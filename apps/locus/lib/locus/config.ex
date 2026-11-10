@@ -369,7 +369,7 @@ defmodule Locus.Config do
 
   # The overcommit factor, a plain decimal of at least 1, kept as the exact
   # fraction it was written as: `1.25` is `{125, 100}`.
-  @decimal ~r/\A([0-9]{1,6})(?:\.([0-9]{1,6}))?\z/
+  @decimal ~r/\A([0-9]+)(?:\.([0-9]+))?\z/
 
   defp overcommit(getenv, variable) do
     case EnvValue.text(getenv, variable) do

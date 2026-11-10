@@ -87,7 +87,8 @@ defmodule Opus.Programs.Box do
   the box may hold (`athanor_memory_bytes`, the `athanor_program_memory_bytes`
   platform setting; unset, the sync names none and the service holds the
   athanor to the box's own budget). The lease and idle periods and the
-  ceiling are read at every tick. A hello's answer tells the box's
+  ceiling are read at every tick, and a changed ceiling syncs every live
+  owner again. A hello's answer tells the box's
   memory (`memory{budget_bytes, admission_limit_bytes, held_bytes}`), which
   this controller keeps beside its pool's size.
 
@@ -464,6 +465,7 @@ defmodule Opus.Programs.Box do
 
   @impl true
   def handle_info(:tick, state) do
+    ceiling = state.athanor_memory_bytes
     state = periods(state)
     Process.send_after(self(), :tick, state.tick_ms)
 
@@ -472,6 +474,7 @@ defmodule Opus.Programs.Box do
         {:ok, generation} ->
           state = check_generation(state, generation)
           state = if state.boot == nil, do: enqueue(state, {:hello}), else: state
+          state = resync_on_ceiling(state, ceiling)
           state = if live_keys(state) != [], do: enqueue(state, {:renew}), else: state
           state = Enum.reduce(Map.keys(state.homes), state, &enqueue(&2, {:home, &1}))
           state = enqueue_release(state)
@@ -2024,6 +2027,15 @@ defmodule Opus.Programs.Box do
           end),
         tick_ms: Keyword.get(fixed, :tick_ms, div(lease_ms, 3))
     }
+  end
+
+  # A changed athanor ceiling reaches the service only on a sync, so every
+  # live owner is synced again ahead of the queue: the service holds the
+  # new ceiling before it admits by the old one any longer than that.
+  defp resync_on_ceiling(%State{athanor_memory_bytes: ceiling} = state, ceiling), do: state
+
+  defp resync_on_ceiling(state, _previous) do
+    state |> live_keys() |> Enum.reverse() |> Enum.reduce(state, &enqueue_front(&2, {:sync, &1}))
   end
 
   defp setting(key) do

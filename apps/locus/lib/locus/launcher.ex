@@ -35,6 +35,14 @@ defmodule Locus.Launcher do
   `:released`, the last. An owner that dies has its process released with
   no grace.
 
+  A spec may name an `heir`, `{pid, tag}`: a process told
+  `{launcher_module, {:heir, tag}, :released}` once nothing of the process
+  is left, whoever owns it then, and once it is known that none was
+  started, as for a spawn refused. So a process the owner's death leaves
+  to the launcher's own release is still followed to its end by another
+  process: the owner's `:released` dies with the owner, the heir's does
+  not.
+
   `c:send/2` writes to the process's stdin; `c:signal/2` signals it;
   `c:release/3` ends it, a term signal first and the kill of everything it
   started once `grace_ms` pass, and answers at once, the `:released` event
@@ -73,7 +81,8 @@ defmodule Locus.Launcher do
           optional(:home) => String.t(),
           optional(:home_max_bytes) => pos_integer(),
           optional(:pty) => boolean(),
-          optional(:hosts) => [String.t(), ...]
+          optional(:hosts) => [String.t(), ...],
+          optional(:heir) => {pid(), term()}
         }
 
   @typedoc """

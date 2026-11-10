@@ -90,7 +90,7 @@ defmodule Prima.WorkerAPI do
   Why a worker service's keeper refuses to start runners, from the last
   runner it refused until one starts again: `reason`, a code of lowercase
   letters, digits and underscores (`memory_unavailable` where the keeper
-  cannot bound a runner's memory), and `message`, a sentence for the
+  cannot bound a runner's memory and CPU), and `message`, a sentence for the
   operator naming what the deployment lacks. While it refuses, a `start`
   no fresh or idle runner can take is refused `unavailable` with the same
   sentence.

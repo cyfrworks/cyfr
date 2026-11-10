@@ -534,6 +534,29 @@ defmodule Locus.Backends.OwnersTest do
       assert [%{status: :failed}] = status(owners, "a").programs
     end
 
+    test "a full owner cannot forget a kept session whose process is still ending", ctx do
+      owners = start_owners(ctx, stop_grace_ms: 3_000)
+
+      assert {:ok, _} =
+               sync(owners, "a", {1, 1}, [program("cat", "trap '' TERM; exec cat", home: :kept)])
+
+      ids =
+        for i <- 1..LocusBackends.max_sessions() do
+          assert {:ok, %{session: id}} =
+                   open(owners, "a", {1, 1}, "cat", home_id: @home, key: "k#{i}")
+
+          id
+        end
+
+      [first | _] = ids
+      backend = session_pid(owners, "a", {1, 1}, first)
+      os_pid = :sys.get_state(backend).handle.pid
+      :ok = Backend.close(backend)
+      assert %{running: false} = Backend.recv(backend, 0, 0)
+      assert File.exists?("/proc/#{os_pid}"), "the session's OS process still runs"
+      assert {:error, :capacity} = open(owners, "a", {1, 1}, "cat", home_id: @home, key: "next")
+    end
+
     test "an owner holds its bound of sessions: the oldest ended one forgotten, capacity with all running",
          ctx do
       owners = start_owners(ctx)
@@ -765,6 +788,73 @@ defmodule Locus.Backends.OwnersTest do
       # process is gone it holds its bound, and then nothing is held.
       wait_until(fn -> held(owners) == %{} end, 10_000)
       assert held_bytes(owners) == 0
+    end
+
+    test "a dead session process keeps its bound held until its launcher says its OS process is gone",
+         ctx do
+      owners = start_owners(ctx, memory_budget: 256 * @mib)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
+      backend = session_pid(owners, "a", {1, 1}, id)
+      handle = :sys.get_state(backend).handle
+      launcher = handle.server
+      os_pid = handle.pid
+
+      on_exit(fn ->
+        try do
+          :sys.resume(launcher)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      # The launcher, held still, has not yet ended the process its dead
+      # owner leaves to it.
+      :sys.suspend(launcher)
+      Process.exit(backend, :kill)
+      wait_until(fn -> not Process.alive?(backend) end, 5_000)
+      wait_until(fn -> hd(Map.values(held(owners))).sessions[id].pid == nil end, 5_000)
+      assert File.exists?("/proc/#{os_pid}"), "the session's OS process still runs"
+
+      assert held_bytes(owners) == 256 * @mib
+      assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "next")
+
+      # Once it has, as the spawn's heir hears, the bound is free again.
+      :sys.resume(launcher)
+      wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
+      assert {:ok, _} = open(owners, "a", {1, 1}, "b1", key: "next")
+    end
+
+    test "a session that dies before it asks for its process holds nothing", ctx do
+      owners =
+        start_owners(ctx,
+          memory_budget: 256 * @mib,
+          bounds: [restart_backoff_ms: [10_000], crash_window_ms: 60_000, max_crashes: 3]
+        )
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("crash", "exit 3")])
+      assert {:ok, _} = open(owners, "a", {1, 1}, "crash")
+      wait_until(fn -> hd(Map.values(held(owners))).programs["crash"].restarts == 1 end, 10_000)
+      wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
+
+      # The next open waits out the crash's backoff before its process is
+      # asked for; its session dies in the wait.
+      opening = Task.async(fn -> open(owners, "a", {1, 1}, "crash") end)
+
+      delayed = fn ->
+        Enum.find_value(hd(Map.values(held(owners))).sessions, fn {_id, session} ->
+          session.running and not session.spawning and session.pid
+        end)
+      end
+
+      wait_until(fn -> delayed.() != nil end, 5_000)
+      waiting = delayed.()
+
+      assert held_bytes(owners) == 256 * @mib
+      Process.exit(waiting, :kill)
+      assert {:error, :internal} = Task.await(opening)
+      assert held_bytes(owners) == 0
+      assert :sys.get_state(owners).ending == %{}
     end
 
     test "a session's bound is released once its process is confirmed gone, not when it is asked to end",

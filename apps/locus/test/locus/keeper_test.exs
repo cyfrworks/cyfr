@@ -72,6 +72,15 @@ defmodule Locus.KeeperTest do
       {:ok, FakeKeeper.start_client!()}
     end
 
+    test "a bound the keeper cannot enforce is named as the memory's and the CPU's",
+         %{name: name, fake: fake} do
+      :ok = FakeKeeper.mode(fake, :memory_unavailable)
+      assert {{:error, {:unavailable, sentence}}, []} = run(name, "true")
+      runner = Locus.Runtime.Keeper.Channel.refusal(:memory_unavailable)
+      assert sentence =~ "memory and CPU"
+      assert runner.message =~ "memory and CPU"
+    end
+
     defp releases(fake, grace) do
       fake
       |> FakeKeeper.requests()

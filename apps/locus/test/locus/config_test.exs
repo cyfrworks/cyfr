@@ -413,6 +413,8 @@ defmodule Locus.ConfigTest do
             {"1.5", {15, 10}},
             {"2", {2, 1}},
             {"1.000001", {1_000_001, 1_000_000}},
+            {"1.0000000", {10_000_000, 10_000_000}},
+            {"1.0000001", {10_000_001, 10_000_000}},
             {" 1.25 ", {125, 100}}
           ] do
         assert {:ok, settings} = backends(%{"LOCUS_BACKENDS_MEMORY_OVERCOMMIT" => text}), text
@@ -431,13 +433,24 @@ defmodule Locus.ConfigTest do
             "1.",
             ".5",
             "1,5",
-            "1.0000001",
+            "0.99999999999",
             "1/2"
           ] do
         assert {:error, message} = backends(%{"LOCUS_BACKENDS_MEMORY_OVERCOMMIT" => value}),
                value
 
         assert message =~ "LOCUS_BACKENDS_MEMORY_OVERCOMMIT must be a decimal of at least 1"
+      end
+    end
+
+    test "the factor takes a plain decimal of any length" do
+      for text <- ["1.0000000", "1.0000001"] do
+        env = %{
+          "LOCUS_BACKENDS_KEY" => String.duplicate("ab", 32),
+          "LOCUS_BACKENDS_MEMORY_OVERCOMMIT" => text
+        }
+
+        assert {:ok, _} = Config.from_env(&Map.get(env, &1), Map.keys(env))
       end
     end
 

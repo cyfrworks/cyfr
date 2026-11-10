@@ -250,7 +250,10 @@ defmodule Locus.DirectLauncher do
     argv = if Map.get(spec, :pty) == true, do: pty(argv), else: argv
 
     with {:ok, home} <- kept_home(opts, spec) do
-      start_child(ref, {self(), ref, argv, env, mode, janitor, strand?, home})
+      start_child(
+        ref,
+        {self(), ref, argv, env, mode, janitor, strand?, home, Map.get(spec, :heir)}
+      )
     end
   end
 
@@ -607,7 +610,7 @@ defmodule Locus.DirectLauncher.Child do
   }
 
   @impl true
-  def init({owner, ref, argv, env, mode, janitor, strand?, kept}) do
+  def init({owner, ref, argv, env, mode, janitor, strand?, kept, heir}) do
     Process.flag(:trap_exit, true)
     home = Path.join(System.tmp_dir!(), "locus_spawn_#{Prima.Hex.short()}")
     log = Path.join(home, "stderr")
@@ -652,6 +655,7 @@ defmodule Locus.DirectLauncher.Child do
 
       state = %{
         owner: owner,
+        heir: heir,
         monitor: Process.monitor(owner),
         ref: ref,
         mode: mode,
@@ -909,10 +913,10 @@ defmodule Locus.DirectLauncher.Child do
   end
 
   # The owner is gone without releasing the process: it is ended at once,
-  # and nothing is left to tell.
+  # and followed to its end for its heir alone.
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, %{monitor: monitor} = state) do
     DirectLauncher.signal_group(state.os_pid, "KILL")
-    {:stop, :normal, %{state | owner: nil}}
+    {:noreply, %{state | owner: nil}}
   end
 
   def handle_info(message, state) do
@@ -978,6 +982,7 @@ defmodule Locus.DirectLauncher.Child do
     state = cleanup(state)
     if state.ended, do: notify(state, state.ended)
     notify(state, :released)
+    tell_heir(state)
     {:stop, :normal, %{state | exited: true}}
   end
 
@@ -1001,6 +1006,11 @@ defmodule Locus.DirectLauncher.Child do
     do: Kernel.send(owner, {DirectLauncher, ref, event})
 
   defp notify(_state, _event), do: :ok
+
+  defp tell_heir(%{heir: {pid, tag}}) when is_pid(pid),
+    do: Kernel.send(pid, {DirectLauncher, {:heir, tag}, :released})
+
+  defp tell_heir(_state), do: :ok
 
   defp ended(mode, status) when status > 128,
     do: exit_event(mode, {:signal, Map.get(@signals, status - 128, "SIG#{status - 128}")})

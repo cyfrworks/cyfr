@@ -2359,4 +2359,18 @@ defmodule Opus.ProgramsTest do
     {:ok, usage} = Arca.ShareUsage.usage(actor, share.id, 1)
     {entry_row, share_row, usage}
   end
+
+  test "a changed athanor ceiling reaches already synced owners on the next tick",
+       %{ctx: ctx, fake: fake} do
+    Cyfr.Test.Settings.put("athanor_program_memory_bytes", 536_870_912)
+    controller = start_controller(fake)
+    vault_entry(ctx)
+    connect(ctx, stdio_row(ctx, "ceiling-refresh"))
+    assert_receive {:control, "sync", %{"athanor_memory_bytes" => 536_870_912}, _}, 2_000
+    Cyfr.Test.Settings.put("athanor_program_memory_bytes", 268_435_456)
+    tick(controller)
+    assert :sys.get_state(controller).athanor_memory_bytes == 268_435_456
+    assert_receive {:control, "renew", _, _}, 2_000
+    assert_receive {:control, "sync", %{"athanor_memory_bytes" => 268_435_456}, _}, 2_000
+  end
 end

@@ -73,7 +73,13 @@ defmodule Locus.Backends.Owners do
   `capacity`. An
   open that attaches to the session already running for its key reserves
   nothing more, and one that found it started while it was prepared drops
-  its reservation. A hello and a status report the box's
+  its reservation. A session's process is gone only when its launcher says
+  so: the session's own `:vacated`, or, once the session process asked for
+  it (`:spawning`) and then died, or its owner was retired with it still
+  held, the launcher's word to this table as the spawn's heir
+  (`t:Locus.Launcher.spec/0`). Until then its bound, and a scratch
+  session's uid of the pool, stay held in the table's endings. A hello
+  and a status report the box's
   `memory{budget_bytes, admission_limit_bytes, held_bytes}`.
 
   Before a scratch session's process starts it holds a uid of the pool
@@ -277,6 +283,10 @@ defmodule Locus.Backends.Owners do
          pids: %{},
          homes: %{},
          homes_checked_at: nil,
+         # The sessions whose process this table no longer follows but whose
+         # end the launcher has not confirmed: {owner id, session id} =>
+         # what they hold.
+         ending: %{},
          queue: :queue.new(),
          busy: nil,
          pending: %{},
@@ -377,6 +387,22 @@ defmodule Locus.Backends.Owners do
   end
 
   def handle_info({Backend, pid, event}, state), do: {:noreply, on_session(state, pid, event)}
+
+  # The launcher, as a spawn's heir: nothing of that session's process is
+  # left.
+  def handle_info({_launcher, {:heir, {owner_id, session_id} = tag}, :released}, state) do
+    state = %{state | ending: Map.delete(state.ending, tag)}
+
+    state =
+      with {:ok, owner} <- Map.fetch(state.owners, owner_id),
+           {:ok, session} <- Map.fetch(owner.sessions, session_id) do
+        put_session(state, owner, session_id, %{session | gone: true})
+      else
+        _ -> state
+      end
+
+    {:noreply, state}
+  end
 
   def handle_info({:DOWN, monitor, :process, pid, _reason}, state) do
     cond do
@@ -896,7 +922,8 @@ defmodule Locus.Backends.Owners do
   end
 
   # The bytes reserved by the athanors `athanor?` takes: every session
-  # whose process is not yet gone, and every open being prepared.
+  # whose process is not yet gone, every open being prepared and every
+  # ending.
   defp held_bytes(state, athanor?) do
     sessions =
       for {_id, owner} <- state.owners,
@@ -905,10 +932,16 @@ defmodule Locus.Backends.Owners do
           reduce: 0,
           do: (sum -> sum + bytes)
 
-    for {_ref, %{continuation: {:open, _from, ask}}} <- state.pending,
-        athanor?.(ask.athanor),
-        reduce: sessions,
-        do: (sum -> sum + ask.memory_bytes)
+    pending =
+      for {_ref, %{continuation: {:open, _from, ask}}} <- state.pending,
+          athanor?.(ask.athanor),
+          reduce: sessions,
+          do: (sum -> sum + ask.memory_bytes)
+
+    for {_tag, ending} <- state.ending,
+        athanor?.(ending.athanor),
+        reduce: pending,
+        do: (sum -> sum + ending.memory_bytes)
   end
 
   defp memory_report(state), do: Map.put(state.memory, :held_bytes, held_bytes(state, & &1))
@@ -1009,7 +1042,7 @@ defmodule Locus.Backends.Owners do
         owner: %{athanor: owner.athanor, server: owner.server, g: owner.g, e: owner.e},
         session: session_id,
         program: program.name,
-        spec: spec(state, owner, program, ask),
+        spec: spec(state, owner, program, ask, session_id),
         secrets: owner.secrets,
         launcher: state.launcher,
         launcher_server: state.launcher_server,
@@ -1033,6 +1066,8 @@ defmodule Locus.Backends.Owners do
           running: true,
           started: false,
           held: true,
+          spawning: false,
+          gone: false,
           memory_bytes: ask.memory_bytes,
           opened: System.unique_integer([:monotonic]),
           waiting: [from]
@@ -1068,7 +1103,7 @@ defmodule Locus.Backends.Owners do
   # arguments as its own, `"$@"` (the administrator allowed the program;
   # its arguments shape only what runs inside its box), or a sign-in's
   # login command on a pseudo-terminal.
-  defp spec(state, owner, program, ask) do
+  defp spec(state, owner, program, ask, session_id) do
     argv =
       case ask.mode do
         :run -> ["/bin/sh", "-c", program.command <> " \"$@\"", "sh" | ask.argv]
@@ -1080,7 +1115,8 @@ defmodule Locus.Backends.Owners do
       env: Map.fetch!(owner.env, program.name),
       pool: @pool,
       memory_bytes: ask.memory_bytes,
-      cpu_quota: state.cpu_quota
+      cpu_quota: state.cpu_quota,
+      heir: {self(), {owner.id, session_id}}
     }
     |> put_given(:home, ask.home_id)
     |> put_given(:home_max_bytes, program.home_max_bytes)
@@ -1135,6 +1171,9 @@ defmodule Locus.Backends.Owners do
     if ended.crash, do: crashed(state, owner, session, ended.error), else: state
   end
 
+  defp session_event(state, owner, session_id, session, :spawning),
+    do: put_session(state, owner, session_id, %{session | spawning: true})
+
   defp session_event(state, owner, session_id, session, :vacated),
     do: put_session(state, owner, session_id, %{session | held: false})
 
@@ -1175,8 +1214,9 @@ defmodule Locus.Backends.Owners do
     put_owner(state, %{owner | programs: Map.put(owner.programs, name, record)})
   end
 
-  # A session process that ended without saying so: its process is gone
-  # with it, and it holds nothing: no uid and no memory.
+  # A session process that ended without saying so. If it had asked for its
+  # process and its launcher has not said that process is gone, what the
+  # session holds moves to the endings until the launcher says so.
   defp session_down(state, pid) do
     {{id, session_id}, pids} = Map.pop(state.pids, pid)
     state = %{state | pids: pids}
@@ -1187,6 +1227,7 @@ defmodule Locus.Backends.Owners do
           {:ok, session} ->
             Enum.each(session.waiting, &GenServer.reply(&1, {:error, :internal}))
             running? = session.running
+            state = end_unconfirmed(state, owner, session_id, session)
             session = %{session | pid: nil, running: false, held: false, waiting: []}
             state = put_session(state, owner, session_id, session)
 
@@ -1421,15 +1462,40 @@ defmodule Locus.Backends.Owners do
   end
 
   # The pool's uids held: a scratch session's (one with no home) until
-  # nothing of its process is left.
+  # nothing of its process is left, its ending's included.
   defp slots_held(state) do
-    Enum.reduce(state.owners, 0, fn {_id, owner}, held ->
-      held +
-        Enum.count(owner.sessions, fn {_id, session} ->
-          session.held and session.home_id == nil
-        end)
-    end)
+    Enum.reduce(
+      state.owners,
+      map_size(Map.filter(state.ending, &(elem(&1, 1).home_id == nil))),
+      fn {_id, owner}, held ->
+        held +
+          Enum.count(owner.sessions, fn {_id, session} ->
+            session.held and session.home_id == nil
+          end)
+      end
+    )
   end
+
+  # A held session whose process this table stops following before its
+  # launcher said that process is gone: what it holds moves to the
+  # endings, which the launcher's word as its heir clears. One that never
+  # asked for its process started none, and holds nothing.
+  defp end_unconfirmed(
+         state,
+         owner,
+         session_id,
+         %{held: true, spawning: true, gone: false} = session
+       ) do
+    ending = %{
+      athanor: owner.athanor,
+      memory_bytes: session.memory_bytes,
+      home_id: session.home_id
+    }
+
+    %{state | ending: Map.put(state.ending, {owner.id, session_id}, ending)}
+  end
+
+  defp end_unconfirmed(state, _owner, _session_id, _session), do: state
 
   defp unroute(state, owner) do
     key = {owner.athanor, owner.server}
@@ -1633,13 +1699,20 @@ defmodule Locus.Backends.Owners do
     :exit, _reason -> :ok
   end
 
-  # An owner whose sessions are stopped frees its uids and leaves the table.
+  # An owner whose sessions are stopped leaves the table; a session of it
+  # whose process its launcher has not yet said is gone stays held in the
+  # endings.
   defp drained(state, id) do
     case Map.pop(state.owners, id) do
       {nil, _owners} ->
         state
 
       {owner, owners} ->
+        state =
+          Enum.reduce(owner.sessions, state, fn {session_id, session}, state ->
+            end_unconfirmed(state, owner, session_id, session)
+          end)
+
         pids =
           Enum.reduce(owner.sessions, state.pids, fn {_sid, session}, pids ->
             Map.delete(pids, session.pid)

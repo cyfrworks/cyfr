@@ -80,9 +80,12 @@ defmodule Locus.Runtime.Keeper.Channel do
   @pool "runner"
   @isolation "netns"
 
-  @memory_unavailable "cyfr-locus cannot bound a runner's memory in this container, so it " <>
-                        "starts none: start the locus-runtime service with the security option " <>
-                        "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
+  # `memory_unavailable` is the keeper's word for any bound it cannot
+  # enforce, the memory's or the CPU's.
+  @memory_unavailable "cyfr-locus cannot bound a runner's memory and CPU in this container, " <>
+                        "so it starts none: start the locus-runtime service with the security " <>
+                        "option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 " <>
+                        "host whose memory and cpu controllers reach the container)"
 
   @impl Locus.Runtime.Keeper
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}

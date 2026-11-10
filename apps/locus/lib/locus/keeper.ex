@@ -199,9 +199,12 @@ defmodule Locus.Keeper do
   # not taken within the bound closes its connection.
   @relay_send_timeout_ms 5_000
 
-  @memory_unavailable "cyfr-locus cannot bound a build's memory in this container, so it " <>
-                        "runs none: start the builder with the security option " <>
-                        "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
+  # `memory_unavailable` is the keeper's word for any bound it cannot
+  # enforce, the memory's or the CPU's.
+  @memory_unavailable "cyfr-locus cannot bound a build's memory and CPU in this container, " <>
+                        "so it runs none: start the builder with the security option " <>
+                        "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host " <>
+                        "whose memory and cpu controllers reach the container)"
 
   @doc false
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
@@ -366,7 +369,8 @@ defmodule Locus.Keeper do
       home: Map.get(spec, :home),
       home_max_bytes: Map.get(spec, :home_max_bytes),
       pty: Map.get(spec, :pty, false) == true,
-      hosts: Map.get(spec, :hosts)
+      hosts: Map.get(spec, :hosts),
+      heir: Map.get(spec, :heir)
     }
 
     try do
@@ -1051,6 +1055,7 @@ defmodule Locus.Keeper do
 
         %{kind: :handle} ->
           notify(entry, ref, :released)
+          tell_heir(entry)
 
         _run_or_control ->
           notify(entry, ref, {:error, :channel_lost})
@@ -1230,8 +1235,8 @@ defmodule Locus.Keeper do
 
     extra =
       if control?,
-        do: %{kind: :control, owner: owner, from: nil, ref: ref},
-        else: %{kind: :handle, owner: owner, from: from, ref: ref}
+        do: %{kind: :control, owner: owner, from: nil, ref: ref, heir: opts.heir},
+        else: %{kind: :handle, owner: owner, from: from, ref: ref, heir: opts.heir}
 
     case start_spawn(state, request, extra) do
       {:ok, ref, state} when control? ->
@@ -1495,6 +1500,7 @@ defmodule Locus.Keeper do
         kind: extra.kind,
         owner: extra.owner,
         from: extra.from,
+        heir: Map.get(extra, :heir),
         monitor: Process.monitor(extra.owner),
         id: id,
         token: token,
@@ -1890,8 +1896,16 @@ defmodule Locus.Keeper do
 
   defp notify(_entry, _ref, _message), do: :ok
 
+  defp tell_heir(%{heir: {pid, tag}}) when is_pid(pid),
+    do: Kernel.send(pid, {__MODULE__, {:heir, tag}, :released})
+
+  defp tell_heir(_entry), do: :ok
+
+  # An entry leaves for good only once nothing of its spawn is left (its
+  # retirement reported, or its spawn refused), so its heir hears so here.
   defp drop(state, ref) do
     {entry, requests} = Map.pop(state.requests, ref)
+    tell_heir(entry)
     Process.demonitor(entry.monitor, [:flush])
     if entry.conn, do: :gen_tcp.close(entry.conn)
 

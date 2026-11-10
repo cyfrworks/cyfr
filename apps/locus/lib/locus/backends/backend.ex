@@ -14,7 +14,8 @@ defmodule Locus.Backends.Backend do
 
   A session starts its process at once, or after `:delay_ms` when its
   owners hold it back for a crash's backoff, and tells its owners
-  `:started` once the launcher answers the spawn. It is `running` until
+  `:spawning` as it asks its launcher for the process, and `:started` once
+  the launcher answers the spawn. It is `running` until
   its process ends, and then `ended`: its buffered lines stay readable,
   every later `recv/3` answers `running: false`, and every later
   `send_lines/2` answers `:ended`. The process stays its until it is gone
@@ -254,6 +255,8 @@ defmodule Locus.Backends.Backend do
 
   @impl GenServer
   def handle_info(:spawn, %{status: :starting, ending: nil} = state) do
+    notify(state, :spawning)
+
     case state.launcher.spawn(state.launcher_server, state.spec) do
       {:ok, handle} ->
         notify(state, :started)
