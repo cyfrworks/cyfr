@@ -33,8 +33,8 @@ defmodule Prima.KeeperProtocol do
   credential.
 
   The keeper runs every spawn in a cgroup of its own holding both bounds:
-  `memory_bytes` as its `memory.max`, with `memory.high` at nine tenths of
-  it, and `cpu_quota` as its `cpu.max` over `cpu_period/0`. The reply code
+  `memory_bytes` as its `memory.max`, and `cpu_quota` as its `cpu.max`
+  over `cpu_period/0`. The reply code
   `memory_unavailable` means that the keeper cannot enforce a spawn's
   bounds where it runs, whichever of them it lacks the means for; it
   refuses every spawn so, and none runs unbounded.

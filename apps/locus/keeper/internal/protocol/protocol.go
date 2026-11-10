@@ -48,9 +48,7 @@
 // every other `exited` carries false. A keeper that cannot give a spawn
 // such a cgroup refuses the request as CodeMemoryUnavailable: the bound is
 // enforced or the command does not run. Missing, null and zero
-// `memory_bytes` are refused as CodeBadRequest. The group's memory.high is
-// nine tenths of the bound, so a growing spawn is throttled and reclaimed
-// before the kernel kills it at the bound.
+// `memory_bytes` are refused as CodeBadRequest.
 //
 // A spawn's required `cpu_quota`, from MinCPUQuota to MaxCPUQuota, is the
 // microseconds of CPU time its group may use in every CPUPeriod (100000

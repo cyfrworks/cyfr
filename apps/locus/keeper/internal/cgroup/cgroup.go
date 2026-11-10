@@ -7,9 +7,8 @@
 // The kernel charges a group for the pages its processes touch, the pages
 // of the tmpfs files they write and the kernel memory they cause, and never
 // lets the total pass the group's memory.max. A spawn's group is created
-// with memory.max at its bound, memory.high at nine tenths of it
-// (HighBytes), so a growing group is throttled and reclaimed before it is
-// killed, memory.swap.max at zero, so the bound is not escaped into swap,
+// with memory.max at its bound, memory.swap.max at zero, so the bound is
+// not escaped into swap,
 // memory.oom.group set, so a group that cannot stay under its bound loses
 // every process at once rather than the one the kernel would pick, and
 // cpu.max at its CPU quota over the fixed period, so its processes together
@@ -154,17 +153,11 @@ func Delegate(root string, self []byte) (*Manager, error) {
 var enabled = []string{"memory", "cpu"}
 
 // boundFiles are the control files Create writes.
-var boundFiles = []string{"memory.max", "memory.high", "memory.swap.max", "memory.oom.group", "cpu.max"}
+var boundFiles = []string{"memory.max", "memory.swap.max", "memory.oom.group", "cpu.max"}
 
 // CPUPeriod is the period, in microseconds, of every group's cpu.max: a
 // quota of CPUPeriod is one CPU.
 const CPUPeriod = 100_000
-
-// HighBytes is a group's memory.high for its memory.max: nine tenths of
-// it, rounded down, where the kernel starts throttling and reclaiming the
-// group's pages so a spawn that grows slows before it is killed. A bound is
-// at most 2^40, so the product cannot overflow.
-func HighBytes(maxBytes uint64) uint64 { return maxBytes * 9 / 10 }
 
 // drain moves every process of root it can see into leaf, and reports how
 // many entries it could not see. cgroup.procs lists a process of another
@@ -263,7 +256,6 @@ func (m *Manager) Create(name string, memoryBytes, cpuQuota uint64) (*Group, err
 	}
 	for _, f := range []struct{ file, value string }{
 		{"memory.max", strconv.FormatUint(memoryBytes, 10)},
-		{"memory.high", strconv.FormatUint(HighBytes(memoryBytes), 10)},
 		{"memory.swap.max", "0"},
 		{"memory.oom.group", "1"},
 		{"cpu.max", strconv.FormatUint(cpuQuota, 10) + " " + strconv.Itoa(CPUPeriod)},

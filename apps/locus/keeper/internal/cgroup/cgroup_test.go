@@ -240,8 +240,8 @@ func TestDelegateNamesTheProcessesItCouldNotSee(t *testing.T) {
 }
 
 // A group that could swap past its bound, lose one process and live on,
-// never be throttled before its bound or take every CPU is not held to its
-// bounds: a kernel without any one of those files enforces none here.
+// or take every CPU is not held to its bounds: a kernel without any one of
+// those files enforces none here.
 func TestDelegateRefusesAKernelThatCannotHoldAGroupToItsBound(t *testing.T) {
 	for _, missing := range boundFiles {
 		var present []string
@@ -282,7 +282,7 @@ func TestCreateSetsTheBoundsNoSwapAndTheGroupKill(t *testing.T) {
 		t.Fatalf("path %q", g.Path())
 	}
 	for file, want := range map[string]string{
-		"memory.max": "1073741824", "memory.high": "966367641", "memory.swap.max": "0",
+		"memory.max": "1073741824", "memory.swap.max": "0",
 		"memory.oom.group": "1", "cpu.max": "200000 100000",
 	} {
 		if got, err := os.ReadFile(filepath.Join(m.root, "keeper-30001", file)); err != nil || string(got) != want {
@@ -325,23 +325,6 @@ func TestCreateNeverReusesAnEarlierSpawnsGroup(t *testing.T) {
 	}
 	if err := g.Remove(); err != nil {
 		t.Fatalf("removing a group already gone: %v", err)
-	}
-}
-
-// memory.high is nine tenths of the bound, rounded down, at both ends of
-// the range a spawn may ask for.
-func TestHighIsNineTenthsOfTheBound(t *testing.T) {
-	for bound, want := range map[uint64]uint64{
-		16 << 20:  15099494,
-		512 << 20: 483183820,
-		1 << 30:   966367641,
-		1 << 40:   989560464998,
-		10:        9,
-		19:        17,
-	} {
-		if got := HighBytes(bound); got != want {
-			t.Errorf("HighBytes(%d) = %d, want %d", bound, got, want)
-		}
 	}
 }
 
