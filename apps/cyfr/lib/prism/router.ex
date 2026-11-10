@@ -199,24 +199,29 @@ defmodule Prism.Router do
       # Opening an athanor is a link: focus is in the URL, `/a/<athanor>/…` —
       # a person's athanor as `@<namespace>`. `PrismWeb.Focus` resolves the segment and narrows
       # the context (`Sanctum.Context.focus/2`) before the page mounts.
+      #
+      # Every page of the session stands over the person's desktop
+      # (`PrismWeb.ShellLive`), which the session's root layout renders as a
+      # LiveView of its own beside the page, so moving between pages never
+      # touches the desktop's frames. `/`, `/a` and `/a/<athanor>` are the
+      # desktop alone (`PrismWeb.DesktopLive`); each Dashboard page draws over
+      # it, and `/chat` forwards to the desktop, where the chat is an overlay.
       scope "/", PrismWeb do
         pipe_through :browser
 
         live_session :athanor,
+          root_layout: {PrismWeb.Layouts, :desktop},
           on_mount: [
             {CyfrWeb.ContextGuard, :protected},
             {PrismWeb.Focus, :assign},
             {PrismWeb.ActiveContext, :assign}
           ] do
-          live "/", RootRedirectLive, :index, metadata: %{auth: :browser_authenticated}
-          live "/a", RootRedirectLive, :index, metadata: %{auth: :browser_authenticated}
-          # The chat names its athanor in the query, not the path, and mounts under the
-          # session's default (`PrismWeb.Focus` passes a bare mount through).
-          live "/chat", ChatLive, :index, metadata: %{auth: :browser_authenticated}
+          live "/", DesktopLive, :index, metadata: %{auth: :browser_authenticated}
+          live "/a", DesktopLive, :index, metadata: %{auth: :browser_authenticated}
+          live "/chat", ChatRedirectLive, :index, metadata: %{auth: :browser_authenticated}
 
           scope "/a/:athanor" do
-            # Forward to /chat with the athanor selected.
-            live "/", ChatRedirectLive, :index, metadata: %{auth: :browser_authenticated}
+            live "/", DesktopLive, :index, metadata: %{auth: :browser_authenticated}
             live "/aqua", AquaLive, :index, metadata: %{auth: :browser_authenticated}
             live "/files", FilesLive, :index, metadata: %{auth: :browser_authenticated}
             # /activities: unified activities feed (mcp_log + execution fan-out).
@@ -245,9 +250,6 @@ defmodule Prism.Router do
             live "/schedules", SchedulesLive, :index, metadata: %{auth: :browser_authenticated}
             live "/settings", SettingsLive, :index, metadata: %{auth: :browser_authenticated}
             live "/programs", ProgramsLive, :index, metadata: %{auth: :browser_authenticated}
-            # /canvas: the Canvas mode, the person's canvases and the apps over
-            # them (PrismWeb.ShellLive); every other page is the Dashboard.
-            live "/canvas", ShellLive, :index, metadata: %{auth: :browser_authenticated}
             live "/legal", LegalLive, :index, metadata: %{auth: :browser_authenticated}
           end
         end

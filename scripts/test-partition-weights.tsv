@@ -580,7 +580,6 @@
 3.9	apps/cyfr/test/prism_web/live/canvas_chrome_test.exs
 9.8	apps/cyfr/test/prism_web/live/canvas_live_test.exs
 5.3	apps/cyfr/test/prism_web/live/carry_live_test.exs
-124.5	apps/cyfr/test/prism_web/live/chat_live_test.exs
 2.1	apps/cyfr/test/prism_web/live/command_palette_test.exs
 1.8	apps/cyfr/test/prism_web/live/company_login_live_test.exs
 7.2	apps/cyfr/test/prism_web/live/components_live_test.exs
@@ -590,8 +589,6 @@
 2.0	apps/cyfr/test/prism_web/live/invite_live_test.exs
 8.4	apps/cyfr/test/prism_web/live/login_live_test.exs
 3.3	apps/cyfr/test/prism_web/live/mcp_servers_live_test.exs
-5.1	apps/cyfr/test/prism_web/live/modes_test.exs
-0.6	apps/cyfr/test/prism_web/live/redirect_live_test.exs
 1.9	apps/cyfr/test/prism_web/live/registry_live_test.exs
 5.4	apps/cyfr/test/prism_web/live/schedules_live_test.exs
 1.3	apps/cyfr/test/prism_web/live/secret_reveal_test.exs

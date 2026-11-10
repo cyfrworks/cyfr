@@ -309,8 +309,8 @@ defmodule Cyfr.Bus do
       template: "tenant:<athanor_id>:notify",
       producers: ["Cyfr.TelemetryBridge"],
       consumers: [
-        "PrismWeb.ChatLive",
         "PrismWeb.ShellLive",
+        "PrismWeb.AquaPanelLive",
         "PrismWeb.AquaLive",
         "PrismWeb.ThreadPaneLive",
         "Aqua.Runner"
@@ -362,7 +362,7 @@ defmodule Cyfr.Bus do
       match: {:prefix, "thread:"},
       template: "tenant:<athanor_id>:thread:<thread_id>",
       producers: ["Aqua.Tape"],
-      consumers: ["Aqua.Runner", "PrismWeb.ThreadPaneLive", "PrismWeb.ChatLive"],
+      consumers: ["Aqua.Runner", "PrismWeb.ThreadPaneLive"],
       reason: "one thread's committed rows and its runner's live state"
     },
     %{

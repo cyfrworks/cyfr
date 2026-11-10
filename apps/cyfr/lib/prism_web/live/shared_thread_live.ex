@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.SharedThreadLive do
   @moduledoc """
-  A shared thread, opened from the chat (`PrismWeb.ChatLive`, `?s=<thread>`)
+  A shared thread, opened in the chat overlay (`PrismWeb.ChatOverlayLive`)
   as a nested LiveView of its own: what its people said, with their
   names and files, a composer that posts words and files, and a header
   with the thread's people and invitations.
@@ -22,7 +22,7 @@ defmodule PrismWeb.SharedThreadLive do
   message posted reads the messages after the last one shown; any other
   change reads the thread and its people again, and a thread the person
   no longer sits in, or that was archived, says so — the chat around the
-  pane moves on (`PrismWeb.ChatLive`). A file opens through
+  pane moves on (`PrismWeb.ChatOverlayLive`). A file opens through
   `/shared/:thread/attachments/:message_id/:filename`
   (`PrismWeb.SharedAttachmentController`), which checks the seat again.
   """
@@ -164,12 +164,6 @@ defmodule PrismWeb.SharedThreadLive do
 
   def handle_event("leave", _params, socket) do
     tool(socket, "shared_thread/leave", %{}, fn socket, _left -> socket end)
-  end
-
-  # The list beside the thread is the chat's drawer on a phone.
-  def handle_event("toggle_rail", _params, socket) do
-    if pid = socket.parent_pid, do: send(pid, {:pane, socket.id, :toggle_rail})
-    {:noreply, socket}
   end
 
   # ============================================================================
@@ -344,13 +338,6 @@ defmodule PrismWeb.SharedThreadLive do
         aria-label="Thread"
       >
         <div class="flex items-center gap-2">
-          <button
-            type="button"
-            phx-click="toggle_rail"
-            class="md:hidden rounded px-2 py-1 text-xs text-gray-400 hover:bg-gray-800"
-          >
-            Chats
-          </button>
           <h2 id="shared-title" class="min-w-0 flex-1 truncate text-sm font-medium text-gray-200">
             {if @thread, do: title(@thread), else: "Thread"}
           </h2>

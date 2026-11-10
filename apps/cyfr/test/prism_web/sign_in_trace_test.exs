@@ -139,14 +139,13 @@ defmodule PrismWeb.SignInTraceTest do
     assert {:ok, [_profile]} =
              Arca.ConsentStorage.profiles(Sanctum.Context.actor(reader), "agent:local.aqua")
 
-    # `/` lands the person in their own athanor — the redirect naming it is
-    # itself the claim — and the page there is not the preparing state.
+    # `/` lands the person on their own desktop, which is not the
+    # preparing state.
     Process.put(:prism_test_athanor_id, athanor_id)
     console = recycle(signed_in)
 
-    assert {:error, {:live_redirect, %{to: landing}}} = live(console, "/")
-    assert landing =~ "/chat"
-    assert {:ok, _view, html} = live(console, landing)
+    assert {:ok, view, html} = live(console, "/")
+    assert view.module == PrismWeb.DesktopLive
     refute html =~ "Preparing"
   end
 end

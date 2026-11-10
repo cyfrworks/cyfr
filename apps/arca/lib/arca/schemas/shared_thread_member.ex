@@ -7,7 +7,9 @@ defmodule Arca.Schemas.SharedThreadMember do
   `Arca.SharedThreadMembers`): a person's seat in a shared thread
   (`active`, naming `user_id`), or an invitation waiting for a person
   identifier (`invited`, naming `person_identifier`) that becomes their
-  seat at their sign-in.
+  seat at their sign-in. A seat's `read_seq` is the person's read mark:
+  the `seq` (`Arca.Schemas.SharedMessage`) of the thread's newest message
+  they have had open, 0 before any.
   """
 
   use Ecto.Schema
@@ -29,5 +31,6 @@ defmodule Arca.Schemas.SharedThreadMember do
     field :status, :string, default: "active"
     field :added_by, :string
     field :created_at, :utc_datetime_usec
+    field :read_seq, :integer, default: 0
   end
 end

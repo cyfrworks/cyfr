@@ -6,8 +6,9 @@ defmodule Sanctum.SharedThreadsTest do
   The rules of shared threads (`Sanctum.SharedThreads`): who makes a
   thread or a pair, who reads one, who adds, removes, withdraws and
   leaves, what a message and
-  its files are, and whom each change is told to. A thread answers anyone
-  not seated in it as a missing one, the platform administrator too.
+  its files are, what is unread to each person past their read mark, and
+  whom each change is told to. A thread answers anyone not seated in it
+  as a missing one, the platform administrator too.
   """
 
   use ExUnit.Case, async: false
@@ -301,9 +302,10 @@ defmodule Sanctum.SharedThreadsTest do
                  title: "Plans",
                  people: [alice_name, bob_name, "someone"],
                  waits_on_you: false,
-                 last_activity: %DateTime{}
+                 last_activity: %DateTime{},
+                 unread: 1
                },
-               %{title: nil, people: [_, _]}
+               %{title: nil, people: [_, _], unread: 0}
              ] = listed
 
       assert {alice_name, bob_name} == {Users.public_name(alice), Users.public_name(bob)}
@@ -318,10 +320,14 @@ defmodule Sanctum.SharedThreadsTest do
       outsider = remote!(identifier())
       alice_athanor = Sanctum.Test.People.athanor!(alice).id
       bob_athanor = Sanctum.Test.People.athanor!(bob).id
+      {:ok, _} = SharedThreads.post(bob, thread.id, "hello")
 
-      # A person with no athanor of their own keeps no list.
-      assert [{^alice, ^alice_athanor, %{id: id, people: [_, _]}}, {^bob, ^bob_athanor, _}] =
-               SharedThreads.listings(thread.id, [alice, bob, outsider.id])
+      # A person with no athanor of their own keeps no list, and each
+      # person's listing counts what is unread to them alone.
+      assert [
+               {^alice, ^alice_athanor, %{id: id, people: [_, _], unread: 1}},
+               {^bob, ^bob_athanor, %{unread: 0}}
+             ] = SharedThreads.listings(thread.id, [alice, bob, outsider.id])
 
       assert id == thread.id
 
@@ -333,6 +339,56 @@ defmodule Sanctum.SharedThreadsTest do
       {:ok, _} = SharedThreads.archive(alice, thread.id)
       assert [{^alice, _, :removed}] = SharedThreads.listings(thread.id, [alice])
       assert [{^alice, _, :removed}] = SharedThreads.listings("sth_gone", [alice])
+    end
+  end
+
+  describe "mark_read/2" do
+    test "another person's post is unread to the person until they mark the thread, and their own never is",
+         %{alice: alice, bob: bob} do
+      thread = thread!(alice) |> seated!(alice, [bob])
+
+      unread = fn ->
+        for who <- [alice, bob] do
+          {:ok, listed} = SharedThreads.listed(who)
+          Enum.find_value(listed, &(&1.id == thread.id and &1.unread))
+        end
+      end
+
+      assert unread.() == [0, 0]
+
+      {:ok, _} = SharedThreads.post(bob, thread.id, "one")
+      assert unread.() == [1, 0]
+
+      {:ok, _} = SharedThreads.post(bob, thread.id, "two")
+      assert unread.() == [2, 0]
+
+      assert :ok = SharedThreads.mark_read(alice, thread.id)
+      assert unread.() == [0, 0]
+
+      {:ok, _} = SharedThreads.post(alice, thread.id, "three")
+      assert unread.() == [0, 1]
+
+      # A mark already at the newest message stands, and answers alike.
+      assert :ok = SharedThreads.mark_read(alice, thread.id)
+      assert unread.() == [0, 1]
+
+      assert {:ok, %{read_seq: 3}} =
+               Arca.SharedThreadMembers.find(Prima.Actor.system(), thread.id, alice)
+    end
+
+    test "a person not seated marks nothing, and hears the thread missing",
+         %{alice: alice, bob: bob, carol: carol} do
+      thread = thread!(alice) |> seated!(alice, [bob])
+      {:ok, _} = SharedThreads.post(alice, thread.id, "hello")
+      {:ok, _} = SharedThreads.leave(bob, thread.id)
+      id = thread.id
+
+      for who <- [bob, carol] do
+        assert {:error, {:not_found, "Thread", ^id}} = SharedThreads.mark_read(who, id)
+      end
+
+      assert {:error, {:not_found, "Thread", "sth_gone"}} =
+               SharedThreads.mark_read(alice, "sth_gone")
     end
   end
 
@@ -686,7 +742,11 @@ defmodule Sanctum.SharedThreadsTest do
 
       :telemetry.attach_many(
         handler,
-        [[:cyfr, :sanctum, :shared_thread, :changed], [:cyfr, :sanctum, :shared_thread, :posted]],
+        [
+          [:cyfr, :sanctum, :shared_thread, :changed],
+          [:cyfr, :sanctum, :shared_thread, :posted],
+          [:cyfr, :sanctum, :shared_thread, :read]
+        ],
         fn [_, _, _, kind], _measurements, meta, _config -> send(test, {kind, meta}) end,
         nil
       )
@@ -718,6 +778,28 @@ defmodule Sanctum.SharedThreadsTest do
       {:ok, %{ended: false}} = SharedThreads.leave(bob, id)
       assert told(:changed, id) == Enum.sort([alice, bob])
 
+      refute_receive {_kind, %{thread_id: ^id}}, 50
+    end
+
+    test "a read mark that moved is told to its person alone, and one that stood to no one",
+         %{alice: alice, bob: bob} do
+      {:ok, thread} = SharedThreads.create(alice, "Plans")
+      id = thread.id
+      assert told(:changed, id) == [alice]
+
+      # Nothing posted yet: the mark stands at the start.
+      assert :ok = SharedThreads.mark_read(alice, id)
+      refute_receive {:read, %{thread_id: ^id}}, 50
+
+      {:ok, :added} = SharedThreads.add(alice, id, user_id: bob)
+      assert told(:changed, id) == Enum.sort([alice, bob])
+      {:ok, _} = SharedThreads.post(bob, id, "hello")
+      assert told(:posted, id) == Enum.sort([alice, bob])
+
+      assert :ok = SharedThreads.mark_read(alice, id)
+      assert told(:read, id) == [alice]
+
+      assert :ok = SharedThreads.mark_read(alice, id)
       refute_receive {_kind, %{thread_id: ^id}}, 50
     end
   end

@@ -112,7 +112,7 @@ defmodule Aqua.Providers.Thread do
         name: "threads.changes",
         topic: :threads,
         projection:
-          ["kind", "id", "title", "people", "last_activity", "waits_on_you"] ++
+          ["kind", "id", "title", "people", "last_activity", "waits_on_you", "unread"] ++
             Prima.Provider.Stream.delivery_fields(),
         subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
         bind: :holder,
@@ -155,9 +155,10 @@ defmodule Aqua.Providers.Thread do
           "of" => %{"type" => "string", "max" => 4096}
         },
         "last_activity" => %{"type" => "time", "nullable" => true},
-        "waits_on_you" => %{"type" => "boolean", "nullable" => true}
+        "waits_on_you" => %{"type" => "boolean", "nullable" => true},
+        "unread" => %{"type" => "integer", "nullable" => true}
       },
-      "required" => ["kind", "id", "title", "people", "last_activity", "waits_on_you"]
+      "required" => ["kind", "id", "title", "people", "last_activity", "waits_on_you", "unread"]
     })
   end
 

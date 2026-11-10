@@ -210,7 +210,7 @@ function decide(observed) {
         ...requestsTo(observed, "/moved.json"),
         ...requestsTo(observed, "/moved-bare.json"),
         ...requestsTo(observed, "/asset.json").slice(1),
-        ...requestsTo(observed, "/chat"),
+        ...requestsTo(observed, "/a"),
         ...requestsTo(observed, "/login"),
       ],
     },
@@ -283,7 +283,7 @@ function summary(facts, observed) {
         break;
       case "redirect_fetch":
         detail = `asset 302 with ACAO *: ${fetchOutcome(frame.asset)}; asset 302 without: ${fetchOutcome(frame.bare)}; ` +
-          `server /chat 302: ${fetchOutcome(frame.server)}`;
+          `server /a 302: ${fetchOutcome(frame.server)}`;
         break;
     }
     const reason = fact.allowed ? "" : consoleReason(observed, name);

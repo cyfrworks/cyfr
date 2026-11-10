@@ -6,11 +6,11 @@ defmodule PrismWeb.NavTest do
 
   alias PrismWeb.Nav
 
-  test "lite is chat and a drawer: the everyday pages, flat" do
+  test "lite is the everyday pages, flat" do
     keys = Enum.map(Nav.items("lite"), & &1.key)
 
     assert keys ==
-             ~w(chat aqua files vault schedules webhooks programs settings legal)
+             ~w(aqua files vault schedules webhooks programs settings legal)
 
     refute "executions" in keys
     refute "api_keys" in keys
@@ -22,7 +22,7 @@ defmodule PrismWeb.NavTest do
     keys = Enum.map(Nav.items("dev"), & &1.key)
 
     for key <-
-          ~w(chat files executions enforcements components builds registry api_keys webhooks reports) do
+          ~w(files executions enforcements components builds registry api_keys webhooks reports) do
       assert key in keys, "dev lacks #{key}"
     end
 
@@ -30,16 +30,18 @@ defmodule PrismWeb.NavTest do
     assert titles == [nil, "Observability", "Components", "Configuration", "Other"]
   end
 
-  test "a mode shows its pages, a record under one and the Canvas, and nothing else" do
+  test "a mode shows its pages, a record under one and the desktop, and nothing else" do
     assert Nav.shown?("/vault", "lite")
     assert Nav.shown?("/schedules/sched_abc?tab=runs", "lite")
     refute Nav.shown?("/executions", "lite")
     assert Nav.shown?("/executions/exec_abc", "dev")
 
     for mode <- ~w(lite dev) do
-      assert Nav.shown?(Nav.canvas_path(), mode)
-      assert Nav.shown?(Nav.canvas_path() <> "?publisher=acme&tincture_name=widget", mode)
+      assert Nav.shown?(Nav.desktop_path(), mode)
+      assert Nav.shown?(Nav.desktop_path() <> "?publisher=acme&tincture_name=widget", mode)
       refute Nav.shown?("/tinctures", mode)
+      refute Nav.shown?("/canvas", mode)
+      refute Nav.shown?("/chat", mode)
     end
   end
 
@@ -59,39 +61,26 @@ defmodule PrismWeb.NavTest do
       |> MapSet.new()
 
     for item <- Nav.items("dev") do
-      expected = if item.scope == :global, do: item.path, else: "/a/:athanor" <> item.path
+      expected = "/a/:athanor" <> item.path
 
       assert MapSet.member?(route_paths, expected),
              "nav item #{item.key} points at #{item.path}, but no route serves #{expected}"
     end
   end
 
-  test "a link is focused on the athanor unless the page is global — the chat is" do
-    chat = Enum.find(Nav.items("lite"), &(&1.key == "chat"))
+  test "every link is focused on the athanor, a bare path and a query string alike" do
     aqua = Enum.find(Nav.items("lite"), &(&1.key == "aqua"))
-
-    assert chat.scope == :global
-    assert Nav.href(chat, "home") == "/chat"
-    assert aqua.scope == :athanor
     assert Nav.href(aqua, "home") == "/a/home/aqua"
 
     # A bare path decides the same way — the palette and an intent hand
     # one in — and a query string does not change the answer.
-    assert Nav.href("/chat", "home") == "/chat"
-    assert Nav.href("/chat?a=home&c=thread_1", "home") == "/chat?a=home&c=thread_1"
     assert Nav.href("/aqua", "home") == "/a/home/aqua"
     assert Nav.href("/executions?id=exec_1", "home") == "/a/home/executions?id=exec_1"
-  end
 
-  test "an item's scope is derived from the one list of global pages" do
-    for item <- Nav.items("dev") do
-      expected = if Nav.global?(item.path), do: :global, else: :athanor
-      assert item.scope == expected, "#{item.key} is #{item.scope}, the list says #{expected}"
-    end
+    assert Nav.href("/?publisher=p&tincture_name=n", "home") ==
+             "/a/home/?publisher=p&tincture_name=n"
 
-    # Every global page is a nav item — the list names pages, not stray paths.
-    paths = Enum.map(Nav.items("dev"), & &1.path)
-    for path <- Nav.global_pages(), do: assert(path in paths)
+    refute Enum.any?(Nav.items("dev"), &(&1.key == "chat"))
   end
 
   # The one place a navigate the assistant proposes meets the router: a
@@ -104,15 +93,15 @@ defmodule PrismWeb.NavTest do
       for %{path: path, metadata: %{phoenix_live_view: live}} <- Cyfr.Boundaries.routes(),
           is_tuple(live),
           live |> elem(0) |> Atom.to_string() |> String.ends_with?("RedirectLive"),
-          String.starts_with?(path, focus),
-          do: String.replace_prefix(path, focus, "")
+          do: String.replace(path, ":athanor", "home")
 
-    assert stubs != []
+    assert "/chat" in stubs
 
     for stub <- stubs do
-      refute Nav.page?(Nav.href(stub, "home")),
-             "#{stub} forwards elsewhere and must not be a navigate target"
+      refute Nav.page?(stub), "#{stub} forwards elsewhere and must not be a navigate target"
     end
+
+    assert Nav.page?(focus |> String.replace(":athanor", "home"))
 
     for mode <- ~w(dev lite), item <- Nav.items(mode) do
       assert Nav.page?(Nav.href(item, "home")),

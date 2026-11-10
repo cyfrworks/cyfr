@@ -77,12 +77,11 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert {:error, {:redirect, %{to: "/"}}} = live(conn, "/a/@no-such-athanor/settings")
   end
 
-  test "the root lands in the chat, on the session's athanor", %{conn: conn} do
+  test "the root lands on the desktop, on the session's athanor", %{conn: conn} do
     conn = log_in_user(conn, test_user())
-    assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/")
-
-    assert to ==
-             PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(seated_athanor()))
+    assert {:ok, view, _html} = live(conn, "/")
+    assert view.module == PrismWeb.DesktopLive
+    assert :sys.get_state(view.pid).socket.assigns.athanor.id == seated_athanor().id
   end
 
   test "lite mode hides the developer views and their words", %{conn: conn} do
@@ -92,7 +91,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     # Lite is the default for a person who is not the administrator.
     {_view, html} = mount_athanor(conn, "/settings")
     refute html =~ "nav-executions"
-    assert html =~ "nav-chat"
+    assert html =~ "drawer-nav-aqua"
 
     # Dev: the full sidebar in the runtime's vocabulary.
     {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
@@ -106,12 +105,13 @@ defmodule PrismWeb.AuthenticatedMountTest do
     {view, html} = mount_athanor(conn, "/settings")
     refute html =~ "nav-executions"
     refute html =~ "nav-api-keys"
-    assert html =~ "nav-chat"
+    assert html =~ "drawer-nav-aqua"
+    refute html =~ "nav-chat"
     refute has_element?(view, "#drawer", "Executions")
     refute html =~ ">Tinctures<"
   end
 
-  test "lite is chat + drawer: no sidebar, no live indicators; dev keeps both",
+  test "lite is the drawer: no sidebar, no live indicators; dev keeps both",
        %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
@@ -132,11 +132,11 @@ defmodule PrismWeb.AuthenticatedMountTest do
     # Lite: no sidebar link at all, the drawer holds the lite pages, and the
     # topbar carries no indicators — the drawer button is always shown.
     {view, html} = mount_athanor(conn, "/settings")
-    refute html =~ ~s(id="nav-chat")
+    refute html =~ ~s(id="nav-aqua")
     refute html =~ ~s(id="nav-webhooks")
 
     for key <-
-          ~w(chat aqua vault schedules webhooks programs settings) do
+          ~w(aqua vault schedules webhooks programs settings) do
       assert has_element?(view, "#drawer #drawer-nav-#{key}"), "lite drawer lacks #{key}"
     end
 
@@ -149,13 +149,6 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert has_element?(bar, "#open-drawer")
     assert has_element?(bar, "#open-palette")
     assert has_element?(view, "#drawer-search")
-  end
-
-  test "the chat page's thread list is a panel a phone can open and close", %{conn: conn} do
-    conn = log_in_user(conn, test_user())
-    {_view, html} = mount_athanor(conn, "")
-    assert html =~ ~s(id="thread-list")
-    assert html =~ "max-md:hidden"
   end
 
   describe "a request a frame made" do

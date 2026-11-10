@@ -237,7 +237,7 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
   # The shell, once the canvas has read the layout and the shell has
   # decided what it shows.
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     wait_until(fn -> render(view) && assigns(view).showing != :pending end, 2_000, "the canvas")
     view
   end
@@ -282,11 +282,14 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
 
     assert has_element?(
              view,
-             ~s(#system-layer-dialog [data-test="grant-pick"][aria-pressed="true"]),
+             ~s(#system-layer-desktop-dialog [data-test="grant-pick"][aria-pressed="true"]),
              entry.name
            )
 
-    view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+    view
+    |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+    |> render_click()
+
     wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
     {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, "tincture:local.#{name}")

@@ -5,19 +5,20 @@ defmodule Cyfr.Bus.SharedThreadChanged do
   @moduledoc """
   A shared thread one person sits in, or sat in until this change, moved,
   on that person's own `Cyfr.Bus.shared_threads/1` topic: `:changed` for
-  its title, status or people, `:posted` for a message. It carries the
-  thread's id and nothing of what changed; a page that shows the thread
-  reads it again under the person's seat (`Sanctum.SharedThreads`).
+  its title, status or people, `:posted` for a message, `:read` when the
+  person's own read mark moved. It carries the thread's id and nothing of
+  what changed; a page that shows the thread reads it again under the
+  person's seat (`Sanctum.SharedThreads`).
   """
 
   alias Cyfr.Bus.Payload
 
-  @kinds [:changed, :posted]
+  @kinds [:changed, :posted, :read]
 
   @enforce_keys [:kind, :user_id, :thread_id]
   defstruct [:kind, :user_id, :thread_id]
 
-  @type kind :: :changed | :posted
+  @type kind :: :changed | :posted | :read
 
   @type t :: %__MODULE__{kind: kind(), user_id: String.t(), thread_id: String.t()}
 

@@ -201,17 +201,21 @@ def answer(text, what):
         value = {}
     if not isinstance(value.get("status"), int):
         problems.append(f"{what}: no answer: {text[:200]!r}")
-        return None, None
-    return value["status"], (value.get("headers") or {}).get("Location")
+        return None, None, ""
+    body = value.get("body") if isinstance(value.get("body"), str) else ""
+    return value["status"], (value.get("headers") or {}).get("Location"), body
 unsigned, signed, segment = sys.argv[1:4]
+# Without the cookie / sends to the sign-in page. With it, / is that
+# person's desktop: answered 200, its gear naming their own athanor's
+# settings page.
 want_unsigned = (302, ["/login"])
-want_signed = (302, ["/chat?" + urllib.parse.urlencode({"a": segment})])
-got = answer(unsigned, "without the cookie")
-if got[0] is not None and got != want_unsigned:
-    problems.append(f"without the cookie / answered {got}, not {want_unsigned}")
-got = answer(signed, "with the cookie")
-if got[0] is not None and got != want_signed:
-    problems.append(f"with the person's cookie / answered {got}, not {want_signed}")
+gear = f'href="/a/{segment}/settings"'
+status, location, _body = answer(unsigned, "without the cookie")
+if status is not None and (status, location) != want_unsigned:
+    problems.append(f"without the cookie / answered {(status, location)}, not {want_unsigned}")
+status, location, body = answer(signed, "with the cookie")
+if status is not None and (status != 200 or gear not in body):
+    problems.append(f"with the person's cookie / answered {status} {location}, not 200 with the desktop's {gear}")
 for p in problems:
     print(p)
 sys.exit(1 if problems else 0)

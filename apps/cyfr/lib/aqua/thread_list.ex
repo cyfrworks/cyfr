@@ -14,8 +14,9 @@ defmodule Aqua.ThreadList do
   them). An own thread is its id, its title, its person by the name a
   reader outside CYFR may see (`Sanctum.Tenancy.Users.public_name/1`), its
   last activity and whether a card in it waits on its person
-  (`Arca.ThreadStorage.pending_approvals/2`). Never a message, an id of a
-  person or an address.
+  (`Arca.ThreadStorage.pending_approvals/2`); it keeps no read mark, so
+  its `unread` is nil, where a shared thread's counts the messages unread
+  to the person. Never a message, an id of a person or an address.
 
   `changed/2` follows the writes that move an own thread's row as the list
   shows it: its creation, a message accepted into it (the first titles
@@ -103,7 +104,8 @@ defmodule Aqua.ThreadList do
       title: thread.title,
       people: [name],
       last_activity: thread.last_message_at || thread.inserted_at,
-      waits_on_you: match?([_ | _], Threads.pending_approvals(actor, thread.id))
+      waits_on_you: match?([_ | _], Threads.pending_approvals(actor, thread.id)),
+      unread: nil
     )
   end
 

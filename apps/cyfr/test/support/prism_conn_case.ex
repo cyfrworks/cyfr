@@ -255,20 +255,13 @@ defmodule PrismWeb.ConnCase do
   The page path for an athanor: `/a/<route>` + `suffix`. Takes an athanor, a
   route string (for a test that names one no one owns), or
   nothing — which is the athanor `log_in_user/3` focused this test's person
-  on. The empty suffix is the athanor's chat, which lives in the chat zone
-  (`/chat?a=<route>`).
+  on. The empty suffix is the athanor's desktop (`PrismWeb.DesktopLive`).
   """
   def athanor_path(suffix, athanor \\ nil)
 
   def athanor_path(suffix, nil), do: athanor_path(suffix, seated_athanor())
 
-  def athanor_path(suffix, route) when is_binary(route) do
-    case suffix do
-      "" -> PrismWeb.ChatLive.chat_path(route)
-      "?c=" <> id -> PrismWeb.ChatLive.chat_path(route, id)
-      _ -> PrismWeb.Focus.path(route, suffix)
-    end
-  end
+  def athanor_path(suffix, route) when is_binary(route), do: PrismWeb.Focus.path(route, suffix)
 
   def athanor_path(suffix, athanor),
     do: athanor_path(suffix, Sanctum.Tenancy.Athanors.route_slug(athanor))
@@ -282,6 +275,22 @@ defmodule PrismWeb.ConnCase do
     quote do
       {:ok, view, _mount_html} =
         live(unquote(conn), PrismWeb.ConnCase.athanor_path(unquote(suffix), unquote(athanor)))
+
+      {view, PrismWeb.ConnCase.settled_render(view)}
+    end
+  end
+
+  @doc """
+  Mount the person's desktop (`PrismWeb.ShellLive`), which no route serves:
+  the `:athanor` session's root layout renders it beside every page, so a
+  test mounts it on its own, under the session `conn` carries, focused on
+  the person's own athanor as the layout's does. Returns `{view, html}`,
+  `html` the settled render.
+  """
+  defmacro mount_desktop(conn) do
+    quote do
+      {:ok, view, _mount_html} =
+        live_isolated(unquote(conn), PrismWeb.ShellLive, session: %{})
 
       {view, PrismWeb.ConnCase.settled_render(view)}
     end

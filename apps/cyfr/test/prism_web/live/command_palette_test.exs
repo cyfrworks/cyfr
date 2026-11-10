@@ -81,7 +81,7 @@ defmodule PrismWeb.CommandPaletteTest do
 
     assert has_element?(
              view,
-             ~s(#command-palette [phx-value-to="/canvas?publisher=local&tincture_name=palette-app"])
+             ~s(#command-palette [phx-value-to="/?publisher=local&tincture_name=palette-app"])
            )
 
     refute has_element?(view, ~s(#command-palette [phx-value-to*="/tinctures"]))

@@ -103,7 +103,7 @@ defmodule Cyfr.Providers.AttentionTest do
 
       destination = stream.shape["fields"]["destination"]
       assert destination["fields"]["kind"]["values"] == ["page", "ref"]
-      assert destination["fields"]["page"]["values"] == ~w(chat executions schedules files)
+      assert destination["fields"]["page"]["values"] == ~w(aqua executions schedules files)
 
       assert {Provider, :waiting} = stream.refresh
       assert function_exported?(Provider, :waiting, 2)
@@ -158,7 +158,7 @@ defmodule Cyfr.Providers.AttentionTest do
       assert item["kind"] == "approval"
       assert item["id"] == waiting.id
       assert item["label"] == "Plan the trip"
-      assert item["destination"] == %{"kind" => "page", "page" => "chat", "ref" => thread.id}
+      assert item["destination"] == %{"kind" => "page", "page" => "aqua", "ref" => thread.id}
       refute item["id"] in [decided.id, expired.id]
     end
 

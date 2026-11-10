@@ -1491,14 +1491,6 @@ defmodule Cyfr.Boundaries do
           "actor, tenant-relative, once its message is found."
     },
     %{
-      from: "PrismWeb.ChatLive",
-      into: "Arca.ThreadStorage",
-      functions: [:get, :list],
-      reason:
-        "the chat page lists and opens the focused athanor's threads under its " <>
-          "actor; the assistant owns every thread write."
-    },
-    %{
       from: "PrismWeb.ExecutionsLive",
       into: "Arca.Execution",
       functions: [:statuses],
@@ -1580,15 +1572,6 @@ defmodule Cyfr.Boundaries do
       reason:
         "the scan mark's key is the cache's own spelling for the actor's athanor, so " <>
           "the shell and the scan name one entry; it reads nothing."
-    },
-    %{
-      from: "PrismWeb.Surface",
-      into: "Arca.Cache",
-      functions: [:get],
-      reason:
-        "the mode a browser session was last in, and its last Dashboard page, are kept " <>
-          "under a hash of its token; a read answers them or a miss, and drops an " <>
-          "expired entry as it finds it, which is the cache's own housekeeping."
     },
     %{
       from: "PrismWeb.ThreadPaneLive",
@@ -1749,15 +1732,6 @@ defmodule Cyfr.Boundaries do
       reason:
         "the scan mark's key is the cache's own spelling for the actor's athanor, so " <>
           "the shell and the scan name one entry; it reads nothing."
-    },
-    %{
-      from: "PrismWeb.Surface",
-      into: "Arca.Cache",
-      functions: [:get],
-      reason:
-        "the mode a browser session was last in, and its last Dashboard page, are kept " <>
-          "under a hash of its token; a read answers them or a miss, and drops an " <>
-          "expired entry as it finds it, which is the cache's own housekeeping."
     },
     %{
       from: "PrismWeb.ThreadPaneLive",
@@ -1917,15 +1891,6 @@ defmodule Cyfr.Boundaries do
         "the shell marks its tincture scan running per athanor for a bounded time, so " <>
           "two refreshes start one scan, and clears the mark when the scan ends: " <>
           "server-local memory, never a row."
-    },
-    %{
-      from: "PrismWeb.Surface",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the mode switch keeps the mode a browser session was last in, and its last " <>
-          "Dashboard page, under a hash of its token, for a bounded time: server-local " <>
-          "memory, never a row."
     }
   ]
 
@@ -2222,6 +2187,7 @@ defmodule Cyfr.Boundaries do
       limits: 0,
       listed: 1,
       listings: 2,
+      mark_read: 2,
       people_in_threads_with: 1,
       post: 5,
       tail: 3

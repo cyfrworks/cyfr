@@ -6,11 +6,13 @@ defmodule Aqua.StreamsTest do
   The assistant's two canvas streams. `threads.changes` is one person's
   list of threads, on that person's own topic: their athanor's own threads
   and the active shared threads they sit in, first as the refresh reads
-  them and then each change. `activity.changes` is the athanor's crew at
-  work: every member's open job first, then each start and end. Every
-  refresh item and live payload is checked as a canvas reads it:
-  projected, passed through JSON and held to the declared shape, and none
-  carries a message, a task's text, a person's id or an address.
+  them and then each change, a shared thread with what is unread to the
+  person and an own thread with no read mark. `activity.changes` is the
+  athanor's crew at work: every member's open job first, then each start
+  and end. Every refresh item and live payload is checked as a canvas
+  reads it: projected, passed through JSON and held to the declared
+  shape, and none carries a message, a task's text, a person's id or an
+  address.
   """
 
   # The telemetry bridge, which announces a shared thread's change, is
@@ -22,7 +24,7 @@ defmodule Aqua.StreamsTest do
   alias Aqua.Providers.Thread, as: Provider
   alias Aqua.{Tape, ThreadList}
   alias Arca.ThreadStorage, as: Threads
-  alias Cyfr.Bus.{CrewActivity, ThreadListed}
+  alias Cyfr.Bus.{CrewActivity, SharedThreadChanged, ThreadListed}
   alias Cyfr.Test.ShareFixtures
   alias Prima.Canvas.Shape
   alias Sanctum.SharedThreads
@@ -61,7 +63,9 @@ defmodule Aqua.StreamsTest do
 
       assert {threads.topic, threads.bind} == {:threads, :holder}
       assert threads.refresh == {ThreadList, :listed}
-      assert threads.projection == ~w(kind id title people last_activity waits_on_you revision at)
+
+      assert threads.projection ==
+               ~w(kind id title people last_activity waits_on_you unread revision at)
 
       assert {threads.key, threads.removal, threads.reread, threads.stale_after} ==
                {"id", "removed", [], 900}
@@ -70,9 +74,11 @@ defmodule Aqua.StreamsTest do
       assert Prima.Provider.Stream.admits?(threads, ada.user.id)
       refute Prima.Provider.Stream.admits?(threads, nil)
 
-      # A removal carries its kind and id alone.
-      for field <- ~w(title people last_activity waits_on_you),
+      # A removal carries its kind and id alone, and an own thread keeps no read mark.
+      for field <- ~w(title people last_activity waits_on_you unread),
           do: assert(threads.shape["fields"][field]["nullable"], field)
+
+      assert threads.shape["fields"]["unread"] == %{"type" => "integer", "nullable" => true}
 
       assert {activity.topic, activity.subject, activity.bind} == {:crew_activity, nil, nil}
       assert activity.refresh == {Activity, :open}
@@ -106,6 +112,7 @@ defmodule Aqua.StreamsTest do
                "title" => "New thread",
                "people" => ["Ada"],
                "waits_on_you" => false,
+               "unread" => nil,
                "last_activity" => created
              } = heard(ada, id)
 
@@ -123,7 +130,8 @@ defmodule Aqua.StreamsTest do
                "title" => nil,
                "people" => nil,
                "last_activity" => nil,
-               "waits_on_you" => nil
+               "waits_on_you" => nil,
+               "unread" => nil
              }
 
       # A later announcement reads the thread gone and says nothing.
@@ -194,6 +202,85 @@ defmodule Aqua.StreamsTest do
       {:ok, _} = SharedThreads.archive(ada.user.id, thread.id)
       assert %{"kind" => "removed"} = heard(ada, thread.id)
       refute_receive %ThreadListed{}, 200
+    end
+
+    test "another's post is unread to a person until their own read mark moves, told to them alone",
+         %{ada: ada, bob: bob} do
+      {:ok, thread} = SharedThreads.create(ada.user.id, "Trip")
+      {:ok, :added} = SharedThreads.add(ada.user.id, thread.id, user_id: bob.user.id)
+      thread_id = thread.id
+      listen(ada)
+      listen(bob)
+      for person <- [ada, bob], do: :ok = Cyfr.Bus.subscribe_global(changes(person))
+
+      {:ok, _} = SharedThreads.post(bob.user.id, thread.id, @said)
+      assert %{"unread" => 1} = heard(ada, thread_id)
+      assert %{"unread" => 0} = heard(bob, thread_id)
+
+      {:ok, _} = SharedThreads.post(bob.user.id, thread.id, @said)
+      assert %{"unread" => 2} = heard(ada, thread_id)
+      assert %{"unread" => 0} = heard(bob, thread_id)
+      flush_changes()
+
+      assert :ok = SharedThreads.mark_read(ada.user.id, thread_id)
+
+      ada_id = ada.user.id
+      assert_receive %SharedThreadChanged{kind: :read, user_id: ^ada_id, thread_id: ^thread_id}
+      read = heard(ada, thread_id)
+
+      assert %{"kind" => "shared", "id" => ^thread_id, "title" => "Trip", "unread" => 0} = read
+
+      text = inspect(read)
+
+      for secret <- [@said, ada.user.id, bob.user.id, ada.user.email, bob.user.email],
+          do: refute(text =~ secret)
+
+      bobs_athanor = bob.athanor.id
+      refute_receive %ThreadListed{athanor_id: ^bobs_athanor}, 200
+      refute_receive %SharedThreadChanged{}, 100
+
+      # A mark that stood announces nothing.
+      assert :ok = SharedThreads.mark_read(ada.user.id, thread_id)
+      refute_receive %ThreadListed{}, 200
+      refute_receive %SharedThreadChanged{}, 100
+    end
+  end
+
+  # The canvas wire's vectors (tests/fixtures/tincture_wire.json), whose
+  # `stream_events` hold this stream's events as a canvas reads them.
+  @wire Path.expand("../../../../tests/fixtures/tincture_wire.json", __DIR__)
+
+  describe "the wire's thread events" do
+    test "are a shared thread's and an own thread's payloads, read back whole as a canvas reads them",
+         %{ada: ada} do
+      vectors = @wire |> File.read!() |> Jason.decode!()
+      events = for %{"event" => event} <- vectors["stream_events"]["threads.changes"], do: event
+
+      assert [%{"kind" => "shared", "unread" => unread}, %{"kind" => "own", "unread" => nil}] =
+               events
+
+      assert is_integer(unread) and unread > 0
+
+      actor = Prima.Actor.in_athanor(ada.athanor.id)
+
+      for event <- events do
+        {:ok, last_activity, 0} = DateTime.from_iso8601(event["last_activity"])
+        {:ok, at, 0} = DateTime.from_iso8601(event["at"])
+
+        payload =
+          ThreadListed.new(actor, String.to_existing_atom(event["kind"]),
+            id: event["id"],
+            title: event["title"],
+            people: event["people"],
+            last_activity: last_activity,
+            unread: event["unread"],
+            waits_on_you: event["waits_on_you"],
+            revision: event["revision"],
+            at: at
+          )
+
+        assert projected(payload) == event
+      end
     end
   end
 
@@ -465,6 +552,18 @@ defmodule Aqua.StreamsTest do
     :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.threads(actor, person.user.id))
   end
 
+  defp changes(person), do: Cyfr.Bus.shared_threads(person.user.id)
+
+  # The shared-thread changes already heard: a case asserts on the ones
+  # its next act makes.
+  defp flush_changes do
+    receive do
+      %SharedThreadChanged{} -> flush_changes()
+    after
+      0 -> :ok
+    end
+  end
+
   # A person's line into their own thread, opening no turn.
   defp say(person, thread_id, text) do
     Tape.accept(person.ctx, thread_id, %{
@@ -513,9 +612,18 @@ defmodule Aqua.StreamsTest do
   end
 
   # A refresh item or a live payload as a canvas reads it on the stream
-  # its topic feeds: projected by the grant, passed through JSON, and held
-  # to the declared shape.
-  defp read_as(%module{} = payload) do
+  # its topic feeds, with its delivery fields set aside.
+  defp read_as(payload) do
+    data = projected(payload)
+    # The delivery fields, its revision its time in microseconds, set aside.
+    {:ok, at, 0} = DateTime.from_iso8601(data["at"])
+    assert data["revision"] == DateTime.to_unix(at, :microsecond)
+    Map.drop(data, ~w(revision at))
+  end
+
+  # The payload whole as a canvas reads it: projected by the grant, passed
+  # through JSON, and held to the declared shape.
+  defp projected(%module{} = payload) do
     name = if module == ThreadListed, do: "threads.changes", else: "activity.changes"
     {:ok, {Provider, stream}} = Sanctum.Catalog.lookup_stream(name)
 
@@ -530,10 +638,7 @@ defmodule Aqua.StreamsTest do
     data = grant |> Prima.StreamGrant.project(payload) |> Jason.encode!() |> Jason.decode!()
     assert :ok = Shape.check(stream.shape, data), inspect(data)
     assert Enum.sort(Map.keys(data)) == Enum.sort(stream.projection)
-    # The delivery fields, its revision its time in microseconds, set aside.
-    {:ok, at, 0} = DateTime.from_iso8601(data["at"])
-    assert data["revision"] == DateTime.to_unix(at, :microsecond)
-    Map.drop(data, ~w(revision at))
+    data
   end
 
   defp later_or_same?(later, earlier) do

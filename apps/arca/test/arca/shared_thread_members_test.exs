@@ -11,7 +11,9 @@ defmodule Arca.SharedThreadMembersTest do
   whatever the thread's status, and neither once an activation or another
   removal changed the row first (`Arca.SharedThreadMembersRaceTest`); a
   person leaving, which ends a pair or a thread left empty; whether two
-  people sit in one active thread, and whom a person sits with in one. The people cap is
+  people sit in one active thread, and whom a person sits with in one; a
+  seat's read mark, which only rises, and what is unread past it, never a
+  person's own message. The people cap is
   `Arca.SharedThreadMembersCapsTest`'s. Every function is the platform's
   and refuses an athanor's actor.
   """
@@ -46,6 +48,18 @@ defmodule Arca.SharedThreadMembersTest do
   defp generation(thread) do
     {:ok, %{security_generation: generation}} = SharedThreads.get(server(), thread.id)
     generation
+  end
+
+  defp posted!(thread, author) do
+    {:ok, %{seq: seq}} =
+      Arca.SharedMessages.append(server(), thread.id, %{author: author, content: "x"})
+
+    seq
+  end
+
+  defp mark!(thread, who) do
+    {:ok, %{read_seq: mark}} = SharedThreadMembers.find(server(), thread.id, who)
+    mark
   end
 
   describe "seat/5" do
@@ -397,6 +411,66 @@ defmodule Arca.SharedThreadMembersTest do
     end
   end
 
+  describe "mark_read/4 and unread/2" do
+    test "the mark only rises, and only at an active seat", %{by: by, thread: thread} do
+      assert mark!(thread, by) == 0
+      assert {:ok, :moved} = SharedThreadMembers.mark_read(server(), thread.id, by, 3)
+      assert {:ok, :unchanged} = SharedThreadMembers.mark_read(server(), thread.id, by, 3)
+      assert {:ok, :unchanged} = SharedThreadMembers.mark_read(server(), thread.id, by, 1)
+      assert mark!(thread, by) == 3
+      assert {:ok, :moved} = SharedThreadMembers.mark_read(server(), thread.id, by, 4)
+      assert mark!(thread, by) == 4
+
+      id = identifier()
+      {:ok, _} = SharedThreadMembers.invite(server(), thread.id, id, by)
+
+      for {thread_id, who} <- [{thread.id, person()}, {"sth_nobody", by}] do
+        assert {:error, :not_found} =
+                 SharedThreadMembers.mark_read(server(), thread_id, who, 1)
+      end
+
+      assert {:error, {:invalid, %{seq: _}}} =
+               SharedThreadMembers.mark_read(server(), thread.id, by, -1)
+
+      assert [%{status: "invited", read_seq: 0}] =
+               for(%{status: "invited"} = row <- people(thread), do: row)
+    end
+
+    test "counts what someone else wrote past each seat's mark, never a person's own",
+         %{by: by, thread: thread} do
+      who = person()
+      {:ok, _} = SharedThreadMembers.seat(server(), thread.id, who, by)
+      {:ok, other} = SharedThreads.create(server(), %{title: "Other", created_by: who})
+
+      unread = fn seats ->
+        {:ok, rows} = SharedThreadMembers.unread(server(), seats)
+        rows |> Enum.map(&{&1.thread_id, &1.user_id, &1.unread}) |> Enum.sort()
+      end
+
+      assert unread.(user_id: who) == Enum.sort([{thread.id, who, 0}, {other.id, who, 0}])
+
+      posted!(thread, by)
+      posted!(thread, who)
+      seq = posted!(thread, by)
+      posted!(other, who)
+
+      assert unread.(user_id: who) == Enum.sort([{thread.id, who, 2}, {other.id, who, 0}])
+      assert unread.(thread_id: thread.id) == Enum.sort([{thread.id, by, 1}, {thread.id, who, 2}])
+
+      {:ok, :moved} = SharedThreadMembers.mark_read(server(), thread.id, who, seq)
+      posted!(thread, who)
+      assert unread.(thread_id: thread.id) == Enum.sort([{thread.id, by, 2}, {thread.id, who, 0}])
+
+      posted!(thread, by)
+      assert unread.(thread_id: thread.id) == Enum.sort([{thread.id, by, 2}, {thread.id, who, 1}])
+
+      # An invitation is no seat and has nothing unread; a stranger sits nowhere.
+      {:ok, _} = SharedThreadMembers.invite(server(), thread.id, identifier(), by)
+      assert length(unread.(thread_id: thread.id)) == 2
+      assert unread.(user_id: person()) == []
+    end
+  end
+
   describe "list/2" do
     test "names the thread's seats and invitations, oldest first", %{by: by, thread: thread} do
       who = person()
@@ -425,12 +499,14 @@ defmodule Arca.SharedThreadMembersTest do
           fn -> SharedThreadMembers.find(actor, thread.id, by) end,
           fn -> SharedThreadMembers.together?(actor, by, by) end,
           fn -> SharedThreadMembers.people_with(actor, by) end,
-          fn -> SharedThreadMembers.list(actor, thread.id) end
+          fn -> SharedThreadMembers.list(actor, thread.id) end,
+          fn -> SharedThreadMembers.mark_read(actor, thread.id, by, 1) end,
+          fn -> SharedThreadMembers.unread(actor, user_id: by) end
         ] do
       assert {:error, :cross_tenant} = call.()
     end
 
-    assert {:ok, [%{user_id: ^by}]} = SharedThreadMembers.list(server(), thread.id)
+    assert {:ok, [%{user_id: ^by, read_seq: 0}]} = SharedThreadMembers.list(server(), thread.id)
   end
 end
 

@@ -13,11 +13,11 @@ defmodule PrismWeb.FocusIntentTest do
   This walks the seam end to end for every intent, without a hand-kept list
   of pages: mint the path through `Aqua.Intents`, hand it to a real
   `PrismWeb.ThreadPaneLive` the way the runner does and take the path
-  it pushes to the browser — the athanor in focus prefixed, a global page
-  left alone — ask the router which LiveView serves it, and require that
-  module's source to read every query key the mint produced. The roster
-  below is the intents, not the wiring — and the first test fails if an
-  intent is added without one.
+  it offers the person as a link — the athanor in focus prefixed — ask
+  the router which LiveView serves it, and require that module's source
+  to read every query key the mint produced. The roster below is the
+  intents, not the wiring — and the first test fails if an intent is
+  added without one.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -39,9 +39,9 @@ defmodule PrismWeb.FocusIntentTest do
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
-  # One pane on the person's own athanor, on a thread of its own, in the mode whose nav shows
-  # every page: what it pushes for a navigate is what the browser would
-  # follow.
+  # One pane on the person's own athanor, on a thread of its own, in the
+  # mode whose nav shows every page: the link it offers for a navigate is
+  # what the browser would follow.
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
@@ -62,7 +62,7 @@ defmodule PrismWeb.FocusIntentTest do
     {:ok, pane: pane, thread: thread, user: user, athanor: athanor}
   end
 
-  defp pushed(%{pane: pane, thread: thread, user: user}, intent) do
+  defp offered(%{pane: pane, thread: thread, user: user}, intent) do
     send(pane.pid, %Cyfr.Bus.ThreadEvent{
       athanor_id: thread.athanor_id,
       thread_id: thread.id,
@@ -70,8 +70,13 @@ defmodule PrismWeb.FocusIntentTest do
       data: %{intents: [intent], user_id: user.user_id}
     })
 
-    render(pane)
-    assert_push_event(pane, "aqua:intents", %{intents: [%{kind: "navigate", to: to}]})
+    assert [to] =
+             pane
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([id$="-links"] a))
+             |> LazyHTML.attribute("href")
+
     to
   end
 
@@ -115,26 +120,31 @@ defmodule PrismWeb.FocusIntentTest do
                Aqua.Intents.validate(Map.put(unquote(Macro.escape(args)), "kind", unquote(kind)))
 
       # `Aqua.Intents` mints the page-relative path; the pane prefixes the
-      # athanor in focus before handing it to the client, the same split
+      # athanor in focus before offering it, the same split
       # `PrismWeb.ActiveContext.strip_focus/1` undoes.
-      to = pushed(context, intent)
+      to = offered(context, intent)
       assert to == PrismWeb.Focus.path(Athanors.route_slug(athanor), path)
 
       uri = URI.parse(to)
       module = served_by(uri.path)
 
-      source =
-        root()
-        |> Path.join(Path.relative_to(module.__info__(:compile)[:source], root()))
-        |> Prima.Test.SourceTree.read()
+      # The desktop's page draws nothing: the desktop's own hook reads its
+      # address and hands the tincture to the shell (`focus_named`).
+      {reader, read} =
+        if module == PrismWeb.DesktopLive,
+          do: {"apps/cyfr/assets/js/hooks/shell_page.js", &~s|searchParams.get("#{&1}")|},
+          else:
+            {Path.relative_to(module.__info__(:compile)[:source], root()), &~s|params["#{&1}"]|}
+
+      source = root() |> Path.join(reader) |> Prima.Test.SourceTree.read()
 
       # A path-segment intent (`/components/:ref`) needs no query key: the
       # route itself carries the resource and Phoenix hands it over.
       for {key, _value} <- URI.decode_query(uri.query || "") do
-        assert source =~ ~s|params["#{key}"]|,
+        assert source =~ read.(key),
                """
-               #{unquote(kind)} navigates to #{path}, but #{inspect(module)}
-               never reads `params[#{inspect(key)}]`.
+               #{unquote(kind)} navigates to #{path}, but #{reader}
+               never reads `#{read.(key)}`.
 
                The intent is inert: the assistant moves the person to a page
                that shows the same list it showed before, while
@@ -146,15 +156,18 @@ defmodule PrismWeb.FocusIntentTest do
     end
   end
 
-  test "a global page is pushed as it is, with no athanor in its address",
-       %{athanor: athanor, thread: thread} = context do
-    path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(athanor), thread.id)
-    assert PrismWeb.Nav.global?(path)
+  test "the desktop's address is offered under the athanor in focus, a tincture's focus kept",
+       %{athanor: athanor} = context do
+    assert {:ok, %{kind: "navigate", to: path} = intent} =
+             Aqua.Intents.validate(%{
+               "kind" => "ui.tincture.focus",
+               "publisher" => "local",
+               "name" => "widget"
+             })
 
-    assert {:ok, %{kind: "navigate", to: ^path} = intent} =
-             Aqua.Intents.validate(%{"kind" => "ui.navigate", "path" => path})
-
-    assert pushed(context, intent) == path
-    assert served_by(URI.parse(path).path) == PrismWeb.ChatLive
+    assert path == "/?publisher=local&tincture_name=widget"
+    offered = offered(context, intent)
+    assert offered == PrismWeb.Focus.path(Athanors.route_slug(athanor), path)
+    assert served_by(URI.parse(offered).path) == PrismWeb.DesktopLive
   end
 end

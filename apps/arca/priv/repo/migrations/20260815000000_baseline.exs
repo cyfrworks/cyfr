@@ -2772,11 +2772,12 @@ defmodule Arca.Repo.Migrations.Baseline do
   # A shared thread is a place people talk in, no athanor's
   # (`Arca.SharedThreads`): a title and its people, or a pair of two people,
   # fixed at its birth and named by `pair_of`, the two user ids sorted and
-  # joined. Its people are `shared_thread_members`: a person's seat, or an
-  # identifier's invitation that becomes one at that person's sign-in
-  # (`Arca.SharedThreadMembers`). Its messages are `shared_messages`, in
-  # `seq` order (`Arca.SharedMessages`). Archiving or reopening one raises
-  # its `security_generation` by one, as an athanor's does.
+  # joined. Its people are `shared_thread_members`: a person's seat, with
+  # their read mark, or an identifier's invitation that becomes one at that
+  # person's sign-in (`Arca.SharedThreadMembers`). Its messages are
+  # `shared_messages`, in `seq` order (`Arca.SharedMessages`). Archiving or
+  # reopening one raises its `security_generation` by one, as an athanor's
+  # does.
   defp shared_threads do
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
@@ -2832,6 +2833,8 @@ defmodule Arca.Repo.Migrations.Baseline do
           "(status <> 'invited' OR (user_id IS NULL AND person_identifier IS NOT NULL))"
     }
 
+    read_counted = %{name: "shared_thread_members_read_seq_counted", expr: "read_seq >= 0"}
+
     create table(:shared_thread_members, primary_key: false) do
       add :id, :string, primary_key: true, null: false
 
@@ -2849,9 +2852,12 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :added_by, :string, null: false
       add :created_at, :utc_datetime_usec, null: false
+      # The person's read mark: the `seq` of the thread's newest message
+      # they have had open, 0 before any.
+      add :read_seq, :integer, null: false, default: 0, check: if(sqlite?, do: read_counted)
     end
 
-    checked(sqlite?, :shared_thread_members, [member_status, seat_whole])
+    checked(sqlite?, :shared_thread_members, [member_status, seat_whole, read_counted])
 
     # One seat per person per thread, and one invitation per identifier per
     # thread.

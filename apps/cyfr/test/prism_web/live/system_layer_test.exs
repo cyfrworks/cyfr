@@ -679,6 +679,28 @@ defmodule PrismWeb.SystemLayerTest do
 
   defp view_context(view), do: :sys.get_state(view.pid).socket.assigns.context
 
+  # A thread pane in its host, AQUA's panel on the desktop, opened and
+  # turned to `thread_id`: answers the panel and the pane once the pane is
+  # on the thread.
+  defp panel_pane(conn, thread_id) do
+    {desktop, _html} = mount_desktop(conn)
+    wait_until(fn -> find_live_child(desktop, "aqua-panel") end, 5_000, "the desktop's panel")
+    panel = find_live_child(desktop, "aqua-panel")
+    panel |> element("#aqua-panel-button") |> render_click()
+    panel |> form("#aqua-panel-thread-form", %{"id" => thread_id}) |> render_change()
+
+    wait_until(
+      fn ->
+        pane = find_live_child(panel, "aqua-panel-pane")
+        pane && match?(%{id: ^thread_id}, :sys.get_state(pane.pid).socket.assigns.thread)
+      end,
+      5_000,
+      "the panel's pane on the thread"
+    )
+
+    {panel, find_live_child(panel, "aqua-panel-pane")}
+  end
+
   # The assigns of the layer `id` holds in the view's process.
   defp layer_assigns(view, id \\ "system-layer") do
     {by_cid, _ids, _next} = :sys.get_state(view.pid).components
@@ -2857,15 +2879,7 @@ defmodule PrismWeb.SystemLayerTest do
       athanor = seated_athanor()
       conn = log_in_user(conn, user, claim: false, athanor_id: athanor.id)
       {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(local))
-
-      {:ok, page, _html} =
-        live(
-          conn,
-          PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), thread.id)
-        )
-
-      settled_render(page)
-      pane = find_live_child(page, "pane-" <> athanor.id)
+      {panel, pane} = panel_pane(conn, thread.id)
 
       refused =
         "Cannot ask for this grant: The stored profile is damaged and cannot be used."
@@ -2893,7 +2907,7 @@ defmodule PrismWeb.SystemLayerTest do
         })
 
         assert render(pane) =~ refused, inspect(changes)
-        refute has_element?(page, ~s(#system-layer-dialog [data-kind="grant"]))
+        refute has_element?(panel, ~s(#system-layer-panel-dialog [data-kind="grant"]))
       end
 
       Cyfr.Test.Sandbox.end_views()
@@ -5472,7 +5486,7 @@ defmodule PrismWeb.SystemLayerTest do
       %{conn: conn, user: user, athanor: athanor, local: local}
     end
 
-    test "a thread pane's grant is asked in the chat page's layer, and its outcome goes back to " <>
+    test "a thread pane's grant is asked in AQUA's panel's layer, and its outcome goes back to " <>
            "the pane",
          %{conn: conn, user: user, athanor: athanor, local: local} do
       app =
@@ -5482,15 +5496,7 @@ defmodule PrismWeb.SystemLayerTest do
 
       regrant_key!(local)
       {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(local))
-
-      {:ok, page, _html} =
-        live(
-          conn,
-          PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), thread.id)
-        )
-
-      settled_render(page)
-      pane = find_live_child(page, "pane-" <> athanor.id)
+      {panel, pane} = panel_pane(conn, thread.id)
 
       send(pane.pid, %Cyfr.Bus.ThreadEvent{
         athanor_id: athanor.id,
@@ -5500,20 +5506,22 @@ defmodule PrismWeb.SystemLayerTest do
       })
 
       render(pane)
-      render(page)
-      assert has_element?(page, ~s(#system-layer-dialog [data-kind="grant"]))
+      render(panel)
+      assert has_element?(panel, ~s(#system-layer-panel-dialog [data-kind="grant"]))
 
-      # The page placed the pane's prompt in its own layer and holds where
+      # The panel placed the pane's prompt in its own layer and holds where
       # the outcome goes.
       assert %{grant_prompt: prompt_id} = :sys.get_state(pane.pid).socket.assigns
       assert is_binary(prompt_id)
 
       assert %{^prompt_id => pane_pid} =
-               :sys.get_state(page.pid).socket.assigns.system_layer_relays
+               :sys.get_state(panel.pid).socket.assigns.system_layer_relays
 
       assert pane_pid == pane.pid
 
-      page |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      panel
+      |> element(~s(#system-layer-panel-dialog button[phx-click="confirm"]))
+      |> render_click()
 
       wait_until(
         fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
@@ -5521,9 +5529,9 @@ defmodule PrismWeb.SystemLayerTest do
         "the pane to hear its grant"
       )
 
-      # The grant was made, and the page let go of the ended prompt.
+      # The grant was made, and the panel let go of the ended prompt.
       assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(local, app)
-      assert :sys.get_state(page.pid).socket.assigns.system_layer_relays == %{}
+      assert :sys.get_state(panel.pid).socket.assigns.system_layer_relays == %{}
       Cyfr.Test.Sandbox.end_views()
     end
 

@@ -161,9 +161,9 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     [
       %{
         kind: :action,
-        label: "Open in Canvas",
+        label: "Open the desktop",
         hint: id,
-        to: "/canvas",
+        to: "/",
         icon: "palette",
         keywords: "open tincture #{id}"
       }
@@ -216,10 +216,10 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     end
   end
 
-  # The Canvas mode, the tincture focused in its picker.
-  defp canvas_path(t),
+  # The desktop, the tincture focused in its picker (`PrismWeb.DesktopLive`).
+  defp desktop_path(t),
     do:
-      "/canvas?publisher=#{URI.encode_www_form(t.publisher)}" <>
+      "/?publisher=#{URI.encode_www_form(t.publisher)}" <>
         "&tincture_name=#{URI.encode_www_form(t.name)}"
 
   defp tincture_items(ctx) do
@@ -231,7 +231,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           kind: :tincture,
           label: t.title || "#{t.publisher}.#{t.name}",
           hint: "tincture",
-          to: canvas_path(t),
+          to: desktop_path(t),
           icon: "palette",
           keywords:
             ["tincture", t.publisher, t.name, t.title]
