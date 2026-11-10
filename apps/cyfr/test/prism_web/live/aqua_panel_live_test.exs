@@ -1149,6 +1149,16 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
       assert has_element?(panel, "#aqua-panel-sheet")
 
+      # The composer took focus as the panel opened, and LiveView leaves a
+      # focused textarea's value alone: the value is pushed to this pane's
+      # composer hook, which sets it.
+      pane_dom = :sys.get_state(pane.pid).socket.assigns.dom <> "-pane"
+
+      assert_push_event(pane, "aqua:composer", %{
+        pane: ^pane_dom,
+        value: "About the runs widget: "
+      })
+
       # A draft the person has is kept, the next sentence after it.
       pane |> element("textarea[name=message]") |> render_change(%{"message" => "my own words"})
       :ok = Cyfr.Bus.broadcast_page(topic, Cyfr.Bus.AquaAsk.new("About the apps widget: "))
@@ -1160,6 +1170,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
         end,
         2_000
       )
+
+      assert_push_event(pane, "aqua:composer", %{
+        pane: ^pane_dom,
+        value: "my own words\n\nAbout the apps widget: "
+      })
 
       # Nothing was sent: no thread of You was made, and nothing is attached.
       assert Threads.list(Sanctum.Context.actor(me)) == []

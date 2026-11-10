@@ -618,10 +618,17 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # A desktop asked about something it shows: Prism's sentence goes after
   # the person's draft, which it never replaces, and nothing is sent.
+  # LiveView leaves a focused textarea's value alone, and the composer takes
+  # focus as the panel opens, so the value is also pushed to the composer's
+  # hook, which sets it; the assign stays what a send carries.
   def handle_info({:aqua_ask, sentence}, socket) when is_binary(sentence) do
     draft = String.trim_trailing(socket.assigns.input)
     input = if draft == "", do: sentence, else: draft <> "\n\n" <> sentence
-    {:noreply, assign(socket, :input, input)}
+
+    {:noreply,
+     socket
+     |> assign(:input, input)
+     |> push_event("aqua:composer", %{pane: pane_id(socket), value: input})}
   end
 
   # The chat overlay opened another shared thread, or none: the thread this
