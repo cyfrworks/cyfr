@@ -422,6 +422,20 @@ defmodule Aqua.Tape do
   end
 
   @doc """
+  Forget the brain's session the turn's thread keeps, at the thread's
+  session `generation` the turn read (`TurnStorage.forget_session/3`), and
+  answer the generation the turn keeps a session under from here.
+  """
+  @spec forget_session(Context.t(), turn(), non_neg_integer()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def forget_session(%Context{} = ctx, turn, generation),
+    do:
+      TurnStorage.forget_session(Sanctum.Context.actor(ctx), turn.id, %{
+        fence: turn.fence,
+        generation: generation
+      })
+
+  @doc """
   Mark a dispatched step whose effect cannot be known, under the turn's
   fence and the step's generation: a sibling the turn's pause already
   covers.

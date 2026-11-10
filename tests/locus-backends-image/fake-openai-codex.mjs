@@ -4,7 +4,7 @@
 //
 // A stand-in for Codex's app-server, run as the `openai-codex` program's
 // command by openai_codex.py: it speaks the JSON-RPC lines Codex 0.167.0's `app-server`
-// was driven to write (seed/components/catalysts/local/openai-codex/0.1.1/README.md,
+// was driven to write (seed/components/catalysts/local/openai-codex/0.1.2/README.md,
 // "Verified against 0.167.0") and keeps its threads in its HOME, the kept
 // folder, under ~/.codex as Codex does.
 //

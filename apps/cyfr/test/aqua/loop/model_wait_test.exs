@@ -19,7 +19,16 @@ defmodule Aqua.Loop.ModelWaitTest do
   turn on a brain consented thirty minutes lasts at least that long, past
   the five its agent is consented. A brain whose first chat is
   interrupted answers a refusal carrying the session it opened, and the
-  next turn's request continues that session.
+  next turn's request continues that session. A brain that refuses the
+  thread's session as one it no longer holds is asked the same request
+  once more without it, in the same turn: the thread forgets the old
+  session and keeps the new one, a refusal of that second request ends
+  the turn as any refusal does, and a thread forgotten from outside
+  meanwhile keeps nothing the turn answers with. A turn forgets a session
+  once: a retry that continues a newer session the brain then refuses the
+  same way ends the turn, and the next turn recovers. A refusal of that
+  type that names a session is off the contract, and forgets and asks
+  nothing.
   """
   use ExUnit.Case, async: false
 
@@ -212,6 +221,202 @@ defmodule Aqua.Loop.ModelWaitTest do
     assert retry["session"] == "brain-1"
   end
 
+  test "a brain that no longer holds the thread's session answers on a new one, which the thread keeps",
+       %{ctx: ctx, thread: thread} do
+    actor = Sanctum.Context.actor(ctx)
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [
+         Map.put(reply("Hello."), "session", "brain-1"),
+         {:refuse, unknown_session()},
+         Map.put(reply("Here again."), "session", "brain-2"),
+         reply("Still here.")
+       ]}
+    )
+
+    assert :completed = Task.await(run(ctx, accept!(ctx, thread, "hello")), 30_000)
+
+    assert {:ok, %{brain_session: "brain-1", brain_generation: generation}} =
+             Threads.get(actor, thread.id)
+
+    # The message is answered in its own turn, on the new session.
+    turn = accept!(ctx, thread, "are you there?")
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert ["error", "ok"] = for(%{kind: "model", outcome: outcome} <- steps, do: outcome)
+
+    assert {:ok, %{brain_session: "brain-2", brain_generation: forgotten}} =
+             Threads.get(actor, thread.id)
+
+    assert forgotten == generation + 1
+
+    assert :completed = Task.await(run(ctx, accept!(ctx, thread, "and now?")), 30_000)
+
+    assert [opened, resumed, again, next] = chat_requests()
+    refute Map.has_key?(opened, "session")
+    assert resumed["session"] == "brain-1"
+    assert again == Map.delete(resumed, "session")
+    assert next["session"] == "brain-2"
+  end
+
+  test "a refusal of the request asked again without the session ends the turn, the session forgotten",
+       %{ctx: ctx, thread: thread} do
+    actor = Sanctum.Context.actor(ctx)
+    %{"message" => gone} = unknown_session()
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [
+         Map.put(reply("Hello."), "session", "brain-1"),
+         {:refuse, unknown_session()},
+         {:refuse, unknown_session()},
+         reply("Back.")
+       ]}
+    )
+
+    assert :completed = Task.await(run(ctx, accept!(ctx, thread, "hello")), 30_000)
+    {:ok, %{brain_generation: generation}} = Threads.get(actor, thread.id)
+
+    assert {:failed, ^gone} =
+             Task.await(run(ctx, accept!(ctx, thread, "are you there?")), 30_000)
+
+    assert {:ok, %{brain_session: nil, brain_generation: forgotten}} =
+             Threads.get(actor, thread.id)
+
+    assert forgotten == generation + 1
+
+    # The next message names no session: the thread recovered on its own.
+    assert :completed = Task.await(run(ctx, accept!(ctx, thread, "again")), 30_000)
+
+    assert [_opened, resumed, again, next] = chat_requests()
+    assert resumed["session"] == "brain-1"
+    refute Map.has_key?(again, "session")
+    refute Map.has_key?(next, "session")
+  end
+
+  # The request asked again is refused for a rate limit and names the
+  # session it opened; the ordinary retry continues that session, and the
+  # brain no longer holds it either. The turn has forgotten a session once,
+  # so it ends there, and the next turn forgets the newer one in its turn.
+  test "a second session the brain no longer holds in one turn ends it, with one forget",
+       %{ctx: ctx, thread: thread} do
+    actor = Sanctum.Context.actor(ctx)
+    %{"message" => gone} = unknown_session()
+    limited = %{"type" => "rate_limited", "message" => "slow down", "session" => "brain-2"}
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [
+         Map.put(reply("Hello."), "session", "brain-1"),
+         {:refuse, unknown_session()},
+         {:refuse, limited},
+         {:refuse, unknown_session()},
+         {:refuse, unknown_session()},
+         Map.put(reply("Back."), "session", "brain-3")
+       ]}
+    )
+
+    assert :completed = Task.await(run(ctx, accept!(ctx, thread, "hello")), 30_000)
+    {:ok, %{brain_generation: generation}} = Threads.get(actor, thread.id)
+
+    assert {:failed, ^gone} =
+             Task.await(run(ctx, accept!(ctx, thread, "are you there?")), 30_000)
+
+    assert [_opened, resumed, fresh, retried] = chat_requests()
+    assert resumed["session"] == "brain-1"
+    assert fresh == Map.delete(resumed, "session")
+    assert retried == Map.put(fresh, "session", "brain-2")
+
+    assert {:ok, %{brain_session: "brain-2", brain_generation: forgotten}} =
+             Threads.get(actor, thread.id)
+
+    assert forgotten == generation + 1
+
+    assert :completed = Task.await(run(ctx, accept!(ctx, thread, "again")), 30_000)
+
+    assert [_, _, _, _, named, anew] = chat_requests()
+    assert named["session"] == "brain-2"
+    refute Map.has_key?(anew, "session")
+
+    assert {:ok, %{brain_session: "brain-3", brain_generation: recovered}} =
+             Threads.get(actor, thread.id)
+
+    assert recovered == generation + 2
+  end
+
+  # A refusal of that type that names a session is off the contract
+  # (`Prima.Model`): the thread's session stays as it is, nothing is asked
+  # again, and the turn ends as it does on any refusal.
+  for {what, session} <- [{"a session", "still-present"}, {"a null session", nil}] do
+    test "a refusal of the thread's session that names #{what} forgets and asks nothing",
+         %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+      refusal = Map.put(unknown_session(), "session", unquote(session))
+      %{"message" => gone} = refusal
+
+      start_supervised!(
+        {ScriptedWorker,
+         ref: @model,
+         script: [
+           Map.put(reply("Hello."), "session", "brain-1"),
+           {:refuse, refusal},
+           reply("Never asked.")
+         ]}
+      )
+
+      assert :completed = Task.await(run(ctx, accept!(ctx, thread, "hello")), 30_000)
+
+      assert {:ok, %{brain_session: "brain-1", brain_generation: generation}} =
+               Threads.get(actor, thread.id)
+
+      assert {:failed, ^gone} =
+               Task.await(run(ctx, accept!(ctx, thread, "are you there?")), 30_000)
+
+      assert [_opened, resumed] = chat_requests()
+      assert resumed["session"] == "brain-1"
+
+      assert {:ok, %{brain_session: "brain-1", brain_generation: ^generation}} =
+               Threads.get(actor, thread.id)
+    end
+  end
+
+  # A program home reset while the request naming the session is out moves
+  # the thread on: the turn's own forget finds a generation it did not
+  # read, and the session its second request opens, perhaps in the home the
+  # reset emptied, is not kept.
+  test "a thread forgotten while the refused request was out keeps no session the turn opens",
+       %{ctx: ctx, thread: thread} do
+    actor = Sanctum.Context.actor(ctx)
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [
+         Map.put(reply("Hello."), "session", "brain-1"),
+         {:probe, self()},
+         {:refuse, unknown_session()},
+         Map.put(reply("Here again."), "session", "brain-2")
+       ]}
+    )
+
+    assert :completed = Task.await(run(ctx, accept!(ctx, thread, "hello")), 30_000)
+    {:ok, %{brain_generation: generation}} = Threads.get(actor, thread.id)
+
+    task = run(ctx, accept!(ctx, thread, "are you there?"))
+    assert_receive {:scripted_probe, worker, _}, 30_000
+    assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+    send(worker, :continue)
+    assert :completed = Task.await(task, 30_000)
+
+    assert {:ok, %{brain_session: nil, brain_generation: reset}} = Threads.get(actor, thread.id)
+    assert reset == generation + 1
+  end
+
   # A files hand consented `consented_ms` hangs: the worker service ends
   # its run at that deadline and its grace and reports it, and the loop
   # asked for no kill, so nothing is held against the athanor and its next
@@ -245,6 +450,16 @@ defmodule Aqua.Loop.ModelWaitTest do
     {:ok, other} = Threads.create(Sanctum.Context.actor(ctx))
     next = accept!(ctx, other, "again")
     assert :completed = Task.await(run(ctx, next), 30_000)
+  end
+
+  # The refusal of a brain that no longer holds the session a request named.
+  defp unknown_session,
+    do: %{"type" => "unknown_session", "message" => "The brain no longer holds this session."}
+
+  # The chat requests the scripted brain was sent, in order.
+  defp chat_requests do
+    for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+        do: params
   end
 
   defp reply(text),

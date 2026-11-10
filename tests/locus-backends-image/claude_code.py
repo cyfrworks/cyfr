@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/claude-code/0.1.2/catalyst.wasm) under a
+(seed/components/catalysts/local/claude-code/0.1.3/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `claude` program, driven by requests signed as
 CYFR signs them (harness.py). The control plane plays CYFR's host for the
@@ -48,6 +48,11 @@ CYFR's tools as the harness starts an MCP server.
 - Resume after retirement: once the session's program is retired idle, the
   next chat naming the session starts the harness again with `--resume`,
   which finds the session in the kept folder.
+- A session the kept folder does not hold: a chat naming one starts the
+  harness with `--resume`, which says in its own words that it finds
+  none and ends; the chat answers unknown_session carrying no session,
+  having sent nothing of the request, and closes the session on the pipe;
+  the same chat without the session opens a new one.
 - A pipe refusal answers the contract's refusal type; and nothing the
   harness writes to its stderr or its folder reaches any answer or event.
 
@@ -73,8 +78,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.2")
-REF = "catalyst:local.claude-code:0.1.2"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.3")
+REF = "catalyst:local.claude-code:0.1.3"
 NEED = "claude"
 OWNER = owner_of("claude-code")
 HOME = "vlt_claude-code"
@@ -417,6 +422,32 @@ def main():
         expect(output["data"]["content"] == [{"type": "text", "text": "Your first message was: say hello"}]
                and output["data"]["session"] == session,
                "the resumed harness finds the session in its kept folder", output)
+
+        # ————— a session the kept folder does not hold —————
+        bridge.calls.clear()
+        gone_id = "0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b"
+        gone = {**later, "session": gone_id}
+        output, events = run_catalyst(rt, plane, wasm, "chat", gone, "a chat naming a session the folder does not hold")
+        answers.append((output, events))
+        argv = bridge.calls[0][1]["argv"]
+        sent = [json.loads(line) for op, args in bridge.calls if op == "send" for line in args["lines"]]
+        expect(argv[argv.index("--resume") + 1] == gone_id and "--session-id" not in argv,
+               "the harness is started resuming the session the request named", argv)
+        expect(output["status"] == 404 and output["error"]["type"] == "unknown_session"
+               and "session" not in output["error"],
+               "a session the harness holds no transcript of answers unknown_session, carrying no session", output)
+        expect(not any(line["type"] == "user" for line in sent) and bridge.calls[-1][0] == "close",
+               "nothing of the request was sent, and the session on the pipe is closed", [bridge.calls, sent])
+        bridge.calls.clear()
+        fresh = {key: value for key, value in gone.items() if key != "session"}
+        output, events = run_catalyst(rt, plane, wasm, "chat", fresh, "the same chat without the session")
+        answers.append((output, events))
+        argv = bridge.calls[0][1]["argv"]
+        expect("--resume" not in argv and output["status"] == 200
+               and output["data"]["session"].split(".")[0] == argv[argv.index("--session-id") + 1]
+               and output["data"]["content"] == [{"type": "text",
+                                                  "text": "Your first message was: what was my first message?"}],
+               "the same chat without the session opens a new session, which holds this message alone", [argv, output])
 
         # ————— a refusal of the pipe —————
         bridge.refuse_next_open = "setup_required"

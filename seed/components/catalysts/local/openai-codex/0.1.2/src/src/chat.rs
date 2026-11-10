@@ -5,14 +5,15 @@
 //! pipe's key and Codex's thread), or a new one. A program started for
 //! the open is initialized, its sign-in read (`account/read`), and the
 //! thread started with CYFR's tools as its dynamic tools, or resumed from
-//! the kept home. The newest user message starts a turn; a request that
-//! answers the tool calls Codex holds answers them. The reply's text
-//! streams, and the turn answers on the first of: calls of CYFR's tools
-//! (`tool_call`s the host runs through its gate; Codex holds each
-//! `item/tool/call` until the next `chat` answers it), the turn's end, or
-//! an error. Codex's own tools (commands, patches) run inside the box
-//! asking nothing, and are shown by name only. `describe` and `models`
-//! read Codex's own model listing (`model/list`).
+//! the kept home; a thread Codex holds nothing to resume from is refused
+//! `unknown_session`, before a turn starts. The newest user message
+//! starts a turn; a request that answers the tool calls Codex holds
+//! answers them. The reply's text streams, and the turn answers on the
+//! first of: calls of CYFR's tools (`tool_call`s the host runs through its
+//! gate; Codex holds each `item/tool/call` until the next `chat` answers
+//! it), the turn's end, or an error. Codex's own tools (commands, patches)
+//! run inside the box asking nothing, and are shown by name only.
+//! `describe` and `models` read Codex's own model listing (`model/list`).
 //!
 //! The catalyst holds nothing between runs: the session is the program's,
 //! a held call's request id and turn ride on its `tool_call`
@@ -207,6 +208,25 @@ fn not_signed_in() -> Refusal {
 
 fn ended() -> Refusal {
     pipe_refusal("ended")
+}
+
+/// The refusal of a request of this catalyst's that Codex answered with an
+/// error.
+fn refused_to_start() -> Refusal {
+    Refusal::new(502, "provider_error", "OpenAI Codex refused to start this session or turn.")
+}
+
+/// The refusal of a session whose thread Codex holds nothing to resume
+/// from (`Prima.Model`). Codex says so in its answer to `thread/resume`,
+/// before this run starts a turn or answers a call, so nothing ran: the
+/// host forgets the session and asks again without one, which starts a new
+/// thread, its usage counted from nothing.
+fn unknown_session() -> Refusal {
+    Refusal::new(
+        404,
+        "unknown_session",
+        "OpenAI Codex no longer holds the session this message continues; the message can be sent again on a new one.",
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -791,9 +811,15 @@ impl Reader {
         }
     }
 
-    /// The answer to this catalyst's request `id`, and every other line read
-    /// meanwhile, in order, for the turn to handle.
-    fn answer<P: Pipe>(&mut self, pipe: &mut P, id: &str, deadline: Instant) -> Result<(Value, Vec<String>), Refusal> {
+    /// What Codex answered this catalyst's request `id`, its result or its
+    /// error's message, and every other line read meanwhile, in order, for
+    /// the turn to handle.
+    fn response<P: Pipe>(
+        &mut self,
+        pipe: &mut P,
+        id: &str,
+        deadline: Instant,
+    ) -> Result<(Result<Value, String>, Vec<String>), Refusal> {
         let mut others = Vec::new();
         loop {
             let wait = wait_until(deadline).ok_or_else(timed_out)?;
@@ -805,11 +831,18 @@ impl Reader {
                     _ => others.push(line),
                 }
             }
-            match answered {
-                Some(Ok(result)) => return Ok((result, others)),
-                Some(Err(_)) => return Err(Refusal::new(502, "provider_error", "OpenAI Codex refused to start this session or turn.")),
-                None => {}
+            if let Some(result) = answered {
+                return Ok((result, others));
             }
+        }
+    }
+
+    /// The result Codex answered this catalyst's request `id` with, an
+    /// error refused, and the other lines read meanwhile (`response`).
+    fn answer<P: Pipe>(&mut self, pipe: &mut P, id: &str, deadline: Instant) -> Result<(Value, Vec<String>), Refusal> {
+        match self.response(pipe, id, deadline)? {
+            (Ok(result), others) => Ok((result, others)),
+            (Err(_), _) => Err(refused_to_start()),
         }
     }
 }
@@ -836,7 +869,7 @@ fn interrupted() -> Refusal {
     Refusal::new(
         502,
         "provider_error",
-        "The session with OpenAI Codex was interrupted mid-turn: its pipe failed or its time ran out, and what reached it is not known. The next message resumes the session from its home.",
+        "The session with OpenAI Codex was interrupted mid-turn: its pipe failed or its time ran out, and what reached it is not known. The next message resumes the session from its folder.",
     )
 }
 
@@ -901,11 +934,12 @@ impl Known {
     /// The session a refusal carries, which the host keeps as a response's,
     /// so a first chat interrupted at its budget is resumed by the next. A
     /// new thread whose rollout is not known to hold the turn carries none:
-    /// Codex answers `turn/start` before it writes the rollout, a thread
-    /// with an empty rollout cannot be resumed, and the host would resume
-    /// it on every later message. Its usage is the thread's
-    /// total less what this run read, which no answer counted: the next
-    /// run counts it, across a reset of Codex's counts too.
+    /// Codex answers `turn/start` before it writes the rollout, and a
+    /// thread with an empty rollout cannot be resumed. A thread Codex
+    /// holds nothing to resume from carries none either
+    /// (`unknown_session`). The session's usage is the thread's total less
+    /// what this run read, which no answer counted: the next run counts
+    /// it, across a reset of Codex's counts too.
     fn carried(&self, key: &str) -> Option<String> {
         let thread = self.thread.as_deref()?;
         let total = self.total.map(|t| -> Counts { std::array::from_fn(|i| t[i].saturating_sub(self.used[i])) });
@@ -1035,7 +1069,16 @@ fn converse<P: Pipe, S: Sink>(
                 }
             };
             send(pipe, line)?;
-            let (started, others) = reader.answer(pipe, &id, deadline).map_err(|r| closing(pipe, r))?;
+            let (started, others) = match reader.response(pipe, &id, deadline)? {
+                (Ok(started), others) => (started, others),
+                // A thread Codex holds nothing to resume from is gone, and
+                // the refusal carries no session.
+                (Err(message), _) if named.is_some() && server::no_rollout(&message) => {
+                    known.thread = None;
+                    return Err(closing(pipe, unknown_session()));
+                }
+                (Err(_), _) => return Err(closing(pipe, refused_to_start())),
+            };
             early.extend(others);
             if model.is_none() {
                 model = started.get("model").and_then(Value::as_str).map(str::to_string);
@@ -1279,6 +1322,10 @@ mod tests {
     struct Codex {
         signed_in: bool,
         silent: bool,
+        /// The error a `thread/resume` of a thread it does not hold is
+        /// answered with; `None` is the one 0.167.0 answered for a thread
+        /// with no rollout in its home.
+        resume_error: Option<&'static str>,
         turns: VecDeque<VecDeque<Vec<String>>>,
         current: VecDeque<Vec<String>>,
         started: u64,
@@ -1292,6 +1339,7 @@ mod tests {
             Codex {
                 signed_in: true,
                 silent: false,
+                resume_error: None,
                 turns: turns.into_iter().map(VecDeque::from).collect(),
                 current: VecDeque::new(),
                 started: 0,
@@ -1346,7 +1394,13 @@ mod tests {
                 Some("thread/resume") if v["params"]["threadId"] == THREAD => {
                     vec![ok(json!({"thread": {"id": THREAD}, "model": "gpt-6.1-sol"}))]
                 }
-                Some("thread/resume") => vec![json!({"id": id, "error": {"code": -32600, "message": "no rollout found"}}).to_string()],
+                Some("thread/resume") => {
+                    let message = match self.resume_error {
+                        Some(message) => message.to_string(),
+                        None => format!("no rollout found for thread id {}", v["params"]["threadId"].as_str().unwrap()),
+                    };
+                    vec![json!({"id": id, "error": {"code": -32600, "message": message}}).to_string()]
+                }
                 Some("turn/start") => {
                     self.started += 1;
                     self.turn = format!("t{}", self.started);
@@ -1741,14 +1795,52 @@ mod tests {
 
     #[test]
     fn a_thread_codex_refuses_to_resume_closes_the_program_so_the_next_message_starts_it_again() {
-        let mut pipe = BoxPipe::new(Codex::new(vec![]));
-        let gone = request(json!({"model": "default", "session": format!("{KEY}.{KEY}"), "messages": [{"role": "user", "content": "hi"}]}));
-        let (refusal, _) = run(&mut pipe, &gone, far());
+        let mut codex = Codex::new(vec![]);
+        codex.resume_error = Some("failed to read thread: thread-store internal error: permission denied");
+        let mut pipe = BoxPipe::new(codex);
+        let named = request(json!({"model": "default", "session": format!("{KEY}.{KEY}"), "messages": [{"role": "user", "content": "hi"}]}));
+        let (refusal, _) = run(&mut pipe, &named, far());
         let refusal = refusal.unwrap_err();
         assert_eq!(refusal.kind, "provider_error");
         assert_eq!(refusal.session, Some(format!("{KEY}.{KEY}")), "the session the request named, unchanged");
         assert_eq!(pipe.log.last().unwrap(), "close pipe-1");
         assert!(!pipe.running);
+    }
+
+    #[test]
+    fn a_thread_codex_holds_no_rollout_of_is_refused_unknown_session_and_the_next_chat_starts_a_new_thread() {
+        let empty = "failed to read thread: thread-store internal error: failed to read session metadata /home/k/.codex/sessions/r.jsonl: rollout at /home/k/.codex/sessions/r.jsonl is empty";
+        for resume_error in [None, Some(empty)] {
+            let mut codex = Codex::new(vec![vec![vec![usage(5, 1, 2), message("m0", "Here."), done()]]]);
+            codex.resume_error = resume_error;
+            let mut pipe = BoxPipe::new(codex);
+            let hi = json!([{"role": "user", "content": "hi"}]);
+            // The session's thread is one this Codex holds no rollout of;
+            // its usage stood at a total the gone thread had reached.
+            let gone = request(json!({"model": "default", "session": format!("{KEY}.{KEY}.11-7-3-0"), "messages": hi}));
+            let (refusal, events) = run(&mut pipe, &gone, far());
+            let refusal = refusal.unwrap_err();
+            assert_eq!((refusal.status, refusal.kind), (404, "unknown_session"), "{refusal:?}");
+            assert_eq!(refusal.session, None, "the session is gone, so the refusal carries none");
+            let envelope: Value = serde_json::from_str(&refusal.envelope()).unwrap();
+            assert_eq!(response_session(&envelope["error"]), Ok(None), "{envelope}");
+            assert_eq!(
+                pipe.sent_since(0),
+                ["initialize", "initialized", "account/read", "thread/resume"],
+                "no turn was started: nothing of the request reached Codex"
+            );
+            assert_eq!(pipe.log.last().unwrap(), "close pipe-1");
+            assert!(events.is_empty() && !refusal.message.contains("rollout"), "none of Codex's words: {refusal:?}");
+
+            // The host asks again without the session: a new thread starts,
+            // and its usage is counted from nothing.
+            let from = pipe.sent.len();
+            let (answer, _) = run(&mut pipe, &request(json!({"model": "default", "messages": hi})), far());
+            let answer = answer.unwrap();
+            assert_eq!(pipe.sent_since(from), ["initialize", "initialized", "account/read", "thread/start", "turn/start"]);
+            assert_eq!(answer["usage"], json!({"input_tokens": 5, "output_tokens": 2, "cache_read_tokens": 1, "cache_write_tokens": 0}));
+            assert_eq!(answer["session"], format!("{KEY}.{THREAD}.5-2-1-0"));
+        }
     }
 
     #[test]
@@ -2218,18 +2310,29 @@ mod tests {
         }
     }
 
+    /// The session a chat answer names, a response's data or a refusal's
+    /// error, or the member that is off the contract, as
+    /// `Prima.Model.response_session/1` reads it.
+    fn response_session(answer: &Value) -> Result<Option<&str>, &'static str> {
+        match answer.get("session") {
+            None => Ok(None),
+            Some(_) if answer["type"] == "unknown_session" => Err("session"),
+            Some(Value::String(session)) if !session.is_empty() => Ok(Some(session)),
+            Some(_) => Err("session"),
+        }
+    }
+
     #[test]
-    fn this_brain_s_responses_name_a_session_as_the_vectors_read_one() {
+    fn this_brain_s_answers_name_a_session_as_the_vectors_read_one() {
         let v = vectors();
         for case in v["valid_chat_responses"].as_array().unwrap() {
-            let session = case["response"].get("session");
-            assert_eq!(session.cloned().unwrap_or(Value::Null), case["session"], "{}", case["why"]);
+            assert_eq!(response_session(&case["response"]), Ok(case["session"].as_str()), "{}", case["why"]);
         }
         for case in v["invalid_chat_responses"].as_array().unwrap() {
-            let session = &case["response"]["session"];
-            assert!(!session.as_str().is_some_and(|s| !s.is_empty()), "{}", case["why"]);
-            assert_eq!(case["member"], "session");
+            assert_eq!(response_session(&case["response"]), Err(case["member"].as_str().unwrap()), "{}", case["why"]);
         }
+        let gone: Value = serde_json::from_str(&unknown_session().envelope()).unwrap();
+        assert_eq!(response_session(&gone["error"]), Ok(None), "{gone}");
         assert!(session_id(&uuid([7, 9])));
     }
 }

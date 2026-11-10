@@ -1,5 +1,5 @@
 [package]
-name = "claude-code-catalyst"
+name = "openai-codex-catalyst"
 version = "0.1.2"
 edition = "2021"
 

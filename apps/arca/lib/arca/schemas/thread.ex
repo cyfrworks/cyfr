@@ -22,8 +22,8 @@ defmodule Arca.Schemas.Thread do
   thread was retired, after which it admits nothing and the next request
   to its member opens a new one. `brain_session` is the brain's own
   opaque session for the thread, and `brain_generation` how many times it
-  was forgotten: a turn keeps a session only under the generation it read
-  (`Arca.TurnStorage`).
+  was forgotten: a turn keeps a session only under the generation it
+  read, or the one its own forget raised (`Arca.TurnStorage`).
   """
 
   use Ecto.Schema

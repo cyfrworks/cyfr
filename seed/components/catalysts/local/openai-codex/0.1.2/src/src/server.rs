@@ -106,6 +106,15 @@ pub fn thread_resume(id: &str, thread: &str, system: Option<&str>) -> String {
     request(id, "thread/resume", params)
 }
 
+/// Whether the error `thread/resume` answered says Codex holds nothing to
+/// resume the thread from, in 0.167.0's words: no rollout of the thread in
+/// its home (`no rollout found for thread id <id>`), or one with nothing
+/// in it (`… rollout at <path> is empty`).
+pub fn no_rollout(message: &str) -> bool {
+    message.starts_with("no rollout found for thread id")
+        || (message.contains("rollout at ") && message.ends_with(" is empty"))
+}
+
 /// `turn/start`: a user message as Codex's input items, with the model and
 /// effort the request sets, which Codex takes per turn.
 pub fn turn_start(id: &str, thread: &str, input: &[Value], model: Option<&str>, effort: Option<&str>) -> String {
@@ -372,6 +381,25 @@ mod tests {
         );
         assert_eq!(read(r#"{"method":"thread/status/changed","params":{"threadId":"th","status":{"type":"idle"}}}"#), Event::Other);
         assert_eq!(read("not json"), Event::Other);
+    }
+
+    /// What 0.167.0 answered a `thread/resume`, recorded from the binary on
+    /// a scratch `CODEX_HOME`: of a thread it held no rollout of, and of
+    /// one whose rollout file was empty.
+    #[test]
+    fn a_resume_codex_holds_nothing_for_reads_as_no_rollout() {
+        let message = |line: &str| match read(line) {
+            Event::Response { result: Err(message), .. } => message,
+            other => panic!("{other:?}"),
+        };
+        assert!(no_rollout(&message(
+            r#"{"error":{"code":-32600,"message":"no rollout found for thread id 0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b"},"id":"r"}"#
+        )));
+        assert!(no_rollout(&message(
+            r#"{"error":{"code":-32603,"message":"failed to read thread: thread-store internal error: failed to read session metadata /home/k/.codex/sessions/2026/11/09/rollout-2026-11-09T23-56-05-01a1c2bd-8fd4-7fc0-a63d-bf3367cf3f5e.jsonl: rollout at /home/k/.codex/sessions/2026/11/09/rollout-2026-11-09T23-56-05-01a1c2bd-8fd4-7fc0-a63d-bf3367cf3f5e.jsonl is empty"},"id":"r"}"#
+        )));
+        assert!(!no_rollout(&message(r#"{"error":{"code":-32600,"message":"no active turn to interrupt"},"id":7}"#)));
+        assert!(!no_rollout("failed to read thread: thread-store internal error: permission denied"));
     }
 
     #[test]

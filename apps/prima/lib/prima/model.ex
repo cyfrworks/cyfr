@@ -45,10 +45,14 @@ defmodule Prima.Model do
   "session"?}}` with `type` one of `invalid_request`, `secret_denied`,
   `authentication`, `rate_limited`, `overloaded`, `provider_error`,
   `incomplete_stream` (the provider's stream ended before its closing
-  signal), `unknown_model`, `unknown_operation`. A refusal's `session` is
-  a response's: the brain's session once it exists, such as a chat
+  signal), `unknown_model`, `unknown_operation`, `unknown_session` (the
+  brain reports that the session the request named no longer exists, and
+  refused before it took anything of the request). A refusal's `session`
+  is a response's: the brain's session once it exists, such as a chat
   interrupted after it opened one, which the host keeps as it keeps a
-  response's, so the next request continues it.
+  response's, so the next request continues it. An `unknown_session`
+  refusal carries none, since the session is gone: the host forgets the
+  one it kept, and the same request without `session` opens a new one.
 
   The provider's HTTP call and the key stay in the catalyst. This module
   names the contract, says whether a manifest declares it, reads the
@@ -228,9 +232,11 @@ defmodule Prima.Model do
   @doc """
   The session a `chat` answer names, a response's data or a refusal's
   `error`: `{:ok, nil}` when it names none, refused when its `session` is
-  not a non-empty string.
+  not a non-empty string, or when an `unknown_session` refusal names one.
   """
   @spec response_session(map()) :: {:ok, String.t() | nil} | {:error, invalid()}
+  def response_session(%{"type" => "unknown_session", "session" => _any}), do: invalid("session")
+
   def response_session(%{"session" => session}) when is_binary(session) and session != "",
     do: {:ok, session}
 

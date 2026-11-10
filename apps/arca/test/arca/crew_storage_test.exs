@@ -812,6 +812,87 @@ defmodule Arca.CrewStorageTest do
 
       assert {:ok, %{brain_session: nil}} = Threads.get(actor, room.id)
     end
+
+    # The brain reported the session gone: the turn forgets it and goes on
+    # under the generation its forget raised, where the session its next
+    # request opens is kept.
+    test "a turn forgets the session its brain no longer holds, and keeps the one it opens next",
+         %{actor: actor, room: room} do
+      turn = running!(actor, room)
+      keep_session!(room, "gone-session")
+
+      assert {:ok, 1} =
+               TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+
+      assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, room.id)
+
+      step = model_step!(actor, turn, "model:1")
+
+      {:ok, _} =
+        TurnStorage.record_response(actor, turn.id, step.id, %{
+          fence: turn.fence,
+          text: "on a new session",
+          session: "new-session",
+          generation: 1,
+          tool_calls: []
+        })
+
+      assert {:ok, %{brain_session: "new-session", brain_generation: 1}} =
+               Threads.get(actor, room.id)
+    end
+
+    # A home reset moved the thread on while the turn's refused request was
+    # out: the turn's forget clears nothing, and answers the generation the
+    # turn read, under which nothing it answers with is kept.
+    test "a turn's forget under a generation the thread has left clears nothing", %{
+      actor: actor,
+      room: room
+    } do
+      turn = running!(actor, room)
+      assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+      keep_session!(room, "session-since")
+
+      assert {:ok, 0} =
+               TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+
+      assert {:ok, %{brain_session: "session-since", brain_generation: 1}} =
+               Threads.get(actor, room.id)
+    end
+
+    test "a turn's forget is refused without its fence or its generation, and to another athanor",
+         %{actor: actor, room: room} do
+      turn = running!(actor, room)
+      keep_session!(room, "kept-session")
+      elsewhere = Prima.Actor.in_athanor("ath_other")
+
+      assert {:error, :generation_required} =
+               TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence})
+
+      assert {:error, :fence_required} =
+               TurnStorage.forget_session(actor, turn.id, %{generation: 0})
+
+      assert {:error, :superseded} =
+               TurnStorage.forget_session(actor, turn.id, %{
+                 fence: turn.fence + 1,
+                 generation: 0
+               })
+
+      assert {:error, :superseded} =
+               TurnStorage.forget_session(elsewhere, turn.id, %{
+                 fence: turn.fence,
+                 generation: 0
+               })
+
+      assert {:ok, %{brain_session: "kept-session", brain_generation: 0}} =
+               Threads.get(actor, room.id)
+    end
+  end
+
+  # The session `thread` keeps, as an earlier turn's answer left it.
+  defp keep_session!(thread, session) do
+    {1, _} =
+      from(t in Arca.Schemas.Thread, where: t.id == ^thread.id)
+      |> Arca.Repo.update_all(set: [brain_session: session])
   end
 
   # A turn of the soul's in `room`, started.

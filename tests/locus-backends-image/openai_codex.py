@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/openai-codex/0.1.1/catalyst.wasm) under a
+(seed/components/catalysts/local/openai-codex/0.1.2/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `openai-codex` program, driven by requests signed as CYFR
 signs them (harness.py). The control plane plays CYFR's host for the
@@ -43,6 +43,11 @@ fake-openai-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
 - Resume after retirement: once the session's program is retired idle, the
   next chat naming the session starts the program again and resumes the
   thread, which the kept folder holds.
+- A thread the kept folder does not hold: a chat naming one is answered
+  unknown_session carrying no session once Codex refuses its
+  `thread/resume`, with no turn started and the program closed; the same
+  chat without the session starts a new thread, its usage counted from
+  nothing.
 - A refused sign-in: once Codex's sign-in is gone from its folder, the
   next program started is refused `authentication` before anything reaches
   a thread, and is closed.
@@ -71,8 +76,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.1")
-REF = "catalyst:local.openai-codex:0.1.1"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.2")
+REF = "catalyst:local.openai-codex:0.1.2"
 NEED = "openai-codex"
 OWNER = owner_of("openai-codex")
 HOME = "vlt_openai-codex"
@@ -386,6 +391,29 @@ def main():
                and identity(output["data"]["session"]) == identity(session),
                "the program starts again and resumes the thread its kept folder holds", [bridge.methods(), output])
         resumed = {**resumed, "session": output["data"]["session"]}
+
+        # ————— a thread the kept folder does not hold —————
+        bridge.calls.clear()
+        gone = {**resumed, "session": "1c6d8d2f-3a4b-4c7f-9bac-2d3e4f5a6b7c.0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b.24-7-5-2"}
+        output, events = run_catalyst(rt, plane, wasm, "chat", gone, "a chat naming a thread the folder does not hold")
+        answers.append((output, events))
+        expect(output["status"] == 404 and output["error"]["type"] == "unknown_session"
+               and "session" not in output["error"],
+               "a thread Codex holds no rollout of answers unknown_session, carrying no session", output)
+        expect(bridge.methods() == ["initialize", "initialized", "account/read", "thread/resume"]
+               and [op for op, _ in bridge.calls if op == "close"] == ["close"],
+               "no turn was started, and the program was closed", bridge.calls)
+        bridge.calls.clear()
+        fresh = {key: value for key, value in gone.items() if key != "session"}
+        output, events = run_catalyst(rt, plane, wasm, "chat", fresh, "the same chat without the session")
+        answers.append((output, events))
+        expect("thread/start" in bridge.methods() and "thread/resume" not in bridge.methods()
+               and output["status"] == 200 and identity(output["data"]["session"]) != identity(session)
+               and output["data"]["content"] == [{"type": "text",
+                                                  "text": "Your first message was: what was my first message?"}]
+               and output["data"]["usage"]["input_tokens"] == 12,
+               "the same chat without the session starts a new thread, its usage counted from nothing",
+               [bridge.methods(), output])
 
         # ————— a refused sign-in —————
         output, events = run_catalyst(rt, plane, wasm, "chat", {**resumed, "messages": [
