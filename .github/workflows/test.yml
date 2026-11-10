@@ -2125,7 +2125,10 @@ jobs:
           paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus docker-entrypoint.sh .env.example .env.locus.example .gitignore .dockerignore README.md ARCHITECTURE.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md'
           # The passphrase word list is BIP-0039's English list, third-party
           # data pinned by its SHA-256 (internal/holder), not CYFR's words.
-          excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/** :(exclude)apps/codex/internal/holder/bip39_english.txt'
+          # The stand-in for Claude Code writes the line the harness itself
+          # writes for a session it holds no transcript of, word for word,
+          # since the catalyst reads those words: the harness's, not CYFR's.
+          excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/** :(exclude)apps/codex/internal/holder/bip39_english.txt :(exclude)tests/locus-backends-image/fake-claude.mjs'
           fail=0
           for p in \
             '\borg_id\b' \

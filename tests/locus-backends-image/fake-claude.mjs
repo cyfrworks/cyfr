@@ -9,8 +9,10 @@
 //
 // - It refuses to start without the arguments every session takes
 //   (`-p`, stream-json both ways, `--verbose`, partial messages,
-//   `--strict-mcp-config`, `--permission-prompt-tool stdio`), and with
-//   `--resume` of a session its folder does not hold.
+//   `--strict-mcp-config`, `--permission-prompt-tool stdio`). Started with
+//   `--resume` of a session its folder does not hold, it ends as 2.1.318
+//   ended: a `result` of no turn naming the session on its stdout, the
+//   same words on its stderr, and exit 1, before it reads a line.
 // - `initialize` is answered with a model listing, and the system prompt it
 //   carries is kept; `mcp_set_servers` starts each stdio server it names
 //   (the image's `cyfr-stub`), lists its tools over MCP and answers
@@ -57,7 +59,12 @@ const transcriptFile = path.join(store, `${sessionId}.json`);
 let transcript = [];
 if (resume) {
   if (!fs.existsSync(transcriptFile)) {
-    process.stderr.write(`fake-claude: no session ${resume} in this folder\n`);
+    const said = `No conversation found with session ID: ${resume}`;
+    const result = { type: 'result', subtype: 'error_during_execution', duration_ms: 0, duration_api_ms: 0, is_error: true,
+      num_turns: 0, stop_reason: null, session_id: resume, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {}, permission_denials: [], uuid: crypto.randomUUID(), errors: [said] };
+    fs.writeSync(1, JSON.stringify(result) + '\n');
+    process.stderr.write(`${said}\n`);
     process.exit(1);
   }
   transcript = JSON.parse(fs.readFileSync(transcriptFile, 'utf8'));

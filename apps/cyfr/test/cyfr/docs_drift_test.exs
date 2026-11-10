@@ -377,7 +377,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # The exact paths the gate's fossil loop excludes (its `excl=` pathspecs
-  # without a glob), third-party data that is not CYFR's words; the
+  # without a glob), each holding a third party's words, not CYFR's; the
   # exclusion list lives in the workflow and is read here, not copied.
   defp retired_name_exempt do
     [_, excl] =
