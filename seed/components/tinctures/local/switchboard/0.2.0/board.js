@@ -207,6 +207,8 @@
     return d.page === 'aqua' || d.page === 'chat' ? d.page : 'settings';
   }
   const pageOf = (call) => (jackOf(call) === 'settings' ? call.destination.page : null);
+  // What a call's page opens at: its thread, run, schedule or offer.
+  const refOf = (call) => (jackOf(call) && typeof call.destination.ref === 'string' && call.destination.ref ? call.destination.ref : null);
 
   // Each waiting item finds the line it is about: an approval its thread, a
   // failed run its component, a failed schedule the component it runs.
@@ -237,7 +239,7 @@
       out.calls.push({
         id: `call:${a.id}`, widget: 'calls', kind: a.kind, name: text(a.label) || KIND[a.kind] || 'Call', call: a,
         lamp: fault(a) ? 'red' : 'amber', meta: [KIND[a.kind] || 'Call', rel(a.since)],
-        targets: jack && jack !== 'aqua' ? [jack, 'aqua'] : ['aqua'], primary: jack, page: pageOf(a), aqua: jack === 'aqua' ? 'open' : 'ask',
+        targets: jack && jack !== 'aqua' ? [jack, 'aqua'] : ['aqua'], primary: jack, page: pageOf(a), at: refOf(a), aqua: jack === 'aqua' ? 'open' : 'ask',
       });
     }
     for (const t of threads.sort((a, b) => text(b.last_activity).localeCompare(text(a.last_activity)))) {
@@ -247,8 +249,8 @@
       const who = own ? 'Own' : people > 0 ? `${people} ${people === 1 ? 'person' : 'people'}` : 'Shared';
       const unread = Number.isInteger(t.unread) && t.unread > 0 ? t.unread : 0;
       const waits = call || t.waits_on_you === true;
-      // A shared thread opens the chat; an own thread AQUA's panel, where
-      // its approvals wait.
+      // A shared thread opens the chat at it; an own thread AQUA's panel at
+      // it, where its approvals wait.
       const targets = own ? ['aqua'] : ['chat', 'aqua'];
       const jack = call && targets.includes(jackOf(call)) ? jackOf(call) : null;
       out.threads.push({
@@ -256,7 +258,7 @@
         lamp: waits ? 'amber' : 'off', strong: unread > 0,
         meta: call ? [KIND[call.kind], rel(call.since)] : waits ? ['Waits on you', rel(t.last_activity)]
           : unread ? [`${unread} unread`, rel(t.last_activity)] : [who, rel(t.last_activity)],
-        targets, primary: jack || (own ? 'aqua' : 'chat'), aqua: own || jack === 'aqua' ? 'open' : 'ask',
+        targets, primary: jack || (own ? 'aqua' : 'chat'), at: text(t.id) || null, aqua: own || jack === 'aqua' ? 'open' : 'ask',
       });
     }
     for (const app of state.installed) {
@@ -285,7 +287,7 @@
       out.components.push({
         id: `component:${c.ref}`, widget: 'components', kind: text(c.type), name: text(c.name) || componentName(c.ref), call,
         lamp: call ? (fault(call) ? 'red' : 'amber') : run && run.kind === 'started' ? 'white' : 'off', meta,
-        targets: ['settings', 'aqua'], primary: 'settings', page: (call && pageOf(call)) || 'components', aqua: 'ask',
+        targets: ['settings', 'aqua'], primary: 'settings', page: (call && pageOf(call)) || 'components', at: call ? refOf(call) : null, aqua: 'ask',
       });
     }
     return out;
@@ -414,13 +416,16 @@
     if (resolves) { patches.set(line.call.id, { rope, line: line.id, name: line.name }); el.classList.add('patched'); } else setTimeout(() => rope.retract(), 2200);
     act(line, dest);
   }
+  // Opens one of CYFR's pages, at the line's thread, run, schedule or offer
+  // where it has one.
+  const show = (page, at) => (at ? sdk.settings(page, at) : sdk.settings(page));
   function act(line, dest) {
     const name = line.name;
-    if (dest === 'aqua' && line.aqua === 'open') { sdk.settings('aqua'); tell(`${name} → AQUA`); return; }
+    if (dest === 'aqua' && line.aqua === 'open') { show('aqua', line.at); tell(`${name} → AQUA`); return; }
     if (dest === 'aqua') { sdk.ask(line.widget); tell(`${name} → AQUA · nothing sent`); return; }
-    if (dest === 'chat') { sdk.settings('chat'); tell(`${name} → chat`); return; }
+    if (dest === 'chat') { show('chat', line.at); tell(`${name} → chat`); return; }
     if (dest === 'app') { sdk.open(line.ref); tell(`${name} → app`); return; }
-    if (dest === 'settings' && line.page) { sdk.settings(line.page); tell(`${name} → settings`); }
+    if (dest === 'settings' && line.page) { show(line.page, line.at); tell(`${name} → settings`); }
   }
 
   /* ---------- the meters: feeds read whatever their result says ---------- */

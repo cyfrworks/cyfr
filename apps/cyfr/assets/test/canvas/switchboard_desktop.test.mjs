@@ -356,7 +356,7 @@ function board({prefs = {}, protocol = "http/1.1", refuse = {}, press = async ()
       return Promise.resolve(open.handle)
     },
     press: (id, value) => (shell.press.push([id, value]), press(id, value)),
-    settings: (page) => shell.settings.push(page),
+    settings: (...args) => shell.settings.push(args),
     ask: (widget) => shell.ask.push(widget),
     open: (ref) => shell.open.push(ref),
     prefs: async () => ({outcome: "saved"}),
@@ -571,13 +571,13 @@ describe("the switchboard desktop 0.2.0", () => {
     b.pump()
     assert.equal(b.$('.pos[data-dest="aqua"]').getAttribute("data-target"), "primary")
     b.$('.pos[data-dest="aqua"]').click()
-    assert.deepEqual(b.shell.settings, ["aqua"])
+    assert.deepEqual(b.shell.settings, [["aqua", "th_trip"]])
     assert.deepEqual(b.shell.ask, [])
 
     // A shared thread shows its unread count, and opens the chat.
     assert.equal(line(b, "threads", "Family").querySelector(".meta-a").textContent, "2 unread")
     patch(b, line(b, "threads", "Family"), "chat")
-    assert.deepEqual(b.shell.settings, ["aqua", "chat"])
+    assert.deepEqual(b.shell.settings, [["aqua", "th_trip"], ["chat", "sth_fam"]])
   })
 
   test("a call whose destination is a page opens that page; a confirmation opens none", async () => {
@@ -594,12 +594,38 @@ describe("the switchboard desktop 0.2.0", () => {
     for (const [name, dest] of [["budget.xlsx", "settings"], ["Morning digest", "settings"], ["backup", "settings"], ["Old thread", "aqua"]]) {
       patch(b, line(b, "calls", name), dest)
     }
-    assert.deepEqual(b.shell.settings, ["files", "schedules", "executions", "aqua"])
+    assert.deepEqual(b.shell.settings, [["files", "off_1"], ["schedules", "sch_1"], ["executions", "catalyst:local.backup:1.0.0"], ["aqua", "th_gone"]])
 
     line(b, "calls", "vault.delete").click()
     b.pump()
     assert.equal(b.$$('.pos[data-target="primary"]').length, 0)
     assert.match(b.readout(), /CYFR asks you this itself/)
+  })
+
+  test("a patch opens its destination at its ref: an approval at its thread, a thread at itself, a failed run at the run", async () => {
+    const digest = {kind: "installed", ref: "formula:local.digest", type: "formula", name: "digest", version: "0.4.0"}
+    const b = await started({}, {
+      "components.changes": [digest],
+      "runs.changes": [RUN("ex_digest", "failed")],
+      "threads.changes": [
+        {kind: "own", id: "th_trip", title: "Trip planning", people: ["Noor"], last_activity: ago(60), waits_on_you: true, unread: null},
+        {kind: "own", id: "th_notes", title: "Notes", people: ["Noor"], last_activity: ago(30), waits_on_you: false, unread: null},
+        {kind: "shared", id: "sth_fam", title: "Family", people: ["Ada", "Bob"], last_activity: ago(10), waits_on_you: false, unread: 0}
+      ],
+      "attention.changes": [
+        {kind: "approval", id: "ap_1", label: "Trip planning", since: ago(60), destination: {kind: "page", page: "aqua", ref: "th_trip"}},
+        {kind: "failed_run", id: "formula:local.digest:0.4.0", label: "digest", since: ago(29), destination: {kind: "page", page: "executions", ref: "ex_digest"}}
+      ]
+    })
+    patch(b, line(b, "threads", "Trip planning"), "aqua")
+    patch(b, line(b, "threads", "Family"), "chat")
+    patch(b, line(b, "threads", "Notes"), "aqua")
+    patch(b, line(b, "components", "digest"), "settings")
+    assert.deepEqual(b.shell.settings, [["aqua", "th_trip"], ["chat", "sth_fam"], ["aqua", "th_notes"], ["executions", "ex_digest"]])
+    // The AQUA jack of a shared thread still asks AQUA about the part.
+    patch(b, line(b, "threads", "Family"), "aqua")
+    assert.deepEqual(b.shell.ask, ["threads"])
+    assert.equal(b.shell.settings.length, 4)
   })
 
   test("a shared thread of one person reads 1 person, and of three, 3 people", async () => {
@@ -762,7 +788,7 @@ describe("the switchboard desktop 0.2.0", () => {
     assert.equal(b.$(".jobs .job-t").textContent, "Compare ferry times")
     assert.equal(b.readout(), "0 calling · 1 busy · healthy")
     b.$('.sys-annun .win[data-sys="settings"]').click()
-    assert.deepEqual(b.shell.settings, ["settings"])
+    assert.deepEqual(b.shell.settings, [["settings"]])
   })
 
   test("the VPN plate lights the trunk in service and presses the feed's own actions, picking none", async () => {
