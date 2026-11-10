@@ -15,8 +15,8 @@ defmodule Locus.Backends.Reservations do
   | `reserved` | an open admitted, its home being made or its pool read | `:started` | `asked` | the table: it started the session's process |
   | | | `:abandoned` | released | the table: it started no session process, so nothing was asked |
   | `asked` | a session process that may have asked its launcher | `:spawned` | `running` | the launcher, answering the spawn |
-  | `asked`, `running` | a process the launcher may run | `:confirmed` | released | the launcher, through the session (`:vacated`: refused, or released) |
-  | | | `:unfollowed` | `ending` | the table: its session process died, its spawn's answer was lost, or its owner retired |
+  | `asked`, `running`, `ending` | | `:confirmed` | released | the launcher, through the session (`:vacated`: refused, or released) |
+  | `asked`, `running` | a process the launcher may run | `:unfollowed` | `ending` | the table: its session process died, its spawn's answer was lost, or its owner retired |
   | `asked`, `running`, `ending` | | `:heir` | released | the launcher, to the spawn's heir: nothing of it is left |
   | `ending` | a process no session follows | `{:fence, :none}` | released | the launcher's fence: none is held, and none will start |
   | | | `{:fence, :pending}`, `{:fence, :failed}` | `ending` | none: asked again at the next sweep |
@@ -28,7 +28,9 @@ defmodule Locus.Backends.Reservations do
   process already gone. Nothing else releases a reservation: no timeout, no
   caller's death and no clock. An ending is asked of its launcher's fence
   (`c:Locus.Launcher.fence/2`) until it is released, so a fence that was
-  not answered, or answered while the process ran, is asked again.
+  not answered, or answered while the process ran, is asked again. Its
+  cost: a fence that answers `:none` stands for the life of the launcher's
+  client, which keeps one entry for each such tag (`Locus.Keeper`).
 
   Every state holds the session's memory bound; every state but `reserved`
   holds a scratch session's uid of the pool, which only its process takes.
