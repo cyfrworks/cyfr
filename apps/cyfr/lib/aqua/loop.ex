@@ -106,6 +106,9 @@ defmodule Aqua.Loop do
       # out what the brain answers with, or as the turn's own forget raised
       # it (`Arca.TurnStorage`).
       :generation,
+      # The turn forgot its thread's session once, on its brain's word that
+      # the session was gone: the next such refusal ends it.
+      forgot_session?: false,
       steps: 0,
       usage: %{input: 0, output: 0},
       activity: [],
@@ -736,7 +739,10 @@ defmodule Aqua.Loop do
   end
 
   defp ask_model(%State{} = state, step, request, retained, retries) do
-    case model_call(state, step, request, retained) do
+    answer = model_call(state, step, request, retained)
+    forget? = forgets?(state, request, answer)
+
+    case answer do
       {:ok, data} ->
         on_response(state, step, data)
 
@@ -762,10 +768,10 @@ defmodule Aqua.Loop do
 
       # The brain no longer holds the session the request named, and
       # refused before it took anything of the request (`Prima.Model`), so
-      # asking again repeats nothing. A request that named none has nothing
-      # to forget, and its refusal ends the turn as any other does.
-      {:error, %{"type" => "unknown_session", "message" => message} = error}
-      when is_map_key(request, "session") ->
+      # asking again repeats nothing. A refusal of that type the turn does
+      # not forget on (`forgets?/3`) ends it as any other does, the thread's
+      # session left as it is.
+      {:error, %{"type" => "unknown_session", "message" => message} = error} when forget? ->
         _ =
           Tape.close_step(guest(state), state.turn, step, "error", refused(state, error, message))
 
@@ -808,6 +814,21 @@ defmodule Aqua.Loop do
   defp continued(request, nil), do: request
   defp continued(request, session), do: Map.put(request, "session", session)
 
+  # Whether the turn forgets its thread's session on this answer and asks
+  # again, once in a turn: the brain refused the session the request named
+  # as one it no longer holds, by a refusal that holds to the contract (one
+  # that names a session is off it, `Prima.Model`), and the turn has not
+  # forgotten a session before. A retry may have put a newer session into
+  # the request, so the turn's own mark decides, not the request.
+  defp forgets?(
+         %State{forgot_session?: false},
+         %{"session" => _named},
+         {:error, %{"type" => "unknown_session"} = error}
+       ),
+       do: Prima.Model.response_session(error) == {:ok, nil}
+
+  defp forgets?(%State{}, _request, _answer), do: false
+
   # The thread forgets the session its brain no longer holds, and the same
   # request is asked once more without it, which opens a new session. The
   # turn keeps that session under the generation its forget answers: the
@@ -816,8 +837,8 @@ defmodule Aqua.Loop do
   # (`Arca.TurnStorage.forget_session/3`).
   defp ask_without_session(%State{} = state, request, retained, retries) do
     with {:ok, generation} <- Tape.forget_session(guest(state), state.turn, state.generation),
-         {:ok, again, asking} <-
-           open_model_step(%{state | session: nil, generation: generation}, "chat") do
+         forgot = %{state | session: nil, generation: generation, forgot_session?: true},
+         {:ok, again, asking} <- open_model_step(forgot, "chat") do
       request = Map.delete(request, "session")
       ask_model(asking, again, request, retained && Map.delete(retained, "session"), retries)
     else

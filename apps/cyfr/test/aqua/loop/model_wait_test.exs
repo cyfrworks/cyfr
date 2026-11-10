@@ -24,7 +24,11 @@ defmodule Aqua.Loop.ModelWaitTest do
   once more without it, in the same turn: the thread forgets the old
   session and keeps the new one, a refusal of that second request ends
   the turn as any refusal does, and a thread forgotten from outside
-  meanwhile keeps nothing the turn answers with.
+  meanwhile keeps nothing the turn answers with. A turn forgets a session
+  once: a retry that continues a newer session the brain then refuses the
+  same way ends the turn, and the next turn recovers. A refusal of that
+  type that names a session is off the contract, and forgets and asks
+  nothing.
   """
   use ExUnit.Case, async: false
 
@@ -292,6 +296,93 @@ defmodule Aqua.Loop.ModelWaitTest do
     assert resumed["session"] == "brain-1"
     refute Map.has_key?(again, "session")
     refute Map.has_key?(next, "session")
+  end
+
+  # The request asked again is refused for a rate limit and names the
+  # session it opened; the ordinary retry continues that session, and the
+  # brain no longer holds it either. The turn has forgotten a session once,
+  # so it ends there, and the next turn forgets the newer one in its turn.
+  test "a second session the brain no longer holds in one turn ends it, with one forget",
+       %{ctx: ctx, thread: thread} do
+    actor = Sanctum.Context.actor(ctx)
+    %{"message" => gone} = unknown_session()
+    limited = %{"type" => "rate_limited", "message" => "slow down", "session" => "brain-2"}
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [
+         Map.put(reply("Hello."), "session", "brain-1"),
+         {:refuse, unknown_session()},
+         {:refuse, limited},
+         {:refuse, unknown_session()},
+         {:refuse, unknown_session()},
+         Map.put(reply("Back."), "session", "brain-3")
+       ]}
+    )
+
+    assert :completed = Task.await(run(ctx, accept!(ctx, thread, "hello")), 30_000)
+    {:ok, %{brain_generation: generation}} = Threads.get(actor, thread.id)
+
+    assert {:failed, ^gone} =
+             Task.await(run(ctx, accept!(ctx, thread, "are you there?")), 30_000)
+
+    assert [_opened, resumed, fresh, retried] = chat_requests()
+    assert resumed["session"] == "brain-1"
+    assert fresh == Map.delete(resumed, "session")
+    assert retried == Map.put(fresh, "session", "brain-2")
+
+    assert {:ok, %{brain_session: "brain-2", brain_generation: forgotten}} =
+             Threads.get(actor, thread.id)
+
+    assert forgotten == generation + 1
+
+    assert :completed = Task.await(run(ctx, accept!(ctx, thread, "again")), 30_000)
+
+    assert [_, _, _, _, named, anew] = chat_requests()
+    assert named["session"] == "brain-2"
+    refute Map.has_key?(anew, "session")
+
+    assert {:ok, %{brain_session: "brain-3", brain_generation: recovered}} =
+             Threads.get(actor, thread.id)
+
+    assert recovered == generation + 2
+  end
+
+  # A refusal of that type that names a session is off the contract
+  # (`Prima.Model`): the thread's session stays as it is, nothing is asked
+  # again, and the turn ends as it does on any refusal.
+  for {what, session} <- [{"a session", "still-present"}, {"a null session", nil}] do
+    test "a refusal of the thread's session that names #{what} forgets and asks nothing",
+         %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+      refusal = Map.put(unknown_session(), "session", unquote(session))
+      %{"message" => gone} = refusal
+
+      start_supervised!(
+        {ScriptedWorker,
+         ref: @model,
+         script: [
+           Map.put(reply("Hello."), "session", "brain-1"),
+           {:refuse, refusal},
+           reply("Never asked.")
+         ]}
+      )
+
+      assert :completed = Task.await(run(ctx, accept!(ctx, thread, "hello")), 30_000)
+
+      assert {:ok, %{brain_session: "brain-1", brain_generation: generation}} =
+               Threads.get(actor, thread.id)
+
+      assert {:failed, ^gone} =
+               Task.await(run(ctx, accept!(ctx, thread, "are you there?")), 30_000)
+
+      assert [_opened, resumed] = chat_requests()
+      assert resumed["session"] == "brain-1"
+
+      assert {:ok, %{brain_session: "brain-1", brain_generation: ^generation}} =
+               Threads.get(actor, thread.id)
+    end
   end
 
   # A program home reset while the request naming the session is out moves
