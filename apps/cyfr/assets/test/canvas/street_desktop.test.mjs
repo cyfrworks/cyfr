@@ -159,7 +159,7 @@ async function street({version = "0.2.0", width = 1024, height = 600, protocol =
   const cyfr = {
     desktop: {prefs: {document: prefs, revision: 1}, appearance: {mode: "light", locale: "en", time_zone: "UTC", safe_areas: {}}, person: {name: "Noor"}},
     on(event, handler) {
-      if (event === "state") handler("live")
+      if (event === "state") (p.state = handler)("live")
       if (event === "posture") handler(width < 768 ? "hand" : "desk")
       return () => {}
     },
@@ -492,6 +492,41 @@ describe("the street desktop 0.2.0", () => {
       p.pump()
     }
     assert.equal(button(p, "Retry"), undefined)
+  })
+
+  // While frozen the SDK tells a stream nothing and its handle stands suspended; shown again, the SDK
+  // opens each stream itself and the page hears resync, the fresh picture and its snapshot.
+  test("a hidden-then-shown desktop shows its parts live again, with no denied in between", async () => {
+    const p = await street()
+    const attention = p.stream("attention.changes"), threads = p.stream("threads.changes"), runs = p.stream("runs.changes")
+    const thread = (id, title) => ({kind: "shared", id, title, people: ["Noor", "Sam"], last_activity: at(-40), waits_on_you: false, unread: 0})
+    picture(attention, [waiting("ap-1", "approval", {kind: "page", page: "aqua", ref: "th-1"}, {label: "Trip"}), waiting("ap-2", "approval", {kind: "page", page: "aqua", ref: "th-2"}, {label: "Book club"})])
+    picture(threads, [thread("th-1", "One"), thread("th-2", "Two")])
+    picture(runs, [run("ex-1", "started", {ended_at: null, error: null}), run("ex-2", "completed", {started_at: at(-90)})])
+    p.pump()
+    const opens = p.opened.length
+
+    p.state("frozen")
+    for (const s of [attention, threads, runs]) s.state = "suspended"
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    p.pump()
+    p.state("live")
+    for (const s of [attention, threads, runs]) {
+      s.state = "live"
+      s.push("resync")
+    }
+    picture(attention, [waiting("ap-1", "approval", {kind: "page", page: "aqua", ref: "th-1"}, {label: "Trip planning"})])
+    picture(threads, [thread("th-1", "One again")])
+    picture(runs, [run("ex-1", "completed")])
+    p.pump()
+
+    const labels = p.hits().map((h) => h.getAttribute("aria-label"))
+    assert.deepEqual(labels.filter((l) => l.startsWith("Waiting on you")).map((l) => l.split(", ")[1]), ["Approve in Trip planning"], "the dropped one does not board the tram")
+    assert.deepEqual(labels.filter((l) => l.startsWith("Thread")).map((l) => l.split(",")[0]), ["Thread One again"])
+    assert.deepEqual(labels.filter((l) => l.startsWith("Runs at")).map((l) => l.replace(/^Runs at \S+ /, "")), ["digest ok"])
+    assert.match(p.board().textContent, /^1 thing waits on you/)
+    assert.doesNotMatch(p.board().textContent, /granted|as of|trying again|could not be read/)
+    assert.equal(p.opened.length, opens, "the page opened no stream again by itself")
   })
 
   test("the weather feed stands at the sun with its forecast, the VPN feed is the ferry, and their actions press the feed", async () => {

@@ -173,12 +173,13 @@ function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}} = {}
   const frames = []
   const timers = []
   const listeners = {}
+  const handlers = {}
   const opened = []
   const presses = []
   const pages = []
   const cyfr = {
     desktop: {prefs: {document: {widgets, desktop: {}}, revision: 1}, appearance: {mode: "dark", accent: "#d9e4ff", locale: "en", time_zone: "UTC", safe_areas: {}}, person: {name: "Noor"}},
-    on() {},
+    on: (event, handler) => (handlers[event] ||= []).push(handler),
     stream(name, subject, onEvent) {
       const line = {key: subject ? `feed:${subject}` : name, name, state: "live", push: (event) => onEvent(event)}
       line.handle = {close() {}, closed: new Promise((resolve) => (line.end = resolve)), get state() { return line.state }}
@@ -226,6 +227,8 @@ function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}} = {}
     html,
     street: () => html("wall") + html("level"),
     line: (key) => opened.filter((l) => l.key === key).at(-1),
+    // What the shell tells the page through `cyfr.on`.
+    tell: (event, value) => (handlers[event] || []).forEach((handler) => handler(value)),
     opens: (key) => opened.filter((l) => l.key === key).length,
     // Draws what the page has queued.
     draw() {
@@ -470,6 +473,50 @@ describe("the night desktop 0.2.0", () => {
     assert.equal(p.opens("threads.changes"), 2)
     assert.equal(p.opens("runs.changes"), 2)
     assert.equal(p.opens("system.changes"), 1)
+  })
+
+  test("a hidden-then-shown desktop shows its parts live again, with no denied in between", async () => {
+    const APPROVAL = {kind: "approval", id: "ap1", label: "Family", since: AT, destination: {kind: "page", page: "aqua", ref: "t1"}}
+    const p = await lit({runs: [RUN_FAILED, RUN_DONE], attention: [APPROVAL, FAILED_ITEM]})
+    picture(p.line("threads.changes"), [{kind: "shared", id: "t1", title: "Family", people: ["a", "b", "c"]}, {kind: "own", id: "t2", title: "Tax notes", people: ["me"], unread: null}])
+    p.draw()
+    assert.match(p.html("wall"), /data-target="failed:formula:local\.digest:1\.0\.0" data-light="sputter"/)
+    const opens = p.opened.length
+
+    // Hidden: the SDK suspends every handle and the page hears nothing; time passes.
+    p.tell("state", "frozen")
+    for (const line of p.opened) line.state = "suspended"
+    p.runTimers()
+    await settle()
+    p.draw()
+
+    // Shown: the SDK opens each again itself, and each hears resync, a fresh picture (one item changed, one gone), snapshot.
+    p.tell("state", "live")
+    for (const line of p.opened) line.state = "live"
+    const fresh = {
+      "attention.changes": [{...APPROVAL, label: "Family dinner", revision: 2}],
+      "threads.changes": [{kind: "shared", id: "t1", title: "Family dinner", people: ["a", "b", "c"], revision: 2}],
+      "runs.changes": [{...RUN_DONE, duration_ms: 2400, revision: 2}],
+    }
+    for (const [key, items] of Object.entries(fresh)) {
+      const line = p.line(key)
+      line.push({id: null, event: "resync", data: null, revision: null, at: null})
+      picture(line, items)
+    }
+    p.runTimers()
+    await settle()
+    p.draw()
+
+    const street = p.street() + p.html("puddle-index")
+    assert.match(p.html("wall"), /Family dinner/)
+    assert.doesNotMatch(p.html("wall"), /Tax notes/)
+    assert.match(p.html("wall"), /2\.4 s/)
+    assert.doesNotMatch(street, /exe_fail|failed:formula/, "the failure the fresh picture dropped is gone")
+    assert.doesNotMatch(street, /data-going|data-light="out"/, "a light a picture dropped goes out with no flare")
+    assert.doesNotMatch(street, /class="refused/, "no part says it is not live")
+    assert.deepEqual([...new Set([...p.street().matchAll(/data-line="(\w+)"/g)].map((m) => m[1]))], ["live"])
+    assert.match(p.html("header"), /1 waiting on you/)
+    assert.equal(p.opened.length, opens, "the page opened no stream again by itself")
   })
 
   test("each waiting item and thread opens the page its destination names", async () => {
