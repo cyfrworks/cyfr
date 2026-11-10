@@ -23,7 +23,6 @@ defmodule Aqua.LaunchTest do
   alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Consent.Bootstrap
 
-  @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
   # A shipped application that roots its own consent: whatever it
   # answers, its root's row is written as the launch admitted it.
@@ -34,10 +33,9 @@ defmodule Aqua.LaunchTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "launch_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path]
+    keys = [:base_path]
     prev = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
     Application.put_env(:arca, :base_path, test_path)
-    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -48,6 +46,8 @@ defmodule Aqua.LaunchTest do
           else: Application.delete_env(:arca, key)
       end
     end)
+
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http), formulas: ~w(list-models))
 
     ctx = person!()
     Sanctum.TestContext.ready!(ctx.athanor_id)

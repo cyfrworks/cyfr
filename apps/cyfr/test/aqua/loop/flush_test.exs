@@ -20,7 +20,6 @@ defmodule Aqua.Loop.FlushTest do
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}
 
-  @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
   @model_id "scripted-small"
@@ -32,10 +31,10 @@ defmodule Aqua.Loop.FlushTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "flush_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :locus_runtime_workers]
+    keys = [arca: :base_path, cyfr: :locus_runtime_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
-    Application.put_env(:arca, :seed_path, @seed_root)
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http))
 
     on_exit(fn ->
       File.rm_rf!(test_path)

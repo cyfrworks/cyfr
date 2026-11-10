@@ -22,7 +22,6 @@ defmodule Aqua.CrewTest do
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.Bootstrap
 
-  @seed_root Path.expand("../../../../seed", __DIR__)
   @model "catalyst:local.claude"
 
   setup do
@@ -35,9 +34,9 @@ defmodule Aqua.CrewTest do
     tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
     on_exit(fn -> File.rm_rf!(tree) end)
 
-    # The shipped catalysts the turns run are read from the repository's
-    # seed tree; the suite's own carries none.
-    Prima.Test.Env.put_app_env(:arca, :seed_path, @seed_root)
+    # The shipped brains of the soul and its crew, in a seed of this
+    # test's own; the suite's own carries none.
+    Cyfr.Test.SeedBundle.lay!(~w(claude claude-code gemini openai-codex files http))
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)

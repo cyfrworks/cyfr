@@ -22,7 +22,6 @@ defmodule Aqua.Providers.StatusTest do
   alias Sanctum.Test.ConsentFixtures
 
   @stream "system.changes"
-  @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul_brain "catalyst:local.claude"
 
   setup tags do
@@ -36,9 +35,9 @@ defmodule Aqua.Providers.StatusTest do
     tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
     on_exit(fn -> File.rm_rf!(tree) end)
 
-    # The shipped catalysts and crew are read from the repository's seed
-    # tree; the suite's own carries none.
-    Prima.Test.Env.put_app_env(:arca, :seed_path, @seed_root)
+    # The shipped crew and the brains it and the soul run on, in a seed
+    # of this test's own; the suite's own carries none.
+    Cyfr.Test.SeedBundle.lay!(~w(claude claude-code gemini openai-codex files http))
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)

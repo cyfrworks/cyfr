@@ -23,7 +23,6 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   alias Prima.Source
   alias Sanctum.Consent.Bootstrap
 
-  @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
 
@@ -34,11 +33,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
     ctx = ScriptedWorker.athanor!(Sanctum.TestContext.local(:prism))
     tree = own_tree!(ctx)
 
-    keys = [
-      arca: :seed_path,
-      cyfr: :locus_runtime_workers,
-      cyfr: :registry_url
-    ]
+    keys = [cyfr: :locus_runtime_workers, cyfr: :registry_url]
 
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
 
@@ -52,7 +47,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
       end
     end)
 
-    Application.put_env(:arca, :seed_path, @seed_root)
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http))
     stub = HTTPStub.open()
     # A loopback registry is reached over http (`Compendium.RegistryHost.base_url/1`).
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{stub.port}")

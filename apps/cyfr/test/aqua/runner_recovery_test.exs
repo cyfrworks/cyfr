@@ -27,7 +27,6 @@ defmodule Aqua.RunnerRecoveryTest do
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.Bootstrap
 
-  @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
 
@@ -36,7 +35,7 @@ defmodule Aqua.RunnerRecoveryTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "recovery_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path]
+    keys = [arca: :base_path]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
 
     on_exit(fn ->
@@ -50,7 +49,7 @@ defmodule Aqua.RunnerRecoveryTest do
     end)
 
     Application.put_env(:arca, :base_path, test_path)
-    Application.put_env(:arca, :seed_path, @seed_root)
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http))
 
     # The runners run under the paths restored above.
     Cyfr.Test.Sandbox.stop_work_on_exit()
