@@ -469,7 +469,7 @@
       if (itemRun(a)) return { label: "Retry", act: "retry", id: text(itemRun(a).execution_id), primary: true };
     }
     const dest = destination(a);
-    if (dest && dest.kind === "page" && PAGE_ACT[dest.page]) return { label: PAGE_ACT[dest.page], act: "page", page: dest.page, primary: false };
+    if (dest && dest.kind === "page" && PAGE_ACT[dest.page]) return { label: PAGE_ACT[dest.page], act: "page", page: dest.page, ref: text(dest.ref), primary: false };
     return null;
   }
   const bySince = (a, b) => (date(a.since) || Infinity) - (date(b.since) || Infinity);
@@ -541,7 +541,7 @@
           const flag = t.waits_on_you === true ? ` · <span class="mark">waits on you</span>`
             : unread ? ` · <b class="unread">${unread} unread</b>` : "";
           // A shared thread is in the chat; an own thread is AQUA's.
-          return `<li class="row"><button class="row-btn" data-act="page" data-page="${shared ? "chat" : "aqua"}" data-key="th-${esc(t.id)}">
+          return `<li class="row"><button class="row-btn" data-act="page" data-page="${shared ? "chat" : "aqua"}" data-ref="${esc(text(t.id))}" data-key="th-${esc(t.id)}">
             <span class="row-t">${esc(text(t.title) || "Untitled")}</span><span class="row-s">${who}${flag}</span></button>
             <span class="row-r num">${esc(when(t.last_activity))}</span></li>`;
         }).join("")}</ul>`,
@@ -944,7 +944,9 @@
     if (!b || !sdk || b.getAttribute("aria-disabled") === "true") return;
     const { act, id } = b.dataset;
     switch (act) {
-      case "page": return sdk.settings(b.dataset.page);
+      // A page at its record when the control names one: AQUA's panel at an
+      // own thread, the chat at a shared one, a Dashboard page at its top.
+      case "page": return b.dataset.ref ? sdk.settings(b.dataset.page, b.dataset.ref) : sdk.settings(b.dataset.page);
       case "grant": return sdk.grant(b.dataset.ref);
       case "open": return sdk.open(b.dataset.ref);
       case "ask": return sdk.ask(id);

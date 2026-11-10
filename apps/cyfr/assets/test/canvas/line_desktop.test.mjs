@@ -171,7 +171,7 @@ function desk({width = 1024, protocol = "h2", prefs = {}, refuse = {}, version =
       return Promise.resolve(open.handle)
     },
     press: (control, value) => new Promise((answer) => presses.push({control, value, answer})),
-    settings: (page) => pages.push(page),
+    settings: (...args) => pages.push(args),
     prefs: () => new Promise(() => {}),
     ask() {},
     open() {},
@@ -304,7 +304,7 @@ describe("the line desktop 0.2.0", () => {
     await flush()
     assert.equal(p.buttons().filter((b) => b.dataset.act === "retry").length, 0)
     p.tap((b) => b.words === "Open runs")
-    assert.deepEqual(p.pages, ["executions"])
+    assert.deepEqual(p.pages, [["executions", "ex_digest"]])
   })
 
   test("a failed root run offers Retry in Today; a completed run and a child run offer none", async () => {
@@ -516,7 +516,28 @@ describe("the line desktop 0.2.0", () => {
     ])
     await flush()
     for (const words of ["Open in AQUA", "Open runs", "Open schedules", "Open files"]) p.tap((b) => b.words === words)
-    assert.deepEqual(p.pages, ["aqua", "executions", "schedules", "files"])
+    assert.deepEqual(p.pages, [["aqua", "Trip planning"], ["executions", DIGEST], ["schedules", "Backup photos"], ["files", "budget.xlsx"]])
+  })
+
+  test("an attention item and a thread open their page at their record", async () => {
+    const p = desk({width: 1440})
+    await flush()
+    p.picture("attention.changes", [
+      {kind: "approval", id: "ap_1", label: "Trip planning", since: today(11, 40), destination: {kind: "page", page: "aqua", ref: "th_trip"}},
+      {kind: "failed_run", id: DIGEST, label: DIGEST, since: today(11, 50), destination: {kind: "page", page: "executions", ref: "ex_gone"}}
+    ])
+    p.picture("threads.changes", [
+      {kind: "shared", id: "th_family", title: "Family", people: ["a", "b"], last_activity: today(13, 55), waits_on_you: false, unread: 0},
+      {kind: "own", id: "th_tax", title: "Tax notes", people: ["a"], last_activity: today(13, 0), waits_on_you: false, unread: null}
+    ])
+    await flush()
+    p.tap((b) => b.words === "Open in AQUA")
+    p.tap((b) => b.dataset.key === "th-th_family")
+    p.tap((b) => b.dataset.key === "th-th_tax")
+    p.tap((b) => b.words === "Open runs")
+    // A control that names no record opens its page alone.
+    p.tap((b) => b.words === "All threads")
+    assert.deepEqual(p.pages, [["aqua", "th_trip"], ["chat", "th_family"], ["aqua", "th_tax"], ["executions", "ex_gone"], ["chat"]])
   })
 
   test("a shared thread opens the chat and an own thread opens AQUA, with unread counts", async () => {
@@ -530,7 +551,7 @@ describe("the line desktop 0.2.0", () => {
     assert.match(p.seen(), /Family 3 people · 2 unread/)
     p.tap((b) => b.dataset.key === "th-th_family")
     p.tap((b) => b.dataset.key === "th-th_tax")
-    assert.deepEqual(p.pages, ["chat", "aqua"])
+    assert.deepEqual(p.pages, [["chat", "th_family"], ["aqua", "th_tax"]])
   })
 
   test("a file offer names its sender once files.changes holds the offer, and reads as before without it", async () => {
