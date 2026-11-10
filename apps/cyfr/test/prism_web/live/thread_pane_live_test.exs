@@ -1144,9 +1144,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   # The athanor as a fill leaves it, its soul's model connected
-  # (`ready_athanor!/2`): what the server ships, the components the soul
-  # depends on among them (the suite's own seed tree ships the AQUA
-  # template alone), the soul's consent selecting its model's default
+  # (`ready_athanor!/2`): the shipped AQUA tree and the components the
+  # soul depends on (the suite's own seed tree ships the AQUA template
+  # alone), the soul's consent selecting its model's default
   # profile, and a key bound to that profile. The seed path it moves is
   # restored only once the work the test's views started has stopped.
   defp connected!(athanor, user) do

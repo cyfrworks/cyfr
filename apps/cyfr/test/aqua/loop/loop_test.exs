@@ -23,7 +23,6 @@ defmodule Aqua.LoopTest do
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}
 
-  @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
 
@@ -37,7 +36,7 @@ defmodule Aqua.LoopTest do
     # its person's own, who sends the turns and decides their cards.
     ctx = person!()
     tree = own_tree!(ctx)
-    keys = [arca: :seed_path, cyfr: :locus_runtime_workers]
+    keys = [cyfr: :locus_runtime_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
 
     on_exit(fn ->
@@ -50,9 +49,9 @@ defmodule Aqua.LoopTest do
       end
     end)
 
-    # The shipped catalysts the turns run are read from the repository's
-    # seed tree; the suite's own carries none.
-    Application.put_env(:arca, :seed_path, @seed_root)
+    # The shipped catalysts the turns run on, in a seed of this test's own;
+    # the suite's own carries none.
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http openai claude-code openai-codex))
 
     # The loops' work stops before their tree is removed and the seed tree restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()

@@ -31,10 +31,8 @@ apps/cyfr/test/cyfr/test_sandbox_test.exs	1	pending
 apps/cyfr/test/cyfr/test_timings_script_test.exs	3	pending
 apps/cyfr/test/support/fill_watch.ex	2	pending
 apps/cyfr/test/support/locus_service.ex	4	pending
-apps/cyfr/test/support/prism_conn_case.ex	1	pending
 apps/cyfr/test/support/runtime_service.ex	2	pending
 apps/cyfr/test/support/scripted_builder.ex	2	pending
 apps/cyfr/test/support/scripted_worker.ex	2	pending
-apps/cyfr/test/support/seed_bundle.ex	1	pending
 apps/cyfr/test/support/step_bench.ex	4	pending
 apps/cyfr/test/support/two_services.ex	3	pending

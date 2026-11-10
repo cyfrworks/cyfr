@@ -21,7 +21,6 @@ defmodule Opus.TurnRootTest do
   alias Prima.Slots
   alias Sanctum.Consent.{Bootstrap}
 
-  @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
   @slots Opus.Slots
 
@@ -30,10 +29,9 @@ defmodule Opus.TurnRootTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "turn_root_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path]
+    keys = [:base_path]
     prev = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
     Application.put_env(:arca, :base_path, test_path)
-    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -44,6 +42,8 @@ defmodule Opus.TurnRootTest do
           else: Application.delete_env(:arca, key)
       end
     end)
+
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http))
 
     ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)

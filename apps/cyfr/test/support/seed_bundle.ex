@@ -4,9 +4,11 @@
 defmodule Cyfr.Test.SeedBundle do
   @moduledoc """
   A private seed tree for one test: the shipped AQUA tree and the named
-  catalysts at their newest shipped version, copied from the repository's
-  `seed/` without build droppings. Points `:seed_path` at it until the
-  test exits.
+  catalysts and formulas at their newest shipped version, copied from the
+  repository's `seed/` without build droppings. Points `:seed_path` at it
+  until the test exits. A test whose turns run on a few shipped units lays
+  those alone, since every unit the seed holds is copied into its
+  athanor, indexed and consented.
   """
 
   @repo_seed Path.expand("../../../../seed", __DIR__)
@@ -91,25 +93,25 @@ defmodule Cyfr.Test.SeedBundle do
     end)
   end
 
-  @doc "Lay the tree, set `:seed_path` to it, and answer its path."
-  @spec lay!([String.t()]) :: String.t()
-  def lay!(catalysts) when is_list(catalysts) do
+  @doc """
+  Lay the tree, with the formulas `formulas:` names beside the catalysts,
+  set `:seed_path` to it, and answer its path.
+  """
+  @spec lay!([String.t()], formulas: [String.t()]) :: String.t()
+  def lay!(catalysts, opts \\ []) when is_list(catalysts) do
+    units =
+      Enum.map(catalysts, &local_unit!("catalysts", &1)) ++
+        Enum.map(Keyword.get(opts, :formulas, []), &local_unit!("formulas", &1))
+
     seed_tree!("seed_bundle", fn dir ->
       File.mkdir_p!(dir)
       File.cp_r!(Path.join(@repo_seed, "aqua"), Path.join(dir, "aqua"))
 
-      for name <- catalysts do
-        versions =
-          [@repo_seed, "components", "catalysts", "local", name, "*"]
-          |> Path.join()
-          |> Prima.Test.SourceTree.files!()
-          |> Enum.map(&Path.basename/1)
-          |> Compendium.Semver.sort_desc()
-
-        version = hd(versions)
-        src = Path.join([@repo_seed, "components", "catalysts", "local", name, version])
-        dest = Path.join([dir, "components", "catalysts", "local", name, version])
-        copy_unit!(src, dest)
+      for %{rel: rel} <- units do
+        copy_unit!(
+          Path.join([@repo_seed, "components", rel]),
+          Path.join([dir, "components", rel])
+        )
       end
     end)
   end
@@ -121,16 +123,7 @@ defmodule Cyfr.Test.SeedBundle do
     dir = temp_dir(prefix)
     ExUnit.Callbacks.on_exit(fn -> File.rm_rf!(dir) end)
     fill.(dir)
-
-    previous = Application.get_env(:arca, :seed_path)
-    Application.put_env(:arca, :seed_path, dir)
-
-    ExUnit.Callbacks.on_exit(fn ->
-      if previous,
-        do: Application.put_env(:arca, :seed_path, previous),
-        else: Application.delete_env(:arca, :seed_path)
-    end)
-
+    Prima.Test.Env.put_app_env(:arca, :seed_path, dir)
     dir
   end
 

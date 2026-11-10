@@ -37,15 +37,17 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  Make `athanor_id` an athanor a turn can run in: the shipped tree and
-  bundle copied in, indexed, the baseline consent the soul pins minted —
-  as a fill leaves it — and a key connected to the Claude catalyst, which
-  its runs unseal when they attach. `user_id` is the athanor's person, whom
-  the bootstrap runs as. The context it answers is that person in Prism,
-  so its origin is `interactive`, as a turn sent from the console is.
+  Make `athanor_id` an athanor a turn can run in: the shipped tree and the
+  catalysts the soul runs on, laid in a seed of the test's own
+  (`Cyfr.Test.SeedBundle.lay!/2`), copied in, indexed, the baseline
+  consent the soul pins minted — as a fill leaves it — and a key connected
+  to the Claude catalyst, which its runs unseal when they attach.
+  `user_id` is the athanor's person, whom the bootstrap runs as. The
+  context it answers is that person in Prism, so its origin is
+  `interactive`, as a turn sent from the console is.
   """
   def ready_athanor!(athanor_id, user_id) do
-    turn_env!()
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http))
     ctx = %{Sanctum.TestContext.local(:prism) | user_id: user_id, athanor_id: athanor_id}
     :ok = Sanctum.TestContext.shipped!(athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
@@ -59,22 +61,6 @@ defmodule PrismWeb.ConnCase do
     })
 
     ctx
-  end
-
-  # A turn pins the consent the fill minted into the durable source, from
-  # the repository's own seed; restored on exit.
-  defp turn_env! do
-    keys = [:seed_path]
-    prev = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
-    Application.put_env(:arca, :seed_path, Path.expand("../../../../seed", __DIR__))
-
-    ExUnit.Callbacks.on_exit(fn ->
-      for {key, value} <- prev do
-        if value,
-          do: Application.put_env(:arca, key, value),
-          else: Application.delete_env(:arca, key)
-      end
-    end)
   end
 
   @doc """

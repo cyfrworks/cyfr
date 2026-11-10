@@ -23,7 +23,6 @@ defmodule Aqua.Loop.AgentWideAutoPolicyTest do
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.Bootstrap
 
-  @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
 
@@ -42,17 +41,8 @@ defmodule Aqua.Loop.AgentWideAutoPolicyTest do
     tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
     refute File.exists?(tree), "#{ctx.athanor_id}'s tree is left from another test"
 
-    prev = Application.get_env(:arca, :seed_path)
-
-    on_exit(fn ->
-      File.rm_rf!(tree)
-
-      if prev,
-        do: Application.put_env(:arca, :seed_path, prev),
-        else: Application.delete_env(:arca, :seed_path)
-    end)
-
-    Application.put_env(:arca, :seed_path, @seed_root)
+    on_exit(fn -> File.rm_rf!(tree) end)
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http))
 
     # The loops' work stops before their tree is removed and the seed tree restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
