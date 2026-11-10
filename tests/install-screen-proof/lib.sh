@@ -759,12 +759,47 @@ guest_chord() {
 # screen_find TEXT [last]: Chrome's find bar on the page in front, at the
 # first match of TEXT (with last, its last), then closed, which gives the
 # keyboard's focus to the link or button holding that match, as a person
-# reaching it by the keyboard does. Enter then presses it.
+# reaching it by the keyboard does. Enter then presses it. Answers 1 when
+# the page shows no match, the display then kept as
+# GUEST_DIR/screen-find-missed.ppm; each count is a line of
+# GUEST_DIR/screen-find.txt.
 screen_find() {
+  local found=1
   guest_chord ctrl f && sleep 1 &&
     printf '%s' "$1" | guest_keys && sleep 2 &&
     { [ "${2:-}" != last ] || guest_chord shift ret; } && sleep 1 &&
-    guest_chord esc && sleep 1
+    { ! screen_match "$1" || found=0; guest_chord esc; } && sleep 1 &&
+    [ "$found" = 0 ]
+}
+
+# screen_match TEXT: whether the display shows the match the find bar
+# stands on. Chrome paints that one match in its own orange, rgb(255, 150,
+# 50), whatever the page's colours, and a page with no match shows none of
+# it; 30 pixels is less than the smallest word's highlight and more than a
+# stray pixel.
+screen_match() {
+  local dump="$GUEST_DIR/screen-find.ppm" count
+  guest_qmp screendump '{"filename": "/tmp/screen-find.ppm", "format": "ppm"}' >/dev/null &&
+    docker cp "$GUEST:/tmp/screen-find.ppm" "$dump" >/dev/null 2>&1 || return 1
+  count=$(python3 -I -c '
+import sys
+data = open(sys.argv[1], "rb").read()
+fields, at = [], 0
+while len(fields) < 4:
+    end = at
+    while not data[end:end + 1].isspace():
+        end += 1
+    fields.append(data[at:end])
+    at = end + 1
+pixels = data[at:]
+print(sum(1 for p in zip(pixels[0::3], pixels[1::3], pixels[2::3]) if p == (255, 150, 50)))' "$dump") || return 1
+  printf '%s %s\n' "$count" "$1" >>"$GUEST_DIR/screen-find.txt"
+  if [ "$count" -ge 30 ]; then
+    rm -f "$dump"
+    return 0
+  fi
+  mv "$dump" "$GUEST_DIR/screen-find-missed.ppm"
+  return 1
 }
 
 # The boot's journal and apt's history, read once nothing else is to be

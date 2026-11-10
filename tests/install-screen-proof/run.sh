@@ -380,7 +380,10 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
 screen_confirms() {
   local ref client
   step "a sensitive change confirmed on this screen: an API key made in Prism"
-  # The person's way there: Prism's sidebar link, from the page in front.
+  # The person's way there from the desktop, which lists no page: its
+  # search, which does.
+  guest_chord ctrl shift k || fail "QMP did not send the keys"
+  sleep 3
   screen_find 'api keys' && printf '\n' | guest_keys || fail "QMP did not press API Keys"
   sleep 8
   check "screenshot screen-api-keys.png" guest_screenshot screen-api-keys.png
