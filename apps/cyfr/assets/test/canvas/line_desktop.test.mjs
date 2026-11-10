@@ -147,6 +147,7 @@ function desk({width = 1024, protocol = "h2", prefs = {}, refuse = {}, version =
   const opens = []
   const presses = []
   const pages = []
+  const shell = {}
   const element = () => ({
     innerHTML: "",
     dataset: {},
@@ -157,7 +158,7 @@ function desk({width = 1024, protocol = "h2", prefs = {}, refuse = {}, version =
   const parts = {"#near": element(), "#far": element(), "#frame": element()}
   const cyfr = {
     desktop: {prefs: {document: prefs, revision: 1}, appearance: {mode: "light", locale: "en-GB", time_zone: "UTC"}, person: {name: "Noor"}},
-    on() {},
+    on: (event, handler) => (shell[event] = handler),
     stream(name, subject, onEvent) {
       const open = {name: subject ? `feed:${subject}` : name, stream: name, onEvent}
       opens.push(open)
@@ -232,7 +233,8 @@ function desk({width = 1024, protocol = "h2", prefs = {}, refuse = {}, version =
     listeners.click({target: {closest: () => ({dataset: b.dataset, getAttribute: (k) => b.attrs[k] ?? null})}})
   }
   const runTimers = () => timers.splice(0).forEach((fn) => fn && fn())
-  return {opens, presses, pages, send, change, picture, seen, buttons, button, tap, runTimers, last}
+  const tell = (event, value) => shell[event](value)
+  return {opens, presses, pages, send, change, picture, seen, buttons, button, tap, runTimers, last, tell}
 }
 
 const flush = async () => {
@@ -439,6 +441,46 @@ describe("the line desktop 0.2.0", () => {
     assert.match(p.seen(), /Schedules .*No longer granted to this desktop/)
     assert.doesNotMatch(p.seen(), /Morning digest|Refusal text/)
     assert.equal(p.opens.filter((o) => o.name === "schedules.changes").length, 1)
+  })
+
+  test("a hidden-then-shown desktop shows its parts live again, with no denied in between", async () => {
+    const p = desk()
+    await flush()
+    const approval = {kind: "approval", id: "ap_1", label: "Trip planning", since: today(11, 40), destination: {kind: "page", page: "aqua", ref: "th_1"}}
+    const offer = {kind: "file_offer", id: "of_1", label: "budget.xlsx", since: today(13, 10), destination: {kind: "page", page: "files", ref: "of_1"}}
+    const run = (id, kind, h) => ({...failedRun, execution_id: id, kind, error: null, ended_at: null, started_at: today(h, 0)})
+    const schedule = (id, name, status) => ({kind: "changed", schedule_id: id, name, status, next_run_at: today(23, 0)})
+    p.picture("attention.changes", [approval, offer])
+    p.picture("runs.changes", [run("ex_a", "completed", 10), run("ex_b", "started", 11)])
+    p.picture("schedules.changes", [schedule("s1", "Morning digest", "active"), schedule("s2", "Weekly review", "active")])
+    await flush()
+    assert.match(p.seen(), /2 things wait on you .*budget\.xlsx/)
+    assert.match(p.seen(), /Weekly review/)
+    const opened = p.opens.length
+
+    // Hidden: every handle is suspended and the page hears nothing.
+    for (const o of p.opens) if (o.handle) o.handle.state = "suspended"
+    p.tell("state", "frozen")
+    p.runTimers()
+    await flush()
+
+    // Shown: the SDK opens each stream again itself; each hears its fresh picture.
+    p.tell("state", "live")
+    for (const o of p.opens) if (o.handle) o.handle.state = "live"
+    for (const name of ["attention.changes", "runs.changes", "schedules.changes"]) p.send(name, {event: "resync"})
+    p.picture("attention.changes", [{...approval, label: "Trip planning, day 2"}])
+    p.picture("runs.changes", [{...run("ex_b", "completed", 11), duration_ms: 2400}])
+    p.picture("schedules.changes", [schedule("s1", "Morning digest", "paused")])
+    await flush()
+
+    const seen = p.seen()
+    assert.match(seen, /1 thing waits on you .*Trip planning, day 2/)
+    assert.doesNotMatch(seen, /budget\.xlsx|settled|left your queue/)
+    assert.match(seen, /Morning digest Paused/)
+    assert.doesNotMatch(seen, /Weekly review/)
+    assert.match(seen, /Today 1 run · 0 failed .*ok 2\.4 s/)
+    assert.doesNotMatch(seen, /No longer granted|Not granted|As of|trying again|Can't be read|could not be read/)
+    assert.equal(p.opens.length, opened)
   })
 
   test("a first open with no answer, and a stream the endpoint ended, open again", async () => {
