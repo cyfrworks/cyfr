@@ -244,7 +244,7 @@
       const call = onThread.get(t.id) || null;
       const own = t.kind === 'own';
       const people = Array.isArray(t.people) ? t.people.length : 0;
-      const who = own ? 'Own' : people > 0 ? `${people} people` : 'Shared';
+      const who = own ? 'Own' : people > 0 ? `${people} ${people === 1 ? 'person' : 'people'}` : 'Shared';
       const unread = Number.isInteger(t.unread) && t.unread > 0 ? t.unread : 0;
       const waits = call || t.waits_on_you === true;
       // A shared thread opens the chat; an own thread AQUA's panel, where

@@ -230,7 +230,7 @@
       const last = N.time(t.last_activity);
       const unread = Number.isInteger(t.unread) && t.unread > 0 ? t.unread : 0;
       out.title = N.text(t.title) || (lit ? lit.label : 'Thread');
-      out.lines.push(t.kind === 'own' ? 'Your thread with AQUA' : Array.isArray(t.people) ? t.people.length + ' people' : '', [last ? 'last activity ' + C.when(last, Date.now()) : '', unread ? unread + ' unread' : ''].filter(Boolean).join(' · '));
+      out.lines.push(t.kind === 'own' ? 'Your thread with AQUA' : Array.isArray(t.people) ? t.people.length + (t.people.length === 1 ? ' person' : ' people') : '', [last ? 'last activity ' + C.when(last, Date.now()) : '', unread ? unread + ' unread' : ''].filter(Boolean).join(' · '));
       if (lit) out.lines.push('An approval waits for you in AQUA.');
       // An approval opens where it waits, a shared thread the chat and an
       // own thread AQUA's panel; neither opens at the thread itself.

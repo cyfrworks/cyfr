@@ -334,7 +334,7 @@
     const rows = list.map((t, i) => {
       const L = lit.get('thread:' + text(t.id));
       const people = Array.isArray(t.people) ? t.people.length : 0;
-      const who = t.kind === 'own' ? 'with AQUA' : people === 2 ? 'pair' : people + ' people';
+      const who = t.kind === 'own' ? 'with AQUA' : people === 2 ? 'pair' : people + (people === 1 ? ' person' : ' people');
       const last = time(t.last_activity);
       const unread = Number.isInteger(t.unread) && t.unread > 0 ? t.unread : 0;
       const news = unread ? '<span class="news">' + '<i></i>'.repeat(Math.min(unread, 3)) + unread + ' new</span>' : '';

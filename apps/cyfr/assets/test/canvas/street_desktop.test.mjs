@@ -530,6 +530,20 @@ describe("the street desktop 0.2.0", () => {
     })
   }
 
+  test("a shared thread of one person reads 1 person, and of three, 3 people", async () => {
+    const p = await street()
+    picture(p.stream("threads.changes"), [
+      {kind: "shared", id: "th-1", title: "Alone", people: ["Noor"], last_activity: at(-60), waits_on_you: false, unread: 0},
+      {kind: "shared", id: "th-3", title: "Family", people: ["Noor", "Sam", "Ana"], last_activity: at(-50), waits_on_you: false, unread: 0},
+    ])
+    p.pump(5)
+    const text = (start) => hit(p, start).textContent
+    assert.match(text("Thread Alone"), /1 person$/)
+    assert.match(text("Thread Family"), /3 people$/)
+    tap(p, "Thread Alone")
+    assert.match(p.board().textContent, /shared, 1 person/)
+  })
+
   test("the files, the offer's sender and how CYFR stands reach the street", async () => {
     const p = await street()
     picture(p.stream("files.changes"), [

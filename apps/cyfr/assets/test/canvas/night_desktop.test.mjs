@@ -505,6 +505,19 @@ describe("the night desktop 0.2.0", () => {
     }
   })
 
+  test("a shared thread of one person reads 1 person, and of three, 3 people", async () => {
+    const p = await lit({runs: [RUN_DONE]})
+    picture(p.line("threads.changes"), [
+      {kind: "shared", id: "t1", title: "Alone", people: ["a"], unread: 0},
+      {kind: "shared", id: "t3", title: "Family", people: ["a", "b", "c"], unread: 0},
+    ])
+    p.draw()
+    const wall = p.html("wall")
+    assert.match(wall, /1 person\b/)
+    assert.doesNotMatch(wall, /1 people/)
+    assert.match(wall, /3 people/)
+  })
+
   test("the files and system items reach the locker and the junction box, and the fields the catalog now carries show", async () => {
     const p = await lit({runs: [RUN_DONE]})
     picture(p.line("files.changes"), [

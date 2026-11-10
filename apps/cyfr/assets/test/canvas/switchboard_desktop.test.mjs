@@ -592,6 +592,14 @@ describe("the switchboard desktop 0.2.0", () => {
     assert.match(b.readout(), /CYFR asks you this itself/)
   })
 
+  test("a shared thread of one person reads 1 person, and of three, 3 people", async () => {
+    const thread = (id, title, people) => ({kind: "shared", id, title, people, last_activity: ago(5), waits_on_you: false, unread: 0})
+    const b = await started({}, {"threads.changes": [thread("a", "Alone", ["Ada"]), thread("b", "Family", ["Ada", "Bob", "Cy"])]})
+    const meta = (name) => line(b, "threads", name).getAttribute("aria-label")
+    assert.match(meta("Alone"), /\b1 person\b/)
+    assert.match(meta("Family"), /\b3 people\b/)
+  })
+
   test("a resync and a picture without an item remove it, with no Cleared", async () => {
     const thread = (id, title) => ({kind: "shared", id, title, people: ["Ada"], last_activity: ago(5), waits_on_you: false, unread: 0})
     const b = await started({}, {"threads.changes": [thread("a", "Alpha"), thread("b", "Beta")]})

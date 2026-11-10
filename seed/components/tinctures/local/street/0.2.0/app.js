@@ -1071,8 +1071,9 @@ function waitingWords(a) {
 function threadSub(th) {
   const people = Array.isArray(th.people) ? th.people.length : 0;
   if (th.waits_on_you) return 'waits on you';
-  if (th.unread > 0) return `${th.unread} unread · ${people} people`;
-  if (th.kind === 'shared') return people === 2 ? 'a pair' : people + ' people';
+  const many = `${people} ${people === 1 ? 'person' : 'people'}`;
+  if (th.unread > 0) return `${th.unread} unread · ${many}`;
+  if (th.kind === 'shared') return people === 2 ? 'a pair' : many;
   return 'with AQUA';
 }
 const HEALTH = { ok: 'healthy', degraded: 'degraded', low_storage: 'low on storage' };
@@ -1432,7 +1433,7 @@ function signFor(e) {
       const people = Array.isArray(th.people) ? th.people : [];
       return {
         title: text(th.title) || 'A thread',
-        facts: [['kind', own ? 'own, with AQUA' : `shared, ${people.length} people`], ['last', when(e.t)], ...(th.unread > 0 ? [['unread', String(th.unread)]] : []), ...(th.waits_on_you ? [['', 'waits on you']] : [])],
+        facts: [['kind', own ? 'own, with AQUA' : `shared, ${people.length} ${people.length === 1 ? 'person' : 'people'}`], ['last', when(e.t)], ...(th.unread > 0 ? [['unread', String(th.unread)]] : []), ...(th.waits_on_you ? [['', 'waits on you']] : [])],
         // An own thread is AQUA's, in its panel; a shared one is in the chat.
         acts: [own ? page('Open AQUA', 'aqua', 'go') : page('Open the chat', 'chat', 'go'), ask('houses')],
       };
