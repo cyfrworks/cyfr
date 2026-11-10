@@ -4,19 +4,20 @@
 defmodule Sanctum.EstablishBoundaryTest do
   @moduledoc """
   `Sanctum.Caller.establish/2` is the only builder of an authenticated
-  context from a credential. Mechanically: every code line that builds a
-  context with `authenticated: true` is one of the enumerated sites, and
+  context from a credential. Mechanically: every place code gives
+  `authenticated` the value `true` is one of the enumerated sites, and
   the credential recipes — a session load, an API key's context and a
   frame credential's verification — are called from `Sanctum.Caller`
   alone.
   """
   use ExUnit.Case, async: true
 
-  @root Path.expand("../../../..", __DIR__)
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
 
-  # A build site spells the keyword on a line of its own; a pattern match
-  # (`%Sanctum.Context{authenticated: true}`) does not.
-  @build_line ~r/^\s*authenticated: true,?\s*$/
+  alias Prima.Test.SourceTree
+
+  @root Path.expand("../../../..", __DIR__)
 
   # Every file that builds an authenticated context, with its site count
   # and what each site is.
@@ -67,33 +68,133 @@ defmodule Sanctum.EstablishBoundaryTest do
   ]
   @caller "apps/sanctum/lib/sanctum/caller.ex"
 
-  defp lib_files do
-    for dir <- Prima.Test.SourceTree.app_libs(@root),
-        file <- Prima.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
-        do:
-          {Path.relative_to(file, @root),
-           Prima.Test.CodeLines.lines(Prima.Test.SourceTree.read(file))}
+  defp lib_paths do
+    for dir <- SourceTree.app_libs(@root),
+        file <- SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
+        do: {Path.relative_to(file, @root), file}
   end
 
   # Where a context may be BUILT: every app's lib, plus the two test
   # support trees holding fixtures that mint authenticated contexts.
-  # `lib_files/0` stays lib-only for the recipe test below, whose invariant
+  # `lib_paths/0` stays lib-only for the recipe test below, whose invariant
   # is about production code alone.
-  defp builder_files do
+  defp builder_paths do
     support =
       for glob <- ~w(apps/cyfr/test/support/**/*.ex apps/sanctum/test/support/**/*.ex),
-          file <- Prima.Test.SourceTree.files!(Path.join(@root, glob)),
-          do:
-            {Path.relative_to(file, @root),
-             Prima.Test.CodeLines.lines(Prima.Test.SourceTree.read(file))}
+          file <- SourceTree.files!(Path.join(@root, glob)),
+          do: {Path.relative_to(file, @root), file}
 
-    lib_files() ++ support
+    lib_paths() ++ support
   end
+
+  defp code_lines(paths),
+    do: for({rel, file} <- paths, do: {rel, Enum.map(SourceTree.code_lines(file), &elem(&1, 0))})
+
+  @defs [:def, :defp, :defmacro, :defmacrop]
+  @types [:spec, :type, :typep, :opaque, :callback, :macrocallback]
+  @key_writers [:put, :put_new, :replace, :replace!]
+
+  # The line of every place `ast` gives `authenticated` the value `true`,
+  # each pipe undone: a map or struct literal or update, a keyword list or
+  # a pair naming it, a `Map` or `Keyword` writer whose key it is, and
+  # `put_in/2,3` whose path reaches it. A pattern matches the key and
+  # writes nothing: a function's arguments, a clause's head, the left of
+  # `=` or `<-`, `match?/2`'s pattern, and a type. What runs beside a
+  # pattern is code: a default argument, a guard, and `cond`'s conditions.
+  defp authenticated_sets(ast) do
+    ast
+    |> Macro.prewalk(fn
+      {:|>, _meta, [left, {call, meta, args}]} when is_list(args) -> {call, meta, [left | args]}
+      node -> node
+    end)
+    |> sets(0, [])
+    |> Enum.reverse()
+  end
+
+  defp sets({def, meta, [head | body]}, _line, acc) when def in @defs,
+    do: sets(body, meta[:line], head_sets(head, meta[:line], acc))
+
+  defp sets({op, meta, [pattern, expression]}, _line, acc) when op in [:=, :<-],
+    do: sets(expression, meta[:line], guard_sets(pattern, meta[:line], acc))
+
+  defp sets({:cond, _meta, [[do: clauses]]}, _line, acc) do
+    Enum.reduce(clauses, acc, fn {:->, meta, [conditions, body]}, acc ->
+      sets(body, meta[:line], sets(conditions, meta[:line], acc))
+    end)
+  end
+
+  defp sets({:->, meta, [heads, body]}, _line, acc),
+    do: sets(body, meta[:line], Enum.reduce(heads, acc, &guard_sets(&1, meta[:line], &2)))
+
+  defp sets({:match?, meta, [pattern, term]}, _line, acc),
+    do: sets(term, meta[:line], guard_sets(pattern, meta[:line], acc))
+
+  defp sets({:@, _meta, [{type, _, _}]}, _line, acc) when type in @types, do: acc
+  defp sets({:authenticated, true}, line, acc), do: [line | acc]
+
+  defp sets(
+         {{:., _, [{:__aliases__, _, [module]}, fun]}, meta, [_data, key, true]} = node,
+         _,
+         acc
+       )
+       when module in [:Map, :Keyword] and fun in @key_writers,
+       do: children(node, meta[:line], mark(key == :authenticated, meta, acc))
+
+  defp sets({:put_in, meta, [path, true]} = node, _line, acc),
+    do: children(node, meta[:line], mark(names?(path), meta, acc))
+
+  defp sets({:put_in, meta, [_data, keys, true]} = node, _line, acc),
+    do: children(node, meta[:line], mark(names?(keys), meta, acc))
+
+  defp sets({_call, meta, args} = node, line, acc) when is_list(meta) and is_list(args),
+    do: children(node, meta[:line] || line, acc)
+
+  defp sets(node, line, acc), do: children(node, line, acc)
+
+  # A function head's guard and default arguments run; its arguments are
+  # patterns.
+  defp head_sets({:when, _meta, [call, guard]}, line, acc),
+    do: sets(guard, line, head_sets(call, line, acc))
+
+  defp head_sets({_name, _meta, args}, line, acc) when is_list(args),
+    do: Enum.reduce(args, acc, &default_sets(&1, line, &2))
+
+  defp head_sets(_bare, _line, acc), do: acc
+
+  defp default_sets({:\\, meta, [_pattern, default]}, line, acc),
+    do: sets(default, meta[:line] || line, acc)
+
+  defp default_sets(_pattern, _line, acc), do: acc
+
+  # A pattern's guard runs; the pattern does not.
+  defp guard_sets({:when, _meta, parts}, line, acc), do: sets(List.last(parts), line, acc)
+  defp guard_sets(_pattern, _line, acc), do: acc
+
+  defp children({call, _meta, args}, line, acc) when is_list(args),
+    do: sets(args, line, sets(call, line, acc))
+
+  defp children({left, right}, line, acc), do: sets(right, line, sets(left, line, acc))
+
+  defp children(list, line, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &sets(&1, line, &2))
+
+  defp children(_leaf, _line, acc), do: acc
+
+  defp mark(true, meta, acc), do: [meta[:line] | acc]
+  defp mark(false, _meta, acc), do: acc
+
+  # Whether a path names the key: the atom itself in a key list, or
+  # `.authenticated`; a variable of that name does not.
+  defp names?(:authenticated), do: true
+  defp names?({name, _meta, context}) when is_atom(name) and is_atom(context), do: false
+  defp names?({call, _meta, args}) when is_list(args), do: names?(call) or names?(args)
+  defp names?(list) when is_list(list), do: Enum.any?(list, &names?/1)
+  defp names?(_leaf), do: false
 
   test "an authenticated context is built only at the enumerated sites" do
     found =
-      for {rel, lines} <- builder_files(),
-          count = Enum.count(lines, &Regex.match?(@build_line, &1)),
+      for {rel, file} <- builder_paths(),
+          count = length(authenticated_sets(SourceTree.quoted(file))),
           count > 0,
           into: %{},
           do: {rel, count}
@@ -118,9 +219,65 @@ defmodule Sanctum.EstablishBoundaryTest do
              "comments): #{inspect(Enum.sort(stale))}"
   end
 
+  test "every way of giving the key true is a site, and a pattern or another value is not" do
+    planted = """
+    defmodule Planted do
+      def a(ctx), do: %{ctx | authenticated: true} # set
+      def b(ctx), do: Map.put(ctx, :authenticated, true) # set
+      def c(ctx), do: ctx |> Map.replace!(:authenticated, true) # set
+      def d, do: %Sanctum.Context{user_id: "u", authenticated: true} # set
+      def e(opts), do: Sanctum.Context.build([authenticated: true] ++ opts) # set
+      def f(ctx), do: struct(ctx, authenticated: true) # set
+      def g(ctx), do: Map.merge(ctx, %{authenticated: true}) # set
+      def h(ctx), do: put_in(ctx.authenticated, true) # set
+      def i(ctx), do: put_in(ctx, [:authenticated], true) # set
+      def j(opts), do: Keyword.put(opts, :authenticated, true) # set
+      def k(%Sanctum.Context{authenticated: true} = ctx), do: ctx
+      def l(ctx) do
+        case ctx do
+          %{authenticated: true} -> ctx
+        end
+      end
+      def m(ctx) do
+        %{authenticated: true} = ctx
+        with {:ok, %{authenticated: true}} <- {:ok, ctx}, do: match?(%{authenticated: true}, ctx)
+      end
+      def n(ctx), do: %{ctx | authenticated: false}
+      def o(ctx), do: Map.get(ctx, :authenticated, true)
+      @spec p() :: %{authenticated: true}
+      def p, do: :ok
+      def q(ctx \\\\ %Sanctum.Context{authenticated: true}), do: ctx # set
+      def r(ctx \\\\ %{authenticated: true}) when is_map(ctx), do: ctx # set
+      def s(ctx) when ctx == %{authenticated: true}, do: ctx # set
+      def t(ctx) do
+        case ctx do
+          c when c == %{authenticated: true} -> c # set
+        end
+      end
+      def u(ctx) do
+        cond do
+          ctx == %{authenticated: true} -> ctx # set
+        end
+      end
+      def v(ctx) do
+        with c when c == %{authenticated: true} <- ctx, do: c # set
+      end
+      def w(ctx), do: match?(c when c == %{authenticated: true}, ctx) # set
+    end
+    """
+
+    set =
+      for {line, number} <- Enum.with_index(String.split(planted, "\n"), 1),
+          line =~ "# set",
+          do: number
+
+    assert length(set) == 17
+    assert authenticated_sets(Code.string_to_quoted!(planted)) == set
+  end
+
   test "a paired device's verifier builds no context: establish_device/2 builds it" do
     file = "apps/sanctum/lib/sanctum/device_certs.ex"
-    lines = Prima.Test.CodeLines.lines(Prima.Test.SourceTree.read(Path.join(@root, file)))
+    lines = Enum.map(SourceTree.code_lines(Path.join(@root, file)), &elem(&1, 0))
 
     refute Enum.any?(lines, &Regex.match?(~r/\bContext\.build\(|%Context\{[^}]*\|/, &1)),
            "#{file} builds or rewrites a context; it verifies, then calls " <>
@@ -129,7 +286,7 @@ defmodule Sanctum.EstablishBoundaryTest do
 
   test "establish_device/2 has one call site, in Sanctum.DeviceCerts" do
     calls =
-      for {rel, lines} <- builder_files(),
+      for {rel, lines} <- code_lines(builder_paths()),
           line <- lines,
           line =~ ~r/\bestablish_device\(/,
           not (rel == @caller and line =~ ~r/^\s*(def|@spec)\s/),
@@ -178,7 +335,7 @@ defmodule Sanctum.EstablishBoundaryTest do
 
   test "the credential recipes are called from Sanctum.Caller alone" do
     reaches =
-      for {rel, lines} <- lib_files(),
+      for {rel, lines} <- code_lines(lib_paths()),
           rel != @caller,
           line <- lines,
           Enum.any?(@recipes, &Regex.match?(&1, line)),

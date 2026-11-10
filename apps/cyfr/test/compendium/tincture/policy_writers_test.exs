@@ -14,6 +14,11 @@ defmodule Compendium.Tincture.PolicyWritersTest do
   """
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
+  alias Prima.Test.SourceTree
+
   @repo_root Path.expand("../../../../..", __DIR__)
   @rules "apps/cyfr/lib/compendium/tincture/rules.ex"
 
@@ -42,11 +47,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
   # joined into one literal: a `<>` chain and a binary construction are
   # read as the text they build, so a directive, a token or a type split
   # across literals is still the literal it spells.
-  defp quoted(source, file) do
-    source
-    |> Code.string_to_quoted!(file: file, columns: false)
-    |> Macro.postwalk(&joined/1)
-  end
+  defp joined_literals(ast), do: Macro.postwalk(ast, &joined/1)
 
   defp joined({:<>, meta, [left, right]}) do
     case {left, right} do
@@ -86,9 +87,9 @@ defmodule Compendium.Tincture.PolicyWritersTest do
   defp flush([last]), do: {:cont, last, []}
 
   # The string literals of a module's source, its docs left out.
-  defp literals(source, file) do
-    source
-    |> quoted(file)
+  defp literals(ast) do
+    ast
+    |> joined_literals()
     |> Macro.prewalk([], fn
       {:@, _, [{doc, _, _}]}, acc when doc in @docs -> {nil, acc}
       literal, acc when is_binary(literal) -> {literal, [literal | acc]}
@@ -100,18 +101,29 @@ defmodule Compendium.Tincture.PolicyWritersTest do
   defp writes_policy?(text), do: text =~ @directive or text =~ @sandbox_token
 
   defp writers(sources) do
-    for {path, source} <- sources,
-        texts =
-          if(String.ends_with?(path, ".ex"), do: literals(source, path), else: [source]),
+    for {path, source, ast} <- sources,
+        texts = if(ast, do: literals(ast), else: [source]),
         hits = Enum.filter(texts, &writes_policy?/1),
         hits != [],
         into: %{},
         do: {path, hits}
   end
 
+  # Each file as the scans read it: its path, its text and, for Elixir, its
+  # quoted form. The tree's are the suite's one read and parse; a planted
+  # file's are its own.
   defp library_sources do
     for path <- Path.wildcard(Path.join(@repo_root, "apps/*/lib/**/*.{ex,heex}")),
-        do: {Path.relative_to(path, @repo_root), File.read!(path)}
+        do:
+          {Path.relative_to(path, @repo_root), SourceTree.read(path),
+           String.ends_with?(path, ".ex") && SourceTree.quoted(path)}
+  end
+
+  defp planted(sources) do
+    for {path, source} <- sources,
+        do:
+          {path, source,
+           String.ends_with?(path, ".ex") && Code.string_to_quoted!(source, file: path)}
   end
 
   test "no library source but the tincture rules writes a policy directive or a sandbox token" do
@@ -144,17 +156,17 @@ defmodule Compendium.Tincture.PolicyWritersTest do
   defp served_type?(_pair), do: false
 
   defp type_tables(sources) do
-    for {path, source} <- sources,
-        String.ends_with?(path, ".ex"),
-        pairs = served_type_pairs(source, path),
+    for {path, _source, ast} <- sources,
+        ast,
+        pairs = served_type_pairs(ast),
         pairs != [],
         into: %{},
         do: {path, pairs}
   end
 
-  defp served_type_pairs(source, file) do
-    source
-    |> quoted(file)
+  defp served_type_pairs(ast) do
+    ast
+    |> joined_literals()
     # A map's pairs are two-element tuples in the quoted form too.
     |> Macro.prewalk([], fn
       {_extension, _type} = pair, acc ->
@@ -181,7 +193,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     """
 
-    assert %{"types.ex" => pairs} = type_tables([{"types.ex", table}])
+    assert %{"types.ex" => pairs} = type_tables(planted([{"types.ex", table}]))
     assert Enum.sort(pairs) == [{".html", "text/html"}, {".wasm", "application/wasm"}]
   end
 
@@ -196,7 +208,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     '''
 
-    assert %{"probe.ex" => hits} = writers([{"probe.ex", composed}])
+    assert %{"probe.ex" => hits} = writers(planted([{"probe.ex", composed}]))
     assert Enum.sort(hits) == ["; sandbox ", "allow-same-origin"]
 
     documented = ~S'''
@@ -207,7 +219,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     '''
 
-    assert writers([{"quiet.ex", documented}]) == %{}
+    assert writers(planted([{"quiet.ex", documented}])) == %{}
   end
 
   test "a directive assembled from literal fragments still has a policy writer" do
@@ -217,7 +229,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     '''
 
-    assert Map.has_key?(writers([{"split_policy.ex", source}]), "split_policy.ex")
+    assert Map.has_key?(writers(planted([{"split_policy.ex", source}])), "split_policy.ex")
   end
 
   test "a sandbox token assembled from literal fragments still has a policy writer" do
@@ -227,7 +239,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     '''
 
-    assert Map.has_key?(writers([{"split_sandbox.ex", source}]), "split_sandbox.ex")
+    assert Map.has_key?(writers(planted([{"split_sandbox.ex", source}])), "split_sandbox.ex")
   end
 
   test "an extension and media type assembled from literal fragments still have a type writer" do
@@ -237,7 +249,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     '''
 
-    assert Map.has_key?(type_tables([{"split_types.ex", source}]), "split_types.ex")
+    assert Map.has_key?(type_tables(planted([{"split_types.ex", source}])), "split_types.ex")
   end
 
   test "a binary construction and a parenthesised chain of literals are read as the text they build" do
@@ -250,9 +262,11 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     '''
 
-    assert %{"built.ex" => hits} = writers([{"built.ex", source}])
+    assert %{"built.ex" => hits} = writers(planted([{"built.ex", source}]))
     assert Enum.sort(hits) == ["allow-forms", "frame-ancestors 'none'"]
-    assert %{"built.ex" => [{".wasm", "application/wasm"}]} = type_tables([{"built.ex", source}])
+
+    assert %{"built.ex" => [{".wasm", "application/wasm"}]} =
+             type_tables(planted([{"built.ex", source}]))
   end
 
   test "a directive built from typed literal binary segments is found" do
@@ -264,7 +278,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     """
 
-    assert Map.has_key?(writers([{"typed_policy.ex", source}]), "typed_policy.ex")
+    assert Map.has_key?(writers(planted([{"typed_policy.ex", source}])), "typed_policy.ex")
   end
 
   test "a sandbox token built from typed literal binary segments is found" do
@@ -276,7 +290,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     """
 
-    assert Map.has_key?(writers([{"typed_sandbox.ex", source}]), "typed_sandbox.ex")
+    assert Map.has_key?(writers(planted([{"typed_sandbox.ex", source}])), "typed_sandbox.ex")
   end
 
   test "a served type pair built from typed literal binary segments is found" do
@@ -286,6 +300,6 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     end
     """
 
-    assert Map.has_key?(type_tables([{"typed_types.ex", source}]), "typed_types.ex")
+    assert Map.has_key?(type_tables(planted([{"typed_types.ex", source}])), "typed_types.ex")
   end
 end

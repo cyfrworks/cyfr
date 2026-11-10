@@ -105,7 +105,8 @@ defmodule Cyfr.LoggerRosterTest do
     sites =
       for path <- Path.wildcard(Path.join(root(), "apps/*/lib/**/*.ex")),
           relative = Path.relative_to(path, root()),
-          {function, line, call} <- inspected_reasons(File.read!(path), listed(relative)),
+          {function, line, call} <-
+            inspected_reasons(Prima.Test.SourceTree.quoted(path), listed(relative)),
           do: "#{relative}:#{line} #{function} #{call}"
 
     assert sites == [],
@@ -122,7 +123,8 @@ defmodule Cyfr.LoggerRosterTest do
     for {{relative, function}, reason} <- @inspected_reasons do
       path = Path.join(root(), relative)
 
-      assert File.exists?(path) and function in defined(File.read!(path)) and reason != "",
+      assert File.exists?(path) and function in defined(Prima.Test.SourceTree.quoted(path)) and
+               reason != "",
              "#{relative} defines no #{function}: delete its entry"
     end
   end
@@ -306,7 +308,7 @@ defmodule Cyfr.LoggerRosterTest do
     end
     """
 
-    assert inspected_reasons(source, ["shape/1"])
+    assert inspected_reasons(Code.string_to_quoted!(source), ["shape/1"])
            |> Enum.map(&elem(&1, 0))
            |> Enum.uniq()
            |> Enum.sort() ==
@@ -405,9 +407,9 @@ defmodule Cyfr.LoggerRosterTest do
   # from a reason, since only `=` and a `case` on the reason are read as
   # matches; and a reason handed to another module's function or held in
   # a term read later, since a file is read alone.
-  defp inspected_reasons(source, listed) do
+  defp inspected_reasons(ast, listed) do
     definitions =
-      for {name, args, _scalars, _body} = definition <- definitions(source),
+      for {name, args, _scalars, _body} = definition <- definitions(ast),
           "#{name}/#{length(args)}" not in listed,
           do: definition
 
@@ -421,16 +423,15 @@ defmodule Cyfr.LoggerRosterTest do
   defp listed(relative),
     do: for({{^relative, function}, _reason} <- @inspected_reasons, do: function)
 
-  defp defined(source),
-    do: for({name, args, _scalars, _body} <- definitions(source), do: "#{name}/#{length(args)}")
+  defp defined(ast),
+    do: for({name, args, _scalars, _body} <- definitions(ast), do: "#{name}/#{length(args)}")
 
   # Every `def` and `defp` clause as `{name, args, scalars, body}`, with
   # the variables its guard holds to a scalar, a pipe read as the call it
   # makes (`a |> f(b)` as `f(a, b)`).
-  defp definitions(source) do
+  defp definitions(ast) do
     {_ast, definitions} =
-      source
-      |> Code.string_to_quoted!()
+      ast
       |> Macro.prewalk(&unpipe/1)
       |> Macro.prewalk([], fn
         {kind, _, [head, [{:do, _} | _] = body]} = node, acc when kind in [:def, :defp] ->

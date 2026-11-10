@@ -69,18 +69,16 @@ defmodule Cyfr.BoundariesTest do
     named = SourceTree.aliases(path)
 
     if String.contains?(source, "use Boundary") do
-      spans = boundary_declarations(source)
+      spans = boundary_declarations(SourceTree.quoted(path))
       Enum.reject(named, fn {_name, line} -> Enum.any?(spans, &(line in &1)) end)
     else
       named
     end
   end
 
-  defp boundary_declarations(source) do
+  defp boundary_declarations(ast) do
     {_ast, spans} =
-      source
-      |> Code.string_to_quoted!(columns: true)
-      |> Macro.prewalk([], fn
+      Macro.prewalk(ast, [], fn
         {:use, meta, [{:__aliases__, _, [:Boundary]} | _]} = node, acc ->
           {node, [meta[:line]..last_line(node) | acc]}
 
@@ -2276,7 +2274,7 @@ defmodule Cyfr.BoundariesTest do
         for lib <- SourceTree.app_libs(root()),
             {path, lines} <- scan(lib <> "/**/*.ex"),
             Enum.any?(lines, &String.contains?(elem(&1, 0), "%Prima.Actor{")),
-            constructed_at(SourceTree.read(Path.join(root(), path))) != [],
+            constructed_at(SourceTree.quoted(Path.join(root(), path))) != [],
             do: path
 
       rostered = MapSet.new(Boundaries.actor_paths(), & &1.file)
@@ -2308,16 +2306,17 @@ defmodule Cyfr.BoundariesTest do
     end
 
     test "a built actor is found where a matched one is not" do
-      assert constructed_at("defmodule A do\n  def a, do: %Prima.Actor{athanor_id: \"x\"}\nend\n") ==
-               [2]
+      assert planted_constructed_at(
+               "defmodule A do\n  def a, do: %Prima.Actor{athanor_id: \"x\"}\nend\n"
+             ) == [2]
 
-      assert constructed_at(
+      assert planted_constructed_at(
                "defmodule A do\n  def a(%Prima.Actor{athanor_id: id}), do: id\nend\n"
-             ) ==
-               []
+             ) == []
 
-      assert constructed_at("defmodule A do\n  def a(x) do\n    %Prima.Actor{} = x\n  end\nend\n") ==
-               []
+      assert planted_constructed_at(
+               "defmodule A do\n  def a(x) do\n    %Prima.Actor{} = x\n  end\nend\n"
+             ) == []
     end
   end
 
@@ -2483,8 +2482,9 @@ defmodule Cyfr.BoundariesTest do
   # not matched in a function head, a `case` clause or the left of a
   # match. A regex cannot tell those apart; the parser can, so this walks
   # the tree and carries the one bit that decides it.
-  defp constructed_at(source),
-    do: source |> Code.string_to_quoted!() |> built(false) |> Enum.sort()
+  defp constructed_at(ast), do: ast |> built(false) |> Enum.sort()
+
+  defp planted_constructed_at(source), do: source |> Code.string_to_quoted!() |> constructed_at()
 
   defp built({:%, meta, [{:__aliases__, _, [:Prima, :Actor]}, {:%{}, _, fields}]}, false),
     do: [meta[:line] | built(fields, false)]
@@ -2511,7 +2511,7 @@ defmodule Cyfr.BoundariesTest do
     test "no test module is defined twice" do
       defined =
         for path <- SourceTree.files!(Path.join(root(), "apps/*/test/**/*_test.exs")),
-            {line, _n} <- path |> SourceTree.read() |> CodeLines.code_lines(),
+            {line, _n} <- SourceTree.code_lines(path),
             [name] <- Regex.scan(~r/^defmodule ([A-Z][\w.]*) do$/, line, capture: :all_but_first),
             do: {name, Path.relative_to(path, root())}
 

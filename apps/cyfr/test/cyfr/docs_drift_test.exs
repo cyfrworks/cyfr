@@ -10,16 +10,20 @@ defmodule Cyfr.DocsDriftTest do
   """
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   alias Cyfr.Platform.Settings.Roster
   alias Cyfr.Platform.Settings.Roster.Entry
   alias Mix.Tasks.Cyfr.Gen.ConfigurationGuide
+  alias Prima.Test.SourceTree
 
   @repo_root Path.expand("../../../..", __DIR__)
   @readme Path.join(@repo_root, "README.md")
   @configuration_guide Path.join(@repo_root, "configuration-guide.md")
 
   test "README's storage tree names every tenant root and global prefix" do
-    doc = File.read!(@readme)
+    doc = SourceTree.read(@readme)
 
     # The README draws the tree with a trailing slash per directory —
     # matched with the slash so a word in prose can't stand in for a root.
@@ -66,7 +70,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   defp glossary do
-    [_, section] = Regex.run(~r/^## Glossary\n(.*?)(?=^## )/ms, File.read!(@readme))
+    [_, section] = Regex.run(~r/^## Glossary\n(.*?)(?=^## )/ms, SourceTree.read(@readme))
 
     [header, _rule | rows] =
       for line <- String.split(section, "\n"),
@@ -121,7 +125,7 @@ defmodule Cyfr.DocsDriftTest do
 
   test "ARCHITECTURE.md describes exactly the parts the glossary names" do
     described =
-      Regex.scan(~r/^### (\w+)(?: \([^)]*\))?: /m, File.read!(@architecture),
+      Regex.scan(~r/^### (\w+)(?: \([^)]*\))?: /m, SourceTree.read(@architecture),
         capture: :all_but_first
       )
       |> List.flatten()
@@ -133,7 +137,7 @@ defmodule Cyfr.DocsDriftTest do
 
   test "ARCHITECTURE.md's four ports are the port roster" do
     [section] =
-      Regex.run(~r/^### 4\.2 The four ports\n(.*?)(?=^### )/ms, File.read!(@architecture),
+      Regex.run(~r/^### 4\.2 The four ports\n(.*?)(?=^### )/ms, SourceTree.read(@architecture),
         capture: :all_but_first
       )
 
@@ -165,7 +169,7 @@ defmodule Cyfr.DocsDriftTest do
         [name] <-
           Regex.scan(
             ~r/"((?:CYFR|LOCUS|KEEPER|RUNTIME)_[A-Z0-9_]*[A-Z0-9])"/,
-            File.read!(Path.join(@repo_root, file)),
+            SourceTree.read(Path.join(@repo_root, file)),
             capture: :all_but_first
           ),
         not MapSet.member?(not_read, name),
@@ -227,7 +231,7 @@ defmodule Cyfr.DocsDriftTest do
     # Unset or blank is the empty allowlist; the boot refuses the wildcard
     # once sign-in is configured (runtime_config_wiring_test.exs holds the
     # readings).
-    lines = Path.join(@repo_root, ".env.example") |> File.read!() |> String.split("\n")
+    lines = Path.join(@repo_root, ".env.example") |> SourceTree.read() |> String.split("\n")
     at = Enum.find_index(lines, &(&1 == "CYFR_CORS_ALLOWED_ORIGINS="))
     assert at, ".env.example assigns no empty CYFR_CORS_ALLOWED_ORIGINS"
 
@@ -249,7 +253,7 @@ defmodule Cyfr.DocsDriftTest do
              "the glossary names #{dir}, which is not a directory"
     end
 
-    compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
+    compose = SourceTree.read(Path.join(@repo_root, "docker-compose.yml"))
     services = compose_services(compose)
 
     assert Enum.sort(glossary_column("Compose service")) == Enum.sort(Map.keys(services)),
@@ -258,7 +262,7 @@ defmodule Cyfr.DocsDriftTest do
     # The images the tag pipeline publishes, each from its Dockerfile.
     built =
       ~r/- image: ([a-z][a-z0-9-]*)\n\s+file: (\S+)/
-      |> Regex.scan(File.read!(Path.join(@repo_root, ".github/workflows/release.yml")),
+      |> Regex.scan(SourceTree.read(Path.join(@repo_root, ".github/workflows/release.yml")),
         capture: :all_but_first
       )
       |> Map.new(fn [image, file] -> {image, file} end)
@@ -364,7 +368,7 @@ defmodule Cyfr.DocsDriftTest do
   # The fossil loop of the vocabulary-gate job: the run block of its step,
   # up to the loop's `do`.
   defp fossil_loop do
-    workflow = File.read!(@workflow)
+    workflow = SourceTree.read(@workflow)
 
     [_, run] =
       Regex.run(
@@ -418,7 +422,7 @@ defmodule Cyfr.DocsDriftTest do
       for rel <- files -- exempt,
           path = Path.join(@repo_root, rel),
           File.regular?(path),
-          text = File.read!(path),
+          text = SourceTree.read(path),
           not String.contains?(text, <<0>>),
           {line, n} <- text |> String.split("\n") |> Enum.with_index(1),
           line =~ pattern,
@@ -434,7 +438,7 @@ defmodule Cyfr.DocsDriftTest do
 
   test "every guide that draws the athanor tree names every tenant root" do
     for guide <- @guides do
-      source = File.read!(Path.join(@repo_root, guide))
+      source = SourceTree.read(Path.join(@repo_root, guide))
 
       # Only guides that actually draw the per-athanor tree are held to it.
       if source =~ "athanors/{athanor_id}/\n" or source =~ "└── athanors" or
@@ -448,7 +452,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   test "component-guide's manifest field table documents the closed key roster" do
-    source = File.read!(Path.join(@repo_root, "component-guide.md"))
+    source = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
 
     for key <- Prima.Manifest.known_keys() do
       assert source =~ "| `#{key}` |",
@@ -461,7 +465,7 @@ defmodule Cyfr.DocsDriftTest do
   # result shape: a component author writes an operation's answer against
   # this row, so the row itself says it.
   test "component-guide's results row says a result shape describes the envelope's data" do
-    source = File.read!(Path.join(@repo_root, "component-guide.md"))
+    source = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
 
     [_, section] =
       Regex.run(~r/^### Field Reference\n(.*?)(?=^#)/ms, source) ||
@@ -500,7 +504,7 @@ defmodule Cyfr.DocsDriftTest do
 
   defp guide_error_codes do
     @integration_guide
-    |> File.read!()
+    |> SourceTree.read()
     |> then(&Regex.scan(~r/^\| (-33\d{3}) \| `(\w+)`/m, &1))
     |> Map.new(fn [_, code, name] -> {String.to_integer(code), name} end)
   end
@@ -546,7 +550,7 @@ defmodule Cyfr.DocsDriftTest do
     [_, section] =
       Regex.run(
         ~r/### Public Tools \(No Auth Required\)\n(.*?)\n### /s,
-        File.read!(@integration_guide)
+        SourceTree.read(@integration_guide)
       )
 
     section
@@ -609,7 +613,7 @@ defmodule Cyfr.DocsDriftTest do
           [name] <-
             Regex.scan(
               ~r/"(CYFR_LOCUS_RUNTIME_[A-Z0-9_]+|CYFR_HOST_API_[A-Z0-9_]+)"/,
-              File.read!(Path.join(@repo_root, file)),
+              SourceTree.read(Path.join(@repo_root, file)),
               capture: :all_but_first
             ),
           uniq: true,
@@ -617,7 +621,7 @@ defmodule Cyfr.DocsDriftTest do
 
     assert length(read) >= 6, "the scan found only #{inspect(read)}"
 
-    guide = documented_in_guide(File.read!(@configuration_guide))
+    guide = documented_in_guide(SourceTree.read(@configuration_guide))
     undocumented = Enum.reject(read, &MapSet.member?(guide, &1))
 
     assert undocumented == [],
@@ -741,7 +745,7 @@ defmodule Cyfr.DocsDriftTest do
   defp homes do
     Map.new(
       ~w(.env.example .env.locus.example integration-guide.md configuration-guide.md),
-      &{&1, File.read!(Path.join(@repo_root, &1))}
+      &{&1, SourceTree.read(Path.join(@repo_root, &1))}
     )
   end
 
@@ -793,10 +797,10 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   defp placement_inputs do
-    compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
+    compose = SourceTree.read(Path.join(@repo_root, "docker-compose.yml"))
 
     variables =
-      release_variables(File.read!(Path.join(@repo_root, "apps/locus/lib/locus/config.ex")))
+      release_variables(SourceTree.read(Path.join(@repo_root, "apps/locus/lib/locus/config.ex")))
 
     {compose, compose_services(compose), variables, homes()}
   end
@@ -931,7 +935,7 @@ defmodule Cyfr.DocsDriftTest do
   # limits, which no release reads, in `.env.example` beside the settings
   # they hold.
   test "every variable docker-compose.yml interpolates is documented in an env example or the guide" do
-    compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
+    compose = SourceTree.read(Path.join(@repo_root, "docker-compose.yml"))
 
     interpolated =
       ~r/\$\{([A-Z][A-Z0-9_]*)(?::?-[^}]*)?\}/
@@ -943,8 +947,8 @@ defmodule Cyfr.DocsDriftTest do
 
     documented =
       for example <- Path.wildcard(Path.join(@repo_root, ".env*.example"), match_dot: true),
-          [_, name] <- Regex.scan(~r/^#?\s*([A-Z][A-Z0-9_]*)=/m, File.read!(example)),
-          into: documented_in_guide(File.read!(@configuration_guide)),
+          [_, name] <- Regex.scan(~r/^#?\s*([A-Z][A-Z0-9_]*)=/m, SourceTree.read(example)),
+          into: documented_in_guide(SourceTree.read(@configuration_guide)),
           do: name
 
     undocumented = Enum.reject(interpolated, &MapSet.member?(documented, &1))
@@ -955,12 +959,12 @@ defmodule Cyfr.DocsDriftTest do
 
     # The containers' limits are compose's alone: documented where compose
     # reads them, and read by no release.
-    project = File.read!(Path.join(@repo_root, ".env.example"))
-    runtime = File.read!(Path.join(@repo_root, "config/runtime.exs"))
-    locus_runtime = File.read!(Path.join(@repo_root, "apps/locus/lib/locus/config.ex"))
+    project = SourceTree.read(Path.join(@repo_root, ".env.example"))
+    runtime = SourceTree.read(Path.join(@repo_root, "config/runtime.exs"))
+    locus_runtime = SourceTree.read(Path.join(@repo_root, "apps/locus/lib/locus/config.ex"))
 
     runtime_settings =
-      File.read!(Path.join(@repo_root, "apps/locus/lib/locus/runtime/settings.ex"))
+      SourceTree.read(Path.join(@repo_root, "apps/locus/lib/locus/runtime/settings.ex"))
 
     for limit <- Enum.filter(interpolated, &String.ends_with?(&1, "_LIMIT")) do
       assert project =~ ~r/^# #{limit}=/m, "#{limit} is not documented in .env.example"
@@ -978,7 +982,7 @@ defmodule Cyfr.DocsDriftTest do
     read =
       @repo_root
       |> Path.join("apps/cyfr/lib/cyfr/runtime_config.ex")
-      |> File.read!()
+      |> SourceTree.read()
       |> then(&Regex.scan(~r/"(CYFR_LOCUS_BUILDS_[A-Z0-9_]+)"/, &1, capture: :all_but_first))
       |> List.flatten()
       |> Enum.uniq()
@@ -986,8 +990,8 @@ defmodule Cyfr.DocsDriftTest do
 
     assert read == ["CYFR_LOCUS_BUILDS_KEY", "CYFR_LOCUS_BUILDS_URL"]
 
-    project = File.read!(Path.join(@repo_root, ".env.example"))
-    configuration = documented_in_guide(File.read!(@configuration_guide))
+    project = SourceTree.read(Path.join(@repo_root, ".env.example"))
+    configuration = documented_in_guide(SourceTree.read(@configuration_guide))
 
     for name <- read do
       assert project =~ ~r/^#{name}=/m, "#{name} is not assigned in .env.example"
@@ -1005,7 +1009,7 @@ defmodule Cyfr.DocsDriftTest do
   test "the backends service's variables are documented in the guide, its key in .env.example" do
     read =
       ~w(config/runtime.exs apps/cyfr/lib/cyfr/platform/settings/roster.ex)
-      |> Enum.map_join("\n", &File.read!(Path.join(@repo_root, &1)))
+      |> Enum.map_join("\n", &SourceTree.read(Path.join(@repo_root, &1)))
       |> then(&Regex.scan(~r/"(CYFR_LOCUS_BACKENDS_[A-Z0-9_]+)"/, &1, capture: :all_but_first))
       |> List.flatten()
       |> Enum.uniq()
@@ -1018,8 +1022,8 @@ defmodule Cyfr.DocsDriftTest do
              "CYFR_LOCUS_BACKENDS_URL"
            ]
 
-    project = File.read!(Path.join(@repo_root, ".env.example"))
-    configuration = documented_in_guide(File.read!(@configuration_guide))
+    project = SourceTree.read(Path.join(@repo_root, ".env.example"))
+    configuration = documented_in_guide(SourceTree.read(@configuration_guide))
 
     for name <- read do
       assert name in configuration, "#{name} is not in configuration-guide.md"
@@ -1027,7 +1031,7 @@ defmodule Cyfr.DocsDriftTest do
 
     assert project =~ ~r/^CYFR_LOCUS_BACKENDS_KEY=$/m
 
-    assert File.read!(Path.join(@repo_root, "docker-compose.yml")) =~
+    assert SourceTree.read(Path.join(@repo_root, "docker-compose.yml")) =~
              "CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus-backends:4101}"
   end
 
@@ -1037,7 +1041,7 @@ defmodule Cyfr.DocsDriftTest do
   # say what they see without it and what `OOMKilled` means.
   test "the deployment guides state the Docker requirement, what fails without it, and OOMKilled" do
     for guide <- ~w(README.md integration-guide.md) do
-      text = File.read!(Path.join(@repo_root, guide))
+      text = SourceTree.read(Path.join(@repo_root, guide))
 
       for needle <- [
             "Docker Engine 28 or later",
@@ -1050,7 +1054,7 @@ defmodule Cyfr.DocsDriftTest do
       end
     end
 
-    readme = File.read!(@readme)
+    readme = SourceTree.read(@readme)
     assert readme =~ ~r/^\| `locus-builds` \*\(profile: `locus-builds`\)\* \|/m
   end
 
@@ -1060,14 +1064,14 @@ defmodule Cyfr.DocsDriftTest do
     read =
       @repo_root
       |> Path.join("apps/cyfr/lib/aqua/models.ex")
-      |> File.read!()
+      |> SourceTree.read()
       |> then(&Regex.scan(~r/described\["([a-z_]+)"\]/, &1, capture: :all_but_first))
       |> List.flatten()
       |> Enum.uniq()
 
     assert "max_input_tokens" in read and "context_window" in read
 
-    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
 
     for field <- read do
       assert guide =~ "`#{field}`" or guide =~ ~s("#{field}"),
@@ -1082,14 +1086,14 @@ defmodule Cyfr.DocsDriftTest do
     answered =
       @repo_root
       |> Path.join("apps/locus/lib/locus/runtime/egress.ex")
-      |> File.read!()
+      |> SourceTree.read()
       |> then(&Regex.scan(~r/\{:(?:refused|error), :([a-z_]+),/, &1, capture: :all_but_first))
       |> List.flatten()
       |> Enum.uniq()
 
     assert "redirect_credentials" in answered and "private_ip_blocked" in answered
 
-    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
 
     [_, types] =
       Regex.run(~r/^### `cyfr:http\/fetch`.*?^Error: `\{"error": \{"type": "([a-z_|]+)"/ms, guide)
@@ -1112,13 +1116,13 @@ defmodule Cyfr.DocsDriftTest do
     vectors =
       @repo_root
       |> Path.join("tests/fixtures/guest_error.json")
-      |> File.read!()
+      |> SourceTree.read()
       |> Jason.decode!()
 
     %{"member" => member, "fields" => [type, message], "setup_member" => setup_member} =
       vectors["envelope"]
 
-    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
 
     section = fn heading ->
       case Regex.run(~r/^#{Regex.escape(heading)}.*?(?=^##)/ms, guide) do
@@ -1170,7 +1174,7 @@ defmodule Cyfr.DocsDriftTest do
   ]
 
   test "component-guide's rows that quote a refusal hold its class and sentence" do
-    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
 
     for {reason, cell} <- @quoted_refusals do
       %Prima.Refusal{class: class, message: message} = Prima.Refusal.classify(reason)
@@ -1230,7 +1234,9 @@ defmodule Cyfr.DocsDriftTest do
 
     for file <- @env_readers ++ keeper_sources(),
         [name] <-
-          Regex.scan(~r/"([A-Z][A-Z0-9_]*[A-Z0-9])"/, File.read!(Path.join(@repo_root, file)),
+          Regex.scan(
+            ~r/"([A-Z][A-Z0-9_]*[A-Z0-9])"/,
+            SourceTree.read(Path.join(@repo_root, file)),
             capture: :all_but_first
           ),
         not MapSet.member?(not_read, name),
@@ -1276,7 +1282,7 @@ defmodule Cyfr.DocsDriftTest do
 
     unread =
       for example <- ~w(.env.example .env.locus.example),
-          name <- documented(File.read!(Path.join(@repo_root, example))),
+          name <- documented(SourceTree.read(Path.join(@repo_root, example))),
           not MapSet.member?(read, name),
           do: {example, name}
 
@@ -1305,7 +1311,7 @@ defmodule Cyfr.DocsDriftTest do
   )
 
   test "the deployment file assigns init's lines, keeps its anchor and holds no platform setting" do
-    text = File.read!(Path.join(@repo_root, ".env.example"))
+    text = SourceTree.read(Path.join(@repo_root, ".env.example"))
 
     assigned =
       for [name] <- Regex.scan(~r/^([A-Z][A-Z0-9_]*)=/m, text, capture: :all_but_first),
@@ -1338,12 +1344,12 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   test "configuration-guide.md is the roster's render" do
-    assert File.read!(@configuration_guide) == ConfigurationGuide.render(),
+    assert SourceTree.read(@configuration_guide) == ConfigurationGuide.render(),
            "configuration-guide.md is stale: run `mix cyfr.gen.configuration_guide`"
   end
 
   test "the guide lists every name the roster declares, each once, with its sentence" do
-    text = File.read!(@configuration_guide)
+    text = SourceTree.read(@configuration_guide)
 
     listed =
       ~r/^\| `([A-Z][A-Z0-9_]*)` \|/m
@@ -1385,7 +1391,7 @@ defmodule Cyfr.DocsDriftTest do
   # The rows of the first table under `heading` in `path` (the integration
   # guide unless named), up to the next heading, each as its trimmed cells.
   defp guide_table(heading, path \\ @integration_guide) do
-    guide = File.read!(path)
+    guide = SourceTree.read(path)
 
     [_, section] =
       Regex.run(~r/^#{Regex.escape(heading)}\n(.*?)(?=^#)/ms, guide) ||
@@ -1486,7 +1492,7 @@ defmodule Cyfr.DocsDriftTest do
   # every field of its stream's shape but the delivery contract's, which
   # the guide names once, before the table.
   test "the guide's canvas stream table is the streams a canvas may read" do
-    guide = File.read!(@integration_guide)
+    guide = SourceTree.read(@integration_guide)
 
     [table] =
       Regex.run(~r/^\| Stream \| Subject \| Each event \|\n\|[-|]+\|\n((?:\|.*\n)+)/m, guide,
@@ -1579,7 +1585,7 @@ defmodule Cyfr.DocsDriftTest do
           backquoted(action) == ["press"],
           do: row
 
-    assert File.read!(Path.join(@repo_root, "tincture-guide.md")) =~
+    assert SourceTree.read(Path.join(@repo_root, "tincture-guide.md")) =~
              "From a canvas, a feed's action runs only on a press the shell forwards within " <>
                "moments of the person's own input, never from a script on its own",
            "tincture-guide.md does not say that from a canvas only a press forwarded on the " <>
@@ -1621,7 +1627,7 @@ defmodule Cyfr.DocsDriftTest do
       # Read as prose: line breaks, and a comment's leading `*`, are spaces.
       text =
         Path.join(@repo_root, file)
-        |> File.read!()
+        |> SourceTree.read()
         |> String.replace(~r/[ \t]*\n[ \t]*(\*[ \t]+)?/, " ")
 
       assert text =~ said, "#{file} does not say a canvas's open and press pass only #{said}"
@@ -1633,7 +1639,7 @@ defmodule Cyfr.DocsDriftTest do
 
     rules =
       Path.join(@repo_root, "apps/cyfr/lib/compendium/tincture/rules.ex")
-      |> File.read!()
+      |> SourceTree.read()
       |> String.replace(~r/[ \t]*\n[ \t]*(#[ \t]+)?/, " ")
 
     refute rules =~ ~r/runs only while/, "the canvas's rules say a canvas runs only while shown"
@@ -1655,7 +1661,7 @@ defmodule Cyfr.DocsDriftTest do
   # inside that type up to its own closing brace, so a key of another type
   # cannot stand in for a missing one.
   defp consent_payload_keys(tag) do
-    consent = File.read!(Path.join(@repo_root, "apps/sanctum/lib/sanctum/consent.ex"))
+    consent = SourceTree.read(Path.join(@repo_root, "apps/sanctum/lib/sanctum/consent.ex"))
 
     [body] =
       Regex.run(~r/^  @type #{tag} :: %\{\n(.*?)\n\s*\}$/ms, consent, capture: :all_but_first) ||
@@ -1688,7 +1694,7 @@ defmodule Cyfr.DocsDriftTest do
     [_, section] =
       Regex.run(
         ~r/^### Readiness and typed errors\n(.*?)(?=^### )/ms,
-        File.read!(@integration_guide)
+        SourceTree.read(@integration_guide)
       )
 
     [paragraph] =
@@ -1756,13 +1762,13 @@ defmodule Cyfr.DocsDriftTest do
   # The canonical world of each component type, by package.
   defp canonical_wits do
     for path <- Path.wildcard(Path.join(@repo_root, "wit/*/world.wit")), into: %{} do
-      wit = wit(File.read!(path))
+      wit = wit(SourceTree.read(path))
       {wit.package, wit}
     end
   end
 
   test "component-guide's WIT blocks are the canonical worlds, a catalyst's imports a subset" do
-    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
     canonical = canonical_wits()
     blocks = Regex.scan(~r/^```wit\n(.*?)^```/ms, guide, capture: :all_but_first)
 
@@ -1805,7 +1811,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   test "component-guide names every function of the invoke interface and of each host interface heading" do
-    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
     formula = canonical_wits() |> Map.values() |> Enum.find(&(&1.package =~ "formula"))
 
     invoke =
@@ -1819,7 +1825,7 @@ defmodule Cyfr.DocsDriftTest do
     # a function its interface declares.
     deps =
       for path <- Path.wildcard(Path.join(@repo_root, "wit/*/deps/*/*.wit")),
-          wit = wit(File.read!(path)),
+          wit = wit(SourceTree.read(path)),
           [package | _] = String.split(wit.package, "@"),
           {interface, functions} <- wit.interfaces,
           into: %{},
@@ -1998,7 +2004,7 @@ defmodule Cyfr.DocsDriftTest do
 
   test "the tincture guide's and the artisan scroll's lists are the rules' and the wire's" do
     for file <- @tincture_list_files, name <- @tincture_lists do
-      text = File.read!(Path.join(@repo_root, file))
+      text = SourceTree.read(Path.join(@repo_root, file))
       expected = Enum.join(tincture_list(name), "\n")
 
       assert tincture_block(text, name) == expected,
@@ -2013,7 +2019,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   test "the SDK's calls are the wire's request kinds and shell verbs" do
-    client = File.read!(Path.join(@repo_root, "apps/cyfr/assets/js/sdk/client.js"))
+    client = SourceTree.read(Path.join(@repo_root, "apps/cyfr/assets/js/sdk/client.js"))
     [_, api] = Regex.run(~r/const api = \{(.*?)\n  \}\n/s, client)
 
     methods =
@@ -2043,7 +2049,7 @@ defmodule Cyfr.DocsDriftTest do
 
     callers =
       for path <- Path.wildcard(Path.join(@repo_root, "apps/*/lib/**/*.ex")),
-          File.read!(path) =~
+          SourceTree.read(path) =~
             ~r/\bLayouts\.publish\b|alias Arca\.Layouts,\s*as:|import Arca\.Layouts\b/,
           do: Path.relative_to(path, @repo_root)
 
@@ -2051,7 +2057,7 @@ defmodule Cyfr.DocsDriftTest do
            "Arca.Layouts.publish is reached from #{inspect(callers)}, not from #{publisher} " <>
              "alone: publish a layout only through the layout tool's edit"
 
-    guide = File.read!(Path.join(@repo_root, "tincture-guide.md"))
+    guide = SourceTree.read(Path.join(@repo_root, "tincture-guide.md"))
 
     [paragraph] =
       Regex.run(~r/^The person's \*\*layout\*\* .*$/m, guide) ||
@@ -2126,7 +2132,7 @@ defmodule Cyfr.DocsDriftTest do
     end
 
     # Both guides state the whole agent-only set, from its one list.
-    component_guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    component_guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
 
     [tools_row] =
       Regex.run(~r/^\| `tools` \|.*$/m, component_guide) ||
@@ -2152,7 +2158,7 @@ defmodule Cyfr.DocsDriftTest do
     {:ok, soul} =
       Compendium.AquaAgent.parse(
         "aqua",
-        File.read!(Path.join(@repo_root, "seed/aqua/aqua.md"))
+        SourceTree.read(Path.join(@repo_root, "seed/aqua/aqua.md"))
       )
 
     assert soul.tool_policy["layout.edit"] == "ask",
@@ -2185,10 +2191,10 @@ defmodule Cyfr.DocsDriftTest do
              "athanor"
   end
 
-  defp tincture_guide, do: File.read!(Path.join(@repo_root, "tincture-guide.md"))
+  defp tincture_guide, do: SourceTree.read(Path.join(@repo_root, "tincture-guide.md"))
 
   test "the tincture guide states the lockfile, the invoke input, the referrer policy and the log rule" do
-    guide = File.read!(Path.join(@repo_root, "tincture-guide.md"))
+    guide = SourceTree.read(Path.join(@repo_root, "tincture-guide.md"))
 
     assert guide =~ "`#{Compendium.Tincture.Rules.lockfile()}`"
     assert guide =~ ~s({"operation": …, "params": …})
@@ -2218,8 +2224,8 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   test "integration-guide.md points at the configuration guide and repeats none of its names" do
-    guide = File.read!(@integration_guide)
-    configuration = documented_in_guide(File.read!(@configuration_guide))
+    guide = SourceTree.read(@integration_guide)
+    configuration = documented_in_guide(SourceTree.read(@configuration_guide))
 
     assert guide =~ "[configuration-guide.md](configuration-guide.md)",
            "integration-guide.md does not point at configuration-guide.md"
@@ -2249,7 +2255,7 @@ defmodule Cyfr.DocsDriftTest do
   # ==========================================================================
 
   defp shipped_guides do
-    script = File.read!(Path.join(@repo_root, "scripts/scaffold-tarball.sh"))
+    script = SourceTree.read(Path.join(@repo_root, "scripts/scaffold-tarball.sh"))
 
     [_, items] =
       Regex.run(~r/\nITEMS=\((.*?)\n\)/s, script) ||
@@ -2265,7 +2271,7 @@ defmodule Cyfr.DocsDriftTest do
 
   defp readme_section(heading) do
     [_, section] =
-      Regex.run(~r/^#{Regex.escape(heading)}\n(.*?)(?=^## )/ms, File.read!(@readme)) ||
+      Regex.run(~r/^#{Regex.escape(heading)}\n(.*?)(?=^## )/ms, SourceTree.read(@readme)) ||
         flunk("README.md has no section #{inspect(heading)}")
 
     section
@@ -2289,7 +2295,7 @@ defmodule Cyfr.DocsDriftTest do
            "the root guides #{inspect(root)} are not the ones the scaffold ships #{inspect(shipped)}"
 
     [_, included] =
-      Regex.run(~r/the included guides \((.*?)\)\./, File.read!(@readme)) ||
+      Regex.run(~r/the included guides \((.*?)\)\./, SourceTree.read(@readme)) ||
         flunk("README.md's `cyfr init` paragraph names no included guides")
 
     copies = [
@@ -2300,7 +2306,7 @@ defmodule Cyfr.DocsDriftTest do
        ~r/^\| \[[^\]]+\]\(([a-z-]+-guide\.md)\)/m}
     ]
 
-    [triggers | _] = String.split(File.read!(@workflow), "\njobs:\n", parts: 2)
+    [triggers | _] = String.split(SourceTree.read(@workflow), "\njobs:\n", parts: 2)
 
     [_, push, pull_request] =
       Regex.run(~r/^  push:\n(.*?)^  pull_request:\n(.*?)^  [a-z_]+:/ms, triggers) ||
@@ -2323,7 +2329,7 @@ defmodule Cyfr.DocsDriftTest do
 
     # The vocabulary gate's two file lists: the retired names' paths, and
     # the guides its storage-diagram check reads.
-    workflow = File.read!(@workflow)
+    workflow = SourceTree.read(@workflow)
 
     gate_lists = [
       {"the vocabulary gate's paths", ~r/^\s+paths='([^']+)'$/m},
@@ -2376,7 +2382,7 @@ defmodule Cyfr.DocsDriftTest do
     seen =
       for guide <- @people_guides, reduce: %{keys: 0, variables: 0, defaults: 0} do
         seen ->
-          text = File.read!(Path.join(@repo_root, guide))
+          text = SourceTree.read(Path.join(@repo_root, guide))
 
           # Every backquoted snake-case name that is a setting's, and every
           # one spelled like a duration setting: a misspelt key fails.
@@ -2438,7 +2444,7 @@ defmodule Cyfr.DocsDriftTest do
   # still works and how the person comes back, and the last row is the one
   # loss no recovery answers, which only starting again as a new person does.
   test "the identity guide's loss table keeps its columns and its last row" do
-    guide = File.read!(Path.join(@repo_root, "identity-guide.md"))
+    guide = SourceTree.read(Path.join(@repo_root, "identity-guide.md"))
 
     [_, section] =
       Regex.run(~r/^## What Each Loss Costs\n(.*?)(?=^## |\z)/ms, guide) ||

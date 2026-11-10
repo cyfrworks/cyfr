@@ -33,6 +33,9 @@ defmodule Cyfr.RefusalRenderingSeamTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   @root Path.expand("../../../..", __DIR__)
 
   # The names a callee's answer goes by where it is inspected.
@@ -91,7 +94,7 @@ defmodule Cyfr.RefusalRenderingSeamTest do
       for lib <- Prima.Test.SourceTree.app_libs(@root),
           file <- Prima.Test.SourceTree.files!(Path.join([@root, lib, "**/*.ex"])),
           path = Path.relative_to(file, @root),
-          line <- shortened(Prima.Test.SourceTree.read(file)),
+          line <- shortened(Prima.Test.SourceTree.quoted(file)),
           do: "  #{path}:#{line}"
 
     assert shortened == [],
@@ -145,7 +148,10 @@ defmodule Cyfr.RefusalRenderingSeamTest do
       end
       """
 
-      found = scan("planted.ex", source) |> Enum.map(fn {_path, function, _line} -> function end)
+      found =
+        "planted.ex"
+        |> scan(Code.string_to_quoted!(source, columns: true))
+        |> Enum.map(fn {_path, function, _line} -> function end)
 
       assert Enum.sort(found) ==
                [:piped, :reduced, :reduced_piped, :returned, :stored, :tagged, :worded, :wrapped]
@@ -165,7 +171,7 @@ defmodule Cyfr.RefusalRenderingSeamTest do
       end
       """
 
-      assert shortened(source) == [2, 3, 4, 5, 6, 7]
+      assert shortened(Code.string_to_quoted!(source, columns: true)) == [2, 3, 4, 5, 6, 7]
     end
 
     test "reaches every umbrella app's lib" do
@@ -188,15 +194,14 @@ defmodule Cyfr.RefusalRenderingSeamTest do
         file <- Prima.Test.SourceTree.files!(Path.join([@root, lib, "**/*.ex"])),
         path = Path.relative_to(file, @root),
         not MapSet.member?(excluded, path),
-        site <- scan(path, Prima.Test.SourceTree.read(file)),
+        site <- scan(path, Prima.Test.SourceTree.quoted(file)),
         do: site
   end
 
   # Each `inspect` of an expression mentioning a vocabulary variable,
   # outside a log line, a raise or an IO write, as
   # `{path, enclosing function, line}`.
-  defp scan(path, source) do
-    ast = Code.string_to_quoted!(source, file: path, columns: true)
+  defp scan(path, ast) do
     {_ast, {_stack, sites}} = Macro.traverse(ast, {[], []}, &enter/2, &leave/2)
     sites |> Enum.reverse() |> Enum.map(fn {function, line} -> {path, function, line} end)
   end
@@ -270,11 +275,9 @@ defmodule Cyfr.RefusalRenderingSeamTest do
 
   # The line of each `alias` or `import` of `Prima.LogFilter`, and each
   # `require` that names it `as:` something shorter.
-  defp shortened(source) do
+  defp shortened(ast) do
     {_ast, lines} =
-      source
-      |> Code.string_to_quoted!(columns: true)
-      |> Macro.prewalk([], fn
+      Macro.prewalk(ast, [], fn
         {directive, meta, [target | options]} = node, lines
         when directive in [:alias, :import, :require] ->
           shortened? =

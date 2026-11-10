@@ -4,6 +4,9 @@
 defmodule Cyfr.TelemetryCatalogTest do
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   @moduledoc """
   Pins the telemetry roster to `Cyfr.Telemetry.Catalog` in both directions.
 
@@ -34,7 +37,7 @@ defmodule Cyfr.TelemetryCatalogTest do
         |> String.split(~r/,\s*/)
         |> Enum.map(&String.trim_leading(&1, ":"))
       end)
-      |> Kernel.++(family_events(path, code))
+      |> Kernel.++(family_events(path))
     end)
     |> MapSet.new()
   end
@@ -42,19 +45,21 @@ defmodule Cyfr.TelemetryCatalogTest do
   # A family's events where its producer passes `[prefix..., kind]` to
   # `:telemetry.execute` in the canonical form the one rule states
   # (`Cyfr.Test.TelemetryFamilies.scan/2`), as segment strings.
-  defp family_events(path, source) do
-    families(path, source).events
+  defp family_events(path) do
+    families(path).events
     |> Enum.map(fn event -> Enum.map(event, &Atom.to_string/1) end)
   end
 
-  defp families(path, source),
-    do: Cyfr.Test.TelemetryFamilies.scan(source, Path.relative_to(path, @umbrella_root))
+  defp families(path),
+    do:
+      Cyfr.Test.TelemetryFamilies.scan(
+        Prima.Test.SourceTree.quoted(path),
+        Path.relative_to(path, @umbrella_root)
+      )
 
   # Every family producer outside the canonical form, by file and line.
   defp unbounded_producers do
-    for path <- source_files(),
-        message <- families(path, Prima.Test.SourceTree.read(path)).unbounded,
-        do: message
+    for path <- source_files(), message <- families(path).unbounded, do: message
   end
 
   defp source_files do

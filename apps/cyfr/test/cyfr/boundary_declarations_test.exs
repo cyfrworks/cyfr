@@ -20,6 +20,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   @root Path.expand("../../../..", __DIR__)
   @apps ~w(arca sanctum cyfr)
 
@@ -213,9 +216,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   # declares any, walking nested `defmodule`s and `defimpl`s. Each is a
   # compiled module of a loaded application, so its name is an atom
   # already, and a name read from source never makes a new one.
-  defp defined(path) do
-    path |> File.read!() |> Code.string_to_quoted!() |> walk(nil)
-  end
+  defp defined(path), do: path |> Prima.Test.SourceTree.quoted() |> walk(nil)
 
   defp walk({:defmodule, _, [name, [do: body]]}, parent) do
     module = module_name(name, parent)
@@ -451,7 +452,8 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           not String.ends_with?(rel, ".md"),
           not String.contains?("/" <> rel, @unscanned),
           File.regular?(path),
-          {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
+          {line, n} <-
+            path |> Prima.Test.SourceTree.read() |> String.split("\n") |> Enum.with_index(1),
           not comment?(line),
           Regex.match?(@docs_path, line),
           do: "#{rel}:#{n}: #{String.trim(line)}"

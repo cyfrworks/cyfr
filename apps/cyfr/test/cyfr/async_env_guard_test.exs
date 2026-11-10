@@ -51,6 +51,9 @@ defmodule Cyfr.AsyncEnvGuardTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   alias Prima.Test.SourceTree
 
   @app_writes [:put_env, :delete_env, :put_all_env]
@@ -60,21 +63,24 @@ defmodule Cyfr.AsyncEnvGuardTest do
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
-  test "no async module writes application environment, directly or through code it runs" do
-    %{violations: violations} = scan(tree_sources())
+  # The tree is walked once for the cases that read it whole.
+  setup_all do
+    tree = tree_quoted()
+    {:ok, tree_paths: Enum.map(tree, &elem(&1, 0)), tree_scan: scan_quoted(tree)}
+  end
 
+  test "no async module writes application environment, directly or through code it runs",
+       %{tree_scan: %{violations: violations}} do
     assert violations == [],
            "async tests write application env, which is global to the VM:\n" <>
              Enum.map_join(violations, "\n", & &1.message)
   end
 
-  test "the walk reads test and support files, and conn_case holds exactly its admitted baseline call" do
-    sources = tree_sources()
+  test "the walk reads test and support files, and conn_case holds exactly its admitted baseline call",
+       %{tree_paths: paths, tree_scan: %{writes: writes}} do
+    assert Enum.any?(paths, &String.ends_with?(&1, "_test.exs"))
+    assert @conn_case in paths
 
-    assert Enum.any?(sources, fn {path, _} -> String.ends_with?(path, "_test.exs") end)
-    assert Enum.any?(sources, fn {path, _} -> path == @conn_case end)
-
-    %{writes: writes} = scan(sources)
     in_file = for w <- writes, w.file == @conn_case, do: {w.line, w.what, w.guarded?}
 
     assert Enum.sort(in_file) == [
@@ -411,22 +417,29 @@ defmodule Cyfr.AsyncEnvGuardTest do
     end
   end
 
-  # Every test and support source of the umbrella, read once, as `{path, source}`.
-  defp tree_sources do
+  # Every test and support source of the umbrella as `{path, quoted}`, the
+  # suite's one parse of it.
+  defp tree_quoted do
     tests = SourceTree.files!(Path.join(root(), "apps/*/test/**/*_test.exs"))
 
     support =
       SourceTree.files!(Path.join(root(), "apps/*/test/**/support/**/*.{ex,exs}"))
 
     for path <- Enum.sort(Enum.uniq(tests ++ support)) do
-      {Path.relative_to(path, root()), SourceTree.read(path)}
+      {Path.relative_to(path, root()), SourceTree.quoted(path)}
     end
   end
 
   # The pure scan: sources in, the violations, every env write and the admitted
   # ones out.
-  defp scan(sources) do
-    modules = Enum.flat_map(sources, fn {path, source} -> modules_of(path, source) end)
+  defp scan(sources),
+    do:
+      scan_quoted(
+        for {path, source} <- sources, do: {path, Code.string_to_quoted!(source, file: path)}
+      )
+
+  defp scan_quoted(quoted) do
+    modules = Enum.flat_map(quoted, fn {path, ast} -> modules_of(path, ast) end)
 
     index =
       Enum.reduce(modules, %{}, fn m, acc -> Map.update(acc, m.name, m, &merge(&1, m)) end)
@@ -600,9 +613,7 @@ defmodule Cyfr.AsyncEnvGuardTest do
   defp part_name(_other), do: "?"
 
   # One umbrella module per `defmodule` in the file, nested ones included.
-  defp modules_of(path, source) do
-    ast = Code.string_to_quoted!(source, file: path, columns: false)
-
+  defp modules_of(path, ast) do
     for {name, body, line} <- find_modules(ast) do
       info = collect_module(body)
 

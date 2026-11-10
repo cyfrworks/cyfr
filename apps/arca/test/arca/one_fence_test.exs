@@ -30,6 +30,9 @@ defmodule Arca.OneFenceTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   @lib Path.expand("../../lib", __DIR__)
   @owners [[:Arca, :Repo], [:Arca, :ControlPlane]]
 
@@ -103,7 +106,7 @@ defmodule Arca.OneFenceTest do
 
   test "a fence written another way is still a fence, and a write through owned/2 is not" do
     planted =
-      module("arca/planted.ex", ~S'''
+      planted_module("arca/planted.ex", ~S'''
       defmodule Arca.Planted do
         alias Arca.Repo.Errors
 
@@ -228,14 +231,14 @@ defmodule Arca.OneFenceTest do
 
   defp tree do
     for path <- Path.wildcard(Path.join(@lib, "**/*.ex")),
-        do: module(Path.relative_to(path, @lib), File.read!(path))
+        do: module(Path.relative_to(path, @lib), Prima.Test.SourceTree.quoted(path))
   end
+
+  defp planted_module(relative, source), do: module(relative, Code.string_to_quoted!(source))
 
   # A source file's module: its name, and each function's clauses as
   # `{args, body}` by `{name, arity}`.
-  defp module(relative, source) do
-    {:ok, ast} = Code.string_to_quoted(source)
-
+  defp module(relative, ast) do
     # A pipe is the call it pipes into, its left side the first argument,
     # so every call is seen with the arity it has.
     ast =
