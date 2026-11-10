@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+# The load check's table, read by tests/load-check/run.sh, whose header gives
+# the columns and the rules: kind, name, quarters, pair, expect, deadline,
+# needs, command, separated by tabs. README.md beside it says why each row
+# is here. expect is the median seconds of the passing runs this host
+# recorded in its current lane, doubled for a subject that moves from the
+# whole machine to two quarters; a run's own report replaces it.
+#
+# Every scratch worktree is prepared cold by the prep rows, in order: the
+# deps, then the deps compiled into each build path a check compiles in,
+# one at a time, as scripts/commit-gate.sh does before its legs.
+prep	deps	-	-	120	1800	-	scripts/ci/retry.sh mix deps.get && scripts/fetch-prebuilt-binaries.sh
+prep	deps-test	-	-	240	1800	-	env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test mix deps.loadpaths
+prep	deps-dev	-	-	240	1800	-	env CYFR_DATABASE=sqlite MIX_ENV=dev mix deps.loadpaths
+prep	deps-test-pg	-	-	240	1800	-	env MIX_BUILD_PATH=_build/test_pg CYFR_DATABASE=postgres MIX_ENV=test mix deps.loadpaths
+prep	deps-dev-pg	-	-	240	1800	-	env MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=postgres MIX_ENV=dev mix deps.loadpaths
+
+# The busy load, on every quarter a subject leaves: a save or handoff
+# row's forced compile and its PostgreSQL test run, in a loop; and on the
+# last of those quarters one cold image build after another, which the
+# Docker daemon runs on any processor.
+load	compile	-	-	20	1200	-	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --force --warnings-as-errors
+load	postgres-tests	-	-	100	2700	tests/load-check/needs.sh postgres	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors apps/arca/test
+image	app-image	-	-	900	3600	tests/load-check/needs.sh docker	docker build --no-cache -q -f Dockerfile -t "${PROOF_RUN_PREFIX}load-check-image" .
+
+# The checks that take the whole machine today, on two quarters: the suite
+# on each adapter in the gate's shape, the gate, go test -race, and every
+# harness self-test a pull-request workflow runs and no handoff row does.
+subject	suite-sqlite	2	-	460	2700	-	scripts/test-partitioned.sh -n "$LOAD_CHECK_PARTS" -a sqlite -- --warnings-as-errors
+subject	suite-postgres	2	-	490	2700	tests/load-check/needs.sh postgres	scripts/test-partitioned.sh -n "$LOAD_CHECK_PARTS" -a postgres -- --warnings-as-errors
+subject	gate	2	pair	2000	7200	tests/load-check/needs.sh postgres	scripts/commit-gate.sh -l "$LOAD_CHECK_OUT/gate"
+subject	go-race	2	pair	220	1800	-	cd apps/codex && go test ./... -race
+subject	commit-gate-test	2	pair	1260	3600	-	bash tests/commit-gate-test.sh
+subject	heavy-check-test	2	pair	450	1800	-	bash tests/heavy-check-test.sh
+subject	contain-test	2	pair	120	1200	-	bash tests/contain-test.sh
+subject	stage-test	2	pair	10	600	-	bash tests/stage-test.sh
+subject	test-partitioned-test	2	pair	1200	2700	-	bash tests/test-partitioned-test.sh
+subject	partition-env-test	2	pair	120	1200	-	elixir tests/test-partition-env-test.exs
+subject	release-boot-test	2	pair	90	1200	-	bash tests/release-boot-test.sh
+subject	access-test	2	pair	90	1200	-	bash tests/release-boot/access-test.sh
+subject	ci-publish-test	2	pair	60	1200	-	bash tests/ci-publish-test.sh
+subject	install-verify-test	2	pair	60	1200	-	sh tests/install-verify-test.sh
+
+# Every proof, on one quarter, beside a second copy of itself, as each
+# workflow step or its README runs it. The canvas proof runs at both
+# viewports held to the reference host class's budget, as on this host
+# today. A proof that finds no prerequisite exits 69 and is skipped.
+subject	canvas	1	pair	800	3600	-	set -e; for viewport in desktop 720x720; do CANVAS_PROOF_VIEWPORT="$viewport" PROOF_OUT="$LOAD_CHECK_OUT/$viewport" tests/canvas-proof/run.sh; export RELEASE_BOOT_SKIP_BUILD=1; done
+subject	install-screen	1	pair	600	3600	-	tests/install-screen-proof/run.sh --out "$LOAD_CHECK_OUT"
+subject	handle	1	pair	1100	3600	tests/load-check/needs.sh env CYFR_RUN_DIR	PROOF_OUT="$LOAD_CHECK_OUT" tests/handle-proof/run.sh
+subject	join	1	pair	300	2700	-	PROOF_OUT="$LOAD_CHECK_OUT" tests/join-proof/run.sh
+subject	pairing	1	pair	120	1800	-	PROOF_OUT="$LOAD_CHECK_OUT" tests/pairing-proof/run.sh
+subject	identity	1	pair	160	1800	-	PROOF_OUT="$LOAD_CHECK_OUT" tests/identity-proof/run.sh
+subject	approval	1	pair	660	2700	-	set -e; for viewport in desktop 720x720; do VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$LOAD_CHECK_OUT/$viewport" tests/approval-proof/run.sh; export RELEASE_BOOT_SKIP_BUILD=1; done
+subject	file-offer	1	pair	60	1200	-	set -e; for viewport in desktop 720x720; do VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$LOAD_CHECK_OUT/$viewport" tests/file-offer-proof/run.sh; export RELEASE_BOOT_SKIP_BUILD=1; done
+subject	share	1	pair	60	1200	-	set -e; for viewport in desktop 720x720; do VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$LOAD_CHECK_OUT/$viewport" tests/share-proof/run.sh; export RELEASE_BOOT_SKIP_BUILD=1; done
+subject	grant	1	pair	30	1200	-	PROOF_OUT="$LOAD_CHECK_OUT" tests/grant-proof/run.sh
+subject	hostile-frame	1	pair	120	1800	-	PROOF_OUT="$LOAD_CHECK_OUT" tests/hostile-frame-proof/run.sh
+subject	multi-home-smoke	1	pair	120	1800	-	PROOF_OUT="$LOAD_CHECK_OUT" tests/multi-home-smoke/run.sh
+subject	markdown	1	pair	60	1200	-	MARKDOWN_OUT="$LOAD_CHECK_OUT" tests/markdown-proof/run.sh
+subject	tincture	1	pair	120	2700	tests/load-check/needs.sh docker	TINCTURE_PROOF_BROWSERS=chromium PROOF_OUT="$LOAD_CHECK_OUT" tests/tincture-proof/run.sh "$(scripts/image.sh locus)"
+subject	frame-facts	1	pair	30	1200	-	BROWSER_OUT="$LOAD_CHECK_OUT" tests/browser/run.sh
+subject	release-boot-sqlite	1	pair	120	1800	-	tests/release-boot/boot.sh sqlite
+subject	release-boot-postgres	1	pair	120	1800	tests/load-check/needs.sh env LOAD_CHECK_BOOT_DATABASE_URL	CYFR_DATABASE_URL="$LOAD_CHECK_BOOT_DATABASE_URL" tests/release-boot/boot.sh postgres
+subject	setup	1	pair	60	1800	-	PROOF_OUT="$LOAD_CHECK_OUT" tests/setup-proof/run.sh
+subject	proxy-hsts	1	pair	30	600	-	tests/proxy-hsts/run.sh
+subject	tailnet-real	1	pair	300	1800	tests/load-check/needs.sh env TAILNET_REAL_AUTH_KEY_FILE	tests/tailnet-real/run.sh
+
+# The Compose proof publishes the shipped compose file's fixed port
+# (127.0.0.1:1055 in docker-compose.yml), so two copies never run at once:
+# it takes the whole machine and is listed, not measured.
+subject	compose	4	-	120	1800	-	tests/compose-proof/run.sh

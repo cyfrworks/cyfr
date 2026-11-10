@@ -186,6 +186,14 @@ same worktree refuses, naming the run that holds it.
   self-test) runs up to three side by side, on a third of the cores each. Checks start in the order
   they queued, and `scripts/heavy-check.sh --status` shows who holds the
   host and who waits.
+- `tests/load-check/run.sh` measures whether each check still passes, and
+  how much slower it runs, on a quarter of the host's cores beside busy
+  neighbours or a second copy of itself. It takes the whole machine for
+  hours: `tests/load-check/run.sh -n` prints the plan and its time, `-s`
+  and `-r` bound a run, and
+  `scripts/heavy-check.sh -t 129600 -- tests/load-check/run.sh` runs it,
+  again whenever the host, its subject table or the lanes change
+  (`tests/load-check/README.md`).
 - Local runs take the Locus and app images from `scripts/image.sh locus`
   and `scripts/image.sh app`, which tag each by a hash of its inputs, so
   every checkout at the same inputs shares one build.
