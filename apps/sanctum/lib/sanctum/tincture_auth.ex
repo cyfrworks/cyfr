@@ -36,12 +36,11 @@ defmodule Sanctum.TinctureAuth do
 
   A resume and a renew rotate the bearer, never extend it: each signs a
   new bearer naming the same row, with a deadline of its own, and moves
-  the row's deadline to match. A canvas's resume signs nothing and keeps
-  the row's deadline (`resume_frame/3` with `rotate: false`), so a canvas
-  hidden past its deadline lapses. Every bearer carries the deadline it was
-  signed with and is refused past it whatever the row's, so a copy of an
-  earlier bearer gains nothing from a renewal, and a frame no shell renews
-  ends at its deadline.
+  the row's deadline to match, so a frame hidden past its deadline, a
+  canvas's included, is resumed under its source's live standing. Every
+  bearer carries the deadline it was signed with and is refused past it
+  whatever the row's, so a copy of an earlier bearer gains nothing from a
+  renewal or a resume, and a frame no shell renews ends at its deadline.
 
   A candidate version's hidden trial holds a **validation credential**: a
   frame credential of the same form whose row's purpose is `validation`
@@ -642,22 +641,15 @@ defmodule Sanctum.TinctureAuth do
   this one opens it. An active row before its deadline keeps its deadline,
   and the answer is a new bearer for it.
 
-  With `rotate: false` nothing is signed and the row keeps its deadline,
-  for a frame that is not resumed past its deadline (a canvas's, which
-  lapses while hidden and is renewed only while shown): the row is
-  resumed only before that deadline, and the answer is its id and
-  deadline.
-
-  `:expired` for a row past its deadline (a suspended one only with
-  `rotate: false`), `:revoked` for one revoked, `:validation` for a
-  validation credential, which is never resumed, `:not_found` for a row
-  not the person's or not minted under the context's own source,
-  `:not_owner` on a member that lost its slot, and the standing's refusals
-  as `mint_frame_credential/5` answers them; none of them writes anything.
+  `:expired` for an active row past its deadline, `:revoked` for one
+  revoked, `:validation` for a validation credential, which is never
+  resumed, `:not_found` for a row not the person's or not minted under
+  the context's own source, `:not_owner` on a member that lost its slot,
+  and the standing's refusals as `mint_frame_credential/5` answers them;
+  none of them writes anything.
   """
-  @spec resume_frame(Context.t(), String.t(), keyword()) ::
+  @spec resume_frame(Context.t(), String.t()) ::
           {:ok, %{credential: String.t(), id: String.t(), deadline: DateTime.t()}}
-          | {:ok, %{id: String.t(), deadline: DateTime.t()}}
           | {:error,
              mint_refusal()
              | :missing_deadline
@@ -666,11 +658,8 @@ defmodule Sanctum.TinctureAuth do
              | :expired
              | :validation
              | :no_athanor}
-  def resume_frame(%Context{} = ctx, id, opts \\ []) when is_binary(id) and is_list(opts) do
-    if Keyword.get(opts, :rotate, true),
-      do: rotate(ctx, id, &Arca.FrameCredentials.resume/3),
-      else: reopen(ctx, id)
-  end
+  def resume_frame(%Context{} = ctx, id) when is_binary(id),
+    do: rotate(ctx, id, &Arca.FrameCredentials.resume/3)
 
   @doc """
   Renew the active frame credential `id` of the context's person while
@@ -717,19 +706,6 @@ defmodule Sanctum.TinctureAuth do
          {:ok, deadline} <- frame_deadline(now, lifetime, source),
          {:ok, row} <- stored(write.(Context.actor(ctx), id, deadline)) do
       {:ok, signed(row, claims, now)}
-    end
-  end
-
-  # A resume that keeps the row's deadline and signs nothing.
-  defp reopen(ctx, id) do
-    with :ok <- owner(),
-         :ok <- primary(ctx),
-         {:ok, claims} <- claims(ctx),
-         {:ok, _standing} <- Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip),
-         {:ok, row} <- own_frame(ctx, id),
-         :ok <- same_source(row, claims),
-         {:ok, row} <- stored(Arca.FrameCredentials.resume(Context.actor(ctx), id, :keep)) do
-      {:ok, %{id: row.id, deadline: row.deadline}}
     end
   end
 

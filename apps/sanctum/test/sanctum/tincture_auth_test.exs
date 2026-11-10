@@ -567,21 +567,12 @@ defmodule Sanctum.TinctureAuthTest do
       assert {:error, :expired_credential} = TinctureAuth.verify_frame_credential(old)
     end
 
-    test "a resume that does not rotate signs nothing and keeps the row's deadline", %{
-      source: ctx
-    } do
+    test "a resume after the deadline passed is refused once its session ended, and writes nothing",
+         %{source: ctx, session: session} do
       settings!(3_600, 2)
 
-      {:ok, %{credential: bearer, id: id, deadline: deadline}} =
+      {:ok, %{credential: old, id: id}} =
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
-
-      {:ok, _} = TinctureAuth.suspend_frame(ctx, id)
-      settings!(3_600, 900)
-
-      assert {:ok, answer} = TinctureAuth.resume_frame(ctx, id, rotate: false)
-      assert answer == %{id: id, deadline: deadline}
-      assert %{state: "active", deadline: ^deadline} = frame_row(id)
-      assert {:ok, %{deadline: ^deadline}} = TinctureAuth.verify_frame_credential(bearer)
 
       {:ok, _} = TinctureAuth.suspend_frame(ctx, id)
 
@@ -591,9 +582,13 @@ defmodule Sanctum.TinctureAuthTest do
         "the suspended row's deadline to pass"
       )
 
+      settings!(3_600, 900)
+      end_session!(session)
       suspended = frame_row(id)
-      assert {:error, :expired} = TinctureAuth.resume_frame(ctx, id, rotate: false)
+
+      assert {:error, :not_standing} = TinctureAuth.resume_frame(ctx, id)
       assert frame_row(id) == suspended
+      assert {:error, _refused} = TinctureAuth.verify_frame_credential(old)
     end
 
     test "a resume of a revoked row, or of one retention removed, fails", %{source: ctx} do

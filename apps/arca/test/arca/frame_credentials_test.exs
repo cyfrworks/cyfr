@@ -217,20 +217,6 @@ defmodule Arca.FrameCredentialsTest do
       assert {:ok, ^held} = FrameCredentials.get(actor, suspended.id)
     end
 
-    test "a resume that keeps the deadline re-opens a row only before it", %{actor: actor} do
-      row = mint!(actor)
-      {:ok, _} = FrameCredentials.suspend(actor, row.id)
-      deadline = row.deadline
-
-      assert {:ok, %{state: "active", deadline: ^deadline}} =
-               FrameCredentials.resume(actor, row.id, :keep)
-
-      past = mint!(actor, %{deadline: in_s(-1)})
-      {:ok, suspended} = FrameCredentials.suspend(actor, past.id)
-      assert {:error, :expired} = FrameCredentials.resume(actor, past.id, :keep)
-      assert {:ok, ^suspended} = FrameCredentials.get(actor, past.id)
-    end
-
     test "a resume by a stale owner re-opens nothing", %{actor: actor, slot: slot} do
       row = mint!(actor)
       {:ok, suspended} = FrameCredentials.suspend(actor, row.id)

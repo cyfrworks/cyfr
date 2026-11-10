@@ -187,12 +187,8 @@ defmodule Arca.FrameCredentials do
   revoked row is `:revoked`, a `deadline` not after the database's clock
   `:expired`, and a validation row, whatever its state, `:validation`,
   each of which writes nothing.
-
-  With `:keep` for `deadline` the row keeps its own: a suspended row is
-  resumed only before that deadline on the database's clock, and is
-  `:expired` past it, for a frame whose bearer is never replaced.
   """
-  @spec resume(Prima.Actor.t(), String.t(), DateTime.t() | :keep) ::
+  @spec resume(Prima.Actor.t(), String.t(), DateTime.t()) ::
           {:ok, row()}
           | {:error,
              :not_found
@@ -202,9 +198,8 @@ defmodule Arca.FrameCredentials do
              | :not_owner
              | :no_athanor
              | :database_error}
-  def resume(%Prima.Actor{athanor_id: athanor_id} = actor, id, deadline)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and
-             (is_struct(deadline, DateTime) or deadline == :keep) do
+  def resume(%Prima.Actor{athanor_id: athanor_id} = actor, id, %DateTime{} = deadline)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.owned("Arca.FrameCredentials.resume", fn ->
       # The row is locked before the clock is read, so a resume that waited
       # behind another write judges the deadline as it acts.
@@ -215,7 +210,7 @@ defmodule Arca.FrameCredentials do
         nil -> {:error, :not_found}
         %FrameCredential{purpose: "validation"} -> {:error, :validation}
         %FrameCredential{state: "revoked"} -> {:error, :revoked}
-        %FrameCredential{state: "suspended"} -> reopen(row, deadline, now)
+        %FrameCredential{state: "suspended"} -> extend(row, "active", deadline, now)
         %FrameCredential{state: "active"} -> standing(row, now)
       end
     end)
@@ -409,12 +404,6 @@ defmodule Arca.FrameCredentials do
       %FrameCredential{state: "revoked"} -> {:error, :revoked}
     end
   end
-
-  defp reopen(row, :keep, now) do
-    with {:ok, row} <- standing(row, now), do: set_state(row, "suspended", "active")
-  end
-
-  defp reopen(row, deadline, now), do: extend(row, "active", deadline, now)
 
   # An active row's deadline moves only while it has not passed: a frame
   # whose credential ran out is opened again, never renewed.

@@ -103,12 +103,12 @@ defmodule Prism.Frames do
   stop, and a suspension that cannot be recorded discards the frame. A
   hidden canvas is frozen whatever its declaration says. A shown frame's
   credential is resumed before it is signalled live, and the resume
-  rotates its bearer (`Sanctum.TinctureAuth.resume_frame/3`); a resume
-  that fails revokes the credential and leaves the frame showing its
-  refusal. A canvas's resume keeps its row's deadline and signs nothing,
-  so a canvas whose deadline passed while it was hidden is refused at its
-  resume. A validation frame is never frozen or thawed: its credential is
-  never suspended.
+  rotates its bearer (`Sanctum.TinctureAuth.resume_frame/2`), a canvas's
+  as an app's: a frame hidden past its deadline is resumed under a new
+  bearer with a deadline of its own while the person's session or key
+  stands. A resume that fails revokes the credential and leaves the frame
+  showing its refusal. A validation frame is never frozen or thawed: its
+  credential is never suspended.
 
   ## Renewal
 
@@ -1041,12 +1041,9 @@ defmodule Prism.Frames do
       {:thaw, key}, t ->
         frame = get(t, key)
 
-        case TinctureAuth.resume_frame(ctx, frame.credential_id, rotate: not canvas_key?(key)) do
-          {:ok, %{credential: _} = minted} ->
+        case TinctureAuth.resume_frame(ctx, frame.credential_id) do
+          {:ok, minted} ->
             t |> thaw(key) |> rotated(key, minted)
-
-          {:ok, _kept} ->
-            thaw(t, key)
 
           {:error, reason} ->
             revoke(ctx, frame.credential_id)
