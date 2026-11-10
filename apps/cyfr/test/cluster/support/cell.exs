@@ -142,16 +142,37 @@ defmodule Cyfr.Cluster.Cell do
   def ensure! do
     case Process.whereis(@name) do
       nil ->
+        unless :persistent_term.get({__MODULE__, :cookie}, nil), do: start_run!()
         {:ok, _pid} = GenServer.start(__MODULE__, [], name: @name)
-        # The cell outlives every case, so the run is what ends it. Two
-        # operating-system processes left behind would hold this run's
-        # node names against the next one.
-        ExUnit.after_suite(fn _results -> shutdown() end)
         GenServer.call(@name, :members, @boot_timeout_ms)
 
       _running ->
         GenServer.call(@name, :members, @boot_timeout_ms)
     end
+  end
+
+  # What the run sets up once, before its first cell: a cell started after
+  # an earlier one exited repeats none of it. The run's cookie, minted
+  # last, is the mark that it has been done.
+  defp start_run! do
+    # A second S3 guard on the run's prefix would delete, at its cleanup,
+    # the markers the first one checks for.
+    Store.ready!()
+    # The cell outlives every case, so the run is what ends it. Two
+    # operating-system processes left behind would hold this run's node
+    # names against the next one. Registered after the store's guard, so
+    # the members stop writing before the prefix is cleaned.
+    ExUnit.after_suite(fn _results -> shutdown() end)
+
+    unless linux?() do
+      IO.puts(
+        "    the members' host API ports are not claimed on this host: abstract " <>
+          "sockets are Linux-only, so another run here could take a down member's port"
+      )
+    end
+
+    _minted = cookie()
+    :ok
   end
 
   @doc "Stop every member and forget the cell."
@@ -320,12 +341,10 @@ defmodule Cyfr.Cluster.Cell do
   @impl true
   def init(_opts) do
     Process.flag(:trap_exit, true)
-    Store.ready!()
 
     members =
-      for {id, worker} <- [{:a, "wrk_cell_a"}, {:b, "wrk_cell_b"}] do
-        port = free_port()
-
+      for {{id, worker}, port} <-
+            Enum.zip([{:a, "wrk_cell_a"}, {:b, "wrk_cell_b"}], host_api_ports(2, candidates())) do
         %{
           id: id,
           node: node_name(id),
@@ -341,6 +360,11 @@ defmodule Cyfr.Cluster.Cell do
     formed!(started)
 
     {:ok, %{members: started}}
+  catch
+    # A failed init calls no terminate/2, so it stops what it started here.
+    kind, reason ->
+      release_all()
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   @impl true
@@ -371,7 +395,7 @@ defmodule Cyfr.Cluster.Cell do
       # gives the slot back and every claim with it — and that is the
       # failure this distinguishes from `kill/1`.
       safe_call(member, Cyfr.Cluster.Boot, :stop!, [], @boot_timeout_ms)
-      :peer.stop(member.peer)
+      release(member.id)
     end
 
     {:reply, :ok, put_member(state, %{member | peer: nil})}
@@ -387,6 +411,7 @@ defmodule Cyfr.Cluster.Cell do
       Process.unlink(member.peer)
       :peer.cast(member.peer, :erlang, :halt, [1])
       await_down!(member)
+      release(member.id)
     end
 
     {:reply, :ok, put_member(state, %{member | peer: nil})}
@@ -426,24 +451,20 @@ defmodule Cyfr.Cluster.Cell do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
   def handle_info(_message, state), do: {:noreply, state}
 
+  # A heal or a start that raises ends this process with the state from
+  # before it, which names none of the members it had booted by then: the
+  # members it stops are the ones it started (`release_all/0`), whatever
+  # the state says.
   @impl true
-  def terminate(_reason, state) do
-    for %{peer: peer} <- state.members, peer != nil do
-      try do
-        :peer.stop(peer)
-      catch
-        _kind, _reason -> :ok
-      end
-    end
-
-    :ok
-  end
+  def terminate(_reason, _state), do: release_all()
 
   # ---------------------------------------------------------------------------
   # Booting one member
   # ---------------------------------------------------------------------------
 
   defp boot(member) do
+    release(member.id)
+
     {:ok, peer, node} =
       :peer.start(%{
         name: Map.fetch!(node_names(), member.id),
@@ -454,6 +475,7 @@ defmodule Cyfr.Cluster.Cell do
         args: peer_args()
       })
 
+    started(member.id, peer)
     ^node = member.node
     started = %{member | peer: peer}
 
@@ -659,6 +681,68 @@ defmodule Cyfr.Cluster.Cell do
     end
   end
 
+  # Every member this process started and has not released, newest first,
+  # kept in the process dictionary rather than the state: a boot that
+  # raises loses the state it was building, and the member it started
+  # must still be stopped.
+  @started {__MODULE__, :started}
+  # The members' port claims this process holds (`host_api_ports/2`).
+  @claims {__MODULE__, :claims}
+
+  defp started(id, peer), do: Process.put(@started, [{id, peer} | Process.get(@started, [])])
+
+  # Stop every member this process started, newest first, then wait for
+  # each node's name to be released, so the next cell of the run can
+  # take it, and only then give up the members' port claims.
+  defp release_all do
+    ids = Enum.map(Process.get(@started, []), &elem(&1, 0))
+    Enum.each(ids, &stop_started/1)
+    Enum.each(ids, &await_released/1)
+    Enum.each(Process.delete(@claims) || [], &:gen_tcp.close/1)
+  end
+
+  # Stop `id`'s node if this process started one, and wait for its name.
+  defp release(id) do
+    stop_started(id)
+    await_released(id)
+  end
+
+  defp stop_started(id) do
+    {mine, rest} = Enum.split_with(Process.get(@started, []), &match?({^id, _}, &1))
+    Process.put(@started, rest)
+
+    for {_id, peer} <- mine do
+      try do
+        :peer.stop(peer)
+      catch
+        _kind, _reason -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  # A node starting under a name the port mapper still lists is refused it.
+  defp await_released(id) do
+    name = Atom.to_charlist(Map.fetch!(node_names(), id))
+
+    Cyfr.Cluster.Wait.until!(
+      fn -> not registered?(name) end,
+      "member #{id}'s node name is still registered",
+      30_000
+    )
+
+    :ok
+  end
+
+  defp registered?(name) do
+    case :erl_epmd.names(@host) do
+      {:ok, names} -> List.keymember?(names, name, 0)
+      # No port mapper running: no node holds a name.
+      {:error, :address} -> false
+    end
+  end
+
   defp await_down!(member) do
     Cyfr.Cluster.Wait.until!(
       fn -> not alive?(member) end,
@@ -713,15 +797,88 @@ defmodule Cyfr.Cluster.Cell do
   # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   defp node_name(id), do: :"#{Map.fetch!(node_names(), id)}@127.0.0.1"
 
-  # A loopback port nothing holds, for a member to bind and to advertise.
-  # The socket is closed before the member starts, which is the usual
-  # small race and is safe here: the cell is started once, serially, for
-  # the whole run.
-  defp free_port do
-    {:ok, socket} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, reuseaddr: true])
-    {:ok, {_ip, port}} = :inet.sockname(socket)
-    :ok = :gen_tcp.close(socket)
-    port
+  # A loopback port for each member to bind and to advertise, distinct,
+  # free now and this cell's for its whole life. A member keeps its port
+  # across every reboot of the run, and while it is down its listener
+  # holds nothing, so two things keep the port its own:
+  #
+  #   * it is taken from below the kernel's ephemeral range: every bind
+  #     to port 0 on this host (a member's distribution listener, its
+  #     endpoint, a scripted worker, a wire) and every outgoing connection
+  #     draw from that range;
+  #   * on Linux it is claimed: this process binds an abstract socket
+  #     named for the port (`claim_name/1`), which another run's picker
+  #     on this host cannot bind and skips. The kernel releases the name
+  #     with the socket, so the claim ends with this process however it
+  #     ends, and `release_all/0` closes it once the members are stopped
+  #     (elsewhere the port is unclaimed, `claim/1`).
+  #
+  # What remains is a listener of another program on a fixed port, which
+  # a boot is refused naming (`Cyfr.Cluster.Boot`).
+  @port_floor 20_000
+
+  # The ports to try, at random below the ephemeral range.
+  defp candidates do
+    ceiling = ephemeral_low() - 1
+
+    if ceiling - @port_floor < 1_000 do
+      raise "the ephemeral port range starts at #{ceiling + 1}, leaving no room below it " <>
+              "from #{@port_floor} for the members' host API ports"
+    end
+
+    Stream.repeatedly(fn -> Enum.random(@port_floor..ceiling) end) |> Stream.take(100)
+  end
+
+  @doc false
+  # The first `count` of `candidates` this process can claim and bind,
+  # each claimed for as long as this process lives. Public for
+  # cell_test.exs, which picks as another run on this host would.
+  @spec host_api_ports(pos_integer(), Enumerable.t()) :: [:inet.port_number()]
+  def host_api_ports(count, candidates) do
+    ports = candidates |> Stream.uniq() |> Stream.filter(&claim/1) |> Enum.take(count)
+    if length(ports) < count, do: raise("no #{count} free, unclaimed host API ports")
+    ports
+  end
+
+  # The abstract socket namespace is Linux's alone: on another kernel
+  # (macOS, the BSDs) a name with a leading zero byte is a file path or
+  # refused, and has no owner that ends with the process. There a port is
+  # picked free with no claim, as a run picked it before claims existed,
+  # so two runs on one such host can still meet on a down member's port.
+  # The run says so once (`start_run!/0`).
+  defp claim(port) do
+    if linux?(), do: claim_abstract(port), else: Cyfr.Cluster.Boot.port_free?(port)
+  end
+
+  defp linux?, do: match?({:unix, :linux}, :os.type())
+
+  defp claim_abstract(port) do
+    case :gen_tcp.listen(0, ifaddr: {:local, claim_name(port)}) do
+      {:ok, socket} ->
+        if Cyfr.Cluster.Boot.port_free?(port) do
+          Process.put(@claims, [socket | Process.get(@claims, [])])
+          true
+        else
+          :gen_tcp.close(socket)
+          false
+        end
+
+      {:error, :eaddrinuse} ->
+        false
+    end
+  end
+
+  # An abstract name (the leading zero byte): no file, one per network
+  # namespace, gone with the last socket bound to it.
+  defp claim_name(port), do: <<0, "cyfr-cluster-host-api-port-#{port}">>
+
+  # The low end of the kernel's ephemeral port range: Linux's own setting,
+  # else IANA's dynamic range, which BSD and macOS hand out from.
+  defp ephemeral_low do
+    case File.read("/proc/sys/net/ipv4/ip_local_port_range") do
+      {:ok, range} -> range |> String.split() |> hd() |> String.to_integer()
+      {:error, _} -> 49_152
+    end
   end
 
   defp all_nodes, do: Enum.map([:a, :b], &node_name/1)
