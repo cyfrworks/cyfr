@@ -2237,7 +2237,7 @@ defmodule Cyfr.Boundaries do
       mint_validation_credential: 5,
       page_frame: 2,
       renew_frame: 2,
-      resume_frame: 3,
+      resume_frame: 2,
       revoke_frame: 2,
       suspend_frame: 2,
       verify_asset_credential: 2

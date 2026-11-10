@@ -313,11 +313,13 @@ defmodule PrismWeb.ShellLive do
 
   A live frame that is not a validation's, a shown canvas's included, has
   its credential renewed before its deadline while this view holds it
-  (`Prism.Frames.renew/4`), and a frame that is not a canvas's is resumed
-  under a new bearer when it is shown again: the view pushes each new
-  bearer as `frame_bearer`, which the canvas hook relays to that frame's
-  bridge alone, and keeps none. A frozen frame is not renewed, so a canvas
-  hidden past its deadline is refused when it is shown again.
+  (`Prism.Frames.renew/4`), and every frame, a canvas's included, is
+  resumed under a new bearer when it is shown again: the view pushes each
+  new bearer as `frame_bearer`, which the canvas hook relays to that
+  frame's bridge alone, ahead of the frame's `frame_state`, and keeps
+  none. A frozen frame is not renewed; one hidden past its deadline is
+  resumed under a new deadline when it is shown again, while the person's
+  session or key stands.
 
   A full frame fills the apps' area between the top bar and the shelf, and
   the canvas makes every layer under it `inert`. The top bar, the shelf,

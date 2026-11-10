@@ -315,6 +315,31 @@ defmodule PrismWeb.ShellCanvasTest do
 
   defp verify(bearer), do: Sanctum.TinctureAuth.verify_frame_credential(bearer)
 
+  defp past?(at), do: DateTime.compare(at, DateTime.utc_now()) == :lt
+
+  # Every `frame_bearer` and `frame_state` the view pushed for `frame_id`
+  # so far, in the order it pushed them.
+  defp frame_pushes(%{proxy: {ref, _topic, _}} = view, frame_id) do
+    _ = render(view)
+
+    receive do
+      {^ref, {:push_event, event, %{frame: ^frame_id} = payload}}
+      when event in ["frame_bearer", "frame_state"] ->
+        [{event, payload} | frame_pushes(view, frame_id)]
+    after
+      0 -> []
+    end
+  end
+
+  # Every session of the person ended a minute ago.
+  defp end_sessions!(user) do
+    sessions = from(s in Arca.Schemas.Session, where: s.user_id == ^user.user_id)
+    hashes = Arca.Repo.all(from(s in sessions, select: s.token_hash))
+    assert hashes != []
+    Arca.Repo.update_all(sessions, set: [expires_at: DateTime.add(DateTime.utc_now(), -60)])
+    Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
+  end
+
   # The frame credential's lifetime, installed beside whatever the run
   # installed and restored after.
   defp deadline_setting!(seconds) do
@@ -1529,23 +1554,161 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{"error" => %{}} = canvas_stream_ended(socket, 3)
     end
 
-    test "a canvas shown again keeps its row's deadline and its handshake's bearer",
+    test "a canvas shown again before its deadline is resumed under a new bearer; while it stays shown, its bearer and deadline stand",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
       home = canvas(view)
-      bearer = handshake!(view, home.id)["credential"]
-      %{deadline: deadline} = row(home.id)
+      home_id = home.id
+      old = handshake!(view, home_id)["credential"]
+      %{deadline: first} = row(home_id)
 
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert row(home.id).state == "suspended"
+      assert row(home_id).state == "suspended"
+      _ = frame_pushes(view, home_id)
       render_hook(view, "switch_canvas", %{"canvas" => "home"})
 
+      assert [{"frame_bearer", %{credential: new}}, {"frame_state", %{state: "live"}}] =
+               frame_pushes(view, home_id)
+
+      refute new == old
+      assert %{id: ^home_id, state: :live, deadline: resumed} = canvas(view)
+      assert DateTime.compare(resumed, first) == :gt
+      assert %{state: "active", deadline: ^resumed} = row(home_id)
+      assert {:ok, %{frame_id: ^home_id, deadline: ^resumed}} = verify(new)
+      # The bearer it replaced keeps only its own deadline.
+      assert {:ok, %{frame_id: ^home_id, deadline: ^first}} = verify(old)
+
+      # Shown and left shown, nothing moves its credential.
+      _ = frame_pushes(view, home_id)
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert %{state: :live, deadline: ^resumed} = canvas(view)
+      assert %{state: "active", deadline: ^resumed} = row(home_id)
+      assert frame_pushes(view, home_id) == []
+    end
+
+    test "a canvas shown again after its deadline passed is resumed under a new bearer and reads its streams again, recorded as before",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      deadline_setting!(2)
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
       home_id = home.id
-      assert %{id: ^home_id, state: :live, deadline: ^deadline} = canvas(view)
-      assert %{state: "active", deadline: ^deadline} = row(home.id)
-      assert {:ok, %{frame_id: ^home_id, deadline: ^deadline}} = verify(bearer)
+      old = handshake!(view, home_id)["credential"]
+      socket = canvas_socket(home_id)
+      assert %{"type" => "subscribed"} = canvas_stream(socket, 1, old, "runs.changes")
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert row(home_id).state == "suspended"
+      assert %{"error" => %{"class" => "forbidden"}} = canvas_stream_ended(socket, 1)
+
+      wait_until(
+        fn -> past?(row(home_id).deadline) and verify(old) == {:error, :expired_credential} end,
+        5_000,
+        "the hidden canvas's deadline to pass"
+      )
+
+      deadline_setting!(900)
+      _ = frame_pushes(view, home_id)
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+
+      # The new bearer reaches the frame ahead of the signal that makes it
+      # live.
+      assert [{"frame_bearer", %{credential: new}}, {"frame_state", %{state: "live"}}] =
+               frame_pushes(view, home_id)
+
+      assert %{id: ^home_id, state: :live, deadline: deadline} = canvas(view)
+      assert DateTime.diff(deadline, DateTime.utc_now()) in 890..900
+      assert %{state: "active", deadline: ^deadline} = row(home_id)
+      assert {:ok, %{frame_id: ^home_id, deadline: ^deadline}} = verify(new)
+      assert {:error, :expired_credential} = verify(old)
+      refute render(view) =~ "Sign in again"
+
+      # The lapsed bearer opens nothing; the new one reads the stream again.
+      assert %{"type" => "ended", "error" => %{"class" => "unauthenticated"}} =
+               canvas_stream(socket, 2, old, "runs.changes")
+
+      assert %{"type" => "subscribed"} = canvas_stream(socket, 3, new, "runs.changes")
+
+      # Each open is the gate's decision, the second recorded as the first.
+      assert [first, again] =
+               Arca.Repo.all(
+                 from(d in Arca.Schemas.DecisionLog,
+                   where:
+                     d.athanor_id == ^ctx.athanor_id and d.tool == "stream:runs.changes" and
+                       d.admission == "admitted",
+                   order_by: d.inserted_at
+                 )
+               )
+
+      fields = [:user_id, :athanor_id, :plane, :tool, :action, :admission, :refusal_class]
+      assert Map.take(again, fields) == Map.take(first, fields)
+      assert first.user_id == user.user_id
+
+      GenServer.stop(view.pid, :normal)
+      assert %{"error" => %{}} = canvas_stream_ended(socket, 3)
+    end
+
+    test "a canvas hidden past its deadline whose session has ended is never resumed: the shell asks for a sign-in and revokes it",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      deadline_setting!(2)
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home_id = canvas(view).id
+      old = handshake!(view, home_id)["credential"]
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert row(home_id).state == "suspended"
+
+      wait_until(
+        fn -> past?(row(home_id).deadline) end,
+        5_000,
+        "the hidden canvas's deadline to pass"
+      )
+
+      deadline_setting!(900)
+      _ = frame_pushes(view, home_id)
+      %{deadline: deadline} = row(home_id)
+      Process.flag(:trap_exit, true)
+      end_sessions!(user)
+
+      assert_redirect(view, "/login", 5_000)
+      wait_until(fn -> row(home_id).state == "revoked" end, 5_000, "the canvas's revocation")
+      assert %{deadline: ^deadline} = row(home_id)
+      assert {:error, _refused} = verify(old)
       refute_push_event(view, "frame_bearer", %{frame: ^home_id})
+    end
+
+    test "a canvas hidden past its deadline whose grant moved is resumed, and its streams are refused as for any frame whose grant moved",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      deadline_setting!(2)
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home_id = canvas(view).id
+      handshake!(view, home_id)
+      socket = canvas_socket(home_id)
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert row(home_id).state == "suspended"
+
+      wait_until(
+        fn -> past?(row(home_id).deadline) end,
+        5_000,
+        "the hidden canvas's deadline to pass"
+      )
+
+      deadline_setting!(900)
+      Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.markets", 2)
+      _ = frame_pushes(view, home_id)
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+
+      assert [{"frame_bearer", %{credential: new}}, {"frame_state", %{state: "live"}}] =
+               frame_pushes(view, home_id)
+
+      assert %{"type" => "ended", "error" => %{"class" => "forbidden", "message" => message}} =
+               canvas_stream(socket, 1, new, "runs.changes")
+
+      assert message =~ "changed since its frame opened"
     end
 
     test "a shown canvas's credential is renewed before its deadline and its new bearer pushed for its wire; hidden, it is renewed no more",
@@ -1578,32 +1741,6 @@ defmodule PrismWeb.ShellCanvasTest do
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert row(home_id).state == "suspended"
       refute Map.has_key?(assigns(view).renewals, home_id)
-    end
-
-    test "a canvas shown again after its deadline passed is refused, as before",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      deadline_setting!(2)
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      home = canvas(view)
-      handshake!(view, home.id)
-
-      render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert row(home.id).state == "suspended"
-
-      wait_until(
-        fn -> DateTime.compare(row(home.id).deadline, DateTime.utc_now()) == :lt end,
-        5_000,
-        "the hidden canvas's deadline to pass"
-      )
-
-      %{deadline: deadline} = row(home.id)
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
-
-      assert %{state: "revoked", deadline: ^deadline} = row(home.id)
-      refute match?(%{state: :live}, canvas(view))
-      home_id = home.id
-      refute_push_event(view, "frame_bearer", %{frame: ^home_id})
     end
 
     test "a switch during validation tears the trial down and activates nothing",
