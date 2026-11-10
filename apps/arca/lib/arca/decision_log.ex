@@ -10,8 +10,8 @@ defmodule Arca.DecisionLog do
   ## The budget
 
   Audit is best-effort for the operation: the caller of `append/3` or
-  `finish/4` waits on the database at most `budget_ms/0` (500 ms, compiled
-  in from `:decision_log_budget_ms`), checkout included, and is answered a
+  `finish/4` waits on the database at most `budget_ms/0` (500 ms, unless
+  `:decision_log_budget_ms` is set), checkout included, and is answered a
   typed `Arca.DecisionLog.AuditFailure` when the write did not finish in
   time, never an unbounded wait. Neither retries anything;
   what the caller does with a failure is the caller's, and no failure here
@@ -97,7 +97,7 @@ defmodule Arca.DecisionLog do
   alias Arca.Schemas.DecisionLog, as: Row
   alias Prima.Decision
 
-  @budget_ms Application.compile_env(:arca, :decision_log_budget_ms, 500)
+  @budget_ms 500
   @default_limit 50
   @max_limit 500
 
@@ -139,7 +139,7 @@ defmodule Arca.DecisionLog do
 
   @doc "The database waiting budget of one append or finish, in milliseconds."
   @spec budget_ms() :: pos_integer()
-  def budget_ms, do: @budget_ms
+  def budget_ms, do: Application.get_env(:arca, :decision_log_budget_ms, @budget_ms)
 
   @doc "How many writers this node runs at once; a write past them is `:capacity`."
   @spec max_writers() :: pos_integer()
@@ -438,7 +438,7 @@ defmodule Arca.DecisionLog do
   end
 
   defp write_budgeted(stage, write) do
-    deadline = System.monotonic_time(:millisecond) + @budget_ms
+    deadline = System.monotonic_time(:millisecond) + budget_ms()
     reply = Process.alias([:reply])
 
     case start_writer(fn -> send(reply, {reply, attempt(stage, write, deadline)}) end) do
@@ -492,7 +492,7 @@ defmodule Arca.DecisionLog do
   defp drain_ms do
     case Arca.Repo.adapter() do
       Ecto.Adapters.SQLite3 -> Arca.Repo.busy_timeout_ms() + @sqlite_margin_ms + @drain_margin_ms
-      _postgres -> @budget_ms + @drain_margin_ms
+      _postgres -> budget_ms() + @drain_margin_ms
     end
   end
 

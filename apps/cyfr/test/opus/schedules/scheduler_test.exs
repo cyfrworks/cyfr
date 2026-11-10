@@ -1389,7 +1389,7 @@ defmodule Opus.Schedules.SchedulerTest do
       {:ok, {_ip, port}} = ThousandIsland.listener_info(upstream)
       Cyfr.Test.TwoServices.watch!()
 
-      until = DateTime.utc_now() |> DateTime.add(8, :second) |> DateTime.truncate(:second)
+      until = DateTime.utc_now() |> DateTime.add(600, :second) |> DateTime.truncate(:second)
       {reference, profile_id} = attached_probe!(ctx, port, until)
 
       input = %{
@@ -1421,15 +1421,13 @@ defmodule Opus.Schedules.SchedulerTest do
       assert_receive {:upstream, sent}, 5_000
       assert sent.path == "/scheduled" and {"x-api-key", @attached_secret} in sent.headers
 
-      # Held across the binding's instant: no tick fires the schedule while
-      # the case waits it out, so the one fire after it is the case's own.
+      # Held across the binding's instant: no tick fires the schedule
+      # meanwhile, so the one fire after it is the case's own. The instant
+      # passes on the binding's row, which each use reads; the wall clock
+      # passing it is waited out once, end to end, by
+      # `Locus.Runtime.AttachedFetchTest`.
       park!(schedule)
-
-      wait_until(
-        fn -> DateTime.compare(DateTime.utc_now(), until) == :gt end,
-        15_000,
-        "the binding's instant to pass"
-      )
+      ConsentFixtures.lapse_bindings!(ctx, profile_id)
 
       # After it: the next fire is admitted and its request refused before
       # any upstream request.

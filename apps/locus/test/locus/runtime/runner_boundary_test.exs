@@ -235,9 +235,13 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
        %{host: host, boot: boot} do
     # The attempt's close is held, so the subtree cannot end on its own:
     # only the watchdog, armed at the deadline plus the grace, ends it.
+    # Held for as long as the test lives and no longer: a request still
+    # parked when the test ends would hold the scripted host's stop.
+    test = self()
+
     ScriptedHost.script(host, "fail", fn _args, _caller ->
-      Process.sleep(30_000)
-      {:ok, "held"}
+      ref = Process.monitor(test)
+      receive do: ({:DOWN, ^ref, :process, ^test, _reason} -> {:ok, "held"})
     end)
 
     # The pool's one runner, taken before the attempt's deadline is set.

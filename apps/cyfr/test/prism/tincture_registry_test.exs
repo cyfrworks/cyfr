@@ -763,14 +763,19 @@ defmodule Prism.TinctureRegistryTest do
     test "list and get answer from ETS while the server is suspended" do
       name = :test_suspended_reads
       {:ok, pid} = TinctureRegistry.start_link(name: name)
-      # Populate (and mark) the athanor first; the suspended read below
-      # must then come straight from ETS.
-      :ok = TinctureRegistry.reload_athanor(name, "ath_test")
+      ctx = lookup("ath_test")
+      # The first read scans the athanor and marks it at the epoch a reader
+      # sees; the suspended read below finds that mark current, and must
+      # then come straight from ETS.
+      assert [%{name: "test-dash"}] = TinctureRegistry.list_tinctures(name, ctx)
 
       :ok = :sys.suspend(pid)
 
-      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
-      assert [%{name: "test-dash"}] = tinctures
+      # A read that asked the suspended server would wait out its call and
+      # then answer the same rows from the table: the bound tells the two
+      # apart.
+      read = Task.async(fn -> TinctureRegistry.list_tinctures(name, ctx) end)
+      assert {:ok, [%{name: "test-dash"}]} = Task.yield(read, 5_000) || Task.shutdown(read)
 
       :ok = :sys.resume(pid)
       GenServer.stop(pid)

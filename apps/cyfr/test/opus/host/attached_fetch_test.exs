@@ -28,7 +28,6 @@ defmodule Opus.Host.AttachedFetchTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
-  import Prima.Test.Wait
 
   alias Opus.Host.AttachedFetch
   alias Opus.HostListener
@@ -534,7 +533,7 @@ defmodule Opus.Host.AttachedFetchTest do
     decisions = %{ref: ref, bindings: [binding]}
     {:ok, preview} = Commit.preview(ctx, decisions)
 
-    {:ok, _committed} =
+    {:ok, committed} =
       Commit.commit(ctx, %{
         decisions: decisions,
         plan_token: plan.plan_token,
@@ -555,6 +554,7 @@ defmodule Opus.Host.AttachedFetchTest do
       component_ref: component_ref,
       authority: authority,
       entry: entry,
+      profile_id: committed.profile_id,
       limits: limits,
       fixture: attempt!(ctx, authority, component_ref, limits, opts)
     }
@@ -1680,9 +1680,9 @@ defmodule Opus.Host.AttachedFetchTest do
     end
 
     test "an until binding is refused once its instant passes", %{ctx: ctx, port: port} do
-      until = DateTime.utc_now() |> DateTime.add(4, :second) |> DateTime.truncate(:second)
+      until = DateTime.utc_now() |> DateTime.add(600, :second) |> DateTime.truncate(:second)
 
-      %{fixture: fixture} =
+      %{fixture: fixture, profile_id: profile_id} =
         scenario!(ctx, port, lifetime: %{kind: "until", until: DateTime.to_iso8601(until)})
 
       request = request("http://127.0.0.1:#{port}/before")
@@ -1690,11 +1690,10 @@ defmodule Opus.Host.AttachedFetchTest do
       assert List.last(frames(fixture, request.call_id)).kind == :end
       assert received_upstream().path == "/before"
 
-      wait_until(
-        fn -> DateTime.compare(DateTime.utc_now(), until) == :gt end,
-        8_000,
-        "the binding's instant to pass"
-      )
+      # The instant passes on the binding's row, which each use reads. The
+      # wall clock passing it is waited out once, end to end, by
+      # `Locus.Runtime.AttachedFetchTest`.
+      Sanctum.Test.ConsentFixtures.lapse_bindings!(ctx, profile_id)
 
       fixture
       |> fetched(request("http://127.0.0.1:#{port}/after"))
