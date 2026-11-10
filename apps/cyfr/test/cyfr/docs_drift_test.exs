@@ -1236,7 +1236,9 @@ defmodule Cyfr.DocsDriftTest do
         [name] <-
           Regex.scan(
             ~r/"([A-Z][A-Z0-9_]*[A-Z0-9])"/,
-            SourceTree.read(Path.join(@repo_root, file)), capture: :all_but_first),
+            SourceTree.read(Path.join(@repo_root, file)),
+            capture: :all_but_first
+          ),
         not MapSet.member?(not_read, name),
         into: MapSet.new(),
         do: name
