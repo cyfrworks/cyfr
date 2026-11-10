@@ -51,7 +51,9 @@ defmodule Opus.AttemptSlotWaitTest do
   # The scripted worker service behind a gate: each `start` and `kill` it
   # is asked for is told to the test first, a `start` waits at the gate
   # while it is closed, and a kill the test holds is answered only once the
-  # test lets it go, the runner killed meanwhile. Served under the scripted
+  # test lets it go, the runner killed meanwhile. A hold ends with the test
+  # as well: every kill of a held run waits, and one the test never lets go
+  # would otherwise hold the listener's stop. Served under the scripted
   # service's id, so its requests are signed and its runners attach as that
   # service's.
   defmodule Gate do
@@ -83,13 +85,7 @@ defmodule Opus.AttemptSlotWaitTest do
       %{test: test, closed: closed?} = Agent.get(__MODULE__, & &1)
       send(test, {:start, id, self()})
 
-      if closed? do
-        receive do
-          :open -> :ok
-        after
-          30_000 -> :ok
-        end
-      end
+      if closed?, do: hold(test, :open)
 
       ScriptedWorker.start(token, input, sealed_keys)
     end
@@ -102,15 +98,21 @@ defmodule Opus.AttemptSlotWaitTest do
 
       if MapSet.member?(held, execution_id) do
         send(test, {:killed, execution_id, self()})
-
-        receive do
-          :proceed -> :ok
-        after
-          30_000 -> :ok
-        end
+        hold(test, :proceed)
       end
 
       answer
+    end
+
+    defp hold(test, word) do
+      ref = Process.monitor(test)
+
+      receive do
+        ^word -> :ok
+        {:DOWN, ^ref, :process, ^test, _reason} -> :ok
+      end
+
+      Process.demonitor(ref, [:flush])
     end
 
     @impl true
