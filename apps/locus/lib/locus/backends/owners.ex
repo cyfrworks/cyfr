@@ -54,10 +54,9 @@ defmodule Locus.Backends.Owners do
 
   Every session reserves its memory bound (the program's `memory_bytes`,
   or `:memory_bytes` for one that names none) from the moment its open is
-  admitted, before its home is made or its pool read, until nothing of its
-  process is left (its `:vacated`, or its session process gone): an open
-  being prepared, a session running and one ended whose process has not
-  yet gone all hold theirs. An open is admitted while
+  admitted, before its home is made or its pool read, until its launcher
+  says nothing of its process is left: an open being prepared, a session
+  running and one ended whose process has not yet gone all hold theirs. An open is admitted while
 
       held + requested <= floor(B * F)
 
@@ -73,19 +72,21 @@ defmodule Locus.Backends.Owners do
   `capacity`. An
   open that attaches to the session already running for its key reserves
   nothing more, and one that found it started while it was prepared drops
-  its reservation. A session's process is gone only when its launcher says
-  so: the session's own `:vacated`, or the launcher's word to this table as
-  the spawn's heir (`t:Locus.Launcher.spec/0`). A held session this table
-  stops following first, its session process dead or its owner retired,
-  keeps its bound, and a scratch session's uid of the pool, in the table's
-  endings, and the launcher is asked to fence it (`c:Locus.Launcher.fence/2`):
-  an ending is cleared by the heir's word, or by the fence's `:none`, which
-  proves no process of it exists or will start; a fence not answered is
-  asked again at the next sweep. A release timeout never clears one. On
-  start the table adopts, as heir, every process the launcher still holds
-  for its ledger (`:ledger`, its name by default), so a table that restarts
-  holds what its predecessor followed, and admits nothing until the
-  launcher has answered. A hello and a status report the box's
+  its reservation. What a session holds, from its open's admission until
+  its launcher says nothing of its process is left, is its reservation, in
+  the one lifecycle `Locus.Backends.Reservations` writes, each state moved
+  by one authority: this table for an open it never started, the launcher
+  through the session (`:vacated`) or to the spawn's heir
+  (`t:Locus.Launcher.spec/0`), and the launcher's fence
+  (`c:Locus.Launcher.fence/2`) for a process no session follows. A
+  reservation this table stops following, its session process dead, its
+  spawn's answer lost (`:unconfirmed`) or its owner retired, is an ending,
+  fenced at once and at every sweep until it is settled. A release timeout
+  settles nothing. On start the table adopts, as heir, every process the
+  launcher still holds for its ledger (`:ledger`, its name by default), each
+  an ending, so a table that restarts holds what its predecessor followed,
+  and admits nothing until the launcher has answered. A hello and a status
+  report the box's
   `memory{budget_bytes, admission_limit_bytes, held_bytes}`.
 
   Before a scratch session's process starts it holds a uid of the pool
@@ -156,7 +157,7 @@ defmodule Locus.Backends.Owners do
 
   require Logger
 
-  alias Locus.Backends.Backend
+  alias Locus.Backends.{Backend, Reservations}
   alias Prima.LocusBackends
 
   @pool "backends"
@@ -291,11 +292,9 @@ defmodule Locus.Backends.Owners do
         pids: %{},
         homes: %{},
         homes_checked_at: nil,
-        # The sessions whose process this table no longer follows but whose
-        # end the launcher has not confirmed: {owner id, session id} =>
-        # their heir tag and whether their fence is :unasked, :asking or
-        # :pending.
-        ending: %{},
+        # What every session holds, from its open's admission until its
+        # launcher says nothing of it is left (`Reservations`).
+        reservations: Reservations.new(),
         ledger: Keyword.get_lazy(opts, :ledger, fn -> Keyword.get(opts, :name, make_ref()) end),
         adopted: false,
         adopting: false,
@@ -418,22 +417,8 @@ defmodule Locus.Backends.Owners do
 
   # The launcher, as a spawn's heir: nothing of that session's process is
   # left.
-  def handle_info(
-        {_launcher, {:heir, %{session: {owner_id, session_id} = key}}, :released},
-        state
-      ) do
-    state = %{state | ending: Map.delete(state.ending, key)}
-
-    state =
-      with {:ok, owner} <- Map.fetch(state.owners, owner_id),
-           {:ok, session} <- Map.fetch(owner.sessions, session_id) do
-        put_session(state, owner, session_id, %{session | gone: true, held: false})
-      else
-        _ -> state
-      end
-
-    {:noreply, state}
-  end
+  def handle_info({_launcher, {:heir, %{session: key}}, :released}, state),
+    do: {:noreply, reservation(state, key, :heir)}
 
   def handle_info({:DOWN, monitor, :process, pid, _reason}, state) do
     cond do
@@ -783,12 +768,8 @@ defmodule Locus.Backends.Owners do
   defp continue(state, {:open, from, ask}, result), do: opened(state, from, ask, result)
 
   defp continue(state, {:fenced, key}, result) do
-    case {state.ending[key], result} do
-      {nil, _result} -> state
-      {_ending, :none} -> %{state | ending: Map.delete(state.ending, key)}
-      {ending, :pending} -> put_in(state.ending[key], %{ending | fence: :pending})
-      {ending, _failed} -> put_in(state.ending[key], %{ending | fence: :unasked})
-    end
+    answer = if result in [:none, :pending], do: result, else: :failed
+    reservation(state, key, {:fence, answer})
   end
 
   defp continue(state, :adopted, {:ok, tags}) when is_list(tags), do: adopted(state, tags)
@@ -849,6 +830,7 @@ defmodule Locus.Backends.Owners do
   defp open_program(state, owner, program, message, from) do
     ask = %{
       owner: owner.id,
+      session: "ss_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower),
       athanor: owner.athanor,
       program: program.name,
       home_id: message.home_id,
@@ -865,6 +847,8 @@ defmodule Locus.Backends.Owners do
          :ok <- memory_room(state, owner, ask.memory_bytes),
          {:ok, admitted} <- room(state, owner) do
       state = put_owner(state, admitted)
+      tag = heir_tag(state, owner, ask.session, ask)
+      state = %{state | reservations: Reservations.reserve(state.reservations, tag)}
       %{launcher: launcher, launcher_server: server} = state
 
       case program.home do
@@ -939,7 +923,9 @@ defmodule Locus.Backends.Owners do
     else
       oldest =
         owner.sessions
-        |> Enum.filter(fn {_id, session} -> not session.running and not session.held end)
+        |> Enum.filter(fn {id, session} ->
+          not session.running and not Reservations.held?(state.reservations, {owner.id, id})
+        end)
         |> Enum.min_by(fn {_id, session} -> session.opened end, fn -> nil end)
 
       case oldest do
@@ -962,36 +948,16 @@ defmodule Locus.Backends.Owners do
   defp memory_room(state, owner, requested) do
     ceiling = owner.athanor_memory_bytes || state.memory.budget_bytes
 
-    if held_bytes(state, & &1) + requested <= state.memory.admission_limit_bytes and
-         held_bytes(state, &(&1 == owner.athanor)) + requested <= ceiling,
+    held = state.reservations
+
+    if Reservations.held_bytes(held) + requested <= state.memory.admission_limit_bytes and
+         Reservations.held_bytes(held, &(&1 == owner.athanor)) + requested <= ceiling,
        do: :ok,
        else: {:error, :capacity}
   end
 
-  # The bytes reserved by the athanors `athanor?` takes: every session
-  # whose process is not yet gone, every open being prepared and every
-  # ending.
-  defp held_bytes(state, athanor?) do
-    sessions =
-      for {_id, owner} <- state.owners,
-          athanor?.(owner.athanor),
-          {_sid, %{held: true, memory_bytes: bytes}} <- owner.sessions,
-          reduce: 0,
-          do: (sum -> sum + bytes)
-
-    pending =
-      for {_ref, %{continuation: {:open, _from, ask}}} <- state.pending,
-          athanor?.(ask.athanor),
-          reduce: sessions,
-          do: (sum -> sum + ask.memory_bytes)
-
-    for {_key, %{tag: tag}} <- state.ending,
-        athanor?.(tag.athanor),
-        reduce: pending,
-        do: (sum -> sum + tag.memory_bytes)
-  end
-
-  defp memory_report(state), do: Map.put(state.memory, :held_bytes, held_bytes(state, & &1))
+  defp memory_report(state),
+    do: Map.put(state.memory, :held_bytes, Reservations.held_bytes(state.reservations))
 
   defp forget(state, pid) do
     DynamicSupervisor.terminate_child(state.supervisor, pid)
@@ -1018,7 +984,8 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  # The open's work done: the session started, or the refusal.
+  # The open's work done: the session started, or the refusal, with which
+  # nothing was asked of the launcher and the reservation is released.
   defp opened(state, from, ask, result) do
     with {:ok, owner} <- still_open(state, ask),
          program = Enum.find(owner.definition, &(&1.name == ask.program)),
@@ -1026,7 +993,7 @@ defmodule Locus.Backends.Owners do
       case running(owner, ask.key) do
         {:ok, session_id} ->
           GenServer.reply(from, {:ok, opened_answer(session_id, true, ask.mode)})
-          state
+          reservation(state, {ask.owner, ask.session}, :abandoned)
 
         :error ->
           start_session(state, owner, program, ask, from)
@@ -1034,11 +1001,11 @@ defmodule Locus.Backends.Owners do
     else
       {:error, code, state} ->
         GenServer.reply(from, {:error, code})
-        state
+        reservation(state, {ask.owner, ask.session}, :abandoned)
 
       {:error, code} ->
         GenServer.reply(from, {:error, code})
-        state
+        reservation(state, {ask.owner, ask.session}, :abandoned)
     end
   end
 
@@ -1081,7 +1048,7 @@ defmodule Locus.Backends.Owners do
   end
 
   defp start_session(state, owner, program, ask, from) do
-    session_id = "ss_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+    session_id = ask.session
     record = owner.programs[program.name]
 
     opts =
@@ -1112,8 +1079,6 @@ defmodule Locus.Backends.Owners do
           mode: ask.mode,
           running: true,
           started: false,
-          held: true,
-          gone: false,
           memory_bytes: ask.memory_bytes,
           opened: System.unique_integer([:monotonic]),
           waiting: [from]
@@ -1132,7 +1097,9 @@ defmodule Locus.Backends.Owners do
               })
         }
 
-        %{state | pids: Map.put(state.pids, pid, {owner.id, session_id})} |> put_owner(owner)
+        %{state | pids: Map.put(state.pids, pid, {owner.id, session_id})}
+        |> put_owner(owner)
+        |> reservation({owner.id, session_id}, :started)
 
       {:error, _reason} ->
         Logger.error(
@@ -1141,7 +1108,7 @@ defmodule Locus.Backends.Owners do
         )
 
         GenServer.reply(from, {:error, :internal})
-        state
+        reservation(state, {owner.id, session_id}, :abandoned)
     end
   end
 
@@ -1201,7 +1168,9 @@ defmodule Locus.Backends.Owners do
       &GenServer.reply(&1, {:ok, opened_answer(session_id, false, session.mode)})
     )
 
-    put_session(state, owner, session_id, %{session | started: true, waiting: []})
+    state
+    |> put_session(owner, session_id, %{session | started: true, waiting: []})
+    |> reservation({owner.id, session_id}, :spawned)
   end
 
   defp session_event(state, owner, session_id, session, {:ended, ended}) do
@@ -1217,8 +1186,15 @@ defmodule Locus.Backends.Owners do
     if ended.crash, do: crashed(state, owner, session, ended.error), else: state
   end
 
-  defp session_event(state, owner, session_id, session, :vacated),
-    do: put_session(state, owner, session_id, %{session | held: false})
+  # The launcher, through the session: its spawn refused, or nothing of its
+  # process left.
+  defp session_event(state, owner, session_id, _session, :vacated),
+    do: reservation(state, {owner.id, session_id}, :confirmed)
+
+  # The session could not learn whether its spawn was taken: its process may
+  # yet run, and only the launcher can say.
+  defp session_event(state, owner, session_id, _session, :unconfirmed),
+    do: unfollowed(state, {owner.id, session_id})
 
   defp session_event(state, _owner, _session_id, _session, _event), do: state
 
@@ -1270,8 +1246,8 @@ defmodule Locus.Backends.Owners do
           {:ok, session} ->
             Enum.each(session.waiting, &GenServer.reply(&1, {:error, :internal}))
             running? = session.running
-            state = end_unconfirmed(state, owner, session_id, session)
-            session = %{session | pid: nil, running: false, held: false, waiting: []}
+            state = unfollowed(state, {owner.id, session_id})
+            session = %{session | pid: nil, running: false, waiting: []}
             state = put_session(state, owner, session_id, session)
 
             if running? and owner.state != :draining,
@@ -1506,29 +1482,15 @@ defmodule Locus.Backends.Owners do
 
   # The pool's uids held: a scratch session's (one with no home) until
   # nothing of its process is left, its ending's included.
-  defp slots_held(state) do
-    Enum.reduce(
-      state.owners,
-      map_size(Map.filter(state.ending, &(elem(&1, 1).tag.home_id == nil))),
-      fn {_id, owner}, held ->
-        held +
-          Enum.count(owner.sessions, fn {_id, session} ->
-            session.held and session.home_id == nil
-          end)
-      end
-    )
-  end
+  defp slots_held(state), do: Reservations.uids(state.reservations)
 
-  # A held session whose process this table stops following before its
-  # launcher said that process is gone: what it holds moves to the
-  # endings, and the launcher is asked to fence it.
-  defp end_unconfirmed(state, owner, session_id, %{held: true, gone: false} = session) do
-    tag = heir_tag(state, owner, session_id, session)
-    state = %{state | ending: Map.put(state.ending, tag.session, %{tag: tag, fence: :unasked})}
-    ask_fence(state, tag.session)
-  end
+  # Every change to what a session holds goes through its reservation's
+  # lifecycle (`Reservations`).
+  defp reservation(state, key, event),
+    do: %{state | reservations: Reservations.event(state.reservations, key, event)}
 
-  defp end_unconfirmed(state, _owner, _session_id, _session), do: state
+  # A reservation this table no longer follows is an ending, fenced at once.
+  defp unfollowed(state, key), do: state |> reservation(key, :unfollowed) |> ask_fence(key)
 
   # What a session's heir tag names: the ledger that may adopt it, the
   # session, and what it holds, so a table that adopts it holds the same.
@@ -1548,31 +1510,33 @@ defmodule Locus.Backends.Owners do
      Keyword.get(state.session_opts, :launcher_server, state.launcher_server)}
   end
 
+  # An ending's fence asked of its launcher, once at a time.
   defp ask_fence(state, key) do
-    case state.ending[key] do
-      %{fence: :unasked, tag: tag} = ending ->
+    case state.reservations[key] do
+      %{state: :ending, fence: fence, tag: tag} when fence in [:unasked, :pending] ->
         {launcher, server} = session_launcher(state)
-        state = put_in(state.ending[key], %{ending | fence: :asking})
+        state = reservation(state, key, :asking)
 
         {_ref, state} =
           run(state, {:fenced, key}, @pool_timeout_ms, fn -> launcher.fence(server, tag) end)
 
         state
 
-      _asked ->
+      _settled_or_asking ->
         state
     end
   end
 
-  # What the launcher still holds for this ledger, adopted: each process
-  # held as an ending its heir's word clears.
+  # What the launcher still holds for this ledger, adopted: each an ending,
+  # fenced, so one whose end this table already heard is settled by the
+  # fence's `:none`.
   defp adopted(state, tags) do
-    ending =
-      Enum.reduce(tags, state.ending, fn %{session: key} = tag, ending ->
-        Map.put_new(ending, key, %{tag: tag, fence: :pending})
+    state =
+      Enum.reduce(tags, state, fn %{session: key} = tag, state ->
+        state |> reservation(key, {:adopted, tag}) |> ask_fence(key)
       end)
 
-    %{state | ending: ending, adopted: true, adopting: false}
+    %{state | adopted: true, adopting: false}
   end
 
   defp adopt(%{adopted: true} = state), do: state
@@ -1801,8 +1765,8 @@ defmodule Locus.Backends.Owners do
 
       {owner, owners} ->
         state =
-          Enum.reduce(owner.sessions, state, fn {session_id, session}, state ->
-            end_unconfirmed(state, owner, session_id, session)
+          Enum.reduce(Map.keys(owner.sessions), state, fn session_id, state ->
+            unfollowed(state, {owner.id, session_id})
           end)
 
         pids =
@@ -1856,7 +1820,9 @@ defmodule Locus.Backends.Owners do
       end)
 
     state =
-      Enum.reduce(Map.keys(state.ending), state, &ask_fence(&2, &1))
+      state.reservations
+      |> Reservations.to_fence()
+      |> Enum.reduce(state, &ask_fence(&2, &1.tag.session))
 
     state |> adopt() |> measure_homes() |> check_homes()
   end

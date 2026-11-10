@@ -72,6 +72,42 @@ defmodule Locus.KeeperTest do
       {:ok, FakeKeeper.start_client!()}
     end
 
+    test "a fence refuses every later spawn carrying its tag", %{name: name} do
+      tag = %{
+        ledger: make_ref(),
+        session: {make_ref(), "ss_fenced"},
+        athanor: "ath_fence",
+        memory_bytes: 268_435_456,
+        home_id: nil
+      }
+
+      spec = %{
+        argv: ["/bin/sh", "-c", "exec cat"],
+        env: %{},
+        pool: "backends",
+        memory_bytes: 268_435_456,
+        cpu_quota: 100_000,
+        heir: {self(), tag}
+      }
+
+      assert :none = Keeper.fence(name, tag)
+      first = Keeper.spawn(name, spec)
+      second = Keeper.spawn(name, spec)
+
+      case second do
+        {:ok, handle} ->
+          Keeper.release(name, handle, 0)
+          ref = handle.ref
+          assert_receive {Keeper, ^ref, :released}, 5_000
+
+        _ ->
+          :ok
+      end
+
+      assert {:error, {:spawn_failed, :fenced}} = first
+      assert {:error, {:spawn_failed, :fenced}} = second
+    end
+
     test "a bound the keeper cannot enforce is named as the memory's and the CPU's",
          %{name: name, fake: fake} do
       :ok = FakeKeeper.mode(fake, :memory_unavailable)

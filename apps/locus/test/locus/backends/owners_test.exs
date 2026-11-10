@@ -24,7 +24,7 @@ defmodule Locus.Backends.OwnersTest do
 
   import Prima.Test.Wait
 
-  alias Locus.Backends.{Backend, LeaseSweeper, Owners}
+  alias Locus.Backends.{Backend, LeaseSweeper, Owners, Reservations}
   alias Prima.LocusBackends
 
   @athanor "ath_owners"
@@ -68,6 +68,36 @@ defmodule Locus.Backends.OwnersTest do
     end
 
     def adopt(_server, _ledger, _heir), do: {:ok, []}
+  end
+
+  defmodule AdoptionRace do
+    @moduledoc false
+    # A session launcher whose first adoption is unanswered and whose next
+    # one names a process the test chose, its answer held until the test
+    # lets it go; its fence finds nothing held, since it starts nothing.
+    def adopt({test, counter}, ledger, heir) do
+      case Agent.get_and_update(counter, fn n -> {n, n + 1} end) do
+        0 ->
+          {:error, {:launcher_unavailable, :timeout}}
+
+        _ ->
+          tag = %{
+            ledger: ledger,
+            session: {make_ref(), "ss_adopted"},
+            athanor: "ath_owners",
+            memory_bytes: 268_435_456,
+            home_id: nil
+          }
+
+          send(test, {:adoption_snapshot, self(), heir, tag})
+
+          receive do
+            :go -> {:ok, [tag]}
+          end
+      end
+    end
+
+    def fence(_server, _tag), do: :none
   end
 
   defmodule Stub do
@@ -603,9 +633,8 @@ defmodule Locus.Backends.OwnersTest do
 
       wait_until(
         fn ->
-          Enum.all?(hd(Map.values(held(owners))).sessions, fn {_id, s} ->
-            not s.running and not s.held
-          end)
+          Enum.all?(hd(Map.values(held(owners))).sessions, fn {_id, s} -> not s.running end) and
+            :sys.get_state(owners).reservations == %{}
         end,
         10_000
       )
@@ -884,7 +913,7 @@ defmodule Locus.Backends.OwnersTest do
       # The launcher's fence answers that it holds no process of it, and
       # will start none.
       wait_until(fn -> held_bytes(owners) == 0 end, 5_000)
-      assert :sys.get_state(owners).ending == %{}
+      assert Reservations.endings(:sys.get_state(owners).reservations) == %{}
     end
 
     test "a session that dies before its launcher has its request is cleared by the launcher's fence",
@@ -903,7 +932,12 @@ defmodule Locus.Backends.OwnersTest do
       assert_receive {:before_spawn, backend}, 2_000
       Process.exit(backend, :kill)
       assert {:error, :internal} = Task.await(opening)
-      wait_until(fn -> map_size(:sys.get_state(owners).ending) == 1 end, 5_000)
+
+      wait_until(
+        fn -> map_size(Reservations.endings(:sys.get_state(owners).reservations)) == 1 end,
+        5_000
+      )
+
       assert held_bytes(owners) == 256 * @mib
       advance(ctx, 86_400_000)
       for _ <- 1..3, do: Owners.sweep(owners)
@@ -1011,6 +1045,65 @@ defmodule Locus.Backends.OwnersTest do
       # Its end, told to the adopting table, frees its bound.
       :sys.resume(handle.server)
       wait_until(fn -> held_bytes(new_owner) == 0 end, 10_000)
+    end
+
+    test "a release heard before the adoption that names it stays released", ctx do
+      counter = start_supervised!({Agent, fn -> 0 end}, id: :adoption_calls)
+
+      owners =
+        start_owners(ctx,
+          memory_budget: 268_435_456,
+          session_opts: [launcher: AdoptionRace, launcher_server: {self(), counter}]
+        )
+
+      assert :sys.get_state(owners).adopted == false
+      :ok = Owners.sweep(owners)
+      assert_receive {:adoption_snapshot, worker, ^owners, tag}, 2_000
+      send(owners, {AdoptionRace, {:heir, tag}, :released})
+      assert {:ok, %{memory: %{held_bytes: 0}}} = control(owners, 1, %{type: :status, owners: []})
+      send(worker, :go)
+      wait_until(fn -> :sys.get_state(owners).adopted end, 5_000)
+      for _ <- 1..3, do: Owners.sweep(owners)
+      wait_until(fn -> held_bytes(owners) == 0 end, 5_000)
+      assert {:ok, %{memory: memory}} = control(owners, 1, %{type: :status, owners: []})
+      assert memory.held_bytes == 0
+    end
+
+    @tag timeout: 30_000
+    test "a spawn whose call timed out stays held until the keeper confirms its retirement",
+         ctx do
+      %{name: client, fake: fake} = Locus.Test.FakeKeeper.start_client!()
+
+      owners =
+        start_owners(ctx,
+          memory_budget: 268_435_456,
+          session_opts: [launcher: Locus.Keeper, launcher_server: client]
+        )
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+
+      on_exit(fn ->
+        try do
+          :sys.resume(fake)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      :sys.suspend(fake)
+      opening = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      wait_until(fn -> map_size(:sys.get_state(client).requests) == 1 end, 5_000)
+      _result = Task.await(opening, 20_000)
+      ledger = :sys.get_state(owners).ledger
+      {:ok, unconfirmed} = Locus.Keeper.adopt(client, ledger, owners)
+      assert length(unconfirmed) == 1
+      assert {:ok, %{memory: memory}} = control(owners, 1, %{type: :status, owners: []})
+      :sys.resume(fake)
+      wait_until(fn -> :sys.get_state(client).requests == %{} end, 10_000)
+      assert memory.held_bytes == 268_435_456
+
+      # The keeper's word, to the spawn's heir, frees it.
+      wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
     end
 
     test "a session's bound is released once its process is confirmed gone, not when it is asked to end",

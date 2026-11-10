@@ -842,9 +842,10 @@ defmodule Locus.Keeper do
     end
   end
 
+  # A fence stands: every spawn naming its tag is refused, however many.
   def handle_call({:spawn_handle, _ref, _argv, _env, %{heir: {_pid, tag}}}, _from, state)
       when is_map_key(state.fences, tag) do
-    {:reply, {:error, {:spawn_failed, :fenced}}, %{state | fences: Map.delete(state.fences, tag)}}
+    {:reply, {:error, {:spawn_failed, :fenced}}, state}
   end
 
   def handle_call({:spawn_handle, ref, argv, env, opts}, {owner, _tag} = from, state) do

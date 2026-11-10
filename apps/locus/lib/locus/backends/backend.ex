@@ -22,8 +22,10 @@ defmodule Locus.Backends.Backend do
   crash (`crash: true`: the process exited of its own accord with a
   status other than 0 or by a signal, wrote a line past
   `Prima.LocusBackends.max_line_bytes/0`, or its spawn was refused) and
-  why; once nothing of its process is left (the launcher's `:released`),
-  `:vacated`, after which it holds no uid.
+  why; once nothing of its process is left (the launcher's `:released`, or
+  its refusal of the spawn), `:vacated`, after which it holds no uid. A
+  spawn the launcher did not answer (`launcher_unavailable`) is
+  `:unconfirmed` instead: it may yet run, and only the launcher can say.
 
   `close/1`, `retire_if_idle/2` (no `send_lines/2` and no `recv/3` within
   the idle period), `end_session/2` (its owners ending it: the cap of its
@@ -258,6 +260,13 @@ defmodule Locus.Backends.Backend do
       {:ok, handle} ->
         notify(state, :started)
         {:noreply, %{state | handle: handle, status: :running}}
+
+      # The launcher could not be heard: the spawn may yet be taken, so
+      # nothing says its process is not running, and only the launcher can.
+      {:error, {:launcher_unavailable, _kind} = reason} ->
+        state = ended(state, %{crash: true, error: "spawn refused: #{refusal(reason)}"})
+        notify(state, :unconfirmed)
+        {:noreply, reply_stoppers(state)}
 
       {:error, reason} ->
         state = %{state | released: true}
