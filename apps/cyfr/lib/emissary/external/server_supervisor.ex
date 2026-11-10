@@ -39,8 +39,14 @@ defmodule Emissary.External.ServerSupervisor do
     digest = config_digest(config)
 
     case Registry.lookup(Emissary.External.ServerRegistry, {name, athanor_id}) do
+      # The registry drops a stopped process's entry only when its partition
+      # handles the exit, after the stopper and every monitor already saw it
+      # go; until then the lookup still lists the dead process, which is
+      # started again as if absent (registering over a dead entry replaces
+      # it). Answering it instead hands the caller a process that answers
+      # nothing: a `:noproc` exit, or `:not_running` once the entry is gone.
       [{pid, ^digest}] ->
-        {:ok, pid}
+        if Process.alive?(pid), do: {:ok, pid}, else: start_child(config)
 
       [{pid, _stale_digest}] ->
         # Config changed since this process booted — replace it. In-flight
