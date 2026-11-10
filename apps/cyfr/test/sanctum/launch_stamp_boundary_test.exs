@@ -25,7 +25,7 @@ defmodule Sanctum.LaunchStampBoundaryTest do
         file <- Prima.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
         do:
           {Path.relative_to(file, @root),
-           Prima.Test.CodeLines.lines(Prima.Test.SourceTree.read(file))}
+           Enum.map(Prima.Test.SourceTree.code_lines(file), &elem(&1, 0))}
   end
 
   test "stamp_launch/2 has one call site, in Aqua.Launch" do
@@ -45,12 +45,11 @@ defmodule Sanctum.LaunchStampBoundaryTest do
   @struct_writers [:struct, :struct!]
   @path_writers [:put_in, :update_in, :get_and_update_in]
 
-  # The lines of `source` that give a `launch` key a value, read over its
-  # syntax tree with each pipe undone, so a writer is matched by where its
-  # arguments sit however the call is spelled or nested.
-  defp writes(source) do
-    source
-    |> Code.string_to_quoted!(columns: false)
+  # The lines of a file's code that give a `launch` key a value, read over
+  # its syntax tree with each pipe undone, so a writer is matched by where
+  # its arguments sit however the call is spelled or nested.
+  defp writes(ast) do
+    ast
     |> Macro.prewalk(fn
       {:|>, _meta, [left, {call, meta, args}]} when is_list(args) -> {call, meta, [left | args]}
       node -> node
@@ -116,7 +115,7 @@ defmodule Sanctum.LaunchStampBoundaryTest do
     found =
       for dir <- Prima.Test.SourceTree.app_libs(@root),
           file <- Prima.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
-          _line <- writes(Prima.Test.SourceTree.read(file)),
+          _line <- writes(Prima.Test.SourceTree.quoted(file)),
           uniq: true,
           do: Path.relative_to(file, @root)
 
@@ -159,7 +158,7 @@ defmodule Sanctum.LaunchStampBoundaryTest do
           do: number
 
     assert length(caught) == 12
-    assert writes(planted) == caught
+    assert writes(Code.string_to_quoted!(planted)) == caught
   end
 
   test "the setter refuses a stamp of another shape" do

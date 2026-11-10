@@ -112,7 +112,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
         reduce: Map.new(Prima.Test.SourceTree.app_libs(@root) ++ [@worker], &{&1, MapSet.new()}) do
       emitted ->
         key = if String.starts_with?(path, worker), do: @worker, else: lib
-        events = emitted_by_source(Prima.Test.SourceTree.read(path), path)
+        events = emitted_by_quoted(Prima.Test.SourceTree.quoted(path), path)
         Map.update!(emitted, key, &MapSet.union(&1, events))
     end
   end
@@ -121,16 +121,19 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   defp unbounded_by_tree do
     for lib <- Prima.Test.SourceTree.app_libs(@root),
         path <- @root |> Path.join(lib) |> Path.join("**/*.ex") |> Path.wildcard(),
-        message <- families(Prima.Test.SourceTree.read(path), path).unbounded,
+        message <- families(Prima.Test.SourceTree.quoted(path), path).unbounded,
         do: message
   end
 
-  defp families(source, path),
-    do: Cyfr.Test.TelemetryFamilies.scan(source, Path.relative_to(path, @root))
+  defp families(ast, path),
+    do: Cyfr.Test.TelemetryFamilies.scan(ast, Path.relative_to(path, @root))
 
-  # The events one source file's code emits.
-  defp emitted_by_source(source, path \\ "planted.ex") do
-    ast = Code.string_to_quoted!(source)
+  # The events a planted file's code emits.
+  defp emitted_by_source(source),
+    do: emitted_by_quoted(Code.string_to_quoted!(source), "planted.ex")
+
+  # The events one file's code emits.
+  defp emitted_by_quoted(ast, path) do
     attributes = attributes(ast)
 
     {_ast, {emits, dynamic?}} =
@@ -147,7 +150,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
           {node, acc}
       end)
 
-    emits = MapSet.union(emits, MapSet.new(families(source, path).events))
+    emits = MapSet.union(emits, MapSet.new(families(ast, path).events))
 
     if dynamic?, do: MapSet.union(emits, spelled(ast)), else: emits
   end
@@ -202,14 +205,19 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   # The tree
   # ---------------------------------------------------------------------------
 
-  test "the tree holds the rule" do
-    assert violations(Catalog.all(), emitted_by_tree()) == []
-    assert unbounded_by_tree() == []
+  # The tree is read once for every case that holds it to the rule or
+  # plants a violation in it.
+  setup_all do
+    {:ok, tree: emitted_by_tree(), unbounded: unbounded_by_tree()}
   end
 
-  test "what a runner emits is the worker's roster, and the audit hears none of it" do
-    emitted = emitted_by_tree()
+  test "the tree holds the rule", %{tree: tree, unbounded: unbounded} do
+    assert violations(Catalog.all(), tree) == []
+    assert unbounded == []
+  end
 
+  test "what a runner emits is the worker's roster, and the audit hears none of it",
+       %{tree: emitted} do
     assert MapSet.to_list(emitted[@worker]) |> Enum.sort() == Catalog.emitted_by(:worker)
     assert Catalog.emitted_by(:worker) -- Catalog.consumed_by(:operator) == []
 
@@ -282,7 +290,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
     """
 
     assert emitted_by_source(canonical) == MapSet.new(shares)
-    assert families(canonical, "planted.ex").unbounded == []
+    assert families(Code.string_to_quoted!(canonical), "planted.ex").unbounded == []
 
     for {source, line, why} <- [
           {"""
@@ -316,7 +324,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
            end
            """, 3, "the kind kind is not guarded by membership in its family's list"}
         ] do
-      assert families(source, "planted.ex").unbounded == [
+      assert families(Code.string_to_quoted!(source), "planted.ex").unbounded == [
                "planted.ex:#{line}: unbounded family producer: #{why}"
              ]
 
@@ -324,7 +332,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
     end
   end
 
-  test "a credential read audited in the runner that reads it is refused both ways" do
+  test "a credential read audited in the runner that reads it is refused both ways", %{tree: tree} do
     # A runner's vault import emitting the credential read the control
     # plane's audit consumes: the audit attaches in the control plane's VM,
     # so it never hears the event.
@@ -342,7 +350,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
       |> Map.put([:cyfr, :opus, :secret, :accessed], %{consumers: [:audit]})
 
     emitted =
-      Map.update!(emitted_by_tree(), @worker, &MapSet.union(&1, emitted_by_source(runner)))
+      Map.update!(tree, @worker, &MapSet.union(&1, emitted_by_source(runner)))
 
     assert {:consumed_in_the_control_plane_but_emitted_elsewhere,
             [:cyfr, :opus, :secret, :accessed]} in violations(catalog, emitted)
@@ -351,9 +359,9 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
             [:cyfr, :opus, :secret, :accessed]} in violations(catalog, emitted)
   end
 
-  test "an audited event the control plane stops emitting is refused" do
+  test "an audited event the control plane stops emitting is refused", %{tree: tree} do
     emitted =
-      Map.update!(emitted_by_tree(), @host, fn events ->
+      Map.update!(tree, @host, fn events ->
         MapSet.delete(events, [:cyfr, :opus, :secret, :dispensed])
       end)
 
@@ -363,10 +371,10 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
            ]
   end
 
-  test "a bridged event emitted only in a runner is refused" do
+  test "a bridged event emitted only in a runner is refused", %{tree: tree} do
     event = [:cyfr, :locus, :runtime, :planted, :bridged]
     catalog = Map.put(Catalog.all(), event, %{consumers: [:bridge]})
-    emitted = Map.update!(emitted_by_tree(), @worker, &MapSet.put(&1, event))
+    emitted = Map.update!(tree, @worker, &MapSet.put(&1, event))
 
     assert {:consumed_in_the_control_plane_but_emitted_elsewhere, event} in violations(
              catalog,
@@ -379,12 +387,13 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
            )
   end
 
-  test "a runner's event missing from the worker's roster, or rostered and unheard, is refused" do
+  test "a runner's event missing from the worker's roster, or rostered and unheard, is refused",
+       %{tree: tree} do
     event = [:cyfr, :locus, :runtime, :formula, :spawn]
 
     unrostered = Map.update!(Catalog.all(), event, &Map.delete(&1, :emitter))
 
-    assert violations(unrostered, emitted_by_tree()) == [
+    assert violations(unrostered, tree) == [
              {:emitted_in_a_runner_but_not_rostered_as_the_workers, event}
            ]
 
@@ -392,27 +401,27 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
 
     assert {:rostered_as_the_workers_with_a_control_plane_consumer, event} in violations(
              audited,
-             emitted_by_tree()
+             tree
            )
 
-    gone = Map.update!(emitted_by_tree(), @worker, &MapSet.delete(&1, event))
+    gone = Map.update!(tree, @worker, &MapSet.delete(&1, event))
 
     assert violations(Catalog.all(), gone) == [
              {:rostered_as_the_workers_but_not_emitted_in_a_runner, event}
            ]
 
-    both = Map.update!(emitted_by_tree(), @host, &MapSet.put(&1, event))
+    both = Map.update!(tree, @host, &MapSet.put(&1, event))
 
     assert violations(Catalog.all(), both) == [
              {:rostered_as_the_workers_but_emitted_by_the_control_plane, event}
            ]
   end
 
-  test "an event emitted by the contracts or by Locus is refused" do
+  test "an event emitted by the contracts or by Locus is refused", %{tree: tree} do
     event = [:cyfr, :opus, :emit]
 
     for lib <- ["apps/prima/lib", "apps/locus/lib"] do
-      emitted = Map.update!(emitted_by_tree(), lib, &MapSet.put(&1, event))
+      emitted = Map.update!(tree, lib, &MapSet.put(&1, event))
 
       assert violations(Catalog.all(), emitted) == [
                {:emitted_outside_the_control_plane_and_a_runner, lib, event}

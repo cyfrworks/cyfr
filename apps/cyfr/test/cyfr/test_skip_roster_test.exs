@@ -57,12 +57,15 @@ defmodule Cyfr.TestSkipRosterTest do
   # `{file, line, :unreadable, source}`.
   defp tests(root, files) do
     Enum.flat_map(files, fn file ->
-      path = Path.join(root, file)
-      ast = Code.string_to_quoted!(File.read!(path), file: path)
-      {_state, found} = walk(ast, fresh(), file, [])
+      {_state, found} = walk(quoted(root, Path.join(root, file)), fresh(), file, [])
       Enum.reverse(found)
     end)
   end
+
+  # The tree's files are the suite's one parse of them; a planted file is
+  # rewritten between cases, so it is parsed where it lies.
+  defp quoted(@root, path), do: Prima.Test.SourceTree.quoted(path)
+  defp quoted(_planted, path), do: Code.string_to_quoted!(File.read!(path), file: path)
 
   # The walk keeps the three tag scopes ExUnit keeps: the module's, the
   # describe's (nil outside one) and the next test's.

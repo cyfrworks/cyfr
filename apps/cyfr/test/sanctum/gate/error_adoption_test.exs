@@ -268,7 +268,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
       counts =
         for path <- lib_files(),
             rel = Path.relative_to(path, root()),
-            count = length(raise_inspects(rel, Prima.Test.SourceTree.read(path))),
+            count = length(inspects_in(Prima.Test.SourceTree.quoted(path))),
             count > 0,
             into: %{},
             do: {rel, count}
@@ -323,7 +323,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
       gone =
         for rel <- Map.keys(@raise_inspects),
             path = Path.join(root(), rel),
-            not File.exists?(path) or raise_inspects(rel, Prima.Test.SourceTree.read(path)) == [],
+            not File.exists?(path) or inspects_in(Prima.Test.SourceTree.quoted(path)) == [],
             do: rel
 
       assert gone == [], "delete these roster lines: #{inspect(Enum.sort(gone))}"
@@ -332,8 +332,10 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
 
   # Each `inspect` of an expression naming a variable inside a `raise`,
   # `reraise` or `IO` call, and each `IO.inspect`, as `{function, line}`.
-  defp raise_inspects(path, source) do
-    ast = Code.string_to_quoted!(source, file: path, columns: true)
+  defp raise_inspects(path, source),
+    do: source |> Code.string_to_quoted!(file: path, columns: true) |> inspects_in()
+
+  defp inspects_in(ast) do
     {_ast, {_stack, sites}} = Macro.traverse(ast, {[], []}, &enter/2, &leave/2)
     Enum.reverse(sites)
   end

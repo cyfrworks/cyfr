@@ -34,8 +34,7 @@ defmodule Cyfr.RestoreOrderTest do
   # The tree's sources read and their mutation sites found once, for every
   # case that walks the whole corpus.
   setup_all do
-    sources = tree_sources()
-    {:ok, tree_sites: sites(sources)}
+    {:ok, tree_sites: quoted_sites(tree_quoted())}
   end
 
   test "every direct global mutation has its exact roster entry", %{tree_sites: tree_sites} do
@@ -299,13 +298,13 @@ defmodule Cyfr.RestoreOrderTest do
     end
   end
 
-  def tree_sources do
+  def tree_quoted do
     root = Path.expand("../../../..", __DIR__)
     tests = SourceTree.files!(Path.join(root, "apps/*/test/**/*_test.exs"))
     support = SourceTree.files!(Path.join(root, "apps/*/test/**/support/**/*.{ex,exs}"))
 
     for path <- Enum.sort(Enum.uniq(tests ++ support)) do
-      {Path.relative_to(path, root), SourceTree.read(path)}
+      {Path.relative_to(path, root), SourceTree.quoted(path)}
     end
   end
 
@@ -361,12 +360,18 @@ defmodule Cyfr.RestoreOrderTest do
     end)
   end
 
-  def sites(sources) do
+  def sites(sources),
+    do:
+      quoted_sites(
+        for {path, source} <- sources, do: {path, Code.string_to_quoted!(source, file: path)}
+      )
+
+  def quoted_sites(quoted) do
     parsed =
-      for {path, source} <- sources,
+      for {path, ast} <- quoted,
           path != @helper,
           Path.basename(path) != "test_helper.exs",
-          do: {path, Code.string_to_quoted!(source, file: path)}
+          do: {path, ast}
 
     modules = module_catalog(parsed)
 

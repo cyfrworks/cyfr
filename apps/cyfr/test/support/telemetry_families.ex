@@ -27,14 +27,13 @@ defmodule Cyfr.Test.TelemetryFamilies do
   @emitting [:execute, :span]
 
   @doc """
-  The family emissions of one file's code, `source` read from `path`:
+  The family emissions of one file's code, `ast` quoted from `path`:
   the events of every canonical producer (`events`), and one
   `"path:line: why"` for every call that passes a variable kind outside
   the canonical form (`unbounded`).
   """
-  @spec scan(String.t(), String.t()) :: %{events: [[atom()]], unbounded: [String.t()]}
-  def scan(source, path) when is_binary(source) and is_binary(path) do
-    ast = Code.string_to_quoted!(source)
+  @spec scan(Macro.t(), String.t()) :: %{events: [[atom()]], unbounded: [String.t()]}
+  def scan(ast, path) when is_binary(path) do
     lists = list_attributes(ast)
     calls = family_calls(ast)
 

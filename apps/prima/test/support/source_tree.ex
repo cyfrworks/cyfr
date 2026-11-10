@@ -3,20 +3,25 @@
 
 defmodule Prima.Test.SourceTree do
   @moduledoc """
-  One read per source file per suite run, shared by every architecture test.
-
-  Shares source reads across roster and inventory tests.
+  One read and one parse per source file per suite run, shared by every
+  architecture test.
 
   `files!/2` is how a scan finds its files: a glob that matches nothing
   raises, so a scan pointed at a moved or misspelled tree cannot pass by
   reading nothing. It needs no table.
 
-  `read/1` memoizes files in an ETS table owned by the test-runner process;
-  the database apps' suite boot (`Arca.Test.SuiteBoot.boot!/1`) calls
-  `ensure_table/0` before tests start, and the umbrella runs them all in
-  one VM, so the call is idempotent.
+  `read/1`, `quoted/1`, `code_lines/1` and `aliases/1` memoize in an ETS
+  table owned by the test-runner process: the database apps' suite boot
+  (`Arca.Test.SuiteBoot.boot!/1`) calls `ensure_table/0` before tests
+  start, and the umbrella runs them all in one VM, so the call is
+  idempotent and the table lives until that VM exits. Each entry is
+  computed once: the first caller claims it and a process of its own
+  fills it, and a caller that finds the claim waits for that process to
+  end rather than compute again, so async scans walking the same tree at
+  the same time share one parse of each file. An entry is never changed
+  once filled: source files do not change while the suite runs.
 
-  Falls back to a plain read when the table is absent: Prima's and Locus's
+  Computes on the spot when the table is absent: Prima's and Locus's
   suites do not create it.
   """
 
@@ -74,30 +79,25 @@ defmodule Prima.Test.SourceTree do
     end
   end
 
-  @doc """
-  `File.read!/1`, memoized for the life of the suite.
-
-  Source files do not change while the suite runs, so a second reader gets
-  the first reader's bytes. Two processes racing to fill the same key both
-  insert the same value, which is harmless.
-  """
+  @doc "`File.read!/1`, memoized for the life of the suite."
   @spec read(Path.t()) :: String.t()
   def read(path) do
-    case :ets.whereis(@table) do
-      :undefined ->
-        File.read!(path)
+    path = Path.expand(path)
+    memo({:read, path}, fn -> File.read!(path) end)
+  end
 
-      _ ->
-        case :ets.lookup(@table, path) do
-          [{^path, source}] ->
-            source
+  @doc """
+  The file's code as `Code.string_to_quoted!/2` reads it, with columns
+  and the path for a parse error, memoized beside its source.
 
-          [] ->
-            source = File.read!(path)
-            :ets.insert(@table, {path, source})
-            source
-        end
-    end
+  Every scan of a file reads this one tree: a scan that needs another
+  view (`Macro.prewalk/3`, its own walk) derives it, and never changes
+  what it was given.
+  """
+  @spec quoted(Path.t()) :: Macro.t()
+  def quoted(path) do
+    path = Path.expand(path)
+    memo({:quoted, path}, fn -> Code.string_to_quoted!(read(path), file: path, columns: true) end)
   end
 
   @doc """
@@ -106,10 +106,12 @@ defmodule Prima.Test.SourceTree do
 
   Classifying a file costs a tokenize, and the architecture rosters read
   the same trees several times over; the memo makes the second read free.
-  Falls back to classifying on the spot when the table is absent.
   """
   @spec code_lines(Path.t()) :: [{String.t(), pos_integer()}]
-  def code_lines(path), do: memo({:code_lines, path}, fn -> CodeLines.code_lines(read(path)) end)
+  def code_lines(path) do
+    path = Path.expand(path)
+    memo({:code_lines, path}, fn -> CodeLines.code_lines(read(path)) end)
+  end
 
   @doc """
   `Prima.Test.CodeLines.aliases/1` over a file, memoized beside its source.
@@ -118,22 +120,61 @@ defmodule Prima.Test.SourceTree do
   architecture rosters read.
   """
   @spec aliases(Path.t()) :: [{String.t(), pos_integer()}]
-  def aliases(path), do: memo({:aliases, path}, fn -> CodeLines.aliases(read(path)) end)
+  def aliases(path) do
+    path = Path.expand(path)
+    memo({:aliases, path}, fn -> CodeLines.aliases(read(path)) end)
+  end
 
+  # An entry is `{key, {:filling, filler}}` while `filler` computes it and
+  # `{key, {:value, value}}` from then on. `filler` is spawned before the
+  # claim and starts only when its claim won, so a waiter's monitor on it
+  # ends once the value is in the table or the computation failed.
   defp memo(key, compute) do
     case :ets.whereis(@table) do
-      :undefined ->
-        compute.()
+      :undefined -> compute.()
+      _table -> fetch(key, compute)
+    end
+  end
 
-      _ ->
+  defp fetch(key, compute) do
+    case :ets.lookup(@table, key) do
+      [{^key, {:value, value}}] ->
+        value
+
+      [{^key, {:filling, filler}} = claim] ->
+        await(claim, filler, key, compute)
+
+      [] ->
+        filler =
+          spawn(fn ->
+            receive do
+              :fill -> :ets.insert(@table, {key, {:value, compute.()}})
+            end
+          end)
+
+        if :ets.insert_new(@table, {key, {:filling, filler}}),
+          do: send(filler, :fill),
+          else: Process.exit(filler, :kill)
+
+        fetch(key, compute)
+    end
+  end
+
+  # A filler gone without a value raised (a file that does not parse) or
+  # was killed: its claim is dropped and the caller computes in place, so
+  # the error is raised where the scan reports it.
+  defp await(claim, filler, key, compute) do
+    ref = Process.monitor(filler)
+
+    receive do
+      {:DOWN, ^ref, :process, _filler, _reason} ->
         case :ets.lookup(@table, key) do
-          [{^key, value}] ->
+          [{^key, {:value, value}}] ->
             value
 
-          [] ->
-            value = compute.()
-            :ets.insert(@table, {key, value})
-            value
+          _gone ->
+            :ets.delete_object(@table, claim)
+            compute.()
         end
     end
   end
