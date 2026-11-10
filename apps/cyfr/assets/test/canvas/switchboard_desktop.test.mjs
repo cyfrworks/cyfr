@@ -321,14 +321,16 @@ function matches(el, selector, scope) {
   return groups(selector).some((parts) => at(el, parts, parts.length - 1))
 }
 
-// A cord that goes wherever it is told, drawing nothing.
-const rope = () => ({hold: false, dead: false, patch() {}, retract() { this.dead = true }, kill() { this.dead = true }})
+// A cord that goes wherever it is told, drawing nothing; `dead` says how it
+// went: drawn back in, or gone at once.
+const rope = () => ({hold: false, dead: false, patch() {}, retract() { this.dead = "retracted" }, kill() { this.dead = "killed" }})
 
 // The board at 1024 by 600 with the person's preferences `prefs`, its
 // document served over `protocol`. The stand-in SDK records each stream the
 // page asks for and each one it opens (refusing the ones `refuse` names with
 // that class, or with what its function answers), and each call the page
-// makes of the shell; `press` answers a control's press.
+// makes of the shell; `press` answers a control's press. `tell` sends the
+// page a value of the shell's (`state`, …); `ropes` are the cords it lifted.
 function board({prefs = {}, protocol = "http/1.1", refuse = {}, press = async () => ({outcome: "accepted"}), version = V2} = {}) {
   const html = new Node("html")
   const body = html.appendChild(new Node("body"))
@@ -336,9 +338,13 @@ function board({prefs = {}, protocol = "http/1.1", refuse = {}, press = async ()
   const asked = []
   const opened = []
   const shell = {settings: [], ask: [], open: [], press: []}
+  const handlers = {}
+  const ropes = []
   const cyfr = {
     desktop: {prefs: {document: prefs, revision: 1}, appearance: {mode: "light", locale: "en-GB", time_zone: "UTC"}, person: {name: "Noor"}},
-    on() {},
+    on(event, fn) {
+      ;(handlers[event] ||= []).push(fn)
+    },
     stream(name, subject, onEvent) {
       const key = subject ? `feed:${subject}` : name
       asked.push(key)
@@ -360,7 +366,7 @@ function board({prefs = {}, protocol = "http/1.1", refuse = {}, press = async ()
   const frames = []
   const win = {
     cyfr,
-    Cords: {pick: rope, wire: rope, fit() {}, wake() {}, freeze() {}, draw() {}},
+    Cords: {pick: () => ropes[ropes.push(rope()) - 1], wire: rope, fit() {}, wake() {}, freeze() {}, draw() {}},
     document: {documentElement: html, hidden: false, getElementById: (id) => ids[id] ?? null, createElement: (tag) => new Node(tag), addEventListener() {}},
     innerWidth: 1024,
     innerHeight: 600,
@@ -385,7 +391,11 @@ function board({prefs = {}, protocol = "http/1.1", refuse = {}, press = async ()
   }
   const $ = (selector) => ids.console.querySelector(selector)
   const $$ = (selector) => ids.console.querySelectorAll(selector)
-  return {asked, opened, shell, pump, $, $$, readout: () => $(".readout-text").textContent}
+  const tell = (event, value) => {
+    for (const fn of handlers[event] || []) fn(value)
+    pump()
+  }
+  return {asked, opened, ropes, shell, tell, pump, $, $$, readout: () => $(".readout-text").textContent}
 }
 
 const settle = async () => {
@@ -690,6 +700,44 @@ describe("the switchboard desktop 0.2.0", () => {
     assert.deepEqual(b.asked.filter((k) => k === "files.changes" || k === "runs.changes").sort(), ["files.changes", "files.changes", "runs.changes", "runs.changes"])
     picture(b, "files.changes", [])
     assert.equal(b.$(".files .mod-sub").textContent, "")
+  })
+
+  test("a hidden-then-shown desktop shows its parts live again, with no denied in between", async () => {
+    const offer = (id, label) => ({kind: "file_offer", id, label, since: ago(5), destination: {kind: "page", page: "files", ref: id}})
+    const thread = (id, title) => ({kind: "shared", id, title, people: ["Ada"], last_activity: ago(5), waits_on_you: false, unread: 0})
+    const b = await started({}, {
+      "attention.changes": [offer("off_1", "budget.xlsx"), offer("off_2", "cover.png")],
+      "threads.changes": [thread("a", "Alpha"), thread("b", "Beta")],
+      "runs.changes": [RUN("ex_1", "started"), RUN("ex_2", "completed")]
+    })
+    // The call the fresh picture will drop has its cord in.
+    patch(b, line(b, "calls", "cover.png"), "settings")
+    const cord = b.ropes.at(-1)
+    const asked = b.asked.length
+
+    // Hidden: the shell freezes the canvas and its streams hear nothing.
+    b.tell("state", "frozen")
+    for (const open of b.opened) open.state = "suspended"
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    await settle()
+
+    // Shown: the SDK opens each stream again itself, and each hears a fresh picture.
+    b.tell("state", "live")
+    for (const open of b.opened) open.state = "live"
+    await settle()
+    picture(b, "attention.changes", [offer("off_1", "budget.xlsx")], true)
+    picture(b, "threads.changes", [thread("a", "Alpha renamed")], true)
+    picture(b, "runs.changes", [RUN("ex_1", "completed")], true)
+
+    assert.deepEqual(lines(b, "calls"), ["budget.xlsx"])
+    assert.deepEqual(lines(b, "threads"), ["Alpha renamed"])
+    assert.deepEqual(b.$$(".paper .tk").map((t) => [t.getAttribute("data-run"), t.querySelector(".tk-d").textContent]), [["ex_1", "ok 30.0 s"]])
+    for (const part of b.$$("[data-part]")) assert.equal(part.getAttribute("data-state"), "live", part.getAttribute("data-part"))
+    assert.deepEqual(b.$$(".strip-note").map((n) => n.textContent), ["", "", "", ""])
+    for (const sub of b.$$(".mod-sub")) assert.doesNotMatch(sub.textContent, /granted|could not be read|trying again|as of/)
+    assert.equal(b.asked.length, asked, "the page opened no stream again by itself")
+    assert.equal(cord.dead, "killed")
+    assert.doesNotMatch(b.readout(), /Cleared/)
   })
 
   test("the files and system items reach the parts that show them", async () => {
