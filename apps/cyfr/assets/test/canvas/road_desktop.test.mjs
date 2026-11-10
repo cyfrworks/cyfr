@@ -478,6 +478,48 @@ describe("the road desktop 0.2.0", () => {
     assert.match(label(p, "Market"), /, no longer granted$/)
   })
 
+  test("a hidden-then-shown desktop shows its parts live again, with no denied in between", async () => {
+    const schedule = (id, name) => ({kind: "changed", schedule_id: id, name, status: "active", cron_expression: "0 9 * * *", next_run_at: iso(600), run_count: 1, error_count: 0})
+    const thread = (id, title) => ({kind: "shared", id, title, people: ["a"], last_activity: iso(-5), waits_on_you: false, unread: 0})
+    const p = await road({scale: 0.01}, {
+      "attention.changes": [failedItem("a1", "formula:local.one", "e1"), failedItem("a2", "formula:local.two", "e2")],
+      "schedules.changes": [schedule("s1", "Morning digest"), schedule("s2", "Backup")],
+      "threads.changes": [thread("t1", "Trip"), thread("t2", "Notes")],
+    })
+    assert.ok(label(p, "2 waiting at your house") && label(p, "Bell tower: 2 schedules") && label(p, "Post boxes: 2 threads"))
+    const opens = p.opened.length
+    // hidden: the streams hear nothing at all, each handle suspended
+    p.handlers.state("frozen")
+    for (const sub of Object.values(p.subs)) sub.handle.state = "suspended"
+    p.pump()
+    await wait(50)
+    // shown: the SDK opens each again itself, and each hears a fresh picture
+    p.handlers.state("live")
+    for (const sub of Object.values(p.subs)) sub.handle.state = "live"
+    for (const [key, items] of [
+      ["attention.changes", [failedItem("a1", "formula:local.uno", "e1")]],
+      ["schedules.changes", [schedule("s1", "Morning news")]],
+      ["threads.changes", [thread("t1", "Trip to Porto")]],
+    ]) {
+      push(p, key, {event: "resync"})
+      picture(p, key, items)
+    }
+    await wait(50)
+    p.pump()
+    assert.equal(label(p, "1 waiting at your house"), "1 waiting at your house. Open the list.")
+    assert.ok(label(p, "uno failed"))
+    assert.ok(!labels(p).some((l) => l.startsWith("one failed") || l.startsWith("two failed")), labels(p).join(" | "))
+    assert.equal(label(p, "Bell tower"), "Bell tower: 1 schedules")
+    assert.equal(label(p, "Post boxes"), "Post boxes: 1 thread, 0 waiting on you, 0 unread")
+    assert.ok(!labels(p).some((l) => /granted|as of|trying again|could not be read/.test(l)), labels(p).join(" | "))
+    assert.equal(p.opened.length, opens)
+    // the visitor the picture dropped did not wave goodbye: nothing was said of it settling
+    assert.doesNotMatch(p.ids.live.textContent, /Settled/)
+    tap(p, "Post boxes")
+    assert.ok(label(p, "Trip to Porto, "))
+    assert.equal(label(p, "Notes"), "")
+  })
+
   test("a first open refused forbidden says not granted; one with no answer opens again after a pause", async () => {
     const p = await road({scale: 0.01, refuse: {"vault.changes": ["forbidden"], "system.changes": ["unavailable"]}})
     assert.match(label(p, "Strongroom"), /, not granted$/)
