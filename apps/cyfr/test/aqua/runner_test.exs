@@ -31,7 +31,20 @@ defmodule Aqua.RunnerTest do
 
   @unknown_origin "hand-edited"
 
+  setup tags do
+    if tags[:prior_runner_crashes] do
+      supervisor = restart_runner_supervisor!()
+      leave_runner_crashes!(supervisor)
+      {:ok, prior_runner_supervisor: supervisor}
+    else
+      :ok
+    end
+  end
+
   setup do
+    # Deliberate crashes in other tests must not spend this test's restart budget.
+    restart_runner_supervisor!()
+
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!()
 
@@ -80,6 +93,39 @@ defmodule Aqua.RunnerTest do
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, user: user, thread: thread}
+  end
+
+  defp restart_runner_supervisor! do
+    :ok = Supervisor.terminate_child(Aqua.RunnerTree, Aqua.RunnerSupervisor)
+    {:ok, supervisor} = Supervisor.restart_child(Aqua.RunnerTree, Aqua.RunnerSupervisor)
+    supervisor
+  end
+
+  defp leave_runner_crashes!(supervisor) do
+    test = self()
+
+    for _ <- 1..3 do
+      tag = make_ref()
+
+      run = fn ->
+        send(test, {tag, self()})
+        receive do: (:finish -> :ok)
+      end
+
+      {:ok, child} =
+        DynamicSupervisor.start_child(supervisor, %{
+          id: tag,
+          start: {Task, :start_link, [run]},
+          restart: :transient
+        })
+
+      assert_receive {^tag, ^child}, 5_000
+      ref = Process.monitor(child)
+      Process.exit(child, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^child, :killed}, 5_000
+      assert_receive {^tag, successor}, 5_000
+      :ok = DynamicSupervisor.terminate_child(supervisor, successor)
+    end
   end
 
   # A crew member the athanor made, on the scripted model, consented as a
@@ -1148,13 +1194,19 @@ defmodule Aqua.RunnerTest do
   end
 
   describe "a runner that dies" do
+    @tag prior_runner_crashes: true
     test "mid model call takes its loop and the call with it; its restart takes the turn over",
-         %{ctx: ctx, thread: thread} do
+         %{ctx: ctx, thread: thread, prior_runner_supervisor: prior_supervisor} do
+      refute Process.alive?(prior_supervisor),
+             "the fixture kept the preceding tests' crash history"
+
+      supervisor = Process.whereis(Aqua.RunnerSupervisor)
       script!([{:probe, self()}, reply("taken over")])
 
       {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
       pids = running!(thread)
       :ok = kill_and_await!(pids)
+      assert Process.whereis(Aqua.RunnerSupervisor) == supervisor
 
       assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
       refute Runner.whereis(thread.id) in [nil, pids.runner]
