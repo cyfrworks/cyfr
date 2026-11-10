@@ -43,10 +43,11 @@
 #
 #   expire TOKEN
 #       Every request waiting on the person, its expiry come now: the
-#       shell that holds it (`Cyfr.Requests`, whose registration names it)
-#       is sent the message its own five-minute timer sends, so the
-#       request ends as an undecided one does, without the proof waiting
-#       five minutes. Answers the ids it expired.
+#       shell that holds it (`Cyfr.Requests.waiting/2` lists it, and its
+#       registration under its id names that shell) is sent the message
+#       its own five-minute timer sends, so the request ends as an
+#       undecided one does, without the proof waiting five minutes.
+#       Answers the ids it expired.
 #
 #   write TOKEN CANVAS KIND DESKTOP_JSON
 #       A new version of the canvas CANVAS written with `canvas.write`,
@@ -527,9 +528,10 @@ fn args ->
       ctx = establish.(token)
 
       expired =
-        for {shell, item} <- Registry.lookup(Cyfr.Requests, {ctx.athanor_id, ctx.user_id}) do
-          send(shell, {:request_expired, item.id})
-          item.id
+        for %{id: id} <- Cyfr.Requests.waiting(ctx.athanor_id, ctx.user_id),
+            [{shell, _held}] <- [Registry.lookup(Cyfr.Requests, id)] do
+          send(shell, {:request_expired, id})
+          id
         end
 
       answer.(%{expired: expired})
