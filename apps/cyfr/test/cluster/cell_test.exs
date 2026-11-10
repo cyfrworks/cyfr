@@ -280,10 +280,11 @@ defmodule Cyfr.Cluster.CellTest do
       assert Enum.all?(ports, &(&1 < low)), "#{inspect(ports)} not all below #{low}"
     end
 
-    # The claim is Linux's alone (`Cyfr.Cluster.Cell`'s host API ports).
-    unless match?({:unix, :linux}, :os.type()), do: @tag(skip: "the port claim is Linux-only")
-
-    test "a down member's port stays this run's, so another run's picker passes it by" do
+    # The claim is Linux's alone (`Cyfr.Cluster.Cell`'s host API ports):
+    # elsewhere the picker takes a free port unclaimed, so the down
+    # member's free port is the one it picks.
+    test "a down member's port stays this run's where the kernel can claim it, " <>
+           "so another run's picker passes it by" do
       %{host_api_port: down} = Cell.member(:b)
       %{host_api_port: up} = Cell.member(:a)
       Cell.stop(:b)
@@ -295,7 +296,12 @@ defmodule Cyfr.Cluster.CellTest do
         |> Task.await()
 
       assert [port] = picked
-      refute port in [down, up]
+
+      if match?({:unix, :linux}, :os.type()) do
+        refute port in [down, up]
+      else
+        assert port == down
+      end
     end
 
     test "a boot finding its port held waits for the release, and is refused naming the port " <>
