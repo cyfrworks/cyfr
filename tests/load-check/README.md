@@ -171,9 +171,10 @@ the PostgreSQL boot's and the real tailnet's settings:
 - a first decisive run (the two suites, the gate, the harness self-tests,
   the canvas, install, handle, join and pairing proofs and both release
   boots), 1 round: about 13 h with the handle and boot settings given;
-- preparation: about 18 min for `a`, then about as long for the other
-  four side by side (a guess: the deps compiled cold into four build
-  paths).
+- preparation: the table's estimate is 18 min for `a`, then about as long
+  for the other four side by side; it is high, since a cold SQLite test
+  build of a fresh worktree, two test files included, took 67 s on five
+  processors in this change's handoff.
 
 ## The self-test
 
