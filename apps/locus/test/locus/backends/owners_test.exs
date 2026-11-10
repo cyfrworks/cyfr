@@ -41,6 +41,33 @@ defmodule Locus.Backends.OwnersTest do
       send(test, {:spec, spec})
       {:error, {:refused, code}}
     end
+
+    # It starts nothing, so it holds nothing to fence or adopt.
+    def fence(_server, _tag), do: :none
+    def adopt(_server, _ledger, _heir), do: {:ok, []}
+  end
+
+  defmodule BeforeSpawn do
+    @moduledoc false
+    # A session launcher that tells its test the session process about to
+    # ask for its process, and holds that process there; its fence is out
+    # of reach until the test's clock has moved past where it started, and
+    # then finds nothing held, since it never starts anything.
+    def spawn({test, _clock, _start}, _spec) do
+      send(test, {:before_spawn, self()})
+
+      receive do
+        :go -> {:error, {:refused, "unavailable"}}
+      end
+    end
+
+    def fence({_test, clock, start}, _tag) do
+      if Agent.get(clock, & &1) > start,
+        do: :none,
+        else: {:error, {:launcher_unavailable, :timeout}}
+    end
+
+    def adopt(_server, _ledger, _heir), do: {:ok, []}
   end
 
   defmodule Stub do
@@ -825,7 +852,7 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, _} = open(owners, "a", {1, 1}, "b1", key: "next")
     end
 
-    test "a session that dies before it asks for its process holds nothing", ctx do
+    test "a session that dies before it asks for its process is cleared by its fence", ctx do
       owners =
         start_owners(ctx,
           memory_budget: 256 * @mib,
@@ -843,7 +870,7 @@ defmodule Locus.Backends.OwnersTest do
 
       delayed = fn ->
         Enum.find_value(hd(Map.values(held(owners))).sessions, fn {_id, session} ->
-          session.running and not session.spawning and session.pid
+          session.running and not session.started and session.pid
         end)
       end
 
@@ -853,8 +880,137 @@ defmodule Locus.Backends.OwnersTest do
       assert held_bytes(owners) == 256 * @mib
       Process.exit(waiting, :kill)
       assert {:error, :internal} = Task.await(opening)
-      assert held_bytes(owners) == 0
+
+      # The launcher's fence answers that it holds no process of it, and
+      # will start none.
+      wait_until(fn -> held_bytes(owners) == 0 end, 5_000)
       assert :sys.get_state(owners).ending == %{}
+    end
+
+    test "a session that dies before its launcher has its request is cleared by the launcher's fence",
+         ctx do
+      owners =
+        start_owners(ctx,
+          memory_budget: 256 * @mib,
+          session_opts: [
+            launcher: BeforeSpawn,
+            launcher_server: {self(), ctx.clock, Agent.get(ctx.clock, & &1)}
+          ]
+        )
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      opening = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      assert_receive {:before_spawn, backend}, 2_000
+      Process.exit(backend, :kill)
+      assert {:error, :internal} = Task.await(opening)
+      wait_until(fn -> map_size(:sys.get_state(owners).ending) == 1 end, 5_000)
+      assert held_bytes(owners) == 256 * @mib
+      advance(ctx, 86_400_000)
+      for _ <- 1..3, do: Owners.sweep(owners)
+      wait_until(fn -> held(owners) == %{} end, 5_000)
+      wait_until(fn -> held_bytes(owners) == 0 end, 5_000)
+      {:ok, %{memory: memory}} = control(owners, 1, %{type: :status, owners: []})
+      assert memory.held_bytes == 0
+    end
+
+    test "a release timeout ends the wait, never the hold, while the process runs", ctx do
+      owners =
+        start_owners(ctx,
+          memory_budget: 256 * @mib,
+          stop_grace_ms: 0,
+          session_opts: [
+            launcher: Locus.DirectLauncher,
+            launcher_server: [kept_root: ctx.root],
+            release_timeout_ms: 25
+          ]
+        )
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
+      backend = session_pid(owners, "a", {1, 1}, id)
+      handle = :sys.get_state(backend).handle
+
+      on_exit(fn ->
+        try do
+          :sys.resume(handle.server)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      :sys.suspend(handle.server)
+      :erlang.trace(backend, true, [:receive])
+      :ok = Backend.close(backend)
+      assert_receive {:trace, ^backend, :receive, :release_timeout}, 2_000
+      :erlang.trace(backend, false, [:receive])
+      Backend.recv(backend, 0, 0)
+      assert File.exists?("/proc/#{handle.pid}")
+      {:ok, %{memory: memory}} = control(owners, 1, %{type: :status, owners: []})
+      assert memory.held_bytes == 256 * @mib
+      assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "next")
+
+      # The launcher's word frees it.
+      :sys.resume(handle.server)
+      wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
+    end
+
+    test "a table restarted by its supervisor adopts the processes its predecessor followed",
+         ctx do
+      owner_name = :owners_restart_owners
+      sessions_name = :owners_restart_sessions
+
+      children = [
+        {Owners,
+         [
+           name: owner_name,
+           boot: "bb_owners",
+           launcher: Stub,
+           launcher_server: ctx.stub,
+           supervisor: sessions_name,
+           clock: fn -> Agent.get(ctx.clock, & &1) end,
+           memory_bytes: 256 * @mib,
+           memory_budget: 256 * @mib,
+           overcommit: {1, 1},
+           session_opts: [launcher: Locus.DirectLauncher, launcher_server: [kept_root: ctx.root]]
+         ]},
+        {DynamicSupervisor, name: sessions_name, strategy: :one_for_one}
+      ]
+
+      {:ok, root} = Supervisor.start_link(children, strategy: :rest_for_one)
+      on_exit(fn -> if Process.alive?(root), do: Supervisor.stop(root) end)
+      old_owner = Process.whereis(owner_name)
+      assert {:ok, _} = sync(old_owner, "a", {1, 1}, idle_programs(1))
+      assert {:ok, %{session: id}} = open(old_owner, "a", {1, 1}, "b1")
+      backend = session_pid(old_owner, "a", {1, 1}, id)
+      handle = :sys.get_state(backend).handle
+
+      on_exit(fn ->
+        try do
+          :sys.resume(handle.server)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      :sys.suspend(handle.server)
+      Process.exit(old_owner, :kill)
+
+      wait_until(
+        fn ->
+          Process.whereis(owner_name) not in [nil, old_owner] and
+            Process.whereis(sessions_name) != nil
+        end,
+        5_000
+      )
+
+      new_owner = Process.whereis(owner_name)
+      assert {:ok, _} = sync(new_owner, "a", {1, 1}, idle_programs(1))
+      assert File.exists?("/proc/#{handle.pid}")
+      assert {:error, :capacity} = open(new_owner, "a", {1, 1}, "b1", key: "after-restart")
+
+      # Its end, told to the adopting table, frees its bound.
+      :sys.resume(handle.server)
+      wait_until(fn -> held_bytes(new_owner) == 0 end, 10_000)
     end
 
     test "a session's bound is released once its process is confirmed gone, not when it is asked to end",

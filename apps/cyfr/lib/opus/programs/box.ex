@@ -87,8 +87,11 @@ defmodule Opus.Programs.Box do
   the box may hold (`athanor_memory_bytes`, the `athanor_program_memory_bytes`
   platform setting; unset, the sync names none and the service holds the
   athanor to the box's own budget). The lease and idle periods and the
-  ceiling are read at every tick, and a changed ceiling syncs every live
-  owner again. A hello's answer tells the box's
+  ceiling are read at every tick. Each owner keeps the ceiling the service
+  last confirmed on its sync; while it differs from the one read, the
+  owner is synced again at every tick this member holds its slot, and a
+  pipe open of it waits for that sync's answer, so the service never
+  admits a pipe by a ceiling the platform no longer names. A hello's answer tells the box's
   memory (`memory{budget_bytes, admission_limit_bytes, held_bytes}`), which
   this controller keeps beside its pool's size.
 
@@ -355,9 +358,17 @@ defmodule Opus.Programs.Box do
     case state.owners[key] do
       %{epoch: epoch, generation: g, holders: %{^holder => _ref}} = entry
       when epoch == owner.epoch and g != nil ->
-        if now_ms() >= deadline,
-          do: {:reply, {:error, :deadline}, state},
-          else: {:noreply, start_pipe_open(state, key, entry, holder, params, deadline, from)}
+        cond do
+          now_ms() >= deadline ->
+            {:reply, {:error, :deadline}, state}
+
+          stale_ceiling?(state, key) ->
+            state = park_pipe_open(state, key, entry, holder, params, deadline, from)
+            {:noreply, dispatch(state)}
+
+          true ->
+            {:noreply, start_pipe_open(state, key, entry, holder, params, deadline, from)}
+        end
 
       _not_held ->
         {:reply, {:error, :not_held}, state}
@@ -465,7 +476,6 @@ defmodule Opus.Programs.Box do
 
   @impl true
   def handle_info(:tick, state) do
-    ceiling = state.athanor_memory_bytes
     state = periods(state)
     Process.send_after(self(), :tick, state.tick_ms)
 
@@ -474,7 +484,7 @@ defmodule Opus.Programs.Box do
         {:ok, generation} ->
           state = check_generation(state, generation)
           state = if state.boot == nil, do: enqueue(state, {:hello}), else: state
-          state = resync_on_ceiling(state, ceiling)
+          state = resync_stale_ceilings(state)
           state = if live_keys(state) != [], do: enqueue(state, {:renew}), else: state
           state = Enum.reduce(Map.keys(state.homes), state, &enqueue(&2, {:home, &1}))
           state = enqueue_release(state)
@@ -497,6 +507,23 @@ defmodule Opus.Programs.Box do
     do: {:noreply, pipe_deadline(state, ref)}
 
   def handle_info({:pipe_deadline, _ref}, state), do: {:noreply, state}
+
+  def handle_info({:parked_deadline, key, pref}, state) do
+    case state.owners[key] do
+      %{parked: parked} = entry ->
+        case List.keytake(parked, pref, 0) do
+          {{^pref, _holder, _params, _deadline, from, _timer}, rest} ->
+            GenServer.reply(from, {:error, :deadline})
+            {:noreply, put_owner(state, key, %{entry | parked: rest})}
+
+          nil ->
+            {:noreply, state}
+        end
+
+      _gone ->
+        {:noreply, state}
+    end
+  end
 
   # A close answered lets a release it held back go.
   def handle_info({:pipe_closed, session, result}, state),
@@ -599,7 +626,11 @@ defmodule Opus.Programs.Box do
           live?: false,
           names: [],
           programs: 0,
-          waiters: [from]
+          waiters: [from],
+          # The athanor ceiling the service last confirmed for this owner,
+          # and the pipe opens waiting for it to be the one read.
+          ceiling: :unconfirmed,
+          parked: []
         })
     end
   end
@@ -665,6 +696,12 @@ defmodule Opus.Programs.Box do
       {entry, owners} ->
         for {_pid, ref} <- entry.holders, do: Process.demonitor(ref, [:flush])
         for waiter <- entry.waiters, do: GenServer.reply(waiter, {:error, :released})
+
+        for {_pref, _holder, _params, _deadline, from, timer} <- Map.get(entry, :parked, []) do
+          Process.cancel_timer(timer)
+          GenServer.reply(from, {:error, :not_held})
+        end
+
         forget_pipes(%{state | owners: owners}, key)
     end
   end
@@ -1566,10 +1603,17 @@ defmodule Opus.Programs.Box do
           | live?: true,
             generation: spec.generation,
             names: names,
-            programs: count
+            programs: count,
+            ceiling: spec.athanor_memory_bytes
         }
 
-        state = state |> put_owner(key, entry) |> supersede_release(key, epoch)
+        state =
+          state
+          |> put_owner(key, entry)
+          |> supersede_release(key, epoch)
+          |> release_parked(key)
+
+        entry = state.owners[key]
 
         if entry.waiters == [] do
           grant = grant(state, key, entry)
@@ -2029,13 +2073,65 @@ defmodule Opus.Programs.Box do
     }
   end
 
-  # A changed athanor ceiling reaches the service only on a sync, so every
-  # live owner is synced again ahead of the queue: the service holds the
-  # new ceiling before it admits by the old one any longer than that.
-  defp resync_on_ceiling(%State{athanor_memory_bytes: ceiling} = state, ceiling), do: state
+  # The athanor ceiling reaches the service only on a sync, so every live
+  # owner whose confirmed ceiling is not the one read is synced again ahead
+  # of the queue, however long ago the ceiling changed.
+  defp resync_stale_ceilings(state) do
+    state
+    |> live_keys()
+    |> Enum.filter(&stale_ceiling?(state, &1))
+    |> Enum.reject(&queued?(state, {:sync, &1}))
+    |> Enum.reverse()
+    |> Enum.reduce(state, &enqueue_front(&2, {:sync, &1}))
+  end
 
-  defp resync_on_ceiling(state, _previous) do
-    state |> live_keys() |> Enum.reverse() |> Enum.reduce(state, &enqueue_front(&2, {:sync, &1}))
+  defp stale_ceiling?(state, key),
+    do: Map.get(state.owners[key], :ceiling, :unconfirmed) != state.athanor_memory_bytes
+
+  # A pipe open of an owner whose ceiling the service has not confirmed
+  # waits for the sync that carries it; the sync's answer starts it, or its
+  # deadline answers it.
+  defp park_pipe_open(state, key, entry, holder, params, deadline, from) do
+    pref = make_ref()
+    timer = Process.send_after(self(), {:parked_deadline, key, pref}, max(deadline - now_ms(), 0))
+    parked = Map.get(entry, :parked, []) ++ [{pref, holder, params, deadline, from, timer}]
+    state = put_owner(state, key, Map.put(entry, :parked, parked))
+
+    if queued?(state, {:sync, key}), do: state, else: enqueue_front(state, {:sync, key})
+  end
+
+  # The opens an owner held back, once its sync has answered: started while
+  # its ceiling is the one read, held again for another sync otherwise.
+  defp release_parked(state, key) do
+    case state.owners[key] do
+      %{parked: [_ | _] = parked} = entry ->
+        if stale_ceiling?(state, key) do
+          if queued?(state, {:sync, key}), do: state, else: enqueue_front(state, {:sync, key})
+        else
+          state = put_owner(state, key, %{entry | parked: []})
+
+          Enum.reduce(parked, state, fn {_pref, holder, params, deadline, from, timer}, state ->
+            Process.cancel_timer(timer)
+            entry = state.owners[key]
+
+            cond do
+              not Map.has_key?(entry.holders, holder) ->
+                GenServer.reply(from, {:error, :not_held})
+                state
+
+              now_ms() >= deadline ->
+                GenServer.reply(from, {:error, :deadline})
+                state
+
+              true ->
+                start_pipe_open(state, key, entry, holder, params, deadline, from)
+            end
+          end)
+        end
+
+      _none ->
+        state
+    end
   end
 
   defp setting(key) do

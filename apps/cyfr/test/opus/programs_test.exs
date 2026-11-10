@@ -2373,4 +2373,49 @@ defmodule Opus.ProgramsTest do
     assert_receive {:control, "renew", _, _}, 2_000
     assert_receive {:control, "sync", %{"athanor_memory_bytes" => 268_435_456}, _}, 2_000
   end
+
+  test "a pipe open waits for the sync that carries a changed ceiling", %{ctx: ctx, fake: fake} do
+    Cyfr.Test.Settings.put("athanor_program_memory_bytes", 2_147_483_648)
+    controller = start_controller(fake)
+    row = pipe_row(ctx, "ceiling-pipe")
+    entry = login_entry(ctx, "ceiling-login", "ceiling-pipe")
+    assert {:ok, _} = Programs.pipe_open(row, entry, "before", [], "att_before")
+    assert_receive {:session, "open", %{"key" => "before"}, _}, 2_000
+    Cyfr.Test.Settings.put("athanor_program_memory_bytes", 1)
+    Scripted.hold(fake, "sync")
+    send(controller, :tick)
+    assert_receive {:held, "sync", held}, 2_000
+    on_exit(fn -> send(held, :go) end)
+    assert :sys.get_state(controller).athanor_memory_bytes == 1
+    opening = Task.async(fn -> Programs.pipe_open(row, entry, "after", [], "att_after") end)
+
+    overtook =
+      receive do
+        {:session, "open", %{"key" => "after"}, _} -> true
+      after
+        300 -> false
+      end
+
+    send(held, :go)
+    assert {:ok, _} = Task.await(opening, 5_000)
+    await_idle(controller)
+    refute overtook, "an open reached the service while its new ceiling sync was held"
+  end
+
+  test "a ceiling read while the member lacks its slot is sent once it holds the slot again",
+       %{ctx: ctx, fake: fake} do
+    Cyfr.Test.Settings.put("athanor_program_memory_bytes", 536_870_912)
+    controller = start_controller(fake)
+    vault_entry(ctx)
+    connect(ctx, stdio_row(ctx, "ceiling-lost-slot"))
+    assert_receive {:control, "sync", %{"athanor_memory_bytes" => 536_870_912}, _}, 2_000
+    Arca.ControlPlane.record(:lost)
+    Cyfr.Test.Settings.put("athanor_program_memory_bytes", 268_435_456)
+    tick(controller)
+    assert :sys.get_state(controller).athanor_memory_bytes == 268_435_456
+    Arca.ControlPlane.record(:unclaimed)
+    tick(controller)
+    assert_receive {:control, "renew", _, _}, 2_000
+    assert_receive {:control, "sync", %{"athanor_memory_bytes" => 268_435_456}, _}, 2_000
+  end
 end

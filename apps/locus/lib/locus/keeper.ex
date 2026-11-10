@@ -430,6 +430,20 @@ defmodule Locus.Keeper do
   end
 
   @impl Locus.Launcher
+  def fence(server, tag) do
+    GenServer.call(server, {:fence, tag}, @pool_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
+
+  @impl Locus.Launcher
+  def adopt(server, ledger, heir) when is_pid(heir) do
+    GenServer.call(server, {:adopt, ledger, heir}, @pool_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
+
+  @impl Locus.Launcher
   def pool_stats(server, pool) when is_binary(pool) do
     GenServer.call(server, {:pool, pool}, @pool_timeout_ms)
   catch
@@ -694,6 +708,9 @@ defmodule Locus.Keeper do
          conns: %{},
          pools: %{},
          homes: %{},
+         # The heir tags fenced while no spawn of them was held: a spawn
+         # naming one is refused, so none starts after the fence's answer.
+         fences: %{},
          kept: kept_homes(opts),
          proc_root: Keyword.get(opts, :proc_root, "/proc")
        }}
@@ -823,6 +840,11 @@ defmodule Locus.Keeper do
         {:stop, {:shutdown, {:channel_lost, reason}}, {:error, {:spawn_failed, :channel_lost}},
          state}
     end
+  end
+
+  def handle_call({:spawn_handle, _ref, _argv, _env, %{heir: {_pid, tag}}}, _from, state)
+      when is_map_key(state.fences, tag) do
+    {:reply, {:error, {:spawn_failed, :fenced}}, %{state | fences: Map.delete(state.fences, tag)}}
   end
 
   def handle_call({:spawn_handle, ref, argv, env, opts}, {owner, _tag} = from, state) do
@@ -969,6 +991,25 @@ defmodule Locus.Keeper do
       {:error, :unencodable} -> {:reply, {:error, :unencodable}, state}
       _ -> {:reply, {:error, :unknown_spawn}, state}
     end
+  end
+
+  def handle_call({:fence, tag}, _from, state) do
+    if Enum.any?(state.requests, fn {_ref, entry} -> match?({_pid, ^tag}, entry.heir) end),
+      do: {:reply, :pending, state},
+      else: {:reply, :none, %{state | fences: Map.put(state.fences, tag, true)}}
+  end
+
+  def handle_call({:adopt, ledger, heir}, _from, state) do
+    {tags, requests} =
+      Enum.map_reduce(state.requests, %{}, fn
+        {ref, %{heir: {_pid, %{ledger: ^ledger} = tag}} = entry}, requests ->
+          {[tag], Map.put(requests, ref, %{entry | heir: {heir, tag}})}
+
+        {ref, entry}, requests ->
+          {[], Map.put(requests, ref, entry)}
+      end)
+
+    {:reply, {:ok, List.flatten(tags)}, %{state | requests: requests}}
   end
 
   def handle_call({:pool, pool}, from, state) do

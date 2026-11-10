@@ -303,6 +303,66 @@ defmodule Locus.DirectLauncher do
   @impl Locus.Launcher
   def pool_stats(_opts, pool) when is_binary(pool), do: {:ok, %{size: 1, free: 1, quarantined: 0}}
 
+  # ————— heirs, fences and adoption —————
+
+  # The node's one record of every process started for an heir, and of
+  # every tag fenced while none was: `{tag, child_pid, heir_pid}` or
+  # `{tag, :fenced, nil}`. A child and a fence claim a tag with one
+  # insert_new each, so a process starts for a tag only if no fence was
+  # answered for it first. Its table is held by a process of its own,
+  # which outlives every launcher's caller.
+  @heirs :locus_direct_launcher_heirs
+
+  @doc false
+  def heirs do
+    if :ets.whereis(@heirs) == :undefined do
+      caller = self()
+
+      spawn(fn ->
+        try do
+          :ets.new(@heirs, [:named_table, :public, :set])
+          Kernel.send(caller, {@heirs, :ready})
+          Process.sleep(:infinity)
+        rescue
+          ArgumentError -> Kernel.send(caller, {@heirs, :ready})
+        end
+      end)
+
+      receive do
+        {@heirs, :ready} -> :ok
+      end
+    end
+
+    @heirs
+  end
+
+  @impl Locus.Launcher
+  def fence(_opts, tag) do
+    table = heirs()
+
+    if :ets.insert_new(table, {tag, :fenced, nil}) do
+      :none
+    else
+      case :ets.lookup(table, tag) do
+        [{^tag, :fenced, _}] -> :none
+        _held -> :pending
+      end
+    end
+  end
+
+  @impl Locus.Launcher
+  def adopt(_opts, ledger, heir) when is_pid(heir) do
+    table = heirs()
+
+    tags =
+      for {%{ledger: ^ledger} = tag, child, _heir} <- :ets.tab2list(table), is_pid(child) do
+        :ets.insert(table, {tag, child, heir})
+        tag
+      end
+
+    {:ok, tags}
+  end
+
   # ————— kept homes —————
 
   @impl Locus.Launcher
@@ -611,6 +671,21 @@ defmodule Locus.DirectLauncher.Child do
 
   @impl true
   def init({owner, ref, argv, env, mode, janitor, strand?, kept, heir}) do
+    case claim(heir) do
+      :ok -> start(owner, ref, argv, env, mode, janitor, strand?, kept, heir)
+      :fenced -> {:stop, :fenced}
+    end
+  end
+
+  # A process for an heir claims its tag first: a tag already fenced
+  # starts nothing.
+  defp claim(nil), do: :ok
+
+  defp claim({pid, tag}) do
+    if :ets.insert_new(DirectLauncher.heirs(), {tag, self(), pid}), do: :ok, else: :fenced
+  end
+
+  defp start(owner, ref, argv, env, mode, janitor, strand?, kept, heir) do
     Process.flag(:trap_exit, true)
     home = Path.join(System.tmp_dir!(), "locus_spawn_#{Prima.Hex.short()}")
     log = Path.join(home, "stderr")
@@ -698,11 +773,13 @@ defmodule Locus.DirectLauncher.Child do
         {:error, reason} ->
           DirectLauncher.signal_group(state.os_pid, "KILL")
           cleanup(state)
+          tell_heir(state)
           {:stop, reason}
       end
     else
       {:error, reason} ->
         File.rm_rf(home)
+        tell_heir(%{heir: heir})
         {:stop, reason}
     end
   end
@@ -1007,8 +1084,21 @@ defmodule Locus.DirectLauncher.Child do
 
   defp notify(_state, _event), do: :ok
 
-  defp tell_heir(%{heir: {pid, tag}}) when is_pid(pid),
-    do: Kernel.send(pid, {DirectLauncher, {:heir, tag}, :released})
+  # The heir as the record names it now, which an adoption may have
+  # changed, told once.
+  defp tell_heir(%{heir: {_pid, tag}}) do
+    table = DirectLauncher.heirs()
+    me = self()
+
+    case :ets.lookup(table, tag) do
+      [{^tag, ^me, heir}] ->
+        :ets.delete(table, tag)
+        Kernel.send(heir, {DirectLauncher, {:heir, tag}, :released})
+
+      _ ->
+        :ok
+    end
+  end
 
   defp tell_heir(_state), do: :ok
 

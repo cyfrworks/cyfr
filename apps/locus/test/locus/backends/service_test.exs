@@ -74,6 +74,10 @@ defmodule Locus.Backends.ServiceTest do
     def send(_handle, _data), do: :ok
     def signal(_handle, _sig), do: :ok
     def release(_agent, _handle, _grace_ms), do: :ok
+    # A process it starts is never released: a fence finds it held, and
+    # an adoption, at a table's start, finds none held yet.
+    def fence(_agent, _tag), do: :pending
+    def adopt(_agent, _ledger, _heir), do: {:ok, []}
     def home_ensure(_agent, _id), do: {:ok, 40_001}
     def home_measure(_agent, _id), do: {:ok, 0}
     def home_reset(_agent, _id), do: :ok

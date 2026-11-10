@@ -14,8 +14,7 @@ defmodule Locus.Backends.Backend do
 
   A session starts its process at once, or after `:delay_ms` when its
   owners hold it back for a crash's backoff, and tells its owners
-  `:spawning` as it asks its launcher for the process, and `:started` once
-  the launcher answers the spawn. It is `running` until
+  `:started` once the launcher answers the spawn. It is `running` until
   its process ends, and then `ended`: its buffered lines stay readable,
   every later `recv/3` answers `running: false`, and every later
   `send_lines/2` answers `:ended`. The process stays its until it is gone
@@ -255,8 +254,6 @@ defmodule Locus.Backends.Backend do
 
   @impl GenServer
   def handle_info(:spawn, %{status: :starting, ending: nil} = state) do
-    notify(state, :spawning)
-
     case state.launcher.spawn(state.launcher_server, state.spec) do
       {:ok, handle} ->
         notify(state, :started)
@@ -297,8 +294,13 @@ defmodule Locus.Backends.Backend do
 
   def handle_info({:flush, _timer}, state), do: {:noreply, state}
 
-  def handle_info(:release_timeout, %{released: false} = state),
-    do: {:noreply, released(state)}
+  # A release the launcher has not reported within its bound ends the
+  # stoppers' wait and the session, never what it holds: that is gone only
+  # when the launcher says so, as `:released` or to the spawn's heir.
+  def handle_info(:release_timeout, %{released: false} = state) do
+    state = ended(state, state.ending || %{crash: true, error: "exited code=null signal=null"})
+    {:noreply, reply_stoppers(state)}
+  end
 
   def handle_info(:release_timeout, state), do: {:noreply, state}
 

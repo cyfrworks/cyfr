@@ -41,7 +41,12 @@ defmodule Locus.Launcher do
   started, as for a spawn refused. So a process the owner's death leaves
   to the launcher's own release is still followed to its end by another
   process: the owner's `:released` dies with the owner, the heir's does
-  not.
+  not. `c:fence/2` asks after a tag whose owner died: `:pending` while the
+  launcher holds a process of it (its heir is told of its end), or `:none`,
+  with every later spawn naming that tag refused, so none can start after
+  the answer. `c:adopt/3` makes the caller the heir of every process the
+  launcher holds whose tag names `ledger` (`%{ledger: ledger}`), and
+  answers their tags: an heir that restarts takes back what it followed.
 
   `c:send/2` writes to the process's stdin; `c:signal/2` signals it;
   `c:release/3` ends it, a term signal first and the kill of everything it
@@ -196,6 +201,13 @@ defmodule Locus.Launcher do
 
   @doc "End the relay of a process started with `control: true`: nothing more is written to it."
   @callback close_relay(handle()) :: :ok
+
+  @doc "Whether a process of `tag` is held (`:pending`), or none is and none will start (`:none`)."
+  @callback fence(GenServer.server() | keyword(), term()) :: :none | :pending | {:error, error()}
+
+  @doc "Become the heir of every process held whose tag's `ledger` is `ledger`; answers their tags."
+  @callback adopt(GenServer.server() | keyword(), term(), pid()) ::
+              {:ok, [term()]} | {:error, error()}
 
   @optional_callbacks send_control: 2,
                       send_relay: 2,
