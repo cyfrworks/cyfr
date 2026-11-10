@@ -28,6 +28,7 @@ defmodule Locus.Config do
   | `LOCUS_BUILDS_MAX_CONCURRENT` | `:max_concurrent` | 1..1024 | 2 |
   | `LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT` | `:max_concurrent_per_tenant` | 1..1024 | 1 |
   | `LOCUS_BUILDS_MEMORY_BYTES` | `:memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 1073741824 (1 GiB) |
+  | `LOCUS_BUILDS_CPU_QUOTA` | `:cpu_quota` | 1000..102400000 microseconds of every 100000 | 100000 (one CPU) |
   | `LOCUS_BUILDS_CARGO_SEED` | `:cargo_seed` | a directory | none |
   | `LOCUS_LOG_LEVEL` | `:log_level` | a Logger level | `info` |
   | `LOCUS_LOG_FORMAT` | `:log_format` | `text` or `json` | `text` |
@@ -35,6 +36,9 @@ defmodule Locus.Config do
   | `LOCUS_BACKENDS_BIND` | `:backends_bind` | an IPv4 or IPv6 address | `0.0.0.0` |
   | `LOCUS_BACKENDS_PORT` | `:backends_port` | 1..65535 | 4101 |
   | `LOCUS_BACKENDS_MEMORY_BYTES` | `:backends_memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 536870912 (512 MiB) |
+  | `LOCUS_BACKENDS_MEMORY_BUDGET` | `:backends_memory_budget` | 16777216..1099511627776 (16 MiB to 1 TiB) | 1879048192 (1792 MiB) |
+  | `LOCUS_BACKENDS_MEMORY_OVERCOMMIT` | `:backends_memory_overcommit` | a decimal of at least 1, such as `1` or `1.5` | 1 |
+  | `LOCUS_BACKENDS_CPU_QUOTA` | `:backends_cpu_quota` | 1000..102400000 microseconds of every 100000 | 200000 (two CPUs) |
   | `LOCUS_RUNTIME_SERVICE_ID` | `:runtime`, `:service_id` | `wrk_` and 1 to 64 letters, digits, `_` or `-` | `wrk_local` |
   | `LOCUS_RUNTIME_KEY` | `:runtime`, `:service_key` | 64 hexadecimal digits, the key derived for the service's id | none: the node serves no runtime |
   | `LOCUS_RUNTIME_HOST_API_URL` | `:runtime`, `:host_url` | an http or https URL with a host and no path | none |
@@ -45,6 +49,7 @@ defmodule Locus.Config do
   | `LOCUS_RUNTIME_WATCHDOG_GRACE_MS` | `:runtime`, `:watchdog_grace_ms` | 1..600000 | 5000 |
   | `LOCUS_RUNTIME_RELEASE_GRACE_MS` | `:runtime`, `:release_grace_ms` | 1..600000 | 2000 |
   | `LOCUS_RUNTIME_MEMORY_BYTES` | `:runtime`, `:runner_memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 402653184 (384 MiB) |
+  | `LOCUS_RUNTIME_CPU_QUOTA` | `:runtime`, `:runner_cpu_quota` | 1000..102400000 microseconds of every 100000 | 100000 (one CPU) |
   | `LOCUS_RUNTIME_ATTACH_DIR` | `:runtime`, `:attach_dir` | a clean absolute directory path | `/run/locus` |
 
   An unset runtime identity or listener row takes the default above; a
@@ -100,6 +105,24 @@ defmodule Locus.Config do
   bound". A program whose row names its own bound is spawned under that
   instead of `:backends_memory_bytes`.
 
+  `:cpu_quota`, `:backends_cpu_quota` and the runtime's `:runner_cpu_quota`
+  are the CPU every build, backend session and runner may use: microseconds
+  of CPU time in every period of `Prima.KeeperProtocol.cpu_period/0`
+  (100000), so 100000 is one CPU. Every spawn carries its role's, and the
+  keeper writes it to the spawn's cgroup before the command starts. Their
+  range is the keeper's own (`cpu_quota_range/0`); zero is refused, and
+  there is no value that means "no bound".
+
+  The backends service admits a session only while its box holds room for
+  it (`Locus.Backends.Owners`): `:backends_memory_budget` (`B`) is the
+  memory the box's sessions may hold, the container's memory limit (a
+  compose setting no release reads) less the service's own headroom, and `:backends_memory_overcommit` (`F`) how far
+  the bounds the sessions hold may add up past it, kept as the exact
+  fraction it was written as (`{numerator, denominator}`), so the
+  admission limit, `floor(B * F)` (`backends_admission_limit_bytes/0`), is
+  exact. A factor below 1, or one that is not a plain decimal, refuses the
+  boot.
+
   A node's logging is the release's one setting whichever role it serves:
   `:log_level` and `:log_format` become the logger's when a release node
   that serves a role starts (`Locus.Application`). A runner reads neither:
@@ -127,12 +150,16 @@ defmodule Locus.Config do
     max_concurrent: 2,
     max_concurrent_per_tenant: 1,
     memory_bytes: 1_073_741_824,
+    cpu_quota: 100_000,
     cargo_seed: nil,
     log_level: :info,
     log_format: :text,
     backends_bind: {0, 0, 0, 0},
     backends_port: 4101,
-    backends_memory_bytes: 536_870_912
+    backends_memory_bytes: 536_870_912,
+    backends_memory_budget: 1_879_048_192,
+    backends_memory_overcommit: {1, 1},
+    backends_cpu_quota: 200_000
   ]
 
   # What the runtime falls back to when neither its environment nor the
@@ -155,6 +182,7 @@ defmodule Locus.Config do
     {"LOCUS_BUILDS_MAX_CONCURRENT", :builds, :max_concurrent},
     {"LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT", :builds, :max_concurrent_per_tenant},
     {"LOCUS_BUILDS_MEMORY_BYTES", :builds, :memory_bytes},
+    {"LOCUS_BUILDS_CPU_QUOTA", :builds, :cpu_quota},
     {"LOCUS_BUILDS_CARGO_SEED", :builds, :cargo_seed},
     {"LOCUS_LOG_LEVEL", :release, :log_level},
     {"LOCUS_LOG_FORMAT", :release, :log_format},
@@ -162,6 +190,9 @@ defmodule Locus.Config do
     {"LOCUS_BACKENDS_BIND", :backends, :backends_bind},
     {"LOCUS_BACKENDS_PORT", :backends, :backends_port},
     {"LOCUS_BACKENDS_MEMORY_BYTES", :backends, :backends_memory_bytes},
+    {"LOCUS_BACKENDS_MEMORY_BUDGET", :backends, :backends_memory_budget},
+    {"LOCUS_BACKENDS_MEMORY_OVERCOMMIT", :backends, :backends_memory_overcommit},
+    {"LOCUS_BACKENDS_CPU_QUOTA", :backends, :backends_cpu_quota},
     {"LOCUS_RUNTIME_SERVICE_ID", :runtime, :service_id},
     {"LOCUS_RUNTIME_KEY", :runtime, :service_key},
     {"LOCUS_RUNTIME_HOST_API_URL", :runtime, :host_url},
@@ -172,6 +203,7 @@ defmodule Locus.Config do
     {"LOCUS_RUNTIME_WATCHDOG_GRACE_MS", :runtime, :watchdog_grace_ms},
     {"LOCUS_RUNTIME_RELEASE_GRACE_MS", :runtime, :release_grace_ms},
     {"LOCUS_RUNTIME_MEMORY_BYTES", :runtime, :runner_memory_bytes},
+    {"LOCUS_RUNTIME_CPU_QUOTA", :runtime, :runner_cpu_quota},
     {"LOCUS_RUNTIME_ATTACH_DIR", :runtime, :attach_dir},
     {"RUNTIME_ROLE", :runner, :role},
     {"RUNTIME_RUNNER_ID", :runner, :runner_id},
@@ -224,6 +256,7 @@ defmodule Locus.Config do
           max_concurrent: pos_integer(),
           max_concurrent_per_tenant: pos_integer(),
           memory_bytes: pos_integer(),
+          cpu_quota: pos_integer(),
           cargo_seed: String.t() | nil,
           log_level: Logger.level(),
           log_format: :text | :json,
@@ -231,6 +264,9 @@ defmodule Locus.Config do
           backends_bind: :inet.ip_address(),
           backends_port: :inet.port_number(),
           backends_memory_bytes: pos_integer(),
+          backends_memory_budget: pos_integer(),
+          backends_memory_overcommit: {pos_integer(), pos_integer()},
+          backends_cpu_quota: pos_integer(),
           runtime: keyword()
         ]
 
@@ -286,6 +322,7 @@ defmodule Locus.Config do
            ),
          {:ok, memory_bytes} <-
            EnvValue.bytes(getenv, variable(:builds, :memory_bytes), memory_range()),
+         {:ok, cpu_quota} <- cpu_quota(getenv, variable(:builds, :cpu_quota)),
          {:ok, cargo_seed} <- EnvValue.text(getenv, variable(:builds, :cargo_seed)) do
       {:ok,
        [
@@ -296,6 +333,7 @@ defmodule Locus.Config do
          max_concurrent: max || @defaults[:max_concurrent],
          max_concurrent_per_tenant: per_tenant || @defaults[:max_concurrent_per_tenant],
          memory_bytes: memory_bytes || @defaults[:memory_bytes],
+         cpu_quota: cpu_quota || @defaults[:cpu_quota],
          cargo_seed: cargo_seed
        ]}
     end
@@ -306,14 +344,49 @@ defmodule Locus.Config do
          {:ok, bind} <- EnvValue.bind(getenv, variable(:backends, :backends_bind)),
          {:ok, port} <- EnvValue.port(getenv, variable(:backends, :backends_port)),
          {:ok, memory_bytes} <-
-           EnvValue.bytes(getenv, variable(:backends, :backends_memory_bytes), memory_range()) do
+           EnvValue.bytes(getenv, variable(:backends, :backends_memory_bytes), memory_range()),
+         {:ok, budget} <-
+           EnvValue.bytes(getenv, variable(:backends, :backends_memory_budget), memory_range()),
+         {:ok, overcommit} <-
+           overcommit(getenv, variable(:backends, :backends_memory_overcommit)),
+         {:ok, cpu_quota} <- cpu_quota(getenv, variable(:backends, :backends_cpu_quota)) do
       {:ok,
        [
          backends_key: key,
          backends_bind: bind || @defaults[:backends_bind],
          backends_port: port || @defaults[:backends_port],
-         backends_memory_bytes: memory_bytes || @defaults[:backends_memory_bytes]
+         backends_memory_bytes: memory_bytes || @defaults[:backends_memory_bytes],
+         backends_memory_budget: budget || @defaults[:backends_memory_budget],
+         backends_memory_overcommit: overcommit || @defaults[:backends_memory_overcommit],
+         backends_cpu_quota: cpu_quota || @defaults[:backends_cpu_quota]
        ]}
+    end
+  end
+
+  # A CPU quota, in microseconds of every period, within the keeper's range.
+  defp cpu_quota(getenv, variable),
+    do: EnvValue.whole_number(getenv, variable, cpu_quota_range(), "microseconds")
+
+  # The overcommit factor, a plain decimal of at least 1, kept as the exact
+  # fraction it was written as: `1.25` is `{125, 100}`.
+  @decimal ~r/\A([0-9]+)(?:\.([0-9]+))?\z/
+
+  defp overcommit(getenv, variable) do
+    case EnvValue.text(getenv, variable) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, text} -> fraction(text, variable)
+    end
+  end
+
+  defp fraction(text, variable) do
+    with [_ | parts] <- Regex.run(@decimal, text),
+         [whole, fraction] = Enum.take(parts ++ [""], 2),
+         denominator = Integer.pow(10, byte_size(fraction)),
+         numerator = String.to_integer(whole <> fraction),
+         true <- numerator >= denominator do
+      {:ok, {numerator, denominator}}
+    else
+      _refused -> {:error, "#{variable} must be a decimal of at least 1, such as 1 or 1.5"}
     end
   end
 
@@ -398,6 +471,7 @@ defmodule Locus.Config do
       watchdog_grace_ms: &EnvValue.milliseconds(&1, &2, 1..600_000),
       release_grace_ms: &EnvValue.milliseconds(&1, &2, 1..600_000),
       runner_memory_bytes: &EnvValue.bytes(&1, &2, memory_range()),
+      runner_cpu_quota: &cpu_quota(&1, &2),
       attach_dir: &EnvValue.text(&1, &2)
     ]
 
@@ -603,6 +677,15 @@ defmodule Locus.Config do
   def memory_range,
     do: Prima.KeeperProtocol.min_memory_bytes()..Prima.KeeperProtocol.max_memory_bytes()//1
 
+  @doc """
+  The range every CPU quota setting of a Locus node accepts, in
+  microseconds of every 100000: the keeper's own for a spawn's
+  `cpu_quota`, 1000 to 102400000.
+  """
+  @spec cpu_quota_range() :: Range.t()
+  def cpu_quota_range,
+    do: Prima.KeeperProtocol.min_cpu_quota()..Prima.KeeperProtocol.max_cpu_quota()//1
+
   defp log_level(getenv) do
     name_read = variable(:release, :log_level)
 
@@ -671,6 +754,10 @@ defmodule Locus.Config do
   @spec memory_bytes() :: pos_integer()
   def memory_bytes, do: get(:memory_bytes)
 
+  @doc "The CPU quota every build's spawn asks cyfr-locus for, in microseconds of every 100000."
+  @spec cpu_quota() :: pos_integer()
+  def cpu_quota, do: get(:cpu_quota)
+
   @doc "The Cargo home whose registry cache a Rust build starts from, or nil."
   @spec cargo_seed() :: String.t() | nil
   def cargo_seed, do: get(:cargo_seed)
@@ -707,6 +794,31 @@ defmodule Locus.Config do
   @doc "The memory bound a program's process is spawned under when its row names none, in bytes."
   @spec backends_memory_bytes() :: pos_integer()
   def backends_memory_bytes, do: get(:backends_memory_bytes)
+
+  @doc "The memory the backends service's sessions may hold: `B`, in bytes."
+  @spec backends_memory_budget() :: pos_integer()
+  def backends_memory_budget, do: get(:backends_memory_budget)
+
+  @doc "The overcommit factor `F`, as the exact fraction `{numerator, denominator}`."
+  @spec backends_memory_overcommit() :: {pos_integer(), pos_integer()}
+  def backends_memory_overcommit, do: get(:backends_memory_overcommit)
+
+  @doc """
+  The backends service's admission limit: `floor(B * F)` bytes, the most
+  the bounds of the sessions it holds may add up to.
+  """
+  @spec backends_admission_limit_bytes() :: pos_integer()
+  def backends_admission_limit_bytes,
+    do: admission_limit_bytes(backends_memory_budget(), backends_memory_overcommit())
+
+  @doc "`floor(budget * factor)`, exact, for a factor kept as `{numerator, denominator}`."
+  @spec admission_limit_bytes(pos_integer(), {pos_integer(), pos_integer()}) :: pos_integer()
+  def admission_limit_bytes(budget, {numerator, denominator}),
+    do: div(budget * numerator, denominator)
+
+  @doc "The CPU quota every backend session's spawn asks for, in microseconds of every 100000."
+  @spec backends_cpu_quota() :: pos_integer()
+  def backends_cpu_quota, do: get(:backends_cpu_quota)
 
   defp get(key), do: Application.get_env(:locus, key, Keyword.fetch!(@defaults, key))
 end

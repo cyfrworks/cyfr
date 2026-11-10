@@ -343,7 +343,8 @@ defmodule Cyfr.Test.ScriptedBackends do
 
     control_answer(conn, st, %{
       "boot" => st.boot,
-      "pool" => %{"size" => st.pool, "free" => st.pool}
+      "pool" => %{"size" => st.pool, "free" => st.pool},
+      "memory" => memory()
     })
   end
 
@@ -452,7 +453,7 @@ defmodule Cyfr.Test.ScriptedBackends do
         })
       end
 
-    control_answer(conn, st, %{"owners" => owners})
+    control_answer(conn, st, %{"owners" => owners, "memory" => memory()})
   end
 
   # As Locus does, a reset or a retire ends every session of the home among
@@ -768,6 +769,15 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   defp refuse(conn, st, code),
     do: answer(conn, st, LocusBackends.status(code), LocusBackends.encode_refusal(code))
+
+  # The box's memory as a hello and a status report it: the shipped budget,
+  # nothing held.
+  defp memory,
+    do: %{
+      "budget_bytes" => 1_879_048_192,
+      "admission_limit_bytes" => 1_879_048_192,
+      "held_bytes" => 0
+    }
 
   defp control_answer(conn, st, body),
     do: answer(conn, st, 200, Map.put(body, "version", st.answer_version))

@@ -16,7 +16,9 @@ defmodule Locus.Runtime.PipeTest do
   line comes back from `cat`; a component that declares no such need, or
   whose need's binding mounts another program, is refused `denied` and
   opens nothing; once the entry is revoked, the open is refused
-  `setup_required` and opens nothing.
+  `setup_required` and opens nothing; on a box whose memory budget holds
+  no session at the program's bound, the open is refused `busy` and opens
+  nothing.
   """
 
   use ExUnit.Case, async: false
@@ -60,14 +62,15 @@ defmodule Locus.Runtime.PipeTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
     Sanctum.TestContext.ready!(ctx.athanor_id)
-    serve_backends!(kept)
+    serve_backends!(kept, Map.get(tags, :memory_budget, 4_294_967_296))
     {:ok, ctx: ctx, kept: kept}
   end
 
-  # A backends service of Locus on a loopback port, its sessions run by the
-  # test launcher with kept homes under `kept`, and the programs
-  # controller's local box pointed at it.
-  defp serve_backends!(kept) do
+  # A backends service of Locus on a loopback port admitting sessions
+  # within `budget` bytes, its sessions run by the test launcher with kept
+  # homes under `kept`, and the programs controller's local box pointed at
+  # it.
+  defp serve_backends!(kept, budget) do
     sessions = start_supervised!({DynamicSupervisor, strategy: :one_for_one}, id: :pipe_sessions)
 
     owners =
@@ -78,6 +81,8 @@ defmodule Locus.Runtime.PipeTest do
            launcher_server: [kept_root: kept],
            supervisor: sessions,
            memory_bytes: 1_073_741_824,
+           memory_budget: budget,
+           overcommit: {1, 1},
            stop_grace_ms: 100,
            session_opts: [release_timeout_ms: 5_000]
          ]},
@@ -218,6 +223,21 @@ defmodule Locus.Runtime.PipeTest do
 
     # The next run opens its key afresh.
     assert %{"open" => "ok", "resumed" => false, "line" => "again"} = run!(ctx, ref, "again")
+  end
+
+  # The box refuses the open as full (`capacity`), the pipe tells the guest
+  # `busy`, and the brain hears `overloaded`, which it retries later.
+  @tag memory_budget: 536_870_912
+  test "an open on a box whose budget holds no session at the program's bound is refused busy",
+       %{ctx: ctx} do
+    row!(ctx)
+    entry = login!(ctx)
+    ref = publish_probe!(ctx, %{"coder" => login_need(@program)})
+    consent!(ctx, ref, [%{need: "coder", entry_id: entry.id}])
+
+    assert %{"open" => "busy"} = data = run!(ctx, ref, "hello")
+    refute Map.has_key?(data, "send")
+    assert Opus.Programs.mounts() == []
   end
 
   test "a catalyst declaring no login need is refused denied, and opens nothing", %{ctx: ctx} do

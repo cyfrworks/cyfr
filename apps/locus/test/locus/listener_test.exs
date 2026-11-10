@@ -119,6 +119,8 @@ defmodule Locus.ListenerTest do
     def send(_handle, _data), do: :ok
     def signal(_handle, _sig), do: :ok
     def release(_server, _handle, _grace_ms), do: :ok
+    def fence(_server, _tag), do: :pending
+    def adopt(_server, _ledger, _heir), do: {:ok, []}
   end
 
   # ————— a client of the wire, over a plain socket —————

@@ -220,7 +220,7 @@ server.listen(attach, () => {
     }
   });
   for (const s of spawns) {
-    const request = { v: 1, type: "spawn", id: s.id, pool: scenario.pool, argv: s.argv, env: {}, attach: { path: attach, token: s.token } };
+    const request = { v: 1, type: "spawn", id: s.id, pool: scenario.pool, argv: s.argv, env: {}, cpu_quota: 100000, attach: { path: attach, token: s.token } };
     if ("memory_bytes" in s) request.memory_bytes = s.memory_bytes;
     channel.write(JSON.stringify(request) + "\n");
   }

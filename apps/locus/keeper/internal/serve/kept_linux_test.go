@@ -63,9 +63,9 @@ func keptRequest(t *testing.T, attach, id, script, path string, uid int, maxByte
 	message := map[string]any{
 		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "pool": "runner",
 		"argv": []string{"/bin/sh", "-c", script}, "env": map[string]string{},
-		"memory_bytes": 64 << 20,
-		"attach":       map[string]string{"path": attach, "token": testToken},
-		"home_mode":    protocol.HomeKept, "home_path": path, "home_uid": uid,
+		"memory_bytes": 64 << 20, "cpu_quota": protocol.CPUPeriod,
+		"attach":    map[string]string{"path": attach, "token": testToken},
+		"home_mode": protocol.HomeKept, "home_path": path, "home_uid": uid,
 	}
 	if maxBytes != nil {
 		message["home_max_bytes"] = *maxBytes

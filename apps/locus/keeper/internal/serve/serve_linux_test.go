@@ -279,8 +279,8 @@ func spawnRequest(t *testing.T, attach, id, script string, env map[string]string
 	message := map[string]any{
 		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "pool": "runner",
 		"argv": []string{"/bin/sh", "-c", script}, "env": env, "control": control,
-		"memory_bytes": memoryBytes,
-		"attach":       map[string]string{"path": attach, "token": testToken},
+		"memory_bytes": memoryBytes, "cpu_quota": protocol.CPUPeriod,
+		"attach": map[string]string{"path": attach, "token": testToken},
 	}
 	line, err := json.Marshal(message)
 	if err != nil {

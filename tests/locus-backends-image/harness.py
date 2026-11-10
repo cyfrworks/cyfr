@@ -115,6 +115,8 @@ with open(os.path.join(ROOT, "tests", "fixtures", "locus_backends.json"), encodi
     WIRE = json.load(_vectors)
 
 VERSION = WIRE["version"]
+# The memory budget every suite's service admits within (64 GiB).
+SUITE_MEMORY_BUDGET = 64 << 30
 LABEL = WIRE["label"]
 AUTH_HEADER = WIRE["auth_header"]
 BOOT_HEADER = WIRE["boot_header"]
@@ -857,6 +859,10 @@ class Stack(imagesuite.Stack):
             "BACKENDS_POOL": self.pool,
             "KEPT_HOMES": f"{KEPT_ROOT}:{KEPT_FIRST}-{KEPT_LAST}",
             "LOCUS_BACKENDS_MEMORY_BYTES": str(self.memory_bytes or ""),
+            # Room for every session a suite holds at once at the shipped
+            # 512 MiB bound: the suites prove other properties than the
+            # memory admission, which the service's own tests hold.
+            "LOCUS_BACKENDS_MEMORY_BUDGET": str(SUITE_MEMORY_BUDGET),
             **extra,
         }
 

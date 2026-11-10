@@ -56,7 +56,10 @@ defmodule Locus.ConfigTest do
     backends_key: nil,
     backends_bind: {0, 0, 0, 0},
     backends_port: 4101,
-    backends_memory_bytes: 536_870_912
+    backends_memory_bytes: 536_870_912,
+    backends_memory_budget: 1_879_048_192,
+    backends_memory_overcommit: {1, 1},
+    backends_cpu_quota: 200_000
   ]
 
   defp env(map), do: fn key -> Map.get(map, key) end
@@ -91,13 +94,17 @@ defmodule Locus.ConfigTest do
       "LOCUS_BUILDS_MAX_CONCURRENT" => "4",
       "LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT" => "2",
       "LOCUS_BUILDS_MEMORY_BYTES" => "2147483648",
+      "LOCUS_BUILDS_CPU_QUOTA" => "300000",
       "LOCUS_BUILDS_CARGO_SEED" => "/opt/cyfr/cargo-seed",
       "LOCUS_LOG_LEVEL" => "debug",
       "LOCUS_LOG_FORMAT" => "json",
       "LOCUS_BACKENDS_KEY" => @backends_key_hex,
       "LOCUS_BACKENDS_BIND" => "127.0.0.2",
       "LOCUS_BACKENDS_PORT" => "4201",
-      "LOCUS_BACKENDS_MEMORY_BYTES" => "268435456"
+      "LOCUS_BACKENDS_MEMORY_BYTES" => "268435456",
+      "LOCUS_BACKENDS_MEMORY_BUDGET" => "1073741824",
+      "LOCUS_BACKENDS_MEMORY_OVERCOMMIT" => "1.25",
+      "LOCUS_BACKENDS_CPU_QUOTA" => "50000"
     }
   end
 
@@ -207,13 +214,17 @@ defmodule Locus.ConfigTest do
              max_concurrent: 4,
              max_concurrent_per_tenant: 2,
              memory_bytes: 2_147_483_648,
+             cpu_quota: 300_000,
              cargo_seed: "/opt/cyfr/cargo-seed",
              log_level: :debug,
              log_format: :json,
              backends_key: @backends_key,
              backends_bind: {127, 0, 0, 2},
              backends_port: 4201,
-             backends_memory_bytes: 268_435_456
+             backends_memory_bytes: 268_435_456,
+             backends_memory_budget: 1_073_741_824,
+             backends_memory_overcommit: {125, 100},
+             backends_cpu_quota: 50_000
            ]
 
     refute settings[:request_key] == @key
@@ -233,6 +244,7 @@ defmodule Locus.ConfigTest do
                max_concurrent: 2,
                max_concurrent_per_tenant: 1,
                memory_bytes: 1_073_741_824,
+               cpu_quota: 100_000,
                cargo_seed: nil,
                log_level: :info,
                log_format: :text
@@ -251,6 +263,7 @@ defmodule Locus.ConfigTest do
                max_concurrent: 2,
                max_concurrent_per_tenant: 1,
                memory_bytes: 1_073_741_824,
+               cpu_quota: 100_000,
                cargo_seed: nil,
                log_level: :info,
                log_format: :text
@@ -367,13 +380,119 @@ defmodule Locus.ConfigTest do
       pool: "build",
       argv: ["true"],
       attach: %{path: "/run/a.sock", token: String.duplicate("ab", 32)},
-      memory_bytes: bytes
+      memory_bytes: bytes,
+      cpu_quota: 100_000
     }
 
     _line = Prima.KeeperProtocol.encode(spawn)
     false
   rescue
     error in ArgumentError -> String.starts_with?(error.message, "memory_bytes ")
+  end
+
+  describe "the backends service's admission and every role's CPU" do
+    defp backends(extra),
+      do: Config.from_env(env(Map.put(extra, "LOCUS_BACKENDS_KEY", @backends_key_hex)))
+
+    test "the budget is a count of bytes in the keeper's range; zero and nonsense refuse the boot" do
+      assert {:ok, settings} = backends(%{"LOCUS_BACKENDS_MEMORY_BUDGET" => "16777216"})
+      assert settings[:backends_memory_budget] == 16_777_216
+
+      for value <- ["0", "-1", "16777215", "1099511627777", "768M", "1.5"] do
+        assert {:error, message} = backends(%{"LOCUS_BACKENDS_MEMORY_BUDGET" => value}),
+               value
+
+        assert message =~ "LOCUS_BACKENDS_MEMORY_BUDGET"
+      end
+    end
+
+    test "the overcommit factor is a plain decimal of at least 1, kept exact; anything else refuses the boot" do
+      for {text, fraction} <- [
+            {"1", {1, 1}},
+            {"1.0", {10, 10}},
+            {"1.5", {15, 10}},
+            {"2", {2, 1}},
+            {"1.000001", {1_000_001, 1_000_000}},
+            {"1.0000000", {10_000_000, 10_000_000}},
+            {"1.0000001", {10_000_001, 10_000_000}},
+            {" 1.25 ", {125, 100}}
+          ] do
+        assert {:ok, settings} = backends(%{"LOCUS_BACKENDS_MEMORY_OVERCOMMIT" => text}), text
+        assert settings[:backends_memory_overcommit] == fraction, text
+      end
+
+      for value <- [
+            "0",
+            "0.99",
+            "0.999999",
+            "-1",
+            "inf",
+            "Infinity",
+            "NaN",
+            "1e3",
+            "1.",
+            ".5",
+            "1,5",
+            "0.99999999999",
+            "1/2"
+          ] do
+        assert {:error, message} = backends(%{"LOCUS_BACKENDS_MEMORY_OVERCOMMIT" => value}),
+               value
+
+        assert message =~ "LOCUS_BACKENDS_MEMORY_OVERCOMMIT must be a decimal of at least 1"
+      end
+    end
+
+    test "the factor takes a plain decimal of any length" do
+      for text <- ["1.0000000", "1.0000001"] do
+        env = %{
+          "LOCUS_BACKENDS_KEY" => String.duplicate("ab", 32),
+          "LOCUS_BACKENDS_MEMORY_OVERCOMMIT" => text
+        }
+
+        assert {:ok, _} = Config.from_env(&Map.get(env, &1), Map.keys(env))
+      end
+    end
+
+    test "the admission limit is floor(B * F), exact" do
+      for {budget, factor, limit} <- [
+            {805_306_368, {1, 1}, 805_306_368},
+            {805_306_368, {115, 100}, 926_102_323},
+            {100, {115, 100}, 115},
+            {3, {15, 10}, 4},
+            {1_099_511_627_776, {1_000_001, 1_000_000}, 1_099_512_727_287}
+          ] do
+        assert Config.admission_limit_bytes(budget, factor) == limit
+      end
+
+      assert Config.backends_admission_limit_bytes() == 1_879_048_192
+    end
+
+    test "every role's CPU quota is microseconds in the keeper's range; zero refuses the boot" do
+      assert Config.cpu_quota_range() ==
+               Prima.KeeperProtocol.min_cpu_quota()..Prima.KeeperProtocol.max_cpu_quota()//1
+
+      runtime = %{
+        "LOCUS_RUNTIME_KEY" => @runtime_key_hex,
+        "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
+      }
+
+      for {base, variable, read} <- [
+            {full(), "LOCUS_BUILDS_CPU_QUOTA", & &1[:cpu_quota]},
+            {full(), "LOCUS_BACKENDS_CPU_QUOTA", & &1[:backends_cpu_quota]},
+            {runtime, "LOCUS_RUNTIME_CPU_QUOTA", & &1[:runtime][:runner_cpu_quota]}
+          ] do
+        for quota <- [1_000, 100_000, 102_400_000] do
+          assert {:ok, settings} = Config.from_env(env(Map.put(base, variable, "#{quota}")))
+          assert read.(settings) == quota
+        end
+
+        for value <- ["0", "999", "102400001", "-100000", "2 cpus", "1.5"] do
+          assert {:error, message} = Config.from_env(env(Map.put(base, variable, value))), value
+          assert message =~ variable
+        end
+      end
+    end
   end
 
   test "the memory bound takes the whole of the keeper's range, both ends, and nothing outside it" do

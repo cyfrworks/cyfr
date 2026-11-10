@@ -37,7 +37,9 @@ defmodule Locus.Runtime.Keeper.Channel do
 
   Every spawn this adapter asks for carries `memory_bytes`, the pool's
   `:runner_memory_bytes` (`Locus.Runtime.Settings.runner_memory_bytes/1`),
-  or the `:memory_bytes` it was started with; nothing asks for none.
+  or the `:memory_bytes` it was started with, and `cpu_quota`, the pool's
+  `:runner_cpu_quota` (`Locus.Runtime.Settings.runner_cpu_quota/1`); nothing
+  asks for none.
   `cyfr-locus` gives the runner a cgroup of its own at that bound: its VM,
   every guest's linear memory, the pages of its home and the kernel
   memory charged to it, together. A runner that cannot stay under it
@@ -78,9 +80,12 @@ defmodule Locus.Runtime.Keeper.Channel do
   @pool "runner"
   @isolation "netns"
 
-  @memory_unavailable "cyfr-locus cannot bound a runner's memory in this container, so it " <>
-                        "starts none: start the locus-runtime service with the security option " <>
-                        "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
+  # `memory_unavailable` is the keeper's word for any bound it cannot
+  # enforce, the memory's or the CPU's.
+  @memory_unavailable "cyfr-locus cannot bound a runner's memory and CPU in this container, " <>
+                        "so it starts none: start the locus-runtime service with the security " <>
+                        "option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 " <>
+                        "host whose memory and cpu controllers reach the container)"
 
   @impl Locus.Runtime.Keeper
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
@@ -118,8 +123,12 @@ defmodule Locus.Runtime.Keeper.Channel do
       isolation: @isolation
     }
 
-    with {:ok, client, bound} <- client(adapter),
-         {:ok, handle} <- Locus.Keeper.spawn(client, Map.put(request, :memory_bytes, bound)) do
+    with {:ok, client, bound, cpu_quota} <- client(adapter),
+         {:ok, handle} <-
+           Locus.Keeper.spawn(
+             client,
+             Map.merge(request, %{memory_bytes: bound, cpu_quota: cpu_quota})
+           ) do
       {:ok, Map.merge(handle, %{runner: runner, memory_bytes: bound, adapter: adapter}), []}
     else
       {:error, reason} -> {:error, failure(reason)}
@@ -221,17 +230,17 @@ defmodule Locus.Runtime.Keeper.Channel do
 
   @impl GenServer
   def init(opts) do
-    case bound(opts) do
-      {:ok, memory_bytes} ->
-        {:ok,
-         %{
-           client: Keyword.get(opts, :client, Locus.Keeper),
-           memory_bytes: memory_bytes,
-           bound_refused: false
-         }}
-
-      {:error, reason} ->
-        {:stop, {:keeper_unavailable, reason}}
+    with {:ok, memory_bytes} <- bound(opts),
+         {:ok, cpu_quota} <- Locus.Runtime.Settings.runner_cpu_quota(Locus.Runtime.Settings.env()) do
+      {:ok,
+       %{
+         client: Keyword.get(opts, :client, Locus.Keeper),
+         memory_bytes: memory_bytes,
+         cpu_quota: cpu_quota,
+         bound_refused: false
+       }}
+    else
+      {:error, reason} -> {:stop, {:keeper_unavailable, reason}}
     end
   end
 
@@ -250,7 +259,7 @@ defmodule Locus.Runtime.Keeper.Channel do
 
   @impl GenServer
   def handle_call(:client, _from, state),
-    do: {:reply, {:ok, state.client, state.memory_bytes}, state}
+    do: {:reply, {:ok, state.client, state.memory_bytes, state.cpu_quota}, state}
 
   # What the deployment lacks is logged once for each run of refusals; a
   # runner spawned again under its bound ends the run.

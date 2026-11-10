@@ -128,6 +128,9 @@ func TestSharedRequestBounds(t *testing.T) {
 		"max_socket_path_bytes": MaxSocketPath,
 		"min_memory_bytes":      MinMemoryBytes,
 		"max_memory_bytes":      MaxMemoryBytes,
+		"cpu_period":            CPUPeriod,
+		"min_cpu_quota":         MinCPUQuota,
+		"max_cpu_quota":         MaxCPUQuota,
 		"max_home_path_bytes":   MaxHomePathBytes,
 		"max_uid":               MaxUID,
 		"max_home_bytes":        MaxHomeBytes,
@@ -270,7 +273,7 @@ func TestHomeRequestBounds(t *testing.T) {
 			t.Errorf("%s: request %+v, refusal %+v", c.line, req, err)
 		}
 	}
-	spawn := `{"v":1,"type":"spawn","id":"1","pool":"backends","argv":["x"],"memory_bytes":16777216,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
+	spawn := `{"v":1,"type":"spawn","id":"1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
 	for _, c := range []struct {
 		fields string
 		ok     bool
@@ -502,7 +505,7 @@ func TestSpawnRequiresMemoryBound(t *testing.T) {
 			t.Run(pool+"/"+c.name, func(t *testing.T) {
 				message := map[string]any{
 					"v": Version, "type": TypeSpawn, "id": "memory-check", "pool": pool,
-					"argv": []string{"true"}, "env": map[string]string{},
+					"argv": []string{"true"}, "env": map[string]string{}, "cpu_quota": CPUPeriod,
 					"attach": Attach{Path: "/run/a.sock", Token: strings.Repeat("a", 64)},
 				}
 				if c.present {
@@ -530,6 +533,87 @@ func TestSpawnRequiresMemoryBound(t *testing.T) {
 					t.Fatalf("invalid bound returned request %+v, refusal %+v", req, refused)
 				}
 				if refused.Detail != c.detail || refused.Reply() != NewError("memory-check", "", CodeBadRequest) {
+					t.Fatalf("refusal %+v, reply %+v", refused, refused.Reply())
+				}
+			})
+		}
+	}
+}
+
+// Every spawn of the vectors carries its CPU quota, and a spawn is refused
+// without one, with a null one or with one outside its range, whatever its
+// pool, as a missing memory bound is.
+func TestSpawnRequiresCPUQuota(t *testing.T) {
+	v := loadVectors(t)
+	for _, raw := range v.ValidRequests {
+		req, err := ParseRequest(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (req.Type == TypeSpawn) != (req.CPUQuota != nil) {
+			t.Fatalf("%s decoded a CPU quota %v", raw, req.CPUQuota)
+		}
+	}
+	var refused int
+	for _, c := range v.InvalidRequests {
+		if strings.Contains(c.Why, "CPU quota") {
+			refused++
+		}
+	}
+	if refused < 7 {
+		t.Fatalf("%d vectors refuse a malformed CPU quota, want absent, null, zero, below, above, fractional and on another request", refused)
+	}
+	if CPUPeriod != 100_000 || MinCPUQuota != 1_000 || MaxCPUQuota != 102_400_000 {
+		t.Fatalf("CPU bounds %d, %d..%d", CPUPeriod, MinCPUQuota, MaxCPUQuota)
+	}
+
+	for _, pool := range []string{"build", "backends", "runner"} {
+		for _, c := range []struct {
+			name    string
+			present bool
+			value   any
+			quota   uint64
+			detail  string
+		}{
+			{name: "absent", detail: "cpu_quota is required"},
+			{name: "null", present: true, detail: "cpu_quota must not be null"},
+			{name: "zero", present: true, value: uint64(0), detail: "cpu_quota must be within 1000..102400000"},
+			{name: "below minimum", present: true, value: uint64(MinCPUQuota - 1), detail: "cpu_quota must be within 1000..102400000"},
+			{name: "above maximum", present: true, value: uint64(MaxCPUQuota + 1), detail: "cpu_quota must be within 1000..102400000"},
+			{name: "minimum", present: true, value: uint64(MinCPUQuota), quota: MinCPUQuota},
+			{name: "maximum", present: true, value: uint64(MaxCPUQuota), quota: MaxCPUQuota},
+		} {
+			t.Run(pool+"/"+c.name, func(t *testing.T) {
+				message := map[string]any{
+					"v": Version, "type": TypeSpawn, "id": "cpu-check", "pool": pool,
+					"argv": []string{"true"}, "env": map[string]string{}, "memory_bytes": MinMemoryBytes,
+					"attach": Attach{Path: "/run/a.sock", Token: strings.Repeat("a", 64)},
+				}
+				if c.present {
+					message["cpu_quota"] = c.value
+				}
+				if pool == "runner" {
+					message["isolation"] = IsolationNetns
+					message["control"] = true
+				}
+				line, err := json.Marshal(message)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req, refused := ParseRequest(line)
+				if c.detail == "" {
+					if refused != nil {
+						t.Fatalf("valid quota refused: %+v", refused)
+					}
+					if req == nil || req.CPUQuota == nil || *req.CPUQuota != c.quota {
+						t.Fatalf("quota %d decoded to %+v", c.quota, req)
+					}
+					return
+				}
+				if req != nil || refused == nil {
+					t.Fatalf("invalid quota returned request %+v, refusal %+v", req, refused)
+				}
+				if refused.Detail != c.detail || refused.Reply() != NewError("cpu-check", "", CodeBadRequest) {
 					t.Fatalf("refusal %+v, reply %+v", refused, refused.Reply())
 				}
 			})

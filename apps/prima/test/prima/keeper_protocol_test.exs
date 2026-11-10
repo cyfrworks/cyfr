@@ -77,6 +77,15 @@ defmodule Prima.KeeperProtocolTest do
     "memory bound on a request that is not a spawn" => "memory_bytes",
     "absent memory bound" => "memory_bytes",
     "null memory bound" => "memory_bytes",
+    "no CPU quota" => "cpu_quota",
+    "null CPU quota" => "cpu_quota",
+    "CPU quota of zero" => "cpu_quota",
+    "CPU quota below the minimum" => "cpu_quota",
+    "CPU quota above the maximum" => "cpu_quota",
+    "negative CPU quota" => "cpu_quota",
+    "fractional CPU quota" => "cpu_quota",
+    "CPU quota that is not a number" => "cpu_quota",
+    "CPU quota on a request that is not a spawn" => "cpu_quota",
     "isolation other than netns" => "isolation",
     "isolation that is not a string" => "isolation",
     "isolation on a request that is not a spawn" => "isolation",
@@ -117,7 +126,7 @@ defmodule Prima.KeeperProtocolTest do
   # atom `encode/1` takes: a closed table, so a vector names no atom it
   # makes.
   @members Map.new(
-             ~w(argv attach control core env extra fsize grace_ms home_max_bytes home_mode
+             ~w(argv attach control core cpu_quota env extra fsize grace_ms home_max_bytes home_mode
                 home_path home_uid hosts id isolation memory_bytes nofile nproc path pool pty
                 rlimits sig spawn_id token type uid v)a,
              &{Atom.to_string(&1), &1}
@@ -154,6 +163,7 @@ defmodule Prima.KeeperProtocolTest do
         pool: "build",
         argv: ["true"],
         memory_bytes: 16_777_216,
+        cpu_quota: 100_000,
         attach: %{path: "/run/a.sock", token: @token}
       },
       fields
@@ -390,6 +400,33 @@ defmodule Prima.KeeperProtocolTest do
       for bytes <- [min - 1, max + 1] do
         assert refused(spawn_request(%{memory_bytes: bytes})) =~ ~r/\Amemory_bytes /
       end
+    end
+
+    test "a spawn's CPU quota runs from min_cpu_quota/0 to max_cpu_quota/0, both ends, and no further" do
+      min = KeeperProtocol.min_cpu_quota()
+      max = KeeperProtocol.max_cpu_quota()
+      assert {KeeperProtocol.cpu_period(), min, max} == {100_000, 1_000, 102_400_000}
+
+      accepted =
+        for %{"type" => "spawn", "cpu_quota" => quota} <- @vectors["valid_requests"], do: quota
+
+      assert Enum.min(accepted) == min
+      assert Enum.max(accepted) == max
+
+      refused =
+        for %{"request" => %{"type" => "spawn", "cpu_quota" => quota}} <-
+              @vectors["invalid_requests"],
+            is_integer(quota),
+            do: quota
+
+      assert (min - 1) in refused
+      assert (max + 1) in refused
+
+      for quota <- [nil, 0, min - 1, max + 1] do
+        assert refused(spawn_request(%{cpu_quota: quota})) =~ ~r/\Acpu_quota /
+      end
+
+      assert refused(Map.delete(spawn_request(%{}), :cpu_quota)) =~ ~r/\Acpu_quota /
     end
 
     test "every reserved prefix is refused in a spawn's env, and a name without one is carried" do
@@ -651,12 +688,13 @@ defmodule Prima.KeeperProtocolTest do
 
       assert line(spawn_request(%{env: env, control: true, memory_bytes: 16_777_216})) ==
                ~s({"argv":["true"],"attach":{"path":"/run/a.sock","token":"#{@token}"},) <>
-                 ~s("control":true,"env":{"ALPHA":"a","ZED":"z"},"id":"1",) <>
+                 ~s("control":true,"cpu_quota":100000,"env":{"ALPHA":"a","ZED":"z"},"id":"1",) <>
                  ~s("memory_bytes":16777216,"pool":"build","type":"spawn","v":1}\n)
 
       assert line(spawn_request(%{pool: "runner", control: true, isolation: "netns"})) ==
                ~s({"argv":["true"],"attach":{"path":"/run/a.sock","token":"#{@token}"},) <>
-                 ~s("control":true,"id":"1","isolation":"netns","memory_bytes":16777216,) <>
+                 ~s("control":true,"cpu_quota":100000,"id":"1","isolation":"netns",) <>
+                 ~s("memory_bytes":16777216,) <>
                  ~s("pool":"runner","type":"spawn","v":1}\n)
 
       assert KeeperProtocol.isolations() == ["netns"]

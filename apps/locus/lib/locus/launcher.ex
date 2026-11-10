@@ -9,7 +9,8 @@ defmodule Locus.Launcher do
 
   `c:spawn/2` starts `argv` with `env` as its whole environment beyond the
   launcher's own `HOME`, `TMPDIR`, `USER`, `LOGNAME` and `PATH`, in the uid
-  pool `pool`, under `memory_bytes`, and answers
+  pool `pool`, under `memory_bytes` and `cpu_quota` (microseconds of CPU
+  time in every 100000), and answers
   the process's `t:handle/0`. A spec naming a kept `home` runs the process
   in that home, under the home's own uid, and takes no uid of the pool;
   `pty: true` gives the process a pseudo-terminal as its stdin, stdout and
@@ -34,6 +35,19 @@ defmodule Locus.Launcher do
   `:released`, the last. An owner that dies has its process released with
   no grace.
 
+  A spec may name an `heir`, `{pid, tag}`: a process told
+  `{launcher_module, {:heir, tag}, :released}` once nothing of the process
+  is left, whoever owns it then, and once it is known that none was
+  started, as for a spawn refused. So a process the owner's death leaves
+  to the launcher's own release is still followed to its end by another
+  process: the owner's `:released` dies with the owner, the heir's does
+  not. `c:fence/2` asks after a tag whose owner died: `:pending` while the
+  launcher holds a process of it (its heir is told of its end), or `:none`,
+  with every later spawn naming that tag refused, so none can start after
+  the answer. `c:adopt/3` makes the caller the heir of every process the
+  launcher holds whose tag names `ledger` (`%{ledger: ledger}`), and
+  answers their tags: an heir that restarts takes back what it followed.
+
   `c:send/2` writes to the process's stdin; `c:signal/2` signals it;
   `c:release/3` ends it, a term signal first and the kill of everything it
   started once `grace_ms` pass, and answers at once, the `:released` event
@@ -56,8 +70,8 @@ defmodule Locus.Launcher do
   """
 
   @typedoc """
-  What a process is started with: the memory it is bounded by, which every
-  process has, `control` where it has a control channel, `isolation`
+  What a process is started with: the memory and the CPU it is bounded
+  by, which every process has, `control` where it has a control channel, `isolation`
   where its pool isolates it, a program's kept `home` with its bound and
   `pty`, and `hosts`, the only hosts it may reach where its row names them.
   """
@@ -66,12 +80,14 @@ defmodule Locus.Launcher do
           required(:env) => %{optional(String.t()) => String.t()},
           required(:pool) => String.t(),
           required(:memory_bytes) => pos_integer(),
+          required(:cpu_quota) => pos_integer(),
           optional(:control) => boolean(),
           optional(:isolation) => String.t(),
           optional(:home) => String.t(),
           optional(:home_max_bytes) => pos_integer(),
           optional(:pty) => boolean(),
-          optional(:hosts) => [String.t(), ...]
+          optional(:hosts) => [String.t(), ...],
+          optional(:heir) => {pid(), term()}
         }
 
   @typedoc """
@@ -185,6 +201,13 @@ defmodule Locus.Launcher do
 
   @doc "End the relay of a process started with `control: true`: nothing more is written to it."
   @callback close_relay(handle()) :: :ok
+
+  @doc "Whether a process of `tag` is held (`:pending`), or none is and none will start (`:none`)."
+  @callback fence(GenServer.server() | keyword(), term()) :: :none | :pending | {:error, error()}
+
+  @doc "Become the heir of every process held whose tag's `ledger` is `ledger`; answers their tags."
+  @callback adopt(GenServer.server() | keyword(), term(), pid()) ::
+              {:ok, [term()]} | {:error, error()}
 
   @optional_callbacks send_control: 2,
                       send_relay: 2,

@@ -310,20 +310,20 @@ func probeIsolation(self string, cfg Config, accounts map[int]Account) error {
 	return nil
 }
 
-// delegateMemory prepares the keeper's cgroup for memory-bounded spawns, or
-// reports why spawns will be refused here.
+// delegateMemory prepares the keeper's cgroup for spawns bounded in memory
+// and CPU, or reports why spawns will be refused here.
 func delegateMemory(log *logx.Logger) *cgroup.Manager {
 	self, err := os.ReadFile(cgroup.SelfPath)
 	if err != nil {
-		log.Info("memory bounds are unavailable; spawns are refused: %v", err)
+		log.Info("memory and CPU bounds are unavailable; spawns are refused: %v", err)
 		return nil
 	}
 	m, err := cgroup.Delegate(cgroup.Root, self)
 	if err != nil {
-		log.Info("memory bounds are unavailable; spawns are refused: %v", err)
+		log.Info("memory and CPU bounds are unavailable; spawns are refused: %v", err)
 		return nil
 	}
-	log.Info("memory bounds are enforced: a cgroup under %s for each spawn", cgroup.Root)
+	log.Info("memory and CPU bounds are enforced: a cgroup under %s for each spawn", cgroup.Root)
 	return m
 }
 
@@ -706,7 +706,7 @@ func (s *server) handleSpawn(req *protocol.Request) {
 		return
 	}
 	if s.memory == nil {
-		s.log.Warn("spawn %s refused: its memory bound is unavailable here", req.ID)
+		s.log.Warn("spawn %s refused: its memory and CPU bounds are unavailable here", req.ID)
 		s.send(protocol.NewError(req.ID, "", protocol.CodeMemoryUnavailable))
 		return
 	}
@@ -861,7 +861,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		groupName = cgroup.SpawnName(sp.id)
 		homeRoot = s.cfg.Kept.Root
 	}
-	group, err := s.memory.Create(groupName, *req.MemoryBytes)
+	group, err := s.memory.Create(groupName, *req.MemoryBytes, *req.CPUQuota)
 	if err != nil {
 		return protocol.CodeInternal, err
 	}

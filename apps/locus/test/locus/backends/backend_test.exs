@@ -38,7 +38,8 @@ defmodule Locus.Backends.BackendTest do
           argv: ["/bin/sh", "-c", command],
           env: %{"PROBE_TOKEN" => @token},
           pool: "backends",
-          memory_bytes: Locus.Config.backends_memory_bytes()
+          memory_bytes: Locus.Config.backends_memory_bytes(),
+          cpu_quota: Locus.Config.backends_cpu_quota()
         },
         Map.new(Keyword.get(opts, :spec, []))
       )
@@ -242,6 +243,7 @@ defmodule Locus.Backends.BackendTest do
       assert spawn["argv"] == argv
       assert spawn["env"] == env
       assert spawn["memory_bytes"] == 268_435_456
+      assert spawn["cpu_quota"] == Locus.Config.backends_cpu_quota()
       refute Map.has_key?(spawn, "control")
 
       assert :ok = Backend.stop(session, 0)

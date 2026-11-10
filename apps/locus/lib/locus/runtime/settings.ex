@@ -25,8 +25,10 @@ defmodule Locus.Runtime.Settings do
   starts its runners (`:keeper`, `:channel`: the `cyfr-locus` channel the
   image inherits; the test build alone also knows `:direct`,
   `Locus.Runtime.Keeper.direct_keeper/0`), where the keeper's relays
-  attach (`:attach_dir`, `/run/locus`), and the memory bound of every
-  runner `cyfr-locus` starts (`:runner_memory_bytes`, 384 MiB); each
+  attach (`:attach_dir`, `/run/locus`), the memory bound of every
+  runner `cyfr-locus` starts (`:runner_memory_bytes`, 384 MiB) and its
+  CPU quota (`:runner_cpu_quota`, 100000 microseconds of every 100000,
+  one CPU: `Locus.Config.cpu_quota_range/0`); each
   default has one definition (`default/1`). Unset, the keeper is
   `:channel`, whatever the environment says: the service refuses to boot
   when no channel was inherited (`Locus.Runtime.Keeper.check!/3`), and
@@ -70,7 +72,8 @@ defmodule Locus.Runtime.Settings do
     watchdog_grace_ms: 5_000,
     release_grace_ms: 2_000,
     attach_dir: "/run/locus",
-    runner_memory_bytes: 402_653_184
+    runner_memory_bytes: 402_653_184,
+    runner_cpu_quota: 100_000
   }
 
   @typedoc "The service role's pool settings."
@@ -81,7 +84,8 @@ defmodule Locus.Runtime.Settings do
           release_grace_ms: pos_integer(),
           keeper: :channel | :direct,
           attach_dir: String.t(),
-          runner_memory_bytes: pos_integer()
+          runner_memory_bytes: pos_integer(),
+          runner_cpu_quota: pos_integer()
         }
 
   @typedoc "The runner role's settings, as its environment spells them (`Locus.Config.runner/1`)."
@@ -121,6 +125,7 @@ defmodule Locus.Runtime.Settings do
           | :release_grace_ms
           | :attach_dir
           | :runner_memory_bytes
+          | :runner_cpu_quota
         ) :: pos_integer() | String.t()
   def default(key), do: Map.fetch!(@pool_defaults, key)
 
@@ -147,7 +152,8 @@ defmodule Locus.Runtime.Settings do
          {:ok, release} <- positive(env, :release_grace_ms),
          {:ok, keeper} <- keeper(Keyword.get(env, :keeper)),
          {:ok, attach_dir} <- attach_dir(Keyword.get(env, :attach_dir)),
-         {:ok, memory_bytes} <- runner_memory_bytes(env) do
+         {:ok, memory_bytes} <- runner_memory_bytes(env),
+         {:ok, cpu_quota} <- runner_cpu_quota(env) do
       {:ok,
        %{
          pool_size: size,
@@ -156,7 +162,8 @@ defmodule Locus.Runtime.Settings do
          release_grace_ms: release,
          keeper: keeper,
          attach_dir: attach_dir,
-         runner_memory_bytes: memory_bytes
+         runner_memory_bytes: memory_bytes,
+         runner_cpu_quota: cpu_quota
        }}
     end
   end
@@ -175,6 +182,22 @@ defmodule Locus.Runtime.Settings do
     if is_integer(bytes) and bytes in Locus.Config.memory_range(),
       do: {:ok, bytes},
       else: {:error, {:malformed, :runner_memory_bytes}}
+  end
+
+  @doc """
+  The CPU quota `env` gives every runner `cyfr-locus` starts, in
+  microseconds of every 100000: its `:runner_cpu_quota`, or the default
+  when unset. A value that is not an integer in
+  `Locus.Config.cpu_quota_range/0` refuses.
+  """
+  @spec runner_cpu_quota(keyword()) ::
+          {:ok, pos_integer()} | {:error, {:malformed, :runner_cpu_quota}}
+  def runner_cpu_quota(env) when is_list(env) do
+    quota = Keyword.get(env, :runner_cpu_quota, default(:runner_cpu_quota))
+
+    if is_integer(quota) and quota in Locus.Config.cpu_quota_range(),
+      do: {:ok, quota},
+      else: {:error, {:malformed, :runner_cpu_quota}}
   end
 
   @doc "`pool/0`, raising on a value that refuses so the boot stops there."
@@ -260,6 +283,11 @@ defmodule Locus.Runtime.Settings do
 
   def expected(:keeper), do: "one of #{Enum.map_join(keepers(), ", ", &inspect/1)}"
   def expected(:attach_dir), do: "a clean absolute directory path"
+
+  def expected(:runner_cpu_quota) do
+    first..last//1 = Locus.Config.cpu_quota_range()
+    "a whole number of microseconds from #{first} to #{last}"
+  end
 
   def expected(:runner_memory_bytes) do
     first..last//1 = Locus.Config.memory_range()

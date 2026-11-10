@@ -569,7 +569,7 @@ defmodule Prima.LocusBackendsTest do
       owner = %{owner | programs: programs}
 
       assert {:error, {:too_large, :status_answer, _bytes, _max}} =
-               LocusBackends.encode_answer(:status, %{owners: [owner]})
+               LocusBackends.encode_answer(:status, %{owners: [owner], memory: answer.memory})
     end
 
     test "a body at another version is refused before its type is read, and maps to the version refusal" do
@@ -629,7 +629,7 @@ defmodule Prima.LocusBackendsTest do
       with_tail = %{owner | programs: [%{kept | stderr_tail: "a secret line"}]}
 
       assert {:error, {:unknown_field, "owners[0].programs[0].stderr_tail"}} =
-               LocusBackends.encode_answer(:status, %{owners: [with_tail]})
+               LocusBackends.encode_answer(:status, %{owners: [with_tail], memory: answer.memory})
 
       {:ok, %{owners: [%{programs: [scratch]} = scratch_owner]}} =
         LocusBackends.read_answer(:status, @vectors["status"]["answer"])
@@ -638,7 +638,62 @@ defmodule Prima.LocusBackendsTest do
       counted = %{scratch_owner | programs: [%{scratch | stderr_bytes: 3}]}
 
       assert {:error, {:unknown_field, "owners[0].programs[0].stderr_bytes"}} =
-               LocusBackends.encode_answer(:status, %{owners: [counted]})
+               LocusBackends.encode_answer(:status, %{owners: [counted], memory: answer.memory})
+    end
+
+    test "a hello and a status report the box's memory, every member required" do
+      for {type, body} <- [
+            {:hello, @vectors["hello"]["answer"]},
+            {:status, @vectors["status"]["answer"]}
+          ] do
+        assert {:ok, %{memory: memory} = answer} = LocusBackends.read_answer(type, body)
+
+        assert %{budget_bytes: budget, admission_limit_bytes: limit, held_bytes: held} = memory
+        assert budget > 0 and limit >= budget and held >= 0
+
+        wire = Jason.decode!(body)
+
+        for member <- ~w(budget_bytes admission_limit_bytes held_bytes) do
+          assert {:error, {:missing_field, "memory." <> ^member}} =
+                   wire
+                   |> update_in(["memory"], &Map.delete(&1, member))
+                   |> Jason.encode!()
+                   |> then(&LocusBackends.read_answer(type, &1))
+        end
+
+        for {member, value} <- [
+              {"budget_bytes", 0},
+              {"admission_limit_bytes", 0},
+              {"held_bytes", -1},
+              {"held_bytes", "0"}
+            ] do
+          assert {:error, {:invalid_field, "memory." <> ^member}} =
+                   wire
+                   |> put_in(["memory", member], value)
+                   |> Jason.encode!()
+                   |> then(&LocusBackends.read_answer(type, &1))
+        end
+
+        assert {:error, {:missing_field, "memory"}} =
+                 LocusBackends.encode_answer(type, Map.delete(answer, :memory))
+
+        assert {:error, {:unknown_field, "memory.extra"}} =
+                 LocusBackends.encode_answer(type, put_in(answer, [:memory, :extra], 1))
+      end
+    end
+
+    test "a sync may name its athanor's ceiling, a positive count of bytes, and omits it when it has none" do
+      {:ok, sync} = LocusBackends.read_control(@vectors["sync"]["body"])
+      assert sync.athanor_memory_bytes == 1_073_741_824
+
+      assert {:ok, body} = LocusBackends.encode_control(%{sync | athanor_memory_bytes: nil})
+      refute body =~ "athanor_memory_bytes"
+      assert {:ok, %{athanor_memory_bytes: nil}} = LocusBackends.read_control(body)
+
+      for value <- [0, -1, "1G", 1.5] do
+        assert {:error, {:invalid_field, "athanor_memory_bytes"}} =
+                 LocusBackends.encode_control(%{sync | athanor_memory_bytes: value})
+      end
     end
 
     test "the buffer is bounded by lines as well as bytes, each line charged its framing" do

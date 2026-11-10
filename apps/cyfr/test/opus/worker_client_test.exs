@@ -250,9 +250,10 @@ defmodule Opus.WorkerClientTest do
 
   test "a start the service refuses 503 with its sentence is its refusal, answered once" do
     sentence =
-      "cyfr-locus cannot bound a runner's memory in this container, so it starts none: " <>
-        "start the locus-runtime service with the security option writable-cgroups=true " <>
-        "(Docker Engine 28 or later on a cgroup v2 host)"
+      "cyfr-locus cannot bound a runner's memory and CPU in this container, so it starts " <>
+        "none: start the locus-runtime service with the security option writable-cgroups=true " <>
+        "(Docker Engine 28 or later on a cgroup v2 host whose memory and cpu controllers " <>
+        "reach the container)"
 
     endpoint =
       serve!(%{

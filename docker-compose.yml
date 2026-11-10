@@ -536,13 +536,16 @@ services:
     deploy:
       resources:
         limits:
-          # Every backend has a memory bound of its own
-          # (LOCUS_BACKENDS_MEMORY_BYTES, 512 MiB): its processes, its
-          # home's tmpfs pages and the kernel memory charged to them,
-          # together, and a backend that reaches it is ended there alone.
-          # This limit bounds every backend running at once and the
-          # service beside them together.
-          memory: 1G
+          # Every backend session has a memory bound of its own
+          # (LOCUS_BACKENDS_MEMORY_BYTES, 512 MiB, or its row's): its
+          # processes, its home's tmpfs pages and the kernel memory charged
+          # to them, together, and a session that reaches it is ended there
+          # alone. The service admits a session only while the bounds of
+          # the sessions it holds stay within LOCUS_BACKENDS_MEMORY_BUDGET
+          # (1792 MiB) times LOCUS_BACKENDS_MEMORY_OVERCOMMIT (1), so this
+          # limit is that budget plus 256 MiB for the service beside them.
+          # Raise it with the budget (.env.example has the arithmetic).
+          memory: ${LOCUS_BACKENDS_MEMORY_LIMIT:-2G}
 
   # The backends island's egress guard, as the builds island's: cyfr-guard
   # in the namespace locus-backends shares, NET_ADMIN alone, the island's

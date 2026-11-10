@@ -675,7 +675,10 @@ defmodule Cyfr.StackShapeTest do
                "${CANARY_DIR:?set CANARY_DIR}:/canary:ro"
              ],
              "entrypoint" => chosen_pool_argv(release, backends, "BACKENDS_POOL"),
-             "environment" => ["LOCUS_BACKENDS_MEMORY_BYTES=${LOCUS_BACKENDS_MEMORY_BYTES:-}"]
+             "environment" => [
+               "LOCUS_BACKENDS_MEMORY_BYTES=${LOCUS_BACKENDS_MEMORY_BYTES:-}",
+               "LOCUS_BACKENDS_MEMORY_BUDGET=${LOCUS_BACKENDS_MEMORY_BUDGET:-}"
+             ]
            },
            backends.guard => guard_overlay("BACKENDS_IMAGE", backends),
            "cyfr-stand-in" => stand_in_overlay("BACKENDS_IMAGE", release, backends)
@@ -1280,6 +1283,30 @@ defmodule Cyfr.StackShapeTest do
     # The release's own health probe is the builds wire's; this service
     # probes the backends wire's instead.
     assert backends =~ Prima.LocusBackends.route(:health)
+
+    # The container's limit is a setting, since it holds the service's
+    # memory budget, which is a setting too; its default is the budget's
+    # default plus the service's 256 MiB of headroom.
+    assert [_, limit] =
+             Regex.run(
+               ~r/^          memory: \$\{LOCUS_BACKENDS_MEMORY_LIMIT:-([0-9]+[MG])\}$/m,
+               backends
+             )
+
+    env = %{"LOCUS_BACKENDS_KEY" => String.duplicate("ab", 32)}
+    {:ok, settings} = Locus.Config.from_env(&Map.get(env, &1), Map.keys(env))
+
+    assert limit_bytes(limit) == settings[:backends_memory_budget] + 256 * 1024 * 1024
+
+    example = read!(".env.locus.example")
+    assert example =~ "LOCUS_BACKENDS_MEMORY_LIMIT"
+    refute example =~ ~r/^#? ?LOCUS_BACKENDS_MEMORY_LIMIT=/m
+    assert read!(".env.example") =~ ~r/^# LOCUS_BACKENDS_MEMORY_LIMIT=#{limit}$/m
+  end
+
+  defp limit_bytes(limit) do
+    {count, unit} = Integer.parse(limit)
+    count * Map.fetch!(%{"M" => 1024 * 1024, "G" => 1024 * 1024 * 1024}, unit)
   end
 
   # The hardening is written once, so a role cannot miss one and a new role

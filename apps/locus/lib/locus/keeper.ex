@@ -28,8 +28,9 @@ defmodule Locus.Keeper do
   ## A run
 
   `run/2` asks for a spawn in the pool `build`, and every spawn it asks for
-  carries `memory_bytes`, the builder's bound (`Locus.Config.memory_bytes/0`):
-  a build is never run without one. cyfr-locus runs the command under a
+  carries `memory_bytes`, the builder's bound (`Locus.Config.memory_bytes/0`),
+  and `cpu_quota`, the builder's CPU (`Locus.Config.cpu_quota/0`): a build
+  is never run without them. cyfr-locus runs the command under a
   pooled uid with a 0700 home, `TMPDIR` inside it, an environment built
   from nothing but the command's `env`, resource limits, and a cgroup of
   its own holding the bound. The spawn's relay, running as this node's
@@ -48,7 +49,8 @@ defmodule Locus.Keeper do
   ## A long-lived spawn
 
   `spawn/2` (`Locus.Launcher`) asks for a spawn in the pool its spec names,
-  under the spec's `memory_bytes`, which every spec names, and answers its
+  under the spec's `memory_bytes` and `cpu_quota`, which every spec names,
+  and answers its
   handle once cyfr-locus reports it spawned, or the refusal. The caller
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, each
@@ -197,9 +199,12 @@ defmodule Locus.Keeper do
   # not taken within the bound closes its connection.
   @relay_send_timeout_ms 5_000
 
-  @memory_unavailable "cyfr-locus cannot bound a build's memory in this container, so it " <>
-                        "runs none: start the builder with the security option " <>
-                        "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
+  # `memory_unavailable` is the keeper's word for any bound it cannot
+  # enforce, the memory's or the CPU's.
+  @memory_unavailable "cyfr-locus cannot bound a build's memory and CPU in this container, " <>
+                        "so it runs none: start the builder with the security option " <>
+                        "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host " <>
+                        "whose memory and cpu controllers reach the container)"
 
   @doc false
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
@@ -291,9 +296,10 @@ defmodule Locus.Keeper do
   def run(server, %{argv: argv, env: env, stdin: stdin}, opts) do
     memory_bytes = memory_bytes!(opts)
     monitor = Process.monitor(server)
+    bounds = %{memory_bytes: memory_bytes, cpu_quota: Locus.Config.cpu_quota()}
 
     try do
-      case GenServer.call(server, {:spawn, argv, env, memory_bytes}, @start_timeout_ms) do
+      case GenServer.call(server, {:spawn, argv, env, bounds}, @start_timeout_ms) do
         {:ok, ref} ->
           await(%{
             phase: :running,
@@ -345,19 +351,26 @@ defmodule Locus.Keeper do
   # ————— a long-lived spawn —————
 
   @impl Locus.Launcher
-  def spawn(server, %{argv: argv, env: env, pool: pool, memory_bytes: memory_bytes} = spec)
-      when is_integer(memory_bytes) and memory_bytes > 0 do
+  def spawn(
+        server,
+        %{argv: argv, env: env, pool: pool, memory_bytes: memory_bytes, cpu_quota: cpu_quota} =
+          spec
+      )
+      when is_integer(memory_bytes) and memory_bytes > 0 and is_integer(cpu_quota) and
+             cpu_quota > 0 do
     ref = make_ref()
 
     opts = %{
       pool: pool,
       memory_bytes: memory_bytes,
+      cpu_quota: cpu_quota,
       control: Map.get(spec, :control, false) == true,
       isolation: Map.get(spec, :isolation),
       home: Map.get(spec, :home),
       home_max_bytes: Map.get(spec, :home_max_bytes),
       pty: Map.get(spec, :pty, false) == true,
-      hosts: Map.get(spec, :hosts)
+      hosts: Map.get(spec, :hosts),
+      heir: Map.get(spec, :heir)
     }
 
     try do
@@ -414,6 +427,20 @@ defmodule Locus.Keeper do
   @impl Locus.Launcher
   def release(server, %{ref: ref}, grace_ms) when is_integer(grace_ms) and grace_ms >= 0 do
     GenServer.cast(server, {:release, ref, grace_ms})
+  end
+
+  @impl Locus.Launcher
+  def fence(server, tag) do
+    GenServer.call(server, {:fence, tag}, @pool_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
+
+  @impl Locus.Launcher
+  def adopt(server, ledger, heir) when is_pid(heir) do
+    GenServer.call(server, {:adopt, ledger, heir}, @pool_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
   end
 
   @impl Locus.Launcher
@@ -681,6 +708,9 @@ defmodule Locus.Keeper do
          conns: %{},
          pools: %{},
          homes: %{},
+         # The heir tags fenced while no spawn of them was held: a spawn
+         # naming one is refused, so none starts after the fence's answer.
+         fences: %{},
          kept: kept_homes(opts),
          proc_root: Keyword.get(opts, :proc_root, "/proc")
        }}
@@ -796,8 +826,8 @@ defmodule Locus.Keeper do
   end
 
   @impl GenServer
-  def handle_call({:spawn, argv, env, memory_bytes}, {owner, _tag}, state) do
-    request = %{pool: @pool, argv: argv, env: env, memory_bytes: memory_bytes}
+  def handle_call({:spawn, argv, env, bounds}, {owner, _tag}, state) do
+    request = Map.merge(%{pool: @pool, argv: argv, env: env}, bounds)
 
     case start_spawn(state, request, %{kind: :run, owner: owner, from: nil}) do
       {:ok, ref, state} ->
@@ -810,6 +840,12 @@ defmodule Locus.Keeper do
         {:stop, {:shutdown, {:channel_lost, reason}}, {:error, {:spawn_failed, :channel_lost}},
          state}
     end
+  end
+
+  # A fence stands: every spawn naming its tag is refused, however many.
+  def handle_call({:spawn_handle, _ref, _argv, _env, %{heir: {_pid, tag}}}, _from, state)
+      when is_map_key(state.fences, tag) do
+    {:reply, {:error, {:spawn_failed, :fenced}}, state}
   end
 
   def handle_call({:spawn_handle, ref, argv, env, opts}, {owner, _tag} = from, state) do
@@ -958,6 +994,25 @@ defmodule Locus.Keeper do
     end
   end
 
+  def handle_call({:fence, tag}, _from, state) do
+    if Enum.any?(state.requests, fn {_ref, entry} -> match?({_pid, ^tag}, entry.heir) end),
+      do: {:reply, :pending, state},
+      else: {:reply, :none, %{state | fences: Map.put(state.fences, tag, true)}}
+  end
+
+  def handle_call({:adopt, ledger, heir}, _from, state) do
+    {tags, requests} =
+      Enum.map_reduce(state.requests, %{}, fn
+        {ref, %{heir: {_pid, %{ledger: ^ledger} = tag}} = entry}, requests ->
+          {[tag], Map.put(requests, ref, %{entry | heir: {heir, tag}})}
+
+        {ref, entry}, requests ->
+          {[], Map.put(requests, ref, entry)}
+      end)
+
+    {:reply, {:ok, List.flatten(tags)}, %{state | requests: requests}}
+  end
+
   def handle_call({:pool, pool}, from, state) do
     id = "pool-" <> Integer.to_string(state.next_id + 1)
 
@@ -1042,6 +1097,7 @@ defmodule Locus.Keeper do
 
         %{kind: :handle} ->
           notify(entry, ref, :released)
+          tell_heir(entry)
 
         _run_or_control ->
           notify(entry, ref, {:error, :channel_lost})
@@ -1189,8 +1245,8 @@ defmodule Locus.Keeper do
 
   defp redact_message({:attach, _token}), do: {:attach, :redacted}
 
-  defp redact_message({:spawn, _argv, _env, memory_bytes}),
-    do: {:spawn, :redacted, :redacted, memory_bytes}
+  defp redact_message({:spawn, _argv, _env, bounds}),
+    do: {:spawn, :redacted, :redacted, bounds}
 
   defp redact_message({:spawn_handle, ref, _argv, _env, opts}),
     do: {:spawn_handle, ref, :redacted, :redacted, opts}
@@ -1202,7 +1258,13 @@ defmodule Locus.Keeper do
 
   defp spawn_handle(ref, argv, env, opts, home, from, owner, state) do
     request =
-      %{pool: opts.pool, argv: argv, env: env, memory_bytes: opts.memory_bytes}
+      %{
+        pool: opts.pool,
+        argv: argv,
+        env: env,
+        memory_bytes: opts.memory_bytes,
+        cpu_quota: opts.cpu_quota
+      }
       |> put_given(:isolation, opts.isolation)
       |> put_given(:control, opts.control || nil)
       |> Map.merge(home)
@@ -1215,8 +1277,8 @@ defmodule Locus.Keeper do
 
     extra =
       if control?,
-        do: %{kind: :control, owner: owner, from: nil, ref: ref},
-        else: %{kind: :handle, owner: owner, from: from, ref: ref}
+        do: %{kind: :control, owner: owner, from: nil, ref: ref, heir: opts.heir},
+        else: %{kind: :handle, owner: owner, from: from, ref: ref, heir: opts.heir}
 
     case start_spawn(state, request, extra) do
       {:ok, ref, state} when control? ->
@@ -1480,6 +1542,7 @@ defmodule Locus.Keeper do
         kind: extra.kind,
         owner: extra.owner,
         from: extra.from,
+        heir: Map.get(extra, :heir),
         monitor: Process.monitor(extra.owner),
         id: id,
         token: token,
@@ -1875,8 +1938,16 @@ defmodule Locus.Keeper do
 
   defp notify(_entry, _ref, _message), do: :ok
 
+  defp tell_heir(%{heir: {pid, tag}}) when is_pid(pid),
+    do: Kernel.send(pid, {__MODULE__, {:heir, tag}, :released})
+
+  defp tell_heir(_entry), do: :ok
+
+  # An entry leaves for good only once nothing of its spawn is left (its
+  # retirement reported, or its spawn refused), so its heir hears so here.
   defp drop(state, ref) do
     {entry, requests} = Map.pop(state.requests, ref)
+    tell_heir(entry)
     Process.demonitor(entry.monitor, [:flush])
     if entry.conn, do: :gen_tcp.close(entry.conn)
 

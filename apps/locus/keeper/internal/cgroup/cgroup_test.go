@@ -59,7 +59,7 @@ func TestOwnReadsTheV2PathAndRefusesAnyOtherHierarchy(t *testing.T) {
 	}
 }
 
-func TestDelegateMovesTheRootsProcessesAsideAndEnablesMemory(t *testing.T) {
+func TestDelegateMovesTheRootsProcessesAsideAndEnablesMemoryAndCPU(t *testing.T) {
 	root := namespaceRoot(t, delegated())
 	keeperFiles(t, root, boundFiles...)
 	for _, self := range []string{"0::/\n", "0::/keeper\n"} {
@@ -71,7 +71,7 @@ func TestDelegateMovesTheRootsProcessesAsideAndEnablesMemory(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(root, keeperLeaf)); err != nil || !info.IsDir() {
 		t.Fatalf("no keeper group: %v", err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(root, "cgroup.subtree_control")); string(got) != "+memory" {
+	if got, _ := os.ReadFile(filepath.Join(root, "cgroup.subtree_control")); string(got) != "+memory +cpu" {
 		t.Fatalf("cgroup.subtree_control holds %q", got)
 	}
 }
@@ -84,6 +84,8 @@ func TestDelegateSaysWhyBoundsAreUnavailable(t *testing.T) {
 	}
 	noMemory := delegated()
 	noMemory["cgroup.controllers"] = "cpuset cpu io pids\n"
+	noCPU := delegated()
+	noCPU["cgroup.controllers"] = "cpuset io memory pids\n"
 	stuck := delegated()
 	stuck["cgroup.procs"] = "1\n"
 
@@ -96,6 +98,7 @@ func TestDelegateSaysWhyBoundsAreUnavailable(t *testing.T) {
 		"a cgroup v1 host":                  {"12:memory:/docker/0123abcd\n0::/\n", delegated(), "cgroup v2"},
 		"no cgroup v2 mount":                {"0::/\n", without("cgroup.controllers"), "not a cgroup v2 mount"},
 		"no memory controller":              {"0::/\n", noMemory, "memory controller is not enabled"},
+		"no cpu controller":                 {"0::/\n", noCPU, "cpu controller is not enabled"},
 		"the machine's root cgroup":         {"0::/\n", without("memory.max"), "not a delegated cgroup"},
 		"processes that do not move":        {"0::/\n", stuck, "processes remain"},
 	} {
@@ -135,7 +138,7 @@ func TestDrainNamesEveryProcessItCannotMove(t *testing.T) {
 		t.Fatalf("a process listed after its move: %v", err)
 	}
 
-	gone := namespaceRoot(t, map[string]string{"cgroup.controllers": "memory\n", "memory.max": "max\n", "cgroup.procs": "999999999\n"})
+	gone := namespaceRoot(t, map[string]string{"cgroup.controllers": "cpu memory\n", "memory.max": "max\n", "cgroup.procs": "999999999\n"})
 	_, err = Delegate(gone, []byte("0::/\n"))
 	if err == nil || !strings.Contains(err.Error(), "pid 999999999 (no /proc entry") {
 		t.Fatalf("a pid /proc does not know: %v", err)
@@ -227,7 +230,7 @@ func TestDelegateNamesTheProcessesItCouldNotSee(t *testing.T) {
 	}
 	waits := pausing(t, nil)
 	_, err := Delegate(root, []byte("0::/\n"))
-	if err == nil || !strings.Contains(err.Error(), "enabling the memory controller") ||
+	if err == nil || !strings.Contains(err.Error(), "enabling the memory and cpu controllers") ||
 		!strings.Contains(err.Error(), "1 processes of another pid namespace") {
 		t.Fatalf("a root the controller cannot be enabled for: %v", err)
 	}
@@ -236,14 +239,17 @@ func TestDelegateNamesTheProcessesItCouldNotSee(t *testing.T) {
 	}
 }
 
-// A group that could swap past its bound, or lose one process and live on,
-// is not held to it: a kernel without either file enforces no bound here.
+// A group that could swap past its bound, lose one process and live on,
+// or take every CPU is not held to its bounds: a kernel without any one of
+// those files enforces none here.
 func TestDelegateRefusesAKernelThatCannotHoldAGroupToItsBound(t *testing.T) {
-	for missing, present := range map[string][]string{
-		"memory.swap.max":  {"memory.max", "memory.oom.group"},
-		"memory.oom.group": {"memory.max", "memory.swap.max"},
-		"memory.max":       {"memory.swap.max", "memory.oom.group"},
-	} {
+	for _, missing := range boundFiles {
+		var present []string
+		for _, file := range boundFiles {
+			if file != missing {
+				present = append(present, file)
+			}
+		}
 		root := namespaceRoot(t, delegated())
 		keeperFiles(t, root, present...)
 		if m, err := Delegate(root, []byte("0::/\n")); err == nil || m != nil || !strings.Contains(err.Error(), "no "+missing) {
@@ -266,16 +272,19 @@ func TestDelegateRefusesAReadOnlyMount(t *testing.T) {
 	}
 }
 
-func TestCreateSetsTheBoundNoSwapAndTheGroupKill(t *testing.T) {
+func TestCreateSetsTheBoundsNoSwapAndTheGroupKill(t *testing.T) {
 	m := &Manager{root: t.TempDir()}
-	g, err := m.Create(Name(30001), 1<<30)
+	g, err := m.Create(Name(30001), 1<<30, 200_000)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if g.Path() != "/keeper-30001" {
 		t.Fatalf("path %q", g.Path())
 	}
-	for file, want := range map[string]string{"memory.max": "1073741824", "memory.swap.max": "0", "memory.oom.group": "1"} {
+	for file, want := range map[string]string{
+		"memory.max": "1073741824", "memory.swap.max": "0",
+		"memory.oom.group": "1", "cpu.max": "200000 100000",
+	} {
 		if got, err := os.ReadFile(filepath.Join(m.root, "keeper-30001", file)); err != nil || string(got) != want {
 			t.Errorf("%s holds %q (%v), want %q", file, got, err, want)
 		}
@@ -287,7 +296,7 @@ func TestCreateSetsTheBoundNoSwapAndTheGroupKill(t *testing.T) {
 		t.Fatalf("cgroup.procs holds %q", got)
 	}
 	for _, name := range []string{"", "keeper", "keeper-", "keeper-0", "keeper-30001/..", "../keeper-30001", "keeper-30001x"} {
-		if g, err := m.Create(name, 1<<30); err == nil {
+		if g, err := m.Create(name, 1<<30, 100_000); err == nil {
 			t.Errorf("Create(%q) made %v", name, g)
 		}
 	}
@@ -298,15 +307,15 @@ func TestCreateNeverReusesAnEarlierSpawnsGroup(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(m.root, "keeper-30002"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	g, err := m.Create(Name(30002), 1<<30)
+	g, err := m.Create(Name(30002), 1<<30, 100_000)
 	if err != nil {
 		t.Fatalf("an empty group left behind was not replaced: %v", err)
 	}
 	// What cannot be removed still holds something of the earlier spawn.
-	if again, err := m.Create(Name(30002), 1<<30); err == nil || !strings.Contains(err.Error(), "earlier spawn") {
+	if again, err := m.Create(Name(30002), 1<<30, 100_000); err == nil || !strings.Contains(err.Error(), "earlier spawn") {
 		t.Fatalf("Create over a group in use = %v, %v", again, err)
 	}
-	for _, file := range []string{"memory.max", "memory.swap.max", "memory.oom.group"} {
+	for _, file := range boundFiles {
 		if err := os.Remove(filepath.Join(m.root, "keeper-30002", file)); err != nil {
 			t.Fatal(err)
 		}
@@ -321,7 +330,7 @@ func TestCreateNeverReusesAnEarlierSpawnsGroup(t *testing.T) {
 
 func TestKillsTellsTheSpawnsBoundFromTheContainers(t *testing.T) {
 	m := &Manager{root: t.TempDir()}
-	g, err := m.Create(Name(30003), 1<<30)
+	g, err := m.Create(Name(30003), 1<<30, 100_000)
 	if err != nil {
 		t.Fatal(err)
 	}
