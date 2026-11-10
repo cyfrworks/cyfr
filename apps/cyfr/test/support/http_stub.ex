@@ -18,8 +18,7 @@ defmodule Cyfr.Test.HTTPStub do
   Setting a route again replaces it. A request nothing answers is answered
   500 and fails the test, as does a function that raises or whose process
   dies mid-request. `pass/1` makes the check pass whatever the requests
-  did. `down/1` stops the listener once the requests in flight have ended,
-  so every later connection is refused.
+  did.
 
   The check waits for the requests in flight, then stops the server. It
   runs after the test process has exited and after the test's later
@@ -88,9 +87,6 @@ defmodule Cyfr.Test.HTTPStub do
   @spec pass(t()) :: :ok
   def pass(%__MODULE__{server: server}), do: GenServer.call(server, :pass)
 
-  @spec down(t()) :: :ok
-  def down(%__MODULE__{server: server}), do: GenServer.call(server, :down, :infinity)
-
   defp put_route(%__MODULE__{server: server}, route, expected, fun)
        when is_function(fun, 1),
        do: GenServer.call(server, {:route, route, expected, fun})
@@ -131,7 +127,6 @@ defmodule Cyfr.Test.HTTPStub do
        in_flight: %{},
        pass: false,
        unexpected: nil,
-       awaiting_down: [],
        awaiting_verify: [],
        verifier: nil
      }}
@@ -200,9 +195,6 @@ defmodule Cyfr.Test.HTTPStub do
     {:reply, :ok, settle(%{state | pass: true, in_flight: %{}})}
   end
 
-  def handle_call(:down, from, state),
-    do: settle(%{state | awaiting_down: [from | state.awaiting_down]}) |> after_settle()
-
   def handle_call(:verify, {caller, _tag} = from, state) do
     Process.send_after(self(), :in_flight_wait_over, @in_flight_wait)
 
@@ -252,22 +244,10 @@ defmodule Cyfr.Test.HTTPStub do
     end
   end
 
-  # Once nothing is in flight, the listener stops for each `down/1` waiting
-  # and the check answers each `verify` waiting.
+  # The check answers only once nothing is in flight.
   defp settle(%{in_flight: in_flight} = state) when map_size(in_flight) > 0, do: state
 
   defp settle(state) do
-    state =
-      case state.awaiting_down do
-        [] ->
-          state
-
-        callers ->
-          state = stop_listener(state)
-          Enum.each(callers, &GenServer.reply(&1, :ok))
-          %{state | awaiting_down: []}
-      end
-
     case state.awaiting_verify do
       [] ->
         state
@@ -283,23 +263,13 @@ defmodule Cyfr.Test.HTTPStub do
   defp after_settle(%{awaiting_verify: :answered} = state), do: {:stop, :normal, state}
   defp after_settle(state), do: {:noreply, state}
 
-  # Stopping the listener closes its socket and its connections before it
-  # returns, so a connection after it is refused.
-  defp stop_listener(%{listener: nil} = state), do: state
-
-  defp stop_listener(%{listener: listener} = state) do
-    :ok = ThousandIsland.stop(listener)
-    %{state | listener: nil}
-  end
-
   # The server's end: every connection process, and with it any handler
   # still running, is killed before the listener stops.
-  defp reclaim(%{listener: nil} = state), do: state
-
   defp reclaim(%{listener: listener} = state) do
     {:ok, connections} = ThousandIsland.connection_pids(listener)
     Enum.each(connections, &Process.exit(&1, :kill))
-    stop_listener(state)
+    :ok = ThousandIsland.stop(listener)
+    state
   end
 
   defp verdict(%{pass: true}), do: :ok

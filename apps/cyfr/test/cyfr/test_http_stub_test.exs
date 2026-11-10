@@ -39,13 +39,17 @@ defmodule Cyfr.Test.HTTPStubTest do
     # mailbox, so the server has taken it by the time it answers a call
     # sent after.
     wait_until(fn -> Process.info(check, :status) == {:status, :waiting} end, 5_000)
-    _ = :sys.get_state(stub.server)
+    %{listener: server} = :sys.get_state(stub.server)
+    listener = ThousandIsland.Server.listener_pid(server)
+    {listening, _span} = ThousandIsland.Listener.acceptor_info(listener, 1)
+    assert :inet.sockname(listening) == {:ok, {{127, 0, 0, 1}, stub.port}}
 
     Process.exit(check, :kill)
 
     assert_receive {:DOWN, ^server_ref, :process, _, _}, 5_000
     assert_receive {:DOWN, ^handler_ref, :process, _, _}, 5_000
-    assert {:error, :econnrefused} = :gen_tcp.connect(~c"127.0.0.1", stub.port, [])
+    # Another server may hold the freed port; inspect the socket the stub owned.
+    assert {:error, _closed} = :inet.sockname(listening)
 
     # The check `open/0` registered would find the server gone; this
     # replaces it under the same name.

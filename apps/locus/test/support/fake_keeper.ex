@@ -452,6 +452,8 @@ defmodule Locus.Test.FakeKeeper do
   # The command's stderr goes to `conn` as it arrives, or is held for a
   # relay that has not dialled; its stdout is read at its exit.
   defp run(fake, spawn_id, request, conn, {dir, input, output}) do
+    # A release may kill the shell before it opens its redirection.
+    File.write!(output, "")
     env = Enum.map(request["env"], fn {k, v} -> "#{k}=#{v}" end)
 
     port =

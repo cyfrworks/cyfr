@@ -201,8 +201,8 @@ async function main(browser) {
     await login.until(/The passphrase again: /);
     login.type(passphrase);
     const code = (await login.until(/Its code is ([0-9a-f]{16})\./))[1];
-    const addUrl = (await login.until(/(https:\/\/dir\.test\/account\/add#\S+)/))[1];
-    const approveKey = (await login.until(/cyfr device approve (\S+)/))[1];
+    const addUrl = (await login.until(/(https:\/\/dir\.test\/account\/add#\S+)\s/))[1];
+    const approveKey = (await login.until(/cyfr device approve (\S+)\s/))[1];
     await login.until(/Your name: @/);
     login.type(NAME);
     const params = new URLSearchParams(new URL(addUrl).hash.slice(1));
