@@ -2,141 +2,101 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The load check: tests/load-check/run.sh [-n] [-s SUBJECT[,SUBJECT...]] [-r ROUNDS] [-o OUTDIR]
+# The load check:
+#   tests/load-check/run.sh [-n] [-s SUBJECT,...] [-c CONDITION,...] [-r ROUNDS] [-o OUTDIR]
 #
-# Whether each check still passes, and how much slower it runs, on a
-# quarter of this host's cores while the other quarters are busy, and
-# beside a second copy of itself (README.md says what its answer decides).
-# It takes the whole machine, so it runs only under scripts/heavy-check.sh's
-# exclusive lane (HEAVY_CHECK_HELD=exclusive), for example
-#   scripts/heavy-check.sh -t 43200 -- tests/load-check/run.sh
-# and refuses with 64 anywhere else. -n prints the plan, the quarters each
-# run takes and the time expected, and runs nothing, in any lane or none.
-# -s picks the subjects by name (all by default), -r the rounds (3), -o
-# a new or empty directory for the report and the logs (by default a fresh
-# /tmp/cyfr-evidence.load-check.XXXXXX, which scripts/janitor.sh removes
-# after seven days).
+# Runs each subject of its table on quarters of this host's cores, busy,
+# beside a copy of itself and on the whole machine, and reports what
+# passed; README.md says what it measures and what its answer decides. It
+# runs only in scripts/heavy-check.sh's exclusive lane
+# (HEAVY_CHECK_HELD=exclusive) and refuses with 64 in any other. -n prints
+# the plan, each run's processors and the expected time, and runs nothing,
+# in any lane. -s picks subjects (all), -c conditions (busy,pair,whole,alone),
+# -r rounds (1), -o a new or empty directory for the report (a fresh
+# /tmp/cyfr-evidence.load-check.XXXXXX).
 #
-# The quarters. The host's online processors (LOAD_CHECK_CPU_ROOT, default
-# /sys/devices/system/cpu: its `online` list and each processor's
-# topology/thread_siblings_list) group into whole cores, one core per
-# siblings list, ordered by their lowest processor. The first 4k cores, k
-# the cores divided by four and rounded down, are cut in that order into
-# four quarters of k cores, both threads of a core always in one quarter;
-# cores left over run nothing of the check's. Every command runs under
-# `taskset -c` on the processors it is given, which every process it
-# starts inherits, so nproc, the Erlang runtime and cargo size themselves
-# to them.
+# Quarters: the online processors (LOAD_CHECK_CPU_ROOT, default
+# /sys/devices/system/cpu) group into whole cores, one per
+# thread_siblings_list, ordered by their lowest processor; the first 4k of
+# them, k the cores divided by four, make four quarters of k cores in that
+# order. Every command runs under `taskset -c` on its processors.
 #
 # The table, tests/load-check/subjects.tsv (LOAD_CHECK_SUBJECTS names
-# another), is one row per line of eight fields separated by single tabs:
-#   kind  name  quarters  pair  expect  deadline  needs  command
-# kind is prep (a step that prepares every scratch worktree, in table
-# order), load (a step of the busy load), image (the busy load's image
-# build) or subject; name is [a-z0-9-]+ and unique within its kind;
-# quarters is a subject's 1, 2 or 4, where 4 means it takes the whole
-# machine and is not measured, and `-` for every other kind; pair is
-# `pair` for a subject that also runs beside a second copy of itself, else
-# `-`; expect is the seconds one run takes on its quarters, for the plan;
-# deadline is the seconds after which a run is stopped; needs is `-` or a
-# command run by bash from the checkout's root before any work, which
-# exits 0 when the row's prerequisite holds and otherwise prints why not;
-# command is run by bash from the scratch worktree's root. Lines that
-# start with # and blank lines are skipped. A bad line is refused with 65,
-# naming it.
+# another): nine fields separated by single tabs; # lines and blank lines
+# are skipped and a bad line is refused with 65.
+#   kind      prep (prepares each scratch worktree, in order), warm, load
+#             (a step of the busy load), image (the busy load's image
+#             build) or subject
+#   name      [a-z0-9-]+, unique within its kind
+#   quarters  a subject's 1, 2 or 4 (4: listed, not measured), else -
+#   with      a subject's further conditions, pair and whole,
+#             comma-separated, else -
+#   warm      a subject's warm row, else -: run once in each worktree that
+#             runs the subject, before its first run, unmeasured
+#   expect    the seconds a run takes on its quarters busy, for the plan; a
+#             whole run is planned at half of it
+#   deadline  the seconds after which a run, a prep, a warm or a load step
+#             is stopped
+#   needs     - or a command run by bash from the checkout's root before
+#             any work: 0 when the row's prerequisite holds, else it says
+#             why not
+#   command   run by bash from the scratch worktree's root
 #
-# The scratch worktrees are detached checkouts of the checkout's HEAD
-# (uncommitted changes are not measured), under LOAD_CHECK_WORKTREES
-# (default the checkout's parent directory), each with its own sources,
-# _build and deps: a runs the subjects, b the second copy of a paired
-# subject, and w1 to w3 the busy load, one for each quarter a subject
-# leaves. Every prep row runs in each, cold, with the whole machine: a's
-# first, then the others side by side; their times are reported as what
-# the worktrees cost to build cold. A subject whose precondition fails is
-# skipped with its reason before any work, and so is one that exits 69
-# (a missing prerequisite) in any run; a skipped subject never counts as
-# passed.
+# Each round runs every chosen condition a subject has, in this order:
+# busy (its quarters, the busy load on every other quarter), pair (copy a
+# on quarters 1 to q, copy b on q+1 to 2q, from another worktree), whole
+# (all four quarters, nothing beside it); then alone (its quarters, the
+# others idle) when busy or pair failed in that round, or when neither is
+# chosen. A run's status is passed, failed, deadline (stopped at its
+# deadline), skipped (it exited 69, or 77 as the proxy HSTS proof does for
+# a missing prerequisite) or void (a run that passed while the busy load
+# did not hold, or with a process or a container outside its processors).
+# A skip ends the subject's runs, but for the alone run that decides a
+# failure seen before it.
 #
-# The runs. Each subject runs once unmeasured to warm its worktrees (a,
-# and b beside it for a paired subject), then ROUNDS rounds of these runs,
-# in an order turned by one each round:
-#   alone   on quarters 1 to q (q its quarters), the others idle
-#   busy    on quarters 1 to q, the busy load on every other quarter
-#   pair    a paired subject: a on quarters 1 to q, b on q+1 to 2q
-#   whole   a subject of two quarters: on all four, as it runs today
-# The busy load is one worker for each quarter the subject leaves, in a
-# worktree of its own, running the load rows in a loop, and on the last
-# of those quarters a second worker running the image rows in a loop (a
-# cold image build, which the Docker daemon runs on any processor); each
-# step is stopped at its row's deadline, which counts as the step
-# failing. The subject starts once every worker has begun, and the
-# workers stop when it ends. A busy run counts as passed only when every
-# worker still ran when the subject ended and no load step failed while
-# it ran; otherwise it is void, naming the worker.
+# Each command's environment loses MIX_BUILD_PATH, MIX_DEPS_PATH,
+# CYFR_TEST_CORES, CARGO_BUILD_JOBS and ERL_FLAGS, keeps HEAVY_CHECK_HELD
+# (a heavy-check inside it runs in place), and gains PROOF_RUN_PREFIX
+# (scripts/lib/run-names.sh's prefix for its worktree with this script's
+# pid), HEAVY_CHECK_CPUS (its processors, as docker's --cpuset-cpus takes
+# them), LOAD_CHECK_OUT (an empty directory of the run's own) and
+# LOAD_CHECK_PARTS (the partitions scripts/commit-gate.sh runs on that
+# many processors; tests/load-check/run-test.sh holds the two rules
+# together).
 #
-# Placement is checked while each run goes, every LOAD_CHECK_SAMPLE
-# seconds (5): every process descended from a run's or a worker's leader
-# must be allowed exactly the processors it was given (Cpus_allowed_list).
-# A process outside them is named, and its run counts as void rather than
-# passed. Docker containers named under a run's prefix are recorded with
-# their cpuset, and the host's other containers at the start: what Docker
-# runs, the host's services and the agents' own processes are the
-# placement this check does not hold.
-#
-# The report, in OUTDIR: report.tsv, one line per run (subject, round,
-# condition, copy, processors, status, exit, seconds, started and ended as
-# Unix times, note, log), where the
-# status is passed, failed, deadline (stopped at the row's deadline),
-# skipped or void; skips.tsv, masks.tsv (processes outside their
-# processors), docker.tsv, prep.tsv, plan.txt and report.txt, the summary
-# it prints last. The summary gives, per subject and condition, the runs
-# passed and the median seconds of the passed runs, and two ratios kept
-# apart: busy against alone (each condition's median over the alone
-# median; pair counts both copies' runs), and, for a subject of two
-# quarters, two quarters against the whole machine (the alone median over
-# the whole median). A ratio with no passed run on either side is n/a.
-#
-# Exits 0 when every selected subject of one or two quarters was measured
-# and every one of its runs passed, and the clean-up was clean; 1 when a subject failed busy or
-# beside its second copy while it passed alone (named "fails busy"), when
-# any other run failed or was void, when preparation failed, or when the
-# clean-up left something; 69 when nothing failed but a subject was
-# skipped; 64 on usage or outside the exclusive lane; 65 for a bad table;
-# 69 without Bash 5, taskset, four whole cores, git, python3 or pgrep, or
-# when a precondition of a prep, load or image row fails, before any work;
-# 130, 143 and 129 on INT, TERM and HUP.
+# The report, in OUTDIR: report.tsv (one line per run), skips.tsv,
+# masks.tsv (processes and containers outside their processors),
+# docker.tsv, prep.tsv, warm.tsv, plan.txt, and report.txt, the summary it
+# prints last. Exits 0 when every measured subject held; 1 when one failed
+# (FAILS BUSY: it failed busy or beside its copy and passed alone), a run
+# was void, a prep failed or the clean-up left something; 69 when nothing
+# failed but a subject was skipped; before any work, 64 on usage or
+# outside the exclusive lane, 65 for a bad table, and 69 without Bash 5,
+# taskset, four whole cores, git, python3 or pgrep, or when a prep, load or
+# image row's precondition fails; 130, 143 and 129 on INT, TERM and HUP.
 #
 # Every command runs contained (scripts/lib/contain.sh) under a leader
 # that, stopped, passes the signal to its process group and waits for it
-# to empty, so a subject's own clean-up runs; a stop gives it
-# LOAD_CHECK_GRACE seconds (120) before the session is killed. On every exit path, a signal
-# and a deadline included, the check stops every run and worker it started,
-# then removes the Docker containers, networks, volumes and image tags,
-# and the $TMPDIR entries, named under its run prefixes, then its
-# worktrees; anything it cannot remove is named on stderr and makes the
-# exit 1. The prefixes are scripts/lib/run-names.sh's for each worktree
-# with this script's pid, each run's PROOF_RUN_PREFIX, so scripts/janitor.sh
-# knows what a killed run left; a worktree a load check that is gone left
-# is removed at the next one's start. Each command's environment loses
-# MIX_BUILD_PATH, MIX_DEPS_PATH, CYFR_TEST_CORES, CARGO_BUILD_JOBS and
-# ERL_FLAGS, so it builds in its own worktree and sizes itself to its
-# processors; it keeps HEAVY_CHECK_HELD, so a heavy-check inside it runs in
-# place; and it gains PROOF_RUN_PREFIX, LOAD_CHECK_OUT (an empty directory
-# of the run's own) and LOAD_CHECK_PARTS (the partitions the commit gate
-# runs on that many processors: eight on sixteen or more, else four, as
-# scripts/commit-gate.sh picks them).
+# to empty, within LOAD_CHECK_GRACE seconds (120). On every exit path the
+# check stops all it started, removes the Docker objects named under its
+# prefixes, then its worktrees and the $TMPDIR entries named under its
+# prefixes; when a process outlived its stop or a container could not be
+# removed it keeps those worktrees and entries, which the process or the
+# container may still hold, and names each. What it leaves makes the exit
+# 1. A worktree that a load check that is gone left is removed at the next
+# one's start.
 set -uo pipefail
 
-usage() { echo "usage: $0 [-n] [-s SUBJECT[,SUBJECT...]] [-r ROUNDS] [-o OUTDIR]"; }
+usage() { echo "usage: $0 [-n] [-s SUBJECT,...] [-c CONDITION,...] [-r ROUNDS] [-o OUTDIR]"; }
 refuse() { echo "load check: $2" >&2; exit "$1"; }
 
-DRY=false ROUNDS=3 PICK= OUT=
+DRY=false ROUNDS=1 PICK= OUT= CHOSEN=busy,pair,whole,alone
 while [ "$#" -gt 0 ]; do
   case $1 in
     -n) DRY=true; shift ;;
-    -s|-r|-o)
+    -s|-r|-o|-c)
       [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 64; }
-      case $1 in -s) PICK="${PICK:+$PICK,}$2" ;; -r) ROUNDS=$2 ;; *) OUT=$2 ;; esac
+      case $1 in -s) PICK="${PICK:+$PICK,}$2" ;; -r) ROUNDS=$2 ;; -c) CHOSEN=$2 ;; *) OUT=$2 ;; esac
       shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 64 ;;
@@ -144,6 +104,12 @@ while [ "$#" -gt 0 ]; do
 done
 case $ROUNDS in ''|0*|*[!0-9]*) refuse 64 'the rounds are a positive whole number' ;; esac
 [ "${#ROUNDS}" -le 2 ] || refuse 64 'at most 99 rounds'
+declare -A CHOICE=()
+IFS=, read -r -a conds <<<"$CHOSEN"
+for c in "${conds[@]}"; do
+  case $c in busy|pair|whole|alone) CHOICE[$c]=1 ;; *) refuse 64 "no condition is called '$c': busy, pair, whole or alone" ;; esac
+done
+chosen() { [ -n "${CHOICE[$1]:-}" ]; }
 if ! $DRY && [ "${HEAVY_CHECK_HELD:-}" != exclusive ]; then
   refuse 64 'it takes the whole host: run it under scripts/heavy-check.sh without -s or -p (or with -n for the plan alone)'
 fi
@@ -167,6 +133,9 @@ SAMPLE=${LOAD_CHECK_SAMPLE:-5}
 for n in "$GRACE" "$SAMPLE"; do
   case $n in ''|0*|*[!0-9]*) refuse 64 'LOAD_CHECK_GRACE and LOAD_CHECK_SAMPLE are positive whole seconds' ;; esac
 done
+
+# The partitions scripts/commit-gate.sh runs on $1 processors.
+gate_parts() { if [ "$1" -ge 16 ]; then echo 8; else echo 4; fi; }
 
 # --- the quarters ------------------------------------------------------------
 
@@ -221,40 +190,49 @@ span() { local q lists=(); for ((q = $1; q <= $2; q++)); do lists+=("${QUARTER[$
 
 TABLE=${LOAD_CHECK_SUBJECTS:-$HERE/subjects.tsv}
 [ -f "$TABLE" ] && [ -r "$TABLE" ] || refuse 65 "$TABLE: there is no table to read"
-S_NAME=() S_Q=() S_PAIR=() S_EXPECT=() S_DEADLINE=() S_NEEDS=() S_CMD=()
+S_NAME=() S_Q=() S_PAIR=() S_WHOLE=() S_WARM=() S_EXPECT=() S_DEADLINE=() S_NEEDS=() S_CMD=()
 P_NAME=() P_EXPECT=() P_DEADLINE=() P_NEEDS=() P_CMD=()
 L_NAME=() L_DEADLINE=() L_NEEDS=() L_CMD=()
 I_NAME=() I_DEADLINE=() I_NEEDS=() I_CMD=()
-declare -A row_seen=()
+declare -A row_seen=() WARM_EXPECT=() WARM_DEADLINE=() WARM_CMD=()
 number=0
 while IFS= read -r line || [ -n "$line" ]; do
   number=$((number + 1))
   case $line in '#'*) continue ;; esac
   [ -n "${line//[[:space:]]/}" ] || continue
   tabs=${line//[^$'\t']/}
-  [ "${#tabs}" = 7 ] || refuse 65 "$TABLE:$number: a row has eight fields separated by single tabs"
+  [ "${#tabs}" = 8 ] || refuse 65 "$TABLE:$number: a row has nine fields separated by single tabs"
   case $line in $'\t'*|*$'\t\t'*|*$'\t') refuse 65 "$TABLE:$number: a field is empty" ;; esac
-  IFS=$'\t' read -r kind name quarters pair expect deadline needs command <<<"$line"
-  case $kind in prep|load|image|subject) ;; *) refuse 65 "$TABLE:$number: no kind is called '$kind'" ;; esac
+  IFS=$'\t' read -r kind name quarters with warm expect deadline needs command <<<"$line"
+  case $kind in prep|warm|load|image|subject) ;; *) refuse 65 "$TABLE:$number: no kind is called '$kind'" ;; esac
   [[ $name =~ ^[a-z0-9-]+$ ]] || refuse 65 "$TABLE:$number: the name '$name' is not [a-z0-9-]+"
   [ -z "${row_seen[$kind/$name]+set}" ] || refuse 65 "$TABLE:$number: a second $kind is called $name"
-  row_seen[$kind/$name]=1
+  row_seen[$kind/$name]=$number
   if [ "$kind" = subject ]; then
     case $quarters in 1|2|4) ;; *) refuse 65 "$TABLE:$number: a subject takes 1, 2 or 4 quarters, not '$quarters'" ;; esac
-    case $pair in pair|-) ;; *) refuse 65 "$TABLE:$number: pair is 'pair' or '-', not '$pair'" ;; esac
-  elif [ "$quarters" != - ] || [ "$pair" != - ]; then
-    refuse 65 "$TABLE:$number: only a subject takes quarters and a pair"
+    case $with in -|pair|whole|pair,whole|whole,pair) ;; *) refuse 65 "$TABLE:$number: with is pair, whole, both or -, not '$with'" ;; esac
+    [[ $warm =~ ^(-|[a-z0-9-]+)$ ]] || refuse 65 "$TABLE:$number: the warm row '$warm' is not a name"
+  elif [ "$quarters" != - ] || [ "$with" != - ] || [ "$warm" != - ]; then
+    refuse 65 "$TABLE:$number: only a subject takes quarters, conditions and a warm row"
   fi
   [[ $expect =~ ^[1-9][0-9]{0,5}$ ]] && [[ $deadline =~ ^[1-9][0-9]{0,5}$ ]] ||
     refuse 65 "$TABLE:$number: expect and deadline are positive seconds"
   case $kind in
-    subject) S_NAME+=("$name") S_Q+=("$quarters") S_PAIR+=("$pair") S_EXPECT+=("$expect") S_DEADLINE+=("$deadline") S_NEEDS+=("$needs") S_CMD+=("$command") ;;
+    subject)
+      S_NAME+=("$name") S_Q+=("$quarters") S_WARM+=("$warm") S_EXPECT+=("$expect") S_DEADLINE+=("$deadline") S_NEEDS+=("$needs") S_CMD+=("$command")
+      case ,$with, in *,pair,*) S_PAIR+=(1) ;; *) S_PAIR+=('') ;; esac
+      case ,$with, in *,whole,*) S_WHOLE+=(1) ;; *) S_WHOLE+=('') ;; esac ;;
     prep) P_NAME+=("$name") P_EXPECT+=("$expect") P_DEADLINE+=("$deadline") P_NEEDS+=("$needs") P_CMD+=("$command") ;;
+    warm) WARM_EXPECT[$name]=$expect WARM_DEADLINE[$name]=$deadline WARM_CMD[$name]=$command ;;
     load) L_NAME+=("$name") L_DEADLINE+=("$deadline") L_NEEDS+=("$needs") L_CMD+=("$command") ;;
     image) I_NAME+=("$name") I_DEADLINE+=("$deadline") I_NEEDS+=("$needs") I_CMD+=("$command") ;;
   esac
 done <"$TABLE"
 [ "${#S_NAME[@]}" -gt 0 ] && [ "${#L_NAME[@]}" -gt 0 ] || refuse 65 "$TABLE: the table needs a subject row and a load row"
+for i in "${!S_NAME[@]}"; do
+  [ "${S_WARM[$i]}" = - ] || [ -n "${WARM_CMD[${S_WARM[$i]}]+set}" ] ||
+    refuse 65 "$TABLE: the subject ${S_NAME[$i]} names the warm row ${S_WARM[$i]}, which the table lacks"
+done
 
 SEL=()
 if [ -n "$PICK" ]; then
@@ -268,6 +246,20 @@ if [ -n "$PICK" ]; then
 else
   SEL=("${!S_NAME[@]}")
 fi
+
+# The conditions subject $1 runs, as chosen, in their order; alone stands
+# for the alone run after a failure, or on its own when neither busy nor
+# pair is chosen.
+conditions() {
+  local c=()
+  if chosen busy; then c+=(busy); fi
+  if chosen pair && [ -n "${S_PAIR[$1]}" ]; then c+=(pair); fi
+  if chosen whole && [ -n "${S_WHOLE[$1]}" ]; then c+=(whole); fi
+  if chosen alone; then c+=(alone); fi
+  echo "${c[*]}"
+}
+# Whether subject $1 runs alone only after a failed busy or pair run.
+alone_decides() { chosen busy || { chosen pair && [ -n "${S_PAIR[$1]}" ]; }; }
 
 # Whether needs command $1 holds, run from the checkout's root; when it
 # does not, REASON says why.
@@ -285,12 +277,15 @@ needs_hold() {
 SKIP=() MEASURED=() OUTSIDE=()
 for i in "${SEL[@]}"; do
   if [ "${S_Q[$i]}" = 4 ]; then OUTSIDE+=("$i"); continue; fi
+  [ -n "$(conditions "$i")" ] || continue
   if needs_hold "${S_NEEDS[$i]}"; then MEASURED+=("$i"); else SKIP[$i]=$REASON; fi
 done
 PAIRED=false WORKERS=0
+declare -A WARMS=()
 for i in "${MEASURED[@]}"; do
-  [ "${S_PAIR[$i]}" != pair ] || PAIRED=true
-  [ $((4 - S_Q[i])) -le "$WORKERS" ] || WORKERS=$((4 - S_Q[i]))
+  if chosen pair && [ -n "${S_PAIR[$i]}" ]; then PAIRED=true; fi
+  if chosen busy && [ $((4 - S_Q[i])) -gt "$WORKERS" ]; then WORKERS=$((4 - S_Q[i])); fi
+  [ "${S_WARM[$i]}" = - ] || WARMS[${S_WARM[$i]}]=1
 done
 ROLES=()
 if [ "${#MEASURED[@]}" -gt 0 ]; then
@@ -301,8 +296,10 @@ fi
 REFUSAL=
 if [ "${#MEASURED[@]}" -gt 0 ]; then
   for i in "${!P_NAME[@]}"; do needs_hold "${P_NEEDS[$i]}" || { REFUSAL="the prep row ${P_NAME[$i]}: $REASON"; break; }; done
-  for i in "${!L_NAME[@]}"; do [ -n "$REFUSAL" ] || needs_hold "${L_NEEDS[$i]}" || REFUSAL="the load row ${L_NAME[$i]}: $REASON"; done
-  for i in "${!I_NAME[@]}"; do [ -n "$REFUSAL" ] || needs_hold "${I_NEEDS[$i]}" || REFUSAL="the image row ${I_NAME[$i]}: $REASON"; done
+  if [ "$WORKERS" -gt 0 ]; then
+    for i in "${!L_NAME[@]}"; do [ -n "$REFUSAL" ] || needs_hold "${L_NEEDS[$i]}" || REFUSAL="the load row ${L_NAME[$i]}: $REASON"; done
+    for i in "${!I_NAME[@]}"; do [ -n "$REFUSAL" ] || needs_hold "${I_NEEDS[$i]}" || REFUSAL="the image row ${I_NAME[$i]}: $REASON"; done
+  fi
 fi
 
 # --- the plan ----------------------------------------------------------------
@@ -314,48 +311,45 @@ human() {
   elif [ "$s" -ge 60 ]; then printf '%dm%02ds' $((s / 60)) $((s % 60))
   else printf '%ds' "$s"; fi
 }
-# The conditions of subject $1, in round 1's order.
-conditions() {
-  local c=(alone busy)
-  [ "${S_PAIR[$1]}" != pair ] || c+=(pair)
-  [ "${S_Q[$1]}" != 2 ] || c+=(whole)
-  echo "${c[*]}"
-}
 plan() {
-  local i q c prep=0 total=0 runs t conds
-  echo "load check of $ROOT at $(git -C "$ROOT" rev-parse --short HEAD), $ROUNDS round(s)"
+  local i q c prep=0 warm=0 total=0 t w names
+  echo "load check of $ROOT at $(git -C "$ROOT" rev-parse --short HEAD), $ROUNDS round(s) of ${CHOSEN//,/ }"
   echo "processors: $ALL; ${#CORES[@]} whole cores, $PER in each quarter"
   for q in 1 2 3 4; do echo "quarter $q: ${QUARTER[$q]}"; done
   echo "outside every quarter: ${LEFT:-none}"
   for i in "${!P_NAME[@]}"; do prep=$((prep + P_EXPECT[i])); done
+  for w in "${!WARMS[@]}"; do warm=$((warm + WARM_EXPECT[$w])); done
   if [ "${#ROLES[@]}" -gt 0 ]; then
-    echo "scratch worktrees: ${ROLES[*]}, in ${LOAD_CHECK_WORKTREES:-$(dirname "$ROOT")}, each prepared cold by ${P_NAME[*]:-nothing}: about $(human "$prep") for a, then as long again for the others side by side"
-    echo "busy load: on each quarter a subject leaves, ${L_NAME[*]} in a loop; on the last of them, ${I_NAME[*]:-no image build} in a loop besides"
-    total=$((2 * prep))
+    echo "scratch worktrees: ${ROLES[*]}, in ${LOAD_CHECK_WORKTREES:-$(dirname "$ROOT")}, prepared cold by ${P_NAME[*]:-nothing}: about $(human "$prep") for a, then as long for the others side by side"
+    names=$(printf '%s\n' "${!WARMS[@]}" | sort | paste -sd' ' -)
+    echo "warmed: ${names:-nothing}, about $(human "$warm")"
+    if [ "$WORKERS" -gt 0 ]; then
+      echo "busy load: on each quarter a subject leaves, ${L_NAME[*]} in a loop; on the last of them, ${I_NAME[*]:-no image build} in a loop besides"
+    fi
+    total=$((2 * prep + warm))
   fi
   for i in "${SEL[@]}"; do
     q=${S_Q[$i]}
     if [ "$q" = 4 ]; then echo "subject ${S_NAME[$i]}: not measured: it takes all four quarters"; continue; fi
     if [ -n "${SKIP[$i]+set}" ]; then echo "subject ${S_NAME[$i]}: skipped: ${SKIP[$i]}"; continue; fi
-    conds=$(conditions "$i")
-    set -- $conds
-    runs=$((1 + ROUNDS * $#))
-    t=$((runs * S_EXPECT[i]))
-    total=$((total + t))
-    printf 'subject %s: %s quarter(s), %s runs of about %s, %s:' "${S_NAME[$i]}" "$q" "$runs" "$(human "${S_EXPECT[$i]}")" "$(human "$t")"
-    printf ' warm-up a %s' "$(span 1 "$q")"
-    [ "${S_PAIR[$i]}" != pair ] || printf ' b %s' "$(span $((q + 1)) $((2 * q)))"
-    for c in $conds; do
+    case " ${MEASURED[*]} " in *" $i "*) ;; *) echo "subject ${S_NAME[$i]}: none of its conditions is chosen"; continue ;; esac
+    t=0
+    printf 'subject %s: %s quarter(s), warm %s;' "${S_NAME[$i]}" "$q" "${S_WARM[$i]}"
+    for c in $(conditions "$i"); do
       case $c in
-        alone) printf '; alone %s' "$(span 1 "$q")" ;;
-        busy) printf '; busy %s, load %s' "$(span 1 "$q")" "$(span $((q + 1)) 4)" ;;
-        pair) printf '; pair a %s b %s' "$(span 1 "$q")" "$(span $((q + 1)) $((2 * q)))" ;;
-        whole) printf '; whole %s' "$(span 1 4)" ;;
+        busy) printf ' busy %s, load %s;' "$(span 1 "$q")" "$(span $((q + 1)) 4)"; t=$((t + S_EXPECT[i])) ;;
+        pair) printf ' pair a %s b %s;' "$(span 1 "$q")" "$(span $((q + 1)) $((2 * q)))"; t=$((t + S_EXPECT[i])) ;;
+        whole) printf ' whole %s;' "$(span 1 4)"; t=$((t + S_EXPECT[i] / 2)) ;;
+        alone)
+          if alone_decides "$i"; then printf ' alone %s after a failure;' "$(span 1 "$q")"
+          else printf ' alone %s;' "$(span 1 "$q")"; t=$((t + S_EXPECT[i])); fi ;;
       esac
     done
-    printf '\n'
+    t=$((t * ROUNDS))
+    total=$((total + t))
+    printf ' about %s\n' "$(human "$t")"
   done
-  echo "expected: about $(human "$total") for ${#MEASURED[@]} measured subject(s), ${#SKIP[@]} skipped, ${#OUTSIDE[@]} not measured"
+  echo "expected: about $(human "$total") for ${#MEASURED[@]} measured subject(s), ${#SKIP[@]} skipped, ${#OUTSIDE[@]} not measured, besides an alone run after each failure"
   if [ -n "$REFUSAL" ]; then echo "refused: $REFUSAL"; fi
 }
 
@@ -381,19 +375,21 @@ WT_ROOT=$(cd "$WT_ROOT" 2>/dev/null && pwd -P) || refuse 64 "cannot use $WT_ROOT
 DOCKER_OK=false
 if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then DOCKER_OK=true; fi
 
-declare -A WT=() PREFIX_OF=()
+declare -A WT=() PREFIX_OF=() WARMED=()
 PREFIXES=("$OWN_PREFIX")
 MADE=()
 REGISTRY_OWNED=false
 FINISHED=false
+# What the clean-up could not do, and what may still hold the worktrees.
 CLEANUP_FAILED=
+HELD=
 
 # A leader: started contained, it runs its command in the background from
 # the directory it is given and waits for it; stopped, it passes the
 # signal to its process group, waits until nothing else of the group is
 # left, and exits 128 + the signal. A worker runs its steps in a loop the
-# same way and writes `begin NAME TIME` and `end NAME TIME STATUS` to its
-# status file around each.
+# same way, each stopped at its deadline (124), and writes `begin NAME
+# TIME` and `end NAME TIME STATUS` to its status file around each.
 read -r -d '' PRELUDE <<'EOF'
 lc_busy() {
   local f line pid rest
@@ -458,8 +454,7 @@ EOF
 WORKER="$PRELUDE"$'\n'"$WORKER"
 # Prints, for each LABEL:PID:PROCESSORS argument, every process descended
 # from PID, PID included, that is allowed other processors than
-# PROCESSORS, as LABEL<TAB>PID<TAB>NAME<TAB>ALLOWED, and then
-# `checked<TAB>LABEL<TAB>N`, N the processes it read.
+# PROCESSORS, as LABEL<TAB>PID<TAB>NAME<TAB>ALLOWED.
 read -r -d '' SAMPLER <<'EOF'
 import os, sys
 def cpus(text):
@@ -482,7 +477,7 @@ for entry in os.listdir("/proc"):
         children.setdefault(int(stat[stat.rfind(")") + 2:].split()[1]), []).append(int(entry))
 for arg in sys.argv[1:]:
     label, pid, want = arg.split(":", 2)
-    want, todo, seen = cpus(want), [int(pid)], 0
+    want, todo = cpus(want), [int(pid)]
     while todo:
         p = todo.pop()
         todo.extend(children.get(p, []))
@@ -493,11 +488,9 @@ for arg in sys.argv[1:]:
             continue
         if fields.get("State", "").strip().startswith(("Z", "X")):
             continue
-        seen += 1
         allowed = fields.get("Cpus_allowed_list", "").strip()
         if cpus(allowed) != want:
             print(f"{label}\t{p}\t{fields.get('Name', '').strip()}\t{allowed}")
-    print(f"checked\t{label}\t{seen}")
 EOF
 
 now() { printf '%s' "${EPOCHREALTIME/,/.}"; }
@@ -510,26 +503,30 @@ leader_alive() {
   case $rest in Z*|X*) return 1 ;; esac
 }
 say() { echo "==> load check: $*" >&2; }
+# Survivors $2 of what $1 names: recorded, and they keep the worktrees.
+survived() {
+  CLEANUP_FAILED="$CLEANUP_FAILED survivors of $1: $2;"
+  HELD="${HELD:+$HELD; }processes $2 of $1 outlived their stop"
+}
 
-# The jobs of the current step, each a contained, placed command: its
-# label, leader, processors, start, deadline (SECONDS), end, status, note.
-J_LABEL=() J_PID=() J_CPUS=() J_START=() J_DUE=() J_END=() J_STATUS=() J_NOTE=() J_LOG=() J_DEADLINE=()
-# The busy load's workers: leader, processors, status file.
+# The jobs of the current step, each a contained, placed command.
+J_LABEL=() J_PID=() J_CPUS=() J_START=() J_DUE=() J_END=() J_STATUS=() J_NOTE=() J_LOG=() J_DEADLINE=() J_PREFIX=()
+# The busy load's workers.
 W_PID=() W_CPUS=() W_FILE=() W_LABEL=()
-CONTEXT=
+CONTEXT= W_NOTE= BUSY_VOID= DOCKER_SEEN=
+reset_jobs() { J_LABEL=() J_PID=() J_CPUS=() J_START=() J_DUE=() J_END=() J_STATUS=() J_NOTE=() J_LOG=() J_DEADLINE=() J_PREFIX=(); }
 
-# launch LABEL WORKTREE PROCESSORS LOG OUTDIR DEADLINE COMMAND: starts it as
-# a job.
+# launch LABEL ROLE PROCESSORS LOG OUTDIR DEADLINE COMMAND: starts COMMAND
+# in ROLE's worktree as a job.
 launch() {
-  local k=${#J_PID[@]} parts=4 role=$2
-  [ "$(count "$3")" -lt 16 ] || parts=8
+  local k=${#J_PID[@]} role=$2
   mkdir -p "$5" || return 1
-  J_LABEL[$k]=$1 J_CPUS[$k]=$3 J_LOG[$k]=$4 J_NOTE[$k]= J_END[$k]= J_STATUS[$k]= J_DEADLINE[$k]=
+  J_LABEL[$k]=$1 J_CPUS[$k]=$3 J_LOG[$k]=$4 J_NOTE[$k]= J_END[$k]= J_STATUS[$k]= J_DEADLINE[$k]= J_PREFIX[$k]=${PREFIX_OF[$role]}
   J_START[$k]=$(now)
   J_DUE[$k]=$((SECONDS + $6))
   if ! contain_start -g "$GRACE" taskset -c "$3" \
       env -u MIX_BUILD_PATH -u MIX_DEPS_PATH -u CYFR_TEST_CORES -u CARGO_BUILD_JOBS -u ERL_FLAGS \
-      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" LOAD_CHECK_OUT="$5" LOAD_CHECK_PARTS="$parts" \
+      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="$3" LOAD_CHECK_OUT="$5" LOAD_CHECK_PARTS="$(gate_parts "$(count "$3")")" \
       "$BASH" -c "$LEADER" load-check-run "${WT[$role]}" "$7" >"$4" 2>&1 </dev/null; then
     J_PID[$k]=
     J_END[$k]=${J_START[$k]} J_STATUS[$k]=1 J_NOTE[$k]='could not start'
@@ -539,7 +536,8 @@ launch() {
 }
 
 # Every live job's and worker's processes against their processors, and
-# the containers named under their prefixes.
+# every container named under a live job's prefix: one with a cpuset must
+# have the job's processors, one without runs on any processor.
 sample() {
   local args=() i label pid name allowed k
   for i in "${!J_PID[@]}"; do
@@ -548,31 +546,33 @@ sample() {
   for i in "${!W_PID[@]}"; do [ -n "${W_PID[$i]}" ] && args+=("w$i:${W_PID[$i]}:${W_CPUS[$i]}"); done
   [ "${#args[@]}" -gt 0 ] || return 0
   while IFS=$'\t' read -r label pid name allowed; do
-    [ "$label" != checked ] || continue
     k=${label#?}
     case $label in
       j*)
         case " ${J_NOTE[$k]} " in *" $pid "*) continue ;; esac
         J_NOTE[$k]="${J_NOTE[$k]:+${J_NOTE[$k]} }outside $pid $name ($allowed)"
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$CONTEXT" "${J_LABEL[$k]}" "$pid" "$name" "$allowed" "${J_CPUS[$k]}" >>"$OUT/masks.tsv" ;;
+        printf '%s\t%s\tprocess\t%s\t%s\t%s\t%s\n' "$CONTEXT" "${J_LABEL[$k]}" "$pid" "$name" "$allowed" "${J_CPUS[$k]}" >>"$OUT/masks.tsv" ;;
       w*)
-        case " ${W_NOTE:-} " in *" $pid "*) continue ;; esac
+        case " $W_NOTE " in *" $pid "*) continue ;; esac
         W_NOTE="${W_NOTE:+$W_NOTE }outside ${W_LABEL[$k]} $pid $name ($allowed)"
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$CONTEXT" "${W_LABEL[$k]}" "$pid" "$name" "$allowed" "${W_CPUS[$k]}" >>"$OUT/masks.tsv" ;;
+        printf '%s\t%s\tprocess\t%s\t%s\t%s\t%s\n' "$CONTEXT" "${W_LABEL[$k]}" "$pid" "$name" "$allowed" "${W_CPUS[$k]}" >>"$OUT/masks.tsv" ;;
     esac
   done < <(python3 -I -c "$SAMPLER" "${args[@]}" 2>/dev/null)
-  if $DOCKER_OK; then
-    while IFS= read -r name; do
-      for i in "${!J_PID[@]}"; do
-        [ -z "${J_END[$i]}" ] || continue
-        case $name in "${J_PREFIX[$i]}"*) ;; *) continue ;; esac
-        case " ${DOCKER_SEEN:-} " in *" $name "*) continue ;; esac
-        DOCKER_SEEN="${DOCKER_SEEN:-} $name"
-        allowed=$(docker inspect -f '{{.HostConfig.CpusetCpus}}' "$name" 2>/dev/null) || allowed='?'
-        printf '%s\t%s\t%s\t%s\n' "$CONTEXT" "${J_LABEL[$i]}" "$name" "${allowed:-any processor}" >>"$OUT/docker.tsv"
-      done
-    done < <(docker ps --format '{{.Names}}' 2>/dev/null)
-  fi
+  $DOCKER_OK || return 0
+  while IFS= read -r name; do
+    for i in "${!J_PID[@]}"; do
+      [ -z "${J_END[$i]}" ] || continue
+      case $name in "${J_PREFIX[$i]}"*) ;; *) continue ;; esac
+      case " $DOCKER_SEEN " in *" $name "*) continue ;; esac
+      DOCKER_SEEN="$DOCKER_SEEN $name"
+      allowed=$(docker inspect -f '{{.HostConfig.CpusetCpus}}' "$name" 2>/dev/null) || allowed='?'
+      printf '%s\t%s\t%s\t%s\n' "$CONTEXT" "${J_LABEL[$i]}" "$name" "${allowed:-any processor}" >>"$OUT/docker.tsv"
+      if [ -n "$allowed" ] && [ "$(cpus_of "$allowed" 2>/dev/null)" != "$(cpus_of "${J_CPUS[$i]}")" ]; then
+        J_NOTE[$i]="${J_NOTE[$i]:+${J_NOTE[$i]} }outside container $name ($allowed)"
+        printf '%s\t%s\tcontainer\t-\t%s\t%s\t%s\n' "$CONTEXT" "${J_LABEL[$i]}" "$name" "$allowed" "${J_CPUS[$i]}" >>"$OUT/masks.tsv"
+      fi
+    done
+  done < <(docker ps --format '{{.Names}}' 2>/dev/null)
 }
 
 # Waits for every job to end or reach its deadline, sampling as it goes.
@@ -587,13 +587,10 @@ watch_jobs() {
         J_STATUS[$i]=0
         contain_wait "${J_PID[$i]}" 0 "$GRACE" || J_STATUS[$i]=$?
         J_END[$i]=$t
-        if [ -n "$CONTAIN_SURVIVORS" ]; then
-          J_NOTE[$i]="${J_NOTE[$i]:+${J_NOTE[$i]} }survivors $CONTAIN_SURVIVORS"
-          CLEANUP_FAILED="$CLEANUP_FAILED survivors of ${J_LABEL[$i]}: $CONTAIN_SURVIVORS;"
-        fi
+        [ -z "$CONTAIN_SURVIVORS" ] || survived "${J_LABEL[$i]}" "$CONTAIN_SURVIVORS"
       elif [ "$SECONDS" -ge "${J_DUE[$i]}" ]; then
         say "${J_LABEL[$i]} reached its deadline: stopping it"
-        contain_stop "${J_PID[$i]}" "$GRACE" || CLEANUP_FAILED="$CLEANUP_FAILED survivors of ${J_LABEL[$i]}: $CONTAIN_SURVIVORS;"
+        contain_stop "${J_PID[$i]}" "$GRACE" || survived "${J_LABEL[$i]}" "$CONTAIN_SURVIVORS"
         J_END[$i]=$(now) J_STATUS[$i]=124 J_DEADLINE[$i]=1
       else
         going=true
@@ -608,7 +605,7 @@ watch_jobs() {
 # start_busy Q DIR: a worker on each quarter after Q, the image worker on
 # the last; 0 once every worker has begun, else 1 with BUSY_VOID set.
 start_busy() {
-  local q=$1 dir=$2 k n=0 i rows=() irows=() file wt
+  local q=$1 dir=$2 k n=0 i rows=() irows=() wt
   W_PID=() W_CPUS=() W_FILE=() W_LABEL=() W_NOTE= BUSY_VOID=
   for i in "${!L_NAME[@]}"; do rows+=("${L_NAME[$i]}" "${L_DEADLINE[$i]}" "${L_CMD[$i]}"); done
   for i in "${!I_NAME[@]}"; do irows+=("${I_NAME[$i]}" "${I_DEADLINE[$i]}" "${I_CMD[$i]}"); done
@@ -639,7 +636,7 @@ start_worker() {
   W_LABEL[$k]="${base##*/} on quarter $quarter" W_CPUS[$k]=${QUARTER[$quarter]} W_FILE[$k]=$base.status W_PID[$k]=
   if ! contain_start -g "$GRACE" taskset -c "${QUARTER[$quarter]}" \
       env -u MIX_BUILD_PATH -u MIX_DEPS_PATH -u CYFR_TEST_CORES -u CARGO_BUILD_JOBS -u ERL_FLAGS \
-      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" LOAD_CHECK_OUT="$base.out" LOAD_CHECK_PARTS=4 \
+      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="${QUARTER[$quarter]}" LOAD_CHECK_OUT="$base.out" LOAD_CHECK_PARTS="$(gate_parts "$(count "${QUARTER[$quarter]}")")" \
       "$BASH" -c "$WORKER" load-check-worker "${WT[$role]}" "$base.status" "$@" >"$base.log" 2>&1 </dev/null; then
     BUSY_VOID="the busy load's ${W_LABEL[$k]} could not start"
     return 1
@@ -662,34 +659,34 @@ busy_held() {
 # only sessions of this shell still running.
 stop_busy() {
   [ "${#W_PID[@]}" -gt 0 ] || return 0
-  if ! contain_stop_all "$GRACE"; then
-    CLEANUP_FAILED="$CLEANUP_FAILED the busy load left $CONTAIN_SURVIVORS;"
-  fi
+  contain_stop_all "$GRACE" || survived 'the busy load' "$CONTAIN_SURVIVORS"
   W_PID=()
 }
 
 # Writes the current jobs to report.tsv under subject $1, round $2 and
-# condition $3, and says how each ended; sets SKIPPED when one exited 69.
+# condition $3 and says how each ended; sets SKIPPED when one skipped and
+# FAILED when a busy or pair run failed.
 record() {
-  local i status note last
+  local i status note why
   for i in "${!J_PID[@]}"; do
     note=${J_NOTE[$i]}
     case ${J_STATUS[$i]} in
       0) status=passed ;;
-      69)
+      69|77)
         status=skipped
-        last=$(sed '/^[[:space:]]*$/d' "${J_LOG[$i]}" 2>/dev/null | grep -v '^_EXIT=' | tail -n 1)
-        note="exited 69: ${last:-a missing prerequisite}"
+        why=$(sed '/^[[:space:]]*$/d; /^_EXIT=/d' "${J_LOG[$i]}" 2>/dev/null | grep -i missing | tail -n 1)
+        [ -n "$why" ] || why=$(sed '/^[[:space:]]*$/d; /^_EXIT=/d' "${J_LOG[$i]}" 2>/dev/null | tail -n 1)
+        note="exited ${J_STATUS[$i]}: ${why:-a missing prerequisite}"
         SKIPPED=$note ;;
       *) status=failed ;;
     esac
     [ -z "${J_DEADLINE[$i]}" ] || { status=deadline; note="${note:+$note; }stopped at its deadline"; }
+    if [ "$3" = busy ] && [ -n "$BUSY_VOID" ]; then note="${note:+$note; }$BUSY_VOID"; fi
     if [ "$status" = passed ]; then
-      if [ "$3" = busy ] && [ -n "$BUSY_VOID" ]; then status=void note="${note:+$note; }$BUSY_VOID"; fi
+      if [ "$3" = busy ] && [ -n "$BUSY_VOID" ]; then status=void; fi
       case $note in *outside*) status=void ;; esac
-    elif [ "$3" = busy ] && [ -n "$BUSY_VOID" ]; then
-      note="${note:+$note; }$BUSY_VOID"
     fi
+    case $3/$status in busy/failed|busy/deadline|pair/failed|pair/deadline) FAILED=1 ;; esac
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${J_LABEL[$i]##* }" "${J_CPUS[$i]}" \
       "$status" "${J_STATUS[$i]}" "$(seconds "${J_START[$i]}" "${J_END[$i]}")" "${J_START[$i]}" "${J_END[$i]}" \
       "${note:--}" "${J_LOG[$i]}" >>"$OUT/report.tsv"
@@ -699,11 +696,11 @@ record() {
 
 # run_condition SUBJECT ROUND CONDITION
 run_condition() {
-  local i=$1 r=$2 c=$3 q=${S_Q[$1]} name=${S_NAME[$1]} dir t0 t1 k
+  local i=$1 r=$2 c=$3 q=${S_Q[$1]} name=${S_NAME[$1]} dir
   dir="$OUT/$name/r$r-$c"
   mkdir -p "$dir" || return 1
   CONTEXT="$name"$'\t'"$r"$'\t'"$c"
-  J_LABEL=() J_PID=() J_CPUS=() J_START=() J_DUE=() J_END=() J_STATUS=() J_NOTE=() J_LOG=() J_DEADLINE=() J_PREFIX=()
+  reset_jobs
   BUSY_VOID= W_NOTE= DOCKER_SEEN=
   if [ "$c" = busy ] && ! start_busy "$q" "$dir"; then
     stop_busy
@@ -715,18 +712,36 @@ run_condition() {
     whole) launch "$name a" a "$(span 1 4)" "$dir/a.log" "$dir/a" "${S_DEADLINE[$i]}" "${S_CMD[$i]}" ;;
     *) launch "$name a" a "$(span 1 "$q")" "$dir/a.log" "$dir/a" "${S_DEADLINE[$i]}" "${S_CMD[$i]}" ;;
   esac
-  J_PREFIX[0]=${PREFIX_OF[a]}
-  if [ "$c" = pair ] || { [ "$c" = warm-up ] && [ "${S_PAIR[$i]}" = pair ]; }; then
+  if [ "$c" = pair ]; then
     launch "$name b" b "$(span $((q + 1)) $((2 * q)))" "$dir/b.log" "$dir/b" "${S_DEADLINE[$i]}" "${S_CMD[$i]}"
-    J_PREFIX[1]=${PREFIX_OF[b]}
   fi
   watch_jobs
   if [ "$c" = busy ]; then
-    t0=${J_START[0]} t1=${J_END[0]}
-    busy_held "$t0" "$t1" || :
+    busy_held "${J_START[0]}" "${J_END[0]}" || :
     stop_busy
   fi
   record "$name" "$r" "$c"
+}
+
+# Warms subject $1's worktrees with its warm row, each worktree once:
+# unplaced, a's and b's side by side.
+warm_subject() {
+  local i=$1 w=${S_WARM[$1]} role roles=(a)
+  [ "$w" != - ] || return 0
+  if chosen pair && [ -n "${S_PAIR[$i]}" ]; then roles+=(b); fi
+  reset_jobs
+  CONTEXT="warm"$'\t'"-"$'\t'"$w"
+  for role in "${roles[@]}"; do
+    [ -z "${WARMED[$role/$w]:-}" ] || continue
+    WARMED[$role/$w]=1
+    launch "warm-$w $role" "$role" "$ALL" "$OUT/warm-$w-$role.log" "$OUT/warm-$w-$role" "${WARM_DEADLINE[$w]}" "${WARM_CMD[$w]}"
+  done
+  [ "${#J_PID[@]}" -gt 0 ] || return 0
+  watch_jobs
+  for i in "${!J_PID[@]}"; do
+    printf '%s\t%s\t%s\t%s\n' "${J_LABEL[$i]}" "${J_STATUS[$i]}" "$(seconds "${J_START[$i]}" "${J_END[$i]}")" "${J_LOG[$i]}" >>"$OUT/warm.tsv"
+    say "${J_LABEL[$i]}: exit ${J_STATUS[$i]} after $(seconds "${J_START[$i]}" "${J_END[$i]}")s"
+  done
 }
 
 # --- clean-up ----------------------------------------------------------------
@@ -748,7 +763,11 @@ docker_sweep() {
       network) names=$(docker network ls --format '{{.Name}}' 2>/dev/null) ;;
       volume) names=$(docker volume ls --format '{{.Name}}' 2>/dev/null) ;;
       image) names=$(docker image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null) ;;
-    esac || { CLEANUP_FAILED="$CLEANUP_FAILED the listing of Docker's ${kind}s;"; return 1; }
+    esac || {
+      CLEANUP_FAILED="$CLEANUP_FAILED the listing of Docker's ${kind}s;"
+      [ "$kind" != container ] || HELD="${HELD:+$HELD; }Docker's containers could not be listed"
+      continue
+    }
     while IFS= read -r name; do
       [ -n "$name" ] && ours "$name" || continue
       case $kind in
@@ -756,25 +775,34 @@ docker_sweep() {
         network) docker network rm "$name" ;;
         volume) docker volume rm -f "$name" ;;
         image) docker image rm -f "$name" ;;
-      esac >/dev/null 2>&1 || CLEANUP_FAILED="$CLEANUP_FAILED the $kind $name;"
+      esac >/dev/null 2>&1 && continue
+      CLEANUP_FAILED="$CLEANUP_FAILED the $kind $name;"
+      [ "$kind" != container ] || HELD="${HELD:+$HELD; }the container $name could not be removed"
     done <<<"$names"
   done
 }
 cleanup() {
-  local p f path
-  if ! contain_stop_all "$GRACE"; then CLEANUP_FAILED="$CLEANUP_FAILED survivors $CONTAIN_SURVIVORS;"; fi
-  docker_sweep
-  for path in "${MADE[@]}"; do remove_worktree "$path"; done
-  for p in "${PREFIXES[@]}"; do
-    for f in "${TMPDIR:-/tmp}/$p"*; do
-      [ -e "$f" ] || continue
-      rm -rf -- "$f" 2>/dev/null || CLEANUP_FAILED="$CLEANUP_FAILED $f;"
-    done
-  done
+  local p f path kept=()
+  contain_stop_all "$GRACE" || survived 'the run' "$CONTAIN_SURVIVORS"
   if $REGISTRY_OWNED; then
-    contain_sweep_registry "$GRACE" || CLEANUP_FAILED="$CLEANUP_FAILED survivors $CONTAIN_SURVIVORS;"
-    rm -f "$CONTAIN_REGISTRY"
+    contain_sweep_registry "$GRACE" || survived 'the registry' "$CONTAIN_SURVIVORS"
   fi
+  docker_sweep
+  for path in "${MADE[@]}"; do [ ! -e "$path" ] || kept+=("$path"); done
+  for p in "${PREFIXES[@]}"; do
+    for f in "${TMPDIR:-/tmp}/$p"*; do [ ! -e "$f" ] || kept+=("$f"); done
+  done
+  for path in ${kept[@]+"${kept[@]}"}; do
+    if [ -n "$HELD" ]; then
+      echo "load check: kept $path: $HELD" >&2
+      CLEANUP_FAILED="$CLEANUP_FAILED kept $path;"
+    elif [ "${path#"$WT_ROOT"/}" != "$path" ]; then
+      remove_worktree "$path"
+    else
+      rm -rf -- "$path" 2>/dev/null || CLEANUP_FAILED="$CLEANUP_FAILED $path;"
+    fi
+  done
+  if $REGISTRY_OWNED; then rm -f "$CONTAIN_REGISTRY"; fi
 }
 on_exit() {
   local s=$?
@@ -842,15 +870,14 @@ if [ "${#ROLES[@]}" -gt 0 ]; then
     prep_command="$prep_command${prep_command:+$'\n'}echo '==> load check: prep ${P_NAME[$i]}' && { ${P_CMD[$i]}; } || exit"
     deadline=$((deadline + P_DEADLINE[i]))
   done
-  [ -n "$prep_command" ] || prep_command=true
+  [ -n "$prep_command" ] || prep_command=true deadline=60
   printf 'worktree\tstatus\texit\tseconds\tlog\n' >"$OUT/prep.tsv"
   for wave in a rest; do
-    J_LABEL=() J_PID=() J_CPUS=() J_START=() J_DUE=() J_END=() J_STATUS=() J_NOTE=() J_LOG=() J_DEADLINE=() J_PREFIX=()
+    reset_jobs
     CONTEXT="prep"$'\t'"-"$'\t'"$wave"
     for role in "${ROLES[@]}"; do
       { [ "$wave" = a ] && [ "$role" = a ]; } || { [ "$wave" = rest ] && [ "$role" != a ]; } || continue
       launch "prep $role" "$role" "$ALL" "$OUT/prep-$role.log" "$OUT/prep-$role" "$deadline" "$prep_command"
-      J_PREFIX[${#J_PID[@]}-1]=${PREFIX_OF[$role]}
     done
     [ "${#J_PID[@]}" -gt 0 ] || continue
     say "preparing ${J_LABEL[*]}"
@@ -869,16 +896,21 @@ if [ "${#ROLES[@]}" -gt 0 ]; then
   done
 fi
 
+: >"$OUT/warm.tsv"
 for i in "${MEASURED[@]}"; do
   SKIPPED=
-  run_condition "$i" 0 warm-up
-  if [ -n "$SKIPPED" ]; then printf '%s\tskipped: %s\n' "${S_NAME[$i]}" "$SKIPPED" >>"$OUT/skips.tsv"; continue; fi
-  read -r -a conds <<<"$(conditions "$i")"
+  warm_subject "$i"
   for ((r = 1; r <= ROUNDS; r++)); do
-    for ((k = 0; k < ${#conds[@]}; k++)); do
-      run_condition "$i" "$r" "${conds[$(( (k + r - 1) % ${#conds[@]} ))]}"
-      if [ -n "$SKIPPED" ]; then printf '%s\tskipped: %s\n' "${S_NAME[$i]}" "$SKIPPED" >>"$OUT/skips.tsv"; break 2; fi
+    FAILED=
+    for c in $(conditions "$i"); do
+      [ "$c" != alone ] || continue
+      run_condition "$i" "$r" "$c"
+      [ -z "$SKIPPED" ] || break
     done
+    if chosen alone && { [ -n "$FAILED" ] || ! alone_decides "$i"; } && { [ -z "$SKIPPED" ] || [ -n "$FAILED" ]; }; then
+      run_condition "$i" "$r" alone
+    fi
+    if [ -n "$SKIPPED" ]; then printf '%s\tskipped: %s\n' "${S_NAME[$i]}" "$SKIPPED" >>"$OUT/skips.tsv"; break; fi
   done
 done
 
@@ -890,13 +922,21 @@ python3 -I - "$OUT" "${names[@]}" <<'PY' || status=$?
 import csv, os, statistics, sys
 
 out, subjects = sys.argv[1], [a.rsplit(":", 1) for a in sys.argv[2:]]
+
+
+def table(name):
+    path = os.path.join(out, name)
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [line.rstrip("\n").split("\t") for line in f]
+
+
 with open(os.path.join(out, "report.tsv")) as f:
     rows = list(csv.DictReader(f, delimiter="\t"))
 skips = {}
-with open(os.path.join(out, "skips.tsv")) as f:
-    for line in f:
-        name, reason = line.rstrip("\n").split("\t", 1)
-        skips.setdefault(name, reason)
+for name, reason in table("skips.tsv"):
+    skips.setdefault(name, reason)
 lines, fails_busy, fails_other, undecided, skipped, outside, holds = [], [], [], [], [], [], []
 
 
@@ -905,62 +945,63 @@ def median(runs):
     return statistics.median(passed) if passed else None
 
 
-def ratio(top, bottom):
-    return "n/a" if top is None or bottom is None or bottom == 0 else f"{top / bottom:.2f}"
-
-
 for name, quarters in subjects:
-    if name in skips:
-        lines.append(f"{name}: {skips[name]}")
-        (outside if skips[name].startswith("not measured") else skipped).append(name)
-        continue
-    runs = [r for r in rows if r["subject"] == name and r["condition"] != "warm-up"]
-    by = {c: [r for r in runs if r["condition"] == c] for c in ("alone", "busy", "pair", "whole")}
-    warm = [r for r in rows if r["subject"] == name and r["condition"] == "warm-up"]
-    alone = median(by["alone"])
+    runs = [r for r in rows if r["subject"] == name]
+    by = {c: [r for r in runs if r["condition"] == c] for c in ("busy", "pair", "whole", "alone")}
     bad = lambda c: [r for r in by[c] if r["status"] in ("failed", "deadline")]
-    void = [r for r in runs if r["status"] == "void"]
-    if bad("alone"):
+    if bad("busy") or bad("pair"):
+        if by["alone"] and all(r["status"] == "passed" for r in by["alone"]):
+            verdict = "FAILS BUSY"
+            fails_busy.append(name)
+        elif bad("alone"):
+            verdict = "fails alone"
+            fails_other.append(name)
+        else:
+            verdict = "fails busy; alone not decided" + (f" ({skips[name]})" if name in skips else "")
+            fails_other.append(name)
+    elif bad("alone"):
         verdict = "fails alone"
         fails_other.append(name)
-    elif bad("busy") or bad("pair"):
-        verdict = "FAILS BUSY"
-        fails_busy.append(name)
-    elif void:
-        verdict = "not decided: a run was void"
-        undecided.append(name)
     elif bad("whole"):
         verdict = "fails on the whole machine"
         fails_other.append(name)
-    else:
+    elif name in skips:
+        verdict = skips[name]
+        (outside if verdict.startswith("not measured") else skipped).append(name)
+    elif any(r["status"] == "void" for r in runs):
+        verdict = "not decided: a run was void"
+        undecided.append(name)
+    elif runs:
         verdict = "holds"
         holds.append(name)
+    else:
+        continue
+    if not runs:
+        lines.append(f"{name}: {verdict}")
+        continue
     lines.append(f"{name} ({quarters} quarter{'s' if quarters != '1' else ''}): {verdict}")
-    for r in warm:
-        lines.append(f"  warm-up {r['copy']}: {r['status']} after {r['seconds']}s")
     for c, group in by.items():
         if not group:
             continue
         passed = sum(r["status"] == "passed" for r in group)
         m = median(group)
         text = f"  {c} {passed}/{len(group)} passed, median {'n/a' if m is None else f'{m:.1f}s'}"
-        if c in ("busy", "pair"):
-            text += f"; {c}/alone {ratio(m, alone)}"
         if c == "whole":
-            text += f"; two quarters/whole machine {ratio(alone, m)}"
+            b = median(by["busy"])
+            text += "; busy/whole " + ("n/a" if b is None or m is None or m == 0 else f"{b / m:.2f}")
         lines.append(text)
         for r in group:
             if r["status"] != "passed":
                 lines.append(f"    round {r['round']} {r['copy']}: {r['status']} (exit {r['exit']}) after {r['seconds']}s: {r['note']}; {r['log']}")
-if os.path.exists(os.path.join(out, "prep.tsv")):
-    with open(os.path.join(out, "prep.tsv")) as f:
-        prep = [l.rstrip("\n").split("\t") for l in f][1:]
+prep = table("prep.tsv")[1:]
+if prep:
     lines.append("cold preparation: " + ", ".join(f"{p[0]} {p[1]} after {p[3]}s" for p in prep))
-with open(os.path.join(out, "masks.tsv")) as f:
-    masks = sum(1 for _ in f)
-lines.append(f"placement: {masks} process(es) outside their processors" + (f", listed in {out}/masks.tsv" if masks else ""))
-with open(os.path.join(out, "docker.tsv")) as f:
-    docker = [l.rstrip("\n").split("\t") for l in f]
+warm = table("warm.tsv")
+if warm:
+    lines.append("warmed: " + ", ".join(f"{w[0]} exit {w[1]} after {w[2]}s" for w in warm))
+masks = table("masks.tsv")
+lines.append(f"placement: {len(masks)} process(es) or container(s) outside their processors" + (f", listed in {out}/masks.tsv" if masks else ""))
+docker = table("docker.tsv")
 host = [f"{d[4]} ({d[5]})" for d in docker if d[0] == "host"]
 started = [d for d in docker if d[0] != "host"]
 anywhere = sum(d[5] == "any processor" for d in started)
@@ -970,7 +1011,7 @@ summary = [f"holds: {len(holds)}"]
 if fails_busy:
     summary.append("FAILS BUSY: " + " ".join(fails_busy))
 if fails_other:
-    summary.append("fails alone or whole: " + " ".join(fails_other))
+    summary.append("fails: " + " ".join(fails_other))
 if undecided:
     summary.append("not decided: " + " ".join(undecided))
 if skipped:

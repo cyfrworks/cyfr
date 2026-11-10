@@ -189,9 +189,9 @@ same worktree refuses, naming the run that holds it.
 - `tests/load-check/run.sh` measures whether each check still passes, and
   how much slower it runs, on a quarter of the host's cores beside busy
   neighbours or a second copy of itself. It takes the whole machine for
-  hours: `tests/load-check/run.sh -n` prints the plan and its time, `-s`
-  and `-r` bound a run, and
-  `scripts/heavy-check.sh -t 129600 -- tests/load-check/run.sh` runs it,
+  hours: `tests/load-check/run.sh -n` prints the plan and its time, `-s`,
+  `-c` and `-r` bound a run to subjects, conditions and rounds, and
+  `scripts/heavy-check.sh -t 28800 -- tests/load-check/run.sh` runs it,
   again whenever the host, its subject table or the lanes change
   (`tests/load-check/README.md`).
 - Local runs take the Locus and app images from `scripts/image.sh locus`

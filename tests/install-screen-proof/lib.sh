@@ -123,7 +123,8 @@ proof_kvm_preflight() {
     echo "docker context: $(docker context show 2>&1), DOCKER_HOST=${DOCKER_HOST:-unset}"
     echo "docker security options: $(docker info --format '{{json .SecurityOptions}}' 2>&1)"
   } >"$OUT/kvm-preflight.txt"
-  if ! proof_fg timeout 120 docker run --rm --init --name "${PROOF_PREFIX}kvm" --network none --device /dev/kvm --group-add "$(kvm_gid)" "$IMAGE" \
+  if ! proof_fg timeout 120 docker run --rm --init --name "${PROOF_PREFIX}kvm" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} \
+    --network none --device /dev/kvm --group-add "$(kvm_gid)" "$IMAGE" \
     /proof/kvm-check.sh >>"$OUT/kvm-preflight.txt" 2>&1; then
     cat "$OUT/kvm-preflight.txt" >&2
     fail "KVM did not start inside the container: /dev/kvm must be usable by Docker's containers. Nothing on the host was changed ($OUT/kvm-preflight.txt)"
@@ -159,7 +160,8 @@ proof_base_verify() {
   proof_own volume "$VOLUME" || fail "the volume $VOLUME cannot be the run's"
   docker volume create "$VOLUME" >/dev/null || fail "the volume $VOLUME was not made"
   proof_own container "${PROOF_PREFIX}verify" || fail "the container ${PROOF_PREFIX}verify cannot be the run's"
-  proof_fg timeout 300 docker run --rm --init --name "${PROOF_PREFIX}verify" --network none --volume "$BASE_DIR:/base:ro" "$IMAGE" \
+  proof_fg timeout 300 docker run --rm --init --name "${PROOF_PREFIX}verify" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} \
+    --network none --volume "$BASE_DIR:/base:ro" "$IMAGE" \
     /proof/verify-base.sh "$CLOUD_IMAGE" "$CLOUD_IMAGE_SHA256" >"$OUT/base-image.txt" 2>&1 || {
     tail -n 20 "$OUT/base-image.txt" >&2
     fail "the cached base image did not verify ($OUT/base-image.txt); run tests/install-screen-proof/prepare.sh again"
@@ -240,7 +242,9 @@ guest_boot() {
   mkdir "$GUEST_DIR" || fail "the evidence directory $GUEST_DIR exists already"
   step "$part: a fresh guest under KVM ($memory MiB, a $disk disk, 4 vCPUs)"
   proof_own container "$GUEST" "$GUEST_DIR" || fail "the container $GUEST cannot be the run's"
-  docker create --init --name "$GUEST" --device /dev/kvm --group-add "$(kvm_gid)" \
+  # On the processors the check holds (HEAVY_CHECK_CPUS) when it is given
+  # them, as every container this proof starts.
+  docker create --init --name "$GUEST" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} --device /dev/kvm --group-add "$(kvm_gid)" \
     --volume "$VOLUME:/disk" --volume "$BASE_DIR:/base:ro" "$IMAGE" \
     /proof/guest-boot.sh "$part" "$memory" "$disk" 4 "$CLOUD_IMAGE" "${GUEST_TPM:-swtpm}" >/dev/null ||
     fail "the QEMU container $GUEST was not made"
