@@ -3,17 +3,23 @@
 // draws. Its TypeScript is types only, so the canvas's tests run this file
 // as it is.
 
-// The part of window.cyfr this canvas uses.
+// window.cyfr on a canvas, as the SDK declares it (apps/cyfr/assets/js/sdk/client.js).
 export interface Sdk {
   // Answers the function that stops the handler hearing more.
-  on(event: "installed" | "covered" | "posture" | "desktop", handler: (value: unknown) => void): (() => void) | void;
-  stream(
-    name: string,
-    subject: string | null,
-    onEvent: (event: { id: number | null; event: string; data: unknown }) => void
-  ): Promise<{ close(): void; closed: Promise<void> }>;
+  on(
+    event: "installed" | "covered" | "posture" | "state" | "desktop",
+    handler: (value: unknown) => void
+  ): (() => void) | void;
+  // Besides each change, the handler hears the delivery contract's
+  // `snapshot`, `resync`, `stale`, `unavailable` and `denied`.
+  stream(name: string, subject: string | null, onEvent: (event: StreamEvent) => void): Promise<StreamHandle>;
   open(ref: string): void;
   grant(ref: string): void;
+  // One of CYFR's own pages by its key, or `aqua` or `chat`, at the
+  // record `ref` names where the page has one.
+  settings(page: string, ref?: string | null): void;
+  // An act only the person may do, decided in CYFR's own prompt.
+  request(operation: string, args?: Record<string, unknown>): Promise<Decided> & { requested: Promise<string | null> };
   // A control the canvas declares, with the value its pick takes.
   press(control: string, value: string | null): Promise<Pressed>;
   // Each widget the document names replaces that widget's whole entry.
@@ -24,8 +30,33 @@ export interface Sdk {
   ready(): void;
 }
 
+// An event of a stream: a change carries its `revision` and `at`; a
+// delivery event names itself in `event`, with `revision` null.
+export interface StreamEvent {
+  id: number | null;
+  event: string;
+  data: unknown;
+  revision?: number | null;
+  at?: string | null;
+}
+
+// `suspended` while the canvas is hidden, opened again once it is shown.
+export type StreamState = "live" | "unavailable" | "suspended" | "stale" | "denied" | "ended";
+
+export interface StreamHandle {
+  close(): void;
+  closed: Promise<void>;
+  readonly state: StreamState;
+}
+
 export interface Pressed {
   outcome: "accepted" | "refused" | "cancelled";
+  reason?: string;
+}
+
+// A request's decision: `approved` once what was asked ran.
+export interface Decided {
+  outcome: "approved" | "refused" | "cancelled";
   reason?: string;
 }
 
@@ -83,6 +114,8 @@ export const WIDGETS = ["attention", "runs", "apps", "schedules"];
 // The controls the manifest declares, each picking a schedule's id.
 export const PAUSE = "pause-schedule";
 export const RESUME = "resume-schedule";
+// Runs a failed run again, picking its execution id.
+export const RETRY = "retry-run";
 export const MAX_RUNS = 20;
 export const MAX_SCHEDULE_RUNS = 10;
 
@@ -370,6 +403,8 @@ export interface RunRow {
   detail: string;
   reason: string;
   duration: string;
+  // Whether Retry is offered: a failed run that no other run started.
+  retry: boolean;
 }
 
 // The first `limit` runs as rows, newest first, and how many more there are.
@@ -391,9 +426,32 @@ export function recentRows(state: State, limit: number): { rows: RunRow[]; more:
               ? "Cancelled"
               : "Finished",
       duration: duration(run.duration_ms),
+      retry: run.kind === "failed" && run.parent_execution_id == null && text(run.execution_id) !== "",
     };
   });
   return { rows, more: Math.max(0, state.runs.length - limit) };
+}
+
+// What Retry's answer says, in the canvas's words, by the refusal's class.
+const RETRY_REFUSED = new Map([
+  ["conflict", "This run cannot run again: only a run a schedule or a feed started, known to have failed, does"],
+  ["invalid_argument", "This run is no longer among the latest runs"],
+  ["not_found", "This run is gone"],
+  ["forbidden", "This run is not yours to run again"],
+  ["unavailable", "CYFR cannot run it now: try again shortly"],
+  ["rate_limited", "CYFR cannot run it now: try again shortly"],
+  ["timeout", "CYFR cannot run it now: try again shortly"],
+  ["uncertain", "No answer came: look at your runs before trying again"],
+]);
+
+// Runs a failed run again, for the person's tap on its row: one tap, one
+// press. Answers what the row says: the new run's outcome shows as it
+// arrives on runs.changes.
+export async function retryRun(sdk: Sdk, row: RunRow): Promise<string> {
+  const answer = await sdk.press(RETRY, row.id);
+  if (answer.outcome === "accepted") return "Running again";
+  if (answer.outcome === "cancelled") return answer.reason === "too_soon" ? "Tap again in a moment" : "Nothing ran";
+  return RETRY_REFUSED.get(text(answer.reason)) ?? "It could not run again";
 }
 
 export interface ScheduleRow {
@@ -644,8 +702,10 @@ function follow(
 
   async function open(): Promise<void> {
     const n = ++opens;
-    const stream = await sdk.stream(name, null, ({ data }) => {
-      if (!stopped && isItem(data)) onItem(data, n);
+    // A change of the stream itself: a delivery event (`unavailable`'s
+    // retry time, `denied`'s refusal) is no item of it.
+    const stream = await sdk.stream(name, null, ({ event, data }) => {
+      if (!stopped && event === name && isItem(data)) onItem(data, n);
     });
     if (stopped) {
       stream.close();

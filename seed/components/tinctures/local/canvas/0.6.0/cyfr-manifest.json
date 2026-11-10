@@ -3,7 +3,7 @@
   "type": "tincture",
   "version": "0.6.0",
   "publisher": "local",
-  "description": "Your canvas: the day in one sentence, what needs your attention grouped by cause with a grant where one fixes it, your recent runs, your apps, and your schedules with the week ahead, each one paused or resumed with a tap; hide a section and show it again.",
+  "description": "Your canvas: the day in one sentence, what needs your attention grouped by cause with a grant where one fixes it, your recent runs with Retry on a failed one, your apps, and your schedules with the week ahead, each one paused or resumed with a tap; hide a section and show it again.",
   "tags": ["canvas", "system"],
   "category": "utility",
   "tincture": {
@@ -27,7 +27,8 @@
           "label": "Resume",
           "operation": "schedule.resume",
           "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
-        }
+        },
+        {"id": "retry-run", "label": "Retry", "operation": "execution.retry", "args": {}, "pick": {"stream": "runs.changes", "field": "/execution_id", "arg": "execution_id"}}
       ],
       "prefs": {
         "widgets": {

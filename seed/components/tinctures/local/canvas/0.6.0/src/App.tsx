@@ -10,6 +10,7 @@ import {
   openApp,
   pressSchedule,
   recentRows,
+  retryRun,
   scheduleRows,
   showWidget,
   start,
@@ -18,6 +19,7 @@ import {
   week,
   type Cause,
   type InstalledApp,
+  type RunRow,
   type ScheduleRow,
   type State,
   type Status,
@@ -227,14 +229,7 @@ function Runs({ state }: { state: State }) {
             <span>oldest</span>
           </div>
           {rows.map((row) => (
-            <div key={row.id} className="run">
-              <Dot status={row.status} />
-              <span className="name">
-                <b>{row.name}</b> <span className="muted">{row.detail}</span>
-              </span>
-              <span className={`reason ${row.status}`}>{row.reason}</span>
-              <span className="muted tabular">{row.duration}</span>
-            </div>
+            <Run key={row.id} row={row} />
           ))}
           {more > 0 && <p className="more">{more} more</p>}
         </>
@@ -319,6 +314,49 @@ function Schedules({ state, now }: { state: State; now: Date }) {
         ))}
       </div>
     </Section>
+  );
+}
+
+// A run's row; a failed run no other run started offers Retry, which says
+// its answer for a moment, the new run showing as its own row.
+function Run({ row }: { row: RunRow }) {
+  const [said, setSaid] = useState<string | null>(null);
+  const [waiting, setWaiting] = useState(false);
+
+  useEffect(() => {
+    if (said === null) return;
+    const timer = setTimeout(() => setSaid(null), REFUSED_MS);
+    return () => clearTimeout(timer);
+  }, [said]);
+
+  const retry = () => {
+    setWaiting(true);
+    retryRun(cyfr, row)
+      .then(setSaid)
+      .finally(() => setWaiting(false));
+  };
+
+  return (
+    <div className="run">
+      <Dot status={row.status} />
+      <span className="name">
+        <b>{row.name}</b> <span className="muted">{row.detail}</span>
+      </span>
+      <span className={`reason ${said === null ? row.status : ""}`}>{said ?? row.reason}</span>
+      <span className="muted tabular">{row.duration}</span>
+      {row.retry ? (
+        <button
+          className="chip action retry"
+          disabled={waiting}
+          aria-label={`Retry ${row.name}`}
+          onClick={retry}
+        >
+          <b>{waiting ? "Retrying" : "Retry"}</b>
+        </button>
+      ) : (
+        <span />
+      )}
+    </div>
   );
 }
 

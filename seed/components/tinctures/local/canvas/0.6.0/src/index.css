@@ -263,6 +263,13 @@ main.stacked {
   outline: none;
 }
 
+/* Retry on a failed run's row: a tap target of its own size. */
+.chip.retry {
+  min-width: 44px;
+  min-height: 44px;
+  align-self: center;
+}
+
 /* Recent runs: the last ones as squares, newest first, then rows. */
 .strip {
   display: flex;
@@ -304,7 +311,7 @@ main.stacked {
 
 .run {
   display: grid;
-  grid-template-columns: 9px minmax(0, 1fr) auto auto;
+  grid-template-columns: 9px minmax(0, 1fr) auto auto auto;
   align-items: start;
   gap: 12px;
   padding: 7px 16px;

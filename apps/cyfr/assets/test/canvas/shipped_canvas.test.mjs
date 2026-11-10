@@ -55,7 +55,10 @@ import {
   week
 } from "../../../../../seed/components/tinctures/local/canvas/0.5.0/src/model.ts"
 
+import * as V6 from "../../../../../seed/components/tinctures/local/canvas/0.6.0/src/model.ts"
+
 const VERSION = new URL("../../../../../seed/components/tinctures/local/canvas/0.5.0/", import.meta.url)
+const VERSION_6 = new URL("../../../../../seed/components/tinctures/local/canvas/0.6.0/", import.meta.url)
 const SCAFFOLD = new URL("../../../lib/compendium/scaffold.ex", import.meta.url)
 
 // Every pending reaction runs: a promise's handlers, then theirs.
@@ -961,6 +964,123 @@ describe("the package", () => {
     const lock = JSON.parse(readFileSync(new URL("package-lock.json", VERSION), "utf8"))
     assert.deepEqual(lock.packages[""].dependencies, template.dependencies)
     assert.deepEqual(lock.packages[""].devDependencies, template.devDependencies)
+  })
+})
+
+// The canvas's 0.6.0, beside 0.5.0, which ships as it shipped: Retry on
+// its run list, the types of the SDK as it stands, and only a change of a
+// stream folded into what it holds.
+describe("the shipped canvas 0.6.0", () => {
+  const manifest = () => JSON.parse(readFileSync(new URL("cyfr-manifest.json", VERSION_6), "utf8"))
+  const folded = (...items) => items.reduce((state, item) => V6.fold(state, "runs.changes", item, 1), V6.EMPTY)
+  const failed = (id, extra = {}) =>
+    run(id, "failed", {parent_execution_id: null, error: {class: "timeout", cause: "timed_out"}, ...extra})
+
+  // window.cyfr as 0.6.0 meets it: each stream opens at once, and the test
+  // tells its handler what the SDK would, by event name.
+  function delivered() {
+    const handlers = new Map()
+    const presses = []
+    const cyfr = {
+      desktop: null,
+      on: () => () => {},
+      stream(name, _subject, onEvent) {
+        handlers.set(name, onEvent)
+        return Promise.resolve({close() {}, closed: new Promise(() => {}), state: "live"})
+      },
+      press(control, value) {
+        presses.push([control, value])
+        return Promise.resolve(cyfr.answer)
+      },
+      ready() {},
+      answer: {outcome: "accepted"}
+    }
+    const states = []
+    const stop = V6.start(cyfr, (state) => states.push(state))
+    const tell = (name, event, data) => handlers.get(name)({id: null, event, data, revision: null, at: "2026-11-10T14:20:00Z"})
+    return {cyfr, presses, tell, stop, state: () => states.at(-1) ?? V6.EMPTY}
+  }
+
+  test("declares retry-run exactly as the guide spells it, beside pause and resume, and reads the same three streams", () => {
+    const {desktop} = manifest().tincture
+    assert.equal(manifest().version, "0.6.0")
+    assert.deepEqual(desktop.data, ["runs.changes", "schedules.changes", "schedule_runs.changes"])
+    assert.deepEqual(
+      desktop.controls.map((control) => control.id),
+      ["pause-schedule", "resume-schedule", "retry-run"]
+    )
+    assert.deepEqual(desktop.controls[2], {
+      id: "retry-run",
+      label: "Retry",
+      operation: "execution.retry",
+      args: {},
+      pick: {stream: "runs.changes", field: "/execution_id", arg: "execution_id"}
+    })
+    assert.equal(V6.RETRY, "retry-run")
+  })
+
+  test("a failed run no other run started offers Retry; a finished, a running or a child run does not", () => {
+    const {rows} = V6.recentRows(
+      folded(
+        failed("root"),
+        failed("child", {parent_execution_id: "root"}),
+        run("done", "completed", {parent_execution_id: null}),
+        run("going", "started", {parent_execution_id: null})
+      ),
+      8
+    )
+    assert.deepEqual(Object.fromEntries(rows.map((row) => [row.id, row.retry])), {
+      going: false,
+      done: false,
+      child: false,
+      root: true
+    })
+  })
+
+  test("a tap on Retry presses retry-run with the run's id once, and says the answer in the canvas's words", async () => {
+    const page = delivered()
+    const row = V6.recentRows(folded(failed("ex-1")), 8).rows[0]
+    const said = async (answer) => {
+      page.cyfr.answer = answer
+      return V6.retryRun(page.cyfr, row)
+    }
+    assert.equal(await said({outcome: "accepted"}), "Running again")
+    assert.deepEqual(page.presses, [["retry-run", "ex-1"]])
+    assert.match(await said({outcome: "refused", reason: "conflict"}), /^This run cannot run again: only a run a schedule or a feed started/)
+    assert.equal(await said({outcome: "refused", reason: "invalid_argument"}), "This run is no longer among the latest runs")
+    assert.equal(await said({outcome: "refused", reason: "not_found"}), "This run is gone")
+    assert.equal(await said({outcome: "refused", reason: "forbidden"}), "This run is not yours to run again")
+    for (const reason of ["unavailable", "rate_limited", "timeout"]) {
+      assert.equal(await said({outcome: "refused", reason}), "CYFR cannot run it now: try again shortly")
+    }
+    assert.equal(await said({outcome: "refused", reason: "uncertain"}), "No answer came: look at your runs before trying again")
+    assert.equal(await said({outcome: "refused", reason: "internal"}), "It could not run again")
+    assert.equal(await said({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
+    assert.equal(await said({outcome: "cancelled"}), "Nothing ran")
+    assert.equal(page.presses.length, 12)
+    page.stop()
+  })
+
+  test("a delivery event's data is no item: unavailable's time and denied's refusal fold into nothing", async () => {
+    const page = delivered()
+    await settle()
+    page.tell("schedule_runs.changes", "unavailable", {retry_at: "2026-11-10T14:21:00Z"})
+    page.tell("schedule_runs.changes", "denied", {class: "consent_required", message: "x", stage: "admission"})
+    page.tell("runs.changes", "denied", {class: "consent_required", message: "x", stage: "admission"})
+    assert.deepEqual(page.state().scheduleRuns, [])
+    assert.deepEqual(page.state().runs, [])
+    page.tell("schedule_runs.changes", "schedule_runs.changes", {kind: "fired", schedule_id: "s1", occurrence_id: "o1", execution_id: "ex-1"})
+    assert.equal(page.state().scheduleRuns.length, 1)
+    page.stop()
+  })
+
+  test("its types declare the SDK as it stands: request, settings at a ref, the handle's suspended state, and revision and at", () => {
+    const model = readFileSync(new URL("src/model.ts", VERSION_6), "utf8")
+    assert.match(model, /request\(operation: string, args\?: Record<string, unknown>\): Promise<Decided> & \{ requested: Promise<string \| null> \}/)
+    assert.match(model, /settings\(page: string, ref\?: string \| null\): void/)
+    assert.match(model, /export type StreamState = "live" \| "unavailable" \| "suspended" \| "stale" \| "denied" \| "ended"/)
+    assert.match(model, /revision\?: number \| null;\s*at\?: string \| null;/)
+    assert.match(readFileSync(new URL("src/cyfr.d.ts", VERSION_6), "utf8"), /declare const cyfr: import\("\.\/model"\)\.Sdk;/)
   })
 })
 
