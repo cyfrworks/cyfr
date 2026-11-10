@@ -181,10 +181,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
       clauses = answer_clauses(sources[consumer], answer)
       assert clauses != [], "no callback in #{consumer} takes #{path}'s #{inspect(answer)}"
 
-      for {line, _args, _body} = clause <- clauses do
+      for {line, _args, _body, _how} = clause <- clauses do
         assert delivered?(clause),
                "#{consumer}:#{line} takes #{path}'s #{inspect(answer)} outside " <>
-                 "CyfrWeb.ContextGuard.deliver/3"
+                 "CyfrWeb.ContextGuard.deliver/3, or its head cannot be read"
       end
     end
   end
@@ -206,16 +206,24 @@ defmodule CyfrWeb.ContextGuardRosterTest do
 
       def handle_info({:answer, _tag, _exit}, socket), do: {:noreply, socket}
 
+      def handle_info({:answer, _tag, {:done, _} = message} = _answer, socket),
+        do: handle_info(message, socket)
+
+      def handle_info({:answer, _, %{}}, socket), do: {:noreply, assign(socket, :rows, %{})}
+
+      def handle_info(@answer = message, socket), do: handle_info(message, socket)
+
       def handle_info({:other, result}, socket), do: {:noreply, shown(socket, result)}
     end
     """
 
     assert planted |> answer_clauses(:answer) |> Enum.map(&delivered?/1) ==
-             [true, false, false, true]
+             [true, false, false, true, false, false, false]
   end
 
   # The `def` clauses in `source` whose head takes `answer`, as
-  # `{line, args, body}`.
+  # `{line, args, body, how}`: `how` is `:unreadable` for a head whose
+  # answer position this check cannot read, which may take it.
   defp answer_clauses(source, answer) do
     {:ok, ast} = Code.string_to_quoted(source)
 
@@ -224,9 +232,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
         {:def, meta, [head, [{:do, body} | _]]} = node, acc ->
           {name, args} = call_head(head)
 
-          if takes?(name, args, answer),
-            do: {node, [{meta[:line], args, body} | acc]},
-            else: {node, acc}
+          case takes(name, args, answer) do
+            false -> {node, acc}
+            how -> {node, [{meta[:line], args, body, how} | acc]}
+          end
 
         node, acc ->
           {node, acc}
@@ -239,19 +248,53 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   defp call_head({name, _, args}) when is_list(args), do: {name, args}
   defp call_head(_head), do: {nil, []}
 
-  defp takes?(:handle_info, [{:{}, _, [answer | _]}, _socket], answer), do: true
-  defp takes?(:handle_info, [{answer, _}, _socket], answer), do: true
-  defp takes?(:handle_async, [answer, _result, _socket], answer), do: true
-  defp takes?(:update, [{:%{}, _, pairs}, _socket], answer), do: List.keymember?(pairs, answer, 0)
-  defp takes?(_name, _args, _answer), do: false
+  defp takes(:handle_info, [message, _socket], answer), do: taken(message, &leads?(&1, answer))
+  defp takes(:handle_async, [name, _result, _socket], answer), do: taken(name, &(&1 == answer))
+  defp takes(:update, [assigns, _socket], answer), do: taken(assigns, &keyed?(&1, answer))
+  defp takes(_name, _args, _answer), do: false
 
-  # The clause hands the answer to `deliver/3` under a tag its head bound,
-  # and reads nothing its head bound outside that call. A clause whose head
-  # binds nothing (a task's exit) has no answer to read.
-  defp delivered?({_line, args, body}) do
-    bound = args |> Enum.drop(-1) |> vars()
-    MapSet.size(bound) == 0 or delivered?(bound, body)
+  # Read through every alias (`a = b`): a side that takes the answer takes
+  # it; a side whose shape is not plain might.
+  defp taken(pattern, takes?) do
+    sides = sides(pattern)
+
+    cond do
+      Enum.any?(sides, takes?) -> :taken
+      Enum.all?(sides, &plain?/1) -> false
+      true -> :unreadable
+    end
   end
+
+  defp sides({:=, _, [left, right]}), do: sides(left) ++ sides(right)
+  defp sides(pattern), do: [pattern]
+
+  defp leads?({:{}, _, [answer | _]}, answer), do: true
+  defp leads?({answer, _}, answer), do: true
+  defp leads?(_pattern, _answer), do: false
+
+  defp keyed?({:%{}, _, pairs}, answer), do: List.keymember?(pairs, answer, 0)
+  defp keyed?(_pattern, _answer), do: false
+
+  # A literal, a variable, a tuple, a map or a struct.
+  defp plain?({kind, _, _}) when kind in [:{}, :%{}, :%], do: true
+  defp plain?({name, _, ctx}) when is_atom(name) and is_atom(ctx), do: true
+  defp plain?({_, _}), do: true
+  defp plain?(term), do: is_atom(term) or is_binary(term) or is_number(term) or is_list(term)
+
+  # The clause hands the answer to `deliver/3` under a tag its head bound
+  # and reads nothing its head bound outside that call, or it drops the
+  # answer: it answers the socket it was handed, unchanged.
+  defp delivered?({_line, _args, _body, :unreadable}), do: false
+
+  defp delivered?({_line, args, body, :taken}) do
+    dropped?(List.last(args), body) or delivered?(args |> Enum.drop(-1) |> vars(), body)
+  end
+
+  defp dropped?({socket, _, ctx}, {reply, {socket, _, body_ctx}})
+       when is_atom(ctx) and is_atom(body_ctx) and reply in [:noreply, :ok],
+       do: true
+
+  defp dropped?(_socket, _body), do: false
 
   defp delivered?(bound, body) do
     {outside, tags} =
