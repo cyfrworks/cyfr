@@ -39,12 +39,12 @@ defmodule Prima.LocusBackends do
 
   | Type | Members | Answer (`encode_answer/2`, `read_answer/2`) |
   |---|---|---|
-  | `hello` | `g`, `cyfr_boot` | `boot`, `pool{size, free}` |
+  | `hello` | `g`, `cyfr_boot` | `boot`, `pool{size, free}`, `memory{budget_bytes, admission_limit_bytes, held_bytes}` |
   | `reconcile` | `keep[{athanor, server, e}]` | `released[{athanor, server, g, e}]` |
-  | `sync` | `owner{athanor, server}`, `e`, `lease_ms`, `idle_ms`, `programs[]`, `sealed` | `status`, `programs[{name, status}]` |
+  | `sync` | `owner{athanor, server}`, `athanor_memory_bytes?`, `e`, `lease_ms`, `idle_ms`, `programs[]`, `sealed` | `status`, `programs[{name, status}]` |
   | `renew` | `lease_ms`, `owners[{athanor, server, e}]` | `renewed[{athanor, server, e, state}]`, `unknown[{athanor, server, e}]` |
   | `release` | `owners[{athanor, server, e}]` | `released[{athanor, server, g, e}]` |
-  | `status` | `owners[{athanor, server}]` | `owners[{athanor, server, g, e, state, lease_ms_left, programs[]}]` |
+  | `status` | `owners[{athanor, server}]` | `owners[{athanor, server, g, e, state, lease_ms_left, programs[]}]`, `memory{budget_bytes, admission_limit_bytes, held_bytes}` |
   | `home` | `op`, `athanor`, `home_id` | `home_id`, `state` |
   | `homes` | none | `homes[]` |
 
@@ -67,12 +67,26 @@ defmodule Prima.LocusBackends do
   them `guard_unavailable`; neither starts. `sealed` is the environment
   `seal/5` sealed to the owner and the service's lifetime.
 
+  A hello and a status answer report the box's memory: `budget_bytes`,
+  the memory its sessions may hold (`B`); `admission_limit_bytes`,
+  `floor(B * F)` for its overcommit factor `F`, the most the bounds of the
+  sessions it holds may add up to; and `held_bytes`, what they add up to
+  now, the opens being prepared and the sessions whose process is not yet
+  gone included (`Locus.Backends.Owners`). A sync's
+  `athanor_memory_bytes`, a positive count of bytes, is the ceiling of
+  the owner's athanor on that sum over every owner of the athanor on the
+  box (absent: the box's `budget_bytes`); an open past either is refused
+  `capacity`.
+
   A status reports each program as `{name, status, restarts, error?,
   stderr_tail?, stderr_bytes?, home, home_bytes?, over_cap, sessions}`:
   its status (`program_statuses/0`: `idle` with no process running,
   `running` with one, `failed` once `max_crashes/0` processes of one
-  session key crashed within `crash_window_ms/0`), the processes that
-  crashed since its sync, the last crash (absent before one), for a
+  session key crashed within `crash_window_ms/0`, or while its memory
+  bound alone is past the box's `admission_limit_bytes`, so it can never
+  start there), the processes that crashed since its sync, the last crash
+  or, for a program past the limit, a sentence naming its bound and the
+  limit (absent before either), for a
   scratch program the masked tail of its stderr (`stderr_tail`) and for a
   kept one only how many bytes of stderr it kept (`stderr_bytes`), since a
   kept home's contents are the person's and its stderr may carry them; its
@@ -299,13 +313,14 @@ defmodule Prima.LocusBackends do
     home: ~w(version type op athanor home_id),
     homes: ~w(version type)
   }
+  @control_optional %{sync: ~w(athanor_memory_bytes)}
   @answer_fields %{
-    hello: ~w(version boot pool),
+    hello: ~w(version boot pool memory),
     reconcile: ~w(version released),
     sync: ~w(version status programs),
     renew: ~w(version renewed unknown),
     release: ~w(version released),
-    status: ~w(version owners),
+    status: ~w(version owners memory),
     home: ~w(version home_id state),
     homes: ~w(version homes)
   }
@@ -437,6 +452,7 @@ defmodule Prima.LocusBackends do
           | %{
               type: :sync,
               owner: owner_ref(),
+              athanor_memory_bytes: pos_integer() | nil,
               e: pos_integer(),
               lease_ms: pos_integer(),
               idle_ms: pos_integer(),
@@ -474,9 +490,20 @@ defmodule Prima.LocusBackends do
           programs: [program_report()]
         }
 
+  @typedoc "A box's memory as a hello and a status answer report it."
+  @type memory_report :: %{
+          budget_bytes: pos_integer(),
+          admission_limit_bytes: pos_integer(),
+          held_bytes: non_neg_integer()
+        }
+
   @typedoc "A control answer, by the type of the message it answers."
   @type answer ::
-          %{boot: String.t(), pool: %{size: non_neg_integer(), free: non_neg_integer()}}
+          %{
+            boot: String.t(),
+            pool: %{size: non_neg_integer(), free: non_neg_integer()},
+            memory: memory_report()
+          }
           | %{released: [owner_version()]}
           | %{status: owner_state(), programs: [%{name: String.t(), status: program_status()}]}
           | %{
@@ -485,7 +512,7 @@ defmodule Prima.LocusBackends do
               ],
               unknown: [owner_epoch()]
             }
-          | %{owners: [owner_report()]}
+          | %{owners: [owner_report()], memory: memory_report()}
           | %{home_id: String.t(), state: home_state()}
           | %{homes: [String.t()]}
 
@@ -1005,7 +1032,13 @@ defmodule Prima.LocusBackends do
   defp read_control_wire(wire) do
     with :ok <- current_version(wire),
          {:ok, type} <- typed(wire, @control_types),
-         :ok <- exact(wire, Map.fetch!(@control_fields, type), "") do
+         :ok <-
+           exact(
+             wire,
+             Map.fetch!(@control_fields, type),
+             Map.get(@control_optional, type, []),
+             ""
+           ) do
       read_control_typed(type, wire)
     end
   end
@@ -1037,6 +1070,8 @@ defmodule Prima.LocusBackends do
 
   defp read_control_typed(:sync, wire) do
     with {:ok, owner} <- owner(wire["owner"], "owner", []),
+         {:ok, ceiling} <-
+           optional(wire, "athanor_memory_bytes", &positive_value(&1, "athanor_memory_bytes")),
          {:ok, e} <- positive(wire, "e", ""),
          {:ok, lease_ms} <- period(wire, "lease_ms", @max_lease_ms),
          {:ok, idle_ms} <- period(wire, "idle_ms", @max_idle_ms),
@@ -1046,6 +1081,7 @@ defmodule Prima.LocusBackends do
        %{
          type: :sync,
          owner: owner,
+         athanor_memory_bytes: ceiling,
          e: e,
          lease_ms: lease_ms,
          idle_ms: idle_ms,
@@ -1255,8 +1291,9 @@ defmodule Prima.LocusBackends do
 
   defp read_answer_typed(:hello, wire) do
     with {:ok, boot} <- field_text(wire, "boot", ""),
-         {:ok, pool} <- pool(wire["pool"]) do
-      {:ok, %{boot: boot, pool: pool}}
+         {:ok, pool} <- pool(wire["pool"]),
+         {:ok, memory} <- memory(wire["memory"]) do
+      {:ok, %{boot: boot, pool: pool, memory: memory}}
     end
   end
 
@@ -1287,7 +1324,8 @@ defmodule Prima.LocusBackends do
              [:g, :e, :state, :lease_ms_left, :programs],
              @max_status_owners
            ),
-         do: {:ok, %{owners: owners}}
+         {:ok, memory} <- memory(wire["memory"]),
+         do: {:ok, %{owners: owners, memory: memory}}
   end
 
   defp read_answer_typed(:homes, wire) do
@@ -1324,6 +1362,17 @@ defmodule Prima.LocusBackends do
   end
 
   defp pool(_wire), do: {:error, {:invalid_field, "pool"}}
+
+  defp memory(%{} = wire) do
+    with :ok <- exact(wire, ~w(budget_bytes admission_limit_bytes held_bytes), "memory."),
+         {:ok, budget} <- positive(wire, "budget_bytes", "memory."),
+         {:ok, limit} <- positive(wire, "admission_limit_bytes", "memory."),
+         {:ok, held} <- count(wire, "held_bytes", "memory.") do
+      {:ok, %{budget_bytes: budget, admission_limit_bytes: limit, held_bytes: held}}
+    end
+  end
+
+  defp memory(_wire), do: {:error, {:invalid_field, "memory"}}
 
   defp program_summary(%{} = wire, at) do
     with :ok <- exact(wire, ~w(name status), at <> "."),
@@ -1836,6 +1885,12 @@ defmodule Prima.LocusBackends do
   # must read as its form.
   defp optional(wire, name, read) do
     if is_map_key(wire, name), do: read.(wire[name]), else: {:ok, nil}
+  end
+
+  defp positive_value(value, at) do
+    if is_integer(value) and value > 0 and MacEnvelope.valid_value?(:integer, value),
+      do: {:ok, value},
+      else: {:error, {:invalid_field, at}}
   end
 
   defp home_id_value(value),

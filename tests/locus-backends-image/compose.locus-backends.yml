@@ -14,7 +14,10 @@
 # root is the shipped `homes` volume), the shipped guard's control (the
 # keeper's --guard, on the shipped `guard-control` volume) and the
 # per-program memory bound
-# (empty for the default). On the guard it adds the image under
+# (empty for the default) and the memory budget the service admits sessions
+# within (LOCUS_BACKENDS_MEMORY_BUDGET: room for every session a suite
+# holds at once, so a suite of another property never meets it; empty for
+# the shipped one). On the guard it adds the image under
 # test, a loopback port for the service's listener, which the guard's
 # namespace holds, and a tools directory first on its PATH, empty in every
 # case but the one that starts the guard with an ip6tables that fails. It
@@ -39,6 +42,7 @@ services:
     entrypoint: ["cyfr-locus", "serve", "--pool", "backends:${BACKENDS_POOL:?set BACKENDS_POOL}", "--home-root", "/var/lib/locus/homes", "--kept-homes", "${KEPT_HOMES:?set KEPT_HOMES}", "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", "locus", "--", "/app/bin/locus", "start"]
     environment:
       - LOCUS_BACKENDS_MEMORY_BYTES=${LOCUS_BACKENDS_MEMORY_BYTES:-}
+      - LOCUS_BACKENDS_MEMORY_BUDGET=${LOCUS_BACKENDS_MEMORY_BUDGET:-}
   locus-backends-guard:
     image: ${BACKENDS_IMAGE:?set BACKENDS_IMAGE}
     container_name: !reset null

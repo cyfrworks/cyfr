@@ -7,7 +7,7 @@
 //
 // Client to keeper:
 //
-//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":true,"hosts":[…]}
+//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":true,"hosts":[…]}
 //	{"v":1,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
 //	{"v":1,"type":"release","spawn_id":…,"grace_ms":…}
 //	{"v":1,"type":"pool","id":…,"pool":…}
@@ -48,7 +48,17 @@
 // every other `exited` carries false. A keeper that cannot give a spawn
 // such a cgroup refuses the request as CodeMemoryUnavailable: the bound is
 // enforced or the command does not run. Missing, null and zero
-// `memory_bytes` are refused as CodeBadRequest.
+// `memory_bytes` are refused as CodeBadRequest. The group's memory.high is
+// nine tenths of the bound, so a growing spawn is throttled and reclaimed
+// before the kernel kills it at the bound.
+//
+// A spawn's required `cpu_quota`, from MinCPUQuota to MaxCPUQuota, is the
+// microseconds of CPU time its group may use in every CPUPeriod (100000
+// microseconds): 100000 is one CPU, 200000 two. It is written to the same
+// group's cpu.max before the command starts, and a keeper whose cgroup has
+// no CPU controller cannot give a spawn its group at all, so it refuses
+// every spawn as CodeMemoryUnavailable alike. Missing, null and zero
+// `cpu_quota` are refused as CodeBadRequest.
 //
 // A spawn with `"control": true` also gets a control channel: the keeper
 // makes an AF_UNIX stream socketpair, installs one end as the command's file
@@ -176,8 +186,8 @@ const (
 	CodeUnknownSpawn = "unknown_spawn"
 	CodeNotRunning   = "not_running"
 	CodeInternal     = "internal"
-	// CodeMemoryUnavailable refuses a spawn whose memory bound the keeper
-	// cannot enforce where it runs.
+	// CodeMemoryUnavailable refuses a spawn whose memory and CPU bounds the
+	// keeper cannot enforce where it runs.
 	CodeMemoryUnavailable = "memory_unavailable"
 	// CodeHomeOverCap refuses a kept spawn whose home already holds its
 	// home_max_bytes.
@@ -214,6 +224,14 @@ const (
 	// MaxMemoryBytes is the most a spawn's memory bound may be, a number
 	// every client's JSON carries exactly.
 	MaxMemoryBytes = 1 << 40
+	// CPUPeriod is the period, in microseconds, a spawn's cpu_quota is a
+	// share of.
+	CPUPeriod = 100_000
+	// MinCPUQuota is the least a spawn's CPU quota may be, the kernel's
+	// own least: a hundredth of a CPU.
+	MinCPUQuota = 1_000
+	// MaxCPUQuota is the most a spawn's CPU quota may be: 1024 CPUs.
+	MaxCPUQuota = 1024 * CPUPeriod
 	// MaxHomePathBytes is the longest a kept home's path may be, PATH_MAX
 	// less its NUL.
 	MaxHomePathBytes = 4095
@@ -377,7 +395,9 @@ type Request struct {
 	Rlimits *Rlimits          `json:"rlimits,omitempty"`
 	// MemoryBytes is required for a spawn and absent for other requests.
 	MemoryBytes *uint64 `json:"memory_bytes,omitempty"`
-	Control     bool    `json:"control,omitempty"`
+	// CPUQuota is required for a spawn and absent for other requests.
+	CPUQuota *uint64 `json:"cpu_quota,omitempty"`
+	Control  bool    `json:"control,omitempty"`
 	// Isolation is IsolationNetns for a spawn of an isolated pool and
 	// empty for any other.
 	Isolation string  `json:"isolation,omitempty"`
@@ -518,8 +538,8 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "control", "isolation", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty", "hosts") {
-		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, control, isolation, attach, home_mode, home_path, home_uid, home_max_bytes, pty and hosts")
+	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "isolation", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty", "hosts") {
+		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, isolation, attach, home_mode, home_path, home_uid, home_max_bytes, pty and hosts")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
@@ -538,6 +558,12 @@ func validateSpawn(req *Request) error {
 	}
 	if m := *req.MemoryBytes; m < MinMemoryBytes || m > MaxMemoryBytes {
 		return fmt.Errorf("memory_bytes must be within %d..%d", uint64(MinMemoryBytes), uint64(MaxMemoryBytes))
+	}
+	if req.CPUQuota == nil {
+		return errors.New("cpu_quota is required")
+	}
+	if q := *req.CPUQuota; q < MinCPUQuota || q > MaxCPUQuota {
+		return fmt.Errorf("cpu_quota must be within %d..%d", uint64(MinCPUQuota), uint64(MaxCPUQuota))
 	}
 	if req.present["isolation"] && req.Isolation != IsolationNetns {
 		return errors.New("isolation must be " + IsolationNetns)

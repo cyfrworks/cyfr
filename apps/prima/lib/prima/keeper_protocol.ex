@@ -24,11 +24,20 @@ defmodule Prima.KeeperProtocol do
   refuses as `bad_request`: a member the type does not carry, a required
   one absent, and a value outside its bound, as the keeper's
   `ParseRequest` reads them (a spawn's `memory_bytes` lies from
-  `min_memory_bytes/0` to `max_memory_bytes/0`; a kept home's members
+  `min_memory_bytes/0` to `max_memory_bytes/0`, and its `cpu_quota`, the
+  microseconds of CPU time its group may use in every `cpu_period/0`, from
+  `min_cpu_quota/0` to `max_cpu_quota/0`; a kept home's members
   follow the rules under Homes). A refusal names the
   member at fault by its path (`argv`, `attach.token`, `rlimits.nofile`)
   and never quotes a value, since an environment value may be a
   credential.
+
+  The keeper runs every spawn in a cgroup of its own holding both bounds:
+  `memory_bytes` as its `memory.max`, with `memory.high` at nine tenths of
+  it, and `cpu_quota` as its `cpu.max` over `cpu_period/0`. The reply code
+  `memory_unavailable` means that the keeper cannot enforce a spawn's
+  bounds where it runs, whichever of them it lacks the means for; it
+  refuses every spawn so, and none runs unbounded.
 
   `decode_reply/1` answers the reply or the first refusal, in this order:
   `:oversize_line`; `:malformed` (not one JSON object); `:bad_version`;
@@ -130,6 +139,10 @@ defmodule Prima.KeeperProtocol do
   @max_socket_path 107
   @min_memory_bytes 16 * 1024 * 1024
   @max_memory_bytes 1024 * 1024 * 1024 * 1024
+  # A spawn's CPU quota is microseconds of this period: 100000 is one CPU.
+  @cpu_period 100_000
+  @min_cpu_quota 1_000
+  @max_cpu_quota 1024 * @cpu_period
   @max_home_path_bytes 4095
   @max_uid 4_294_967_294
   @max_home_bytes 1024 * 1024 * 1024 * 1024 * 1024
@@ -171,6 +184,7 @@ defmodule Prima.KeeperProtocol do
          env: :optional,
          rlimits: :optional,
          memory_bytes: :required,
+         cpu_quota: :required,
          control: :optional,
          isolation: :optional,
          attach: :required,
@@ -222,7 +236,7 @@ defmodule Prima.KeeperProtocol do
   @typedoc """
   A request, as `encode/1` takes it: its `type` and its members, with atom
   keys but for `env`'s names. `spawn` requires `id`, `pool`, `argv`,
-  `memory_bytes` and `attach` (`%{path: path, token: token}`); `env`
+  `memory_bytes`, `cpu_quota` and `attach` (`%{path: path, token: token}`); `env`
   (names to values), `rlimits` (`nofile`, `nproc`, `core`, `fsize`),
   `control`, `isolation` (`"netns"`), `home_mode` (`"scratch"` or
   `"kept"`), `home_path`, `home_uid`, `home_max_bytes`, `pty` and `hosts`
@@ -239,6 +253,7 @@ defmodule Prima.KeeperProtocol do
             optional(:env) => %{optional(String.t()) => String.t()},
             optional(:rlimits) => %{optional(atom()) => non_neg_integer()},
             required(:memory_bytes) => pos_integer(),
+            required(:cpu_quota) => pos_integer(),
             optional(:control) => boolean(),
             optional(:isolation) => String.t(),
             required(:attach) => %{path: String.t(), token: String.t()},
@@ -323,7 +338,8 @@ defmodule Prima.KeeperProtocol do
   A request's ceilings: the most argv and env entries, the most bytes of
   one value, of argv and env together and of an attach path, the longest
   grace a release may ask for, the least and most of a spawn's
-  `memory_bytes`, the most bytes of a kept home's path, the highest uid a
+  `memory_bytes`, the period of a spawn's `cpu_quota` and its least and
+  most, the most bytes of a kept home's path, the highest uid a
   kept home may own, the most a kept home's `home_max_bytes` may be and the
   most hosts a spawn may name.
   """
@@ -338,6 +354,9 @@ defmodule Prima.KeeperProtocol do
       max_socket_path_bytes: @max_socket_path,
       min_memory_bytes: @min_memory_bytes,
       max_memory_bytes: @max_memory_bytes,
+      cpu_period: @cpu_period,
+      min_cpu_quota: @min_cpu_quota,
+      max_cpu_quota: @max_cpu_quota,
       max_home_path_bytes: @max_home_path_bytes,
       max_uid: @max_uid,
       max_home_bytes: @max_home_bytes,
@@ -389,6 +408,21 @@ defmodule Prima.KeeperProtocol do
   @doc "The most a spawn's `memory_bytes` may be, 1 TiB: the high end of the keeper's range."
   @spec max_memory_bytes() :: pos_integer()
   def max_memory_bytes, do: @max_memory_bytes
+
+  @doc """
+  The period a spawn's `cpu_quota` is a share of, in microseconds: 100000,
+  so a quota of 100000 is one CPU and 200000 two.
+  """
+  @spec cpu_period() :: pos_integer()
+  def cpu_period, do: @cpu_period
+
+  @doc "The least a spawn's `cpu_quota` may be, 1000 microseconds: the kernel's own least."
+  @spec min_cpu_quota() :: pos_integer()
+  def min_cpu_quota, do: @min_cpu_quota
+
+  @doc "The most a spawn's `cpu_quota` may be: 1024 CPUs."
+  @spec max_cpu_quota() :: pos_integer()
+  def max_cpu_quota, do: @max_cpu_quota
 
   # ============================================================================
   # Frames
@@ -575,6 +609,10 @@ defmodule Prima.KeeperProtocol do
   defp write(:spawn, {:memory_bytes, bytes})
        when is_integer(bytes) and bytes >= @min_memory_bytes and bytes <= @max_memory_bytes,
        do: {"memory_bytes", bytes}
+
+  defp write(:spawn, {:cpu_quota, quota})
+       when is_integer(quota) and quota >= @min_cpu_quota and quota <= @max_cpu_quota,
+       do: {"cpu_quota", quota}
 
   defp write(:spawn, {:control, control}) when is_boolean(control), do: {"control", control}
 

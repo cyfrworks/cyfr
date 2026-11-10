@@ -160,6 +160,7 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_LOCUS_RUNTIME_WATCH_MISSES` | `locus_runtime_watch_misses` | `integer` | `3` | `workers` | live | serve | Status polls a worker service may miss in a row before cyfr ends the runs of the boot it last heard from. |
 | `CYFR_LOCUS_BACKENDS_LEASE_MS` | `locus_backends_lease_ms` | `integer` | `30000` | `backends` | live | serve | How long the backends service runs a stdio server's backends without a renewal from cyfr, in milliseconds; cyfr renews every third of it. |
 | `CYFR_LOCUS_BACKENDS_IDLE_MS` | `locus_backends_idle_ms` | `integer` | `900000` | `backends` | live | serve | How long a stdio backend runs without a tool call before it is stopped and its slot freed, in milliseconds; its next call starts it again. |
+| `CYFR_ATHANOR_PROGRAM_MEMORY_BYTES` | `athanor_program_memory_bytes` | `integer` | none | `backends` | live | serve | Bytes the program sessions of one athanor may hold on one backends box together, each session counted at its memory bound from its start until its process is gone; an open past it is refused until one ends. Unset, the box's own budget (`LOCUS_BACKENDS_MEMORY_BUDGET`); 0 is refused. |
 | `CYFR_LOG_LEVEL` | `log_level` | `atom` | `info` | `logging` | live | serve | The Logger level, `emergency` to `debug`; debug output may include unredacted dependency messages. |
 | `CYFR_ASSET_CREDENTIAL_WINDOW_S` | `asset_credential_window_s` | `duration_s` | `3600` | `tinctures` | live | serve | How long a private tincture's asset credential stays one credential, in seconds. |
 | `CYFR_FRAME_CREDENTIAL_DEADLINE_S` | `frame_credential_deadline_s` | `duration_s` | `3600` | `tinctures` | live | serve | How long one frame credential lives before it is refused, in seconds; the shell renews a running frame's before then. |
@@ -181,6 +182,7 @@ refused, naming the variable or key and the form it must take.
 | Variable | What it sets |
 |---|---|
 | `CYFR_CPU_LIMIT` | The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in locus-runtime under `LOCUS_RUNTIME_CPU_LIMIT`. |
+| `LOCUS_BACKENDS_MEMORY_LIMIT` | The locus-backends container's memory limit (default 2G): `LOCUS_BACKENDS_MEMORY_BUDGET` (1792 MiB by default, three program sessions at their default 512 MiB bound), the memory the programs' sessions may hold, plus 256 MiB for the service beside them. |
 | `LOCUS_BUILDS_CPU_LIMIT` | The locus-builds container's CPU limit (default 2). |
 | `LOCUS_BUILDS_MEMORY_LIMIT` | The locus-builds container's memory limit (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the container reaches its limit. |
 | `LOCUS_RUNTIME_CPU_LIMIT` | The locus-runtime container's CPU limit (default 4). |

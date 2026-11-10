@@ -82,8 +82,14 @@ defmodule Opus.Programs.Box do
       wire's bounds, never cut.
 
   Every sync asks the service to end a session with no `send` and no `recv`
-  for the idle period (the `locus_backends_idle_ms` platform setting). The
-  lease and idle periods are read at every tick.
+  for the idle period (the `locus_backends_idle_ms` platform setting), and
+  names the ceiling of the owner's athanor on the memory its sessions on
+  the box may hold (`athanor_memory_bytes`, the `athanor_program_memory_bytes`
+  platform setting; unset, the sync names none and the service holds the
+  athanor to the box's own budget). The lease and idle periods and the
+  ceiling are read at every tick. A hello's answer tells the box's
+  memory (`memory{budget_bytes, admission_limit_bytes, held_bytes}`), which
+  this controller keeps beside its pool's size.
 
   Nothing is sent, and no claim renewed, while this member does not hold its
   slot in the cell (`Arca.ControlPlane.held?/0`) or its generation cannot be
@@ -195,12 +201,15 @@ defmodule Opus.Programs.Box do
       :boot,
       :generation,
       :pool_size,
+      # The box's memory as its last hello answered it.
+      :memory,
       :inflight,
       generation_source: &Arca.ControlPlane.generation/0,
       # The periods the caller fixed; the rest are read at every tick.
       fixed: [],
       lease_ms: 30_000,
       idle_ms: 900_000,
+      athanor_memory_bytes: nil,
       tick_ms: 10_000,
       owners: %{},
       # The `mcp_backend` claim this controller holds for each owner, and
@@ -241,9 +250,10 @@ defmodule Opus.Programs.Box do
     * `:name` — the process name; required.
     * `:url`, `:root` — the service's base URL (a trailing `/` dropped) and
       its 32-byte key, from which the control and seal keys derive.
-    * `:lease_ms`, `:idle_ms` — fixed for the controller's life when given;
-      otherwise the `locus_backends_lease_ms` and `locus_backends_idle_ms`
-      platform settings as they read at every tick.
+    * `:lease_ms`, `:idle_ms`, `:athanor_memory_bytes` — fixed for the
+      controller's life when given; otherwise the `locus_backends_lease_ms`,
+      `locus_backends_idle_ms` and `athanor_program_memory_bytes` platform
+      settings as they read at every tick.
     * `:tick_ms` — the renewal cadence; default a third of the lease.
     * `:generation` — the zero-arity function this member's generation is
       read from: `{:ok, generation}`, `:none` (generation 1) or anything
@@ -296,7 +306,7 @@ defmodule Opus.Programs.Box do
         control_key: LocusBackends.control_key(root),
         seal_key: LocusBackends.seal_key(root),
         cyfr_boot: Prima.Boot.id(),
-        fixed: Keyword.take(opts, [:lease_ms, :idle_ms, :tick_ms]),
+        fixed: Keyword.take(opts, [:lease_ms, :idle_ms, :athanor_memory_bytes, :tick_ms]),
         generation_source: Keyword.get(opts, :generation, &Arca.ControlPlane.generation/0)
       })
 
@@ -988,6 +998,7 @@ defmodule Opus.Programs.Box do
             server_id: server_id,
             epoch: entry.epoch,
             idle_ms: state.idle_ms,
+            athanor_memory_bytes: state.athanor_memory_bytes,
             share: share(state),
             athanor_programs: held_by_others(state, key)
           })
@@ -1158,6 +1169,7 @@ defmodule Opus.Programs.Box do
       body = %{
         type: :sync,
         owner: %{athanor: spec.athanor_id, server: spec.server_id},
+        athanor_memory_bytes: spec.athanor_memory_bytes,
         e: spec.epoch,
         lease_ms: spec.lease_ms,
         idle_ms: spec.idle_ms,
@@ -1479,12 +1491,23 @@ defmodule Opus.Programs.Box do
   defp answer_boot({:released, answer, _given_up}), do: answer_boot(answer)
   defp answer_boot(_result), do: nil
 
-  defp settle_job(state, {:hello}, spec, {:http, 200, _boot, %{boot: boot, pool: pool}}) do
+  defp settle_job(
+         state,
+         {:hello},
+         spec,
+         {:http, 200, _boot, %{boot: boot, pool: pool, memory: memory}}
+       ) do
     Logger.info(
       "[Opus.Programs] greeted the backends service #{boot} under generation #{spec.generation}"
     )
 
-    state = %{state | boot: boot, generation: spec.generation, pool_size: pool.size}
+    state = %{
+      state
+      | boot: boot,
+        generation: spec.generation,
+        pool_size: pool.size,
+        memory: memory
+    }
 
     resyncs = for {key, %{live?: false}} <- state.owners, do: {:sync, key}
 
@@ -1995,6 +2018,10 @@ defmodule Opus.Programs.Box do
       state
       | lease_ms: lease_ms,
         idle_ms: Keyword.get_lazy(fixed, :idle_ms, fn -> setting("locus_backends_idle_ms") end),
+        athanor_memory_bytes:
+          Keyword.get_lazy(fixed, :athanor_memory_bytes, fn ->
+            setting("athanor_program_memory_bytes")
+          end),
         tick_ms: Keyword.get(fixed, :tick_ms, div(lease_ms, 3))
     }
   end

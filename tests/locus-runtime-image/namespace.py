@@ -94,6 +94,8 @@ POOL = f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['isolation']}"
 TOKEN = "0123456789abcdef" * 4
 # The bound every spawn names (`memory_bytes`, which the keeper requires): room enough for a shell and curl.
 MEMORY_BYTES = 64 << 20
+# One CPU of every 100000-microsecond period.
+CPU_QUOTA = 100_000
 BOOT_S = 90
 NO_CAPS = "0000000000000000"
 
@@ -176,7 +178,7 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
 
 def spawn_line(spawn_id, argv, isolated=True, env=None, control=False, attach=f"{RUN_DIR}/attach.sock"):
     request = {"v": 1, "type": "spawn", "id": spawn_id, "pool": ROLE["pool"], "argv": argv, "env": env or {},
-               "memory_bytes": MEMORY_BYTES, "attach": {"path": attach, "token": TOKEN}}
+               "memory_bytes": MEMORY_BYTES, "cpu_quota": CPU_QUOTA, "attach": {"path": attach, "token": TOKEN}}
     if control:
         request["control"] = True
     if isolated:
@@ -521,7 +523,7 @@ def test_restart(stack):
     stack.wait_restarted(state, 60)
     stack.wait_listener()
     logs = stack.logs()
-    unavailable = [line for line in logs.splitlines() if "memory bounds are unavailable" in line]
+    unavailable = [line for line in logs.splitlines() if "CPU bounds are unavailable" in line]
     expect(not unavailable, "restart: the restarted keeper enforces memory bounds in the reused cgroup "
            "(a refusal names every pid its drain could not move and the write's error)", "\n".join(unavailable))
     stack.wait_pool(timeout=BOOT_S)

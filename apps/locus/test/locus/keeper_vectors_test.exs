@@ -195,6 +195,7 @@ defmodule Locus.KeeperVectorsTest do
     task = Task.async(fn -> run(name) end)
     request = next_request(peer)
     assert request["memory_bytes"] == Locus.Config.memory_bytes()
+    assert request["cpu_quota"] == Locus.Config.cpu_quota()
     send_reply(peer, v |> reply("spawned") |> Map.put("id", request["id"]))
     conn = attach(v, :sys.get_state(client).attach_path, request["attach"]["token"])
     :ok = :gen_tcp.close(conn)
@@ -338,7 +339,8 @@ defmodule Locus.KeeperVectorsTest do
                  argv: ["/bin/true"],
                  env: %{},
                  pool: "backends",
-                 memory_bytes: 268_435_456
+                 memory_bytes: 268_435_456,
+                 cpu_quota: 100_000
                })
 
       {request, spawned} = Task.await(keeper, 10_000)
@@ -372,6 +374,7 @@ defmodule Locus.KeeperVectorsTest do
                env: %{"RUNTIME_ROLE" => "runner"},
                pool: "runner",
                memory_bytes: @runner_spawn["memory_bytes"],
+               cpu_quota: @runner_spawn["cpu_quota"],
                control: true,
                isolation: "netns"
              })
@@ -430,6 +433,7 @@ defmodule Locus.KeeperVectorsTest do
                env: @runner_spawn["env"],
                pool: @runner_spawn["pool"],
                memory_bytes: @runner_spawn["memory_bytes"],
+               cpu_quota: @runner_spawn["cpu_quota"],
                control: true,
                isolation: @runner_spawn["isolation"]
              })

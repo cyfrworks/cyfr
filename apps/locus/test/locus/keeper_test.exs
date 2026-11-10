@@ -373,7 +373,8 @@ defmodule Locus.KeeperTest do
 
       adapter =
         start_supervised!(
-          {Locus.Runtime.Keeper.Channel, client: c.name, memory_bytes: 268_435_456, name: nil}
+          {Locus.Runtime.Keeper.Channel,
+           client: c.name, memory_bytes: 268_435_456, cpu_quota: 100_000, name: nil}
         )
 
       # The runtime's adapter asks for the runner, as a runner's process
@@ -434,9 +435,16 @@ defmodule Locus.KeeperTest do
             {:stdin, ref, p.assign},
             {:control, ref, p.assign},
             {:relay, ref, p.assign},
-            {:spawn, ["/app/bin/locus", "start"], p.env, 268_435_456},
+            {:spawn, ["/app/bin/locus", "start"], p.env,
+             %{memory_bytes: 268_435_456, cpu_quota: 100_000}},
             {:spawn_handle, ref, ["/app/bin/locus", "start"], p.env,
-             %{pool: "runner", memory_bytes: 268_435_456, control: true, isolation: "netns"}}
+             %{
+               pool: "runner",
+               memory_bytes: 268_435_456,
+               cpu_quota: 100_000,
+               control: true,
+               isolation: "netns"
+             }}
           ] do
         status =
           Keeper.format_status(%{message: message, state: :sys.get_state(c.client), log: []})
@@ -478,7 +486,8 @@ defmodule Locus.KeeperTest do
           argv: ["/bin/true"],
           env: p.env,
           pool: "runner",
-          memory_bytes: 268_435_456
+          memory_bytes: 268_435_456,
+          cpu_quota: 100_000
         })
 
       answers = [spawned, sent, relayed, run, launched, Keeper.send_control(gone, p.assign)]
@@ -553,6 +562,7 @@ defmodule Locus.KeeperTest do
                  env: %{},
                  pool: "runner",
                  memory_bytes: 268_435_456,
+                 cpu_quota: 100_000,
                  control: true,
                  isolation: "netns"
                })
@@ -681,7 +691,8 @@ defmodule Locus.KeeperTest do
         argv: ["/bin/sh", "-c", script],
         env: env,
         pool: "backends",
-        memory_bytes: 268_435_456
+        memory_bytes: 268_435_456,
+        cpu_quota: 100_000
       })
     end
 
@@ -760,14 +771,14 @@ defmodule Locus.KeeperTest do
       refute_receive {Keeper, _ref, _event}, 200
     end
 
-    test "a spec without a memory bound is refused before cyfr-locus is asked anything", %{
-      name: name,
-      fake: fake
-    } do
+    test "a spec without a memory bound or a CPU quota is refused before cyfr-locus is asked anything",
+         %{name: name, fake: fake} do
       for spec <- [
-            %{argv: ["true"], env: %{}, pool: "backends"},
-            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: nil},
-            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 0}
+            %{argv: ["true"], env: %{}, pool: "backends", cpu_quota: 100_000},
+            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: nil, cpu_quota: 100_000},
+            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 0, cpu_quota: 100_000},
+            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456},
+            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456, cpu_quota: 0}
           ] do
         assert_raise FunctionClauseError, fn -> Keeper.spawn(name, spec) end
       end
@@ -895,7 +906,8 @@ defmodule Locus.KeeperTest do
                  argv: ["true"],
                  env: %{},
                  pool: "backends",
-                 memory_bytes: 268_435_456
+                 memory_bytes: 268_435_456,
+                 cpu_quota: 100_000
                })
 
       assert {:error, {:launcher_unavailable, :noproc}} =
@@ -1063,7 +1075,14 @@ defmodule Locus.KeeperTest do
     test "a spawn in a kept home names the home, its uid, its bound and its terminal",
          %{root: root, uid: uid} do
       %{name: name, fake: fake} = kept_client(root, uid, uid)
-      spec = %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456}
+
+      spec = %{
+        argv: ["true"],
+        env: %{},
+        pool: "backends",
+        memory_bytes: 268_435_456,
+        cpu_quota: 100_000
+      }
 
       assert {:error, {:refused, "home_absent"}} =
                Keeper.spawn(name, Map.put(spec, :home, "vlt_a"))
@@ -1094,7 +1113,14 @@ defmodule Locus.KeeperTest do
 
     test "a spawn's hosts go with it, and a spawn refused for them is the keeper's code" do
       %{name: name, fake: fake} = FakeKeeper.start_client!()
-      spec = %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456}
+
+      spec = %{
+        argv: ["true"],
+        env: %{},
+        pool: "backends",
+        memory_bytes: 268_435_456,
+        cpu_quota: 100_000
+      }
 
       assert {:ok, _handle} =
                Keeper.spawn(
@@ -1139,6 +1165,7 @@ defmodule Locus.KeeperTest do
                  env: %{},
                  pool: "backends",
                  memory_bytes: 268_435_456,
+                 cpu_quota: 100_000,
                  home: "vlt_a"
                })
 

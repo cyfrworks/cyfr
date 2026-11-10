@@ -9,7 +9,8 @@ defmodule Locus.Launcher do
 
   `c:spawn/2` starts `argv` with `env` as its whole environment beyond the
   launcher's own `HOME`, `TMPDIR`, `USER`, `LOGNAME` and `PATH`, in the uid
-  pool `pool`, under `memory_bytes`, and answers
+  pool `pool`, under `memory_bytes` and `cpu_quota` (microseconds of CPU
+  time in every 100000), and answers
   the process's `t:handle/0`. A spec naming a kept `home` runs the process
   in that home, under the home's own uid, and takes no uid of the pool;
   `pty: true` gives the process a pseudo-terminal as its stdin, stdout and
@@ -56,8 +57,8 @@ defmodule Locus.Launcher do
   """
 
   @typedoc """
-  What a process is started with: the memory it is bounded by, which every
-  process has, `control` where it has a control channel, `isolation`
+  What a process is started with: the memory and the CPU it is bounded
+  by, which every process has, `control` where it has a control channel, `isolation`
   where its pool isolates it, a program's kept `home` with its bound and
   `pty`, and `hosts`, the only hosts it may reach where its row names them.
   """
@@ -66,6 +67,7 @@ defmodule Locus.Launcher do
           required(:env) => %{optional(String.t()) => String.t()},
           required(:pool) => String.t(),
           required(:memory_bytes) => pos_integer(),
+          required(:cpu_quota) => pos_integer(),
           optional(:control) => boolean(),
           optional(:isolation) => String.t(),
           optional(:home) => String.t(),

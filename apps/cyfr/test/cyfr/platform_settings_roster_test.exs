@@ -304,7 +304,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  session_ttl_hours webhook_max_skew_seconds webhook_idempotency_ttl_seconds
                  device_label health_ready_cache_ms decision_retention_days
                  locus_runtime_watch_poll_ms locus_runtime_watch_misses locus_backends_lease_ms
-                 locus_backends_idle_ms log_level
+                 locus_backends_idle_ms athanor_program_memory_bytes log_level
                  asset_credential_window_s frame_credential_deadline_s
                  frame_invocation_max frame_invocation_window_ms
                  directory_serve directory_max_identities directory_log_bytes

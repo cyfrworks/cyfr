@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package cgroup bounds a spawn's memory with a cgroup v2 group of its own.
+// Package cgroup bounds a spawn's memory and CPU with a cgroup v2 group of
+// its own.
 //
 // The kernel charges a group for the pages its processes touch, the pages
 // of the tmpfs files they write and the kernel memory they cause, and never
 // lets the total pass the group's memory.max. A spawn's group is created
-// with memory.max at its bound, memory.swap.max at zero, so the bound is
-// not escaped into swap, and memory.oom.group set, so a group that cannot
-// stay under its bound loses every process at once rather than the one the
-// kernel would pick. Every process the spawn forks is born in the group. A
-// process leaves a group only by a write to a cgroup.procs file, and every
-// file here belongs to uid 0, so no spawned process moves itself, raises
-// its bound or clears the group kill.
+// with memory.max at its bound, memory.high at nine tenths of it
+// (HighBytes), so a growing group is throttled and reclaimed before it is
+// killed, memory.swap.max at zero, so the bound is not escaped into swap,
+// memory.oom.group set, so a group that cannot stay under its bound loses
+// every process at once rather than the one the kernel would pick, and
+// cpu.max at its CPU quota over the fixed period, so its processes together
+// use at most that share of the CPUs. Every process the spawn forks is born
+// in the group. A process leaves a group only by a write to a cgroup.procs
+// file, and every file here belongs to uid 0, so no spawned process moves
+// itself, raises its bounds or clears the group kill.
 //
 // Groups can be made only where the keeper's own cgroup is the root of a
 // cgroup namespace mounted writable, as a container started with Docker's
@@ -103,8 +107,10 @@ func Delegate(root string, self []byte) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s is not a cgroup v2 mount: %w", root, err)
 	}
-	if !hasField(string(controllers), "memory") {
-		return nil, fmt.Errorf("the memory controller is not enabled for %s", root)
+	for _, controller := range enabled {
+		if !hasField(string(controllers), controller) {
+			return nil, fmt.Errorf("the %s controller is not enabled for %s", controller, root)
+		}
 	}
 	// The root cgroup of the whole machine has no memory.max: a keeper
 	// there would be dividing the host, not a container's allotment.
@@ -120,7 +126,7 @@ func Delegate(root string, self []byte) (*Manager, error) {
 		if err != nil {
 			return nil, err
 		}
-		err = os.WriteFile(filepath.Join(root, "cgroup.subtree_control"), []byte("+memory"), 0o644)
+		err = os.WriteFile(filepath.Join(root, "cgroup.subtree_control"), []byte("+memory +cpu"), 0o644)
 		if err == nil {
 			break
 		}
@@ -128,14 +134,14 @@ func Delegate(root string, self []byte) (*Manager, error) {
 			if hidden > 0 {
 				err = fmt.Errorf("%w, with %d processes of another pid namespace in it", err, hidden)
 			}
-			return nil, fmt.Errorf("enabling the memory controller under %s: %w", root, err)
+			return nil, fmt.Errorf("enabling the memory and cpu controllers under %s: %w", root, err)
 		}
 		pause(drainInterval)
 	}
 	// A child of the root now has the files a spawn's group is bounded
-	// with, or this kernel cannot hold a group to its bound: without swap
+	// with, or this kernel cannot hold a group to its bounds: without swap
 	// accounting a group swaps past it, without the group kill it loses one
-	// process and lives on.
+	// process and lives on, without cpu.max it takes every CPU.
 	for _, file := range boundFiles {
 		if _, err := os.Stat(filepath.Join(leaf, file)); err != nil {
 			return nil, fmt.Errorf("this kernel gives a group no %s: %w", file, err)
@@ -144,8 +150,21 @@ func Delegate(root string, self []byte) (*Manager, error) {
 	return &Manager{root: root}, nil
 }
 
+// enabled are the controllers Delegate enables for the spawns' groups.
+var enabled = []string{"memory", "cpu"}
+
 // boundFiles are the control files Create writes.
-var boundFiles = []string{"memory.max", "memory.swap.max", "memory.oom.group"}
+var boundFiles = []string{"memory.max", "memory.high", "memory.swap.max", "memory.oom.group", "cpu.max"}
+
+// CPUPeriod is the period, in microseconds, of every group's cpu.max: a
+// quota of CPUPeriod is one CPU.
+const CPUPeriod = 100_000
+
+// HighBytes is a group's memory.high for its memory.max: nine tenths of
+// it, rounded down, where the kernel starts throttling and reclaiming the
+// group's pages so a spawn that grows slows before it is killed. A bound is
+// at most 2^40, so the product cannot overflow.
+func HighBytes(maxBytes uint64) uint64 { return maxBytes * 9 / 10 }
 
 // drain moves every process of root it can see into leaf, and reports how
 // many entries it could not see. cgroup.procs lists a process of another
@@ -228,10 +247,10 @@ func Own(self []byte) (string, error) {
 	return strings.TrimPrefix(lines[0], "0::"), nil
 }
 
-// Create makes the group name with its memory bound. A group of that name
-// left by an earlier spawn is removed first, so a group's counters are
-// always its own spawn's.
-func (m *Manager) Create(name string, memoryBytes uint64) (*Group, error) {
+// Create makes the group name with its memory bound and its CPU quota, in
+// microseconds of every CPUPeriod. A group of that name left by an earlier
+// spawn is removed first, so a group's counters are always its own spawn's.
+func (m *Manager) Create(name string, memoryBytes, cpuQuota uint64) (*Group, error) {
 	if !namePattern.MatchString(name) {
 		return nil, fmt.Errorf("group name %q", name)
 	}
@@ -244,8 +263,10 @@ func (m *Manager) Create(name string, memoryBytes uint64) (*Group, error) {
 	}
 	for _, f := range []struct{ file, value string }{
 		{"memory.max", strconv.FormatUint(memoryBytes, 10)},
+		{"memory.high", strconv.FormatUint(HighBytes(memoryBytes), 10)},
 		{"memory.swap.max", "0"},
 		{"memory.oom.group", "1"},
+		{"cpu.max", strconv.FormatUint(cpuQuota, 10) + " " + strconv.Itoa(CPUPeriod)},
 	} {
 		if err := os.WriteFile(filepath.Join(g.path, f.file), []byte(f.value), 0o644); err != nil {
 			_ = os.Remove(g.path)

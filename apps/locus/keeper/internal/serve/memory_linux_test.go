@@ -104,8 +104,10 @@ func TestABoundedSpawnRunsInAGroupOfItsOwnItCannotChange(t *testing.T) {
 	k := boundedKeeper(t)
 	script := `cat /proc/self/cgroup
 own="/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)"
-echo "max=$(cat "$own/memory.max") swap=$(cat "$own/memory.swap.max") group=$(cat "$own/memory.oom.group")"
+echo "max=$(cat "$own/memory.max") high=$(cat "$own/memory.high") swap=$(cat "$own/memory.swap.max") group=$(cat "$own/memory.oom.group") cpu=$(cat "$own/cpu.max")"
 echo max 2>/dev/null > "$own/memory.max" && echo raised
+echo max 2>/dev/null > "$own/memory.high" && echo unthrottled
+echo max 2>/dev/null > "$own/cpu.max" && echo unbounded
 echo 0 2>/dev/null > "$own/memory.oom.group" && echo ungrouped
 echo $$ 2>/dev/null > /sys/fs/cgroup/keeper/cgroup.procs && echo moved
 mkdir "$own/inner" 2>/dev/null && echo nested
@@ -113,7 +115,10 @@ cat /proc/self/cgroup`
 	spawnID, uid, rc := k.spawnBounded(t, "42", script, map[string]string{}, false, 64<<20)
 	rc.readUntil(t, func() bool { return false })
 	group := "0::/" + cgroup.Name(uid) + "\n"
-	want := group + "max=67108864 swap=0 group=1\n" + group
+	// memory.high is nine tenths of the bound, as the kernel keeps it: in
+	// whole pages, rounded down.
+	high := cgroup.HighBytes(64<<20) / uint64(os.Getpagesize()) * uint64(os.Getpagesize())
+	want := group + fmt.Sprintf("max=67108864 high=%d swap=0 group=1 cpu=%d %d\n", high, protocol.CPUPeriod, protocol.CPUPeriod) + group
 	if got := string(rc.got[frame.StreamStdout]); got != want {
 		t.Fatalf("the spawn saw\n%s\nwant\n%s", got, want)
 	}

@@ -41,6 +41,9 @@ defmodule Locus.Backends.ServiceTest do
   @g @vectors["owner"]["generation"]
   @e @vectors["owner"]["epoch"]
   @instant @vectors["hello"]["ts"]
+  # The budget the vectors' hello names, room for every session a vector
+  # opens.
+  @roomy_budget Jason.decode!(@vectors["hello"]["answer"])["memory"]["budget_bytes"]
 
   defmodule Launcher do
     @moduledoc false
@@ -114,16 +117,18 @@ defmodule Locus.Backends.ServiceTest do
       end
 
     owners =
-      start_supervised!(
-        {Owners,
-         [
-           boot: @boot,
-           supervisor: supervisor,
-           clock: fn -> Agent.get(clock, & &1) end,
-           stop_grace_ms: 100,
-           session_opts: session_opts
-         ] ++ launcher_opts}
-      )
+      start_supervised!({Owners,
+       [
+         boot: @boot,
+         supervisor: supervisor,
+         clock: fn -> Agent.get(clock, & &1) end,
+         stop_grace_ms: 100,
+         session_opts: session_opts,
+         # Room for every session a vector opens, but where it names
+         # the budget it tests.
+         memory_budget: given["memory_budget"] || @roomy_budget,
+         overcommit: {1, 1}
+       ] ++ launcher_opts})
 
     server =
       start_supervised!(
@@ -478,7 +483,16 @@ defmodule Locus.Backends.ServiceTest do
     test "a hello names no lifetime, and answers this one", ctx do
       answer = control(ctx, %{type: :hello, g: @g, cyfr_boot: @cyfr_boot})
       assert answer.status == 200
-      assert %{"boot" => @boot, "pool" => %{"size" => 64, "free" => 64}} = json(answer)
+
+      assert %{
+               "boot" => @boot,
+               "pool" => %{"size" => 64, "free" => 64},
+               "memory" => %{
+                 "budget_bytes" => @roomy_budget,
+                 "admission_limit_bytes" => @roomy_budget,
+                 "held_bytes" => 0
+               }
+             } = json(answer)
 
       # A hello whose members are not its header's is no hello.
       assert_refused(

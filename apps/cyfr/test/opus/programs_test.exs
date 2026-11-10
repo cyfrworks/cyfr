@@ -214,7 +214,17 @@ defmodule Opus.ProgramsTest do
     fake: fake
   } do
     controller = start_controller(fake)
-    assert %{boot: "bb_first", generation: 1, pool_size: 32} = :sys.get_state(controller)
+
+    assert %{
+             boot: "bb_first",
+             generation: 1,
+             pool_size: 32,
+             memory: %{
+               budget_bytes: 1_879_048_192,
+               admission_limit_bytes: 1_879_048_192,
+               held_bytes: 0
+             }
+           } = :sys.get_state(controller)
   end
 
   test "a stdio server syncs with its env sealed for its version and lifetime, and signs every request",
@@ -237,6 +247,8 @@ defmodule Opus.ProgramsTest do
            } = sync
 
     assert {athanor, server} == {ctx.athanor_id, row.id}
+    # No ceiling is set: the box holds the athanor to its own budget.
+    refute Map.has_key?(sync, "athanor_memory_bytes")
     refute Map.has_key?(hd(sync["programs"]), "env")
     refute Map.has_key?(hd(sync["programs"]), "memory_bytes")
     assert_receive {:sealed_env, ^server, %{"github" => %{"GITHUB_TOKEN" => @secret}}}
@@ -619,19 +631,28 @@ defmodule Opus.ProgramsTest do
     end
   end
 
-  test "the configured lease and idle period are what a sync asks for, renewed every third of the lease",
+  test "the configured lease, idle period and athanor ceiling are what a sync asks for, renewed every third of the lease",
        %{ctx: ctx, fake: fake} do
     Cyfr.Test.Settings.put("locus_backends_lease_ms", 6_000)
     Cyfr.Test.Settings.put("locus_backends_idle_ms", 120_000)
+    Cyfr.Test.Settings.put("athanor_program_memory_bytes", 536_870_912)
 
     controller = supervise_controller(url: fake.url, root: @root)
-    assert %{lease_ms: 6_000, idle_ms: 120_000, tick_ms: 2_000} = :sys.get_state(controller)
+
+    assert %{lease_ms: 6_000, idle_ms: 120_000, athanor_memory_bytes: 536_870_912, tick_ms: 2_000} =
+             :sys.get_state(controller)
+
     assert_receive {:control, "hello", _hello, _fields}, 2_000
 
     vault_entry(ctx)
     connect(ctx, stdio_row(ctx, "leased"))
 
-    assert_receive {:control, "sync", %{"lease_ms" => 6_000, "idle_ms" => 120_000}, _fields},
+    assert_receive {:control, "sync",
+                    %{
+                      "lease_ms" => 6_000,
+                      "idle_ms" => 120_000,
+                      "athanor_memory_bytes" => 536_870_912
+                    }, _fields},
                    2_000
 
     tick(controller)

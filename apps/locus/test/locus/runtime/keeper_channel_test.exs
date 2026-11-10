@@ -134,6 +134,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
        %{keeper: keeper, name: name, dir: dir} do
     handle = start_handle!(name)
     {:ok, bound} = Locus.Runtime.Settings.runner_memory_bytes([])
+    {:ok, quota} = Locus.Runtime.Settings.runner_cpu_quota([])
 
     # The whole request but its own id and attach target: a field dropped
     # or added, the isolation among them, fails here.
@@ -147,6 +148,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
              "control" => true,
              "isolation" => "netns",
              "memory_bytes" => bound,
+             "cpu_quota" => quota,
              "argv" => ["/app/bin/locus", "start"],
              "env" => @spec_env
            }

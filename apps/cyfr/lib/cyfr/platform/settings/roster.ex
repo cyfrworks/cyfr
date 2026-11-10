@@ -276,6 +276,8 @@ defmodule Cyfr.Platform.Settings.Roster do
   @compose_only [
     {"CYFR_CPU_LIMIT",
      "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in locus-runtime under `LOCUS_RUNTIME_CPU_LIMIT`."},
+    {"LOCUS_BACKENDS_MEMORY_LIMIT",
+     "The locus-backends container's memory limit (default 2G): `LOCUS_BACKENDS_MEMORY_BUDGET` (1792 MiB by default, three program sessions at their default 512 MiB bound), the memory the programs' sessions may hold, plus 256 MiB for the service beside them."},
     {"LOCUS_BUILDS_CPU_LIMIT", "The locus-builds container's CPU limit (default 2)."},
     {"LOCUS_BUILDS_MEMORY_LIMIT",
      "The locus-builds container's memory limit (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the container reaches its limit."},
@@ -370,6 +372,8 @@ defmodule Cyfr.Platform.Settings.Roster do
       "Status polls a worker service may miss in a row before cyfr ends the runs of the boot it last heard from.",
     "locus_backends_lease_ms" =>
       "How long the backends service runs a stdio server's backends without a renewal from cyfr, in milliseconds; cyfr renews every third of it.",
+    "athanor_program_memory_bytes" =>
+      "Bytes the program sessions of one athanor may hold on one backends box together, each session counted at its memory bound from its start until its process is gone; an open past it is refused until one ends. Unset, the box's own budget (`LOCUS_BACKENDS_MEMORY_BUDGET`); 0 is refused.",
     "locus_backends_idle_ms" =>
       "How long a stdio backend runs without a tool call before it is stopped and its slot freed, in milliseconds; its next call starts it again.",
     "log_level" =>
@@ -639,6 +643,15 @@ defmodule Cyfr.Platform.Settings.Roster do
         "CYFR_LOCUS_BACKENDS_IDLE_MS",
         900_000,
         whole(1_000..86_400_000, "milliseconds"),
+        :backends
+      ),
+      # Carried on every sync as the athanor's ceiling; unset, the sync
+      # names none and the box holds the athanor to its own budget.
+      limit(
+        :athanor_program_memory_bytes,
+        "CYFR_ATHANOR_PROGRAM_MEMORY_BYTES",
+        nil,
+        byte_count(1..@max_bytes),
         :backends
       ),
       %Entry{

@@ -47,8 +47,34 @@ defmodule Locus.Backends.Owners do
   (`bad_request`); a program the owner does not define is
   `unknown_program`; one failed, `program_failed`. An owner holds at most
   `Prima.LocusBackends.max_sessions/0` sessions, running or ended: the
-  oldest ended one is forgotten for a new one, and with all of them
-  running an open is `capacity`.
+  oldest ended one whose process is gone is forgotten for a new one, and
+  with none such an open is `capacity`.
+
+  ## Admission by memory
+
+  Every session reserves its memory bound (the program's `memory_bytes`,
+  or `:memory_bytes` for one that names none) from the moment its open is
+  admitted, before its home is made or its pool read, until nothing of its
+  process is left (its `:vacated`, or its session process gone): an open
+  being prepared, a session running and one ended whose process has not
+  yet gone all hold theirs. An open is admitted while
+
+      held + requested <= floor(B * F)
+
+  for the box, `B` being `:memory_budget` and `F` `:overcommit`
+  (`Locus.Config.backends_memory_budget/0` and
+  `backends_memory_overcommit/0`), and while the same sum over the
+  sessions of the owner's athanor, every owner of it on this box, stays
+  within that athanor's ceiling `A`, the `athanor_memory_bytes` its last
+  sync named (`B` when it named none); past either it is `capacity`. A
+  program whose bound alone is past the box's admission limit can never
+  be admitted: a sync and a status report it `failed`, and a status names
+  its bound and the limit as its `error`, while each of its opens is still
+  `capacity`. An
+  open that attaches to the session already running for its key reserves
+  nothing more, and one that found it started while it was prepared drops
+  its reservation. A hello and a status report the box's
+  `memory{budget_bytes, admission_limit_bytes, held_bytes}`.
 
   Before a scratch session's process starts it holds a uid of the pool
   `backends`: the claim is made after one read of the pool
@@ -145,7 +171,10 @@ defmodule Locus.Backends.Owners do
   by default); `:supervisor`, the `DynamicSupervisor` sessions start
   under; `:clock`, the milliseconds leases, crashes and idle periods are
   read on (monotonic by default); `:memory_bytes` (`Locus.Config`'s by
-  default), the bound of a program that names none; `:stop_grace_ms`;
+  default), the bound of a program that names none; `:memory_budget` and
+  `:overcommit` (`Locus.Config`'s by default), the box's `B` and `F`;
+  `:cpu_quota` (`Locus.Config.backends_cpu_quota/0` by default), every
+  session's CPU; `:stop_grace_ms`;
   `:pool_timeout_ms`; `:status_timeout_ms`; `:measure_interval_ms`;
   `:bounds`, overriding `Prima.LocusBackends`' `restart_backoff_ms`,
   `crash_window_ms` and `max_crashes`; and `:session_opts`, more options
@@ -226,6 +255,8 @@ defmodule Locus.Backends.Owners do
          clock: Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end),
          memory_bytes:
            Keyword.get_lazy(opts, :memory_bytes, &Locus.Config.backends_memory_bytes/0),
+         memory: memory(opts),
+         cpu_quota: Keyword.get_lazy(opts, :cpu_quota, &Locus.Config.backends_cpu_quota/0),
          stop_grace_ms: Keyword.get(opts, :stop_grace_ms, @stop_grace_ms),
          pool_timeout_ms: Keyword.get(opts, :pool_timeout_ms, @pool_timeout_ms),
          status_timeout_ms: Keyword.get(opts, :status_timeout_ms, @status_timeout_ms),
@@ -264,6 +295,18 @@ defmodule Locus.Backends.Owners do
   end
 
   defp mint_boot, do: "bb_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+  # The box's budget `B` and its admission limit, `floor(B * F)`.
+  defp memory(opts) do
+    budget = Keyword.get_lazy(opts, :memory_budget, &Locus.Config.backends_memory_budget/0)
+
+    overcommit = Keyword.get_lazy(opts, :overcommit, &Locus.Config.backends_memory_overcommit/0)
+
+    %{
+      budget_bytes: budget,
+      admission_limit_bytes: Locus.Config.admission_limit_bytes(budget, overcommit)
+    }
+  end
 
   @impl GenServer
   def handle_call(:boot, _from, state), do: {:reply, state.boot, state}
@@ -516,10 +559,11 @@ defmodule Locus.Backends.Owners do
         owner = %{
           existing
           | lease_until: state.clock.() + message.lease_ms,
-            idle_ms: message.idle_ms
+            idle_ms: message.idle_ms,
+            athanor_memory_bytes: Map.get(message, :athanor_memory_bytes)
         }
 
-        {:reply, {:ok, sync_answer(owner)}, put_owner(state, owner)}
+        {:reply, {:ok, sync_answer(state, owner)}, put_owner(state, owner)}
 
       _new ->
         admit_sync(state, message, version, definition, existing, open_env)
@@ -586,7 +630,7 @@ defmodule Locus.Backends.Owners do
           routes: Map.put(state.routes, {owner.athanor, owner.server}, owner.id)
       }
 
-      {:reply, {:ok, sync_answer(owner)}, state}
+      {:reply, {:ok, sync_answer(state, owner)}, state}
     else
       :error -> {:reply, {:error, :bad_request}, state}
     end
@@ -632,8 +676,16 @@ defmodule Locus.Backends.Owners do
   defp continue(state, {:hello, from}, result) do
     reply =
       case pool(result) do
-        {:ok, pool} -> {:ok, %{boot: state.boot, pool: %{size: pool.size, free: pool.free}}}
-        :error -> {:error, :unavailable}
+        {:ok, pool} ->
+          {:ok,
+           %{
+             boot: state.boot,
+             pool: %{size: pool.size, free: pool.free},
+             memory: memory_report(state)
+           }}
+
+        :error ->
+          {:error, :unavailable}
       end
 
     GenServer.reply(from, reply)
@@ -641,7 +693,7 @@ defmodule Locus.Backends.Owners do
   end
 
   defp continue(state, {:status, from}, {:ok, owners}) do
-    GenServer.reply(from, {:ok, %{owners: owners}})
+    GenServer.reply(from, {:ok, %{owners: owners, memory: memory_report(state)}})
     control_done(state)
   end
 
@@ -728,17 +780,20 @@ defmodule Locus.Backends.Owners do
   defp open_program(state, owner, program, message, from) do
     ask = %{
       owner: owner.id,
+      athanor: owner.athanor,
       program: program.name,
       home_id: message.home_id,
       key: {program.name, message.home_id, message.key, message.mode},
       mode: message.mode,
-      argv: message.argv
+      argv: message.argv,
+      memory_bytes: program.memory_bytes || state.memory_bytes
     }
 
     with :ok <- shape(program, message),
          :ok <- not_failed(owner, program, ask.key),
          :error <- running(owner, ask.key),
          :ok <- home_open(state, message.home_id),
+         :ok <- memory_room(state, owner, ask.memory_bytes),
          {:ok, admitted} <- room(state, owner) do
       state = put_owner(state, admitted)
       %{launcher: launcher, launcher_server: server} = state
@@ -815,7 +870,7 @@ defmodule Locus.Backends.Owners do
     else
       oldest =
         owner.sessions
-        |> Enum.filter(fn {_id, session} -> not session.running and not session.slot end)
+        |> Enum.filter(fn {_id, session} -> not session.running and not session.held end)
         |> Enum.min_by(fn {_id, session} -> session.opened end, fn -> nil end)
 
       case oldest do
@@ -828,6 +883,35 @@ defmodule Locus.Backends.Owners do
       end
     end
   end
+
+  # Room for `requested` more bytes: within the box's admission limit, and
+  # within the ceiling of the owner's athanor over every owner of it here.
+  defp memory_room(state, owner, requested) do
+    ceiling = owner.athanor_memory_bytes || state.memory.budget_bytes
+
+    if held_bytes(state, & &1) + requested <= state.memory.admission_limit_bytes and
+         held_bytes(state, &(&1 == owner.athanor)) + requested <= ceiling,
+       do: :ok,
+       else: {:error, :capacity}
+  end
+
+  # The bytes reserved by the athanors `athanor?` takes: every session
+  # whose process is not yet gone, and every open being prepared.
+  defp held_bytes(state, athanor?) do
+    sessions =
+      for {_id, owner} <- state.owners,
+          athanor?.(owner.athanor),
+          {_sid, %{held: true, memory_bytes: bytes}} <- owner.sessions,
+          reduce: 0,
+          do: (sum -> sum + bytes)
+
+    for {_ref, %{continuation: {:open, _from, ask}}} <- state.pending,
+        athanor?.(ask.athanor),
+        reduce: sessions,
+        do: (sum -> sum + ask.memory_bytes)
+  end
+
+  defp memory_report(state), do: Map.put(state.memory, :held_bytes, held_bytes(state, & &1))
 
   defp forget(state, pid) do
     DynamicSupervisor.terminate_child(state.supervisor, pid)
@@ -858,14 +942,14 @@ defmodule Locus.Backends.Owners do
   defp opened(state, from, ask, result) do
     with {:ok, owner} <- still_open(state, ask),
          program = Enum.find(owner.definition, &(&1.name == ask.program)),
-         {:ok, slot?} <- claimed(state, program, ask, result) do
+         :ok <- claimed(state, program, ask, result) do
       case running(owner, ask.key) do
         {:ok, session_id} ->
           GenServer.reply(from, {:ok, opened_answer(session_id, true, ask.mode)})
           state
 
         :error ->
-          start_session(state, owner, program, ask, slot?, from)
+          start_session(state, owner, program, ask, from)
       end
     else
       {:error, code, state} ->
@@ -892,7 +976,7 @@ defmodule Locus.Backends.Owners do
       {:ok, pool} ->
         if slots_held(state) + 1 > capacity(pool),
           do: {:error, :capacity},
-          else: {:ok, true}
+          else: :ok
 
       :error ->
         {:error, :unavailable}
@@ -902,7 +986,7 @@ defmodule Locus.Backends.Owners do
   defp claimed(state, %{home: :kept}, ask, result) do
     case result do
       :kept ->
-        {:ok, false}
+        :ok
 
       {:over_cap, bytes} ->
         {:error, :home_over_cap,
@@ -916,7 +1000,7 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  defp start_session(state, owner, program, ask, slot?, from) do
+  defp start_session(state, owner, program, ask, from) do
     session_id = "ss_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
     record = owner.programs[program.name]
 
@@ -948,7 +1032,8 @@ defmodule Locus.Backends.Owners do
           mode: ask.mode,
           running: true,
           started: false,
-          slot: slot?,
+          held: true,
+          memory_bytes: ask.memory_bytes,
           opened: System.unique_integer([:monotonic]),
           waiting: [from]
         }
@@ -994,7 +1079,8 @@ defmodule Locus.Backends.Owners do
       argv: argv,
       env: Map.fetch!(owner.env, program.name),
       pool: @pool,
-      memory_bytes: program.memory_bytes || state.memory_bytes
+      memory_bytes: ask.memory_bytes,
+      cpu_quota: state.cpu_quota
     }
     |> put_given(:home, ask.home_id)
     |> put_given(:home_max_bytes, program.home_max_bytes)
@@ -1050,7 +1136,7 @@ defmodule Locus.Backends.Owners do
   end
 
   defp session_event(state, owner, session_id, session, :vacated),
-    do: put_session(state, owner, session_id, %{session | slot: false})
+    do: put_session(state, owner, session_id, %{session | held: false})
 
   defp session_event(state, _owner, _session_id, _session, _event), do: state
 
@@ -1090,7 +1176,7 @@ defmodule Locus.Backends.Owners do
   end
 
   # A session process that ended without saying so: its process is gone
-  # with it, and it holds nothing.
+  # with it, and it holds nothing: no uid and no memory.
   defp session_down(state, pid) do
     {{id, session_id}, pids} = Map.pop(state.pids, pid)
     state = %{state | pids: pids}
@@ -1101,7 +1187,7 @@ defmodule Locus.Backends.Owners do
           {:ok, session} ->
             Enum.each(session.waiting, &GenServer.reply(&1, {:error, :internal}))
             running? = session.running
-            session = %{session | pid: nil, running: false, slot: false, waiting: []}
+            session = %{session | pid: nil, running: false, held: false, waiting: []}
             state = put_session(state, owner, session_id, session)
 
             if running? and owner.state != :draining,
@@ -1135,16 +1221,18 @@ defmodule Locus.Backends.Owners do
         homes = Enum.map(record.homes, &Map.get(state.homes, &1, new_home()))
         last = record.last && owner.sessions[record.last]
 
+        unadmittable = unadmittable(state, program)
+
         %{
           name: program.name,
           status:
             cond do
-              MapSet.size(record.failed_keys) > 0 -> :failed
+              MapSet.size(record.failed_keys) > 0 or unadmittable != nil -> :failed
               sessions != [] -> :running
               true -> :idle
             end,
           restarts: record.restarts,
-          error: record.error,
+          error: unadmittable || record.error,
           home: program.home,
           home_bytes: home_bytes(program.home, homes),
           over_cap: Enum.any?(homes, & &1.over_cap),
@@ -1244,6 +1332,7 @@ defmodule Locus.Backends.Owners do
       state: :running,
       lease_until: state.clock.() + message.lease_ms,
       idle_ms: message.idle_ms,
+      athanor_memory_bytes: Map.get(message, :athanor_memory_bytes),
       programs:
         Map.new(definition, fn program ->
           {program.name,
@@ -1274,19 +1363,36 @@ defmodule Locus.Backends.Owners do
         do: value
   end
 
-  defp sync_answer(owner) do
+  defp sync_answer(state, owner) do
     %{
       status: owner.state,
       programs:
-        Enum.map(owner.definition, fn %{name: name} ->
-          %{
-            name: name,
-            status:
-              if(MapSet.size(owner.programs[name].failed_keys) > 0, do: :failed, else: :idle)
-          }
+        Enum.map(owner.definition, fn %{name: name} = program ->
+          failed? =
+            MapSet.size(owner.programs[name].failed_keys) > 0 or
+              unadmittable(state, program) != nil
+
+          %{name: name, status: if(failed?, do: :failed, else: :idle)}
         end)
     }
   end
+
+  # Why a program can never be admitted on this box, or nil: its bound
+  # alone is past the admission limit, so every open of it is `capacity`.
+  # Its owner is told once, as the program's status and this sentence,
+  # rather than reading busy on every retry.
+  defp unadmittable(state, program) do
+    bound = program.memory_bytes || state.memory_bytes
+    limit = state.memory.admission_limit_bytes
+
+    if bound > limit,
+      do:
+        "Its memory bound, #{size(bound)}, is above the #{size(limit)} this box admits: " <>
+          "it cannot start here until its bound is lowered or the box's budget raised."
+  end
+
+  defp size(bytes) when rem(bytes, 1_048_576) == 0, do: "#{div(bytes, 1_048_576)} MiB"
+  defp size(bytes), do: "#{bytes} bytes"
 
   defp version(owner), do: %{athanor: owner.athanor, server: owner.server, g: owner.g, e: owner.e}
 
@@ -1314,9 +1420,14 @@ defmodule Locus.Backends.Owners do
     end
   end
 
+  # The pool's uids held: a scratch session's (one with no home) until
+  # nothing of its process is left.
   defp slots_held(state) do
     Enum.reduce(state.owners, 0, fn {_id, owner}, held ->
-      held + Enum.count(owner.sessions, fn {_id, session} -> session.slot end)
+      held +
+        Enum.count(owner.sessions, fn {_id, session} ->
+          session.held and session.home_id == nil
+        end)
     end)
   end
 

@@ -28,8 +28,9 @@ defmodule Locus.Keeper do
   ## A run
 
   `run/2` asks for a spawn in the pool `build`, and every spawn it asks for
-  carries `memory_bytes`, the builder's bound (`Locus.Config.memory_bytes/0`):
-  a build is never run without one. cyfr-locus runs the command under a
+  carries `memory_bytes`, the builder's bound (`Locus.Config.memory_bytes/0`),
+  and `cpu_quota`, the builder's CPU (`Locus.Config.cpu_quota/0`): a build
+  is never run without them. cyfr-locus runs the command under a
   pooled uid with a 0700 home, `TMPDIR` inside it, an environment built
   from nothing but the command's `env`, resource limits, and a cgroup of
   its own holding the bound. The spawn's relay, running as this node's
@@ -48,7 +49,8 @@ defmodule Locus.Keeper do
   ## A long-lived spawn
 
   `spawn/2` (`Locus.Launcher`) asks for a spawn in the pool its spec names,
-  under the spec's `memory_bytes`, which every spec names, and answers its
+  under the spec's `memory_bytes` and `cpu_quota`, which every spec names,
+  and answers its
   handle once cyfr-locus reports it spawned, or the refusal. The caller
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, each
@@ -291,9 +293,10 @@ defmodule Locus.Keeper do
   def run(server, %{argv: argv, env: env, stdin: stdin}, opts) do
     memory_bytes = memory_bytes!(opts)
     monitor = Process.monitor(server)
+    bounds = %{memory_bytes: memory_bytes, cpu_quota: Locus.Config.cpu_quota()}
 
     try do
-      case GenServer.call(server, {:spawn, argv, env, memory_bytes}, @start_timeout_ms) do
+      case GenServer.call(server, {:spawn, argv, env, bounds}, @start_timeout_ms) do
         {:ok, ref} ->
           await(%{
             phase: :running,
@@ -345,13 +348,19 @@ defmodule Locus.Keeper do
   # ————— a long-lived spawn —————
 
   @impl Locus.Launcher
-  def spawn(server, %{argv: argv, env: env, pool: pool, memory_bytes: memory_bytes} = spec)
-      when is_integer(memory_bytes) and memory_bytes > 0 do
+  def spawn(
+        server,
+        %{argv: argv, env: env, pool: pool, memory_bytes: memory_bytes, cpu_quota: cpu_quota} =
+          spec
+      )
+      when is_integer(memory_bytes) and memory_bytes > 0 and is_integer(cpu_quota) and
+             cpu_quota > 0 do
     ref = make_ref()
 
     opts = %{
       pool: pool,
       memory_bytes: memory_bytes,
+      cpu_quota: cpu_quota,
       control: Map.get(spec, :control, false) == true,
       isolation: Map.get(spec, :isolation),
       home: Map.get(spec, :home),
@@ -796,8 +805,8 @@ defmodule Locus.Keeper do
   end
 
   @impl GenServer
-  def handle_call({:spawn, argv, env, memory_bytes}, {owner, _tag}, state) do
-    request = %{pool: @pool, argv: argv, env: env, memory_bytes: memory_bytes}
+  def handle_call({:spawn, argv, env, bounds}, {owner, _tag}, state) do
+    request = Map.merge(%{pool: @pool, argv: argv, env: env}, bounds)
 
     case start_spawn(state, request, %{kind: :run, owner: owner, from: nil}) do
       {:ok, ref, state} ->
@@ -1189,8 +1198,8 @@ defmodule Locus.Keeper do
 
   defp redact_message({:attach, _token}), do: {:attach, :redacted}
 
-  defp redact_message({:spawn, _argv, _env, memory_bytes}),
-    do: {:spawn, :redacted, :redacted, memory_bytes}
+  defp redact_message({:spawn, _argv, _env, bounds}),
+    do: {:spawn, :redacted, :redacted, bounds}
 
   defp redact_message({:spawn_handle, ref, _argv, _env, opts}),
     do: {:spawn_handle, ref, :redacted, :redacted, opts}
@@ -1202,7 +1211,13 @@ defmodule Locus.Keeper do
 
   defp spawn_handle(ref, argv, env, opts, home, from, owner, state) do
     request =
-      %{pool: opts.pool, argv: argv, env: env, memory_bytes: opts.memory_bytes}
+      %{
+        pool: opts.pool,
+        argv: argv,
+        env: env,
+        memory_bytes: opts.memory_bytes,
+        cpu_quota: opts.cpu_quota
+      }
       |> put_given(:isolation, opts.isolation)
       |> put_given(:control, opts.control || nil)
       |> Map.merge(home)
