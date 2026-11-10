@@ -1516,7 +1516,7 @@ func (args ExecutionReadResourceArgs) MarshalJSON() ([]byte, error) {
 
 // ExecutionRetryArgs carries arguments for execution.retry.
 type ExecutionRetryArgs struct {
-	// retry: the failed run to run again, one a schedule or a feed started; it runs as a new run with the same component, input and grant
+	// retry: the failed run to run again, one a schedule or a feed started; it runs as a new run with the same component, input and grant, answered accepted with the new run's id once it starts
 	ExecutionId string `json:"execution_id"`
 }
 

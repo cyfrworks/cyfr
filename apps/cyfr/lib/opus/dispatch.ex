@@ -92,6 +92,12 @@ defmodule Opus.Dispatch do
           secrets: %{optional(String.t()) => String.t()}
         }
 
+  @typedoc """
+  A run `admit/4` admitted and has not dispatched: the calling process is
+  its waiter, and only `dispatch/1` in that process carries it on.
+  """
+  @opaque admitted_run :: {map(), WorkerAPI.endpoint(), map(), keyword()}
+
   @doc """
   Run `reference` with `input` in `ctx` on a worker service. `opts` are
   `Opus.Admission.admit/4`'s (without `:service_id`, `:boot_id`
@@ -102,29 +108,43 @@ defmodule Opus.Dispatch do
   @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(%Context{} = ctx, reference, input, opts \\ [])
       when is_binary(reference) and is_map(input) and is_list(opts) do
-    admitted =
-      with {:ok, worker} <- worker(reference) do
-        opts =
-          Keyword.merge(opts,
-            service_id: worker.service,
-            boot_id: worker.boot,
-            worker: worker.endpoint
-          )
+    with {:ok, admitted, _execution_id} <- admit(ctx, reference, input, opts),
+         do: dispatch(admitted)
+  end
 
-        with {:ok, admitted} <- Admission.admit(ctx, reference, input, opts) do
-          {:ok, admitted, worker.endpoint}
-        end
-      end
-
-    case admitted do
-      {:ok, admitted, endpoint} ->
-        dispatch(admitted, endpoint, input, opts)
-
+  @doc """
+  The first step of `run/4` alone: select the worker service and admit
+  the run with the calling process as its waiter. Answers the admitted run,
+  which `dispatch/1` in the same process carries on, and its execution's
+  id; a refusal answers what `run/4` would, with nothing dispatched.
+  """
+  @spec admit(Context.t(), String.t(), map(), keyword()) ::
+          {:ok, admitted_run(), String.t()} | {:error, term()}
+  def admit(%Context{} = ctx, reference, input, opts)
+      when is_binary(reference) and is_map(input) and is_list(opts) do
+    with {:ok, worker} <- worker(reference),
+         admission_opts =
+           Keyword.merge(opts,
+             service_id: worker.service,
+             boot_id: worker.boot,
+             worker: worker.endpoint
+           ),
+         {:ok, admitted} <- Admission.admit(ctx, reference, input, admission_opts) do
+      {:ok, {admitted, worker.endpoint, input, opts}, admitted.execution_id}
+    else
       {:error, _reason} = refused ->
         give_back_invoke(ctx, opts)
         refused
     end
   end
+
+  @doc """
+  Steps 2 to 5 of `run/4` for a run `admit/4` admitted in the calling
+  process: take its slot, start it and wait for its close. Answers the
+  run's result as its close recorded it.
+  """
+  @spec dispatch(admitted_run()) :: {:ok, map()} | {:error, term()}
+  def dispatch({admitted, endpoint, input, opts}), do: dispatch(admitted, endpoint, input, opts)
 
   @doc """
   Admit `reference` with `input` in `ctx` for a runner that already runs

@@ -38,7 +38,8 @@ streams.
   feed action that names a `pick`. A retry control picks a failed run
   from `runs.changes` at `/execution_id` into `execution_id`; only a
   run a schedule or a feed started, and known to have failed, is run
-  again.
+  again. Its press is accepted once the new run starts; show the new
+  run's outcome from `runs.changes`, never as the press's answer.
 - `canvas.write` asks the person first, and its card names the streams
   the version reads. Write what the person asked for, and declare only
   the streams the page opens.
