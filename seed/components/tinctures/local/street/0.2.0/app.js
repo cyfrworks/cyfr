@@ -1337,7 +1337,8 @@ function select(id) {
 }
 const act = (label, fn, cls = '') => ({ label, fn, cls });
 const ask = (widget) => act('Ask AQUA', () => sdk && sdk.ask(widget));
-const page = (label, key, cls = '') => act(label, () => sdk && sdk.settings(key), cls);
+// A page by its key, at `ref` when one is given: AQUA's panel at an own thread, the chat at a shared one.
+const page = (label, key, cls = '', ref = null) => act(label, () => sdk && (ref == null ? sdk.settings(key) : sdk.settings(key, ref)), cls);
 const PAGE_LABEL = { aqua: 'Open AQUA', chat: 'Open the chat', executions: 'Open runs', schedules: 'Open schedules', files: 'Open files' };
 
 function scheduleControl(s) {
@@ -1416,7 +1417,7 @@ function signFor(e) {
       // Retry, while the failed run is among the runs this street holds.
       const run = a.kind === 'failed_run' && isStr(dest.ref) && one('runs.changes', dest.ref) ? dest.ref : null;
       if (run) base.acts.push(retryAct(run, 'go'));
-      if (dest.kind === 'page' && isStr(dest.page)) base.acts.push(page(PAGE_LABEL[dest.page] || 'Open', dest.page, run ? '' : 'go'));
+      if (dest.kind === 'page' && isStr(dest.page)) base.acts.push(page(PAGE_LABEL[dest.page] || 'Open', dest.page, run ? '' : 'go', isStr(dest.ref) ? dest.ref : null));
       if (a.kind === 'failed_schedule') {
         const held = one('schedules.changes', a.id);
         const control = held && scheduleAct(held);
@@ -1435,7 +1436,7 @@ function signFor(e) {
         title: text(th.title) || 'A thread',
         facts: [['kind', own ? 'own, with AQUA' : `shared, ${people.length} ${people.length === 1 ? 'person' : 'people'}`], ['last', when(e.t)], ...(th.unread > 0 ? [['unread', String(th.unread)]] : []), ...(th.waits_on_you ? [['', 'waits on you']] : [])],
         // An own thread is AQUA's, in its panel; a shared one is in the chat.
-        acts: [own ? page('Open AQUA', 'aqua', 'go') : page('Open the chat', 'chat', 'go'), ask('houses')],
+        acts: [page(own ? 'Open AQUA' : 'Open the chat', own ? 'aqua' : 'chat', 'go', th.id), ask('houses')],
       };
     }
     case 'lamp': {

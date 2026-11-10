@@ -177,7 +177,7 @@ async function street({version = "0.2.0", width = 1024, height = 600, protocol =
       presses.push([control, value])
       return typeof p.answer === "function" ? p.answer() : Promise.resolve(p.answer)
     },
-    settings: (page) => pages.push(page),
+    settings: (...args) => pages.push(args),
     prefs: async (document) => ({outcome: "saved", document}),
     ask() {},
     open() {},
@@ -478,20 +478,48 @@ describe("the street desktop 0.2.0", () => {
     ])
     p.pump()
     for (const [target, label, page] of [
-      ["Waiting on you: an approval", "Open AQUA", "aqua"],
-      ["Waiting on you: a failed run", "Open runs", "executions"],
-      ["Waiting on you: a failed schedule", "Open schedules", "schedules"],
-      ["Waiting on you: a file offered", "Open files", "files"],
-      ["Thread Family", "Open the chat", "chat"],
-      ["Thread Tax notes", "Open AQUA", "aqua"],
+      ["Waiting on you: an approval", "Open AQUA", ["aqua", "th-1"]],
+      ["Waiting on you: a failed run", "Open runs", ["executions", "ex-9"]],
+      ["Waiting on you: a failed schedule", "Open schedules", ["schedules", "sch-1"]],
+      ["Waiting on you: a file offered", "Open files", ["files", "of-1"]],
+      ["Thread Family", "Open the chat", ["chat", "th-2"]],
+      ["Thread Tax notes", "Open AQUA", ["aqua", "th-3"]],
     ]) {
       tap(p, target)
       await press(p, label)
-      assert.equal(p.pages.at(-1), page, target)
+      assert.deepEqual(p.pages.at(-1), page, target)
       button(p, "Close").dispatch("click")
       p.pump()
     }
     assert.equal(button(p, "Retry"), undefined)
+  })
+
+  test("a waiting item opens its destination at its ref, and a thread house opens AQUA or the chat at its thread", async () => {
+    const p = await street()
+    picture(p.stream("runs.changes"), [])
+    picture(p.stream("attention.changes"), [
+      waiting("ap-1", "approval", {kind: "page", page: "aqua", ref: "th-1"}, {label: "Trip planning", since: at(-200)}),
+      waiting("ap-2", "approval", {kind: "page", page: "aqua", ref: null}, {label: "Book club", since: at(-180)}),
+      waiting("formula:local.digest", "failed_run", {kind: "page", page: "executions", ref: "ex-9"}, {since: at(-150)}),
+    ])
+    picture(p.stream("threads.changes"), [
+      {kind: "shared", id: "th-2", title: "Family", people: ["Noor", "Sam", "Ana"], last_activity: at(-60), waits_on_you: false, unread: 0},
+      {kind: "own", id: "th-3", title: "Tax notes", people: ["Noor"], last_activity: at(-130), waits_on_you: false, unread: null},
+    ])
+    p.pump()
+    for (const [target, label] of [
+      ["Waiting on you: an approval, Approve in Trip planning", "Open AQUA"],
+      ["Waiting on you: an approval, Approve in Book club", "Open AQUA"],
+      ["Waiting on you: a failed run", "Open runs"],
+      ["Thread Family", "Open the chat"],
+      ["Thread Tax notes", "Open AQUA"],
+    ]) {
+      tap(p, target)
+      await press(p, label)
+      button(p, "Close").dispatch("click")
+      p.pump()
+    }
+    assert.deepEqual(p.pages, [["aqua", "th-1"], ["aqua"], ["executions", "ex-9"], ["chat", "th-2"], ["aqua", "th-3"]])
   })
 
   // While frozen the SDK tells a stream nothing and its handle stands suspended; shown again, the SDK
