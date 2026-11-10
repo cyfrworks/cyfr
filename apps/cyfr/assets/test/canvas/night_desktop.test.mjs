@@ -190,7 +190,7 @@ function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}} = {}
     },
     prefs: async (document) => ({outcome: "saved", document, revision: 2}),
     press: async (control, value) => (presses.push([control, value]), typeof answer === "function" ? answer(control, value) : answer),
-    settings: (page) => pages.push(page),
+    settings: (...args) => pages.push(args),
     ask() {},
     open() {},
     grant() {},
@@ -548,7 +548,7 @@ describe("the night desktop 0.2.0", () => {
       assert.match(p.street(), new RegExp(`data-target="${target}"`))
       p.tap({"data-target": target})
       press(p, label)
-      assert.equal(p.pages.at(-1), page, `${target} opened ${p.pages.at(-1)}`)
+      assert.equal(p.pages.at(-1)[0], page, `${target} opened ${p.pages.at(-1)}`)
     }
   })
 
@@ -563,6 +563,29 @@ describe("the night desktop 0.2.0", () => {
     assert.match(wall, /1 person\b/)
     assert.doesNotMatch(wall, /1 people/)
     assert.match(wall, /3 people/)
+  })
+
+  test("a lit sign opens its item's destination at its ref, and a thread plaque opens AQUA or the chat at the thread", async () => {
+    const p = await lit({
+      runs: [RUN_FAILED],
+      attention: [{kind: "approval", id: "ap1", label: "Trip planning", since: AT, destination: {kind: "page", page: "aqua", ref: "t1"}}, FAILED_ITEM],
+    })
+    picture(p.line("threads.changes"), [
+      {kind: "own", id: "t1", title: "Trip planning", people: ["me"], unread: null},
+      {kind: "shared", id: "t2", title: "Family", people: ["a", "b", "c"], unread: 2},
+      {kind: "own", id: "t3", title: "Tax notes", people: ["me"], unread: null},
+    ])
+    p.draw()
+    for (const [target, label, opened] of [
+      ["thread:t1", "Open the approval", ["aqua", "t1"]],
+      ["thread:t2", "Open in chat", ["chat", "t2"]],
+      ["thread:t3", "Open in AQUA", ["aqua", "t3"]],
+      ["failed:formula:local.digest:1.0.0", "Open runs", ["executions", "exe_fail"]],
+    ]) {
+      p.tap({"data-target": target})
+      press(p, label)
+      assert.deepEqual(p.pages.at(-1), opened, `${target} opened ${p.pages.at(-1)}`)
+    }
   })
 
   test("the files and system items reach the locker and the junction box, and the fields the catalog now carries show", async () => {
@@ -583,6 +606,6 @@ describe("the night desktop 0.2.0", () => {
     assert.match(p.html("wall"), /Compare ferry times/)
     p.tap({"data-target": "file:data/trip.md"})
     press(p, "Open files")
-    assert.deepEqual(p.pages, ["files"])
+    assert.deepEqual(p.pages, [["files"]])
   })
 })

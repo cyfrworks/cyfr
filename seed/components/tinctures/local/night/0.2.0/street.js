@@ -222,9 +222,10 @@
     const kind = i < 0 ? ref : ref.slice(0, i), id = i < 0 ? '' : ref.slice(i + 1);
     const out = { ref, hue: lit ? lit.hue : null, att: lit ? lit.id : null, kind: lit ? lit.word + (lit.since ? ' · since ' + C.hm(lit.since) : '') : '', title: '', lines: [], acts: [] };
     const ask = (widget) => out.acts.push({ label: 'Ask AQUA', act: 'ask', widget });
-    const page = (label, key, primary) => out.acts.push({ label, act: 'settings', page: key, primary });
-    // Where a waiting item is acted on: the page its destination names.
-    const dest = lit && lit.item && N.isItem(lit.item.destination) && lit.item.destination.kind === 'page' ? N.text(lit.item.destination.page) : '';
+    const page = (label, key, primary, at) => out.acts.push({ label, act: 'settings', page: key, ref: at || null, primary });
+    // Where a waiting item is acted on: the page its destination names, at its ref.
+    const to = lit && lit.item && N.isItem(lit.item.destination) && lit.item.destination.kind === 'page' ? lit.item.destination : null;
+    const dest = to ? N.text(to.page) : '', destRef = to ? N.text(to.ref) : '';
     if (kind === 'thread') {
       const t = state.threads.get(id) || {};
       const last = N.time(t.last_activity);
@@ -233,10 +234,10 @@
       out.lines.push(t.kind === 'own' ? 'Your thread with AQUA' : Array.isArray(t.people) ? t.people.length + (t.people.length === 1 ? ' person' : ' people') : '', [last ? 'last activity ' + C.when(last, Date.now()) : '', unread ? unread + ' unread' : ''].filter(Boolean).join(' · '));
       if (lit) out.lines.push('An approval waits for you in AQUA.');
       // An approval opens where it waits, a shared thread the chat and an
-      // own thread AQUA's panel; neither opens at the thread itself.
-      if (lit) page('Open the approval', dest || 'aqua', true);
-      else if (t.kind === 'shared') page('Open in chat', 'chat', true);
-      else if (t.kind === 'own') page('Open in AQUA', 'aqua', true);
+      // own thread AQUA's panel, each at the thread.
+      if (lit) page('Open the approval', dest || 'aqua', true, destRef);
+      else if (t.kind === 'shared') page('Open in chat', 'chat', true, id);
+      else if (t.kind === 'own') page('Open in AQUA', 'aqua', true, id);
       ask('threads');
     } else if (kind === 'schedule') {
       const x = state.schedules.get(id);
@@ -248,7 +249,7 @@
         if (x.status === 'paused') out.acts.push({ label: 'Resume', act: 'press', control: 'resume-schedule', value: id, primary: true });
       }
       if (lit) out.lines.push('Its last run failed.');
-      page('Open schedules', dest || 'schedules', !x);
+      page('Open schedules', dest || 'schedules', !x, destRef);
       ask('board');
     } else if (kind === 'failed' || kind === 'run') {
       // A failure that waits names its run by the destination's ref.
@@ -261,7 +262,7 @@
       out.lines.push(reference, item ? (item.kind === 'failed' ? (err ? N.words(err.class) + ' · ' + N.words(err.cause) : 'failed') : item.kind === 'started' ? 'running' + (started ? ' since ' + C.hm(started) : '') : item.kind === 'completed' ? 'finished' + (typeof item.duration_ms === 'number' ? ' in ' + (item.duration_ms / 1000).toFixed(1) + ' s' : '') : N.words(item.kind)) + (ended ? ' · ended ' + C.hm(ended) : '') : 'failed');
       // Only a failed root run the street holds runs again: the shell checks the id against the runs it reads.
       if (item && item.kind === 'failed' && !item.parent_execution_id) out.acts.push({ label: 'Retry', act: 'press', control: 'retry-run', value: runId, primary: true });
-      page('Open runs', dest || 'executions', !out.acts.length);
+      page('Open runs', dest || 'executions', !out.acts.length, destRef);
       ask('board');
     } else if (kind === 'feed') {
       const f = N.feedOf(state, id);
@@ -293,7 +294,7 @@
       out.title = o ? N.text(o.name) : a ? N.text(a.label) : 'A file';
       const at = N.time(o ? o.changed_at : a && a.since);
       out.lines.push('offered to you' + (o && N.text(o.from) ? ' by ' + N.text(o.from) : '') + (at ? ' at ' + C.hm(at) : ''));
-      page('Open files', dest || 'files', true);
+      page('Open files', dest || 'files', true, destRef);
       ask('files');
     } else if (kind === 'file') {
       const f = state.files.get(id) || {};
@@ -384,7 +385,7 @@
   // One tap, one verb: each act sends exactly one of the shell's verbs.
   function runPlateAct(a) {
     if (a.act === 'ask') { sdk.ask(a.widget); closePlate(); }
-    else if (a.act === 'settings') { sdk.settings(a.page); closePlate(); }
+    else if (a.act === 'settings') { if (a.ref) sdk.settings(a.page, a.ref); else sdk.settings(a.page); closePlate(); }
     else if (a.act === 'open') { sdk.open(a.app); closePlate(); }
     else if (a.act === 'grant') { sdk.grant(a.ref); closePlate(); }
     else if (a.act === 'feed') { sdk.press(a.binding, a.action); ui.working[a.feed] = true; schedule(); closePlate(); }
