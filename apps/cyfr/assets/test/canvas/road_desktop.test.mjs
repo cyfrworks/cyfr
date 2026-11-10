@@ -509,7 +509,7 @@ describe("the road desktop 0.2.0", () => {
     assert.equal(label(p, "1 waiting at your house"), "1 waiting at your house. Open the list.")
     assert.ok(label(p, "uno failed"))
     assert.ok(!labels(p).some((l) => l.startsWith("one failed") || l.startsWith("two failed")), labels(p).join(" | "))
-    assert.equal(label(p, "Bell tower"), "Bell tower: 1 schedules")
+    assert.equal(label(p, "Bell tower"), "Bell tower: 1 schedule")
     assert.equal(label(p, "Post boxes"), "Post boxes: 1 thread, 0 waiting on you, 0 unread")
     assert.ok(!labels(p).some((l) => /granted|as of|trying again|could not be read/.test(l)), labels(p).join(" | "))
     assert.equal(p.opened.length, opens)
