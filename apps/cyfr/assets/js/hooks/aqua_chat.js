@@ -8,6 +8,11 @@
 //   dialog: the open panel owns focus, and the page's own pane mounting
 //   beside it must not pull it back out.
 // - Auto-grows from one row up to a max height (then scrolls).
+// - `aqua:composer` sets the composer's text from the server, as
+//   `{pane, value}`: LiveView leaves a focused textarea's value alone, so a
+//   sentence a desktop asks would otherwise never show in a composer that
+//   took focus as the panel opened. LiveView dispatches a pushed event to
+//   every hook on the page, so a composer acts only on its own pane's id.
 // - Enter (no modifiers) submits the composer form.
 // - Shift+Enter / Ctrl+Enter / Cmd+Enter insert a newline at the cursor.
 // - Pasted files (typically screenshots from a clipboard manager) are injected
@@ -47,6 +52,15 @@ const AquaChat = {
     this.el.addEventListener("input", this._onInput)
     this._resize()
     this._focus()
+
+    this.handleEvent("aqua:composer", ({pane, value}) => {
+      const section = this.el.closest("section[id]")
+      if (!section || pane !== section.id || typeof value !== "string") return
+      this.el.value = value
+      this._resize()
+      this.el.selectionStart = this.el.selectionEnd = value.length
+      this.el.scrollTop = this.el.scrollHeight
+    })
 
     this._onKeyDown = (e) => {
       if (e.key !== "Enter" || e.isComposing) return
