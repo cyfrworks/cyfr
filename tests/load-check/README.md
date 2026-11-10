@@ -74,7 +74,10 @@ first run, the worktrees that run it are warmed, once each, with what that
 first run would otherwise build: the suites' test build, go's race build,
 and the release the release proofs start. The gate forces its own builds
 and a harness self-test builds what it tests inside each run, so neither
-is warmed.
+is warmed. A warm row that fails in a worktree leaves every subject that
+names it unmeasured: one void row names the warm row, and the run exits
+1. A warm's scratch directory is named under the run's prefix, so the
+run's clean-up removes it however the warm ended.
 
 ## Placement
 
@@ -132,10 +135,19 @@ processors, status, exit, seconds, start and end, a note and the log. The
 summary, printed last and kept as `report.txt`, gives per subject and
 condition the runs passed and the median seconds of the passed runs, and
 for the four whole-machine subjects `busy/whole`: the busy median on two
-quarters over the whole-machine median, the ratio the 2.5 rule reads. Its
-verdicts are `holds`, `FAILS BUSY`, `fails alone`, `fails on the whole
-machine`, `fails busy; alone not decided` (the alone run was skipped or
-not chosen), `not decided` (a run was void), `skipped` and `not measured`.
+quarters over the whole-machine median, the ratio the 2.5 rule reads.
+
+A subject's verdict is the first that applies of: a failed or stopped run
+(`FAILS BUSY` when it failed busy or beside its copy and passed alone,
+`fails alone`, `fails busy; alone not decided` when the alone run was
+skipped or not chosen, `fails on the whole machine`); a void run (`not
+decided`, naming a failed warm row); a skip (`skipped`). It `holds` only
+when every run passed; a four-quarter subject is `not measured`. So no
+later run hides an earlier one that was worse.
+
+A line the check quotes from a subject or a precondition, and the
+database helper's own messages, show a URL without its userinfo. The
+subjects' own logs are theirs, as they wrote them.
 
 ## The scratch worktrees
 

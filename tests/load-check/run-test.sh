@@ -17,6 +17,10 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 S=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-load-check-test.XXXXXX")
 S=$(cd "$S" && pwd -P)
 TOKEN=lcstub-$$
+# Made-up passwords: no output or log of the check may hold the first, and
+# none of the check's own lines the second, which a stub prints.
+SECRET=sentinel$$x$RANDOM
+SECRET2=quoted$$y$RANDOM
 cleanup() {
   pkill -f "$TOKEN" 2>/dev/null || :
   rm -rf "$S"
@@ -75,8 +79,9 @@ topology "$S/smt16" "${smt[@]}"
 
 printf '#!/bin/sh\nexit 127\n' >"$S/notaskset/taskset"
 # The stand-in docker: `run` records a container and its cpuset, or, when
-# it runs psql, creates or drops a database; `rm` refuses a container
-# whose name holds `stuck`.
+# it runs psql, creates or drops a database, refusing to while
+# refuse-create or refuse-drop is there; `rm` refuses a container whose
+# name holds `stuck`.
 cat >"$S/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 d=$DOCKER_STUB
@@ -94,8 +99,12 @@ case "$1 ${2:-}" in
     if [ -n "$sql" ]; then
       db=${sql#*\"}; db=${db%%\"*}
       case $sql in
-        CREATE*) ! grep -qxF "$db" "$d/databases" || exit 1; echo "$db" >>"$d/databases"; echo "$db" >>"$d/created" ;;
-        DROP*) drop databases "$db" ;;
+        CREATE*)
+          [ ! -e "$d/refuse-create" ] || { echo 'ERROR: permission denied to create database' >&2; exit 1; }
+          ! grep -qxF "$db" "$d/databases" || exit 1; echo "$db" >>"$d/databases"; echo "$db" >>"$d/created" ;;
+        DROP*)
+          [ ! -e "$d/refuse-drop" ] || { echo 'ERROR: must be owner of database' >&2; exit 1; }
+          drop databases "$db" ;;
       esac
     else
       echo "$name" >>"$d/containers"; echo "$name $cpus" >>"$d/cpusets"
@@ -116,7 +125,7 @@ chmod +x "$S/notaskset/taskset" "$S/bin/docker"
 
 # The toy repository: the load check and what it reads, committed, and a
 # release boot that fails, as boot.sh's own check does, on a database it
-# was handed before.
+# was handed before, and a release build that fails.
 repo="$S/repo"
 mkdir -p "$repo/scripts/lib" "$repo/tests/load-check" "$repo/tests/release-boot"
 cp "$ROOT/scripts/lib/contain.sh" "$ROOT/scripts/lib/run-names.sh" "$repo/scripts/lib/"
@@ -132,6 +141,7 @@ echo "$db" >>"$LOAD_PROBE/boot-used"
 sleep 1
 EOF
 chmod +x "$repo/tests/release-boot/boot.sh"
+printf '%s\n' 'release_build() { echo "the $ADAPTER release did not build" >&2; exit 1; }' >"$repo/tests/release-boot/release.sh"
 git -C "$repo" init -q
 git -C "$repo" add -A
 git -C "$repo" -c user.email=t@t -c user.name=t commit -qm toy
@@ -160,15 +170,22 @@ in_busy='case $LOAD_CHECK_OUT in */r1-busy/*)'
   row subject long 1 - - 2 120 - 'docker run -d --name "${PROOF_RUN_PREFIX}box" stub; echo "${PROOF_RUN_PREFIX}net" >>"$DOCKER_STUB/networks"; echo "${PROOF_RUN_PREFIX}vol" >>"$DOCKER_STUB/volumes"; echo "${PROOF_RUN_PREFIX}img:latest" >>"$DOCKER_STUB/images"; mkdir -p "$TMPDIR/${PROOF_RUN_PREFIX}scratch"; grep Cpus_allowed_list /proc/self/status >"$LOAD_CHECK_OUT/mask"; '"$in_busy"' exec -a "$LOAD_TEST_TOKEN" sleep 60 ;; esac; sleep 1.5'
   row subject stuck 1 - - 2 30 - 'docker run -d --name "${PROOF_RUN_PREFIX}stuck" stub; mkdir -p "$TMPDIR/${PROOF_RUN_PREFIX}held"; sleep 1.5'
   row subject whole 4 - - 2 30 - 'touch "$LOAD_PROBE/whole-ran"'
+  row subject voidskip 1 pair - 2 30 - "case \$LOAD_CHECK_OUT in */r1-pair/*) echo 'missing prerequisite: a widget'; exit 69 ;; esac; sleep 1"
+  row subject warmed 1 - release-sqlite 2 30 - 'touch "$LOAD_PROBE/warmed-ran"'
+  row subject warmed2 1 - release-sqlite 2 30 - 'touch "$LOAD_PROBE/warmed-ran"'
+  row subject leaky 1 - - 2 30 - 'echo "missing prerequisite: a server at postgres://review:$LOAD_TEST_SECRET@db.example:5432/base" >&2; exit 69'
+  # The release warm row, read from the real table.
+  awk -F'\t' '$1 == "warm" && $2 == "release-sqlite"' "$ROOT/tests/load-check/subjects.tsv"
   # The release boot's own row, read from the real table, without its warm.
   awk -F'\t' -v OFS='\t' '$1 == "subject" && $2 == "release-boot-postgres" { $5 = "-"; print }' "$ROOT/tests/load-check/subjects.tsv"
 } >"$table"
-grep -q '^subject	release-boot-postgres	' "$table" || fail 'the real table has no release-boot-postgres row'
+grep -q '^subject	release-boot-postgres	' "$table" && grep -q '^warm	release-sqlite	' "$table" ||
+  fail 'the real table has no release-boot-postgres subject or release-sqlite warm row'
 
 fresh() {
   pkill -f "$TOKEN" 2>/dev/null || :
-  rm -rf "$S/probe" "$S/docker" "$S/wt" "$TMPDIR"/cyfr-*
-  mkdir "$S/probe" "$S/docker" "$S/wt"
+  rm -rf "$S/probe" "$S/docker" "$S/wt" "$TMPDIR"
+  mkdir "$S/probe" "$S/docker" "$S/wt" "$TMPDIR"
   git -C "$repo" worktree prune
   printf 'cyfr-postgres\ncyfr-0123456789-1-box\n' >"$S/docker/containers"
   printf 'cyfr-0123456789-1-net\n' >"$S/docker/networks"
@@ -181,7 +198,8 @@ lc_env=()
 set_env() {
   lc_env=(HEAVY_CHECK_HELD=exclusive LOAD_CHECK_CPU_ROOT="$S/cpu" LOAD_CHECK_WORKTREES="$S/wt" LOAD_CHECK_SUBJECTS="$table"
     LOAD_CHECK_SAMPLE=1 LOAD_CHECK_GRACE=10 PATH="$S/bin:$PATH" LOAD_TEST_TOKEN="$TOKEN" LOAD_TEST_ALL="$ALL4"
-    LOAD_PROBE="$S/probe" DOCKER_STUB="$S/docker" LOAD_CHECK_BOOT_DATABASE_URL=postgres://u:p@localhost:5432/base)
+    LOAD_PROBE="$S/probe" DOCKER_STUB="$S/docker" LOAD_CHECK_BOOT_DATABASE_URL=postgres://u:p@localhost:5432/base
+    LOAD_TEST_SECRET="$SECRET2")
 }
 set_env
 # lc NAME [VAR=VALUE...] [-- ARGS]: the toy load check (or mutant NAME's),
@@ -196,11 +214,12 @@ lc() {
   rc=0
   env "${lc_env[@]}" "${vars[@]}" "$script" -o "$S/out/$name" "$@" >"$S/$name.out" 2>"$S/$name.err" || rc=$?
 }
-# mutant NAME OLD NEW [FILE]: a copy of the load check (or of FILE, as
-# $S/mutant-NAME) with OLD, which it holds once, replaced by NEW.
+# mutant NAME OLD NEW [FILE [COPY]]: a copy of the load check (or of FILE,
+# as COPY, else $S/mutant-NAME) with OLD, which it holds once, replaced by
+# NEW.
 mutant() {
   local src=${4:-$repo/tests/load-check/run.sh} dst=$repo/tests/load-check/mutant-$1.sh
-  [ -z "${4:-}" ] || dst=$S/mutant-$1
+  [ -z "${4:-}" ] || dst=${5:-$S/mutant-$1}
   python3 -I - "$src" "$dst" "$2" "$3" <<'PY'
 import sys
 src, dst, old, new = sys.argv[1:5]
@@ -388,12 +407,24 @@ fresh; lc mutant-skip-first -- -s late
 begin 'a run that passes while its load step fails, or with a process or a container outside its processors, is void and named'
 fresh
 touch "$S/probe/fail-load"
-lc void -- -s nap -c busy
-[ "$rc" = 1 ] && said void 'nap (1 quarter): not decided: a run was void' || fail "the run exited $rc: $(cat "$S/void.out")"
+lc void -- -s nap,voidskip -c busy,pair
+[ "$rc" = 1 ] && said void 'nap (1 quarter): not decided: a run was void' &&
+  said void 'voidskip (1 quarter): not decided: a run was void' || fail "the run exited $rc: $(cat "$S/void.out")"
+[ "$(awk -F'\t' '$1 == "voidskip" { printf "%s:%s ", $3, $6 }' "$S/out/void/report.tsv")" = 'busy:void pair:skipped pair:skipped ' ] ||
+  fail "voidskip's runs: $(grep voidskip "$S/out/void/report.tsv")"
+mutant skip-before-void '    elif any(r["status"] == "void" for r in runs):' '    elif name in skips:
+        verdict = skips[name]
+        skipped.append(name)
+    elif any(r["status"] == "void" for r in runs):'
+fresh; touch "$S/probe/fail-load"; lc mutant-skip-before-void -- -s voidskip -c busy,pair
+! said mutant-skip-before-void 'voidskip (1 quarter): not decided: a run was void' >/dev/null && [ "$rc" = 69 ] ||
+  fail 'the skip-before-void control still kept the void run'
+fresh
+touch "$S/probe/fail-load"
 awk -F'\t' '$1 == "nap" && $6 == "void" && index($11, "the busy load'"'"'s load-w1 on quarter 2: spin exited 3 while the subject ran")' "$S/out/void/report.tsv" | grep -q . ||
   fail "the void run: $(cat "$S/out/void/report.tsv")"
 mutant held 'busy_held "${J_START[0]}" "${J_END[0]}" || :' ':'
-fresh; touch "$S/probe/fail-load"; lc mutant-held -- -s nap -c busy
+lc mutant-held -- -s nap -c busy
 ! said mutant-held 'nap (1 quarter): not decided: a run was void' >/dev/null || fail 'the load control still voided the run'
 fresh
 lc outside -- -s escape,boxed,misplaced -c alone
@@ -487,6 +518,53 @@ done
 mutant keep '    if [ -n "$HELD" ]; then' '    if false; then'
 fresh; lc mutant-keep -- -s stuck -c alone
 [ -z "$(ls -A "$S/wt")" ] || fail 'the keep control still kept the worktrees'
+
+begin 'a warm row that fails leaves every subject naming it void, named, with exit 1, and its scratch directory is removed'
+fresh
+lc warm -- -s warmed,warmed2 -c alone
+[ "$rc" = 1 ] && said warm 'warmed (1 quarter): not decided: the warm row release-sqlite failed in worktree a (exit 1)' &&
+  said warm 'warmed2 (1 quarter): not decided: the warm row release-sqlite failed in worktree a (exit 1)' || fail "the run exited $rc: $(cat "$S/warm.out")"
+[ ! -e "$S/probe/warmed-ran" ] && [ "$(wc -l <"$S/out/warm/warm.tsv")" = 1 ] || fail 'a subject ran on a failed warm, or the warm ran twice'
+[ -z "$(ls -A "$TMPDIR")" ] || fail "the warm left: $(ls -A "$TMPDIR")"
+mutant warm-failed '      [ "${J_STATUS[$i]}" = 0 ] ||
+        WARM_FAILED' '      true ||
+        WARM_FAILED'
+fresh; lc mutant-warm-failed -- -s warmed -c alone
+! said mutant-warm-failed 'warmed (1 quarter): not decided: the warm row release-sqlite failed in worktree a (exit 1)' >/dev/null && [ "$rc" = 0 ] ||
+  fail 'the warm control still voided the subject'
+sed 's#^\(warm\trelease-sqlite\t.*\t\)ADAPTER=sqlite WORK=[^ ]* \(.*\)$#\1ADAPTER=sqlite WORK=$(mktemp -d) \&\& . tests/release-boot/release.sh \&\& release_build; s=$?; rm -rf "$WORK"; exit $s#' "$table" >"$S/oldwarm.tsv"
+grep -q 'WORK=$(mktemp -d) &&' "$S/oldwarm.tsv" || fail 'the old warm row was not written'
+fresh; lc oldwarm LOAD_CHECK_SUBJECTS="$S/oldwarm.tsv" -- -s warmed -c alone
+[ -n "$(ls -A "$TMPDIR")" ] || fail 'the old warm row left nothing behind'
+
+begin 'no message, report or log of the check holds a password a URL carried'
+fresh
+url="postgres://review:$SECRET@localhost:5432/base"
+helper() { # NAME [SCRIPT]: the database helper on url, with the stand-in docker
+  rc=0
+  env PATH="$S/bin:$PATH" DOCKER_STUB="$S/docker" "${2:-$repo/tests/load-check/fresh-database.sh}" "$url" true >"$S/$1.out" 2>"$S/$1.err" || rc=$?
+}
+touch "$S/docker/refuse-create"; helper create
+[ "$rc" = 1 ] && grep -qE '^fresh database: could not create cyfr_load_check_[0-9]+_[0-9a-f]{8} on postgres://localhost:5432$' "$S/create.err" ||
+  fail "the refused create: $rc $(cat "$S/create.err")"
+rm "$S/docker/refuse-create"; touch "$S/docker/refuse-drop"; helper drop
+[ "$rc" = 1 ] && grep -qE '^fresh database: could not drop cyfr_load_check_[0-9]+_[0-9a-f]{8} on postgres://localhost:5432$' "$S/drop.err" ||
+  fail "the refused drop: $rc $(cat "$S/drop.err")"
+rm "$S/docker/refuse-drop"; touch "$S/docker/refuse-create"
+lc leak LOAD_CHECK_BOOT_DATABASE_URL="$url" -- -s release-boot-postgres,leaky -c busy,alone
+[ "$rc" = 1 ] && said leak 'leaky (1 quarter): skipped: exited 69: missing prerequisite: a server at postgres://[redacted]@db.example:5432/base' ||
+  fail "the run exited $rc: $(cat "$S/leak.out")"
+! grep -rqF "$SECRET" "$S/out/leak" "$S/leak.out" "$S/leak.err" "$S/create.out" "$S/create.err" "$S/drop.out" "$S/drop.err" ||
+  fail "the password is in: $(grep -rlF "$SECRET" "$S/out/leak" "$S/leak.out" "$S/leak.err" "$S"/create.* "$S"/drop.*)"
+! grep -qF "$SECRET2" "$S/leak.out" "$S/leak.err" "$S/out/leak/report.tsv" "$S/out/leak/report.txt" "$S/out/leak/skips.tsv" ||
+  fail 'a password a subject printed is in the check'"'"'s own lines'
+grep -qF "$SECRET2" "$S/out/leak/leaky/r1-busy/a.log" || fail 'the stub did not print its password'
+mutant leak 'server=$(printf' 'server=${base%/*} || server=$(printf' "$ROOT/tests/load-check/fresh-database.sh" "$repo/tests/load-check/mutant-leak.sh"
+fresh; touch "$S/docker/refuse-create"; helper mutant-leak "$repo/tests/load-check/mutant-leak.sh"
+grep -qF "$SECRET" "$S/mutant-leak.err" || fail 'the helper control did not print the password'
+mutant redact '        note="exited ${J_STATUS[$i]}: $(redact "${why:-a missing prerequisite}")"' '        note="exited ${J_STATUS[$i]}: ${why:-a missing prerequisite}"'
+fresh; lc mutant-redact -- -s leaky -c alone
+grep -qF "$SECRET2" "$S/mutant-redact.out" || fail 'the note control did not print the password'
 
 begin 'the partitions a run is told are the commit gate'"'"'s, and every container the browser harness and the install proof start is placed'
 # gate_rule SCRIPT N: what the gate's own lines pick on N processors;

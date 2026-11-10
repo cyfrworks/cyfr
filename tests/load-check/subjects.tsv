@@ -23,11 +23,13 @@ prep	deps-dev-pg	-	-	-	60	1800	-	env MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=
 # worktree that runs it: the suites' test build, go's race build, and the
 # release the release proofs start. The gate forces its own builds, and a
 # harness self-test builds what it tests inside every run, so neither warms.
+# A warm's scratch directory is named under the run's prefix, so the run's
+# own clean-up removes it whatever the build did.
 warm	test-sqlite	-	-	-	90	1800	-	env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test mix compile && scripts/wasm-tools.sh install _tools >/dev/null
 warm	test-postgres	-	-	-	90	1800	-	env MIX_BUILD_PATH=_build/test_pg CYFR_DATABASE=postgres MIX_ENV=test mix compile && scripts/wasm-tools.sh install _tools >/dev/null
 warm	go-race	-	-	-	120	1800	-	cd apps/codex && go test -race -run '^$' ./...
-warm	release-sqlite	-	-	-	300	2700	-	ADAPTER=sqlite WORK=$(mktemp -d) && . tests/release-boot/release.sh && release_build; s=$?; rm -rf "$WORK"; exit $s
-warm	release-postgres	-	-	-	300	2700	-	ADAPTER=postgres WORK=$(mktemp -d) && . tests/release-boot/release.sh && release_build; s=$?; rm -rf "$WORK"; exit $s
+warm	release-sqlite	-	-	-	300	2700	-	ADAPTER=sqlite WORK=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX}warm-release.XXXXXX") && . tests/release-boot/release.sh && release_build
+warm	release-postgres	-	-	-	300	2700	-	ADAPTER=postgres WORK=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX}warm-release.XXXXXX") && . tests/release-boot/release.sh && release_build
 
 # The busy load, on every quarter a subject leaves: a save or handoff
 # row's forced compile and its PostgreSQL test run, in a loop; and on the

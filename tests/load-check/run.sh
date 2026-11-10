@@ -52,7 +52,11 @@
 # a missing prerequisite) or void (a run that passed while the busy load
 # did not hold, or with a process or a container outside its processors).
 # A skip ends the subject's runs, but for the alone run that decides a
-# failure seen before it.
+# failure seen before it; a warm row that fails in a worktree leaves every
+# subject naming it unmeasured, with one void row naming the warm row. A
+# subject's verdict is the first that applies of: a failed or stopped run
+# (FAILS BUSY when it failed busy or beside its copy and passed alone), a
+# void run, a skip; it holds only when every run passed.
 #
 # Each command's environment loses MIX_BUILD_PATH, MIX_DEPS_PATH,
 # CYFR_TEST_CORES, CARGO_BUILD_JOBS and ERL_FLAGS, keeps HEAVY_CHECK_HELD
@@ -261,6 +265,9 @@ conditions() {
 # Whether subject $1 runs alone only after a failed busy or pair run.
 alone_decides() { chosen busy || { chosen pair && [ -n "${S_PAIR[$1]}" ]; }; }
 
+# Text $1 with the userinfo of every URL in it replaced, as
+# scripts/heavy-check.sh shows a command, so no password is quoted.
+redact() { printf '%s' "$1" | sed -E 's#([A-Za-z][A-Za-z0-9+.-]*://)[^/[:space:]]*@#\1[redacted]@#g'; }
 # Whether needs command $1 holds, run from the checkout's root; when it
 # does not, REASON says why.
 needs_hold() {
@@ -269,7 +276,7 @@ needs_hold() {
   [ "$1" != - ] || return 0
   out=$(cd "$ROOT" && timeout 120 "$BASH" -c "$1" </dev/null 2>&1) || s=$?
   [ "$s" != 0 ] || return 0
-  REASON=$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | head -n 1)
+  REASON=$(redact "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | head -n 1)")
   [ -n "$REASON" ] || REASON="its precondition exited $s"
   return 1
 }
@@ -375,7 +382,7 @@ WT_ROOT=$(cd "$WT_ROOT" 2>/dev/null && pwd -P) || refuse 64 "cannot use $WT_ROOT
 DOCKER_OK=false
 if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then DOCKER_OK=true; fi
 
-declare -A WT=() PREFIX_OF=() WARMED=()
+declare -A WT=() PREFIX_OF=() WARMED=() WARM_FAILED=()
 PREFIXES=("$OWN_PREFIX")
 MADE=()
 REGISTRY_OWNED=false
@@ -676,7 +683,7 @@ record() {
         status=skipped
         why=$(sed '/^[[:space:]]*$/d; /^_EXIT=/d' "${J_LOG[$i]}" 2>/dev/null | grep -i missing | tail -n 1)
         [ -n "$why" ] || why=$(sed '/^[[:space:]]*$/d; /^_EXIT=/d' "${J_LOG[$i]}" 2>/dev/null | tail -n 1)
-        note="exited ${J_STATUS[$i]}: ${why:-a missing prerequisite}"
+        note="exited ${J_STATUS[$i]}: $(redact "${why:-a missing prerequisite}")"
         SKIPPED=$note ;;
       *) status=failed ;;
     esac
@@ -724,9 +731,11 @@ run_condition() {
 }
 
 # Warms subject $1's worktrees with its warm row, each worktree once:
-# unplaced, a's and b's side by side.
+# unplaced, a's and b's side by side. Sets WARM_VOID, writing a void row
+# for each, when the row failed in one of them.
 warm_subject() {
-  local i=$1 w=${S_WARM[$1]} role roles=(a)
+  local i=$1 w=${S_WARM[$1]} role roles=(a) note status t s0 s1 log
+  WARM_VOID=
   [ "$w" != - ] || return 0
   if chosen pair && [ -n "${S_PAIR[$i]}" ]; then roles+=(b); fi
   reset_jobs
@@ -736,11 +745,25 @@ warm_subject() {
     WARMED[$role/$w]=1
     launch "warm-$w $role" "$role" "$ALL" "$OUT/warm-$w-$role.log" "$OUT/warm-$w-$role" "${WARM_DEADLINE[$w]}" "${WARM_CMD[$w]}"
   done
-  [ "${#J_PID[@]}" -gt 0 ] || return 0
-  watch_jobs
-  for i in "${!J_PID[@]}"; do
-    printf '%s\t%s\t%s\t%s\n' "${J_LABEL[$i]}" "${J_STATUS[$i]}" "$(seconds "${J_START[$i]}" "${J_END[$i]}")" "${J_LOG[$i]}" >>"$OUT/warm.tsv"
-    say "${J_LABEL[$i]}: exit ${J_STATUS[$i]} after $(seconds "${J_START[$i]}" "${J_END[$i]}")s"
+  if [ "${#J_PID[@]}" -gt 0 ]; then
+    watch_jobs
+    for i in "${!J_PID[@]}"; do
+      role=${J_LABEL[$i]##* }
+      printf '%s\t%s\t%s\t%s\n' "${J_LABEL[$i]}" "${J_STATUS[$i]}" "$(seconds "${J_START[$i]}" "${J_END[$i]}")" "${J_LOG[$i]}" >>"$OUT/warm.tsv"
+      say "${J_LABEL[$i]}: exit ${J_STATUS[$i]} after $(seconds "${J_START[$i]}" "${J_END[$i]}")s"
+      [ "${J_STATUS[$i]}" = 0 ] ||
+        WARM_FAILED[$role/$w]="the warm row $w failed in worktree $role (exit ${J_STATUS[$i]}${J_DEADLINE[$i]:+, at its deadline})"$'\t'"${J_STATUS[$i]}"$'\t'"$(seconds "${J_START[$i]}" "${J_END[$i]}")"$'\t'"${J_START[$i]}"$'\t'"${J_END[$i]}"$'\t'"${J_LOG[$i]}"
+    done
+  fi
+  # A worktree whose warm row failed, now or for an earlier subject, leaves
+  # this subject unmeasured: one void row says which.
+  WARM_VOID=
+  for role in "${roles[@]}"; do
+    [ -n "${WARM_FAILED[$role/$w]:-}" ] || continue
+    IFS=$'\t' read -r note status t s0 s1 log <<<"${WARM_FAILED[$role/$w]}"
+    printf '%s\t-\twarm\t%s\t%s\tvoid\t%s\t%s\t%s\t%s\t%s\t%s\n' "${S_NAME[$1]}" "$role" "$ALL" "$status" "$t" "$s0" "$s1" "$note" "$log" >>"$OUT/report.tsv"
+    say "${S_NAME[$1]}: void ($note)"
+    WARM_VOID=1
   done
 }
 
@@ -900,6 +923,7 @@ fi
 for i in "${MEASURED[@]}"; do
   SKIPPED=
   warm_subject "$i"
+  [ -z "$WARM_VOID" ] || continue
   for ((r = 1; r <= ROUNDS; r++)); do
     FAILED=
     for c in $(conditions "$i"); do
@@ -947,7 +971,7 @@ def median(runs):
 
 for name, quarters in subjects:
     runs = [r for r in rows if r["subject"] == name]
-    by = {c: [r for r in runs if r["condition"] == c] for c in ("busy", "pair", "whole", "alone")}
+    by = {c: [r for r in runs if r["condition"] == c] for c in ("warm", "busy", "pair", "whole", "alone")}
     bad = lambda c: [r for r in by[c] if r["status"] in ("failed", "deadline")]
     if bad("busy") or bad("pair"):
         if by["alone"] and all(r["status"] == "passed" for r in by["alone"]):
@@ -965,12 +989,13 @@ for name, quarters in subjects:
     elif bad("whole"):
         verdict = "fails on the whole machine"
         fails_other.append(name)
+    elif any(r["status"] == "void" for r in runs):
+        warm = [r for r in by["warm"] if r["status"] == "void"]
+        verdict = "not decided: " + (warm[0]["note"] if warm else "a run was void")
+        undecided.append(name)
     elif name in skips:
         verdict = skips[name]
         (outside if verdict.startswith("not measured") else skipped).append(name)
-    elif any(r["status"] == "void" for r in runs):
-        verdict = "not decided: a run was void"
-        undecided.append(name)
     elif runs:
         verdict = "holds"
         holds.append(name)
