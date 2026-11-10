@@ -82,6 +82,11 @@ defmodule Aqua.Loop do
   @recoverable ~w(rate_limited overloaded incomplete_stream)
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
   @setup ~w(authentication secret_denied)
+  # The refusal of a session the brain no longer holds (`Prima.Model`). A
+  # step the turn forgot its thread's session on closes with this type as
+  # its error, as a retried step closes with its own, so a continued turn
+  # reads from its steps that it forgot one (`forgot_session?/1`).
+  @session_gone "unknown_session"
   # A note flush offers this action alone, and keeps a note this large at most.
   @flush_tool "notes"
   @flush_action "keep"
@@ -107,7 +112,8 @@ defmodule Aqua.Loop do
       # it (`Arca.TurnStorage`).
       :generation,
       # The turn forgot its thread's session once, on its brain's word that
-      # the session was gone: the next such refusal ends it.
+      # the session was gone: the next such refusal ends it. A continued
+      # turn reads it from its steps, as it reads their count (`settle/1`).
       forgot_session?: false,
       steps: 0,
       usage: %{input: 0, output: 0},
@@ -771,10 +777,8 @@ defmodule Aqua.Loop do
       # asking again repeats nothing. A refusal of that type the turn does
       # not forget on (`forgets?/3`) ends it as any other does, the thread's
       # session left as it is.
-      {:error, %{"type" => "unknown_session", "message" => message} = error} when forget? ->
-        _ =
-          Tape.close_step(guest(state), state.turn, step, "error", refused(state, error, message))
-
+      {:error, %{"type" => @session_gone = type} = error} when forget? ->
+        _ = Tape.close_step(guest(state), state.turn, step, "error", refused(state, error, type))
         ask_without_session(state, request, retained, retries)
 
       {:error, %{"type" => type} = error} when type in @setup ->
@@ -823,11 +827,17 @@ defmodule Aqua.Loop do
   defp forgets?(
          %State{forgot_session?: false},
          %{"session" => _named},
-         {:error, %{"type" => "unknown_session"} = error}
+         {:error, %{"type" => @session_gone} = error}
        ),
        do: Prima.Model.response_session(error) == {:ok, nil}
 
   defp forgets?(%State{}, _request, _answer), do: false
+
+  # A step the turn forgot its thread's session on, as its row tells it.
+  defp forgot_session?(%{kind: "model", purpose: "chat", outcome: "error", error: @session_gone}),
+    do: true
+
+  defp forgot_session?(_step), do: false
 
   # The thread forgets the session its brain no longer holds, and the same
   # request is asked once more without it, which opens a new session. The
@@ -2061,7 +2071,8 @@ defmodule Aqua.Loop do
       state = %{
         state
         | restricted?: open != [] or Tape.restricted?(guest, state.turn),
-          steps: Enum.count(steps, &(&1.kind == "model"))
+          steps: Enum.count(steps, &(&1.kind == "model")),
+          forgot_session?: Enum.any?(steps, &forgot_session?/1)
       }
 
       cond do
