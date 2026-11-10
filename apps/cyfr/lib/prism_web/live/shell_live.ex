@@ -266,7 +266,11 @@ defmodule PrismWeb.ShellLive do
   attention lists) and is answered `requested` with its id, then
   `decided` once the person approves, refuses or dismisses it, the gate
   refuses its call, or it waits five minutes undecided (`expired`, its
-  prompt withdrawn). One request of a frame waits at a time: another
+  prompt withdrawn). An approved call that needs a fresh confirmation is
+  decided once that confirmation ends, whatever time it takes: `approved`
+  when it is proven and the call runs, `cancelled` when it is cancelled
+  or voided, `cancelled` `expired` when it expires. One request of a
+  frame waits at a time: another
   meanwhile is answered `cancelled` `busy` and asks nothing; one the
   domain refuses is answered `refused` with its class, the person never
   asked; one whose frame this view stops holding is withdrawn, told
@@ -1374,6 +1378,8 @@ defmodule PrismWeb.ShellLive do
         :dismissed -> {"cancelled", "dismissed"}
         {:refused, :declined} -> {"refused", Prima.TinctureWire.declined()}
         {:refused, reason} -> {"refused", refusal_class(reason)}
+        {:cancelled, :expired} -> {"cancelled", "expired"}
+        {:cancelled, _kind} -> {"cancelled", nil}
       end
 
     socket
@@ -1384,7 +1390,8 @@ defmodule PrismWeb.ShellLive do
   # A request that waited past its bound: ended `expired` at the registry
   # first, and only when nothing decided it before, its prompt withdrawn
   # after and the frame told it expired. One the person decided already
-  # is that decision's to answer.
+  # is that decision's to answer, as is one they approved whose call waits
+  # for its fresh confirmation: it is decided when that confirmation ends.
   defp request_expired(socket, id) do
     with {:ok, request} <- Map.fetch(socket.assigns.requests, id),
          :ok <- Cyfr.Requests.decide(id, :expired) do

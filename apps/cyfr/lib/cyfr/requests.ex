@@ -13,15 +13,19 @@ defmodule Cyfr.Requests do
   so a member of a cell lists only its own shells'.
 
   This registry is the one authority on whether a request still waits.
-  Whatever decides it, the person's approval, refusal or dismissal in the
-  system layer, its expiry, or its frame's leaving, first ends it here
-  with `decide/2`, which answers `:ok` to the first decision alone and
-  `:decided` to every later one; only the decision that ended it acts,
-  and the prompt follows. Only the holding process can end a request, and
-  the system layer that presents it runs in that process, so the check
-  and the end are one step that nothing else interleaves with: an
-  approval queued behind the expiry finds the request decided and runs
-  nothing.
+  Whatever decides it first acts, and nothing after it: the person's
+  refusal or dismissal in the system layer, its expiry, or its frame's
+  leaving ends it here with `decide/2`, and the person's approval marks
+  it approved with `approve/1`; each answers `:ok` to the first decision
+  alone and `:decided` to every later one, and the prompt follows. An
+  approved request waits on for its call, which may need a fresh
+  confirmation, so no expiry, refusal or withdrawal ends it then; the
+  system layer ends it with `settle/2` once its call ran or was refused,
+  or the confirmation it waited for ended unproven. Only the holding
+  process can decide a request, and the system layer that presents it
+  runs in that process, so the check and the end are one step that
+  nothing else interleaves with: an approval queued behind the expiry
+  finds the request decided and runs nothing.
 
   Each opening and each end is told on the person's attention topic
   (`Cyfr.Bus.attention/2`) as an `attention.changes` item of kind
@@ -62,7 +66,7 @@ defmodule Cyfr.Requests do
   def open(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, id, label)
       when is_binary(athanor_id) and is_binary(user_id) and is_binary(id) and is_binary(label) do
     item = item(id, label, DateTime.utc_now())
-    held = %{actor: Context.actor(ctx), user_id: user_id, item: item}
+    held = %{actor: Context.actor(ctx), user_id: user_id, item: item, approved: false}
     {:ok, _owner} = Registry.register(@registry, id, held)
     tell(held, :grant_request, Map.delete(item, :kind))
   end
@@ -72,15 +76,48 @@ defmodule Cyfr.Requests do
   decided by the person (`resolved`), left until it expired (`expired`),
   or taken away with its frame (`withdrawn`). `:ok` when the calling
   process held it waiting, which it no longer does; `:decided` when it
-  waits no longer, ended already or never held here, and nothing
-  changes. The first decision of a request is the one that acts.
+  waits no longer, approved, ended already or never held here, and
+  nothing changes. The first decision of a request is the one that acts.
   """
   @spec decide(String.t(), Attention.outcome()) :: :ok | :decided
   def decide(id, outcome) when is_binary(id) do
     case Registry.lookup(@registry, id) do
-      [{owner, held}] when owner == self() ->
-        :ok = Registry.unregister(@registry, id)
-        tell(held, :removed, %{id: id, outcome: outcome})
+      [{owner, %{approved: false} = held}] when owner == self() ->
+        end_held(id, held, outcome)
+
+      _decided ->
+        :decided
+    end
+  end
+
+  @doc """
+  Request `id` is approved by the person: still listed, it waits for its
+  call, which ends it (`settle/2`). `:ok` when the calling process held it
+  waiting; `:decided` otherwise, and nothing changes.
+  """
+  @spec approve(String.t()) :: :ok | :decided
+  def approve(id) when is_binary(id) do
+    case Registry.lookup(@registry, id) do
+      [{owner, %{approved: false}}] when owner == self() ->
+        {_approved, _waiting} = Registry.update_value(@registry, id, &%{&1 | approved: true})
+        :ok
+
+      _decided ->
+        :decided
+    end
+  end
+
+  @doc """
+  Ends approved request `id` once its call has: it ran or was refused
+  (`resolved`), or the fresh confirmation it waited for was cancelled
+  (`resolved`) or expired (`expired`). `:ok` when the calling process held
+  it approved; `:decided` otherwise, and nothing changes.
+  """
+  @spec settle(String.t(), Attention.outcome()) :: :ok | :decided
+  def settle(id, outcome) when is_binary(id) do
+    case Registry.lookup(@registry, id) do
+      [{owner, %{approved: true} = held}] when owner == self() ->
+        end_held(id, held, outcome)
 
       _decided ->
         :decided
@@ -95,6 +132,11 @@ defmodule Cyfr.Requests do
     |> Enum.filter(&(&1.actor.athanor_id == athanor_id and &1.user_id == user_id))
     |> Enum.map(& &1.item)
     |> Enum.sort_by(& &1.since, DateTime)
+  end
+
+  defp end_held(id, held, outcome) do
+    :ok = Registry.unregister(@registry, id)
+    tell(held, :removed, %{id: id, outcome: outcome})
   end
 
   defp item(id, label, since),

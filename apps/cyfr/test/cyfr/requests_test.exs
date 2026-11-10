@@ -4,9 +4,10 @@
 defmodule Cyfr.RequestsTest do
   @moduledoc """
   The registry of requests waiting on a person: the one authority on
-  whether a request still waits. The first decision ends it and acts;
-  every later one, and any from a process that does not hold it, is told
-  it was decided and changes nothing.
+  whether a request still waits. The first decision ends it, or approves
+  it until its call settles it, and acts; every later one, and any from a
+  process that does not hold it, is told it was decided and changes
+  nothing.
   """
 
   use ExUnit.Case, async: false
@@ -30,6 +31,27 @@ defmodule Cyfr.RequestsTest do
         do: assert(Cyfr.Requests.decide(id, outcome) == :decided)
 
     assert Cyfr.Requests.decide(Prima.UUID7.request_id(), :resolved) == :decided
+  end
+
+  test "an approved request waits on, listed, until its call settles it, and nothing else ends it",
+       %{ctx: ctx} do
+    id = Prima.UUID7.request_id()
+    :ok = Cyfr.Requests.open(ctx, id, "vault.rebind")
+    assert Cyfr.Requests.settle(id, :resolved) == :decided
+
+    assert Cyfr.Requests.approve(id) == :ok
+    assert Cyfr.Requests.approve(id) == :decided
+
+    for outcome <- [:resolved, :expired, :withdrawn],
+        do: assert(Cyfr.Requests.decide(id, outcome) == :decided)
+
+    assert [%{id: ^id}] = Cyfr.Requests.waiting(ctx.athanor_id, ctx.user_id)
+    assert Task.await(Task.async(fn -> Cyfr.Requests.settle(id, :resolved) end)) == :decided
+
+    assert Cyfr.Requests.settle(id, :expired) == :ok
+    assert Cyfr.Requests.waiting(ctx.athanor_id, ctx.user_id) == []
+    assert Cyfr.Requests.settle(id, :resolved) == :decided
+    assert Cyfr.Requests.approve(id) == :decided
   end
 
   test "only the process that holds a request decides it", %{ctx: ctx} do

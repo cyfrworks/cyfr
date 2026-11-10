@@ -51,7 +51,8 @@ defmodule PrismWeb.SystemLayer do
   live keep their order. An id neither open nor waiting changes nothing.
 
   Each prompt's outcome goes to the parent LiveView as
-  `{:system_layer, id, :confirmed | :dismissed | {:refused, reason}}`;
+  `{:system_layer, id, :confirmed | :dismissed | {:refused, reason}}`,
+  or `{:cancelled, kind}` for a frame's request (below);
   the view's hook (`PrismWeb.SystemLayer.Hook`) takes it. A
   withdrawn prompt, and a credential entry it raised, report nothing: the
   view that withdrew it has let it go. A
@@ -128,15 +129,20 @@ defmodule PrismWeb.SystemLayer do
       with the preview CYFR built of exactly that call drawn first and
       the frame that asked named beside it, never anything the frame
       drew. Approving, refusing and dismissing each first decide the
-      request its prompt names at its one authority
-      (`Cyfr.Requests.decide/2`), and only the first decision acts: one
-      that comes after the request expired or was decided otherwise runs
-      nothing. Approving reports `:confirmed` once the call answers; one that
-      needs a fresh confirmation waits for its proof as any of the
-      layer's own changes does. Refusing reports `{:refused, :declined}`
-      and ends the prompt; a call the gate refuses reports its refusal
-      and stays open, saying it, with nothing left to approve, so a
-      decided request is never run again from it;
+      request its prompt names at its one authority (`Cyfr.Requests`),
+      and only the first decision acts: one that comes after the request
+      expired or was decided otherwise runs nothing. Approving reports
+      `:confirmed` once the call answers; one that needs a fresh
+      confirmation waits for its proof as any of the layer's own changes
+      does, the request approved and waiting with it, so the request's
+      own expiry ends nothing then. The request ends once its call does
+      (`Cyfr.Requests.settle/2`): run, refused, or its confirmation
+      ended unproven, which reports `{:cancelled, kind}` (`:cancelled`,
+      `:voided` or `:expired`), or cancelled by dismissing the prompt.
+      Refusing reports `{:refused, :declined}` and ends the prompt; a
+      call the gate refuses reports its refusal and stays open, saying
+      it, with nothing left to approve, so a decided request is never
+      run again from it;
     * the fallback notice's kept version — `canvas.restore` of the canvas,
       under today's grant: a grant that waits for the person raises the
       grant prompt, and once that is confirmed the restore is asked again;
@@ -1036,7 +1042,7 @@ defmodule PrismWeb.SystemLayer do
         clear_forms(socket, panel)
 
       :layer ->
-        assign(socket, :held, Map.delete(socket.assigns.held, ref))
+        confirmation_ended(socket, ref, kind)
     end
   end
 
@@ -1231,7 +1237,7 @@ defmodule PrismWeb.SystemLayer do
       %{own: true, origin: :layer, status: status} when status in [:pending, :waiting] ->
         socket
         |> set_status(ref, {:ended, :expired})
-        |> assign(:held, Map.delete(socket.assigns.held, ref))
+        |> confirmation_ended(ref, :expired)
 
       %{own: false, status: status} when status in [:pending, :confirmed] ->
         set_status(socket, ref, {:ended, :expired})
@@ -1398,9 +1404,12 @@ defmodule PrismWeb.SystemLayer do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case socket.assigns.current do
         %{id: ^id} = prompt ->
-          # A frame's request still waiting ends here, dismissed; one
-          # decided already keeps that decision.
+          # A frame's request still waiting ends here, dismissed, as
+          # does one approved and waiting for its fresh confirmation,
+          # which the dismissal cancels; one decided already keeps that
+          # decision.
           _decided = decided?(prompt.subject)
+          _settled = settle_request(prompt.subject, :resolved)
           socket = end_own_request(socket, prompt)
           if reports?(socket, prompt), do: report(id, :dismissed)
 
@@ -1428,14 +1437,15 @@ defmodule PrismWeb.SystemLayer do
 
   # A frame's request: approving runs its call as the layer's own change
   # and refusing ends it, each only once it has decided the request at its
-  # one authority (`Cyfr.Requests.decide/2`), where whatever came first,
-  # an expiry or another decision, has already ended it. A late one acts
-  # on nothing: the request's actual end is what its frame is told.
+  # one authority (`Cyfr.Requests.approve/1`, `Cyfr.Requests.decide/2`),
+  # where whatever came first, an expiry or another decision, has already
+  # ended it. A late one acts on nothing: the request's actual end is what
+  # its frame is told.
   def handle_event("request_approve", %{"id" => id}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       with {:ok, prompt} <- open(socket, id, [:request]),
            false <- Map.has_key?(prompt.subject, :refused),
-           false <- decided?(prompt.subject) do
+           :ok <- Cyfr.Requests.approve(prompt.subject.request) do
         {:noreply, request_run(socket, prompt)}
       else
         _decided -> {:noreply, socket}
@@ -2229,23 +2239,53 @@ defmodule PrismWeb.SystemLayer do
   defp decided?(%{request: request}), do: Cyfr.Requests.decide(request, :resolved) == :decided
   defp decided?(_subject), do: false
 
-  # The call the request names, as the person approved it. A refusal is
-  # reported and said, and marks the prompt decided: it offers nothing to
-  # approve again.
-  defp request_run(socket, %{subject: %{tool: tool, args: args}} = prompt) do
-    case layer_call(socket, prompt, :request, tool, args) do
+  # A frame's request the person approved ends once its call has: it ran,
+  # was refused, or the fresh confirmation it waited for ended.
+  defp settle_request(%{request: request}, outcome), do: Cyfr.Requests.settle(request, outcome)
+  defp settle_request(_subject, _outcome), do: :decided
+
+  # The call the request names, as the person approved it, which ends the
+  # request once it answers. A refusal is reported and said, and marks the
+  # prompt decided: it offers nothing to approve again.
+  defp request_run(socket, %{subject: subject} = prompt) do
+    case layer_call(socket, prompt, :request, subject.tool, subject.args) do
       {:asked, socket} ->
         socket
 
-      {:done, {:ok, _result}, socket} ->
-        settle(socket, prompt, :confirmed)
-
-      {:done, {:error, reason}, socket} ->
-        socket
-        |> assign(:current, put_in(prompt.subject[:refused], true))
-        |> refuse(prompt, reason, Ops.error_message(reason))
+      {:done, result, socket} ->
+        _settled = settle_request(subject, :resolved)
+        request_ran(socket, prompt, result)
     end
   end
+
+  defp request_ran(socket, prompt, {:ok, _result}), do: settle(socket, prompt, :confirmed)
+
+  defp request_ran(socket, prompt, {:error, reason}) do
+    socket
+    |> assign(:current, put_in(prompt.subject[:refused], true))
+    |> refuse(prompt, reason, Ops.error_message(reason))
+  end
+
+  # The layer's own change that waited for a fresh confirmation lets go of
+  # its secret once the confirmation ended unproven (`kind`: cancelled,
+  # voided or expired). A frame's request waiting on it ends with it,
+  # cancelled: settled at its registry, where the approval left it
+  # waiting, and reported once, since the secret is let go here once.
+  defp confirmation_ended(socket, ref, kind) do
+    {held, kept} = Map.pop(socket.assigns.held, ref)
+    socket = assign(socket, :held, kept)
+
+    with %{repeat: :request, prompt_id: prompt_id} <- held,
+         %{subject: subject} <- prompt_of(socket, prompt_id),
+         :ok <- settle_request(subject, if(kind == :expired, do: :expired, else: :resolved)) do
+      report(prompt_id, {:cancelled, kind})
+    end
+
+    socket
+  end
+
+  defp prompt_of(%{assigns: %{current: current, queue: queue}}, id),
+    do: Enum.find([current | queue], &match?(%{id: ^id}, &1))
 
   # ---------------------------------------------------------------------------
   # Pairing

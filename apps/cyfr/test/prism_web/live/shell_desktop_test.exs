@@ -836,6 +836,124 @@ defmodule PrismWeb.ShellDesktopTest do
       refute_push_event(view, "canvas_answer", %{verb: "decided"})
     end
 
+    # A request whose approved call needs the person's fresh confirmation:
+    # an entry rebound to disclose its value. Approved, it waits for the
+    # proof, still listed in the person's attention and told nothing yet.
+    defp confirming!(conn, ctx, user, call) do
+      Sanctum.TestContext.passkey!(user.user_id)
+      person = %{ctx | user_id: user.user_id}
+
+      params = %{
+        name: "rebound-#{call}",
+        kind: "api_key",
+        fields: %{"API_KEY" => "not-a-real-secret"},
+        destination: %{hosts: ["api.example.com"]},
+        disclose: false
+      }
+
+      entering =
+        Sanctum.TestContext.confirmed(person, :credential_entry, %{
+          operation: "vault.create",
+          arguments: params,
+          resource: params.name
+        })
+
+      {:ok, entry} = Sanctum.Vault.create(entering, params)
+      view = shell!(conn)
+      home = canvas(view).id
+
+      rebind = %{
+        "operation" => "vault.rebind",
+        "args" => %{"id" => entry.id, "disclose" => true},
+        "call" => call
+      }
+
+      verb!(view, home, :request, rebind)
+      assert %{"call" => ^call, "request" => id} = answer!(view, home, "requested")
+      click!(view, "request-approve")
+
+      assert {:ok, [%{ref: ref}]} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(person), user.user_id)
+
+      wait_until(fn -> render(view) =~ ~s(data-ref="#{ref}") end, 2_000, "the waiting record")
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      assert [%{id: ^id}] = waiting(ctx, user)
+      %{view: view, home: home, id: id, ref: ref, person: person, entry: entry}
+    end
+
+    defp attach_only?(person, entry_id) do
+      {:ok, entries} = Sanctum.Vault.list(person)
+      Enum.find(entries, &(&1.id == entry_id)).attach_only
+    end
+
+    defp request_ended!(view) do
+      wait_until(
+        fn ->
+          _ = render(view)
+          assigns(view).requests == %{}
+        end,
+        2_000,
+        "the request to end"
+      )
+    end
+
+    test "a cancelled fresh confirmation also ends the frame request",
+         %{conn: conn, ctx: ctx, user: user} do
+      %{view: view, home: home, id: id, ref: ref, person: person, entry: entry} =
+        confirming!(conn, ctx, user, 69)
+
+      assert {:ok, _cancelled} =
+               PrismWeb.Ops.call_tool(assigns(view).context, "confirmation/cancel", %{
+                 "ref" => ref
+               })
+
+      request_ended!(view)
+      assert answer!(view, home, "decided") == %{"call" => 69, "outcome" => "cancelled"}
+      assert waiting(ctx, user) == []
+
+      send(view.pid, {:request_expired, id})
+      _ = render(view)
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      assert attach_only?(person, entry.id)
+    end
+
+    test "a fresh confirmation proven after the request's own expiry runs it, approved once",
+         %{conn: conn, ctx: ctx, user: user} do
+      %{view: view, home: home, id: id, ref: ref, person: person, entry: entry} =
+        confirming!(conn, ctx, user, 70)
+
+      send(view.pid, {:request_expired, id})
+      _ = render(view)
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      assert [%{id: ^id}] = waiting(ctx, user)
+
+      Sanctum.TestContext.prove!(person, ref)
+      request_ended!(view)
+      assert answer!(view, home, "decided") == %{"call" => 70, "outcome" => "approved"}
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      assert waiting(ctx, user) == []
+      refute attach_only?(person, entry.id)
+    end
+
+    test "a fresh confirmation that expires cancels the request expired",
+         %{conn: conn, ctx: ctx, user: user} do
+      %{view: view, home: home, ref: ref, person: person, entry: entry} =
+        confirming!(conn, ctx, user, 71)
+
+      Phoenix.LiveView.send_update(view.pid, PrismWeb.SystemLayer,
+        id: "system-layer-desktop",
+        expire: ref
+      )
+
+      request_ended!(view)
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 71, "outcome" => "cancelled", "reason" => "expired"}
+
+      assert waiting(ctx, user) == []
+      assert attach_only?(person, entry.id)
+    end
+
     test "a control that asks is a request under its press's call", %{
       conn: conn,
       ctx: ctx,
