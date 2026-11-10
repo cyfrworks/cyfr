@@ -1134,7 +1134,7 @@ describe("a canvas hidden with its streams open has them again once it is shown"
       endpoint.suspended = false
       tell("live")
     }
-    return {...client, endpoint, hide, show}
+    return {...client, endpoint, hide, show, tell, states}
   }
 
   for (const order of ["end first", "frozen first"]) {
@@ -1173,6 +1173,58 @@ describe("a canvas hidden with its streams open has them again once it is shown"
       assert.equal(handle.state, "ended")
     })
   }
+
+  // `frozen` and the endpoint's end travel apart: from `frozen` on, a change
+  // already on its way is not heard, and shown again with no end ever come,
+  // the stream that missed it opens again and hears a fresh picture.
+  test("a canvas hears no in-flight stream event after frozen, and shown again it hears a fresh picture", async () => {
+    const {api, sent, sockets, tell, states} = await shownCanvas()
+    const events = []
+    const handle = await api.stream(PICTURED.name, PICTURED.subject, (event) => events.push(event.event))
+    await eventually(() => events.length === 2)
+
+    tell("frozen")
+    await eventually(() => states.at(-1) === "frozen")
+    const change = deliveryOf(1).find((reply) => reply.type === "event" && reply.data.status === "paused")
+    sockets[0].say({...change, sub: 1})
+    sockets[0].say({v: 1, type: "stale", sub: 1, at: change.data.at})
+    await tick()
+    assert.deepEqual(events, ["schedules.changes", "snapshot"])
+
+    tell("live")
+    await eventually(() => events.length === 5)
+    assert.deepEqual(events, ["schedules.changes", "snapshot", "resync", "schedules.changes", "snapshot"])
+    assert.equal(handle.state, "live")
+    assert.deepEqual(
+      sent().map(({type, sub}) => [type, sub]),
+      [
+        ["subscribe", 1],
+        ["unsubscribe", 1],
+        ["subscribe", 2]
+      ]
+    )
+    assert.equal(sockets.length, 1)
+    handle.close()
+  })
+
+  test("a denial while frozen is told once the canvas is shown", async () => {
+    const {api, sockets, tell, states} = await shownCanvas()
+    const events = []
+    const handle = await api.stream(PICTURED.name, PICTURED.subject, (event) => events.push(event))
+    await eventually(() => events.length === 2)
+
+    tell("frozen")
+    await eventually(() => states.at(-1) === "frozen")
+    sockets[0].say({...REVOKED, sub: 1})
+    await handle.closed
+    assert.equal(handle.state, "denied")
+    await tick()
+    assert.equal(events.length, 2)
+
+    tell("live")
+    await eventually(() => events.length === 3)
+    assert.deepEqual(events.at(-1), {id: null, event: "denied", data: REVOKED.error, revision: null, at: null})
+  })
 
   test("a grant revoked while it was hidden is denied once it is shown", async () => {
     const {api, sent, endpoint, hide, show} = await shownCanvas()

@@ -180,6 +180,9 @@ export function createClient({
   const handlers = new Map(CANVAS_EVENTS.map((event) => [event, new Set()]))
   // The resolvers of a canvas's subscriptions waiting for it to be shown.
   const unshown = []
+  // A canvas's subscriptions something was withheld from while it was
+  // frozen, settled once it is shown (`thawed`).
+  const withheld = new Set()
   // The stream connection while it is not closed, and the number the next
   // subscription takes.
   let connection = null
@@ -270,7 +273,10 @@ export function createClient({
 
     const value = heard(told, args)
     latest.set(told, value)
-    if (told === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve()
+    if (told === "state" && value === "live") {
+      for (const resolve of unshown.splice(0)) resolve()
+      thawed()
+    }
     for (const entry of handlers.get(told)) deliver(told, entry, value)
   }
 
@@ -460,7 +466,9 @@ export function createClient({
       delivery: "live",
       opened: false,
       tries: 0,
-      timer: null
+      timer: null,
+      missed: false,
+      last: null
     }
     const opened = new Promise((resolve, reject) => Object.assign(subscription, {resolve, reject}))
     const closed = new Promise((resolve, reject) => (subscription.closed = {resolve, reject}))
@@ -512,6 +520,7 @@ export function createClient({
 
   function attach(subscription) {
     if (subscription.state !== "waiting") return
+    subscription.missed = false
     let held
     try {
       held = connect()
@@ -693,7 +702,21 @@ export function createClient({
     return wait
   }
 
+  // From `frozen` until `live` a canvas's page hears nothing of its
+  // streams, whatever order the endpoint's end for the suspended credential
+  // comes in, since the two travel apart. What it would have heard is
+  // dropped, not held: a stream that misses anything is opened again once
+  // shown, and its fresh picture, a resync, replaces what was dropped,
+  // where holding would keep an unbounded backlog the resync supersedes.
+  // A stream's last word, its denial or refusal, is held and told once
+  // shown.
   function hear(subscription, event) {
+    if (canvas !== null && latest.get("state") === "frozen") {
+      if (subscription.state === "over") subscription.last = event
+      else subscription.missed = true
+      withheld.add(subscription)
+      return
+    }
     try {
       subscription.onEvent(event)
     } catch (_error) {
@@ -701,10 +724,32 @@ export function createClient({
     }
   }
 
+  // Shown again: a stream's withheld last word is told, and a stream still
+  // open that missed anything is opened again under a new number, on the
+  // same connection, its fresh picture announced by `resync`. One that is
+  // waiting opens again by itself.
+  function thawed() {
+    for (const subscription of [...withheld]) {
+      withheld.delete(subscription)
+      if (subscription.state === "over" && subscription.last) {
+        const last = subscription.last
+        subscription.last = null
+        hear(subscription, last)
+      } else if (subscription.state === "open" && subscription.missed) {
+        const {held, number} = subscription
+        held.subscriptions.delete(number)
+        held.socket.send(JSON.stringify(unsubscribeMessage(number)))
+        Object.assign(subscription, {state: "waiting", held: null, number: null, sent: false})
+        attach(subscription)
+      }
+    }
+  }
+
   // Ends `subscription` from the page's side, at once: the endpoint is told
   // only of one it was asked for.
   function unsubscribe(subscription) {
     const was = subscription.state
+    subscription.last = null
     if (was === "over") return
     subscription.state = "over"
     subscription.delivery = "ended"

@@ -360,6 +360,7 @@
     const latest = /* @__PURE__ */ new Map();
     const handlers = new Map(CANVAS_EVENTS.map((event) => [event, /* @__PURE__ */ new Set()]));
     const unshown = [];
+    const withheld = /* @__PURE__ */ new Set();
     let connection = null;
     let nextSubscription = 1;
     let desktop = null;
@@ -428,7 +429,10 @@
       }
       const value = heard(told2, args);
       latest.set(told2, value);
-      if (told2 === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve();
+      if (told2 === "state" && value === "live") {
+        for (const resolve of unshown.splice(0)) resolve();
+        thawed();
+      }
       for (const entry of handlers.get(told2)) deliver(told2, entry, value);
     }
     function tellDesktop() {
@@ -564,7 +568,9 @@
         delivery: "live",
         opened: false,
         tries: 0,
-        timer: null
+        timer: null,
+        missed: false,
+        last: null
       };
       const opened = new Promise((resolve, reject) => Object.assign(subscription, { resolve, reject }));
       const closed = new Promise((resolve, reject) => subscription.closed = { resolve, reject });
@@ -610,6 +616,7 @@
     }
     function attach(subscription) {
       if (subscription.state !== "waiting") return;
+      subscription.missed = false;
       let held;
       try {
         held = connect();
@@ -739,13 +746,36 @@
       return wait;
     }
     function hear(subscription, event) {
+      if (canvas !== null && latest.get("state") === "frozen") {
+        if (subscription.state === "over") subscription.last = event;
+        else subscription.missed = true;
+        withheld.add(subscription);
+        return;
+      }
       try {
         subscription.onEvent(event);
       } catch (_error) {
       }
     }
+    function thawed() {
+      for (const subscription of [...withheld]) {
+        withheld.delete(subscription);
+        if (subscription.state === "over" && subscription.last) {
+          const last = subscription.last;
+          subscription.last = null;
+          hear(subscription, last);
+        } else if (subscription.state === "open" && subscription.missed) {
+          const { held, number } = subscription;
+          held.subscriptions.delete(number);
+          held.socket.send(JSON.stringify(unsubscribeMessage(number)));
+          Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false });
+          attach(subscription);
+        }
+      }
+    }
     function unsubscribe(subscription) {
       const was = subscription.state;
+      subscription.last = null;
       if (was === "over") return;
       subscription.state = "over";
       subscription.delivery = "ended";
