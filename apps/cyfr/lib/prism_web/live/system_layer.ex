@@ -127,7 +127,11 @@ defmodule PrismWeb.SystemLayer do
       dispatched as the layer's own change once the person approves it,
       with the preview CYFR built of exactly that call drawn first and
       the frame that asked named beside it, never anything the frame
-      drew. Approving reports `:confirmed` once the call answers; one that
+      drew. Approving, refusing and dismissing each first decide the
+      request its prompt names at its one authority
+      (`Cyfr.Requests.decide/2`), and only the first decision acts: one
+      that comes after the request expired or was decided otherwise runs
+      nothing. Approving reports `:confirmed` once the call answers; one that
       needs a fresh confirmation waits for its proof as any of the
       layer's own changes does. Refusing reports `{:refused, :declined}`
       and ends the prompt; a call the gate refuses reports its refusal
