@@ -385,7 +385,8 @@
     pressFeed(feed, action) { const f = state.feeds[feed]; if (sdk && f && f.binding) sdk.press(f.binding, action); },
     open: (ref) => sdk && sdk.open(ref),
     ask: (widget) => sdk && sdk.ask(widget),
-    settings: (page) => sdk && sdk.settings(page),
+    // a page, at `ref` when there is one: AQUA's panel at an own thread, the chat at a shared one
+    settings: (page, ref) => sdk && (ref ? sdk.settings(page, ref) : sdk.settings(page)),
     grant: (ref) => sdk && sdk.grant(ref),
     ready: () => sdk && sdk.ready(),
   };

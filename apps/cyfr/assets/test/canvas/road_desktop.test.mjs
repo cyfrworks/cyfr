@@ -136,7 +136,7 @@ function page({version = "0.1.0", width = 1024, height = 600, protocol = "http/1
       return answers.press
     },
     ask() {},
-    settings: (page) => calls.settings.push(page),
+    settings: (...args) => calls.settings.push(args),
     open() {},
     grant: (ref) => calls.grant.push(ref),
     ready() {},
@@ -551,7 +551,7 @@ describe("the road desktop 0.2.0", () => {
       tap(p, choice)
       tap(p, "Close")
     }
-    assert.deepEqual(p.calls.settings, ["aqua", "executions", "schedules", "files"])
+    assert.deepEqual(p.calls.settings, [["aqua", "th1"], ["executions", "e9"], ["schedules", "s1"], ["files", "o1"]])
     tap(p, "Confirm Send mail")
     assert.ok(!labels(p).some((l) => l.startsWith("Open")), labels(p).join(" | "))
   })
@@ -566,7 +566,25 @@ describe("the road desktop 0.2.0", () => {
     tap(p, "Post boxes")
     tap(p, "Trip, 3 unread")
     tap(p, "Notes, with AQUA")
-    assert.deepEqual(p.calls.settings, ["chat", "aqua"])
+    assert.deepEqual(p.calls.settings, [["chat", "t1"], ["aqua", "t2"]])
+  })
+
+  test("a visitor opens its destination at its ref, and a post box its thread", async () => {
+    const p = await road({}, {
+      "attention.changes": [{kind: "approval", id: "a1", label: "Trip", since: iso(-9), destination: {kind: "page", page: "aqua", ref: "th1"}}, failedItem("a2", "formula:local.digest", "e9")],
+      "threads.changes": [
+        {kind: "shared", id: "t1", title: "Trip", people: ["a", "b"], last_activity: iso(-5), waits_on_you: false, unread: 0},
+        {kind: "own", id: "t2", title: "Notes", people: [], last_activity: iso(-9), waits_on_you: false, unread: null},
+      ],
+    })
+    tap(p, "Approval in Trip")
+    tap(p, "Open AQUA")
+    tap(p, "digest failed")
+    tap(p, "Open runs")
+    tap(p, "Post boxes")
+    tap(p, "Trip, 2 people")
+    tap(p, "Notes, with AQUA")
+    assert.deepEqual(p.calls.settings, [["aqua", "th1"], ["executions", "e9"], ["chat", "t1"], ["aqua", "t2"]])
   })
 
   test("files and offers reach the archive, and an offer's sender its visitor", async () => {

@@ -40,7 +40,7 @@ window.RoadList = (function () {
     root.replaceChildren(
       el('p', said, null),
       section('Waiting on you', 'attention', R.waiting().map((a) => [(a.kind === 'file_offer' && a.from ? a.from + ' offers ' + a.label : a.label + ' ' + (KIND[a.kind] || 'waits')) + (a.since != null ? ', since ' + at(a.since) : ''), a.kind.startsWith('failed'),
-        ...(a.kind === 'failed_run' && R.retryable(a.ref) ? [retry(a.ref)] : []), ...(a.page ? [button('Open', () => R.settings(a.page))] : []), ...(a.kind === 'grant' ? [button('Review grant', () => R.grant(a.ref))] : [])]), 'Nothing waits on you.'),
+        ...(a.kind === 'failed_run' && R.retryable(a.ref) ? [retry(a.ref)] : []), ...(a.page ? [button('Open', () => R.settings(a.page, a.ref))] : []), ...(a.kind === 'grant' ? [button('Review grant', () => R.grant(a.ref))] : [])]), 'Nothing waits on you.'),
       section('Schedules', 'schedules', v(S.schedules).map((s) => [s.name + ': ' + (s.status === 'active' ? 'next ' + at(s.next) : s.status) + ', ' + s.runs + (s.runs === 1 ? ' run, ' : ' runs, ') + s.errors + (s.errors === 1 ? ' error' : ' errors'), s.errors > 0,
         ...(s.status === 'active' || s.status === 'paused' ? [button(s.status === 'active' ? 'Pause' : 'Resume', () => R.press(s.status === 'active' ? R.PAUSE : R.RESUME, s.id))] : [])]), 'No schedules.'),
       section('Schedule runs', 'schedules', v(S.scheduleRuns).sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, 10).map((r) => [sched(r.sid) + ' ' + (r.kind === 'failed' ? 'failed' : 'ran') + ' at ' + at(r.at) + cause(r.cause), r.kind === 'failed',

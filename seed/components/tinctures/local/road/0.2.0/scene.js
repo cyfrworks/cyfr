@@ -266,7 +266,7 @@ window.RoadScene = function () {
     R.ask(widget);
     say("AQUA's panel opens with a sentence about the " + PARTS[widget].name.toLowerCase() + '. Nothing is sent.');
   }
-  function settings(page, words) { R.settings(page); say('Opening ' + words + '.'); }
+  function settings(page, words, ref) { R.settings(page, ref); say('Opening ' + words + '.'); }
   async function press(s) {
     pending.sched.add(s.id);
     const pause = s.status === 'active';
@@ -344,7 +344,7 @@ window.RoadScene = function () {
       const since = 'Waiting since ' + when(a.since) + ', ' + dur(n - a.since) + '.';
       const look = { failed_run: 'news', failed_schedule: 'bell', approval: 'aqua', file_offer: 'sam' }[a.kind] || 'porter';
       const [opens, words] = PAGES[a.page] || ['Open', a.page];
-      const open = a.page ? [{ label: opens, primary: true, run: () => settings(a.page, words) }] : [];
+      const open = a.page ? [{ label: opens, primary: true, run: () => settings(a.page, words, a.ref) }] : [];
       if (a.kind === 'failed_run') {
         const r = run(a.ref), retries = R.retryable(a.ref);
         return { title: a.label + ' failed', portrait: look, lines: ['Its last run failed, and no run of it has ended since.', ...(r ? [runTimes(r)] : []), since],
@@ -371,7 +371,7 @@ window.RoadScene = function () {
     }
     if (kind === 'threads') return { title: 'Threads', portrait: 'post', lines: S.threads.size ? [] : ['No threads yet.'],
       rows: threads().map((t) => ({ text: t.title, sub: (t.waits ? 'waits on you, ' : '') + (t.unread ? t.unread + ' unread, ' : '') + (t.own ? 'with AQUA' : t.people + (t.people === 1 ? ' person' : ' people')) + ', ' + when(t.last), dot: t.waits ? P.red : t.unread ? P.ochre : null,
-        run: () => (t.own ? settings('aqua', 'AQUA') : settings('chat', 'the chat')) })), choices: [ask('threads')] };
+        run: () => (t.own ? settings('aqua', 'AQUA', t.id) : settings('chat', 'the chat', t.id)) })), choices: [ask('threads')] };
     if (kind === 'crew') {
       const list = jobs(), s = sys();
       return { title: 'Crew', portrait: 'crew', lines: [...(list.length ? list.map((j) => j.member + ' is at work' + (j.title ? ': ' + j.title : '') + (j.askedBy ? ', asked by ' + j.askedBy : '') + ', since ' + when(j.since) + (j.status ? ' (' + j.status + ')' : '') + '.') : ['Nobody is out on a job.']),
