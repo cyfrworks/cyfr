@@ -147,7 +147,8 @@
   var CLOSE_CODES = Object.freeze({ unreadable: 4400, too_big: 1009, replaced: 4409, idle: 1e3 });
   var REFUSAL_EVENT = "refusal";
   var DELIVERY_EVENTS = Object.freeze(["snapshot", "resync", "unavailable", "stale", "denied"]);
-  var STREAM_STATES = Object.freeze(["live", "unavailable", "stale", "denied", "ended"]);
+  var STREAM_STATES = Object.freeze(["live", "unavailable", "suspended", "stale", "denied", "ended"]);
+  var ENDED_REASONS = Object.freeze(["frame_suspended"]);
   var NO_ANSWER_CLASSES = Object.freeze([
     "cancelled",
     "corrupt",
@@ -184,7 +185,7 @@
         read = sameKeys(message, head);
         break;
       case "ended":
-        read = sameKeys(message, head) || sameKeys(message, [...head, "error"]) && isRefusal(message.error);
+        read = sameKeys(message, head) || sameKeys(message, [...head, "error"]) && isRefusal(message.error) || sameKeys(message, [...head, "error", "reason"]) && isRefusal(message.error) && ENDED_REASONS.includes(message.reason);
         break;
       default:
         read = false;
@@ -359,6 +360,7 @@
     const latest = /* @__PURE__ */ new Map();
     const handlers = new Map(CANVAS_EVENTS.map((event) => [event, /* @__PURE__ */ new Set()]));
     const unshown = [];
+    const withheld = /* @__PURE__ */ new Set();
     let connection = null;
     let nextSubscription = 1;
     let desktop = null;
@@ -427,7 +429,10 @@
       }
       const value = heard(told2, args);
       latest.set(told2, value);
-      if (told2 === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve();
+      if (told2 === "state" && value === "live") {
+        for (const resolve of unshown.splice(0)) resolve();
+        thawed();
+      }
       for (const entry of handlers.get(told2)) deliver(told2, entry, value);
     }
     function tellDesktop() {
@@ -563,7 +568,9 @@
         delivery: "live",
         opened: false,
         tries: 0,
-        timer: null
+        timer: null,
+        missed: false,
+        last: null
       };
       const opened = new Promise((resolve, reject) => Object.assign(subscription, { resolve, reject }));
       const closed = new Promise((resolve, reject) => subscription.closed = { resolve, reject });
@@ -577,7 +584,8 @@
         close,
         /**
          * On a canvas, the stream's state: `live`, `unavailable` (it opens
-         * again at the time its last `unavailable` event named), `stale`,
+         * again at the time its last `unavailable` event named), `suspended`
+         * (the canvas is hidden; it opens again once shown), `stale`,
          * `denied` or `ended`.
          */
         get state() {
@@ -608,6 +616,7 @@
     }
     function attach(subscription) {
       if (subscription.state !== "waiting") return;
+      subscription.missed = false;
       let held;
       try {
         held = connect();
@@ -662,6 +671,7 @@
         if (subscription.state === "open") hear(subscription, heardEvent(message));
       } else if (message.type === "ended") {
         held.subscriptions.delete(subscription.number);
+        if (message.reason === "frame_suspended" && canvas !== null && subscription.opened) return suspend(subscription);
         end(subscription, "error" in message ? message.error : null, null);
       } else if (subscription.state === "open" && canvas !== null) {
         if (message.type === "snapshot") Object.assign(subscription, { delivery: "live", tries: 0 });
@@ -715,10 +725,16 @@
       subscription.closed.resolve();
     }
     function reopen(subscription) {
+      const wait = later(subscription, "unavailable");
+      told(subscription, "unavailable", { retry_at: new Date(Date.now() + wait).toISOString() });
+    }
+    function suspend(subscription) {
+      later(subscription, "suspended");
+    }
+    function later(subscription, delivery) {
       const wait = Math.min(REOPEN_FIRST_MS * 2 ** subscription.tries, REOPEN_MOST_MS);
       subscription.tries += 1;
-      Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false, delivery: "unavailable" });
-      told(subscription, "unavailable", { retry_at: new Date(Date.now() + wait).toISOString() });
+      Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false, delivery });
       subscription.timer = setTimeout(() => {
         subscription.timer = null;
         if (subscription.state !== "waiting") return;
@@ -727,15 +743,39 @@
           (error) => refuse(subscription, error)
         );
       }, wait);
+      return wait;
     }
     function hear(subscription, event) {
+      if (canvas !== null && latest.get("state") === "frozen") {
+        if (subscription.state === "over") subscription.last = event;
+        else subscription.missed = true;
+        withheld.add(subscription);
+        return;
+      }
       try {
         subscription.onEvent(event);
       } catch (_error) {
       }
     }
+    function thawed() {
+      for (const subscription of [...withheld]) {
+        withheld.delete(subscription);
+        if (subscription.state === "over" && subscription.last) {
+          const last = subscription.last;
+          subscription.last = null;
+          hear(subscription, last);
+        } else if (subscription.state === "open" && subscription.missed) {
+          const { held, number } = subscription;
+          held.subscriptions.delete(number);
+          held.socket.send(JSON.stringify(unsubscribeMessage(number)));
+          Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false });
+          attach(subscription);
+        }
+      }
+    }
     function unsubscribe(subscription) {
       const was = subscription.state;
+      subscription.last = null;
       if (was === "over") return;
       subscription.state = "over";
       subscription.delivery = "ended";
@@ -815,7 +855,9 @@
        *   replaces it), `stale` (`at`, the picture's time), `unavailable` (`data.retry_at`,
        *   when the SDK opens it again, after a lost connection or an end for want of an
        *   answer) and `denied` (`data`, the refusal; the stream ended), each as
-       *   {id: null, event, data, revision: null, at}
+       *   {id: null, event, data, revision: null, at}. A stream open when the canvas is
+       *   hidden hears nothing while it is hidden, its handle's state `suspended`, and
+       *   opens again once the canvas is shown, its fresh picture announced by `resync`
        * @returns {Promise<{close: function, closed: Promise, state: string}>} once the stream is open,
        *   carrying `close()` itself, the handle's: closed before it opened, the
        *   promise rejects `cancelled`. A refusal rejects with a CyfrError of

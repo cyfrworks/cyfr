@@ -335,7 +335,11 @@ defmodule Compendium.Canvas do
       picture is `stale_after` old and no fresh one came, whatever its
       read does, and it stays so until a fresh picture comes; `denied`, the frame's
       grant no longer covers the stream, which ends and opens again only
-      under a new grant.
+      under a new grant. A stream of a hidden canvas is `suspended`, told
+      nothing: the endpoint ends it with its frame's suspended credential,
+      saying so (`Prima.TinctureWire.ended_reasons/0`), and the SDK opens
+      it again once the canvas is shown, its fresh picture a resync; it is
+      denied only if its grant no longer covers it then.
 
   The delivery fields carry no content: `key` names a field the stream
   projects already, `revision` is a number and `at` a time.

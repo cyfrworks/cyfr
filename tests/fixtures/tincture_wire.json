@@ -440,7 +440,8 @@
             "class": "forbidden",
             "message": "This frame is suspended — it opens nothing until it is shown again",
             "stage": "admission"
-          }
+          },
+          "reason": "frame_suspended"
         },
         "rejects": {
           "class": "forbidden",
@@ -6214,7 +6215,7 @@
     ]
   },
   "delivery": {
-    "comment": "The delivery contract (Compendium.Canvas.catalog/1) on a canvas's stream connection. `to_frame` are the endpoint's messages on one connection in order: subscription 1 to `schedules.changes` is handed its picture (an item marked refresh, then `snapshot` with the time its read began), a change of that item with a higher revision, the item's removal (its `kind` the stream's `removal`), a fresh picture (`resync`, its items, `snapshot`) and `stale` once a read again at the stream's bound failed; subscription 2 ends after `subscribed` with a refusal, the stream's denial; subscription 3 ends after `subscribed` with a refusal of a class `stream_rejections.no_answer_classes` names, for want of an answer. `heard` is what a canvas's handler hears of each, `{id, event, data, revision, at}` per event in order, and the handle's `state` after: a change carries its revision and time, `snapshot` and `stale` their `at`, `denied` the refusal and `unavailable` `retry_at`, the time the SDK opens the stream again (any time: `retry_at` is a placeholder here), when a new `subscribe` of the same stream goes (`reopens`). `refused` are messages the SDK does not read. Prima.TinctureWire builds each message of `to_frame`.",
+    "comment": "The delivery contract (Compendium.Canvas.catalog/1) on a canvas's stream connection. `to_frame` are the endpoint's messages on one connection in order: subscription 1 to `schedules.changes` is handed its picture (an item marked refresh, then `snapshot` with the time its read began), a change of that item with a higher revision, the item's removal (its `kind` the stream's `removal`), a fresh picture (`resync`, its items, `snapshot`) and `stale` once a read again at the stream's bound failed; subscription 2 ends after `subscribed` with a refusal, the stream's denial; subscription 3 ends after `subscribed` with a refusal of a class `stream_rejections.no_answer_classes` names, for want of an answer; subscription 4 ends after `subscribed` because its frame is suspended, the refusal with `reason` `frame_suspended` beside it (`ended_reasons`, every reason an end names, Prima.TinctureWire.ended_reasons/0), and is not denied: it hears nothing, its state is `suspended`, and it opens again once the canvas is shown (shown here, so after the SDK's first wait). `heard` is what a canvas's handler hears of each, `{id, event, data, revision, at}` per event in order, and the handle's `state` after: a change carries its revision and time, `snapshot` and `stale` their `at`, `denied` the refusal and `unavailable` `retry_at`, the time the SDK opens the stream again (any time: `retry_at` is a placeholder here), when a new `subscribe` of the same stream goes (`reopens`). `refused` are messages the SDK does not read. Prima.TinctureWire builds each message of `to_frame`.",
     "to_frame": [
       {
         "v": 1,
@@ -6335,6 +6336,22 @@
           "message": "The store could not answer — retry shortly",
           "stage": "execution"
         }
+      },
+      {
+        "v": 1,
+        "type": "subscribed",
+        "sub": 4
+      },
+      {
+        "v": 1,
+        "type": "ended",
+        "sub": 4,
+        "error": {
+          "class": "forbidden",
+          "message": "This frame is suspended — it opens nothing until it is shown again",
+          "stage": "admission"
+        },
+        "reason": "frame_suspended"
       }
     ],
     "heard": [
@@ -6460,6 +6477,12 @@
         ],
         "state": "unavailable",
         "reopens": true
+      },
+      {
+        "sub": 4,
+        "events": [],
+        "state": "suspended",
+        "reopens": true
       }
     ],
     "refused": [
@@ -6498,7 +6521,31 @@
           "sub": 1,
           "at": "2026-11-10T10:15:00.500000Z"
         }
+      },
+      {
+        "why": "an end naming a reason the frame does not act on",
+        "message": {
+          "v": 1,
+          "type": "ended",
+          "sub": 4,
+          "error": {
+            "class": "forbidden",
+            "message": "This frame is suspended — it opens nothing until it is shown again",
+            "stage": "admission"
+          },
+          "reason": "frame_moved"
+        }
+      },
+      {
+        "why": "an end naming a reason without its refusal",
+        "message": {
+          "v": 1,
+          "type": "ended",
+          "sub": 4,
+          "reason": "frame_suspended"
+        }
       }
-    ]
+    ],
+    "ended_reasons": ["frame_suspended"]
   }
 }
