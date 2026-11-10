@@ -287,10 +287,16 @@ export const REFUSAL_EVENT = "refusal"
 // contract (`Compendium.Canvas.catalog/1`): its picture is whole
 // (`snapshot`), a fresh picture follows (`resync`), it cannot be read now
 // (`unavailable`), it is older than its bound (`stale`), or its grant no
-// longer covers it (`denied`). The last three, and `live` and `ended`, are
-// the states a canvas's stream handle is in.
+// longer covers it (`denied`). The last three, and `live`, `suspended` (its
+// frame is hidden, and it opens again once shown, telling nothing) and
+// `ended`, are the states a canvas's stream handle is in.
 export const DELIVERY_EVENTS = Object.freeze(["snapshot", "resync", "unavailable", "stale", "denied"])
-export const STREAM_STATES = Object.freeze(["live", "unavailable", "stale", "denied", "ended"])
+export const STREAM_STATES = Object.freeze(["live", "unavailable", "suspended", "stale", "denied", "ended"])
+
+// Why the endpoint ended a subscription, when its `ended` names a reason
+// beside its refusal (`Prima.TinctureWire.ended_reasons/0`): its frame is
+// hidden and its credential suspended until it is shown again.
+export const ENDED_REASONS = Object.freeze(["frame_suspended"])
 
 // The refusal classes that leave a subscription unanswered: those a request
 // is answered with a server error for. A subscription refused with one
@@ -327,7 +333,8 @@ const isTime = (at) => typeof at === "string" && at !== "" && !Number.isNaN(Date
 // What the endpoint sends over the stream connection read back: `{ok: true,
 // message}` for exactly a `subscribed`, an `event`, a `snapshot` or a
 // `stale` with its `at`, a `resync` or an `ended`, the last with `error`, a
-// refusal's projection, when the endpoint said why; `{ok: false}` for
+// refusal's projection, when the endpoint said why, and with `reason`
+// beside it when that is one of `ENDED_REASONS`; `{ok: false}` for
 // anything else. A subscription's number has a call's grammar
 // (`Prima.TinctureWire.subscription?/1`).
 export function decodeConnectionMessage(message) {
@@ -349,7 +356,12 @@ export function decodeConnectionMessage(message) {
       read = sameKeys(message, head)
       break
     case "ended":
-      read = sameKeys(message, head) || (sameKeys(message, [...head, "error"]) && isRefusal(message.error))
+      read =
+        sameKeys(message, head) ||
+        (sameKeys(message, [...head, "error"]) && isRefusal(message.error)) ||
+        (sameKeys(message, [...head, "error", "reason"]) &&
+          isRefusal(message.error) &&
+          ENDED_REASONS.includes(message.reason))
       break
     default:
       read = false

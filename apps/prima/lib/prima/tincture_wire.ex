@@ -77,14 +77,17 @@ defmodule Prima.TinctureWire do
       fresh picture came, until the next `resync`;
     * `ended` (`ended/2`) — exactly `v`, `type` and `sub`, and `error`, a
       refusal's projection, when the endpoint ended it for a reason the
-      frame should know. One that comes before `subscribed` is the
-      subscription's refusal: it never opened. An app's handler hears an
-      `error` after `subscribed` as its last event, named
-      `refusal_event/0`, as it heard a stream's end before.
+      frame should know, and `reason` beside it when that reason is one
+      the frame acts on (`ended_reasons/0`): `frame_suspended`, its frame
+      is hidden and its credential suspended until it is shown again. One
+      that comes before `subscribed` is the subscription's refusal: it
+      never opened. An app's handler hears an `error` after `subscribed`
+      as its last event, named `refusal_event/0`, as it heard a stream's
+      end before.
 
   `snapshot`, `resync` and `stale` belong to a canvas-readable stream
   alone, and what they mean, with how a canvas hears an `ended` (its
-  `unavailable` and `denied`), is the delivery contract
+  `unavailable`, `suspended` and `denied`), is the delivery contract
   (`Compendium.Canvas.catalog/1`).
 
   One connection carries at most `max_subscriptions/0` subscriptions at
@@ -272,6 +275,7 @@ defmodule Prima.TinctureWire do
   @request_cancel_reasons ~w(too_soon busy expired dismissed)
   @declined "declined"
   @grant_operation "grant"
+  @ended_reasons ~w(frame_suspended)
 
   @frame_id ~r/\A[A-Za-z0-9_-]{8,64}\z/
   @athanor_segment ~r/\A@[a-z0-9]+(-[a-z0-9]+)*\z/
@@ -501,6 +505,16 @@ defmodule Prima.TinctureWire do
   """
   @spec request_id?(term()) :: boolean()
   def request_id?(id), do: is_binary(id) and Regex.match?(@request_id, id)
+
+  @doc """
+  Why the endpoint ended a subscription, when its `ended` says beside its
+  `error`: `frame_suspended`, the frame is hidden and its credential
+  suspended, so the stream opens again once the frame is shown. The
+  refusal's projection never carries its reason; these are the reasons a
+  frame acts on.
+  """
+  @spec ended_reasons() :: [String.t()]
+  def ended_reasons, do: @ended_reasons
 
   @doc "Whether `id` is a frame id: 8 to 64 URL-safe characters."
   @spec frame_id?(term()) :: boolean()
@@ -868,13 +882,18 @@ defmodule Prima.TinctureWire do
 
   @doc """
   `ended`: subscription `sub` ended, with `refusal`'s projection as
-  `error` when the endpoint ended it for a reason the frame should know.
+  `error` when the endpoint ended it for a reason the frame should know,
+  and its reason as `reason` when that is one of `ended_reasons/0`.
   """
   @spec ended(pos_integer(), Prima.Refusal.t() | nil) :: map()
   def ended(sub, nil), do: %{"v" => @version, "type" => "ended", "sub" => sub}
 
-  def ended(sub, %Prima.Refusal{} = refusal),
-    do: Map.put(ended(sub, nil), "error", projection(refusal))
+  def ended(sub, %Prima.Refusal{} = refusal) do
+    ended = Map.put(ended(sub, nil), "error", projection(refusal))
+    reason = if is_atom(refusal.reason), do: Atom.to_string(refusal.reason)
+
+    if reason in @ended_reasons, do: Map.put(ended, "reason", reason), else: ended
+  end
 
   # ---- a canvas --------------------------------------------------------------
 

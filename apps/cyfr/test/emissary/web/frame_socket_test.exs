@@ -424,12 +424,16 @@ defmodule Emissary.Web.FrameSocketTest do
     refute_received {:socket, ^socket, %{"sub" => 1}}
   end
 
-  # A suspended frame is the shell's to show again; a revoked bearer opens
-  # nothing.
-  for {act, class} <- [suspend_frame: "forbidden", revoke_frame: "unauthenticated"] do
-    @tag act: act, class: class
+  # A suspended frame is the shell's to show again, and its end says so
+  # beside the refusal, so the SDK opens its streams again once shown; a
+  # revoked bearer opens nothing, and its end names no reason.
+  for {act, class, reason} <- [
+        {:suspend_frame, "forbidden", "frame_suspended"},
+        {:revoke_frame, "unauthenticated", nil}
+      ] do
+    @tag act: act, class: class, reason: reason
     test "a frame's #{act} ends every subscription at its announcement",
-         %{source: source, act: act, class: class} do
+         %{source: source, act: act, class: class, reason: reason} do
       fresh_for_the_case!()
       frame = canvas_frame!(source)
       socket = Socket.connect({:canvas, frame.frame_id})
@@ -442,7 +446,8 @@ defmodule Emissary.Web.FrameSocketTest do
       {:ok, _} = apply(TinctureAuth, act, [source, frame.id])
 
       for sub <- [1, 2] do
-        assert %{"type" => "ended", "error" => %{"class" => ^class}} = answer(socket, sub)
+        assert %{"type" => "ended", "error" => %{"class" => ^class}} = ended = answer(socket, sub)
+        assert ended["reason"] == reason
       end
 
       wait_until(fn -> listeners(source) == 0 end, @answer_ms)

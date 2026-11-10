@@ -160,8 +160,8 @@ defmodule Prima.TinctureWireTest do
                 event["data"]
               )
 
-            %{"type" => "ended", "sub" => sub, "error" => error} ->
-              TinctureWire.ended(sub, refusal_of(error))
+            %{"type" => "ended", "error" => _error} = ended ->
+              ended_of(ended)
 
             %{"type" => "ended", "sub" => sub} ->
               TinctureWire.ended(sub, nil)
@@ -216,8 +216,8 @@ defmodule Prima.TinctureWireTest do
             %{"type" => "stale", "sub" => sub, "at" => at} ->
               TinctureWire.stale(sub, time(at))
 
-            %{"type" => "ended", "sub" => sub, "error" => error} ->
-              TinctureWire.ended(sub, refusal_of(error))
+            %{"type" => "ended", "error" => _error} = ended ->
+              ended_of(ended)
           end
 
         assert written == message
@@ -232,7 +232,25 @@ defmodule Prima.TinctureWireTest do
         assert data["revision"] == data["at"] |> time() |> DateTime.to_unix(:microsecond)
       end
 
-      assert heard |> Enum.map(& &1["state"]) |> Enum.sort() == ~w(denied stale unavailable)
+      assert heard |> Enum.map(& &1["state"]) |> Enum.sort() ==
+               ~w(denied stale suspended unavailable)
+    end
+
+    test "an end names a reason beside its refusal only for a reason the frame acts on" do
+      assert TinctureWire.ended_reasons() == vectors()["delivery"]["ended_reasons"]
+
+      for reason <- TinctureWire.ended_reasons() do
+        refusal = %{refusal_of(error_vector()) | reason: reason_of(reason)}
+        assert %{"reason" => ^reason, "error" => error} = TinctureWire.ended(1, refusal)
+        refute Map.has_key?(error, "reason")
+      end
+
+      for reason <- [:frame_moved, :vector, {:frame_suspended, :nested}, nil] do
+        refute Map.has_key?(
+                 TinctureWire.ended(1, %{refusal_of(error_vector()) | reason: reason}),
+                 "reason"
+               )
+      end
     end
   end
 
@@ -241,12 +259,23 @@ defmodule Prima.TinctureWireTest do
     at
   end
 
-  # The refusal a vector's error projects: a reason of its own, which the
-  # projection never carries.
-  defp refusal_of(%{"class" => class, "message" => message, "stage" => stage}) do
+  # The `ended` a vector shows, built from its refusal and the reason it
+  # names beside it, if any.
+  defp ended_of(%{"sub" => sub, "error" => error} = ended),
+    do: TinctureWire.ended(sub, refusal_of(error, ended["reason"]))
+
+  # The refusal reason an end names: the reasons are FrameAdmission's, which
+  # this app does not load, so each is named here.
+  defp reason_of(reason), do: Map.fetch!(%{"frame_suspended" => :frame_suspended}, reason)
+
+  defp error_vector, do: hd(for %{"error" => e} <- vectors()["delivery"]["to_frame"], do: e)
+
+  # The refusal a vector's error projects: the reason its end names, or a
+  # reason of its own, which the projection never carries.
+  defp refusal_of(%{"class" => class, "message" => message, "stage" => stage}, reason \\ nil) do
     %Prima.Refusal{
       class: String.to_existing_atom(class),
-      reason: :vector,
+      reason: if(reason, do: reason_of(reason), else: :vector),
       message: message,
       stage: String.to_existing_atom(stage)
     }
@@ -301,9 +330,7 @@ defmodule Prima.TinctureWireTest do
     answers = for %{"answer" => %{} = answer} <- cases, do: answer
     assert answers != []
 
-    for %{"sub" => sub, "error" => error} = answer <- answers do
-      assert TinctureWire.ended(sub, refusal_of(error)) == answer
-    end
+    for answer <- answers, do: assert(ended_of(answer) == answer)
 
     # Every case says how the SDK rejects it, with a stage only for a
     # refusal it rejects as itself.
