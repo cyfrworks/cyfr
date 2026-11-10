@@ -416,6 +416,15 @@ defmodule Arca.DecisionLogBudgetTest do
   # The longest the rollback test holds its writer.
   @hold_ms 30_000
 
+  # The budget the cases that wait one out run under: the production
+  # figure, not the long one the build gives every other test
+  # (`config/test.exs`). Each writer here has a connection of its own, so
+  # none is closed under a test.
+  @budget_ms 500
+
+  defp production_budget!,
+    do: Prima.Test.Env.put_app_env(:arca, :decision_log_budget_ms, @budget_ms)
+
   setup do
     call_id = "call_budget_#{System.unique_integer([:positive])}"
 
@@ -525,6 +534,8 @@ defmodule Arca.DecisionLogBudgetTest do
 
   test "a blocked writer is a :timeout within the budget, and the id holds one row at most",
        %{call_id: call_id, actor: actor} do
+    production_budget!()
+
     decision =
       Prima.Decision.new(
         call_id: call_id,
@@ -649,6 +660,7 @@ defmodule Arca.DecisionLogBudgetTest do
 
   test "a write past the writer cap is refused at once, and an overload runs no more than the cap",
        %{call_id: call_id, actor: actor} do
+    production_budget!()
     ids = for i <- 1..40, do: "#{call_id}_#{i}"
     on_exit(fn -> delete_rows(ids) end)
     # A failing case still drains its writers before their rows go and the
@@ -696,6 +708,7 @@ defmodule Arca.DecisionLogBudgetTest do
   test "a caller's timeout or death never stops its writer, which keeps its slot until its work " <>
          "returns",
        %{call_id: call_id, actor: actor} do
+    production_budget!()
     killed_id = call_id <> "_killed"
     on_exit(fn -> delete_rows([killed_id]) end)
     # The writers have finished before their rows go and the shared state
