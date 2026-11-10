@@ -127,12 +127,12 @@ same worktree refuses, naming the run that holds it.
   `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
 - Checks run in stages. `scripts/stages.tsv` names what each stage runs,
   and `scripts/stage.sh STAGE` runs it, queuing each check through
-  `scripts/heavy-check.sh` in the lane the table names. The host answers
-  while you edit and keeps itself; GitHub proves the tree:
+  `scripts/heavy-check.sh` for the quarters the table names. The host
+  answers while you edit and keeps itself; GitHub proves the tree:
   - `save`, after an edit: the format and credo checks, an incremental
     compile with warnings as errors, and the touched tests on SQLite;
-  - `handoff`, before you report a change ready, in the scoped and proof
-    lanes only: the format and credo checks, a forced compile on both
+  - `handoff`, before you report a change ready, one quarter for each
+    check: the format and credo checks, a forced compile on both
     adapters, the generated files' checks, the touched tests on both
     adapters (all of `apps/arca/test` when Arca changed), `mix dialyzer`
     when a `lib` file changed, the light self-test of every harness
@@ -156,7 +156,7 @@ same worktree refuses, naming the run that holds it.
   The self-tests that need the whole machine, those a workflow runs and
   no handoff row does, and `go test ./... -race` are the pull request's
   run's alone: a defect in one shows there. To have one's answer before
-  the pull request, run it here by name in the exclusive lane, as its
+  the pull request, run it here by name on all four quarters, as its
   workflow step runs it:
   `scripts/heavy-check.sh bash tests/commit-gate-test.sh`, or
   `scripts/heavy-check.sh bash -c 'cd apps/codex && go test ./... -race'`.
@@ -177,22 +177,25 @@ same worktree refuses, naming the run that holds it.
   files name and a running Docker daemon, and it refuses to run without
   them; it installs `govulncheck` and the close's `trivy` itself, at the
   versions CI pins.
-- `scripts/heavy-check.sh` queues the checks of everyone sharing a host
-  in three lanes: an exclusive check (the default) runs alone, a proof
-  (`-p`: a proof, an image suite, an image build or a release boot) runs
-  one at a time beside at most `PROOF_SCOPED` scoped checks (a number the
-  script sets from a measured load test), and a scoped check (`-s`: named
-  test paths in one partition, a compile, dialyzer, credo or a light
-  self-test) runs up to three side by side, on a third of the cores each. Checks start in the order
-  they queued, and `scripts/heavy-check.sh --status` shows who holds the
-  host and who waits.
+- `scripts/heavy-check.sh` queues the checks of everyone sharing a host.
+  It cuts the machine's cores into four quarters of whole cores. A check
+  takes all four by default and runs alone: a gate, a full or
+  multi-partition suite, `go test -race`, a harness self-test that needs
+  the machine, the compose proof. With `-q 1` it takes one quarter: named
+  test paths in one partition, a compile, dialyzer, credo, a light
+  self-test, a browser or install proof, an image suite or build, a
+  release boot. Four of those run side by side, each on its own quarter's
+  processors, which it is told as `HEAVY_CHECK_CPUS` for the containers it
+  starts. Checks start in the order they queued, none past an earlier
+  one, and `scripts/heavy-check.sh --status` shows who holds which
+  quarters and who waits.
 - `tests/load-check/run.sh` measures whether each check still passes, and
   how much slower it runs, on a quarter of the host's cores beside busy
   neighbours or a second copy of itself. It takes the whole machine for
   hours: `tests/load-check/run.sh -n` prints the plan and its time, `-s`,
   `-c` and `-r` bound a run to subjects, conditions and rounds, and
   `scripts/heavy-check.sh -t 28800 -- tests/load-check/run.sh` runs it,
-  again whenever the host, its subject table or the lanes change
+  again whenever the host, its subject table or the quarters change
   (`tests/load-check/README.md`).
 - Local runs take the Locus and app images from `scripts/image.sh locus`
   and `scripts/image.sh app`, which tag each by a hash of its inputs, so

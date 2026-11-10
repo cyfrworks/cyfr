@@ -8,18 +8,16 @@
 # Runs each subject of its table on quarters of this host's cores, busy,
 # beside a copy of itself and on the whole machine, and reports what
 # passed; README.md says what it measures and what its answer decides. It
-# runs only in scripts/heavy-check.sh's exclusive lane
-# (HEAVY_CHECK_HELD=exclusive) and refuses with 64 in any other. -n prints
-# the plan, each run's processors and the expected time, and runs nothing,
-# in any lane. -s picks subjects (all), -c conditions (busy,pair,whole,alone),
+# runs only on all four of scripts/heavy-check.sh's quarters
+# (HEAVY_CHECK_HELD=4) and refuses with 64 on fewer. -n prints the plan,
+# each run's processors and the expected time, and runs nothing, anywhere. -s picks subjects (all), -c conditions (busy,pair,whole,alone),
 # -r rounds (1), -o a new or empty directory for the report (a fresh
 # /tmp/cyfr-evidence.load-check.XXXXXX).
 #
-# Quarters: the online processors (LOAD_CHECK_CPU_ROOT, default
-# /sys/devices/system/cpu) group into whole cores, one per
-# thread_siblings_list, ordered by their lowest processor; the first 4k of
-# them, k the cores divided by four, make four quarters of k cores in that
-# order. Every command runs under `taskset -c` on its processors.
+# Quarters: the ones scripts/heavy-check.sh places checks on, cut by
+# scripts/lib/quarters.sh from LOAD_CHECK_CPU_ROOT (default
+# /sys/devices/system/cpu). Every command runs under `taskset -c` on its
+# processors.
 #
 # The table, tests/load-check/subjects.tsv (LOAD_CHECK_SUBJECTS names
 # another): nine fields separated by single tabs; # lines and blank lines
@@ -75,7 +73,7 @@
 # (FAILS BUSY: it failed busy or beside its copy and passed alone), a run
 # was void, a prep failed or the clean-up left something; 69 when nothing
 # failed but a subject was skipped; before any work, 64 on usage or
-# outside the exclusive lane, 65 for a bad table, and 69 without Bash 5,
+# on fewer than four quarters, 65 for a bad table, and 69 without Bash 5,
 # taskset, four whole cores, git, python3 or pgrep, or when a prep, load or
 # image row's precondition fails; 130, 143 and 129 on INT, TERM and HUP.
 #
@@ -114,8 +112,8 @@ for c in "${conds[@]}"; do
   case $c in busy|pair|whole|alone) CHOICE[$c]=1 ;; *) refuse 64 "no condition is called '$c': busy, pair, whole or alone" ;; esac
 done
 chosen() { [ -n "${CHOICE[$1]:-}" ]; }
-if ! $DRY && [ "${HEAVY_CHECK_HELD:-}" != exclusive ]; then
-  refuse 64 'it takes the whole host: run it under scripts/heavy-check.sh without -s or -p (or with -n for the plan alone)'
+if ! $DRY && [ "${HEAVY_CHECK_HELD:-}" != 4 ]; then
+  refuse 64 'it takes the whole host: run it under scripts/heavy-check.sh on all four quarters, without -q 1 (or with -n for the plan alone)'
 fi
 [ "${BASH_VERSINFO[0]}" -ge 5 ] || refuse 69 "it needs Bash 5 or later, this is $BASH_VERSION"
 { command -v taskset && taskset -p "$$"; } >/dev/null 2>&1 ||
@@ -128,6 +126,8 @@ ROOT=$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null) && ROOT=$(cd "$ROOT
 . "$ROOT/scripts/lib/contain.sh" || refuse 69 'cannot load scripts/lib/contain.sh'
 # shellcheck source=../../scripts/lib/run-names.sh
 . "$ROOT/scripts/lib/run-names.sh" || refuse 69 'cannot load scripts/lib/run-names.sh'
+# shellcheck source=../../scripts/lib/quarters.sh
+. "$ROOT/scripts/lib/quarters.sh" || refuse 69 'cannot load scripts/lib/quarters.sh'
 for tool in git python3 pgrep; do
   command -v "$tool" >/dev/null 2>&1 || refuse 69 "$tool is required"
 done
@@ -143,52 +143,11 @@ gate_parts() { if [ "$1" -ge 16 ]; then echo 8; else echo 4; fi; }
 
 # --- the quarters ------------------------------------------------------------
 
-# The processors a list such as 0-3,8 names, sorted and once each, one
-# space apart; 1 for a list that is not one.
-cpus_of() {
-  local part a b out=() IFS=,
-  for part in $1; do
-    case $part in
-      ''|*[!0-9-]*|-*|*-|*-*-*) return 1 ;;
-      *-*)
-        a=$((10#${part%-*})) b=$((10#${part#*-}))
-        [ "$a" -le "$b" ] || return 1
-        while [ "$a" -le "$b" ]; do out+=("$a"); a=$((a + 1)); done ;;
-      *) out+=("$((10#$part))") ;;
-    esac
-  done
-  [ "${#out[@]}" -gt 0 ] || return 1
-  printf '%s\n' "${out[@]}" | sort -nu | paste -sd' ' -
-}
-# The comma list of the processors in comma lists $@, sorted.
-joined() { printf '%s\n' "$@" | tr ', ' '\n\n' | sed '/^$/d' | sort -nu | paste -sd, -; }
-# How many processors comma list $1 holds.
-count() { local IFS=,; set -- $1; echo "$#"; }
-
 CPU_ROOT=${LOAD_CHECK_CPU_ROOT:-/sys/devices/system/cpu}
-online=
-read -r online 2>/dev/null <"$CPU_ROOT/online" && online=$(cpus_of "$online") ||
-  refuse 69 "cannot read the online processors in $CPU_ROOT/online"
-CORES=() seen=' '
-for cpu in $online; do
-  sib=
-  read -r sib 2>/dev/null <"$CPU_ROOT/cpu$cpu/topology/thread_siblings_list" && sib=$(cpus_of "$sib") ||
-    refuse 69 "cannot read processor $cpu's thread siblings in $CPU_ROOT/cpu$cpu/topology"
-  key=${sib// /,}
-  case $seen in *" $key "*) continue ;; esac
-  seen="$seen$key "
-  whole=true
-  for c in $sib; do case " $online " in *" $c "*) ;; *) whole=false ;; esac; done
-  if $whole; then CORES+=("$key"); fi
-done
-PER=$(( ${#CORES[@]} / 4 ))
-[ "$PER" -ge 1 ] || refuse 69 "this host has ${#CORES[@]} whole cores, and the check needs four, one for each quarter"
-QUARTER=()
-for q in 1 2 3 4; do QUARTER[$q]=$(joined "${CORES[@]:$(( (q - 1) * PER )):$PER}"); done
-LEFT=$(joined "${CORES[@]:$(( 4 * PER ))}")
-ALL=$(joined ${online// /,})
+quarters_cut "$CPU_ROOT" || refuse 69 "$QUARTERS_WHY"
+ALL=$QUARTERS_ALL
 # The processors of quarters $1 to $2.
-span() { local q lists=(); for ((q = $1; q <= $2; q++)); do lists+=("${QUARTER[$q]}"); done; joined "${lists[@]}"; }
+span() { local q lists=(); for ((q = $1; q <= $2; q++)); do lists+=("${QUARTER[$q]}"); done; quarters_list "${lists[@]}"; }
 
 # --- the table ---------------------------------------------------------------
 
@@ -321,9 +280,9 @@ human() {
 plan() {
   local i q c prep=0 warm=0 total=0 t w names
   echo "load check of $ROOT at $(git -C "$ROOT" rev-parse --short HEAD), $ROUNDS round(s) of ${CHOSEN//,/ }"
-  echo "processors: $ALL; ${#CORES[@]} whole cores, $PER in each quarter"
+  echo "processors: $ALL; ${#QUARTERS_CORES[@]} whole cores, $QUARTERS_PER in each quarter"
   for q in 1 2 3 4; do echo "quarter $q: ${QUARTER[$q]}"; done
-  echo "outside every quarter: ${LEFT:-none}"
+  echo "outside every quarter: ${QUARTERS_LEFT:-none}"
   for i in "${!P_NAME[@]}"; do prep=$((prep + P_EXPECT[i])); done
   for w in "${!WARMS[@]}"; do warm=$((warm + WARM_EXPECT[$w])); done
   if [ "${#ROLES[@]}" -gt 0 ]; then
@@ -533,7 +492,7 @@ launch() {
   J_DUE[$k]=$((SECONDS + $6))
   if ! contain_start -g "$GRACE" taskset -c "$3" \
       env -u MIX_BUILD_PATH -u MIX_DEPS_PATH -u CYFR_TEST_CORES -u CARGO_BUILD_JOBS -u ERL_FLAGS \
-      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="$3" LOAD_CHECK_OUT="$5" LOAD_CHECK_PARTS="$(gate_parts "$(count "$3")")" \
+      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="$3" LOAD_CHECK_OUT="$5" LOAD_CHECK_PARTS="$(gate_parts "$(quarters_count "$3")")" \
       "$BASH" -c "$LEADER" load-check-run "${WT[$role]}" "$7" >"$4" 2>&1 </dev/null; then
     J_PID[$k]=
     J_END[$k]=${J_START[$k]} J_STATUS[$k]=1 J_NOTE[$k]='could not start'
@@ -574,7 +533,7 @@ sample() {
       DOCKER_SEEN="$DOCKER_SEEN $name"
       allowed=$(docker inspect -f '{{.HostConfig.CpusetCpus}}' "$name" 2>/dev/null) || allowed='?'
       printf '%s\t%s\t%s\t%s\n' "$CONTEXT" "${J_LABEL[$i]}" "$name" "${allowed:-any processor}" >>"$OUT/docker.tsv"
-      if [ -n "$allowed" ] && [ "$(cpus_of "$allowed" 2>/dev/null)" != "$(cpus_of "${J_CPUS[$i]}")" ]; then
+      if [ -n "$allowed" ] && [ "$(quarters_cpus_of "$allowed" 2>/dev/null)" != "$(quarters_cpus_of "${J_CPUS[$i]}")" ]; then
         J_NOTE[$i]="${J_NOTE[$i]:+${J_NOTE[$i]} }outside container $name ($allowed)"
         printf '%s\t%s\tcontainer\t-\t%s\t%s\t%s\n' "$CONTEXT" "${J_LABEL[$i]}" "$name" "$allowed" "${J_CPUS[$i]}" >>"$OUT/masks.tsv"
       fi
@@ -643,7 +602,7 @@ start_worker() {
   W_LABEL[$k]="${base##*/} on quarter $quarter" W_CPUS[$k]=${QUARTER[$quarter]} W_FILE[$k]=$base.status W_PID[$k]=
   if ! contain_start -g "$GRACE" taskset -c "${QUARTER[$quarter]}" \
       env -u MIX_BUILD_PATH -u MIX_DEPS_PATH -u CYFR_TEST_CORES -u CARGO_BUILD_JOBS -u ERL_FLAGS \
-      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="${QUARTER[$quarter]}" LOAD_CHECK_OUT="$base.out" LOAD_CHECK_PARTS="$(gate_parts "$(count "${QUARTER[$quarter]}")")" \
+      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="${QUARTER[$quarter]}" LOAD_CHECK_OUT="$base.out" LOAD_CHECK_PARTS="$(gate_parts "$(quarters_count "${QUARTER[$quarter]}")")" \
       "$BASH" -c "$WORKER" load-check-worker "${WT[$role]}" "$base.status" "$@" >"$base.log" 2>&1 </dev/null; then
     BUSY_VOID="the busy load's ${W_LABEL[$k]} could not start"
     return 1

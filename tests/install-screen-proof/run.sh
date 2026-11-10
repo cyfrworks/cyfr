@@ -50,14 +50,14 @@
 # removes it, and scripts/janitor.sh's rule 1 removes a killed run's. The
 # base image is the host's cache and the proof image is shared, each made
 # by tests/install-screen-proof/prepare.sh, and this tree's server image
-# is shared too, made by scripts/image.sh --undated app, all outside any
-# lane before the run; without one the run exits 69, naming its command.
+# is shared too, made by scripts/image.sh --undated app, all outside the
+# queue before the run; without one the run exits 69, naming its command.
 # The guests' overlays are in the Docker volume ${PROOF_RUN_PREFIX}disk.
 #
 # Every name the run gives Docker begins with PROOF_RUN_PREFIX, which
 # scripts/heavy-check.sh sets; unset, it is scripts/lib/run-names.sh's prefix
-# with this script's pid. It is a proof-lane check:
-#   scripts/heavy-check.sh -p -t 3600 -- tests/install-screen-proof/run.sh
+# with this script's pid. It takes one quarter:
+#   scripts/heavy-check.sh -q 1 -t 3600 -- tests/install-screen-proof/run.sh
 #
 # Needs docker with the host's /dev/kvm, ssh, ssh-keygen, git, go, python3,
 # timeout, flock, getent, and the guest's network: Ubuntu's archive,

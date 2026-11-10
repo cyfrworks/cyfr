@@ -16,7 +16,7 @@ runs this proof; without `CYFR_RUN_DIR` the script says it did not run and
 why, and exits 0.
 
 ```bash
-CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -p -- tests/handle-proof/run.sh
+CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -q 1 -- tests/handle-proof/run.sh
 ```
 
 ## What runs
@@ -30,7 +30,7 @@ CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -p -- tests/handle-proof
 The model checks run independently with
 `node --test tests/handle-proof/models-test.mjs`. The PostgreSQL tamper
 helper's checks run with
-`scripts/heavy-check.sh -s -- bash tests/handle-proof/registry-test.sh`.
+`scripts/heavy-check.sh -q 1 -- bash tests/handle-proof/registry-test.sh`.
 
 The directory's rows are read from `directory.entries` in the registry's
 PostgreSQL. Their canonical entries, hashes, lengths and timestamps are
@@ -52,7 +52,7 @@ the scratch directory with the run's authority key and every token.
 `PROOF_RUN_PREFIX` prefixes every container's and volume's name. The one
 exception is the release: it is built through `tests/release-boot/release.sh`
 into the shared `_build/prod_release_boot_sqlite` with its reuse stamp,
-under heavy-check's exclusive slot, as every other release proof builds it.
+under the proof's own heavy-check, as every other release proof builds it.
 
 ## Steps
 

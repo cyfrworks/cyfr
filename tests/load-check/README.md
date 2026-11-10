@@ -2,16 +2,15 @@
 
 `run.sh` measures whether a check still proves what it proves when it
 runs on a quarter of this host's cores with the other quarters busy, or
-beside a second copy of itself. Its answer decides whether the lanes of
-`scripts/heavy-check.sh` give way to four placed quarters:
+beside a second copy of itself. `scripts/heavy-check.sh` places each
+check on one of the same four quarters or on all four, and the answer
+decides what each check takes:
 
-- the quarters replace the lanes when no subject fails busy that passes
-  alone;
-- a whole-machine check takes two quarters when its busy run there takes
-  less than about 2.5 times its run on the whole machine, and four
-  otherwise;
-- a subject that fails busy is fixed at its owner, or takes four quarters
-  until it is.
+- a whole-machine check may take two quarters when its busy run there
+  takes less than about 2.5 times its run on the whole machine, and keeps
+  four otherwise;
+- a subject that fails busy and passes alone is fixed at its owner, or
+  takes four quarters until it is.
 
 The header of `run.sh` is the contract: the options, the table's columns,
 the order of the runs, the statuses, the exits and the clean-up. This page
@@ -19,8 +18,8 @@ says how to run it and why the table holds what it holds.
 
 ## Running it
 
-It takes the whole machine, so it runs only in heavy-check's exclusive
-lane and refuses with 64 anywhere else:
+It takes the whole machine, so it runs only on all four of heavy-check's
+quarters and refuses with 64 anywhere else:
 
 ```bash
 tests/load-check/run.sh -n                      # the plan and its time, anywhere
@@ -46,7 +45,7 @@ scripts/heavy-check.sh -t 86400 -- tests/load-check/run.sh -r 3
 - The busy load needs the PostgreSQL server the test runs use and a
   Docker daemon; without either the check refuses with 69 before any work.
 
-Run it again when the host, the table or the lanes change. Its report
+Run it again when the host, the table or the quarters change. Its report
 goes in the pull request that acts on it.
 
 ## The runs
@@ -111,7 +110,7 @@ this check does not hold.
 
 `subjects.tsv` is the one list, each subject by its own entry point as the
 workflow step or its README runs it. Its `expect` column is the median
-time of the passing runs this host recorded in today's lanes, doubled for
+time of the passing runs this host recorded before the quarters, doubled for
 the four subjects that also run on the whole machine.
 
 | Subjects | Quarters | Also | Warmed |

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Prepares the install-and-screen proof on this host outside any queue
-# lane, so a run holding the proof lane neither downloads nor builds:
+# Prepares the install-and-screen proof on this host outside the queue,
+# so a run holding its quarter neither downloads nor builds:
 #
 #   tests/install-screen-proof/prepare.sh             the base image, then the proof image
 #   tests/install-screen-proof/prepare.sh --tag-only  prints the proof image's tag
@@ -11,7 +11,7 @@
 #
 # Run it before tests/install-screen-proof/run.sh, which refuses (69)
 # without the base image's cache or the proof image. It runs on the host
-# itself and takes no lane: it downloads and builds, and every byte it
+# itself and queues for nothing: it downloads and builds, and every byte it
 # keeps is verified or named by the hash of its inputs.
 #
 # The base image. It downloads the pinned release's SHA256SUMS and
@@ -142,7 +142,7 @@ if [ "$MODE" = use ]; then
   exec 9>>"$state/$h.lock"
   flock 9
   if [ "$(docker image inspect -f '{{index .Config.Labels "works.cyfr.image-inputs"}}' "$tag" 2>/dev/null)" != "$h" ]; then
-    echo "install-screen proof: the proof image $tag is not built; run tests/install-screen-proof/prepare.sh first, outside any lane" >&2
+    echo "install-screen proof: the proof image $tag is not built; run tests/install-screen-proof/prepare.sh first, outside the queue" >&2
     exit 69
   fi
   printf '%s\n' "$USE_PID" >>"$state/$h.uses"

@@ -58,14 +58,14 @@ for f in apps/arca/lib/arca/x.ex apps/arca/test/arca/x_test.exs apps/cyfr/lib/cy
   put "$repo/$f" "$f"
 done
 toy_rows=(
-  'handoff|format|scoped|60|always|git grep -q . -- README.md'
-  'handoff|compile|scoped|60|apps/**,config/**|echo compile'
-  'handoff|dialyzer|scoped|60|apps/*/lib/**|echo dialyzer'
-  'handoff|arca|scoped|60|apps/arca/**|echo arca'
-  'handoff|tests|scoped|60|tests|printf "%s\n" $STAGE_TESTS >"$STAGE_LOGDIR/tests.txt"'
-  'handoff|env|proof|60|always|printf "%s;%s;%s;%s\n" "$STAGE" "$STAGE_TESTS" "$STAGE_LOGDIR" "${PROOF_RUN_PREFIX-unset}" >"$STAGE_LOGDIR/env.txt"'
-  'handoff|notes|exclusive|60|notes/**|echo notes'
-  'release|close|exclusive|60|always|echo close'
+  'handoff|format|1|60|always|git grep -q . -- README.md'
+  'handoff|compile|1|60|apps/**,config/**|echo compile'
+  'handoff|dialyzer|1|60|apps/*/lib/**|echo dialyzer'
+  'handoff|arca|1|60|apps/arca/**|echo arca'
+  'handoff|tests|1|60|tests|printf "%s\n" $STAGE_TESTS >"$STAGE_LOGDIR/tests.txt"'
+  'handoff|env|4|60|always|printf "%s;%s;%s;%s\n" "$STAGE" "$STAGE_TESTS" "$STAGE_LOGDIR" "${PROOF_RUN_PREFIX-unset}" >"$STAGE_LOGDIR/env.txt"'
+  'handoff|notes|4|60|notes/**|echo notes'
+  'release|close|4|60|always|echo close'
 )
 table "${toy_rows[@]}"
 git -C "$repo" add -A
@@ -88,7 +88,7 @@ framed() { # NAME STATUS: the run's stdout is framed by its own pid
 }
 reset_tree() { git -C "$repo" checkout -q -- . && git -C "$repo" clean -qfd -e scripts; }
 
-begin 'every row of a stage runs or is skipped by its when, in its lane, with the stage environment'
+begin 'every row of a stage runs or is skipped by its when, on its quarters, with the stage environment'
 reset_tree
 printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/a.ex"
 stage run -l "$S/logs-run" handoff
@@ -105,9 +105,9 @@ grep -qx 'compile' "$S/logs-run/compile.log" || fail 'a row log does not hold it
 # A row queues with its hold alone: its wait for the host is heavy-check's
 # default queue deadline, which tests/heavy-check-test.sh holds above every
 # hold of the real table.
-grep -qx -- '-s -t 60 -- bash -c echo compile' "$STUB_CALLS" || fail "a scoped row did not queue -s -t 60: $(cat "$STUB_CALLS")"
-grep -qx -- '-s -t 60 -- bash -c git grep -q . -- README.md' "$STUB_CALLS" || fail 'the format row did not queue -s'
-grep -q -- '^-p -t 60 -- bash -c printf' "$STUB_CALLS" || fail 'a proof row did not queue -p'
+grep -qx -- '-q 1 -t 60 -- bash -c echo compile' "$STUB_CALLS" || fail "a row on one quarter did not queue -q 1 -t 60: $(cat "$STUB_CALLS")"
+grep -qx -- '-q 1 -t 60 -- bash -c git grep -q . -- README.md' "$STUB_CALLS" || fail 'the format row did not queue -q 1'
+grep -q -- '^-q 4 -t 60 -- bash -c printf' "$STUB_CALLS" || fail 'a row on four quarters did not queue -q 4'
 grep -qF "stage: handoff logs in $S/logs-run" "$S/run.err" || fail 'the log directory is not named'
 
 begin 'the changed set holds deleted paths for the rows, and the touched tests hold only tests that exist'
@@ -172,7 +172,7 @@ stage spaced2 -l "$S/logs-spaced2" handoff
 reset_tree
 
 begin 'a row whose queue deadline passes fails, and the rows after it still run'
-table "${toy_rows[@]}" 'release|queue|scoped|60|always|echo #queue-deadline' 'release|after|scoped|60|always|echo after'
+table "${toy_rows[@]}" 'release|queue|1|60|always|echo #queue-deadline' 'release|after|1|60|always|echo after'
 stage deadline -l "$S/logs-deadline" release
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
 framed deadline 1
@@ -186,7 +186,7 @@ printf '# edit\n' >>"$repo/notes/today.md"
 stage dry -n handoff
 [ "$rc" = 0 ] || fail "exited $rc"
 framed dry 0
-grep -qxF 'would run notes (exclusive): echo notes' "$S/dry.out" || fail "$(cat "$S/dry.out")"
+grep -qxF 'would run notes (4 quarters): echo notes' "$S/dry.out" || fail "$(cat "$S/dry.out")"
 grep -qxF 'would skip compile: no changed path matches apps/**,config/**' "$S/dry.out" || fail "$(cat "$S/dry.out")"
 [ ! -s "$STUB_CALLS" ] || fail 'a dry run queued a row'
 reset_tree
@@ -200,19 +200,21 @@ refused() { # LINE WHY ROW: the toy table with ROW appended at line LINE
   [ ! -s "$STUB_CALLS" ] || fail "\`$3\`: a row ran before the refusal"
   framed refused 65
 }
-refused 9 "no stage is called 'deploy'" 'deploy|x|scoped|60|always|echo x'
-refused 9 "no stage is called 'save handoff'" 'save handoff|x|scoped|60|always|echo x'
-refused 9 "no lane is called 'fast'" 'nightly|x|fast|60|always|echo x'
-refused 9 "'apps/**,,config/**' is not always, tests or comma-separated globs" 'handoff|x|scoped|60|apps/**,,config/**|echo x'
-refused 9 "'apps/** config/**' is not always, tests or comma-separated globs" 'handoff|x|scoped|60|apps/** config/**|echo x'
-refused 9 'handoff has a second check called compile' 'handoff|compile|scoped|60|always|echo x'
-refused 9 'only save and handoff rows take tests' 'release|x|scoped|60|tests|echo x'
-refused 9 'only save and handoff rows take globs' 'nightly|x|scoped|60|apps/**|echo x'
-refused 9 "no lane is called 'none'" 'handoff|x|none|-|always|git grep x'
-refused 9 "the hold '-' is not seconds" 'handoff|x|scoped|-|always|echo x'
-refused 9 "the check 'Compile' is not [a-z0-9-]+" 'handoff|Compile|scoped|60|always|echo x'
-refused 9 'a row has six fields separated by single tabs' 'handoff|x|scoped|60|echo x'
-refused 9 'a field is empty' 'handoff||scoped|60|always|echo x'
+refused 9 "no stage is called 'deploy'" 'deploy|x|1|60|always|echo x'
+refused 9 "no stage is called 'save handoff'" 'save handoff|x|1|60|always|echo x'
+refused 9 "a row takes 1 or 4 quarters, not '2'" 'nightly|x|2|60|always|echo x'
+refused 9 "a row takes 1 or 4 quarters, not 'scoped'" 'nightly|x|scoped|60|always|echo x'
+refused 9 "a row takes 1 or 4 quarters, not 'exclusive'" 'nightly|x|exclusive|60|always|echo x'
+refused 9 "'apps/**,,config/**' is not always, tests or comma-separated globs" 'handoff|x|1|60|apps/**,,config/**|echo x'
+refused 9 "'apps/** config/**' is not always, tests or comma-separated globs" 'handoff|x|1|60|apps/** config/**|echo x'
+refused 9 'handoff has a second check called compile' 'handoff|compile|1|60|always|echo x'
+refused 9 'only save and handoff rows take tests' 'release|x|1|60|tests|echo x'
+refused 9 'only save and handoff rows take globs' 'nightly|x|1|60|apps/**|echo x'
+refused 9 "a row takes 1 or 4 quarters, not 'none'" 'handoff|x|none|-|always|git grep x'
+refused 9 "the hold '-' is not seconds" 'handoff|x|1|-|always|echo x'
+refused 9 "the check 'Compile' is not [a-z0-9-]+" 'handoff|Compile|1|60|always|echo x'
+refused 9 'a row has six fields separated by single tabs' 'handoff|x|1|60|echo x'
+refused 9 'a field is empty' 'handoff||1|60|always|echo x'
 table "${toy_rows[@]}"
 
 begin 'a table that is missing or unreadable is refused with 65 naming it, and a stage is named whole'
@@ -234,9 +236,9 @@ status=0; (cd "$repo" && scripts/stage.sh -n 'save handoff') >"$S/two.out" 2>&1 
 [ "$status" = 64 ] || fail "the stage 'save handoff' gave $status"
 
 begin 'every exit is framed: 64 inside a heavy-check and on usage, and 69 outside a checkout'
-for lane in scoped proof exclusive; do
-  rc=0; (cd "$repo" && HEAVY_CHECK_HELD=$lane scripts/stage.sh -n handoff) >"$S/held.out" 2>"$S/held.err" || rc=$?
-  [ "$rc" = 64 ] && grep -qF 'run this outside scripts/heavy-check.sh' "$S/held.err" || fail "inside a $lane heavy-check: $rc"
+for held in 1 4; do
+  rc=0; (cd "$repo" && HEAVY_CHECK_HELD=$held scripts/stage.sh -n handoff) >"$S/held.out" 2>"$S/held.err" || rc=$?
+  [ "$rc" = 64 ] && grep -qF 'run this outside scripts/heavy-check.sh' "$S/held.err" || fail "inside a heavy-check on $held: $rc"
   framed held 64
 done
 rc=0; (cd "$repo" && scripts/stage.sh -x handoff) >"$S/usage.out" 2>/dev/null || rc=$?
@@ -251,7 +253,7 @@ status=0; (cd "$repo" && scripts/stage.sh -n deploy) >/dev/null 2>&1 || status=$
 [ "$status" = 64 ] || fail "an unknown stage gave $status"
 
 begin 'INT and TERM stop the running row and end with a frame'
-table "${toy_rows[@]}" 'release|slow|scoped|60|always|exec sleep 6107'
+table "${toy_rows[@]}" 'release|slow|1|60|always|exec sleep 6107'
 for sig in INT:130 TERM:143; do
   name=${sig%%:*} want=${sig##*:}
   : >"$STUB_CALLS"
@@ -368,18 +370,18 @@ printf '# header\n1.5\tapps/a_test.exs\n0.4\tapps/b_test.exs\n3.0\tapps/c_test.e
 [ "$(cat "$S/wroot/scripts/test-partition-weights.tsv")" = "$(printf '# header\n1.5\tapps/a_test.exs\n0.2\tapps/b_test.exs')" ] ||
   fail 'the tracked table changed'
 
-begin 'the real table reads whole, no handoff row is exclusive, and every self-test a handoff row runs is one a pull-request workflow runs'
+begin 'the real table reads whole, no save or handoff row takes more than one quarter, and every self-test a handoff row runs is one a pull-request workflow runs'
 status=0; (cd "$ROOT" && scripts/stage.sh -n release) >"$S/real.out" 2>"$S/real.err" || status=$?
 [ "$status" = 0 ] || fail "the real table was refused: $(cat "$S/real.err")"
-grep -qF 'would run close (exclusive): scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"' "$S/real.out" || fail "$(cat "$S/real.out")"
-# What needs the whole machine is the pull request's run's: the handoff
-# queues in the scoped and proof lanes alone.
-exclusive_rows() { # TABLE: prints each handoff row of TABLE in the exclusive lane
-  awk -F'\t' '!/^#/ && $1 == "handoff" && $3 == "exclusive" { print $2 }' "$1"
+grep -qF 'would run close (4 quarters): scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"' "$S/real.out" || fail "$(cat "$S/real.out")"
+# What needs the whole machine is the pull request's run's: the save and
+# handoff rows each queue for one quarter.
+whole_rows() { # TABLE: prints each save or handoff row of TABLE on more than one quarter
+  awk -F'\t' '!/^#/ && ($1 == "save" || $1 == "handoff") && $3 != "1" { print $1 "/" $2 }' "$1"
 }
-[ -z "$(exclusive_rows "$ROOT/scripts/stages.tsv")" ] || fail "a handoff row is exclusive: $(exclusive_rows "$ROOT/scripts/stages.tsv" | tr '\n' ' ')"
-{ cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe-proof\tproof\t60\talways\ttrue\nhandoff\tprobe\texclusive\t60\talways\ttrue\n'; } >"$S/stages-exclusive.tsv"
-[ "$(exclusive_rows "$S/stages-exclusive.tsv")" = probe ] || fail "an exclusive handoff row was not caught alone: $(exclusive_rows "$S/stages-exclusive.tsv")"
+[ -z "$(whole_rows "$ROOT/scripts/stages.tsv")" ] || fail "a row takes the whole machine: $(whole_rows "$ROOT/scripts/stages.tsv" | tr '\n' ' ')"
+{ cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe-one\t1\t60\talways\ttrue\nhandoff\tprobe\t4\t60\talways\ttrue\nsave\tprobe\t4\t60\talways\ttrue\nrelease\tprobe\t4\t60\talways\ttrue\n'; } >"$S/stages-whole.tsv"
+[ "$(whole_rows "$S/stages-whole.tsv" | tr '\n' ' ')" = 'handoff/probe save/probe ' ] || fail "the whole-machine rows were not caught alone: $(whole_rows "$S/stages-whole.tsv")"
 guard() { # TABLE [WORKFLOWS]: prints each self-test a handoff row of TABLE runs that no pull-request workflow runs
   python3 -I - "${2:-$ROOT/.github/workflows}" "$1" <<'PY'
 import glob, os, re, sys, yaml
@@ -528,7 +530,7 @@ left=$(guard "$ROOT/scripts/stages.tsv")
 # a shell one, and a Python one run with --self-check alone or with no
 # argument; a Python script given its image is no self-test.
 probe_table() { # COMMAND: the real table with one more handoff row running COMMAND
-  { cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe\tscoped\t60\talways\t%s\n' "$1"; } >"$S/stages-probe.tsv"
+  { cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe\t1\t60\talways\t%s\n' "$1"; } >"$S/stages-probe.tsv"
 }
 probe_table 'bash tests/stage-probe-test.sh'
 [ "$(guard "$S/stages-probe.tsv")" = tests/stage-probe-test.sh ] || fail "a row running a self-test no workflow runs was not caught: $(guard "$S/stages-probe.tsv")"
@@ -538,19 +540,19 @@ probe_table 'python3 -I tests/stage-probe.py --self-check && python3 -I tests/st
 probe_table 'python3 -I tests/stage-probe.py cyfr-locus:review'
 [ -z "$(guard "$S/stages-probe.tsv")" ] || fail "an image suite given its image was counted as a self-test: $(guard "$S/stages-probe.tsv")"
 # The roster tests are application tests, which the guard does not read:
-# their row runs always, whatever a change touches, in the scoped lane.
-rosters_held() { # TABLE: answers whether its rosters row runs both tests always and scoped
-  awk -F'\t' '$1 == "handoff" && $2 == "rosters" && $3 == "scoped" && $5 == "always" &&
+# their row runs always, whatever a change touches, on one quarter.
+rosters_held() { # TABLE: answers whether its rosters row runs both tests always on one quarter
+  awk -F'\t' '$1 == "handoff" && $2 == "rosters" && $3 == "1" && $5 == "always" &&
     index($6, "apps/cyfr/test/cyfr/restore_order_test.exs") && index($6, "apps/cyfr/test/cyfr/cross_language_drift_test.exs") { held = 1 }
     END { exit !held }' "$1"
 }
-rosters_held "$ROOT/scripts/stages.tsv" || fail 'no handoff row runs the two roster tests always and scoped'
+rosters_held "$ROOT/scripts/stages.tsv" || fail 'no handoff row runs the two roster tests always on one quarter'
 grep -v $'^handoff\trosters\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
 ! rosters_held "$S/stages-short.tsv" || fail 'a table without the rosters row was not caught'
 sed $'/^handoff\trosters\t/s/\talways\t/\ttests\t/' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
 ! rosters_held "$S/stages-short.tsv" || fail 'a rosters row that does not run always was not caught'
-sed $'/^handoff\trosters\t/s/\tscoped\t/\texclusive\t/' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
-! rosters_held "$S/stages-short.tsv" || fail 'a rosters row in another lane was not caught'
+sed $'/^handoff\trosters\t/s/\t1\t/\t4\t/' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
+! rosters_held "$S/stages-short.tsv" || fail 'a rosters row on four quarters was not caught'
 # A workflow runs a self-test where the shell runs it: not in a comment, an
 # echo's arguments or a heredoc's body, and a real command with a comment
 # after it, or after &&, does. An image suite given its image does not run

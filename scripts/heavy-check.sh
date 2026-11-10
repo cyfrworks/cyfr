@@ -3,46 +3,54 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # Run one check on the verification host:
-#   scripts/heavy-check.sh [-s | -p] [-t HOLD] [-w QUEUE] [--] command [args]
+#   scripts/heavy-check.sh [-q 1|4] [-t HOLD] [-w QUEUE] [--] command [args]
 #   scripts/heavy-check.sh --status
 #
-# It needs Bash 4.1 or later and flock(1) (util-linux). macOS ships Bash
-# 3.2: install a current one beside flock (brew install bash flock).
+# It needs Bash 4.1 or later and flock(1) (util-linux), and places checks
+# with taskset(1), also util-linux. macOS ships Bash 3.2: install a current
+# one beside flock (brew install bash flock); it has no taskset, so its
+# checks are counted and not placed (below).
 #
-# The host's checks queue here and nowhere else, in three lanes.
-#   exclusive  (default) a gate, a close, a full or multi-partition suite,
-#              a timing measurement or a shell harness self-test. It
-#              sizes itself to the whole machine and its tests carry
-#              timing bounds, so it runs alone.
-#   proof      (-p) a browser or release proof, a release boot, an image
-#              suite, the compose and setup proofs, an image build. One
-#              runs at a time, beside at most PROOF_SCOPED scoped checks,
-#              never beside an exclusive one.
-#   scoped     (-s) named test paths in one partition, a compile,
-#              dialyzer, credo or a light self-test. Up to three run side
-#              by side, at most PROOF_SCOPED of them while a proof runs,
-#              each on a third of the cores. The command's own grammar
-#              decides what fits its lane: it sees HEAVY_CHECK_HELD and
-#              refuses what does not.
-# One arrival queue serves every lane. A check arrives at the instant its
+# The host's checks queue here and nowhere else. The machine's cores are
+# cut into four equal quarters (scripts/lib/quarters.sh), and a check takes
+# one or all four:
+#   4  (default) a gate, a close, a full or multi-partition suite, go test
+#      -race, a harness self-test that needs the machine, the load check,
+#      a timing measurement or the compose proof, whose shipped compose
+#      file publishes a fixed port. It sizes itself to the whole machine,
+#      or its tests carry timing bounds, so it runs alone.
+#   1  (-q 1) named test paths in one partition, a compile, dialyzer,
+#      credo, a light self-test, a browser, release or install proof, an
+#      image suite or build, a release boot, the janitor. Four run side by
+#      side, each on a quarter of its own. The command's own grammar
+#      decides what fits one quarter: it sees HEAVY_CHECK_HELD and refuses
+#      what does not.
+# Any other count is refused with 64, two included: no check takes half
+# the machine.
+# The machine is the lock file itself, held exclusively by a check on four
+# quarters and shared by a check on one, which also holds one of the four
+# quarter locks beside it exclusively. A check takes every quarter it asks
+# for at once or none: one that finds too few gives back what it took and
+# waits again.
+# One arrival queue serves every check. A check arrives at the instant its
 # ticket's clock is read, immediately before the ticket appears, and
 # arrival order is the order of those instants: the order in which the
 # tickets are published, with two exceptions. A check stopped between the
 # clock's reading and its ticket's appearing keeps its earlier arrival, so
 # a check that published meanwhile can run after it; and two checks whose
 # tickets appear in the same instant may each see no earlier ticket, and
-# the lanes' own locks decide between them. A check starts only when no
-# check that arrived before it still waits, a stopped or dead waiter
-# apart, and its lane has room; it never waits for a check that arrived
-# after it. There is no lock over admission: a check never waits on
-# another waiter's admission, only on earlier tickets and on the lanes'
-# locks.
-# A holder stopped after it took its lane keeps the lane until it is
+# the locks decide between them. A check starts only when no check that
+# arrived before it still waits, a stopped or dead waiter apart, and
+# enough quarters are free; it never waits for a check that arrived after
+# it, and never starts past one that arrived before it, whatever either
+# asks for. There is no lock over admission: a check never waits on
+# another waiter's admission, only on earlier tickets and on the locks.
+# A holder stopped after it took its quarters keeps them until it is
 # continued or ends; --status shows it held and stopped.
 #
-# Inside a check, a check runs its command in place: any under an
-# exclusive one; -p and -s under a proof; -s under a scoped one. Any other
-# is refused with 64.
+# Inside a check, a check runs its command in place when it asks for no
+# more quarters than its parent holds: any under a check on four, -q 1
+# under a check on one. More is refused with 64.
 #
 # HOLD (default 2700 s) bounds how long the command may keep the host:
 # at the deadline it is stopped and the exit is 124. A repeat recipe
@@ -55,41 +63,59 @@
 # HUP, INT and TERM stop the command and exit 129, 130 and 143. Otherwise
 # the exit is the command's own.
 #
-# The command's environment gains HEAVY_CHECK_HELD (its lane) and
-# CONTAIN_REGISTRY, and PROOF_RUN_PREFIX when the caller set none: the
-# prefix scripts/lib/run-names.sh gives the worktree holding the caller's
-# working directory, else the checkout this script lives in, with this
-# script's pid. A scoped command also gets its slot's share n of the cores
-# (cores / 3, at least 2) as CYFR_TEST_CORES=n, CARGO_BUILD_JOBS=n and
-# `+S n:n` after the caller's own ERL_FLAGS, so every BEAM, cargo build
-# and Node runner it starts is bounded by it.
+# Placement. The command runs under `taskset -c` on its quarter's
+# processors, or on every online processor when it holds all four (on a
+# host whose whole cores do not divide by four, the cores past the four
+# quarters are the whole machine's), and every process it starts inherits
+# them. Where taskset cannot place a process, or the host has fewer than
+# four whole cores, quarters are counted and not placed: the command runs
+# where the system puts it, and the running line and the holder's record
+# and --status line say so. HEAVY_CHECK_CPU_ROOT (default
+# /sys/devices/system/cpu) names the processor directory read.
+#
+# The command's environment gains HEAVY_CHECK_HELD (the quarters it holds,
+# 1 or 4), HEAVY_CHECK_CPUS (its processors, in the form docker's
+# --cpuset-cpus takes) when it is placed, and loses one its caller set when
+# it is not, and gains CONTAIN_REGISTRY, and PROOF_RUN_PREFIX when the
+# caller set none: the prefix scripts/lib/run-names.sh gives the worktree
+# holding the caller's working directory, else the checkout this script
+# lives in, with this script's pid. A command on one quarter also gets the
+# count n of its processors (placed) or a quarter of the machine's, at
+# least 1 (not placed), as CYFR_TEST_CORES=n, CARGO_BUILD_JOBS=n and
+# `+S n:n` after the caller's own ERL_FLAGS, so every BEAM, cargo build and
+# Node runner it starts is bounded by it.
 #
 # The command runs contained (scripts/lib/contain.sh) as the leader of a
 # session of its own, without the lock descriptors, and every session
-# started under it is listed in a registry this script owns. Before the
-# host is handed on, the command's session and every session in the
+# started under it is listed in a registry this script owns. Before its
+# quarters are handed on, the command's session and every session in the
 # registry are stopped, within HEAVY_CHECK_GRACE (default 300 s) plus
 # 15 s each. If this script is killed outright, the watchdog keeps the
-# lane until the same sessions are stopped. A process that outlives KILL
-# turns a 0 into 1: this script waits up to 60 s more for it, its last
-# stderr line names any that remain, and the watchdog then keeps the lane
-# for up to HEAVY_CHECK_GRACE plus 15 s more while it stops them again.
+# quarters until the same sessions are stopped. A process that outlives
+# KILL turns a 0 into 1: this script waits up to 60 s more for it, its last
+# stderr line names any that remain, and the watchdog then keeps the
+# quarters for up to HEAVY_CHECK_GRACE plus 15 s more while it stops them
+# again.
 #
-# Each holder writes its lane's record, one line, for example
-#   pid=41237 mode=scoped since=2026-10-28T21:14:03+0000 hold=2700s group=41251 watchdog=41250 checkout=/home/x/cyfr command=mix dialyzer
-# where group is the command's process group and watchdog its watchdog's
-# pid; each waiter's ticket holds pid=, mode=, queued=, checkout= and
-# command= the same way. A run is finished when no process is left in its
-# group and its watchdog has exited. The record is removed at the exit
-# only when the registry ended empty and the run is finished, both checked;
-# otherwise it stays until the lane's next holder replaces it, which
-# happens only once the watchdog has released the lane, so a record names
-# its run until the run is finished.
+# Each holder writes a record, one line, for example
+#   pid=41237 quarters=1 cpus=2,3,10,11 since=2026-10-28T21:14:03+0000 hold=2700s group=41251 watchdog=41250 checkout=/home/x/cyfr command=mix dialyzer
+# in LOCK.holder on four quarters and LOCK.quarter<i>.holder on quarter i,
+# where cpus is its processors or `unplaced`, group the command's process
+# group and watchdog its watchdog's pid; each waiter's ticket holds pid=,
+# quarters=, queued=, checkout= and command= the same way.
+# scripts/janitor.sh reads the pid, group and watchdog of every
+# LOCK.holder and LOCK.*.holder. A run is finished when no process is left
+# in its group and its watchdog has exited. The record is removed at the
+# exit only when the registry ended empty and the run is finished, both
+# checked; otherwise it stays until its quarters' next holder replaces it,
+# which happens only once the watchdog has released them, so a record
+# names its run until the run is finished.
 #
-# --status prints, and exits 0: a `held` line for each holder whose run is
-# not finished, with `state=stopped` after its pid while that pid is
-# stopped, then a `waiting <n>` line for each live waiter in queue order,
-# or the word `idle` when there are neither.
+# --status prints, and exits 0: a `held quarters=<n> pid=<pid> cpus=...`
+# line for each holder whose run is not finished, with `state=stopped`
+# after its pid while that pid is stopped, then a `waiting <i>
+# quarters=<n> pid=...` line for each live waiter in queue order, or the
+# word `idle` when there are neither.
 #
 # Stdout carries two lines that frame the run, after option parsing:
 # `_START=<pid>` first and `_EXIT=<pid> <status>` last, on its own line,
@@ -102,27 +128,25 @@
 # Lines beginning `==> heavy-check:` on stderr say what the check is
 # queued behind, when it starts and how it ended; scripts/await-task.sh
 # reads them so a wait's deadline does not run while the check is queued.
-# A queued check says `queued (<mode>) <n> of <m> waiting, behind:` with
-# the records of the runs that hold a lane, if any, as soon as it waits,
-# and again every 60 seconds with its place then. A `NAME=value` word of
-# the command is shown as `NAME=…` there, in the records and in --status, a URL's userinfo in any word as
-# `[redacted]`, and a tab or newline in a word as \t or \n.
+# A queued check says `queued (<n> quarter[s]) <i> of <m> waiting,
+# behind:` with the records of the runs that hold quarters, if any, as
+# soon as it waits, and again every 60 seconds with its place then; a
+# check that starts says `running (<n> quarter[s], processors <list>)`,
+# or `not placed: <why>` in place of the processors. A `NAME=value` word
+# of the command is shown as `NAME=…` there, in the records and in
+# --status, a URL's userinfo in any word as `[redacted]`, and a tab or
+# newline in a word as \t or \n.
 set -uo pipefail
 
-# 1 when the load check holds every timing bound with a scoped slot beside
-# a proof (docs/plans/verification-flow.md, D4), else 0.
-PROOF_SCOPED=1
-
-MODE=exclusive; HOLD=2700; QUEUE=14400; STATUS=false
-usage() { echo "usage: $0 [-s | -p] [-t HOLD_SECONDS] [-w QUEUE_SECONDS] [--] command [args] | $0 --status"; }
+QUARTERS=4; HOLD=2700; QUEUE=14400; STATUS=false
+asked=false
+usage() { echo "usage: $0 [-q 1|4] [-t HOLD_SECONDS] [-w QUEUE_SECONDS] [--] command [args] | $0 --status"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -s) MODE=scoped; shift ;;
-    -p) MODE=proof; shift ;;
     --status) STATUS=true; shift ;;
-    -t|-w)
+    -q|-t|-w)
       [ "$#" -ge 2 ] || { usage >&2; exit 64; }
-      case "$1" in -t) HOLD=$2 ;; *) QUEUE=$2 ;; esac
+      case "$1" in -q) QUARTERS=$2 asked=true ;; -t) HOLD=$2 ;; *) QUEUE=$2 ;; esac
       shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
@@ -131,10 +155,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if $STATUS; then
-  [ "$#" -eq 0 ] && [ "$MODE" = exclusive ] || { usage >&2; exit 64; }
+  [ "$#" -eq 0 ] && ! $asked || { usage >&2; exit 64; }
 else
   [ "$#" -ge 1 ] || { usage >&2; exit 64; }
 fi
+case "$QUARTERS" in
+  1|4) ;;
+  *) echo "a check takes 1 or 4 quarters, not '$QUARTERS'" >&2; exit 64 ;;
+esac
 for n in "$HOLD" "$QUEUE"; do
   case "$n" in ''|*[!0-9]*|0*) echo 'deadlines are positive decimal seconds' >&2; exit 64 ;; esac
   [ "${#n}" -le 6 ] || { echo 'a deadline is at most 999999 seconds' >&2; exit 64; }
@@ -143,7 +171,6 @@ done
 say() { echo "==> heavy-check: $*" >&2; }
 
 LOCK=${HEAVY_CHECK_LOCK:-/tmp/cyfr-heavy-check.lock}
-SLOTS=3
 # How often a queued check repeats its place in the queue.
 REPEAT=${HEAVY_CHECK_REPEAT:-60}
 case "$REPEAT" in ''|*[!0-9]*|0*) echo 'HEAVY_CHECK_REPEAT is positive decimal seconds' >&2; exit 64 ;; esac
@@ -212,8 +239,8 @@ run_live() {
   if pid_ok "$watchdog" && alive "$watchdog"; then return 0; fi
   return 1
 }
-holder_files() { printf '%s\n' "$LOCK.holder" "$LOCK.proof.holder" "$LOCK".slot[0-9].holder; }
-# The records of the runs that hold a lane and are not finished.
+holder_files() { printf '%s\n' "$LOCK.holder" "$LOCK".quarter{1,2,3,4}.holder; }
+# The records of the runs that hold quarters and are not finished.
 holders() {
   local file
   while IFS= read -r file; do
@@ -262,8 +289,8 @@ status() {
     any=true
     pid=$(field pid "$line") state=
     if pid_ok "$pid" && stopped "$pid"; then state=' state=stopped'; fi
-    printf 'held %s pid=%s%s since=%s elapsed=%ss hold=%s checkout=%s command=%s\n' \
-      "$(field mode "$line")" "$pid" "$state" "$(field since "$line")" \
+    printf 'held quarters=%s pid=%s%s cpus=%s since=%s elapsed=%ss hold=%s checkout=%s command=%s\n' \
+      "$(field quarters "$line")" "$pid" "$state" "$(field cpus "$line")" "$(field since "$line")" \
       "$(since_seconds "$(field since "$line")")" "$(field hold "$line")" \
       "$(field checkout "$line")" "$(field command "$line")"
   done < <(holder_files)
@@ -271,8 +298,8 @@ status() {
     line=$(head -n 1 "$LOCK.wait.$k" 2>/dev/null) || continue
     n=$((n + 1))
     any=true
-    printf 'waiting %s %s pid=%s queued=%s waited=%ss checkout=%s command=%s\n' \
-      "$n" "$(field mode "$line")" "$(field pid "$line")" "$(field queued "$line")" \
+    printf 'waiting %s quarters=%s pid=%s queued=%s waited=%ss checkout=%s command=%s\n' \
+      "$n" "$(field quarters "$line")" "$(field pid "$line")" "$(field queued "$line")" \
       "$(since_seconds "$(field queued "$line")")" "$(field checkout "$line")" "$(field command "$line")"
   done < <(live_tickets)
   $any || echo idle
@@ -284,19 +311,16 @@ if $STATUS; then
   exit 0
 fi
 
-# A check started by a check already holds the host through its parent,
-# and the parent's deadline covers it. It writes no line: the parent's
-# frame the run.
+# A check started by a check already holds its quarters through its
+# parent, runs on its parent's processors, and the parent's deadline
+# covers it. It writes no line: the parent's frame the run.
 case "${HEAVY_CHECK_HELD:-}" in
   '') ;;
-  exclusive) exec "$@" ;;
-  proof)
-    [ "$MODE" != exclusive ] || { echo 'an exclusive check cannot start inside a proof' >&2; exit 64; }
+  1|4)
+    [ "$QUARTERS" -le "$HEAVY_CHECK_HELD" ] ||
+      { echo "a check on $QUARTERS quarters cannot start inside a check on $HEAVY_CHECK_HELD" >&2; exit 64; }
     exec "$@" ;;
-  scoped)
-    [ "$MODE" = scoped ] || { echo "a $MODE check cannot start inside a scoped one" >&2; exit 64; }
-    exec "$@" ;;
-  *) echo 'HEAVY_CHECK_HELD is not a mode this script set' >&2; exit 64 ;;
+  *) echo 'HEAVY_CHECK_HELD is not a count of quarters this script set' >&2; exit 64 ;;
 esac
 
 # The queue deadline counts in milliseconds where Bash has EPOCHREALTIME
@@ -328,7 +352,7 @@ command_text=$(redacted "$@")
 # written. In order: the command is stopped if it still runs, every
 # session in the registry is swept, survivors are waited for, then the
 # registry goes, and the holder's record when nothing of the run is left,
-# and the lane is released by the exit itself. A 0 that is not the main
+# and the quarters are released by the exit itself. A 0 that is not the main
 # path's own end is the status of whatever ran last before a signal Bash
 # dies of, so it is reported as 1.
 on_exit() {
@@ -372,7 +396,7 @@ on_exit() {
 }
 # Whether this check's run is finished: no process is left in its group and
 # its watchdog has exited. A retired watchdog exits at once; one that has
-# not within 5 s, such as a stopped one, still holds the lane.
+# not within 5 s, such as a stopped one, still holds the quarters.
 run_finished() {
   local n=0
   if pid_ok "$run_group" && kill -0 -- "-$run_group" 2>/dev/null; then return 1; fi
@@ -412,6 +436,8 @@ here=${BASH_SOURCE[0]%/*}
 . "$here/lib/contain.sh" || { echo "cannot load $here/lib/contain.sh" >&2; exit 69; }
 # shellcheck source=lib/run-names.sh
 . "$here/lib/run-names.sh" || { echo "cannot load $here/lib/run-names.sh" >&2; exit 69; }
+# shellcheck source=lib/quarters.sh
+. "$here/lib/quarters.sh" || { echo "cannot load $here/lib/quarters.sh" >&2; exit 69; }
 command -v flock >/dev/null 2>&1 || { echo 'flock is required (util-linux; on macOS: brew install flock)' >&2; exit 69; }
 
 # Above the gate's own stop of its legs (255 s at most), so a stopped
@@ -431,6 +457,26 @@ case "$fd_base" in ''|*[!0-9]*) ;; *)
 esac
 umask 077
 
+# Placement: the quarters' processors, when taskset can place a process on
+# them, or why the quarters are counted and not placed.
+placed=false unplaced=
+if ! quarters_cut "${HEAVY_CHECK_CPU_ROOT:-/sys/devices/system/cpu}"; then
+  unplaced=$QUARTERS_WHY
+elif ! { command -v taskset >/dev/null 2>&1 && taskset -c -- "$QUARTERS_ALL" true >/dev/null 2>&1; }; then
+  unplaced="taskset cannot place a process on $QUARTERS_ALL here"
+else
+  placed=true
+fi
+# The processors of quarter $1, or of the whole machine for 0, or
+# `unplaced`.
+cpus_for() {
+  if ! $placed; then echo unplaced
+  elif [ "$1" = 0 ]; then echo "$QUARTERS_ALL"
+  else echo "${QUARTER[$1]}"
+  fi
+}
+quarters_words() { if [ "$1" = 1 ]; then echo '1 quarter'; else echo "$1 quarters"; fi; }
+
 # Whether the queue deadline has passed.
 expired() { [ $(( $(now_ms) - queued_ms )) -ge $(( QUEUE * 1000 )) ]; }
 
@@ -441,7 +487,7 @@ gave_up() {
 }
 
 # The queue. A check arrives by publishing its ticket, $LOCK.wait.<ns>.<pid>,
-# a file that carries its pid, lane, arrival and command. It is written
+# a file that carries its pid, quarters, arrival and command. It is written
 # whole and locked under a temporary name, then a child process reads the
 # clock and renames it into place under that time in nanoseconds and the
 # check's pid, so a stop of the check itself does not delay its
@@ -467,7 +513,7 @@ now_ns() {
 publish_ticket() {
   exec {ticket_fd}>"$LOCK.ticket.$$" || exit 1
   flock -n -x "$ticket_fd" || exit 1
-  printf 'pid=%s mode=%s queued=%s checkout=%s command=%s\n' "$$" "$MODE" \
+  printf 'pid=%s quarters=%s queued=%s checkout=%s command=%s\n' "$$" "$QUARTERS" \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$checkout" "$command_text" >&"$ticket_fd" || exit 1
   ticket=$(t=$(now_ns) && mv -f "$LOCK.ticket.$$" "$LOCK.wait.$t.$$" && echo "$t.$$") || exit 1
 }
@@ -496,92 +542,62 @@ places() {
   done
 }
 
-# The lanes. Descriptors: 9 the host (exclusive alone, shared by the other
-# lanes), 8 the proof lane, 7 a scoped slot. The room the other lanes hold
-# is read by trying their locks without keeping them.
-slots_taken() {
-  local i n=0
-  for ((i=1; i<=SLOTS; i++)); do
-    flock -n -x "$LOCK.slot$i" true 2>/dev/null || n=$((n + 1))
-  done
-  echo "$n"
-}
-proof_running() { ! flock -n -x "$LOCK.proof" true 2>/dev/null; }
-lane_record() {
-  case "$MODE" in
-    exclusive) echo "$LOCK.holder" ;;
-    proof) echo "$LOCK.proof.holder" ;;
-    scoped) echo "$LOCK.slot$1.holder" ;;
-  esac
-}
+# The locks. Descriptors: 9 the machine (exclusive on four quarters,
+# shared on one), 7 the quarter held on one.
+record_for() { if [ "$1" = 0 ]; then echo "$LOCK.holder"; else echo "$LOCK.quarter$1.holder"; fi; }
 write_record() {
-  printf 'pid=%s mode=%s since=%s hold=%ss group=%s watchdog=%s checkout=%s command=%s\n' \
-    "$$" "$MODE" "$since" "$HOLD" "${1:-}" "${2:-}" "$checkout" "$command_text" > "$record"
+  printf 'pid=%s quarters=%s cpus=%s since=%s hold=%ss group=%s watchdog=%s checkout=%s command=%s\n' \
+    "$$" "$QUARTERS" "$cpus" "$since" "$HOLD" "${1:-}" "${2:-}" "$checkout" "$command_text" > "$record"
 }
 # Run in a child process, so that a check stopped meanwhile either holds
-# its lane with its record written or holds nothing: it takes the lane's
-# locks on the descriptors the check opened, then reads the room the
-# other lanes hold, with its own locks held, and the queue deadline, gives
-# its locks back if either fails, and writes the lane's record. Two checks
-# that take at once each read the other's locks, so a proof and the scoped
-# checks beside it never keep more than PROOF_SCOPED slots between them;
-# the one that reads too many gives its locks back and tries again. Exits 0
-# when it took the lane, or 10 + the slot in the scoped lane; 1 when there
-# is no room; 2 when the deadline has passed.
-take_lane() {
-  local i= taken=9 s=0
-  case "$MODE" in
-    exclusive)
-      flock -n -x 9 || exit 1 ;;
-    proof)
-      flock -n -s 9 || exit 1
-      flock -n -x 8 || { flock -u 9; exit 1; }
-      taken="9 8"
-      [ "$(slots_taken)" -le "$PROOF_SCOPED" ] || s=1 ;;
-    scoped)
-      flock -n -s 9 || exit 1
-      for ((i=1; i<=SLOTS; i++)); do
-        if flock -n -x "${slot_fd[$i]}"; then break; fi
-      done
-      [ "$i" -le "$SLOTS" ] || { flock -u 9; exit 1; }
-      taken="9 ${slot_fd[$i]}"
-      if proof_running && [ "$(slots_taken)" -gt "$PROOF_SCOPED" ]; then s=1; fi ;;
-  esac
-  if [ "$s" = 0 ] && expired; then s=2; fi
-  if [ "$s" = 0 ]; then
-    record=$(lane_record "$i")
-    write_record || s=1
+# its quarters with its record written or holds nothing: it takes the
+# locks on the descriptors the check opened, then reads the queue
+# deadline and writes the record. Exits 10 when it took the four quarters,
+# 10 + i when it took quarter i; 1 when too few are free; 2 when the
+# deadline has passed. A lock it took stays on the check's descriptors,
+# which the check closes unless the take succeeded.
+take_quarters() {
+  local i held=0
+  if [ "$QUARTERS" = 4 ]; then
+    flock -n -x 9 || exit 1
+  else
+    flock -n -s 9 || exit 1
+    for ((i=1; i<=4; i++)); do
+      if flock -n -x "${quarter_fd[$i]}"; then held=$i; break; fi
+    done
+    [ "$held" != 0 ] || exit 1
   fi
-  if [ "$s" != 0 ]; then
-    for i in $taken; do flock -u "$i"; done
-    exit "$s"
-  fi
-  [ "$MODE" != scoped ] || exit $((10 + i))
-  exit 0
+  ! expired || exit 2
+  record=$(record_for "$held") cpus=$(cpus_for "$held")
+  write_record || exit 1
+  exit $((10 + held))
 }
-# Opens the lane's descriptors and takes the lane in a child; returns its
-# 0, 1 or 2, and keeps the descriptors only when it took the lane.
+# Opens the descriptors and takes the quarters in a child; returns 0, 1 or
+# 2, and keeps the descriptors only when it took the quarters, the one it
+# holds as 7 on one quarter. Closing the rest gives back every lock the
+# child took, also when it ended any other way, killed included.
 admit() {
   local i fd s=0
   exec 9>>"$LOCK" || exit 1
-  case "$MODE" in
-    proof) exec 8>>"$LOCK.proof" || exit 1 ;;
-    scoped)
-      for ((i=1; i<=SLOTS; i++)); do
-        exec {fd}>>"$LOCK.slot$i" || exit 1
-        slot_fd[$i]=$fd
-      done ;;
-  esac
-  since=$(date '+%Y-%m-%dT%H:%M:%S%z')
-  ( take_lane ) || s=$?
-  if [ "$MODE" = scoped ]; then
-    if [ "$s" -gt 10 ]; then
-      slot=$((s - 10)) s=0
-      exec 7>&"${slot_fd[$slot]}" || exit 1
-    fi
-    for ((i=1; i<=SLOTS; i++)); do eval "exec ${slot_fd[$i]}>&-"; done
+  if [ "$QUARTERS" = 1 ]; then
+    for ((i=1; i<=4; i++)); do
+      exec {fd}>>"$LOCK.quarter$i" || exit 1
+      quarter_fd[$i]=$fd
+    done
   fi
-  if [ "$s" != 0 ]; then exec 7>&- 8>&- 9>&-; fi
+  since=$(date '+%Y-%m-%dT%H:%M:%S%z')
+  ( take_quarters ) || s=$?
+  case "$s" in
+    1[0-4]) held_quarter=$((s - 10)) s=0 ;;
+    1|2) ;;
+    *) s=1 ;;
+  esac
+  if [ "$s" = 0 ] && [ "$held_quarter" != 0 ]; then
+    exec 7>&"${quarter_fd[$held_quarter]}" || exit 1
+  fi
+  for i in "${quarter_fd[@]}"; do eval "exec $i>&-"; done
+  quarter_fd=()
+  if [ "$s" != 0 ]; then exec 7>&- 9>&-; fi
   return "$s"
 }
 
@@ -593,12 +609,12 @@ announce() {
   [ -z "$said_at" ] || [ $((SECONDS - said_at)) -ge "$REPEAT" ] || return 0
   said_at=$SECONDS
   held=$(holders)
-  say "queued ($MODE) $((ahead + 1)) of $waiting waiting, behind:"
+  say "queued ($(quarters_words "$QUARTERS")) $((ahead + 1)) of $waiting waiting, behind:"
   [ -z "$held" ] || printf '%s\n' "$held" | sed 's/^/==> heavy-check:   /' >&2
 }
 
-ahead=0 waiting=1 slot= since=
-slot_fd=()
+ahead=0 waiting=1 held_quarter= since=
+quarter_fd=()
 publish_ticket
 while :; do
   places
@@ -612,12 +628,13 @@ while :; do
   expired && gave_up
   sleep 0.5
 done
-record=$(lane_record "$slot")
+record=$(record_for "$held_quarter") cpus=$(cpus_for "$held_quarter")
 wrote_record=true
 release_ticket
 
 ran_at=$SECONDS
-say "running ($MODE) after $((ran_at - queued_at))s queued: $command_text"
+if $placed; then where="processors $cpus"; else where="not placed: $unplaced"; fi
+say "running ($(quarters_words "$QUARTERS"), $where) after $((ran_at - queued_at))s queued: $command_text"
 
 # The outermost check owns the registry. One started by a wrapper that
 # already keeps a registry appends to that one and leaves it to its owner.
@@ -629,27 +646,37 @@ fi
 # The server refuses a CYFR_ name it does not declare, so what this script
 # hands the command is named outside that prefix, or inside the test
 # harness's part of it.
-export HEAVY_CHECK_HELD="$MODE"
+export HEAVY_CHECK_HELD="$QUARTERS"
+if $placed; then export HEAVY_CHECK_CPUS="$cpus"; else unset HEAVY_CHECK_CPUS; fi
 if [ -z "${PROOF_RUN_PREFIX:-}" ]; then
   prefix=$(run_names_prefix "$checkout" 2>/dev/null) || prefix=$(run_names_prefix "$here" 2>/dev/null) || prefix=
   if [ -n "$prefix" ]; then export PROOF_RUN_PREFIX="$prefix"; fi
 fi
-if [ "$MODE" = scoped ]; then
-  cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
-  share=$(( cores / SLOTS )); [ "$share" -lt 2 ] && share=2
+if [ "$QUARTERS" = 1 ]; then
+  if $placed; then
+    share=$(quarters_count "$cpus")
+  else
+    cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+    share=$(( cores / 4 )); [ "$share" -ge 1 ] || share=1
+  fi
   export CYFR_TEST_CORES="$share" CARGO_BUILD_JOBS="$share"
   export ERL_FLAGS="${ERL_FLAGS:+$ERL_FLAGS }+S $share:$share"
 fi
 
 # The command never holds the lock descriptors, so nothing it leaves
-# behind can keep the lane. The watchdog holds them instead, so a check
-# killed outright keeps its lane until its command's sessions are gone.
+# behind can keep the quarters. The watchdog holds them instead, so a
+# check killed outright keeps its quarters until its command's sessions
+# are gone.
 # The command does not hold the saved streams either, so its descriptors
 # are its caller's.
-CONTAIN_CLOSE_FDS="7 8 9 $saved_out $saved_err"
-CONTAIN_HOLD_FDS="7 8 9"
+CONTAIN_CLOSE_FDS="7 9 $saved_out $saved_err"
+CONTAIN_HOLD_FDS="7 9"
 export -n CONTAIN_CLOSE_FDS CONTAIN_HOLD_FDS
-contain_start -g "$GRACE" "$@"
+if $placed; then
+  contain_start -g "$GRACE" taskset -c -- "$cpus" "$@"
+else
+  contain_start -g "$GRACE" "$@"
+fi
 status=$?
 [ "$status" = 0 ] || exit "$status"
 cmd=$CONTAIN_PID
