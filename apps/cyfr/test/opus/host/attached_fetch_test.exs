@@ -28,7 +28,6 @@ defmodule Opus.Host.AttachedFetchTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
-  import Prima.Test.Wait
 
   alias Opus.Host.AttachedFetch
   alias Opus.HostListener
