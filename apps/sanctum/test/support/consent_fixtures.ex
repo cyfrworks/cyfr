@@ -391,6 +391,29 @@ defmodule Sanctum.Test.ConsentFixtures do
   end
 
   @doc """
+  Move the instant of the `until` bindings of the profile's head revision
+  into the past, on their rows. A binding's lifetime is read from its row
+  at each use (`Sanctum.Attach.lifetime/3`), so the next use finds the
+  instant passed without the case waiting it out.
+  """
+  def lapse_bindings!(%Context{} = ctx, profile_id) do
+    {:ok, profile} = Arca.ProfileStorage.get(Context.actor(ctx), profile_id)
+
+    {lapsed, _} =
+      Arca.Repo.update_all(
+        from(r in Arca.Schemas.ConsentVaultRef,
+          where:
+            r.athanor_id == ^ctx.athanor_id and r.consent_id == ^profile.head_consent_id and
+              r.lifetime_kind == "until"
+        ),
+        set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+      )
+
+    true = lapsed > 0
+    :ok
+  end
+
+  @doc """
   A profile row with no head revision — the shape `Consent.Loader` refuses
   with `{:no_head_consent, id}`, and the only one the two-row mint above
   cannot produce.
