@@ -206,10 +206,13 @@ defmodule Aqua.Models do
   declares the contract, at its newest version, asked for `models`
   through the catalog, so consent applies to what runs. A catalyst whose
   setup plan (`component.setup_plan`, as `model_status/2` reads it)
-  leaves a key or a sign-in to connect is not run: it is listed under
-  `errors` with the sentence its run would be refused with
-  (`:connection_not_granted`'s), and no run, failed or otherwise, is
-  recorded for it. Any other plan, or a plan that cannot be read, runs the
+  leaves a key or a sign-in to connect is not run, and no run, failed or
+  otherwise, is recorded for it. It is listed under `errors` with
+  `:connection_not_granted`'s sentence, the one its run is refused with,
+  when nothing is bound; with "The login entry bound to <need> is not
+  signed in; sign it in on the Programs page." when its bound login entry
+  waits on its program's sign-in, the state a catalyst may word in its
+  own way. Any other plan, or a plan that cannot be read, runs the
   listing, whose own refusal is the catalyst's row.
 
   Returns `{:ok, %{"models" => %{provider => [id]}, "refs" => %{provider
@@ -281,23 +284,65 @@ defmodule Aqua.Models do
   # failed run stands as something waiting on the person
   # (`Cyfr.Providers.Attention`).
   defp list_models(ctx, ref) do
-    if to_connect?(ctx, ref),
-      do: {:error, refusal_text(:connection_not_granted)},
-      else: ask_models(ctx, ref)
+    case to_connect(ctx, ref) do
+      nil -> ask_models(ctx, ref)
+      sentence -> {:error, sentence}
+    end
   end
 
-  # Whether the catalyst's own consent leaves a key or a sign-in to
-  # connect: a damaged consent, one the store could not answer, or a plan
-  # that could not be read is no setup the person can make, and runs as
-  # it always has.
-  defp to_connect?(ctx, ref) do
+  # What the catalyst's own consent leaves the person to connect, as the
+  # sentence its row shows, or nil to run it: a damaged consent, one the
+  # store could not answer, or a plan that could not be read is no setup
+  # the person can make, and runs as it always has.
+  defp to_connect(ctx, ref) do
     case Aqua.Ops.call_tool("component", ctx, %{"action" => "setup_plan", "reference" => ref}) do
       {:ok, %{ready: false} = plan} ->
-        match?({status, _} when status in [:needs_key, :needs_sign_in], unready(plan, ref))
+        case unready(plan, ref) do
+          {status, _} when status in [:needs_key, :needs_sign_in] -> setup_sentence(ctx, plan)
+          _no_setup -> nil
+        end
 
       _ready_or_unread ->
-        false
+        nil
     end
+  end
+
+  # A root binds one entry, on its own ingress, so a login entry it binds
+  # serves the plan's required login need. Nothing bound, or a binding
+  # that fails for another reason, is a grant to make.
+  defp setup_sentence(ctx, plan) do
+    if signing_in?(ctx, plan) do
+      needs =
+        for need <- plan.needs, need[:required] != false, need[:kind] == "login", do: need.name
+
+      "The login entry bound to #{Enum.join(needs, ", ")} is not signed in; " <>
+        "sign it in on the Programs page."
+    else
+      refusal_text(:connection_not_granted)
+    end
+  end
+
+  # Whether a login entry the plan binds waits on its program's sign-in:
+  # its row in the caller's vault (`vault.list`) is a login whose status is
+  # `needs_reauth`, which the Vault page calls "not signed in". A vault
+  # that cannot be listed leaves the binding to the grant sentence.
+  defp signing_in?(ctx, plan) do
+    bound =
+      for %{entry_id: id, satisfied: false} when is_binary(id) <-
+            get_in(plan, [:consent, :needs]) || [],
+          do: id
+
+    bound != [] and
+      case Aqua.Ops.call_tool("vault", ctx, %{"action" => "list"}) do
+        {:ok, %{entries: entries}} ->
+          Enum.any?(
+            entries,
+            &(&1.id in bound and &1.kind == "login" and &1.status == "needs_reauth")
+          )
+
+        _unlisted ->
+          false
+      end
   end
 
   defp ask_models(ctx, ref) do

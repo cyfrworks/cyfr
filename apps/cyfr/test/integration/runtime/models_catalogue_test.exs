@@ -111,6 +111,31 @@ defmodule Locus.Runtime.ModelsCatalogueTest do
     refute catalogue["errors"]["openai"] == Prima.Refusal.message(:connection_not_granted)
   end
 
+  # A login bound to a program not signed in yet is no grant to make: the
+  # catalyst is still not run, and its row says what waits.
+  test "a bound login waiting on sign-in keeps the actual state", %{ctx: ctx} do
+    install!(ctx)
+    ctx = %{ctx | origin: :interactive}
+    ref = "catalyst:local.claude-code"
+
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "claude-login",
+        kind: "login",
+        program: "claude"
+      })
+
+    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: entry.id}]})
+
+    assert {:ok, catalogue} = Aqua.models(ctx)
+    assert executions(ctx) == []
+
+    assert catalogue["errors"]["claude-code"] ==
+             "The login entry bound to claude is not signed in; sign it in on the Programs page."
+
+    assert catalogue["errors"]["openai-codex"] == Prima.Refusal.message(:connection_not_granted)
+  end
+
   # The seed's model catalysts and its files catalyst (which speaks no
   # contract), installed and consented by the bootstrap, nothing bound.
   defp install!(ctx) do
