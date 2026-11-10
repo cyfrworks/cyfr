@@ -95,6 +95,13 @@ defmodule Compendium.CanvasTest do
             "label" => "Pause",
             "operation" => "schedule.pause",
             "args" => %{"schedule_id" => "sch_1"}
+          },
+          # A control the person approves first is admitted beside a direct one.
+          %{
+            "id" => "drop",
+            "label" => "Delete",
+            "operation" => "schedule.delete",
+            "args" => %{"schedule_id" => "sch_1"}
           }
         ],
         "prefs" => %{"desktop" => %{"fields" => %{"compact" => %{"type" => "boolean"}}}},
@@ -216,9 +223,8 @@ defmodule Compendium.CanvasTest do
         {write_args(data: ["vault.entries"]), "vault.entries"},
         {write_args(data: ["mcp_servers.changes"]), "mcp_servers.changes"},
         {write_args(feeds: ["BTC"]), "tincture.desktop.feeds"},
-        {write_args(
-           controls: [%{"id" => "c1", "label" => "Go", "operation" => "schedule.delete"}]
-         ), "schedule.delete, which is destructive"},
+        {write_args(controls: [%{"id" => "c1", "label" => "Go", "operation" => "settings.set"}]),
+         "tincture.desktop.controls c1 runs settings.set, which is an administrator's"},
         {write_args(
            prefs: %{"widgets" => %{"w" => %{"fields" => %{"on" => %{"type" => "boolean"}}}}}
          ), "every widget carries already"},

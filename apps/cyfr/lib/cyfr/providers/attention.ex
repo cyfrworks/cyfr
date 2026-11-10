@@ -18,6 +18,7 @@ defmodule Cyfr.Providers.Attention do
   | kind | the record | `id` | `label` | `since` | enters, leaves |
   |---|---|---|---|---|---|
   | `approval` | a pending approval in the athanor's threads | the approval | its thread's title | opened | opened; resolved or expired |
+  | `grant_request` | a frame's request of the person, waiting in the shell that presents it (`Cyfr.Requests`) | the request | the operation it asks for, or the component a grant names | asked | asked; decided, expired, or withdrawn with its frame |
   | `confirmation` | the person's open confirmation of a sensitive change | its ref | its operation | opened | opened; consumed, cancelled, voided or expired |
   | `failed_run` | the newest failed top-level run of a reference the person ran, that no later run of it ended after | the reference | the reference | its end | failed; the reference's next top-level run's end |
   | `failed_schedule` | a schedule of the person whose latest ended occurrence failed or is uncertain | the schedule | its name | that occurrence's due time | failed; its next completed run or its deletion |
@@ -38,8 +39,8 @@ defmodule Cyfr.Providers.Attention do
 
   An athanor is one person's, so its threads' approvals wait for its
   owner, and an offer waits for its recipient in their own athanor; a
-  run, a schedule and a confirmation wait for the person their record
-  names. Nothing an operator decides for the server is an item.
+  run, a schedule, a confirmation and a request wait for the person their
+  record names. Nothing an operator decides for the server is an item.
 
   The destination is where the person acts on the item, in one trusted
   spelling: `{kind: "page", page, ref}` for where Prism shows it, each a
@@ -48,8 +49,9 @@ defmodule Cyfr.Providers.Attention do
   `schedules` and `files`), and the record there (a thread, a run, a
   schedule or an offer), or `{kind: "ref", page: nil,
   ref}` for a confirmation, which the system layer presents wherever the
-  person is. No field carries a message, a credential, a diagnostic
-  sentence or a person's identifier.
+  person is, and for a request, which the system layer presents above
+  the frame that asked. No field carries a message, a credential, a
+  diagnostic sentence or a person's identifier.
   """
 
   @behaviour Prima.Provider
@@ -132,7 +134,8 @@ defmodule Cyfr.Providers.Attention do
          {:ok, runs} <- runs(actor, holder, limit: @failed_runs),
          {:ok, schedules} <- schedules(actor, holder, []) do
       items =
-        Enum.map(confirmations, &confirmation/1) ++ approvals ++ offers ++ runs ++ schedules
+        Enum.map(confirmations, &confirmation/1) ++
+          Cyfr.Requests.waiting(athanor_id, holder) ++ approvals ++ offers ++ runs ++ schedules
 
       {:ok,
        items

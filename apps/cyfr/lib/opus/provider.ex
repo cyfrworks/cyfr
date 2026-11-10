@@ -424,7 +424,8 @@ defmodule Opus.Provider do
                 required: true,
                 description:
                   "retry: the failed run to run again, one a schedule or a feed started; it " <>
-                    "runs as a new run with the same component, input and grant"
+                    "runs as a new run with the same component, input and grant, answered " <>
+                    "accepted with the new run's id once it starts"
               )
             ],
             kind: :execute,
@@ -668,21 +669,22 @@ defmodule Opus.Provider do
   # its row: its seed was empty and it named no account, while a run
   # started anywhere else may have carried a launch's sources or an
   # account the row does not record. The retry starts as the caller's own
-  # run, under the caller's origin, which the grant admits or refuses.
+  # run, under the caller's origin, which the grant admits or refuses. It
+  # answers `accepted` with the new run's id once the run is admitted
+  # (`Opus.start_root/5`), and the run goes on as a fired run does: its
+  # outcome is the run's own, on its row and `runs.changes`, never the
+  # retry's answer.
   def handle("execution", %Context{} = ctx, %{"action" => "retry", "execution_id" => id})
       when is_binary(id) do
     with {:ok, record} <- retriable(ctx, id),
          :ok <- known_failed(record),
          {:ok, consent_id} <- rooted_at(ctx, record),
          {:ok, input} <- Record.input(ctx, record) do
-      case Opus.run_root(ctx, {:id, record.profile_id}, record.reference, input,
+      case Opus.start_root(ctx, {:id, record.profile_id}, record.reference, input,
              consent_id: consent_id
            ) do
-        {:ok, result} ->
-          {:ok,
-           ctx
-           |> format_run_result(result, record.reference)
-           |> Map.put(:retry_of, record.id)}
+        {:ok, execution_id} ->
+          {:ok, %{status: "accepted", execution_id: execution_id, retry_of: record.id}}
 
         # The profile it ran under is gone or no longer active: its grant
         # is not current.

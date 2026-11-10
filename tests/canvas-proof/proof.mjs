@@ -86,6 +86,7 @@ const STEPS = [
   ["crash_fallback", ["chromium"]],
   ["activation", ALL],
   ["grant_control", ALL],
+  ["request", ALL],
   ["rebound_control", ALL],
   ["connection_allowlist", ALL],
   ["policy", ALL],
@@ -100,7 +101,7 @@ const STEPS = [
 const ORDER = [
   "two_canvases", "attention_moves", "switch", "written_canvas", "feed_chart", "app_over_canvas",
   "window_drag", "tile_narrows", "covered_windows", "frame_kept", "hidden_canvas",
-  "activation", "grant_control", "rebound_control", "connection_allowlist", "policy",
+  "activation", "grant_control", "request", "rebound_control", "connection_allowlist", "policy",
   "validation_failures", "crash_fallback", "disconnect", "failed_fire",
 ];
 
@@ -1467,7 +1468,7 @@ async function marketsBound(page) {
   await shown.frame.evaluate(installRecorder);
   const box = async (sel) => shown.frame.locator(sel).boundingBox();
   const centers = {};
-  for (const [key, sel] of [["press", "#press"], ["press3", "#press3"], ["later", "#later"], ["grant", "#grant"]]) {
+  for (const [key, sel] of [["press", "#press"], ["press3", "#press3"], ["later", "#later"], ["grant", "#grant"], ["request", "#request"]]) {
     const b = await box(sel);
     centers[key] = b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null;
   }
@@ -1659,6 +1660,87 @@ async function stepGrantControl(page, name) {
       inside_click: { forwarded: inside.forwarded, total: inside.total, active: inside.receipts[0] && inside.receipts[0].active, active_element_is_frame: inside.receipts[0] && inside.receipts[0].activeElementIsFrame },
       scripted_no_input: { received: noInput.total, forwarded: noInput.forwarded, dropped_delta: dropped1 - dropped0, ...noInputTiming },
       offer: { in_system_layer: offered !== null, names_the_component: names, in_canvas: inCanvas, after_the_timer: offeredAfterTimer },
+    });
+  await showCanvas(page, "start");
+}
+
+// request: a canvas asks the person for one of their own acts, the rename
+// of a schedule of theirs (`fixture.exs` `schedule`), from a button the
+// person clicks. Each ask raises the system layer's request prompt in the
+// shell's own page, naming the operation and the canvas that asked, and
+// nothing of it in the canvas's document; the page performs nothing. Asked
+// three times: approved, the schedule is renamed and the canvas hears
+// `approved`; refused, it keeps its name and the canvas hears `refused`
+// `declined`; left undecided, its expiry fires (`fixture.exs` `expire`, the
+// shell's own timer's message sent early), the prompt is withdrawn, the
+// name stays and the canvas hears `cancelled` `expired`. Each decision
+// follows the request's id, which the canvas heard first.
+async function stepRequest(page, name) {
+  const { shown, centers } = await marketsBound(page);
+  if (!centers.request) throw new Error("the markets request button could not be measured");
+  const made = await ask({ op: "schedule", name: `proof-request-${name}` });
+  if (!made || !made.id) throw new Error(`the request step's schedule was not made: ${JSON.stringify(made)}`);
+  const renamed = `proof-renamed-${name}`;
+  await shown.frame.evaluate(([id, to]) => window.__canvas.target(id, to), [made.id, renamed]);
+
+  const decisions = () => shown.frame.evaluate(() => window.__canvas.decisions());
+  const nameNow = async () => ((await ask({ op: "schedule_name", id: made.id })) || {}).name;
+
+  // One ask from the person's click: the prompt it raised, what it says,
+  // and whether the canvas's document holds any of it.
+  const askOnce = async (n) => {
+    await personClick(page, shown.id, centers.request.x, centers.request.y);
+    const raised = await lib.waitFor(async () => {
+      const p = await prompt(page);
+      return p && p.kind === "request" ? p : null;
+    }, { timeoutMs: 20_000, what: `request ${n}'s prompt in the system layer` }).catch(() => null);
+    const text = await page.$eval("#system-layer-desktop-dialog", (d) => d.textContent).catch(() => "");
+    const requested = await lib.waitFor(async () => {
+      const all = await decisions();
+      return all.length >= n && all[n - 1].requested ? all[n - 1].requested : null;
+    }, { timeoutMs: 15_000, what: `request ${n}'s id heard by the canvas` }).catch(() => null);
+    const inCanvas = await shown.frame.evaluate(() => document.querySelector('[data-kind="request"], #system-layer-desktop-dialog') !== null).catch(() => null);
+    return {
+      raised: raised !== null,
+      names: /schedule\.update/.test(text) && /markets/.test(text) && text.includes(renamed),
+      requested,
+      in_canvas: inCanvas,
+    };
+  };
+  const decided = (n) => lib.waitFor(async () => {
+    const all = await decisions();
+    return all.length >= n && all[n - 1].decision ? all[n - 1].decision : null;
+  }, { timeoutMs: 20_000, what: `request ${n}'s decision heard by the canvas` }).catch(() => null);
+  const gone = () => lib.waitFor(async () => ((await prompt(page)) === null ? true : null), { timeoutMs: 15_000, what: "the request prompt gone" }).then(() => true, () => false);
+
+  const refusedAsk = await askOnce(1);
+  if (refusedAsk.raised) await page.click('#system-layer-desktop-dialog button[data-test="request-refuse"]');
+  const refused = await decided(1);
+  const refusedGone = await gone();
+  const afterRefused = await nameNow();
+
+  const expiredAsk = await askOnce(2);
+  const fired = await ask({ op: "expire" });
+  const expired = await decided(2);
+  const expiredGone = await gone();
+  const afterExpired = await nameNow();
+
+  const approvedAsk = await askOnce(3);
+  if (approvedAsk.raised) await page.click('#system-layer-desktop-dialog button[data-test="request-approve"]');
+  const approved = await decided(3);
+  const approvedGone = await gone();
+  const afterApproved = await nameNow();
+
+  const asked = (a) => a.raised && a.names && a.in_canvas === false && typeof a.requested === "string";
+  note("request", name,
+    asked(refusedAsk) && refused && refused.outcome === "refused" && refused.reason === "declined" && refusedGone && afterRefused === `proof-request-${name}` &&
+      asked(expiredAsk) && fired && Array.isArray(fired.expired) && fired.expired.includes(expiredAsk.requested) &&
+      expired && expired.outcome === "cancelled" && expired.reason === "expired" && expiredGone && afterExpired === `proof-request-${name}` &&
+      asked(approvedAsk) && approved && approved.outcome === "approved" && approvedGone && afterApproved === renamed,
+    {
+      refused: { ...refusedAsk, decision: refused, prompt_gone: refusedGone, name_after: afterRefused },
+      expired: { ...expiredAsk, fired: fired && fired.expired, decision: expired, prompt_gone: expiredGone, name_after: afterExpired },
+      approved: { ...approvedAsk, decision: approved, prompt_gone: approvedGone, name_after: afterApproved },
     });
   await showCanvas(page, "start");
 }
@@ -2233,6 +2315,7 @@ const STEP_FNS = {
   hidden_canvas: (page, name) => stepHiddenCanvas(page, name),
   activation: (page, name) => stepActivation(page, name),
   grant_control: (page, name) => stepGrantControl(page, name),
+  request: (page, name) => stepRequest(page, name),
   rebound_control: (page, name) => stepReboundControl(page, name),
   connection_allowlist: (page, name) => stepConnectionAllowlist(page, name),
   policy: (page, name, { proxy, receiver, udp }) => stepPolicy(page, name, proxy, receiver, udp),

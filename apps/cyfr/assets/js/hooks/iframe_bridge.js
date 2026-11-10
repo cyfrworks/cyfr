@@ -2,6 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 import {
+  ANSWER_OF,
   ANSWER_VERBS,
   CREDENTIAL,
   HANDSHAKE,
@@ -35,6 +36,10 @@ const FROM_CANVAS = Object.freeze({
 // and posted again after its handshake, in this order.
 const TOLD = TOLD_VERBS
 
+// The person's verbs an app's frame sends, held to the person's input as a
+// canvas's are; an app's other verbs reach the view while it acts.
+const FROM_APP_PERSON = Object.freeze(["request"])
+
 /**
  * IframeBridge hook — the shell's end of a tincture frame's MessagePort.
  *
@@ -58,17 +63,22 @@ const TOLD = TOLD_VERBS
  * then its credential as every frame is, then the latest `posture`,
  * `covered`, `installed` and `state` the shell told it, and each one
  * after as it comes: the canvas hook's (`cyfr:to-canvas`), and each change
- * of its shell state. The shell's answers to its press of a control and
- * its write of its preferences (`pressed`, `prefs`) are posted once as
- * they come, never held for a later handshake. A value the wire refuses
- * is never posted. An app's frame opened on a subject is posted it
- * (`subject`) before its credential, and a new one as the app is opened
- * again on it (`cyfr:to-canvas` with `subject`).
+ * of its shell state. The shell's answers to its press of a control, its
+ * write of its preferences and its request (`pressed`, `prefs`,
+ * `requested`, `decided`) are posted once as they come, never held for a
+ * later handshake. An app's frame is posted the answers to its request
+ * (`requested`, `decided`) once its port is open, and nothing else of a
+ * canvas's messages. A value the wire refuses is never posted. An app's
+ * frame opened on a subject is posted it (`subject`) before its
+ * credential, and a new one as the app is opened again on it
+ * (`cyfr:to-canvas` with `subject`).
  *
  * From a canvas only `ready`, `failed` and the person's verbs (`open`,
- * `press`, `grant`, `prefs`, `ask`, `settings`) reach the view, and from
- * a validation frame only `ready` and `failed`. A canvas's `ready` and
- * `failed` are forwarded whatever its shown state, needing no input.
+ * `press`, `grant`, `prefs`, `ask`, `settings`, `request`) reach the view,
+ * and from a validation frame only `ready` and `failed`. A canvas's
+ * `ready` and `failed` are forwarded whatever its shown state, needing no
+ * input. From an app every verb reaches the view while it acts, its
+ * `request` held to the person's input as a canvas's person's verb is.
  *
  * A person's verb is forwarded once per input of the person's, never from
  * a script on its own. The bridge sees no input made inside a frame, and in
@@ -86,18 +96,18 @@ const TOLD = TOLD_VERBS
  * lifespan; one sent within that lifespan is dropped at once, never held,
  * and the verb forwarded carries the ordinal of the input it came with
  * (`input`), by which the view honours one verb per input too. A person's
- * verb dropped is counted, and a press of a control or a write of the
- * preferences is answered `cancelled` over the port, under its call
- * number, naming `too_soon` when it came within that lifespan; one whose
- * call number is no higher than the last the frame used is a replay or a
- * forgery of another call's, and is dropped first, unanswered and never
- * forwarded. So a press in the chrome followed by the frame focusing
- * itself passes nothing, two verbs from one input pass one, and a
- * person's press in the frame within a few seconds of a press in the
- * chrome or of the frame's last verb is dropped, `too_soon`, for the
- * person to press again. What stays open: an input in another frame
- * followed by this frame taking focus within that input's activation
- * counts as this frame's.
+ * verb dropped is counted, and a press of a control, a write of the
+ * preferences or a request is answered `cancelled` over the port (as
+ * `pressed`, `prefs` or `decided`), under its call number, naming
+ * `too_soon` when it came within that lifespan; one whose call number is
+ * no higher than the last the frame used is a replay or a forgery of
+ * another call's, and is dropped first, unanswered and never forwarded.
+ * So a press in the chrome followed by the frame focusing itself passes
+ * nothing, two verbs from one input pass one, and a person's press in the
+ * frame within a few seconds of a press in the chrome or of the frame's
+ * last verb is dropped, `too_soon`, for the person to press again. What
+ * stays open: an input in another frame followed by this frame taking
+ * focus within that input's activation counts as this frame's.
  *
  * A later load (a reload, or the frame navigating itself) gets no second
  * handshake: the port is closed and the frame is spent until the person
@@ -163,14 +173,14 @@ const IframeBridge = {
     // the page: activation the page holds as the bridge mounts was given by
     // no input in this frame, so it starts spent.
     this._spentAt = activated() ? now() : -Infinity
-    // The highest call number the frame has numbered a press or a write
-    // with: a frame numbers its calls upward, so one not above it was used
-    // already, pending or answered.
+    // The highest call number the frame has numbered a press, a write or a
+    // request with: a frame numbers its calls upward, so one not above it
+    // was used already, pending or answered.
     this._lastCall = 0
     // The preferences the frame holds as the shell last told it, for a
     // write the bridge answers itself.
     this._prefs = null
-    if (this._canvas) this._listen()
+    this._listen()
   },
 
   _listen() {
@@ -199,10 +209,12 @@ const IframeBridge = {
 
   // Hold what the shell tells a canvas as the latest of its kind, and post
   // it once the canvas has its open; post an answer once, holding nothing
-  // but the preferences it carries. One the wire refuses is neither.
+  // but the preferences it carries, to a canvas once it has its open and
+  // to an app once its port is open. One the wire refuses is neither.
   _tell(verb, args) {
     if (!this._canvas && verb === "subject") return this._retell(args)
-    if (!this._canvas || !(TOLD.includes(verb) || ANSWER_VERBS.includes(verb))) return
+    const takes = this._canvas ? TOLD.includes(verb) || ANSWER_VERBS.includes(verb) : ANSWER_OF.request.includes(verb)
+    if (!takes) return
     let message
     try {
       message = toFrameMessage(verb, this._frameId, args)
@@ -211,7 +223,7 @@ const IframeBridge = {
     }
     if (verb === "prefs") this._prefs = {document: args.document, revision: args.revision}
     if (TOLD.includes(verb)) this._told.set(verb, message)
-    if (this._port && this._mode !== null) this._port.postMessage(message)
+    if (this._port && (this._mode !== null || !this._canvas)) this._port.postMessage(message)
   },
 
   // An app opened again on another subject is posted it, once its port is
@@ -225,14 +237,15 @@ const IframeBridge = {
     }
   },
 
-  // A person's verb the bridge dropped: a press of a control and a write
-  // of the preferences are told they did not run, and why when `reason`
-  // names it (`too_soon`).
+  // A person's verb the bridge dropped: a press of a control, a write of
+  // the preferences and a request are told they did not run, and why when
+  // `reason` names it (`too_soon`).
   _cancelled(message, reason = null) {
-    if (!this._canvas || !this._port || this._mode === null) return
     const {verb, args} = message
     const why = reason === null ? {} : {reason}
-    if (verb === "press" && "control" in args) {
+    if (verb === "request") {
+      this._tell("decided", {call: args.call, outcome: "cancelled", ...why})
+    } else if (verb === "press" && "control" in args) {
       this._tell("pressed", {control: args.control, call: args.call, outcome: "cancelled", ...why})
     } else if (verb === "prefs" && this._prefs) {
       this._tell("prefs", {call: args.call, outcome: "cancelled", ...why, ...this._prefs})
@@ -308,7 +321,7 @@ const IframeBridge = {
     }
 
     const {message} = decoded
-    const person = this._canvas && PERSON_VERBS.includes(message.verb)
+    const person = (this._canvas ? PERSON_VERBS : FROM_APP_PERSON).includes(message.verb)
 
     // A call number used already is a replay or a forgery, and an answer
     // under it, the bridge's or the shell's, would settle the call that
@@ -321,7 +334,7 @@ const IframeBridge = {
       this._lastCall = message.args.call
     }
 
-    if (!this._forwards(message.verb)) {
+    if (!this._forwards(message.verb, person)) {
       this._drop()
       if (person) this._cancelled(message)
       return
@@ -348,15 +361,14 @@ const IframeBridge = {
   },
 
   // Whether a verb this frame posted reaches the view, which it can only
-  // while the socket is up: every verb of a live tincture's frame; of a
-  // canvas's, those its mode sends, `ready` and `failed` whether it is
-  // shown or hidden, and a person's verb only for an input of the
-  // person's in it, on the shown, live canvas.
-  _forwards(verb) {
+  // while the socket is up: of a live tincture's frame, every verb but its
+  // request; of a canvas's, those its mode sends, `ready` and `failed`
+  // whether it is shown or hidden; and a person's verb, `person`, only for
+  // an input of the person's in it, on the shown, live frame.
+  _forwards(verb, person) {
     if (!this._standing.connected) return false
-    if (!this._canvas) return acting(this._standing)
-    if (!(FROM_CANVAS[this._mode] || []).includes(verb)) return false
-    if (!PERSON_VERBS.includes(verb)) return true
+    if (this._canvas && !(FROM_CANVAS[this._mode] || []).includes(verb)) return false
+    if (!person) return this._canvas || acting(this._standing)
     return acting(this._standing) && this._shown() && this._personActed()
   },
 
@@ -399,7 +411,7 @@ const IframeBridge = {
 
   destroyed() {
     const win = typeof window === "undefined" ? null : window
-    if (this._canvas && win && typeof win.removeEventListener === "function") {
+    if (this._onChromeInput && win && typeof win.removeEventListener === "function") {
       for (const type of CHROME_INPUTS) win.removeEventListener(type, this._onChromeInput, true)
     }
     this.el.removeEventListener("load", this._onLoad)

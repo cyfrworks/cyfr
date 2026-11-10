@@ -160,8 +160,8 @@ defmodule Prima.TinctureWireTest do
                 event["data"]
               )
 
-            %{"type" => "ended", "sub" => sub, "error" => error} ->
-              TinctureWire.ended(sub, refusal_of(error))
+            %{"type" => "ended", "error" => _error} = ended ->
+              ended_of(ended)
 
             %{"type" => "ended", "sub" => sub} ->
               TinctureWire.ended(sub, nil)
@@ -216,8 +216,8 @@ defmodule Prima.TinctureWireTest do
             %{"type" => "stale", "sub" => sub, "at" => at} ->
               TinctureWire.stale(sub, time(at))
 
-            %{"type" => "ended", "sub" => sub, "error" => error} ->
-              TinctureWire.ended(sub, refusal_of(error))
+            %{"type" => "ended", "error" => _error} = ended ->
+              ended_of(ended)
           end
 
         assert written == message
@@ -232,7 +232,25 @@ defmodule Prima.TinctureWireTest do
         assert data["revision"] == data["at"] |> time() |> DateTime.to_unix(:microsecond)
       end
 
-      assert heard |> Enum.map(& &1["state"]) |> Enum.sort() == ~w(denied stale unavailable)
+      assert heard |> Enum.map(& &1["state"]) |> Enum.sort() ==
+               ~w(denied stale suspended unavailable)
+    end
+
+    test "an end names a reason beside its refusal only for a reason the frame acts on" do
+      assert TinctureWire.ended_reasons() == vectors()["delivery"]["ended_reasons"]
+
+      for reason <- TinctureWire.ended_reasons() do
+        refusal = %{refusal_of(error_vector()) | reason: reason_of(reason)}
+        assert %{"reason" => ^reason, "error" => error} = TinctureWire.ended(1, refusal)
+        refute Map.has_key?(error, "reason")
+      end
+
+      for reason <- [:frame_moved, :vector, {:frame_suspended, :nested}, nil] do
+        refute Map.has_key?(
+                 TinctureWire.ended(1, %{refusal_of(error_vector()) | reason: reason}),
+                 "reason"
+               )
+      end
     end
   end
 
@@ -241,12 +259,23 @@ defmodule Prima.TinctureWireTest do
     at
   end
 
-  # The refusal a vector's error projects: a reason of its own, which the
-  # projection never carries.
-  defp refusal_of(%{"class" => class, "message" => message, "stage" => stage}) do
+  # The `ended` a vector shows, built from its refusal and the reason it
+  # names beside it, if any.
+  defp ended_of(%{"sub" => sub, "error" => error} = ended),
+    do: TinctureWire.ended(sub, refusal_of(error, ended["reason"]))
+
+  # The refusal reason an end names: the reasons are FrameAdmission's, which
+  # this app does not load, so each is named here.
+  defp reason_of(reason), do: Map.fetch!(%{"frame_suspended" => :frame_suspended}, reason)
+
+  defp error_vector, do: hd(for %{"error" => e} <- vectors()["delivery"]["to_frame"], do: e)
+
+  # The refusal a vector's error projects: the reason its end names, or a
+  # reason of its own, which the projection never carries.
+  defp refusal_of(%{"class" => class, "message" => message, "stage" => stage}, reason \\ nil) do
     %Prima.Refusal{
       class: String.to_existing_atom(class),
-      reason: :vector,
+      reason: if(reason, do: reason_of(reason), else: :vector),
       message: message,
       stage: String.to_existing_atom(stage)
     }
@@ -301,9 +330,7 @@ defmodule Prima.TinctureWireTest do
     answers = for %{"answer" => %{} = answer} <- cases, do: answer
     assert answers != []
 
-    for %{"sub" => sub, "error" => error} = answer <- answers do
-      assert TinctureWire.ended(sub, refusal_of(error)) == answer
-    end
+    for answer <- answers, do: assert(ended_of(answer) == answer)
 
     # Every case says how the SDK rejects it, with a stage only for a
     # refusal it rejects as itself.
@@ -433,6 +460,59 @@ defmodule Prima.TinctureWireTest do
                TinctureWire.decode_shell_message(message),
              inspect(args)
     end
+  end
+
+  test "a request names grant or an operation, its args and its call, and nothing else" do
+    frame = "frm_01a09fee2e4f"
+
+    for {operation, args} <- [
+          {"schedule.create", %{"name" => "digest", "cron_expression" => "0 8 * * *"}},
+          {"layout.edit", %{}},
+          {"grant", %{"ref" => "c:local.openai"}},
+          {"grant", %{"ref" => "tincture:local.vault:0.2.0"}}
+        ] do
+      request = %{"operation" => operation, "args" => args, "call" => 1}
+      message = TinctureWire.shell_message(:request, frame, request)
+
+      assert {:ok, %{verb: :request, args: ^request}} =
+               TinctureWire.decode_shell_message(message)
+    end
+
+    for args <- [
+          %{"operation" => "schedule.create", "args" => %{}},
+          %{"operation" => "schedule", "args" => %{}, "call" => 1},
+          %{"operation" => 7, "args" => %{}, "call" => 1},
+          %{"operation" => "schedule.create", "args" => "digest", "call" => 1},
+          %{"operation" => "grant", "args" => %{"ref" => "agent:local.helper"}, "call" => 1},
+          %{"operation" => "grant", "args" => %{"ref" => "c:local.x", "y" => 1}, "call" => 1},
+          %{"operation" => "layout.edit", "args" => %{}, "call" => 1, "why" => "x"}
+        ] do
+      message = TinctureWire.shell_message(:request, frame, args)
+      assert {:error, _} = TinctureWire.decode_shell_message(message), inspect(args)
+    end
+
+    assert TinctureWire.request_operation?(TinctureWire.grant_operation())
+    refute TinctureWire.request_operation?("grant.commit.now")
+  end
+
+  test "settings names a page and, optionally, the record on it to open at" do
+    for args <- [%{"page" => "aqua"}, %{"page" => "chat", "ref" => "sth_1"}] do
+      message = TinctureWire.shell_message(:settings, "frm_01a09fee2e4f", args)
+      assert {:ok, %{verb: :settings, args: ^args}} = TinctureWire.decode_shell_message(message)
+    end
+
+    for args <- [%{"page" => "aqua", "ref" => ""}, %{"ref" => "thr_1"}] do
+      message = TinctureWire.shell_message(:settings, "frm_01a09fee2e4f", args)
+      assert {:error, _} = TinctureWire.decode_shell_message(message), inspect(args)
+    end
+  end
+
+  test "a request id the identifier generator mints is one the wire reads, and no two are the same" do
+    ids = for _ <- 1..32, do: Prima.UUID7.request_id()
+    assert Enum.all?(ids, &TinctureWire.request_id?/1)
+    assert Enum.uniq(ids) == ids
+    refute TinctureWire.request_id?("req_short")
+    refute TinctureWire.request_id?("sch_0190f3a27b1c7d2e8f3a")
   end
 
   test "every installed tincture the fixture sends a canvas is the wire's entry, and the refused ones break it" do
@@ -586,8 +666,38 @@ defmodule Prima.TinctureWireTest do
         refute built == args, why
       end
 
+      for %{"message" => %{"verb" => "requested", "args" => args}} <- rows["valid"] do
+        assert TinctureWire.requested(args["call"], args["request"]) == args
+      end
+
+      decided =
+        for %{"message" => %{"verb" => "decided", "args" => args}} <- rows["valid"], do: args
+
+      assert decided |> Enum.map(& &1["outcome"]) |> Enum.uniq() |> Enum.sort() ==
+               Enum.sort(TinctureWire.request_outcomes())
+
+      for args <- decided do
+        assert TinctureWire.decided(args["call"], args["outcome"], args["reason"]) == args
+      end
+
+      for %{"why" => why, "message" => %{"verb" => verb, "args" => args}} <- rows["invalid"],
+          verb in ["requested", "decided"] do
+        built =
+          try do
+            if verb == "requested",
+              do: TinctureWire.requested(args["call"], args["request"]),
+              else: TinctureWire.decided(args["call"], args["outcome"], args["reason"])
+          rescue
+            ArgumentError -> :raised
+          end
+
+        refute built == args, why
+      end
+
       assert TinctureWire.press_outcomes() == ~w(accepted refused cancelled)
       assert TinctureWire.prefs_outcomes() == ~w(saved stale refused cancelled)
+      assert TinctureWire.request_outcomes() == ~w(approved refused cancelled)
+      assert TinctureWire.request_cancel_reasons() == ~w(too_soon busy expired dismissed)
     end
   end
 

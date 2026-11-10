@@ -87,6 +87,7 @@ Every library is bundled; nothing is imported from a remote URL.
 | `cyfr.title(title)` | the shell's port, `title` |
 | `cyfr.ready()` | the shell's port, `ready` |
 | `cyfr.credential(name)` | the shell's port, `credential` |
+| `cyfr.request(operation, args)` | the shell's port, `request` |
 <!-- /tincture:sdk -->
 
 A canvas's own calls, and what `installed` tells it of each tincture:
@@ -98,7 +99,7 @@ A canvas's own calls, and what `installed` tells it of each tincture:
 | `cyfr.grant(ref)` | the shell's port, `grant` |
 | `cyfr.prefs(document)` | the shell's port, `prefs` |
 | `cyfr.ask(widget)` | the shell's port, `ask` |
-| `cyfr.settings(page)` | the shell's port, `settings` |
+| `cyfr.settings(page, ref)` | the shell's port, `settings` |
 | `cyfr.on("installed", handler)` | the shell's port, `installed`: each tincture's `icon`, `name`, `open`, `ref` |
 <!-- /tincture:canvas -->
 
@@ -107,6 +108,7 @@ A canvas's own calls, and what `installed` tells it of each tincture:
 - `cyfr.stream(name, subject, onEvent)` opens a declared stream over the frame's one stream connection and resolves with a handle (`close()`, `closed`); the returned promise's own `close()` cancels an open still waiting; `onEvent` gets `{id, event, data}`.
 - A frame never asks for a secret: `cyfr.credential(name)` has the shell prompt the person and store the value in the vault as `name`, for a tincture that declares `vault.create`, and resolves with `{saved}` alone.
 - A frame never raises itself: no verb places, sizes or raises a frame.
+- A frame never performs the person's own acts (a grant, a schedule, a feed binding, the layout, an operation that asks for their confirmation): `cyfr.request(operation, args)` asks the person in CYFR's own prompt, which shows what would run, and resolves with their decision (`approved`, `refused` or `cancelled`); the tincture guide's Requests section says what it answers.
 - A refusal rejects with a `CyfrError` whose `code` is its class (`forbidden`, `rate_limited`, `consent_required`, `unauthenticated`, …).
 - A public tincture's page at its address calls the same SDK with no credential, under its public profile.
 

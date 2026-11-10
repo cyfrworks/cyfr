@@ -523,6 +523,104 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
+  @doc """
+  The preview the system layer shows the person for a frame's request of
+  `operation` with `args`, the very call that runs once they approve it:
+  the same `Prima.Confirmation.Preview` a sensitive change's record
+  holds, built here from the request and never from anything the frame
+  wrote. It names this home, the athanor by name and the operation, the
+  `resource` the operation touches by name (the argument its declaration
+  names, `Sanctum.Catalog.action_declaration/1`, or nil), and each
+  argument as a detail under its own name: text as it is, a list of
+  text as a list, and any other value as JSON with its keys in order,
+  so what the person reads is what runs. An argument named as a secret
+  (`Prima.Sanitizer`), one whose name or value the preview cannot hold
+  (`Prima.Confirmation.Preview`'s bounds), or more arguments than its
+  details take are refused
+  `{:invalid_argument, sentence}`: a call the person cannot read in full
+  is never asked for. `{:error, :unavailable}` when the athanor's name
+  cannot be read.
+  """
+  @spec request_preview(Context.t(), String.t(), map(), String.t() | nil) ::
+          {:ok, Prima.Confirmation.Preview.t()} | {:error, term()}
+  def request_preview(%Context{} = ctx, operation, args, resource)
+      when is_binary(operation) and is_map(args) and not is_struct(args) and
+             (is_nil(resource) or is_binary(resource)) do
+    with {:ok, details} <- request_details(args),
+         {:ok, home} <- home(),
+         {:ok, athanor} <- athanor_name(ctx.athanor_id) do
+      case Prima.Confirmation.Preview.new(
+             home: home,
+             athanor: athanor,
+             operation: operation,
+             resource: resource,
+             details: details
+           ) do
+        {:ok, preview} -> {:ok, preview}
+        {:error, _unheld} -> {:error, {:invalid_argument, unpreviewable()}}
+      end
+    end
+  end
+
+  defp request_details(args) do
+    cond do
+      map_size(args) > Prima.Confirmation.Preview.max_details() ->
+        {:error, {:invalid_argument, unpreviewable()}}
+
+      Enum.any?(Map.keys(args), &Prima.Sanitizer.sensitive_key?/1) ->
+        {:error,
+         {:invalid_argument, "A request cannot carry a secret: the person enters it in CYFR."}}
+
+      true ->
+        Enum.reduce_while(args, {:ok, %{}}, fn {name, value}, {:ok, details} ->
+          case detail(value) do
+            {:ok, text} -> {:cont, {:ok, Map.put(details, name, text)}}
+            :error -> {:halt, {:error, {:invalid_argument, unpreviewable()}}}
+          end
+        end)
+    end
+  end
+
+  # Text the preview holds as it is; any other text (empty, or with a
+  # control character) as its JSON string, which escapes it.
+  defp detail(value) when is_binary(value) do
+    if shown_as_is?(value), do: {:ok, value}, else: as_json(value)
+  end
+
+  defp detail([_ | _] = values) do
+    if Enum.all?(values, &shown_as_is?/1), do: {:ok, values}, else: as_json(values)
+  end
+
+  defp detail(value), do: as_json(value)
+
+  defp shown_as_is?(value),
+    do: Prima.Identity.Encoding.text?(value, Prima.Confirmation.Preview.max_text())
+
+  # JSON with every object's keys in order, so one call always reads the
+  # same; `null` and numbers as the frame sent them.
+  defp as_json(value) do
+    case Jason.encode(ordered(value)) do
+      {:ok, text} -> {:ok, text}
+      {:error, _not_json} -> :error
+    end
+  end
+
+  defp ordered(%{} = map) when not is_struct(map),
+    do:
+      map
+      |> Enum.sort()
+      |> Enum.map(fn {k, v} -> {k, ordered(v)} end)
+      |> Jason.OrderedObject.new()
+
+  defp ordered(list) when is_list(list), do: Enum.map(list, &ordered/1)
+  defp ordered(value), do: value
+
+  defp unpreviewable,
+    do:
+      "This request cannot be shown in full, so it is not asked: at most " <>
+        "#{Prima.Confirmation.Preview.max_details()} arguments, each named in lowercase " <>
+        "and each value at most #{Prima.Confirmation.Preview.max_text()} bytes of text."
+
   defp athanor_name(athanor_id) do
     case Sanctum.Tenancy.Athanors.get(athanor_id) do
       {:ok, %{name: name}} when is_binary(name) and name != "" ->

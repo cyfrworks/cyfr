@@ -33,16 +33,42 @@ defmodule Cyfr.Cluster.Boot do
   """
   @spec start!(String.t()) :: :ok | {:error, term()}
   def start!(_worker_service) do
-    case Application.ensure_all_started(:cyfr) do
-      {:ok, _started} ->
-        settle()
-        :ok
+    port = Application.fetch_env!(:cyfr, :host_api_port)
 
-      {:error, reason} ->
-        {:error, reason}
+    with :ok <- released(port),
+         {:ok, _started} <- Application.ensure_all_started(:cyfr) do
+      settle()
+      :ok
     end
   catch
     kind, reason -> {:error, {kind, reason, __STACKTRACE__}}
+  end
+
+  # How long a boot waits for its host API port. The member it replaces
+  # closed the port as its application stopped or its process died, and
+  # the kernel frees a listening socket at its close, so a port still held
+  # past this is another listener's, and the boot is refused naming it
+  # rather than failing in the listener's bind.
+  @release_ms 10_000
+
+  defp released(port) do
+    Cyfr.Cluster.Wait.until!(fn -> port_free?(port) end, "port #{port} held", @release_ms)
+    :ok
+  rescue
+    RuntimeError -> {:error, {:host_api_port_held, port}}
+  end
+
+  @doc """
+  Whether a loopback listener could bind `port` now, under the options
+  the host API listener binds with (`reuseaddr`, so a closed connection's
+  `TIME_WAIT` does not count as a holder).
+  """
+  @spec port_free?(:inet.port_number()) :: boolean()
+  def port_free?(port) do
+    case :gen_tcp.listen(port, ip: {127, 0, 0, 1}, reuseaddr: true) do
+      {:ok, socket} -> :gen_tcp.close(socket) == :ok
+      {:error, :eaddrinuse} -> false
+    end
   end
 
   # A boot's own background work finishes before the member is handed to

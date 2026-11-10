@@ -33,12 +33,19 @@ streams.
 - Declare each feed by name in `feeds`: the page reads a feed's results
   from the stream `feed.results`, with the feed's name as its subject.
 - A control runs `feed.press`, `execution.retry` or a write the person
-  makes directly, on the person's tap; publish refuses any other, naming
-  why. A `feed.press` control's pick fills its `pick` argument, for a
+  makes directly on the person's tap. Any other execute, a destructive
+  or external operation, or one of the person's own acts (a schedule's
+  create or update, a feed's binding or removal, the layout, an
+  operation that asks for their confirmation) asks the person first:
+  the tap opens CYFR's own prompt showing what would run, and it runs
+  only once they approve. Publish refuses a read, an administrator's
+  operation, one that runs only inside a run and the `profile` tool's,
+  naming why. A `feed.press` control's pick fills its `pick` argument, for a
   feed action that names a `pick`. A retry control picks a failed run
   from `runs.changes` at `/execution_id` into `execution_id`; only a
   run a schedule or a feed started, and known to have failed, is run
-  again.
+  again. Its press is accepted once the new run starts; show the new
+  run's outcome from `runs.changes`, never as the press's answer.
 - `canvas.write` asks the person first, and its card names the streams
   the version reads. Write what the person asked for, and declare only
   the streams the page opens.
@@ -104,7 +111,7 @@ working, which is kept, and which validation last failed.
 - `cyfr.stream(name, subject, onEvent)` opens a declared stream
   (`subject` is `null` for one that takes none) and resolves once it is
   open with a handle whose `close()` ends it and whose `state` is
-  `live`, `unavailable`, `stale`, `denied` or `ended`; `onEvent` gets
+  `live`, `unavailable`, `suspended`, `stale`, `denied` or `ended`; `onEvent` gets
   `{id, event, data, revision, at}`. Every stream rides the page's one connection, so
   open every stream the page shows at once, up to 32. The returned
   promise has the same `close()`, which cancels an open still waiting.
@@ -127,6 +134,22 @@ working, which is kept, and which validation last failed.
   which they confirm in CYFR's own prompt, never in the page. The browser
   forwards each only within moments of the person's own input, never from
   a script on its own.
+- `cyfr.request(operation, args)` asks the person for one of their own
+  acts the page composes when it asks, such as `schedule.create` with a
+  name and a time from a form, or `grant` with `{ref}`: CYFR shows what
+  would run in its own prompt, above every frame, and runs it only once
+  they approve. It resolves with `{outcome, reason}`: `approved`,
+  `refused` (`declined` by the person, or a refusal's class) or
+  `cancelled` (`busy` while another request of the page waits, `expired`
+  after five minutes or when the confirmation its call needed expired,
+  `dismissed` or `too_soon`; a cancelled confirmation carries no reason);
+  its `requested` promise holds the request's id while it waits. Declare a control instead for a
+  fixed act the desktop offers on a tap: the person sees it in the
+  canvas's grant before it ever runs. Never put a secret in a request.
+- `cyfr.settings(page, ref)` opens one of CYFR's pages; an
+  `attention.changes` item's `destination` opens with
+  `cyfr.settings(destination.page, destination.ref)`, AQUA's panel and
+  the chat at the thread it names.
 - `cyfr.ready()` tells the browser the page has drawn. Call it once,
   after the streams are open or refused: a version that has not called
   it ten seconds after it opens, or that hits an error it does not catch
@@ -143,7 +166,9 @@ stream's `removal` kind. A `resync` event means a fresh picture follows
 up to the next `snapshot` and replaces yours. `unavailable` (`data.retry_at`,
 the SDK opens it again by itself), `stale` (the picture is old; `at` is
 when it was read) and `denied` (it ended) are states to show, never
-errors to throw.
+errors to throw. A hidden canvas's streams are `suspended`, hearing
+nothing; shown again, the SDK opens each again and its handler hears
+`resync` and the fresh picture, so a page reopens nothing itself.
 
 ```html
 <!DOCTYPE html>

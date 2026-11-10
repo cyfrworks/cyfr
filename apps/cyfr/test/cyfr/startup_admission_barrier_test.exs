@@ -122,6 +122,10 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Opus.Schedules.TaskSupervisor,
     Opus.Schedules.Scheduler,
     Prism.TinctureRegistry,
+    # The requests the shells hold for their people: a request admits work
+    # for the person once they approve it, so its registry starts after
+    # the gate, beside the console's other children.
+    Cyfr.Requests,
     Prism.TaskSupervisor,
     Cyfr.ReleaseChannel,
     Cyfr.SeedOffer
@@ -156,6 +160,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cyfr.SeedOffer,
     Cyfr.ReleaseChannel,
     Prism.TaskSupervisor,
+    Cyfr.Requests,
     Prism.TinctureRegistry,
     Opus.Schedules.Scheduler,
     Opus.Schedules.TaskSupervisor,

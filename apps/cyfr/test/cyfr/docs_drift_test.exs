@@ -1868,7 +1868,8 @@ defmodule Cyfr.DocsDriftTest do
     grant: "ref",
     prefs: "document",
     ask: "widget",
-    settings: "page"
+    settings: "page, ref",
+    request: "operation, args"
   }
 
   defp tincture_list("served-types") do

@@ -40,14 +40,17 @@
     "grant",
     "prefs",
     "ask",
-    "settings"
+    "settings",
+    "request"
   ]);
   var CANVAS_VERBS = Object.freeze(["press", "failed", "grant", "prefs", "ask", "settings"]);
-  var PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "ask", "settings"]);
+  var PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "ask", "settings", "request"]);
   var SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "component", "file"]);
   var PRESS_OUTCOMES = Object.freeze(["accepted", "refused", "cancelled"]);
   var PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cancelled"]);
   var CANCEL_REASONS = Object.freeze(["too_soon"]);
+  var REQUEST_OUTCOMES = Object.freeze(["approved", "refused", "cancelled"]);
+  var REQUEST_CANCEL_REASONS = Object.freeze(["too_soon", "busy", "expired", "dismissed"]);
   var STAGES = Object.freeze(["load", "runtime"]);
   var HANDSHAKE = "cyfr:handshake";
   var CREDENTIAL = "cyfr:credential";
@@ -60,8 +63,12 @@
   }
   var FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/;
   var TINCTURE_REF = /^(t|tincture):\S+$/;
+  var COMPONENT_REF = /^(c|catalyst|r|reagent|f|formula|t|tincture):\S+$/;
   var DESKTOP_ID = /^[a-z][a-z0-9_-]{0,62}$/;
   var SUBJECT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$/;
+  var OPERATION = /^[a-z][a-z0-9_-]{0,62}\.[a-z][a-z0-9_-]{0,62}$/;
+  var GRANT_OPERATION = "grant";
+  var REQUEST_ID = /^req_[A-Za-z0-9_-]{16,64}$/;
   var MAX_PRESS_VALUE = 256;
   var MAX_CALL = 2147483647;
   var ACCENT = /^#[0-9a-f]{6}$/;
@@ -91,6 +98,8 @@
   var isDesktopId = (id) => typeof id === "string" && DESKTOP_ID.test(id);
   var isPressValue = (value) => isBoundedText(value, MAX_PRESS_VALUE);
   var isCall = (call) => Number.isInteger(call) && call >= 1 && call <= MAX_CALL;
+  var isGrantArgs = (args) => isObject(args) && sameKeys(args, ["ref"]) && typeof args.ref === "string" && COMPONENT_REF.test(args.ref);
+  var isRequest = (operation, args) => operation === GRANT_OPERATION ? isGrantArgs(args) : typeof operation === "string" && OPERATION.test(operation) && isObject(args);
   var isSubject = (subject) => isObject(subject) && sameKeys(subject, ["kind", "id"]) && SUBJECT_KINDS.includes(subject.kind) && typeof subject.id === "string" && SUBJECT_ID.test(subject.id);
   function isFrameId(id) {
     return typeof id === "string" && FRAME_ID.test(id);
@@ -147,7 +156,8 @@
   var CLOSE_CODES = Object.freeze({ unreadable: 4400, too_big: 1009, replaced: 4409, idle: 1e3 });
   var REFUSAL_EVENT = "refusal";
   var DELIVERY_EVENTS = Object.freeze(["snapshot", "resync", "unavailable", "stale", "denied"]);
-  var STREAM_STATES = Object.freeze(["live", "unavailable", "stale", "denied", "ended"]);
+  var STREAM_STATES = Object.freeze(["live", "unavailable", "suspended", "stale", "denied", "ended"]);
+  var ENDED_REASONS = Object.freeze(["frame_suspended"]);
   var NO_ANSWER_CLASSES = Object.freeze([
     "cancelled",
     "corrupt",
@@ -184,7 +194,7 @@
         read = sameKeys(message, head);
         break;
       case "ended":
-        read = sameKeys(message, head) || sameKeys(message, [...head, "error"]) && isRefusal(message.error);
+        read = sameKeys(message, head) || sameKeys(message, [...head, "error"]) && isRefusal(message.error) || sameKeys(message, [...head, "error", "reason"]) && isRefusal(message.error) && ENDED_REASONS.includes(message.reason);
         break;
       default:
         read = false;
@@ -213,11 +223,17 @@
     "state",
     "pressed",
     "prefs",
+    "requested",
+    "decided",
     "subject"
   ]);
   var TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"]);
-  var ANSWER_OF = Object.freeze({ press: "pressed", prefs: "prefs" });
-  var ANSWER_VERBS = Object.freeze(Object.values(ANSWER_OF));
+  var ANSWER_OF = Object.freeze({
+    press: Object.freeze(["pressed", "requested", "decided"]),
+    prefs: Object.freeze(["prefs"]),
+    request: Object.freeze(["requested", "decided"])
+  });
+  var ANSWER_VERBS = Object.freeze([...new Set(Object.values(ANSWER_OF).flat())]);
   var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop", "subject"]);
   var POSTURES = ["desk", "hand"];
   var SHELL_STATES = ["live", "frozen"];
@@ -258,10 +274,10 @@
     if (!isPerson(block.person)) return "a canvas's person is exactly a name, or none";
     return null;
   }
-  var isOutcome = (args, outcomes) => {
+  var isOutcome = (args, outcomes, cancelReasons = CANCEL_REASONS) => {
     if (!outcomes.includes(args.outcome)) return false;
     if (args.outcome === "refused") return typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason);
-    if (args.outcome === "cancelled") return !("reason" in args) || CANCEL_REASONS.includes(args.reason);
+    if (args.outcome === "cancelled") return !("reason" in args) || cancelReasons.includes(args.reason);
     return !("reason" in args);
   };
   var withReason = (args, keys) => "reason" in args ? [...keys, "reason"] : keys;
@@ -272,6 +288,9 @@
   function prefsAnswerError(args) {
     const keys = withReason(args, ["call", "outcome", "document", "revision"]);
     return sameKeys(args, keys) && isCall(args.call) && isObject(args.document) && isRevision(args.revision) && isOutcome(args, PREFS_OUTCOMES) ? null : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused or cancelled too soon";
+  }
+  function decidedError(args) {
+    return sameKeys(args, withReason(args, ["call", "outcome"])) && isCall(args.call) && isOutcome(args, REQUEST_OUTCOMES, REQUEST_CANCEL_REASONS) ? null : "decided is exactly a call and its outcome, with a reason when refused and perhaps when cancelled";
   }
   function toFrameArgsError(verb, args, frame) {
     switch (verb) {
@@ -289,6 +308,10 @@
         return pressedError(args);
       case "prefs":
         return prefsAnswerError(args);
+      case "requested":
+        return sameKeys(args, ["call", "request"]) && isCall(args.call) && typeof args.request === "string" && REQUEST_ID.test(args.request) ? null : "requested is exactly a call and its request's id";
+      case "decided":
+        return decidedError(args);
       case "subject":
         return isSubject(args) ? null : "subject is exactly a kind and an id";
       default:
@@ -315,6 +338,7 @@
   var REOPEN_FIRST_MS = 1e3;
   var REOPEN_MOST_MS = 3e4;
   var ANSWER_TIMEOUT_MS = 3e4;
+  var DECISION_TIMEOUT_MS = 10 * 60 * 1e3;
   var BINDING_ID = /^feed_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   var ACTION_NAME = /^[a-z0-9][a-z0-9-]{0,47}$/;
   var BENIGN_ERRORS = Object.freeze([
@@ -359,6 +383,7 @@
     const latest = /* @__PURE__ */ new Map();
     const handlers = new Map(CANVAS_EVENTS.map((event) => [event, /* @__PURE__ */ new Set()]));
     const unshown = [];
+    const withheld = /* @__PURE__ */ new Set();
     let connection = null;
     let nextSubscription = 1;
     let desktop = null;
@@ -416,6 +441,8 @@
         known("canvas");
         return tellDesktop();
       }
+      if (told2 === "requested") return asked(args.call, args.request);
+      if (told2 === "decided") return answered(told2, args.call, answerOf(args));
       if (kind !== "canvas") return;
       if (told2 === "pressed") return answered(told2, args.call, answerOf(args));
       if (told2 === "prefs") {
@@ -427,7 +454,10 @@
       }
       const value = heard(told2, args);
       latest.set(told2, value);
-      if (told2 === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve();
+      if (told2 === "state" && value === "live") {
+        for (const resolve of unshown.splice(0)) resolve();
+        thawed();
+      }
       for (const entry of handlers.get(told2)) deliver(told2, entry, value);
     }
     function tellDesktop() {
@@ -450,26 +480,49 @@
     }
     function take(verb2, call2) {
       const waiting = calls.get(call2);
-      if (!waiting || waiting.answer !== verb2) return null;
+      if (!waiting || !waiting.answers.includes(verb2)) return null;
       calls.delete(call2);
       return waiting.settle;
     }
-    function awaitAnswer(name, args) {
+    function asked(call2, request2) {
+      const waiting = calls.get(call2);
+      if (!waiting || !waiting.answers.includes("requested") || waiting.asked) return;
+      waiting.asked = true;
+      waiting.requested(request2);
+    }
+    function awaitAnswer(name, args, onRequested = () => {
+    }) {
       const call2 = nextCall++;
       return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          calls.delete(call2);
-          resolve(UNCERTAIN);
-        }, ANSWER_TIMEOUT_MS);
+        let timer = null;
+        const settle2 = (answer) => {
+          clearTimeout(timer);
+          onRequested(null);
+          resolve(answer);
+        };
+        const wait = (ms) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            calls.delete(call2);
+            settle2(UNCERTAIN);
+          }, ms);
+        };
+        wait(ANSWER_TIMEOUT_MS);
         calls.set(call2, {
-          answer: ANSWER_OF[name],
-          settle: (answer) => {
-            clearTimeout(timer);
-            resolve(answer);
-          }
+          answers: ANSWER_OF[name],
+          asked: false,
+          requested: (request2) => {
+            wait(DECISION_TIMEOUT_MS);
+            onRequested(request2);
+          },
+          settle: settle2
         });
         verb(name, __spreadProps(__spreadValues({}, args), { call: call2 }));
       });
+    }
+    function requestHandle(decision, requested) {
+      decision.requested = requested;
+      return decision;
     }
     function shown() {
       return latest.get("state") === "live" ? Promise.resolve() : new Promise((resolve) => unshown.push(resolve));
@@ -563,7 +616,9 @@
         delivery: "live",
         opened: false,
         tries: 0,
-        timer: null
+        timer: null,
+        missed: false,
+        last: null
       };
       const opened = new Promise((resolve, reject) => Object.assign(subscription, { resolve, reject }));
       const closed = new Promise((resolve, reject) => subscription.closed = { resolve, reject });
@@ -577,7 +632,8 @@
         close,
         /**
          * On a canvas, the stream's state: `live`, `unavailable` (it opens
-         * again at the time its last `unavailable` event named), `stale`,
+         * again at the time its last `unavailable` event named), `suspended`
+         * (the canvas is hidden; it opens again once shown), `stale`,
          * `denied` or `ended`.
          */
         get state() {
@@ -608,6 +664,7 @@
     }
     function attach(subscription) {
       if (subscription.state !== "waiting") return;
+      subscription.missed = false;
       let held;
       try {
         held = connect();
@@ -662,6 +719,7 @@
         if (subscription.state === "open") hear(subscription, heardEvent(message));
       } else if (message.type === "ended") {
         held.subscriptions.delete(subscription.number);
+        if (message.reason === "frame_suspended" && canvas !== null && subscription.opened) return suspend(subscription);
         end(subscription, "error" in message ? message.error : null, null);
       } else if (subscription.state === "open" && canvas !== null) {
         if (message.type === "snapshot") Object.assign(subscription, { delivery: "live", tries: 0 });
@@ -715,10 +773,16 @@
       subscription.closed.resolve();
     }
     function reopen(subscription) {
+      const wait = later(subscription, "unavailable");
+      told(subscription, "unavailable", { retry_at: new Date(Date.now() + wait).toISOString() });
+    }
+    function suspend(subscription) {
+      later(subscription, "suspended");
+    }
+    function later(subscription, delivery) {
       const wait = Math.min(REOPEN_FIRST_MS * 2 ** subscription.tries, REOPEN_MOST_MS);
       subscription.tries += 1;
-      Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false, delivery: "unavailable" });
-      told(subscription, "unavailable", { retry_at: new Date(Date.now() + wait).toISOString() });
+      Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false, delivery });
       subscription.timer = setTimeout(() => {
         subscription.timer = null;
         if (subscription.state !== "waiting") return;
@@ -727,15 +791,39 @@
           (error) => refuse(subscription, error)
         );
       }, wait);
+      return wait;
     }
     function hear(subscription, event) {
+      if (canvas !== null && latest.get("state") === "frozen") {
+        if (subscription.state === "over") subscription.last = event;
+        else subscription.missed = true;
+        withheld.add(subscription);
+        return;
+      }
       try {
         subscription.onEvent(event);
       } catch (_error) {
       }
     }
+    function thawed() {
+      for (const subscription of [...withheld]) {
+        withheld.delete(subscription);
+        if (subscription.state === "over" && subscription.last) {
+          const last = subscription.last;
+          subscription.last = null;
+          hear(subscription, last);
+        } else if (subscription.state === "open" && subscription.missed) {
+          const { held, number } = subscription;
+          held.subscriptions.delete(number);
+          held.socket.send(JSON.stringify(unsubscribeMessage(number)));
+          Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false });
+          attach(subscription);
+        }
+      }
+    }
     function unsubscribe(subscription) {
       const was = subscription.state;
+      subscription.last = null;
       if (was === "over") return;
       subscription.state = "over";
       subscription.delivery = "ended";
@@ -815,7 +903,9 @@
        *   replaces it), `stale` (`at`, the picture's time), `unavailable` (`data.retry_at`,
        *   when the SDK opens it again, after a lost connection or an end for want of an
        *   answer) and `denied` (`data`, the refusal; the stream ended), each as
-       *   {id: null, event, data, revision: null, at}
+       *   {id: null, event, data, revision: null, at}. A stream open when the canvas is
+       *   hidden hears nothing while it is hidden, its handle's state `suspended`, and
+       *   opens again once the canvas is shown, its fresh picture announced by `resync`
        * @returns {Promise<{close: function, closed: Promise, state: string}>} once the stream is open,
        *   carrying `close()` itself, the handle's: closed before it opened, the
        *   promise rejects `cancelled`. A refusal rejects with a CyfrError of
@@ -854,8 +944,12 @@
        * `{outcome: "refused", reason}` with the refusal's class, or
        * `{outcome: "cancelled"}` when no input of the person's carried it or
        * the canvas was not shown, with `reason: "too_soon"` when it came
-       * within a few seconds of the last spend of the activation. Nothing is
-       * tried again.
+       * within a few seconds of the last spend of the activation. A control
+       * whose operation the person approves first settles once they decide,
+       * as `cyfr.request` does: `{outcome: "approved"}`, `{outcome:
+       * "refused", reason}` (`declined` when the person refused it, or a
+       * refusal's class) or `{outcome: "cancelled"}`, perhaps with its
+       * `reason`. Nothing is tried again.
        *
        * Its first argument a binding id (as a `feed.results` event carries
        * one) and its second an action's name, it presses that feed's action
@@ -901,10 +995,42 @@
       },
       /**
        * On a canvas, open one of CYFR's own pages by its key, e.g.
-       * "schedules" or "vault". Only for an input of the person's.
+       * "schedules" or "vault", and optionally at one record on it, by its
+       * id, e.g. a thread's. Only for an input of the person's.
        */
-      settings(page) {
-        verb("settings", { page });
+      settings(page, ref = null) {
+        verb("settings", ref === null ? { page } : { page, ref });
+      },
+      /**
+       * Ask the person for an act only they may do: an operation by its
+       * name, "tool.action", with its arguments, or "grant" with `{ref}`, a
+       * component reference, e.g. "c:local.openai". The person decides in
+       * CYFR's own prompt, never in the frame, and the frame performs
+       * nothing: CYFR runs what they approve. Which operations a frame may
+       * ask for, and what the person is shown, are CYFR's. Only for an input
+       * of the person's, from any frame.
+       * @param {string} operation - "tool.action", or "grant"
+       * @param {object} [args] - its arguments; for "grant" exactly `{ref}`
+       * @returns {Promise<{outcome: string, reason?: string}> & {requested: Promise<string|null>}}
+       *   the decision: `{outcome: "approved"}` once it ran, `{outcome:
+       *   "refused", reason}` (`declined` when the person refused it, or a
+       *   refusal's class when CYFR did), or `{outcome: "cancelled"}`, as
+       *   when no input of the person's carried it, with `reason`
+       *   `too_soon`, `busy`, `expired` or `dismissed` when CYFR says why.
+       *   One that got no answer settles refused `uncertain`.
+       *   `requested` resolves with the request's id once the person is
+       *   asked, or with null when it was decided without asking them.
+       *   Arguments outside the wire reject `invalid_argument`.
+       */
+      request(operation, args = {}) {
+        if (!isRequest(operation, args)) {
+          const refused = invalid("a request names tool.action with an object of arguments, or grant with exactly a ref");
+          return requestHandle(refused, Promise.resolve(null));
+        }
+        if (!framed) return requestHandle(Promise.resolve(CANCELLED), Promise.resolve(null));
+        let heard2;
+        const requested = new Promise((resolve) => heard2 = resolve);
+        return requestHandle(awaitAnswer("request", { operation, args }, heard2), requested);
       },
       /**
        * On a canvas, ask the person to grant a component: a component

@@ -6,7 +6,8 @@ defmodule Opus.ProviderRetryTest do
   `execution.retry` through the gate: a failed run of the caller's athanor
   that a schedule or a feed started runs again as a new root with the
   same pinned component, input and profile, at the consent revision it
-  ran at, as the caller's own run. Another athanor's run, a run that did
+  ran at, as the caller's own run, answered accepted once it starts and
+  ending as the run's own events say. Another athanor's run, a run that did
   not fail, one started anywhere but a schedule or a feed, one whose input
   is no longer kept and one whose grant has changed since are refused,
   and nothing runs.
@@ -79,12 +80,14 @@ defmodule Opus.ProviderRetryTest do
     } do
       failed = scheduled_failure!(ctx)
       script!([%{"answer" => "sunny"}])
+      watch_runs(ctx)
 
-      assert {:ok, %{status: "completed", execution_id: again, retry_of: ^failed} = answer} =
+      assert {:ok, %{status: "accepted", execution_id: again, retry_of: ^failed} = answer} =
                retry(ctx, failed)
 
-      assert answer.reference == @pinned
+      assert Map.keys(answer) |> Enum.sort() == [:execution_id, :retry_of, :status]
       refute again == failed
+      assert_receive %Cyfr.Bus.Execution{execution_id: ^again, kind: :completed}, 10_000
 
       {:ok, original} = Record.get(ctx, failed)
       {:ok, rerun} = Record.get(ctx, again)
@@ -107,6 +110,48 @@ defmodule Opus.ProviderRetryTest do
 
       # The failed run stands as it was; a retry is a run of its own.
       assert %Record{status: :failed, error_class: :internal} = original
+    end
+
+    test "answers accepted for a rerun that fails again, its failure the run's own event", %{
+      ctx: ctx
+    } do
+      failed = scheduled_failure!(ctx)
+      script!([{:error, "still gone"}])
+      watch_runs(ctx)
+
+      # The press is answered for the run that started; the run's failure
+      # is the run's, never a refusal of the retry.
+      assert {:ok, %{status: "accepted", execution_id: again, retry_of: ^failed}} =
+               retry(ctx, failed)
+
+      refute again == failed
+
+      assert_receive %Cyfr.Bus.Execution{execution_id: ^again, kind: :failed, error: error},
+                     10_000
+
+      assert %{class: :internal} = error
+      assert {:ok, %Record{status: :failed, schedule_id: nil}} = Record.get(ctx, again)
+    end
+
+    test "answers once the rerun starts, without waiting for it, and the rerun outlives the caller",
+         %{ctx: ctx} do
+      failed = scheduled_failure!(ctx)
+      # The rerun holds at the probe until this test lets it go.
+      script!([{:probe, self()}, %{"answer" => "late"}])
+      watch_runs(ctx)
+
+      press = Task.async(fn -> retry(ctx, failed) end)
+      assert_receive {:scripted_probe, runner, again}, 10_000
+
+      assert {:ok, {:ok, %{status: "accepted", execution_id: ^again, retry_of: ^failed}}} =
+               Task.yield(press, 2_000),
+             "the retry waited for the rerun to end"
+
+      # The caller has gone; the rerun goes on and ends as a run does.
+      refute Process.alive?(press.pid)
+      assert {:ok, %Record{status: :running}} = Record.get(ctx, again)
+      send(runner, :continue)
+      assert_receive %Cyfr.Bus.Execution{execution_id: ^again, kind: :completed}, 10_000
     end
 
     test "refuses another athanor's run as one that does not exist, and runs nothing", %{
@@ -252,6 +297,12 @@ defmodule Opus.ProviderRetryTest do
 
   defp retry(ctx, id),
     do: Sanctum.Gate.call_external("execution", ctx, %{"action" => "retry", "execution_id" => id})
+
+  # The athanor's run lifecycle as `runs.changes` reads it.
+  defp watch_runs(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
+  end
 
   defp refused({:error, reason}) do
     %Prima.Refusal{class: class, message: message} = Sanctum.Refusals.classify(reason)

@@ -89,6 +89,10 @@ defmodule Prima.Confirmation.Preview do
   @spec max_text() :: pos_integer()
   def max_text, do: @max_text
 
+  @doc "The most details a preview holds."
+  @spec max_details() :: pos_integer()
+  def max_details, do: @max_details
+
   @doc "The JSON map of a preview; `resource` and empty `details` are absent."
   @spec encode(t()) :: map()
   def encode(%__MODULE__{} = preview) do

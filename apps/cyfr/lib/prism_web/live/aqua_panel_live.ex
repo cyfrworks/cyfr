@@ -372,13 +372,31 @@ defmodule PrismWeb.AquaPanelLive do
   def handle_info({:pane, _pane, _message}, socket), do: {:noreply, socket}
 
   # The desktop opens the panel (a canvas's `settings` of `aqua`): on the
-  # thread it keeps, as the button does.
+  # thread it keeps, as the button does; once open, it stays as it is.
   def handle_info(:open, %{assigns: %{phase: :ready, open: false}} = socket) do
     id = socket.assigns.thread && socket.assigns.thread.id
     {:noreply, socket |> open_on(id) |> remember()}
   end
 
   def handle_info(:open, socket), do: {:noreply, socket}
+
+  # The desktop opens the panel at a thread (an attention item's `aqua`
+  # destination): one of the person's own, read under their context, or
+  # the thread it keeps when the id names none of theirs.
+  def handle_info({:open, thread_id}, %{assigns: %{phase: :ready}} = socket)
+      when is_binary(thread_id) do
+    own = Threads.list(Sanctum.Context.actor(socket.assigns.context))
+
+    id =
+      case Enum.find(own, &(&1.id == thread_id and &1.kind == "own")) do
+        %{id: id} -> id
+        nil -> socket.assigns.thread && socket.assigns.thread.id
+      end
+
+    {:noreply, socket |> open_on(id) |> remember()}
+  end
+
+  def handle_info({:open, _thread_id}, socket), do: {:noreply, socket}
 
   # The athanor moved: its seeding ended or it was renamed; read it again.
   def handle_info(

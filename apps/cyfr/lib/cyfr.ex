@@ -64,6 +64,7 @@ defmodule Cyfr do
       Platform.Settings,
       Platform.Settings.Roster,
       ReleaseChannel,
+      Requests,
       RetentionScheduler,
       RuntimeConfig,
       SeedOffer,

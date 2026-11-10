@@ -1306,6 +1306,59 @@ defmodule Sanctum.Consent.AuthzTest do
       end
     end
   end
+
+  describe "a request's preview" do
+    setup [:checkout, :standing_session]
+
+    test "names the home, the athanor, the operation, its resource and every argument as it runs",
+         %{session_ctx: ctx, athanor: athanor} do
+      args = %{
+        "name" => "digest",
+        "cron_expression" => "0 8 * * *",
+        "tags" => ["a", "b"],
+        "input" => %{"z" => 1, "a" => [true, nil]},
+        "catch_up_limit" => 3,
+        "note" => "two\nlines",
+        "label" => ""
+      }
+
+      assert {:ok, %Prima.Confirmation.Preview{} = preview} =
+               Authz.request_preview(ctx, "schedule.create", args, "digest")
+
+      assert preview.operation == "schedule.create"
+      assert preview.resource == "digest"
+      assert preview.athanor in [athanor.name, athanor.id]
+
+      assert preview.details == %{
+               "name" => "digest",
+               "cron_expression" => "0 8 * * *",
+               "tags" => ["a", "b"],
+               "input" => ~s({"a":[true,null],"z":1}),
+               "catch_up_limit" => "3",
+               "note" => ~s("two\\nlines"),
+               "label" => ~s("")
+             }
+    end
+
+    test "refuses a secret, a value too long to show, a name it cannot hold and too many arguments",
+         %{session_ctx: ctx} do
+      too_many = Map.new(1..33, &{"a#{&1}", "x"})
+
+      for args <- [
+            %{"api_key" => "sk-1"},
+            %{"password" => "hunter2"},
+            %{"name" => String.duplicate("a", 1_025)},
+            %{"Name" => "x"},
+            too_many
+          ] do
+        assert {:error, {:invalid_argument, sentence}} =
+                 Authz.request_preview(ctx, "feed.bind", args, nil),
+               inspect(Map.keys(args))
+
+        assert is_binary(sentence)
+      end
+    end
+  end
 end
 
 defmodule Sanctum.Consent.AuthzRaceTest do
