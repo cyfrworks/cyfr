@@ -221,6 +221,37 @@ defmodule Aqua.RunnerTest do
       |> Arca.Repo.update_all(set: [expires_at: past])
   end
 
+  # A trigger that refuses every write of `error` as a step's error, spelled
+  # per adapter. The sandbox rolls it back with the test.
+  defp refuse_step_error!(error) do
+    name = "runner_test_refused_step_error"
+
+    if Arca.Test.Adapter.sqlite?() do
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE UPDATE ON turn_steps WHEN NEW.error = '#{error}' " <>
+          "BEGIN SELECT RAISE(ABORT, 'the step write is refused'); END"
+      )
+    else
+      Arca.Repo.query!(
+        "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
+          "$$ BEGIN RAISE EXCEPTION 'the step write is refused'; END $$"
+      )
+
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE UPDATE ON turn_steps FOR EACH ROW " <>
+          "WHEN (NEW.error = '#{error}') EXECUTE FUNCTION #{name}()"
+      )
+    end
+
+    name
+  end
+
+  defp allow_step_errors!(name) do
+    if Arca.Test.Adapter.sqlite?(),
+      do: Arca.Repo.query!("DROP TRIGGER #{name}"),
+      else: Arca.Repo.query!("DROP TRIGGER #{name} ON turn_steps")
+  end
+
   defp await_retired(runner, ref) do
     assert_receive {:DOWN, ^ref, :process, ^runner, :normal}, 5_000
     _ = :sys.get_state(Aqua.RunnerSupervisor)
@@ -773,6 +804,67 @@ defmodule Aqua.RunnerTest do
           do: params["session"]
 
     assert sessions == [nil, "brain-1", nil, "brain-2"]
+  end
+
+  # The store refuses the write of the mark that the turn forgot a session.
+  # Nothing is forgotten and nothing is asked again, since a continued turn
+  # would find no mark and forget a second time. Whichever way the turn
+  # goes on, to its end or to a card that then expires, the thread's
+  # session and generation are as they were and no request follows the
+  # refused one.
+  test "a refused write of the forget's mark leaves the thread's session and asks nothing again",
+       %{ctx: ctx, thread: thread} do
+    actor = Sanctum.Context.actor(ctx)
+    gone = %{"type" => "unknown_session", "message" => "The brain no longer holds this session."}
+    keep = call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"})
+
+    script!([
+      Map.put(reply("hello"), "session", "brain-1"),
+      {:refuse, gone},
+      Map.put(keep, "session", "brain-2"),
+      {:refuse, gone},
+      reply("never asked")
+    ])
+
+    {:ok, _} = Runner.send_message(ctx, thread.id, "@aqua hello")
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+
+    assert {:ok, %{brain_session: "brain-1", brain_generation: generation}} =
+             Threads.get(actor, thread.id)
+
+    refused = refuse_step_error!("unknown_session")
+    {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua keep it")
+
+    reached =
+      receive do
+        %ThreadEvent{kind: kind} when kind in [:turn_finished, :turn_paused] -> kind
+      after
+        60_000 -> flunk("the turn neither finished nor paused")
+      end
+
+    allow_step_errors!(refused)
+
+    if reached == :turn_paused do
+      {:ok, paused} = Tape.turn(ctx, turn_id)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      lapse!(approval)
+      send(Runner.whereis(thread.id), {:expire, turn_id})
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+      assert {:ok, %{status: "expired"}} = Tape.approval(ctx, approval.id)
+    end
+
+    {:ok, stored} = Threads.get(actor, thread.id)
+    {:ok, ended} = Tape.turn(ctx, turn_id)
+
+    sessions =
+      for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+          do: params["session"]
+
+    assert stored.brain_generation == generation
+    assert stored.brain_session == "brain-1"
+    assert ended.status == "failed"
+    assert ended.recovery_attempts == 0
+    assert sessions == [nil, "brain-1"]
   end
 
   @tag :stop_handoff

@@ -777,9 +777,8 @@ defmodule Aqua.Loop do
       # asking again repeats nothing. A refusal of that type the turn does
       # not forget on (`forgets?/3`) ends it as any other does, the thread's
       # session left as it is.
-      {:error, %{"type" => @session_gone = type} = error} when forget? ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", refused(state, error, type))
-        ask_without_session(state, request, retained, retries)
+      {:error, %{"type" => @session_gone} = error} when forget? ->
+        ask_without_session(state, step, error, request, retained, retries)
 
       {:error, %{"type" => type} = error} when type in @setup ->
         _ =
@@ -839,14 +838,20 @@ defmodule Aqua.Loop do
 
   defp forgot_session?(_step), do: false
 
-  # The thread forgets the session its brain no longer holds, and the same
-  # request is asked once more without it, which opens a new session. The
-  # turn keeps that session under the generation its forget answers: the
-  # raised one, or the one it read when the thread was forgotten from
-  # outside meanwhile, under which nothing it answers with is kept
-  # (`Arca.TurnStorage.forget_session/3`).
-  defp ask_without_session(%State{} = state, request, retained, retries) do
-    with {:ok, generation} <- Tape.forget_session(guest(state), state.turn, state.generation),
+  # The refused step closes with the mark that the turn forgot a session
+  # (`@session_gone`), the thread forgets the session its brain no longer
+  # holds, and the same request is asked once more without it, which opens
+  # a new session. Each write is required before the next: a mark that was
+  # not written forgets nothing and asks nothing, since a continued turn
+  # would find no mark and forget again. The turn keeps the new session
+  # under the generation its forget answers: the raised one, or the one it
+  # read when the thread was forgotten from outside meanwhile, under which
+  # nothing it answers with is kept (`Arca.TurnStorage.forget_session/3`).
+  defp ask_without_session(%State{} = state, step, error, request, retained, retries) do
+    marked = refused(state, error, @session_gone)
+
+    with {:ok, _closed} <- Tape.close_step(guest(state), state.turn, step, "error", marked),
+         {:ok, generation} <- Tape.forget_session(guest(state), state.turn, state.generation),
          forgot = %{state | session: nil, generation: generation, forgot_session?: true},
          {:ok, again, asking} <- open_model_step(forgot, "chat") do
       request = Map.delete(request, "session")
