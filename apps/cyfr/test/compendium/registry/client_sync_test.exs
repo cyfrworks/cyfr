@@ -861,8 +861,13 @@ defmodule Compendium.Registry.ClientSyncTest do
       end
     end
 
-    test "a registry that does not answer is unavailable", %{stub: stub} do
-      HTTPStub.down(stub)
+    test "a registry that does not answer is unavailable" do
+      # Keep the refused port reserved so another test cannot serve it.
+      {:ok, socket} = :socket.open(:inet, :stream, :tcp)
+      on_exit(fn -> :socket.close(socket) end)
+      :ok = :socket.bind(socket, %{family: :inet, addr: {127, 0, 0, 1}, port: 0})
+      {:ok, %{port: port}} = :socket.sockname(socket)
+      Prima.Test.Env.put_app_env(:cyfr, :registry_url, "127.0.0.1:#{port}")
 
       log =
         capture_log(fn ->
