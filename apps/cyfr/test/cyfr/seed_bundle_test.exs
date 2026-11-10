@@ -100,16 +100,21 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is 0.5.0 on the react template, the default layout's, and the publish check accepts it" do
+  test "the shipped canvas is 0.6.0 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
-    assert canvas.version == "0.5.0"
+    assert canvas.version == "0.6.0"
 
-    # The seed ships it beside the version before it, which stays as it
+    # The seed ships it beside the versions before it, which stay as they
     # shipped.
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), canvas.rel)
-    assert dir |> Path.dirname() |> File.ls!() |> Enum.sort() == ["0.4.0", canvas.version]
+
+    assert dir |> Path.dirname() |> File.ls!() |> Enum.sort() == [
+             "0.4.0",
+             "0.5.0",
+             canvas.version
+           ]
 
     # The default layout's one canvas, with nothing placed over it.
     assert [%{id: "home", tincture: ref, postures: postures}] = Prima.Layout.default().canvases
@@ -144,8 +149,9 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
 
     # It pauses and resumes a schedule, picked from the schedules it reads,
-    # keeps each section's on and off in its preferences, and declares the
-    # current look in its chrome, read as publish reads it.
+    # runs a failed run again, picked from the runs, keeps each section's on
+    # and off in its preferences, and declares the current look in its
+    # chrome, read as publish reads it.
     pick = %Prima.Manifest.Tincture.Pick{
       stream: "schedules.changes",
       field: "/schedule_id",
@@ -154,8 +160,11 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert [
              %{id: "pause-schedule", operation: "schedule.pause", args: %{}, pick: ^pick},
-             %{id: "resume-schedule", operation: "schedule.resume", args: %{}, pick: ^pick}
+             %{id: "resume-schedule", operation: "schedule.resume", args: %{}, pick: ^pick},
+             %{id: "retry-run"}
            ] = declaration.desktop.controls
+
+    assert retries?(declaration)
 
     assert declaration.desktop.prefs == %{
              widgets: Map.new(~w(attention runs apps schedules), &{&1, %{}}),
@@ -228,20 +237,28 @@ defmodule Cyfr.Test.SeedBundleTest do
     )
   end
 
-  # A shipped version is immutable: each desktop's 0.1.0 ships beside its
-  # 0.2.0 as it shipped, still a desktop the publish check accepts, with no
-  # retry control.
-  test "each shipped desktop's 0.1.0 still ships beside 0.2.0 and passes the publish check" do
+  # A shipped version is immutable: each desktop's earlier version (the
+  # five's 0.1.0, the canvas's 0.5.0) ships beside its new one as it
+  # shipped, still a desktop the publish check accepts, with no retry
+  # control.
+  test "each shipped desktop's earlier version still ships beside the new one and passes the publish check" do
     components = Path.expand("../../../../seed/components", __DIR__)
 
-    for name <- ~w(line night road street switchboard) do
+    for {name, before, now} <- [
+          {"canvas", "0.5.0", "0.6.0"},
+          {"line", "0.1.0", "0.2.0"},
+          {"night", "0.1.0", "0.2.0"},
+          {"road", "0.1.0", "0.2.0"},
+          {"street", "0.1.0", "0.2.0"},
+          {"switchboard", "0.1.0", "0.2.0"}
+        ] do
       unit = SeedBundle.local_unit!("tinctures", name)
-      assert unit.version == "0.2.0", name
-      dir = Path.join(components, "tinctures/local/#{name}/0.1.0")
-      assert dir |> Path.dirname() |> File.ls!() |> Enum.sort() == ["0.1.0", "0.2.0"], name
+      assert unit.version == now, name
+      dir = Path.join(components, "tinctures/local/#{name}/#{before}")
+      assert before in (dir |> Path.dirname() |> File.ls!()), name
 
       manifest = dir |> Path.join("cyfr-manifest.json") |> File.read!() |> Jason.decode!()
-      assert manifest["version"] == "0.1.0", name
+      assert manifest["version"] == before, name
       assert Prima.Manifest.validate(manifest, fn _ -> true end) == :ok, name
       assert {:ok, declaration} = Compendium.tincture_declaration(manifest)
       assert Prima.Manifest.Tincture.canvas?(declaration), name

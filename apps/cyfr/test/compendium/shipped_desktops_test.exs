@@ -3,17 +3,28 @@
 
 defmodule Compendium.ShippedDesktopsTest do
   @moduledoc """
-  The five shipped desktops ship two versions each: 0.1.0 as it shipped,
-  and 0.2.0 beside it. An athanor filled while only 0.1.0 shipped sees an
-  update once the seed carries 0.2.0, and one filled from the seed holds
-  both versions as the components list reads them, its 0.1.0 marked so.
+  The shipped desktops each ship a new version beside the one they shipped
+  with: the five at 0.2.0 beside 0.1.0, and the shipped canvas at 0.6.0
+  beside 0.5.0. An athanor filled while only the earlier version shipped
+  sees an update once the seed carries the new one, and one filled from
+  the seed holds both versions as the components list reads them, the
+  earlier marked so.
   """
   use ExUnit.Case, async: false
 
   alias Compendium.Providers.Component
 
   @repo_desktops Path.expand("../../../../seed/components/tinctures/local", __DIR__)
-  @desktops ~w(line night road street switchboard)
+  # Each desktop, the version it shipped with and the version beside it.
+  @shipped [
+    {"canvas", "0.5.0", "0.6.0"},
+    {"line", "0.1.0", "0.2.0"},
+    {"night", "0.1.0", "0.2.0"},
+    {"road", "0.1.0", "0.2.0"},
+    {"street", "0.1.0", "0.2.0"},
+    {"switchboard", "0.1.0", "0.2.0"}
+  ]
+  @names Enum.map(@shipped, &elem(&1, 0))
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -30,9 +41,11 @@ defmodule Compendium.ShippedDesktopsTest do
     {:ok, seed: seed, ctx: Sanctum.TestContext.local()}
   end
 
-  # The seed ships `version` of every desktop, copied from the repository's.
-  defp ship!(seed, version) do
-    for name <- @desktops do
+  # The seed ships each desktop's version `pick` chooses, copied from the
+  # repository's.
+  defp ship!(seed, pick) do
+    for {name, _before, _after} = desktop <- @shipped do
+      version = pick.(desktop)
       target = Path.join([seed, "components/tinctures/local", name, version])
       File.mkdir_p!(target)
       File.cp_r!(Path.join([@repo_desktops, name, version]), target)
@@ -52,42 +65,41 @@ defmodule Compendium.ShippedDesktopsTest do
   defp desktops!(ctx) do
     {:ok, items} = Component.installed(ctx, nil)
 
-    for %{type: "tincture", name: name} = item <- items, name in @desktops do
+    for %{type: "tincture", name: name} = item <- items, name in @names do
       {name, item.version, item.update_available}
     end
     |> Enum.sort()
   end
 
-  test "the seed ships 0.1.0 and 0.2.0 of each desktop" do
-    for name <- @desktops do
-      assert File.ls!(Path.join(@repo_desktops, name)) |> Enum.sort() == ["0.1.0", "0.2.0"]
+  test "the seed ships each desktop's new version beside the one it shipped with" do
+    for {name, before, now} <- @shipped do
+      versions = File.ls!(Path.join(@repo_desktops, name))
+      assert before in versions and now in versions, name
     end
   end
 
-  test "an installed 0.1.0 shows an update once 0.2.0 ships, and a fill lists both", %{
-    seed: seed,
-    ctx: ctx
-  } do
-    ship!(seed, "0.1.0")
+  test "an installed earlier version shows an update once the new one ships, and a fill lists both",
+       %{seed: seed, ctx: ctx} do
+    ship!(seed, &elem(&1, 1))
     fill!(ctx)
-    assert desktops!(ctx) == for(name <- @desktops, do: {name, "0.1.0", false})
+    assert desktops!(ctx) == for({name, before, _now} <- @shipped, do: {name, before, false})
 
-    # The next release's seed carries 0.2.0 beside it.
-    ship!(seed, "0.2.0")
+    # The next release's seed carries the new version beside it.
+    ship!(seed, &elem(&1, 2))
 
-    for name <- @desktops do
-      assert Compendium.Provenance.shipped_versions("tincture", name) == {:ok, ["0.2.0", "0.1.0"]}
+    for {name, before, now} <- @shipped do
+      assert Compendium.Provenance.shipped_versions("tincture", name) == {:ok, [now, before]}
     end
 
-    assert desktops!(ctx) == for(name <- @desktops, do: {name, "0.1.0", true})
+    assert desktops!(ctx) == for({name, before, _now} <- @shipped, do: {name, before, true})
 
     fill!(ctx)
 
     assert desktops!(ctx) ==
              for(
-               name <- @desktops,
-               version <- ["0.1.0", "0.2.0"],
-               do: {name, version, version == "0.1.0"}
+               {name, before, now} <- @shipped,
+               version <- [before, now],
+               do: {name, version, version == before}
              )
   end
 end
