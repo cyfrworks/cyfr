@@ -140,8 +140,9 @@ working, which is kept, and which validation last failed.
   they approve. It resolves with `{outcome, reason}`: `approved`,
   `refused` (`declined` by the person, or a refusal's class) or
   `cancelled` (`busy` while another request of the page waits, `expired`
-  after five minutes, `dismissed`, `too_soon`); its `requested` promise
-  holds the request's id while it waits. Declare a control instead for a
+  after five minutes or when the confirmation its call needed expired,
+  `dismissed` or `too_soon`; a cancelled confirmation carries no reason);
+  its `requested` promise holds the request's id while it waits. Declare a control instead for a
   fixed act the desktop offers on a tap: the person sees it in the
   canvas's grant before it ever runs. Never put a secret in a request.
 - `cyfr.settings(page, ref)` opens one of CYFR's pages; an
