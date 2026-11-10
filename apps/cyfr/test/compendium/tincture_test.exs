@@ -330,21 +330,23 @@ defmodule Compendium.TinctureTest do
                "tincture.desktop.data names mcp_servers.changes, " <>
                  "which a desktop cannot read: the stream declares no shape"
 
-      # A control outside the direct rule is refused at publish, naming why.
+      # A control the person approves first is admitted at publish; one
+      # publish refuses still is, naming why.
+      control = fn operation ->
+        canvas(%{
+          "desktop" => %{
+            "controls" => [%{"id" => "go", "label" => "Go", "operation" => operation}]
+          }
+        })
+      end
+
+      assert {:ok, 1} = Tincture.check_version(control.("schedule.create"), [{"index.html", 1}])
+
       assert {:error, message} =
-               Tincture.check_version(
-                 canvas(%{
-                   "desktop" => %{
-                     "controls" => [
-                       %{"id" => "go", "label" => "Go", "operation" => "schedule.create"}
-                     ]
-                   }
-                 }),
-                 [{"index.html", 1}]
-               )
+               Tincture.check_version(control.("profile.commit"), [{"index.html", 1}])
 
       assert message =~
-               "tincture.desktop.controls go runs schedule.create, which is the person's own act"
+               "tincture.desktop.controls go runs profile.commit, a step of a grant's consent walk"
 
       # The same stream on a tincture that is no canvas is admitted.
       assert {:ok, 1} =

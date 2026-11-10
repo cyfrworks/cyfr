@@ -181,7 +181,7 @@ defmodule Cyfr.Providers.AttentionTest do
       ctx: ctx,
       other_ctx: other_ctx
     } do
-      id = Prima.TinctureWire.request_id()
+      id = Prima.UUID7.request_id()
       :ok = Cyfr.Requests.open(ctx, id, "schedule.create")
 
       assert [item] = refreshed(ctx)
@@ -205,7 +205,7 @@ defmodule Cyfr.Providers.AttentionTest do
 
       holder =
         spawn(fn ->
-          :ok = Cyfr.Requests.open(ctx, Prima.TinctureWire.request_id(), "feed.remove")
+          :ok = Cyfr.Requests.open(ctx, Prima.UUID7.request_id(), "feed.remove")
           send(test, :held)
           receive do: (:stop -> :ok)
         end)
@@ -324,7 +324,7 @@ defmodule Cyfr.Providers.AttentionTest do
       schedule = schedule!(actor, ctx.user_id, "s")
       occurrence!(actor, schedule.id, ~U[2026-01-02 00:00:00.000000Z], "failed")
       offer!(other_ctx, ctx.user_id, ["f.csv"])
-      :ok = Cyfr.Requests.open(ctx, Prima.TinctureWire.request_id(), "layout.edit")
+      :ok = Cyfr.Requests.open(ctx, Prima.UUID7.request_id(), "layout.edit")
 
       items = refreshed(ctx)
 
@@ -484,7 +484,7 @@ defmodule Cyfr.Providers.AttentionTest do
       ctx: ctx
     } do
       for outcome <- ~w(resolved expired withdrawn)a do
-        id = Prima.TinctureWire.request_id()
+        id = Prima.UUID7.request_id()
         :ok = Cyfr.Requests.open(ctx, id, "schedule.update")
         assert_receive %Attention{kind: :grant_request} = entered
         assert [read_as(entered)] == refreshed(ctx)
@@ -656,7 +656,7 @@ defmodule Cyfr.Providers.AttentionTest do
     end
 
     test "no item names a person", %{ctx: ctx, actor: actor, other_ctx: other_ctx} do
-      :ok = Cyfr.Requests.open(ctx, Prima.TinctureWire.request_id(), "feed.bind")
+      :ok = Cyfr.Requests.open(ctx, Prima.UUID7.request_id(), "feed.bind")
       approval!(actor, thread!(actor, "t"))
       confirmation!(ctx)
       run!(actor, ctx.user_id, "reagent:local.x:1.0.0", "failed", DateTime.utc_now())

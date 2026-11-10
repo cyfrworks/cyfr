@@ -230,7 +230,7 @@ defmodule Compendium.Providers.CanvasTest do
             write_args(%{"data" => ["x"]}),
             write_args(%{"data" => "runs.changes"}),
             write_args(%{
-              "controls" => [%{"id" => "c", "label" => "Go", "operation" => "layout.edit"}]
+              "controls" => [%{"id" => "c", "label" => "Go", "operation" => "profile.grant"}]
             })
           ] do
         assert class.(call(ctx, "write", args)) == :invalid_argument

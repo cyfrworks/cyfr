@@ -480,8 +480,8 @@ defmodule Prima.TinctureWireTest do
     end
   end
 
-  test "a fresh request id is one the wire reads, and no two are the same" do
-    ids = for _ <- 1..32, do: TinctureWire.request_id()
+  test "a request id the identifier generator mints is one the wire reads, and no two are the same" do
+    ids = for _ <- 1..32, do: Prima.UUID7.request_id()
     assert Enum.all?(ids, &TinctureWire.request_id?/1)
     assert Enum.uniq(ids) == ids
     refute TinctureWire.request_id?("req_short")

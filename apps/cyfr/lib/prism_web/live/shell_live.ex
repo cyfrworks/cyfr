@@ -1345,7 +1345,7 @@ defmodule PrismWeb.ShellLive do
   # `requested`, and ended `expired` at its bound. It ends under the
   # context it was opened with, wherever the view's focus has moved since.
   defp open_request(socket, frame, call, prompt_id, kind, label) do
-    id = Prima.TinctureWire.request_id()
+    id = Prima.UUID7.request_id()
     ctx = socket.assigns.context
     :ok = Cyfr.Requests.open(ctx, id, label)
     timer = Process.send_after(self(), {:request_expired, id}, @request_ttl_ms)

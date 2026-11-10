@@ -583,7 +583,7 @@ defmodule PrismWeb.ShellDesktopTest do
       row.name
     end
 
-    defp prompt(view), do: ~s(#system-layer-desktop-dialog [data-kind="request"])
+    defp prompt, do: ~s(#system-layer-desktop-dialog [data-kind="request"])
 
     defp click!(view, test),
       do:
@@ -602,7 +602,7 @@ defmodule PrismWeb.ShellDesktopTest do
       assert %{"call" => 11, "request" => id} = answer!(view, home, "requested")
       assert Prima.TinctureWire.request_id?(id)
 
-      assert has_element?(view, prompt(view))
+      assert has_element?(view, prompt())
       assert has_element?(view, ~s([data-test="request-preview"]), "schedule.update")
       assert has_element?(view, ~s([data-test="request-preview"]), "renamed")
       assert has_element?(view, ~s([data-test="request-asker"]), "markets")
@@ -614,7 +614,7 @@ defmodule PrismWeb.ShellDesktopTest do
       click!(view, "request-approve")
       assert answer!(view, home, "decided") == %{"call" => 11, "outcome" => "approved"}
       assert name_of(ctx, digest.id) == "renamed"
-      refute has_element?(view, prompt(view))
+      refute has_element?(view, prompt())
       assert waiting(ctx, user) == []
     end
 
@@ -670,7 +670,7 @@ defmodule PrismWeb.ShellDesktopTest do
                %{"call" => 16, "outcome" => "cancelled", "reason" => "expired"}
 
       _ = render(view)
-      refute has_element?(view, prompt(view))
+      refute has_element?(view, prompt())
       assert waiting(ctx, user) == []
       assert name_of(ctx, digest.id) == "digest"
     end
@@ -689,7 +689,7 @@ defmodule PrismWeb.ShellDesktopTest do
       assert answer!(view, home, "decided") ==
                %{"call" => 17, "outcome" => "refused", "reason" => "invalid_argument"}
 
-      refute has_element?(view, prompt(view))
+      refute has_element?(view, prompt())
       assert assigns(view).requests == %{}
     end
 
@@ -700,7 +700,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
       verb!(view, home, :request, rename(digest, "scripted", 18), nil)
       assert answer!(view, home, "decided") == %{"call" => 18, "outcome" => "cancelled"}
-      refute has_element?(view, prompt(view))
+      refute has_element?(view, prompt())
     end
 
     test "the gate's refusal of the approved call decides it, and nothing is left to approve again",
@@ -725,7 +725,7 @@ defmodule PrismWeb.ShellDesktopTest do
       # The prompt says why and offers nothing more to run. The name is
       # freed, so a run now would succeed: an approval sent all the same
       # runs nothing.
-      assert has_element?(view, prompt(view))
+      assert has_element?(view, prompt())
       refute has_element?(view, ~s(button[data-test="request-approve"]))
       {:ok, _} = Arca.CronSchedule.update(Sanctum.Context.actor(ctx), taken.id, %{name: "free"})
 
@@ -788,7 +788,7 @@ defmodule PrismWeb.ShellDesktopTest do
       render_hook(view, "frame_close", %{"frame" => app.id})
       _ = render(view)
 
-      refute has_element?(view, prompt(view))
+      refute has_element?(view, prompt())
       assert assigns(view).requests == %{}
       assert waiting(ctx, user) == []
       refute_push_event(view, "canvas_answer", %{verb: "decided"})

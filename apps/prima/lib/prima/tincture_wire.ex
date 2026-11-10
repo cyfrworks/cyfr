@@ -495,14 +495,12 @@ defmodule Prima.TinctureWire do
   def request_operation?(operation),
     do: is_binary(operation) and Prima.Manifest.Tincture.operation_name?(operation)
 
-  @doc "Whether `id` is a request's id: `req_` and 16 to 64 URL-safe characters."
+  @doc """
+  Whether `id` is a request's id: `req_` and 16 to 64 URL-safe characters,
+  as `Prima.UUID7.request_id/0` mints one.
+  """
   @spec request_id?(term()) :: boolean()
   def request_id?(id), do: is_binary(id) and Regex.match?(@request_id, id)
-
-  @doc "A fresh request id."
-  @spec request_id() :: String.t()
-  def request_id,
-    do: "req_" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
 
   @doc "Whether `id` is a frame id: 8 to 64 URL-safe characters."
   @spec frame_id?(term()) :: boolean()
