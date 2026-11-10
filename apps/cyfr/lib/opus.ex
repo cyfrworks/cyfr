@@ -135,7 +135,7 @@ defmodule Opus do
   """
   @spec start_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def start_root(%Context{} = ctx, profile_selector, reference, input, opts \\ []) do
+  def start_root(%Context{} = ctx, profile_selector, reference, input, opts) do
     caller = self()
     answer = make_ref()
     logger_metadata = Prima.LoggerContext.capture()
