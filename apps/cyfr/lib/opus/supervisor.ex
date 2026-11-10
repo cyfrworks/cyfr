@@ -55,7 +55,8 @@ defmodule Opus.Supervisor do
           {Registry, keys: :unique, name: Opus.Attempt.Registry},
           {DynamicSupervisor, name: Opus.Attempt.Supervisor, strategy: :one_for_one}
         ]),
-        # Roots run in the background (`execution.run_stream`), after the
+        # Roots run in the background (`execution.run_stream`,
+        # `Opus.start_root/5`), after the
         # registry each one registers in. 30 s: the longest root it lets
         # finish.
         Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor},
