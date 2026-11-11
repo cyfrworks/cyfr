@@ -383,6 +383,13 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # section of it. A section is a top-level key, read as the reader's
   # language spells a read of it (`sections_read/3`); `a.b` is the nested
   # path `.a.b` a JavaScript reader names.
+  #
+  # It also fails when a file under a test path names a vector file and has
+  # no row for it (`naming/2`), unless @named_not_read says what that file
+  # does with the name. The scan finds a reader by the vector file's name in
+  # its text, so a reader that builds the name at runtime (from parts, or by
+  # listing tests/fixtures) is out of its reach, as is one outside a test
+  # path (a component's source, which a row names all the same).
   @vector_readers %{
     "account_names.json" => [
       {"apps/codex/cmd/profile_test.go", ~w(unicode keys same different)},
@@ -415,11 +422,13 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/origin_test.exs", ~w(origins)}
     ],
     "device.json" => [
+      {"apps/codex/internal/shell/device_test.go", ~w(keys messages refusals)},
       {"apps/cyfr/test/emissary/web/device_channel_test.exs", ~w(messages refusals)},
       {"apps/prima/test/prima/device_test.exs",
        ~w(continuous_fields keys messages protocol refusals types)}
     ],
     "device_cert.json" => [
+      {"apps/codex/internal/shell/proof_test.go", ~w(challenges keys proofs verify)},
       {"apps/prima/test/prima/device_cert_test.exs",
        ~w(certificate_protocol certificates challenge_refusals challenges issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals verify)}
     ],
@@ -429,6 +438,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(protocol common_fields purpose_fields keys proofs verify)},
       {"apps/codex/internal/shell/server_test.go", ~w(exchange)},
       {"apps/cyfr/assets/test/device_unlock/complete.test.mjs", ~w(exchange)},
+      {"apps/cyfr/test/emissary/web/controllers/device_session_controller_test.exs",
+       ~w(exchange)},
+      {"apps/prima/test/prima/device_cert_test.exs", ~w(keys proofs purpose_fields verify)},
       {"apps/prima/test/prima/device_unlock_test.exs",
        ~w(protocol common_fields purpose_fields keys proofs verify exchange)}
     ],
@@ -458,6 +470,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(framing_headers override_headers override_prefixes credential_headers)},
       {"apps/prima/test/prima/runner_relay_test.exs", ~w(version max_body_bytes keys calls)},
       {"apps/prima/test/prima/worker_auth_test.exs", ~w(keys report)},
+      {"apps/prima/test/prima/worker_protocol_test.exs",
+       ~w(calls max_answer_bytes max_body_bytes retries standing timeouts_ms window_ms)},
       {"apps/prima/test/prima/worker_wire_test.exs",
        ~w(version auth_header routes calls body_refusals report egress_pin_cases egress_pin_internal_purposes)},
       {"tests/locus-runtime-image/control_plane.py", ~w()},
@@ -466,6 +480,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version auth_header routes retries timeouts_ms window_ms standing keys calls pre_body_refusals body_refusals report retry_identity connection_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases framing_headers override_headers override_prefixes credential_headers)}
     ],
     "directory_wire.json" => [
+      {"apps/codex/internal/account/wire_test.go", ~w(keys scenarios)},
       {"apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs",
        ~w(directory entries keys scenarios)},
       {"tests/handle-proof/models-test.mjs", ~w(entries)},
@@ -475,8 +490,15 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # beside internal/identity/testdata/SOURCE, which names this file's
     # SHA-256), outside this roster's reach.
     "identity.json" => [
+      {"apps/codex/cmd/thread_test.go", ~w(identifiers)},
+      {"apps/codex/internal/account/identity_test.go",
+       ~w(chains entries identifiers keys kits user_ids webauthn)},
+      {"apps/cyfr/assets/test/account/identity.test.mjs",
+       ~w(chains entries identifiers keys kits user_ids webauthn)},
+      {"apps/cyfr/assets/test/account/pages.test.mjs", ~w(directory entries identifiers keys)},
       {"apps/prima/test/prima/identity_test.exs",
-       ~w(chains directory entries identifiers keys kinds kits max_entry_bytes max_keys max_recovery prefix protocol user_ids webauthn)}
+       ~w(chains directory entries identifiers keys kinds kits max_entry_bytes max_keys max_recovery prefix protocol user_ids webauthn)},
+      {"tests/registry-stand-in/standin_test.py", ~w(chains directory entries)}
     ],
     "keeper_protocol.json" => [
       {"apps/cyfr/test/opus/programs/definition_test.exs", ~w(reserved_env_prefixes)},
@@ -548,16 +570,25 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/codex/internal/access/refusals_test.go", ~w(refusals)},
       {"apps/cyfr/test/cyfr/cross_language_drift_test.exs", ~w(refusals)},
       {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names)},
+      {"apps/cyfr/test/cyfr/runtime_config_wiring_test.exs", ~w(boot)},
+      {"apps/cyfr/test/cyfr/stack_shape_test.exs", ~w(boot profiles)},
+      {"tests/compose-proof/predicates.sh", ~w(derive profiles words)},
       {"tests/compose-proof/run.sh", ~w(refusals boot)},
+      {"tests/release-boot/access-test.sh", ~w(boot)},
       {"tests/release-boot/boot.sh", ~w(boot)}
     ],
     "recovery_code.json" => [
+      {"apps/codex/internal/account/wire_test.go", ~w(refused spellings valid)},
+      {"apps/cyfr/assets/test/account/recovery_code.test.mjs", ~w(refused spellings valid)},
       {"apps/prima/test/prima/recovery_code_test.exs", ~w(protocol refused spellings valid)}
     ],
     # cyfr.run reads its vendored copy too (internal/identity/vectors_test.go,
     # beside internal/identity/testdata/SOURCE, which names this file's
     # SHA-256), outside this roster's reach.
     "registry_wire.json" => [
+      {"apps/codex/internal/account/wire_test.go", ~w(answers envelopes keys requests slugs)},
+      {"apps/cyfr/assets/test/account/registry.test.mjs",
+       ~w(answers codes envelopes keys requests)},
       {"apps/prima/test/prima/handle_answer_test.exs", ~w(answers identity slugs)},
       {"apps/prima/test/prima/registry_request_test.exs",
        ~w(answers codes envelopes identity keys refusals requests slugs verify)},
@@ -570,12 +601,14 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(valid valid_prerelease refused versions signature)},
       {"apps/codex/internal/scaffold/scaffold_test.go", ~w(signature)},
       {"apps/cyfr/test/cyfr/release_channel_test.exs", ~w(versions)},
-      {"tests/ci-release-graph.py", ~w(valid valid_prerelease refused versions signature)}
+      {"tests/ci-release-graph.py", ~w(valid valid_prerelease refused versions signature)},
+      {"tests/release-boot-test.sh", ~w(versions)}
     ],
     "restore_barrier.json" => [
       {"apps/codex/cmd/restore_test.go", ~w(barred_exit declare_expr declared_prefix name)},
       {"apps/cyfr/test/cyfr/platform_settings_roster_test.exs", ~w(name)},
-      {"tests/compose-proof/run.sh", ~w()}
+      {"tests/compose-proof/run.sh", ~w()},
+      {"tests/pairing-proof/run.sh", ~w()}
     ],
     "runner_control.json" => [
       {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
@@ -590,11 +623,18 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
     ],
     "sign_in.json" => [
+      {"apps/codex/cmd/registry_sign_test.go", ~w(requests)},
+      {"apps/codex/internal/account/wire_test.go", ~w(answers keys request_refusals requests)},
+      {"apps/cyfr/assets/test/account/pages.test.mjs",
+       ~w(answers directory fragments identity keys max_fragment_bytes requests verify)},
+      {"apps/cyfr/assets/test/account/sign_in.test.mjs",
+       ~w(answers directory fragments identity max_fragment_bytes registry_output request_refusals requests)},
       {"apps/prima/test/prima/sign_in_test.exs",
        ~w(answer_refusals answers challenge_bytes directory fragments home identity keys lifetime_ms max_fragment_bytes protocol purposes registry_output request_refusals requests verify)}
     ],
     "tincture_wire.json" => [
       {"apps/cyfr/assets/test/canvas/hook.test.mjs", ~w(shell shell_invalid canvas.handshake)},
+      {"apps/cyfr/assets/test/canvas/night_desktop.test.mjs", ~w(canvas)},
       {"apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs",
        ~w(stream_rejections stream_events)},
       {"apps/cyfr/assets/test/canvas/switchboard_desktop.test.mjs", ~w(stream_events)},
@@ -622,6 +662,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "worker_auth.json" => [
       {"apps/codex/cmd/lifecycle_test.go", ~w(keys root_hex root_text service)},
+      {"apps/cyfr/test/cyfr/locus_dev_stack_task_test.exs", ~w(keys root_hex service)},
       {"apps/cyfr/test/cyfr/locus_runtime_key_task_test.exs",
        ~w(keys root_hex root_text service)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
@@ -645,6 +686,55 @@ defmodule Cyfr.CrossLanguageDriftTest do
         "(tests/locus-backends-image/residue.py, tests/builder-image/stack.py): a program, " <>
         "not data two sides read"
   }
+
+  # The files under a test path that name a vector file outside a comment
+  # line and read none of it, each with what it does with the name. Exact:
+  # an entry the scan no longer finds fails as well.
+  @named_not_read %{
+    {"keeper_protocol.json", "tests/builder-image/memory.py"} =>
+      "its docstring names the protocol its keeper client speaks",
+    {"locus_builds.json", "apps/cyfr/test/cyfr/stack_shape_test.exs"} =>
+      "a planted harness text that reads it, for the drift check's own case",
+    {"locus_roles.json", "apps/cyfr/test/cyfr/stack_shape_test.exs"} =>
+      "the drift check holds every image harness to reading it"
+  }
+
+  # Every tracked or new file under a test path (a test/ or tests/
+  # directory, a Go `_test.go` or a `.test.mjs` file), but this roster, the
+  # vector files themselves and Markdown.
+  defp test_path_files do
+    {listing, 0} =
+      System.cmd("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cd: @root,
+        env: [{"GIT_DIR", nil}, {"GIT_WORK_TREE", nil}, {"GIT_INDEX_FILE", nil}]
+      )
+
+    for rel <- String.split(listing, <<0>>, trim: true),
+        rel != "apps/cyfr/test/cyfr/cross_language_drift_test.exs",
+        not String.starts_with?(rel, "tests/fixtures/"),
+        Path.extname(rel) != ".md",
+        test_path?(rel),
+        File.regular?(Path.join(@root, rel)),
+        do: rel
+  end
+
+  defp test_path?(rel) do
+    segments = Path.split(rel)
+
+    Enum.any?(Enum.drop(segments, -1), &(&1 in ["test", "tests"])) or
+      String.ends_with?(rel, ["_test.go", ".test.mjs"])
+  end
+
+  # Whether `source` names the vector file `vectors` on a line that is not a
+  # comment line, as a whole name (setup-device.json does not name
+  # device.json).
+  defp naming(source, vectors) do
+    name = ~r/(?<![\w-])#{Regex.escape(vectors)}/
+
+    source
+    |> String.split("\n")
+    |> Enum.any?(&(not Regex.match?(~r/^\s*(#|\/\/|\/?\*)/, &1) and Regex.match?(name, &1)))
+  end
 
   # The spellings of a read of `section` in a reader of `path`'s language.
   defp section_reads(path, section) do
@@ -713,6 +803,36 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "apps/prima/test/prima/recovery_code_test.exs does not read recovery_code.json's no_such_section",
              "apps/prima/test/prima/planted_test.exs is gone"
            ]
+  end
+
+  test "every file under a test path that names a vector file is a row of it" do
+    files = test_path_files()
+    assert "apps/codex/internal/shell/device_test.go" in files
+
+    rows = for {vectors, readers} <- @vector_readers, {file, _} <- readers, do: {vectors, file}
+
+    named =
+      for file <- files,
+          source = read!(file),
+          vectors <- Map.keys(@vector_readers),
+          naming(source, vectors),
+          do: {vectors, file}
+
+    assert Enum.sort(named -- rows) == Enum.sort(Map.keys(@named_not_read)),
+           "a file names a vector file and has no row: #{inspect(Enum.sort((named -- rows) -- Map.keys(@named_not_read)))}; " <>
+             "an exemption the scan no longer finds: #{inspect(Enum.sort(Map.keys(@named_not_read) -- (named -- rows)))}"
+
+    # Planted: a read names its file; a comment line, a longer name and
+    # another file's name do not.
+    assert naming(~S|  fixture(t, "device.json", &v)|, "device.json")
+    assert naming(~S|for file <- ~w(device_unlock.json),|, "device_unlock.json")
+    refute naming("  # tests/fixtures/device.json pins it", "device.json")
+    refute naming("  // close (device.json's refused vector).", "device.json")
+    refute naming(~S|path = Path.join(dir, "setup-device.json")|, "device.json")
+    refute naming(~S|fixture(t, "device_cert.json", &v)|, "device.json")
+    refute test_path?("apps/codex/internal/shell/device.go")
+    assert test_path?("apps/cyfr/assets/test/account/pages.test.mjs")
+    assert test_path?("tests/compose-proof/predicates.sh")
   end
 
   # ==========================================================================
