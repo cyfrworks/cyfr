@@ -183,7 +183,7 @@ ATTACHED_AUTHORITY = {
 }
 # The shipped model catalysts at the version whose `api_key` need CYFR
 # attaches, each run as its seed artifact: the seed refs this suite names.
-SHIPPED_MODELS = {name: "1.4.1" for name in ("claude", "gemini", "grok", "openai", "openrouter")}
+SHIPPED_MODELS = {name: "1.4.2" for name in ("claude", "gemini", "grok", "openai", "openrouter")}
 SHIPPED = {name: os.path.join(ROOT, "seed", "components", "catalysts", "local", name, version)
            for name, version in SHIPPED_MODELS.items()}
 SHIPPED_MANIFESTS = {}

@@ -435,7 +435,7 @@ defmodule Prima.TinctureWireTest do
 
   test "a grant names exactly one component reference, of any component type, at a version or none" do
     for ref <- [
-          "catalyst:local.openai:1.4.1",
+          "catalyst:local.openai:1.4.2",
           "c:local.openai",
           "reagent:local.notes",
           "formula:example.com.digest:0.2.0",
