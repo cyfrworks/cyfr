@@ -132,8 +132,10 @@ defmodule Sanctum.SignIn do
   ## Registry answers
 
   `record_namespace/2`: the namespace lands on the `users` row the moment
-  the registry's answer to a token mint names it, before, and regardless
-  of, the push tokens. That row is what every request reads
+  a registry answer names it. A sign-in asks for the account's name by its
+  identifier (`Sanctum.Handle.name_of/1`) while this CYFR has no name for
+  the person, and nothing that lookup meets refuses the sign-in. A token
+  mint's answer records it before, and regardless of, the push tokens. That row is what every request reads
   (`Sanctum.Namespace`). `record_name/2` records a name the person says is
   theirs, once the registry's answer for that name names their account.
   """

@@ -9,9 +9,11 @@ defmodule Sanctum.Namespace do
   handle there, claimed by a request a key of their account signs and
   bound to their identifier, never to a sign-in provider, and the same on
   every server. The `users` row is the authority for *whether this server
-  knows it*: the slug is recorded on `users.namespace` the moment the
-  registry's answer to a token mint names it
-  (`Sanctum.SignIn.record_namespace/2`) and read from there ever after. The registry push tokens in
+  knows it*: the slug is recorded on `users.namespace` the moment a
+  registry answer names it as the person's
+  (`Sanctum.SignIn.record_namespace/2`: a sign-in's lookup of the
+  account's name, a name the person offered or typed, or a token mint)
+  and read from there ever after. The registry push tokens in
   `Compendium.Registry.CredentialStore` are what a push needs, not who a
   person is: losing them costs a sync, never the identity.
 

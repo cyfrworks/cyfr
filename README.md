@@ -287,7 +287,7 @@ cyfr push c:local.my-api:1.0.0
 
 The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, cleans build artifacts, and pulls any missing dependencies. A Rust build is locked to the component's `Cargo.lock` after its first build; compile with `--resolve` after changing a dependency.
 
-`cyfr push` pushes a local component to the registry under your **personal namespace**, the name your account holds at cyfr.run ([identity-guide.md](identity-guide.md)) — `c:local.my-api` is pushed as `c:<your-name>.my-api`. `cyfr registry sync` mints and stores your push tokens under a fresh confirmation, a request your live key signs, and sign-in never speaks to the registry. A push whose namespace has no stored token, or whose token the registry revoked, refuses and says to run `cyfr registry sync`. A deployment with `CYFR_REGISTRY_URL=none` refuses every registry request before it is sent.
+`cyfr push` pushes a local component to the registry under your **personal namespace**, the name your account holds at cyfr.run ([identity-guide.md](identity-guide.md)) — `c:local.my-api` is pushed as `c:<your-name>.my-api`. `cyfr registry sync` mints and stores your push tokens under a fresh confirmation, a request your live key signs. A sign-in mints none: it asks the registry only for the name your account holds, while this CYFR has no name for you, and stands whatever the answer. A push whose namespace has no stored token, or whose token the registry revoked, refuses and says to run `cyfr registry sync`. A deployment with `CYFR_REGISTRY_URL=none` refuses every registry request before it is sent.
 
 ### Tinctures
 
@@ -749,8 +749,9 @@ account's recovery code is shown and saved before anything is sent, and an
 account whose making stopped is finished from the same browser or command
 line with that code ([identity-guide.md](identity-guide.md)). This CYFR
 records the person's name once the registry confirms it is their
-account's: when they create their account from an invitation that offered
-it, or with **Finish your name** in Settings.
+account's: at a sign-in, which asks the registry for the name their
+identifier holds; when they create their account from an invitation that
+offered it; or with **Finish your name** in Settings.
 Every admission at this server (setup, an invitation or the open admission)
 makes the person with their own athanor, and an invitation adds the thread
 seat it names. The athanor is seeded and baseline-consented
