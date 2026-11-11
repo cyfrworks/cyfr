@@ -215,6 +215,9 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
     test "only the abnormal endings cascade" do
       # Successful parents leave asynchronous children running. Failure and
       # cancellation cascade; abandoned children are reaped by lease expiry.
+      # A close that finds its row already cancelled or failed cascades too
+      # (`Opus.Close`): the close that ended the row may have died before it
+      # stopped the children.
       read = fn path -> [__DIR__, path] |> Path.join() |> Path.expand() |> File.read!() end
       dispatch = read.("../../../lib/opus/dispatch.ex")
       lapse = read.("../../../lib/opus/lapse.ex")
@@ -226,8 +229,9 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
         |> Enum.filter(&(String.trim(&1) =~ ~r/^Cascade\.fail_children(_of)?\(/))
         |> Enum.map(&String.trim/1)
 
-      assert length(callers) == 3,
-             "expected exactly the failure, cancel and lapse cascades, got: #{inspect(callers)}"
+      assert length(callers) == 4,
+             "expected exactly the failure, cancel and lapse cascades and the one over a row " <>
+               "another close ended, got: #{inspect(callers)}"
 
       # ...and the success path returns without one.
       [_before, complete] = String.split(close, "def complete(", parts: 2)
