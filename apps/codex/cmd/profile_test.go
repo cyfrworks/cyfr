@@ -6,7 +6,6 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -606,10 +605,9 @@ func asMaps(t *testing.T, value any) []map[string]any {
 	return maps
 }
 
-func TestLifetimes_FiveChoicesStandingWhenNoneIsNamed(t *testing.T) {
+func TestLifetimes_FourChoicesStandingWhenNoneIsNamed(t *testing.T) {
 	now := time.Date(2026, 10, 4, 13, 0, 30, 0, time.UTC)
-	session := time.Date(2026, 10, 4, 18, 0, 0, 0, time.UTC)
-	chooser := grantChooser{now: now, sessionEnd: func() (time.Time, bool, error) { return session, true, nil }}
+	chooser := grantChooser{now: now}
 
 	for value, want := range map[string][3]string{
 		"vlt_1":          {"vlt_1", "standing", ""},
@@ -617,7 +615,6 @@ func TestLifetimes_FiveChoicesStandingWhenNoneIsNamed(t *testing.T) {
 		"vlt_1:once":     {"vlt_1", "once", ""},
 		"vlt_1:5m":       {"vlt_1", "until", "2026-10-04T13:05:30Z"},
 		"vlt_1:1h":       {"vlt_1", "until", "2026-10-04T14:00:30Z"},
-		"vlt_1:session":  {"vlt_1", "until", "2026-10-04T18:00:00Z"},
 	} {
 		id, choice, err := splitLifetime("--entry", value)
 		if err != nil {
@@ -632,38 +629,11 @@ func TestLifetimes_FiveChoicesStandingWhenNoneIsNamed(t *testing.T) {
 		}
 	}
 
-	for _, bad := range []string{"vlt_1:forever", "vlt_1:1d", ":once"} {
+	for _, bad := range []string{"vlt_1:forever", "vlt_1:1d", ":once", ":session"} {
 		if _, _, err := splitLifetime("--entry", bad); err == nil ||
-			!strings.Contains(err.Error(), "standing, 5m, 1h, session, once") {
-			t.Errorf("%s: want a refusal naming the five lifetimes, got %v", bad, err)
+			!strings.Contains(err.Error(), "standing, 5m, 1h, once") {
+			t.Errorf("%s: want a refusal naming the four lifetimes, got %v", bad, err)
 		}
-	}
-}
-
-// "session" is the earlier of the session's end and 24 hours on; with no
-// session behind the command line it is refused, naming the four others.
-func TestLifetimes_SessionIsHeldTo24HoursAndNeedsASession(t *testing.T) {
-	now := time.Date(2026, 10, 4, 13, 0, 0, 0, time.UTC)
-	far := grantChooser{now: now, sessionEnd: func() (time.Time, bool, error) {
-		return now.Add(720 * time.Hour), true, nil
-	}}
-	if kind, until, err := lifetimeOf("session", far); err != nil || kind != "until" ||
-		until != "2026-10-05T13:00:00Z" {
-		t.Errorf("a session ending in 30 days: got %s %s %v, want until 24 hours on", kind, until, err)
-	}
-
-	none := grantChooser{now: now, sessionEnd: func() (time.Time, bool, error) { return time.Time{}, false, nil }}
-	_, _, err := lifetimeOf("session", none)
-	if err == nil || !strings.Contains(err.Error(), "choose standing, 5m, 1h or once") {
-		t.Errorf("no session: got %v", err)
-	}
-
-	if end, ok, err := sessionEndOf(map[string]any{"session_expires_at": nil}); ok || err != nil || !end.IsZero() {
-		t.Errorf("an API key's whoami read as a session end: %v %v %v", end, ok, err)
-	}
-	if end, ok, err := sessionEndOf(map[string]any{"session_expires_at": "2026-11-03T13:00:00.123456Z"}); !ok ||
-		err != nil || end.Format(time.RFC3339) != "2026-11-03T13:00:00Z" {
-		t.Errorf("a session's whoami: %v %v %v", end, ok, err)
 	}
 }
 
@@ -923,32 +893,24 @@ func TestProfileGrant_GetHeadOnlyNarrowsACatalystsMethods(t *testing.T) {
 	}
 }
 
-// The session lifetime reads the command line's own whoami once, after the
-// plan, and holds the until to it; a credential that is no session is
-// refused before any preview.
-func TestProfileGrant_SessionLifetimeReadsWhoami(t *testing.T) {
-	plan := planWith(list(need("api_key", "api_key", true, "", false, "vlt_a")), `[]`, `[]`)
-	end := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Second)
-	who := fmt.Sprintf(`{"user_id":"u","session_expires_at":%q}`, end.Format(time.RFC3339Nano))
-
-	srv := newCLIServer(t, "profile.commit", plan, who, previewAnswer, commitAnswer)
-	runGrant(t, srv, "--entry", "api_key=vlt_a:session")
-	if name, args := srv.call(1); name != "session" || args["action"] != "whoami" {
-		t.Fatalf("call 1 is %s %v, want session.whoami", name, args)
-	}
-	preview, _ := sentDecisions(t, srv, 2)
-	b := asMaps(t, preview["bindings"])
-	if len(b) != 1 || !reflect.DeepEqual(b[0]["lifetime"], map[string]any{"kind": "until", "until": end.Format(time.RFC3339)}) {
-		t.Errorf("sent %v, want until the session's end %s", b, end)
-	}
-
-	srv = newCLIServer(t, "profile.commit", plan, `{"user_id":"u","session_expires_at":null}`, previewAnswer, commitAnswer)
+// The session lifetime is refused before anything is asked of the home,
+// saying why and naming the lifetimes to use: the login shell's session
+// is renewed a minute at a time, so a grant bound to its end would lapse
+// within about a minute.
+func TestProfileGrant_TheSessionLifetimeIsRefused(t *testing.T) {
+	srv := newCLIServer(t, "profile.commit")
 	_, err := tryGrant(t, srv, "--entry", "api_key=vlt_a:session")
-	if err == nil || !strings.Contains(err.Error(), "choose standing, 5m, 1h or once") {
-		t.Errorf("an API key's session lifetime: got %v", err)
+	want := `--entry "vlt_a:session" names the session lifetime, which the command line ` +
+		`does not offer: its session is renewed a minute at a time, so a grant bound to it would ` +
+		`end within about a minute. Choose standing, 5m, 1h or once`
+	if err == nil || err.Error() != want {
+		t.Errorf("the session lifetime: got %v, want %q", err, want)
 	}
-	if srv.count() != 2 {
-		t.Errorf("a refused session lifetime made %d calls, want the plan and whoami", srv.count())
+	if srv.count() != 0 {
+		t.Errorf("a refused session lifetime made %d calls", srv.count())
+	}
+	if strings.Contains(profileGrantCmd.Long, "session") || strings.Contains(profileGrantCmd.Flags().Lookup("entry").Usage, "session") {
+		t.Error("the help still offers the session lifetime")
 	}
 }
 
@@ -1037,38 +999,8 @@ func TestUnresolvedPlan(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The session lifetime's words, and a re-grant
+// A re-grant
 // ---------------------------------------------------------------------------
-
-// The help and the refusal of an API key's session lifetime name the time
-// a session binding ends, at most 24 hours on, and never that a session's
-// end or a sign-out ends it: an until is fixed once committed.
-func TestProfileGrant_SessionCopyNamesTheTimeItEnds(t *testing.T) {
-	help := "session (until the time your session is now due to end, at most 24 hours on, " +
-		"fixed when you grant)"
-	if !strings.Contains(profileGrantCmd.Long, help) {
-		t.Errorf("the help does not say %q:\n%s", help, profileGrantCmd.Long)
-	}
-
-	none := grantChooser{now: time.Now(), sessionEnd: func() (time.Time, bool, error) { return time.Time{}, false, nil }}
-	_, _, err := lifetimeOf("session", none)
-	refusal := "the session lifetime lasts until the time this command line's session is now " +
-		"due to end, at most 24 hours on, and this credential is no session (an API key), so it " +
-		"has no such time: choose standing, 5m, 1h or once"
-	if err == nil || err.Error() != refusal {
-		t.Errorf("an API key's session lifetime: got %v, want %q", err, refusal)
-	}
-
-	for _, text := range []string{profileGrantCmd.Long, refusal} {
-		lower := strings.ToLower(text)
-		for _, claim := range []string{"session ends", "session does", "sign out", "sign-out",
-			"signing out", "until your session"} {
-			if strings.Contains(lower, claim) {
-				t.Errorf("%q says %q", text, claim)
-			}
-		}
-	}
-}
 
 const regrantApp = "f:local.daily-report"
 
@@ -1221,7 +1153,7 @@ func TestCollectDecisions_AsksHowLongAPassedUntilLivesNow(t *testing.T) {
 				values = append(values, o.Value)
 			}
 			if !reflect.DeepEqual(values, lifetimeChoices) {
-				t.Errorf("offered %v, want the five lifetimes", values)
+				t.Errorf("offered %v, want the four lifetimes", values)
 			}
 			return "1h", nil
 		},
