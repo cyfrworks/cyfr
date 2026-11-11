@@ -1036,7 +1036,14 @@ defmodule Sanctum.Dispatch do
           # `:insufficient_permissions`.
           {:error, reason}
 
-        {:exit, {exception, stacktrace}} when is_exception(exception) ->
+        # A raise in the handler: `Task.Supervised` exits with the raised
+        # term and its stacktrace, the term raw for an error the VM raised
+        # (`:function_clause`, `{:badmatch, _}`, `:badarg`), so it is
+        # normalized as the inline runner's `rescue` normalizes it, and
+        # both runners answer a crash alike.
+        {:exit, {reason, [{_module, _function, _arity_or_args, _location} | _] = stacktrace}} ->
+          exception = Exception.normalize(:error, reason, stacktrace)
+
           Logger.error(
             "[Sanctum.Dispatch] Tool #{name} crashed: #{Prima.LogFilter.format_exception(:error, exception, stacktrace)}"
           )

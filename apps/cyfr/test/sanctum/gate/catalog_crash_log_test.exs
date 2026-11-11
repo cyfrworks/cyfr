@@ -58,14 +58,20 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
     :ok
   end
 
-  test "a supervised handler's crash names the handler by arity, never the context or arguments" do
-    {result, log} = call("put", runner: :supervised)
+  # An error the VM raises (here a function clause) is a crash on either
+  # runner, never an exit.
+  for runner <- [:supervised, :inline] do
+    test "a #{runner} handler's crash names the handler by arity, never the context or arguments" do
+      {result, log} = call("put", runner: unquote(runner))
 
-    assert {:error, {:uncertain, _sentence}} = result
-    assert log =~ "[Sanctum.Dispatch] Tool crash_log_probe exited: "
-    assert log =~ "Sanctum.Gate.CatalogCrashLogTest.Probe, :handle, 3,"
-    refute log =~ @email
-    refute log =~ @value
+      assert {:error, {:uncertain, sentence}} = result
+      assert sentence == Sanctum.Dispatch.uncertain_message("crash_log_probe", :crashed)
+      assert log =~ "[Sanctum.Dispatch] Tool crash_log_probe crashed: "
+      assert log =~ "(FunctionClauseError)"
+      assert log =~ "Sanctum.Gate.CatalogCrashLogTest.Probe.handle/3"
+      refute log =~ @email
+      refute log =~ @value
+    end
   end
 
   test "an inline handler's exit names the call it made by arity, never its request" do
