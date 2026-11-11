@@ -459,8 +459,7 @@ fn parse_arguments(raw: Option<&Value>) -> Value {
 // ---------------------------------------------------------------------------
 
 /// What this catalyst can do; with a `model` param, also that model's
-/// `context_window` and `max_output_tokens`. A model this catalyst does not
-/// know is refused.
+/// `context_window`. A model this catalyst does not know is refused.
 pub fn describe(params: &Value) -> String {
     let mut data = json!({
         "contracts": [CONTRACT],
@@ -1097,6 +1096,61 @@ mod tests {
             "",
         ] {
             assert_eq!(window_of(invented), Err(json!("unknown_model")), "{invented}");
+        }
+    }
+
+    /// Every model a manifest example names, beside its example's name:
+    /// what it is asked of, what it answers, what a listing answers. An
+    /// image operation's model is not a chat model.
+    fn example_models(manifest: &Value) -> Vec<(String, String)> {
+        let mut named = Vec::new();
+        for example in manifest["examples"].as_array().unwrap() {
+            let operation = example["input"]["operation"].as_str().unwrap();
+            if operation.starts_with("images.") {
+                continue;
+            }
+            let data = &example["output"]["data"];
+            let listed = data["models"].as_array().into_iter().flatten().map(|m| &m["id"]);
+            for model in [&example["input"]["params"]["model"], &data["model"]].into_iter().chain(listed) {
+                if let Some(model) = model.as_str() {
+                    named.push((example["name"].as_str().unwrap().to_string(), model.to_string()));
+                }
+            }
+        }
+        named
+    }
+
+    fn manifest() -> Value {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../cyfr-manifest.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn every_model_the_manifest_s_examples_name_is_one_this_catalyst_knows() {
+        let named = example_models(&manifest());
+        assert!(named.iter().any(|(name, _)| name == "Describe a model (model/chat@1)"), "{named:?}");
+        for (name, model) in named {
+            assert!(window(&model).is_some(), "{name}: '{model}' is not a model this catalyst knows");
+        }
+    }
+
+    #[test]
+    fn the_manifest_s_describe_examples_answer_as_describe_does() {
+        let manifest = manifest();
+        let examples: Vec<&Value> = manifest["examples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["input"]["operation"] == "describe")
+            .collect();
+        assert_eq!(examples.len(), 2);
+        for example in examples {
+            let answered: Value = serde_json::from_str(&describe(&example["input"]["params"])).unwrap();
+            let shown = &example["output"];
+            assert_eq!(answered["status"], shown["status"], "{}", example["name"]);
+            for (key, value) in shown["data"].as_object().unwrap() {
+                assert_eq!(&answered["data"][key], value, "{}: {key}", example["name"]);
+            }
         }
     }
 
