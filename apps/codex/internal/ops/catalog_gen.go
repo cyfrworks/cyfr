@@ -2048,7 +2048,7 @@ func (args McpLogCorrelateArgs) MarshalJSON() ([]byte, error) {
 
 // McpLogGetArgs carries arguments for mcp_log.get.
 type McpLogGetArgs struct {
-	// Request ID
+	// The row's id, as list answers it: the one recorded call's id, not its ingress request_id.
 	Id string `json:"id"`
 }
 

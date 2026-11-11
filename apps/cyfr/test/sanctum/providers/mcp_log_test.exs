@@ -78,6 +78,50 @@ defmodule Sanctum.Providers.McpLogTest do
       assert row.error == "Not allowed."
       refute Map.has_key?(row, :error_code)
     end
+
+    test "get finds a row by the id list answers for it, the id its schema describes", %{
+      ctx: ctx
+    } do
+      decision =
+        Prima.Decision.new(
+          call_id: Prima.UUID7.generate_id("call"),
+          request_id: Prima.UUID7.request_id(),
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          plane: :external,
+          tool: "storage",
+          action: "get",
+          inserted_at: DateTime.utc_now(),
+          admission: :refused,
+          refusal_class: :forbidden,
+          reason: "Not allowed."
+        )
+
+      :ok = Sanctum.Decisions.open(ctx, decision, %{input: %{}})
+
+      assert {:ok, %{logs: [listed]}} =
+               MCP.handle("mcp_log", actor(ctx), %{
+                 "action" => "list",
+                 "request_id" => decision.request_id
+               })
+
+      assert {:ok, ^listed} =
+               MCP.handle("mcp_log", actor(ctx), %{"action" => "get", "id" => listed.id})
+
+      # The request id names the chain, not a row: a client that passes it
+      # to get finds nothing, so the schema must not describe it so.
+      assert {:error, {:not_found, "MCP log", _}} =
+               MCP.handle("mcp_log", actor(ctx), %{
+                 "action" => "get",
+                 "id" => decision.request_id
+               })
+
+      [tool] = MCP.tools()
+      get = Enum.find(tool.operations, &(&1.action == "get"))
+      [%{name: "id", description: description}] = get.args
+      assert description =~ "as list answers it"
+      refute description =~ ~r/^Request ID/
+    end
   end
 
   describe "write/delete verbs are unknown at dispatch" do

@@ -33,7 +33,7 @@ defmodule Compendium.Provider do
   @impl true
   def status, do: %{"registry" => registry_health()}
 
-  # The probe's answer is memoized per registry: it is an outbound HTTPS
+  # The probe's answer is memoized per registry: it is an outbound
   # probe with 3s connect + 3s read timeouts, and system/status is called
   # from the dev topbar on page loads. What configuration alone decides is
   # answered afresh.
@@ -73,10 +73,13 @@ defmodule Compendium.Provider do
 
   # Shared TLS verification, SSRF checks and DNS pinning. The registry is
   # operator config and may sit on a private network, so it is dialled
-  # under the operator's private-egress targets, as the registry clients
-  # dial it (`Compendium.Registry.Transport`, `Compendium.OCI.Transport`).
+  # under the operator's private-egress targets and the scheme its host
+  # takes, as the registry clients dial it (`Compendium.Registry.Transport`,
+  # `Compendium.OCI.Transport`).
   defp probe_registry_health(host) do
-    case Sanctum.Egress.pinned_request(:get, "https://#{host}/health", [], nil,
+    url = Compendium.RegistryHost.base_url(host) <> "/health"
+
+    case Sanctum.Egress.pinned_request(:get, url, [], nil,
            receive_timeout: 3_000,
            private_policy: :operator,
            max_response_bytes: 64 * 1024
