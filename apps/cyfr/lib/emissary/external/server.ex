@@ -17,7 +17,8 @@ defmodule Emissary.External.Server do
   handshake for third-party servers still on the older revision (see
   `connect/1`). Every request's timeout bounds its wall time, however the
   peer trickles its reply. A legacy peer that issues an `Mcp-Session-Id` at
-  `initialize` gets it back on every later request until the next connect.
+  `initialize` gets it back on every later request until the next connect,
+  and the id is kept and masked as the resolved credential headers are.
   A paged `tools/list` is followed through its `nextCursor` to the last
   page, and a listing longer than 20 pages, or not finished within the
   handshake limit of its first request, fails the connect. A reply whose
@@ -258,7 +259,8 @@ defmodule Emissary.External.Server do
   defmodule State do
     @moduledoc false
     # `headers` holds RESOLVED credential values (vault references already
-    # unsealed to plaintext), `raw_headers` may carry inline ones and
+    # unsealed to plaintext) and the session id a legacy peer issued,
+    # `raw_headers` may carry inline ones and
     # `grant` holds a stdio owner's key. OTP prints `inspect(state)` in
     # every GenServer crash/exit report, so all three are excluded from
     # Inspect — a crashed call must not write credentials into the log.
@@ -286,9 +288,6 @@ defmodule Emissary.External.Server do
       # re-probing on every call would double the traffic to a legacy peer
       # forever.
       :era,
-      # The `Mcp-Session-Id` a legacy peer issued at `initialize`, sent on
-      # every later request to it; nil when it issued none.
-      :peer_session,
       transport: :http,
       raw_headers: %{},
       headers: %{},
@@ -927,12 +926,7 @@ defmodule Emissary.External.Server do
         fail_initialize(state, reason)
 
       {:ok, resolved_headers} ->
-        state = %{
-          state
-          | headers: resolved_headers,
-            timeout_ms: handshake_timeout,
-            peer_session: nil
-        }
+        state = %{state | headers: resolved_headers, timeout_ms: handshake_timeout}
 
         # `connected` rather than rebinding `state`: the else arm below must
         # see the headers-resolved state, and a `with` pattern binding would
@@ -944,7 +938,7 @@ defmodule Emissary.External.Server do
             | timeout_ms: call_timeout,
               status: :ready,
               tools: tools,
-              server_info: mask_credentials(server_info, state),
+              server_info: mask_credentials(server_info, connected),
               error: nil
           }
 
@@ -955,6 +949,9 @@ defmodule Emissary.External.Server do
 
           {:ok, state}
         else
+          # A failure after `initialize` carries the state that holds the
+          # peer's session, so the sentence is masked with it too.
+          {:error, reason, failed} -> fail_initialize(failed, reason)
           {:error, reason} -> fail_initialize(state, reason)
         end
     end
@@ -1482,15 +1479,21 @@ defmodule Emissary.External.Server do
   end
 
   defp legacy_connect(state) do
-    with {:ok, init_result, state} <- send_initialize(state),
-         :ok <- send_initialized_notification(state),
-         {:ok, tools, state} <- send_tools_list(state) do
-      {:ok, tools, server_info(init_result), state}
-    else
-      # A legacy peer has no fall-forward; a second `:legacy` here would mean the
-      # handshake itself was refused, which is a failure rather than an era.
-      {:legacy, state} -> {:error, "#{state.name} refused both protocol eras"}
-      other -> other
+    case send_initialize(state) do
+      {:ok, init_result, state} ->
+        with :ok <- send_initialized_notification(state),
+             {:ok, tools, state} <- send_tools_list(state) do
+          {:ok, tools, server_info(init_result), state}
+        else
+          # A legacy peer has no fall-forward; a second `:legacy` here would
+          # mean the handshake itself was refused, which is a failure rather
+          # than an era.
+          {:legacy, _state} -> {:error, "#{state.name} refused both protocol eras", state}
+          {:error, reason} -> {:error, reason, state}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1509,7 +1512,7 @@ defmodule Emissary.External.Server do
 
     case http_exchange(state, body) do
       {{:ok, %Message{type: :response, result: result}}, resp_headers} ->
-        {:ok, result, %{state | peer_session: peer_session(resp_headers)}}
+        {:ok, result, keep_session(state, resp_headers)}
 
       {{:ok, %Message{type: :error, error: error}}, _resp_headers} ->
         {:error, upstream_message(error)}
@@ -1519,13 +1522,22 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # A session id is visible ASCII (the specification's `0x21`-`0x7E`); one
-  # carrying anything else is not kept, since it would go back out as a
-  # header value.
-  defp peer_session(resp_headers) do
+  # The peer's session id is kept among the resolved headers, so it goes
+  # out on every later request of this connection and is a secret wherever
+  # they are: excluded from Inspect, redacted from the status, masked out
+  # of what the peer answers and of the log. The next connect resolves the
+  # headers afresh, without it. An id is visible ASCII (the
+  # specification's `0x21`-`0x7E`); one carrying anything else is not kept,
+  # since it would go back out as a header value.
+  defp keep_session(state, resp_headers) do
     case List.keyfind(resp_headers, @session_id_header, 0) do
-      {_name, id} -> if String.match?(id, ~r/^[\x21-\x7e]+$/), do: id
-      nil -> nil
+      {_name, id} ->
+        if String.match?(id, ~r/^[\x21-\x7e]+$/),
+          do: %{state | headers: Map.put(state.headers, @session_id_header, id)},
+          else: state
+
+      nil ->
+        state
     end
   end
 
@@ -1674,7 +1686,6 @@ defmodule Emissary.External.Server do
 
     headers =
       [{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"}]
-      |> Enum.concat(session_headers(state.peer_session))
       |> Enum.concat(protocol_headers(body, state.era, state.tools))
       |> merge_headers(state.headers)
 
@@ -1683,9 +1694,6 @@ defmodule Emissary.External.Server do
       {:error, _reason} -> {{:error, "Request encoding failed"}, []}
     end
   end
-
-  defp session_headers(nil), do: []
-  defp session_headers(id), do: [{@session_id_header, id}]
 
   defp post_encoded(state, body, headers, json_body) do
     # Pin to the validated IP on EVERY request (not just at init), with the
@@ -2097,8 +2105,8 @@ defmodule Emissary.External.Server do
   # An upstream server can echo request headers back in its result (debug
   # endpoints, error bodies, proxies). External responses never pass through
   # the executor's SecretMasker, so the credentials THIS plane injected are
-  # masked here: every resolved `vault:` header value plus the value of any
-  # credential-shaped literal header.
+  # masked here: every resolved `vault:` header value, the value of any
+  # credential-shaped literal header, and the session id the peer issued.
   defp mask_credentials(term, state) do
     case sensitive_header_values(state) do
       [] -> term
@@ -2118,6 +2126,7 @@ defmodule Emissary.External.Server do
         true -> []
       end
     end)
+    |> Enum.concat(List.wrap(state.headers[@session_id_header]))
     # Too-short values would mangle unrelated text (e.g. "gzip")
     |> Enum.filter(&(byte_size(&1) >= 8))
     |> Enum.uniq()

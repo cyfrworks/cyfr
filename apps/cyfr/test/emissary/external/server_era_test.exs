@@ -188,7 +188,7 @@ defmodule Emissary.External.ServerEraTest do
     # A stateful peer on the older revision, as the common servers are: it
     # issues a session at `initialize` and answers any later request that
     # does not carry it 400.
-    defp legacy_peer(stub, test_pid) do
+    defp legacy_peer(stub, test_pid, answer \\ &answer_listing/2) do
       HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
         session = Plug.Conn.get_req_header(conn, "mcp-session-id")
@@ -217,18 +217,22 @@ defmodule Emissary.External.ServerEraTest do
           "notifications/initialized" ->
             Plug.Conn.resp(conn, 202, "")
 
-          "tools/list" ->
-            json(conn, %{
-              "jsonrpc" => "2.0",
-              "id" => body["id"],
-              "result" => %{"tools" => [%{"name" => "echo"}]}
-            })
-
-          "tools/call" ->
-            json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"echo" => true}})
+          _method ->
+            answer.(conn, body)
         end
       end)
     end
+
+    defp answer_listing(conn, %{"method" => "tools/list"} = body),
+      do:
+        json(conn, %{
+          "jsonrpc" => "2.0",
+          "id" => body["id"],
+          "result" => %{"tools" => [%{"name" => "echo"}]}
+        })
+
+    defp answer_listing(conn, %{"method" => "tools/call"} = body),
+      do: json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"echo" => true}})
 
     test "falls back to the handshake after a bare 4xx", %{stub: stub, url: url} do
       legacy_peer(stub, self())
@@ -253,6 +257,33 @@ defmodule Emissary.External.ServerEraTest do
       assert_received {:method, "notifications/initialized", ["peer-session"]}
       assert_received {:method, "tools/list", ["peer-session"]}
       assert_received {:method, "tools/call", ["peer-session"]}
+    end
+
+    test "the session a peer echoes in a refusal stays out of the log", %{stub: stub, url: url} do
+      legacy_peer(stub, self(), fn conn, body ->
+        json(conn, %{
+          "jsonrpc" => "2.0",
+          "id" => body["id"],
+          "error" => %{"code" => -32000, "message" => "session rejected: peer-session"}
+        })
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {_pid, {:error, reason}} = connect(url, "session-echo-peer")
+          refute reason =~ "peer-session"
+        end)
+
+      assert log =~ "Failed to initialize session-echo-peer"
+      refute log =~ "peer-session"
+    end
+
+    test "the session stays out of the process's status", %{stub: stub, url: url} do
+      legacy_peer(stub, self())
+
+      {pid, {:ok, _tools}} = connect(url, "session-status-peer")
+      refute inspect(:sys.get_status(pid), limit: :infinity) =~ "peer-session"
+      refute inspect(:sys.get_state(pid), limit: :infinity) =~ "peer-session"
     end
 
     # A trickling peer holds initialize as it could a listing: each chunk
