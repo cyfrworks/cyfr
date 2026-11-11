@@ -1553,6 +1553,7 @@ tests/compose-proof/run.sh --case interrupt|skip=unset browsers= join= db= case_
 tests/compose-proof/run.sh --case restore-identity|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case shutdown|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case restore|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case restore-person|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case runtime --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/setup-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=NS/cyfr:compose-proof
 tests/setup-proof/run.sh |skip=unset browsers= join= db= case_image=NS/cyfr:compose-proof

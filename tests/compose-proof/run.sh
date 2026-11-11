@@ -96,10 +96,10 @@
 #          TestSnapshotsHoldNeitherTheTailnetStateNorTheAccessState. The
 #          restore alone runs as root, in a container of a pinned docker
 #          CLI image with the host's docker and the project directory at
-#          its own path, since a non-root person's restore cannot put back
-#          a storage root the container's entrypoint has handed to the
-#          image's user (a defect outside this proof); every other
-#          CYFR command runs as the person.
+#          its own path, as `cyfr restore` tells a person to once the
+#          container's entrypoint has handed the storage root to the
+#          image's user (the restore-person case holds that refusal);
+#          every other CYFR command runs as the person.
 #
 #   shutdown
 #          `docker compose stop cyfr` ends within the stop_grace_period
@@ -130,6 +130,15 @@
 #          restore runs, `docker compose run --rm --no-deps -T -e <bar>= cyfr
 #          bin/cyfr eval <declaration>`, boots past the release's
 #          configuration and answers the restore's id.
+#
+#   restore-person
+#          `cyfr restore` run as the person, who is not root, once the
+#          stack has run and the entrypoint has handed the storage root to
+#          the image's user: refused before any part is put back, with the
+#          sentence that names the same restore as root and says
+#          docker-compose.yml and .env are as they were. Both files are
+#          byte for byte what they were, no restore bar is left in .env,
+#          and `cyfr up` starts the home again.
 #
 #   runtime
 #          a component run on the shipped cyfr by the real runtime: the
@@ -171,7 +180,7 @@
 # three times fails the run, naming the project). Nothing of a deployed
 # stack on the same host is touched.
 #
-# Usage: tests/compose-proof/run.sh --case bind|modes|interrupt|restore-identity|shutdown|restore
+# Usage: tests/compose-proof/run.sh --case bind|modes|interrupt|restore-identity|shutdown|restore|restore-person
 #        tests/compose-proof/run.sh --case runtime --locus-image LOCUS_IMAGE
 # LOCUS_IMAGE, the runtime case's alone, is the Locus image built from the
 # tree (Dockerfile.locus), which the run does not build.
@@ -183,7 +192,7 @@
 # image it builds, tagged cyfr:compose-proof.
 set -euo pipefail
 
-CASES="bind|modes|interrupt|restore-identity|shutdown|restore|runtime"
+CASES="bind|modes|interrupt|restore-identity|shutdown|restore|restore-person|runtime"
 usage() {
   echo "usage: $0 --case $CASES [--locus-image LOCUS_IMAGE]" >&2
   exit 2
@@ -204,7 +213,7 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
-case "$CASE" in bind | modes | interrupt | restore-identity | shutdown | restore | runtime) ;; *) usage ;; esac
+case "$CASE" in bind | modes | interrupt | restore-identity | shutdown | restore | restore-person | runtime) ;; *) usage ;; esac
 if [ "$CASE" = runtime ]; then [ -n "$LOCUS_IMAGE" ] || usage; else [ -z "$LOCUS_IMAGE" ] || usage; fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -340,7 +349,7 @@ cyfr_cli() {
 }
 
 # The docker CLI image the restore-identity case runs `cyfr restore` in, as
-# root (docker:29.8.1-cli).
+# root, as a person's refused restore says to (docker:29.8.1-cli).
 ROOT_CLI_IMAGE="docker:29.8.1-cli@sha256:018edbc908e08fcc9dbf029c812c34251e9b4719e6f71ca0e5eae2a987d014ca"
 
 # The command line's run `$2...` as root, in a container of ROOT_CLI_IMAGE
@@ -2134,6 +2143,44 @@ restore_case() {
 }
 
 # ---------------------------------------------------------------------------
+# restore-person
+# ---------------------------------------------------------------------------
+
+restore_person_case() {
+  local snapshot status compose_before env_before
+  [ "$(id -u)" != 0 ] || fail "the restore-person case is a person's who is not root; this run is root's"
+
+  step "restore-person: a snapshot taken with the stack stopped, then the stack started again"
+  cli_ok down-first down
+  snapshot="$(snapshot_take)"
+  cli_ok up-again up
+  expect_head local localhost
+  ok "snapshot $snapshot; the running home's entrypoint has handed data/ to the image's user"
+  compose_before="$(sha256sum <"$WORK/docker-compose.yml")"
+  env_before="$(sha256sum <"$WORK/.env")"
+
+  step "restore-person: cyfr restore as the person is refused before any part is put back"
+  status=0
+  cli_run restore-person restore "$snapshot" || status=$?
+  [ "$status" -ne 0 ] || fail "cyfr restore as the person exited 0: $(tail -n 20 "$WORK/restore-person.log")"
+  for said in "run the same cyfr restore as root, with sudo" \
+    "nothing of the snapshot was put back" \
+    "docker-compose.yml and .env are as they were. Start the stack again with 'cyfr up'"; do
+    grep -qF -- "$said" "$WORK/restore-person.log" ||
+      fail "the refusal does not say \"$said\": $(tail -n 20 "$WORK/restore-person.log")"
+  done
+  [ "$(sha256sum <"$WORK/docker-compose.yml")" = "$compose_before" ] || fail "the refused restore changed docker-compose.yml"
+  [ "$(sha256sum <"$WORK/.env")" = "$env_before" ] || fail "the refused restore changed .env"
+  [ -z "$(env_value "$(barrier name)")" ] || fail "the refused restore left $(barrier name) in .env"
+  ok "exit $status: $(grep -m1 -F 'as root, with sudo' "$WORK/restore-person.log")"
+
+  step "restore-person: the home starts again"
+  cli_ok up-after up
+  expect_head local localhost
+  ok "cyfr up started the home the refused restore stopped"
+}
+
+# ---------------------------------------------------------------------------
 # runtime
 # ---------------------------------------------------------------------------
 
@@ -2245,11 +2292,15 @@ case "$CASE" in
   restore-identity)
     restore_identity_case
     ;;
-  shutdown | restore)
+  shutdown | restore | restore-person)
     step "up: a local home, as a project of this run's own"
     cli_ok up-local up
     expect_head local localhost
-    if [ "$CASE" = shutdown ]; then shutdown_case; else restore_case; fi
+    case "$CASE" in
+      shutdown) shutdown_case ;;
+      restore) restore_case ;;
+      restore-person) restore_person_case ;;
+    esac
     ;;
   runtime)
     # The head's predicate holds the project to cyfr and its proxy alone;
