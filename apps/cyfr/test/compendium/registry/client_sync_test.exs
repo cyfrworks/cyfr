@@ -246,7 +246,10 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert result.registry_error =~
                "Access denied for #{Compendium.RegistryHost.canonical_rest_host()}"
 
-      assert result.note =~ "INCOMPLETE RESULTS — cyfr.run search failed"
+      assert result.note =~
+               "INCOMPLETE RESULTS — #{Compendium.RegistryHost.canonical_rest_host()} search failed"
+
+      refute result.note =~ "cyfr.run"
       assert result.note =~ "Only local components are shown."
     end
 
