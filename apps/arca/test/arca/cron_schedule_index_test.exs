@@ -10,6 +10,7 @@ defmodule Arca.CronScheduleIndexTest do
   #   (athanor_id, kind, name) WHERE status != 'deleted'
   #     — :cron_schedules_athanor_kind_name_active
   # A live name is unique per kind, so a feed may share a schedule's name.
+  # A create the index refuses is `:conflict`, as a feed's bind is.
   # These tests pin its semantics for schedules on both adapters:
   # soft-deleted rows release the name, everything else (active AND paused)
   # holds it, and the name is scoped to the athanor — a schedule is the
@@ -41,18 +42,14 @@ defmodule Arca.CronScheduleIndexTest do
   test "an active schedule blocks a duplicate name in the same athanor", %{actor: actor} do
     assert {:ok, _} = CronSchedule.create(actor, schedule_attrs("dup-active"))
 
-    assert_raise Ecto.ConstraintError, fn ->
-      CronSchedule.create(actor, schedule_attrs("dup-active"))
-    end
+    assert {:error, :conflict} = CronSchedule.create(actor, schedule_attrs("dup-active"))
   end
 
   test "a paused schedule still holds its name", %{actor: actor} do
     assert {:ok, _} =
              CronSchedule.create(actor, schedule_attrs("dup-paused", %{status: "paused"}))
 
-    assert_raise Ecto.ConstraintError, fn ->
-      CronSchedule.create(actor, schedule_attrs("dup-paused"))
-    end
+    assert {:error, :conflict} = CronSchedule.create(actor, schedule_attrs("dup-paused"))
   end
 
   test "a soft-deleted schedule releases its name", %{actor: actor} do
@@ -75,9 +72,11 @@ defmodule Arca.CronScheduleIndexTest do
     assert {:ok, _} = CronSchedule.create(actor, schedule_attrs("shared-name"))
     other_member = Arca.Test.Actor.local(user_id: "other-user")
 
-    assert_raise Ecto.ConstraintError, fn ->
-      CronSchedule.create(other_member, schedule_attrs("shared-name", %{user_id: "other-user"}))
-    end
+    assert {:error, :conflict} =
+             CronSchedule.create(
+               other_member,
+               schedule_attrs("shared-name", %{user_id: "other-user"})
+             )
   end
 
   test "the same name in a different athanor is unaffected", %{actor: actor} do

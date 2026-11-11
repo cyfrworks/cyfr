@@ -81,7 +81,11 @@ defmodule Arca.Schemas.CronSchedule do
   @spec kinds() :: [String.t()]
   def kinds, do: @kinds
 
-  @doc "The changeset a new schedule is inserted through: always of kind `schedule`."
+  @doc """
+  The changeset a new schedule is inserted through: always of kind
+  `schedule`. A live name the athanor's schedules already hold is a
+  unique-constraint error, declared as `feed_changeset/1` declares it.
+  """
   @spec create_changeset(map()) :: Ecto.Changeset.t()
   def create_changeset(attrs) do
     %__MODULE__{kind: "schedule"}
@@ -119,6 +123,8 @@ defmodule Arca.Schemas.CronSchedule do
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:concurrency, @concurrency)
     |> validate_missed_runs()
+    |> unique_constraint(:name, name: :cron_schedules_athanor_kind_name_active)
+    |> unique_constraint(:name, name: :cron_schedules_athanor_id_kind_name_index)
   end
 
   @doc """
