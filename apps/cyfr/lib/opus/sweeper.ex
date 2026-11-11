@@ -3,8 +3,9 @@
 
 defmodule Opus.Sweeper do
   @moduledoc """
-  Periodic sweep that lapses running executions whose lease lapsed, and
-  cancels the open work of an athanor that was archived.
+  Periodic sweep that lapses running executions whose lease lapsed,
+  cancels the open work of an athanor that was archived, and reclaims the
+  invoke-budget charges whose holders are gone.
 
   Runs every 60 seconds. A running row's attempt carries a lease
   (`execution_attempts.lease_until`) that its runner renews while the work
@@ -48,6 +49,14 @@ defmodule Opus.Sweeper do
   failure left, or that changed while a scan ran, is found by the next.
   Work whose runner cannot be reached stays retired — it can renew and do
   nothing — until its lease lapses here.
+
+  ## Leaked budget charges
+
+  Each sweep then reclaims, athanor by athanor, the invoke-budget charges
+  no live holder will give back (`Arca.BudgetReservations.sweep/1`): a
+  charge whose child never reached admission, or whose holder ended
+  without giving it back (killed, its node gone, or the store unable to
+  take the give-back), so a root's cap counts only live work.
   """
 
   use GenServer
@@ -100,6 +109,41 @@ defmodule Opus.Sweeper do
   def sweep do
     lapse_stale()
     retire_retired(nil)
+    reclaim_charges()
+  end
+
+  # A member that no longer holds its slot stops at once; an athanor whose
+  # sweep fails is swept again at the next tick.
+  defp reclaim_charges do
+    Enum.reduce_while(Sanctum.Tenancy.Athanors.list_active(), :ok, fn athanor, :ok ->
+      if Arca.ControlPlane.held?() do
+        reclaim_charges(athanor.id)
+        {:cont, :ok}
+      else
+        {:halt, :ok}
+      end
+    end)
+  end
+
+  defp reclaim_charges(athanor_id) do
+    case Arca.BudgetReservations.sweep(Prima.Actor.in_athanor(athanor_id)) do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, reclaimed} ->
+        Logger.info("[Opus.Sweeper] reclaimed #{reclaimed} budget charges in #{athanor_id}")
+
+      {:error, reason} ->
+        Logger.error(
+          "[Opus.Sweeper] budget charges in #{athanor_id} were not reclaimed: #{inspect(reason)}"
+        )
+    end
+  rescue
+    exception ->
+      Logger.error(
+        "[Opus.Sweeper] budget charges in #{athanor_id} were not reclaimed: " <>
+          Prima.LogFilter.exception_message(exception)
+      )
   end
 
   defp lapse_stale do
