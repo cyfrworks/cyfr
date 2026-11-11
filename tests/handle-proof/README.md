@@ -139,8 +139,8 @@ each shown failing by a control: a copy of the object with that one field
 corrupted, which the comparison must refuse on that field.
 
 At the end every object is read again and held to what was read before,
-with the fields later steps move (a person's `last_seen_at` and the
-namespace the sync recorded, a cached head's `verified_at`, the
+with the fields later steps move (a person's `last_seen_at`, a cached
+head's `verified_at`, the
 registry's `read_at`) each held to its own source or
 window. Every loop that ran is recorded by its row's identity (store,
 table and the row's own key, never its position) and the predicate it ran
@@ -220,7 +220,7 @@ row per field of each row of each step's objects:
 | setup:a.users[row] | email_verified | exact | `null` |
 | setup:a.users[row] | admission | exact | `"setup"` |
 | setup:a.users[row] | display_name | exact | `null` |
-| setup:a.users[row] | namespace | exact | `null` |
+| setup:a.users[row] | namespace | exact | `"proof"`: the name the registry says the account holds, learned at the sign-in (`Sanctum.SignIn`) |
 | setup:a.users[row] | status | exact | `"active"` |
 | setup:a.users[row] | prefs | exact | `"{}"` |
 | setup:a.users[row] | first_seen_at | bound | a time inside setup at A |
@@ -257,6 +257,7 @@ row per field of each row of each step's objects:
 | setup:a.directory_heads[row] | directory_url | exact | `"https://registry.test"` |
 | setup:a.directory_heads[row] | head_hash | derived | the head of the account's log as the directory serves it |
 | setup:a.directory_heads[row] | state | captured | the verified state the head leaves, as JSON text |
+| setup:a.directory_heads[row] | keys_added | captured | when each listed key was added, as JSON text |
 | setup:a.directory_heads[row] | verified_at | bound | a time inside setup at A up to setup:a.directory_heads's read |
 | setup:a.directory_heads[row] | gone_at | exact | `null` |
 | setup:a.directory_heads[row] | revision | captured | the cached head's revision |
@@ -280,7 +281,7 @@ row per field of each row of each step's objects:
 | allow:b.users[row] | email_verified | exact | `null` |
 | allow:b.users[row] | admission | exact | `"setup"` |
 | allow:b.users[row] | display_name | exact | `null` |
-| allow:b.users[row] | namespace | exact | `null` |
+| allow:b.users[row] | namespace | exact | `"proof-b"`: the name the registry says the account holds, learned at the sign-in (`Sanctum.SignIn`) |
 | allow:b.users[row] | status | exact | `"active"` |
 | allow:b.users[row] | prefs | exact | `"{}"` |
 | allow:b.users[row] | first_seen_at | bound | a time inside B's administrator's account and setup at B |
@@ -398,7 +399,7 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the person's] | email_verified | exact | `null` |
 | sign_in:b.users[the person's] | admission | exact | `"open"` |
 | sign_in:b.users[the person's] | display_name | exact | `null` |
-| sign_in:b.users[the person's] | namespace | exact | `null` |
+| sign_in:b.users[the person's] | namespace | exact | `"proof"`: the name the registry says the account holds, learned at the sign-in (`Sanctum.SignIn`) |
 | sign_in:b.users[the person's] | status | exact | `"active"` |
 | sign_in:b.users[the person's] | prefs | exact | `"{}"` |
 | sign_in:b.users[the person's] | first_seen_at | bound | a time inside the sign-in at B |
@@ -413,6 +414,7 @@ row per field of each row of each step's objects:
 | sign_in:b.directory_heads[the administrator's] | directory_url | exact | `"https://registry.test"` |
 | sign_in:b.directory_heads[the administrator's] | head_hash | derived | the head of the account's log as the directory serves it |
 | sign_in:b.directory_heads[the administrator's] | state | captured | the verified state the head leaves, as JSON text |
+| sign_in:b.directory_heads[the administrator's] | keys_added | captured | when each listed key was added, as JSON text |
 | sign_in:b.directory_heads[the administrator's] | verified_at | bound | a time inside B's administrator's account and setup at B up to sign_in:b.directory_heads's read |
 | sign_in:b.directory_heads[the administrator's] | gone_at | exact | `null` |
 | sign_in:b.directory_heads[the administrator's] | revision | captured | the cached head's revision |
@@ -423,6 +425,7 @@ row per field of each row of each step's objects:
 | sign_in:b.directory_heads[the person's, read at the allow] | directory_url | exact | `"https://registry.test"` |
 | sign_in:b.directory_heads[the person's, read at the allow] | head_hash | derived | the head of the account's log as the directory serves it |
 | sign_in:b.directory_heads[the person's, read at the allow] | state | captured | the verified state the head leaves, as JSON text |
+| sign_in:b.directory_heads[the person's, read at the allow] | keys_added | captured | when each listed key was added, as JSON text |
 | sign_in:b.directory_heads[the person's, read at the allow] | verified_at | bound | a time inside the allow up to sign_in:b.directory_heads's read |
 | sign_in:b.directory_heads[the person's, read at the allow] | gone_at | exact | `null` |
 | sign_in:b.directory_heads[the person's, read at the allow] | revision | captured | the cached head's revision |
@@ -465,6 +468,9 @@ row per field of each row of each step's objects:
 | sign_in:b.sessions[the administrator's] | kid | derived | the kid of the key the browser's authenticator holds |
 | sign_in:b.sessions[the administrator's] | head | derived | the head it signed in under |
 | sign_in:b.sessions[the administrator's] | client_id | derived | the passkey's paired client here |
+| sign_in:b.sessions[the administrator's] | browser | captured | the browser the sign-in's user agent names, in words |
+| sign_in:b.sessions[the administrator's] | system | captured | the system the sign-in's user agent names, in words |
+| sign_in:b.sessions[the administrator's] | last_seen_at | bound | a time inside B's administrator's account and setup at B |
 | sign_in:b.sessions[the administrator's] | inserted_at | bound | a time inside B's administrator's account and setup at B |
 | sign_in:b.sessions[the person's] | id | captured | a new ses_ id |
 | sign_in:b.sessions[the person's] | token_hash | derived | the SHA-256 of the session token the browser's cookie carries |
@@ -477,6 +483,9 @@ row per field of each row of each step's objects:
 | sign_in:b.sessions[the person's] | kid | derived | the kid of the key the browser's authenticator holds |
 | sign_in:b.sessions[the person's] | head | derived | the head it signed in under |
 | sign_in:b.sessions[the person's] | client_id | derived | the passkey's paired client here |
+| sign_in:b.sessions[the person's] | browser | captured | the browser the sign-in's user agent names, in words |
+| sign_in:b.sessions[the person's] | system | captured | the system the sign-in's user agent names, in words |
+| sign_in:b.sessions[the person's] | last_seen_at | bound | a time inside the sign-in at B |
 | sign_in:b.sessions[the person's] | inserted_at | bound | a time inside the sign-in at B |
 | sync:registry.push_tokens[proof][row] | id | captured | a token id: a new UUID, not the nil UUID |
 | sync:registry.push_tokens[proof][row] | token_hash | derived | the digest of the token A sealed |
@@ -556,7 +565,7 @@ row per field of each row of each step's objects:
 | held:a.users[row] | first_seen_at | exact | as read at setup |
 | held:a.users[row] | id | exact | as read at setup |
 | held:a.users[row] | last_seen_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
-| held:a.users[row] | namespace | exact | `"proof"`: the personal namespace the sync recorded (`Sanctum.SignIn.record_namespace/2`) |
+| held:a.users[row] | namespace | exact | as read at setup |
 | held:a.users[row] | platform_admin_at | exact | as read at setup |
 | held:a.users[row] | prefs | exact | as read at setup |
 | held:a.users[row] | security_generation | exact | as read at setup |
@@ -590,6 +599,7 @@ row per field of each row of each step's objects:
 | held:a.directory_heads[row] | head_hash | exact | as read at setup |
 | held:a.directory_heads[row] | identifier | exact | as read at setup |
 | held:a.directory_heads[row] | inserted_at | exact | as read at setup |
+| held:a.directory_heads[row] | keys_added | exact | as read at setup |
 | held:a.directory_heads[row] | revision | captured | the cached head's revision, moved by each read since |
 | held:a.directory_heads[row] | state | exact | as read at setup |
 | held:a.directory_heads[row] | updated_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
@@ -756,6 +766,7 @@ row per field of each row of each step's objects:
 | held:b.paired_clients[the person's] | updated_at | exact | as read at sign_in |
 | held:b.paired_clients[the person's] | user_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | athanor_id | exact | as read at sign_in |
+| held:b.sessions[the administrator's] | browser | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | client_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | email | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | expires_at | exact | as read at sign_in |
@@ -763,11 +774,14 @@ row per field of each row of each step's objects:
 | held:b.sessions[the administrator's] | id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | inserted_at | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | kid | exact | as read at sign_in |
+| held:b.sessions[the administrator's] | last_seen_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
 | held:b.sessions[the administrator's] | provider | exact | as read at sign_in |
+| held:b.sessions[the administrator's] | system | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | token_hash | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | token_prefix | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | user_id | exact | as read at sign_in |
 | held:b.sessions[the person's] | athanor_id | exact | as read at sign_in |
+| held:b.sessions[the person's] | browser | exact | as read at sign_in |
 | held:b.sessions[the person's] | client_id | exact | as read at sign_in |
 | held:b.sessions[the person's] | email | exact | as read at sign_in |
 | held:b.sessions[the person's] | expires_at | exact | as read at sign_in |
@@ -775,7 +789,9 @@ row per field of each row of each step's objects:
 | held:b.sessions[the person's] | id | exact | as read at sign_in |
 | held:b.sessions[the person's] | inserted_at | exact | as read at sign_in |
 | held:b.sessions[the person's] | kid | exact | as read at sign_in |
+| held:b.sessions[the person's] | last_seen_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
 | held:b.sessions[the person's] | provider | exact | as read at sign_in |
+| held:b.sessions[the person's] | system | exact | as read at sign_in |
 | held:b.sessions[the person's] | token_hash | exact | as read at sign_in |
 | held:b.sessions[the person's] | token_prefix | exact | as read at sign_in |
 | held:b.sessions[the person's] | user_id | exact | as read at sign_in |

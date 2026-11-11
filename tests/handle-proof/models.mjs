@@ -465,13 +465,13 @@ function models(S) {
   M["setup:registry.request_nonces[a]"] = () => [nonce(id, win(S, "make")), nonce(id, win(S, "make"))];
   M["setup:handle_answer[proof]"] = () => handleAnswer(HANDLE, id);
 
-  const userRow = (window, admission, readKey) => ({
+  const userRow = (window, admission, readKey, name) => ({
     id: anId("usr"),
     email: nil(),
     email_verified: nil(),
     admission: exact(admission),
     display_name: nil(),
-    namespace: nil(),
+    namespace: exact(name, { shown: `\`"${name}"\`: the name the registry says the account holds, learned at the sign-in (\`Sanctum.SignIn\`)` }),
     status: exact("active"),
     prefs: exact("{}"),
     first_seen_at: within(win(S, window)),
@@ -556,7 +556,7 @@ function models(S) {
     inserted_at: within(win(S, window)),
   });
 
-  M["setup:a.users"] = () => [userRow("setup", "setup", "setup:a.users")];
+  M["setup:a.users"] = () => [userRow("setup", "setup", "setup:a.users", HANDLE)];
   M["setup:a.athanors"] = () => [athanorRow(aUser(), "me", "setup", "setup:a.athanors")];
   M["setup:a.person_identities"] = () => [identityRow(aUser(), id, headHash(), "setup")];
   M["setup:a.directory_heads"] = () => [directoryHead(id, headHash(), "setup", "setup:a.directory_heads")];
@@ -565,7 +565,7 @@ function models(S) {
   // allow: B, set up by its administrator's own account, allows @proof.
   const adminId = () => first("allow:b.person_identities")[0]?.identifier;
   const adminHead = () => first("allow:b.person_identities")[0]?.head_hash;
-  M["allow:b.users"] = () => [userRow("admin", "setup", "allow:b.users")];
+  M["allow:b.users"] = () => [userRow("admin", "setup", "allow:b.users", ADMIN_HANDLE)];
   M["allow:b.athanors"] = () => [athanorRow(bAdmin(), "me", "admin", "allow:b.athanors")];
   M["allow:b.person_identities"] = () => [{
     ...identityRow(bAdmin(), adminId(), adminHead(), "admin"),
@@ -615,7 +615,7 @@ function models(S) {
       last_seen_at: sameOrWithin(first("allow:b.users")[0]?.last_seen_at, win(S, "signin"), "as read at allow"),
       updated_at: sameOrWithin(first("allow:b.users")[0]?.updated_at, win(S, "signin"), "as read at allow"),
     }, "as read at allow"), "the administrator's"],
-    [remote(), { ...userRow("signin", "open", "sign_in:b.users"), id: derived(remote(), "B's identity row for A's identifier") }, "the person's"],
+    [remote(), { ...userRow("signin", "open", "sign_in:b.users", HANDLE), id: derived(remote(), "B's identity row for A's identifier") }, "the person's"],
   ]);
   M["sign_in:b.athanors"] = () => byKey(first("sign_in:b.athanors"), (r) => r.owner_user_id, [
     [bAdmin(), held(first("allow:b.athanors")[0] ?? {}, {
@@ -717,10 +717,7 @@ function models(S) {
   };
   const moving = (name, step, fields) => (r) => Object.fromEntries(fields.map((f) =>
     [f, sameOrWithin(r[f], since(name, step), `as read at ${step}`)]));
-  M["held:a.users"] = () => heldAll("setup:a.users", "setup", (r) => ({
-    ...moving("a.users", "setup", ["last_seen_at", "updated_at"])(r),
-    namespace: exact(HANDLE, { shown: "`\"proof\"`: the personal namespace the sync recorded (`Sanctum.SignIn.record_namespace/2`)" }),
-  }));
+  M["held:a.users"] = () => heldAll("setup:a.users", "setup", moving("a.users", "setup", ["last_seen_at", "updated_at"]));
   M["held:a.athanors"] = () => heldAll("setup:a.athanors", "setup", moving("a.athanors", "setup", ["provisioned_at", "updated_at"]));
   M["held:a.directory_heads"] = () => heldAll("setup:a.directory_heads", "setup", (r) => ({
     ...moving("a.directory_heads", "setup", ["verified_at", "updated_at"])(r),

@@ -113,6 +113,22 @@ async function claim(key, what, read, io = {}) {
 const filtered = (read, column) => Object.assign(read, { filter: column || null });
 const cyfrRows = (cell, tableName, column = "", value = "") => filtered(async () =>
   (await ask({ op: "rows", cell, table: tableName, column, value })).rows, column);
+// A cell's athanors once none is being filled: the fill runs after the
+// admission commits and ends by writing the row (`Sanctum.Provisioning`,
+// `provisioned_at` or `provisioning_failed_at`), so a row read before it
+// ends is written again under its own tamper loops. A fill's claim stands
+// one minute without renewal, the wait's bound.
+const athanorRows = (cell) => {
+  const read = cyfrRows(cell, "athanors");
+  return filtered(async () => {
+    const closes = clock() + 60_000;
+    for (;;) {
+      const rows = await read();
+      if (rows.every((r) => r.provisioned_at || r.provisioning_failed_at) || clock() >= closes) return rows;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }, "");
+};
 const cyfrIo = (cell, tableName, keyField = "id") => ({
   identity: { store: `${cell}.${tableName}`, key: (row) => row[keyField] },
   write: async (i, field, value, rowNow) => {
@@ -281,7 +297,7 @@ async function main(chromium) {
   if (!row("setup", atA.landed && atA.what === `Sign in to ${A}`,
     "A is set up by signing in with the account at its setup link: the sign page names A, and A lands signed in", atA)) return;
   await claim("setup:a.users", "A's one person, admitted by setup", cyfrRows("a", "users"), cyfrIo("a", "users"));
-  await claim("setup:a.athanors", "A's one athanor, its person's", cyfrRows("a", "athanors"), cyfrIo("a", "athanors"));
+  await claim("setup:a.athanors", "A's one athanor, its person's", athanorRows("a"), cyfrIo("a", "athanors"));
   await claim("setup:a.person_identities", "A's person is the account's identifier, read at registry.test", cyfrRows("a", "person_identities"), cyfrIo("a", "person_identities"));
   await claim("setup:a.directory_heads", "A's cached head of the account's log", cyfrRows("a", "directory_heads"), cyfrIo("a", "directory_heads", "identifier"));
   await claim("setup:a.paired_clients", "A's one paired client: the passkey that signed in, by its kid", cyfrRows("a", "paired_clients"), cyfrIo("a", "paired_clients"));
@@ -311,7 +327,7 @@ async function main(chromium) {
   await park(admin);
   row("allow", atB.landed && labelled, "B's administrator sets B up with their own account and allows @proof in Settings", { setup: atB, labelled });
   await claim("allow:b.users", "B's one person, its administrator", cyfrRows("b", "users"), cyfrIo("b", "users"));
-  await claim("allow:b.athanors", "B's one athanor, the administrator's", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
+  await claim("allow:b.athanors", "B's one athanor, the administrator's", athanorRows("b"), cyfrIo("b", "athanors"));
   await claim("allow:b.person_identities", "B's administrator is their account's identifier", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities"));
   await claim("allow:b.server_allowlist", "B's allowlist: setup's allow of the administrator, and @proof's identifier labelled @proof", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist"));
 
@@ -330,7 +346,7 @@ async function main(chromium) {
   row("sign_in", signedIn.landed && signedIn.what === `Sign in to ${B}`,
     "at B's sign-in page the person signs in with their passkey, typing no address: the sign page names B, and B admits the account under its allow", signedIn);
   await claim("sign_in:b.person_identities", "B's identities: its administrator's, and A's identifier, admitted", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities"));
-  await claim("sign_in:b.athanors", "B's athanors: its administrator's, and the person's own, made in the admission", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
+  await claim("sign_in:b.athanors", "B's athanors: its administrator's, and the person's own, made in the admission", athanorRows("b"), cyfrIo("b", "athanors"));
   await claim("sign_in:b.users", "B's people: its administrator, and the person admitted under the allow", cyfrRows("b", "users"), cyfrIo("b", "users"));
   await claim("sign_in:b.directory_heads", "B's cached heads: the administrator's account's and the person's", cyfrRows("b", "directory_heads"), cyfrIo("b", "directory_heads", "identifier"));
   await claim("sign_in:b.paired_clients", "B's paired clients: each passkey that signed in there, by its kid", cyfrRows("b", "paired_clients"), cyfrIo("b", "paired_clients"));
