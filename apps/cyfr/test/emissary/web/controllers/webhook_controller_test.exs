@@ -108,6 +108,49 @@ defmodule Emissary.Web.WebhookControllerTest do
     |> post("/hooks/" <> slug, body)
   end
 
+  describe "POST /hooks/:slug — the shipped rate limits" do
+    # Each test sends from an address of its own; the limits are checked
+    # before the signature, so an unsigned delivery is counted as any is.
+    defp unsigned(conn, slug, n) do
+      %{conn | remote_ip: {198, 51, 102, n}}
+      |> put_req_header("content-type", "application/json")
+      |> post("/hooks/" <> slug, ~s({}))
+    end
+
+    test "a known webhook takes 100 deliveries a minute and refuses the next",
+         %{conn: conn, ctx: ctx} do
+      %{slug: slug} = create_hook!(ctx, "ceiling")
+
+      for _ <- 1..100, do: assert(unsigned(conn, slug, 1).status == 401)
+
+      over = unsigned(conn, slug, 1)
+      assert json_response(over, 429)["code"] == "rate_limited"
+      assert [_seconds] = get_resp_header(over, "retry-after")
+    end
+
+    test "unknown slugs from one address take 10 a minute together and refuse the next",
+         %{conn: conn} do
+      for n <- 1..10, do: assert(unsigned(conn, "wh_unknown_#{n}", 2).status == 404)
+
+      assert unsigned(conn, "wh_unknown_11", 2).status == 429
+    end
+
+    # 6,000 a minute is too many to run up in a test; the proof is in two
+    # halves: the setting's shipped value is what the store answers with no
+    # row, and the door's per-address ceiling is that setting.
+    test "one address's ceiling across every webhook is the setting, shipped at 6,000",
+         %{conn: conn, ctx: ctx} do
+      assert Arca.PlatformSettings.get("webhook_per_ip_rate_limit_max") == {:error, :not_found}
+      assert Arca.PlatformSettings.effective("webhook_per_ip_rate_limit_max") == {:ok, 6_000}
+
+      Cyfr.Test.Settings.put("webhook_per_ip_rate_limit_max", 3)
+      slugs = for n <- 1..4, do: create_hook!(ctx, "per-ip-#{n}").slug
+
+      for slug <- Enum.take(slugs, 3), do: assert(unsigned(conn, slug, 3).status == 401)
+      assert unsigned(conn, List.last(slugs), 3).status == 429
+    end
+  end
+
   describe "POST /hooks/:slug — auth boundaries" do
     test "404 on unknown slug", %{conn: conn} do
       conn =
