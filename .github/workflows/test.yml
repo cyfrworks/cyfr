@@ -2283,7 +2283,7 @@ jobs:
           # reviewer's to check. In Markdown and in the vector a `code span`
           # (delimited by a run of backticks, closed by a run of the same
           # length) is not prose: an identifier, event name, wire field or
-          # command is spelled as the code spells it (`door.*`, the canvas id
+          # command is spelled as the code spells it (`door.*`, a program's
           # `home`), so the check skips code spans. In the setup pages a
           # backtick delimits a JavaScript template literal, whose text a
           # person reads, so it is scanned with only its ${...} placeholders

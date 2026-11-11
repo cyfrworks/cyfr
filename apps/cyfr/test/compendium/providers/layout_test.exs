@@ -62,7 +62,7 @@ defmodule Compendium.Providers.LayoutTest do
     "minimised" => true
   }
 
-  # Two canvases: `home` on `canvas`, opening the vault as a window and a
+  # Two canvases: `main` on `canvas`, opening the vault as a window and a
   # tincture nobody installed as a minimised tile on the desk; and
   # `notes`, opening nothing.
   defp document(canvas \\ "tincture:local.canvas") do
@@ -70,7 +70,7 @@ defmodule Compendium.Providers.LayoutTest do
       "version" => 3,
       "canvases" => [
         %{
-          "id" => "home",
+          "id" => "main",
           "tincture" => canvas,
           "postures" => %{"desk" => %{"apps" => [@vault, @never_installed]}}
         },
@@ -85,7 +85,7 @@ defmodule Compendium.Providers.LayoutTest do
       "version" => 2,
       "canvases" => [
         %{
-          "id" => "home",
+          "id" => "main",
           "tincture" => "tincture:local.canvas",
           "postures" => %{
             "desk" => %{
@@ -180,7 +180,7 @@ defmodule Compendium.Providers.LayoutTest do
               %{
                 posture: "hand",
                 arrangement: [
-                  %{"id" => "home", "tincture" => "tincture:local.canvas", "apps" => []}
+                  %{"id" => "main", "tincture" => "tincture:local.canvas", "apps" => []}
                 ]
               }} = get(ctx, %{"posture" => "hand"})
     end
@@ -189,10 +189,10 @@ defmodule Compendium.Providers.LayoutTest do
          %{ctx: ctx} do
       {:ok, _} = edit(ctx, document(), 0)
 
-      assert {:ok, %{arrangement: [home, notes]}} = get(ctx, %{"posture" => "desk"})
+      assert {:ok, %{arrangement: [main, notes]}} = get(ctx, %{"posture" => "desk"})
 
-      assert home == %{
-               "id" => "home",
+      assert main == %{
+               "id" => "main",
                "tincture" => "tincture:local.canvas",
                "apps" => [@vault, @never_installed]
              }
@@ -229,7 +229,7 @@ defmodule Compendium.Providers.LayoutTest do
       assert {:ok,
               %{
                 revision: 1,
-                arrangement: [%{id: "home", tincture: "tincture:local.canvas"}, %{id: "notes"}]
+                arrangement: [%{id: "main", tincture: "tincture:local.canvas"}, %{id: "notes"}]
               } = read} = Compendium.layout(ctx, "desk")
 
       assert %Prima.Layout{} = read.document
@@ -252,16 +252,16 @@ defmodule Compendium.Providers.LayoutTest do
       [app | _] = hd(document()["canvases"])["postures"]["desk"]["apps"]
 
       with_action =
-        update_in(document(), ["canvases"], fn [home | rest] ->
+        update_in(document(), ["canvases"], fn [main | rest] ->
           [
-            put_in(home, ["postures", "desk", "apps"], [Map.put(app, "action", "vault.list")])
+            put_in(main, ["postures", "desk", "apps"], [Map.put(app, "action", "vault.list")])
             | rest
           ]
         end)
 
       with_stream =
-        update_in(document(), ["canvases"], fn [home | rest] ->
-          [put_in(home, ["postures", "desk", "stream"], "vault.status") | rest]
+        update_in(document(), ["canvases"], fn [main | rest] ->
+          [put_in(main, ["postures", "desk", "stream"], "vault.status") | rest]
         end)
 
       assert {:error, {:invalid_argument, _}} = edit(ctx, with_action, 0)
@@ -289,7 +289,7 @@ defmodule Compendium.Providers.LayoutTest do
                  digest: Prima.Layout.digest(default),
                  shipped_default: true,
                  arrangement: [
-                   %{"id" => "home", "tincture" => "tincture:local.canvas", "apps" => []}
+                   %{"id" => "main", "tincture" => "tincture:local.canvas", "apps" => []}
                  ]
                }
 

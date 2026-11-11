@@ -379,7 +379,7 @@ describe("the keys", () => {
   })
 
   test("with no active app the arrows switch canvases; 1 to 8 show that canvas", () => {
-    const {pushed} = mount(layerOf({dots: ["home", "work", "play"]}))
+    const {pushed} = mount(layerOf({dots: ["main", "work", "play"]}))
     assert.equal(press({key: "ArrowLeft"}), true)
     press({key: "ArrowRight"})
     press({key: "2", code: "Digit2"})

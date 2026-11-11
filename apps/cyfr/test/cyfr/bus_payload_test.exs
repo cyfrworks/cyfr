@@ -118,7 +118,7 @@ defmodule Cyfr.BusPayloadTest do
       Notify.new(@actor, :approval_pending, %{thread_id: "t", approval_id: "a"}),
       Ping.new(1),
       RoomInView.new(%{"athanor_id" => "ath_payload", "thread_id" => "t", "title" => "x"}),
-      AquaAsk.new("About the runs widget on my home desktop (canvas): "),
+      AquaAsk.new("About the runs widget on my main desktop (canvas): "),
       ScheduleCompleted.new(@actor),
       CrewPending.new(@actor),
       VaultEntry.new(@actor, :changed, name: "github", type: "api_key", status: "fine"),

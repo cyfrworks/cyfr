@@ -5093,7 +5093,7 @@ defmodule PrismWeb.SystemLayerTest do
 
       fallback =
         Prism.Fallback.enter(:gone, %{
-          canvas: "home",
+          canvas: "main",
           tincture: "tincture:local.markets",
           kept: nil
         })
@@ -5158,10 +5158,10 @@ defmodule PrismWeb.SystemLayerTest do
   describe "the fallback's notice" do
     setup :signed_in
 
-    # The canvas `home` on markets, fallen back, keeping `kept`.
+    # The canvas `main` on markets, fallen back, keeping `kept`.
     defp fallback(kept \\ "1.0.0") do
       Prism.Fallback.enter(:gone, %{
-        canvas: "home",
+        canvas: "main",
         tincture: "tincture:local.markets",
         kept: kept
       })

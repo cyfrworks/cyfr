@@ -117,7 +117,7 @@ defmodule Cyfr.Test.SeedBundleTest do
            ]
 
     # The default layout's one canvas, with nothing placed over it.
-    assert [%{id: "home", tincture: ref, postures: postures}] = Prima.Layout.default().canvases
+    assert [%{id: "main", tincture: ref, postures: postures}] = Prima.Layout.default().canvases
     assert ref == canvas.ref
     assert postures == %{}
 

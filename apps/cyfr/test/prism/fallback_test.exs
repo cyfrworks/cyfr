@@ -18,13 +18,13 @@ defmodule Prism.FallbackTest do
   @not_reasons [:ok, :crashed, :requested]
 
   defp canvas(fields \\ %{}),
-    do: Map.merge(%{canvas: "home", tincture: "tincture:local.markets", kept: "0.1.3"}, fields)
+    do: Map.merge(%{canvas: "main", tincture: "tincture:local.markets", kept: "0.1.3"}, fields)
 
   test "it keeps the reason and the canvas" do
     for reason <- [:not_ready, :gone, :not_validated] do
       assert Fallback.enter(reason, canvas()) == %Fallback{
                reason: reason,
-               canvas: "home",
+               canvas: "main",
                tincture: "tincture:local.markets",
                kept: "0.1.3"
              }
@@ -40,7 +40,7 @@ defmodule Prism.FallbackTest do
       assert_raise FunctionClauseError, fn -> Fallback.enter(unknown, canvas()) end
     end
 
-    for fields <- [%{kept: 3}, %{canvas: nil}, %{canvas: :home}, %{tincture: nil}] do
+    for fields <- [%{kept: 3}, %{canvas: nil}, %{canvas: :main}, %{tincture: nil}] do
       assert_raise FunctionClauseError, fn -> Fallback.enter(:gone, canvas(fields)) end
     end
   end

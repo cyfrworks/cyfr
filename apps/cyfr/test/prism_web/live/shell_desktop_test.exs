@@ -197,7 +197,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
   defp assigns(%Phoenix.LiveViewTest.View{pid: pid}), do: :sys.get_state(pid).socket.assigns
   defp frames(view), do: assigns(view).frames
-  defp canvas(view, id \\ "home"), do: Frames.get(frames(view), {:canvas, id})
+  defp canvas(view, id \\ "main"), do: Frames.get(frames(view), {:canvas, id})
   defp dropped(view), do: Frames.dropped(frames(view))
 
   defp handshake!(view, frame_id) do
@@ -255,7 +255,7 @@ defmodule PrismWeb.ShellDesktopTest do
   describe "the handshake" do
     setup %{ctx: ctx, user: user, athanor: athanor} do
       desktop!(ctx, "markets", %{"data" => ["runs.changes"], "prefs" => @prefs})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       :ok
     end
 
@@ -272,7 +272,7 @@ defmodule PrismWeb.ShellDesktopTest do
         Arca.CanvasPrefs.write(
           actor,
           user.user_id,
-          "home",
+          "main",
           %{"widgets" => %{"runs" => %{"on" => false, "compact" => true}}},
           schema,
           0
@@ -304,44 +304,44 @@ defmodule PrismWeb.ShellDesktopTest do
   describe "one input of the person's" do
     setup %{ctx: ctx, user: user, athanor: athanor} do
       desktop!(ctx, "markets", %{"data" => ["runs.changes"], "prefs" => @prefs})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       :ok
     end
 
     test "carries one verb: a second with the same input, or one with none, is dropped and told it did not run",
          %{conn: conn, ctx: ctx, user: user} do
       view = shell!(conn)
-      home = canvas(view).id
-      handshake!(view, home)
+      main = canvas(view).id
+      handshake!(view, main)
       write = %{"document" => %{"widgets" => %{"apps" => %{"on" => false}}}}
 
-      verb!(view, home, :prefs, write, 41)
-      assert %{"outcome" => "saved", "revision" => 1} = answer!(view, home, "prefs")
+      verb!(view, main, :prefs, write, 41)
+      assert %{"outcome" => "saved", "revision" => 1} = answer!(view, main, "prefs")
 
       # The same input again, and an earlier one.
-      verb!(view, home, :prefs, write, 41)
-      assert %{"outcome" => "cancelled", "revision" => 1} = answer!(view, home, "prefs")
-      verb!(view, home, :prefs, write, 40)
-      assert %{"outcome" => "cancelled"} = answer!(view, home, "prefs")
+      verb!(view, main, :prefs, write, 41)
+      assert %{"outcome" => "cancelled", "revision" => 1} = answer!(view, main, "prefs")
+      verb!(view, main, :prefs, write, 40)
+      assert %{"outcome" => "cancelled"} = answer!(view, main, "prefs")
 
       # No input at all.
-      verb!(view, home, :prefs, write, nil)
-      assert %{"outcome" => "cancelled"} = answer!(view, home, "prefs")
+      verb!(view, main, :prefs, write, nil)
+      assert %{"outcome" => "cancelled"} = answer!(view, main, "prefs")
 
       assert dropped(view) == 3
-      assert {_document, 1} = stored(ctx, user, "home")
+      assert {_document, 1} = stored(ctx, user, "main")
 
       # A new input carries the next.
-      verb!(view, home, :prefs, write, 42)
-      assert %{"outcome" => "saved", "revision" => 2} = answer!(view, home, "prefs")
+      verb!(view, main, :prefs, write, 42)
+      assert %{"outcome" => "saved", "revision" => 2} = answer!(view, main, "prefs")
     end
 
     test "ready and failed need none", %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :ready, %{}, nil)
-      assert MapSet.member?(assigns(view).canvas_ready, home)
+      verb!(view, main, :ready, %{}, nil)
+      assert MapSet.member?(assigns(view).canvas_ready, main)
       assert dropped(view) == 0
     end
   end
@@ -351,20 +351,20 @@ defmodule PrismWeb.ShellDesktopTest do
   describe "the preferences" do
     setup %{ctx: ctx, user: user, athanor: athanor} do
       desktop!(ctx, "markets", %{"data" => ["runs.changes"], "prefs" => @prefs})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       :ok
     end
 
     test "a write goes over the revision the frame holds; a stale one is answered with the current document and merges nothing",
          %{conn: conn, ctx: ctx, user: user} do
       view = shell!(conn)
-      home = canvas(view).id
-      %{"canvas" => %{"prefs" => %{"revision" => 0}}} = handshake!(view, home)
+      main = canvas(view).id
+      %{"canvas" => %{"prefs" => %{"revision" => 0}}} = handshake!(view, main)
 
-      verb!(view, home, :prefs, %{"document" => %{"widgets" => %{"runs" => %{"on" => false}}}})
+      verb!(view, main, :prefs, %{"document" => %{"widgets" => %{"runs" => %{"on" => false}}}})
 
       assert %{"outcome" => "saved", "revision" => 1, "document" => saved} =
-               answer!(view, home, "prefs")
+               answer!(view, main, "prefs")
 
       assert saved["widgets"] == %{"runs" => %{"on" => false}}
 
@@ -378,25 +378,25 @@ defmodule PrismWeb.ShellDesktopTest do
         Arca.CanvasPrefs.write(
           Sanctum.Context.actor(ctx),
           user.user_id,
-          "home",
+          "main",
           %{"widgets" => %{"apps" => %{"on" => false}}},
           schema,
           1
         )
 
-      verb!(view, home, :prefs, %{"document" => %{"widgets" => %{"runs" => %{"on" => true}}}})
+      verb!(view, main, :prefs, %{"document" => %{"widgets" => %{"runs" => %{"on" => true}}}})
 
       assert %{"outcome" => "stale", "revision" => 2, "document" => current} =
-               answer!(view, home, "prefs")
+               answer!(view, main, "prefs")
 
       assert current["widgets"] == %{"runs" => %{"on" => false}, "apps" => %{"on" => false}}
-      assert {^current, 2} = stored(ctx, user, "home")
+      assert {^current, 2} = stored(ctx, user, "main")
 
       # Written again over the current one, it lands, the other widget kept.
-      verb!(view, home, :prefs, %{"document" => %{"widgets" => %{"runs" => %{"on" => true}}}})
+      verb!(view, main, :prefs, %{"document" => %{"widgets" => %{"runs" => %{"on" => true}}}})
 
       assert %{"outcome" => "saved", "revision" => 3, "document" => document} =
-               answer!(view, home, "prefs")
+               answer!(view, main, "prefs")
 
       assert document["widgets"] == %{"runs" => %{"on" => true}, "apps" => %{"on" => false}}
     end
@@ -404,8 +404,8 @@ defmodule PrismWeb.ShellDesktopTest do
     test "a document the schema refuses is refused and leaves the stored one untouched",
          %{conn: conn, ctx: ctx, user: user} do
       view = shell!(conn)
-      home = canvas(view).id
-      handshake!(view, home)
+      main = canvas(view).id
+      handshake!(view, main)
 
       for document <- [
             %{"widgets" => %{"weather" => %{"on" => true}}},
@@ -413,22 +413,22 @@ defmodule PrismWeb.ShellDesktopTest do
             %{"widgets" => %{"runs" => %{"rect" => %{"x" => 0, "y" => 0, "w" => 0, "h" => 10}}}},
             %{"theme" => "dark"}
           ] do
-        verb!(view, home, :prefs, %{"document" => document})
+        verb!(view, main, :prefs, %{"document" => document})
 
         assert %{"outcome" => "refused", "reason" => "invalid_argument", "revision" => 0} =
-                 answer!(view, home, "prefs")
+                 answer!(view, main, "prefs")
       end
 
-      assert {:none, 0} = stored(ctx, user, "home")
+      assert {:none, 0} = stored(ctx, user, "main")
     end
 
     test "survives the shell's end: the next view hands the frame what was written",
          %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
-      handshake!(view, home)
-      verb!(view, home, :prefs, %{"document" => %{"widgets" => %{"apps" => %{"on" => false}}}})
-      assert %{"outcome" => "saved"} = answer!(view, home, "prefs")
+      main = canvas(view).id
+      handshake!(view, main)
+      verb!(view, main, :prefs, %{"document" => %{"widgets" => %{"apps" => %{"on" => false}}}})
+      assert %{"outcome" => "saved"} = answer!(view, main, "prefs")
 
       GenServer.stop(view.pid)
       view = shell!(conn)
@@ -473,22 +473,22 @@ defmodule PrismWeb.ShellDesktopTest do
         ]
       })
 
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       {:ok, digest: schedule!(ctx, user, "digest"), other: schedule!(ctx, user, "other")}
     end
 
     test "runs through the gate as the person with a value the stream publishes now",
          %{conn: conn, ctx: ctx, digest: digest, other: other} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :press, %{
+      verb!(view, main, :press, %{
         "control" => "pause-schedule",
         "value" => digest.id,
         "call" => 7
       })
 
-      assert answer!(view, home, "pressed") == %{
+      assert answer!(view, main, "pressed") == %{
                "control" => "pause-schedule",
                "call" => 7,
                "outcome" => "accepted"
@@ -501,7 +501,7 @@ defmodule PrismWeb.ShellDesktopTest do
     test "refuses a value the stream does not publish, a pick without one, an undeclared or indirect control, and says why",
          %{conn: conn, ctx: ctx, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
       for args <- [
             %{"control" => "pause-schedule", "value" => "sch_not_this_athanors"},
@@ -510,10 +510,10 @@ defmodule PrismWeb.ShellDesktopTest do
             %{"control" => "make-schedule"},
             %{"control" => "pause-missing", "value" => digest.id}
           ] do
-        verb!(view, home, :press, args)
+        verb!(view, main, :press, args)
 
         assert %{"outcome" => "refused", "reason" => "invalid_argument"} =
-                 answer!(view, home, "pressed"),
+                 answer!(view, main, "pressed"),
                inspect(args)
       end
 
@@ -525,9 +525,9 @@ defmodule PrismWeb.ShellDesktopTest do
     test "the gate decides what it reaches: a fixed argument naming nothing of the athanor's is refused by the gate",
          %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :press, %{"control" => "pause-missing"})
+      verb!(view, main, :press, %{"control" => "pause-missing"})
 
       # The schedule tool's own refusal, classified as the gate classifies it.
       {:error, refused} =
@@ -536,16 +536,16 @@ defmodule PrismWeb.ShellDesktopTest do
         })
 
       reason = Atom.to_string(Prima.Refusal.classify(refused).class)
-      assert %{"outcome" => "refused", "reason" => ^reason} = answer!(view, home, "pressed")
+      assert %{"outcome" => "refused", "reason" => ^reason} = answer!(view, main, "pressed")
     end
 
     test "pressed with no input of the person's it does not run, and is told so",
          %{conn: conn, ctx: ctx, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :press, %{"control" => "pause-schedule", "value" => digest.id}, nil)
-      assert %{"outcome" => "cancelled"} = answer!(view, home, "pressed")
+      verb!(view, main, :press, %{"control" => "pause-schedule", "value" => digest.id}, nil)
+      assert %{"outcome" => "cancelled"} = answer!(view, main, "pressed")
       assert status(ctx, digest.id) == "active"
     end
   end
@@ -570,7 +570,7 @@ defmodule PrismWeb.ShellDesktopTest do
       })
 
       app!(ctx, "planner")
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       {:ok, digest: schedule!(ctx, user, "digest")}
     end
 
@@ -599,10 +599,10 @@ defmodule PrismWeb.ShellDesktopTest do
     test "asks the person above every frame on CYFR's preview, naming the frame, and runs only once approved",
          %{conn: conn, ctx: ctx, user: user, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :request, rename(digest, "renamed", 11))
-      assert %{"call" => 11, "request" => id} = answer!(view, home, "requested")
+      verb!(view, main, :request, rename(digest, "renamed", 11))
+      assert %{"call" => 11, "request" => id} = answer!(view, main, "requested")
       assert Prima.TinctureWire.request_id?(id)
 
       assert has_element?(view, prompt())
@@ -615,7 +615,7 @@ defmodule PrismWeb.ShellDesktopTest do
       assert [%{kind: :grant_request, id: ^id, label: "schedule.update"}] = waiting(ctx, user)
 
       click!(view, "request-approve")
-      assert answer!(view, home, "decided") == %{"call" => 11, "outcome" => "approved"}
+      assert answer!(view, main, "decided") == %{"call" => 11, "outcome" => "approved"}
       assert name_of(ctx, digest.id) == "renamed"
       refute has_element?(view, prompt())
       assert waiting(ctx, user) == []
@@ -624,20 +624,20 @@ defmodule PrismWeb.ShellDesktopTest do
     test "refused or dismissed by the person, it runs nothing and says how it ended",
          %{conn: conn, ctx: ctx, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :request, rename(digest, "refused", 12))
-      assert %{"call" => 12} = answer!(view, home, "requested")
+      verb!(view, main, :request, rename(digest, "refused", 12))
+      assert %{"call" => 12} = answer!(view, main, "requested")
       click!(view, "request-refuse")
 
-      assert answer!(view, home, "decided") ==
+      assert answer!(view, main, "decided") ==
                %{"call" => 12, "outcome" => "refused", "reason" => "declined"}
 
-      verb!(view, home, :request, rename(digest, "dismissed", 13))
-      assert %{"call" => 13} = answer!(view, home, "requested")
+      verb!(view, main, :request, rename(digest, "dismissed", 13))
+      assert %{"call" => 13} = answer!(view, main, "requested")
       click!(view, "prompt-dismiss")
 
-      assert answer!(view, home, "decided") ==
+      assert answer!(view, main, "decided") ==
                %{"call" => 13, "outcome" => "cancelled", "reason" => "dismissed"}
 
       assert name_of(ctx, digest.id) == "digest"
@@ -646,14 +646,14 @@ defmodule PrismWeb.ShellDesktopTest do
     test "a second request of the frame while one waits is cancelled busy and asks nothing",
          %{conn: conn, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :request, rename(digest, "first", 14))
-      assert %{"call" => 14} = answer!(view, home, "requested")
+      verb!(view, main, :request, rename(digest, "first", 14))
+      assert %{"call" => 14} = answer!(view, main, "requested")
 
-      verb!(view, home, :request, rename(digest, "second", 15))
+      verb!(view, main, :request, rename(digest, "second", 15))
 
-      assert answer!(view, home, "decided") ==
+      assert answer!(view, main, "decided") ==
                %{"call" => 15, "outcome" => "cancelled", "reason" => "busy"}
 
       assert map_size(assigns(view).requests) == 1
@@ -662,14 +662,14 @@ defmodule PrismWeb.ShellDesktopTest do
     test "left undecided, it expires cancelled and its prompt is withdrawn",
          %{conn: conn, ctx: ctx, user: user, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :request, rename(digest, "late", 16))
-      assert %{"request" => id} = answer!(view, home, "requested")
+      verb!(view, main, :request, rename(digest, "late", 16))
+      assert %{"request" => id} = answer!(view, main, "requested")
 
       send(view.pid, {:request_expired, id})
 
-      assert answer!(view, home, "decided") ==
+      assert answer!(view, main, "decided") ==
                %{"call" => 16, "outcome" => "cancelled", "reason" => "expired"}
 
       _ = render(view)
@@ -681,15 +681,15 @@ defmodule PrismWeb.ShellDesktopTest do
     test "one the request rule refuses is refused with its class, the person never asked",
          %{conn: conn, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :request, %{
+      verb!(view, main, :request, %{
         "operation" => "schedule.pause",
         "args" => %{"schedule_id" => digest.id},
         "call" => 17
       })
 
-      assert answer!(view, home, "decided") ==
+      assert answer!(view, main, "decided") ==
                %{"call" => 17, "outcome" => "refused", "reason" => "invalid_argument"}
 
       refute has_element?(view, prompt())
@@ -699,10 +699,10 @@ defmodule PrismWeb.ShellDesktopTest do
     test "sent with no input of the person's it asks nothing, and is told so",
          %{conn: conn, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :request, rename(digest, "scripted", 18), nil)
-      assert answer!(view, home, "decided") == %{"call" => 18, "outcome" => "cancelled"}
+      verb!(view, main, :request, rename(digest, "scripted", 18), nil)
+      assert answer!(view, main, "decided") == %{"call" => 18, "outcome" => "cancelled"}
       refute has_element?(view, prompt())
     end
 
@@ -710,17 +710,17 @@ defmodule PrismWeb.ShellDesktopTest do
          %{conn: conn, ctx: ctx, user: user, digest: digest} do
       taken = schedule!(ctx, user, "taken")
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
       # A name another schedule holds: the schedule tool refuses the call.
-      verb!(view, home, :request, rename(digest, "taken", 19))
-      assert %{"call" => 19} = answer!(view, home, "requested")
+      verb!(view, main, :request, rename(digest, "taken", 19))
+      assert %{"call" => 19} = answer!(view, main, "requested")
       [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
 
       click!(view, "request-approve")
 
       assert %{"call" => 19, "outcome" => "refused", "reason" => reason} =
-               answer!(view, home, "decided")
+               answer!(view, main, "decided")
 
       assert reason in Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
       assert name_of(ctx, digest.id) == "digest"
@@ -776,14 +776,14 @@ defmodule PrismWeb.ShellDesktopTest do
       digest: digest
     } do
       view = shell!(conn)
-      home = canvas(view).id
-      verb!(view, home, :request, rename(digest, "must-not-run-after-expiry", 66))
-      assert %{"request" => id} = answer!(view, home, "requested")
+      main = canvas(view).id
+      verb!(view, main, :request, rename(digest, "must-not-run-after-expiry", 66))
+      assert %{"request" => id} = answer!(view, main, "requested")
       [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
 
       queued!(view, [{:request_expired, id}, layer_event(view, "request_approve", prompt_id)])
 
-      assert answer!(view, home, "decided") ==
+      assert answer!(view, main, "decided") ==
                %{"call" => 66, "outcome" => "cancelled", "reason" => "expired"}
 
       _ = render(view)
@@ -798,9 +798,9 @@ defmodule PrismWeb.ShellDesktopTest do
       digest: digest
     } do
       view = shell!(conn)
-      home = canvas(view).id
-      verb!(view, home, :request, rename(digest, "must-not-run-after-refusal", 67))
-      assert %{"call" => 67} = answer!(view, home, "requested")
+      main = canvas(view).id
+      verb!(view, main, :request, rename(digest, "must-not-run-after-refusal", 67))
+      assert %{"call" => 67} = answer!(view, main, "requested")
       [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
 
       queued!(view, [
@@ -808,7 +808,7 @@ defmodule PrismWeb.ShellDesktopTest do
         layer_event(view, "request_approve", prompt_id)
       ])
 
-      assert answer!(view, home, "decided") ==
+      assert answer!(view, main, "decided") ==
                %{"call" => 67, "outcome" => "refused", "reason" => "declined"}
 
       _ = render(view)
@@ -822,9 +822,9 @@ defmodule PrismWeb.ShellDesktopTest do
       digest: digest
     } do
       view = shell!(conn)
-      home = canvas(view).id
-      verb!(view, home, :request, rename(digest, "approved-once", 68))
-      assert %{"request" => id} = answer!(view, home, "requested")
+      main = canvas(view).id
+      verb!(view, main, :request, rename(digest, "approved-once", 68))
+      assert %{"request" => id} = answer!(view, main, "requested")
       [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
 
       queued!(view, [
@@ -833,7 +833,7 @@ defmodule PrismWeb.ShellDesktopTest do
         {:request_expired, id}
       ])
 
-      assert answer!(view, home, "decided") == %{"call" => 68, "outcome" => "approved"}
+      assert answer!(view, main, "decided") == %{"call" => 68, "outcome" => "approved"}
       _ = render(view)
       assert name_of(ctx, digest.id) == "approved-once"
       refute_push_event(view, "canvas_answer", %{verb: "decided"})
@@ -863,7 +863,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
       {:ok, entry} = Sanctum.Vault.create(entering, params)
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
       rebind = %{
         "operation" => "vault.rebind",
@@ -871,8 +871,8 @@ defmodule PrismWeb.ShellDesktopTest do
         "call" => call
       }
 
-      verb!(view, home, :request, rebind)
-      assert %{"call" => ^call, "request" => id} = answer!(view, home, "requested")
+      verb!(view, main, :request, rebind)
+      assert %{"call" => ^call, "request" => id} = answer!(view, main, "requested")
       click!(view, "request-approve")
 
       assert {:ok, [%{ref: ref}]} =
@@ -881,7 +881,7 @@ defmodule PrismWeb.ShellDesktopTest do
       wait_until(fn -> render(view) =~ ~s(data-ref="#{ref}") end, 2_000, "the waiting record")
       refute_push_event(view, "canvas_answer", %{verb: "decided"})
       assert [%{id: ^id}] = waiting(ctx, user)
-      %{view: view, home: home, id: id, ref: ref, person: person, entry: entry}
+      %{view: view, main: main, id: id, ref: ref, person: person, entry: entry}
     end
 
     defp attach_only?(person, entry_id) do
@@ -902,7 +902,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
     test "a cancelled fresh confirmation also ends the frame request",
          %{conn: conn, ctx: ctx, user: user} do
-      %{view: view, home: home, id: id, ref: ref, person: person, entry: entry} =
+      %{view: view, main: main, id: id, ref: ref, person: person, entry: entry} =
         confirming!(conn, ctx, user, 69)
 
       assert {:ok, _cancelled} =
@@ -911,7 +911,7 @@ defmodule PrismWeb.ShellDesktopTest do
                })
 
       request_ended!(view)
-      assert answer!(view, home, "decided") == %{"call" => 69, "outcome" => "cancelled"}
+      assert answer!(view, main, "decided") == %{"call" => 69, "outcome" => "cancelled"}
       assert waiting(ctx, user) == []
 
       send(view.pid, {:request_expired, id})
@@ -922,7 +922,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
     test "a fresh confirmation proven after the request's own expiry runs it, approved once",
          %{conn: conn, ctx: ctx, user: user} do
-      %{view: view, home: home, id: id, ref: ref, person: person, entry: entry} =
+      %{view: view, main: main, id: id, ref: ref, person: person, entry: entry} =
         confirming!(conn, ctx, user, 70)
 
       send(view.pid, {:request_expired, id})
@@ -932,7 +932,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
       Sanctum.TestContext.prove!(person, ref)
       request_ended!(view)
-      assert answer!(view, home, "decided") == %{"call" => 70, "outcome" => "approved"}
+      assert answer!(view, main, "decided") == %{"call" => 70, "outcome" => "approved"}
       refute_push_event(view, "canvas_answer", %{verb: "decided"})
       assert waiting(ctx, user) == []
       refute attach_only?(person, entry.id)
@@ -940,7 +940,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
     test "a fresh confirmation that expires cancels the request expired",
          %{conn: conn, ctx: ctx, user: user} do
-      %{view: view, home: home, ref: ref, person: person, entry: entry} =
+      %{view: view, main: main, ref: ref, person: person, entry: entry} =
         confirming!(conn, ctx, user, 71)
 
       Phoenix.LiveView.send_update(view.pid, PrismWeb.SystemLayer,
@@ -950,7 +950,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
       request_ended!(view)
 
-      assert answer!(view, home, "decided") ==
+      assert answer!(view, main, "decided") ==
                %{"call" => 71, "outcome" => "cancelled", "reason" => "expired"}
 
       assert waiting(ctx, user) == []
@@ -963,24 +963,24 @@ defmodule PrismWeb.ShellDesktopTest do
       digest: digest
     } do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :press, %{"control" => "rename", "value" => digest.id, "call" => 20})
-      assert %{"call" => 20, "request" => _} = answer!(view, home, "requested")
+      verb!(view, main, :press, %{"control" => "rename", "value" => digest.id, "call" => 20})
+      assert %{"call" => 20, "request" => _} = answer!(view, main, "requested")
       assert has_element?(view, ~s([data-test="request-preview"]), "renamed-by-control")
       assert name_of(ctx, digest.id) == "digest"
 
       click!(view, "request-approve")
-      assert answer!(view, home, "decided") == %{"call" => 20, "outcome" => "approved"}
+      assert answer!(view, main, "decided") == %{"call" => 20, "outcome" => "approved"}
       assert name_of(ctx, digest.id) == "renamed-by-control"
     end
 
     test "an app's request is the person's too, from a frame they see",
          %{conn: conn, ctx: ctx, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
-      verb!(view, home, :open, %{"ref" => "tincture:local.planner"})
-      app = Frames.get(frames(view), {:app, "home", "tincture:local.planner"})
+      main = canvas(view).id
+      verb!(view, main, :open, %{"ref" => "tincture:local.planner"})
+      app = Frames.get(frames(view), {:app, "main", "tincture:local.planner"})
 
       verb!(view, app.id, :request, rename(digest, "from-the-app", 21))
       assert %{"call" => 21} = answer!(view, app.id, "requested")
@@ -998,9 +998,9 @@ defmodule PrismWeb.ShellDesktopTest do
     test "a request whose frame leaves is withdrawn, told nowhere",
          %{conn: conn, ctx: ctx, user: user, digest: digest} do
       view = shell!(conn)
-      home = canvas(view).id
-      verb!(view, home, :open, %{"ref" => "tincture:local.planner"})
-      app = Frames.get(frames(view), {:app, "home", "tincture:local.planner"})
+      main = canvas(view).id
+      verb!(view, main, :open, %{"ref" => "tincture:local.planner"})
+      app = Frames.get(frames(view), {:app, "main", "tincture:local.planner"})
 
       verb!(view, app.id, :request, rename(digest, "orphan", 23))
       assert %{"call" => 23} = answer!(view, app.id, "requested")
@@ -1034,7 +1034,7 @@ defmodule PrismWeb.ShellDesktopTest do
       desktop!(ctx, "plain", %{"data" => ["runs.changes"]})
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.styled"),
+        entry("main", "tincture:local.styled"),
         entry("work", "tincture:local.plain")
       ])
 
@@ -1061,7 +1061,7 @@ defmodule PrismWeb.ShellDesktopTest do
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert_push_event(view, "chrome", %{chrome: nil})
 
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
       assert_push_event(view, "chrome", %{chrome: ^chrome})
     end
 
@@ -1072,7 +1072,7 @@ defmodule PrismWeb.ShellDesktopTest do
       assert_push_event(view, "chrome", %{chrome: %{}})
 
       render_hook(view, "app_open", %{"ref" => "tincture:local.notes"})
-      app = Frames.get(frames(view), {:app, "home", "tincture:local.notes"})
+      app = Frames.get(frames(view), {:app, "main", "tincture:local.notes"})
       render_hook(view, "frame_full", %{"frame" => app.id})
       assert_push_event(view, "chrome", %{chrome: nil})
 
@@ -1082,12 +1082,12 @@ defmodule PrismWeb.ShellDesktopTest do
 
     test "a desktop that falls back wears Prism's default", %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
       assert_push_event(view, "chrome", %{chrome: %{}})
 
-      verb!(view, home, :failed, %{"stage" => "load"}, nil)
+      verb!(view, main, :failed, %{"stage" => "load"}, nil)
       assert_push_event(view, "chrome", %{chrome: nil})
-      assert Map.has_key?(assigns(view).fallbacks, "home")
+      assert Map.has_key?(assigns(view).fallbacks, "main")
     end
   end
 
@@ -1098,23 +1098,23 @@ defmodule PrismWeb.ShellDesktopTest do
       desktop!(ctx, "markets", %{"data" => ["runs.changes"], "prefs" => @prefs})
       app!(ctx, "run-view", %{"subjects" => ["run"]})
       app!(ctx, "plain-view")
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       :ok
     end
 
     test "ask opens AQUA with Prism's sentence naming a declared widget and the desktop, and nothing else",
          %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
       :ok = Cyfr.Bus.subscribe_page(assigns(view).aqua_ask)
 
-      verb!(view, home, :ask, %{"widget" => "runs"})
+      verb!(view, main, :ask, %{"widget" => "runs"})
 
       assert_receive %Cyfr.Bus.AquaAsk{sentence: sentence}
-      assert sentence == "About the runs widget on my home desktop (markets): "
+      assert sentence == "About the runs widget on my main desktop (markets): "
 
       # A widget the desktop does not declare asks nothing.
-      verb!(view, home, :ask, %{"widget" => "weather"})
+      verb!(view, main, :ask, %{"widget" => "weather"})
       refute_receive %Cyfr.Bus.AquaAsk{}, 100
       assert dropped(view) == 1
     end
@@ -1122,56 +1122,56 @@ defmodule PrismWeb.ShellDesktopTest do
     test "settings opens a page from Prism's own list over the desktop, the canvas still held, and nothing else",
          %{conn: conn, athanor: athanor} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      verb!(view, home, :settings, %{"page" => "no_such_page"})
+      verb!(view, main, :settings, %{"page" => "no_such_page"})
       assert dropped(view) == 1
       refute_push_event(view, "navigate", _)
 
-      verb!(view, home, :settings, %{"page" => "schedules"})
+      verb!(view, main, :settings, %{"page" => "schedules"})
       to = "/a/#{Sanctum.Tenancy.Athanors.route_slug(athanor)}/schedules"
       assert_push_event(view, "navigate", %{to: ^to})
 
       # The page moves under the desktop's own hook; the desktop stays, its
       # canvas held and live.
       assert Process.alive?(view.pid)
-      assert %{id: ^home, state: :live} = canvas(view)
+      assert %{id: ^main, state: :live} = canvas(view)
     end
 
     test "settings of aqua, an approval's destination, opens AQUA's panel in place",
          %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
       panel = find_live_child(view, "aqua-panel")
       render(panel)
       _ = render(view)
       refute has_element?(panel, "#aqua-panel-sheet")
 
-      verb!(view, home, :settings, %{"page" => "aqua"})
+      verb!(view, main, :settings, %{"page" => "aqua"})
       _ = render(view)
 
       assert has_element?(panel, "#aqua-panel-sheet")
       refute_push_event(view, "navigate", _)
-      assert %{id: ^home, state: :live} = canvas(view)
+      assert %{id: ^main, state: :live} = canvas(view)
     end
 
     test "settings of chat opens the chat overlay in place",
          %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
       chat = find_live_child(view, "chat-overlay")
       # The overlay has reported in once it rendered connected.
       render(chat)
       _ = render(view)
       refute has_element?(chat, "#chat-sheet")
 
-      verb!(view, home, :settings, %{"page" => "chat"})
+      verb!(view, main, :settings, %{"page" => "chat"})
       _ = render(view)
 
       assert has_element?(chat, "#chat-sheet")
       assert has_element?(chat, ~s(#chat-button[aria-expanded="true"]))
       refute_push_event(view, "navigate", _)
-      assert %{id: ^home, state: :live} = canvas(view)
+      assert %{id: ^main, state: :live} = canvas(view)
     end
 
     test "settings of aqua with a ref opens AQUA's panel at that thread of the person's own, and at its kept one otherwise",
@@ -1179,12 +1179,12 @@ defmodule PrismWeb.ShellDesktopTest do
       {:ok, plans} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx), %{title: "Plans"})
       {:ok, theirs} = Sanctum.SharedThreads.create(user.user_id, "Shared, not AQUA's")
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
       panel = find_live_child(view, "aqua-panel")
       render(panel)
       _ = render(view)
 
-      verb!(view, home, :settings, %{"page" => "aqua", "ref" => plans.id})
+      verb!(view, main, :settings, %{"page" => "aqua", "ref" => plans.id})
       _ = render(view)
       assert has_element?(panel, "#aqua-panel-sheet")
       assert %{id: id} = :sys.get_state(panel.pid).socket.assigns.thread
@@ -1192,7 +1192,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
       # A shared thread is not one of the person's own with AQUA: the
       # panel stays at the thread it holds.
-      verb!(view, home, :settings, %{"page" => "aqua", "ref" => theirs.id})
+      verb!(view, main, :settings, %{"page" => "aqua", "ref" => theirs.id})
       _ = render(view)
       assert %{id: ^id} = :sys.get_state(panel.pid).socket.assigns.thread
     end
@@ -1203,17 +1203,17 @@ defmodule PrismWeb.ShellDesktopTest do
       stranger = test_user()
       {:ok, theirs} = Sanctum.SharedThreads.create(stranger.user_id, "Not yours")
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
       chat = find_live_child(view, "chat-overlay")
       render(chat)
       _ = render(view)
 
-      verb!(view, home, :settings, %{"page" => "chat", "ref" => plans.id})
+      verb!(view, main, :settings, %{"page" => "chat", "ref" => plans.id})
       _ = render(view)
       assert has_element?(chat, "#chat-sheet")
       assert find_live_child(chat, "chat-thread-" <> plans.id)
 
-      verb!(view, home, :settings, %{"page" => "chat", "ref" => theirs.id})
+      verb!(view, main, :settings, %{"page" => "chat", "ref" => theirs.id})
       assert render(chat) =~ "That thread cannot be opened"
       refute find_live_child(chat, "chat-thread-" <> theirs.id)
       refute render(chat) =~ "Not yours"
@@ -1222,31 +1222,31 @@ defmodule PrismWeb.ShellDesktopTest do
     test "open carries a subject of a kind the app declares to its handshake, and refuses any other",
          %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
       subject = %{"kind" => "run", "id" => "exec_0190f3a2"}
 
-      verb!(view, home, :open, %{"ref" => "tincture:local.plain-view", "subject" => subject})
+      verb!(view, main, :open, %{"ref" => "tincture:local.plain-view", "subject" => subject})
       assert dropped(view) == 1
-      refute Frames.get(frames(view), {:app, "home", "tincture:local.plain-view"})
+      refute Frames.get(frames(view), {:app, "main", "tincture:local.plain-view"})
 
-      verb!(view, home, :open, %{"ref" => "tincture:local.run-view", "subject" => subject})
-      app = Frames.get(frames(view), {:app, "home", "tincture:local.run-view"})
+      verb!(view, main, :open, %{"ref" => "tincture:local.run-view", "subject" => subject})
+      app = Frames.get(frames(view), {:app, "main", "tincture:local.run-view"})
       assert app.subject == subject
       assert handshake!(view, app.id)["subject"] == subject
     end
 
     test "opening an existing app on another subject delivers the new subject", %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
       first = %{"kind" => "run", "id" => "exec_first"}
       second = %{"kind" => "run", "id" => "exec_second"}
 
-      verb!(view, home, :open, %{"ref" => "tincture:local.run-view", "subject" => first})
-      opened = Frames.get(frames(view), {:app, "home", "tincture:local.run-view"})
+      verb!(view, main, :open, %{"ref" => "tincture:local.run-view", "subject" => first})
+      opened = Frames.get(frames(view), {:app, "main", "tincture:local.run-view"})
       assert handshake!(view, opened.id)["subject"] == first
 
-      verb!(view, home, :open, %{"ref" => "tincture:local.run-view", "subject" => second})
-      current = Frames.get(frames(view), {:app, "home", "tincture:local.run-view"})
+      verb!(view, main, :open, %{"ref" => "tincture:local.run-view", "subject" => second})
+      current = Frames.get(frames(view), {:app, "main", "tincture:local.run-view"})
 
       # The same frame, told the new subject through its bridge.
       assert current.id == opened.id

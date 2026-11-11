@@ -126,7 +126,7 @@ defmodule Prism.CanvasValidationTest do
     end
   end
 
-  # The person's layout: one canvas, home on markets.
+  # The person's layout: one canvas, main on markets.
   defp layout!(user, athanor) do
     ctx =
       Sanctum.Context.build(
@@ -144,7 +144,7 @@ defmodule Prism.CanvasValidationTest do
         "document" => %{
           "version" => 3,
           "canvases" => [
-            %{"id" => "home", "tincture" => "tincture:local.markets", "postures" => %{}}
+            %{"id" => "main", "tincture" => "tincture:local.markets", "postures" => %{}}
           ]
         },
         "revision" => 0
@@ -169,8 +169,8 @@ defmodule Prism.CanvasValidationTest do
 
   defp assigns(%Phoenix.LiveViewTest.View{pid: pid}), do: :sys.get_state(pid).socket.assigns
   defp frames(view), do: assigns(view).frames
-  defp trial(view), do: Frames.get(frames(view), {:validation, "home"})
-  defp live_canvas(view), do: Frames.get(frames(view), {:canvas, "home"})
+  defp trial(view), do: Frames.get(frames(view), {:validation, "main"})
+  defp live_canvas(view), do: Frames.get(frames(view), {:canvas, "main"})
 
   defp row(frame_id) do
     Arca.Repo.one(from(f in Arca.Schemas.FrameCredential, where: f.frame_id == ^frame_id))
@@ -345,7 +345,7 @@ defmodule Prism.CanvasValidationTest do
 
       torn_down!(view, trial)
       assert %{working: nil, failed: %{version: "1.0.0", outcome: "died"}} = stored(ctx).document
-      assert %{"home" => %{fallback: %{reason: :not_validated}}} = assigns(view).fallbacks
+      assert %{"main" => %{fallback: %{reason: :not_validated}}} = assigns(view).fallbacks
 
       # The notice offers trying again alone: there is no kept version.
       assert has_element?(view, "#system-layer-desktop-notice", "Your canvas stopped.")
@@ -433,7 +433,7 @@ defmodule Prism.CanvasValidationTest do
       assert html =~ ~s(data-kind="grant")
       assert html =~ "Grant tincture:local.markets"
 
-      assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{_prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       view
@@ -495,7 +495,7 @@ defmodule Prism.CanvasValidationTest do
       verb!(view, trial.id, :close)
 
       assert Frames.dropped(frames(view)) == 5
-      assert [%{key: {:validation, "home"}}] = Frames.list(frames(view))
+      assert [%{key: {:validation, "main"}}] = Frames.list(frames(view))
 
       assert Arca.Repo.all(
                from(d in Arca.Schemas.DecisionLog,

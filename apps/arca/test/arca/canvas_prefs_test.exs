@@ -31,7 +31,7 @@ defmodule Arca.CanvasPrefsTest do
     {Arca.ControlPlane, :slot}
   ]
 
-  @canvas "home"
+  @canvas "main"
 
   @prefs %{
     "widgets" => %{
@@ -95,7 +95,7 @@ defmodule Arca.CanvasPrefsTest do
   test "preferences never written are not found, under a key naming the person and the canvas",
        %{actor: actor, user: user} do
     assert {:error, :not_found} = CanvasPrefs.get(actor, user, @canvas)
-    assert CanvasPrefs.key(user, @canvas) == "prefs/usr_prf/home"
+    assert CanvasPrefs.key(user, @canvas) == "prefs/usr_prf/main"
   end
 
   test "a write reads back as the merged document, its revision and its digest", %{

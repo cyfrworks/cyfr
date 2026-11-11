@@ -118,7 +118,7 @@ defmodule PrismWeb.CanvasChromeTest do
   defp layout!(ctx, user) do
     canvases = [
       %{
-        "id" => "home",
+        "id" => "main",
         "tincture" => "tincture:local.markets",
         "postures" => %{
           "desk" => %{
@@ -147,7 +147,7 @@ defmodule PrismWeb.CanvasChromeTest do
   defp frames(view), do: :sys.get_state(view.pid).socket.assigns.frames
 
   defp app_frame(view, name),
-    do: Frames.get(frames(view), {:app, "home", "tincture:local.#{name}"})
+    do: Frames.get(frames(view), {:app, "main", "tincture:local.#{name}"})
 
   defp control(view, frame, action),
     do: element(view, ~s(#canvas-frame-#{frame.id} [data-canvas-action="#{action}"]))

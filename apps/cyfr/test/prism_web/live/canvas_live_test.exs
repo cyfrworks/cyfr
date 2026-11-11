@@ -142,7 +142,7 @@ defmodule PrismWeb.CanvasLiveTest do
   defp canvases do
     [
       %{
-        "id" => "home",
+        "id" => "main",
         "tincture" => "tincture:local.markets",
         "postures" => %{
           "desk" => %{
@@ -253,7 +253,7 @@ defmodule PrismWeb.CanvasLiveTest do
 
   # A frame as the layer's stream reads it: its id, its key and its state.
   defp held_frame(name, state \\ :live),
-    do: %{id: "frm_#{name}", key: {:app, "home", "tincture:local.#{name}"}, state: state}
+    do: %{id: "frm_#{name}", key: {:app, "main", "tincture:local.#{name}"}, state: state}
 
   defp holding(frames) do
     %Prism.Frames{
@@ -315,12 +315,12 @@ defmodule PrismWeb.CanvasLiveTest do
     html = render(view)
 
     # The canvas fills the layer under everything placed over it.
-    canvas = by_key(view, {:canvas, "home"})
+    canvas = by_key(view, {:canvas, "main"})
     assert %{state: :live, visible: true, placement: :canvas} = canvas
     assert html =~ ~r/data-canvas-place="canvas"[^>]*>\s*<iframe[^>]*id="#{canvas.id}"/
 
     # A window is its tincture's own frame, at its geometry and stack.
-    column = by_key(view, {:app, "home", "tincture:local.slot-dash"})
+    column = by_key(view, {:app, "main", "tincture:local.slot-dash"})
 
     assert %{
              state: :live,
@@ -337,7 +337,7 @@ defmodule PrismWeb.CanvasLiveTest do
     assert window =~ "left: 25.00%; top: 50.00%; width: 30.00%; height: 40.00%; z-index: 30;"
 
     # A tile stands at its edge and share, and narrows the canvas beside it.
-    tile = by_key(view, {:app, "home", "tincture:local.tile-dash"})
+    tile = by_key(view, {:app, "main", "tincture:local.tile-dash"})
     assert %{state: :live, visible: true, placement: {:tile, :right, 2500}, stack: 3} = tile
     tiled = wrapper_tag(html, tile.id)
     assert tiled =~ ~s(data-canvas-place="tile")
@@ -348,8 +348,8 @@ defmodule PrismWeb.CanvasLiveTest do
 
     # A minimised app, full or not, is not opened with the canvas, and the
     # canvas, the window and the tile are all that were.
-    assert by_key(view, {:app, "home", "tincture:local.icon-dash"}) == nil
-    assert by_key(view, {:app, "home", "tincture:local.hidden-dash"}) == nil
+    assert by_key(view, {:app, "main", "tincture:local.icon-dash"}) == nil
+    assert by_key(view, {:app, "main", "tincture:local.hidden-dash"}) == nil
     assert length(rows()) == 3
 
     # In the order they were opened: what the layout places, then the canvas.
@@ -367,21 +367,21 @@ defmodule PrismWeb.CanvasLiveTest do
 
     {view, _html} = mount_desktop(conn)
     [first, middle, last] = held = Prism.Frames.list(frames(view))
-    assert middle.key == {:app, "home", "tincture:local.tile-dash"}
+    assert middle.key == {:app, "main", "tincture:local.tile-dash"}
 
     # Every frame's wrapper, and only those, in the order it was opened.
     assert wrappers(view) == Enum.map(held, &wrapper/1)
 
     # The middle frame of three discarded: the other two keep their ids,
     # their src and their order.
-    [home, work] = canvases()
+    [main, work] = canvases()
 
-    home =
-      update_in(home, ["postures", "desk", "apps"], fn apps ->
+    main =
+      update_in(main, ["postures", "desk", "apps"], fn apps ->
         Enum.reject(apps, &(&1["tincture"] == "tincture:local.tile-dash"))
       end)
 
-    relayout!(view, ctx, user, [home, work], 1)
+    relayout!(view, ctx, user, [main, work], 1)
 
     wait_until(
       fn -> render(view) && by_key(view, middle.key) == nil end,
@@ -444,7 +444,7 @@ defmodule PrismWeb.CanvasLiveTest do
 
     {view, _html} = mount_desktop(conn)
 
-    assert by_key(view, {:app, "home", "tincture:local.hidden-dash"}) == nil
+    assert by_key(view, {:app, "main", "tincture:local.hidden-dash"}) == nil
     refute Enum.any?(Prism.Frames.list(frames(view)), &(&1.tincture_id == "iframe_hidden-dash"))
     assert length(Regex.scan(~r/<iframe /, render(view))) == 3
   end
@@ -467,30 +467,30 @@ defmodule PrismWeb.CanvasLiveTest do
     layout!(ctx, user, canvases())
 
     {view, _html} = mount_desktop(conn)
-    desk_column = by_key(view, {:app, "home", "tincture:local.slot-dash"})
-    desk_tile = by_key(view, {:app, "home", "tincture:local.tile-dash"})
-    canvas = by_key(view, {:canvas, "home"})
+    desk_column = by_key(view, {:app, "main", "tincture:local.slot-dash"})
+    desk_tile = by_key(view, {:app, "main", "tincture:local.tile-dash"})
+    canvas = by_key(view, {:canvas, "main"})
 
     posture!(view, "tablet")
     posture!(view, "HAND")
     html = render(view)
     assert html =~ ~s(data-posture="desk")
-    assert by_key(view, {:app, "home", "tincture:local.slot-dash"}).id == desk_column.id
+    assert by_key(view, {:app, "main", "tincture:local.slot-dash"}).id == desk_column.id
 
     posture!(view, "hand")
     html = render(view)
     assert html =~ ~s(data-posture="hand")
 
     # In the hand every app is full, whatever the layout stores for it.
-    pocket = by_key(view, {:app, "home", "tincture:local.icon-dash"})
+    pocket = by_key(view, {:app, "main", "tincture:local.icon-dash"})
     assert %{tincture_id: "iframe_icon-dash", state: :live, placement: :full} = pocket
-    assert by_key(view, {:app, "home", "tincture:local.slot-dash"}) == nil
-    assert by_key(view, {:app, "home", "tincture:local.tile-dash"}) == nil
+    assert by_key(view, {:app, "main", "tincture:local.slot-dash"}) == nil
+    assert by_key(view, {:app, "main", "tincture:local.tile-dash"}) == nil
     assert row(desk_column.id).state == "revoked"
     assert row(desk_tile.id).state == "revoked"
 
     # The canvas is kept across postures.
-    assert by_key(view, {:canvas, "home"}).id == canvas.id
+    assert by_key(view, {:canvas, "main"}).id == canvas.id
   end
 
   test "a full frame over the canvas freezes what it covers, and closing it lets it run",
@@ -499,8 +499,8 @@ defmodule PrismWeb.CanvasLiveTest do
     layout!(ctx, user, canvases())
 
     {view, _html} = mount_desktop(conn)
-    column = by_key(view, {:app, "home", "tincture:local.slot-dash"})
-    canvas = by_key(view, {:canvas, "home"})
+    column = by_key(view, {:app, "main", "tincture:local.slot-dash"})
+    canvas = by_key(view, {:canvas, "main"})
     bearer = bearer!(view, column.id)
     assert {:ok, _} = Sanctum.TinctureAuth.verify_frame_credential(bearer)
 
@@ -512,12 +512,12 @@ defmodule PrismWeb.CanvasLiveTest do
     })
 
     assert %{placement: :full, visible: true} =
-             by_key(view, {:app, "home", "tincture:local.icon-dash"})
+             by_key(view, {:app, "main", "tincture:local.icon-dash"})
 
     assert %{state: :frozen, visible: false} = by_key(view, column.key)
     assert {:error, :suspended} = Sanctum.TinctureAuth.verify_frame_credential(bearer)
-    assert %{state: :frozen} = by_key(view, {:app, "home", "tincture:local.tile-dash"})
-    assert %{state: :frozen} = by_key(view, {:canvas, "home"})
+    assert %{state: :frozen} = by_key(view, {:app, "main", "tincture:local.tile-dash"})
+    assert %{state: :frozen} = by_key(view, {:canvas, "main"})
     column_id = column.id
     assert_push_event(view, "frame_state", %{frame: ^column_id, state: "frozen"})
 
@@ -536,7 +536,7 @@ defmodule PrismWeb.CanvasLiveTest do
 
     assert has_element?(
              view,
-             ~s(#canvas-shelf #canvas-switcher button[data-canvas="home"][aria-pressed="true"])
+             ~s(#canvas-shelf #canvas-switcher button[data-canvas="main"][aria-pressed="true"])
            )
 
     assert has_element?(
@@ -565,7 +565,7 @@ defmodule PrismWeb.CanvasLiveTest do
 
     layout!(ctx, user, [
       %{
-        "id" => "home",
+        "id" => "main",
         "tincture" => "tincture:local.markets",
         "postures" => %{
           "desk" => %{"apps" => [app("tincture:local.notes-canvas", "tile", 0)]}
@@ -576,7 +576,7 @@ defmodule PrismWeb.CanvasLiveTest do
     {view, _html} = mount_desktop(conn)
 
     assert %{state: :refused, refusal: :undeclared, credential_id: nil} =
-             app = by_key(view, {:app, "home", "tincture:local.notes-canvas"})
+             app = by_key(view, {:app, "main", "tincture:local.notes-canvas"})
 
     assert render(view) =~ ~s(id="tincture_state_#{app.id}")
     assert Enum.map(rows(), & &1.name) == ["markets"]
