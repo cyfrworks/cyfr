@@ -98,7 +98,7 @@ defmodule Prism.FramesTest do
   end
 
   # Hold the frames, canvas-placement ones as the open path holds them.
-  defp held(frames, canvas \\ "home") do
+  defp held(frames, canvas \\ "main") do
     Enum.reduce(frames, %Frames{canvas: canvas}, fn %{key: key} = frame, t ->
       %{t | frames: Map.put(t.frames, key, frame), order: t.order ++ [key]}
     end)
@@ -109,7 +109,7 @@ defmodule Prism.FramesTest do
       cards = Enum.map(~w(notes clock sheet radio), &card/1)
 
       canvas = %{
-        id: "home",
+        id: "main",
         tincture: "tincture:local.canvas",
         apps: [
           layout_app("tincture:local.clock", :full, 1),
@@ -120,12 +120,12 @@ defmodule Prism.FramesTest do
       }
 
       assert [
-               {{:app, "home", "tincture:local.clock"}, :full, 1, false, %{id: "iframe_clock"}},
-               {{:app, "home", "tincture:local.radio"}, {:window, @g}, 2, true,
+               {{:app, "main", "tincture:local.clock"}, :full, 1, false, %{id: "iframe_clock"}},
+               {{:app, "main", "tincture:local.radio"}, {:window, @g}, 2, true,
                 %{id: "iframe_radio"}},
-               {{:app, "home", "tincture:local.notes"}, {:window, @g}, 3, false,
+               {{:app, "main", "tincture:local.notes"}, {:window, @g}, 3, false,
                 %{id: "iframe_notes"}},
-               {{:app, "home", "tincture:local.sheet"}, {:tile, :right, 2500}, 5, false,
+               {{:app, "main", "tincture:local.sheet"}, {:tile, :right, 2500}, 5, false,
                 %{id: "iframe_sheet"}}
              ] = Frames.placements(canvas, cards, "desk")
 
@@ -136,7 +136,7 @@ defmodule Prism.FramesTest do
 
     test "an entry naming a tincture nobody installed places nothing" do
       canvas = %{
-        id: "home",
+        id: "main",
         tincture: "tincture:local.canvas",
         apps: [layout_app("tincture:acme.gone", :window, 0)]
       }
@@ -172,9 +172,9 @@ defmodule Prism.FramesTest do
     end
 
     test "place, resize, raise, minimise and restore keep the frame and change only what they name" do
-      window = app("home", "notes", {:window, @g}, stack: 0)
-      tile = app("home", "sheet", {:tile, :left, 2000}, stack: 1)
-      full = app("home", "game", :full, stack: 2)
+      window = app("main", "notes", {:window, @g}, stack: 0)
+      tile = app("main", "sheet", {:tile, :left, 2000}, stack: 1)
+      full = app("main", "game", :full, stack: 2)
       t = held([window, tile, full])
 
       kept = fn t, frame ->
@@ -218,18 +218,18 @@ defmodule Prism.FramesTest do
 
       # A placement of no kind, or a frame that is not an app's, changes nothing.
       assert Frames.place(t, window.key, {:window, @g}) == t
-      assert Frames.place(t, {:canvas, "home"}, :full) == t
+      assert Frames.place(t, {:canvas, "main"}, :full) == t
     end
 
     test "each key names the canvas it belongs to, and a launch none" do
-      assert Frames.canvas_of({:canvas, "home"}) == "home"
-      assert Frames.canvas_of({:validation, "home"}) == "home"
+      assert Frames.canvas_of({:canvas, "main"}) == "main"
+      assert Frames.canvas_of({:validation, "main"}) == "main"
       assert Frames.canvas_of({:app, "work", "tincture:local.x"}) == "work"
       assert Frames.canvas_of({:full, "iframe_x"}) == nil
 
-      assert Frames.canvas_key?({:canvas, "home"})
-      assert Frames.canvas_key?({:validation, "home"})
-      refute Frames.canvas_key?({:app, "home", "tincture:local.x"})
+      assert Frames.canvas_key?({:canvas, "main"})
+      assert Frames.canvas_key?({:validation, "main"})
+      refute Frames.canvas_key?({:app, "main", "tincture:local.x"})
       refute Frames.canvas_key?({:full, "iframe_x"})
     end
   end
@@ -237,14 +237,14 @@ defmodule Prism.FramesTest do
   describe "visibility" do
     setup do
       frames = [
-        canvas_frame(:canvas, "home", id: "frm_home_canvas"),
+        canvas_frame(:canvas, "main", id: "frm_main_canvas"),
         canvas_frame(:validation, "work", id: "frm_work_trial"),
         canvas_frame(:canvas, "work", id: "frm_work_canvas"),
-        app("home", "notes", {:window, @g}, stack: 0),
-        app("home", "game", :full, stack: 1, minimised: true),
+        app("main", "notes", {:window, @g}, stack: 0),
+        app("main", "game", :full, stack: 1, minimised: true),
         app("work", "sheet", {:window, @g}),
-        app("home", "clock", {:tile, :right, 2000}, stack: 2),
-        app("home", "hidden", {:window, @g}, stack: 3, minimised: true),
+        app("main", "clock", {:tile, :right, 2000}, stack: 2),
+        app("main", "hidden", {:window, @g}, stack: 3, minimised: true),
         launch("radio")
       ]
 
@@ -262,9 +262,9 @@ defmodule Prism.FramesTest do
     test "with no frame active, the visible canvas and its windows and tiles not minimised are shown",
          %{t: t} do
       assert shown(t) == [
-               {:canvas, "home"},
-               {:app, "home", "tincture:local.notes"},
-               {:app, "home", "tincture:local.clock"}
+               {:canvas, "main"},
+               {:app, "main", "tincture:local.notes"},
+               {:app, "main", "tincture:local.clock"}
              ]
     end
 
@@ -277,19 +277,19 @@ defmodule Prism.FramesTest do
 
     test "the topmost full app of the visible canvas not minimised, or a launch above it, alone is shown",
          %{t: t} do
-      game = {:app, "home", "tincture:local.game"}
+      game = {:app, "main", "tincture:local.game"}
       t = Frames.restore(t, game)
       assert shown(t) == [game]
       assert Frames.active_tincture(t) == "iframe_game"
 
       assert shown(Frames.activate(t, {:full, "iframe_radio"})) == [{:full, "iframe_radio"}]
-      assert shown(Frames.minimise(t, game)) |> Enum.member?({:canvas, "home"})
+      assert shown(Frames.minimise(t, game)) |> Enum.member?({:canvas, "main"})
     end
 
     test "a window raised above the full app ends its cover; the full app waits hidden until raised",
          %{t: t} do
-      game = {:app, "home", "tincture:local.game"}
-      notes = {:app, "home", "tincture:local.notes"}
+      game = {:app, "main", "tincture:local.game"}
+      notes = {:app, "main", "tincture:local.notes"}
       t = Frames.restore(t, game)
       assert shown(t) == [game]
 
@@ -297,9 +297,9 @@ defmodule Prism.FramesTest do
       assert Frames.active(raised) == nil
 
       assert shown(raised) == [
-               {:canvas, "home"},
+               {:canvas, "main"},
                notes,
-               {:app, "home", "tincture:local.clock"}
+               {:app, "main", "tincture:local.clock"}
              ]
 
       assert %{placement: :full, minimised: false} = Frames.get(raised, game)
@@ -307,7 +307,7 @@ defmodule Prism.FramesTest do
     end
 
     test "a full app is active only over its own canvas", %{t: t} do
-      t = t |> Frames.restore({:app, "home", "tincture:local.game"})
+      t = t |> Frames.restore({:app, "main", "tincture:local.game"})
 
       assert Frames.active(%{t | canvas: "work"}) == nil
 
@@ -317,18 +317,18 @@ defmodule Prism.FramesTest do
              ]
 
       # Shown again over its canvas.
-      assert %{key: {:app, "home", _}} = Frames.active(t)
+      assert %{key: {:app, "main", _}} = Frames.active(t)
     end
 
     test "a validation frame is never shown", %{t: t} do
-      for canvas <- ["home", "work"] do
+      for canvas <- ["main", "work"] do
         refute {:validation, "work"} in shown(%{t | canvas: canvas})
       end
     end
 
     test "activating anything but a launch changes nothing", %{t: t} do
-      assert Frames.activate(t, {:app, "home", "tincture:local.notes"}) == t
-      assert Frames.activate(t, {:canvas, "home"}) == t
+      assert Frames.activate(t, {:app, "main", "tincture:local.notes"}) == t
+      assert Frames.activate(t, {:canvas, "main"}) == t
       assert Frames.activate(t, {:full, "iframe_nobody"}) == t
     end
 
@@ -336,13 +336,13 @@ defmodule Prism.FramesTest do
          %{t: t} do
       t =
         t
-        |> Frames.restore({:app, "home", "tincture:local.game"})
+        |> Frames.restore({:app, "main", "tincture:local.game"})
         |> Frames.activate({:full, "iframe_radio"})
         |> Frames.forget({:full, "iframe_radio"})
 
-      assert %{key: {:app, "home", "tincture:local.game"}} = Frames.active(t)
+      assert %{key: {:app, "main", "tincture:local.game"}} = Frames.active(t)
 
-      t = Frames.forget(t, {:app, "home", "tincture:local.game"})
+      t = Frames.forget(t, {:app, "main", "tincture:local.game"})
       assert Frames.active(t) == nil
     end
   end
@@ -354,12 +354,12 @@ defmodule Prism.FramesTest do
       t =
         held(
           [
-            canvas_frame(:canvas, "home", background: true),
+            canvas_frame(:canvas, "main", background: true),
             canvas_frame(:canvas, "work", background: true),
             app("work", "radio", {:window, @g}, background: true),
             app("work", "notes", {:window, @g})
           ],
-          "home"
+          "main"
         )
         |> Frames.visibility()
 
@@ -371,13 +371,13 @@ defmodule Prism.FramesTest do
       # Shown again, the frozen canvas is to thaw.
       thawing = %{Frames.freeze(t, {:canvas, "work"}) | canvas: "work"} |> Frames.visibility()
       assert {:thaw, {:canvas, "work"}} in Frames.plan(thawing)
-      assert {:freeze, {:canvas, "home"}} in Frames.plan(thawing)
+      assert {:freeze, {:canvas, "main"}} in Frames.plan(thawing)
     end
 
     test "a validation frame is never frozen or thawed" do
       t =
         held([
-          canvas_frame(:validation, "home"),
+          canvas_frame(:validation, "main"),
           canvas_frame(:validation, "work", state: :frozen)
         ])
         |> Frames.visibility()
@@ -388,7 +388,7 @@ defmodule Prism.FramesTest do
     test "a hidden live frame without a background grant is to freeze; a refused one is left alone" do
       t =
         held([
-          app("home", "notes", {:window, @g}),
+          app("main", "notes", {:window, @g}),
           launch("a"),
           launch("b", background: true),
           launch("c", state: :refused, refusal: :refused, bearer: nil)
@@ -396,14 +396,14 @@ defmodule Prism.FramesTest do
         |> Frames.activate({:full, "iframe_a"})
         |> Frames.visibility()
 
-      assert Frames.plan(t) == [{:freeze, {:app, "home", "tincture:local.notes"}}]
+      assert Frames.plan(t) == [{:freeze, {:app, "main", "tincture:local.notes"}}]
     end
   end
 
   describe "holding a frame" do
     test "only the frames' own open path holds a canvas or validation frame" do
       for kind <- [:canvas, :validation] do
-        assert_raise ArgumentError, fn -> Frames.put(Frames.new(), canvas_frame(kind, "home")) end
+        assert_raise ArgumentError, fn -> Frames.put(Frames.new(), canvas_frame(kind, "main")) end
       end
 
       launched = launch("a")
@@ -443,12 +443,12 @@ defmodule Prism.FramesTest do
 
       t =
         held([
-          canvas_frame(:canvas, "home",
+          canvas_frame(:canvas, "main",
             id: "frm_canvas_hand",
             bearer: "canvas-bearer",
             canvas: block.("frm_canvas_hand", "live")
           ),
-          canvas_frame(:validation, "home",
+          canvas_frame(:validation, "main",
             id: "frm_trial_hand",
             bearer: "trial-bearer",
             canvas: block.("frm_trial_hand", "validation")
@@ -466,7 +466,7 @@ defmodule Prism.FramesTest do
         "person" => %{"name" => "Ada"}
       }
 
-      assert {:ok, handed, %{key: {:canvas, "home"}}, t} =
+      assert {:ok, handed, %{key: {:canvas, "main"}}, t} =
                Frames.handshake(t, "frm_canvas_hand", desktop)
 
       # Exactly the wire's canvas handshake: the credential and the block,
@@ -485,8 +485,8 @@ defmodule Prism.FramesTest do
                  desktop
                )
 
-      assert Frames.get(t, {:canvas, "home"}).bearer == nil
-      assert Frames.get(t, {:canvas, "home"}).canvas == block.("frm_canvas_hand", "live")
+      assert Frames.get(t, {:canvas, "main"}).bearer == nil
+      assert Frames.get(t, {:canvas, "main"}).canvas == block.("frm_canvas_hand", "live")
 
       assert {:ok, %{"credential" => "trial-bearer", "canvas" => %{"mode" => "validation"}}, _, t} =
                Frames.handshake(t, "frm_trial_hand", desktop)
@@ -538,13 +538,13 @@ defmodule Prism.FramesTest do
   describe "renewal" do
     test "a live frame holding a deadline is renewed, a shown canvas's included; a hidden canvas and a validation's never are" do
       assert Frames.renewable?(launch("a"))
-      assert Frames.renewable?(app("home", "b", {:window, @g}))
-      assert Frames.renewable?(canvas_frame(:canvas, "home"))
+      assert Frames.renewable?(app("main", "b", {:window, @g}))
+      assert Frames.renewable?(canvas_frame(:canvas, "main"))
       refute Frames.renewable?(launch("c", state: :frozen))
       refute Frames.renewable?(launch("d", state: :refused))
       refute Frames.renewable?(launch("e", deadline: nil))
-      refute Frames.renewable?(canvas_frame(:canvas, "home", state: :frozen, visible: false))
-      refute Frames.renewable?(canvas_frame(:validation, "home"))
+      refute Frames.renewable?(canvas_frame(:canvas, "main", state: :frozen, visible: false))
+      refute Frames.renewable?(canvas_frame(:validation, "main"))
     end
 
     test "queued replacements are taken once, in order" do

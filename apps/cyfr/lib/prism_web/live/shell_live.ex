@@ -63,7 +63,7 @@ defmodule PrismWeb.ShellLive do
 
   The shell shows one of the canvases the person's layout names for the
   posture (`Compendium.layout/2`; a person who never arranged one has the
-  shipped canvas, `home` on `tincture:local.canvas`): the visible canvas,
+  shipped canvas, `main` on `tincture:local.canvas`): the visible canvas,
   the layout's first at mount (`Prism.Frames.visible_canvas/1`). It opens
   that canvas's working version (`Compendium.canvas_versions/2`) as a frame
   keyed `{:canvas, id}`, and holds the apps the layout places over it,

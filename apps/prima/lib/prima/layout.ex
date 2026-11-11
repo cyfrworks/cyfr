@@ -14,7 +14,7 @@ defmodule Prima.Layout do
         version: 3,
         canvases: [
           %{
-            id: "home",
+            id: "main",
             tincture: ref,
             postures: %{
               "desk" | "hand" => %{
@@ -89,7 +89,7 @@ defmodule Prima.Layout do
   @max_fraction 10_000
 
   @default_canvas "tincture:local.canvas"
-  @default_id "home"
+  @default_id "main"
 
   @document_keys ~w(canvases version)
   @canvas_keys ~w(id postures tincture)

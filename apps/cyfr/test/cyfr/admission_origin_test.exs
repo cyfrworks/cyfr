@@ -519,9 +519,9 @@ defmodule Cyfr.AdmissionOriginTest do
       idle = {:app, "work", "tincture:local.idle"}
 
       frames =
-        %{Prism.Frames.new() | canvas: "home"}
+        %{Prism.Frames.new() | canvas: "main"}
         |> Prism.Frames.put(
-          shell_frame({:app, "home", "tincture:local.shown"}, {:window, @window}, false)
+          shell_frame({:app, "main", "tincture:local.shown"}, {:window, @window}, false)
         )
         |> Prism.Frames.put(
           shell_frame({:app, "work", "tincture:local.kept"}, {:window, @window}, true)

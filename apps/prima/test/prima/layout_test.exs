@@ -38,7 +38,7 @@ defmodule Prima.LayoutTest do
     do: %{"tincture" => tincture, "placement" => "full", "order" => order, "minimised" => false}
 
   defp desk(apps),
-    do: document([canvas("home", "tincture:local.canvas", %{"desk" => %{"apps" => apps}})])
+    do: document([canvas("main", "tincture:local.canvas", %{"desk" => %{"apps" => apps}})])
 
   describe "the fixture" do
     test "the valid document reads, writes back and hashes as the fixture says" do
@@ -54,7 +54,7 @@ defmodule Prima.LayoutTest do
     test "each placement reads as the struct with exactly its own fields set" do
       {:ok, layout} = Layout.validate(vectors()["valid"])
 
-      assert {:ok, [%{id: "home", tincture: "tincture:local.canvas", apps: apps}, markets]} =
+      assert {:ok, [%{id: "main", tincture: "tincture:local.canvas", apps: apps}, markets]} =
                Layout.arrangement(layout, "desk")
 
       assert apps == [
@@ -158,7 +158,7 @@ defmodule Prima.LayoutTest do
       {:ok, layout} =
         Layout.validate(
           document([
-            canvas("home", "tincture:local.canvas", %{
+            canvas("main", "tincture:local.canvas", %{
               "desk" => %{"apps" => [full("tincture:local.vault", 0)]}
             }),
             canvas("markets", "tincture:local.markets")
@@ -168,14 +168,14 @@ defmodule Prima.LayoutTest do
       assert {:ok,
               [
                 %{
-                  id: "home",
+                  id: "main",
                   tincture: "tincture:local.canvas",
                   apps: [%{tincture: "tincture:local.vault", placement: :full, order: 0}]
                 },
                 %{id: "markets", tincture: "tincture:local.markets", apps: []}
               ]} = Layout.arrangement(layout, "desk")
 
-      assert {:ok, [%{id: "home", apps: []}, %{id: "markets", apps: []}]} =
+      assert {:ok, [%{id: "main", apps: []}, %{id: "markets", apps: []}]} =
                Layout.arrangement(layout, "hand")
 
       assert :error = Layout.arrangement(layout, "wall")
@@ -187,18 +187,18 @@ defmodule Prima.LayoutTest do
       assert Layout.tinctures(empty) == []
     end
 
-    test "the default is one canvas, home, on the shipped canvas, with nothing placed, and is itself valid" do
+    test "the default is one canvas, main, on the shipped canvas, with nothing placed, and is itself valid" do
       default = Layout.default()
 
       assert default == %Layout{
                version: 3,
-               canvases: [%{id: "home", tincture: "tincture:local.canvas", postures: %{}}]
+               canvases: [%{id: "main", tincture: "tincture:local.canvas", postures: %{}}]
              }
 
       assert Layout.tinctures(default) == ["tincture:local.canvas"]
 
       for name <- Layout.postures() do
-        assert {:ok, [%{id: "home", tincture: "tincture:local.canvas", apps: []}]} =
+        assert {:ok, [%{id: "main", tincture: "tincture:local.canvas", apps: []}]} =
                  Layout.arrangement(default, name)
       end
 
@@ -264,7 +264,7 @@ defmodule Prima.LayoutTest do
       document = %{
         "version" => 2,
         "canvases" => [
-          canvas("home", "tincture:local.canvas", %{"desk" => %{"apps" => [], "floating" => []}})
+          canvas("main", "tincture:local.canvas", %{"desk" => %{"apps" => [], "floating" => []}})
         ]
       }
 
@@ -283,7 +283,7 @@ defmodule Prima.LayoutTest do
 
     test "a reference is spelt canonically" do
       assert {:error, {:invalid_layout, sentence}} =
-               Layout.validate(document([canvas("home", "t:local.canvas")]))
+               Layout.validate(document([canvas("main", "t:local.canvas")]))
 
       assert sentence =~ "tincture:local.canvas"
     end

@@ -292,8 +292,8 @@ defmodule PrismWeb.ShellCanvasTest do
 
   defp assigns(%Phoenix.LiveViewTest.View{pid: pid}), do: :sys.get_state(pid).socket.assigns
   defp frames(view), do: assigns(view).frames
-  defp canvas(view, id \\ "home"), do: Frames.get(frames(view), {:canvas, id})
-  defp validation(view, id \\ "home"), do: Frames.get(frames(view), {:validation, id})
+  defp canvas(view, id \\ "main"), do: Frames.get(frames(view), {:canvas, id})
+  defp validation(view, id \\ "main"), do: Frames.get(frames(view), {:validation, id})
   defp opened(view), do: Frames.list(frames(view))
   defp dropped(view), do: Frames.dropped(frames(view))
 
@@ -549,24 +549,24 @@ defmodule PrismWeb.ShellCanvasTest do
     assert Arca.ControlPlane.held?()
   end
 
-  # Two canvases with working versions, `home` on markets and `work` on
-  # notes-canvas, `home_postures` placed over home. Answers markets'
+  # Two canvases with working versions, `main` on markets and `work` on
+  # notes-canvas, `main_postures` placed over main. Answers markets'
   # release digest.
-  defp two_canvases!(ctx, user, athanor, home_postures \\ %{}) do
+  defp two_canvases!(ctx, user, athanor, main_postures \\ %{}) do
     digest = canvas!(ctx, "markets")
     canvas!(ctx, "notes-canvas")
     versions!(ctx, "markets", %{working: "1.0.0"})
     versions!(ctx, "notes-canvas", %{working: "1.0.0"})
 
     layout!(user, athanor, [
-      entry("home", "tincture:local.markets", home_postures),
+      entry("main", "tincture:local.markets", main_postures),
       entry("work", "tincture:local.notes-canvas")
     ])
 
     digest
   end
 
-  # A shell whose `home` canvas runs 1.0.1, 1.0.0 kept, and is hidden by
+  # A shell whose `main` canvas runs 1.0.1, 1.0.0 kept, and is hidden by
   # `hidden_by`: a switch to `work`, or a full frame its own open put over
   # it, which freezes it while it stays the visible canvas.
   defp hidden_canvas!(conn, ctx, user, athanor, hidden_by) do
@@ -577,23 +577,23 @@ defmodule PrismWeb.ShellCanvasTest do
     versions!(ctx, "markets", %{working: "1.0.1", kept: "1.0.0"})
 
     view = shell!(conn)
-    assert %{reference: %{version: "1.0.1"}, state: :live} = home = canvas(view)
+    assert %{reference: %{version: "1.0.1"}, state: :live} = main = canvas(view)
 
     case hidden_by do
       :switch -> render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      :full_frame -> canvas_verb!(view, home.id, :open, %{"ref" => "tincture:local.app-dash"})
+      :full_frame -> canvas_verb!(view, main.id, :open, %{"ref" => "tincture:local.app-dash"})
     end
 
     assert %{state: :frozen, visible: false} = canvas(view)
     view
   end
 
-  # The hidden `home` canvas shown again as `hidden_canvas!/5` hid it.
-  defp show_again!(view, :switch), do: render_hook(view, "switch_canvas", %{"canvas" => "home"})
+  # The hidden `main` canvas shown again as `hidden_canvas!/5` hid it.
+  defp show_again!(view, :switch), do: render_hook(view, "switch_canvas", %{"canvas" => "main"})
   defp show_again!(view, :full_frame), do: render_click(view, "close_active_tincture", %{})
 
-  # A shell whose `home` canvas opened hidden: a full frame its own open
-  # put over it is shown when the layout gives `home` another tincture,
+  # A shell whose `main` canvas opened hidden: a full frame its own open
+  # put over it is shown when the layout gives `main` another tincture,
   # whose frame opens frozen under that full frame. Closing the full frame
   # shows it.
   defp opened_hidden!(conn, ctx, user, athanor) do
@@ -606,7 +606,7 @@ defmodule PrismWeb.ShellCanvasTest do
     assert %{state: :frozen} = canvas(view)
 
     layout!(user, athanor, [
-      entry("home", "tincture:local.notes-canvas", full),
+      entry("main", "tincture:local.notes-canvas", full),
       entry("work", "tincture:local.markets")
     ])
 
@@ -655,10 +655,10 @@ defmodule PrismWeb.ShellCanvasTest do
                visible: true,
                placement: :canvas,
                reference: %{name: "markets", version: "1.0.0"}
-             } = home = canvas(view)
+             } = main = canvas(view)
 
       assert canvas(view, "work") == nil
-      assert Frames.visible_canvas(frames(view)) == "home"
+      assert Frames.visible_canvas(frames(view)) == "main"
 
       html = render(view)
       refute html =~ ~s(id="shell-picker")
@@ -666,29 +666,29 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # The canvas's own page under an asset credential, its sandbox the
       # rules', and no allow attribute.
-      tag = iframe(html, home.id)
+      tag = iframe(html, main.id)
       assert attribute(tag, "data-frame-kind") == "canvas"
-      assert attribute(tag, "src") =~ ~r{^/_c/v1/[^/]+/#{home.id}$}
+      assert attribute(tag, "src") =~ ~r{^/_c/v1/[^/]+/#{main.id}$}
       assert "/_c/v1/" <> _ = attribute(tag, "src")
-      assert attribute(tag, "src") == home.src
+      assert attribute(tag, "src") == main.src
 
       assert attribute(tag, "sandbox") ==
                Enum.join(Compendium.tincture_canvas_sandbox_tokens(), " ")
 
       assert attribute(tag, "allow") == nil
 
-      row = row(home.id)
+      row = row(main.id)
       assert row.state == "active"
       assert row.purpose == "live"
       assert {row.name, row.version, row.version_digest} == {"markets", "1.0.0", digest}
 
       # Its handshake is the wire's canvas handshake, its bearer beside
       # its block, once.
-      reply = handshake!(view, home.id)
+      reply = handshake!(view, main.id)
 
       assert reply ==
                Prima.TinctureWire.canvas_handshake(
-                 home.id,
+                 main.id,
                  reply["credential"],
                  "live",
                  [%{"name" => "runs.changes", "subject" => nil}],
@@ -699,23 +699,23 @@ defmodule PrismWeb.ShellCanvasTest do
                  }
                )
 
-      assert reply["canvas"]["data_path"] == Prima.TinctureWire.data_path(home.id)
+      assert reply["canvas"]["data_path"] == Prima.TinctureWire.data_path(main.id)
 
       assert {:ok, %{frame_id: frame_id, mode: :live}} =
                Sanctum.TinctureAuth.verify_frame_credential(reply["credential"])
 
-      assert frame_id == home.id
+      assert frame_id == main.id
       refute render(view) =~ reply["credential"]
 
       # It is told what it may open: the listed tinctures that are not canvases.
-      home_id = home.id
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+      main_id = main.id
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: installed})
 
       assert installed == [
                %{ref: "tincture:local.app-dash", name: "app-dash", icon: nil, open: false}
              ]
 
-      render_hook(view, "frame_handshake", %{"frame" => home.id})
+      render_hook(view, "frame_handshake", %{"frame" => main.id})
       assert_reply(view, %{error: "no_credential"})
     end
 
@@ -728,20 +728,20 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "word-dash", %{"icon" => "palette"})
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets", %{
+        entry("main", "tincture:local.markets", %{
           "desk" => posture([app("tincture:local.app-dash", "window")])
         })
       ])
 
       view = shell!(conn)
-      assert %{state: :live, id: home_id} = canvas(view)
+      assert %{state: :live, id: main_id} = canvas(view)
 
       assert %{visible: true} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.app-dash"})
 
-      _reply = handshake!(view, home_id)
+      _reply = handshake!(view, main_id)
 
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: installed})
 
       assert installed == [
                %{ref: "tincture:local.app-dash", name: "app-dash", icon: "🧭", open: true},
@@ -774,7 +774,7 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "clock")
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.no-canvas", %{
+        entry("main", "tincture:local.no-canvas", %{
           "desk" =>
             posture([
               app("tincture:local.app-dash", "window"),
@@ -790,10 +790,10 @@ defmodule PrismWeb.ShellCanvasTest do
       assert render(view) =~ ~s(id="shell-picker")
 
       assert %{state: :live, visible: true, placement: {:window, %{x: 1000, w: 3000}}} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.app-dash"})
 
       assert %{state: :live, visible: true, placement: {:tile, :right, 2500}} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.clock"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.clock"})
     end
 
     test "a new person sees the shipped canvas", %{conn: conn, ctx: ctx} do
@@ -847,8 +847,8 @@ defmodule PrismWeb.ShellCanvasTest do
       })
 
       view = shell!(conn)
-      home = canvas(view)
-      id = home.id
+      main = canvas(view)
+      id = main.id
 
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.app-dash"})
       assert %{state: :frozen, visible: false} = canvas(view)
@@ -856,7 +856,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert_push_event(view, "frame_state", %{frame: ^id, state: "frozen"})
 
       assert %{state: :live, visible: true, placement: :full} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.app-dash"})
 
       render_click(view, "close_active_tincture", %{})
       assert %{id: ^id, state: :live, visible: true} = canvas(view)
@@ -937,14 +937,14 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "notes-canvas")
       versions!(ctx, "markets", %{working: "1.0.0"})
       versions!(ctx, "notes-canvas", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{reference: %{name: "markets"}} = canvas(view)
 
       # Another person arranges their own layout, in their own athanor.
       other = test_user()
       theirs = Sanctum.Test.People.athanor!(other.user_id)
-      layout!(other, theirs, [entry("home", "tincture:local.notes-canvas")])
+      layout!(other, theirs, [entry("main", "tincture:local.notes-canvas")])
       _ = render(view)
       assert %{reference: %{name: "markets"}} = canvas(view)
 
@@ -955,7 +955,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # The same person, from another session.
       old = canvas(view).id
-      layout!(user, athanor, [entry("home", "tincture:local.notes-canvas")])
+      layout!(user, athanor, [entry("main", "tincture:local.notes-canvas")])
       settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
 
       assert %{reference: %{name: "notes-canvas"}, state: :live} = canvas(view)
@@ -966,12 +966,12 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
-      assert %{state: :live, reference: %{version: "1.0.0"}} = home = canvas(view)
+      assert %{state: :live, reference: %{version: "1.0.0"}} = main = canvas(view)
 
       # A newer version installed after the shell listed its tinctures, and
-      # a fresh canvas id on the same tincture in home's place.
+      # a fresh canvas id on the same tincture in main's place.
       canvas!(ctx, "markets", "1.0.1")
       layout!(user, athanor, [entry("fresh", "tincture:local.markets")])
 
@@ -985,14 +985,14 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert canvas(view, "fresh") == nil
       assert %{purpose: "validation", version: "1.0.1"} = row(trial.id)
-      assert row(home.id).state == "revoked"
+      assert row(main.id).state == "revoked"
       assert %{working: "1.0.0"} = versions(ctx, "markets")
     end
 
     test "a version written during a validation is validated once that validation ends, before the working version opens",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets", "1.1.0")
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{state: :live, reference: %{version: "1.1.0"}} = first = validation(view)
 
@@ -1022,7 +1022,7 @@ defmodule PrismWeb.ShellCanvasTest do
     test "a validation that ends with no newer version written opens the working version and starts no trial",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets", "1.1.0")
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{state: :live, reference: %{version: "1.1.0"}} = first = validation(view)
 
@@ -1039,7 +1039,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets", "1.0.0")
       versions!(ctx, "markets", %{working: "1.0.0"})
       canvas!(ctx, "markets", "1.1.0")
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{reference: %{version: "1.1.0"}} = first = validation(view)
 
@@ -1059,7 +1059,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets", "1.0.0")
       versions!(ctx, "markets", %{working: "1.0.0"})
       canvas!(ctx, "markets", "1.1.0")
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{reference: %{version: "1.1.0"}} = first = validation(view)
 
@@ -1084,7 +1084,7 @@ defmodule PrismWeb.ShellCanvasTest do
         canvas!(ctx, "markets", "1.0.0")
         versions!(ctx, "markets", %{working: "1.0.0"})
         canvas!(ctx, "markets", "1.1.0")
-        layout!(user, athanor, [entry("home", "tincture:local.markets")])
+        layout!(user, athanor, [entry("main", "tincture:local.markets")])
         view = shell!(conn)
         assert %{reference: %{version: "1.1.0"}} = first = validation(view)
 
@@ -1122,7 +1122,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets", "1.0.0")
       versions!(ctx, "markets", %{working: "1.0.0"})
       canvas!(ctx, "markets", "1.1.0")
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{reference: %{version: "1.1.0"}} = first = validation(view)
 
@@ -1151,7 +1151,7 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{state: :live} = canvas(view)
 
@@ -1160,7 +1160,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "notes-canvas")
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
@@ -1183,7 +1183,7 @@ defmodule PrismWeb.ShellCanvasTest do
       versions!(ctx, "markets", %{working: "1.0.0"})
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("ghost", "tincture:local.no-canvas")
       ])
 
@@ -1202,7 +1202,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert List.last(drawn) == "shell-picker"
       assert List.delete(drawn, "shell-picker") == without
 
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
       refute has_element?(view, "#shell-picker")
       assert shell_children(view) == without
     end
@@ -1211,7 +1211,7 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{state: :live} = canvas(view)
 
@@ -1220,7 +1220,7 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "plain-dash")
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.plain-dash")
       ])
 
@@ -1236,12 +1236,12 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
       tincture!(ctx, "plain-dash")
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{state: :live} = canvas(view)
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.plain-dash")
       ])
 
@@ -1257,7 +1257,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
       tincture!(ctx, "plain-dash")
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{state: :live} = canvas(view)
       assert Enum.any?(assigns(view).tinctures, &(&1.name == "plain-dash"))
@@ -1267,7 +1267,7 @@ defmodule PrismWeb.ShellCanvasTest do
       unlay!(ctx, "plain-dash")
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.plain-dash")
       ])
 
@@ -1288,16 +1288,16 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "app-dash")
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
       view = shell!(conn)
-      assert %{state: :live, id: home_id} = canvas(view)
-      _reply = handshake!(view, home_id)
+      assert %{state: :live, id: main_id} = canvas(view)
+      _reply = handshake!(view, main_id)
 
       assert_push_event(view, "canvas_installed", %{
-        frame: ^home_id,
+        frame: ^main_id,
         tinctures: [%{name: "app-dash"}]
       })
 
@@ -1306,11 +1306,11 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "plain-dash")
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert %{state: :live} = canvas(view, "work")
-      assert %{state: :frozen} = canvas(view, "home")
+      assert %{state: :frozen} = canvas(view, "main")
       assert Enum.sort(Enum.map(assigns(view).tinctures, & &1.name)) == ["app-dash", "plain-dash"]
 
       assert_push_event(view, "canvas_installed", %{
-        frame: ^home_id,
+        frame: ^main_id,
         tinctures: [%{name: "app-dash"}, %{name: "plain-dash"}]
       })
     end
@@ -1324,16 +1324,16 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "app-dash")
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
       view = shell!(conn)
-      assert %{state: :live, id: home_id} = canvas(view)
-      _reply = handshake!(view, home_id)
+      assert %{state: :live, id: main_id} = canvas(view)
+      _reply = handshake!(view, main_id)
 
       assert_push_event(view, "canvas_installed", %{
-        frame: ^home_id,
+        frame: ^main_id,
         tinctures: [%{name: "app-dash"}]
       })
 
@@ -1343,7 +1343,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert Enum.sort(Enum.map(assigns(view).tinctures, & &1.name)) == ["app-dash", "plain-dash"]
 
       assert_push_event(view, "canvas_installed", %{
-        frame: ^home_id,
+        frame: ^main_id,
         tinctures: [%{name: "app-dash"}, %{name: "plain-dash"}]
       })
     end
@@ -1357,16 +1357,16 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "app-dash")
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
       view = shell!(conn)
-      assert %{state: :live, id: home_id} = canvas(view)
-      _reply = handshake!(view, home_id)
+      assert %{state: :live, id: main_id} = canvas(view)
+      _reply = handshake!(view, main_id)
 
       assert_push_event(view, "canvas_installed", %{
-        frame: ^home_id,
+        frame: ^main_id,
         tinctures: [%{name: "app-dash"}]
       })
 
@@ -1374,7 +1374,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # same listing, and no frame is pushed `installed`.
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert %{state: :live} = canvas(view, "work")
-      assert %{state: :frozen} = canvas(view, "home")
+      assert %{state: :frozen} = canvas(view, "main")
       refute_push_event(view, "canvas_installed", %{frame: _})
     end
 
@@ -1388,27 +1388,27 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "plain-dash")
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
       view = shell!(conn)
-      assert %{state: :live, id: home_id} = canvas(view)
-      _reply = handshake!(view, home_id)
+      assert %{state: :live, id: main_id} = canvas(view)
+      _reply = handshake!(view, main_id)
 
       assert_push_event(view, "canvas_installed", %{
-        frame: ^home_id,
+        frame: ^main_id,
         tinctures: [%{name: "app-dash"}, %{name: "plain-dash"}]
       })
 
       unlay!(ctx, "plain-dash")
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert %{state: :live} = canvas(view, "work")
-      assert %{state: :frozen} = canvas(view, "home")
+      assert %{state: :frozen} = canvas(view, "main")
       assert Enum.map(assigns(view).tinctures, & &1.name) == ["app-dash"]
 
       assert_push_event(view, "canvas_installed", %{
-        frame: ^home_id,
+        frame: ^main_id,
         tinctures: [%{name: "app-dash"}]
       })
     end
@@ -1417,7 +1417,7 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{state: :live} = canvas(view)
 
@@ -1443,19 +1443,19 @@ defmodule PrismWeb.ShellCanvasTest do
       })
 
       view = shell!(conn)
-      home = canvas(view)
-      column = Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+      main = canvas(view)
+      column = Frames.get(frames(view), {:app, "main", "tincture:local.app-dash"})
       assert %{state: :live, visible: true} = column
 
       html = render(view)
       assert html =~ ~s(id="canvas-switcher")
-      assert html =~ ~s(data-canvas="home")
+      assert html =~ ~s(data-canvas="main")
       assert html =~ ~s(data-canvas="work")
       assert html =~ ~s(id="canvas-shelf")
 
       # The chord at the first canvas: no wrap.
       render_hook(view, "switch_canvas", %{"direction" => "previous"})
-      assert Frames.visible_canvas(frames(view)) == "home"
+      assert Frames.visible_canvas(frames(view)) == "main"
 
       view |> element(~s(#canvas-switcher button[data-canvas="work"])) |> render_click()
 
@@ -1463,12 +1463,12 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{state: :live, visible: true} = work = canvas(view, "work")
       assert row(work.id).state == "active"
       assert %{state: :frozen, visible: false} = canvas(view)
-      assert row(home.id).state == "suspended"
-      home_id = home.id
-      assert_push_event(view, "frame_state", %{frame: ^home_id, state: "frozen"})
+      assert row(main.id).state == "suspended"
+      main_id = main.id
+      assert_push_event(view, "frame_state", %{frame: ^main_id, state: "frozen"})
 
       assert %{state: :frozen, visible: false} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.app-dash"})
 
       # At the last canvas, next goes nowhere.
       render_hook(view, "switch_canvas", %{"direction" => "next"})
@@ -1476,14 +1476,14 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # Back by the chord: the canvas left is held, frozen, and thaws.
       render_hook(view, "switch_canvas", %{"direction" => "previous"})
-      assert %{id: ^home_id, state: :live, visible: true} = canvas(view)
-      assert row(home.id).state == "active"
+      assert %{id: ^main_id, state: :live, visible: true} = canvas(view)
+      assert row(main.id).state == "active"
       assert %{state: :frozen} = canvas(view, "work")
 
       # A canvas the layout does not have, or no canvas at all, is no switch.
       render_hook(view, "switch_canvas", %{"canvas" => "elsewhere"})
       render_hook(view, "switch_canvas", %{"direction" => "sideways"})
-      assert Frames.visible_canvas(frames(view)) == "home"
+      assert Frames.visible_canvas(frames(view)) == "main"
     end
 
     test "a hidden canvas reads and acts on nothing; shown again, it reads its streams once more, once",
@@ -1491,8 +1491,8 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "app-dash")
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home = canvas(view)
-      bearer = handshake!(view, home.id)["credential"]
+      main = canvas(view)
+      bearer = handshake!(view, main.id)["credential"]
       topic = Cyfr.Bus.executions(Sanctum.Context.actor(ctx))
 
       # The subscriptions a stream's forwarder holds on the runs' topic;
@@ -1503,7 +1503,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       forwarder = fn socket, sub -> Cyfr.Test.FrameSocket.state(socket).subs[sub].forwarder end
 
-      socket = canvas_socket(home.id)
+      socket = canvas_socket(main.id)
       assert %{"type" => "subscribed"} = canvas_stream(socket, 1, bearer, "runs.changes")
       first = forwarder.(socket, 1)
       assert [_one] = held_by.(first)
@@ -1513,7 +1513,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # refusal.
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert %{state: :frozen, visible: false} = canvas(view)
-      assert row(home.id).state == "suspended"
+      assert row(main.id).state == "suspended"
       assert {:error, :suspended} = verify(bearer)
 
       assert %{"error" => %{"class" => "forbidden"}} = canvas_stream_ended(socket, 1)
@@ -1524,9 +1524,9 @@ defmodule PrismWeb.ShellCanvasTest do
                canvas_stream(socket, 2, bearer, "runs.changes")
 
       before = dropped(view)
-      canvas_verb!(view, home.id, :open, %{"ref" => "tincture:local.app-dash"})
+      canvas_verb!(view, main.id, :open, %{"ref" => "tincture:local.app-dash"})
 
-      canvas_verb!(view, home.id, :press, %{
+      canvas_verb!(view, main.id, :press, %{
         "binding" => "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
         "action" => "refresh"
       })
@@ -1536,8 +1536,8 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # Shown again, its credential resumes and a new open reads again,
       # holding one subscription.
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
-      assert row(home.id).state == "active"
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
+      assert row(main.id).state == "active"
       assert {:ok, _} = verify(bearer)
 
       assert %{"type" => "subscribed"} = canvas_stream(socket, 3, bearer, "runs.changes")
@@ -1558,33 +1558,33 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home = canvas(view)
-      home_id = home.id
-      old = handshake!(view, home_id)["credential"]
-      %{deadline: first} = row(home_id)
+      main = canvas(view)
+      main_id = main.id
+      old = handshake!(view, main_id)["credential"]
+      %{deadline: first} = row(main_id)
 
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert row(home_id).state == "suspended"
-      _ = frame_pushes(view, home_id)
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert row(main_id).state == "suspended"
+      _ = frame_pushes(view, main_id)
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
 
       assert [{"frame_bearer", %{credential: new}}, {"frame_state", %{state: "live"}}] =
-               frame_pushes(view, home_id)
+               frame_pushes(view, main_id)
 
       refute new == old
-      assert %{id: ^home_id, state: :live, deadline: resumed} = canvas(view)
+      assert %{id: ^main_id, state: :live, deadline: resumed} = canvas(view)
       assert DateTime.compare(resumed, first) == :gt
-      assert %{state: "active", deadline: ^resumed} = row(home_id)
-      assert {:ok, %{frame_id: ^home_id, deadline: ^resumed}} = verify(new)
+      assert %{state: "active", deadline: ^resumed} = row(main_id)
+      assert {:ok, %{frame_id: ^main_id, deadline: ^resumed}} = verify(new)
       # The bearer it replaced keeps only its own deadline.
-      assert {:ok, %{frame_id: ^home_id, deadline: ^first}} = verify(old)
+      assert {:ok, %{frame_id: ^main_id, deadline: ^first}} = verify(old)
 
       # Shown and left shown, nothing moves its credential.
-      _ = frame_pushes(view, home_id)
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      _ = frame_pushes(view, main_id)
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
       assert %{state: :live, deadline: ^resumed} = canvas(view)
-      assert %{state: "active", deadline: ^resumed} = row(home_id)
-      assert frame_pushes(view, home_id) == []
+      assert %{state: "active", deadline: ^resumed} = row(main_id)
+      assert frame_pushes(view, main_id) == []
     end
 
     test "a canvas shown again after its deadline passed is resumed under a new bearer and reads its streams again, recorded as before",
@@ -1592,35 +1592,35 @@ defmodule PrismWeb.ShellCanvasTest do
       deadline_setting!(2)
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home = canvas(view)
-      home_id = home.id
-      old = handshake!(view, home_id)["credential"]
-      socket = canvas_socket(home_id)
+      main = canvas(view)
+      main_id = main.id
+      old = handshake!(view, main_id)["credential"]
+      socket = canvas_socket(main_id)
       assert %{"type" => "subscribed"} = canvas_stream(socket, 1, old, "runs.changes")
 
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert row(home_id).state == "suspended"
+      assert row(main_id).state == "suspended"
       assert %{"error" => %{"class" => "forbidden"}} = canvas_stream_ended(socket, 1)
 
       wait_until(
-        fn -> past?(row(home_id).deadline) and verify(old) == {:error, :expired_credential} end,
+        fn -> past?(row(main_id).deadline) and verify(old) == {:error, :expired_credential} end,
         5_000,
         "the hidden canvas's deadline to pass"
       )
 
       deadline_setting!(900)
-      _ = frame_pushes(view, home_id)
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      _ = frame_pushes(view, main_id)
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
 
       # The new bearer reaches the frame ahead of the signal that makes it
       # live.
       assert [{"frame_bearer", %{credential: new}}, {"frame_state", %{state: "live"}}] =
-               frame_pushes(view, home_id)
+               frame_pushes(view, main_id)
 
-      assert %{id: ^home_id, state: :live, deadline: deadline} = canvas(view)
+      assert %{id: ^main_id, state: :live, deadline: deadline} = canvas(view)
       assert DateTime.diff(deadline, DateTime.utc_now()) in 890..900
-      assert %{state: "active", deadline: ^deadline} = row(home_id)
-      assert {:ok, %{frame_id: ^home_id, deadline: ^deadline}} = verify(new)
+      assert %{state: "active", deadline: ^deadline} = row(main_id)
+      assert {:ok, %{frame_id: ^main_id, deadline: ^deadline}} = verify(new)
       assert {:error, :expired_credential} = verify(old)
       refute render(view) =~ "Sign in again"
 
@@ -1654,29 +1654,29 @@ defmodule PrismWeb.ShellCanvasTest do
       deadline_setting!(2)
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home_id = canvas(view).id
-      old = handshake!(view, home_id)["credential"]
+      main_id = canvas(view).id
+      old = handshake!(view, main_id)["credential"]
 
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert row(home_id).state == "suspended"
+      assert row(main_id).state == "suspended"
 
       wait_until(
-        fn -> past?(row(home_id).deadline) end,
+        fn -> past?(row(main_id).deadline) end,
         5_000,
         "the hidden canvas's deadline to pass"
       )
 
       deadline_setting!(900)
-      _ = frame_pushes(view, home_id)
-      %{deadline: deadline} = row(home_id)
+      _ = frame_pushes(view, main_id)
+      %{deadline: deadline} = row(main_id)
       Process.flag(:trap_exit, true)
       end_sessions!(user)
 
       assert_redirect(view, "/login", 5_000)
-      wait_until(fn -> row(home_id).state == "revoked" end, 5_000, "the canvas's revocation")
-      assert %{deadline: ^deadline} = row(home_id)
+      wait_until(fn -> row(main_id).state == "revoked" end, 5_000, "the canvas's revocation")
+      assert %{deadline: ^deadline} = row(main_id)
       assert {:error, _refused} = verify(old)
-      refute_push_event(view, "frame_bearer", %{frame: ^home_id})
+      refute_push_event(view, "frame_bearer", %{frame: ^main_id})
     end
 
     test "a canvas hidden past its deadline whose grant moved is resumed, and its streams are refused as for any frame whose grant moved",
@@ -1684,26 +1684,26 @@ defmodule PrismWeb.ShellCanvasTest do
       deadline_setting!(2)
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home_id = canvas(view).id
-      handshake!(view, home_id)
-      socket = canvas_socket(home_id)
+      main_id = canvas(view).id
+      handshake!(view, main_id)
+      socket = canvas_socket(main_id)
 
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert row(home_id).state == "suspended"
+      assert row(main_id).state == "suspended"
 
       wait_until(
-        fn -> past?(row(home_id).deadline) end,
+        fn -> past?(row(main_id).deadline) end,
         5_000,
         "the hidden canvas's deadline to pass"
       )
 
       deadline_setting!(900)
       Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.markets", 2)
-      _ = frame_pushes(view, home_id)
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      _ = frame_pushes(view, main_id)
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
 
       assert [{"frame_bearer", %{credential: new}}, {"frame_state", %{state: "live"}}] =
-               frame_pushes(view, home_id)
+               frame_pushes(view, main_id)
 
       assert %{"type" => "ended", "error" => %{"class" => "forbidden", "message" => message}} =
                canvas_stream(socket, 1, new, "runs.changes")
@@ -1715,32 +1715,32 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home = canvas(view)
-      home_id = home.id
-      old = handshake!(view, home_id)["credential"]
-      %{deadline: deadline} = row(home_id)
+      main = canvas(view)
+      main_id = main.id
+      old = handshake!(view, main_id)["credential"]
+      %{deadline: deadline} = row(main_id)
 
-      assert %{^home_id => {timer, token}} = assigns(view).renewals
+      assert %{^main_id => {timer, token}} = assigns(view).renewals
       Process.cancel_timer(timer)
-      send(view.pid, {:frame_renewal, home_id, deadline, token})
+      send(view.pid, {:frame_renewal, main_id, deadline, token})
       _ = render(view)
 
-      assert_push_event(view, "frame_bearer", %{frame: ^home_id, credential: new})
+      assert_push_event(view, "frame_bearer", %{frame: ^main_id, credential: new})
       refute new == old
-      assert {:ok, %{frame_id: ^home_id, deadline: renewed}} = verify(new)
+      assert {:ok, %{frame_id: ^main_id, deadline: renewed}} = verify(new)
       assert DateTime.compare(renewed, deadline) == :gt
-      assert %{state: "active", deadline: ^renewed} = row(home_id)
+      assert %{state: "active", deadline: ^renewed} = row(main_id)
       assert %{state: :live, deadline: ^renewed, bearer: nil} = canvas(view)
 
       # The bearer it replaced keeps its own deadline.
-      assert {:ok, %{frame_id: ^home_id, deadline: ^deadline}} = verify(old)
+      assert {:ok, %{frame_id: ^main_id, deadline: ^deadline}} = verify(old)
 
       # Armed again for the new deadline while shown; hidden, it is not.
-      assert %{^home_id => {_next, next_token}} = assigns(view).renewals
+      assert %{^main_id => {_next, next_token}} = assigns(view).renewals
       refute next_token == token
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert row(home_id).state == "suspended"
-      refute Map.has_key?(assigns(view).renewals, home_id)
+      assert row(main_id).state == "suspended"
+      refute Map.has_key?(assigns(view).renewals, main_id)
     end
 
     test "a switch during validation tears the trial down and activates nothing",
@@ -1750,7 +1750,7 @@ defmodule PrismWeb.ShellCanvasTest do
       versions!(ctx, "notes-canvas", %{working: "1.0.0"})
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
@@ -1772,7 +1772,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{working: nil, failed: nil} = versions(ctx, "markets")
 
       # Shown again, it is validated again.
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
       assert %{state: :live} = again = validation(view)
       refute again.id == trial.id
     end
@@ -1782,14 +1782,14 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets")
       canvas!(ctx, "notes-canvas")
       versions!(ctx, "notes-canvas", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
       trial = validation(view)
       assert %{state: :live, reference: %{name: "markets"}} = trial
 
       # Given another tincture, the canvas opens as that tincture's versions say.
-      layout!(user, athanor, [entry("home", "tincture:local.notes-canvas")])
+      layout!(user, athanor, [entry("main", "tincture:local.notes-canvas")])
       settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
 
       assert validation(view) == nil
@@ -1798,7 +1798,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # Given back, it is trialled anew; dropped, its trial goes the same way.
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
@@ -1857,7 +1857,7 @@ defmodule PrismWeb.ShellCanvasTest do
         granted: false
       )
 
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
 
       # The grant names 1.0.0's streams: 1.0.1's trial opens nothing and
@@ -1891,7 +1891,7 @@ defmodule PrismWeb.ShellCanvasTest do
         granted: false
       )
 
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
 
       # 1.0.1's trial asks for 1.0.1's grant; granted, it is trialled, and
@@ -1930,7 +1930,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       layout!(user, athanor, [])
       settle!(view, fn -> canvas(view) == nil end)
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       settle!(view, fn -> match?(%{state: :live}, canvas(view)) end)
       assert %{reference: %{version: "1.0.0"}} = canvas(view)
       assert assigns(view).grant_prompts == %{}
@@ -1941,7 +1941,7 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       owner_head!(ctx, :needs_consent)
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
 
@@ -1951,7 +1951,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert rows() == []
       assert render(view) =~ ~s(data-kind="grant")
 
-      assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{_prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       # Dismissed, with no working version: the canvas shows its refusal.
@@ -1971,7 +1971,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # the canvas is validated again under the grant now held.
       layout!(user, athanor, [])
       settle!(view, fn -> canvas(view) == nil end)
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
       assert validation(view) == nil
 
@@ -1995,7 +1995,7 @@ defmodule PrismWeb.ShellCanvasTest do
         versions!(ctx, "notes-canvas", %{working: "1.0.0"})
 
         layout!(user, athanor, [
-          entry("home", "tincture:local.markets"),
+          entry("main", "tincture:local.markets"),
           entry("work", "tincture:local.notes-canvas")
         ])
 
@@ -2016,7 +2016,7 @@ defmodule PrismWeb.ShellCanvasTest do
         assert validation(view) == nil
         assert render(view) =~ ~s(data-kind="grant")
 
-        assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
+        assert [{_prompt, {{:activation, "main"}, "iframe_markets"}}] =
                  Map.to_list(assigns(view).grant_prompts)
 
         # The person granted it another way, and the layout published
@@ -2025,7 +2025,7 @@ defmodule PrismWeb.ShellCanvasTest do
         owner_head!(ctx, :active)
 
         layout!(user, athanor, [
-          entry("home", "tincture:local.markets"),
+          entry("main", "tincture:local.markets"),
           entry("work", "tincture:local.notes-canvas")
         ])
 
@@ -2064,7 +2064,7 @@ defmodule PrismWeb.ShellCanvasTest do
       versions!(ctx, "notes-canvas", %{working: "1.0.0"})
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
@@ -2076,13 +2076,13 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, first.id, :ready)
       assert validation(view) == nil
 
-      assert [{prompt, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       owner_head!(ctx, :active)
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
@@ -2139,7 +2139,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
       owner_head!(ctx, :needs_consent)
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
 
@@ -2152,13 +2152,13 @@ defmodule PrismWeb.ShellCanvasTest do
       assert rows() == []
       assert render(view) =~ ~s(data-kind="grant")
 
-      assert [{prompt, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       # A layout change while the prompt is open decides the canvas again,
       # refused again, and asks nothing more: the open prompt stands.
       first_id = first.id
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       settle!(view, fn ->
         case canvas(view) do
@@ -2169,7 +2169,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
 
-      assert [{^prompt, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{^prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       # Dismissed, the refusal stays, and nothing is asked again.
@@ -2181,13 +2181,13 @@ defmodule PrismWeb.ShellCanvasTest do
       assert assigns(view).fallbacks == %{}
 
       # A layout change decides the canvas again: refused, it asks once more.
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
 
       assert %{state: :refused, refusal: :ungranted} = again = canvas(view)
       refute again.id == refused.id
 
-      assert [{another, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{another, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       refute another == prompt
@@ -2203,7 +2203,7 @@ defmodule PrismWeb.ShellCanvasTest do
       owner_head!(ctx, :needs_consent)
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
@@ -2213,7 +2213,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert validation(view) == nil
       assert canvas(view) == nil
 
-      assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{_prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       # Dismissed, the working version opens and is refused for want of the
@@ -2230,12 +2230,12 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # A switch back decides the canvas again: its trial is refused and asks once more.
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
 
       assert canvas(view) == nil
       assert validation(view) == nil
 
-      assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{_prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
     end
 
@@ -2244,16 +2244,16 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
       owner_head!(ctx, :needs_consent)
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
       assert %{state: :refused, refusal: :ungranted} = first = canvas(view)
 
-      assert [{prompt, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       first_id = first.id
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       settle!(view, fn ->
         case canvas(view) do
@@ -2262,7 +2262,7 @@ defmodule PrismWeb.ShellCanvasTest do
         end
       end)
 
-      assert [{^prompt, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{^prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       view
@@ -2281,7 +2281,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
       owner_head!(ctx, :needs_consent)
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
       assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
@@ -2307,17 +2307,17 @@ defmodule PrismWeb.ShellCanvasTest do
       versions!(ctx, "notes-canvas", %{working: "1.0.0"})
       owner_head!(ctx, "markets", :needs_consent)
       owner_head!(ctx, "notes-canvas", :needs_consent)
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
       assert %{state: :refused, refusal: :ungranted, reference: %{name: "markets"}} = canvas(view)
 
-      assert [{markets, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{markets, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       assert render(view) =~ "Grant tincture:local.markets"
 
-      layout!(user, athanor, [entry("home", "tincture:local.notes-canvas")])
+      layout!(user, athanor, [entry("main", "tincture:local.notes-canvas")])
       settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
 
       assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
@@ -2325,7 +2325,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # notes-canvas is asked for once, under a prompt of its own; markets'
       # prompt is gone from the shell and from the system layer, and
       # notes-canvas's is the one drawn.
-      assert [{notes, {{:activation, "home"}, "iframe_notes-canvas"}}] =
+      assert [{notes, {{:activation, "main"}, "iframe_notes-canvas"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       refute notes == markets
@@ -2353,15 +2353,15 @@ defmodule PrismWeb.ShellCanvasTest do
       versions!(ctx, "markets", %{working: "1.0.0"})
       versions!(ctx, "notes-canvas", %{working: "1.0.0"})
       owner_head!(ctx, "markets", :needs_consent)
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
       assert %{state: :refused, reference: %{name: "markets"}} = canvas(view)
 
-      assert [{markets, {{:activation, "home"}, "iframe_markets"}}] =
+      assert [{markets, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      layout!(user, athanor, [entry("home", "tincture:local.notes-canvas")])
+      layout!(user, athanor, [entry("main", "tincture:local.notes-canvas")])
       settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
 
       assert %{state: :live} = canvas(view)
@@ -2385,7 +2385,7 @@ defmodule PrismWeb.ShellCanvasTest do
         view = shell!(conn)
         assert %{state: :refused, refusal: :ungranted} = canvas(view)
 
-        assert [{markets, {{:activation, "home"}, "iframe_markets"}}] =
+        assert [{markets, {{:activation, "main"}, "iframe_markets"}}] =
                  Map.to_list(assigns(view).grant_prompts)
 
         assert render(view) =~ ~s(data-prompt-id="#{markets}")
@@ -2409,19 +2409,19 @@ defmodule PrismWeb.ShellCanvasTest do
         # Shown again, markets is decided again and asks under a new prompt.
         case leaves_by do
           "a switch" ->
-            render_hook(view, "switch_canvas", %{"canvas" => "home"})
+            render_hook(view, "switch_canvas", %{"canvas" => "main"})
 
           "the layout dropping it" ->
             layout!(user, athanor, [
-              entry("home", "tincture:local.markets"),
+              entry("main", "tincture:local.markets"),
               entry("work", "tincture:local.notes-canvas")
             ])
 
-            settle!(view, fn -> Enum.any?(assigns(view).arrangement, &(&1.id == "home")) end)
-            render_hook(view, "switch_canvas", %{"canvas" => "home"})
+            settle!(view, fn -> Enum.any?(assigns(view).arrangement, &(&1.id == "main")) end)
+            render_hook(view, "switch_canvas", %{"canvas" => "main"})
         end
 
-        assert [{again, {{:activation, "home"}, "iframe_markets"}}] =
+        assert [{again, {{:activation, "main"}, "iframe_markets"}}] =
                  Map.to_list(assigns(view).grant_prompts)
 
         refute again == markets
@@ -2455,26 +2455,26 @@ defmodule PrismWeb.ShellCanvasTest do
       id = canvas(view).id
 
       # A minimised app is placed but not opened with the canvas.
-      assert Frames.get(frames(view), {:app, "home", "tincture:local.clock"}) == nil
-      assert Frames.get(frames(view), {:app, "home", "tincture:local.full-dash"}) == nil
+      assert Frames.get(frames(view), {:app, "main", "tincture:local.clock"}) == nil
+      assert Frames.get(frames(view), {:app, "main", "tincture:local.full-dash"}) == nil
 
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.full-dash"})
 
       assert %{placement: :full, visible: true, state: :live} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.full-dash"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.full-dash"})
 
       # Closing it closes the app on the layout too.
       render_click(view, "close_active_tincture", %{})
-      assert Frames.get(frames(view), {:app, "home", "tincture:local.full-dash"}) == nil
+      assert Frames.get(frames(view), {:app, "main", "tincture:local.full-dash"}) == nil
 
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.loose-dash"})
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.column-dash"})
 
       assert %{placement: {:window, loose}, visible: true} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.loose-dash"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.loose-dash"})
 
       assert %{placement: {:window, column}, visible: true} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.column-dash"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.column-dash"})
 
       assert column.x > loose.x
 
@@ -2482,16 +2482,16 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.clock"})
 
       assert %{placement: {:window, %{x: 1000, y: 1000}}, visible: true} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.clock"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.clock"})
 
       # Every open is the person's, written once the gestures settle.
       send(view.pid, :write_layout)
       _ = render(view)
 
-      assert {:ok, %{revision: 2, arrangement: [home | _]}} =
+      assert {:ok, %{revision: 2, arrangement: [main | _]}} =
                Compendium.layout(person_of(view), "desk")
 
-      assert Enum.map(home.apps, &{&1.tincture, &1.minimised}) == [
+      assert Enum.map(main.apps, &{&1.tincture, &1.minimised}) == [
                {"tincture:local.loose-dash", false},
                {"tincture:local.column-dash", false},
                {"tincture:local.clock", false}
@@ -2508,30 +2508,30 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.loose-dash"})
 
       assert %{placement: :full, visible: true} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.loose-dash"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.loose-dash"})
     end
 
     test "an open with an extra key, of an unlisted tincture or a canvas, or from a hidden canvas, is dropped",
          %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
       render_hook(view, "frame_verb", %{
         "input" => System.unique_integer([:positive, :monotonic]),
-        "frame" => home,
+        "frame" => main,
         "message" => %{
           "v" => 1,
           "verb" => "open",
-          "frame" => home,
+          "frame" => main,
           "args" => %{"ref" => "tincture:local.loose-dash", "place" => "full"}
         }
       })
 
-      canvas_verb!(view, home, :open, %{"ref" => "tincture:local.nobody"})
-      canvas_verb!(view, home, :open, %{"ref" => "tincture:local.notes-canvas"})
+      canvas_verb!(view, main, :open, %{"ref" => "tincture:local.nobody"})
+      canvas_verb!(view, main, :open, %{"ref" => "tincture:local.notes-canvas"})
 
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      canvas_verb!(view, home, :open, %{"ref" => "tincture:local.loose-dash"})
+      canvas_verb!(view, main, :open, %{"ref" => "tincture:local.loose-dash"})
 
       assert dropped(view) == 4
       refute Enum.any?(opened(view), &match?(%{key: {:app, _, "tincture:local.loose-dash"}}, &1))
@@ -2540,11 +2540,11 @@ defmodule PrismWeb.ShellCanvasTest do
     test "a canvas's title, close and credential are dropped: it acts only on ready, failed, open and press",
          %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      canvas_verb!(view, home, :title, %{"title" => "Mine"})
-      canvas_verb!(view, home, :close)
-      canvas_verb!(view, home, :credential, %{"name" => "api"})
+      canvas_verb!(view, main, :title, %{"title" => "Mine"})
+      canvas_verb!(view, main, :close)
+      canvas_verb!(view, main, :credential, %{"name" => "api"})
 
       assert dropped(view) == 3
       assert %{state: :live} = canvas(view)
@@ -2554,12 +2554,12 @@ defmodule PrismWeb.ShellCanvasTest do
     test "a message naming another frame than the port it came from, or malformed, is dropped",
          %{conn: conn} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
       # The port's frame and the message's differ.
       render_hook(view, "frame_verb", %{
         "input" => System.unique_integer([:positive, :monotonic]),
-        "frame" => home,
+        "frame" => main,
         "message" =>
           Prima.TinctureWire.shell_message(:open, "frm_another_frame", %{
             "ref" => "tincture:local.loose-dash"
@@ -2567,8 +2567,8 @@ defmodule PrismWeb.ShellCanvasTest do
       })
 
       # A press with arguments its verb does not take, and a failure at no stage.
-      canvas_verb!(view, home, :press, %{"binding" => "btc", "action" => "refresh"})
-      canvas_verb!(view, home, :failed, %{"stage" => "boot"})
+      canvas_verb!(view, main, :press, %{"binding" => "btc", "action" => "refresh"})
+      canvas_verb!(view, main, :failed, %{"stage" => "boot"})
 
       assert dropped(view) == 3
       assert %{state: :live} = canvas(view)
@@ -2724,9 +2724,9 @@ defmodule PrismWeb.ShellCanvasTest do
     test "a canvas frozen under a full app cannot ask for a grant",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor, catalyst: catalyst} do
       view = hidden_canvas!(conn, ctx, user, athanor, :full_frame)
-      assert %{state: :frozen} = home = canvas(view)
+      assert %{state: :frozen} = main = canvas(view)
 
-      canvas_verb!(view, home.id, :grant, %{"ref" => catalyst})
+      canvas_verb!(view, main.id, :grant, %{"ref" => catalyst})
 
       assert assigns(view).grant_prompts == %{}
       assert dropped(view) == 1
@@ -2737,13 +2737,13 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "grant-app")
       owner_head!(ctx, "grant-app", :needs_consent)
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      canvas_verb!(view, home, :open, %{"ref" => "tincture:local.grant-app"})
+      canvas_verb!(view, main, :open, %{"ref" => "tincture:local.grant-app"})
       assert map_size(assigns(view).grant_prompts) == 1
       assert has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="grant"]))
 
-      canvas_verb!(view, home, :grant, %{"ref" => "tincture:local.grant-app"})
+      canvas_verb!(view, main, :grant, %{"ref" => "tincture:local.grant-app"})
       assert map_size(assigns(view).grant_prompts) == 1
       assert dropped(view) == 1
 
@@ -2755,10 +2755,10 @@ defmodule PrismWeb.ShellCanvasTest do
     test "for an installed catalyst with no frame, the system layer offers the grant, and its outcome opens no frame",
          %{conn: conn, catalyst: catalyst} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
       before = Enum.map(opened(view), & &1.id)
 
-      canvas_verb!(view, home, :grant, %{"ref" => catalyst})
+      canvas_verb!(view, main, :grant, %{"ref" => catalyst})
 
       assert [{_prompt, {{:component, ^catalyst}, nil}}] =
                Map.to_list(assigns(view).grant_prompts)
@@ -2774,7 +2774,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert Enum.map(opened(view), & &1.id) == before
       assert %{state: :live} = canvas(view)
 
-      canvas_verb!(view, home, :grant, %{"ref" => catalyst <> ":0.1.0"})
+      canvas_verb!(view, main, :grant, %{"ref" => catalyst <> ":0.1.0"})
 
       assert [{_prompt, {{:component, ^catalyst}, nil}}] =
                Map.to_list(assigns(view).grant_prompts)
@@ -2787,10 +2787,10 @@ defmodule PrismWeb.ShellCanvasTest do
       catalyst: catalyst
     } do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      canvas_verb!(view, home, :grant, %{"ref" => catalyst})
-      canvas_verb!(view, home, :grant, %{"ref" => catalyst <> ":0.1.0"})
+      canvas_verb!(view, main, :grant, %{"ref" => catalyst})
+      canvas_verb!(view, main, :grant, %{"ref" => catalyst <> ":0.1.0"})
 
       assert map_size(assigns(view).grant_prompts) == 1
       assert dropped(view) == 1
@@ -2799,10 +2799,10 @@ defmodule PrismWeb.ShellCanvasTest do
     test "a reference that names nothing installed, or a component granted with nothing its grant needs missing, is dropped and offers nothing",
          %{conn: conn, ctx: ctx, catalyst: catalyst} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
-      canvas_verb!(view, home, :grant, %{"ref" => "catalyst:local.nobody"})
-      canvas_verb!(view, home, :grant, %{"ref" => catalyst <> ":9.9.9"})
+      canvas_verb!(view, main, :grant, %{"ref" => "catalyst:local.nobody"})
+      canvas_verb!(view, main, :grant, %{"ref" => catalyst <> ":9.9.9"})
 
       # Granted, and needing nothing more: its setup plan reads ready.
       _profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, catalyst)
@@ -2810,7 +2810,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert {:ok, %{consent: %{ready: true}}} =
                Compendium.Component.setup_plan(person_of(view), catalyst)
 
-      canvas_verb!(view, home, :grant, %{"ref" => catalyst})
+      canvas_verb!(view, main, :grant, %{"ref" => catalyst})
 
       assert assigns(view).grant_prompts == %{}
       refute has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="grant"]))
@@ -2840,10 +2840,10 @@ defmodule PrismWeb.ShellCanvasTest do
 
     test "from a canvas the glass does not show, it is dropped", %{conn: conn, catalyst: catalyst} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      canvas_verb!(view, home, :grant, %{"ref" => catalyst})
+      canvas_verb!(view, main, :grant, %{"ref" => catalyst})
 
       assert assigns(view).grant_prompts == %{}
       assert dropped(view) == 1
@@ -2892,7 +2892,7 @@ defmodule PrismWeb.ShellCanvasTest do
       versions!(ctx, "notes-canvas", %{working: "1.0.0"})
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
@@ -2914,18 +2914,18 @@ defmodule PrismWeb.ShellCanvasTest do
     test "for an undeclared feed, a binding that is not live, or from a hidden or another frame, it is dropped",
          %{conn: conn, ctx: ctx, eth: eth, btc: btc} do
       view = shell!(conn)
-      home = canvas(view).id
+      main = canvas(view).id
 
       # A feed the served version does not read.
-      canvas_verb!(view, home, :press, %{"binding" => eth, "action" => "refresh"})
+      canvas_verb!(view, main, :press, %{"binding" => eth, "action" => "refresh"})
 
       # A binding id that is no live feed of the athanor.
       gone = "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
-      canvas_verb!(view, home, :press, %{"binding" => gone, "action" => "refresh"})
+      canvas_verb!(view, main, :press, %{"binding" => gone, "action" => "refresh"})
 
       # From a frozen, hidden canvas.
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      canvas_verb!(view, home, :press, %{"binding" => btc, "action" => "refresh"})
+      canvas_verb!(view, main, :press, %{"binding" => btc, "action" => "refresh"})
 
       # From a canvas whose version reads no feed.
       canvas_verb!(view, canvas(view, "work").id, :press, %{
@@ -2944,7 +2944,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
 
       assert %{id: app, state: :live, visible: true} =
-               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+               Frames.get(frames(view), {:app, "main", "tincture:local.app-dash"})
 
       before = dropped(view)
       canvas_verb!(view, app, :press, %{"binding" => btc, "action" => "refresh"})
@@ -2966,7 +2966,7 @@ defmodule PrismWeb.ShellCanvasTest do
       Path.basename(seed())
     end
 
-    defp fallback(view, canvas \\ "home"),
+    defp fallback(view, canvas \\ "main"),
       do: get_in(assigns(view).fallbacks, [canvas, :fallback])
 
     defp notice(view, offer),
@@ -2992,16 +2992,16 @@ defmodule PrismWeb.ShellCanvasTest do
       })
 
       view = shell!(conn)
-      home = canvas(view)
-      handshake!(view, home.id)
+      main = canvas(view)
+      handshake!(view, main.id)
       dash = app_frame(view, "app-dash")
       assert %{state: :live, visible: true} = dash
       refute has_element?(view, "#system-layer-desktop-notice")
 
       deadlines_pass!(view)
 
-      assert %{reason: :not_ready, canvas: "home", kept: nil} = fallback(view)
-      assert row(home.id).state == "revoked"
+      assert %{reason: :not_ready, canvas: "main", kept: nil} = fallback(view)
+      assert row(main.id).state == "revoked"
       assert %{reference: %{name: "canvas", version: ^shipped}, state: :live} = canvas(view)
 
       # The window stands as it stood, the same frame.
@@ -3052,8 +3052,8 @@ defmodule PrismWeb.ShellCanvasTest do
       refute MapSet.member?(assigns(view).canvas_ready, work.id)
       assert row(work.id).state == "revoked"
 
-      # The line is the shown canvas's: back on `home`, none; on `work`, its.
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      # The line is the shown canvas's: back on `main`, none; on `work`, its.
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
       refute has_element?(view, "#system-layer-desktop-notice")
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert has_element?(view, "#system-layer-desktop-notice")
@@ -3142,14 +3142,14 @@ defmodule PrismWeb.ShellCanvasTest do
       deadlines_pass!(view)
       assert assigns(view).fallbacks == %{}
 
-      # Away to `work` and back, which shows the full frame over `home`
+      # Away to `work` and back, which shows the full frame over `main`
       # again: the canvas is never shown, and no deadline is ever its.
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert %{state: :live, visible: true} = canvas(view, "work")
       assert %{state: :frozen, visible: false} = canvas(view)
       refute Map.has_key?(assigns(view).canvas_deadlines, id)
 
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
       assert %{id: ^id, state: :frozen, visible: false} = canvas(view)
       assert assigns(view).canvas_deadlines == %{}
 
@@ -3181,7 +3181,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets", "1.0.1")
       versions!(ctx, "markets", %{working: "1.0.1", kept: "1.0.0"})
       view = shell!(conn)
-      home = canvas(view)
+      main = canvas(view)
 
       # `work` reports ready, then a page error: nothing.
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
@@ -3192,14 +3192,14 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{id: work_id, state: :live} = canvas(view, "work")
       assert work_id == work.id
 
-      # `home` fails before its ready, at whatever stage it names.
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
-      assert %{id: home_id} = canvas(view)
-      assert home_id == home.id
-      canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
+      # `main` fails before its ready, at whatever stage it names.
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
+      assert %{id: main_id} = canvas(view)
+      assert main_id == main.id
+      canvas_verb!(view, main.id, :failed, %{"stage" => "runtime"})
 
       assert %{reason: :not_ready, kept: "1.0.0"} = fallback(view)
-      assert row(home.id).state == "revoked"
+      assert row(main.id).state == "revoked"
 
       assert has_element?(
                view,
@@ -3219,12 +3219,12 @@ defmodule PrismWeb.ShellCanvasTest do
       seeded!(ctx)
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home = canvas(view)
+      main = canvas(view)
 
-      render_hook(view, "frame_gone", %{"frame" => home.id})
+      render_hook(view, "frame_gone", %{"frame" => main.id})
 
       assert %{reason: :gone} = fallback(view)
-      assert row(home.id).state == "revoked"
+      assert row(main.id).state == "revoked"
       assert %{reference: %{name: "canvas"}, state: :live} = canvas(view)
       assert has_element?(view, "#system-layer-desktop-notice")
     end
@@ -3262,7 +3262,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # and back, nor when the deadlines pass.
       assert canvas(view) == nil
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
       deadlines_pass!(view)
       assert canvas(view) == nil
       assert assigns(view).fallbacks == kept
@@ -3278,21 +3278,21 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home = canvas(view)
+      main = canvas(view)
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert %{state: :frozen} = canvas(view)
 
-      render_hook(view, "frame_gone", %{"frame" => home.id})
+      render_hook(view, "frame_gone", %{"frame" => main.id})
 
       assert canvas(view) == nil
-      assert row(home.id).state == "revoked"
+      assert row(main.id).state == "revoked"
       assert assigns(view).fallbacks == %{}
       assert %{state: :live, visible: true} = canvas(view, "work")
       assert %{working: "1.0.0", failed: nil} = versions(ctx, "markets")
 
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
       assert %{state: :live, visible: true} = again = canvas(view)
-      refute again.id == home.id
+      refute again.id == main.id
       assert row(again.id).state == "active"
     end
 
@@ -3303,21 +3303,21 @@ defmodule PrismWeb.ShellCanvasTest do
       test "a canvas hidden by #{hidden_by} that reports ready is ready: no deadline, hidden or shown again, falls it back",
            %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
         view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
-        home = canvas(view)
-        assert %{state: :frozen, visible: false} = home
+        main = canvas(view)
+        assert %{state: :frozen, visible: false} = main
         before = dropped(view)
 
-        canvas_verb!(view, home.id, :ready)
+        canvas_verb!(view, main.id, :ready)
 
         assert dropped(view) == before
-        assert MapSet.member?(assigns(view).canvas_ready, home.id)
+        assert MapSet.member?(assigns(view).canvas_ready, main.id)
 
         # Hidden, it runs no deadline; shown again, ready, it is given none.
-        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+        refute Map.has_key?(assigns(view).canvas_deadlines, main.id)
         show_again!(view, hidden_by)
         assert %{id: id, state: :live, visible: true} = canvas(view)
-        assert id == home.id
-        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+        assert id == main.id
+        refute Map.has_key?(assigns(view).canvas_deadlines, main.id)
 
         deadlines_pass!(view)
         assert assigns(view).fallbacks == %{}
@@ -3327,8 +3327,8 @@ defmodule PrismWeb.ShellCanvasTest do
       test "a canvas hidden by #{hidden_by} before it is ready runs no deadline while hidden, and shown again has the whole period from its showing",
            %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
         view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
-        home = canvas(view)
-        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+        main = canvas(view)
+        refute Map.has_key?(assigns(view).canvas_deadlines, main.id)
 
         # Time passes while it is hidden: whatever the shell holds falls due,
         # and none of it is this canvas's. The canvas shown meanwhile, if
@@ -3343,7 +3343,7 @@ defmodule PrismWeb.ShellCanvasTest do
         shown_at = System.monotonic_time(:millisecond)
         show_again!(view, hidden_by)
         assert %{id: id, state: :live, visible: true} = canvas(view)
-        assert id == home.id
+        assert id == main.id
         assert %{^id => {timer, _token}} = assigns(view).canvas_deadlines
 
         # Its deadline falls due no sooner than the whole period from its
@@ -3358,23 +3358,23 @@ defmodule PrismWeb.ShellCanvasTest do
       test "a canvas hidden by #{hidden_by} that fails before its ready is died: nothing while hidden, it falls back once shown",
            %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
         view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
-        home = canvas(view)
+        main = canvas(view)
         before = dropped(view)
 
-        canvas_verb!(view, home.id, :failed, %{"stage" => "load"})
+        canvas_verb!(view, main.id, :failed, %{"stage" => "load"})
 
         # Hidden, it acts on nothing and is held as it was.
         assert dropped(view) == before
         assert assigns(view).fallbacks == %{}
-        assert MapSet.member?(assigns(view).canvas_died, home.id)
+        assert MapSet.member?(assigns(view).canvas_died, main.id)
         assert %{id: id, state: :frozen} = canvas(view)
-        assert id == home.id
+        assert id == main.id
 
         # Shown again, it falls back, as a failure while shown does, its
         # kept version offered.
         show_again!(view, hidden_by)
         assert %{reason: :not_ready, kept: "1.0.0"} = fallback(view)
-        assert row(home.id).state == "revoked"
+        assert row(main.id).state == "revoked"
         assert has_element?(view, ~s(#system-layer-desktop-notice button[phx-value-offer="kept"]))
       end
     end
@@ -3387,7 +3387,7 @@ defmodule PrismWeb.ShellCanvasTest do
     } do
       # Named as the layout's canvas, but not declared as one.
       tincture!(ctx, "plain-dash")
-      layout!(user, athanor, [entry("home", "tincture:local.plain-dash")])
+      layout!(user, athanor, [entry("main", "tincture:local.plain-dash")])
       view = shell!(conn)
 
       assert %{reason: :not_ready} = fallback(view)
@@ -3408,7 +3408,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       canvas!(ctx, "markets", "1.0.1")
       versions!(ctx, "markets", %{working: "1.0.0", kept: "1.0.1"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
 
       assert %{reason: :not_ready} = fallback(view)
@@ -3422,8 +3422,8 @@ defmodule PrismWeb.ShellCanvasTest do
       seeded!(ctx)
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home = canvas(view)
-      render_hook(view, "frame_gone", %{"frame" => home.id})
+      main = canvas(view)
+      render_hook(view, "frame_gone", %{"frame" => main.id})
       line = notice_text(view)
       assert line =~ "Your canvas stopped. Showing the standard one."
 
@@ -3432,7 +3432,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert assigns(view).fallbacks == %{}
       refute has_element?(view, "#system-layer-desktop-notice")
       assert %{reference: %{name: "markets"}, state: :live} = again = canvas(view)
-      refute again.id == home.id
+      refute again.id == main.id
 
       render_hook(view, "frame_gone", %{"frame" => again.id})
       assert %{reason: :gone} = fallback(view)
@@ -3448,13 +3448,13 @@ defmodule PrismWeb.ShellCanvasTest do
       versions!(ctx, "notes-canvas", %{working: "1.0.0"})
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets"),
+        entry("main", "tincture:local.markets"),
         entry("work", "tincture:local.notes-canvas")
       ])
 
       view = shell!(conn)
-      assert %{reference: %{version: "1.0.1"}} = home = canvas(view)
-      render_hook(view, "frame_gone", %{"frame" => home.id})
+      assert %{reference: %{version: "1.0.1"}} = main = canvas(view)
+      render_hook(view, "frame_gone", %{"frame" => main.id})
 
       view |> notice("kept") |> render_click()
       settle!(view, fn -> canvas(view) != nil end)
@@ -3463,7 +3463,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # Restored, the newest version is the kept one: nothing is validated,
       # and only the visible canvas opens, at its working version.
-      assert [%{key: {:canvas, "home"}, state: :live, reference: %{version: "1.0.0"}}] =
+      assert [%{key: {:canvas, "main"}, state: :live, reference: %{version: "1.0.0"}}] =
                opened(view)
 
       assert assigns(view).fallbacks == %{}
@@ -3583,7 +3583,7 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "fallback-app")
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       {:ok, %{revision: layout_revision}} = Compendium.layout(person(user, athanor), "desk")
 
       view = shell!(conn)
@@ -3602,7 +3602,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # A publication that only arranges, the canvas's tincture kept, keeps
       # the shipped canvas: saving a gesture never opens the failed one.
       shipped_id = canvas(view).id
-      layout!(user, athanor, [entry("home", "tincture:local.markets", %{"desk" => posture([])})])
+      layout!(user, athanor, [entry("main", "tincture:local.markets", %{"desk" => posture([])})])
       settle!(view, fn -> assigns(view).layout_base.revision == layout_revision + 1 end)
       assert %{id: ^shipped_id, reference: %{name: "canvas"}} = canvas(view)
 
@@ -3613,7 +3613,7 @@ defmodule PrismWeb.ShellCanvasTest do
       versions!(ctx, "markets-two", %{working: "1.0.0"})
       render_hook(view, "app_open", %{"ref" => "tincture:local.fallback-app"})
       assert_reply(view, %{ok: true})
-      layout!(user, athanor, [entry("home", "tincture:local.markets-two")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets-two")])
       send(view.pid, :write_layout)
       _ = render(view)
       assert assigns(view).pending == []
@@ -3632,7 +3632,7 @@ defmodule PrismWeb.ShellCanvasTest do
       shipped!(ctx)
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       {:ok, %{revision: revision}} = Compendium.layout(person(user, athanor), "desk")
 
       view = shell!(conn)
@@ -3655,7 +3655,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert html =~ "Grant tincture:local.canvas"
       refute html =~ "Grant tincture:local.markets"
 
-      assert [{_prompt, {{:activation, "home"}, "iframe_canvas"}}] =
+      assert [{_prompt, {{:activation, "main"}, "iframe_canvas"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
       view
@@ -3667,7 +3667,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{reference: %{name: "canvas"}, state: :live} = live = canvas(view)
       refute live.id == refused.id
       assert row(live.id).state == "active"
-      assert Map.has_key?(assigns(view).fallbacks, "home")
+      assert Map.has_key?(assigns(view).fallbacks, "main")
       assert {:ok, %{revision: ^revision}} = Compendium.layout(person(user, athanor), "desk")
       assert {:error, :not_found} = Arca.CanvasVersions.get(Sanctum.Context.actor(ctx), "canvas")
       assert %{working: "1.0.0"} = versions(ctx, "markets")
@@ -3685,7 +3685,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert assigns(view).grant_prompts == %{}
       assert canvas(view) == refused
-      assert Map.has_key?(assigns(view).fallbacks, "home")
+      assert Map.has_key?(assigns(view).fallbacks, "main")
       refute render(view) =~ ~s(data-kind="grant")
     end
   end
@@ -3696,7 +3696,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
       owner_head!(ctx, :needs_consent)
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
       assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
@@ -3720,7 +3720,7 @@ defmodule PrismWeb.ShellCanvasTest do
       shipped!(ctx)
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
       render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
@@ -3733,7 +3733,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert canvas(view) == shipped
       assert row(shipped.id).state == "active"
-      assert Map.has_key?(assigns(view).fallbacks, "home")
+      assert Map.has_key?(assigns(view).fallbacks, "main")
       refute render(view) =~ ~s(id="shell-picker")
     end
 
@@ -3741,7 +3741,7 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       view = shell!(conn)
       assert %{state: :live} = live = canvas(view)
 
@@ -3757,7 +3757,7 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
       break_layout!(ctx, user, athanor)
 
       view = shell!(conn)
@@ -3774,7 +3774,7 @@ defmodule PrismWeb.ShellCanvasTest do
       shipped!(ctx)
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      layout!(user, athanor, [entry("main", "tincture:local.markets")])
 
       view = shell!(conn)
       assert %{state: :live, reference: %{name: "markets"}} = canvas(view)
@@ -3797,7 +3797,7 @@ defmodule PrismWeb.ShellCanvasTest do
       published!(view, ctx, user)
       settle!(view, fn -> layout_notes(view) == 0 end)
       assert canvas(view) == shipped
-      assert Map.has_key?(assigns(view).fallbacks, "home")
+      assert Map.has_key?(assigns(view).fallbacks, "main")
     end
   end
 
@@ -3823,7 +3823,7 @@ defmodule PrismWeb.ShellCanvasTest do
     end
 
     defp app_frame(view, name),
-      do: Frames.get(frames(view), {:app, "home", "tincture:local.#{name}"})
+      do: Frames.get(frames(view), {:app, "main", "tincture:local.#{name}"})
 
     defp gesture!(view, event, params) do
       render_hook(view, event, params)
@@ -3842,8 +3842,8 @@ defmodule PrismWeb.ShellCanvasTest do
     end
 
     defp stored_app(user, athanor, name) do
-      %{arrangement: [home | _]} = stored(user, athanor)
-      Enum.find(home.apps, &(&1.tincture == "tincture:local.#{name}"))
+      %{arrangement: [main | _]} = stored(user, athanor)
+      Enum.find(main.apps, &(&1.tincture == "tincture:local.#{name}"))
     end
 
     defp identity(frame), do: Map.take(frame, [:id, :credential_id, :src])
@@ -3914,7 +3914,7 @@ defmodule PrismWeb.ShellCanvasTest do
       end
 
       assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
-      assert %{key: {:app, "home", "tincture:local.app-dash"}} = Frames.active(frames(view))
+      assert %{key: {:app, "main", "tincture:local.app-dash"}} = Frames.active(frames(view))
       assert {:ok, _} = verify(bearer)
 
       written!(view)
@@ -3924,31 +3924,31 @@ defmodule PrismWeb.ShellCanvasTest do
     test "minimise, restore, close and open follow the layout, and each tells the canvas what is open",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
-      home = canvas(view)
-      _ = handshake!(view, home.id)
-      home_id = home.id
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id})
+      main = canvas(view)
+      _ = handshake!(view, main.id)
+      main_id = main.id
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id})
       dash = app_frame(view, "app-dash")
 
       assert gesture!(view, "frame_minimise", %{"frame" => dash.id}) == %{ok: true}
       assert %{minimised: true, visible: false} = app_frame(view, "app-dash")
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: installed})
       assert %{open: true} = Enum.find(installed, &(&1.name == "app-dash"))
 
       assert gesture!(view, "app_restore", %{"ref" => "tincture:local.app-dash"}) == %{ok: true}
       assert %{minimised: false, visible: true} = app_frame(view, "app-dash")
       assert identity(app_frame(view, "app-dash")) == identity(dash)
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id})
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id})
 
       assert gesture!(view, "frame_close", %{"frame" => dash.id}) == %{ok: true}
       assert app_frame(view, "app-dash") == nil
       assert row(dash.id).state == "revoked"
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: installed})
       assert %{open: false} = Enum.find(installed, &(&1.name == "app-dash"))
 
       assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
       assert %{placement: {:window, _}, visible: true} = app_frame(view, "loose-dash")
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: installed})
       assert %{open: true} = Enum.find(installed, &(&1.name == "loose-dash"))
 
       written!(view)
@@ -4007,7 +4007,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # Another screen of the person arranges meanwhile: it closes the tile
       # and opens another app.
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets", %{
+        entry("main", "tincture:local.markets", %{
           "desk" =>
             posture([
               app("tincture:local.app-dash", "window", 0),
@@ -4042,7 +4042,7 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       dash = app_frame(view, "app-dash")
       assert gesture!(view, "frame_full", %{"frame" => dash.id}) == %{ok: true}
-      assert %{key: {:app, "home", "tincture:local.app-dash"}} = Frames.active(frames(view))
+      assert %{key: {:app, "main", "tincture:local.app-dash"}} = Frames.active(frames(view))
       assert %{visible: false} = app_frame(view, "side-dash")
 
       assert gesture!(view, "app_open", %{"ref" => "tincture:local.side-dash"}) == %{ok: true}
@@ -4052,7 +4052,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{state: :live, visible: true} = canvas(view)
 
       assert gesture!(view, "frame_raise", %{"frame" => dash.id}) == %{ok: true}
-      assert %{key: {:app, "home", "tincture:local.app-dash"}} = Frames.active(frames(view))
+      assert %{key: {:app, "main", "tincture:local.app-dash"}} = Frames.active(frames(view))
     end
 
     test "windows stack by their rank, distinct whatever orders the layout holds",
@@ -4069,7 +4069,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       for {a, b} <- [{100, 200}, {300, 200}] do
         layout!(user, athanor, [
-          entry("home", "tincture:local.markets", %{
+          entry("main", "tincture:local.markets", %{
             "desk" =>
               posture([
                 app("tincture:local.app-dash", "window", a),
@@ -4114,10 +4114,10 @@ defmodule PrismWeb.ShellCanvasTest do
     test "each canvas is told the apps open over it, a hidden one included",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
-      home = canvas(view)
-      home_id = home.id
-      _ = handshake!(view, home_id)
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: first})
+      main = canvas(view)
+      main_id = main.id
+      _ = handshake!(view, main_id)
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: first})
       assert %{open: true} = Enum.find(first, &(&1.name == "app-dash"))
 
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
@@ -4128,7 +4128,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{open: false} = Enum.find(told, &(&1.name == "app-dash"))
 
       assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: hidden})
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: hidden})
       assert %{open: true} = Enum.find(hidden, &(&1.name == "app-dash"))
       assert %{open: false} = Enum.find(hidden, &(&1.name == "loose-dash"))
       assert_push_event(view, "canvas_installed", %{frame: ^work_id, tinctures: shown})
@@ -4142,13 +4142,13 @@ defmodule PrismWeb.ShellCanvasTest do
     test "a publication from elsewhere tells each held canvas its open apps again",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
-      home_id = canvas(view).id
-      _ = handshake!(view, home_id)
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: initial})
+      main_id = canvas(view).id
+      _ = handshake!(view, main_id)
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: initial})
       assert %{open: false} = Enum.find(initial, &(&1.name == "loose-dash"))
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets", %{
+        entry("main", "tincture:local.markets", %{
           "desk" =>
             posture([
               app("tincture:local.app-dash", "window", 0),
@@ -4164,15 +4164,15 @@ defmodule PrismWeb.ShellCanvasTest do
       end)
 
       assert app_frame(view, "loose-dash").visible
-      assert canvas(view).id == home_id
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: later})
+      assert canvas(view).id == main_id
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: later})
       assert %{open: true} = Enum.find(later, &(&1.name == "loose-dash"))
     end
 
     test "a change of posture tells the canvas its open apps again",
          %{conn: conn, user: user, athanor: athanor} do
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets", %{
+        entry("main", "tincture:local.markets", %{
           "desk" => posture([app("tincture:local.app-dash", "window", 0)]),
           "hand" => posture([])
         }),
@@ -4180,9 +4180,9 @@ defmodule PrismWeb.ShellCanvasTest do
       ])
 
       view = shell!(conn)
-      home_id = canvas(view).id
-      _ = handshake!(view, home_id)
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: initial})
+      main_id = canvas(view).id
+      _ = handshake!(view, main_id)
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: initial})
       assert %{open: true} = Enum.find(initial, &(&1.name == "app-dash"))
 
       view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
@@ -4191,8 +4191,8 @@ defmodule PrismWeb.ShellCanvasTest do
         assigns(view).posture == "hand" and app_frame(view, "app-dash") == nil
       end)
 
-      assert canvas(view).id == home_id
-      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: later})
+      assert canvas(view).id == main_id
+      assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: later})
       assert %{open: false} = Enum.find(later, &(&1.name == "app-dash"))
     end
 
@@ -4208,7 +4208,7 @@ defmodule PrismWeb.ShellCanvasTest do
         end
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets", %{"desk" => posture(apps)}),
+        entry("main", "tincture:local.markets", %{"desk" => posture(apps)}),
         entry("work", "tincture:local.notes-canvas")
       ])
 
@@ -4216,7 +4216,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, canvas(view).id, :ready)
       top = app_frame(view, "many-27")
       assert top.visible
-      assert Enum.count(opened(view), &match?(%{key: {:app, "home", _}}, &1)) == 27
+      assert Enum.count(opened(view), &match?(%{key: {:app, "main", _}}, &1)) == 27
 
       html = render(view)
       [tag] = Regex.run(~r/<div[^>]*data-canvas-frame="#{top.id}"[^>]*>/, html)
@@ -4265,7 +4265,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert render(view) =~ "Your arrangement could not be saved"
 
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets", %{
+        entry("main", "tincture:local.markets", %{
           "desk" => posture([app("tincture:local.app-dash", "tile", 0)])
         }),
         entry("work", "tincture:local.notes-canvas")
@@ -4288,7 +4288,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # Another screen publishes before the save: the view still holds the
       # revision it read.
       layout!(user, athanor, [
-        entry("home", "tincture:local.markets", %{
+        entry("main", "tincture:local.markets", %{
           "desk" =>
             posture([
               app("tincture:local.app-dash", "window", 0),
@@ -4361,32 +4361,32 @@ defmodule PrismWeb.ShellCanvasTest do
     } do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home = canvas(view)
-      canvas_verb!(view, home.id, :ready)
+      main = canvas(view)
+      canvas_verb!(view, main.id, :ready)
 
-      canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
+      canvas_verb!(view, main.id, :failed, %{"stage" => "runtime"})
 
       assert assigns(view).fallbacks == %{}
       assert %{id: id, state: :live} = canvas(view)
-      assert id == home.id
+      assert id == main.id
     end
 
     test "changes nothing while it is hidden, nor once it is shown again",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
-      home = canvas(view)
-      canvas_verb!(view, home.id, :ready)
+      main = canvas(view)
+      canvas_verb!(view, main.id, :ready)
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert %{state: :frozen} = canvas(view)
 
-      canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
-      refute MapSet.member?(assigns(view).canvas_died, home.id)
+      canvas_verb!(view, main.id, :failed, %{"stage" => "runtime"})
+      refute MapSet.member?(assigns(view).canvas_died, main.id)
 
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
       assert assigns(view).fallbacks == %{}
       assert %{id: id, state: :live} = canvas(view)
-      assert id == home.id
+      assert id == main.id
     end
   end
 

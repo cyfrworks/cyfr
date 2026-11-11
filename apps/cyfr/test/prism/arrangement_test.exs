@@ -43,7 +43,7 @@ defmodule Prism.ArrangementTest do
         "version" => 3,
         "canvases" => [
           %{
-            "id" => "home",
+            "id" => "main",
             "tincture" => "tincture:local.canvas",
             "postures" => %{"desk" => %{"apps" => desk}, "hand" => %{"apps" => hand}}
           },
@@ -55,8 +55,8 @@ defmodule Prism.ArrangementTest do
   end
 
   defp apps(layout, posture \\ "desk") do
-    {:ok, [home | _]} = Layout.arrangement(layout, posture)
-    home.apps
+    {:ok, [main | _]} = Layout.arrangement(layout, posture)
+    main.apps
   end
 
   defp app(layout, ref, posture \\ "desk"),
@@ -74,7 +74,7 @@ defmodule Prism.ArrangementTest do
     test "a move stands the app as a window at the geometry, raised above every other",
          %{layout: layout} do
       geometry = %{x: 0, y: 2000, w: 5000, h: 8000}
-      assert {:ok, moved} = Arrangement.apply(layout, "home", "desk", {:move, @b, geometry})
+      assert {:ok, moved} = Arrangement.apply(layout, "main", "desk", {:move, @b, geometry})
 
       assert app(moved, @b) == %{
                tincture: @b,
@@ -94,58 +94,58 @@ defmodule Prism.ArrangementTest do
       order = fn layout -> Enum.map(apps(layout), &{&1.tincture, &1.order}) end
       geometry = %{x: 100, y: 100, w: 9000, h: 9000}
 
-      assert {:ok, resized} = Arrangement.apply(layout, "home", "desk", {:resize, @a, geometry})
+      assert {:ok, resized} = Arrangement.apply(layout, "main", "desk", {:resize, @a, geometry})
       assert order.(resized) == [{@b, 0}, {@c, 1}, {@a, 2}]
 
-      assert {:ok, resized} = Arrangement.apply(layout, "home", "desk", {:resize, @b, 4000})
+      assert {:ok, resized} = Arrangement.apply(layout, "main", "desk", {:resize, @b, 4000})
       assert order.(resized) == [{@a, 0}, {@c, 1}, {@b, 2}]
 
-      assert {:ok, tiled} = Arrangement.apply(layout, "home", "desk", {:tile, @a, :left, 2000})
+      assert {:ok, tiled} = Arrangement.apply(layout, "main", "desk", {:tile, @a, :left, 2000})
       assert order.(tiled) == [{@b, 0}, {@c, 1}, {@a, 2}]
 
-      assert {:ok, minimised} = Arrangement.apply(layout, "home", "desk", {:minimise, @a})
+      assert {:ok, minimised} = Arrangement.apply(layout, "main", "desk", {:minimise, @a})
       assert order.(minimised) == order.(layout)
 
-      assert {:ok, closed} = Arrangement.apply(layout, "home", "desk", {:close, @a})
+      assert {:ok, closed} = Arrangement.apply(layout, "main", "desk", {:close, @a})
       assert order.(closed) == [{@b, 0}, {@c, 1}]
     end
 
     test "a resize takes a window's geometry or a tile's share, and nothing of another kind",
          %{layout: layout} do
       geometry = %{x: 100, y: 100, w: 9000, h: 9000}
-      assert {:ok, resized} = Arrangement.apply(layout, "home", "desk", {:resize, @a, geometry})
+      assert {:ok, resized} = Arrangement.apply(layout, "main", "desk", {:resize, @a, geometry})
       assert app(resized, @a).geometry == geometry
 
-      assert {:ok, resized} = Arrangement.apply(layout, "home", "desk", {:resize, @b, 4000})
+      assert {:ok, resized} = Arrangement.apply(layout, "main", "desk", {:resize, @b, 4000})
       assert %{placement: :tile, side: :right, share: 4000} = app(resized, @b)
 
-      assert {:ok, ^layout} = Arrangement.apply(layout, "home", "desk", {:resize, @a, 4000})
+      assert {:ok, ^layout} = Arrangement.apply(layout, "main", "desk", {:resize, @a, 4000})
     end
 
     test "a tile, a full, a minimise and a restore stand the app so", %{layout: layout} do
-      assert {:ok, tiled} = Arrangement.apply(layout, "home", "desk", {:tile, @a, :left, 2000})
+      assert {:ok, tiled} = Arrangement.apply(layout, "main", "desk", {:tile, @a, :left, 2000})
       assert %{placement: :tile, side: :left, share: 2000, geometry: nil} = app(tiled, @a)
 
-      assert {:ok, full} = Arrangement.apply(layout, "home", "desk", {:full, @b})
+      assert {:ok, full} = Arrangement.apply(layout, "main", "desk", {:full, @b})
       assert %{placement: :full, side: nil, share: nil} = app(full, @b)
 
-      assert {:ok, minimised} = Arrangement.apply(layout, "home", "desk", {:minimise, @c})
+      assert {:ok, minimised} = Arrangement.apply(layout, "main", "desk", {:minimise, @c})
       assert %{placement: :window, geometry: @window, minimised: true} = app(minimised, @c)
 
-      assert {:ok, restored} = Arrangement.apply(minimised, "home", "desk", {:restore, @c})
+      assert {:ok, restored} = Arrangement.apply(minimised, "main", "desk", {:restore, @c})
       assert %{minimised: false, order: 2} = app(restored, @c)
     end
 
     test "a raise puts the app last in a stacking order renumbered from 0", %{layout: layout} do
-      assert {:ok, raised} = Arrangement.apply(layout, "home", "desk", {:raise, @a})
+      assert {:ok, raised} = Arrangement.apply(layout, "main", "desk", {:raise, @a})
       assert Enum.map(apps(raised), &{&1.tincture, &1.order}) == [{@b, 0}, {@c, 1}, {@a, 2}]
 
       # Raised again it stays where it is.
-      assert {:ok, ^raised} = Arrangement.apply(raised, "home", "desk", {:raise, @a})
+      assert {:ok, ^raised} = Arrangement.apply(raised, "main", "desk", {:raise, @a})
     end
 
     test "a close takes the app off the canvas, and the rest close up", %{layout: layout} do
-      assert {:ok, closed} = Arrangement.apply(layout, "home", "desk", {:close, @b})
+      assert {:ok, closed} = Arrangement.apply(layout, "main", "desk", {:close, @b})
       assert Enum.map(apps(closed), &{&1.tincture, &1.order}) == [{@a, 0}, {@c, 1}]
     end
 
@@ -153,11 +153,11 @@ defmodule Prism.ArrangementTest do
          %{layout: layout} do
       d = "tincture:local.d"
       new = Arrangement.open(d, nil, "desk", 3)
-      assert {:ok, opened} = Arrangement.apply(layout, "home", "desk", {:open, d, new})
+      assert {:ok, opened} = Arrangement.apply(layout, "main", "desk", {:open, d, new})
       assert %{placement: :window, order: 3, minimised: false} = app(opened, d)
 
-      {:ok, minimised} = Arrangement.apply(layout, "home", "desk", {:minimise, @a})
-      assert {:ok, reopened} = Arrangement.apply(minimised, "home", "desk", {:open, @a, new})
+      {:ok, minimised} = Arrangement.apply(layout, "main", "desk", {:minimise, @a})
+      assert {:ok, reopened} = Arrangement.apply(minimised, "main", "desk", {:open, @a, new})
 
       assert %{placement: :window, geometry: @window, minimised: false, order: 2} =
                app(reopened, @a)
@@ -174,18 +174,18 @@ defmodule Prism.ArrangementTest do
             {:raise, @a},
             {:open, "tincture:local.d", Arrangement.open("tincture:local.d", nil, "desk", 3)}
           ] do
-        {:ok, once} = Arrangement.apply(layout, "home", "desk", gesture)
-        assert {:ok, ^once} = Arrangement.apply(once, "home", "desk", gesture), inspect(gesture)
+        {:ok, once} = Arrangement.apply(layout, "main", "desk", gesture)
+        assert {:ok, ^once} = Arrangement.apply(once, "main", "desk", gesture), inspect(gesture)
       end
 
       # Closed once, the app is gone: closing it again is refused, and the
       # document stays the one closing it once made.
-      {:ok, closed} = Arrangement.apply(layout, "home", "desk", {:close, @c})
-      assert {:error, :not_placed} = Arrangement.apply(closed, "home", "desk", {:close, @c})
+      {:ok, closed} = Arrangement.apply(layout, "main", "desk", {:close, @c})
+      assert {:error, :not_placed} = Arrangement.apply(closed, "main", "desk", {:close, @c})
     end
 
     test "the other canvas and the other posture are left as they are", %{layout: layout} do
-      {:ok, moved} = Arrangement.apply(layout, "home", "desk", {:raise, @a})
+      {:ok, moved} = Arrangement.apply(layout, "main", "desk", {:raise, @a})
       assert apps(moved, "hand") == apps(layout, "hand")
       assert Enum.at(moved.canvases, 1) == Enum.at(layout.canvases, 1)
     end
@@ -198,7 +198,7 @@ defmodule Prism.ArrangementTest do
 
     test "for an app the canvas does not place, or a canvas the layout does not have",
          %{layout: layout} do
-      assert {:error, :not_placed} = Arrangement.apply(layout, "home", "desk", {:raise, @c})
+      assert {:error, :not_placed} = Arrangement.apply(layout, "main", "desk", {:raise, @c})
       assert {:error, :not_placed} = Arrangement.apply(layout, "work", "desk", {:close, @a})
       assert {:error, :no_canvas} = Arrangement.apply(layout, "gone", "desk", {:raise, @a})
     end
@@ -211,11 +211,11 @@ defmodule Prism.ArrangementTest do
             {:tile, @a, :left, 2000},
             {:full, @a}
           ] do
-        assert {:error, :hand} = Arrangement.apply(layout, "home", "hand", gesture)
+        assert {:error, :hand} = Arrangement.apply(layout, "main", "hand", gesture)
       end
 
-      assert {:ok, _} = Arrangement.apply(layout, "home", "hand", {:minimise, @a})
-      assert {:ok, _} = Arrangement.apply(layout, "home", "hand", {:close, @a})
+      assert {:ok, _} = Arrangement.apply(layout, "main", "hand", {:minimise, @a})
+      assert {:ok, _} = Arrangement.apply(layout, "main", "hand", {:close, @a})
     end
 
     test "for a geometry or a share outside the layout's bounds, with the layout's sentence",
@@ -227,17 +227,17 @@ defmodule Prism.ArrangementTest do
             %{x: 0, y: 0, w: 100, h: 10_001}
           ] do
         assert {:error, {:invalid, sentence}} =
-                 Arrangement.apply(layout, "home", "desk", {:move, @a, geometry})
+                 Arrangement.apply(layout, "main", "desk", {:move, @a, geometry})
 
         assert sentence =~ "w and h"
       end
 
       for share <- [0, 10_001] do
         assert {:error, {:invalid, _}} =
-                 Arrangement.apply(layout, "home", "desk", {:tile, @a, :left, share})
+                 Arrangement.apply(layout, "main", "desk", {:tile, @a, :left, share})
 
         assert {:error, {:invalid, _}} =
-                 Arrangement.apply(layout, "home", "desk", {:resize, @b, share})
+                 Arrangement.apply(layout, "main", "desk", {:resize, @b, share})
       end
     end
   end
@@ -256,7 +256,7 @@ defmodule Prism.ArrangementTest do
       for placed <- 0..40 do
         layout = layout([])
         app = Arrangement.open(@a, nil, "desk", placed)
-        assert {:ok, _} = Arrangement.apply(layout, "home", "desk", {:open, @a, app})
+        assert {:ok, _} = Arrangement.apply(layout, "main", "desk", {:open, @a, app})
       end
     end
   end

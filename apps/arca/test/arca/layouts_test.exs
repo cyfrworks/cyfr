@@ -55,7 +55,7 @@ defmodule Arca.LayoutsTest do
         "version" => 3,
         "canvases" => [
           %{
-            "id" => "home",
+            "id" => "main",
             "tincture" => canvas,
             "postures" => %{
               "hand" => %{
@@ -193,7 +193,7 @@ defmodule Arca.LayoutsTest do
     for revision <- 0..5, do: {:ok, _} = Layouts.publish(actor, user, layout(), revision)
 
     version_2 =
-      ~s({"canvases":[{"id":"home","postures":{"desk":{"apps":[{"mode":"column","order":0,) <>
+      ~s({"canvases":[{"id":"main","postures":{"desk":{"apps":[{"mode":"column","order":0,) <>
         ~s("tincture":"tincture:local.vault"}],"floating":[]}},"tincture":"tincture:local.canvas"}],) <>
         ~s("version":2})
 
