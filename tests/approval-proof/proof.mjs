@@ -1234,7 +1234,22 @@ async function main() {
       const pane = document.getElementById("aqua-panel-pane");
       const select = document.getElementById("aqua-panel-threads");
       return pane && pane.classList.contains("phx-connected") && select && select.value === id;
-    }, thread.thread_id, { timeout: 30_000 });
+    }, thread.thread_id, { timeout: 30_000 }).catch(async (error) => {
+      // What the page showed when the wait ran out, in the record a failed
+      // run leaves: which half of the wait did not arrive, and what stood
+      // over the desktop.
+      const shown = await page.evaluate((id) => {
+        const pane = document.getElementById("aqua-panel-pane");
+        const select = document.getElementById("aqua-panel-threads");
+        return {
+          panel_open: !!document.getElementById("aqua-panel-sheet"),
+          pane_classes: pane ? pane.className : null,
+          thread_chosen: select ? select.value === id : null,
+          dialogs_open: Array.from(document.querySelectorAll("dialog[open]"), (d) => d.id),
+        };
+      }, thread.thread_id).catch(() => null);
+      throw new Error(`${error.message} The page showed ${JSON.stringify(shown)}`, { cause: error });
+    });
     const announced = await ask({ op: "announce", thread_id: thread.thread_id, name: ACCOUNT });
     await granting(page);
     const named = await sheet(page);
