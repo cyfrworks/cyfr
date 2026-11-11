@@ -229,3 +229,177 @@ defmodule Arca.BudgetReservationsTest do
     assert charged(actor, budget) == 1
   end
 end
+
+defmodule Arca.BudgetReservationsRaceTest do
+  @moduledoc """
+  The sweep against a charge and against a give-back of the same
+  reservation, on PostgreSQL: each runs outside the sandbox on a
+  connection of its own, the other's writes held open until the sweep is
+  seen waiting on them.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.BudgetReservations
+  alias Arca.Schemas.{BudgetCharge, BudgetReservation, Execution, ExecutionAttempt}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @moduletag :postgres
+  @moduletag timeout: 60_000
+
+  setup do
+    actor = Arca.Test.Actor.local()
+    budget = "bgt_race_#{System.unique_integer([:positive])}"
+    id = "exec_race_#{System.unique_integer([:positive])}"
+    on_exit(fn -> unboxed(fn -> delete_run!(id) end) end)
+
+    {:ok, _admitted} =
+      unboxed(fn ->
+        Arca.Execution.admit(
+          %{
+            id: id,
+            reference: "formula:local.demo:1.0.0",
+            user_id: actor.user_id,
+            athanor_id: actor.athanor_id,
+            component_type: "formula",
+            origin: :programmatic
+          },
+          reservation: %{budget_id: budget, cap: 3},
+          grant: Arca.Test.Actor.grant(actor.athanor_id),
+          verify: &Arca.Test.Actor.admits/1
+        )
+      end)
+
+    {:ok, actor: actor, budget: budget}
+  end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp delete_run!(execution_id) do
+    Arca.Repo.delete_all(from(a in ExecutionAttempt, where: a.execution_id == ^execution_id))
+
+    Arca.Repo.delete_all(
+      from(r in BudgetReservation, where: r.root_execution_id == ^execution_id)
+    )
+
+    Arca.Repo.delete_all(from(e in Execution, where: e.id == ^execution_id))
+  end
+
+  defp charge_row(actor, budget, id, fields \\ []) do
+    struct!(
+      %BudgetCharge{
+        id: id,
+        athanor_id: actor.athanor_id,
+        reservation_id: budget,
+        attempt: "att_race",
+        n: 1,
+        runner_id: "boot_race",
+        inserted_at: DateTime.utc_now()
+      },
+      fields
+    )
+  end
+
+  defp add_charged(budget, n),
+    do:
+      Arca.Repo.update_all(from(r in BudgetReservation, where: r.id == ^budget),
+        inc: [charged: n]
+      )
+
+  defp charged(budget), do: unboxed(fn -> Arca.Repo.get!(BudgetReservation, budget).charged end)
+
+  # `writes` in a transaction of its own, held open until released.
+  defp holding(writes) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            writes.()
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            after
+              30_000 -> Arca.Repo.rollback(:timeout)
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(task.pid), do: Process.exit(task.pid, :kill) end)
+    assert_receive :held, 5_000
+    task
+  end
+
+  defp release(task) do
+    send(task.pid, :release)
+    assert {:ok, :ok} = Task.await(task, 10_000)
+  end
+
+  defp sweeping(actor) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+          send(test, {:sweep, backend})
+          BudgetReservations.sweep(actor)
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(task.pid), do: Process.exit(task.pid, :kill) end)
+    assert_receive {:sweep, backend}, 5_000
+    {task, backend}
+  end
+
+  test "a charge whose increment commits while the sweep recounts is counted", %{
+    actor: actor,
+    budget: budget
+  } do
+    charging =
+      holding(fn ->
+        Arca.Repo.insert!(charge_row(actor, budget, "racing"))
+        add_charged(budget, 1)
+      end)
+
+    {sweep, backend} = sweeping(actor)
+    Arca.Test.LockWait.await_lock_wait!(backend, ["budget_reservations"])
+    release(charging)
+
+    assert {:ok, 0} = Task.await(sweep, 10_000)
+    assert charged(budget) == 1
+  end
+
+  test "a charge a give-back releases while the sweep reclaims it is released once", %{
+    actor: actor,
+    budget: budget
+  } do
+    past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+    unboxed(fn ->
+      Arca.Repo.insert!(
+        charge_row(actor, budget, "late", holder_execution_id: "exec_never", admit_by: past)
+      )
+
+      add_charged(budget, 1)
+    end)
+
+    giving_back =
+      holding(fn ->
+        Arca.Repo.delete_all(from(c in BudgetCharge, where: c.id == "late"))
+        add_charged(budget, -1)
+      end)
+
+    {sweep, backend} = sweeping(actor)
+    Arca.Test.LockWait.await_lock_wait!(backend, ["budget_charges"])
+    release(giving_back)
+
+    assert {:ok, 0} = Task.await(sweep, 10_000)
+    assert charged(budget) == 0
+  end
+end
