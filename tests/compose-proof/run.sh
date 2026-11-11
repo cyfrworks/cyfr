@@ -154,7 +154,12 @@
 #          to their athanor's files and reading it back, so both runs reach
 #          the host API; each run completes with the catalyst's answer.
 #          The app image's cosign, the one `Compendium.Cosign` finds on
-#          PATH, is the version scripts/cosign.sh pins.
+#          PATH, run in the cyfr service as `docker compose run` runs it
+#          (its entrypoint, its user, the shipped file's environment), is
+#          the version scripts/cosign.sh pins and verifies a signed image
+#          keyed and keyless (scripts/cosign.sh check). The runs wait for
+#          the person's athanor to read filled, the product's own
+#          readiness, before the first one.
 #
 # The project is the run's own: its directory is named for the run, which
 # makes the compose project the command line derives from it one no other
@@ -2210,7 +2215,7 @@ print(json.dumps(json.loads(result) if isinstance(result, str) else result))' ||
 }
 
 runtime_case() {
-  local shipped project workers host_api runtime_id health signed_in token pinned cosign mark written read_back
+  local shipped project workers host_api runtime_id health signed_in token cosign fill mark written read_back
   step "the runtime's wiring is the shipped file's"
   shipped="$(cd "$WORK" && docker compose --project-name "$RUN-shipped" -f "$WORK/docker-compose.yml" config --format json)"
   project="$(compose config --format json)"
@@ -2236,19 +2241,35 @@ runtime_case() {
     fail "locus-runtime is ${health:-not running} after 120 s: $(docker logs --tail 30 "$runtime_id" 2>&1 || true)"
   ok "locus-runtime runs $LOCUS_IMAGE and is healthy"
 
-  step "the app image's cosign, as Compendium.Cosign finds it"
-  pinned="$("$ROOT/scripts/cosign.sh" version)"
+  step "the app image's cosign, as Compendium.Cosign finds it and as the cyfr service runs it"
   cosign="$(cyfr_rpc 'IO.puts("COSIGN=" <> (System.find_executable("cosign") || "none"))' | sed -n 's/^COSIGN=//p')"
   [ -n "$cosign" ] && [ "$cosign" != none ] || fail "the running cyfr finds no cosign on its PATH"
-  docker exec -u app "$cyfr_id" "$cosign" version --json 2>&1 | grep -q "\"gitVersion\": *\"v$pinned\"" ||
-    fail "$cosign in the running cyfr is not cosign $pinned"
-  ok "cyfr runs $cosign, cosign $pinned"
+  "$ROOT/scripts/cosign.sh" check cyfr compose run --rm --no-deps -T || fail "the cyfr service's cosign does not verify"
+  ok "cyfr finds $cosign, which verifies keyed and keyless as the service runs it"
 
   step "a person signed in on cyfr, as the release proofs sign one in"
   signed_in="$(cyfr_fixture person operator@example.com compose-proof-runtime)"
   token="$(jget "$signed_in" token)"
   [ -n "$token" ] && [ "$token" != null ] || fail "the release fixture signed nobody in: '$signed_in'"
   ok "operator@example.com is signed in"
+
+  step "the person's athanor reads filled, as the sign-in's fill leaves it"
+  # Polled through the product's own reading (Sanctum.Provisioning.status/1)
+  # under one deadline; nothing but :ready lets the runs start.
+  fill="$(cyfr_rpc "{:ok, ctx} = Sanctum.Caller.establish({:session, \"$token\"})
+    deadline = System.monotonic_time(:millisecond) + 120_000
+    settle = fn settle ->
+      case Sanctum.Provisioning.status(ctx) do
+        :filling ->
+          if System.monotonic_time(:millisecond) < deadline,
+            do: (Process.sleep(250); settle.(settle)),
+            else: :filling
+        other -> other
+      end
+    end
+    IO.puts(\"FILL=#{settle.(settle)}\")" | sed -n 's/^FILL=//p')"
+  [ "$fill" = ready ] || fail "the person's athanor reads '${fill:-nothing}', not ready, within 120 s of the sign-in"
+  ok "the athanor reads ready"
 
   step "the person runs catalyst:local.files on the runtime: a mark written, then read back"
   mark="$(mark)"
