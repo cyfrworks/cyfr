@@ -46,4 +46,32 @@ defmodule PrismWeb.ComponentDetailLiveTest do
     assert html =~ ~r{optional-dep:1\.0\.0</span>\s*<span[^>]*>optional</span>}
     refute html =~ ~r{missing-dep:1\.0\.0</span>\s*<span[^>]*>optional</span>}
   end
+
+  # `config/test.exs` configures a registry that is not cyfr.run: the
+  # report goes to its moderators, named as the registry's.
+  test "a report goes to the registry's moderators, never cyfr.run's", %{conn: conn, ctx: ctx} do
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(
+        ctx,
+        Cyfr.Test.Guests.wasm(:reagent),
+        %{
+          name: "reportable",
+          version: "1.0.0",
+          type: "reagent",
+          publisher: "local",
+          description: "",
+          tags: [],
+          manifest: "{}"
+        },
+        source: "filesystem"
+      )
+
+    {view, html} = mount_athanor(conn, "/components/reagent:local.reportable:1.0.0")
+    assert html =~ "Report this component to the registry&#39;s moderators"
+
+    render_click(view, "open_report", %{})
+    html = render(view)
+    assert html =~ "Your report goes to the registry&#39;s moderators."
+    refute html =~ "cyfr.run"
+  end
 end

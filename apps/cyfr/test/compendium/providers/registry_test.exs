@@ -21,6 +21,14 @@ defmodule Compendium.Providers.RegistryTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
+  # A client reads the tool's description from the catalog: it speaks of
+  # the configured registry, never of cyfr.run.
+  test "the registry tool describes registry operations, never cyfr.run's" do
+    {:ok, tool} = Sanctum.Catalog.get_tool("registry")
+    assert tool["description"] =~ "Registry operations, each a request your identity signs"
+    refute tool["description"] =~ "cyfr.run"
+  end
+
   # Valid mutation arguments reach the credential check.
   describe "gated identity mutations reach their handlers with valid args" do
     test "tokens_revoke", %{ctx: ctx} do

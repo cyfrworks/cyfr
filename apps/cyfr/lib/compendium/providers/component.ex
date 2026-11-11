@@ -1089,11 +1089,11 @@ defmodule Compendium.Providers.Component do
     end
   end
 
-  # Why the cyfr.run half of a search is missing: the registry's refusal,
+  # Why the registry's half of a search is missing: the registry's refusal,
   # or a stored push token that does not open (no request was sent).
   defp remote_search_refusal(%Errors{} = err) do
     Logger.error(
-      "[Compendium.Providers.Component] CYFR.RUN SEARCH FAILED — #{Errors.to_log_string(err)}. " <>
+      "[Compendium.Providers.Component] REGISTRY SEARCH FAILED — #{Errors.to_log_string(err)}. " <>
         "Results are incomplete. Only local components are shown."
     )
 

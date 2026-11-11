@@ -234,14 +234,20 @@ defmodule Compendium.Registry.ClientSyncTest do
         json_resp(conn, 403, %{"error" => "denied"})
       end)
 
-      {:ok, result} =
-        Provider.handle("component", ctx, %{
-          "action" => "search",
-          "query" => "nonexistent-component-xyz"
-        })
+      {{:ok, result}, log} =
+        with_log(fn ->
+          Provider.handle("component", ctx, %{
+            "action" => "search",
+            "query" => "nonexistent-component-xyz"
+          })
+        end)
 
       assert is_list(result.components)
       assert result.incomplete == true
+
+      # The operator's log line speaks of the registry, as the note does.
+      assert log =~ "REGISTRY SEARCH FAILED"
+      refute log =~ ~r/cyfr\.run/i
 
       assert result.registry_error =~
                "Access denied for #{Compendium.RegistryHost.canonical_rest_host()}"

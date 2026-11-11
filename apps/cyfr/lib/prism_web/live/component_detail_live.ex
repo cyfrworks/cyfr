@@ -119,7 +119,7 @@ defmodule PrismWeb.ComponentDetailLive do
           :if={!@loading && @component}
           phx-click="open_report"
           class="shrink-0 px-3 py-1.5 text-xs rounded border border-gray-700 bg-gray-800 text-gray-300 hover:bg-red-900/40 hover:text-red-200 hover:border-red-800"
-          title="Report this component to cyfr.run moderators"
+          title="Report this component to the registry's moderators"
         >
           Report
         </button>

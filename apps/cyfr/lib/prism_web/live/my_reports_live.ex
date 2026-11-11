@@ -108,7 +108,7 @@ defmodule PrismWeb.MyReportsLive do
         <div>
           <h2 class="text-lg font-semibold text-white">My Reports</h2>
           <p class="text-sm text-gray-400 mt-1">
-            Abuse reports you've filed on cyfr.run. Moderator outcomes show here
+            Abuse reports you've filed with the registry. Moderator outcomes show here
             once a report is resolved or dismissed.
           </p>
         </div>

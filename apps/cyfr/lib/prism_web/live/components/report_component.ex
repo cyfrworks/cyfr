@@ -115,7 +115,7 @@ defmodule PrismWeb.ReportComponent do
               <span class="font-mono text-gray-300">{@target_ref}</span>
             </p>
             <p class="text-xs text-gray-500 mt-2">
-              Your report goes to cyfr.run moderators. Track status under <a
+              Your report goes to the registry's moderators. Track status under <a
                 href={PrismWeb.Focus.path(@athanor_route, "/reports")}
                 class="underline hover:text-gray-400"
               >My Reports</a>.

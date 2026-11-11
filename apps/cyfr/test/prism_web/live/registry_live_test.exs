@@ -117,6 +117,18 @@ defmodule PrismWeb.RegistryLiveTest do
     assert render(view) =~ "Again."
   end
 
+  # The registry is the configured one (`RegistryStub`'s host, not
+  # cyfr.run): the page names it as the registry, never as cyfr.run.
+  test "the page speaks of the registry, never of cyfr.run", %{conn: conn} do
+    refute Compendium.RegistryHost.canonical_rest_host() =~ "cyfr.run"
+
+    {view, _html} = mount_athanor(conn, "/registry")
+    html = render(view)
+    assert html =~ "Components you&#39;ve published to the registry."
+    assert html =~ "The registry&#39;s policies, version"
+    refute html =~ "cyfr.run"
+  end
+
   test "the registry's policies are shown, and accepting asks a passkey to sign their version",
        %{conn: conn, user: user} do
     {view, _html} = mount_athanor(conn, "/registry")
