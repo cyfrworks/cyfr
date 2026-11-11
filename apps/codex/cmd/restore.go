@@ -393,7 +393,7 @@ func (r *restorer) run() error {
 	if r.ctx.Err() != nil {
 		return errors.New("cyfr restore was interrupted during the stop; the stack is left stopped and nothing was restored. Start it again with 'cyfr up'")
 	}
-	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers}
+	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.refuseUnwritableParts, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers}
 	for _, step := range steps {
 		err := step()
 		if err == nil && r.ctx.Err() != nil {
@@ -854,6 +854,61 @@ func (r *restorer) probeRestoredPostgres() error {
 	}
 	r.config.pgMajor = major
 	return nil
+}
+
+// refuseUnwritableParts refuses, before any part is put back, a storage
+// root or SQLite file this process cannot replace: the image's entrypoint
+// hands the storage root to the image's user at every start, so on native
+// Linux a person who is not root cannot clear or rename what it holds.
+// Every directory the put-back enters is checked, each mount's whole tree
+// and a missing one's nearest existing parent.
+func (r *restorer) refuseUnwritableParts() error {
+	var dirs []string
+	if r.config.storage == "local" {
+		for _, m := range r.config.storageMounts {
+			if !m.dir {
+				dirs = append(dirs, filepath.Dir(m.host))
+				continue
+			}
+			err := filepath.WalkDir(m.host, func(p string, d fs.DirEntry, err error) error {
+				switch {
+				case errors.Is(err, fs.ErrNotExist) && p == m.host:
+					dirs = append(dirs, filepath.Dir(m.host))
+					return nil
+				case err != nil:
+					return err
+				case d.IsDir():
+					dirs = append(dirs, p)
+				}
+				return nil
+			})
+			if err != nil {
+				return unwritable(err)
+			}
+		}
+	}
+	if r.config.adapter == "sqlite" {
+		dirs = append(dirs, filepath.Dir(r.config.sqliteFile))
+	}
+	for _, dir := range dirs {
+		for {
+			if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) || filepath.Dir(dir) == dir {
+				break
+			}
+			dir = filepath.Dir(dir)
+		}
+		if err := canReplaceIn(dir); err != nil {
+			return unwritable(&fs.PathError{Op: "write", Path: dir, Err: err})
+		}
+	}
+	return nil
+}
+
+// unwritable is the refusal of a part the put-back could not write as
+// this person. It names no snapshot directory: the refusal is redacted,
+// and .env holds that directory as the barrier's value.
+func unwritable(err error) error {
+	return fmt.Errorf("cyfr restore cannot replace what the CYFR server stores as you (%v): the server's container owns its storage once the stack has run, so run the same cyfr restore as root, with sudo", err)
 }
 
 // refuseLiveMembers reads the live slots of the database the restore writes,
