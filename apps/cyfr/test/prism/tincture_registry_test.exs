@@ -653,8 +653,10 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     defp listed(server) do
-      {:ok, pid} = TinctureRegistry.start_link(name: server)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      # The test's supervisor owns the registry and stops it before any
+      # on_exit callback runs: linked to the test process it ended with it,
+      # and a stop from a callback that met it ending exited.
+      start_supervised!({TinctureRegistry, name: server})
       Map.new(TinctureRegistry.list_tinctures(server, lookup("ath_test")), &{&1.name, &1})
     end
 

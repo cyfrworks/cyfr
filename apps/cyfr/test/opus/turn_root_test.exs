@@ -700,15 +700,23 @@ defmodule Opus.TurnRootTest do
   defp fill_foreground! do
     %{max: max, child_reserve: reserve, active: active} = Slots.status(@slots)
 
-    {:ok, holder} =
-      Agent.start_link(fn ->
-        for _ <- 1..(max - reserve - active)//1 do
-          {:ok, ref} = Slots.acquire(@slots, nil, :root, wait_ms: 0)
-          ref
-        end
-      end)
+    # The test's supervisor owns the holder and stops it before any on_exit
+    # callback runs: linked to the test process it ended with it, and a stop
+    # from a callback that met it ending exited.
+    holder =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Agent,
+           fn ->
+             for _ <- 1..(max - reserve - active)//1 do
+               {:ok, ref} = Slots.acquire(@slots, nil, :root, wait_ms: 0)
+               ref
+             end
+           end},
+          id: :slot_holder
+        )
+      )
 
-    on_exit(fn -> if Process.alive?(holder), do: Agent.stop(holder) end)
     assert {:error, :capacity} = Slots.acquire(@slots, nil, :root, wait_ms: 0)
     %{holder: holder, full: Slots.status(@slots).active}
   end
