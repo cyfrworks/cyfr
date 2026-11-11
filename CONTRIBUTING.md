@@ -127,8 +127,12 @@ same worktree refuses, naming the run that holds it.
   `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
 - Checks run in stages. `scripts/stages.tsv` names what each stage runs,
   and `scripts/stage.sh STAGE` runs it, queuing each check through
-  `scripts/heavy-check.sh` for the quarters the table names. The host
-  answers while you edit and keeps itself; GitHub proves the tree:
+  `scripts/heavy-check.sh` for the quarters the table names. The checks
+  that use one build folder (`_build/dev`, `dev_pg`, `test` or `test_pg`,
+  the table's folder column) run one after another; the rest run side by
+  side, so one stage can hold all four quarters for a while, and its
+  summary lists every check in the table's order. The host answers while
+  you edit and keeps itself; GitHub proves the tree:
   - `save`, after an edit: the format and credo checks, an incremental
     compile with warnings as errors, and the touched tests on SQLite;
   - `handoff`, before you report a change ready, one quarter for each
