@@ -817,6 +817,126 @@ defmodule Arca.ControlPlaneLockTest do
     assert generation == slot.generation
   end
 
+  @tag :postgres
+  test "a holder-only write that starts while a take or a release waits commits before it or not at all",
+       %{node: node} do
+    for action <- [:take, :release] do
+      node = "#{node}-#{action}"
+      {:ok, slot} = unboxed(fn -> ControlPlane.take(node, "boot_a", 60_000) end)
+      test = self()
+
+      # A holds the row; the take or the release waits behind it.
+      first = holder(test, slot, node <> "-a")
+      assert_receive {:writing, first_pid}, 5_000
+
+      waiting =
+        Task.async(fn ->
+          unboxed(fn ->
+            %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+            send(test, {:backend, backend})
+
+            case action do
+              # This boot taking its own live slot again: the slot stays its.
+              :take -> ControlPlane.take(node, "boot_a", 60_000)
+              :release -> ControlPlane.release()
+            end
+          end)
+        end)
+
+      assert_receive {:backend, backend}, 5_000
+      await_blocked!(backend)
+
+      # B starts while the take or the release waits. PostgreSQL may let it
+      # pass the waiting lock or queue it; the fence holds either way.
+      second = holder(test, slot, node <> "-b")
+      second_pid = receive do: ({:writing, pid} -> pid), after: (500 -> nil)
+
+      if second_pid, do: send(second_pid, :finish)
+      send(first_pid, :finish)
+      assert {:ok, :written} = Task.await(first, 25_000)
+      answered = Task.await(waiting, 25_000)
+
+      # A B that queued runs once the take or the release has committed: it
+      # writes after a take of the boot's own slot, and is refused after a
+      # release before it writes anything.
+      unless second_pid do
+        receive do
+          {:writing, late_pid} -> send(late_pid, :finish)
+        after
+          2_000 -> :ok
+        end
+      end
+
+      written = Task.await(second, 25_000)
+      lease = unboxed(fn -> Arca.Repo.get!(CellLease, node) end)
+
+      case action do
+        :take ->
+          # Taken again by its own boot: B commits whichever comes first.
+          assert {:ok, %{owner: "boot_a", generation: generation}} = answered
+          assert generation == slot.generation
+          assert {:ok, :written} = written
+          assert marked?(node <> "-b")
+
+        :release ->
+          assert :ok = answered
+
+          case written do
+            # B committed before the release wrote: its row predates it.
+            {:ok, :written} ->
+              mark = unboxed(fn -> Arca.Repo.get!(CellLease, node <> "-b-mark") end)
+              assert DateTime.compare(mark.inserted_at, lease.updated_at) != :gt
+
+            # B waited for the release and found the lease run out.
+            {:error, :not_owner} ->
+              refute marked?(node <> "-b")
+          end
+      end
+    end
+  end
+
+  @tag :postgres
+  test "a deadlock between two holder-only writes aborts one, which commits nothing and answers " <>
+         ":database_error",
+       %{node: node} do
+    {:ok, slot} = unboxed(fn -> ControlPlane.take(node, "boot_a", 60_000) end)
+    test = self()
+    [r1, r2] = rows = ["#{node}-r1", "#{node}-r2"]
+    unboxed(fn -> Enum.each(rows, &row!/1) end)
+
+    writers =
+      for {mine, theirs, mark} <- [{r1, r2, "#{node}-m1"}, {r2, r1, "#{node}-m2"}] do
+        Task.async(fn ->
+          unboxed(fn ->
+            Arca.Repo.owned("lock test", slot, fn ->
+              Arca.Repo.query!("SET LOCAL deadlock_timeout = '100ms'")
+              lock_row!(mine)
+              row!(mark)
+              send(test, {:ready, self()})
+
+              receive do
+                :go -> :ok
+              end
+
+              lock_row!(theirs)
+              {:ok, :written}
+            end)
+          end)
+        end)
+      end
+
+    for _ <- writers, do: assert_receive({:ready, _pid}, 5_000)
+    Enum.each(writers, &send(&1.pid, :go))
+    answers = Enum.map(writers, &Task.await(&1, 25_000))
+
+    assert Enum.sort(answers) == Enum.sort([{:ok, :written}, {:error, :database_error}])
+
+    for {answer, mark} <- Enum.zip(answers, ["#{node}-m1", "#{node}-m2"]) do
+      assert unboxed(fn -> Arca.Repo.exists?(from(l in CellLease, where: l.node == ^mark)) end) ==
+               (answer == {:ok, :written})
+    end
+  end
+
   # A holder-only write under `slot` that marks a row of its own, then
   # waits for `:finish` before it commits.
   defp holder(test, slot, node) do
@@ -862,13 +982,16 @@ defmodule Arca.ControlPlaneLockTest do
     end)
   end
 
-  defp mark!(node) do
+  defp mark!(node), do: row!(node <> "-mark")
+
+  # A row of the lease table that names no member's slot.
+  defp row!(name) do
     now = Arca.ServerMetaStorage.now!()
 
     {1, _} =
       Arca.Repo.insert_all(CellLease, [
         %{
-          node: node <> "-mark",
+          node: name,
           owner: "mark",
           generation: 1,
           fence: 1,
@@ -879,6 +1002,28 @@ defmodule Arca.ControlPlaneLockTest do
           updated_at: now
         }
       ])
+  end
+
+  defp lock_row!(name) do
+    from(l in CellLease, where: l.node == ^name)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one!()
+  end
+
+  # Until the connection `backend` waits on a lock.
+  defp await_blocked!(backend) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        unboxed(fn ->
+          %{rows: [[blocked]]} =
+            Arca.Repo.query!("SELECT cardinality(pg_blocking_pids($1)) > 0", [backend])
+
+          blocked
+        end)
+      end,
+      5_000,
+      "the take or the release to wait on the lease row"
+    )
   end
 
   defp marked?(node) do

@@ -74,25 +74,45 @@ defmodule Arca.ControlPlane do
   `verify_held/1` writes nothing: it is how a security transaction or a
   fenced publication (`Arca.FencedPublication`) proves, under a key-share
   row lock, that the slot it runs for is still this member's. A take and
-  a release lock the row `FOR UPDATE` before they write it, so they wait
-  for those writes and hold off new ones; a renew changes no key column,
-  so it waits for none of them.
+  a release lock the row `FOR UPDATE` before they write it, so each waits
+  for the writes that hold the row before it and, once it holds the row,
+  holds off new ones; a renew changes no key column, so it waits for none
+  of them (see "The lease row's locks").
 
   ## The lease row's locks
 
   On PostgreSQL a holder-only write holds its slot's row `FOR KEY SHARE`
-  from its check to its commit; a take or a release holds it `FOR UPDATE`
-  from its read to its commit; a renew takes the row lock any `UPDATE`
-  that changes no key column takes, which conflicts with a take's or a
-  release's and not with a holder's. One cycle remains, and only while a
-  take or a release waits: a holder-only write that holds the row and then
-  waits for a row R that a second one holds, while the second, having
-  locked R first, asks for the lease row and queues behind the waiting take
-  or release. PostgreSQL finds the cycle within its `deadlock_timeout` and
-  aborts one of the three; the aborted one raises `Postgrex.Error`, which
-  its entry point answers as `{:error, :database_error}` (a person reads
-  "The store could not answer — retry shortly"), a take or a release
-  answering the same and the claimant trying again on its next tick.
+  from its check to its commit (`verify_held/1`); a take or a release
+  takes the row `FOR UPDATE` before it writes and holds it to its commit;
+  a renew takes the lock every `UPDATE` that changes no key column takes,
+  which conflicts with a take's or a release's and not with a holder's.
+
+  A take or a release waits for every holder-only write that holds the row
+  before it does. Once it holds the row, a holder-only write that starts
+  waits for it and then finds the slot taken or released. One that starts
+  while the take or the release is still waiting may go ahead and commit
+  under the standing owner, which is safe: the take or the release has
+  written nothing yet, and judges the row only once it holds it, after
+  that write has committed. Whether such a write queues or goes ahead is
+  PostgreSQL's choice (today a key-share lock passes a waiting
+  `FOR UPDATE`), not a promise of its documentation, and the fence holds
+  either way.
+
+  So a steady overlap of holder-only writes can delay a take or a release.
+  The delay is bounded. Every locking transaction ends within its deadline
+  (the repository's 15 s checkout, a standing transition's minute). A
+  take-over is possible only once the lease has run out, and then
+  `verify_held/1` answers `:lost` and a stale writer's transaction gives
+  the row back at once, so only writes begun before the lapse hold it. A
+  release is the member's own: if its own writes keep it waiting past its
+  deadline it answers `{:error, :database_error}` and the slot is recorded
+  lost, so the member stops renewing and admitting, the lease runs out, and
+  its successor's take is bounded as above.
+
+  A deadlock PostgreSQL detects among the rows holder-only writes lock
+  aborts one transaction, which commits nothing; its entry point answers
+  `{:error, :database_error}` (a person reads "The store could not answer
+  — retry shortly").
 
   ## Its own connection
 
@@ -320,9 +340,10 @@ defmodule Arca.ControlPlane do
   compare-and-set rather than both replacing the same row.
 
   The row is read `FOR UPDATE` and judged on the clock read after that
-  lock, so a take waits for every holder-only write in flight on the slot
-  (`verify_held/1`) and for a renew being written, and a holder-only write
-  that starts meanwhile waits for the take and then finds its slot gone.
+  lock, so a take waits for every holder-only write that holds the row
+  before it (`verify_held/1`) and for a renew being written, and a
+  holder-only write that starts once the take holds the row waits for it
+  and then finds its slot gone (see "The lease row's locks").
   """
   @spec take(String.t(), String.t(), pos_integer(), keyword()) ::
           {:ok, slot()}
@@ -457,8 +478,9 @@ defmodule Arca.ControlPlane do
   nothing is written. Either way this member holds nothing afterwards.
 
   As a take does, a release locks the row `FOR UPDATE` before it writes:
-  it waits for every holder-only write in flight on the slot, and one that
-  starts meanwhile waits for it and then finds the lease run out.
+  it waits for every holder-only write that holds the row before it, and
+  one that starts once the release holds the row waits for it and then
+  finds the lease run out (see "The lease row's locks").
   """
   @spec release() :: :ok | :taken | :unclaimed | {:error, :database_error}
   def release do
@@ -480,8 +502,8 @@ defmodule Arca.ControlPlane do
   # The row left with its lease already run out, while it is still this
   # member's at the fence it last wrote. It is locked `FOR UPDATE` first and
   # the clock read after that lock, as a take locks it: a release waits for
-  # every holder-only write in flight on the slot and holds off any that
-  # would start, which then find the lease run out.
+  # the holder-only writes that hold the row before it, and holds off those
+  # that start once it holds the row, which then find the lease run out.
   defp give_up(slot) do
     _held = slot |> mine() |> Arca.QueryHelpers.for_update() |> Arca.Repo.one()
     now = Arca.ServerMetaStorage.now!()
@@ -505,7 +527,8 @@ defmodule Arca.ControlPlane do
   member's transactions hold it at once, so they do not serialize on
   their own row; a successor's take and a release lock the row
   `FOR UPDATE` before they write it, so each waits until every one of them
-  commits, and one that starts after waits for the take or the release.
+  holding the row commits, and one that starts once the take or the release
+  holds the row waits for it (see "The lease row's locks").
   The claimant's renew changes no key column, so it neither waits for
   them nor is waited for: it can only push `lease_until` out and raise
   `fence`, under the same node, owner and generation this checked, and
@@ -825,9 +848,9 @@ defmodule Arca.ControlPlane do
   # nothing.
   #
   # The row is read under `FOR UPDATE` and the clock after that lock, so a
-  # take waits for every holder-only write in flight on the slot (each holds
-  # it `FOR KEY SHARE`, `verify_held/1`) and for a renew being written, and
-  # holds off any that would start, until it commits.
+  # take waits for every holder-only write that holds the row before it (each
+  # holds it `FOR KEY SHARE`, `verify_held/1`) and for a renew being written,
+  # and holds off those that start once it holds the row, until it commits.
   defp do_take(node, {owner, release} = boot, lease_ms, rounds) do
     row = node |> by_node() |> Arca.QueryHelpers.for_update() |> Arca.Repo.one()
     now = Arca.ServerMetaStorage.now!()
