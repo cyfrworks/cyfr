@@ -759,12 +759,59 @@ guest_chord() {
 # screen_find TEXT [last]: Chrome's find bar on the page in front, at the
 # first match of TEXT (with last, its last), then closed, which gives the
 # keyboard's focus to the link or button holding that match, as a person
-# reaching it by the keyboard does. Enter then presses it.
+# reaching it by the keyboard does. Enter then presses it. Answers 1 when
+# the display shows no match, that display then kept as
+# GUEST_DIR/screen-find-missed.ppm; each count is a line of
+# GUEST_DIR/screen-find.txt.
 screen_find() {
-  guest_chord ctrl f && sleep 1 &&
+  local found=1
+  screen_dump before &&
+    guest_chord ctrl f && sleep 1 &&
     printf '%s' "$1" | guest_keys && sleep 2 &&
     { [ "${2:-}" != last ] || guest_chord shift ret; } && sleep 1 &&
-    guest_chord esc && sleep 1
+    { ! screen_match "$1" || found=0; guest_chord esc; } && sleep 1 &&
+    [ "$found" = 0 ]
+}
+
+# screen_dump NAME: the guest's display as GUEST_DIR/screen-find-NAME.ppm.
+screen_dump() {
+  guest_qmp screendump "{\"filename\": \"/tmp/screen-find-$1.ppm\", \"format\": \"ppm\"}" >/dev/null &&
+    docker cp "$GUEST:/tmp/screen-find-$1.ppm" "$GUEST_DIR/screen-find-$1.ppm" >/dev/null 2>&1
+}
+
+# screen_match TEXT: whether the display shows the match the find bar
+# stands on, against the display screen_dump before took. Chrome paints
+# that one match in its own orange, rgb(255, 150, 50), so the find put
+# there the pixels that are that orange now and were not before; orange of
+# the page's own is in both and counts for nothing. 30 pixels is less than
+# the smallest word's highlight and more than a stray pixel. The match
+# must be on the display: one scrolled out of view counts as none. A page
+# that moves orange of its own between the two dumps would count as a
+# match; nothing CYFR draws is that orange.
+screen_match() {
+  local before="$GUEST_DIR/screen-find-before.ppm" after="$GUEST_DIR/screen-find-after.ppm" count
+  screen_dump after || return 1
+  count=$(python3 -I -c '
+import sys
+def pixels(path):
+    data = open(path, "rb").read()
+    at = 0
+    for _ in range(4):
+        while not data[at:at + 1].isspace():
+            at += 1
+        at += 1
+    data = data[at:]
+    return zip(data[0::3], data[1::3], data[2::3])
+orange = (255, 150, 50)
+print(sum(1 for was, now in zip(pixels(sys.argv[1]), pixels(sys.argv[2])) if now == orange != was))' "$before" "$after") || return 1
+  printf '%s %s\n' "$count" "$1" >>"$GUEST_DIR/screen-find.txt"
+  rm -f "$before"
+  if [ "$count" -ge 30 ]; then
+    rm -f "$after"
+    return 0
+  fi
+  mv "$after" "$GUEST_DIR/screen-find-missed.ppm"
+  return 1
 }
 
 # The boot's journal and apt's history, read once nothing else is to be
