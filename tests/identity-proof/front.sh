@@ -28,13 +28,17 @@ declare -A IDENTITY_FRONT_NAMES=()
 
 # The front address of this run's directory number `$1` (0 or 1): 127,
 # then one bit for the directory and the 22 bits of the run's pid, which
-# no other process alive holds. 127.128.0.0/9 lies apart from every other
+# no other process alive in the host's pid namespace holds. Proofs
+# started in containers that share the host's network may hold one pid
+# and so one address; the second then fails at its front's own step. The
+# pid whose second address would be the block's broadcast address,
+# 127.255.255.255, is refused. 127.128.0.0/9 lies apart from every other
 # loopback address the checks stand on (127.0.0.1, 127.78.0.0/16,
 # 127.79.0.0/16).
 identity_front_address() {
   local n="$1"
   [ "$n" -lt 2 ] || fail "a run has two front addresses, and both are taken"
-  [ "$$" -lt 4194304 ] || fail "the run's pid $$ does not fit a front's address"
+  [ "$$" -lt 4194303 ] || fail "the run's pid $$ does not fit a front's address"
   printf '127.%s.%s.%s' $((128 + 64 * n + ($$ >> 16))) $((($$ >> 8) & 255)) $(($$ & 255))
 }
 
