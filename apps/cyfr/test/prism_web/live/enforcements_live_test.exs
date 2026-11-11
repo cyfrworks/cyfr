@@ -68,13 +68,33 @@ defmodule PrismWeb.EnforcementsLiveTest do
   end
 
   test "a row's link opens the activities page on its request", %{conn: conn} do
-    request_id = Prima.UUID7.request_id()
+    # A call the gate admitted, and the policy row its request recorded.
+    ctx = %{
+      Sanctum.TestContext.local(:prism)
+      | athanor_id: seated_athanor().id,
+        request_id: Prima.UUID7.request_id()
+    }
+
+    decision =
+      Prima.Decision.new(
+        call_id: Prima.UUID7.generate_id("call"),
+        request_id: ctx.request_id,
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        plane: :external,
+        inserted_at: DateTime.utc_now(),
+        admission: :admitted,
+        tool: "execution",
+        action: "run"
+      )
+
+    :ok = Sanctum.Decisions.open(ctx, decision, %{input: %{}})
 
     {:ok, _row} =
       Arca.PolicyLog.record(%{
         id: Prima.UUID7.generate_id("pl"),
-        request_id: request_id,
-        athanor_id: seated_athanor().id,
+        request_id: ctx.request_id,
+        athanor_id: ctx.athanor_id,
         user_id: "user_enforcements",
         timestamp: DateTime.utc_now(),
         event_type: "policy_consultation",
@@ -90,6 +110,9 @@ defmodule PrismWeb.EnforcementsLiveTest do
              view |> element("tbody tr", "formula:local.enforced-fixture") |> render_click()
 
     {:ok, activities, _html} = live(conn, path)
-    assert :sys.get_state(activities.pid).socket.assigns.expanded_id == request_id
+    html = settled_render(activities)
+
+    assert html =~ "Policy decisions (1)"
+    assert html =~ "the row under test"
   end
 end
