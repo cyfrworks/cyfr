@@ -304,7 +304,7 @@ defmodule Sanctum.Providers.Key do
       message: "That key is not suspended, so there is nothing to re-enable"
     }
 
-  defp reenable_refusal(reason) when reason in [:database_error, :not_owner, :unavailable],
+  defp reenable_refusal(reason) when reason in [:database_error, :unavailable],
     do: Prima.Refusal.classify(:unavailable)
 
   defp reenable_refusal(reason) when Sanctum.Issuance.standing_refusal?(reason),

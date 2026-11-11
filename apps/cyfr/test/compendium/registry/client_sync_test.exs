@@ -435,6 +435,19 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert result.auth_note =~ "You are pulling anonymously"
     end
 
+    test "an anonymous pull refused for ownership answers the ownership refusal", c do
+      :ok = Cache.put_manifest(c.registry, c.repository, "1.0.0", c.manifest, c.digest)
+      entitle!(credential_key(c.ctx, c.ref), c)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} =
+               Provider.handle("component", c.ctx, %{
+                 "action" => "pull",
+                 "reference" => c.reference
+               })
+    end
+
     test "a signed-in pull is served from a stale cache only under its own entitlement", c do
       signed_in = Sanctum.TestContext.local()
       :ok = CredentialStore.put_push_token(signed_in, c.registry, "alice", "tok_a", "personal")

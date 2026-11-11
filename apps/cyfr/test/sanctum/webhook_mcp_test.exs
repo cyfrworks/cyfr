@@ -344,6 +344,32 @@ defmodule Sanctum.WebhookMCPTest do
 
       assert webhook_row("kept").secret_encrypted == before.secret_encrypted
     end
+
+    test "a webhook re-enable refused for ownership answers the ownership refusal and leaves it suspended",
+         %{ctx: ctx} do
+      # One person makes it and re-enables it.
+      {ctx, _user} = Sanctum.TestContext.person!(ctx)
+
+      {:ok, _} =
+        handle(ctx, %{
+          "action" => "create",
+          "name" => "held-unowned",
+          "replay_protection" => "none",
+          "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler"
+        })
+
+      %{id: id} = webhook_row("held-unowned")
+
+      Ecto.Query.from(w in Arca.Schemas.Webhook, where: w.id == ^id)
+      |> Arca.Repo.update_all(set: [suspended: true])
+
+      assert {:error, :not_owner} =
+               handle_after_losing_slot(ctx, %{"action" => "reenable", "webhook_id" => id})
+
+      Arca.ControlPlane.record(:unclaimed)
+      assert %{suspended: true} = webhook_row("held-unowned")
+    end
   end
 
   # The tool as `handle/2` reaches it, with this server's slot lost once

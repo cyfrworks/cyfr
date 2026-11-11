@@ -1584,6 +1584,11 @@ defmodule Compendium.Providers.Component do
 
         maybe_auto_pull_oci_deps(ctx, result)
 
+      # This server's slot is not live: nothing was stored, whatever the
+      # pull's credentials, and the refusal reads as itself.
+      {:error, :not_owner} = refused ->
+        refused
+
       {:error, reason} ->
         if anonymous? do
           {:error,

@@ -468,6 +468,23 @@ defmodule Sanctum.ProviderTest do
       Arca.ControlPlane.record(:unclaimed)
       assert {:ok, %{key_prefix: ^prefix}} = Sanctum.ApiKey.get(ctx, "kept-key")
     end
+
+    test "a key re-enable refused for ownership answers the ownership refusal and leaves it suspended",
+         %{ctx: ctx} do
+      {:ok, _} = key_tool(ctx, %{"action" => "create", "name" => "held-unowned"})
+      {:ok, %{id: id}} = key_tool(ctx, %{"action" => "get", "name" => "held-unowned"})
+
+      Ecto.Query.from(k in Arca.Schemas.ApiKey, where: k.id == ^id)
+      |> Arca.Repo.update_all(set: [suspended: true])
+
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      assert {:error, :not_owner} =
+               key_tool_after_losing_slot(ctx, %{"action" => "reenable", "key_id" => id})
+
+      Arca.ControlPlane.record(:unclaimed)
+      assert %{suspended: true} = Arca.Repo.get!(Arca.Schemas.ApiKey, id)
+    end
   end
 
   # The key tool as `key_tool/2` reaches it, with this server's slot lost
