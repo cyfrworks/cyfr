@@ -238,28 +238,36 @@ defmodule Opus.Admission do
   The registry row for `reference` in the context's athanor, with string
   keys: `{:ok, component_ref, type, component}`. A row read from the
   registry is cached for five minutes under the athanor and the
-  reference; an unresolvable reference answers Compendium's own refusal
-  (`{:not_found, {:component, reference}}` for one the registry does not
-  hold).
+  reference, beside the projection epoch the athanor's component
+  registry had acknowledged before the row was read
+  (`Compendium.acknowledged_projection_epoch/3`, after its barrier); a
+  cached row answers only a read that finds that epoch still standing, so
+  a delete, a republish or a re-pull on any server of the cell is a miss
+  here from the read after it. An unresolvable reference answers
+  Compendium's own refusal (`{:not_found, {:component, reference}}` for
+  one the registry does not hold), and a registry whose epoch cannot be
+  read answers that refusal.
   """
   @spec inspect_component(Context.t(), String.t()) ::
           {:ok, String.t(), term(), map()} | {:error, term()}
   def inspect_component(%Context{} = ctx, reference) do
     cache_key = Arca.Cache.Keys.component_meta(Sanctum.Context.actor(ctx), reference)
 
-    case Arca.Cache.get(cache_key) do
-      {:ok, cached} ->
-        {:ok, cached["component_ref"], cached["type"], cached}
+    with {:ok, epoch} <- Compendium.acknowledged_projection_epoch(ctx, "components") do
+      case Arca.Cache.get(cache_key) do
+        {:ok, {^epoch, cached}} ->
+          {:ok, cached["component_ref"], cached["type"], cached}
 
-      :miss ->
-        case Compendium.inspect_component(ctx, reference) do
-          {:ok, component} ->
-            Arca.Cache.put(cache_key, component, :timer.minutes(5))
-            {:ok, component["component_ref"], component["type"], component}
+        _stale_or_absent ->
+          case Compendium.inspect_component(ctx, reference) do
+            {:ok, component} ->
+              Arca.Cache.put(cache_key, {epoch, component}, :timer.minutes(5))
+              {:ok, component["component_ref"], component["type"], component}
 
-          {:error, reason} ->
-            {:error, reason}
-        end
+            {:error, reason} ->
+              {:error, reason}
+          end
+      end
     end
   end
 
