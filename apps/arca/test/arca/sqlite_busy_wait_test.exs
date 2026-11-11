@@ -284,13 +284,14 @@ defmodule Arca.SqliteBusyWaitTest do
     assert {:ok, nil} = Task.await(reader, 5_000)
   end
 
-  test "a multi takes the lock as its first step, the one key it adds" do
+  test "a multi takes the lock as its first step and the slot proof as its last, the two keys added" do
     multi =
       Ecto.Multi.run(Ecto.Multi.new(), :seen, fn _repo, changes -> {:ok, Map.keys(changes)} end)
 
     assert {:ok, changes} = unboxed(fn -> Arca.Repo.locking_transaction(multi) end)
-    assert changes == %{arca_lock: :acquired, seen: [:arca_lock]}
+    assert changes == %{arca_lock: :acquired, seen: [:arca_lock], arca_slot_proof: :proved}
 
+    # A step that refuses ends the multi before the proof.
     refusing = Ecto.Multi.run(multi, :refuse, fn _repo, _changes -> {:error, :refused} end)
 
     assert {:error, :refuse, :refused, so_far} =

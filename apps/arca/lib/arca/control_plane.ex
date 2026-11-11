@@ -464,7 +464,7 @@ defmodule Arca.ControlPlane do
 
   The answer is an unlocked read, for the caller to branch on: `:lost`
   refuses at once. A slot it finds held is recorded as owed a proof by the
-  outermost locking transaction (`Arca.Repo.owe_proof/1`), which reads the
+  outermost locking transaction (`proving/2`), which reads the
   row again once the caller's work has answered and before the commit
   (`prove/1`), so whatever came before or during that work — a takeover,
   a lapse, a release — rolls the whole transaction back with
@@ -496,7 +496,7 @@ defmodule Arca.ControlPlane do
 
     case standing(slot, & &1) do
       :ok ->
-        Arca.Repo.owe_proof(slot)
+        owe_proof(slot)
         :ok
 
       :lost ->
@@ -541,10 +541,70 @@ defmodule Arca.ControlPlane do
   end
 
   defp proving! do
-    unless Arca.Repo.proving?() do
+    unless Arca.Repo.in_transaction?() and Process.get(owed_key()) != nil do
       raise ArgumentError, "Arca.ControlPlane.verify_held/1 runs inside a locking transaction"
     end
   end
+
+  @doc false
+  # The outermost `Arca.Repo.locking_transaction/2`'s work, handed to `run`
+  # (which opens the transaction) with the proof appended: the caller's
+  # function, then every slot `verify_held/1` recorded in it proved
+  # (`prove/1`) before the commit, a slot that no longer stands rolling the
+  # transaction back with `:not_owner`; a Multi gets the proof as its last
+  # step, `:arca_slot_proof`. The record is this process's, per dynamic
+  # repository, and is dropped however `run` returns, raises or exits.
+  @spec proving(fun | Ecto.Multi.t(), (fun | Ecto.Multi.t() -> result)) :: result
+        when fun: (-> term()) | (module() -> term()), result: term()
+  def proving(fun_or_multi, run) when is_function(run, 1) do
+    key = owed_key()
+    Process.put(key, [])
+
+    try do
+      fun_or_multi |> proved(key) |> run.()
+    after
+      Process.delete(key)
+    end
+  end
+
+  defp proved(fun, key) when is_function(fun, 0) do
+    fn ->
+      value = fun.()
+      prove!(key)
+      value
+    end
+  end
+
+  defp proved(fun, key) when is_function(fun, 1) do
+    fn repo ->
+      value = fun.(repo)
+      prove!(key)
+      value
+    end
+  end
+
+  # Ecto's transaction accepts a fun or a Multi and nothing else.
+  defp proved(multi, key) do
+    Ecto.Multi.run(multi, :arca_slot_proof, fn _repo, _changes ->
+      if proved?(key), do: {:ok, :proved}, else: {:error, :not_owner}
+    end)
+  end
+
+  defp prove!(key), do: unless(proved?(key), do: Arca.Repo.rollback(:not_owner))
+
+  defp proved?(key), do: key |> Process.get([]) |> Enum.all?(&(prove(&1) == :ok))
+
+  # `slot`, found held, recorded once as owed a proof by the outermost
+  # locking transaction.
+  defp owe_proof(%{node: node, owner: owner, generation: generation}) do
+    key = owed_key()
+    slot = %{node: node, owner: owner, generation: generation}
+    slots = Process.get(key, [])
+    unless slot in slots, do: Process.put(key, [slot | slots])
+    :ok
+  end
+
+  defp owed_key, do: {__MODULE__, :owed_proofs, Arca.Repo.get_dynamic_repo()}
 
   @doc """
   `verify_held/1` in a locking transaction of its own, for a caller that

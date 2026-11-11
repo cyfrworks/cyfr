@@ -258,11 +258,13 @@ defmodule Arca.LockingTransactionTest do
     assert {:ok, %{before: nil, write: {1, _}} = changes} =
              unboxed(fn -> Arca.Repo.locking_transaction(multi) end)
 
-    # SQLite's write lock is the multi's first step, and the one key it adds.
+    # The keys Arca adds: the slot proof, the multi's last step on both
+    # adapters (`Arca.Repo.locking_transaction/2`), and SQLite's write lock,
+    # its first.
     expected =
       case Arca.Repo.adapter() do
-        Ecto.Adapters.SQLite3 -> [:arca_lock, :before, :write]
-        Ecto.Adapters.Postgres -> [:before, :write]
+        Ecto.Adapters.SQLite3 -> [:arca_lock, :arca_slot_proof, :before, :write]
+        Ecto.Adapters.Postgres -> [:arca_slot_proof, :before, :write]
       end
 
     assert changes |> Map.keys() |> Enum.sort() == expected
