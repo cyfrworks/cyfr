@@ -20,9 +20,10 @@ apps/cyfr/priv/static/**/*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a
 .github/
 scripts/
 # The pinned wasm-tools installer and the prebuilt binary fetch, which both
-# images run
+# images run, and the app image's pinned cosign installer
 !scripts/wasm-tools.sh
 !scripts/fetch-prebuilt-binaries.sh
+!scripts/cosign.sh
 _tools/
 Dockerfile*
 docker-compose*.yml
