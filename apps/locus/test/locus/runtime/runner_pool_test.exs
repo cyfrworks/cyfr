@@ -268,6 +268,39 @@ defmodule Locus.Runtime.RunnerPoolTest do
     wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
   end
 
+  test "a runner's exit frame heard after the keeper's exited still reports its open attempts",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 0)
+    serve!(pool)
+    {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    spawn = spawn_of(keeper, pid)
+
+    never_retired(spawn, fn ->
+      send(pid, {ScriptedKeeper, spawn.ref, {:exited, {:status, 137}}})
+      frame = RunnerControl.encode(%{type: :exit, runner: id, open: ["att_1", "att_child"]})
+      send(pid, {ScriptedKeeper, spawn.ref, {:control, IO.iodata_to_binary(frame)}})
+      send(pid, {ScriptedKeeper, spawn.ref, :control_closed})
+      assert_receive {RunnerPool, ^pid, {:exit, ^id, ["att_1", "att_child"]}}, 5_000
+      _ = :sys.get_state(pid)
+      _ = RunnerPool.status(pool)
+      refute_received {RunnerPool, ^pid, {:gone, _}}
+    end)
+  end
+
+  test "an exited runner whose control channel stays open is reported gone within a bound", %{
+    keeper: keeper
+  } do
+    pool = start_pool!(keeper, pool_size: 0)
+    serve!(pool)
+    {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    spawn = spawn_of(keeper, pid)
+
+    never_retired(spawn, fn ->
+      send(pid, {ScriptedKeeper, spawn.ref, {:exited, {:status, 137}}})
+      assert_receive {RunnerPool, ^pid, {:gone, {:exited, {:status, 137}}}}, 5_000
+    end)
+  end
+
   test "a killed runner's own exit frame still reaches the assignee, once", %{keeper: keeper} do
     pool = start_pool!(keeper, pool_size: 0)
     serve!(pool)

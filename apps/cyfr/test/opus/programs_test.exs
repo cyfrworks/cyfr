@@ -659,6 +659,15 @@ defmodule Opus.ProgramsTest do
     assert_receive {:control, "renew", %{"lease_ms" => 6_000}, _fields}, 2_000
   end
 
+  test "the first home call after a backends restart greets the new boot and is sent again",
+       %{ctx: ctx, fake: fake} do
+    start_controller(fake)
+    Scripted.restart(fake, "bb_second")
+    assert :ok = Programs.home(ctx.athanor_id, "vlt_restart", :reset)
+    assert_receive {:control, "hello", _message, %{boot: "-"}}, 2_000
+    assert_receive {:control, "home", %{"op" => "reset"}, %{boot: "bb_second"}}, 2_000
+  end
+
   test "a restarted service is greeted, reconciled and every live owner synced under its new boot",
        %{ctx: ctx, fake: fake} do
     controller = start_controller(fake)
@@ -1579,6 +1588,23 @@ defmodule Opus.ProgramsTest do
       refute ctx == nil
     end
 
+    test "a sign-in after a backends restart opens its session under the new boot",
+         %{fake: fake, row: row, admin: admin, entry: entry} do
+      # A live owner answers the sign-in's hold at once, with the grant of
+      # the boot it was synced under.
+      assert {:ok, %{session: _}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      Scripted.restart(fake, "bb_second")
+
+      assert {:ok, %{session: _token}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "sign_in",
+                 "name" => "claude",
+                 "entry" => "claude-login"
+               })
+
+      assert_receive {:session, "open", %{"mode" => "sign_in"}, %{boot: "bb_second"}}, 3_000
+    end
+
     test "a needs_reauth entry signed in with an exit 0 is active again, and with exit 1 stays as it is",
          %{ctx: ctx, fake: fake, row: row, admin: admin, entry: entry} do
       actor = Sanctum.Context.actor(ctx)
@@ -1862,6 +1888,20 @@ defmodule Opus.ProgramsTest do
                Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0)
 
       assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", first, ["x"])
+    end
+
+    test "a pipe open after a backends restart is opened under the new boot, its owner synced again",
+         %{fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: _first}} = Programs.pipe_open(row, entry, "pipe-k1", [], "att_1")
+      Scripted.restart(fake, "bb_second")
+
+      # The box's resync under the new boot ends the key's holder, and the
+      # open is carried on by a fresh one.
+      assert {:ok, %{session: _second}} = Programs.pipe_open(row, entry, "pipe-k2", [], "att_2")
+
+      assert_receive {:control, "sync", _message, %{boot: "bb_second"}}, 2_000
+      assert_receive {:session, "open", %{"key" => "pipe-k2"}, %{boot: "bb_second"}}, 2_000
     end
 
     test "a close ends the session and releases the owner; a repeat is harmless",

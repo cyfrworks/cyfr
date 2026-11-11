@@ -96,16 +96,79 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
     {:ok, auth: auth, ctx: ctx, charge: charge, lineage: lineage}
   end
 
-  defp call(ctx, auth, charge, lineage) do
+  defp call(ctx, auth, charge, lineage, opts \\ []) do
     Sanctum.Gate.call_in_chain(
       "tincture_visibility",
       ctx,
       %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"},
       auth,
-      guest_fn: :spawn,
-      charge: charge,
-      lineage: lineage
+      [guest_fn: :spawn, charge: charge, lineage: lineage] ++ opts
     )
+  end
+
+  # The window is one deadline, measured from before the charge: a call
+  # held up past it before its handler starts is refused there, its charge
+  # given back, so the row the cell reclaims at its own deadline is never
+  # one whose handler can still run. A short window stands in for the five
+  # minutes (`:holder_window_ms`).
+  test "a call whose window ran out before its handler started is refused, its charge given back",
+       %{auth: auth, ctx: ctx, charge: charge, lineage: lineage} do
+    test = self()
+    id = {__MODULE__, :held_before_handler, make_ref()}
+    on_exit(fn -> :telemetry.detach(id) end)
+
+    :ok =
+      :telemetry.attach(
+        id,
+        [:cyfr, :sanctum, :decision, :admitted],
+        fn _event, _measurements, metadata, test ->
+          if metadata.tool == "tincture_visibility" do
+            send(test, {:before_handler, self()})
+
+            receive do
+              :continue -> :ok
+            after
+              10_000 -> :ok
+            end
+          end
+        end,
+        test
+      )
+
+    task = Task.async(fn -> call(ctx, auth, charge, lineage, holder_window_ms: 2_000) end)
+    assert_receive {:before_handler, holder}, 10_000
+    actor = Prima.Actor.in_athanor(@athanor)
+
+    assert {:ok, [%{holder_deadline: due}]} =
+             Arca.BudgetReservations.charges(actor, auth.budget.id)
+
+    # Past the cell's deadline the row is reclaimed, and the dispatcher,
+    # still held, can no longer start its handler.
+    Prima.Test.Wait.wait_until(
+      fn -> DateTime.compare(Arca.ServerMetaStorage.now!(), due) == :gt end,
+      5_000
+    )
+
+    assert {:ok, 1} = Arca.BudgetReservations.sweep(actor)
+    send(holder, :continue)
+
+    assert {:error, refusal} = Task.await(task, 10_000)
+    assert inspect(refusal) =~ "ran out of its time before it started"
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
+    assert {:ok, []} = Arca.BudgetReservations.charges(actor, auth.budget.id)
+    assert %{charged: 0} = Arca.BudgetReservations.lookup(actor, auth.budget.id)
+  end
+
+  test "a call with its window left runs its handler", %{
+    auth: auth,
+    ctx: ctx,
+    charge: charge,
+    lineage: lineage
+  } do
+    case call(ctx, auth, charge, lineage, holder_window_ms: 30_000) do
+      {:ok, _} -> :ok
+      {:error, msg} when is_binary(msg) -> refute msg =~ "ran out of its time"
+    end
   end
 
   test "the row is charged for the call and released after it", %{
