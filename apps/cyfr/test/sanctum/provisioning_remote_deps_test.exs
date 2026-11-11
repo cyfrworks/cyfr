@@ -607,6 +607,51 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     assert {:ok, _} = Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
   end
 
+  test "a sign-in mints nothing early while a shipped component's optional dependency is " <>
+         "missing: the fill pulls it and mints that component's consent over its whole closure",
+       %{ctx: ctx, athanor: athanor} do
+    # A shipped catalyst that declares the registry's `below` optional.
+    # Minted before the pull, its consent would hold a closure without
+    # `below`; the pull moves that shape, and a revision admits only nodes
+    # the seed ships, so the fill's last walk could not mint it.
+    opt =
+      Path.join([Application.get_env(:arca, :seed_path), "components", "catalysts", "local"])
+      |> Path.join("opt/1.0.0")
+
+    File.mkdir_p!(opt)
+    File.write!(Path.join(opt, "catalyst.wasm"), @wasm)
+
+    File.write!(
+      Path.join(opt, "cyfr-manifest.json"),
+      Jason.encode!(%{
+        "name" => "opt",
+        "version" => "1.0.0",
+        "type" => "catalyst",
+        "caps" => %{"egress" => %{"domains" => []}},
+        "dependencies" => %{
+          "static" => [%{"ref" => "catalyst:someone.below", "optional" => true}]
+        }
+      })
+    )
+
+    assert :ok = Provisioning.after_sign_in(ctx.user_id)
+
+    {:ok, filled} = Athanors.get(athanor.id)
+    assert %DateTime{} = filled.provisioned_at, inspect(Athanors.provisioning_failure(filled))
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(actor, "catalyst:local.opt")
+    {:ok, head, _refs} = Arca.ConsentStorage.get_head(actor, profile.id)
+    assert {head.revision, head.granted_via} == {1, "bootstrap"}
+
+    assert head.resolved_policy
+           |> Jason.decode!()
+           |> Map.fetch!("nodes")
+           |> Map.keys()
+           |> Enum.sort() ==
+             ["catalyst:local.opt", "catalyst:someone.below"]
+  end
+
   test "the seed sync heals a dependency an earlier attempt lost", %{ctx: ctx, athanor: athanor} do
     :ok = Provisioning.start_provisioning(ctx)
     {:ok, athanor} = Athanors.get(athanor.id)

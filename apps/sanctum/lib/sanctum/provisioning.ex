@@ -43,9 +43,15 @@ defmodule Sanctum.Provisioning do
   held:
 
     * `after_sign_in/1`'s personal fill (`sign_in`): the row and the seat
-      were written by the admission; the fill is asked for and runs in the
-      background under its own claim. A held claim means someone is
-      filling already, and the sign-in adds nothing. No backoff.
+      were written by the admission. The sign-in runs the fill's local
+      half in its own request, under the claim and before the person's
+      session exists, which mints the shipped components' baseline
+      consents without waiting on a registry; then the whole fill runs in
+      the background under a claim of its own (`Compendium.Provisioning`).
+      A local half that fails is recorded on the row and the sign-in goes
+      on. A held claim means someone is filling already, and the sign-in
+      adds nothing, even when the holder is a second sign-in answered at
+      the same moment whose local half has not yet minted. No backoff.
     * `start_provisioning/1`, `ready/1` and `status/1` (`first_need`):
       readers never claim and never wait. They read the claim once and
       answer — filled, filling, failed — and ask for a fill only when
@@ -80,15 +86,20 @@ defmodule Sanctum.Provisioning do
   `{:error, :provisioning_busy}`; its claim, no longer renewed, runs out
   or is released, and the next attempt fills the athanor.
 
-  An attempt settles its claim `ready` or `failed`; an install, a sync and
-  an attempt that found the athanor filled release it.
+  An attempt settles its claim `ready` or `failed`; an install, a sync, a
+  sign-in's local half that stood and an attempt that found the athanor
+  filled release it.
 
   ## Giving the athanor back
 
   A claim is given back by the attempt that holds it, or — for an attempt
   killed where it stands, which runs no `after` — by its keeper, which
   monitors it. With the keeper gone too nothing releases it and the lease
-  is the bound: one minute from the write that last stood for it.
+  is the bound: one minute from the write that last stood for it. A claim
+  whose keeper cannot be started at all (its supervisor not yet started,
+  or gone in a shutdown or a restart) is given back at once, nothing runs
+  under it, and its taker is answered `{:error, {:keeper_not_started,
+  reason}}` rather than exited.
 
   Either releaser stops what the attempt started beside itself first, and
   waits for it to have stopped (`bounded_work/3`). A release is never what
@@ -142,8 +153,9 @@ defmodule Sanctum.Provisioning do
   @doc """
   Called after an admission commits, at every later sign-in, and whenever
   the person's namespace is recorded (`Sanctum.SignIn.record_namespace/2`):
-  asks for the fill of their own athanor while it is unfilled. Mints
-  nothing: a person's athanor is their admission's (`mint_personal/1`).
+  asks for the fill of their own athanor while it is unfilled, whose local
+  half runs in this call (the moduledoc's entry points). Mints no athanor:
+  a person's athanor is their admission's (`mint_personal/1`).
   """
   @spec after_sign_in(String.t()) :: :ok
   def after_sign_in(user_id) when is_binary(user_id) do
@@ -356,8 +368,8 @@ defmodule Sanctum.Provisioning do
 
   # ---- the athanor's filler ---------------------------------------------------
 
-  # A hook's fill: the component domain starts it in the background and
-  # answers at once, so no request path waits on a registry.
+  # A hook's fill: the component domain answers `:ok` without waiting on a
+  # registry; a sign-in's local half has run by then (`after_sign_in/1`).
   defp request_fill(athanor, acting_ctx, entry_kind) do
     :ok = Sanctum.Consent.Components.fill(athanor, acting_ctx, entry_kind)
   end
@@ -384,17 +396,15 @@ defmodule Sanctum.Provisioning do
         when result: term()
   def under_claim(athanor_id, entry_kind, fun) when is_function(fun, 1) do
     case take_claim(athanor_id, entry_kind) do
-      {:ok, claim} -> hold(athanor_id, claim, fun)
+      {:ok, claim} -> held(actor(athanor_id), claim, fun)
       {:error, _} = error -> error
     end
   end
 
   @doc """
-  Take the athanor's claim without holding it, for a filler that hands the
-  work to another process: the claim is taken here, so a reader arriving
-  straight after already finds the athanor being filled, and `hold/3` runs
-  where the work does. A claim nothing released is `release/2`'s to give
-  back.
+  Take the athanor's claim once, under this member's own slot, without
+  holding it: no keeper renews or releases what this takes, so its lease
+  is the bound. `under_claim/3` takes the claim here and holds it.
   """
   @spec take_claim(String.t(), String.t()) ::
           {:ok, claim()} | {:error, :provisioning_busy | :not_owner} | {:error, term()}
@@ -407,20 +417,6 @@ defmodule Sanctum.Provisioning do
       end
     end
   end
-
-  @doc """
-  Run `fun` under a claim this process now answers for: a keeper renews
-  the lease while it runs, and whatever `fun` did not settle is released
-  when it ends.
-  """
-  @spec hold(String.t(), claim(), (claim() -> result)) :: result when result: term()
-  def hold(athanor_id, claim, fun) when is_function(fun, 1),
-    do: held(actor(athanor_id), claim, fun)
-
-  @doc "Give a taken claim back with no verdict on readiness."
-  @spec release(String.t(), claim()) :: :ok | :stale | {:error, term()}
-  def release(athanor_id, claim),
-    do: Claims.release(actor(athanor_id), claim.owner, claim.fence)
 
   @doc """
   Wait out an attempt in progress, within `wait_ms`, then run `fun`
@@ -565,7 +561,13 @@ defmodule Sanctum.Provisioning do
   # quiesces whatever the attempt started beside itself, so the release
   # never discovers work still running: by then there is none.
   defp held(actor, claim, fun) do
-    keeper = keep(actor, claim)
+    case keep(actor, claim) do
+      {:ok, keeper} -> held_by(keeper, actor, claim, fun)
+      {:error, reason} -> unkept(actor, claim, reason)
+    end
+  end
+
+  defp held_by(keeper, actor, claim, fun) do
     previous = Process.put(@keeper_key, keeper)
 
     try do
@@ -607,20 +609,31 @@ defmodule Sanctum.Provisioning do
   defp keep(actor, claim) do
     attempt = self()
 
-    case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fn ->
-           # A timer, not a receive timeout: the renewal is due when the
-           # lease says, and a message the attempt sends must not put it
-           # off.
-           Process.send_after(self(), :renew, @renew_ms)
-           keep_loop(actor, claim, Process.monitor(attempt), [])
-         end) do
-      {:ok, keeper} ->
-        keeper
+    Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fn ->
+      # A timer, not a receive timeout: the renewal is due when the lease
+      # says, and a message the attempt sends must not put it off.
+      Process.send_after(self(), :renew, @renew_ms)
+      keep_loop(actor, claim, Process.monitor(attempt), [])
+    end)
+  catch
+    # A supervisor not yet started or already gone exits its caller
+    # instead of answering.
+    :exit, reason -> {:error, {:supervisor_down, reason}}
+  end
 
-      {:error, reason} ->
-        Logger.warning("[Provisioning] lease keeper not started: #{inspect(reason)}")
-        nil
-    end
+  # A claim no keeper stands for is given back before anything runs under
+  # it: nothing would renew its lease, release it if the attempt died, or
+  # stop what the attempt started beside itself. The taker is answered, so
+  # a request that took it on its way (a sign-in) goes on, and the next
+  # attempt fills the athanor.
+  defp unkept(actor, claim, reason) do
+    Logger.warning(
+      "[Provisioning] #{claim.athanor_id}: lease keeper not started (#{inspect(reason)}); " <>
+        "the claim is given back and nothing runs under it"
+    )
+
+    _ = Claims.release(actor, claim.owner, claim.fence)
+    {:error, {:keeper_not_started, reason}}
   end
 
   defp keep_loop(actor, claim, ref, started) do
@@ -701,8 +714,6 @@ defmodule Sanctum.Provisioning do
   # The attempt's side of the same handshake. A keeper that has already
   # stopped stopped its attempt's work with it, so its absence is an
   # answer.
-  defp stop_keeper(nil), do: :ok
-
   defp stop_keeper(keeper) do
     ref = Process.monitor(keeper)
     send(keeper, {:stop, self()})
