@@ -41,10 +41,11 @@ defmodule Cyfr.Test.Sandbox do
   killed and awaited, unless it is registered under a name, which makes it
   a service rather than the test's work, or the test started it before its
   sandbox, which makes it scaffolding the test means to outlive it. All of
-  them are suspended before the first is killed, so none answers another's
-  end with a write after a kill cut the shared connection mid-query. A sync
-  test's sweep does this first and again on every pass; an async test's
-  does only this, since the supervisors are its neighbours' too.
+  them are killed in one pass that no other process runs during (`kill/1`),
+  so none answers another's end with a write after a kill cut the shared
+  connection mid-query. A sync test's sweep does this first and again on
+  every pass; an async test's does only this, since the supervisors are its
+  neighbours' too.
 
   `on_exit` callbacks run last-registered first. A test that restores
   configuration a background process reads (a base path, a seed path, the
@@ -362,63 +363,62 @@ defmodule Cyfr.Test.Sandbox do
   # Killed, not asked: a process the test left behind has no one to answer
   # a shutdown to. Each kill is awaited, so the owner outlives them all.
   #
-  # Every one is suspended before any is killed. A kill can land while its
-  # process holds the shared connection mid-query, and the pool then drops
-  # the connection and the owner's checkout with it; a sibling still free
-  # to run would answer that death by writing — a provisioning keeper
-  # releasing the claim of the attempt it watches — into no owner at all.
-  # Suspended, none of them runs again: a kill still ends each one.
+  # A descendant started while the list was read is not on it, so passes
+  # repeat until one finds none.
   defp stop_descendants(test, spared) do
     sweeping(test)
 
-    watched =
-      for pid <- suspend_descendants(test, spared, MapSet.new()),
-          do: {Process.monitor(pid), pid}
+    case descendants(test, spared) do
+      [] ->
+        []
 
-    for {_ref, pid} <- watched, do: Process.exit(pid, :kill)
+      pids ->
+        watched = for pid <- pids, do: {Process.monitor(pid), pid}
+        kill(pids)
 
-    for {ref, pid} <- watched do
-      receive do
-        {:DOWN, ^ref, :process, ^pid, _reason} -> pid
-      end
-    end
-  end
+        for {ref, pid} <- watched do
+          receive do
+            {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+          end
+        end
 
-  # Passes repeat until one finds no descendant left running: one started
-  # while the pass before suspended its starter is suspended on the next,
-  # and a suspended process starts nothing.
-  defp suspend_descendants(test, spared, suspended) do
-    found =
-      for pid <- descendants(test, spared),
-          not MapSet.member?(suspended, pid),
-          into: MapSet.new(),
-          do: pid
-
-    if MapSet.size(found) == 0 do
-      MapSet.to_list(suspended)
-    else
-      Enum.each(found, &suspend/1)
-      suspend_descendants(test, spared, MapSet.union(suspended, found))
+        pids ++ stop_descendants(test, spared)
     end
   end
 
   @doc """
-  Suspend `pid` for the sweep: true, or false for a process that ended
-  since it was listed, which is as stopped as a suspended one (its monitor
-  answers at once). One gone before the call is refused as a bad
-  argument; one that ends while the suspend is on its way answers
-  `exited`.
-  """
-  @spec suspend(pid()) :: boolean()
-  def suspend(pid) do
-    :erlang.suspend_process(pid)
-  rescue
-    ArgumentError ->
-      false
+  Kill every one of `pids`, with no other process running between the
+  first kill and the last. A kill can land while its process holds the
+  shared connection mid-query, and the pool then drops the connection and
+  the owner's checkout with it; a sibling free to run would answer that
+  death by writing — a provisioning keeper releasing the claim of the
+  attempt it watches — into no owner at all.
 
-    error in ErlangError ->
-      if error.original == :exited, do: false, else: reraise(error, __STACKTRACE__)
+  The other normal schedulers are blocked for the pass and the caller runs
+  it at the highest priority, so the one scheduler left takes up nothing
+  else until the last kill is sent; a process inside a dirty call stays
+  there or waits for that scheduler. The pids are never suspended instead:
+  a suspended process killed while it waits for a dirty I/O scheduler can
+  be freed under that scheduler, which ends the whole VM on a signal 11
+  (OTP 29.1). Blocks count, so sweeps side by side each lift their own,
+  and the VM lifts the block of a caller that dies holding it. A block
+  moves every process onto the one scheduler, so fewer than two pids,
+  which have no kill to come between, are killed without one.
+  """
+  @spec kill([pid()]) :: :ok
+  def kill([_, _ | _] = pids) do
+    :erlang.system_flag(:multi_scheduling, :block_normal)
+    priority = Process.flag(:priority, :max)
+
+    try do
+      Enum.each(pids, &Process.exit(&1, :kill))
+    after
+      Process.flag(:priority, priority)
+      :erlang.system_flag(:multi_scheduling, :unblock_normal)
+    end
   end
+
+  def kill(pids) when is_list(pids), do: Enum.each(pids, &Process.exit(&1, :kill))
 
   # ---------------------------------------------------------------------------
   # Ownership errors

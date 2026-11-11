@@ -165,9 +165,10 @@ defmodule Cyfr.Test.SandboxTest do
     # connection as a query in flight does, so whichever is killed first,
     # the kill either cuts the connection under the other's write or leaves
     # one alive to make it. On one scheduler, with the siblings above the
-    # sweep's priority, a sibling free to run when the other ends always
-    # runs before the sweep's next kill: the sweep must leave none free.
-    test "are all held before any is killed, so none writes after a kill",
+    # test's priority, a sibling free to run when the other ends always
+    # runs before a next kill the sweep waited to send: the sweep must send
+    # every kill before it lets any of them run.
+    test "are all killed before any of them runs again, so none writes after a kill",
          %{collector: collector} do
       test = self()
       holding = sibling(test, collector, :holding, true)
@@ -180,16 +181,34 @@ defmodule Cyfr.Test.SandboxTest do
     end
   end
 
-  # A process that ends while the sweep's suspend is on its way answers
-  # `exited` rather than a bad argument; it is as stopped as a suspended
-  # one. The case needs the process running on another scheduler and
-  # ending within its slice as the suspend arrives: about one in 60,000 of
-  # these short-lived processes, so a million make it all but certain.
-  test "a process that ends as it is suspended counts as stopped" do
-    for i <- 1..1_000_000 do
-      pid = spawn(fn -> count_down(rem(i, 50) * 200) end)
-      if Sandbox.suspend(pid), do: :erlang.resume_process(pid)
-    end
+  # The sweeps of async tests run side by side, each blocking the other
+  # schedulers for its kills. Every one must end, and the last to lift its
+  # block must leave the schedulers running. Each sweeper stays alive until
+  # the test has looked, since the VM lifts the block of one that ends.
+  test "kills made side by side all land, and leave every scheduler running" do
+    assert :erlang.system_info(:multi_scheduling) == :enabled
+    test = self()
+
+    sweepers =
+      for _ <- 1..8 do
+        spawn_link(fn ->
+          for _ <- 1..500 do
+            watched = for _ <- 1..3, do: spawn_monitor(fn -> Process.sleep(:infinity) end)
+            :ok = Sandbox.kill(for {pid, _ref} <- watched, do: pid)
+            for {pid, ref} <- watched, do: assert_receive({:DOWN, ^ref, :process, ^pid, :killed})
+          end
+
+          send(test, {:swept, self()})
+          receive do: (:looked -> :ok)
+        end)
+      end
+
+    for sweeper <- sweepers, do: assert_receive({:swept, ^sweeper}, 30_000)
+
+    assert :erlang.system_info(:multi_scheduling) == :enabled
+    assert :erlang.system_info(:normal_multi_scheduling_blockers) == []
+
+    for sweeper <- sweepers, do: send(sweeper, :looked)
   end
 
   describe "a sync test's runners" do
@@ -394,9 +413,6 @@ defmodule Cyfr.Test.SandboxTest do
          ]}
     }
   end
-
-  defp count_down(0), do: :ok
-  defp count_down(n), do: count_down(n - 1)
 
   # A task of the test's, as the attempt and its keeper are: it watches the
   # sibling it is told of and, once that one has ended, reports and makes
