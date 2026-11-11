@@ -12,8 +12,10 @@ retires it.
 
 The registry, directory and account pages are cyfr.run's own, built from
 the checkout `CYFR_RUN_DIR` names. CI cannot read that source, so CI never
-runs this proof; without `CYFR_RUN_DIR` the script says it did not run and
-why, and exits 0.
+runs this proof: the host's nightly runs it on main's head
+(`scripts/nightly.sh`). Without `CYFR_RUN_DIR` the script says it did not
+run and why, and exits 69, which the stage reports as not run and counts as
+not passed.
 
 ```bash
 CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -q 1 -- tests/handle-proof/run.sh

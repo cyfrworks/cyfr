@@ -143,8 +143,10 @@ same worktree refuses, naming the run that holds it.
     offline or reproducing a failing CI job;
   - `release`: the gate's close, which holds the host for over an hour,
     run by `scripts/release.sh --gate` for a HEAD with no run on GitHub;
-  - `nightly`: `scripts/janitor.sh`, which a timer on the host runs once
-    a day (the nightly, below).
+  - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
+    proof, which no workflow runs, each on one quarter: the host's timer
+    runs it once a day on main's head through `scripts/nightly.sh`, which
+    reports the night to GitHub (the nightly, below).
 
   The touched tests are the changed test files and, for each changed or
   deleted `apps/<app>/lib/<path>.ex`, `apps/<app>/test/<path>_test.exs`
@@ -213,26 +215,52 @@ same worktree refuses, naming the run that holds it.
   main's head, to the branch `nightly/weights` and prints the
   `gh pr create` command for its owner: a pull request opened with the
   job's own token would get no Test run. The weights are seconds on CI's
-  four-vCPU runners, relative, which is all the split reads. The host
-  runs only the janitor, from a user timer at about 04:00; another host
-  copies these two units into `~/.config/systemd/user/`, with its own
-  checkout's path, and runs `systemctl --user enable --now
-  cyfr-nightly.timer` (with `loginctl enable-linger` it runs without a
-  session):
+  four-vCPU runners, relative, which is all the split reads.
+- The host has a nightly of its own, from a user timer at about 04:00,
+  in two checkouts kept for the timer alone: `~/Projects/cyfr-nightly`, a
+  detached worktree of this repository, and `~/Projects/cyfr.run-nightly`,
+  a detached worktree of a cyfr.run checkout, which the handle proof builds
+  its registry from (`CYFR_RUN_DIR`). Nobody works in either: before each
+  night the unit moves both to their origin's main and removes whatever
+  else they hold but ignored build output. `scripts/nightly.sh` then runs
+  the nightly stage there, the janitor and the two proofs no workflow runs,
+  and triggers `.github/workflows/host-nightly.yml` with the commit, the
+  stage's exit, its row lines and its logs' path on the host. That run
+  fails unless the exit is 0, a check that did not run included, and
+  GitHub tells the account that triggered it, the one `gh` is logged in as
+  here, of a failed run as of any it triggered. The workflow's watchdog
+  fails each day no report has arrived from the host within 26 hours, as
+  after a night the unit could not fetch, which runs and reports nothing. A
+  host sets it up by making the two worktrees (`git -C ~/Projects/cyfr
+  worktree add --detach ~/Projects/cyfr-nightly origin/main`, and the same
+  from its cyfr.run checkout), logging `gh` in with the workflow scope, and
+  copying these two units into `~/.config/systemd/user/` with its own
+  paths and the PATH its `mix`, `go` and `gh` are on, then `systemctl
+  --user enable --now cyfr-nightly.timer` (with `loginctl enable-linger`
+  it runs without a session). `systemctl --user start cyfr-nightly` runs a
+  night by hand:
 
   ```ini
   # cyfr-nightly.service
   [Unit]
-  Description=CYFR nightly: the janitor (scripts/stage.sh nightly)
+  Description=CYFR nightly: the janitor and the proofs no workflow runs (scripts/nightly.sh)
 
   [Service]
   Type=oneshot
-  WorkingDirectory=%h/Projects/cyfr
-  ExecStart=%h/Projects/cyfr/scripts/stage.sh nightly
+  WorkingDirectory=%h/Projects/cyfr-nightly
+  Environment=PATH=%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+  Environment=CYFR_RUN_DIR=%h/Projects/cyfr.run-nightly
+  ExecStartPre=git -C %h/Projects/cyfr-nightly fetch -q origin
+  ExecStartPre=git -C %h/Projects/cyfr-nightly checkout -q --detach --force origin/main
+  ExecStartPre=git -C %h/Projects/cyfr-nightly clean -q -f -d
+  ExecStartPre=git -C %h/Projects/cyfr.run-nightly fetch -q origin
+  ExecStartPre=git -C %h/Projects/cyfr.run-nightly checkout -q --detach --force origin/main
+  ExecStartPre=git -C %h/Projects/cyfr.run-nightly clean -q -f -d
+  ExecStart=%h/Projects/cyfr-nightly/scripts/nightly.sh
 
   # cyfr-nightly.timer
   [Unit]
-  Description=CYFR nightly janitor at about 04:00
+  Description=CYFR nightly at about 04:00
 
   [Timer]
   OnCalendar=*-*-* 04:00

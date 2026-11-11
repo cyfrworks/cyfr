@@ -9,8 +9,10 @@
 # offline work and reproducing a CI failure: the pull request's run on
 # GitHub is the check), release (the gate's close, which
 # `scripts/release.sh --gate` runs for a HEAD with no run on GitHub) and
-# nightly (the janitor, which a timer on the host runs once a day). What
-# each runs is scripts/stages.tsv, one row per check:
+# nightly (the janitor and the proofs no workflow runs, which
+# scripts/nightly.sh runs once a day from a timer on the host, on main's
+# head, and reports to GitHub). What each runs is scripts/stages.tsv, one
+# row per check:
 #   stage<TAB>check<TAB>quarters<TAB>hold<TAB>when<TAB>command
 #   stage    one of the five above
 #   check    [a-z0-9-]+, unique within its stage
@@ -53,7 +55,10 @@
 # Stdout is `_START=<pid>` first and `_EXIT=<pid> <status>` last, as the
 # other harness scripts frame theirs (scripts/await-task.sh), with one line
 # per row between: `<check>: ok <seconds>s`, `<check>: failed <status>
-# <seconds>s` or `<check>: skipped (<reason>) <seconds>s`. -n prints `would run
+# <seconds>s`, `<check>: not run <status> <seconds>s` or `<check>: skipped
+# (<reason>) <seconds>s`. Not run is a status of 69, a prerequisite the
+# check names is missing, or 75, heavy-check's queue deadline passed
+# before it started; it counts as failed. -n prints `would run
 # <check> (<n> quarter[s]): <command>` or `would skip <check>: <reason>` per row
 # and runs nothing.
 #
@@ -245,12 +250,12 @@ for i in ${rows[@]+"${!rows[@]}"}; do
   status=0
   wait "$row_pid" || status=$?
   row_pid=
-  if [ "$status" = 0 ]; then
-    echo "$check: ok $((SECONDS - started))s"
-  else
-    echo "$check: failed $status $((SECONDS - started))s"
-    failures=$((failures + 1))
-  fi
+  case $status in
+    0) echo "$check: ok $((SECONDS - started))s" ;;
+    69 | 75) echo "$check: not run $status $((SECONDS - started))s" ;;
+    *) echo "$check: failed $status $((SECONDS - started))s" ;;
+  esac
+  [ "$status" = 0 ] || failures=$((failures + 1))
 done
 
 finished=true

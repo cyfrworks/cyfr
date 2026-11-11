@@ -25,6 +25,7 @@ handoff	arca-sqlite	1	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a sqli
 handoff	arca-postgres	1	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors apps/arca/test
 handoff	dialyzer	1	2400	apps/*/lib/**	mix dialyzer
 handoff	js	1	900	apps/cyfr/assets/**,seed/**	(cd apps/cyfr/assets && npm ci --ignore-scripts --no-audit --no-fund && npx eslint . && test/run.sh) && scripts/check-seed-canvas.sh
+handoff	stage-test	1	600	scripts/stage.sh,scripts/stages.tsv,scripts/nightly.sh,scripts/lib/nightly.py,tests/stage-test.sh,tests/handle-proof/run.sh,.github/workflows/**	bash tests/stage-test.sh
 handoff	run-names-test	1	600	scripts/lib/run-names.sh,tests/run-names-test.sh	bash tests/run-names-test.sh
 handoff	image-test	1	600	scripts/image.sh,tests/image-stub.sh,tests/image-test.sh	bash tests/image-test.sh
 handoff	janitor-test	1	900	scripts/janitor.sh,scripts/image.sh,scripts/lib/run-names.sh,tests/image-stub.sh,tests/janitor-test.sh,tests/install-screen-proof/prepare.sh,tests/install-screen-proof/base-image.sh	bash tests/janitor-test.sh
@@ -55,3 +56,10 @@ pull-request	gate	4	2700	always	scripts/commit-gate.sh -l "$STAGE_LOGDIR/gate"
 release	close	4	10800	always	scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"
 
 nightly	janitor	1	1800	always	scripts/janitor.sh
+# The proofs no workflow runs, on main's head (scripts/nightly.sh). The
+# install proof's row prepares its images first, in its own row, so a
+# night whose preparation fails reads not run or failed, never passed; the
+# handle proof reads its cyfr.run checkout from CYFR_RUN_DIR, which the
+# timer's unit sets (CONTRIBUTING.md).
+nightly	install-screen-proof	1	3600	always	tests/install-screen-proof/prepare.sh && scripts/image.sh --undated app && tests/install-screen-proof/run.sh
+nightly	handle-proof	1	3600	always	tests/handle-proof/run.sh
