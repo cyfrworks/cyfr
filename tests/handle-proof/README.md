@@ -25,7 +25,7 @@ CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -q 1 -- tests/handle-pro
 |---|---|---|
 | A | `a.test` | a `cyfr` release with a `CYFR_SETUP_TOKEN` of its own; reads accounts at `CYFR_DIRECTORY_URL=https://registry.test` and names at `CYFR_REGISTRY_URL=registry.test` |
 | B | `b.test` | the same, with its own setup token |
-| the registry, directory and account pages | `registry.test` | cyfr.run's image, built from `git archive HEAD` of `CYFR_RUN_DIR` by its `Dockerfile`, on a `postgres:16-alpine` of the run's own, with `DOMAIN=registry.test`, behind a front of the identity proof's kind on `127.77.0.3` for the CYFRs, and routed by the browsers' proxy to its listener (`startProxy`'s `routed`) |
+| the registry, directory and account pages | `registry.test` | cyfr.run's image, built from `git archive HEAD` of `CYFR_RUN_DIR` by its `Dockerfile`, on a `postgres:16-alpine` of the run's own, with `DOMAIN=registry.test`, behind a front of the identity proof's kind, on the run's own address, for the CYFRs, and routed by the browsers' proxy to its listener (`startProxy`'s `routed`) |
 
 The model checks run independently with
 `node --test tests/handle-proof/models-test.mjs`. The PostgreSQL tamper

@@ -82,7 +82,7 @@ browser_home "$X" x.test
 browser_home "$Y" y.test
 browser_home "$Z" z.test
 
-identity_directory dir.test 127.77.0.1
+identity_directory dir.test
 identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
 for cell in "$X" "$Y" "$Z"; do
   openssl rand -hex 32 | tr -d '\n' >"$SECRETS/setup-$(basename "$cell")"

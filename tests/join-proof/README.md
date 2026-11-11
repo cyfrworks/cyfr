@@ -15,7 +15,8 @@ harness's TLS front (`browser_home`):
 | H | `h.test` | the CYFR people join; reads accounts at `CYFR_DIRECTORY_URL=https://dir.test` and names at `CYFR_REGISTRY_URL=dir.test`; a `CYFR_SETUP_TOKEN` of the run's own, under which its operator sets it up |
 
 H reaches the directory through the identity proof's front
-(`tests/identity-proof/front.sh` and `cells.sh`, on `127.77.0.1`). No
+(`tests/identity-proof/front.sh` and `cells.sh`, on the run's own
+loopback address). No
 DNS, `/etc/hosts`, trust store or other configuration outside the scratch
 directory is read or changed. Everything the run starts (the cells'
 servers, the front, the Playwright container) and the scratch directory,

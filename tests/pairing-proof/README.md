@@ -21,7 +21,8 @@ on a `.test` name behind the harness's TLS front (`browser_home`):
 | Z | `z.test` | configured as X and Y; set up from the terminal |
 
 The CYFRs reach the directory through the identity proof's front
-(`tests/identity-proof/front.sh` and `cells.sh`, on `127.77.0.1`). No
+(`tests/identity-proof/front.sh` and `cells.sh`, on the run's own
+loopback address). No
 DNS, `/etc/hosts`, trust store or other configuration outside the scratch
 directory is read or changed. Everything the run starts (the cells'
 servers, the front, the Playwright container) and the scratch directory,

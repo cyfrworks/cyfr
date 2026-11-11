@@ -30,8 +30,9 @@ pieces another proof sources (`tests/join-proof/` and
 `tests/pairing-proof/` among them):
 
 - `front.sh` and `front.mjs`: each directory a proof runs is declared
-  by its name and its front's address (`identity_directory dir.test
-  127.77.0.1`). Each front is one container of the pinned Playwright
+  by its name (`identity_directory dir.test`), and its front stands on a
+  loopback address of the run's own, made from the run's pid, so proofs
+  run side by side. Each front is one container of the pinned Playwright
   image per run and directory, `cyfr-identity-front-<pid>-<name>`, on the
   host network as root so it can listen on port 443 of its own loopback
   address, presenting the certificate the run's authority issued for its

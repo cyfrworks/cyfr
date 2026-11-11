@@ -4,9 +4,11 @@
 # The directories' fronts for the cells, sourced after tests/release-boot/
 # release.sh and tests/browser/harness.sh (by run.sh, and by a proof that
 # reuses it, as tests/join-proof/ does). Each directory a proof runs is
-# declared once, by its name and the front address the cells reach it at
-# (`identity_directory`), each on a loopback address of its own that
-# nothing else on the host uses (127.77.0.1, 127.77.0.2, …). Each front is
+# declared once, by its name (`identity_directory`), and its front stands
+# on a loopback address of the run's own, which the cells reach it at:
+# the run's pid written into 127.128.0.0/9 (`identity_front_address`), so
+# runs alive at once, of one proof or of several, never share an address,
+# and nothing is taken that an ended run must give back. Each front is
 # one container of the pinned Playwright image, `cyfr-identity-front-
 # <run>-<name>`, running front.mjs on the host network as root, so it may
 # listen on port 443 of that address. It presents the certificate the
@@ -24,15 +26,31 @@ declare -A IDENTITY_FRONT_CONTROLS=()
 # Each started front's container, by directory.
 declare -A IDENTITY_FRONT_NAMES=()
 
-# Declare the directory `$1` (its hostname), reached at the front address
-# `$2` (a loopback address of this run's own), its control listener on
-# port `$3` (9443) of the same address. Every directory is declared
-# before any cell that reaches one is configured (cells.sh).
+# The front address of this run's directory number `$1` (0 or 1): 127,
+# then one bit for the directory and the 22 bits of the run's pid, which
+# no other process alive in the host's pid namespace holds. Proofs
+# started in containers that share the host's network may hold one pid
+# and so one address; the second then fails at its front's own step. The
+# pid whose second address would be the block's broadcast address,
+# 127.255.255.255, is refused. 127.128.0.0/9 lies apart from every other
+# loopback address the checks stand on (127.0.0.1, 127.78.0.0/16,
+# 127.79.0.0/16).
+identity_front_address() {
+  local n="$1"
+  [ "$n" -lt 2 ] || fail "a run has two front addresses, and both are taken"
+  [ "$$" -lt 4194303 ] || fail "the run's pid $$ does not fit a front's address"
+  printf '127.%s.%s.%s' $((128 + 64 * n + ($$ >> 16))) $((($$ >> 8) & 255)) $(($$ & 255))
+}
+
+# Declare the directory `$1` (its hostname), reached at a front address of
+# this run's own, its control listener on port `$2` (9443) of the same
+# address. Every directory is declared before any cell that reaches one
+# is configured (cells.sh).
 identity_directory() {
-  local host="$1" address="$2" control="${3:-9443}"
+  local host="$1" control="${2:-9443}"
   [[ "$host" == *.test ]] || fail "a directory's name is a .test name, not '$host'"
-  [[ "$address" =~ ^127\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "a front's address is a loopback address, not '$address'"
-  IDENTITY_FRONTS[$host]="$address"
+  [ -z "${IDENTITY_FRONTS[$host]:-}" ] || fail "the directory $host is declared already"
+  IDENTITY_FRONTS[$host]="$(identity_front_address "${#IDENTITY_FRONTS[@]}")"
   IDENTITY_FRONT_CONTROLS[$host]="$control"
 }
 
