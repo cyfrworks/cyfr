@@ -1,7 +1,7 @@
 {
   "name": "claude",
   "type": "catalyst",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "publisher": "local",
   "description": "Anthropic Claude API \u2014 the model/chat@1 contract (chat, describe, models) plus messages, streaming, token counting and batches",
   "contracts": [

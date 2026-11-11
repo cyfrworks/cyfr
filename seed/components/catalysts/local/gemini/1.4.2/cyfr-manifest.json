@@ -1,7 +1,7 @@
 {
   "name": "gemini",
   "type": "catalyst",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "publisher": "local",
   "description": "Google Gemini API \u2014 the model/chat@1 contract (chat, describe, models) plus text generation, streaming, embeddings and token counting",
   "contracts": [

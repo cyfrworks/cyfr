@@ -138,6 +138,20 @@ fn format_error(status: i64, error_type: &str, message: &str) -> String {
     .to_string()
 }
 
+/// The host's own error (a refused request, a stream that broke) as the
+/// catalyst's error envelope, its type and message kept.
+fn host_error(err: &Value) -> String {
+    let (err_type, err_msg) = if let Some(obj) = err.as_object() {
+        (
+            obj.get("type").and_then(|v| v.as_str()).unwrap_or("http_error"),
+            obj.get("message").and_then(|v| v.as_str()).unwrap_or("unknown host error"),
+        )
+    } else {
+        ("http_error", err.as_str().unwrap_or("unknown host error"))
+    };
+    format_error(500, err_type, err_msg)
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -196,15 +210,7 @@ fn parse_response(resp_str: &str) -> String {
 
     // Host-level error (e.g. domain blocked)
     if let Some(err) = resp.get("error") {
-        let (err_type, err_msg) = if let Some(obj) = err.as_object() {
-            (
-                obj.get("type").and_then(|v| v.as_str()).unwrap_or("http_error"),
-                obj.get("message").and_then(|v| v.as_str()).unwrap_or("unknown host error"),
-            )
-        } else {
-            ("http_error", err.as_str().unwrap_or("unknown host error"))
-        };
-        return format_error(500, err_type, err_msg);
+        return host_error(err);
     }
 
     let status = resp.get("status").and_then(|v| v.as_i64()).unwrap_or(500);
@@ -252,14 +258,27 @@ fn chat_completions_stream(
     let headers = build_headers(referer, title);
     let req = request("POST", &url, headers, body.to_string());
 
-    // Open the stream
-    let handle_resp = streaming::request(&req.to_string());
-    let handle_val: Value = serde_json::from_str(&handle_resp)
+    raw_stream(&streaming::request(&req.to_string()), streaming::read, |handle| {
+        let _ = streaming::close(handle);
+    })
+}
+
+/// Read a raw stream to its end and answer its chunks and their text:
+/// `opened` is the host's answer to the stream's request, `read` and
+/// `close` the host's read and close of its handle. A refused request, and
+/// a read that answers an error, answer the host's error. A read's error
+/// ends the stream: the host has let the handle go by then, and every
+/// later read would answer `invalid_handle`, never `done`.
+fn raw_stream(
+    opened: &str,
+    mut read: impl FnMut(&str) -> String,
+    close: impl FnOnce(&str),
+) -> Result<String, String> {
+    let handle_val: Value = serde_json::from_str(opened)
         .map_err(|e| format!("Failed to parse stream handle response: {e}"))?;
 
     if let Some(err) = handle_val.get("error") {
-        let msg = err.as_str().unwrap_or("stream request failed");
-        return Ok(format_error(500, "stream_error", msg));
+        return Ok(host_error(err));
     }
 
     let handle = handle_val
@@ -267,15 +286,24 @@ fn chat_completions_stream(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "No 'handle' in stream response".to_string())?;
 
-    // Collect SSE chunks
+    let answer = collect(handle, &mut read);
+    close(handle);
+    answer
+}
+
+/// The stream's SSE chunks, read until `done` or an error.
+fn collect(handle: &str, read: &mut impl FnMut(&str) -> String) -> Result<String, String> {
     let mut chunks: Vec<Value> = Vec::new();
     let mut combined_text = String::new();
     let mut buffer = String::new();
 
     loop {
-        let chunk_resp = streaming::read(handle);
-        let chunk_val: Value = serde_json::from_str(&chunk_resp)
+        let chunk_val: Value = serde_json::from_str(&read(handle))
             .map_err(|e| format!("Failed to parse stream chunk: {e}"))?;
+
+        if let Some(err) = chunk_val.get("error") {
+            return Ok(host_error(err));
+        }
 
         let done = chunk_val
             .get("done")
@@ -321,9 +349,6 @@ fn chat_completions_stream(
             break;
         }
     }
-
-    // Close the stream
-    let _ = streaming::close(handle);
 
     Ok(json!({
         "status": 200,
@@ -403,6 +428,69 @@ pub(crate) fn credential_header(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The host's reads of a stream, in order; past them every read
+    /// answers as the host does once it has let the handle go.
+    fn reads(answers: &[Value]) -> (impl FnMut(&str) -> String, std::rc::Rc<std::cell::Cell<usize>>) {
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = count.clone();
+        let answers: Vec<String> = answers.iter().map(Value::to_string).collect();
+        let read = move |handle: &str| {
+            let n = seen.get();
+            seen.set(n + 1);
+            assert!(n < 100, "the stream is read on after its error");
+            answers.get(n).cloned().unwrap_or_else(|| {
+                json!({"error": {"type": "invalid_handle", "message": format!("Unknown stream handle: {handle}")}})
+                    .to_string()
+            })
+        };
+        (read, count)
+    }
+
+    #[test]
+    fn a_raw_stream_ends_at_a_read_that_answers_an_error_and_closes_its_handle() {
+        let (read, count) = reads(&[
+            json!({"data": "data: {\"n\": 1}\n", "done": false, "status": 200}),
+            json!({"error": {"type": "stream_error", "message": "The provider's stream broke."}}),
+        ]);
+        let mut closed = Vec::new();
+        let answer = raw_stream(r#"{"handle": "h1"}"#, read, |h| closed.push(h.to_string())).unwrap();
+        let answer: Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(
+            answer,
+            json!({"status": 500, "error": {"type": "stream_error", "message": "The provider's stream broke."}})
+        );
+        assert_eq!(count.get(), 2);
+        assert_eq!(closed, ["h1"]);
+    }
+
+    #[test]
+    fn a_refused_raw_stream_answers_the_host_s_refusal() {
+        let (read, count) = reads(&[]);
+        let refusal = json!({"error": {"type": "flow_blocked", "message": "No flow reaches this destination."}});
+        let answer = raw_stream(&refusal.to_string(), read, |_| panic!("no handle was opened")).unwrap();
+        let answer: Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(
+            answer,
+            json!({"status": 500, "error": {"type": "flow_blocked", "message": "No flow reaches this destination."}})
+        );
+        assert_eq!(count.get(), 0);
+    }
+
+    #[test]
+    fn a_raw_stream_read_to_done_answers_its_chunks_and_closes_its_handle() {
+        let (read, count) = reads(&[
+            json!({"data": "data: {\"n\": 1}\ndata: {\"n\"", "done": false, "status": 200}),
+            json!({"data": "", "done": false, "status": 200}),
+            json!({"data": ": 2}\ndata: [DONE]\n", "done": true, "status": 200}),
+        ]);
+        let mut closed = Vec::new();
+        let answer = raw_stream(r#"{"handle": "h1"}"#, read, |h| closed.push(h.to_string())).unwrap();
+        let answer: Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(answer, json!({"status": 200, "data": {"chunks": [{"n": 1}, {"n": 2}], "combined_text": ""}}));
+        assert_eq!(count.get(), 3);
+        assert_eq!(closed, ["h1"]);
+    }
 
     fn run(operation: &str, params: Value) -> Value {
         let input = json!({"operation": operation, "params": params}).to_string();

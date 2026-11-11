@@ -1,7 +1,7 @@
 {
   "name": "grok",
   "type": "catalyst",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "publisher": "local",
   "description": "xAI Grok API \u2014 the model/chat@1 contract (chat, describe, models) plus chat, vision, image generation, embeddings, responses and files",
   "contracts": [
