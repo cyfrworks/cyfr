@@ -14,14 +14,15 @@
 #                                   of its symbols; a DIR/cosign already at
 #                                   the pinned version is kept
 #   scripts/cosign.sh version       print the pinned version
-#   scripts/cosign.sh check TARGET RUNNER...
-#                                   run in TARGET as RUNNER... runs it
-#                                   (`docker run --rm` with a boot's
-#                                   environment and an image, or `docker
-#                                   compose run --rm --no-deps -T` and the
-#                                   cyfr service: through the image's
+#   scripts/cosign.sh check image IMAGE
+#   scripts/cosign.sh check run TARGET RUNNER...
+#                                   in a container of IMAGE the check starts
+#                                   with a boot's environment, or in TARGET
+#                                   as RUNNER... runs it (`docker compose run
+#                                   --rm --no-deps -T` and the cyfr service);
+#                                   either way through the image's
 #                                   entrypoint, as its user, with its
-#                                   environment): its cosign is the pinned
+#                                   environment: its cosign is the pinned
 #                                   version, and the product's own
 #                                   `Compendium.Cosign.verify/2`, through
 #                                   `bin/cyfr eval` under the CYFR_COSIGN_*
@@ -51,17 +52,34 @@ CHECK_IMAGE=ghcr.io/sigstore/cosign/cosign@sha256:0f06154836d2de34f887a5c273506d
 CHECK_IDENTITY='^keyless@projectsigstore\.iam\.gserviceaccount\.com$'
 CHECK_ISSUER='^https://accounts\.google\.com$'
 
-usage() { echo "usage: $0 install DIR | version | check TARGET RUNNER..." >&2; exit 64; }
+usage() { echo "usage: $0 install DIR | version | check image IMAGE | check run TARGET RUNNER..." >&2; exit 64; }
 
-# The line Compendium.Cosign.verify/2 of CHECK_IMAGE answers in TARGET
-# (`$1`), run as RUNNER (`$3...`) with the extra run options `$2` (one
-# word list, split on spaces): VERIFIED and the recorded identity and
-# issuer as Elixir terms, or REFUSED and the refusal.
+# Runs `$2...` in the check's target with the settings of the env file
+# `$1` (NAME=value lines) and the key directory at /run/cosign-check.
+# `check image` starts a container of the image of its own for each
+# command, named under PROOF_RUN_PREFIX, with what a boot needs
+# (CYFR_ACCESS and a fresh CYFR_SECRET_KEY_BASE); `check run` runs
+# RUNNER... TARGET with each setting as an -e.
+in_target() {
+  local envfile=$1 line
+  shift
+  if [ "$mode" = image ]; then
+    docker run --rm --name "${PROOF_RUN_PREFIX:-}cosign-check-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
+      -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$secret" --env-file "$envfile" -v "$key:/run/cosign-check:ro" \
+      "$target" "$@"
+  else
+    local -a settings=()
+    while IFS= read -r line; do settings+=(-e "$line"); done <"$envfile"
+    "${runner[@]}" ${settings[@]+"${settings[@]}"} -v "$key:/run/cosign-check:ro" "$target" "$@"
+  fi
+}
+
+# The line Compendium.Cosign.verify/2 of CHECK_IMAGE answers in the target
+# under the CYFR_COSIGN_* settings `$@` (NAME=value words): VERIFIED and the
+# recorded identity and issuer as Elixir terms, or REFUSED and the refusal.
 module_verify() {
-  local target=$1 options=$2
-  shift 2
-  # shellcheck disable=SC2086
-  "$@" $options "$target" /app/bin/cyfr eval "
+  printf '%s\n' "$@" >"$key/settings.env"
+  in_target "$key/settings.env" /app/bin/cyfr eval "
     case Compendium.Cosign.verify(\"$CHECK_IMAGE\", \"${CHECK_IMAGE#*@}\") do
       {:ok, signer} -> IO.puts(\"VERIFIED #{inspect(signer.identity)} #{inspect(signer.issuer)}\")
       refused -> IO.puts(\"REFUSED #{inspect(refused)}\")
@@ -69,28 +87,29 @@ module_verify() {
 }
 
 check() {
-  local target=$1 key answer want
-  shift
-  answer="$("$@" "$target" cosign version --json 2>&1)" || { echo "cosign: $target runs no cosign: $answer" >&2; return 1; }
-  printf '%s' "$answer" | grep -q "\"gitVersion\": *\"v$VERSION\"" ||
-    { echo "cosign: $target runs a cosign that is not $VERSION: $answer" >&2; return 1; }
+  local answer want
   key="$(mktemp -d)"
   trap 'rm -rf "$key"' RETURN
+  # Readable by the image's user, whatever this process's umask.
+  chmod 0755 "$key"
+  : >"$key/none.env"
+  answer="$(in_target "$key/none.env" cosign version --json 2>&1)" ||
+    { echo "cosign: $target runs no cosign: $answer" >&2; return 1; }
+  printf '%s' "$answer" | grep -q "\"gitVersion\": *\"v$VERSION\"" ||
+    { echo "cosign: $target runs a cosign that is not $VERSION: $answer" >&2; return 1; }
   curl --proto '=https' --tlsv1.2 -sSfL --max-time 60 --connect-timeout 20 -o "$key/release-cosign.pub" \
     "https://github.com/sigstore/cosign/releases/download/v$VERSION/release-cosign.pub"
   echo "$RELEASE_KEY_SHA256  $key/release-cosign.pub" | sha256sum -c --quiet -
-  # Readable by the image's user, whatever this process's umask.
-  chmod 0755 "$key"
   chmod 0644 "$key/release-cosign.pub"
-  answer="$(module_verify "$target" "-v $key:/run/cosign-check:ro -e CYFR_COSIGN_KEY=/run/cosign-check/release-cosign.pub" "$@")"
+  answer="$(module_verify CYFR_COSIGN_KEY=/run/cosign-check/release-cosign.pub)"
   want="VERIFIED \"key:sha256:$RELEASE_KEY_SHA256\" \"key\""
   [ "$answer" = "$want" ] || { echo "cosign: $target's keyed verification of $CHECK_IMAGE answered '$answer', not '$want'" >&2; return 1; }
   echo "Compendium.Cosign in $target verified $CHECK_IMAGE keyed: $answer"
-  answer="$(module_verify "$target" "-e CYFR_COSIGN_IDENTITY=$CHECK_IDENTITY -e CYFR_COSIGN_ISSUER=$CHECK_ISSUER" "$@")"
+  answer="$(module_verify "CYFR_COSIGN_IDENTITY=$CHECK_IDENTITY" "CYFR_COSIGN_ISSUER=$CHECK_ISSUER")"
   want="VERIFIED nil nil"
   [ "$answer" = "$want" ] || { echo "cosign: $target's keyless verification of $CHECK_IMAGE answered '$answer', not '$want'" >&2; return 1; }
   echo "Compendium.Cosign in $target verified $CHECK_IMAGE keyless: $answer"
-  answer="$(module_verify "$target" "-e CYFR_COSIGN_IDENTITY=^release@example\.com$ -e CYFR_COSIGN_ISSUER=$CHECK_ISSUER" "$@")"
+  answer="$(module_verify 'CYFR_COSIGN_IDENTITY=^release@example\.com$' "CYFR_COSIGN_ISSUER=$CHECK_ISSUER")"
   case "$answer" in
     "REFUSED {:error, {:rejected, "*) echo "Compendium.Cosign in $target refused $CHECK_IMAGE keyless for another identity" ;;
     *) echo "cosign: $target's keyless verification of $CHECK_IMAGE for another identity answered '$answer', not cosign's refusal" >&2; return 1 ;;
@@ -103,9 +122,19 @@ case "${1:-}" in
     exit 0
     ;;
   check)
-    [ "$#" -ge 3 ] || usage
-    shift
-    check "$@"
+    case "${2:-}" in
+      image)
+        [ "$#" -eq 3 ] || usage
+        mode=image target=$3 secret="$(openssl rand -hex 48)"
+        ;;
+      run)
+        [ "$#" -ge 4 ] || usage
+        mode=run target=$3
+        runner=("${@:4}")
+        ;;
+      *) usage ;;
+    esac
+    check
     exit
     ;;
   install)

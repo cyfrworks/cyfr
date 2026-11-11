@@ -2244,7 +2244,7 @@ runtime_case() {
   step "the app image's cosign, as Compendium.Cosign finds it and as the cyfr service runs it"
   cosign="$(cyfr_rpc 'IO.puts("COSIGN=" <> (System.find_executable("cosign") || "none"))' | sed -n 's/^COSIGN=//p')"
   [ -n "$cosign" ] && [ "$cosign" != none ] || fail "the running cyfr finds no cosign on its PATH"
-  "$ROOT/scripts/cosign.sh" check cyfr compose run --rm --no-deps -T || fail "the cyfr service's cosign does not verify"
+  "$ROOT/scripts/cosign.sh" check run cyfr compose run --rm --no-deps -T || fail "the cyfr service's cosign does not verify"
   ok "cyfr finds $cosign, which verifies keyed and keyless as the service runs it"
 
   step "a person signed in on cyfr, as the release proofs sign one in"

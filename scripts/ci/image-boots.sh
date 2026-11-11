@@ -78,7 +78,5 @@ done
 echo "$image ($kind) started on $(uname -m) and is healthy"
 
 if [ "$kind" = cyfr ]; then
-  # One container at a time, each removed before the next starts.
-  "$root/scripts/cosign.sh" check "$image" docker run --rm --name "$name-check" \
-    -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" || failed "does not verify with its cosign"
+  "$root/scripts/cosign.sh" check image "$image" || failed "does not verify with its cosign"
 fi
