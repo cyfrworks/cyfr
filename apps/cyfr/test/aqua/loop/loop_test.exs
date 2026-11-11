@@ -270,7 +270,7 @@ defmodule Aqua.LoopTest do
 
   test "request_setup.open opens the setup form for its component and the turn goes on",
        %{ctx: ctx, thread: thread} do
-    ref = "catalyst:local.claude:1.4.1"
+    ref = "catalyst:local.claude:1.4.2"
 
     script!([
       calls([{"c1", "request_setup", %{"action" => "open", "component_ref" => ref}}]),
