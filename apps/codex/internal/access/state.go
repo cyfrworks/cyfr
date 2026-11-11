@@ -109,7 +109,7 @@ func writeDurable(name string, data []byte, mode os.FileMode, fail func(name, st
 		err = inject("rename")
 	}
 	if err == nil {
-		err = replaceFile(tmp.Name(), name)
+		err = ReplaceFile(tmp.Name(), name)
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
@@ -118,7 +118,7 @@ func writeDurable(name string, data []byte, mode os.FileMode, fail func(name, st
 	if err := inject("sync"); err != nil {
 		return err
 	}
-	if err := syncDir(dir); err != nil {
+	if err := SyncDir(dir); err != nil {
 		return fmt.Errorf("access: write %s: %w", name, err)
 	}
 	return nil
@@ -145,7 +145,7 @@ func (e *Engine) removeDurable(name string) error {
 	if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("access: remove %s: %w", name, err)
 	}
-	if err := syncDir(filepath.Dir(name)); err != nil {
+	if err := SyncDir(filepath.Dir(name)); err != nil {
 		return fmt.Errorf("access: remove %s: %w", name, err)
 	}
 	return nil
@@ -352,7 +352,7 @@ func (e *Engine) prune() {
 		}
 	}
 	if removed {
-		syncDir(e.path(receiptsDir))
+		SyncDir(e.path(receiptsDir))
 	}
 }
 
@@ -409,7 +409,7 @@ func (e *Engine) sweepStrays(j *journal) {
 				os.Remove(filepath.Join(dir, name))
 			}
 		}
-		syncDir(dir)
+		SyncDir(dir)
 	}
 }
 

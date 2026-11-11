@@ -487,16 +487,13 @@ func withBarrier(env []byte, snapshot string) ([]byte, error) {
 }
 
 // writeDurable writes data over the file at name as writeFileAtomic does,
-// then syncs the directory, so the rename survives a crash.
+// then syncs the directory (access.SyncDir, which Windows needs no handle
+// for), so the rename survives a crash.
 func writeDurable(name string, data []byte, mode os.FileMode) error {
 	if err := writeFileAtomic(name, data, mode); err != nil {
 		return err
 	}
-	d, err := os.Open(filepath.Dir(name))
-	if err != nil {
-		return err
-	}
-	return errors.Join(d.Sync(), d.Close())
+	return access.SyncDir(filepath.Dir(name))
 }
 
 // raiseBarrier sets restoreBarrier in the project's .env, durably, before
@@ -572,14 +569,10 @@ func (r *restorer) putConfigFiles() error {
 // readRestoredConfig read with the bar reaching cyfr, over
 // docker-compose.yml.
 func (r *restorer) publishCompose() error {
-	if err := os.Rename(stagedCompose, "docker-compose.yml"); err != nil {
+	if err := access.ReplaceFile(stagedCompose, "docker-compose.yml"); err != nil {
 		return err
 	}
-	d, err := os.Open(".")
-	if err != nil {
-		return err
-	}
-	return errors.Join(d.Sync(), d.Close())
+	return access.SyncDir(".")
 }
 
 // stagedComposeArgs are the compose arguments that read the configuration
@@ -619,8 +612,8 @@ func (r *restorer) putBackHeld() error {
 		case data == nil:
 			if err := os.Remove(f.file); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				errs = append(errs, err)
-			} else if d, err := os.Open("."); err == nil {
-				errs = append(errs, d.Sync(), d.Close())
+			} else {
+				errs = append(errs, access.SyncDir("."))
 			}
 		default:
 			mode := os.FileMode(0600)
@@ -1041,7 +1034,7 @@ func replaceFile(src, dst string) error {
 	if err = errors.Join(err, tmp.Chmod(0600), tmp.Sync(), tmp.Close()); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), dst)
+	return access.ReplaceFile(tmp.Name(), dst)
 }
 
 // restoreSQLite puts the SQLite file back, and its WAL as the snapshot
@@ -1066,10 +1059,7 @@ func (r *restorer) restoreSQLite() error {
 			return err
 		}
 	}
-	if d, err := os.Open(filepath.Dir(file)); err == nil {
-		d.Sync()
-		d.Close()
-	}
+	access.SyncDir(filepath.Dir(file))
 	return nil
 }
 
