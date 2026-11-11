@@ -155,25 +155,43 @@ defmodule Aqua.Loop.Planner do
   # So the boundary is pulled back to include any call whose answer is kept.
   # Pulling back can bring in further results whose calls are older still,
   # hence the repeat; it only ever moves earlier, so it settles.
-  defp with_answered_calls(rows, first) do
-    calls =
-      for row <- rows, row.kind == "tool_call", id = call_id(row), id != nil, into: %{} do
-        {id, row.seq}
-      end
+  defp with_answered_calls(rows, first), do: pull_back(answered(rows), first)
 
-    orphaned =
-      for row <- rows,
-          row.seq >= first,
-          row.kind == "tool_result",
-          id = call_id(row),
-          seq = Map.get(calls, id),
-          seq != nil and seq < first,
-          do: seq
+  defp pull_back(pairs, first) do
+    orphaned = for {result, call} <- pairs, result >= first, call < first, do: call
 
     case orphaned do
       [] -> first
-      seqs -> with_answered_calls(rows, Enum.min(seqs))
+      seqs -> pull_back(pairs, Enum.min(seqs))
     end
+  end
+
+  # Each result's seq beside the seq of the call it answers: the latest call
+  # before it under the same id. A call id names a call only within one
+  # response for some providers (Gemini numbers its calls `call_1`,
+  # `call_2`… in every response), so an id alone names no call across the
+  # thread.
+  defp answered(rows) do
+    {pairs, _calls} =
+      rows
+      |> Enum.sort_by(& &1.seq)
+      |> Enum.reduce({[], %{}}, fn row, {pairs, calls} ->
+        case {row.kind, call_id(row)} do
+          {_kind, nil} ->
+            {pairs, calls}
+
+          {"tool_call", id} ->
+            {pairs, Map.put(calls, id, row.seq)}
+
+          {"tool_result", id} when is_map_key(calls, id) ->
+            {[{row.seq, Map.fetch!(calls, id)} | pairs], calls}
+
+          _other ->
+            {pairs, calls}
+        end
+      end)
+
+    pairs
   end
 
   defp call_id(%{payload: json}) when is_binary(json) do

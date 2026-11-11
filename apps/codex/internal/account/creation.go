@@ -39,6 +39,10 @@ const (
 var (
 	// ErrNameTaken is a name someone else holds: another is asked.
 	ErrNameTaken = errors.New("name_taken")
+	// ErrNameReserved is a name the registry keeps from every account,
+	// whose lookup answers not found as a free name's does: another is
+	// asked.
+	ErrNameReserved = errors.New("name_reserved")
 	// ErrPolicyChanged is a registry that asks for a newer policy than the
 	// one accepted: it is asked of the person again.
 	ErrPolicyChanged = errors.New("policy_changed")
@@ -92,7 +96,7 @@ func Begin(c Config, name, accepted string, pub []byte, now int64) (Attempt, []b
 // answer (the directory's exists is success), then the name. The name
 // step reads the handle first, so a claim whose answer was lost is
 // reconciled: the account's is done, another's is ErrNameTaken, a free
-// name is claimed, after the policy is accepted when a was made under
+// name is claimed (a reserved one refused ErrNameReserved), after the policy is accepted when a was made under
 // one. Each registry request is signed afresh by key, since a nonce is
 // spent once. ErrUnreachable leaves the step to send again.
 func Submit(ctx context.Context, a *Attempt, key ed25519.PrivateKey, now func() int64, client *http.Client, save func(Attempt) error) error {
@@ -146,6 +150,8 @@ func claim(ctx context.Context, r Registry, a *Attempt, key ed25519.PrivateKey, 
 	switch {
 	case errors.As(err, &ref) && ref.Reason == "handle_taken":
 		return ErrNameTaken
+	case errors.As(err, &ref) && ref.Reason == "handle_reserved":
+		return ErrNameReserved
 	case errors.As(err, &ref) && ref.Reason == "policy_required":
 		return ErrPolicyChanged
 	}

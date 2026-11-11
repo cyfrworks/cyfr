@@ -188,7 +188,7 @@ defmodule Aqua.CrewTest do
     # The harnesses' catalysts ship, with no login entry bound to their
     # programs, and the explorer's key is not bound: none is told of.
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["claude-code"] == {:needs_sign_in, "catalyst:local.claude-code:0.1.3"}
+    assert status["claude-code"] == {:needs_sign_in, "catalyst:local.claude-code:0.1.4"}
     assert status["openai-codex"] == {:needs_sign_in, "catalyst:local.openai-codex:0.1.2"}
     assert {:needs_key, _} = status["explorer"]
 

@@ -1913,6 +1913,7 @@ defmodule Arca.FileOffersLockOrderTest do
     {accept, deny} =
       race(offer_id, fn -> FileOffers.accept(recipient, offer_id, "data/inbox") end, fn ->
         Arca.SecurityTransitions.deny_user(Prima.Actor.system(), recipient_id,
+          slot: :none,
           verify: fn _rows -> :ok end
         )
       end)
@@ -2252,7 +2253,10 @@ defmodule Arca.FileOffersLockOrderTest do
   end
 
   defp deny!(user_id) do
-    Arca.SecurityTransitions.deny_user(Prima.Actor.system(), user_id, verify: fn _rows -> :ok end)
+    Arca.SecurityTransitions.deny_user(Prima.Actor.system(), user_id,
+      slot: :none,
+      verify: fn _rows -> :ok end
+    )
   end
 
   defp purge!(athanor_id),

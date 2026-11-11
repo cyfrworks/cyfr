@@ -14,6 +14,10 @@ defmodule Compendium.Registry.ClientTest do
   alias Compendium.Provider
   alias Compendium.OCI.Errors
 
+  # The registry `config/test.exs` configures: an error names it, never
+  # cyfr.run whatever is configured.
+  @registry "127.0.0.1:19"
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -24,37 +28,38 @@ defmodule Compendium.Registry.ClientTest do
   # ============================================================================
 
   describe "search/2 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable", %{ctx: ctx} do
+    test "returns %Errors{} naming the configured registry when it is unreachable", %{ctx: ctx} do
       {:error, %Errors{} = err} = Client.search(ctx, %{query: "test"})
-      assert err.registry == "cyfr.run"
+      assert err.registry == @registry
       assert err.reason == :registry_unavailable
+      assert err.message == "Failed to connect to #{@registry}"
     end
 
     test "accepts empty params", %{ctx: ctx} do
       {:error, %Errors{} = err} = Client.search(ctx, %{})
-      assert err.registry == "cyfr.run"
+      assert err.registry == @registry
     end
   end
 
   describe "discover/2 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable", %{ctx: ctx} do
+    test "returns %Errors{} naming the configured registry when it is unreachable", %{ctx: ctx} do
       {:error, %Errors{} = err} = Client.discover(ctx, %{namespace: "cyfr"})
-      assert err.registry == "cyfr.run"
+      assert err.registry == @registry
       assert err.reason == :registry_unavailable
     end
 
     test "accepts empty params", %{ctx: ctx} do
       {:error, %Errors{} = err} = Client.discover(ctx, %{})
-      assert err.registry == "cyfr.run"
+      assert err.registry == @registry
     end
   end
 
   describe "get_component/5 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable", %{ctx: ctx} do
+    test "returns %Errors{} naming the configured registry when it is unreachable", %{ctx: ctx} do
       {:error, %Errors{} = err} =
         Client.get_component(ctx, "reagent", "cyfr", "data-processor", "1.0.0")
 
-      assert err.registry == "cyfr.run"
+      assert err.registry == @registry
       assert err.reason == :registry_unavailable
     end
   end
@@ -62,21 +67,21 @@ defmodule Compendium.Registry.ClientTest do
   # Registry endpoint error paths against an unreachable host.
 
   describe "get_namespace/1 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable" do
+    test "returns %Errors{} naming the configured registry when it is unreachable" do
       {:error, %Errors{} = err} = Client.get_namespace("alice")
       assert err.reason == :registry_unavailable
     end
   end
 
   describe "list_tokens/2 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable" do
+    test "returns %Errors{} naming the configured registry when it is unreachable" do
       {:error, %Errors{} = err} = Client.list_tokens("alice", "fake-bearer")
       assert err.reason == :registry_unavailable
     end
   end
 
   describe "issue_additional_token/3 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable" do
+    test "returns %Errors{} naming the configured registry when it is unreachable" do
       {:error, %Errors{} = err} =
         Client.issue_additional_token("alice", "fake-bearer", "ci-laptop")
 
@@ -85,7 +90,7 @@ defmodule Compendium.Registry.ClientTest do
   end
 
   describe "revoke_token/3 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable" do
+    test "returns %Errors{} naming the configured registry when it is unreachable" do
       {:error, %Errors{} = err} =
         Client.revoke_token("alice", "01H8K9XZABC", "fake-bearer")
 

@@ -15,7 +15,8 @@ defmodule Locus.Runtime.RunnerProcess do
   (`complete` or `exit`; a frame the runner may not send, or a line that
   is not one, is `{:error, {:protocol, reason}}`), `:closed` once the
   runner's end of the channel is closed, `{:exited, how}` once its
-  process ended, `:released` once the keeper has retired it,
+  process ended and, for an attached runner, after its channel closed or
+  a bound passed, `:released` once the keeper has retired it,
   `{:refused, reason}` when the keeper refused the spawn, so no process of
   the runner ever ran and nothing is left to release, and
   `{:error, reason}` for a later failure of the keeper's. A message the service
@@ -49,6 +50,9 @@ defmodule Locus.Runtime.RunnerProcess do
 
   # A line past the protocol's bound before its newline is not a frame.
   @max_line_bytes RunnerControl.max_line_bytes()
+
+  # How long the process's end is held for its control stream to close.
+  @control_drain_ms 1_000
 
   @doc false
   def child_spec(opts) do
@@ -110,6 +114,7 @@ defmodule Locus.Runtime.RunnerProcess do
        pending: [],
        buffer: "",
        closed: false,
+       exited: nil,
        released: false
      }, {:continue, :spawn}}
   end
@@ -167,6 +172,11 @@ defmodule Locus.Runtime.RunnerProcess do
   end
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+
+  def handle_info({:control_drained, ref}, %{exited: {ref, _how}} = state),
+    do: {:noreply, flush_exited(state)}
+
+  def handle_info({:control_drained, _ref}, state), do: {:noreply, state}
 
   def handle_info(msg, %{channel: channel} = state) when channel != nil do
     case state.keeper.handle_message(channel, msg) do
@@ -259,10 +269,22 @@ defmodule Locus.Runtime.RunnerProcess do
 
   defp on_event(:control_closed, %{closed: false} = state) do
     notify(state, :closed)
-    %{state | closed: true}
+    flush_exited(%{state | closed: true})
   end
 
   defp on_event(:control_closed, state), do: state
+
+  # The keeper hears a runner's end apart from its control stream, which
+  # comes on the relay's connection, so the two arrive in no defined
+  # order. The end of a runner whose stream is still open is held until
+  # the stream closes, bounded by `@control_drain_ms`, so the frames the
+  # runner wrote before it ended (its `exit`, with what it holds) reach the
+  # owner first.
+  defp on_event({:exited, how}, %{attached: true, closed: false} = state) do
+    ref = make_ref()
+    Process.send_after(self(), {:control_drained, ref}, @control_drain_ms)
+    %{state | exited: {ref, how}}
+  end
 
   defp on_event({:exited, how}, state) do
     notify(state, {:exited, how})
@@ -270,6 +292,7 @@ defmodule Locus.Runtime.RunnerProcess do
   end
 
   defp on_event(:released, state) do
+    state = flush_exited(state)
     notify(state, :released)
     %{state | released: true}
   end
@@ -340,6 +363,13 @@ defmodule Locus.Runtime.RunnerProcess do
     :ok = state.keeper.release(state.channel, grace_ms)
     %{state | released: true}
   end
+
+  defp flush_exited(%{exited: {_ref, how}} = state) do
+    notify(state, {:exited, how})
+    %{state | exited: nil}
+  end
+
+  defp flush_exited(state), do: state
 
   defp notify(state, event), do: send(state.owner, {__MODULE__, self(), event})
 end

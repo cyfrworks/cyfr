@@ -242,8 +242,14 @@ defmodule Compendium.Registry.ClientSyncTest do
 
       assert is_list(result.components)
       assert result.incomplete == true
-      assert result.registry_error =~ "Access denied for cyfr.run"
-      assert result.note =~ "INCOMPLETE RESULTS — cyfr.run search failed"
+
+      assert result.registry_error =~
+               "Access denied for #{Compendium.RegistryHost.canonical_rest_host()}"
+
+      assert result.note =~
+               "INCOMPLETE RESULTS — #{Compendium.RegistryHost.canonical_rest_host()} search failed"
+
+      refute result.note =~ "cyfr.run"
       assert result.note =~ "Only local components are shown."
     end
 
@@ -435,6 +441,19 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert result.auth_note =~ "You are pulling anonymously"
     end
 
+    test "an anonymous pull refused for ownership answers the ownership refusal", c do
+      :ok = Cache.put_manifest(c.registry, c.repository, "1.0.0", c.manifest, c.digest)
+      entitle!(credential_key(c.ctx, c.ref), c)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} =
+               Provider.handle("component", c.ctx, %{
+                 "action" => "pull",
+                 "reference" => c.reference
+               })
+    end
+
     test "a signed-in pull is served from a stale cache only under its own entitlement", c do
       signed_in = Sanctum.TestContext.local()
       :ok = CredentialStore.put_push_token(signed_in, c.registry, "alice", "tok_a", "personal")
@@ -500,6 +519,29 @@ defmodule Compendium.Registry.ClientSyncTest do
       ],
       "annotations" => %{}
     })
+  end
+
+  describe "a refusal names the configured registry" do
+    setup :point_at_stub
+
+    test "a taken-down component names the registry that took it down, never cyfr.run", %{
+      ctx: ctx,
+      stub: stub
+    } do
+      host = Compendium.RegistryHost.canonical_rest_host()
+
+      HTTPStub.expect_once(stub, "GET", "/v1/components/reagent/local/probe/1.0.0", fn conn ->
+        Plug.Conn.send_resp(conn, 410, "{}")
+      end)
+
+      assert {:error, %Errors{reason: :taken_down, registry: ^host} = err} =
+               Client.get_component(ctx, "reagent", "local", "probe", "1.0.0")
+
+      refusal = Compendium.Providers.Shared.refusal(err)
+      assert refusal.message =~ "Component taken down on #{host}"
+      assert refusal.message =~ "removed by #{host}'s moderators"
+      refute refusal.message =~ "cyfr.run"
+    end
   end
 
   describe "happy-path wire tests (HTTP stub)" do

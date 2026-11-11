@@ -11,7 +11,7 @@ defmodule PrismWeb.EnforcementsLive do
   `[:cyfr, :sanctum, :policy, :decision]` fans out via PubSub so the table
   updates without a full reload.
 
-  Click a row → jump to `/activities?request_id=…` to see the request-anchored
+  Click a row → jump to `/activities?id=…` to see the request-anchored
   causal chain (mcp_log + executions + every policy decision in that request).
   """
 
@@ -302,7 +302,7 @@ defmodule PrismWeb.EnforcementsLive do
                 phx-click={
                   req_id &&
                     Phoenix.LiveView.JS.navigate(
-                      PrismWeb.Focus.path(@athanor_route, "/activities?request_id=#{req_id}")
+                      PrismWeb.Focus.path(@athanor_route, "/activities?id=#{req_id}")
                     )
                 }
                 class={[

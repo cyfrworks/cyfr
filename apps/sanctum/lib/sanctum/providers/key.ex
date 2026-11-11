@@ -13,7 +13,7 @@ defmodule Sanctum.Providers.Key do
 
   # A sensitive change's own answers (`Sanctum.Consent.Authz`), which pass
   # as they are: the confirmation signal is matched apart, by its shape.
-  @confirmation_refusals [:identity_stale, :missing_tenant]
+  @confirmation_refusals [:identity_stale, :identity_gone, :missing_tenant]
 
   alias Sanctum.Context
 
@@ -178,6 +178,11 @@ defmodule Sanctum.Providers.Key do
         {:error, {:conflict, message} = conflict} when is_binary(message) ->
           {:error, conflict}
 
+        # This server's slot is not live: nothing was written, and the
+        # refusal reads as itself.
+        {:error, :not_owner} = refused ->
+          refused
+
         # No re-log: the storage layer already logged this failure with the
         # exception detail (Arca.ApiKeyStorage).
         {:error, _reason} ->
@@ -236,6 +241,9 @@ defmodule Sanctum.Providers.Key do
 
       {:error, {:conflict, message} = conflict} when is_binary(message) ->
         {:error, conflict}
+
+      {:error, :not_owner} = refused ->
+        refused
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Key] Failed to rotate key: #{inspect(reason)}")
@@ -296,7 +304,7 @@ defmodule Sanctum.Providers.Key do
       message: "That key is not suspended, so there is nothing to re-enable"
     }
 
-  defp reenable_refusal(reason) when reason in [:database_error, :not_owner, :unavailable],
+  defp reenable_refusal(reason) when reason in [:database_error, :unavailable],
     do: Prima.Refusal.classify(:unavailable)
 
   defp reenable_refusal(reason) when Sanctum.Issuance.standing_refusal?(reason),

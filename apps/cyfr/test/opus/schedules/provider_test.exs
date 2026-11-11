@@ -202,6 +202,24 @@ defmodule Opus.Schedules.ProviderTest do
                Provider.handle("schedule", ctx, args)
     end
 
+    test "a name a live or paused schedule holds is refused as a conflict", %{ctx: ctx} do
+      assert {:ok, first} = Provider.handle("schedule", ctx, schedule_args("taken"))
+
+      assert {:error, {:conflict, "a live schedule is named taken"}} =
+               Provider.handle("schedule", ctx, schedule_args("taken"))
+
+      assert {:ok, _} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "pause",
+                 "schedule_id" => first.schedule_id
+               })
+
+      assert {:error, {:conflict, "a live schedule is named taken"}} =
+               Provider.handle("schedule", ctx, schedule_args("taken"))
+
+      assert {:ok, 1} = Arca.Test.CronSlots.occupied(Context.actor(ctx), "schedule")
+    end
+
     test "refuses at the configured ceiling, naming it", %{ctx: ctx} do
       Cyfr.Test.Settings.put("max_schedules_per_athanor", 3)
 

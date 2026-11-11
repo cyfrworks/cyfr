@@ -277,6 +277,39 @@ defmodule Sanctum.VaultTest do
     end
   end
 
+  describe "a create refused for ownership" do
+    test "answers the ownership refusal through the vault tool and seals nothing", %{ctx: ctx} do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      args = %{
+        "action" => "create",
+        "name" => "unowned-key",
+        "kind" => "api_key",
+        "fields" => %{"api_key" => "unowned-secret"},
+        "destination" => %{"hosts" => ["api.example"]}
+      }
+
+      # The slot is lost after the confirmation is proven, before the write.
+      result =
+        Sanctum.TestContext.confirming(ctx, fn
+          %Sanctum.Context{confirmation_id: nil} = asking ->
+            Sanctum.Provider.handle("vault", asking, args)
+
+          confirmed ->
+            Arca.ControlPlane.record(:lost)
+            Sanctum.Provider.handle("vault", confirmed, args)
+        end)
+
+      Arca.ControlPlane.record(:unclaimed)
+      assert {:error, :not_owner} = result
+
+      assert {:ok, %{entries: entries}} =
+               Sanctum.Provider.handle("vault", ctx, %{"action" => "list"})
+
+      refute Enum.any?(entries, &(&1.name == args["name"]))
+    end
+  end
+
   describe "create + list" do
     test "creates sealed material and lists metadata only", %{ctx: ctx} do
       view = create!(ctx, %{name: "my-supabase"})

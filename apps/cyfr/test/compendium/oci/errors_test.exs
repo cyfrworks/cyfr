@@ -72,7 +72,7 @@ defmodule Compendium.OCI.ErrorsTest do
     test ":taken_down returns the moderator-removal hint with appeal pointer" do
       err = Errors.from_response(410, "", "registry.cyfr.run")
       hint = Errors.actionable_hint(err)
-      assert hint =~ "moderators"
+      assert hint =~ "removed by registry.cyfr.run's moderators"
       assert hint =~ "appeal"
     end
 

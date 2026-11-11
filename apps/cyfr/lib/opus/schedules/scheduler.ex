@@ -150,6 +150,16 @@ defmodule Opus.Schedules.Scheduler do
   wakes the consumer; a lost one loses nothing. The row's stored metadata
   says whether the outcome is kept (`keep_outcome/1`).
 
+  Every member arms a timer for every active row: at its start, and again
+  at every standing pass, which holds each timer to its row: it arms the
+  active rows it holds no timer for, arms again, in place of the old
+  timer, a row whose cursor is no longer the one its timer was armed for,
+  and drops the timers of rows gone or paused. So a schedule created,
+  resumed, edited or bound on a peer fires here too, its claim deciding
+  which member runs it. A writer's cast to its own member's scheduler
+  (`add/1`, `update/1`, `resume/1`, `remove/1`, `pause/1`) is the fast
+  path.
+
   A row of kind `feed` (`Opus.Feeds`) fires through the same claim,
   decision, run, profile and options as a schedule, its first occurrence
   included, and its claim is refused `:not_owner` and deferred as a
@@ -274,9 +284,12 @@ defmodule Opus.Schedules.Scheduler do
 
   @impl true
   # A member that does not hold its cell slot claims no occurrence: the
-  # schedule is asked again at the recheck.
+  # schedule is asked again at the recheck. The message can be an older
+  # timer's, fired as the standing pass replaced it: the timer the state
+  # holds is cancelled, never just dropped, so no timer runs that the
+  # state does not hold.
   def handle_info({:fire, schedule_id}, state) do
-    state = %{state | timers: Map.delete(state.timers, schedule_id)}
+    state = cancel_timer(schedule_id, state)
 
     if Arca.ControlPlane.held?(),
       do: {:noreply, fire_schedule(schedule_id, state)},
@@ -294,7 +307,7 @@ defmodule Opus.Schedules.Scheduler do
   # whatever any exit asked for. A member that does not hold it runs
   # nothing, and looks again at the next.
   def handle_info(:standing_pass, state) do
-    state = arm_standing(state)
+    state = state |> arm_standing() |> arm_from_rows()
     generation = Arca.ControlPlane.generation()
 
     if still_ours?(generation),
@@ -303,7 +316,7 @@ defmodule Opus.Schedules.Scheduler do
   end
 
   def handle_info({:recheck, schedule_id}, state) do
-    state = %{state | timers: Map.delete(state.timers, schedule_id)}
+    state = cancel_timer(schedule_id, state)
 
     if Arca.ControlPlane.held?(),
       do: {:noreply, schedule_timer(schedule_id, state)},
@@ -347,7 +360,7 @@ defmodule Opus.Schedules.Scheduler do
 
   @impl true
   def terminate(_reason, state) do
-    Enum.each(state.timers, fn {_id, ref} -> Process.cancel_timer(ref) end)
+    Enum.each(state.timers, fn {_id, {ref, _armed_for}} -> Process.cancel_timer(ref) end)
     if state.recovery_ref, do: Process.cancel_timer(state.recovery_ref)
     if state.standing_ref, do: Process.cancel_timer(state.standing_ref)
 
@@ -474,6 +487,56 @@ defmodule Opus.Schedules.Scheduler do
     :exit, reason ->
       load_retry(state, Prima.LogFilter.format_exception(:exit, reason), :warning)
   end
+
+  # Every member arms every active schedule from its row, so a schedule
+  # made, resumed, edited or bound on a peer is armed here at the next
+  # standing pass: one with no timer, and one whose cursor moved from the
+  # one its timer was armed for (`schedule_timer/2` replaces the timer).
+  # A retry's timer reads the row itself within a tick, and is left. The
+  # timer of a row gone or paused is dropped. The writer's cast to its own
+  # scheduler is the fast path. A pass the store does not answer arms
+  # nothing and drops nothing; the next one looks again.
+  defp arm_from_rows(state) do
+    case CronSchedule.active_schedules() do
+      {:ok, rows} ->
+        active = MapSet.new(rows, & &1.id)
+
+        state =
+          state.timers
+          |> Map.keys()
+          |> Enum.reject(&MapSet.member?(active, &1))
+          |> Enum.reduce(state, &cancel_timer/2)
+
+        rows
+        |> Enum.reject(&held_to_row?(state.timers[&1.id], &1))
+        |> Enum.reduce(state, &load_one_schedule/2)
+
+      {:error, :database_error} ->
+        state
+    end
+  rescue
+    e in @db_errors ->
+      Logger.warning(
+        "[Opus.Schedules.Scheduler] arming schedules from their rows failed: #{Exception.message(e)}"
+      )
+
+      state
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Opus.Schedules.Scheduler] arming schedules from their rows exited: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
+
+      state
+  end
+
+  defp held_to_row?(nil, _row), do: false
+  defp held_to_row?({_ref, :retry}, _row), do: true
+
+  defp held_to_row?({_ref, %DateTime{} = armed_for}, %{next_run_at: %DateTime{} = cursor}),
+    do: DateTime.compare(armed_for, cursor) == :eq
+
+  defp held_to_row?({_ref, armed_for}, %{next_run_at: cursor}), do: armed_for == cursor
 
   defp load_retry(state, why, level \\ :error) do
     retry_count = state.load_retry_count + 1
@@ -826,7 +889,8 @@ defmodule Opus.Schedules.Scheduler do
         else
           # The athanor is archived or the creator was denied on this
           # server — the run is skipped and recorded, never the schedule
-          # deleted: the members who remain decide its fate.
+          # deleted: the members who remain decide its fate. The cursor
+          # stays, so the schedule is looked at again at the recheck.
           Logger.warning(
             "[Opus.Schedules.Scheduler] schedule #{schedule_id} athanor #{schedule.athanor_id} or " <>
               "creator #{inspect(schedule.user_id)} no longer active — skipping run"
@@ -834,7 +898,7 @@ defmodule Opus.Schedules.Scheduler do
 
           record_error(ctx, schedule_id, "Athanor or creator no longer active — run skipped")
           emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive")
-          schedule_timer(schedule_id, state)
+          recheck_later(schedule_id, state)
         end
 
       {:ok, _other_status} ->
@@ -861,6 +925,10 @@ defmodule Opus.Schedules.Scheduler do
       retry_later(schedule_id, left_open(state))
   end
 
+  # A run skipped before its claim (a damaged row, or input that does not
+  # read) leaves the cursor where it was: the schedule is looked at again
+  # at the recheck, never re-armed for a cursor already past, which would
+  # fire it again at once.
   defp fire_active_schedule(schedule, ctx, state) do
     case runnable(schedule) do
       {:error, :damaged_reference} ->
@@ -871,7 +939,7 @@ defmodule Opus.Schedules.Scheduler do
 
         emit_schedule_failed(schedule, ctx, :damaged_reference)
         record_error(ctx, schedule.id, "Damaged schedule: no pinned reference")
-        schedule_timer(schedule.id, state)
+        recheck_later(schedule.id, state)
 
       {:error, :invalid_input} ->
         Logger.error(
@@ -880,7 +948,7 @@ defmodule Opus.Schedules.Scheduler do
 
         emit_schedule_failed(schedule, ctx, :invalid_input)
         record_error(ctx, schedule.id, "Invalid JSON input")
-        schedule_timer(schedule.id, state)
+        recheck_later(schedule.id, state)
 
       {:ok, exec_reference, input} ->
         case claim(schedule) do
@@ -1710,17 +1778,20 @@ defmodule Opus.Schedules.Scheduler do
   # A retry after a failure waits 30 s plus a little noise, so nodes that
   # failed together do not fire together.
   defp retry_later(schedule_id, state) do
-    arm(schedule_id, {:fire, schedule_id}, @recheck_ms + jitter_ms(@recheck_ms), state)
+    arm(schedule_id, {:fire, schedule_id}, @recheck_ms + jitter_ms(@recheck_ms), :retry, state)
   end
 
   defp recheck_later(schedule_id, state) do
-    arm(schedule_id, {:fire, schedule_id}, @recheck_ms + jitter_ms(@recheck_ms), state)
+    arm(schedule_id, {:fire, schedule_id}, @recheck_ms + jitter_ms(@recheck_ms), :retry, state)
   end
 
-  defp arm(schedule_id, message, delay_ms, state) do
+  # One timer per schedule, beside what it was armed for: the row's cursor
+  # (nil for a row with none), or `:retry` for a timer that reads the row
+  # again when it fires.
+  defp arm(schedule_id, message, delay_ms, armed_for, state) do
     state = cancel_timer(schedule_id, state)
     timer_ref = Process.send_after(self(), message, delay_ms)
-    %{state | timers: Map.put(state.timers, schedule_id, timer_ref)}
+    %{state | timers: Map.put(state.timers, schedule_id, {timer_ref, armed_for})}
   end
 
   # Up to a tenth of the delay, capped at 30 s: schedules that share a
@@ -1752,8 +1823,15 @@ defmodule Opus.Schedules.Scheduler do
         delay_ms = max(DateTime.diff(next_run, DateTime.utc_now(), :millisecond), 0)
 
         if delay_ms > @max_timer_ms,
-          do: arm(schedule_id, {:recheck, schedule_id}, @max_timer_ms, state),
-          else: arm(schedule_id, {:fire, schedule_id}, delay_ms + jitter_ms(delay_ms), state)
+          do: arm(schedule_id, {:recheck, schedule_id}, @max_timer_ms, next_run, state),
+          else:
+            arm(
+              schedule_id,
+              {:fire, schedule_id},
+              delay_ms + jitter_ms(delay_ms),
+              next_run,
+              state
+            )
 
       {:ok, %{status: "active"} = schedule} ->
         # No cursor: one is derived from the expression, or the schedule
@@ -1762,7 +1840,7 @@ defmodule Opus.Schedules.Scheduler do
         case compute_next_run(schedule.cron_expression) do
           {:ok, next_run} ->
             delay_ms = max(DateTime.diff(next_run, DateTime.utc_now(), :millisecond), 0)
-            arm(schedule_id, {:fire, schedule_id}, delay_ms + jitter_ms(delay_ms), state)
+            arm(schedule_id, {:fire, schedule_id}, delay_ms + jitter_ms(delay_ms), nil, state)
 
           {:error, reason} ->
             Logger.warning("[Opus.Schedules.Scheduler] cannot schedule #{schedule_id}: #{reason}")
@@ -1803,7 +1881,7 @@ defmodule Opus.Schedules.Scheduler do
       nil ->
         state
 
-      timer_ref ->
+      {timer_ref, _armed_for} ->
         Process.cancel_timer(timer_ref)
         %{state | timers: Map.delete(state.timers, schedule_id)}
     end

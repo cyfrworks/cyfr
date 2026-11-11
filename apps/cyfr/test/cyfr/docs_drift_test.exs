@@ -533,6 +533,39 @@ defmodule Cyfr.DocsDriftTest do
              "them: #{inspect(Enum.sort(missing))}"
   end
 
+  # The standard codes' table is held to `Prima.MCP.Message`'s table of
+  # them, read from its source and checked against the module, so a code
+  # the server can send and the guide omits fails as one it lists wrongly.
+  defp guide_standard_codes do
+    @integration_guide
+    |> SourceTree.read()
+    |> then(&Regex.scan(~r/^\| (-32\d{3}) \| `(\w+)`/m, &1))
+    |> Map.new(fn [_, code, name] -> {name, String.to_integer(code)} end)
+  end
+
+  defp message_standard_codes do
+    [_, block] =
+      Regex.run(
+        ~r/@error_codes %\{(.*?)\n  \}/s,
+        SourceTree.read(Path.join(@repo_root, "apps/prima/lib/prima/mcp/message.ex"))
+      )
+
+    ~r/(\w+): (-\d+)/
+    |> Regex.scan(block)
+    |> Map.new(fn [_, name, code] -> {name, String.to_integer(code)} end)
+  end
+
+  test "the guide's standard codes are every one the server sends" do
+    sent = message_standard_codes()
+
+    for {name, code} <- sent do
+      assert Prima.MCP.Message.error_code(String.to_existing_atom(name)) == code
+    end
+
+    assert map_size(sent) > 0
+    assert guide_standard_codes() == sent
+  end
+
   # Every action a provider annotates `auth: :anonymous` — the actions that
   # answer without a session, which is exactly what the table claims to list.
   defp anonymous_actions do

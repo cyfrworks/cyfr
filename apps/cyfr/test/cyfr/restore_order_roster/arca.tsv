@@ -33,7 +33,6 @@ apps/arca/test/arca/object_revisions_test.exs	5	pending
 apps/arca/test/arca/paired_clients_test.exs	1	pending
 apps/arca/test/arca/pending_confirmations_test.exs	2	pending
 apps/arca/test/arca/person_identities_test.exs	1	pending
-apps/arca/test/arca/platform_settings_test.exs	1	pending
 apps/arca/test/arca/provisioning_claims_test.exs	2	pending
 apps/arca/test/arca/s3_test_env_test.exs	5	pending
 apps/arca/test/arca/schedule_occurrences_test.exs	2	pending

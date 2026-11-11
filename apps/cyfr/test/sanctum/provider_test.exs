@@ -444,6 +444,61 @@ defmodule Sanctum.ProviderTest do
 
       assert String.starts_with?(result.api_key, "cyfr_ak_")
     end
+
+    test "a key create refused for ownership answers the ownership refusal and mints nothing",
+         %{ctx: ctx} do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      assert {:error, :not_owner} =
+               key_tool_after_losing_slot(ctx, %{"action" => "create", "name" => "unowned-key"})
+
+      Arca.ControlPlane.record(:unclaimed)
+      assert {:error, :not_found} = Sanctum.ApiKey.get(ctx, "unowned-key")
+    end
+
+    test "a key rotation refused for ownership answers the ownership refusal and keeps the key",
+         %{ctx: ctx} do
+      {:ok, _} = key_tool(ctx, %{"action" => "create", "name" => "kept-key"})
+      {:ok, %{key_prefix: prefix}} = Sanctum.ApiKey.get(ctx, "kept-key")
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      assert {:error, :not_owner} =
+               key_tool_after_losing_slot(ctx, %{"action" => "rotate", "name" => "kept-key"})
+
+      Arca.ControlPlane.record(:unclaimed)
+      assert {:ok, %{key_prefix: ^prefix}} = Sanctum.ApiKey.get(ctx, "kept-key")
+    end
+
+    test "a key re-enable refused for ownership answers the ownership refusal and leaves it suspended",
+         %{ctx: ctx} do
+      {:ok, _} = key_tool(ctx, %{"action" => "create", "name" => "held-unowned"})
+      {:ok, %{id: id}} = key_tool(ctx, %{"action" => "get", "name" => "held-unowned"})
+
+      Ecto.Query.from(k in Arca.Schemas.ApiKey, where: k.id == ^id)
+      |> Arca.Repo.update_all(set: [suspended: true])
+
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      assert {:error, :not_owner} =
+               key_tool_after_losing_slot(ctx, %{"action" => "reenable", "key_id" => id})
+
+      Arca.ControlPlane.record(:unclaimed)
+      assert %{suspended: true} = Arca.Repo.get!(Arca.Schemas.ApiKey, id)
+    end
+  end
+
+  # The key tool as `key_tool/2` reaches it, with this server's slot lost
+  # once the person has confirmed: the write the confirmation lets through
+  # is the one refused, not the confirmation.
+  defp key_tool_after_losing_slot(ctx, args) do
+    Sanctum.TestContext.confirming(ctx, fn
+      %Context{confirmation_id: nil} = asking ->
+        Provider.handle("key", asking, args)
+
+      confirmed ->
+        Arca.ControlPlane.record(:lost)
+        Provider.handle("key", confirmed, args)
+    end)
   end
 
   # ============================================================================

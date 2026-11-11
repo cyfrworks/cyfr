@@ -34,11 +34,12 @@ func lockExclusive(f *os.File) (busy bool, err error) {
 // inherited the descriptor and must keep it until it exits.
 func unlockExclusive(*os.File) {}
 
-// replaceFile renames from over to.
-func replaceFile(from, to string) error { return os.Rename(from, to) }
+// ReplaceFile renames from over to. A rename made durable on every
+// platform is ReplaceFile, then SyncDir of its directory.
+func ReplaceFile(from, to string) error { return os.Rename(from, to) }
 
-// syncDir makes a rename or a removal in dir durable.
-func syncDir(dir string) error {
+// SyncDir makes a rename or a removal in dir durable.
+func SyncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
 		return err

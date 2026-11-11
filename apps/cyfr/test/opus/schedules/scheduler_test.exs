@@ -208,6 +208,163 @@ defmodule Opus.Schedules.SchedulerTest do
     :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
   end
 
+  # Every timer the scheduler armed while it worked through `fun` that is
+  # still running, beside the ones its state holds.
+  defp armed_while(scheduler, fun) do
+    :erlang.trace_pattern({:erlang, :send_after, 4}, [{:_, [], [{:return_trace}]}], [])
+    :erlang.trace(scheduler, true, [:call, {:tracer, self()}])
+
+    on_exit(fn -> :erlang.trace_pattern({:erlang, :send_after, 4}, false, []) end)
+
+    fun.()
+    _ = :sys.get_state(scheduler)
+    :erlang.trace(scheduler, false, [:call])
+    refs = armed_refs(scheduler, [])
+    live = Enum.filter(refs, &is_integer(Process.read_timer(&1)))
+    state = :sys.get_state(scheduler)
+
+    held = [
+      state.standing_ref,
+      state.recovery_ref | Enum.map(state.timers, fn {_, {ref, _}} -> ref end)
+    ]
+
+    {live, held}
+  end
+
+  defp armed_refs(scheduler, refs) do
+    receive do
+      {:trace, ^scheduler, :return_from, {:erlang, :send_after, 4}, ref} ->
+        armed_refs(scheduler, [ref | refs])
+
+      {:trace, ^scheduler, :call, {:erlang, :send_after, _args}} ->
+        armed_refs(scheduler, refs)
+    after
+      50 -> refs
+    end
+  end
+
+  test "an old timer that fires behind the standing pass that replaced it leaves no timer the state does not hold",
+       %{ctx: ctx} do
+    script!([])
+
+    schedule =
+      create_schedule(ctx, %{next_run_at: DateTime.add(DateTime.utc_now(), 500, :millisecond)})
+
+    scheduler = scheduler!()
+    {old_timer, _armed_for} = :sys.get_state(scheduler).timers[schedule.id]
+    :ok = :sys.suspend(scheduler)
+    on_exit(fn -> if Process.alive?(scheduler), do: :sys.resume(scheduler) end)
+
+    {:ok, _} =
+      CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+        next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+      })
+
+    # The pass is queued first, the old timer's message behind it.
+    send(scheduler, :standing_pass)
+    wait_until(fn -> Process.read_timer(old_timer) == false end, 2_000)
+
+    {live, held} = armed_while(scheduler, fn -> :ok = :sys.resume(scheduler) end)
+    assert live -- held == []
+  end
+
+  test "a retry timer outlives a moved cursor, and a pause cancels it", %{ctx: ctx} do
+    script!([])
+    schedule = create_schedule(ctx, %{next_run_at: DateTime.add(DateTime.utc_now(), -1, :second)})
+    lose_ownership(:lost)
+    scheduler = scheduler!()
+
+    wait_until(
+      fn -> match?({_ref, :retry}, :sys.get_state(scheduler).timers[schedule.id]) end,
+      2_000
+    )
+
+    {retry, :retry} = :sys.get_state(scheduler).timers[schedule.id]
+    Arca.ControlPlane.record(:unclaimed)
+    actor = Sanctum.Context.actor(ctx)
+
+    {:ok, _} =
+      CronSchedule.update(actor, schedule.id, %{
+        next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+      })
+
+    send(scheduler, :standing_pass)
+    assert {^retry, :retry} = :sys.get_state(scheduler).timers[schedule.id]
+
+    {:ok, _} = CronSchedule.update(actor, schedule.id, %{status: "paused"})
+    send(scheduler, :standing_pass)
+    refute Map.has_key?(:sys.get_state(scheduler).timers, schedule.id)
+    assert Process.read_timer(retry) == false
+  end
+
+  test "a long recheck timer is replaced when a peer moves the row", %{ctx: ctx} do
+    script!([])
+
+    schedule =
+      create_schedule(ctx, %{next_run_at: DateTime.add(DateTime.utc_now(), 7200, :second)})
+
+    scheduler = scheduler!()
+    {old, _armed_for} = :sys.get_state(scheduler).timers[schedule.id]
+    next = DateTime.add(DateTime.utc_now(), 10_800, :second)
+    {:ok, _} = CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{next_run_at: next})
+
+    send(scheduler, :standing_pass)
+    assert {new, armed_for} = :sys.get_state(scheduler).timers[schedule.id]
+    assert DateTime.compare(armed_for, next) == :eq
+    refute new == old
+    assert Process.read_timer(old) == false
+    assert is_integer(Process.read_timer(new))
+  end
+
+  test "a schedule a peer made due is armed again at the standing pass, its old timer cancelled",
+       %{ctx: ctx} do
+    script!([{:probe, self()}, %{"ran" => true}])
+    schedule = create_schedule(ctx)
+    scheduler = scheduler!()
+    assert {old_timer, _armed_for} = :sys.get_state(scheduler).timers[schedule.id]
+
+    {:ok, _} =
+      CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+        next_run_at: DateTime.add(DateTime.utc_now(), -1, :second)
+      })
+
+    send(scheduler, :standing_pass)
+    assert_receive {:scripted_probe, worker, _id}, 10_000
+    assert Process.read_timer(old_timer) == false
+    send(worker, :continue)
+  end
+
+  test "a due schedule made after the scheduler started, with no cast to it, fires at the standing pass",
+       %{ctx: ctx} do
+    script!([{:probe, self()}, %{"ran" => true}])
+    scheduler = scheduler!()
+    _ = :sys.get_state(scheduler)
+    schedule = due!(create_schedule(ctx))
+
+    send(scheduler, :standing_pass)
+    assert_receive {:scripted_probe, worker, _id}, 10_000
+    send(worker, :continue)
+    assert [_occurrence] = occurrences(ctx, schedule)
+  end
+
+  test "the standing pass drops the timer of a schedule paused or deleted with no cast to it",
+       %{ctx: ctx} do
+    paused = create_schedule(ctx)
+    deleted = create_schedule(ctx)
+    scheduler = scheduler!()
+    timers = :sys.get_state(scheduler).timers
+    assert Map.has_key?(timers, paused.id) and Map.has_key?(timers, deleted.id)
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, _} = CronSchedule.update(actor, paused.id, %{status: "paused"})
+    {:ok, _} = CronSchedule.soft_delete(actor, deleted.id)
+
+    send(scheduler, :standing_pass)
+    timers = :sys.get_state(scheduler).timers
+    refute Map.has_key?(timers, paused.id)
+    refute Map.has_key?(timers, deleted.id)
+  end
+
   for loss <- [:lost, :expired], event <- [:completion, :death] do
     @tag :ownership_loss
     test "a scheduled #{event} after ownership is #{loss} leaves the occurrence and counters unchanged",
@@ -796,6 +953,28 @@ defmodule Opus.Schedules.SchedulerTest do
     assert ScriptedWorker.calls() == []
     assert [] = Arca.Repo.all(Arca.Schemas.Execution)
     assert {:ok, %{error_count: 1}} = CronSchedule.get_for_daemon(schedule.id)
+  end
+
+  test "a due schedule whose run is skipped is looked at again at the recheck, never fired again at once",
+       %{ctx: ctx} do
+    script!([])
+    schedule = due!(create_schedule(ctx))
+
+    Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^ctx.athanor_id),
+      set: [status: "archived"]
+    )
+
+    capture_log(fn ->
+      scheduler = scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert {timer, :retry} = :sys.get_state(scheduler).timers[schedule.id]
+      assert Process.read_timer(timer) > 15_000
+      assert {:ok, %{error_count: 1}} = CronSchedule.get_for_daemon(schedule.id)
+    end)
   end
 
   test "a live peer's freshly claimed occurrence is left where it is", %{ctx: ctx} do

@@ -721,7 +721,7 @@
         "verb": "grant",
         "frame": "frm_01a09fee2e4f",
         "args": {
-          "ref": "catalyst:local.openai:1.4.1"
+          "ref": "catalyst:local.openai:1.4.2"
         }
       }
     },

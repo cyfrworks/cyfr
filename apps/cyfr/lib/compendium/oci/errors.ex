@@ -135,7 +135,7 @@ defmodule Compendium.OCI.Errors do
     }
   end
 
-  # 410 Gone — cyfr.run signals taken-down components on REST detail handlers
+  # 410 Gone — a registry signals taken-down components on REST detail handlers
   # and on OCI gateway `/v2/*` manifest pulls. The status code is
   # authoritative; the `X-Cyfr-Component-Status: taken_down` header beside it
   # is not read.
@@ -185,17 +185,21 @@ defmodule Compendium.OCI.Errors do
     }
   end
 
-  @doc "Build an error from a cyfr.run API response."
+  @doc """
+  Build an error from a response of the registry's REST API, named by the
+  host this deployment configures for it
+  (`Compendium.RegistryHost.canonical_rest_host/0`).
+  """
   @spec from_api_response(integer(), binary(), String.t()) :: t()
   def from_api_response(status, body, operation) do
-    err = from_response(status, body, "cyfr.run")
+    err = from_response(status, body, Compendium.RegistryHost.canonical_rest_host())
     %{err | detail: %{operation: operation, original_detail: err.detail}}
   end
 
-  @doc "Build a connection error for the cyfr.run API."
+  @doc "Build a connection error for the registry's REST API, named as `from_api_response/3` names it."
   @spec api_connection_error(term()) :: t()
   def api_connection_error(reason) do
-    connection_error("cyfr.run", reason)
+    connection_error(Compendium.RegistryHost.canonical_rest_host(), reason)
   end
 
   @doc "The refusal every registry client answers when no registry is configured."
@@ -239,13 +243,18 @@ defmodule Compendium.OCI.Errors do
   defp dig_required_version(%{"original_detail" => inner}), do: dig_required_version(inner)
   defp dig_required_version(_), do: nil
 
-  @doc "Build a parse error for unexpected response formats."
+  @doc """
+  Build a parse error for an unexpected response format from the
+  registry's REST API, named as `from_api_response/3` names it.
+  """
   @spec parse_error(String.t(), term()) :: t()
   def parse_error(operation, detail) do
+    registry = Compendium.RegistryHost.canonical_rest_host()
+
     %__MODULE__{
       reason: :parse_error,
-      message: "Unexpected response format from cyfr.run during #{operation}",
-      registry: "cyfr.run",
+      message: "Unexpected response format from #{registry} during #{operation}",
+      registry: registry,
       status: nil,
       detail: detail
     }
@@ -306,15 +315,15 @@ defmodule Compendium.OCI.Errors do
     do: "Publish with a new version number instead."
 
   def actionable_hint(%__MODULE__{reason: :parse_error}),
-    do: "This may indicate a cyfr.run API version mismatch. Check for updates."
+    do: "This may indicate a registry API version mismatch. Check for updates."
 
   def actionable_hint(%__MODULE__{reason: :ssrf_blocked}),
     do:
       "The registry returned a redirect to a blocked address. This may indicate a misconfigured or malicious registry."
 
-  def actionable_hint(%__MODULE__{reason: :taken_down}),
+  def actionable_hint(%__MODULE__{reason: :taken_down, registry: registry}),
     do:
-      "Component was removed by cyfr.run moderators. If you believe this was in error, open an appeal from the prism Registry tab or run `cyfr registry appeals`."
+      "Component was removed by #{registry || "the registry"}'s moderators. If you believe this was in error, open an appeal from the prism Registry tab or run `cyfr registry appeals`."
 
   def actionable_hint(%__MODULE__{}), do: ""
 

@@ -41,6 +41,8 @@ defmodule Arca.Test.S3Env do
   key under an actor's segments and cannot list the bucket root.
   """
 
+  alias Arca.Adapters.S3
+
   @defaults %{
     endpoint: {"CYFR_TEST_S3_ENDPOINT", "http://127.0.0.1:9000"},
     bucket: {"CYFR_TEST_S3_BUCKET", "cyfr-test"},
@@ -179,11 +181,13 @@ defmodule Arca.Test.S3Env do
         %{status: status, body: body} -> raise "could not list: HTTP #{status} #{inspect(body)}"
       end
 
-    acc = [Enum.map(Regex.scan(~r{<Key>([^<]*)</Key>}, body), &xml_text(Enum.at(&1, 1))) | acc]
+    acc = [
+      Enum.map(Regex.scan(~r{<Key>([^<]*)</Key>}, body), &S3.xml_unescape(Enum.at(&1, 1))) | acc
+    ]
 
     with true <- String.contains?(body, "<IsTruncated>true</IsTruncated>"),
          [_, next] <- Regex.run(~r{<NextContinuationToken>([^<]+)</NextContinuationToken>}, body) do
-      next = xml_text(next)
+      next = S3.xml_unescape(next)
 
       if MapSet.member?(seen, next),
         do: raise("the listing repeated its continuation token #{inspect(next)}")
@@ -354,19 +358,6 @@ defmodule Arca.Test.S3Env do
     key
     |> String.split("/")
     |> Enum.map_join("/", fn segment -> URI.encode(segment, &URI.char_unreserved?/1) end)
-  end
-
-  # A key or token is XML text: undo the predefined and numeric entities.
-  defp xml_text(text) do
-    Regex.replace(~r/&(lt|gt|quot|apos|amp|#x[0-9a-fA-F]+|#[0-9]+);/, text, fn
-      _, "lt" -> "<"
-      _, "gt" -> ">"
-      _, "quot" -> "\""
-      _, "apos" -> "'"
-      _, "amp" -> "&"
-      _, "#x" <> hex -> <<String.to_integer(hex, 16)::utf8>>
-      _, "#" <> dec -> <<String.to_integer(dec)::utf8>>
-    end)
   end
 
   defp env_flag(variable, default) do

@@ -357,8 +357,8 @@ so a shared cache must not serve one caller's list to another.
 }
 ```
 
-**CYFR error codes.** This is the whole set — every code the server can put
-on the wire.
+**CYFR error codes.** These are CYFR's own; with the standard codes in the
+table after them they are every code the server can put on the wire.
 
 | Code | Name | Meaning |
 |------|------|---------|
@@ -385,14 +385,27 @@ consent signals, whose `error.data` payload is described under
 band answers a `resources/read` by the class of its refusal; a store that
 cannot answer is `-33103`, never a missing resource.
 
-Everything else a tool refuses arrives as a **successful** JSON-RPC response
-whose `result.isError` is `true` and whose content carries the sentence —
-including a component that does not resolve, a registry that is unreachable,
-and a failed validation. Branch on `result.isError` for those, not on a code.
+A call refused before its tool ran is a JSON-RPC error by the class of its
+refusal: a failed validation of the arguments, an unknown tool or a missing
+`name` is `-32602` at HTTP 400. An authentication, permission or consent
+refusal keeps its code wherever it was raised. Everything else a tool refuses
+once it ran arrives as a **successful** JSON-RPC response whose
+`result.isError` is `true` and whose content carries the sentence —
+including a component that does not resolve and a registry that is
+unreachable. Branch on `result.isError` for those, not on a code.
 
-Two protocol-level codes are also in play, both standard JSON-RPC:
-`-32601` for an unknown method and `-32022` (`UnsupportedProtocolVersion`),
-which carries the supported list in `error.data.supported`.
+**Standard codes.** JSON-RPC's own, and the ones MCP reserves:
+
+| Code | Name | HTTP | Meaning |
+|------|------|------|---------|
+| -32700 | `parse_error` | 400, 415 | The body is not parseable JSON, or not sent as `application/json` |
+| -32600 | `invalid_request` | 400, 405, 413 | Not a single JSON-RPC request: a batch, an HTTP method other than `POST`, or a body over the size limit |
+| -32601 | `method_not_found` | 404 | Unknown method |
+| -32602 | `invalid_params` | 400 | The arguments do not validate, the tool is unknown, or a required field is missing |
+| -32603 | `internal_error` | 500 | The request's handler failed before it could answer |
+| -32002 | `resource_not_found` | 400 | `resources/read` of a resource that does not exist |
+| -32020 | `header_mismatch` | 400 | A required MCP header is missing or disagrees with the body ([Required Headers](#required-headers)) |
+| -32022 | `unsupported_protocol_version` | 400 | `error.data.supported` lists the revisions the server speaks |
 
 > **MCP Tool Reference**: For a complete mapping of CLI commands to MCP tool/action pairs (useful when building HTTP integrations), see [CLI → MCP Tool Reference](component-guide.md#cli--mcp-tool-reference) in the Component Guide.
 

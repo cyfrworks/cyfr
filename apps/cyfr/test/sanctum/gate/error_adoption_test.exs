@@ -60,7 +60,12 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # lender and flows each say theirs.
     "apps/prima/lib/prima/authority/blob.ex" => 25,
     "apps/prima/lib/prima/component_ref.ex" => 20,
-    "apps/cyfr/lib/emissary/external/server.ex" => 19,
+    # An external MCP server's own faults, said to the operator: among
+    # them a session id it issued that is not visible ASCII or too short
+    # to keep, and a listing of more pages than the client reads. A connect
+    # answers its caller the masked sentence it keeps as its status error,
+    # so nothing branches on the reason.
+    "apps/cyfr/lib/emissary/external/server.ex" => 22,
     # What is wrong with the values offered (an empty field, a cron
     # expression, a reference that does not resolve) and the cap reached.
     "apps/cyfr/lib/opus/schedules/provider.ex" => 3,
