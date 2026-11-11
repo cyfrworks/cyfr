@@ -187,7 +187,32 @@ defmodule PrismWeb.LoginLiveTest do
       assert {:ok, %{namespace: "page-person"}} = Sanctum.Tenancy.Users.get(asked.ctx.user_id)
     end
 
-    test "the page keeps the session's caller and never its token", %{conn: conn, dir: dir} do
+    test "a sync signed while the session store could not answer the page's opening completes once it answers",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+
+      registry(asked.account, fn %{path: "/v1/tokens/mint"} ->
+        {200,
+         Sanctum.Test.RegistryStub.answer(%{
+           "personal_namespace" => %{"slug" => "page-person", "token" => "cyfr_pt_page"},
+           "memberships" => []
+         })}
+      end)
+
+      try do
+        Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+        {:ok, view, _html} = live(asked.conn, ~p"/login")
+        Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
+
+        render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
+        assert {"/", %{"info" => "Your push tokens are synced."}} = assert_redirect(view)
+        assert_received {:registry_request, %{method: "POST", path: "/v1/tokens/mint"}}
+      after
+        Arca.Repo.query("ALTER TABLE sessions_unavailable RENAME TO sessions")
+      end
+    end
+
+    test "the page never keeps the session's token", %{conn: conn, dir: dir} do
       asked = asked!(conn, dir, %{"action" => "sync"})
       token = Plug.Conn.get_session(asked.conn, session_key())
       assert is_binary(token)
@@ -196,8 +221,6 @@ defmodule PrismWeb.LoginLiveTest do
       assigns = :sys.get_state(view.pid).socket.assigns
 
       refute inspect(assigns, limit: :infinity, printable_limit: :infinity) =~ token
-      assert {:ok, %Sanctum.Context{user_id: user_id}} = assigns.session_caller
-      assert user_id == asked.ctx.user_id
     end
 
     test "a registry's refusal is the flash the browser returns with, in a person's words",

@@ -60,11 +60,6 @@ defmodule PrismWeb.LoginLive do
      # on that browser, and a person's session the one their requests for
      # a confirmation are bound to.
      |> assign(:bindings, bindings(session))
-     # The caller a registry signature completes under: the session its
-     # request was bound to, which the answer is taken under. The socket
-     # keeps the established context, never the token, since a socket's
-     # assigns print in its crash reports.
-     |> assign(:session_caller, session_caller(socket, session))
      |> assign(:browser_binding, session["_csrf_token"])
      # `connect_info` is readable only here, so the address a request is
      # charged to is captured at mount and carried.
@@ -76,19 +71,9 @@ defmodule PrismWeb.LoginLive do
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
-  # Only a connected socket answers an event, so only it establishes.
-  defp session_caller(socket, session) do
-    if connected?(socket) do
-      Sanctum.Caller.establish(
-        {:session, session[to_string(CyfrWeb.SignInResponse.session_key())]},
-        refresh: false
-      )
-    else
-      {:error, :unauthenticated}
-    end
-  end
-
-  # Every binding this browser's session cookie holds.
+  # Every binding this browser's session cookie holds. The session is
+  # held by its row key (`Sanctum.Session.token_hash/1`), never its token,
+  # since a socket's assigns print in its crash reports.
   defp bindings(session) do
     token = session[to_string(CyfrWeb.SignInResponse.session_key())]
 
@@ -156,12 +141,31 @@ defmodule PrismWeb.LoginLive do
   defp answered(socket, {:error, reason}), do: assign(socket, :error, sentence(reason))
 
   defp registered(socket, outcome) do
-    with {:ok, ctx} <- socket.assigns.session_caller,
-         {:ok, ctx} <- Sanctum.Caller.revalidate_session(ctx),
+    with {:ok, ctx} <- session_caller(socket.assigns.bindings),
          {:ok, result} <- Compendium.complete_registry(ctx, outcome) do
       {:info, done(outcome.registry_request, result)}
     else
       {:error, reason} -> {:error, "That did not go through: " <> Ops.error_message(reason)}
+    end
+  end
+
+  # The caller a registry signature completes under: the session its
+  # request was bound to, read from the store when the answer arrives, as
+  # a holder of a session's row key reads it (`Sanctum.Session.load_by_hash/1`),
+  # then established and held to the person's standing as a session is.
+  defp session_caller(bindings) do
+    with {:session, hash} <- List.keyfind(bindings, :session, 0, {:error, :unauthenticated}),
+         {:ok, stored} <- stored_session(hash),
+         {:ok, ctx} <- Sanctum.Caller.establish_context(stored) do
+      Sanctum.Caller.revalidate_session(ctx)
+    end
+  end
+
+  defp stored_session(hash) do
+    case Sanctum.Session.load_by_hash(hash) do
+      {:ok, ctx} -> {:ok, ctx}
+      {:error, :invalid_session} -> {:error, :unauthenticated}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
