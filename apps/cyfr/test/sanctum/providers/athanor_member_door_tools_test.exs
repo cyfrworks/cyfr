@@ -136,6 +136,61 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, :allowed} = Sanctum.Door.admit_person(carol)
   end
 
+  # A person of an account with their own athanor, denied by an entry of
+  # their account's identifier, with the athanor cap set to the active
+  # athanors left, so reopening theirs is refused.
+  defp denied_at_cap!(admin, n) do
+    {:ok, carol} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|capped-#{n}",
+        provider: "github",
+        email: "capped#{n}@example.com",
+        verified: true
+      })
+
+    {:ok, identifier} = Users.identifier(carol.id)
+
+    assert {:ok, %{effect: "deny", ejected: 1, id: deny_id}} =
+             call(admin, "door", %{"action" => "deny", "value" => identifier})
+
+    {:ok, count} = Athanors.count()
+    Cyfr.Test.Settings.put("max_athanors", count)
+    {carol, identifier, deny_id}
+  end
+
+  defp not_restored(done, user_id),
+    do:
+      "#{done}, but 1 of 1 denied people were not restored and stay denied — #{user_id}: " <>
+        "This server holds as many athanors as it may — ask its operator"
+
+  test "door.allow answers a restore the athanor cap refuses, in its class, and the person stays denied",
+       %{ops: ops, ctx: ctx, n: n} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    {carol, identifier, _deny_id} = denied_at_cap!(admin, n)
+
+    assert {:error, %Prima.Refusal{class: :rate_limited, message: message}} =
+             call(admin, "door", %{"action" => "allow", "value" => identifier})
+
+    assert message == not_restored("Sign-in is allowed", carol.id)
+    assert {:ok, %{status: "denied"}} = Users.get(carol.id)
+
+    assert [%{effect: "allow"}] =
+             Enum.filter(Sanctum.Door.Store.list(), &(&1.value == identifier))
+  end
+
+  test "door.remove of a deny answers a restore the athanor cap refuses, in its class, and the person stays denied",
+       %{ops: ops, ctx: ctx, n: n} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    {carol, identifier, deny_id} = denied_at_cap!(admin, n)
+
+    assert {:error, %Prima.Refusal{class: :rate_limited, message: message}} =
+             call(admin, "door", %{"action" => "remove", "id" => deny_id})
+
+    assert message == not_restored("The entry is removed", carol.id)
+    assert {:ok, %{status: "denied"}} = Users.get(carol.id)
+    assert [] = Enum.filter(Sanctum.Door.Store.list(), &(&1.value == identifier))
+  end
+
   # A session the door's verdict issued to `user_id`.
   defp session_for(user_id, email) do
     ctx =

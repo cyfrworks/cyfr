@@ -141,9 +141,15 @@ defmodule Sanctum.Providers.Door do
           # reopens; the thread seats the deny removed stay removed — a
           # thread's people add them again. Said in the result, not left to guess.
           restored = denied_users(kind, value)
-          Enum.each(restored, &Users.allow/1)
+          failed = restore(restored)
           Sanctum.Notify.allowlist_changed()
-          {:ok, with_restore_note(render(entry), restored)}
+
+          restore_answer(
+            failed,
+            restored,
+            "Sign-in is allowed",
+            with_restore_note(render(entry), restored)
+          )
 
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Door] door.allow failed: #{inspect(reason)}")
@@ -204,7 +210,7 @@ defmodule Sanctum.Providers.Door do
           do: denied_users(entry.kind, entry.value),
           else: []
 
-      Enum.each(restored, &Users.allow/1)
+      failed = restore(restored)
 
       # Removing an allow is closing the door on whoever it admitted, and the
       # credentials it issued would otherwise outlive it by their whole TTL.
@@ -216,9 +222,12 @@ defmodule Sanctum.Providers.Door do
 
       Sanctum.Notify.allowlist_changed()
 
-      {:ok,
-       %{id: id, removed: true, ejected: ejected}
-       |> with_restore_note(restored)}
+      restore_answer(
+        failed,
+        restored,
+        "The entry is removed",
+        with_restore_note(%{id: id, removed: true, ejected: ejected}, restored)
+      )
     else
       {:error, :not_found} ->
         {:error, {:not_found, "Allowlist entry", id}}
@@ -275,6 +284,33 @@ defmodule Sanctum.Providers.Door do
       restored: length(restored),
       note: "Their own athanor is reopened; thread seats removed by the deny are not restored"
     })
+  end
+
+  # Each denied person allowed back (`Users.allow/1`), answering the ones
+  # whose allow was refused, each with its refusal.
+  defp restore(people) do
+    for user <- people,
+        {:error, reason} <- [Users.allow(user)],
+        do: {user, Sanctum.Refusals.classify(reason)}
+  end
+
+  # What a write that restores people answers: its result when every
+  # restore went through, else one refusal of the first failure's class
+  # whose sentence says the write stands and names each person left denied
+  # with their own refusal's sentence.
+  defp restore_answer([], _restored, _done, result), do: {:ok, result}
+
+  defp restore_answer([{_user, first} | _] = failed, restored, done, _result) do
+    reasons =
+      Enum.map_join(failed, "; ", fn {user, refusal} -> "#{user.id}: #{refusal.message}" end)
+
+    {:error,
+     %{
+       first
+       | message:
+           "#{done}, but #{length(failed)} of #{length(restored)} denied people were not " <>
+             "restored and stay denied — #{reasons}"
+     }}
   end
 
   # Every invitation the identifier still holds, withdrawn once; the count
