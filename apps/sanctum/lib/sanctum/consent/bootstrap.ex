@@ -190,7 +190,10 @@ defmodule Sanctum.Consent.Bootstrap do
   def run(%Context{} = ctx, claim \\ nil) do
     with :ok <- holding(ctx, claim),
          {:ok, result} <- walk(ctx, claim) do
-      if Enum.any?(result.skipped, &match?({_ref, :claim_lost}, &1)),
+      # A source whose write the commit's slot proof refused
+      # (`Arca.Repo.locking_transaction/2`) answers `:not_owner`: the slot
+      # the claim was taken under is lost, and with it the claim.
+      if Enum.any?(result.skipped, fn {_ref, reason} -> reason in [:claim_lost, :not_owner] end),
         do: {:error, :claim_lost},
         else: {:ok, result}
     end

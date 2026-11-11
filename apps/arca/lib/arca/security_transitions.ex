@@ -123,11 +123,12 @@ defmodule Arca.SecurityTransitions do
   ## The slot
 
   A denial and an allow run under this member's slot (`slot:`, as
-  `Arca.ControlPlane.member_slot/0` answers it), verified on the
-  database's clock as the transaction's first step
-  (`Arca.ControlPlane.verify_held/1`): a member whose slot a successor
-  took or that lapsed is refused `:not_owner` with no standing changed,
-  and a takeover that starts later waits for the transition to commit.
+  `Arca.ControlPlane.member_slot/0` answers it), verified as the
+  transaction's first step (`Arca.ControlPlane.verify_held/1`) and proved
+  on the database's clock at its commit (`Arca.Repo.locking_transaction/2`):
+  a member whose slot a successor took or that lapsed before the proof is
+  refused `:not_owner` with no standing changed, and a takeover that
+  starts after it waits for the transition to commit.
   """
 
   import Ecto.Query
@@ -254,7 +255,7 @@ defmodule Arca.SecurityTransitions do
   # ---- the runner ------------------------------------------------------------
 
   # One transaction within `@deadline_ms` whose first step verifies
-  # `slot`; a raised database error rolls it back and answers
+  # `slot`, proved at its commit; a raised database error rolls it back and answers
   # `:database_error`.
   defp run(tag, slot, body) do
     tag
@@ -722,14 +723,21 @@ defmodule Arca.SecurityTransitions do
 
   Every statement's postcondition is read before commit; a survivor rolls
   the whole transition back as `:postcondition_failed`. A lost slot is
-  `:slot_lost`; a store that cannot answer, `:database_error`.
+  `:slot_lost`, whether a check found it lost or the commit's proof did
+  (`Arca.Repo.locking_transaction/2`); a store that cannot answer,
+  `:database_error`.
   """
   @spec restore(keyword()) :: {:ok, map() | :none} | {:error, term()}
   def restore(opts) when is_list(opts) do
     slot = Keyword.fetch!(opts, :slot)
 
     Arca.Repo.Errors.with_db_rescue("Arca.SecurityTransitions.restore", fn ->
-      Arca.Repo.locking_transaction(fn -> declared_restore(slot) end, timeout: @deadline_ms)
+      case Arca.Repo.locking_transaction(fn -> declared_restore(slot) end,
+             timeout: @deadline_ms
+           ) do
+        {:error, :not_owner} -> {:error, :slot_lost}
+        answer -> answer
+      end
     end)
     |> Arca.Data.project()
   end

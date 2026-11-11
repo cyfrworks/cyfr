@@ -83,6 +83,12 @@ defmodule Arca.AgentStorage do
           Arca.Repo.rollback(:claim_lost)
         end
       end)
+      |> case do
+        # The slot the claim was taken under, lost before the commit's proof
+        # (`Arca.Repo.locking_transaction/2`), is the claim lost as well.
+        {:error, :not_owner} when claim != nil -> {:error, :claim_lost}
+        answer -> answer
+      end
     end)
     |> Arca.Data.project()
   end
