@@ -49,6 +49,19 @@ defmodule Sanctum.Dispatch do
   `Sanctum.RunningTasks` so a cancel stops it (`call_external/4`'s
   `:runner`).
 
+  A spawn-shaped in-chain call with a charge identity holds its budget
+  charge for one window, the handler's timeout (`:holder_window_ms`, five
+  minutes by default), and that window is one deadline: it is measured
+  from just before the charge is taken, on this member's monotonic clock,
+  and the handler is given what is left of it less a fixed margin for the
+  give-back, never a timeout of its own. A call with nothing left is
+  refused before its handler starts, and its charge given back. The
+  charge's row is held until the same window has passed on the cell's
+  clock, from inside the transaction that writes it, after that starting
+  instant (`Arca.BudgetReservations.charge/5`): a duration measured on
+  one member carries no skew, so the handler has ended before the row can
+  be reclaimed.
+
   ## A handler that does not answer
 
   A handler that raises, exits, times out or is cancelled once it may
@@ -71,6 +84,10 @@ defmodule Sanctum.Dispatch do
 
   # Default tool execution timeout (5 minutes)
   @tool_timeout_ms :timer.minutes(5)
+
+  # What a charged call's handler leaves of its window for the give-back
+  # of its charge.
+  @give_back_margin_ms 1_000
 
   # The exit of a supervised task whose registration was refused: its
   # handler never ran.
@@ -280,14 +297,14 @@ defmodule Sanctum.Dispatch do
   defp hold_of(_authority, _charge), do: nil
 
   # `opts[:charge]` is `%{id, attempt, generation, holder_execution_id}`;
-  # the row is held for the dispatcher's own timeout, counted on the
-  # cell's clock where the row is written and swept.
-  defp charge_row(:spawn, %Context{athanor_id: athanor_id} = ctx, authority, opts)
+  # the row is held for the call's window, counted on the cell's clock
+  # where the row is written and swept.
+  defp charge_row(:spawn, %Context{athanor_id: athanor_id} = ctx, authority, opts, window_ms)
        when is_binary(athanor_id) do
     case Keyword.get(opts, :charge) do
       %{id: _} = charge ->
         case Arca.BudgetReservations.charge(Context.actor(ctx), authority.budget.id, charge, 1,
-               holder_window_ms: @tool_timeout_ms
+               holder_window_ms: window_ms
              ) do
           :ok -> :ok
           :exhausted -> {:error, :invoke_budget_exhausted}
@@ -301,7 +318,7 @@ defmodule Sanctum.Dispatch do
     end
   end
 
-  defp charge_row(_guest_fn, _ctx, _authority, _opts), do: :ok
+  defp charge_row(_guest_fn, _ctx, _authority, _opts, _window_ms), do: :ok
 
   defp release_row(%Context{athanor_id: athanor_id} = ctx, authority, opts)
        when is_binary(athanor_id) do
@@ -819,14 +836,20 @@ defmodule Sanctum.Dispatch do
   # `after` — the guard releases on :DOWN. With a charge identity the hold
   # is a row too, reclaimable past the dispatcher's own timeout.
   defp charged(name, ctx, args, authority, guest_fn, opts) do
-    case charge_row(guest_fn, ctx, authority, opts) do
+    # The window starts before the charge is taken, so the cell's deadline,
+    # set inside the charge's transaction, is after the handler's.
+    started = System.monotonic_time(:millisecond)
+    window_ms = Keyword.get(opts, :holder_window_ms, @tool_timeout_ms)
+
+    case charge_row(guest_fn, ctx, authority, opts, window_ms) do
       :ok ->
         if guest_fn == :spawn, do: Sanctum.Authority.guard_invoke(authority)
 
         dispatch_opts =
           opts
           |> Keyword.put(:hold, hold_of(authority, Keyword.get(opts, :charge)))
-          |> Keyword.drop([:guest_fn, :charge, :authority])
+          |> held_until(guest_fn, started + window_ms - @give_back_margin_ms)
+          |> Keyword.drop([:guest_fn, :charge, :authority, :holder_window_ms])
 
         try do
           case dispatch(name, ctx, args, dispatch_opts) do
@@ -850,6 +873,17 @@ defmodule Sanctum.Dispatch do
         refused(opts, args, Refusals.admission({:invoke_denied, reason}))
     end
   end
+
+  # A call holding a charge row runs until its window's deadline, on this
+  # member's monotonic clock; any other runs for the default timeout.
+  defp held_until(opts, :spawn, deadline) do
+    case Keyword.get(opts, :charge) do
+      %{id: _} -> Keyword.put(opts, :deadline, deadline)
+      _ -> opts
+    end
+  end
+
+  defp held_until(opts, _guest_fn, _deadline), do: opts
 
   # The admitted call, run: a catalogued tool's handler, or — on a miss —
   # the proxy port for a `server:tool` name, once it has resolved the name
@@ -948,10 +982,26 @@ defmodule Sanctum.Dispatch do
   # either plane and under either runner.
   defp execute_tool_call(name, ctx, opts, execute_fn) do
     action = Keyword.get(opts, :action)
+    timeout_ms = handler_timeout(opts)
 
-    case Keyword.get(opts, :runner, :inline) do
-      :inline -> run_inline({name, action}, execute_fn)
-      :supervised -> run_supervised({name, action}, ctx, opts, execute_fn)
+    cond do
+      timeout_ms <= 0 ->
+        {:error, {:timeout, "Tool #{name} ran out of its time before it started"}}
+
+      Keyword.get(opts, :runner, :inline) == :inline ->
+        run_inline({name, action}, execute_fn)
+
+      true ->
+        run_supervised({name, action}, ctx, opts, timeout_ms, execute_fn)
+    end
+  end
+
+  # What is left of a charged call's window (`held_until/3`), else the
+  # default timeout.
+  defp handler_timeout(opts) do
+    case Keyword.get(opts, :deadline) do
+      nil -> @tool_timeout_ms
+      deadline -> deadline - System.monotonic_time(:millisecond)
     end
   end
 
@@ -977,22 +1027,22 @@ defmodule Sanctum.Dispatch do
       unanswered(op, :exited, {:exit, "Tool #{name} exited unexpectedly"})
   end
 
-  defp run_supervised({name, _action} = op, ctx, opts, execute_fn) do
+  defp run_supervised({name, _action} = op, ctx, opts, timeout_ms, execute_fn) do
     case Keyword.get(opts, :cancel_handle) do
       nil ->
-        supervise(op, ctx, nil, execute_fn)
+        supervise(op, ctx, nil, timeout_ms, execute_fn)
 
       handle ->
         # Claimed before the task exists, so a cancel that lands first is
         # seen when the task registers, and the handler never runs.
         case Sanctum.RunningTasks.claim(handle) do
-          :ok -> supervise(op, ctx, handle, execute_fn)
+          :ok -> supervise(op, ctx, handle, timeout_ms, execute_fn)
           :cancelled -> {:error, {:cancelled, "Tool #{name} was cancelled"}}
         end
     end
   end
 
-  defp supervise({name, _action} = op, ctx, handle, execute_fn) do
+  defp supervise({name, _action} = op, ctx, handle, timeout_ms, execute_fn) do
     # Registered under the request id `do_call/4` guarantees, which is
     # also the request's progress topic (`Cyfr.Bus.progress/2`) — one
     # identity per request across both subsystems. The transport cancels
@@ -1020,7 +1070,7 @@ defmodule Sanctum.Dispatch do
       end)
 
     result =
-      case Task.yield(task, @tool_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
         {:ok, result} ->
           result
 
@@ -1059,12 +1109,12 @@ defmodule Sanctum.Dispatch do
           unanswered(op, :exited, {:exit, "Tool #{name} exited unexpectedly"})
 
         nil ->
-          Logger.error("[Sanctum.Dispatch] Tool #{name} timed out after #{@tool_timeout_ms}ms")
+          Logger.error("[Sanctum.Dispatch] Tool #{name} timed out after #{timeout_ms}ms")
 
           unanswered(
             op,
             :timed_out,
-            {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}
+            {:timeout, "Tool #{name} timed out after #{timeout_ms}ms"}
           )
       end
 

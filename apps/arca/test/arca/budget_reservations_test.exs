@@ -114,6 +114,45 @@ defmodule Arca.BudgetReservationsTest do
     assert charged(actor, budget) == 1
   end
 
+  # A hold ages on the cell's clock alone, the database ten minutes behind
+  # the member's or ten minutes ahead.
+  for offset <- [-600, 600] do
+    @tag :postgres
+    test "a call's hold ages on the cell's clock, the database #{offset} s from the member's", %{
+      actor: actor,
+      budget: budget,
+      attempt: attempt
+    } do
+      offset = unquote(offset)
+      Arca.Repo.query!("CREATE SCHEMA offset_clock")
+      offset_clock!(offset)
+      Arca.Repo.query!("SET LOCAL search_path TO offset_clock, pg_catalog, public")
+      cell_now = Arca.ServerMetaStorage.now!()
+      assert abs(DateTime.diff(cell_now, DateTime.utc_now(), :second) - offset) <= 1
+
+      assert :ok =
+               charge(actor, budget, attempt.attempt, "offset-call", holder_window_ms: 300_000)
+
+      assert {:ok, [%{holder_deadline: deadline}]} = BudgetReservations.charges(actor, budget)
+      assert DateTime.diff(deadline, cell_now, :second) in 299..301
+      assert {:ok, 0} = BudgetReservations.sweep(actor)
+      assert charged(actor, budget) == 1
+
+      offset_clock!(offset + 301)
+      assert {:ok, 1} = BudgetReservations.sweep(actor)
+      assert charged(actor, budget) == 0
+      assert {:ok, []} = BudgetReservations.charges(actor, budget)
+    end
+  end
+
+  defp offset_clock!(seconds) do
+    Arca.Repo.query!(
+      "CREATE OR REPLACE FUNCTION offset_clock.clock_timestamp() RETURNS timestamptz " <>
+        "LANGUAGE sql VOLATILE AS " <>
+        "'SELECT pg_catalog.clock_timestamp() + interval ''#{seconds} seconds'''"
+    )
+  end
+
   test "a charge counts once, the cap refuses the fourth, and release is idempotent", %{
     actor: actor,
     budget: budget,
