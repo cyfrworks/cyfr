@@ -181,6 +181,53 @@ defmodule Cyfr.Test.SandboxTest do
     end
   end
 
+  describe "a descendant that starts children until it is swept" do
+    setup do
+      collector = spawn(fn -> collect(%{}) end)
+
+      # Registered before the sandbox, so it runs after the sweep.
+      on_exit(fn ->
+        send(collector, {:reports, self()})
+        assert_receive {:reports, started}, 5_000
+        left = for {pid, :started} <- started, Process.alive?(pid), do: pid
+        Enum.each(left, &Process.exit(&1, :kill))
+
+        assert left == [],
+               "#{length(left)} of the #{map_size(started)} processes the test's descendant " <>
+                 "started outlived the sweep"
+      end)
+
+      Sandbox.setup!()
+      {:ok, collector: collector}
+    end
+
+    # The parent never stops starting children, so some start after the
+    # sweep has read which processes there are. Each child names only its
+    # parent, and its parent is dead once it is killed: the sweep must find
+    # the child all the same.
+    test "are ended with it, however late each started", %{collector: collector} do
+      test = self()
+
+      spawn(fn ->
+        send(collector, {:report, self(), :started})
+        send(test, :breeding)
+        breed(collector)
+      end)
+
+      assert_receive :breeding, 5_000
+    end
+  end
+
+  test "a kill pass gives the caller back the priority it had" do
+    for priority <- [:low, :normal, :high, :max] do
+      was = Process.flag(:priority, priority)
+      pids = for _ <- 1..2, do: spawn(fn -> Process.sleep(:infinity) end)
+      :ok = Sandbox.kill(pids)
+      assert Process.info(self(), :priority) == {:priority, priority}
+      Process.flag(:priority, was)
+    end
+  end
+
   # The sweeps of async tests run side by side, each blocking the other
   # schedulers for its kills. Every one must end, and the last to lift its
   # block must leave the schedulers running. Each sweeper stays alive until
@@ -412,6 +459,13 @@ defmodule Cyfr.Test.SandboxTest do
            end
          ]}
     }
+  end
+
+  # Starts a child that never ends and reports it, again and again.
+  defp breed(collector) do
+    send(collector, {:report, spawn(fn -> Process.sleep(:infinity) end), :started})
+    for _ <- 1..500, do: :erlang.unique_integer()
+    breed(collector)
   end
 
   # A task of the test's, as the attempt and its keeper are: it watches the
