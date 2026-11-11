@@ -705,6 +705,34 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     end
   end
 
+  describe "the transport back-stop" do
+    # The shipped ceiling of the data routes, per address in a minute
+    # (`Cyfr.RuntimeConfig.tincture_default_invoke_max/0`, 120), under the
+    # per-frame limits. The suite lifts it (`:tincture_rate_limit_max` in
+    # config/test.exs); this test removes that.
+    setup do
+      Prima.Test.Env.delete_app_env(:cyfr, :tincture_rate_limit_max)
+      :ok
+    end
+
+    test "refuses the request past the shipped 120 a minute from one address, 429 in the wire's shape" do
+      ip = {198, 51, 100, 120}
+      body = TinctureWire.request(:action, %{operation: "system.status", args: %{}})
+
+      for _ <- 1..120 do
+        assert data(:action, body, ip: ip).status == 401
+      end
+
+      over = data(:action, body, ip: ip)
+      assert over.status == 429
+      assert %{class: "rate_limited"} = refused(over, :action)
+      assert [_seconds] = get_resp_header(over, "retry-after")
+
+      # Another address has its own budget.
+      assert data(:action, body, ip: {198, 51, 100, 121}).status == 401
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # The frame's flows
   # ---------------------------------------------------------------------------

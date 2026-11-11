@@ -93,6 +93,24 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
   end
 
   # This HTTP endpoint must render plain API errors.
+  describe "the transport rate limit" do
+    # The `:api` bucket's shipped ceiling: unset, it is the MCP pair's, 120
+    # requests a minute from one address, counted before the credential is
+    # read.
+    @tag auth: :none
+    test "refuses the request past the shipped 120 a minute from one address", %{conn: conn} do
+      conn = %{conn | remote_ip: {198, 51, 100, 121}}
+
+      for _ <- 1..120 do
+        assert conn |> get("/api/executions/exec_unknown/events") |> json_response(401)
+      end
+
+      over = get(conn, "/api/executions/exec_unknown/events")
+      assert json_response(over, 429)["code"] == "rate_limited"
+      assert [_seconds] = get_resp_header(over, "retry-after")
+    end
+  end
+
   describe "it does not answer in a protocol it does not speak" do
     test "a bad credential is a plain HTTP error, not a JSON-RPC envelope", %{conn: conn} do
       conn =

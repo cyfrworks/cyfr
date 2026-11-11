@@ -894,23 +894,21 @@ defmodule Emissary.Web.TinctureControllerTest do
   end
 
   describe "transport rate limiting" do
+    # The shipped ceilings, per address and tincture in a minute: 60 page
+    # requests and 300 asset requests (`Emissary.Router`'s `:tincture` and
+    # `:tincture_asset` pipelines). The suite lifts them
+    # (`:tincture_rate_limit_max` in config/test.exs); these tests remove
+    # that, from a clean slate, since earlier tests here counted under it.
     setup do
-      # Earlier tests in this file already counted requests under the disabled
-      # (1M) limit — start these from a clean slate, then lower the limit.
       Prima.Test.RateLimiter.reset!()
-      Application.put_env(:cyfr, :tincture_rate_limit_max, 2)
-
-      on_exit(fn ->
-        Application.put_env(:cyfr, :tincture_rate_limit_max, 1_000_000)
-        Prima.Test.RateLimiter.reset!()
-      end)
-
+      on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
+      Prima.Test.Env.delete_app_env(:cyfr, :tincture_rate_limit_max)
       :ok
     end
 
-    test "page requests over the limit get 429 with retry-after", %{conn: conn} do
-      for _ <- 1..2 do
-        assert get(build_conn(), "/t/@test/local/pub-dash").status != 429
+    test "page requests past the shipped 60 a minute get 429 with retry-after" do
+      for _ <- 1..60 do
+        assert get(build_conn(), "/t/@test/local/pub-dash").status == 200
       end
 
       blocked = get(build_conn(), "/t/@test/local/pub-dash")
@@ -919,15 +917,14 @@ defmodule Emissary.Web.TinctureControllerTest do
 
       # Other tinctures are unaffected (separate bucket key).
       assert get(build_conn(), "/t/@test/local/auth-dash").status != 429
-      _ = conn
     end
 
-    test "asset requests over the limit get 429", %{conn: _conn} do
-      for _ <- 1..2 do
-        assert get(build_conn(), "/t/@test/local/pub-dash/app.js").status != 429
+    test "asset requests past the shipped 300 a minute get 429" do
+      for _ <- 1..300 do
+        assert get(build_conn(), "/t/@test/local/pub-dash/style.css").status == 200
       end
 
-      assert get(build_conn(), "/t/@test/local/pub-dash/app.js").status == 429
+      assert get(build_conn(), "/t/@test/local/pub-dash/style.css").status == 429
     end
   end
 end
