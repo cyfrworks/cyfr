@@ -34,7 +34,7 @@ fi
 kind=$1
 image=$2
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-name="image-boots-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+name="${PROOF_RUN_PREFIX:-}image-boots-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
 
 case "$kind" in
@@ -78,6 +78,7 @@ done
 echo "$image ($kind) started on $(uname -m) and is healthy"
 
 if [ "$kind" = cyfr ]; then
-  "$root/scripts/cosign.sh" check "$image" docker run --rm \
+  # One container at a time, each removed before the next starts.
+  "$root/scripts/cosign.sh" check "$image" docker run --rm --name "$name-check" \
     -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" || failed "does not verify with its cosign"
 fi
