@@ -47,7 +47,6 @@ defmodule Opus.WorkerWatchTest do
   # only bounds one that never ends.
   @heard_ms 10_000
   @watch :worker_watch_under_test
-  @exiting :worker_watch_exiting
   @not_a_status %{"no" => "status"}
 
   # A worker service whose status answers from a script the test sets: a
@@ -328,7 +327,7 @@ defmodule Opus.WorkerWatchTest do
       endpoint = serve!([status("boot_1", [fixture.attempt])])
       watch = watch!(endpoint)
 
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
+      wait_until(fn -> match?(%{boot: "boot_1", misses: 0}, seen(watch)) end, @heard_ms)
       assert %{boot: "boot_1", attempts: [_], misses: 0, lapsed: false} = seen(watch)
 
       Worker.script!(self(), [@not_a_status])
@@ -345,7 +344,6 @@ defmodule Opus.WorkerWatchTest do
 
       assert %{boot: "boot_1", misses: misses, lapsed: true} = seen(watch)
       assert misses >= 3
-      assert WorkerWatch.fresh_boot(endpoint, watch) == :unknown
 
       # Further misses lapse nothing more: an attempt of the boot opened
       # since stays running until a status names the boot again.
@@ -380,19 +378,13 @@ defmodule Opus.WorkerWatchTest do
       for _poll <- 1..3, do: assert_receive({:status_asked, ^heard}, @heard_ms)
       assert %{status: "running"} = row(fixture)
       assert Process.alive?(fixture.pid)
-
-      # The entry is published when the answer is recorded, one round trip
-      # after the request the test just saw; the window it stays fresh in
-      # is one poll interval, so the condition is waited for and not read
-      # off the instant the request landed.
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
     end
 
     test "a status of another service, or of another shape, is a miss", %{ctx: ctx} do
       fixture = attached!(ctx, "boot_1")
       endpoint = serve!([status("boot_1", [fixture.attempt])])
       watch = watch!(endpoint)
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
+      wait_until(fn -> match?(%{boot: "boot_1", misses: 0}, seen(watch)) end, @heard_ms)
 
       elsewhere = status("boot_1", [fixture.attempt], %{service: "wrk_elsewhere"})
       malformed = status("boot_1", [fixture.attempt], %{runners: %{fresh: -1}})
@@ -418,7 +410,6 @@ defmodule Opus.WorkerWatchTest do
                :sys.get_state(watch).seen[id]
 
       assert Arca.JobClaims.read("worker_watch", id) == {:error, :not_found}
-      assert WorkerWatch.fresh_boot(endpoint, watch) == :unknown
     end
 
     # The lapse's event retires the stream's delta counters after the row
@@ -430,7 +421,7 @@ defmodule Opus.WorkerWatchTest do
       child = child!(fixture)
       endpoint = serve!([status("boot_1", [fixture.attempt])])
       watch = watch!(endpoint)
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
+      wait_until(fn -> match?(%{boot: "boot_1", misses: 0}, seen(watch)) end, @heard_ms)
 
       on_exit(&restart_sequence/0)
       :ok = Supervisor.terminate_child(Opus.Tree, Opus.Events.Sequence)
@@ -465,7 +456,7 @@ defmodule Opus.WorkerWatchTest do
       children = [child!(fixture), child!(fixture)]
       endpoint = serve!([status("boot_1", [fixture.attempt])])
       watch = watch!(endpoint)
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
+      wait_until(fn -> match?(%{boot: "boot_1", misses: 0}, seen(watch)) end, @heard_ms)
 
       on_exit(&restart_event_buffers/0)
       :ok = Supervisor.terminate_child(Opus.Tree, Opus.Events.Supervisor)
@@ -606,7 +597,7 @@ defmodule Opus.WorkerWatchTest do
       :ok = Opus.Events.subscribe(old.execution_id, ctx)
       endpoint = serve!([status("boot_1", [old.attempt])])
       watch = watch!(endpoint)
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
+      wait_until(fn -> match?(%{boot: "boot_1", misses: 0}, seen(watch)) end, @heard_ms)
 
       Worker.script!(self(), [status("boot_2")])
 
@@ -615,7 +606,7 @@ defmodule Opus.WorkerWatchTest do
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(old)
       old_id = old.execution_id
       assert_receive %Cyfr.Bus.ExecutionEvent{type: "execution.lapsed", execution_id: ^old_id}
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_2"} end, @heard_ms)
+      wait_until(fn -> match?(%{boot: "boot_2", misses: 0}, seen(watch)) end, @heard_ms)
       assert %{boot: "boot_2", attempts: [], misses: 0, lapsed: false} = seen(watch)
 
       # The new boot's attempts are its own, through as many identical
@@ -713,71 +704,6 @@ defmodule Opus.WorkerWatchTest do
                List.keyfind(children, WorkerWatch, 0)
 
       assert :ignore = WorkerWatch.start_link([])
-      assert WorkerWatch.fresh_boot(%{id: "wrk_local", url: "http://127.0.0.1:4200"}) == :unknown
-    end
-  end
-
-  describe "the heard table" do
-    # The table goes with the watch that owns it. Readers read it in a loop
-    # while the watch is killed, so in some round one has found the table
-    # and reads it as it goes; each answers what it heard, then `:unknown`.
-    test "a watch that exits while it is read answers :unknown, never a raise" do
-      endpoint = serve!([status("boot_1")])
-      test = self()
-
-      for _round <- 1..5 do
-        watch =
-          start_supervised!(
-            Supervisor.child_spec(
-              {WorkerWatch,
-               workers: [endpoint],
-               poll_ms: 60_000,
-               lease_ms: @lease_ms,
-               misses: 3,
-               name: @exiting},
-              id: @exiting,
-              restart: :temporary
-            )
-          )
-
-        wait_until(
-          fn -> WorkerWatch.fresh_boot(endpoint, @exiting) == {:ok, "boot_1"} end,
-          @heard_ms
-        )
-
-        # The heard status is recorded; the next poll is a minute away.
-        _state = :sys.get_state(watch)
-
-        readers =
-          for _reader <- 1..max(System.schedulers_online(), 4),
-              do: spawn_monitor(fn -> read_until_unknown(endpoint, test) end)
-
-        for {reader, _ref} <- readers, do: assert_receive({:reading, ^reader}, @heard_ms)
-
-        ref = Process.monitor(watch)
-        Process.exit(watch, :kill)
-        assert_receive {:DOWN, ^ref, :process, ^watch, :killed}, @heard_ms
-
-        for {reader, ref} <- readers do
-          assert_receive {:DOWN, ^ref, :process, ^reader, reason}, @heard_ms
-          assert reason == :normal
-        end
-
-        assert WorkerWatch.fresh_boot(endpoint, @exiting) == :unknown
-      end
-    end
-  end
-
-  defp read_until_unknown(endpoint, test) do
-    {:ok, "boot_1"} = WorkerWatch.fresh_boot(endpoint, @exiting)
-    send(test, {:reading, self()})
-    reading(endpoint)
-  end
-
-  defp reading(endpoint) do
-    case WorkerWatch.fresh_boot(endpoint, @exiting) do
-      {:ok, "boot_1"} -> reading(endpoint)
-      :unknown -> :ok
     end
   end
 
@@ -788,29 +714,16 @@ defmodule Opus.WorkerWatchTest do
       :ok
     end
 
-    test "addresses a start to the boot the watch heard within a poll interval, and asks otherwise" do
+    test "asks the worker service for its status at every selection, whatever the watch heard" do
       endpoint = serve!([status("boot_1")])
       Application.put_env(:cyfr, :locus_runtime_workers, [endpoint])
+      watch = watch!(endpoint, poll_ms: 60_000)
+      assert_receive {:status_asked, _answer}, @heard_ms
+      wait_until(fn -> match?(%{boot: "boot_1", misses: 0}, seen(watch)) end, @heard_ms)
 
-      # Without a watch, each selection asks the worker service.
       assert {:ok, %{service: @service, boot: "boot_1", endpoint: ^endpoint}} = Dispatch.worker()
       assert_receive {:status_asked, _answer}, @heard_ms
-
-      # With one that heard the boot, none does.
-      watch!(endpoint, name: WorkerWatch, poll_ms: 60_000)
-      assert_receive {:status_asked, _answer}, @heard_ms
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint) == {:ok, "boot_1"} end, @heard_ms)
-      assert {:ok, %{service: @service, boot: "boot_1"}} = Dispatch.worker()
       assert {:ok, %{boot: "boot_1"}} = Dispatch.worker("reagent:local.any")
-      refute_receive {:status_asked, _answer}, 100
-
-      # A boot heard longer ago than one poll interval is asked for again.
-      :ok = stop_supervised(WorkerWatch)
-      watch!(endpoint, name: WorkerWatch, poll_ms: 60)
-      Arca.ControlPlane.record(:lost)
-      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint) == :unknown end, @heard_ms)
-      assert {:ok, %{boot: "boot_1"}} = Dispatch.worker()
       assert_receive {:status_asked, _answer}, @heard_ms
     end
   end

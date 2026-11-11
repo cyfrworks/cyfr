@@ -7,11 +7,12 @@ defmodule Opus.Dispatch do
 
   `run/4` dispatches to the first worker service in
   `config :cyfr, :locus_runtime_workers` (each a `t:Prima.WorkerAPI.endpoint/0`, reached
-  through `Opus.WorkerClient`) whose status answers its
-  configured id: the status `Opus.WorkerWatch` heard from it
-  within the last poll interval (`Opus.WorkerWatch.fresh_boot/2`),
-  else one asked for now. The boot that status names is the attempt
-  row's runner and the assignment's audience. In order:
+  through `Opus.WorkerClient`) whose status, asked for at each dispatch,
+  answers its configured id. The boot that status names is the attempt
+  row's runner and the assignment's audience, so a dispatch after a
+  worker service restarted is addressed to its new boot; a restart that
+  lands between that status and the start fails that one run, refused by
+  the service as addressed to a boot it no longer is. In order:
 
     1. the run is admitted (`Opus.Admission.admit/4`): its row
        and its `Opus.Attempt`;
@@ -72,8 +73,7 @@ defmodule Opus.Dispatch do
 
   require Logger
 
-  alias Opus.{Admission, Assignments, Attempt, Cascade, Charge, Close, Keys, Record}
-  alias Opus.{WorkerClient, WorkerWatch}
+  alias Opus.{Admission, Assignments, Attempt, Cascade, Charge, Close, Keys, Record, WorkerClient}
   alias Prima.{WorkerAPI, WorkerAuth}
   alias Sanctum.Context
 
@@ -280,9 +280,8 @@ defmodule Opus.Dispatch do
   `components` list names the name-level references it alone runs, or is
   nil) whose status answers its configured id, with the boot that status
   names; an entry that does not answer, or answers as another service, is
-  skipped. The status is the one `Opus.WorkerWatch` heard
-  within the last poll interval, else the entry is asked now. `worker/1`
-  also requires the entry to run `reference`.
+  skipped. Each entry is asked for its status now. `worker/1` also
+  requires the entry to run `reference`.
   `{:error, :execution_unavailable}` when no entry qualifies or answers.
   """
   @spec worker() :: {:ok, worker()} | {:error, :execution_unavailable}
@@ -315,18 +314,12 @@ defmodule Opus.Dispatch do
   defp answering(%{id: id} = entry) do
     endpoint = Map.put_new(entry, :components, nil)
 
-    case WorkerWatch.fresh_boot(endpoint) do
-      {:ok, boot} ->
+    case WorkerClient.status(endpoint) do
+      {:ok, %{service: ^id, boot: boot}} when is_binary(boot) ->
         {:ok, %{service: id, boot: boot, endpoint: endpoint}}
 
-      :unknown ->
-        case WorkerClient.status(endpoint) do
-          {:ok, %{service: ^id, boot: boot}} when is_binary(boot) ->
-            {:ok, %{service: id, boot: boot, endpoint: endpoint}}
-
-          _ ->
-            nil
-        end
+      _ ->
+        nil
     end
   end
 
