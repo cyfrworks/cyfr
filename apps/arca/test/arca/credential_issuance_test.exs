@@ -152,6 +152,7 @@ defmodule Arca.CredentialIssuanceTest do
     Task.async(fn ->
       unboxed(fn ->
         SecurityTransitions.deny_user(server(), user_id,
+          slot: :none,
           verify: fn _rows ->
             send(test, :denial_holds)
 
@@ -460,7 +461,9 @@ defmodule Arca.CredentialIssuanceTest do
 
       denier =
         Task.async(fn ->
-          unboxed(fn -> SecurityTransitions.deny_user(server(), user_id, verify: admit()) end)
+          unboxed(fn ->
+            SecurityTransitions.deny_user(server(), user_id, slot: :none, verify: admit())
+          end)
         end)
 
       refute Task.yield(denier, 300), "the denial decided while the issuance held the person"
@@ -507,7 +510,9 @@ defmodule Arca.CredentialIssuanceTest do
 
       denier =
         Task.async(fn ->
-          unboxed(fn -> SecurityTransitions.deny_user(server(), user_id, verify: admit()) end)
+          unboxed(fn ->
+            SecurityTransitions.deny_user(server(), user_id, slot: :none, verify: admit())
+          end)
         end)
 
       refute Task.yield(denier, 300)

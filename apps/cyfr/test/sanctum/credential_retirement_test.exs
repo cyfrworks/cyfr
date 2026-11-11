@@ -424,6 +424,7 @@ defmodule Sanctum.CredentialRetirementLockTest do
       Task.async(fn ->
         unboxed(fn ->
           Arca.SecurityTransitions.deny_user(Prima.Actor.system(), user.id,
+            slot: :none,
             verify: fn _rows ->
               send(test, :denial_holds)
 

@@ -537,7 +537,7 @@ defmodule Arca.SecurityTransitionsTest do
       peer_key = key!(theirs.id, peer.id)
 
       assert {:ok, change} =
-               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert change.transitioned
       assert change.user_generation == 2
@@ -573,14 +573,16 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert %DateTime{} = user(user.id).platform_admin_at
 
-      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
+
       assert change.user.platform_admin_at == nil
       assert %{status: "denied", platform_admin_at: nil} = user(user.id)
       assert athanor(own.id).status == "archived"
       refute session?(session)
 
       assert {:ok, %{transitioned: true}} =
-               SecurityTransitions.allow_user(server(), user.id, verify: admit())
+               SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
 
       assert %{status: "active", platform_admin_at: nil} = user(user.id)
     end
@@ -599,7 +601,8 @@ defmodule Arca.SecurityTransitionsTest do
       invited = shared_thread!(host.id)
       {:ok, _} = Arca.SharedThreadMembers.invite(server(), invited.id, identifier, host.id)
 
-      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert change.left_shared_thread_ids ==
                Enum.sort([pair.id, alone.id, kept.id, ended.id])
@@ -626,7 +629,9 @@ defmodule Arca.SecurityTransitionsTest do
       assert host_id == host.id
 
       # A repeated denial finds no seat left to take.
-      assert {:ok, again} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, again} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
+
       assert again.left_shared_thread_ids == [] and again.archived_shared_thread_ids == []
     end
 
@@ -656,7 +661,8 @@ defmodule Arca.SecurityTransitionsTest do
 
       on_exit(fn -> :telemetry.detach(handler) end)
 
-      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert change.ended_offer_ids == Enum.sort([sent, incoming])
       refute Map.has_key?(change, :ended_offers)
@@ -682,7 +688,8 @@ defmodule Arca.SecurityTransitionsTest do
       1 = open_offers!(own.id, elsewhere.id, 10)
       stranded = "ofr_many_#{own.id}_1"
 
-      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert change.archived_athanor_ids == [own.id]
       assert change.ended_offer_ids == [stranded]
@@ -695,7 +702,9 @@ defmodule Arca.SecurityTransitionsTest do
       offers = open_offers!(theirs.id, user.id, 32_800)
       counters = observe_offer_ends!(theirs.id, offers)
 
-      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
+
       assert :atomics.get(counters, 1) == 32_800
       assert :atomics.get(counters, 2) == 32_800
       assert length(change.ended_offer_ids) == offers
@@ -704,14 +713,16 @@ defmodule Arca.SecurityTransitionsTest do
 
     test "a repeated denial moves no generation and still checks what it retires" do
       {user, own} = owner!()
-      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       # Something that survived a lost write: a session and a key issued
       # around the first denial.
       straggler = session!(user.id)
       key = key!(own.id, user.id)
 
-      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
+
       refute change.transitioned
       assert change.user_generation == 2
       assert change.archived_athanor_ids == []
@@ -725,7 +736,7 @@ defmodule Arca.SecurityTransitionsTest do
       plain = person!()
 
       assert {:ok, %{archived_athanor_ids: []}} =
-               SecurityTransitions.deny_user(server(), plain.id, verify: admit())
+               SecurityTransitions.deny_user(server(), plain.id, slot: :none, verify: admit())
 
       # The owner is what selects the athanor, for the denial and for the
       # allow.
@@ -733,12 +744,12 @@ defmodule Arca.SecurityTransitionsTest do
       own_id = own.id
 
       assert {:ok, %{archived_athanor_ids: [^own_id]}} =
-               SecurityTransitions.deny_user(server(), owner.id, verify: admit())
+               SecurityTransitions.deny_user(server(), owner.id, slot: :none, verify: admit())
 
       assert athanor(own.id).status == "archived"
 
       assert {:ok, %{reopened_athanor_ids: [^own_id]}} =
-               SecurityTransitions.allow_user(server(), owner.id, verify: admit())
+               SecurityTransitions.allow_user(server(), owner.id, slot: :none, verify: admit())
 
       assert athanor(own.id).status == "active"
     end
@@ -750,6 +761,7 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert {:error, :operator_said_no} =
                SecurityTransitions.deny_user(server(), user.id,
+                 slot: :none,
                  verify: fn %{user: %{id: id}, archive: archive} ->
                    send(self(), {:asked, id, archive})
                    {:error, :operator_said_no}
@@ -766,12 +778,13 @@ defmodule Arca.SecurityTransitionsTest do
 
     test "an unknown person and a non-system actor are refused before anything moves" do
       assert {:error, :not_found} =
-               SecurityTransitions.deny_user(server(), "usr_nobody", verify: admit())
+               SecurityTransitions.deny_user(server(), "usr_nobody", slot: :none, verify: admit())
 
       user = person!()
 
       assert {:error, :cross_tenant} =
                SecurityTransitions.deny_user(Prima.Actor.in_athanor("ath_test"), user.id,
+                 slot: :none,
                  verify: admit()
                )
 
@@ -794,7 +807,7 @@ defmodule Arca.SecurityTransitionsTest do
         failure = fail_on!(unquote(table), unquote(event))
 
         assert {:error, :database_error} =
-                 SecurityTransitions.deny_user(server(), user.id, verify: admit())
+                 SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
         assert frame_state(frame) == "active"
 
@@ -809,16 +822,18 @@ defmodule Arca.SecurityTransitionsTest do
         # An allow over the failed denial has nothing to restore and moves
         # nothing.
         assert {:ok, %{transitioned: false, user_generation: 1}} =
-                 SecurityTransitions.allow_user(server(), user.id, verify: admit())
+                 SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
 
         # The retry, once the statement can run, retires everything; the
         # allow after it restores the standing and none of the credentials.
         clear_failure!(failure)
 
         assert {:ok, %{transitioned: true}} =
-                 SecurityTransitions.deny_user(server(), user.id, verify: admit())
+                 SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
-        assert {:ok, allowed} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+        assert {:ok, allowed} =
+                 SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
+
         assert allowed.user_generation == 3
         refute session?(session)
         assert revoked?(key)
@@ -832,9 +847,13 @@ defmodule Arca.SecurityTransitionsTest do
     test "restores standing and the own athanor, and nothing else" do
       {user, own} = owner!()
       key = key!(own.id, user.id)
-      {:ok, _denied} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
-      assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+      {:ok, _denied} =
+        SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
+
+      assert {:ok, change} =
+               SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
+
       assert change.transitioned
       assert change.user_generation == 3
       assert change.reopened_athanor_ids == [own.id]
@@ -848,10 +867,11 @@ defmodule Arca.SecurityTransitionsTest do
 
     test "the caller's cap refusal leaves the person denied and the athanor archived" do
       {user, own} = owner!()
-      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert {:error, {:limit_reached, :max_athanors, 1}} =
                SecurityTransitions.allow_user(server(), user.id,
+                 slot: :none,
                  verify: fn %{athanor: %{status: "archived"}} ->
                    {:error, {:limit_reached, :max_athanors, 1}}
                  end
@@ -865,14 +885,14 @@ defmodule Arca.SecurityTransitionsTest do
     for table <- @retirement_tables do
       test "an injected #{table} UPDATE failure rolls the allow back with every straggler standing" do
         {user, own} = owner!()
-        {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+        {:ok, _} = SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
         stragglers = stragglers!(own.id, user.id)
         before = {user(user.id), athanor(own.id), rows(stragglers)}
         assert {elem(before, 0).status, elem(before, 1).status} == {"denied", "archived"}
         failure = fail_on!(unquote(table), "UPDATE")
 
         assert {:error, :database_error} =
-                 SecurityTransitions.allow_user(server(), user.id, verify: admit())
+                 SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
 
         # Nothing committed, row for row: no restored standing or reopened
         # athanor beside a credential the allow was to retire.
@@ -880,7 +900,9 @@ defmodule Arca.SecurityTransitionsTest do
 
         clear_failure!(failure)
 
-        assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+        assert {:ok, change} =
+                 SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
+
         assert change.transitioned
         assert change.user_generation == 3
         assert retired_ids(change) == straggler_ids(stragglers)
@@ -890,6 +912,56 @@ defmodule Arca.SecurityTransitionsTest do
         assert straggler_states(stragglers) ==
                  ["revoked", "revoked", "revoked", "voided"]
       end
+    end
+  end
+
+  # A successor holds the lease row: the slot this member read names the
+  # generation before it.
+  defp successor!(node) do
+    now = DateTime.utc_now()
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.CellLease, [
+        %{
+          node: node,
+          owner: node <> "#boot_b",
+          generation: 2,
+          fence: 1,
+          lease_until: DateTime.add(now, 60, :second),
+          taken_at: now,
+          release: Prima.Version.current(),
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    lost = %{node: node, owner: node <> "#boot_a", generation: 1, fence: 1}
+    {lost, %{lost | owner: node <> "#boot_b", generation: 2}}
+  end
+
+  describe "a member that lost its slot" do
+    test "neither denies nor allows: answered :not_owner, with no standing changed" do
+      {user, own} = owner!()
+      session = session!(user.id, own.id)
+      {lost, held} = successor!("node-st-#{System.unique_integer([:positive])}")
+      before = {user(user.id), athanor(own.id)}
+
+      assert {:error, :not_owner} =
+               SecurityTransitions.deny_user(server(), user.id, slot: lost, verify: admit())
+
+      assert {user(user.id), athanor(own.id)} == before
+      assert session?(session)
+
+      assert {:ok, _} =
+               SecurityTransitions.deny_user(server(), user.id, slot: held, verify: admit())
+
+      denied = {user(user.id), athanor(own.id)}
+      assert {elem(denied, 0).status, elem(denied, 1).status} == {"denied", "archived"}
+
+      assert {:error, :not_owner} =
+               SecurityTransitions.allow_user(server(), user.id, slot: lost, verify: admit())
+
+      assert {user(user.id), athanor(own.id)} == denied
     end
   end
 
@@ -905,7 +977,8 @@ defmodule Arca.SecurityTransitionsTest do
       guest_own = frame!(own.id, peer.id)
       already = frame!(own.id, user.id, "revoked")
 
-      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert change.revoked_frame_credential_ids == Enum.sort([mine_own, mine_theirs, guest_own])
 
@@ -918,10 +991,12 @@ defmodule Arca.SecurityTransitionsTest do
     test "an allow revokes a frame that outlived the denial and restores none" do
       {user, own} = owner!()
       opened = frame!(own.id, user.id)
-      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
       straggler = frame!(own.id, user.id)
 
-      assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
+
       assert change.revoked_frame_credential_ids == [straggler]
       assert frame_state(opened) == "revoked"
       assert frame_state(straggler) == "revoked"
@@ -935,7 +1010,7 @@ defmodule Arca.SecurityTransitionsTest do
       failure = fail_on!("frame_credentials", "UPDATE")
 
       assert {:error, :database_error} =
-               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert user(user.id).status == "active"
       assert athanor(own.id).status == "active"
@@ -946,7 +1021,7 @@ defmodule Arca.SecurityTransitionsTest do
       clear_failure!(failure)
 
       assert {:ok, %{revoked_frame_credential_ids: [^frame]}} =
-               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
     end
   end
 
@@ -962,7 +1037,8 @@ defmodule Arca.SecurityTransitionsTest do
       guest_own = paired!(own.id, peer.id)
       already = paired!(own.id, user.id, "revoked")
 
-      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert change.revoked_paired_client_ids == Enum.sort([mine_own, mine_theirs, guest_own])
 
@@ -975,10 +1051,12 @@ defmodule Arca.SecurityTransitionsTest do
     test "an allow revokes a client that outlived the denial and restores none" do
       {user, own} = owner!()
       paired = paired!(own.id, user.id)
-      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
       straggler = paired!(own.id, user.id)
 
-      assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
+
       assert change.revoked_paired_client_ids == [straggler]
       assert paired_standing(paired) == "revoked"
       assert paired_standing(straggler) == "revoked"
@@ -992,7 +1070,7 @@ defmodule Arca.SecurityTransitionsTest do
       failure = fail_on!("paired_clients", "UPDATE")
 
       assert {:error, :database_error} =
-               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert user(user.id).status == "active"
       assert session?(session)
@@ -1003,7 +1081,7 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert {:ok,
               %{revoked_paired_client_ids: [^paired], revoked_frame_credential_ids: [^frame]}} =
-               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
     end
   end
 
@@ -1022,7 +1100,8 @@ defmodule Arca.SecurityTransitionsTest do
       by_guest = confirmation!(own.id, peer.id, client: guest_client)
       peer_confirmation = confirmation!(theirs.id, peer.id, client: peer_client)
 
-      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert change.revoked_device_certificate_ids == Enum.sort([cert, guest_cert])
       assert change.voided_confirmation_ids == Enum.sort([own_confirmation, by_guest])
@@ -1035,7 +1114,9 @@ defmodule Arca.SecurityTransitionsTest do
       assert confirmation_state(peer_confirmation) == "confirmed"
 
       # An allow resurrects none of them.
-      assert {:ok, _} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+      assert {:ok, _} =
+               SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
+
       assert certificate_state(cert) == "revoked"
     end
 
@@ -1047,7 +1128,7 @@ defmodule Arca.SecurityTransitionsTest do
       failure = fail_on!("device_certificates", "UPDATE")
 
       assert {:error, :database_error} =
-               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
       assert user(user.id).status == "active"
       assert session?(session)
@@ -1057,7 +1138,7 @@ defmodule Arca.SecurityTransitionsTest do
       clear_failure!(failure)
 
       assert {:ok, %{revoked_device_certificate_ids: [^cert]}} =
-               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
     end
   end
 
@@ -1107,7 +1188,10 @@ defmodule Arca.SecurityTransitionsTest do
       {share, alice, profile} = shared!(terry)
 
       assert {:ok, change} =
-               SecurityTransitions.deny_user(server(), terry.user.id, verify: admit())
+               SecurityTransitions.deny_user(server(), terry.user.id,
+                 slot: :none,
+                 verify: admit()
+               )
 
       assert change.revoked_share_ids == [share.id]
       assert share_status(terry, share) == "revoked"
@@ -1115,7 +1199,10 @@ defmodule Arca.SecurityTransitionsTest do
 
       # A repeated denial finds nothing more to revoke and still holds.
       assert {:ok, again} =
-               SecurityTransitions.deny_user(server(), terry.user.id, verify: admit())
+               SecurityTransitions.deny_user(server(), terry.user.id,
+                 slot: :none,
+                 verify: admit()
+               )
 
       assert again.revoked_share_ids == []
     end
@@ -1126,12 +1213,15 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert {:error, :refused} =
                SecurityTransitions.deny_user(server(), terry.user.id,
+                 slot: :none,
                  verify: fn _ -> {:error, :refused} end
                )
 
       assert share_status(terry, share) == "active"
 
-      {:ok, _} = SecurityTransitions.deny_user(server(), terry.user.id, verify: admit())
+      {:ok, _} =
+        SecurityTransitions.deny_user(server(), terry.user.id, slot: :none, verify: admit())
+
       entry = Arca.Test.Shares.entry!(terry.actor)
 
       assert {:error, :not_own_athanor} =
@@ -1233,6 +1323,7 @@ defmodule Arca.SecurityTransitionsLockTest do
           server(),
           id,
           [
+            slot: :none,
             verify: fn _rows ->
               send(test, {:holding, transition})
 
@@ -1248,7 +1339,9 @@ defmodule Arca.SecurityTransitionsLockTest do
 
   defp run(transition, id) do
     Task.async(fn ->
-      unboxed(fn -> apply(SecurityTransitions, transition, [server(), id, [verify: admit()]]) end)
+      unboxed(fn ->
+        apply(SecurityTransitions, transition, [server(), id, [slot: :none, verify: admit()]])
+      end)
     end)
   end
 
@@ -1257,7 +1350,9 @@ defmodule Arca.SecurityTransitionsLockTest do
     own_id: own_id
   } do
     {:ok, _} =
-      unboxed(fn -> SecurityTransitions.deny_user(server(), user_id, verify: admit()) end)
+      unboxed(fn ->
+        SecurityTransitions.deny_user(server(), user_id, slot: :none, verify: admit())
+      end)
 
     allower = paused(:allow_user, user_id)
     assert_receive {:holding, :allow_user}, 5_000
@@ -1329,6 +1424,7 @@ defmodule Arca.SecurityTransitionsLockTest do
       spawn(fn ->
         unboxed(fn ->
           SecurityTransitions.deny_user(server(), user_id,
+            slot: :none,
             verify: fn _rows -> Process.exit(self(), :kill) end
           )
         end)
@@ -1353,7 +1449,9 @@ defmodule Arca.SecurityTransitionsLockTest do
 
     # And the next denial is not blocked by what the dead one held.
     assert {:ok, %{revoked_session_hashes: [^hash]}} =
-             unboxed(fn -> SecurityTransitions.deny_user(server(), user_id, verify: admit()) end)
+             unboxed(fn ->
+               SecurityTransitions.deny_user(server(), user_id, slot: :none, verify: admit())
+             end)
   end
 
   # A write-then-rollback on the person's row from a fresh connection,
