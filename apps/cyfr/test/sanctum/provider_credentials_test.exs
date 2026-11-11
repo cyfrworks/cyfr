@@ -207,6 +207,31 @@ defmodule Sanctum.ProviderCredentialsTest do
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
+    test "a client configuration refused for ownership answers the ownership refusal and stores nothing",
+         %{ctx: ctx} do
+      confirmed =
+        Sanctum.TestContext.confirmed_change(
+          ctx,
+          "oauth.set_client",
+          %{provider: "google", client_id: "unowned-id", client_secret: "unowned-secret"},
+          "google"
+        )
+
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} =
+               Sanctum.Providers.OAuth.handle(confirmed, %{
+                 "action" => "set_client",
+                 "provider" => "google",
+                 "client_id" => "unowned-id",
+                 "client_secret" => "unowned-secret"
+               })
+
+      Arca.ControlPlane.record(:unclaimed)
+      assert {:error, _missing} = ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
+    end
+
     test "requires provider and client_id" do
       ctx = Sanctum.TestContext.local()
       assert {:error, _} = Sanctum.Providers.OAuth.handle(ctx, %{"action" => "set_client"})

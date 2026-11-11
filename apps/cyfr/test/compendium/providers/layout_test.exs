@@ -318,6 +318,17 @@ defmodule Compendium.Providers.LayoutTest do
       assert {:error, {:corrupt, _}} = Compendium.layout(ctx, "desk")
     end
 
+    test "an edit refused for ownership answers the ownership refusal and publishes nothing",
+         %{ctx: ctx} do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} = edit(ctx, document(), 0)
+
+      Arca.ControlPlane.record(:unclaimed)
+      assert {:ok, %{shipped_default: true, revision: 0}} = get(ctx)
+    end
+
     test "an empty layout is published, and arranges no canvas", %{ctx: ctx} do
       assert {:ok, %{revision: 1}} = edit(ctx, %{"version" => 3, "canvases" => []}, 0)
       assert {:ok, %{arrangement: [], shipped_default: false}} = get(ctx, %{"posture" => "desk"})

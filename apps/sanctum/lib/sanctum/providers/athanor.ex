@@ -125,6 +125,9 @@ defmodule Sanctum.Providers.Athanor do
         {:error, {:provisioning_failed, step, _detail}} ->
           {:error, "Provisioning failed at #{step} — the error is recorded on the athanor"}
 
+        {:error, :not_owner} = refused ->
+          refused
+
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Athanor] athanor.provision failed: #{inspect(reason)}")
           {:error, {:unavailable, "Provisioning"}}

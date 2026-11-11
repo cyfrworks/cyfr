@@ -53,6 +53,20 @@ defmodule Aqua.Loop.PlannerTest do
     assert %{first_kept_seq: 4} = Planner.boundary(rows, 2_000)
   end
 
+  test "a call id a later response reuses does not let the boundary keep a result whose call it cut" do
+    # Gemini numbers its calls in each response: both calls are `call_1`.
+    rows = [
+      paired(1, "tool_call", String.duplicate("x", 40_000), "s1", "call_1"),
+      row(2, "approval", "may I?"),
+      paired(3, "tool_result", "ok", "s1_call", "call_1"),
+      paired(4, "tool_call", "again", "s2", "call_1"),
+      paired(5, "tool_result", "ok again", "s2_call", "call_1"),
+      row(6, "text", "done", "s3")
+    ]
+
+    assert %{first_kept_seq: 1} = Planner.boundary(rows, 2_000)
+  end
+
   test "a card between a call and its answer does not let the boundary part them" do
     big = String.duplicate("x", 40_000)
 

@@ -533,6 +533,10 @@ defmodule Compendium.Providers.Component do
               broadcast_components_changed(ctx)
               {:ok, res}
 
+            {:error, :not_owner} = refused ->
+              broadcast_progress(ctx, progress_id, :error, "Pull failed")
+              refused
+
             {:error, reason} ->
               broadcast_progress(ctx, progress_id, :error, "Pull failed")
               {:error, shipped_pull_error(reference, reason)}
@@ -769,6 +773,9 @@ defmodule Compendium.Providers.Component do
 
         {:error, :projection_unavailable} ->
           index_unavailable()
+
+        {:error, :not_owner} = refused ->
+          refused
 
         {:error, reason} ->
           Logger.error(
@@ -1577,6 +1584,11 @@ defmodule Compendium.Providers.Component do
           end
 
         maybe_auto_pull_oci_deps(ctx, result)
+
+      # This server's slot is not live: nothing was stored, whatever the
+      # pull's credentials, and the refusal reads as itself.
+      {:error, :not_owner} = refused ->
+        refused
 
       {:error, reason} ->
         if anonymous? do

@@ -1542,6 +1542,19 @@ defmodule Aqua.Loop do
     end
   end
 
+  # The setup form is the consent sheet for the ref, opened on the sender's
+  # page as a launch that needs consent opens it.
+  defp execute(%State{} = state, _step, %Call{kind: :ui, tool: "request_setup", args: args}) do
+    with ref when is_binary(ref) <- Map.get(args, "component_ref"),
+         {:ok, _parsed} <- Prima.ComponentRef.parse(ref) do
+      announce(state, :consent_required, %{ref: ref, user_id: ctx(state).user_id})
+      {:ok, "The setup form for #{ref} is open for the person"}
+    else
+      _invalid ->
+        {:error, "request_setup.open: component_ref must be a component reference"}
+    end
+  end
+
   defp execute(%State{} = state, _step, %Call{kind: :ui, args: args}) do
     case Aqua.Intents.validate(args) do
       {:ok, intent} ->
@@ -2573,6 +2586,13 @@ defmodule Aqua.Loop do
     do: "What the model read could not be recorded on the turn, so its answer was not used"
 
   defp describe(reason) when is_binary(reason), do: reason
+
+  # A refusal for ownership (this server has not won its slot, or has lost
+  # it) reads as its declared sentence, which says to retry: the turn did
+  # not run, and the message can be sent again.
+  defp describe(reason) when reason in [:not_owner, :control_plane_lost, :slot_not_held],
+    do: Prima.Refusal.message(reason)
+
   defp describe(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp describe(reason), do: Aqua.Ops.render_refusal(reason)
 

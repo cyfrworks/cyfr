@@ -71,6 +71,9 @@ defmodule Compendium.Fork do
              next_steps: next_steps(source_ref.type, target_ref_str)
            }}
 
+        {:error, :not_owner} = refused ->
+          refused
+
         {:error, reason} ->
           {:error, "Fork failed: #{failure_text(reason)}"}
       end
