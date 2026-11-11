@@ -52,7 +52,7 @@ defmodule Arca.BudgetReservationsTest do
         holder_execution_id: Keyword.get(opts, :holder)
       },
       1,
-      Keyword.take(opts, [:holder_deadline])
+      Keyword.take(opts, [:holder_window_ms])
     )
   end
 
@@ -75,6 +75,43 @@ defmodule Arca.BudgetReservationsTest do
       )
 
     attempt
+  end
+
+  # The database's clock ten minutes ahead of the member's: a schema
+  # ahead of pg_catalog on the search path answers `clock_timestamp()`,
+  # for this test's transaction alone.
+  @tag :postgres
+  test "a live call's charge is not reclaimed whatever the member's clock says", %{
+    actor: actor,
+    budget: budget,
+    attempt: attempt
+  } do
+    Arca.Repo.query!("CREATE SCHEMA skewed_clock")
+
+    Arca.Repo.query!(
+      "CREATE FUNCTION skewed_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql " <>
+        "VOLATILE AS 'SELECT pg_catalog.clock_timestamp() + interval ''10 minutes'''"
+    )
+
+    Arca.Repo.query!("SET LOCAL search_path TO skewed_clock, pg_catalog, public")
+    cell_now = Arca.ServerMetaStorage.now!()
+    assert DateTime.diff(cell_now, DateTime.utc_now(), :second) >= 599
+
+    assert {:ok, _} =
+             ExecutionAttempts.renew(
+               attempt.attempt,
+               DateTime.add(cell_now, 60, :second),
+               Arca.Test.Actor.stored()
+             )
+
+    assert :ok = charge(actor, budget, attempt.attempt, "live-call", holder_window_ms: 300_000)
+    assert charged(actor, budget) == 1
+
+    # Held for its window from the cell's clock, not the member's.
+    assert {:ok, [%{holder_deadline: deadline}]} = BudgetReservations.charges(actor, budget)
+    assert DateTime.diff(deadline, cell_now, :second) >= 299
+    assert {:ok, 0} = BudgetReservations.sweep(actor)
+    assert charged(actor, budget) == 1
   end
 
   test "a charge counts once, the cap refuses the fourth, and release is idempotent", %{
@@ -197,10 +234,15 @@ defmodule Arca.BudgetReservationsTest do
 
     # A charge with no holder goes with its deadline, or with its
     # authorizing attempt.
-    past = DateTime.add(DateTime.utc_now(), -1, :second)
-    future = DateTime.add(DateTime.utc_now(), 300, :second)
-    :ok = charge(actor, budget, a, "call_late", holder_deadline: past)
-    :ok = charge(actor, budget, a, "call_live", holder_deadline: future)
+    :ok = charge(actor, budget, a, "call_late", holder_window_ms: 300_000)
+    :ok = charge(actor, budget, a, "call_live", holder_window_ms: 300_000)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.BudgetCharge, where: c.id == "call_late"),
+        set: [holder_deadline: DateTime.add(DateTime.utc_now(), -1, :second)]
+      )
+
     assert {:ok, 1} = BudgetReservations.sweep(actor)
 
     assert {:ok, [%{id: "call_live"}]} =

@@ -15,9 +15,11 @@ defmodule Arca.BudgetReservations do
 
   Holds are deadlines, not ages: a charge must be admitted by `admit_by`
   (`admit_hold!/3` is the barrier admission runs), and a charge with no
-  holder is reclaimable past `holder_deadline`. `admit_by` is written,
-  checked and swept on the cell's clock (`Arca.ServerMetaStorage.now!/0`),
-  so members whose own clocks disagree agree on whether a hold stands.
+  holder is reclaimable past `holder_deadline`. Both deadlines are
+  written, checked and swept on the cell's clock
+  (`Arca.ServerMetaStorage.now!/0`), each from a window the caller names,
+  so members whose own clocks disagree with the database's agree on
+  whether a hold stands.
   `sweep/1` reclaims by conditional writes on the same rows admission
   updates, so either side of a race sees the other's commit.
 
@@ -85,8 +87,9 @@ defmodule Arca.BudgetReservations do
   charge stands (a retry of the same charge id is `:ok` without a second
   increment); `:exhausted` when the cap is full; `:stale_attempt` when
   the authorizing attempt does not own its execution; `:released` when
-  the reservation is closed. `opts`: `:holder_deadline` for a charge
-  without a holder execution.
+  the reservation is closed. `opts`: `:holder_window_ms`, for a charge
+  without a holder execution, how long it is held: its `holder_deadline`
+  is that far past the cell's clock at the charge.
   """
   @spec charge(Prima.Actor.t(), String.t(), charge(), pos_integer(), keyword()) ::
           :ok | :exhausted | :stale_attempt | :released | {:error, term()}
@@ -125,7 +128,7 @@ defmodule Arca.BudgetReservations do
                 if(Map.get(charge, :holder_execution_id),
                   do: DateTime.add(now, @admission_window_seconds, :second)
                 ),
-              holder_deadline: Keyword.get(opts, :holder_deadline),
+              holder_deadline: holder_deadline(now, Keyword.get(opts, :holder_window_ms)),
               inserted_at: now
             }
 
@@ -395,6 +398,11 @@ defmodule Arca.BudgetReservations do
 
     :ok
   end
+
+  defp holder_deadline(_now, nil), do: nil
+
+  defp holder_deadline(now, window_ms) when is_integer(window_ms) and window_ms > 0,
+    do: DateTime.add(now, window_ms, :millisecond)
 
   # arca:db-raise-ok inside the caller's transaction
   defp attempt_owns?(athanor_id, attempt) do
