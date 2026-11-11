@@ -49,8 +49,37 @@ defmodule Cyfr.MixProject do
     [
       test: [&test_after_database/1],
       "cyfr.bench.step": ["ecto.create --quiet", "ecto.migrate --quiet", "cyfr.bench.step"],
-      "assets.deploy": ["tailwind prism --minify", "esbuild prism --minify", "phx.digest"]
+      "assets.deploy": ["tailwind prism --minify", "esbuild prism --minify", "phx.digest"],
+      esbuild: [&install_esbuild/1, "esbuild"],
+      "phx.server": [&install_esbuild/1, "phx.server"]
     ]
+  end
+
+  # esbuild's own install unpacks through one directory of the user's cache,
+  # which it empties first, so two worktrees installing at once can leave
+  # one a truncated binary. Before `mix esbuild` or the dev server's watcher
+  # would install it, a missing binary is installed through a directory
+  # under this worktree's _build.
+  defp install_esbuild(_args) do
+    Mix.Task.run("loadpaths")
+
+    unless File.exists?(Esbuild.bin_path()) do
+      cache = Path.join(Path.dirname(Mix.Project.build_path()), "esbuild-install")
+      names = ~w(MIX_XDG XDG_CACHE_HOME)
+      before = Map.new(names, &{&1, System.get_env(&1)})
+      System.put_env(%{"MIX_XDG" => "1", "XDG_CACHE_HOME" => cache})
+
+      try do
+        Mix.Task.run("esbuild.install")
+      after
+        Enum.each(before, fn
+          {name, nil} -> System.delete_env(name)
+          {name, value} -> System.put_env(name, value)
+        end)
+
+        File.rm_rf!(cache)
+      end
+    end
   end
 
   # `mix test` prepares the database, then tests. The database steps take

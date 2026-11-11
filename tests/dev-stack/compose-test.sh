@@ -35,14 +35,35 @@
 # read. The scaffold ships neither file. Each mutation fails; an
 # equivalent respelling holds.
 #
-# Needs docker's compose plugin (no daemon), git, python3, ss and a build
-# of the checkout (_build/$MIX_ENV, or DEV_STACK_BUILD). The boundary cases
-# take the slots whose ports this host leaves free. SHOW=1 prints why each
-# mutation fails; DEV_STACK_SCRIPT runs the boundary cases against another
-# script, and DEV_STACK_CASES (case_* names) runs those boundary cases alone
-# after the static checks, with no mutation of the script. Usage: bash
-# tests/dev-stack/compose-test.sh
+# Needs docker's compose plugin (no daemon), git, python3, ss, flock and a
+# build of the checkout (_build/$MIX_ENV, or DEV_STACK_BUILD). The boundary
+# cases take the slots whose ports this host leaves free. SHOW=1 prints why
+# each mutation fails; DEV_STACK_SCRIPT runs the boundary cases against
+# another script, and DEV_STACK_CASES (case_* names) runs those boundary
+# cases alone after the static checks, with no mutation of the script.
+# Usage: bash tests/dev-stack/compose-test.sh
 set -uo pipefail
+
+# One copy runs on a host at a time. The boundary cases stand the script's
+# real listeners on the host's slots, each case with claims of its own, so
+# two copies would take the same slots and fail on each other's ports. The
+# lock is flock's on a file every copy on the host names: the kernel
+# releases it when its holder ends, however it ends, and no process this
+# test starts keeps it (flock -o). A copy waits for another up to 300 s,
+# and then fails with 75. A dev loop started on the host while the cases
+# run can still take a slot they chose: the lock is this test's alone.
+if [ "${1:-}" != --locked ]; then
+  lock=/tmp/cyfr-dev-stack-test.lock
+  flock -o -n -E 75 "$lock" bash "$0" --locked
+  status=$?
+  if [ "$status" = 75 ]; then
+    echo "compose-test: another copy of this test holds $lock; waiting up to 300 s for it to end" >&2
+    flock -o -w 300 -E 75 "$lock" bash "$0" --locked
+    status=$?
+    [ "$status" != 75 ] || echo "compose-test: the other copy still held $lock after 300 s" >&2
+  fi
+  exit "$status"
+fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # The boundary cases, defined below; DEV_STACK_CASES names some of them.

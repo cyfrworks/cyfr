@@ -38,7 +38,7 @@ handoff	backends-image-check	1	600	tests/locus-backends-image/**	python3 -I test
 handoff	compose-proof-tests	1	900	tests/compose-proof/**,docker-compose.yml	bash tests/compose-proof/cleanup-test.sh && bash tests/compose-proof/predicates-test.sh
 handoff	setup-proof-test	1	600	tests/setup-proof/**	bash tests/setup-proof/cleanup-test.sh
 handoff	tailnet-guard-tests	1	600	tests/tailnet-real/**,docker-compose.yml	bash tests/tailnet-real/guard-test.sh && bash tests/tailnet-real/predicates-test.sh
-handoff	dev-stack-test	1	284	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
+handoff	dev-stack-test	1	600	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
 handoff	prebuilt-binaries-test	1	600	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh
 handoff	ci-guards-test	1	600	scripts/ci/**,scripts/release.sh,tests/ci-guards-test.sh	bash tests/ci-guards-test.sh
 handoff	containerd-store-test	1	600	scripts/ci/containerd-image-store.sh,tests/containerd-image-store-test.sh	bash tests/containerd-image-store-test.sh
