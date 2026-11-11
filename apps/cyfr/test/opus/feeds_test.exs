@@ -372,8 +372,10 @@ defmodule Opus.FeedsTest do
       # loaded with, and the deferral's own pass, a tick away, fires before
       # the one the scheduler's start asked for two ticks away.
       wait_until(fn ->
-        timer = :sys.get_state(scheduler).timers[feed.id]
-        is_reference(timer) and (Process.read_timer(timer) || 0) > 15_000
+        case :sys.get_state(scheduler).timers[feed.id] do
+          {timer, _armed_for} -> (Process.read_timer(timer) || 0) > 15_000
+          nil -> false
+        end
       end)
 
       state = :sys.get_state(scheduler)

@@ -208,6 +208,24 @@ defmodule Opus.Schedules.SchedulerTest do
     :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
   end
 
+  test "a schedule a peer made due is armed again at the standing pass, its old timer cancelled",
+       %{ctx: ctx} do
+    script!([{:probe, self()}, %{"ran" => true}])
+    schedule = create_schedule(ctx)
+    scheduler = scheduler!()
+    assert {old_timer, _armed_for} = :sys.get_state(scheduler).timers[schedule.id]
+
+    {:ok, _} =
+      CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+        next_run_at: DateTime.add(DateTime.utc_now(), -1, :second)
+      })
+
+    send(scheduler, :standing_pass)
+    assert_receive {:scripted_probe, worker, _id}, 10_000
+    assert Process.read_timer(old_timer) == false
+    send(worker, :continue)
+  end
+
   test "a due schedule made after the scheduler started, with no cast to it, fires at the standing pass",
        %{ctx: ctx} do
     script!([{:probe, self()}, %{"ran" => true}])
