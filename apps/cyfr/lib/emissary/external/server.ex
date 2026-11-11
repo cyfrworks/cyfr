@@ -1489,9 +1489,11 @@ defmodule Emissary.External.Server do
     case send_initialize(state) do
       {:ok, init_result, state} ->
         with :ok <- send_initialized_notification(state),
-             {:ok, tools, state} <- send_tools_list(state) do
-          {:ok, tools, server_info(init_result), state}
+             {:ok, tools, listed} <- send_tools_list(state) do
+          {:ok, tools, server_info(init_result), listed}
         else
+          # `state` is the one `initialize` answered, which holds the peer's
+          # session, so a failure after it is masked with that session.
           # A legacy peer has no fall-forward; a second `:legacy` here would
           # mean the handshake itself was refused, which is a failure rather
           # than an era.
