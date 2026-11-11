@@ -125,7 +125,8 @@ defmodule Sanctum.Test.People do
   end
 
   # The person row of `admission`, then `also` handed the person, in one
-  # transaction.
+  # locking transaction, which proves the slots `also`'s holder-only
+  # writes read (`Arca.Repo.locking_transaction/2`).
   defp insert(info, admission, also) do
     now = DateTime.utc_now()
     user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
@@ -144,7 +145,7 @@ defmodule Sanctum.Test.People do
         contact(info)
       )
 
-    Arca.Repo.transaction(fn ->
+    Arca.Repo.locking_transaction(fn ->
       user = %User{} |> User.changeset(user_attrs) |> Arca.Repo.insert!()
       person = Arca.Data.project(user)
       :ok = also.(person)

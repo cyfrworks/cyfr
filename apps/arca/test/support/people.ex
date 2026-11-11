@@ -26,7 +26,9 @@ defmodule Arca.Test.People do
 
     also = Keyword.get(opts, :also, fn _person -> :ok end)
 
-    Arca.Repo.transaction(fn ->
+    # A locking transaction, which proves the slots `also`'s holder-only
+    # writes read (`Arca.Repo.locking_transaction/2`).
+    Arca.Repo.locking_transaction(fn ->
       with {:ok, user} <- %User{} |> User.changeset(user_attrs) |> Arca.Repo.insert(),
            :ok <- also.(Arca.Data.project(user)) do
         user
