@@ -165,9 +165,10 @@ defmodule Cyfr.Test.SandboxTest do
     # connection as a query in flight does, so whichever is killed first,
     # the kill either cuts the connection under the other's write or leaves
     # one alive to make it. On one scheduler, with the siblings above the
-    # sweep's priority, a sibling free to run when the other ends always
-    # runs before the sweep's next kill: the sweep must leave none free.
-    test "are all held before any is killed, so none writes after a kill",
+    # test's priority, a sibling free to run when the other ends always
+    # runs before a next kill the sweep waited to send: the sweep must send
+    # every kill before it lets any of them run.
+    test "are all killed before any of them runs again, so none writes after a kill",
          %{collector: collector} do
       test = self()
       holding = sibling(test, collector, :holding, true)
@@ -180,16 +181,111 @@ defmodule Cyfr.Test.SandboxTest do
     end
   end
 
-  # A process that ends while the sweep's suspend is on its way answers
-  # `exited` rather than a bad argument; it is as stopped as a suspended
-  # one. The case needs the process running on another scheduler and
-  # ending within its slice as the suspend arrives: about one in 60,000 of
-  # these short-lived processes, so a million make it all but certain.
-  test "a process that ends as it is suspended counts as stopped" do
-    for i <- 1..1_000_000 do
-      pid = spawn(fn -> count_down(rem(i, 50) * 200) end)
-      if Sandbox.suspend(pid), do: :erlang.resume_process(pid)
+  describe "a descendant that starts children until it is swept" do
+    setup do
+      collector = spawn(fn -> collect(%{}) end)
+
+      # Registered before the sandbox, so it runs after the sweep.
+      on_exit(fn ->
+        send(collector, {:reports, self()})
+        assert_receive {:reports, started}, 5_000
+        left = for {pid, :started} <- started, Process.alive?(pid), do: pid
+        Enum.each(left, &Process.exit(&1, :kill))
+
+        assert left == [],
+               "#{length(left)} of the #{map_size(started)} processes the test's descendant " <>
+                 "started outlived the sweep"
+      end)
+
+      Sandbox.setup!()
+      {:ok, collector: collector}
     end
+
+    # The parent never stops starting children, so some start after the
+    # sweep has read which processes there are. Each child names only its
+    # parent, and its parent is dead once it is killed: the sweep must find
+    # the child all the same.
+    test "are ended with it, however late each started", %{collector: collector} do
+      test = self()
+
+      spawn(fn ->
+        send(collector, {:report, self(), :started})
+        send(test, :breeding)
+        breed(collector)
+      end)
+
+      assert_receive :breeding, 5_000
+    end
+  end
+
+  # The sweep knows a process for a descendant by what it names as where it
+  # came from. This one names a process the sweep kills only once that
+  # process has ended, so no read before the kills knew it: only the read
+  # after them finds it, through the killed pid it names. It then starts
+  # three more, a millisecond apart, each born while the sweep reads for
+  # the one before: the sweep must read until it finds none.
+  test "what names a killed process only after the kills is ended too, with all it starts, " <>
+         "and the sweep fails" do
+    test = self()
+
+    # Stands for a test: its one child is all the sweep knows of.
+    root =
+      spawn(fn ->
+        send(test, {:known, spawn(fn -> Process.sleep(:infinity) end)})
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:known, known}
+    on_exit(fn -> Enum.each([root, known], &Process.exit(&1, :kill)) end)
+    spawn(fn -> names_late(test, known) end)
+    assert_receive {:started, _late}
+
+    error = assert_raise ExUnit.AssertionError, fn -> Sandbox.stop_descendants(root, []) end
+    assert error.message =~ ~r/found \d+ more that it had not known/
+    refute error.message =~ "may be left"
+
+    left = Enum.filter([known | started()], &Process.alive?/1)
+    assert left == [], "#{length(left)} processes outlived a sweep that failed"
+  end
+
+  test "a kill pass gives the caller back the priority it had" do
+    for priority <- [:low, :normal, :high, :max] do
+      was = Process.flag(:priority, priority)
+      pids = for _ <- 1..2, do: spawn(fn -> Process.sleep(:infinity) end)
+      :ok = Sandbox.kill(pids)
+      assert Process.info(self(), :priority) == {:priority, priority}
+      Process.flag(:priority, was)
+    end
+  end
+
+  # The sweeps of async tests run side by side, each blocking the other
+  # schedulers for its kills. Every one must end, and the last to lift its
+  # block must leave the schedulers running. Each sweeper stays alive until
+  # the test has looked, since the VM lifts the block of one that ends.
+  test "kills made side by side all land, and leave every scheduler running" do
+    assert :erlang.system_info(:multi_scheduling) == :enabled
+    test = self()
+
+    sweepers =
+      for _ <- 1..8 do
+        spawn_link(fn ->
+          for _ <- 1..500 do
+            watched = for _ <- 1..3, do: spawn_monitor(fn -> Process.sleep(:infinity) end)
+            :ok = Sandbox.kill(for {pid, _ref} <- watched, do: pid)
+            for {pid, ref} <- watched, do: assert_receive({:DOWN, ^ref, :process, ^pid, :killed})
+          end
+
+          send(test, {:swept, self()})
+          receive do: (:looked -> :ok)
+        end)
+      end
+
+    for sweeper <- sweepers, do: assert_receive({:swept, ^sweeper}, 30_000)
+
+    assert :erlang.system_info(:multi_scheduling) == :enabled
+    assert :erlang.system_info(:normal_multi_scheduling_blockers) == []
+
+    for sweeper <- sweepers, do: send(sweeper, :looked)
   end
 
   describe "a sync test's runners" do
@@ -395,8 +491,57 @@ defmodule Cyfr.Test.SandboxTest do
     }
   end
 
-  defp count_down(0), do: :ok
-  defp count_down(n), do: count_down(n - 1)
+  # Names `origin` as where it came from once `origin` has ended, and then
+  # starts a chain of three. Every one of them ends with the test.
+  defp names_late(test, origin) do
+    Process.flag(:priority, :high)
+    up = Process.monitor(test)
+    ref = Process.monitor(origin)
+    send(test, {:started, self()})
+
+    receive do
+      {:DOWN, ^ref, :process, ^origin, _reason} ->
+        Process.put(:"$callers", [origin])
+        chain(test, up, 3)
+
+      {:DOWN, ^up, :process, ^test, _reason} ->
+        :ok
+    end
+  end
+
+  # Starts the next link a millisecond from now, if any is left, and waits
+  # for the test's end.
+  defp chain(test, up, links) do
+    if links > 0 do
+      Process.sleep(1)
+
+      spawn(fn ->
+        send(test, {:started, self()})
+        chain(test, Process.monitor(test), links - 1)
+      end)
+    end
+
+    receive do
+      {:DOWN, ^up, :process, ^test, _reason} -> :ok
+    end
+  end
+
+  # Every process that has told the test it started, a chain still growing
+  # included.
+  defp started(pids \\ []) do
+    receive do
+      {:started, pid} -> started([pid | pids])
+    after
+      50 -> pids
+    end
+  end
+
+  # Starts a child that never ends and reports it, again and again.
+  defp breed(collector) do
+    send(collector, {:report, spawn(fn -> Process.sleep(:infinity) end), :started})
+    for _ <- 1..500, do: :erlang.unique_integer()
+    breed(collector)
+  end
 
   # A task of the test's, as the attempt and its keeper are: it watches the
   # sibling it is told of and, once that one has ended, reports and makes

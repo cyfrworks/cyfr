@@ -40,11 +40,13 @@ defmodule Cyfr.Test.Sandbox do
   a `Task`, a task a supervisor above runs on the test's behalf — is
   killed and awaited, unless it is registered under a name, which makes it
   a service rather than the test's work, or the test started it before its
-  sandbox, which makes it scaffolding the test means to outlive it. All of
-  them are suspended before the first is killed, so none answers another's
-  end with a write after a kill cut the shared connection mid-query. A sync
-  test's sweep does this first and again on every pass; an async test's
-  does only this, since the supervisors are its neighbours' too.
+  sandbox, which makes it scaffolding the test means to outlive it. The
+  kills are sent with every other scheduler blocked and the sweep at the
+  highest priority, so no process below that priority runs between the
+  first kill and the last, and none answers another's end with a write
+  after a kill cut the shared connection mid-query. A sync test's sweep
+  does this first and again on every pass; an async test's does only this,
+  since the supervisors are its neighbours' too.
 
   `on_exit` callbacks run last-registered first. A test that restores
   configuration a background process reads (a base path, a seed path, the
@@ -317,107 +319,236 @@ defmodule Cyfr.Test.Sandbox do
   anything that leads back only through them.
   """
   @spec descendants(pid(), [pid()]) :: [pid()]
-  def descendants(test, spared \\ []) when is_pid(test) and is_list(spared) do
-    lineage =
-      for pid <- Process.list(),
-          pid != self(),
-          pid not in spared,
-          from = lineage(pid),
-          from != nil,
-          do: {pid, from}
+  def descendants(test, spared \\ []) when is_pid(test) and is_list(spared),
+    do: found([test], spared)
 
-    lineage
-    |> reach(MapSet.new([test]))
-    |> MapSet.delete(test)
-    |> Enum.filter(&(Process.info(&1, :registered_name) == {:registered_name, []}))
+  # The live, unnamed processes that lead back to one of `roots`, the roots
+  # apart. A root need not be alive: a process names where it came from by
+  # pid, so what a dead root started still leads back to it.
+  defp found(roots, spared) do
+    {_reached, found} = Process.list() |> origins(spared) |> trace({MapSet.new(roots), []})
+    found
   end
 
-  # The pids a process names as where it came from, or nil once it is gone.
-  defp lineage(pid) do
-    case Process.info(pid, [:parent, :dictionary]) do
-      [parent: parent, dictionary: dictionary] ->
-        from =
-          Keyword.get(dictionary, :"$callers", []) ++ Keyword.get(dictionary, :"$ancestors", [])
+  # What each of `pids` names as where it came from, and whether it is
+  # registered under a name; the caller, the spared and the gone left out.
+  # Reading a process's dictionary lets a runnable process run some of its
+  # own code while it is read, at the reader's priority.
+  defp origins(pids, spared) do
+    for pid <- pids,
+        pid != self(),
+        pid not in spared,
+        info = Process.info(pid, [:parent, :dictionary, :registered_name]),
+        info != nil do
+      dictionary = info[:dictionary]
 
-        Enum.filter([parent | from], &is_pid/1)
+      from =
+        Keyword.get(dictionary, :"$callers", []) ++ Keyword.get(dictionary, :"$ancestors", [])
 
-      nil ->
-        nil
+      {pid, Enum.filter([info[:parent] | from], &is_pid/1), info[:registered_name] != []}
     end
   end
 
-  # The closure of `reached` over the lineage: passes repeat until one adds
+  # Adds `origins`, read for the first time, to what is traced so far: the
+  # pids reached from the roots, and the unnamed ones among them. A process
+  # names only what existed before it, so nothing traced earlier changes.
+  defp trace(origins, {reached, found}) do
+    grown = reach(origins, reached)
+
+    new =
+      for {pid, _from, false} <- origins,
+          MapSet.member?(grown, pid),
+          not MapSet.member?(reached, pid),
+          do: pid
+
+    {grown, new ++ found}
+  end
+
+  # The closure of `reached` over the origins: passes repeat until one adds
   # nobody, so a grandchild counts however the list is ordered.
-  defp reach(lineage, reached) do
+  defp reach(origins, reached) do
     grown =
-      for {pid, from} <- lineage,
+      for {pid, from, _named} <- origins,
           not MapSet.member?(reached, pid),
           Enum.any?(from, &MapSet.member?(reached, &1)),
           reduce: reached,
           do: (acc -> MapSet.put(acc, pid))
 
-    if MapSet.size(grown) == MapSet.size(reached), do: reached, else: reach(lineage, grown)
+    if MapSet.size(grown) == MapSet.size(reached), do: reached, else: reach(origins, grown)
   end
+
+  # How many times the sweep, alone, looks for processes it has not read
+  # before it kills what it knows. Each look reads a process once, and
+  # alone a process below the highest priority runs only while it is read,
+  # so a look finds only what the look before let start: the first takes
+  # what started while the list was read, the second what those started as
+  # they were read, and a third finds nothing unless each generation starts
+  # the next. Without a bound, such a chain would hold every other
+  # scheduler blocked without end. The bound is on how many times the sweep
+  # looks, not on how long it stays alone: a look reads every process it
+  # finds unread, however many, and each read waits for its process.
+  @looks 3
+
+  # How many times the sweep reads again once what it killed is gone. What
+  # such a read finds was not known when the kills were sent, so it runs
+  # freely and can start more while it is read and killed: the reads repeat
+  # until one finds nothing. A chain that ends within them is ended with
+  # them; a longer one, or one that never ends, is the limit the failure
+  # then names.
+  @reads 5
 
   # Killed, not asked: a process the test left behind has no one to answer
   # a shutdown to. Each kill is awaited, so the owner outlives them all.
   #
-  # Every one is suspended before any is killed. A kill can land while its
-  # process holds the shared connection mid-query, and the pool then drops
-  # the connection and the owner's checkout with it; a sibling still free
-  # to run would answer that death by writing — a provisioning keeper
-  # releasing the claim of the attempt it watches — into no owner at all.
-  # Suspended, none of them runs again: a kill still ends each one.
-  defp stop_descendants(test, spared) do
+  # A kill can land while its process holds the shared connection
+  # mid-query, and the pool then drops the connection and the owner's
+  # checkout with it; a sibling free to run would answer that death by
+  # writing — a provisioning keeper releasing the claim of the attempt it
+  # watches — into no owner at all. So the kills are sent alone
+  # (`alone/1`), all of them after the last read:
+  #
+  #   - between the first kill and the last, no process below the highest
+  #     priority runs Erlang code;
+  #   - before the first kill, a process the sweep reads for the first time
+  #     can run while it is read, and start others: the sweep looks again
+  #     for what it has not read, `@looks` times at most;
+  #   - a process at the highest priority can run at any point. Only OTP's
+  #     own processes run there today, and two test processes for a moment
+  #     each: the worker service pool's, and the one here that checks the
+  #     sweep gives the priority back.
+  #
+  # A process read before it names where it came from — a task a supervisor
+  # has started for a descendant, before its first instructions — is not
+  # known for a descendant: it outlives the kills and can run. So can what
+  # a chain longer than `@looks` started. Once the killed are gone the
+  # sweep reads again, with the killed as roots since their children name
+  # them; what it finds it kills and awaits, and it reads again, `@reads`
+  # times at most, until a read finds nothing. Then it fails the test,
+  # naming the first of them, and says so when the reads ran out, since
+  # something may then be left. The suspension this replaces had the same
+  # limit and said nothing.
+  @doc """
+  End every process that leads back to `test` (`descendants/2`), the
+  `spared` apart: the sweep of an async test, and the first step of each
+  pass of a sync test's. Answers the pids it killed, or fails the test
+  when, once those were gone, it found more that it had not known.
+  """
+  @spec stop_descendants(pid(), [pid()]) :: [pid()]
+  def stop_descendants(test, spared) do
     sweeping(test)
+    listed = Process.list()
 
-    watched =
-      for pid <- suspend_descendants(test, spared, MapSet.new()),
-          do: {Process.monitor(pid), pid}
+    case listed |> origins(spared) |> trace({MapSet.new([test]), []}) do
+      {_reached, []} ->
+        []
 
-    for {_ref, pid} <- watched, do: Process.exit(pid, :kill)
+      traced ->
+        read = MapSet.new(listed)
 
-    for {ref, pid} <- watched do
+        killed =
+          alone(fn ->
+            {_reached, found} = unread(traced, read, spared, @looks)
+            Enum.each(found, &Process.exit(&1, :kill))
+            found
+          end)
+
+        await(killed)
+
+        case unknown(test, spared, killed, {0, []}, @reads) do
+          {0, [], _left} ->
+            killed
+
+          {count, first, left} ->
+            ExUnit.Assertions.flunk(
+              "the sweep killed #{length(killed)} of the test's processes, and once they " <>
+                "had ended found #{count} more that it had not known, the first: " <>
+                Enum.join(first, "; ") <>
+                if(left == :unread,
+                  do: "; each of its #{@reads} reads found more, so some may be left",
+                  else: ""
+                )
+            )
+        end
+    end
+  end
+
+  # Kills and awaits what leads back to the test or to anything `killed`,
+  # and reads again with those among the killed, until a read finds none
+  # (`:none`) or the reads run out (`:unread`). Answers how many it found
+  # and the first five as they were before it killed them.
+  defp unknown(_test, _spared, _killed, {count, first}, 0), do: {count, first, :unread}
+
+  defp unknown(test, spared, killed, {count, first}, reads) do
+    case found([test | killed], spared) do
+      [] ->
+        {count, first, :none}
+
+      left ->
+        named = left |> Enum.take(5 - length(first)) |> Enum.map(&still_running/1)
+        kill(left)
+        await(left)
+        unknown(test, spared, left ++ killed, {count + length(left), first ++ named}, reads - 1)
+    end
+  end
+
+  # Traces what started since `read` was listed, reading each such process
+  # once, until a look finds none unread or the looks run out.
+  defp unread(traced, _read, _spared, 0), do: traced
+
+  defp unread(traced, read, spared, looks) do
+    case Enum.reject(Process.list(), &MapSet.member?(read, &1)) do
+      [] ->
+        traced
+
+      new ->
+        unread(
+          new |> origins(spared) |> trace(traced),
+          MapSet.union(read, MapSet.new(new)),
+          spared,
+          looks - 1
+        )
+    end
+  end
+
+  defp await(pids) do
+    for pid <- pids do
+      ref = Process.monitor(pid)
+
       receive do
-        {:DOWN, ^ref, :process, ^pid, _reason} -> pid
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
       end
     end
   end
 
-  # Passes repeat until one finds no descendant left running: one started
-  # while the pass before suspended its starter is suspended on the next,
-  # and a suspended process starts nothing.
-  defp suspend_descendants(test, spared, suspended) do
-    found =
-      for pid <- descendants(test, spared),
-          not MapSet.member?(suspended, pid),
-          into: MapSet.new(),
-          do: pid
-
-    if MapSet.size(found) == 0 do
-      MapSet.to_list(suspended)
-    else
-      Enum.each(found, &suspend/1)
-      suspend_descendants(test, spared, MapSet.union(suspended, found))
-    end
-  end
-
   @doc """
-  Suspend `pid` for the sweep: true, or false for a process that ended
-  since it was listed, which is as stopped as a suspended one (its monitor
-  answers at once). One gone before the call is refused as a bad
-  argument; one that ends while the suspend is on its way answers
-  `exited`.
+  Kill every one of `pids`, with no process below the highest priority
+  running Erlang code between the first kill and the last (`alone/1`).
   """
-  @spec suspend(pid()) :: boolean()
-  def suspend(pid) do
-    :erlang.suspend_process(pid)
-  rescue
-    ArgumentError ->
-      false
+  @spec kill([pid()]) :: :ok
+  def kill(pids) when is_list(pids),
+    do: alone(fn -> Enum.each(pids, &Process.exit(&1, :kill)) end)
 
-    error in ErlangError ->
-      if error.original == :exited, do: false, else: reraise(error, __STACKTRACE__)
+  # `fun` with the other normal schedulers blocked and the caller at the
+  # highest priority: the one scheduler left takes up nothing below that
+  # priority unless `fun` reads it or waits. A process inside a dirty call
+  # stays there, or waits for that scheduler. Blocks count, so sweeps side
+  # by side each lift their own, and the VM lifts the block of a caller
+  # that dies holding it. The block is lifted before the priority is given
+  # back, so the caller is not preempted while it still holds it.
+  #
+  # The pids are never suspended instead: a suspended process killed while
+  # it waits for a dirty I/O scheduler can be freed under that scheduler,
+  # which ends the whole VM on a signal 11 (OTP 29.1).
+  defp alone(fun) do
+    :erlang.system_flag(:multi_scheduling, :block_normal)
+    priority = Process.flag(:priority, :max)
+
+    try do
+      fun.()
+    after
+      :erlang.system_flag(:multi_scheduling, :unblock_normal)
+      Process.flag(:priority, priority)
+    end
   end
 
   # ---------------------------------------------------------------------------

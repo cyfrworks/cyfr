@@ -273,8 +273,11 @@ defmodule Aqua.TurnLedgerTest do
 
       # The loop's worker is held after the child's terminal write and
       # before the loop reads its row; retention prunes the row meanwhile.
-      prune!(actor, probed, "failed")
-      release_waiter!(probed)
+      try do
+        prune!(actor, probed, "failed")
+      after
+        release_waiter!(probed)
+      end
 
       # The failure's text reaches the thread only once the turn holds the
       # unnamed outside source the gone row stands for.
@@ -307,8 +310,11 @@ defmodule Aqua.TurnLedgerTest do
           hold_waiter!(child)
         end)
 
-      prune!(actor, probed, "completed")
-      release_waiter!(probed)
+      try do
+        prune!(actor, probed, "completed")
+      after
+        release_waiter!(probed)
+      end
 
       assert :completed = await!(result)
       turn_sources = sources(ctx, turn)
@@ -447,11 +453,12 @@ defmodule Aqua.TurnLedgerTest do
 
   # The process waiting on the child — the loop's worker, registered under
   # the child's id — stops before the child answers, so the child's
-  # terminal write lands and its answer waits in the worker's mailbox. The
-  # resume is registered first, so a test that fails holds nothing.
+  # terminal write lands and its answer waits in the worker's mailbox. Only
+  # this process can resume it, so the test releases it in an `after`: a
+  # test that fails ends the loop, and the worker with it, through its link
+  # before the VM lifts the suspension.
   defp hold_waiter!(child) do
     [{waiter, _}] = Registry.lookup(Opus.Registry, child)
-    on_exit(fn -> if Process.alive?(waiter), do: :erlang.resume_process(waiter) end)
     true = :erlang.suspend_process(waiter)
     Process.put({:held, child}, waiter)
     :held
