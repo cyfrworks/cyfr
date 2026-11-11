@@ -117,7 +117,7 @@ other_token="$(field "$other" token)"
 LAYOUT_REVISION=1
 none='{"version":3,"canvases":[]}'
 windowed='{"apps":[{"tincture":"tincture:local.ungranted-probe","placement":"window","order":0,"minimised":false,"geometry":{"x":6000,"y":6000,"w":3000,"h":3000}}]}'
-window="{\"version\":3,\"canvases\":[{\"id\":\"home\",\"tincture\":\"tincture:local.no-canvas\",\"postures\":{\"desk\":$windowed,\"hand\":$windowed}}]}"
+window="{\"version\":3,\"canvases\":[{\"id\":\"main\",\"tincture\":\"tincture:local.no-canvas\",\"postures\":{\"desk\":$windowed,\"hand\":$windowed}}]}"
 publish_layout() {
   browser_layout "$CELL" "$token" "$1" "$LAYOUT_REVISION"
   LAYOUT_REVISION=$((LAYOUT_REVISION + 1))
