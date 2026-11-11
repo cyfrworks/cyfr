@@ -15,7 +15,12 @@ defmodule Emissary.External.Server do
   connection. Connecting is a stateless `tools/list` probe under the current
   protocol revision, falling back to the legacy initialize → initialized
   handshake for third-party servers still on the older revision (see
-  `connect/1`).
+  `connect/1`). A legacy peer that issues an `Mcp-Session-Id` at
+  `initialize` gets it back on every later request until the next connect.
+  A paged `tools/list` is followed through its `nextCursor` to the last
+  page, and a listing longer than 20 pages fails the connect. A reply whose
+  content type is `text/event-stream` is read as an event stream, its last
+  event the answer; any other is read as JSON.
 
   A connect checks every `vault:` header template against this server's
   URL from the entries' metadata (`Sanctum.Vault.destination_matches?/3`)
@@ -35,7 +40,8 @@ defmodule Emissary.External.Server do
   backend's command. A backend started afresh (`resumed: false`) is
   initialized at the legacy protocol revision
   (`Prima.MCP.Protocol.legacy_version/0`) and told
-  `notifications/initialized`; then each is asked `tools/list`, and its
+  `notifications/initialized`; then each is asked `tools/list`, every page
+  of it as an HTTP listing is, and its
   tools are this server's as `<backend>__<tool>`. Every request is one
   JSON-RPC line `send` writes; a reader process per session waits on `recv`
   and hands this process the lines, each answer going to the call that
@@ -117,6 +123,12 @@ defmodule Emissary.External.Server do
   @input_required Protocol.result_type(:input_required)
 
   @reinit_cooldown_ms 5_000
+  # The most pages of a paged `tools/list` read before a connect fails
+  # rather than keep a listing it knows is cut short: a consent baseline
+  # missing tools would admit them unseen.
+  @max_listing_pages 20
+  # The header a Streamable HTTP peer names its session in.
+  @session_id_header "mcp-session-id"
   # 10 MB
   @max_response_body_bytes 10_485_760
 
@@ -270,6 +282,9 @@ defmodule Emissary.External.Server do
       # re-probing on every call would double the traffic to a legacy peer
       # forever.
       :era,
+      # The `Mcp-Session-Id` a legacy peer issued at `initialize`, sent on
+      # every later request to it; nil when it issued none.
+      :peer_session,
       transport: :http,
       raw_headers: %{},
       headers: %{},
@@ -908,7 +923,12 @@ defmodule Emissary.External.Server do
         fail_initialize(state, reason)
 
       {:ok, resolved_headers} ->
-        state = %{state | headers: resolved_headers, timeout_ms: handshake_timeout}
+        state = %{
+          state
+          | headers: resolved_headers,
+            timeout_ms: handshake_timeout,
+            peer_session: nil
+        }
 
         # `connected` rather than rebinding `state`: the else arm below must
         # see the headers-resolved state, and a `with` pattern binding would
@@ -1052,15 +1072,9 @@ defmodule Emissary.External.Server do
   end
 
   defp list_backend_tools(state, backend) do
-    case request(state, backend, "tools/list", %{}) do
-      {:ok, result, state} ->
-        case listed_tools(result) do
-          {:ok, tools} -> {:ok, mask_credentials(tools, state), state}
-          :error -> {:error, "#{backend} answered tools/list without a list of tools", state}
-        end
-
-      {:error, reason, state} ->
-        {:error, reason, state}
+    case list_pages(state, backend, &request(&1, backend, "tools/list", &2)) do
+      {:ok, tools, state} -> {:ok, mask_credentials(tools, state), state}
+      {:error, reason, state} -> {:error, reason, state}
     end
   end
 
@@ -1489,10 +1503,25 @@ defmodule Emissary.External.Server do
         }
       })
 
-    case http_post(state, body) do
-      {:ok, %Message{type: :response, result: result}} -> {:ok, result, state}
-      {:ok, %Message{type: :error, error: error}} -> {:error, upstream_message(error)}
-      {:error, reason} -> {:error, reason}
+    case http_exchange(state, body) do
+      {{:ok, %Message{type: :response, result: result}}, resp_headers} ->
+        {:ok, result, %{state | peer_session: peer_session(resp_headers)}}
+
+      {{:ok, %Message{type: :error, error: error}}, _resp_headers} ->
+        {:error, upstream_message(error)}
+
+      {{:error, reason}, _resp_headers} ->
+        {:error, reason}
+    end
+  end
+
+  # A session id is visible ASCII (the specification's `0x21`-`0x7E`); one
+  # carrying anything else is not kept, since it would go back out as a
+  # header value.
+  defp peer_session(resp_headers) do
+    case List.keyfind(resp_headers, @session_id_header, 0) do
+      {_name, id} -> if String.match?(id, ~r/^[\x21-\x7e]+$/), do: id
+      nil -> nil
     end
   end
 
@@ -1508,33 +1537,58 @@ defmodule Emissary.External.Server do
     end
   end
 
+  # The listing is the upstream's words as much as a result is, and is
+  # stored, answered and drawn: it is masked as a tool call's result is.
   defp send_tools_list(state) do
-    {request_id, state} = next_request_id(state)
-
-    body = Message.encode_request(request_id, "tools/list", %{})
-
-    # The listing is the upstream's words as much as a result is, and is
-    # stored, answered and drawn: it is masked as a tool call's result is.
-    case http_post(state, body) do
-      {:ok, %Message{type: :response, result: result}} ->
-        case listed_tools(result) do
-          {:ok, tools} ->
-            {:ok, mask_credentials(tools, state), state}
-
-          :error ->
-            {:error, {:failed, "#{state.name} answered tools/list without a list of tools"}}
-        end
-
-      {:ok, %Message{type: :error, error: error}} ->
-        {:error, upstream_message(error)}
-
-      {:legacy, state} ->
-        {:legacy, state}
-
-      {:error, reason} ->
-        {:error, reason}
+    case list_pages(state, state.name, &http_list_page/2) do
+      {:ok, tools, state} -> {:ok, mask_credentials(tools, state), state}
+      {:error, sentence, _state} -> {:error, {:failed, sentence}}
+      {:legacy, state} -> {:legacy, state}
+      {:error, reason} -> {:error, reason}
     end
   end
+
+  defp http_list_page(state, params) do
+    {request_id, state} = next_request_id(state)
+
+    case http_post(state, Message.encode_request(request_id, "tools/list", params)) do
+      {:ok, %Message{type: :response, result: result}} -> {:ok, result, state}
+      {:ok, %Message{type: :error, error: error}} -> {:error, upstream_message(error)}
+      {:legacy, state} -> {:legacy, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Every tool a paged `tools/list` holds: `fetch` asks for one page with
+  # the params given and answers `{:ok, result, state}` or what the caller
+  # passes back as it is. Pages are read while the peer names a next
+  # cursor, to @max_listing_pages.
+  defp list_pages(state, who, fetch), do: list_pages(state, who, fetch, %{}, [], 1)
+
+  defp list_pages(state, who, fetch, params, acc, page) do
+    case fetch.(state, params) do
+      {:ok, result, state} ->
+        case {listed_tools(result), next_cursor(result)} do
+          {:error, _cursor} ->
+            {:error, "#{who} answered tools/list without a list of tools", state}
+
+          {{:ok, tools}, nil} ->
+            {:ok, acc ++ tools, state}
+
+          {{:ok, _tools}, _cursor} when page >= @max_listing_pages ->
+            {:error, "#{who} listed more than #{@max_listing_pages} pages of tools", state}
+
+          {{:ok, tools}, cursor} ->
+            list_pages(state, who, fetch, %{"cursor" => cursor}, acc ++ tools, page + 1)
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp next_cursor(%{"nextCursor" => cursor}) when is_binary(cursor) and cursor != "", do: cursor
+  defp next_cursor(_result), do: nil
 
   # A listing is a list of tool objects, at `tools` or, for some servers,
   # with no `tools` key at all; anything else is no listing.
@@ -1554,18 +1608,29 @@ defmodule Emissary.External.Server do
   # ============================================================================
 
   defp http_post(state, body) do
+    {reply, _resp_headers} = http_exchange(state, body)
+    reply
+  end
+
+  # The reply to `body` and the headers it came with (`[]` when no
+  # response was read).
+  defp http_exchange(state, body) do
     body = maybe_add_meta(body, state.era)
 
     headers =
       [{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"}]
+      |> Enum.concat(session_headers(state.peer_session))
       |> Enum.concat(protocol_headers(body, state.era, state.tools))
       |> merge_headers(state.headers)
 
     case Jason.encode(body) do
       {:ok, json_body} -> post_encoded(state, body, headers, json_body)
-      {:error, _reason} -> {:error, "Request encoding failed"}
+      {:error, _reason} -> {{:error, "Request encoding failed"}, []}
     end
   end
+
+  defp session_headers(nil), do: []
+  defp session_headers(id), do: [{@session_id_header, id}]
 
   defp post_encoded(state, body, headers, json_body) do
     # Pin to the validated IP on EVERY request (not just at init), with the
@@ -1583,53 +1648,59 @@ defmodule Emissary.External.Server do
     ]
 
     case Sanctum.Egress.pinned_request(:post, state.url, headers, json_body, opts) do
-      {:ok, status, _headers, resp_body} when status in 200..299 ->
-        read_reply(state, resp_body, body)
+      {:ok, status, resp_headers, resp_body} when status in 200..299 ->
+        {read_reply(state, resp_headers, resp_body, body), resp_headers}
 
-      {:error, {:response_too_large, _size, _max}} ->
-        {:error, "Response too large (max 10MB)"}
+      {:ok, status, resp_headers, resp_body} ->
+        {refused_status(state, status, resp_body), resp_headers}
 
-      {:ok, status, _headers, resp_body} ->
-        # A 4xx while speaking the current revision is how a peer says it
-        # cannot. The specification is explicit that the body has to be read
-        # before falling back: a modern server also answers 4xx for an
-        # unsupported version or a bad header, and those mean "retry
-        # differently", not "you are talking to an older server".
-        #
-        # The body is inspected, never reflected — it may carry internal
-        # diagnostics or credentials echoed back at us.
-        cond do
-          # An auth rejection is never an era signal: a legacy retry
-          # re-sends the same refused credential, wastes a round-trip,
-          # and logs "speaks a pre-2026 revision" about a server whose
-          # only complaint is the bearer token. Say what it is.
-          status in [401, 403] ->
-            {:error,
-             "HTTP #{status} — the server refused the configured " <>
-               "credentials; check the registered Authorization header"}
-
-          state.era == :modern and status in 400..499 and not modern_error?(resp_body) ->
-            {:legacy, state}
-
-          true ->
-            {:error, "HTTP #{status}"}
-        end
-
-      # SSRF/DNS validation failures are safe, descriptive strings.
-      {:error, {:refused, _type, reason}} ->
-        {:error, reason}
-
-      # Transport/connection failure — log detail internally, surface a
-      # generic message to the caller. Whether the request reached the
-      # server is not known from here.
       {:error, reason} ->
-        Logger.debug(
-          "[Emissary.External.Server] request to #{state.name} failed: " <>
-            log_reason(reason, state)
-        )
-
-        {:error, {:uncertain, "Request failed"}}
+        {request_failed(state, reason), []}
     end
+  end
+
+  # A 4xx while speaking the current revision is how a peer says it cannot.
+  # The specification is explicit that the body has to be read before
+  # falling back: a modern server also answers 4xx for an unsupported
+  # version or a bad header, and those mean "retry differently", not "you
+  # are talking to an older server".
+  #
+  # The body is inspected, never reflected — it may carry internal
+  # diagnostics or credentials echoed back at us.
+  defp refused_status(state, status, resp_body) do
+    cond do
+      # An auth rejection is never an era signal: a legacy retry re-sends
+      # the same refused credential, wastes a round-trip, and logs "speaks a
+      # pre-2026 revision" about a server whose only complaint is the bearer
+      # token. Say what it is.
+      status in [401, 403] ->
+        {:error,
+         "HTTP #{status} — the server refused the configured " <>
+           "credentials; check the registered Authorization header"}
+
+      state.era == :modern and status in 400..499 and not modern_error?(resp_body) ->
+        {:legacy, state}
+
+      true ->
+        {:error, "HTTP #{status}"}
+    end
+  end
+
+  defp request_failed(_state, {:response_too_large, _size, _max}),
+    do: {:error, "Response too large (max 10MB)"}
+
+  # SSRF/DNS validation failures are safe, descriptive strings.
+  defp request_failed(_state, {:refused, _type, reason}), do: {:error, reason}
+
+  # Transport/connection failure — log detail internally, surface a generic
+  # message to the caller. Whether the request reached the server is not
+  # known from here.
+  defp request_failed(state, reason) do
+    Logger.debug(
+      "[Emissary.External.Server] request to #{state.name} failed: " <> log_reason(reason, state)
+    )
+
+    {:error, {:uncertain, "Request failed"}}
   end
 
   # Per-request metadata. There is no handshake in this revision, so a request
@@ -1722,10 +1793,10 @@ defmodule Emissary.External.Server do
   # A notification expects no answer, so any JSON body is accepted. The
   # refusal names which of these it was in the log, never the body: that
   # may carry internal diagnostics.
-  defp read_reply(_state, "", _request), do: {:error, :empty_response}
+  defp read_reply(_state, _resp_headers, "", _request), do: {:error, :empty_response}
 
-  defp read_reply(state, resp_body, request) do
-    case Message.decode_json(reply_json(resp_body)) do
+  defp read_reply(state, resp_headers, resp_body, request) do
+    case Message.decode_json(reply_json(resp_headers, resp_body)) do
       {:error, :parse_error, _} ->
         {:error, "Invalid JSON response"}
 
@@ -1753,11 +1824,18 @@ defmodule Emissary.External.Server do
   defp refused_reply({:ok, %Message{}}, _id), do: "it is a request of the server's own"
   defp refused_reply({:error, :invalid_request, _}, _id), do: "it is not a valid response"
 
-  # Handle SSE-wrapped responses (some MCP servers use text/event-stream)
-  defp reply_json(body) do
-    if String.starts_with?(body, "event:") or String.starts_with?(body, "data:"),
-      do: extract_sse_data(body),
-      else: body
+  # A reply is an event stream when its content type says so, whatever
+  # field or comment line the stream opens with; any other is JSON.
+  defp reply_json(resp_headers, body) do
+    if event_stream?(resp_headers), do: extract_sse_data(body), else: body
+  end
+
+  defp event_stream?(resp_headers) do
+    Enum.any?(resp_headers, fn {name, value} ->
+      name == "content-type" and
+        value |> String.split(";") |> hd() |> String.trim() |> String.downcase() ==
+          "text/event-stream"
+    end)
   end
 
   # Extract the JSON-RPC response from the last SSE event.

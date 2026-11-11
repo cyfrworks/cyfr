@@ -88,15 +88,51 @@ defmodule Emissary.External.ServerEraTest do
       # Header and body must agree or a conforming peer refuses the request.
       assert version_header == meta[Protocol.meta_protocol_version_key()]
     end
-  end
 
-  describe "a legacy peer" do
-    test "falls back to the handshake after a bare 4xx", %{stub: stub, url: url} do
-      test_pid = self()
+    test "a paged listing is followed to its last page", %{stub: stub, url: url} do
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+
+        result =
+          case body["params"]["cursor"] do
+            nil -> %{"tools" => [%{"name" => "first"}], "nextCursor" => "page-two"}
+            "page-two" -> %{"tools" => [%{"name" => "second"}], "nextCursor" => "page-three"}
+            "page-three" -> %{"tools" => [%{"name" => "third"}]}
+          end
+
+        json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+      end)
+
+      {_pid, {:ok, tools}} = connect(url, "paging-peer")
+      assert Enum.map(tools, & &1["name"]) == ["first", "second", "third"]
+    end
+
+    test "a listing that never ends fails the connect", %{stub: stub, url: url} do
+      pages = :counters.new(1, [])
 
       HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
-        send(test_pid, {:method, body["method"]})
+        :counters.add(pages, 1, 1)
+        page = %{"tools" => [%{"name" => "t#{body["id"]}"}], "nextCursor" => "more"}
+        json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => page})
+      end)
+
+      {pid, {:error, reason}} = connect(url, "endless-peer")
+      assert reason =~ "listed more than 20 pages of tools"
+      assert :counters.get(pages, 1) == 20
+      assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
+    end
+  end
+
+  describe "a legacy peer" do
+    # A stateful peer on the older revision, as the common servers are: it
+    # issues a session at `initialize` and answers any later request that
+    # does not carry it 400.
+    defp legacy_peer(stub, test_pid) do
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        session = Plug.Conn.get_req_header(conn, "mcp-session-id")
+        send(test_pid, {:method, body["method"], session})
 
         modern? = get_in(body, ["params", "_meta"]) != nil
 
@@ -107,27 +143,56 @@ defmodule Emissary.External.ServerEraTest do
             Plug.Conn.resp(conn, 400, "Bad Request")
 
           "initialize" ->
-            json(conn, %{
+            conn
+            |> Plug.Conn.put_resp_header("mcp-session-id", "peer-session")
+            |> json(%{
               "jsonrpc" => "2.0",
               "id" => body["id"],
               "result" => %{"serverInfo" => %{"name" => "old", "version" => "1"}}
             })
 
+          _method when session != ["peer-session"] ->
+            Plug.Conn.resp(conn, 400, "Bad Request: No valid session ID provided")
+
           "notifications/initialized" ->
             Plug.Conn.resp(conn, 202, "")
 
           "tools/list" ->
-            json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
+            json(conn, %{
+              "jsonrpc" => "2.0",
+              "id" => body["id"],
+              "result" => %{"tools" => [%{"name" => "echo"}]}
+            })
+
+          "tools/call" ->
+            json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"echo" => true}})
         end
       end)
+    end
+
+    test "falls back to the handshake after a bare 4xx", %{stub: stub, url: url} do
+      legacy_peer(stub, self())
 
       {pid, {:ok, _tools}} = connect(url, "legacy-peer")
 
       assert %{status: :ready, server_info: %{"name" => "old"}} =
                GenServer.call(pid, :status, 5_000)
 
-      assert_received {:method, "tools/list"}
-      assert_received {:method, "initialize"}
+      assert_received {:method, "tools/list", []}
+      assert_received {:method, "initialize", []}
+    end
+
+    test "every request after initialize carries the session it issued",
+         %{stub: stub, url: url} do
+      legacy_peer(stub, self())
+
+      {pid, {:ok, [%{"name" => "echo"}]}} = connect(url, "session-peer")
+      assert {:ok, %{"echo" => true}} = Server.call_tool(pid, "echo", %{})
+
+      assert_received {:method, "initialize", []}
+      assert_received {:method, "notifications/initialized", ["peer-session"]}
+      assert_received {:method, "tools/list", ["peer-session"]}
+      assert_received {:method, "tools/call", ["peer-session"]}
     end
   end
 
