@@ -1227,13 +1227,19 @@ async function main() {
     // The panel's thread pane, its own view, connected. Mounted on the kept
     // thread, its connected mount follows the thread's events
     // (`PrismWeb.ThreadPaneLive`'s `open_thread/2`) before it answers the
-    // join that marks it connected, so once it is, the announcement reaches
-    // it: nothing more is waited for. A pane turned by message gives no such
-    // sign, so the proof does not announce to one.
+    // join, so once its connected render stands, the announcement reaches
+    // it: nothing more is waited for. The sign is the pane's own: on this
+    // thread, which holds no message, the pane says it is reading the model
+    // until its connected mount has read it. The `phx-connected` class is
+    // not the pane's to keep: a patch of the panel that carries the pane's
+    // element again puts the panel's classes back on it, and the class is
+    // gone from a pane that is connected. A pane turned by message gives no
+    // such sign, so the proof does not announce to one.
     await page.waitForFunction((id) => {
       const pane = document.getElementById("aqua-panel-pane");
       const select = document.getElementById("aqua-panel-threads");
-      return pane && pane.classList.contains("phx-connected") && select && select.value === id;
+      return pane && pane.querySelector("#aqua-panel-pane-thread") &&
+        !pane.querySelector('[data-test="model-pending"]') && select && select.value === id;
     }, thread.thread_id, { timeout: 30_000 }).catch(async (error) => {
       // What the page showed when the wait ran out, in the record a failed
       // run leaves: which half of the wait did not arrive, and what stood
@@ -1244,6 +1250,7 @@ async function main() {
         return {
           panel_open: !!document.getElementById("aqua-panel-sheet"),
           pane_classes: pane ? pane.className : null,
+          pane_reading_model: pane ? !!pane.querySelector('[data-test="model-pending"]') : null,
           thread_chosen: select ? select.value === id : null,
           dialogs_open: Array.from(document.querySelectorAll("dialog[open]"), (d) => d.id),
         };
