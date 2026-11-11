@@ -131,13 +131,27 @@ defmodule Opus.AttemptAbandonedTest do
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, parent.athanor_id) end)
     child = child!(parent)
 
-    assert {:ok, %{cancelled: true}} = Opus.cancel(parent.ctx, parent.execution_id)
-    stopped = row(child.id)
-    assert stopped.status == "failed"
+    # The report passes its ownership check, then the cancel ends the row
+    # and stops the children itself: the report's close cascades a second
+    # time.
+    checked = hold_after_ownership_check(parent)
+    reporter = Task.async(fn -> abandoned(parent, @cancelled) end)
+    assert_receive {:checked, checker}, 2_000
 
-    abandoned(parent, @cancelled)
+    assert {:ok, %{cancelled: true}} = Opus.cancel(parent.ctx, parent.execution_id)
+    actor = Prima.Actor.in_athanor(parent.athanor_id)
+    stopped = Arca.Repo.get!(Arca.Schemas.Execution, child.id)
+    ended = Arca.Repo.get!(Arca.Schemas.Execution, parent.execution_id)
+    assert stopped.status == "failed"
+    assert {:ok, events} = Arca.ExecutionEvents.since(actor, child.id, 0)
+
+    send(checker, :continue)
+    assert %{"ok" => _} = Task.await(reporter, 5_000)
     assert {:error, "Execution cancelled"} = AttemptWaiter.await(parent.pid, parent.close)
-    assert row(child.id) == stopped
+    assert Arca.Repo.get!(Arca.Schemas.Execution, child.id) == stopped
+    assert Arca.Repo.get!(Arca.Schemas.Execution, parent.execution_id) == ended
+    assert {:ok, ^events} = Arca.ExecutionEvents.since(actor, child.id, 0)
+    :telemetry.detach(checked)
   end
 
   # A running child of `parent`, as a formula's guest admits one.
