@@ -598,7 +598,7 @@ defmodule Opus.ProviderTest do
       failed_tool!(
         ctx,
         fn -> over_mcp(ctx, %{"reference" => ref, "input" => %{}}) end,
-        "Failed to resolve component #{ref}: The component index is catching up with its files — retry shortly",
+        "The component index is catching up with its files — retry shortly",
         "unavailable"
       )
     end

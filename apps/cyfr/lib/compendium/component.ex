@@ -137,9 +137,12 @@ defmodule Compendium.Component do
   the ref is pinned (`Registry.get/5`) or versionless
   (`Registry.get_latest/4`, whose row already carries the manifest).
   A component the registry does not hold is
-  `{:error, {:not_found, {:component, reference}}}`; a malformed reference
-  or a storage fault is a human-readable `{:error, binary}`. Nothing
-  raises.
+  `{:error, {:not_found, {:component, reference}}}`; a registry whose
+  index has not caught up with its files is the declared refusal
+  `{:error, :projection_unavailable}` (`Compendium.ProjectionReconciler`),
+  passed on as itself so every reader answers it as unavailable; a
+  malformed reference or another storage fault is a human-readable
+  `{:error, binary}`. Nothing raises.
 
   The one resolver: the MCP tool modules call it directly and
   `Compendium.Resolver` is its string-in adapter, so no caller and no
@@ -147,7 +150,7 @@ defmodule Compendium.Component do
   """
   @spec resolve_component(Context.t(), term()) ::
           {:ok, map(), map()}
-          | {:error, {:not_found, {:component, String.t()}} | String.t()}
+          | {:error, {:not_found, {:component, String.t()}} | :projection_unavailable | String.t()}
   def resolve_component(%Context{} = ctx, reference) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
@@ -167,6 +170,9 @@ defmodule Compendium.Component do
 
           {:error, :not_found} ->
             {:error, {:not_found, {:component, reference}}}
+
+          {:error, :projection_unavailable} = refused ->
+            refused
 
           {:error, reason} ->
             {:error, "Failed to resolve component #{reference}: #{Refusals.render(reason)}"}

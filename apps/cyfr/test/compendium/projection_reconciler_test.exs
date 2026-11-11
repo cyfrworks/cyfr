@@ -240,6 +240,15 @@ defmodule Compendium.ProjectionReconcilerTest do
 
       assert {:error, :projection_unavailable} = Registry.get(ctx, name, "1.0.0")
       assert {:error, :projection_unavailable} = Registry.search(ctx, %{})
+
+      # The component reads above the registry pass the refusal on as
+      # itself.
+      reference = "reagent:local.#{name}:1.0.0"
+
+      assert {:error, :projection_unavailable} =
+               Compendium.Component.resolve_component(ctx, reference)
+
+      assert {:error, :projection_unavailable} = Compendium.inspect_component(ctx, reference)
       refute caught_up?(actor)
 
       # The agent index is another root's projection, and stands.
