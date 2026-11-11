@@ -13,9 +13,10 @@
 # The report is whatever the stage did, a stage that died early or was
 # stopped included: the commit tested (HEAD, or `<HEAD> with changes`
 # when the tree differs from it), the stage's exit status, its row lines
-# (`<check>: <result> <seconds>s`, nothing else of its output) and the log
-# directory's path on this host. Only those reach GitHub, whose runs are
-# public; the logs stay here.
+# (`<check>: ok|failed <n>|not run <n> <seconds>s`, nothing else of its
+# output; a nightly row is never skipped) and the log directory's path on
+# this host. Only those reach GitHub, whose runs are public; the logs stay
+# here.
 #
 # The log directory is LOGDIR, else a fresh /tmp/cyfr-stage.nightly.XXXXXX,
 # which scripts/janitor.sh removes after seven days (its rule 5); it is
@@ -75,7 +76,7 @@ if [ -n "$stopped" ]; then
 fi
 cat "$logdir/stage.out"
 
-rows=$(grep -E '^[a-z0-9-]+: (ok|failed [0-9]+|not run [0-9]+|skipped \(.*\)) [0-9]+s$' "$logdir/stage.out")
+rows=$(grep -E '^[a-z0-9-]+: (ok|failed [0-9]+|not run [0-9]+) [0-9]+s$' "$logdir/stage.out")
 reported=0
 gh workflow run host-nightly.yml -f commit="$commit" -f status="$status" -f summary="$rows" -f logs="$logdir" >&2 ||
   reported=$?

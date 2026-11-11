@@ -416,11 +416,15 @@ begin "the workflow's report fails unless the stage exited exactly 0 and the rep
 sha40=0123456789abcdef0123456789abcdef01234567
 green_rows=$'janitor: ok 9s\ninstall-screen-proof: ok 1702s'
 red_rows=$'janitor: ok 9s\nhandle-proof: not run 69 0s'
-report() { # STATUS SUMMARY [COMMIT]: runs the report step; its exit in $rc
+report() { # STATUS SUMMARY [COMMIT [LOGS]]: runs the report step; its exit in $rc
   : >"$S/step-summary"
   rc=0
   env -i PATH="$PATH" GITHUB_STEP_SUMMARY="$S/step-summary" STATUS="$1" SUMMARY="$2" COMMIT="${3-$sha40}" \
-    LOGS=/tmp/cyfr-stage.nightly.Ab1sCd bash --noprofile --norc -eo pipefail "$S/wf-report.sh" >"$S/report.out" 2>&1 || rc=$?
+    LOGS="${4-/tmp/cyfr-stage.nightly.Ab1sCd}" bash --noprofile --norc -eo pipefail "$S/wf-report.sh" >"$S/report.out" 2>&1 || rc=$?
+}
+refused() { # WHAT: the report just run exited 1 and printed nothing it was sent
+  [ "$rc" = 1 ] && [ ! -s "$S/step-summary" ] && ! grep -qi 'planted' "$S/report.out" ||
+    fail "a report with $1 exited $rc, printed: $(cat "$S/report.out") $(cat "$S/step-summary")"
 }
 report 0 "$green_rows"
 [ "$rc" = 0 ] || fail "a green report failed: $(cat "$S/report.out")"
@@ -433,10 +437,28 @@ for status in 1 69 75 143 '' 00 ' 0' '0 ' x; do
 done
 report 69 "$red_rows"
 grep -qF 'exited 69: a check failed or did not run' "$S/report.out" || fail "a red report said: $(cat "$S/report.out")"
-report 0 $'janitor: ok 9s\n::error::planted'
-[ "$rc" = 1 ] && ! grep -q '^::error::planted' "$S/report.out" || fail "a report with a planted workflow command exited $rc: $(cat "$S/report.out")"
 report 0 "$green_rows" abc
 [ "$rc" = 1 ] || fail "a report of commit 'abc' exited $rc, not 1"
+# A row is never skipped in the nightly, so no row holds free text: none
+# carries a workflow command, the runner's older ##[ form, or a carriage
+# return, at which the runner splits a line and the summary's fence could
+# close; nor does any other input.
+report 0 $'janitor: ok 9s\n::error::planted'
+refused 'a workflow command line'
+report 0 'handle-proof: skipped (##[error]planted) 0s'
+refused 'a legacy workflow command in a skipped row'
+report 0 $'handle-proof: skipped (\r::error::planted) 0s'
+refused 'a carriage return before a workflow command'
+report 0 $'handle-proof: skipped (\r```\r# PLANTED OUTSIDE FENCE\r```text\r) 0s'
+refused 'carriage returns around a closed fence'
+report 0 $'janitor: ok 9s\r'
+refused 'a carriage return in a row'
+report $'0\r' "$green_rows"
+refused 'a carriage return in the status'
+report 0 "$green_rows" "$sha40"$'\r'
+refused 'a carriage return in the commit'
+report 0 "$green_rows" "$sha40" $'/tmp/cyfr-stage.nightly.Ab1sCd\r'
+refused 'a carriage return in the log path'
 
 begin "the workflow's watchdog passes only on a report run that completed within 26 hours, never on its own"
 mkdir -p "$S/watch-bin" "$S/runner"
@@ -781,5 +803,8 @@ grep -qxF 'would run janitor (1 quarter): scripts/janitor.sh' "$S/nightly-real.o
   grep -qx 'would run install-screen-proof (1 quarter): .* && tests/install-screen-proof/run.sh' "$S/nightly-real.out" &&
   grep -qxF 'would run handle-proof (1 quarter): tests/handle-proof/run.sh' "$S/nightly-real.out" ||
   fail "the nightly would run: $(cat "$S/nightly-real.out")"
+# The report's grammar holds no skipped row: every nightly row runs always.
+selected=$(awk -F'\t' '!/^#/ && $1 == "nightly" && $5 != "always" { print $2 }' "$ROOT/scripts/stages.tsv")
+[ -z "$selected" ] || fail "a nightly row has a selector: $selected"
 
 echo 'stage tests passed'

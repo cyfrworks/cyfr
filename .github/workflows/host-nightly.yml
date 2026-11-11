@@ -48,8 +48,11 @@ jobs:
     timeout-minutes: 5
     steps:
       # The inputs are the host's, read only through the environment and
-      # held to what scripts/nightly.sh sends before any is printed: a
-      # line of the log that began with :: would be a workflow command.
+      # held to what scripts/nightly.sh sends before any is printed. The
+      # runner reads a workflow command (::, or ##[ anywhere in a line) in
+      # what a step prints and splits lines at a carriage return, so no
+      # accepted input holds free text: a nightly row is never skipped, and
+      # each pattern below admits neither # nor [ nor a carriage return.
       - name: The stage exited 0
         env:
           COMMIT: ${{ inputs.commit }}
@@ -58,7 +61,7 @@ jobs:
           LOGS: ${{ inputs.logs }}
         run: |
           set -uo pipefail
-          row='^[a-z0-9-]+: (ok|failed [0-9]+|not run [0-9]+|skipped \(.*\)) [0-9]+s$'
+          row='^[a-z0-9-]+: (ok|failed [0-9]+|not run [0-9]+) [0-9]+s$'
           well_formed=true
           [[ $COMMIT =~ ^([0-9a-f]{40}( with changes)?|unknown)$ ]] || well_formed=false
           [[ $STATUS =~ ^[0-9]{1,3}$ ]] || well_formed=false
