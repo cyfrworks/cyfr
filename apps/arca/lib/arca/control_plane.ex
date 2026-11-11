@@ -71,9 +71,11 @@ defmodule Arca.ControlPlane do
   The cell's claimant, and nothing else. This module keeps no timer and no
   process: `take/3`, `renew/1` and `release/0` are called from the
   claimant's own process and leave the cached standing behind them.
-  `verify_held/1` writes nothing: it is how a security transaction or a
-  fenced publication (`Arca.FencedPublication`) proves, under a shared
-  row lock, that the slot it runs for is still this member's.
+  `verify_held/1` writes nothing: it is how a holder-only write — a
+  security transaction, a fenced publication (`Arca.FencedPublication`),
+  any write of `Arca.Repo.owned/3` — learns its slot stands and has the
+  outermost locking transaction prove it, under a shared row lock, as
+  its last step before commit (`prove/1`).
 
   ## Its own connection
 
@@ -460,51 +462,72 @@ defmodule Arca.ControlPlane do
   node, owner and generation as `take/3` won them — still names the row,
   under a lease that stands on the database's clock.
 
-  The row is read under a shared lock held until the caller commits
-  (`Arca.QueryHelpers.for_share/1`). On PostgreSQL any number of this
-  member's transactions hold it at once, so they do not serialize on
-  their own row, while a write to it — the claimant's renew, a
-  successor's take, a release — waits until each of them commits. On
-  SQLite the read is plain and the locking transaction's write lock
-  serializes the same writers. Nothing is written, so the fence the
-  claimant's renew names does not move.
-
-  The lease is compared with the database's clock read AFTER the lock was
-  won, so a wait behind a release or a takeover cannot pass on an instant
-  taken before it, and a lease that ran out with no successor refuses
-  exactly as a takeover does. Never touches the cached standing:
-  `renew/1` writes that, and it is not called here.
+  The answer is an unlocked read, for the caller to branch on: `:lost`
+  refuses at once. A slot it finds held is recorded as owed a proof by the
+  outermost locking transaction (`Arca.Repo.owe_proof/1`), which reads the
+  row again once the caller's work has answered and before the commit
+  (`prove/1`), so whatever came before or during that work — a takeover,
+  a lapse, a release — rolls the whole transaction back with
+  `{:error, :not_owner}`. The lease row is locked at that proof alone, so
+  the claimant's renew waits for the commit and never for the work, and
+  nothing takes the slot over between the proof and the commit. Nothing is
+  written, so the fence the claimant's renew names does not move.
 
   `:none` is the slot `member_slot/0` answers where no claimant runs: it
-  is `:ok` while `claimed?/0` is false, with nothing read, and `:lost`
-  wherever a claimant runs, so a writer that holds no slot is never taken
-  for one with nothing to fence.
+  is `:ok` while `claimed?/0` is false, with nothing read and nothing
+  owed, and `:lost` wherever a claimant runs, so a writer that holds no
+  slot is never taken for one with nothing to fence.
 
-  Raises outside a transaction and on a store that cannot answer, so the
+  Raises outside a locking transaction — with no transaction, in a plain
+  or read transaction, or in a locking one opened inside either — where
+  no proof could follow, and on a store that cannot answer, so the
   caller's transaction rolls back.
   """
   @spec verify_held(slot() | :none) :: :ok | :lost
   def verify_held(:none) do
-    unless Arca.Repo.in_transaction?() do
-      raise ArgumentError, "Arca.ControlPlane.verify_held/1 runs inside a locking transaction"
-    end
-
+    proving!()
     if claimed?(), do: :lost, else: :ok
   end
 
   # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
-  def verify_held(%{node: node, owner: owner, generation: generation})
+  def verify_held(%{node: node, owner: owner, generation: generation} = slot)
       when is_binary(node) and is_binary(owner) and is_integer(generation) do
-    unless Arca.Repo.in_transaction?() do
-      raise ArgumentError, "Arca.ControlPlane.verify_held/1 runs inside a locking transaction"
-    end
+    proving!()
 
+    case standing(slot, & &1) do
+      :ok ->
+        Arca.Repo.owe_proof(slot)
+        :ok
+
+      :lost ->
+        :lost
+    end
+  end
+
+  @doc false
+  # The proof the outermost locking transaction makes before it commits,
+  # for each slot `verify_held/1` recorded: the row read under a shared
+  # lock held until the commit (`Arca.QueryHelpers.for_share/1`), and the
+  # lease compared with the database's clock read AFTER the lock was won,
+  # so a wait behind a release or a takeover cannot pass on an instant
+  # taken before it, and a lease that ran out with no successor refuses
+  # exactly as a takeover does. On PostgreSQL any number of this member's
+  # transactions hold the lock at once, while a write to the row — the
+  # claimant's renew, a successor's take, a release — waits until each of
+  # them commits. On SQLite the read is plain and the locking
+  # transaction's write lock, held from its start, serializes the same
+  # writers. Never touches the cached standing.
+  # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
+  @spec prove(%{node: String.t(), owner: String.t(), generation: pos_integer()}) :: :ok | :lost
+  def prove(slot), do: standing(slot, &Arca.QueryHelpers.for_share/1)
+
+  defp standing(%{node: node, owner: owner, generation: generation}, lock) do
     held =
       from(l in CellLease,
         where: l.node == ^node and l.owner == ^owner and l.generation == ^generation,
         select: l.lease_until
       )
-      |> Arca.QueryHelpers.for_share()
+      |> lock.()
 
     case Arca.Repo.one(held) do
       nil ->
@@ -517,6 +540,12 @@ defmodule Arca.ControlPlane do
     end
   end
 
+  defp proving! do
+    unless Arca.Repo.proving?() do
+      raise ArgumentError, "Arca.ControlPlane.verify_held/1 runs inside a locking transaction"
+    end
+  end
+
   @doc """
   `verify_held/1` in a locking transaction of its own, for a caller that
   holds none: `:ok` while `slot` still names the row under a standing
@@ -526,8 +555,10 @@ defmodule Arca.ControlPlane do
   @spec check_held(slot() | :none) :: :ok | :lost
   # arca:db-raise-ok a store that cannot answer raises, as its doc says
   def check_held(slot) do
-    {:ok, standing} = Arca.Repo.locking_transaction(fn -> verify_held(slot) end)
-    standing
+    case Arca.Repo.locking_transaction(fn -> verify_held(slot) end) do
+      {:ok, standing} -> standing
+      {:error, :not_owner} -> :lost
+    end
   end
 
   # ---- the roster ------------------------------------------------------------

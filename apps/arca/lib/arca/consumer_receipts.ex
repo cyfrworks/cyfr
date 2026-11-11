@@ -100,10 +100,10 @@ defmodule Arca.ConsumerReceipts do
   @doc """
   Write `receipt` in a transaction of its own, under `claim` and the
   writer's member `slot`: the claim's row is held at its owner and fence
-  (`Arca.JobClaims.hold/1`), then the slot verified live
-  (`Arca.ControlPlane.verify_held/1`, `:none` where no claimant runs),
-  then the claim's lease judged again on the database's clock read after
-  that wait, and the receipt written only while both stand.
+  (`Arca.JobClaims.hold/1`), then the slot verified
+  (`Arca.ControlPlane.verify_held/1`, `:none` where no claimant runs, and
+  proved live at the commit), then the claim's lease judged again, and
+  the receipt written only while both stand.
 
   Answers `:ok`, `:taken` or `:lapsed` (the claim is no longer this
   consumer's to act under), `{:error, :not_owner}` (the member no longer
@@ -139,9 +139,10 @@ defmodule Arca.ConsumerReceipts do
   # arca:db-raise-ok a step inside the consumer's transaction; a refusal rolls it back.
   def record!(%Prima.Actor{athanor_id: athanor_id} = actor, %{} = claim, slot, %{} = receipt)
       when is_binary(athanor_id) and athanor_id != "" do
-    # The claim is asked again after the lease row's lock is won: a
-    # claim that ran out while this waited on the member's lease is
-    # judged on the clock read after the wait, and writes nothing.
+    # The claim is asked again once the slot is read, and the slot is
+    # proved at the commit (`Arca.Repo.locking_transaction/2`): the claim
+    # row this transaction holds keeps a successor's take behind the
+    # commit, which then reads the receipt.
     with {:ok, _held} <- Arca.JobClaims.hold(claim),
          :ok <- Arca.ControlPlane.verify_held(slot),
          {:ok, _still} <- Arca.JobClaims.hold(claim),

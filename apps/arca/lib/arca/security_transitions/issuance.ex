@@ -46,12 +46,13 @@ defmodule Arca.SecurityTransitions.Issuance do
 
   Every credential written here is written by a member that still owns
   its slot. The slot this member believes it holds
-  (`Arca.ControlPlane.member_slot/0`) is verified live as the
-  transaction's first statement (`Arca.ControlPlane.verify_held/1`),
-  before any standing row is locked, and a slot that was taken over, ran
-  out or was released answers `{:error, :not_owner}` with nothing
-  written. A takeover that commits first is read here, and one that
-  starts later waits until this transaction commits or rolls back. Where
+  (`Arca.ControlPlane.member_slot/0`) is verified as the transaction's
+  first statement (`Arca.ControlPlane.verify_held/1`), before any
+  standing row is locked, and proved live at its commit
+  (`Arca.Repo.locking_transaction/2`): a slot that was taken over, ran out
+  or was released before the proof answers `{:error, :not_owner}` with
+  nothing written, and a takeover that starts after it waits until this
+  transaction commits or rolls back. Where
   no claimant runs (`:none`), the check passes with nothing read.
   """
 
@@ -138,8 +139,8 @@ defmodule Arca.SecurityTransitions.Issuance do
   end
 
   # One locking transaction whose first statement verifies the member's
-  # slot live, on the database's clock, before `step` locks or writes
-  # anything: the cached slot is only the claim, and a member holding none
+  # slot, before `step` locks or writes anything, and whose commit proves
+  # it live on the database's clock: the cached slot is only the claim, and a member holding none
   # is refused before the transaction opens.
   defp owned(step) do
     with {:ok, slot} <- Arca.ControlPlane.member_slot() do

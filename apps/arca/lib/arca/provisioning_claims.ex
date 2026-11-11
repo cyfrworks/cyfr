@@ -58,11 +58,11 @@ defmodule Arca.ProvisioningClaims do
   `entry_kind`, for `lease_ms`, under the claiming member's `slot`
   (`Arca.ControlPlane.member_slot/0`).
 
-  The slot is verified live in the take's own transaction before the row
-  is read (`Arca.ControlPlane.verify_held/1`, which holds the lease row
-  until commit), so a takeover of the member's slot either lands first —
-  and this answers `{:error, :not_owner}` with nothing taken — or waits
-  until the claim has committed. This is the member's check, beside the
+  The slot is verified in the take's own transaction before the row is
+  read and proved live at its commit (`Arca.ControlPlane.verify_held/1`,
+  `Arca.Repo.locking_transaction/2`), so a takeover of the member's slot
+  either lands before the proof — and this answers `{:error, :not_owner}`
+  with nothing taken — or waits until the claim has committed. This is the member's check, beside the
   athanor's own fence (the claim row's owner and fence), not a second one.
   """
   @spec claim(
@@ -236,9 +236,10 @@ defmodule Arca.ProvisioningClaims do
   `false` otherwise. In either case nothing about the claim changes but
   the instant it was last touched.
 
-  The slot is verified first (`Arca.ControlPlane.verify_held/1`, whose
-  shared hold on the slot's lease row lasts until the caller commits), in
-  the order `claim/5` takes them. The claim is then held by a conditional
+  The slot is verified first (`Arca.ControlPlane.verify_held/1`), as
+  `claim/5` verifies it, and proved live at the caller's commit, where
+  the slot's lease row is the last row its transaction locks
+  (`Arca.Repo.locking_transaction/2`). The claim is then held by a conditional
   WRITE and not a read, on purpose: a read inside a transaction is a
   check-then-act, and a takeover landing between it and the work it guards
   leaves the work written under a claim its owner has lost. A write takes
@@ -405,8 +406,8 @@ defmodule Arca.ProvisioningClaims do
     end
   end
 
-  # `write` in one locking transaction that first verifies `slot` live, as
-  # `claim/5` does: a slot that is not the member's rolls back as
+  # `write` in one locking transaction that first verifies `slot`, proved
+  # live at its commit, as `claim/5` does: a slot that is not the member's rolls back as
   # `{:error, :not_owner}` with nothing written. The public entry that
   # calls it holds the `with_db_rescue`, as the row-plane convention has it
   # (`Arca.DbRescueCoverageTest` reads each public entry's own body).

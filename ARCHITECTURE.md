@@ -226,7 +226,7 @@ Resource limits, platform ceilings, capacity ceilings, depth caps and invocation
 
 ### 6.1 Members and the cell lease
 
-Each control-plane member owns its slot through a database lease with a generation of its own; a peer joining invalidates no healthy member's slot, and host calls bind to the member that issued them. **A stale owner admits no work, dispenses no credential, emits no result and overwrites no successor's state**, which is verified live in the transaction that writes.
+Each control-plane member owns its slot through a database lease with a generation of its own; a peer joining invalidates no healthy member's slot, and host calls bind to the member that issued them. **A stale owner admits no work, dispenses no credential, emits no result and overwrites no successor's state**, which is verified live in the transaction that writes: the transaction proves the slot as its last step before commit, under the lease row's shared lock, so on PostgreSQL the claimant's renewal waits for a commit and never for the work.
 
 ### 6.2 Boot and standing transitions
 

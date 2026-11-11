@@ -26,8 +26,9 @@ defmodule Arca.CronSchedule do
   Every feed function takes the actor first and touches that athanor's
   rows alone: another athanor's actor naming a feed id finds nothing and
   changes nothing. Every feed write runs in one locking transaction whose
-  first step checks the member's slot (`Arca.ControlPlane.verify_held/1`),
-  so a member that lost its slot writes nothing and is answered
+  first step checks the member's slot (`Arca.ControlPlane.verify_held/1`)
+  and whose commit proves it, so a member that lost its slot writes
+  nothing and is answered
   `:not_owner`:
 
     * `create_feed/2` counts the athanor's live feeds and inserts under
@@ -81,9 +82,9 @@ defmodule Arca.CronSchedule do
   alias Prima.Feed.Binding
 
   # A schedule's create and every feed write run as `Arca.Repo.owned/2`: one
-  # locking transaction whose first step checks the member's slot on the
-  # database's clock, so a takeover that committed first refuses it and one
-  # that starts later waits for it. A feed's result is accepted, and its
+  # locking transaction whose first step checks the member's slot and whose
+  # commit proves it on the database's clock, so a takeover that committed
+  # before the proof refuses it and one that starts after it waits for it. A feed's result is accepted, and its
   # acceptance checked, under the slot its claimant read when it claimed
   # the seq (`Arca.Repo.owned/3`).
 

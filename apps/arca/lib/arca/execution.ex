@@ -184,9 +184,10 @@ defmodule Arca.Execution do
   transaction takes (the occurrence's start) and before the
   `execution.started` event is appended, it reads the slot this member
   believes it holds (`Arca.ControlPlane.member_slot/0`) and verifies it on
-  the database (`Arca.ControlPlane.verify_held/1`): a member whose slot was
-  taken over, even while the transaction waited on a lock, admits nothing
-  and is refused `{:error, :not_owner}`. Where no claimant runs the slot
+  the database (`Arca.ControlPlane.verify_held/1`, proved live at the
+  commit): a member whose slot was taken over before the commit, even
+  while the transaction waited on a lock, admits nothing and is refused
+  `{:error, :not_owner}`. Where no claimant runs the slot
   is `:none` and the check passes.
 
   Answers `{:ok, %{execution: row, attempt: row}}`, each a plain map; the
@@ -378,9 +379,9 @@ defmodule Arca.Execution do
   end
 
   # The slot this member believes it holds, verified on the database inside
-  # the admission's transaction (`Arca.ControlPlane.verify_held/1`, a
-  # shared lock on the lease row until the transaction ends): a member
-  # that holds none admits nothing.
+  # the admission's transaction (`Arca.ControlPlane.verify_held/1`, proved
+  # live under the lease row's shared lock at the commit): a member that
+  # holds none admits nothing.
   # arca:db-raise-ok inside the caller's transaction
   defp slot_held! do
     with {:ok, slot} <- Arca.ControlPlane.member_slot(),

@@ -18,9 +18,10 @@ defmodule Arca.FencedPublication do
       resolve as a conflict, `:stale`, and never by comparing their
       generations.
     * **The writer's ownership** — its slot, `(node, owner, generation)`,
-      verified live inside the publication's transaction by
-      `Arca.ControlPlane.verify_held/1`, which holds the lease row under a
-      shared lock until commit and reads the database's clock. A lease that
+      verified inside the publication's transaction by
+      `Arca.ControlPlane.verify_held/1` and proved live at its commit,
+      under the lease row's shared lock and on the database's clock
+      (`Arca.Repo.locking_transaction/2`). A lease that
       ran out with no successor refuses exactly as a takeover does
       (`:not_owner`), and on PostgreSQL a member's publications do not
       serialize on its own row.
@@ -378,11 +379,10 @@ defmodule Arca.FencedPublication do
   # statement's own; then the one statement that publishes, and the
   # owner's row beside it. A replay recognized at the claim answers the
   # revision it already published, and the owner's row is still written
-  # beside it. The owner's row locks come before the lease row's shared
-  # lock because the schedule writers (the claim, `Arca.CronSchedule`'s
-  # writes) lock their row and then verify the slot: the reverse order
-  # here would let a lease renewal queued between the two close a
-  # deadlock on PostgreSQL.
+  # beside it. Ownership is read here and proved at the commit, where the
+  # lease row's shared lock is the last lock any holder-only write takes
+  # (`Arca.Repo.locking_transaction/2`), so no row order here can close a
+  # deadlock with a lease renewal queued on PostgreSQL.
   defp publication(target, revision_read, slot, started, verify, also) do
     with :ok <- ran(verify, []),
          :ok <- owned(slot),

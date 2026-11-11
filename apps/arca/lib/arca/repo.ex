@@ -68,6 +68,9 @@ defmodule Arca.Repo do
   @read_only :arca_read_transaction
   @write_turn :arca_write_turn
   @turn_kinds [:audit, :control_plane]
+  # The slots the outermost locking transaction of this process owes a
+  # proof before it commits, per dynamic repository (`owe_proof/1`).
+  @owed :arca_owed_slot_proofs
   @pool_deadline :pool_deadline
   # What must still fit inside a pool deadline once the lock is taken: the
   # last quantum, the pause before it, the caller's writes and the commit.
@@ -96,10 +99,43 @@ defmodule Arca.Repo do
   keeps it for its outer transaction. PostgreSQL asks for no turn, and
   neither does a SQLite store where turns are off
   (`Arca.WriteTurn.enabled?/0`).
+
+  The outermost locking transaction proves the slots its work relied on.
+  `Arca.ControlPlane.verify_held/1` answers its caller from an unlocked
+  read and records a slot it found held (`owe_proof/1`); once `fun`
+  answers, or the last step of a Multi has run, and before the commit,
+  each recorded slot is read again under the shared lock and its lease
+  compared with the database's clock read after the lock
+  (`Arca.ControlPlane.prove/1`). A slot that no longer stands rolls the
+  whole transaction back, answering `{:error, :not_owner}` (a Multi
+  answers `{:error, :arca_slot_proof, :not_owner, changes}`). The lease
+  row is therefore the last row any holder-only write locks, held from
+  the proof to the commit only: no take, renewal or release lands between
+  them, and none waits on the work itself. A locking transaction nested in
+  another proves nothing of its own; the outermost one proves every slot
+  once. What a transaction recorded is dropped however it ends, and one
+  opened inside a transaction that is not a locking one records nothing,
+  so `verify_held/1` raises there.
   """
   @spec locking_transaction((-> term()) | (module() -> term()) | Ecto.Multi.t(), keyword()) ::
           {:ok, term()} | {:error, term()} | {:error, term(), term(), map()}
   def locking_transaction(fun_or_multi, opts \\ []) when is_list(opts) do
+    key = owed_key()
+
+    if Process.get(key) != nil or in_transaction?() do
+      turned(fun_or_multi, opts)
+    else
+      Process.put(key, [])
+
+      try do
+        fun_or_multi |> proving(key) |> turned(opts)
+      after
+        Process.delete(key)
+      end
+    end
+  end
+
+  defp turned(fun_or_multi, opts) do
     case Keyword.pop(opts, :write_turn) do
       {nil, opts} ->
         transaction(fun_or_multi, opts)
@@ -115,11 +151,70 @@ defmodule Arca.Repo do
     end
   end
 
+  # The caller's work, then the proof of every slot it recorded, inside the
+  # transaction and before its commit.
+  defp proving(fun, key) when is_function(fun, 0) do
+    fn ->
+      value = fun.()
+      prove!(key)
+      value
+    end
+  end
+
+  defp proving(fun, key) when is_function(fun, 1) do
+    fn repo ->
+      value = fun.(repo)
+      prove!(key)
+      value
+    end
+  end
+
+  # Ecto's transaction accepts a fun or a Multi and nothing else.
+  defp proving(multi, key) do
+    Ecto.Multi.run(multi, :arca_slot_proof, fn _repo, _changes ->
+      if proved?(key), do: {:ok, :proved}, else: {:error, :not_owner}
+    end)
+  end
+
+  defp prove!(key), do: unless(proved?(key), do: rollback(:not_owner))
+
+  defp proved?(key) do
+    key |> Process.get([]) |> Enum.all?(&(Arca.ControlPlane.prove(&1) == :ok))
+  end
+
+  defp owed_key, do: {@owed, get_dynamic_repo()}
+
+  @doc false
+  # Whether this process runs inside a locking transaction that will prove
+  # the slots recorded in it (`Arca.ControlPlane.verify_held/1` raises
+  # where it does not).
+  @spec proving?() :: boolean()
+  def proving?, do: in_transaction?() and Process.get(owed_key()) != nil
+
+  @doc false
+  # Record `slot` (`Arca.ControlPlane.verify_held/1`'s, found held) as owed
+  # a proof by the outermost locking transaction, once.
+  @spec owe_proof(Arca.ControlPlane.slot()) :: :ok
+  def owe_proof(%{node: node, owner: owner, generation: generation}) do
+    key = owed_key()
+    slot = %{node: node, owner: owner, generation: generation}
+
+    case Process.get(key) do
+      nil -> raise ArgumentError, "no locking transaction owes this slot a proof"
+      slots -> unless slot in slots, do: Process.put(key, [slot | slots])
+    end
+
+    :ok
+  end
+
   @doc """
   Run `write` as a write only the control plane's holder makes: one
-  locking transaction whose first step checks this member's slot on the
-  database's clock, so a takeover that committed first refuses it with
-  `{:error, :not_owner}` and one that starts later waits for it.
+  locking transaction whose first step reads this member's slot
+  (`Arca.ControlPlane.verify_held/1`) and whose commit proves it on the
+  database's clock (`locking_transaction/2`), so a takeover or a lapse
+  that came before the write or while it ran refuses it with
+  `{:error, :not_owner}`, and one that starts after the proof waits for
+  the commit.
 
   `write` answers `{:ok, value}` or `{:error, reason}`, and an error
   rolls the transaction back (`committed/1`). A member that holds no slot

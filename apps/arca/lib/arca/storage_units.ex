@@ -228,10 +228,10 @@ defmodule Arca.StorageUnits do
 
   The slot is the one this member holds as the commit begins
   (`Arca.ControlPlane.member_slot/0`, a term read), and the transaction
-  verifies it live before it touches the row
-  (`Arca.ControlPlane.verify_held/1`, which holds the slot's lease row
-  until commit): a takeover of the member's slot either lands first, and
-  the pointer does not move, or waits until the commit has landed. A
+  verifies it before it touches the row and proves it live at its commit
+  (`Arca.ControlPlane.verify_held/1`, `Arca.Repo.locking_transaction/2`):
+  a takeover of the member's slot either lands before the proof, and the
+  pointer does not move, or waits until the commit has landed. A
   member's cached standing outlives the row it stands for by up to a
   renewal, so the cached check every gate makes on the way in is never
   what lets a pointer move. `stamped_commit/6` names the writer instead.
@@ -391,9 +391,9 @@ defmodule Arca.StorageUnits do
 
   The writer is verified before the row moves, in this transaction, as
   `stamped_commit/6` verifies a commit's: the slot this member holds as
-  the removal begins (`Arca.ControlPlane.member_slot/0`), verified live
-  (`Arca.ControlPlane.verify_held/1`, which holds the slot's lease row
-  until commit), so a member whose slot a successor took over retires
+  the removal begins (`Arca.ControlPlane.member_slot/0`), verified and
+  proved live at the commit (`Arca.ControlPlane.verify_held/1`), so a
+  member whose slot a successor took over retires
   nothing and deletes nothing, however its cached standing reads, and is
   answered `{:error, :not_owner}`. `:claim` in `opts` is
   `stamped_commit/6`'s: a provisioning attempt's retirement — the cleanup

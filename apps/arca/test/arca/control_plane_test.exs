@@ -529,6 +529,125 @@ defmodule Arca.ControlPlaneTest do
     end
   end
 
+  # A row the write under test makes, so what it committed is read back.
+  defp mark!(node) do
+    peer!(node <> "-mark", Prima.Version.current(), 60_000)
+    {:ok, :written}
+  end
+
+  defp marked?(node),
+    do: Arca.Repo.exists?(from(l in CellLease, where: l.node == ^(node <> "-mark")))
+
+  # A successor's take of `node`'s slot, written to its row.
+  defp succeed!(node, slot) do
+    {1, _} =
+      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node),
+        set: [owner: "boot_b", generation: slot.generation + 1]
+      )
+
+    :ok
+  end
+
+  describe "the commit's proof" do
+    test "a write begun under a held slot that a successor took before its end commits nothing",
+         %{node: node} do
+      claimed_here(true)
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+
+      assert {:error, :not_owner} =
+               Arca.Repo.owned("proof test", slot, fn ->
+                 {:ok, :written} = mark!(node)
+                 :ok = succeed!(node, slot)
+                 {:ok, :written}
+               end)
+
+      refute marked?(node)
+
+      # The same write while the slot stands commits.
+      assert {:ok, :written} = Arca.Repo.owned("proof test", slot, fn -> mark!(node) end)
+      assert marked?(node)
+    end
+
+    test "a slot of :none is refused where a claimant runs, with nothing written", %{node: node} do
+      claimed_here(true)
+      assert {:error, :not_owner} = Arca.Repo.owned("proof test", :none, fn -> mark!(node) end)
+      refute marked?(node)
+    end
+
+    test "verify_held/1 raises in a transaction no proof follows", %{node: node} do
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+
+      for open <- [
+            &Arca.Repo.transaction/1,
+            &Arca.Repo.read_transaction/1,
+            fn verify ->
+              Arca.Repo.transaction(fn -> Arca.Repo.locking_transaction(verify) end)
+            end
+          ] do
+        assert_raise ArgumentError, ~r/inside a locking transaction/, fn ->
+          open.(fn -> ControlPlane.verify_held(slot) end)
+        end
+      end
+    end
+
+    test "a nested locking transaction is proved once, by the outermost, at its commit", %{
+      node: node
+    } do
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+
+      {answer, %{by_source: reads}} =
+        Arca.Test.QueryCounter.count(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            assert {:ok, :ok} =
+                     Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(slot) end)
+
+            assert :ok = ControlPlane.verify_held(slot)
+            :done
+          end)
+        end)
+
+      assert answer == {:ok, :done}
+      # Two verifies and one proof.
+      assert reads["cell_leases"] == 3
+
+      # The inner transaction proves nothing of its own: a successor's take
+      # after it returned is what the outer commit finds.
+      assert {:error, :not_owner} =
+               Arca.Repo.locking_transaction(fn ->
+                 {:ok, :ok} =
+                   Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(slot) end)
+
+                 succeed!(node, slot)
+               end)
+    end
+
+    test "what a transaction recorded is gone once it rolls back or raises", %{node: node} do
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+
+      assert {:error, :refused} =
+               Arca.Repo.locking_transaction(fn ->
+                 :ok = ControlPlane.verify_held(slot)
+                 Arca.Repo.rollback(:refused)
+               end)
+
+      assert_raise RuntimeError, fn ->
+        Arca.Repo.locking_transaction(fn ->
+          :ok = ControlPlane.verify_held(slot)
+          raise "the work failed"
+        end)
+      end
+
+      # The next transaction proves nothing it did not record: the slot is
+      # lost now, and a transaction that never verified it commits.
+      :ok = succeed!(node, slot)
+      assert {:ok, :committed} = Arca.Repo.locking_transaction(fn -> :committed end)
+
+      assert_raise ArgumentError, ~r/inside a locking transaction/, fn ->
+        Arca.Repo.transaction(fn -> ControlPlane.verify_held(slot) end)
+      end
+    end
+  end
+
   describe "the slot a host-owned write names" do
     test "member_slot/0 answers the slot this member won and still believes it holds", %{
       node: node
@@ -632,10 +751,13 @@ end
 
 defmodule Arca.ControlPlaneLockTest do
   @moduledoc """
-  `Arca.ControlPlane.verify_held/1` under two real connections, outside
-  the sandbox: a verify that waited behind a release decides on the
-  database's clock read after the wait, so it answers `:lost` rather
-  than passing on an instant taken before the slot was given up.
+  `Arca.ControlPlane.verify_held/1` and the commit's proof under real
+  connections, outside the sandbox: a verify that waited behind a release
+  decides on the database's clock read after the wait, so it refuses
+  rather than passing on an instant taken before the slot was given up;
+  on PostgreSQL a takeover during a long write lands and the write
+  commits nothing, and between the proof and the commit no renewal or
+  release lands.
   """
 
   use ExUnit.Case, async: false
@@ -659,7 +781,9 @@ defmodule Arca.ControlPlaneLockTest do
     node = "node-lock-#{System.unique_integer([:positive])}"
 
     on_exit(fn ->
-      unboxed(fn -> Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node)) end)
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(l in CellLease, where: like(l.node, ^"#{node}%")))
+      end)
 
       for {key, value} <- saved do
         if value == :absent,
@@ -711,7 +835,156 @@ defmodule Arca.ControlPlaneLockTest do
     Process.sleep(20)
     send(releaser.pid, :commit)
     assert {:ok, :ok} = Task.await(releaser, 25_000)
-    assert {:ok, :lost} = Task.await(verifier, 25_000)
+
+    # SQLite's verify waited for the write lock at its transaction's start
+    # and reads the release; PostgreSQL's read the row unlocked and its
+    # commit's proof, waiting on the release's row lock, refuses.
+    lost = if postgres?(), do: {:error, :not_owner}, else: {:ok, :lost}
+    assert Task.await(verifier, 25_000) == lost
+  end
+
+  @tag :postgres
+  test "a takeover during a long holder-only write lands, and the write commits nothing", %{
+    node: node
+  } do
+    {:ok, slot} = unboxed(fn -> ControlPlane.take(node, "boot_a", 60_000) end)
+    test = self()
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.owned("proof test", slot, fn ->
+            lease_row!(node <> "-mark")
+            send(test, :written)
+
+            receive do
+              :finish -> {:ok, :written}
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :written, 5_000
+
+    taker =
+      Task.async(fn ->
+        unboxed(fn ->
+          {1, _} =
+            Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node),
+              set: [lease_until: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
+            )
+
+          ControlPlane.take(node, "boot_b", 60_000)
+        end)
+      end)
+
+    assert {:ok, %{generation: generation}} = Task.await(taker, 5_000)
+    assert generation == slot.generation + 1
+
+    send(holder.pid, :finish)
+    assert {:error, :not_owner} = Task.await(holder, 25_000)
+
+    refute unboxed(fn ->
+             Arca.Repo.exists?(from(l in CellLease, where: l.node == ^(node <> "-mark")))
+           end)
+  end
+
+  @tag :postgres
+  test "between the proof and the commit no renewal or release lands", %{node: node} do
+    {:ok, slot} = unboxed(fn -> ControlPlane.take(node, "boot_a", 60_000) end)
+    # A second slot whose row a test connection holds, so the proof of
+    # this one waits there, after the first slot was proved.
+    other = peer!(node <> "-other")
+    test = self()
+
+    blocker =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            from(l in CellLease, where: l.node == ^other.node)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one!()
+
+            send(test, :blocking)
+
+            receive do
+              :go -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :blocking, 5_000
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            # Recorded in this order, proved in the reverse: this member's
+            # slot first, then the blocked one.
+            :ok = ControlPlane.verify_held(other)
+            :ok = ControlPlane.verify_held(slot)
+            :done
+          end)
+        end)
+      end)
+
+    await_lock_wait!()
+
+    renewer = Task.async(fn -> unboxed(fn -> ControlPlane.renew(60_000) end) end)
+    releaser = Task.async(fn -> unboxed(fn -> ControlPlane.release() end) end)
+
+    refute Task.yield(renewer, 300), "a renewal landed between the proof and the commit"
+    refute Task.yield(releaser, 0), "a release landed between the proof and the commit"
+
+    send(blocker.pid, :go)
+    assert {:ok, :ok} = Task.await(blocker, 25_000)
+    assert {:ok, :done} = Task.await(holder, 25_000)
+    assert Task.await(renewer, 25_000) != nil
+    assert Task.await(releaser, 25_000) != nil
+  end
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  # A live slot of another member, written straight to its row.
+  defp peer!(node), do: unboxed(fn -> lease_row!(node) end)
+
+  # The row itself, in the caller's own connection and transaction.
+  defp lease_row!(node) do
+    now = Arca.ServerMetaStorage.now!()
+
+    row = %{
+      node: node,
+      owner: node <> "#boot",
+      generation: 1,
+      fence: 1,
+      lease_until: DateTime.add(now, 60, :second),
+      taken_at: now,
+      release: Prima.Version.current(),
+      inserted_at: now,
+      updated_at: now
+    }
+
+    {1, _} = Arca.Repo.insert_all(CellLease, [row])
+    Map.take(row, [:node, :owner, :generation])
+  end
+
+  # Until a connection of this database waits on a row lock of the lease
+  # table: the holder's proof, behind the blocker.
+  defp await_lock_wait!(tries \\ 500) do
+    waiting =
+      unboxed(fn ->
+        Arca.Repo.query!(
+          "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() " <>
+            "AND wait_event_type = 'Lock' AND query LIKE '%cell_leases%'"
+        )
+      end)
+
+    case waiting.rows do
+      [[n]] when n > 0 -> :ok
+      _ when tries > 0 -> Process.sleep(10) && await_lock_wait!(tries - 1)
+      _ -> flunk("the proof never waited on the lease table")
+    end
   end
 end
 
@@ -849,6 +1122,40 @@ defmodule Arca.ControlPlaneOwnPoolTest do
     Application.put_env(:arca, :control_plane_pool, true)
     Application.put_env(:arca, :write_turn, true)
     {:ok, node: node}
+  end
+
+  @tag :postgres
+  test "a long holder-only write delays no renewal: the slot is proved at its commit", %{
+    node: node
+  } do
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
+    own_pool!()
+    {:ok, _} = ControlPlane.take(node, "boot_a", 15_000)
+    test = self()
+
+    holder =
+      Task.async(fn ->
+        Arca.Repo.owned("long write", fn ->
+          send(test, :writing)
+
+          receive do
+            :finish -> {:ok, :finished}
+          end
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(holder.pid), do: Process.exit(holder.pid, :kill) end)
+    assert_receive :writing, 5_000
+
+    # The renewal lands while the write is still open, and the member goes
+    # on holding its slot.
+    assert {:ok, renewed} = Task.await(Task.async(fn -> ControlPlane.renew(15_000) end), 5_000)
+    assert ControlPlane.held?()
+
+    send(holder.pid, :finish)
+    assert {:ok, :finished} = Task.await(holder, 5_000)
+    assert {:ok, %{fence: fence}} = run(fn -> ControlPlane.slot(node) end)
+    assert fence == renewed.fence
   end
 
   test "an exhausted ordinary pool delays no renewal: the writes have their own connection", %{
