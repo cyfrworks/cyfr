@@ -593,6 +593,28 @@ defmodule Emissary.External.ProviderTest do
                })
     end
 
+    test "a restart refused for ownership answers the ownership refusal and keeps the epoch",
+         %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+
+      Arca.McpServerStorage.insert(actor, %{
+        cap: 0,
+        name: "kept",
+        transport: "stdio",
+        url: nil,
+        config_json: Jason.encode!(@stdio_config)
+      })
+
+      {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(actor, "kept")
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} =
+               Provider.handle("mcp_servers", ctx, %{"action" => "restart", "name" => "kept"})
+
+      assert {:ok, %{epoch: ^epoch}} = Arca.McpServerStorage.get(actor, "kept")
+    end
+
     test "get shows the warnings a stored definition carries, and none when it carries none",
          %{ctx: ctx} do
       [backend] = @stdio_config["backends"]

@@ -101,6 +101,26 @@ defmodule Aqua.LoopTest do
     tree
   end
 
+  test "a turn refused its root for ownership reads the retry sentence and can be sent again",
+       %{ctx: ctx, thread: thread} do
+    # This server has lost its slot: the root's admission is refused.
+    Arca.ControlPlane.record(:lost)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+    turn = accept!(ctx, thread, "hello")
+    assert {:failed, :not_owner} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+    {:ok, ended} = Tape.turn(ctx, turn.id)
+    assert %{status: "failed", error: error} = ended
+    assert error == Prima.Refusal.message(:not_owner)
+    assert error =~ "retry shortly"
+
+    # The slot is back: the same message, sent again, runs.
+    Arca.ControlPlane.record(:unclaimed)
+    script!([reply("hi")])
+    again = accept!(ctx, thread, "hello")
+    assert :completed = Task.await(run(ctx, again), 30_000)
+  end
+
   test "the catalyst's consented cap answers to a name, not to the ref the spec carries", %{
     ctx: ctx
   } do

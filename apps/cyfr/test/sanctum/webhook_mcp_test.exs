@@ -307,6 +307,62 @@ defmodule Sanctum.WebhookMCPTest do
     end
   end
 
+  describe "a server that lost its control-plane slot" do
+    setup do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+    end
+
+    test "a webhook create refused for ownership answers the ownership refusal and writes none",
+         %{ctx: ctx} do
+      assert {:error, :not_owner} =
+               handle_after_losing_slot(ctx, %{
+                 "action" => "create",
+                 "name" => "unowned",
+                 "replay_protection" => "none",
+                 "target_ref" => "f:local.handler",
+                 "profile_id" => "prof-handler"
+               })
+
+      refute webhook_row("unowned")
+    end
+
+    test "a webhook rotation refused for ownership answers the ownership refusal and keeps its secret",
+         %{ctx: ctx} do
+      {:ok, _} =
+        handle(ctx, %{
+          "action" => "create",
+          "name" => "kept",
+          "replay_protection" => "none",
+          "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler"
+        })
+
+      before = webhook_row("kept")
+
+      assert {:error, :not_owner} =
+               handle_after_losing_slot(ctx, %{"action" => "rotate", "name" => "kept"})
+
+      assert webhook_row("kept").secret_encrypted == before.secret_encrypted
+    end
+  end
+
+  # The tool as `handle/2` reaches it, with this server's slot lost once
+  # the person has confirmed: the write the confirmation lets through is
+  # the one refused, not the confirmation.
+  defp handle_after_losing_slot(ctx, args) do
+    Sanctum.TestContext.confirming(ctx, fn
+      %Sanctum.Context{confirmation_id: nil} = asking ->
+        Provider.handle("webhook", asking, args)
+
+      confirmed ->
+        Arca.ControlPlane.record(:lost)
+        Provider.handle("webhook", confirmed, args)
+    end)
+  end
+
+  defp webhook_row(name),
+    do: Arca.Repo.one(Ecto.Query.from(w in Arca.Schemas.Webhook, where: w.name == ^name))
+
   describe "webhook/reenable" do
     test "answers the webhook a restore suspended, once confirmed, and refuses in sentences",
          %{ctx: ctx} do

@@ -2573,6 +2573,13 @@ defmodule Aqua.Loop do
     do: "What the model read could not be recorded on the turn, so its answer was not used"
 
   defp describe(reason) when is_binary(reason), do: reason
+
+  # A refusal for ownership (this server has not won its slot, or has lost
+  # it) reads as its declared sentence, which says to retry: the turn did
+  # not run, and the message can be sent again.
+  defp describe(reason) when reason in [:not_owner, :control_plane_lost, :slot_not_held],
+    do: Prima.Refusal.message(reason)
+
   defp describe(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp describe(reason), do: Aqua.Ops.render_refusal(reason)
 

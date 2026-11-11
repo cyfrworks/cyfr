@@ -2257,6 +2257,27 @@ defmodule Compendium.ProviderTest do
       assert got.disabled == true
     end
 
+    test "a restore refused for ownership answers the ownership refusal and keeps the edit",
+         %{ctx: ctx} do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} =
+               Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "explorer"})
+
+      assert {:error, :not_owner} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "skill_reset",
+                 "name" => "capability-acquisition"
+               })
+
+      Arca.ControlPlane.record(:unclaimed)
+      {:ok, %{files: files}} = Provider.handle("aqua", ctx, %{"action" => "status"})
+
+      assert %{state: "bundled_modified"} =
+               Enum.find(files, &(&1.path == "aqua/crew/explorer.md"))
+    end
+
     test "the soul is edited, never created or deleted", %{ctx: ctx} do
       assert {:error, {:invalid_argument, msg}} =
                Provider.handle("aqua", ctx, %{

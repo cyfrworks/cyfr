@@ -264,6 +264,7 @@ defmodule Compendium.Providers.Layout do
   end
 
   defp refusal(:corrupt, _revision), do: {:corrupt, {:digest, "The layout"}}
+  defp refusal(:not_owner, _revision), do: :not_owner
 
   defp refusal({:storage, {:limit_reached, :athanor_storage_bytes, cap}}, _revision) do
     {:invalid_argument, "the athanor's storage cap of #{cap} bytes is reached"}

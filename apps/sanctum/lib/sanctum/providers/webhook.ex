@@ -276,6 +276,11 @@ defmodule Sanctum.Providers.Webhook do
       {:error, %Prima.Refusal{}} = refused ->
         refused
 
+      # This server's slot is not live: nothing was written, and the
+      # refusal reads as itself.
+      {:error, :not_owner} = refused ->
+        refused
+
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to create webhook: #{inspect(reason)}")
         {:error, "Failed to create webhook"}
@@ -367,6 +372,9 @@ defmodule Sanctum.Providers.Webhook do
 
       {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
         {:error, Sanctum.Issuance.standing_refusal(reason)}
+
+      {:error, :not_owner} = refused ->
+        refused
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to rotate webhook: #{inspect(reason)}")

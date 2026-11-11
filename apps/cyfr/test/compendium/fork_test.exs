@@ -438,6 +438,26 @@ defmodule Compendium.ForkTest do
   # These test the ComponentRef.parse guards that the MCP handler applies
   # ============================================================================
 
+  describe "a server that lost its control-plane slot" do
+    test "a fork refused for ownership answers the ownership refusal and lands nothing", %{
+      ctx: ctx
+    } do
+      create_source_component("catalyst", "acme", "unowned-tool", "1.0.0", with_wasm: true)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} = Fork.fork(ctx, parse_ref!("c:acme.unowned-tool:1.0.0"))
+
+      Arca.ControlPlane.record(:unclaimed)
+
+      refute Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               ["components", "catalysts", "local", "unowned-tool", "1.0.0"],
+               "cyfr-manifest.json"
+             )
+    end
+  end
+
   describe "version required (guard at Fork level)" do
     test "fork validates version is present" do
       # ComponentRef with nil version would be caught by MCP handler,

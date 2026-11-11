@@ -178,6 +178,11 @@ defmodule Sanctum.Providers.Key do
         {:error, {:conflict, message} = conflict} when is_binary(message) ->
           {:error, conflict}
 
+        # This server's slot is not live: nothing was written, and the
+        # refusal reads as itself.
+        {:error, :not_owner} = refused ->
+          refused
+
         # No re-log: the storage layer already logged this failure with the
         # exception detail (Arca.ApiKeyStorage).
         {:error, _reason} ->
@@ -236,6 +241,9 @@ defmodule Sanctum.Providers.Key do
 
       {:error, {:conflict, message} = conflict} when is_binary(message) ->
         {:error, conflict}
+
+      {:error, :not_owner} = refused ->
+        refused
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Key] Failed to rotate key: #{inspect(reason)}")

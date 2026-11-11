@@ -533,6 +533,10 @@ defmodule Compendium.Providers.Component do
               broadcast_components_changed(ctx)
               {:ok, res}
 
+            {:error, :not_owner} = refused ->
+              broadcast_progress(ctx, progress_id, :error, "Pull failed")
+              refused
+
             {:error, reason} ->
               broadcast_progress(ctx, progress_id, :error, "Pull failed")
               {:error, shipped_pull_error(reference, reason)}
@@ -769,6 +773,9 @@ defmodule Compendium.Providers.Component do
 
         {:error, :projection_unavailable} ->
           index_unavailable()
+
+        {:error, :not_owner} = refused ->
+          refused
 
         {:error, reason} ->
           Logger.error(

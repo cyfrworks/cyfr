@@ -507,6 +507,30 @@ defmodule Compendium.BuildsTest do
       ScriptedBuilder.await_builds()
     end
 
+    test "whose server lost its control-plane slot is refused for ownership, and nothing is published",
+         %{ctx: ctx} do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      ScriptedBuilder.script([
+        {:stream,
+         [
+           {:hold, self()},
+           {:result, tincture_result(%{"index.html" => "<html><body></body></html>"})}
+         ]}
+      ])
+
+      build = Task.async(fn -> Builds.compile(ctx, @tincture) end)
+
+      # The slot goes while the builder works, so the publish after the
+      # build is the write refused.
+      assert_receive {:scripted_builder, :holding, handler}, 5_000
+      Arca.ControlPlane.record(:lost)
+      send(handler, :continue)
+
+      assert {:error, :not_owner} = Task.await(build, 30_000)
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @tincture_unit ++ ["dist", "index.html"])
+    end
+
     test "without its lockfile is refused before the builder is asked", %{ctx: ctx} do
       :ok = Arca.delete(Sanctum.Context.actor(ctx), @tincture_unit ++ ["package-lock.json"])
 

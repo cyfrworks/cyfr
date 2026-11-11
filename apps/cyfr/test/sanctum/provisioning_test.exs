@@ -1593,6 +1593,24 @@ defmodule Sanctum.ProvisioningTest do
       assert_received {:fill_requested, ^id, "provision", false}
     end
 
+    test "athanor.provision refused for ownership answers the ownership refusal and fills nothing",
+         %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir)
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
+      athanor = unfilled!(ctx.user_id, "Unowned #{n}")
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} =
+               Sanctum.Providers.Athanor.handle(ctx, %{
+                 "action" => "provision",
+                 "athanor" => athanor.id
+               })
+
+      assert {:ok, %{provisioned_at: nil}} = Athanors.get(athanor.id)
+    end
+
     # A step that raises stands in for any defect in a fill: the context
     # is no context, which the agent index refuses by raising.
     test "an attempt that raises is a failure on the row, for the verb and for a hook",
