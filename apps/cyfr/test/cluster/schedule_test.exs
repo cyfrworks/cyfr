@@ -22,7 +22,26 @@ defmodule Cyfr.Cluster.ScheduleTest do
   describe "one due schedule" do
     test "made on one member and cast to neither, is armed by both schedulers and claimed by one" do
       athanor = Cell.call(:a, Fixtures, :athanor!, ["schedule-armed"])
-      schedule = Cell.call(:a, Fixtures, :due_schedule!, [athanor.id, 1])
+
+      # Made by the server itself, a creator never denied, so a fire gets
+      # past the creator's check to its claim (the fixture's creator is no
+      # person on file, which a fire refuses before claiming).
+      {:ok, schedule} =
+        Cell.call(:a, Arca.CronSchedule, :create, [
+          Prima.Actor.in_athanor(athanor.id),
+          %{
+            user_id: "system",
+            athanor_id: athanor.id,
+            name: "cluster-armed-#{System.unique_integer([:positive])}",
+            cron_expression: "0 * * * *",
+            reference: "reagent:local.cluster:1.0.0",
+            resolved_reference: "reagent:local.cluster:1.0.0",
+            profile_id: "prof_cluster",
+            next_run_at: DateTime.add(DateTime.utc_now(), -1, :second),
+            cap: 1_000
+          }
+        ])
+
       boots = for member <- [:a, :b], do: Cell.call(member, Fixtures, :boot, [])
 
       for member <- [:a, :b],
