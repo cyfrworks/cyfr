@@ -178,15 +178,18 @@ defmodule Sanctum.Consent.AuthzTest do
       assert Authz.message(:not_standing) =~ "no longer stands"
       assert Authz.message(:unavailable) =~ "try again"
       assert Authz.message(:identity_stale) == Prima.Refusal.message(:identity_stale)
+      assert Authz.message(:identity_gone) == Prima.Refusal.message(:identity_gone)
+      refute Authz.message(:identity_gone) =~ "try again"
     end
   end
 
   describe "a revalidation's refusal" do
-    test "is named here: a stale identity as itself, one this vocabulary does not know as unavailable" do
+    test "is named here: a stale or gone identity as itself, one this vocabulary does not know as unavailable" do
       assert Authz.standing_refusal(:unauthenticated) == :not_authenticated
       assert Authz.standing_refusal(:not_standing) == :not_standing
       assert Authz.standing_refusal(:not_member) == :not_standing
       assert Authz.standing_refusal(:identity_stale) == :identity_stale
+      assert Authz.standing_refusal(:identity_gone) == :identity_gone
       assert Authz.standing_refusal(:unavailable) == :unavailable
 
       # A refusal revalidation learns later still refuses, never crashes.
