@@ -18,8 +18,9 @@ defmodule Emissary.External.Server do
   `connect/1`). Every request's timeout bounds its wall time, however the
   peer trickles its reply. A legacy peer that issues an `Mcp-Session-Id` at
   `initialize` gets it back on every later request until the next connect,
-  and the id is kept and masked as the resolved credential headers are. An
-  issued id that is not
+  and the id is kept and masked as the resolved credential headers are. A
+  configured `mcp-session-id` header wins over an issued id, which is then
+  not kept, and is masked as a credential header. An issued id that is not
   visible ASCII, or shorter than the 8 bytes masking needs, is not kept: the
   connect fails saying so.
   A paged `tools/list` is followed through its `nextCursor` to the last
@@ -1532,7 +1533,8 @@ defmodule Emissary.External.Server do
   # out on every later request of this connection and is a secret wherever
   # they are: excluded from Inspect, redacted from the status, masked out
   # of what the peer answers and of the log. The next connect resolves the
-  # headers afresh, without it. An issued id is kept only when it can
+  # headers afresh, without it. A configured `mcp-session-id` header wins
+  # and an issued id is then not kept. An issued id is kept only when it can
   # be both sent and masked: visible ASCII (the specification's
   # `0x21`-`0x7E`), since it goes back out as a header value, and at least
   # @min_masked_bytes long, since a shorter one would not be masked; any
@@ -1544,6 +1546,9 @@ defmodule Emissary.External.Server do
 
       {_name, id} ->
         cond do
+          configured_session?(state) ->
+            {:ok, state}
+
           not String.match?(id, ~r/^[\x21-\x7e]+$/) ->
             {:error, "#{state.name} issued a session id that is not visible ASCII"}
 
@@ -1555,6 +1560,11 @@ defmodule Emissary.External.Server do
         end
     end
   end
+
+  defp configured_session?(state),
+    do: Enum.any?(Map.keys(state.raw_headers), &session_header?/1)
+
+  defp session_header?(key), do: key |> to_string() |> String.downcase() == @session_id_header
 
   defp send_initialized_notification(state) do
     body = Message.encode_notification("notifications/initialized")
@@ -2157,7 +2167,7 @@ defmodule Emissary.External.Server do
   defp credential_shaped_header?(key) do
     k = key |> to_string() |> String.downcase()
 
-    Prima.Network.credential_header?(k) or String.contains?(k, "token") or
+    session_header?(k) or Prima.Network.credential_header?(k) or String.contains?(k, "token") or
       String.contains?(k, "secret") or
       String.contains?(k, "auth") or String.contains?(k, "key")
   end

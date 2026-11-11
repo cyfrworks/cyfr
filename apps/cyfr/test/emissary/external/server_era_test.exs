@@ -319,6 +319,24 @@ defmodule Emissary.External.ServerEraTest do
       assert reason =~ "issued a session id that is not visible ASCII"
     end
 
+    test "a configured session header wins over the issued one", %{stub: stub, url: url} do
+      legacy_peer(stub, self(), require: "configured-session")
+
+      config = [
+        name: "configured-session-peer",
+        url: url,
+        athanor_id: "ath_test",
+        headers: %{"Mcp-Session-Id" => "configured-session"}
+      ]
+
+      pid = start_supervised!({Server, config})
+      assert {:ok, [%{"name" => "echo"}]} = GenServer.call(pid, :get_tools, 5_000)
+
+      assert_received {:method, "initialize", ["configured-session"]}
+      assert_received {:method, "notifications/initialized", ["configured-session"]}
+      assert_received {:method, "tools/list", ["configured-session"]}
+    end
+
     test "a reconnect does not send the session issued before it", %{stub: stub, url: url} do
       legacy_peer(stub, self())
 
@@ -336,6 +354,63 @@ defmodule Emissary.External.ServerEraTest do
       assert_received {:method, "initialize", []}
       assert_received {:method, "notifications/initialized", ["peer-session"]}
       assert_received {:method, "tools/list", ["peer-session"]}
+    end
+
+    # A configured header resolved from the vault stays its own: the issued
+    # id does not replace it on the wire or in the masking.
+    test "a vault session header echoed by the peer stays masked", %{stub: stub, url: url} do
+      ctx = Sanctum.TestContext.local()
+      secret = "configured-vault-session-secret"
+
+      assert {:ok, _entry} =
+               Sanctum.TestContext.create_vault(ctx, %{
+                 name: "era-session-header",
+                 kind: "api_key",
+                 fields: %{"value" => secret},
+                 destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => stub.port}
+               })
+
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        session = Plug.Conn.get_req_header(conn, "mcp-session-id")
+
+        cond do
+          get_in(body, ["params", "_meta"]) != nil ->
+            Plug.Conn.resp(conn, 400, "Bad Request")
+
+          session != [secret] ->
+            Plug.Conn.resp(conn, 400, "Bad Request: No valid session ID provided")
+
+          body["method"] == "initialize" ->
+            conn
+            |> Plug.Conn.put_resp_header("mcp-session-id", "issued-session")
+            |> json(%{
+              "jsonrpc" => "2.0",
+              "id" => body["id"],
+              "result" => %{"serverInfo" => %{"name" => "peer", "version" => secret}}
+            })
+
+          body["method"] == "notifications/initialized" ->
+            Plug.Conn.resp(conn, 202, "")
+
+          true ->
+            json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
+        end
+      end)
+
+      config = [
+        name: "vault-session-peer",
+        url: url,
+        athanor_id: ctx.athanor_id,
+        headers: %{"mcp-session-id" => "vault:era-session-header"}
+      ]
+
+      pid = start_supervised!({Server, config})
+      assert {:ok, []} = GenServer.call(pid, :get_tools, 5_000)
+
+      status = GenServer.call(pid, :status, 5_000)
+      assert status.server_info["version"] == "[REDACTED]"
+      refute inspect(status) =~ secret
     end
 
     # A trickling peer holds initialize as it could a listing: each chunk
