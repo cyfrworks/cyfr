@@ -1406,7 +1406,7 @@ jobs:
   locus-backends-image:
     name: Backends image (end to end, isolation, refusals, residue, memory bound) and the Compose proof
     runs-on: ubuntu-latest
-    # The Compose proof's six cases bring the stack up and switch its access mode
+    # The Compose proof's seven cases bring the stack up and switch its access mode
     # some twenty times between them.
     timeout-minutes: 100
     needs: locus-image
@@ -1588,9 +1588,13 @@ jobs:
       # own while it holds a stream and a running call. restore: with the
       # restore's bar in .env the cyfr service is refused at the entrypoint,
       # and the declaration `cyfr restore` runs, the bar set empty in its
-      # one-off container, boots and declares. Each run fails when its
-      # teardown leaves the project behind, which the teardown's stand-in
-      # cases hold.
+      # one-off container, boots and declares. runtime: the shipped
+      # locus-runtime service, on the Locus image above, runs a seed
+      # catalyst for a signed-in person, cyfr dispatching to the worker URL
+      # and the runtime calling the host API the shipped file names under
+      # the keys `cyfr init` wrote, and the app image carries the pinned
+      # cosign. Each run fails when its teardown leaves the project behind,
+      # which the teardown's stand-in cases hold.
       - name: The Compose proof's teardown against stand-ins
         run: bash tests/compose-proof/cleanup-test.sh
       # The Compose proof's whole-object predicates on canned objects: each
@@ -1631,6 +1635,10 @@ jobs:
         env:
           COMPOSE_PROOF_SKIP_BUILD: '1'
         run: tests/compose-proof/run.sh --case restore
+      - name: The Compose proof (runtime)
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case runtime --locus-image cyfr-locus:backends
       # The setup proof (tests/setup-proof/run.sh) on the same image:
       # `cyfr setup`'s pages at the 720×720 handheld in Chromium, through
       # the browser harness, ask nothing, set up a CYFR reached from this
