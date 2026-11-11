@@ -389,7 +389,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # does with the name. The scan finds a reader by the vector file's name in
   # its text, so a reader that builds the name at runtime (from parts, or by
   # listing tests/fixtures) is out of its reach, as is one outside a test
-  # path (a component's source, which a row names all the same).
+  # path. A Rust source is a test path, since its tests sit in the file they
+  # test (a component's `src/`); its rows name the component's version
+  # directory, so a new version of a component that reads a vector is a new
+  # row, which the scan asks for.
   @vector_readers %{
     "account_names.json" => [
       {"apps/codex/cmd/profile_test.go", ~w(unicode keys same different)},
@@ -700,8 +703,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
   }
 
   # Every tracked or new file under a test path (a test/ or tests/
-  # directory, a Go `_test.go` or a `.test.mjs` file), but this roster, the
-  # vector files themselves and Markdown.
+  # directory, a Go `_test.go`, a `.test.mjs` or a Rust `.rs` file), but
+  # this roster, the vector files themselves and Markdown.
   defp test_path_files do
     {listing, 0} =
       System.cmd("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
@@ -722,7 +725,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     segments = Path.split(rel)
 
     Enum.any?(Enum.drop(segments, -1), &(&1 in ["test", "tests"])) or
-      String.ends_with?(rel, ["_test.go", ".test.mjs"])
+      String.ends_with?(rel, ["_test.go", ".test.mjs", ".rs"])
   end
 
   # Whether `source` names the vector file `vectors` on a line that is not a
@@ -833,6 +836,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     refute test_path?("apps/codex/internal/shell/device.go")
     assert test_path?("apps/cyfr/assets/test/account/pages.test.mjs")
     assert test_path?("tests/compose-proof/predicates.sh")
+    assert test_path?("seed/components/catalysts/local/claude-code/0.1.3/src/src/chat.rs")
+    assert "seed/components/catalysts/local/claude-code/0.1.3/src/src/chat.rs" in files
   end
 
   # ==========================================================================
