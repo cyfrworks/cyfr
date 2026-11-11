@@ -135,7 +135,7 @@ defmodule Compendium.OCI.Errors do
     }
   end
 
-  # 410 Gone — cyfr.run signals taken-down components on REST detail handlers
+  # 410 Gone — a registry signals taken-down components on REST detail handlers
   # and on OCI gateway `/v2/*` manifest pulls. The status code is
   # authoritative; the `X-Cyfr-Component-Status: taken_down` header beside it
   # is not read.
@@ -321,9 +321,9 @@ defmodule Compendium.OCI.Errors do
     do:
       "The registry returned a redirect to a blocked address. This may indicate a misconfigured or malicious registry."
 
-  def actionable_hint(%__MODULE__{reason: :taken_down}),
+  def actionable_hint(%__MODULE__{reason: :taken_down, registry: registry}),
     do:
-      "Component was removed by cyfr.run moderators. If you believe this was in error, open an appeal from the prism Registry tab or run `cyfr registry appeals`."
+      "Component was removed by #{registry || "the registry"}'s moderators. If you believe this was in error, open an appeal from the prism Registry tab or run `cyfr registry appeals`."
 
   def actionable_hint(%__MODULE__{}), do: ""
 
