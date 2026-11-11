@@ -760,45 +760,55 @@ guest_chord() {
 # first match of TEXT (with last, its last), then closed, which gives the
 # keyboard's focus to the link or button holding that match, as a person
 # reaching it by the keyboard does. Enter then presses it. Answers 1 when
-# the page shows no match, the display then kept as
+# the display shows no match, that display then kept as
 # GUEST_DIR/screen-find-missed.ppm; each count is a line of
 # GUEST_DIR/screen-find.txt.
 screen_find() {
   local found=1
-  guest_chord ctrl f && sleep 1 &&
+  screen_dump before &&
+    guest_chord ctrl f && sleep 1 &&
     printf '%s' "$1" | guest_keys && sleep 2 &&
     { [ "${2:-}" != last ] || guest_chord shift ret; } && sleep 1 &&
     { ! screen_match "$1" || found=0; guest_chord esc; } && sleep 1 &&
     [ "$found" = 0 ]
 }
 
+# screen_dump NAME: the guest's display as GUEST_DIR/screen-find-NAME.ppm.
+screen_dump() {
+  guest_qmp screendump "{\"filename\": \"/tmp/screen-find-$1.ppm\", \"format\": \"ppm\"}" >/dev/null &&
+    docker cp "$GUEST:/tmp/screen-find-$1.ppm" "$GUEST_DIR/screen-find-$1.ppm" >/dev/null 2>&1
+}
+
 # screen_match TEXT: whether the display shows the match the find bar
-# stands on. Chrome paints that one match in its own orange, rgb(255, 150,
-# 50), whatever the page's colours, and a page with no match shows none of
-# it; 30 pixels is less than the smallest word's highlight and more than a
-# stray pixel.
+# stands on, against the display screen_dump before took. Chrome paints
+# that one match in its own orange, rgb(255, 150, 50), so the find put
+# there the pixels that are that orange now and were not before; orange of
+# the page's own is in both and counts for nothing. 30 pixels is less than
+# the smallest word's highlight and more than a stray pixel. The match
+# must be on the display: one scrolled out of view counts as none.
 screen_match() {
-  local dump="$GUEST_DIR/screen-find.ppm" count
-  guest_qmp screendump '{"filename": "/tmp/screen-find.ppm", "format": "ppm"}' >/dev/null &&
-    docker cp "$GUEST:/tmp/screen-find.ppm" "$dump" >/dev/null 2>&1 || return 1
+  local before="$GUEST_DIR/screen-find-before.ppm" after="$GUEST_DIR/screen-find-after.ppm" count
+  screen_dump after || return 1
   count=$(python3 -I -c '
 import sys
-data = open(sys.argv[1], "rb").read()
-fields, at = [], 0
-while len(fields) < 4:
-    end = at
-    while not data[end:end + 1].isspace():
-        end += 1
-    fields.append(data[at:end])
-    at = end + 1
-pixels = data[at:]
-print(sum(1 for p in zip(pixels[0::3], pixels[1::3], pixels[2::3]) if p == (255, 150, 50)))' "$dump") || return 1
+def pixels(path):
+    data = open(path, "rb").read()
+    at = 0
+    for _ in range(4):
+        while not data[at:at + 1].isspace():
+            at += 1
+        at += 1
+    data = data[at:]
+    return zip(data[0::3], data[1::3], data[2::3])
+orange = (255, 150, 50)
+print(sum(1 for was, now in zip(pixels(sys.argv[1]), pixels(sys.argv[2])) if now == orange != was))' "$before" "$after") || return 1
   printf '%s %s\n' "$count" "$1" >>"$GUEST_DIR/screen-find.txt"
+  rm -f "$before"
   if [ "$count" -ge 30 ]; then
-    rm -f "$dump"
+    rm -f "$after"
     return 0
   fi
-  mv "$dump" "$GUEST_DIR/screen-find-missed.ppm"
+  mv "$after" "$GUEST_DIR/screen-find-missed.ppm"
   return 1
 }
 
