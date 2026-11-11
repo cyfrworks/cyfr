@@ -1010,8 +1010,15 @@ defmodule Locus.Backends.OwnersTest do
         {DynamicSupervisor, name: sessions_name, strategy: :one_for_one}
       ]
 
-      {:ok, root} = Supervisor.start_link(children, strategy: :rest_for_one)
-      on_exit(fn -> if Process.alive?(root), do: Supervisor.stop(root) end)
+      # The test's supervisor owns the root and stops it before any on_exit
+      # callback runs. Linked to the test process, the root ended with it,
+      # and a stop from a callback that met it ending exited.
+      start_supervised!(%{
+        id: :owners_restart_root,
+        start: {Supervisor, :start_link, [children, [strategy: :rest_for_one]]},
+        type: :supervisor
+      })
+
       old_owner = Process.whereis(owner_name)
       assert {:ok, _} = sync(old_owner, "a", {1, 1}, idle_programs(1))
       assert {:ok, %{session: id}} = open(old_owner, "a", {1, 1}, "b1")
