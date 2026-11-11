@@ -117,7 +117,8 @@ func TestSignRegistryRequest_AsksTheUnlockForEachSignature(t *testing.T) {
 }
 
 // A registry action the person signs is made twice: without an answer,
-// which answers the CYFR's request, then with the same arguments and the
+// which answers the CYFR's request with the account page's url, as a
+// session's caller is answered, then with the same arguments and the
 // signed request as its answer; an action that answers anything else is
 // made once.
 func TestSignedRegistry_AnswersTheRequestInASecondCall(t *testing.T) {
@@ -134,7 +135,7 @@ func TestSignedRegistry_AnswersTheRequestInASecondCall(t *testing.T) {
 	result, err := signedRegistry(t.Context(), client, func(answer ops.Field[any]) (map[string]any, error) {
 		answers = append(answers, answer)
 		if answer.IsZero() {
-			return map[string]any{"request": asked}, nil
+			return map[string]any{"request": asked, "url": "https://cyfr.run/account/sign#request"}, nil
 		}
 		return map[string]any{"personal_namespace": "alice"}, nil
 	})

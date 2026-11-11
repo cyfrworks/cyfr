@@ -444,18 +444,20 @@ the last admin returns 409 ` + "`sole_admin`" + `.`,
 }
 
 // signedRegistry makes a registry action the person signs, in its two
-// calls: made without an answer it answers {request}, the CYFR's request
-// of purpose registry, whose registry request this command line signs
-// with its own key after its unlock (registrySigner); call is then made
-// again with the same arguments and that signed request as its answer. An
-// action that answers anything else answers it as it is.
+// calls: made without an answer it answers {request, url?}, the CYFR's
+// request of purpose registry and, for a session's caller, the account
+// page that signs it with a passkey. This command line signs the registry
+// request with its own key after its unlock (registrySigner) and never
+// follows the url; call is then made again with the same arguments and
+// that signed request as its answer. An action that answers anything else
+// answers it as it is.
 func signedRegistry(ctx context.Context, client *mcp.Client, call func(answer ops.Field[any]) (map[string]any, error)) (map[string]any, error) {
 	result, err := call(ops.Field[any]{})
 	if err != nil {
 		return nil, err
 	}
 	asked, ok := result["request"]
-	if !ok || len(result) != 1 {
+	if !ok {
 		return result, nil
 	}
 	answer, err := registrySigner(ctx, client.BaseURL, asked)
