@@ -33,18 +33,23 @@
 #            root
 # Lines that start with #, and blank lines, are skipped. The whole table
 # is read, and every row's when decided on the changed set as the stage
-# found it, before any row runs. The rows of one folder run one after
-# another in the table's order; every other row runs beside them, each
-# queued for its own quarters when the stage starts, so a stage can hold
-# every quarter at once. Every row runs whatever an earlier one ended
-# with. When the rows that run name two folders or more, the stage first
-# compiles the dependencies into each of those folders in turn, in the
-# order the table first names them, on one quarter (`mix deps.loadpaths`
-# under the folder's build path, adapter and MIX_ENV, logged in deps.log),
-# and starts no row that names a folder before it ends: a dependency's own
-# compile writes under deps/, which every folder shares (erlex's generated
-# parser), so two cold builds started together race there. Warm, it finds
-# nothing to do. No check is called deps.
+# found it, before any row runs. In save and handoff the rows of one
+# folder run one after another in the table's order and every other row
+# runs beside them, each queued for its own quarters when the stage
+# starts, so a stage can hold every quarter at once; every other stage
+# runs its rows one after another in the table's order. Every row runs
+# whatever an earlier one ended with. When the save or handoff rows that
+# run name two folders or more, the stage first compiles the dependencies
+# into each of those folders in turn, in the order the table first names
+# them, on one quarter (`mix deps.loadpaths` under the folder's build path,
+# adapter and MIX_ENV, logged in deps.log), and starts no row that names a
+# folder before it ends: a dependency's own compile writes under deps/,
+# which every folder shares (erlex's generated parser), so two cold builds
+# started together race there. Warm, it finds nothing to do. When it
+# fails, no row that names a folder starts: each reads `not run 69`, and
+# the rows of no folder still run. No check is called deps. The stage
+# clears MIX_ENV and MIX_BUILD_PATH before any of it, so a row's build
+# folder is what its own command sets, never the caller's.
 #
 # The changed set is every path the diff from the base to the working
 # tree adds, modifies or deletes, renames as a deletion and an addition,
@@ -134,6 +139,9 @@ while [ "$#" -gt 0 ]; do
 done
 is_stage "$stage" || { usage >&2; exit 64; }
 [ -z "${HEAVY_CHECK_HELD:-}" ] || refuse 64 'each row queues for its own quarters: run this outside scripts/heavy-check.sh'
+# A caller's MIX_ENV or MIX_BUILD_PATH would move a lane's rows into
+# another folder, or two lanes into one.
+unset MIX_ENV MIX_BUILD_PATH
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 root=$(git -C "$here/.." rev-parse --show-toplevel 2>/dev/null) || root=
@@ -248,12 +256,20 @@ for row in ${rows[@]+"${rows[@]}"}; do
   reasons+=("$reason")
 done
 
-# The folders the rows that run name, in the order the table first names
-# them, and, for two or more, the dependency compile into each in turn.
+# Each row's lane: in save and handoff its folder, - for one that runs
+# beside every other; in every other stage the one lane of the stage.
+lanes=()
+for i in ${rows[@]+"${!rows[@]}"}; do
+  IFS=$'\t' read -r _ _ _ _ _ folder _ <<<"${rows[$i]}"
+  case $stage in save | handoff) lanes+=("$folder") ;; *) lanes+=(stage) ;; esac
+done
+# The lanes the rows that run name, in the order the table first names
+# them, and, for two folders or more, the dependency compile into each in
+# turn.
 folders=() deps_command=
 for i in ${rows[@]+"${!rows[@]}"}; do
   [ -z "${reasons[$i]}" ] || continue
-  IFS=$'\t' read -r _ _ _ _ _ folder _ <<<"${rows[$i]}"
+  folder=${lanes[$i]}
   [ "$folder" = - ] || [[ " ${folders[*]+${folders[*]}} " == *" $folder "* ]] || folders+=("$folder")
 done
 if [ "${#folders[@]}" -ge 2 ]; then
@@ -334,11 +350,11 @@ flush() { # prints every line whose row, and every row before it, has ended
 }
 
 for i in ${rows[@]+"${!rows[@]}"}; do
-  IFS=$'\t' read -r _ _ check _ _ folder _ <<<"${rows[$i]}"
+  IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$i]}"
   if [ -n "${reasons[$i]}" ]; then
     lines[$i]="$check: skipped (${reasons[$i]}) 0s"
-  elif [ "$folder" != - ]; then
-    lane[$folder]+="$i "
+  elif [ "${lanes[$i]}" != - ]; then
+    lane[${lanes[$i]}]+="$i "
   fi
 done
 if [ -n "$deps_command" ]; then
@@ -348,8 +364,7 @@ else
   for folder in ${folders[@]+"${folders[@]}"}; do next_in "$folder"; done
 fi
 for i in ${rows[@]+"${!rows[@]}"}; do
-  IFS=$'\t' read -r _ _ _ _ _ folder _ <<<"${rows[$i]}"
-  if [ -z "${reasons[$i]}" ] && [ "$folder" = - ]; then start_row "$i"; fi
+  if [ -z "${reasons[$i]}" ] && [ "${lanes[$i]}" = - ]; then start_row "$i"; fi
 done
 
 failures=0
@@ -364,11 +379,24 @@ while [ "${#running[@]}" -gt 0 ]; do
   [ "$status" = 0 ] || failures=$((failures + 1))
   if [ "$entry" = deps ]; then
     deps_line=$(result deps "$status" $((SECONDS - deps_began)))
-    for folder in "${folders[@]}"; do next_in "$folder"; done
+    if [ "$status" = 0 ]; then
+      for folder in "${folders[@]}"; do next_in "$folder"; done
+    else
+      # A row of a folder would compile what the failed compile left there,
+      # beside the other folders' rows: none starts.
+      for folder in "${folders[@]}"; do
+        for i in ${lane[$folder]}; do
+          IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$i]}"
+          lines[$i]="$check: not run 69 0s"
+          failures=$((failures + 1))
+        done
+        lane[$folder]=
+      done
+    fi
   else
-    IFS=$'\t' read -r _ _ check _ _ folder _ <<<"${rows[$entry]}"
+    IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$entry]}"
     lines[$entry]=$(result "$check" "$status" $((SECONDS - began[entry])))
-    [ "$folder" = - ] || next_in "$folder"
+    [ "${lanes[$entry]}" = - ] || next_in "${lanes[$entry]}"
   fi
   flush
 done

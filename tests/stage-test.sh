@@ -291,6 +291,7 @@ mkdir -p "$S/fake-mix"
 cat >"$S/fake-mix/mix" <<'EOF'
 #!/usr/bin/env bash
 printf '%s|%s|%s|%s\n' "${MIX_BUILD_PATH-default}" "${CYFR_DATABASE-}" "${MIX_ENV-}" "$*" >>"$FAKE_MIX_CALLS"
+printf '%s %s\n' "${MIX_BUILD_PATH:-_build/${MIX_ENV:-dev}}" "$*" >>"$FAKE_MIX_USES"
 echo "deps ${MIX_BUILD_PATH-default}" >>"$EVENTS"
 exit "${FAKE_MIX_EXIT:-0}"
 EOF
@@ -301,15 +302,16 @@ for _ in $(seq 100); do [ -e "$1" ] && exit 0; sleep 0.05; done
 exit 1
 EOF
 chmod +x "$repo/scripts/wait-for"
-export FAKE_MIX_CALLS="$S/mix-calls" EVENTS="$S/events"
+export FAKE_MIX_CALLS="$S/mix-calls" FAKE_MIX_USES="$S/mix-uses" EVENTS="$S/events"
 lanes() { # NAME ARGS...: the toy stage with the stand-in mix; stdout to $S/NAME.out, rows' lines to $S/NAME.rows
   local name=$1
   shift
   : >"$FAKE_MIX_CALLS"
+  : >"$FAKE_MIX_USES"
   : >"$EVENTS"
   : >"$STUB_CALLS"
   rc=0
-  (cd "$repo" && env -u MIX_BUILD_PATH PATH="$S/fake-mix:$PATH" scripts/stage.sh "$@") >"$S/$name.out" 2>"$S/$name.err" || rc=$?
+  (cd "$repo" && PATH="$S/fake-mix:$PATH" scripts/stage.sh "$@") >"$S/$name.out" 2>"$S/$name.err" || rc=$?
   sed -n '2,$p' "$S/$name.out" | sed '$d' | sed -E 's/ [0-9]+s$//' >"$S/$name.rows"
 }
 # The toy table's fields are split at |, so no command here holds one.
@@ -340,16 +342,29 @@ lanes lanes-dry -n handoff
 grep -qxF 'would compile deps (1 quarter): dev test' "$S/lanes-dry.out" || fail "the dry run said: $(cat "$S/lanes-dry.out")"
 [ ! -s "$FAKE_MIX_CALLS" ] || fail 'a dry run compiled the dependencies'
 
-begin 'rows that name one folder compile no dependencies first, and a failed dependency compile fails the stage while every row still runs'
+begin "the caller's MIX_ENV and MIX_BUILD_PATH reach no row and no dependency compile: format stays in dev's folder and the tests in test's"
+table 'handoff|format|1|60|dev|always|mix format' 'handoff|tests|1|60|test|always|env MIX_ENV=test mix test'
+for caller in MIX_ENV=test "MIX_BUILD_PATH=$S/elsewhere"; do
+  (export "$caller"; lanes inherited -l "$S/logs-inherited" handoff)
+  rc=$(sed -n 's/^_EXIT=[0-9]* //p' "$S/inherited.out")
+  [ "$rc" = 0 ] || fail "under $caller the stage exited $rc: $(cat "$S/inherited.err")"
+  printf '%s\n' '_build/dev deps.loadpaths' '_build/test deps.loadpaths' '_build/dev format' '_build/test test' >"$S/want"
+  diff "$S/want" <(LC_ALL=C sort "$FAKE_MIX_USES" | sed -n '/deps.loadpaths/p'; grep -v deps.loadpaths "$FAKE_MIX_USES" | LC_ALL=C sort) >/dev/null ||
+    fail "under $caller the rows used: $(tr '\n' ';' <"$FAKE_MIX_USES")"
+done
+
+begin 'rows that name one folder compile no dependencies first, and a failed dependency compile fails the stage and starts no row that names a folder, each of which reads not run, while the rest still run'
 table 'handoff|solo|1|60|dev|always|echo solo' 'handoff|free|1|60|-|always|echo free'
 lanes one-folder -l "$S/logs-one-folder" handoff
 [ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/one-folder.err")"
 [ "$(tr '\n' ';' <"$S/one-folder.rows")" = 'solo: ok;free: ok;' ] || fail "the rows said: $(tr '\n' ';' <"$S/one-folder.rows")"
 [ ! -s "$FAKE_MIX_CALLS" ] && [ ! -e "$S/logs-one-folder/deps.log" ] || fail 'one folder compiled the dependencies first'
-table 'handoff|a|1|60|dev|always|echo a' 'handoff|b|1|60|test_pg|always|echo b'
+table 'handoff|a|1|60|dev|always|echo a' 'handoff|b|1|60|test_pg|always|echo b' 'handoff|c|1|60|-|always|echo c'
 FAKE_MIX_EXIT=1 lanes deps-failed -l "$S/logs-deps-failed" handoff
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
-[ "$(tr '\n' ';' <"$S/deps-failed.rows")" = 'deps: failed 1;a: ok;b: ok;' ] || fail "the rows said: $(tr '\n' ';' <"$S/deps-failed.rows")"
+[ "$(tr '\n' ';' <"$S/deps-failed.rows")" = 'deps: failed 1;a: not run 69;b: not run 69;c: ok;' ] || fail "the rows said: $(tr '\n' ';' <"$S/deps-failed.rows")"
+[ ! -e "$S/logs-deps-failed/a.log" ] && [ ! -e "$S/logs-deps-failed/b.log" ] && ! grep -q 'echo [ab]$' "$STUB_CALLS" ||
+  fail "a row of a folder started after the failed compile: $(cat "$STUB_CALLS")"
 [ "$(cut -d'|' -f1-3 "$FAKE_MIX_CALLS" | tr '\n' ';')" = 'default|sqlite|dev;_build/test_pg|postgres|test;' ] ||
   fail "a failed compile stopped the next folder's: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
 
@@ -891,7 +906,7 @@ planted 'python3 -I tests/stage-probe.py --self-check # no image'
 [ -z "$(guard "$S/stages-probe.tsv" "$S/workflows")" ] ||
   fail "a self-check with a comment after it was not counted: $(guard "$S/stages-probe.tsv" "$S/workflows")"
 
-begin "the real table's nightly runs the janitor and the two proofs no workflow runs, each on one quarter"
+begin "the real table's nightly runs the janitor and the two proofs no workflow runs, each on one quarter, one after another"
 status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/nightly-real.out" 2>"$S/nightly-real.err" || status=$?
 [ "$status" = 0 ] || fail "the nightly stage was refused: $(cat "$S/nightly-real.err")"
 grep -qxF 'would run janitor (1 quarter): scripts/janitor.sh' "$S/nightly-real.out" &&
@@ -901,5 +916,29 @@ grep -qxF 'would run janitor (1 quarter): scripts/janitor.sh' "$S/nightly-real.o
 # The report's grammar holds no skipped row: every nightly row runs always.
 selected=$(awk -F'\t' '!/^#/ && $1 == "nightly" && $6 != "always" { print $2 }' "$ROOT/scripts/stages.tsv")
 [ -z "$selected" ] || fail "a nightly row has a selector: $selected"
+# The nightly runs its rows one after another in the table's order, as
+# every stage but save and handoff does, the janitor before the proofs: a
+# stand-in queue records each row's start and end and runs nothing.
+[ "$(awk -F'\t' '!/^#/ && $1 == "nightly" { print $2 }' "$ROOT/scripts/stages.tsv" | tr '\n' ' ')" = 'janitor install-screen-proof handle-proof ' ] ||
+  fail 'the nightly does not hold the janitor, then the install-screen proof, then the handle proof'
+night="$S/night-repo"
+git init -q -b main "$night"
+mkdir -p "$night/scripts"
+cp "$ROOT/scripts/stage.sh" "$ROOT/scripts/stages.tsv" "$night/scripts/"
+cat >"$night/scripts/heavy-check.sh" <<'EOF'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+printf 'start %s\n' "$4" >>"$NIGHT_EVENTS"
+sleep 0.3
+printf 'end %s\n' "$4" >>"$NIGHT_EVENTS"
+EOF
+chmod +x "$night/scripts/heavy-check.sh"
+git -C "$night" add -A
+git -C "$night" -c user.name=test -c user.email=test@invalid commit -q -m 'the real table'
+: >"$S/night-events"
+status=0; (cd "$night" && NIGHT_EVENTS="$S/night-events" scripts/stage.sh -l "$S/logs-night-order" nightly) >"$S/night-order.out" 2>&1 || status=$?
+[ "$status" = 0 ] || fail "the nightly's stand-in run exited $status: $(cat "$S/night-order.out")"
+awk -F'\t' '!/^#/ && $1 == "nightly" { print "start " $7; print "end " $7 }' "$ROOT/scripts/stages.tsv" >"$S/want"
+diff "$S/want" "$S/night-events" >/dev/null || fail "the nightly's rows ran as: $(cut -c1-40 "$S/night-events" | tr '\n' ';')"
 
 echo 'stage tests passed'

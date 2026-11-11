@@ -4,7 +4,8 @@
 # and the rules: stage, check, quarters, hold, folder, when, command, separated
 # by tabs. A row's folder is the build folder its command compiles into or
 # reads that another row may use too (dev-stack-test reads dev's); a row that
-# builds only where no other row of its stage does names none (-).
+# builds only where no other row of its stage does names none (-). Only save
+# and handoff run rows side by side; every other stage runs its rows in order.
 # No save or handoff row takes more than one quarter: the harness self-tests
 # that need the whole machine, and go test -race, run on the pull request's run
 # on GitHub (CONTRIBUTING.md says how to run one here by name).
