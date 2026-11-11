@@ -472,7 +472,8 @@ defmodule Opus.Attempt do
   - `{:fail, outcome}` closes the run failed with the outcome's error:
     `{:ok, message}`, the failure as the close recorded it, masked. An
     `abandoned` outcome is first counted against the athanor as a kill
-    whose native work may still run (`note_unreaped/2`).
+    whose native work may still run (`note_unreaped/2`), and closes
+    uncertain (`Opus.Close.abandoned/3`): what the run did is not known.
   - `{:push_deltas, deltas}` emits each delta's event on the attempt's
     stream, masked with its set: `{:ok, replies}`, one reply per delta, the
     JSON a guest's `emit` returns. A delta naming another attempt is
@@ -1382,12 +1383,19 @@ defmodule Opus.Attempt do
     end
   end
 
+  # A run the runtime abandoned at its budget was killed with its native
+  # work possibly still running: the kill is counted against its athanor,
+  # and what the run did is not known, so it closes uncertain under the
+  # runtime's message.
   defp run({:fail, %Outcome{status: :failed} = outcome}, state) do
     if names_outcome?(state, outcome) do
       if outcome.abandoned, do: note_unreaped(state.ctx.athanor_id, state.execution_id)
 
       close_run(state, &failed_answer/1, fn ->
-        Close.fail(state.close, masking_set(state), outcome.error)
+        if outcome.abandoned,
+          do:
+            Close.abandoned(state.close, masking_set(state), outcome.error || "Execution failed"),
+          else: Close.fail(state.close, masking_set(state), outcome.error)
       end)
     else
       refuse_outcome(state)
@@ -1551,6 +1559,7 @@ defmodule Opus.Attempt do
   defp completed_answer({:error, _typed}), do: {:error, {:failed, "Execution failed"}}
 
   defp failed_answer({:error, message}) when is_binary(message), do: {:ok, message}
+  defp failed_answer({:error, {:uncertain, message}}) when is_binary(message), do: {:ok, message}
   defp failed_answer(_result), do: {:ok, "Execution failed"}
 
   defp emit_delta(state, emit, %Delta{} = delta) do

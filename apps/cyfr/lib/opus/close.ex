@@ -209,8 +209,10 @@ defmodule Opus.Close do
   The write is fenced on the run's attempt. When the row is no longer
   running under it (the attempt wrote its terminal row before it ended, a
   cancel closed the row, a lapse closed it, or another attempt took it
-  over), nothing is written, no failure telemetry fires and no child is
-  failed, and the answer is the row's: its result when it completed, its
+  over), nothing is written and no failure telemetry fires; a row that
+  stands cancelled or failed has its children still running failed, since
+  the close that ended it may have died before it stopped them; and the
+  answer is the row's: its result when it completed, its
   error when it was cancelled, and when it failed, as the attempt that
   ended it closed (`Opus.Record.ended_outcome/1`) — `{:uncertain, error}`
   for `uncertain` (a lapse's), `{:result_lost, error}` for `result_lost`,
@@ -223,14 +225,30 @@ defmodule Opus.Close do
   @spec lost(t()) ::
           {:ok, map()}
           | {:error, String.t() | {:uncertain, String.t()} | {:result_lost, String.t()}}
-  def lost(%__MODULE__{record: record} = close) do
-    message = "Execution attempt ended before it closed"
+  def lost(%__MODULE__{} = close),
+    do: uncertain(close, "Execution attempt ended before it closed")
 
+  @doc """
+  Close a run its runtime abandoned at its time budget: the component was
+  killed, and its native work may still run, so what the run did is not
+  known. It closes as `lost/1` closes, failed with its attempt's outcome
+  `uncertain`, under the runtime's message masked with `secrets`, and
+  answers as `lost/1` answers: `{:error, {:uncertain, message}}`, or the
+  row's own answer when it is no longer running under the attempt.
+  """
+  @spec abandoned(t(), [String.t()], String.t()) ::
+          {:ok, map()}
+          | {:error, String.t() | {:uncertain, String.t()} | {:result_lost, String.t()}}
+  def abandoned(%__MODULE__{} = close, secrets, message) when is_binary(message),
+    do: uncertain(close, SecretMasker.mask(message, secrets))
+
+  defp uncertain(%__MODULE__{record: record} = close, message) do
     if Arca.ControlPlane.held?() do
       failed_record = Record.fail(record, message, :uncertain)
 
       case Record.write_uncertain(failed_record, close.admission) do
         {:error, :not_running} ->
+          stop_children_of_ended(failed_record)
           closed_answer(close, message)
 
         written ->
@@ -239,6 +257,22 @@ defmodule Opus.Close do
       end
     else
       closed_answer(close, message)
+    end
+  end
+
+  # The close that ended the row first stops the run's children, but it may
+  # have died before it did: while the row stands cancelled or failed they
+  # are failed here too, a pass that fails only children still running, so
+  # running it after that close's own leaves its work as it was. A row
+  # running under another attempt is that attempt's, its children with it;
+  # a completed run leaves its children running, as its own close does.
+  defp stop_children_of_ended(failed_record) do
+    case Record.reread(failed_record) do
+      {:ok, %Record{status: status}} when status in [:cancelled, :failed] ->
+        Cascade.fail_children(failed_record)
+
+      _completed_running_elsewhere_or_unread ->
+        :ok
     end
   end
 

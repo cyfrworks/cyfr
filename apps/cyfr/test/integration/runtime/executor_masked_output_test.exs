@@ -150,7 +150,8 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
     id = Prima.UUID7.execution_id()
     hold_attach_past_deadline!(id)
 
-    assert {:error, message} =
+    # Stopped at its budget, what the run did is not known.
+    assert {:error, {:uncertain, message}} =
              Opus.run_root(ctx, :default, @brief, chat(), execution_id: id)
 
     assert message =~ ~r/^#{Regex.escape(@redacted)} #{Regex.escape(@redacted)} \d+ms$/
