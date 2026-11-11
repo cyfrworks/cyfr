@@ -8,6 +8,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   """
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Refusals
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
@@ -134,6 +136,92 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     assert {:ok, %{status: "active"}} = Users.get(carol.id)
     assert {:ok, :allowed} = Sanctum.Door.admit_person(carol)
+  end
+
+  # A person of an account with their own athanor, denied by an entry of
+  # their account's identifier, with the athanor cap set to the active
+  # athanors left, so reopening theirs is refused.
+  defp denied_at_cap!(admin, n) do
+    {:ok, carol} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|capped-#{n}",
+        provider: "github",
+        email: "capped#{n}@example.com",
+        verified: true
+      })
+
+    {:ok, identifier} = Users.identifier(carol.id)
+
+    assert {:ok, %{effect: "deny", ejected: 1, id: deny_id}} =
+             call(admin, "door", %{"action" => "deny", "value" => identifier})
+
+    {:ok, count} = Athanors.count()
+    Cyfr.Test.Settings.put("max_athanors", count)
+    {carol, identifier, deny_id}
+  end
+
+  defp not_restored(done, user_id),
+    do:
+      "#{done}, but 1 of 1 denied people were not restored and stay denied — #{user_id}: " <>
+        "This server holds as many athanors as it may — ask its operator"
+
+  test "door.allow answers a restore the athanor cap refuses, in its class, and the person stays denied",
+       %{ops: ops, ctx: ctx, n: n} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    {carol, identifier, _deny_id} = denied_at_cap!(admin, n)
+
+    assert {:error, %Prima.Refusal{class: :rate_limited, message: message}} =
+             call(admin, "door", %{"action" => "allow", "value" => identifier})
+
+    assert message == not_restored("Sign-in is allowed", carol.id)
+    assert {:ok, %{status: "denied"}} = Users.get(carol.id)
+
+    assert [%{effect: "allow"}] =
+             Enum.filter(Sanctum.Door.Store.list(), &(&1.value == identifier))
+  end
+
+  test "door.remove of a deny answers a restore the athanor cap refuses, in its class, and the person stays denied",
+       %{ops: ops, ctx: ctx, n: n} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    {carol, identifier, deny_id} = denied_at_cap!(admin, n)
+
+    assert {:error, %Prima.Refusal{class: :rate_limited, message: message}} =
+             call(admin, "door", %{"action" => "remove", "id" => deny_id})
+
+    assert message == not_restored("The entry is removed", carol.id)
+    assert {:ok, %{status: "denied"}} = Users.get(carol.id)
+    assert [] = Enum.filter(Sanctum.Door.Store.list(), &(&1.value == identifier))
+  end
+
+  test "door.deny on a member whose slot a successor took answers the ownership refusal, and ejects no one",
+       %{alice: alice, ops: ops, ctx: ctx} do
+    # A claimant runs and this member took a slot; its restore is
+    # registered before each change.
+    for key <- [:standing, :generation, :slot],
+        do: Prima.Test.Env.erase_persistent_term({Arca.ControlPlane, key})
+
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
+    node = "door-deny-#{System.unique_integer([:positive])}"
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+
+    # A successor takes the slot over while this member still reads it held.
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+        set: [owner: node <> "#boot_b", generation: slot.generation + 1]
+      )
+
+    assert Arca.ControlPlane.held?()
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+
+    assert {:error, %Prima.Refusal{class: :not_owner, reason: :not_owner, message: message}} =
+             call(admin, "door", %{"action" => "deny", "value" => alice})
+
+    assert message ==
+             "Sign-in is denied, but 1 of 1 known people were not ejected — #{alice}: " <>
+               "This server does not currently own its control plane — retry shortly"
+
+    assert {:ok, %{status: "active"}} = Users.get(alice)
   end
 
   # A session the door's verdict issued to `user_id`.

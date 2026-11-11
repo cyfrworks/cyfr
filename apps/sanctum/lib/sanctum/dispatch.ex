@@ -976,8 +976,9 @@ defmodule Sanctum.Dispatch do
   # the caller is the request process, which does not trap exits, so a
   # linked handler that raised would kill the request with a link exit
   # signal, which no try/rescue catches, and answer a bare 500 instead of a
-  # JSON-RPC error. Without a link, a crash arrives as `{:exit, reason}`
-  # from `yield/2`.
+  # JSON-RPC error. A raise is caught inside the task, where the handler
+  # is called (`call_handler/1`), and comes back as its answer; without a
+  # link, an exit arrives as `{:exit, reason}` from `yield/2`.
   # A handler that does not answer is answered by `unanswered/3`, on
   # either plane and under either runner.
   defp execute_tool_call(name, ctx, opts, execute_fn) do
@@ -1005,26 +1006,47 @@ defmodule Sanctum.Dispatch do
     end
   end
 
-  defp run_inline({name, _action} = op, execute_fn) do
-    execute_fn.()
-  rescue
-    refusal in Sanctum.UnauthorizedError ->
-      {:error, refusal.reason}
-
-    exception ->
-      Logger.error(
-        "[Sanctum.Dispatch] Tool #{name} crashed: " <>
-          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
-      )
-
-      unanswered(op, :crashed, {:crashed, "Tool #{name} crashed"})
+  defp run_inline(op, execute_fn) do
+    answer(op, call_handler(execute_fn))
   catch
-    :exit, reason ->
-      Logger.error(
-        "[Sanctum.Dispatch] Tool #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
-      )
+    :exit, reason -> exited(op, reason)
+  end
 
-      unanswered(op, :exited, {:exit, "Tool #{name} exited unexpectedly"})
+  # The handler called where it runs, on either runner: a raise is learnt
+  # here, as a raise, so neither runner tells a crash from an exit by the
+  # shape of an exit's payload. A raised authorization refusal
+  # (`Context.athanor!/1`, `require_tenant!/1`) is the refusal it is: no
+  # error log, and the reason travels, not the sentence, so the wire
+  # boundary renders it as it renders the returned form. An exit is not
+  # caught here: it ends the handler's process, or the inline runner's
+  # call, and is answered as an exit.
+  defp call_handler(execute_fn) do
+    {:answered, execute_fn.()}
+  rescue
+    refusal in Sanctum.UnauthorizedError -> {:answered, {:error, refusal.reason}}
+    exception -> {:raised, exception, __STACKTRACE__}
+  end
+
+  defp answer(_op, {:answered, result}), do: result
+
+  defp answer({name, _action} = op, {:raised, exception, stacktrace}) do
+    Logger.error(
+      "[Sanctum.Dispatch] Tool #{name} crashed: " <>
+        Prima.LogFilter.format_exception(:error, exception, stacktrace)
+    )
+
+    # The tuple carries only the tool's name — the exception's own message
+    # can hold a query, a path, or the offending bytes, and this tuple
+    # renders verbatim on the wire (`Prima.Refusal.message/1`).
+    unanswered(op, :crashed, {:crashed, "Tool #{name} crashed"})
+  end
+
+  defp exited({name, _action} = op, reason) do
+    Logger.error(
+      "[Sanctum.Dispatch] Tool #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
+    )
+
+    unanswered(op, :exited, {:exit, "Tool #{name} exited unexpectedly"})
   end
 
   defp run_supervised({name, _action} = op, ctx, opts, timeout_ms, execute_fn) do
@@ -1064,36 +1086,15 @@ defmodule Sanctum.Dispatch do
         # A refused registration exits with a reason of its own: the
         # handler never ran, so the call is cancelled whatever its action.
         case register_task(request_id, claim, handle) do
-          :ok -> execute_fn.()
+          :ok -> call_handler(execute_fn)
           _refused -> exit(@not_started)
         end
       end)
 
     result =
       case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-        {:ok, result} ->
-          result
-
-        {:exit, {%Sanctum.UnauthorizedError{reason: reason}, _stacktrace}} ->
-          # An authorization refusal that surfaced as a raise inside the
-          # handler (`Context.athanor!/1`, `require_tenant!/1`) is a
-          # refusal, not a crash: no error log, and the router answers it
-          # with the auth error code instead of an isError "crashed" text.
-          # The reason travels, not the sentence — the wire boundary renders
-          # it the same way it renders the returned form, which is how the
-          # raised one gets its own code rather than everything landing on
-          # `:insufficient_permissions`.
-          {:error, reason}
-
-        {:exit, {exception, stacktrace}} when is_exception(exception) ->
-          Logger.error(
-            "[Sanctum.Dispatch] Tool #{name} crashed: #{Prima.LogFilter.format_exception(:error, exception, stacktrace)}"
-          )
-
-          # The tuple carries only the tool's name — the exception's own
-          # message can hold a query, a path, or the offending bytes, and
-          # this tuple renders verbatim on the wire (`Prima.Refusal.message/1`).
-          unanswered(op, :crashed, {:crashed, "Tool #{name} crashed"})
+        {:ok, outcome} ->
+          answer(op, outcome)
 
         {:exit, @not_started} ->
           {:error, {:cancelled, "Tool #{name} was cancelled"}}
@@ -1102,11 +1103,7 @@ defmodule Sanctum.Dispatch do
           unanswered(op, :cancelled, {:cancelled, "Tool #{name} was cancelled"})
 
         {:exit, reason} ->
-          Logger.error(
-            "[Sanctum.Dispatch] Tool #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
-          )
-
-          unanswered(op, :exited, {:exit, "Tool #{name} exited unexpectedly"})
+          exited(op, reason)
 
         nil ->
           Logger.error("[Sanctum.Dispatch] Tool #{name} timed out after #{timeout_ms}ms")

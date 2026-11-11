@@ -6,7 +6,7 @@ defmodule Arca.PlatformSettingsTest do
   The platform settings store and its one accessor: uninstalled until the
   host installs its declaration, then the default, then the row; writes
   compare-and-set on the store revision; each member's pins retired by
-  member and generation; and, when the cache has expired and the store
+  member and generation; and, when the cache was invalidated and the store
   cannot answer, a `:refuse` key refused and a `:serve` key served its
   last value with the catalogued event.
 
@@ -50,14 +50,6 @@ defmodule Arca.PlatformSettingsTest do
     revision
   end
 
-  # The cached value of `key`, aged past the cache's lifetime, so the next
-  # read must ask the store.
-  defp expire(key) do
-    {value, _read_at} = :persistent_term.get({PlatformSettings, :value, key})
-    aged = System.monotonic_time(:millisecond) - PlatformSettings.ttl_ms() - 1
-    :persistent_term.put({PlatformSettings, :value, key}, {value, aged})
-  end
-
   defp break_store! do
     Arca.Repo.query!("ALTER TABLE platform_settings RENAME TO platform_settings_away")
   end
@@ -96,7 +88,7 @@ defmodule Arca.PlatformSettingsTest do
       assert PlatformSettings.effective("a_cap") == {:ok, 50}
     end
 
-    test "a cached value is answered until it is invalidated or expires" do
+    test "a cached value is answered until it is invalidated" do
       assert PlatformSettings.effective("a_rate") == {:ok, 120}
 
       # A write from another member reaches this one's cache only through
@@ -110,12 +102,8 @@ defmodule Arca.PlatformSettingsTest do
       assert :ok = PlatformSettings.invalidate("a_rate")
       assert PlatformSettings.effective("a_rate") == {:ok, 240}
 
-      {1, _} = Arca.Repo.update_all(row("a_rate"), set: [value: "360"])
-      assert PlatformSettings.effective("a_rate") == {:ok, 240}
-      expire("a_rate")
-      assert PlatformSettings.effective("a_rate") == {:ok, 360}
-
       {1, _} = Arca.Repo.update_all(row("a_rate"), set: [value: "480"])
+      assert PlatformSettings.effective("a_rate") == {:ok, 240}
       assert :ok = PlatformSettings.invalidate(:all)
       assert PlatformSettings.effective("a_rate") == {:ok, 480}
     end
@@ -126,22 +114,22 @@ defmodule Arca.PlatformSettingsTest do
       assert PlatformSettings.effective("a_cap") == {:ok, 60}
     end
 
-    test "an expired :refuse key whose store cannot answer is unavailable, never stale" do
+    test "an invalidated :refuse key whose store cannot answer is unavailable, never stale" do
       assert PlatformSettings.effective("a_cap") == {:ok, 50}
-      expire("a_cap")
+      assert :ok = PlatformSettings.invalidate("a_cap")
       break_store!()
 
       assert PlatformSettings.effective("a_cap") == {:error, :unavailable}
     end
 
-    test "an expired :serve key whose store cannot answer serves its last value and says so" do
+    test "an invalidated :serve key whose store cannot answer serves its last value and says so" do
       ref = :telemetry_test.attach_event_handlers(self(), [PlatformSettings.stale_event()])
       on_exit(fn -> :telemetry.detach(ref) end)
 
       rev = revision()
       {:ok, _} = PlatformSettings.put("a_rate", 240, rev, nil)
       assert PlatformSettings.effective("a_rate") == {:ok, 240}
-      expire("a_rate")
+      assert :ok = PlatformSettings.invalidate("a_rate")
       break_store!()
 
       assert PlatformSettings.effective("a_rate") == {:ok, 240}

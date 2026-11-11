@@ -343,7 +343,10 @@ defmodule Arca.ExecutionStandingLockTest do
 
   # The archive is the denial of the athanor's person.
   defp archive(owner_id, verify) do
-    Arca.SecurityTransitions.deny_user(Prima.Actor.system(), owner_id, verify: verify)
+    Arca.SecurityTransitions.deny_user(Prima.Actor.system(), owner_id,
+      slot: :none,
+      verify: verify
+    )
   end
 
   test "an admission holding the athanor retires under the archive that waited for it", %{

@@ -898,14 +898,21 @@ defmodule Arca.Adapters.S3 do
     end
   end
 
-  # Tokens/keys are XML text nodes; undo the five predefined entities.
-  defp xml_unescape(text) do
-    text
-    |> String.replace("&lt;", "<")
-    |> String.replace("&gt;", ">")
-    |> String.replace("&quot;", "\"")
-    |> String.replace("&apos;", "'")
-    |> String.replace("&amp;", "&")
+  # Tokens/keys are XML text nodes: undo the predefined entities and the
+  # numeric character references in one pass, since stores spell the same
+  # character differently (Go's encoding/xml, which SeaweedFS and MinIO
+  # use, writes `'` as `&#39;`).
+  @doc false
+  def xml_unescape(text) do
+    Regex.replace(~r/&(lt|gt|quot|apos|amp|#x[0-9a-fA-F]+|#[0-9]+);/, text, fn
+      _, "lt" -> "<"
+      _, "gt" -> ">"
+      _, "quot" -> "\""
+      _, "apos" -> "'"
+      _, "amp" -> "&"
+      _, "#x" <> hex -> <<String.to_integer(hex, 16)::utf8>>
+      _, "#" <> dec -> <<String.to_integer(dec)::utf8>>
+    end)
   end
 
   # ============================================================================

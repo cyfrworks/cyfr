@@ -191,14 +191,7 @@ defmodule PrismWeb.ComponentDetailLive do
         <!-- Dependencies -->
         <.card :if={@component["dependencies"]}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">Dependencies</h3>
-          <ul class="space-y-1">
-            <li
-              :for={dep <- @component["dependencies"]}
-              class="text-sm text-gray-300"
-            >
-              {dep}
-            </li>
-          </ul>
+          <.dependencies nodes={@component["dependencies"]} />
         </.card>
       </div>
 
@@ -214,6 +207,26 @@ defmodule PrismWeb.ComponentDetailLive do
         athanor_route={@athanor_route}
       />
     </div>
+    """
+  end
+
+  # The inspection's dependencies are a tree of nodes
+  # (`Compendium.DependencyResolver.resolve_tree/3`): each names its ref,
+  # whether it is optional, whether it closes a cycle, and its children.
+  attr :nodes, :list, required: true
+
+  defp dependencies(assigns) do
+    ~H"""
+    <ul class="space-y-1">
+      <li :for={node <- @nodes} class="text-sm text-gray-300">
+        <span class="font-mono">{node.dependency_ref}</span>
+        <span :if={node.optional} class="text-xs text-gray-500">optional</span>
+        <span :if={node.cycle} class="text-xs text-gray-500">cycle</span>
+        <div :if={node.children != []} class="ml-4 mt-1">
+          <.dependencies nodes={node.children} />
+        </div>
+      </li>
+    </ul>
     """
   end
 end

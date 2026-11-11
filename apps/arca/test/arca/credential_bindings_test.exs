@@ -167,6 +167,7 @@ defmodule Arca.CredentialBindingsLockTest do
       Task.async(fn ->
         unboxed(fn ->
           Arca.SecurityTransitions.deny_user(server(), user_id,
+            slot: :none,
             verify: fn _rows ->
               send(test, :denial_holds)
 

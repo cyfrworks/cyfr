@@ -1061,7 +1061,7 @@ defmodule Compendium.Providers.Component do
                |> Map.put(:registry_error, error_msg)
                |> Map.put(
                  :note,
-                 "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}. " <>
+                 "INCOMPLETE RESULTS — #{Compendium.RegistryHost.canonical_rest_host()} search failed: #{error_msg}. " <>
                    "Only local components are shown."
                )}
 
@@ -1072,7 +1072,8 @@ defmodule Compendium.Providers.Component do
                  total: 0,
                  incomplete: true,
                  registry_error: error_msg,
-                 note: "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}."
+                 note:
+                   "INCOMPLETE RESULTS — #{Compendium.RegistryHost.canonical_rest_host()} search failed: #{error_msg}."
                }}
           end
       end

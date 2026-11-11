@@ -117,7 +117,17 @@ defmodule Arca.SecurityTransitions do
   the person of each archived athanor, the person's generation, and the shares
   it revoked (`revoked_share_ids`). Refusals:
   `:not_found`, `:conflict`, `:postcondition_failed`, `:cross_tenant`,
-  `:no_athanor`, `:database_error`, or the callback's own reason.
+  `:no_athanor`, `:not_owner`, `:database_error`, or the callback's own
+  reason.
+
+  ## The slot
+
+  A denial and an allow run under this member's slot (`slot:`, as
+  `Arca.ControlPlane.member_slot/0` answers it), verified on the
+  database's clock as the transaction's first step
+  (`Arca.ControlPlane.verify_held/1`): a member whose slot a successor
+  took or that lapsed is refused `:not_owner` with no standing changed,
+  and a takeover that starts later waits for the transition to commit.
   """
 
   import Ecto.Query
@@ -199,7 +209,8 @@ defmodule Arca.SecurityTransitions do
 
   @doc """
   Deny the person `user_id` on this server, with everything a denial
-  retires (see the module doc). A person already denied is denied again:
+  retires (see the module doc), under `opts[:slot]` (the moduledoc's
+  "The slot") and `opts[:verify]`. A person already denied is denied again:
   nothing moves their generation, and the retirement is re-run and its
   postconditions checked, so a retry finishes what a failure left.
   """
@@ -207,8 +218,9 @@ defmodule Arca.SecurityTransitions do
   def deny_user(%Prima.Actor{scope: :platform, system: true}, user_id, opts)
       when is_binary(user_id) and user_id != "" and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
+    slot = Keyword.fetch!(opts, :slot)
 
-    case run("Arca.SecurityTransitions.deny_user", fn -> deny(user_id, verify) end) do
+    case run("Arca.SecurityTransitions.deny_user", slot, fn -> deny(user_id, verify) end) do
       {:ok, change} ->
         # The offers the denial ended release their snapshots and announce
         # themselves only once it committed.
@@ -225,26 +237,37 @@ defmodule Arca.SecurityTransitions do
 
   @doc """
   Restore the person `user_id`: their standing and their own athanor when
-  it is archived. Their platform administrator's mark, sessions, keys,
+  it is archived, under `opts[:slot]` (the moduledoc's "The slot") and
+  `opts[:verify]`. Their platform administrator's mark, sessions, keys,
   shared-thread seats and invitations the denial took stay taken.
   """
   @spec allow_user(Prima.Actor.t(), String.t(), keyword()) :: {:ok, change()} | {:error, term()}
   def allow_user(%Prima.Actor{scope: :platform, system: true}, user_id, opts)
       when is_binary(user_id) and user_id != "" and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
-    run("Arca.SecurityTransitions.allow_user", fn -> allow(user_id, verify) end)
+    slot = Keyword.fetch!(opts, :slot)
+    run("Arca.SecurityTransitions.allow_user", slot, fn -> allow(user_id, verify) end)
   end
 
   def allow_user(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
 
   # ---- the runner ------------------------------------------------------------
 
-  # One transaction within `@deadline_ms`; a raised database error rolls
-  # it back and answers `:database_error`.
-  defp run(tag, body) do
+  # One transaction within `@deadline_ms` whose first step verifies
+  # `slot`; a raised database error rolls it back and answers
+  # `:database_error`.
+  defp run(tag, slot, body) do
     tag
     |> Arca.Repo.Errors.with_db_rescue(fn ->
-      Arca.Repo.locking_transaction(body, timeout: @deadline_ms)
+      Arca.Repo.locking_transaction(
+        fn ->
+          case Arca.ControlPlane.verify_held(slot) do
+            :ok -> body.()
+            :lost -> Arca.Repo.rollback(:not_owner)
+          end
+        end,
+        timeout: @deadline_ms
+      )
     end)
     |> Arca.Data.project()
   end
