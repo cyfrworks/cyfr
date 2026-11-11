@@ -728,15 +728,19 @@ defmodule Cyfr.CrossLanguageDriftTest do
       String.ends_with?(rel, ["_test.go", ".test.mjs", ".rs"])
   end
 
-  # Whether `source` names the vector file `vectors` on a line that is not a
-  # comment line, as a whole name (setup-device.json does not name
-  # device.json).
+  # The vector files of `vectors` that `source` names on a line that is not
+  # a comment line, each as a whole name (setup-device.json does not name
+  # device.json). One pass over the source: the comment lines blanked by one
+  # multiline replace, then one scan for an alternation of every name, so a
+  # file costs a read and two linear passes whatever the number of vectors.
   defp naming(source, vectors) do
-    name = ~r/(?<![\w-])#{Regex.escape(vectors)}/
+    names = vectors |> Enum.sort_by(&(-byte_size(&1))) |> Enum.map_join("|", &Regex.escape/1)
 
-    source
-    |> String.split("\n")
-    |> Enum.any?(&(not Regex.match?(~r/^\s*(#|\/\/|\/?\*)/, &1) and Regex.match?(name, &1)))
+    ~r/^[ \t]*(#|\/\/|\/?\*).*$/m
+    |> Regex.replace(source, "")
+    |> then(&Regex.scan(~r/(?<![\w-])(#{names})/, &1, capture: :all_but_first))
+    |> List.flatten()
+    |> MapSet.new()
   end
 
   # The spellings of a read of `section` in a reader of `path`'s language.
@@ -814,12 +818,12 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
     rows = for {vectors, readers} <- @vector_readers, {file, _} <- readers, do: {vectors, file}
 
+    vectors = Map.keys(@vector_readers)
+
     named =
       for file <- files,
-          source = read!(file),
-          vectors <- Map.keys(@vector_readers),
-          naming(source, vectors),
-          do: {vectors, file}
+          vector <- naming(read!(file), vectors),
+          do: {vector, file}
 
     assert Enum.sort(named -- rows) == Enum.sort(Map.keys(@named_not_read)),
            "a file names a vector file and has no row: #{inspect(Enum.sort((named -- rows) -- Map.keys(@named_not_read)))}; " <>
@@ -827,12 +831,24 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
     # Planted: a read names its file; a comment line, a longer name and
     # another file's name do not.
-    assert naming(~S|  fixture(t, "device.json", &v)|, "device.json")
-    assert naming(~S|for file <- ~w(device_unlock.json),|, "device_unlock.json")
-    refute naming("  # tests/fixtures/device.json pins it", "device.json")
-    refute naming("  // close (device.json's refused vector).", "device.json")
-    refute naming(~S|path = Path.join(dir, "setup-device.json")|, "device.json")
-    refute naming(~S|fixture(t, "device_cert.json", &v)|, "device.json")
+    planted = ["device.json", "device_cert.json", "device_unlock.json"]
+
+    assert naming(~S|  fixture(t, "device.json", &v)|, planted) == MapSet.new(["device.json"])
+
+    assert naming(~S|for file <- ~w(device_unlock.json),|, planted) ==
+             MapSet.new(["device_unlock.json"])
+
+    assert naming("  # tests/fixtures/device.json pins it", planted) == MapSet.new()
+    assert naming("  // close (device.json's refused vector).", planted) == MapSet.new()
+    assert naming(~S|path = Path.join(dir, "setup-device.json")|, planted) == MapSet.new()
+
+    assert naming(~S|fixture(t, "device_cert.json", &v)|, planted) ==
+             MapSet.new(["device_cert.json"])
+
+    # A comment line among code lines blanks only itself.
+    assert naming("x = 1\n  # device.json\nread(\"device_unlock.json\")\n", planted) ==
+             MapSet.new(["device_unlock.json"])
+
     refute test_path?("apps/codex/internal/shell/device.go")
     assert test_path?("apps/cyfr/assets/test/account/pages.test.mjs")
     assert test_path?("tests/compose-proof/predicates.sh")
