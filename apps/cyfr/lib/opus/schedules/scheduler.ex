@@ -150,6 +150,14 @@ defmodule Opus.Schedules.Scheduler do
   wakes the consumer; a lost one loses nothing. The row's stored metadata
   says whether the outcome is kept (`keep_outcome/1`).
 
+  Every member arms a timer for every active row: at its start, and again
+  at every standing pass, which arms the active rows it holds no timer for
+  and drops the timers of rows gone or paused, so a schedule created,
+  resumed, edited or bound on a peer fires here too, its claim deciding
+  which member runs it. A writer's cast to its own member's scheduler
+  (`add/1`, `update/1`, `resume/1`, `remove/1`, `pause/1`) is the fast
+  path.
+
   A row of kind `feed` (`Opus.Feeds`) fires through the same claim,
   decision, run, profile and options as a schedule, its first occurrence
   included, and its claim is refused `:not_owner` and deferred as a
@@ -294,7 +302,7 @@ defmodule Opus.Schedules.Scheduler do
   # whatever any exit asked for. A member that does not hold it runs
   # nothing, and looks again at the next.
   def handle_info(:standing_pass, state) do
-    state = arm_standing(state)
+    state = state |> arm_standing() |> arm_from_rows()
     generation = Arca.ControlPlane.generation()
 
     if still_ours?(generation),
@@ -473,6 +481,45 @@ defmodule Opus.Schedules.Scheduler do
   catch
     :exit, reason ->
       load_retry(state, Prima.LogFilter.format_exception(:exit, reason), :warning)
+  end
+
+  # Every member arms every active schedule from its row, so a schedule
+  # made, resumed, edited or bound on a peer is armed here at the next
+  # standing pass, and the timer of one gone or paused is dropped. The
+  # writer's cast to its own scheduler is the fast path. A pass the store
+  # does not answer arms nothing and drops nothing; the next one looks again.
+  defp arm_from_rows(state) do
+    case CronSchedule.active_schedules() do
+      {:ok, rows} ->
+        active = MapSet.new(rows, & &1.id)
+
+        state =
+          state.timers
+          |> Map.keys()
+          |> Enum.reject(&MapSet.member?(active, &1))
+          |> Enum.reduce(state, &cancel_timer/2)
+
+        rows
+        |> Enum.reject(&Map.has_key?(state.timers, &1.id))
+        |> Enum.reduce(state, &load_one_schedule/2)
+
+      {:error, :database_error} ->
+        state
+    end
+  rescue
+    e in @db_errors ->
+      Logger.warning(
+        "[Opus.Schedules.Scheduler] arming schedules from their rows failed: #{Exception.message(e)}"
+      )
+
+      state
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Opus.Schedules.Scheduler] arming schedules from their rows exited: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
+
+      state
   end
 
   defp load_retry(state, why, level \\ :error) do

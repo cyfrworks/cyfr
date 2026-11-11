@@ -208,6 +208,37 @@ defmodule Opus.Schedules.SchedulerTest do
     :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
   end
 
+  test "a due schedule made after the scheduler started, with no cast to it, fires at the standing pass",
+       %{ctx: ctx} do
+    script!([{:probe, self()}, %{"ran" => true}])
+    scheduler = scheduler!()
+    _ = :sys.get_state(scheduler)
+    schedule = due!(create_schedule(ctx))
+
+    send(scheduler, :standing_pass)
+    assert_receive {:scripted_probe, worker, _id}, 10_000
+    send(worker, :continue)
+    assert [_occurrence] = occurrences(ctx, schedule)
+  end
+
+  test "the standing pass drops the timer of a schedule paused or deleted with no cast to it",
+       %{ctx: ctx} do
+    paused = create_schedule(ctx)
+    deleted = create_schedule(ctx)
+    scheduler = scheduler!()
+    timers = :sys.get_state(scheduler).timers
+    assert Map.has_key?(timers, paused.id) and Map.has_key?(timers, deleted.id)
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, _} = CronSchedule.update(actor, paused.id, %{status: "paused"})
+    {:ok, _} = CronSchedule.soft_delete(actor, deleted.id)
+
+    send(scheduler, :standing_pass)
+    timers = :sys.get_state(scheduler).timers
+    refute Map.has_key?(timers, paused.id)
+    refute Map.has_key?(timers, deleted.id)
+  end
+
   for loss <- [:lost, :expired], event <- [:completion, :death] do
     @tag :ownership_loss
     test "a scheduled #{event} after ownership is #{loss} leaves the occurrence and counters unchanged",
