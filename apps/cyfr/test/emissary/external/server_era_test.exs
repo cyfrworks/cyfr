@@ -188,7 +188,14 @@ defmodule Emissary.External.ServerEraTest do
     # A stateful peer on the older revision, as the common servers are: it
     # issues a session at `initialize` and answers any later request that
     # does not carry it 400.
-    defp legacy_peer(stub, test_pid, answer \\ &answer_listing/2) do
+    # `:issue` is the session it issues, `:require` the one it then
+    # requires (the issued one unless the client is configured with its
+    # own) and `:answer` answers everything after the handshake.
+    defp legacy_peer(stub, test_pid, opts \\ []) do
+      issued = Keyword.get(opts, :issue, "peer-session")
+      required = Keyword.get(opts, :require, issued)
+      answer = Keyword.get(opts, :answer, &answer_listing/2)
+
       HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
         session = Plug.Conn.get_req_header(conn, "mcp-session-id")
@@ -204,14 +211,14 @@ defmodule Emissary.External.ServerEraTest do
 
           "initialize" ->
             conn
-            |> Plug.Conn.put_resp_header("mcp-session-id", "peer-session")
+            |> Plug.Conn.put_resp_header("mcp-session-id", issued)
             |> json(%{
               "jsonrpc" => "2.0",
               "id" => body["id"],
               "result" => %{"serverInfo" => %{"name" => "old", "version" => "1"}}
             })
 
-          _method when session != ["peer-session"] ->
+          _method when session != [required] ->
             Plug.Conn.resp(conn, 400, "Bad Request: No valid session ID provided")
 
           "notifications/initialized" ->
@@ -221,6 +228,16 @@ defmodule Emissary.External.ServerEraTest do
             answer.(conn, body)
         end
       end)
+    end
+
+    defp refuse_echoing_session(conn, body) do
+      [session] = Plug.Conn.get_req_header(conn, "mcp-session-id")
+
+      json(conn, %{
+        "jsonrpc" => "2.0",
+        "id" => body["id"],
+        "error" => %{"code" => -32000, "message" => "session rejected: #{session}"}
+      })
     end
 
     defp answer_listing(conn, %{"method" => "tools/list"} = body),
@@ -260,13 +277,7 @@ defmodule Emissary.External.ServerEraTest do
     end
 
     test "the session a peer echoes in a refusal stays out of the log", %{stub: stub, url: url} do
-      legacy_peer(stub, self(), fn conn, body ->
-        json(conn, %{
-          "jsonrpc" => "2.0",
-          "id" => body["id"],
-          "error" => %{"code" => -32000, "message" => "session rejected: peer-session"}
-        })
-      end)
+      legacy_peer(stub, self(), answer: &refuse_echoing_session/2)
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
@@ -284,6 +295,47 @@ defmodule Emissary.External.ServerEraTest do
       {pid, {:ok, _tools}} = connect(url, "session-status-peer")
       refute inspect(:sys.get_status(pid), limit: :infinity) =~ "peer-session"
       refute inspect(:sys.get_state(pid), limit: :infinity) =~ "peer-session"
+    end
+
+    # Masking leaves out values shorter than eight bytes, so an id that
+    # short could not be kept out of the log: it is not kept at all.
+    test "a session id too short to mask fails the connect", %{stub: stub, url: url} do
+      legacy_peer(stub, self(), issue: "Sess123", answer: &refuse_echoing_session/2)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {_pid, {:error, reason}} = connect(url, "short-session-peer")
+          assert reason =~ "issued a session id too short to keep"
+        end)
+
+      refute log =~ "Sess123"
+      refute_received {:method, "notifications/initialized", _session}
+    end
+
+    test "a session id that is not visible ASCII fails the connect", %{stub: stub, url: url} do
+      legacy_peer(stub, self(), issue: "peer session")
+
+      assert {_pid, {:error, reason}} = connect(url, "spaced-session-peer")
+      assert reason =~ "issued a session id that is not visible ASCII"
+    end
+
+    test "a reconnect does not send the session issued before it", %{stub: stub, url: url} do
+      legacy_peer(stub, self())
+
+      {pid, {:ok, _tools}} = connect(url, "reconnecting-peer")
+      assert_handshake()
+
+      assert {:ok, :ready} = GenServer.call(pid, :reinitialize, 5_000)
+      assert_handshake()
+    end
+
+    # The probe and initialize carry no session; everything after carries
+    # the one initialize issued.
+    defp assert_handshake do
+      assert_received {:method, "tools/list", []}
+      assert_received {:method, "initialize", []}
+      assert_received {:method, "notifications/initialized", ["peer-session"]}
+      assert_received {:method, "tools/list", ["peer-session"]}
     end
 
     # A trickling peer holds initialize as it could a listing: each chunk

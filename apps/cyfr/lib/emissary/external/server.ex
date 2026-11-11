@@ -18,7 +18,10 @@ defmodule Emissary.External.Server do
   `connect/1`). Every request's timeout bounds its wall time, however the
   peer trickles its reply. A legacy peer that issues an `Mcp-Session-Id` at
   `initialize` gets it back on every later request until the next connect,
-  and the id is kept and masked as the resolved credential headers are.
+  and the id is kept and masked as the resolved credential headers are. An
+  issued id that is not
+  visible ASCII, or shorter than the 8 bytes masking needs, is not kept: the
+  connect fails saying so.
   A paged `tools/list` is followed through its `nextCursor` to the last
   page, and a listing longer than 20 pages, or not finished within the
   handshake limit of its first request, fails the connect. A reply whose
@@ -134,6 +137,9 @@ defmodule Emissary.External.Server do
   @max_listing_pages 20
   # The header a Streamable HTTP peer names its session in.
   @session_id_header "mcp-session-id"
+  # The shortest credential value masked out of what a peer answers: a
+  # shorter one would mangle unrelated text ("gzip").
+  @min_masked_bytes 8
   # 10 MB
   @max_response_body_bytes 10_485_760
 
@@ -1512,7 +1518,7 @@ defmodule Emissary.External.Server do
 
     case http_exchange(state, body) do
       {{:ok, %Message{type: :response, result: result}}, resp_headers} ->
-        {:ok, result, keep_session(state, resp_headers)}
+        with {:ok, state} <- keep_session(state, resp_headers), do: {:ok, result, state}
 
       {{:ok, %Message{type: :error, error: error}}, _resp_headers} ->
         {:error, upstream_message(error)}
@@ -1526,18 +1532,27 @@ defmodule Emissary.External.Server do
   # out on every later request of this connection and is a secret wherever
   # they are: excluded from Inspect, redacted from the status, masked out
   # of what the peer answers and of the log. The next connect resolves the
-  # headers afresh, without it. An id is visible ASCII (the
-  # specification's `0x21`-`0x7E`); one carrying anything else is not kept,
-  # since it would go back out as a header value.
+  # headers afresh, without it. An issued id is kept only when it can
+  # be both sent and masked: visible ASCII (the specification's
+  # `0x21`-`0x7E`), since it goes back out as a header value, and at least
+  # @min_masked_bytes long, since a shorter one would not be masked; any
+  # other fails the connect.
   defp keep_session(state, resp_headers) do
     case List.keyfind(resp_headers, @session_id_header, 0) do
-      {_name, id} ->
-        if String.match?(id, ~r/^[\x21-\x7e]+$/),
-          do: %{state | headers: Map.put(state.headers, @session_id_header, id)},
-          else: state
-
       nil ->
-        state
+        {:ok, state}
+
+      {_name, id} ->
+        cond do
+          not String.match?(id, ~r/^[\x21-\x7e]+$/) ->
+            {:error, "#{state.name} issued a session id that is not visible ASCII"}
+
+          byte_size(id) < @min_masked_bytes ->
+            {:error, "#{state.name} issued a session id too short to keep"}
+
+          true ->
+            {:ok, %{state | headers: Map.put(state.headers, @session_id_header, id)}}
+        end
     end
   end
 
@@ -2127,8 +2142,7 @@ defmodule Emissary.External.Server do
       end
     end)
     |> Enum.concat(List.wrap(state.headers[@session_id_header]))
-    # Too-short values would mangle unrelated text (e.g. "gzip")
-    |> Enum.filter(&(byte_size(&1) >= 8))
+    |> Enum.filter(&(byte_size(&1) >= @min_masked_bytes))
     |> Enum.uniq()
   end
 
