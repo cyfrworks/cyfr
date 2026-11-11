@@ -731,6 +731,31 @@ defmodule Arca.Adapters.S3Test do
     end
   end
 
+  describe "listing entities" do
+    test "a listed key decodes predefined and numeric references alike", %{actor: actor} do
+      listing = """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <ListBucketResult>
+        <IsTruncated>false</IsTruncated>
+        <Contents><Key>athanors/ath_test/data/q/it&#39;s.txt</Key><Size>1</Size></Contents>
+        <Contents><Key>athanors/ath_test/data/q/&#x22;hi&#34;&amp;&lt;&gt;&apos;.txt</Key><Size>2</Size></Contents>
+        <Contents><Key>athanors/ath_test/data/q/&amp;#39;.txt</Key><Size>3</Size></Contents>
+      </ListBucketResult>
+      """
+
+      Req.Test.stub(:s3, fn conn -> Plug.Conn.send_resp(conn, 200, listing) end)
+
+      assert {:ok, leaves} = S3.list_recursive(actor, ["data", "q"])
+
+      assert Enum.sort(leaves) ==
+               Enum.sort([
+                 ["data", "q", "it's.txt"],
+                 ["data", "q", ~s("hi"&<>'.txt)],
+                 ["data", "q", "&#39;.txt"]
+               ])
+    end
+  end
+
   describe "ListObjectsV2 pagination" do
     # Serves a truncated first page and a final second page; the adapter must
     # follow NextContinuationToken (base64-ish, needs URL encoding) and merge

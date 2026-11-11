@@ -117,6 +117,28 @@ defmodule Cyfr.TwoWorkersTest do
       :ok
     end
 
+    test "a dispatch after the worker service restarted starts on its new boot, while a watch runs",
+         %{ctx: ctx} do
+      arm!(ctx, key: "k-#{System.unique_integer([:positive])}", token: "t-unused")
+      endpoint = RuntimeService.endpoint()
+      old_boot = RuntimeService.boot()
+
+      watch =
+        start_supervised!({Opus.WorkerWatch, workers: [endpoint], poll_ms: 60_000, misses: 3})
+
+      wait_until(fn -> match?(%{boot: ^old_boot}, :sys.get_state(watch).seen[endpoint.id]) end)
+
+      new_boot = RuntimeService.restart!()
+      refute new_boot == old_boot
+      execution_id = Prima.UUID7.execution_id()
+
+      assert {:ok, _result} =
+               Opus.run_root(ctx, :default, @stub, chat(), execution_id: execution_id)
+
+      assert %{state: "completed", boot_id: ^new_boot} =
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), execution_id)
+    end
+
     test "independent roots run on each service, under keys of their own", %{ctx: ctx} do
       arm!(ctx, key: "k-#{System.unique_integer([:positive])}", token: "t-unused")
       answer = %{"content" => [%{"type" => "text", "text" => "scripted"}]}
@@ -484,8 +506,10 @@ defmodule Cyfr.TwoWorkersTest do
 
       wait_until(
         fn ->
-          Opus.WorkerWatch.fresh_boot(RuntimeService.endpoint(), :two_workers_watch) ==
-            {:ok, old_boot}
+          match?(
+            %{boot: ^old_boot},
+            :sys.get_state(:two_workers_watch).seen[RuntimeService.endpoint().id]
+          )
         end,
         10_000,
         "the watch to hear the old boot"

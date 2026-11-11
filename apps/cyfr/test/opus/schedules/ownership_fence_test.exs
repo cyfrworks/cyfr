@@ -1420,8 +1420,10 @@ defmodule Opus.Schedules.OwnershipFenceTest do
   # recheck, a tick or more away, and no longer the fire it was loaded
   # with, which is due at once.
   defp deferred?(scheduler, schedule_id) do
-    timer = :sys.get_state(scheduler).timers[schedule_id]
-    is_reference(timer) and (Process.read_timer(timer) || 0) > div(@tick_ms, 2)
+    case :sys.get_state(scheduler).timers[schedule_id] do
+      {timer, _armed_for} -> (Process.read_timer(timer) || 0) > div(@tick_ms, 2)
+      nil -> false
+    end
   end
 
   # A recovery pass is armed to fire within `ms`.

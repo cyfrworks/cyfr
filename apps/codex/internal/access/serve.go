@@ -41,7 +41,7 @@ func (e *Engine) closeServe() error {
 		return err
 	}
 	if equalBytes(e.servePath(), []byte(serveClosed)) {
-		return syncDir(e.path(serveDir))
+		return SyncDir(e.path(serveDir))
 	}
 	return e.writeDurable(e.servePath(), []byte(serveClosed), serveFileMode)
 }

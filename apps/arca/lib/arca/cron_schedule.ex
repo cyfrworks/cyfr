@@ -106,6 +106,7 @@ defmodule Arca.CronSchedule do
   One locking transaction checks the member's slot, locks the athanor's
   row, counts its schedules and inserts, so creates racing for the last
   place leave one row in it. Refused with `:schedule_cap` at `cap`,
+  `:conflict` when a live or paused schedule of the athanor holds the name,
   `:not_owner` on a member that no longer owns its slot, `:not_found` when
   the athanor has no row, `:no_athanor` for an actor that names none,
   `{:validation, errors}` for a malformed field or cap, and
@@ -115,6 +116,7 @@ defmodule Arca.CronSchedule do
           {:ok, map()}
           | {:error,
              :schedule_cap
+             | :conflict
              | :not_owner
              | :not_found
              | :no_athanor
@@ -608,7 +610,7 @@ defmodule Arca.CronSchedule do
       row
       |> Row.create_changeset()
       |> Arca.Repo.insert()
-      |> mapped_validation()
+      |> inserted()
     end
   end
 
@@ -744,7 +746,7 @@ defmodule Arca.CronSchedule do
       |> Map.merge(%{next_run_at: now, created_at: now, updated_at: now})
       |> Row.feed_changeset()
       |> Arca.Repo.insert()
-      |> feed_inserted()
+      |> inserted()
     end
   end
 
@@ -775,9 +777,10 @@ defmodule Arca.CronSchedule do
   defp cap_refusal("feed"), do: :feed_cap
   defp cap_refusal("schedule"), do: :schedule_cap
 
-  defp feed_inserted({:ok, row}), do: {:ok, row}
+  # A live name the kind already holds in the athanor is `:conflict`.
+  defp inserted({:ok, row}), do: {:ok, row}
 
-  defp feed_inserted({:error, %Ecto.Changeset{errors: errors} = changeset}) do
+  defp inserted({:error, %Ecto.Changeset{errors: errors} = changeset}) do
     if Enum.any?(errors, fn {_field, {_message, opts}} -> opts[:constraint] == :unique end),
       do: {:error, :conflict},
       else: mapped_validation({:error, changeset})

@@ -581,11 +581,11 @@ defmodule Opus.ProviderTest do
       )
     end
 
-    test "a component graph the store cannot give right now is unavailable, never a setup to make",
+    test "a component index the store cannot give right now is unavailable, never a setup to make",
          %{ctx: ctx, ref: ref} do
       # The component's registry row was read within its cache's minutes,
-      # as by an earlier run, so the run's graph is the first read to meet
-      # the component index the edit leaves behind.
+      # as by an earlier run; the cached row answers no run the index has
+      # not caught up with.
       assert {:ok, _ref, _type, _component} = Opus.Admission.inspect_component(ctx, ref)
 
       {:ok, _pending} =
@@ -598,7 +598,7 @@ defmodule Opus.ProviderTest do
       failed_tool!(
         ctx,
         fn -> over_mcp(ctx, %{"reference" => ref, "input" => %{}}) end,
-        "The component graph is unavailable — retry shortly",
+        "The component index is catching up with its files — retry shortly",
         "unavailable"
       )
     end

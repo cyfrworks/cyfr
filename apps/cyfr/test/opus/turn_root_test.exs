@@ -169,6 +169,65 @@ defmodule Opus.TurnRootTest do
     assert execution(claim.execution_id).status == "completed"
   end
 
+  test "the sweep reclaims a root's charges whose children never reached admission", %{
+    ctx: ctx,
+    turn: turn
+  } do
+    {claim, _started} = claim!(ctx, turn)
+    actor = Sanctum.Context.actor(ctx)
+
+    # A dispatcher killed between its charges and its children's admission
+    # gives nothing back.
+    {dispatcher, monitor} =
+      spawn_monitor(fn ->
+        for n <- 1..claim.authority.budget.cap do
+          :ok =
+            Arca.BudgetReservations.charge(
+              actor,
+              claim.budget_id,
+              %{id: "leak-#{n}", attempt: claim.attempt, holder_execution_id: "exec_never_#{n}"},
+              1
+            )
+        end
+
+        receive do
+          :never -> :ok
+        end
+      end)
+
+    wait_until(fn ->
+      Arca.BudgetReservations.lookup(actor, claim.budget_id).charged ==
+        claim.authority.budget.cap
+    end)
+
+    Process.exit(dispatcher, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^dispatcher, :killed}
+
+    assert :exhausted =
+             Arca.BudgetReservations.charge(
+               actor,
+               claim.budget_id,
+               %{id: "refused", attempt: claim.attempt},
+               1
+             )
+
+    # Past their admission window.
+    from(c in Arca.Schemas.BudgetCharge, where: c.reservation_id == ^claim.budget_id)
+    |> Arca.Repo.update_all(set: [admit_by: DateTime.add(DateTime.utc_now(), -1, :second)])
+
+    :ok = Opus.Sweeper.sweep()
+
+    assert %{charged: 0} = Arca.BudgetReservations.lookup(actor, claim.budget_id)
+
+    assert :ok =
+             Arca.BudgetReservations.charge(
+               actor,
+               claim.budget_id,
+               %{id: "next", attempt: claim.attempt},
+               1
+             )
+  end
+
   test "a claim refused at the athanor's cap fails its row with the refusal's sentence", %{
     ctx: ctx,
     turn: turn

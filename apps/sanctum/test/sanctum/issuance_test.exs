@@ -9,7 +9,9 @@ defmodule Sanctum.IssuanceTest do
   athanor, and stands only while the client and the certificate the
   context stands under still stand. A device context without its own
   binding issues nothing, and a session or a key issues under its own
-  credential.
+  credential. A person whose account was closed at its directory is
+  refused by each credential tool in the closed-account refusal, and
+  nothing is written.
 
   Every device here is paired as a hello pairs one
   (`Sanctum.Test.Devices.paired!/1`) and verified through
@@ -27,6 +29,7 @@ defmodule Sanctum.IssuanceTest do
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, Issuance, Pairing}
   alias Sanctum.Tenancy.Users
+  alias Sanctum.Test.DirectoryServer
 
   @source "198.51.100.9"
 
@@ -458,6 +461,54 @@ defmodule Sanctum.IssuanceTest do
 
       assert {:error, :not_found} =
                Arca.VaultStorage.get_by_name(Context.actor(ctx), "unbound-entry")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A person whose account was closed
+  # ---------------------------------------------------------------------------
+
+  describe "a person whose account was closed" do
+    test "a key create answers the closed-account refusal, and no key is minted", %{
+      session_ctx: session_ctx
+    } do
+      create = &Sanctum.Providers.Key.handle(&1, %{"action" => "create", "name" => "closed-key"})
+
+      assert DirectoryServer.repeated_once_closed(session_ctx, create) == {:error, :identity_gone}
+      refute Arca.Repo.exists?(from(k in ApiKey, where: k.name == "closed-key"))
+    end
+
+    test "a webhook rotation answers the closed-account refusal, and the secret stands", %{
+      session_ctx: session_ctx
+    } do
+      before = hook!(session_ctx, "closed-hook")
+
+      rotate =
+        &Sanctum.Providers.Webhook.handle(&1, %{"action" => "rotate", "name" => "closed-hook"})
+
+      assert DirectoryServer.repeated_once_closed(session_ctx, rotate) == {:error, :identity_gone}
+
+      assert Arca.Repo.get!(Arca.Schemas.Webhook, before.id).secret_encrypted ==
+               before.secret_encrypted
+    end
+
+    test "a vault entry answers the closed-account refusal, and no entry is written", %{
+      session_ctx: session_ctx
+    } do
+      args = %{
+        "action" => "create",
+        "name" => "closed-entry",
+        "kind" => "api_key",
+        "fields" => %{"token" => "t-1"},
+        "destination" => %{"hosts" => ["api.example.com"]}
+      }
+
+      create = &Sanctum.Providers.Vault.handle(&1, args)
+
+      assert DirectoryServer.repeated_once_closed(session_ctx, create) == {:error, :identity_gone}
+
+      assert {:error, :not_found} =
+               Arca.VaultStorage.get_by_name(Context.actor(session_ctx), "closed-entry")
     end
   end
 

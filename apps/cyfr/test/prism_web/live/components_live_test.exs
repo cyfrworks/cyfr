@@ -743,4 +743,31 @@ defmodule PrismWeb.ComponentsLiveTest do
     {view, _html} = expand.()
     refute has_element?(view, ~s(a[data-test="install-program"]))
   end
+
+  test "an expanded component shows its description and tags", %{conn: conn} do
+    ctx = %{Sanctum.TestContext.local(:prism) | athanor_id: seated_athanor().id}
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(
+        ctx,
+        @valid_wasm,
+        %{
+          name: "described-tool",
+          version: "1.0.0",
+          type: "reagent",
+          publisher: "local",
+          description: "A distinctive description",
+          tags: ["distinctive-tag"],
+          manifest: Jason.encode!(%{})
+        },
+        source: "filesystem"
+      )
+
+    {view, _html} = mount_athanor(conn, "/components")
+    render_click(view, "toggle_expand", %{"ref" => "reagent:local.described-tool"})
+    html = view |> element(~s(tr[class="bg-gray-900/60"])) |> render()
+
+    assert html =~ "A distinctive description"
+    assert html =~ "distinctive-tag"
+  end
 end

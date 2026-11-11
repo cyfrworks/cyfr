@@ -994,8 +994,8 @@ async function stepAppOverCanvas(page, name) {
 const canvasSocket = (url) => /\/_f\/v1\/o\/[^/]+\/socket$/.test(url.pathname);
 
 const ATTENTION_RUNS = [
-  ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.1", duration_ms: 100, error: { class: "setup_required", cause: "needs_setup" } })),
-  { kind: "failed", execution_id: "attention_other", reference: "catalyst:local.openai:1.4.1", duration_ms: 100, error: { class: "unavailable", cause: "unavailable" } },
+  ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.2", duration_ms: 100, error: { class: "setup_required", cause: "needs_setup" } })),
+  { kind: "failed", execution_id: "attention_other", reference: "catalyst:local.openai:1.4.2", duration_ms: 100, error: { class: "unavailable", cause: "unavailable" } },
 ];
 
 function attentionFailures(ws) {

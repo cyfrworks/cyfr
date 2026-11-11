@@ -53,8 +53,8 @@ defmodule Cyfr.Platform.Settings do
   ## The settings process
 
   One per member, started after the bus and before every consumer. It
-  drops a key's cached value on every change it hears, and applies the
-  log level, the one live apply, in store-revision order: a change older
+  invalidates a key's cached value on every change it hears, and applies
+  the log level, the one live apply, in store-revision order: a change older
   than the one it last applied is never applied over it, whether it
   arrives late or out of order. Where a claimant runs it also asks the
   store every `Arca.PlatformSettings.ttl_ms/0`, so a member that missed a
@@ -740,7 +740,7 @@ defmodule Cyfr.Platform.Settings do
     {:noreply, state}
   end
 
-  # A committed write: the key's cached value goes whatever its revision,
+  # A committed write: the key's cached value is invalidated whatever its revision,
   # since the cache only ever re-reads the store; the log level is applied
   # only from a change newer than the one it runs at.
   defp observe(%SettingsChanged{setting: key, revision: revision, op: op, value: value}, state) do
@@ -755,7 +755,7 @@ defmodule Cyfr.Platform.Settings do
   end
 
   # What the store holds now, for a member that missed a message: every
-  # cached value goes, and the log level follows its row.
+  # cached value is invalidated, and the log level follows its row.
   defp poll(state) do
     case Store.all() do
       {:ok, %{revision: revision, settings: rows}} when revision > state.observed ->

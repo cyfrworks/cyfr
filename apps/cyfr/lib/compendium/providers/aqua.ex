@@ -884,6 +884,9 @@ defmodule Compendium.Providers.Aqua do
       {:error, :not_found} ->
         {:error, {:not_found, noun, name}}
 
+      {:error, :not_owner} = refused ->
+        refused
+
       {:error, reason} ->
         Logger.error(
           "[Compendium.Providers.Aqua] aqua restore #{name} failed: #{inspect(reason)}"

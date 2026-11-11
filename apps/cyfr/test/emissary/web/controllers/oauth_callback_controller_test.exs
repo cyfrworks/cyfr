@@ -147,6 +147,27 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
     refute entry_named?(ctx, name)
   end
 
+  test "a grant refused for ownership says so in the ownership refusal and writes nothing", %{
+    conn: conn,
+    ctx: ctx
+  } do
+    name = "Mail #{System.unique_integer([:positive])}"
+    state = pending!(ctx, name)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+    # The slot goes while the provider answers, after the request was
+    # admitted, so the grant's write is the one refused.
+    token_endpoint(fn -> Arca.ControlPlane.record(:lost) end)
+
+    conn = get(conn, "/auth/oauth/callback", %{"code" => "code-4", "state" => state})
+
+    assert conn.status == 409
+    assert conn.resp_body =~ Prima.Refusal.message(:not_owner)
+    refute conn.resp_body =~ "at-1"
+    Arca.ControlPlane.record(:unclaimed)
+    refute entry_named?(ctx, name)
+  end
+
   test "a session revoked while the code was exchanged writes nothing", %{
     conn: conn,
     ctx: ctx

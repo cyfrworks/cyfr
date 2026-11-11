@@ -46,9 +46,11 @@ defmodule Emissary.External.ServerSseTest do
     |> Plug.Conn.resp(200, Enum.join(events, "\r\n\r\n") <> "\r\n\r\n")
   end
 
+  # A stream opens with whatever field its server writes first; this one
+  # names its events, as the common servers do.
   defp result_event(id, tools) do
     payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => %{"tools" => tools}})
-    "event: message\r\ndata: " <> payload
+    "id: #{id}\r\nevent: message\r\ndata: " <> payload
   end
 
   @tool %{"name" => "probe", "description" => "d", "inputSchema" => %{"type" => "object"}}
@@ -85,6 +87,23 @@ defmodule Emissary.External.ServerSseTest do
 
     assert {_pid, {:ok, tools}} = connect(url, "sse-folded-peer")
     assert Enum.map(tools, & &1["name"]) == ["probe"]
+  end
+
+  for {opening, kind} <- [
+        {"id: 0", "an id"},
+        {"retry: 3000", "a retry"},
+        {": stream open", "a comment"}
+      ] do
+    test "a stream opening with #{kind} line is read like any other", %{stub: stub, url: url} do
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        id = Jason.decode!(body)["id"]
+        sse(conn, [unquote(opening) <> "\r\n" <> result_event(id, [@tool])])
+      end)
+
+      assert {_pid, {:ok, tools}} = connect(url, "sse-#{unquote(kind)}-peer")
+      assert Enum.map(tools, & &1["name"]) == ["probe"]
+    end
   end
 
   test "a caller gone mid-call takes its upstream round-trip with it", %{stub: stub, url: url} do

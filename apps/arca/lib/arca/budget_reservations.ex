@@ -15,9 +15,13 @@ defmodule Arca.BudgetReservations do
 
   Holds are deadlines, not ages: a charge must be admitted by `admit_by`
   (`admit_hold!/3` is the barrier admission runs), and a charge with no
-  holder is reclaimable past `holder_deadline`. `sweep/1` reclaims by
-  conditional writes on the same rows admission updates, so either side
-  of a race sees the other's commit.
+  holder is reclaimable past `holder_deadline`. Both deadlines are
+  written, checked and swept on the cell's clock
+  (`Arca.ServerMetaStorage.now!/0`), each from a window the caller names,
+  so members whose own clocks disagree with the database's agree on
+  whether a hold stands.
+  `sweep/1` reclaims by conditional writes on the same rows admission
+  updates, so either side of a race sees the other's commit.
 
   ## Tenancy
 
@@ -83,8 +87,9 @@ defmodule Arca.BudgetReservations do
   charge stands (a retry of the same charge id is `:ok` without a second
   increment); `:exhausted` when the cap is full; `:stale_attempt` when
   the authorizing attempt does not own its execution; `:released` when
-  the reservation is closed. `opts`: `:holder_deadline` for a charge
-  without a holder execution.
+  the reservation is closed. `opts`: `:holder_window_ms`, for a charge
+  without a holder execution, how long it is held: its `holder_deadline`
+  is that far past the cell's clock at the charge.
   """
   @spec charge(Prima.Actor.t(), String.t(), charge(), pos_integer(), keyword()) ::
           :ok | :exhausted | :stale_attempt | :released | {:error, term()}
@@ -100,7 +105,7 @@ defmodule Arca.BudgetReservations do
       when is_binary(athanor_id) and athanor_id != "" and is_integer(n) and n > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.charge", fn ->
       Arca.Repo.transaction(fn ->
-        now = DateTime.utc_now()
+        now = Arca.ServerMetaStorage.now!()
 
         cond do
           not attempt_owns?(athanor_id, attempt) ->
@@ -123,7 +128,7 @@ defmodule Arca.BudgetReservations do
                 if(Map.get(charge, :holder_execution_id),
                   do: DateTime.add(now, @admission_window_seconds, :second)
                 ),
-              holder_deadline: Keyword.get(opts, :holder_deadline),
+              holder_deadline: holder_deadline(now, Keyword.get(opts, :holder_window_ms)),
               inserted_at: now
             }
 
@@ -198,7 +203,7 @@ defmodule Arca.BudgetReservations do
   # arca:db-raise-ok inside the caller's transaction
   def admit_hold!(%Prima.Actor{athanor_id: athanor_id}, reservation_id, id)
       when is_binary(athanor_id) and athanor_id != "" do
-    now = DateTime.utc_now()
+    now = Arca.ServerMetaStorage.now!()
 
     {count, _} =
       from(c in BudgetCharge,
@@ -268,15 +273,18 @@ defmodule Arca.BudgetReservations do
   Three conditional rules, each a write on the row admission also
   updates: an admitted charge whose holder's current attempt is terminal;
   an unadmitted hold past `admit_by`; a charge with no holder past its
-  `holder_deadline`, or whose authorizing attempt is terminal. Answers
+  `holder_deadline`, or whose authorizing attempt is terminal. A charge a
+  give-back released first is not reclaimed again. Each open reservation
+  is then recounted to the sum of its surviving rows under its row lock,
+  so a charge committed meanwhile is counted, never overwritten. Answers
   the number of charges reclaimed.
   """
   @spec sweep(Prima.Actor.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.sweep", fn ->
-      Arca.Repo.transaction(fn ->
-        now = DateTime.utc_now()
+      Arca.Repo.locking_transaction(fn ->
+        now = Arca.ServerMetaStorage.now!()
         terminal = Arca.ExecutionAttempts.terminal_states()
 
         dead_holders =
@@ -304,14 +312,14 @@ defmodule Arca.BudgetReservations do
                       c.attempt in subquery(dead_attempts)))
           )
 
-        rows = Arca.Repo.all(reclaimable)
-
-        Enum.each(rows, fn c ->
-          release!(athanor_id, c.reservation_id, c.id)
-        end)
+        reclaimed =
+          reclaimable
+          |> Arca.Repo.all()
+          |> Enum.map(&release!(athanor_id, &1.reservation_id, &1.id))
+          |> Enum.sum()
 
         recount!(athanor_id)
-        length(rows)
+        reclaimed
       end)
     end)
     |> Arca.Data.project()
@@ -333,34 +341,47 @@ defmodule Arca.BudgetReservations do
       nil ->
         0
 
+      # The row read can be gone by the delete: a give-back or a sweep that
+      # released it first committed between them, and decremented for it.
       %BudgetCharge{n: n} ->
-        {1, _} =
-          Arca.Repo.delete_all(
-            from(c in BudgetCharge,
-              where: c.athanor_id == ^athanor_id and c.reservation_id == ^reservation_id,
-              where: c.id == ^id
+        case Arca.Repo.delete_all(
+               from(c in BudgetCharge,
+                 where: c.athanor_id == ^athanor_id and c.reservation_id == ^reservation_id,
+                 where: c.id == ^id
+               )
+             ) do
+          {1, _} ->
+            from(r in BudgetReservation,
+              where: r.athanor_id == ^athanor_id and r.id == ^reservation_id
             )
-          )
+            |> Arca.Repo.update_all(inc: [charged: -n])
 
-        from(r in BudgetReservation,
-          where: r.athanor_id == ^athanor_id and r.id == ^reservation_id
-        )
-        |> Arca.Repo.update_all(inc: [charged: -n])
+            1
 
-        1
+          {0, _} ->
+            0
+        end
     end
   end
 
-  # The reservation's charged total is the sum of its surviving rows.
+  # The reservation's charged total is the sum of its surviving rows, read
+  # under the reservation's row lock (`Arca.QueryHelpers.for_update/1`),
+  # taken in id order: a charge's increment holds that lock until it
+  # commits, so the sum read after it counts the charge, and a charge whose
+  # increment comes later adds to the recounted total. A charge's row is
+  # inserted before its increment, and a release deletes before it
+  # decrements, so the lock is taken after every charge row lock this
+  # transaction holds, as theirs is.
   # arca:db-raise-ok inside the caller's transaction
   defp recount!(athanor_id) do
     reservations =
-      Arca.Repo.all(
-        from(r in BudgetReservation,
-          where: r.athanor_id == ^athanor_id and is_nil(r.released_at),
-          select: r.id
-        )
+      from(r in BudgetReservation,
+        where: r.athanor_id == ^athanor_id and is_nil(r.released_at),
+        order_by: [asc: r.id],
+        select: r.id
       )
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.all()
 
     Enum.each(reservations, fn id ->
       sum =
@@ -377,6 +398,11 @@ defmodule Arca.BudgetReservations do
 
     :ok
   end
+
+  defp holder_deadline(_now, nil), do: nil
+
+  defp holder_deadline(now, window_ms) when is_integer(window_ms) and window_ms > 0,
+    do: DateTime.add(now, window_ms, :millisecond)
 
   # arca:db-raise-ok inside the caller's transaction
   defp attempt_owns?(athanor_id, attempt) do

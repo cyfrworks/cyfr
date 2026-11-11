@@ -81,6 +81,58 @@ defmodule Opus.AdmissionTest do
     {:ok, ctx: ctx, root: root_component}
   end
 
+  test "a row cached before a delete and republish elsewhere answers no read after it", %{
+    ctx: ctx
+  } do
+    reference = "#{@root_node}:0.1.0"
+    {:ok, _, _, old} = Admission.inspect_component(ctx, reference)
+    key = Arca.Cache.Keys.component_meta(Sanctum.Context.actor(ctx), reference)
+    {:ok, held} = Arca.Cache.get(key)
+
+    assert {:ok, :deleted} =
+             Compendium.Registry.delete(
+               Sanctum.TestContext.local(),
+               "chain-root",
+               "0.1.0",
+               "local"
+             )
+
+    assert {:ok, _} =
+             Compendium.Registry.publish_bytes(
+               Sanctum.TestContext.local(),
+               Cyfr.Test.Guests.wasm(:reagent) <> <<0, 9, 3, "s3x", "v2new">>,
+               %{
+                 name: "chain-root",
+                 version: "0.1.0",
+                 type: "reagent",
+                 description: "republished description"
+               }
+             )
+
+    # Another server of the cell keeps what it cached: the writer's sweep
+    # of its own cache reaches no peer's.
+    :ok = Arca.Cache.put(key, held, :timer.minutes(5))
+
+    {:ok, _, _, current} = Admission.inspect_component(ctx, reference)
+    refute current["release_digest"] == old["release_digest"]
+  end
+
+  test "a row cached before the component index fell behind answers the index's refusal", %{
+    ctx: ctx
+  } do
+    reference = "#{@root_node}:0.1.0"
+    assert {:ok, _, _, _} = Admission.inspect_component(ctx, reference)
+
+    assert {:ok, _} =
+             Arca.StorageProjectionChanges.begin_edit(
+               Context.actor(ctx),
+               "components",
+               "reagents/local/chain-root/0.1.0"
+             )
+
+    assert {:error, :projection_unavailable} = Admission.inspect_component(ctx, reference)
+  end
+
   defp limits_map do
     %{
       "timeout" => "1m",

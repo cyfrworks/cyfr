@@ -231,6 +231,53 @@ defmodule Compendium.ProvenanceTest do
     assert {:ok, %{provenance: :bundled, drift: :pristine}} = Provenance.status(ctx, own)
   end
 
+  describe "a server that lost its control-plane slot" do
+    setup do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+    end
+
+    test "the component tool's reset refused for ownership answers the ownership refusal and keeps the edit",
+         %{ctx: ctx} do
+      edited = @valid_wasm <> <<0>>
+      :ok = Arca.put(Sanctum.Context.actor(ctx), @bundled_dir ++ ["reagent.wasm"], edited)
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} =
+               Compendium.Providers.Component.handle(ctx, %{
+                 "action" => "reset",
+                 "reference" => "reagent:local.bundled-tool:1.0.0"
+               })
+
+      assert {:ok, ^edited} =
+               Arca.get(Sanctum.Context.actor(ctx), @bundled_dir ++ ["reagent.wasm"])
+    end
+
+    test "the component tool's pull of a shipped version refused for ownership answers the ownership refusal and copies nothing",
+         %{ctx: ctx} do
+      Arca.Test.UnitFixtures.seed_component!("reagent", "local", "bundled-tool", "1.1.0",
+        manifest: %{"type" => "reagent", "version" => "1.1.0", "description" => "shipped"},
+        wasm: @valid_wasm
+      )
+
+      Arca.ControlPlane.record(:lost)
+
+      assert {:error, :not_owner} =
+               Compendium.Providers.Component.handle(ctx, %{
+                 "action" => "pull",
+                 "reference" => "reagent:local.bundled-tool:1.1.0"
+               })
+
+      refute Arca.exists?(Sanctum.Context.actor(ctx), [
+               "components",
+               "reagents",
+               "local",
+               "bundled-tool",
+               "1.1.0",
+               "reagent.wasm"
+             ])
+    end
+  end
+
   test "status/2 answers provenance and drift in one probe", %{ctx: ctx, bundled: bundled} do
     assert {:ok, %{provenance: :bundled, drift: :pristine}} = Provenance.status(ctx, bundled)
 

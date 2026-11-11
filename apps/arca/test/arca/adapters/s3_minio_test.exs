@@ -45,6 +45,21 @@ defmodule Arca.Adapters.S3MinioTest do
     {:ok, actor: Arca.Test.Actor.local()}
   end
 
+  test "a key holding quotes lists, reads and deletes under its own name", %{actor: actor} do
+    # The store escapes these as numeric references (`&#39;`, `&#34;`);
+    # a listing that kept them would name keys that do not exist.
+    dir = ["data", "quoted"]
+    names = ["it's.txt", ~s(say "hi".txt), "a&b.txt"]
+    for name <- names, do: assert(:ok = S3.put(actor, dir ++ [name], name))
+
+    assert {:ok, listed} = S3.list_recursive(actor, dir)
+    assert Enum.sort(listed) == Enum.sort(Enum.map(names, &(dir ++ [&1])))
+    for path <- listed, do: assert({:ok, List.last(path)} == S3.get(actor, path))
+
+    assert :ok = S3.delete_tree(actor, dir)
+    for name <- names, do: assert({:error, :not_found} = S3.get(actor, dir ++ [name]))
+  end
+
   test "round-trips keys the signer must percent-encode", %{actor: actor} do
     # These names break a signer that double-encodes (or forgets to encode)
     # the canonical URI — exactly what the stub suite cannot verify.

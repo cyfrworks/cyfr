@@ -13,7 +13,7 @@ defmodule Sanctum.Providers.Webhook do
 
   # A sensitive change's own answers (`Sanctum.Consent.Authz`), which pass
   # as they are: the confirmation signal is matched apart, by its shape.
-  @confirmation_refusals [:identity_stale, :missing_tenant]
+  @confirmation_refusals [:identity_stale, :identity_gone, :missing_tenant]
 
   alias Sanctum.Context
 
@@ -276,6 +276,11 @@ defmodule Sanctum.Providers.Webhook do
       {:error, %Prima.Refusal{}} = refused ->
         refused
 
+      # This server's slot is not live: nothing was written, and the
+      # refusal reads as itself.
+      {:error, :not_owner} = refused ->
+        refused
+
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to create webhook: #{inspect(reason)}")
         {:error, "Failed to create webhook"}
@@ -368,6 +373,9 @@ defmodule Sanctum.Providers.Webhook do
       {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
         {:error, Sanctum.Issuance.standing_refusal(reason)}
 
+      {:error, :not_owner} = refused ->
+        refused
+
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to rotate webhook: #{inspect(reason)}")
         {:error, "Failed to rotate webhook"}
@@ -428,7 +436,7 @@ defmodule Sanctum.Providers.Webhook do
       message: "That webhook is not suspended, so there is nothing to re-enable"
     }
 
-  defp reenable_refusal(reason) when reason in [:database_error, :not_owner, :unavailable],
+  defp reenable_refusal(reason) when reason in [:database_error, :unavailable],
     do: Prima.Refusal.classify(:unavailable)
 
   defp reenable_refusal(reason) when Sanctum.Issuance.standing_refusal?(reason),

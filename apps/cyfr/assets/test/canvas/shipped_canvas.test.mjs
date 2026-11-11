@@ -489,11 +489,11 @@ describe("what needs attention", () => {
     const items = []
     const names = ["openai", "openrouter", "gemini", "grok", "claude"]
     for (let i = 0; i < 15; i++) {
-      items.push(failed(`g${i}`, `catalyst:local.${names[i % 5]}:1.4.1`, "setup_required", "needs_setup"))
+      items.push(failed(`g${i}`, `catalyst:local.${names[i % 5]}:1.4.2`, "setup_required", "needs_setup"))
     }
-    items.push(failed("c1", "catalyst:local.gemini:1.4.1", "unavailable", "unavailable"))
-    items.push(failed("c2", "catalyst:local.openrouter:1.4.1", "unavailable", "unavailable"))
-    for (let i = 0; i < 3; i++) items.push(run(`ok${i}`, "completed", {reference: "catalyst:local.claude:1.4.1", duration_ms: 289}))
+    items.push(failed("c1", "catalyst:local.gemini:1.4.2", "unavailable", "unavailable"))
+    items.push(failed("c2", "catalyst:local.openrouter:1.4.2", "unavailable", "unavailable"))
+    for (let i = 0; i < 3; i++) items.push(run(`ok${i}`, "completed", {reference: "catalyst:local.claude:1.4.2", duration_ms: 289}))
     return folded(...items)
   }
 
@@ -571,7 +571,7 @@ describe("what needs attention", () => {
   })
 
   test("a failure no grant fixes offers none and promises no fix", () => {
-    const state = folded(failed("a", "catalyst:local.claude:1.4.1", "internal", "failed"))
+    const state = folded(failed("a", "catalyst:local.claude:1.4.2", "internal", "failed"))
     assert.equal(causes(state)[0].grantable, false)
     assert.doesNotMatch(today(state, new Date()).sentence, /grant/)
   })
@@ -580,7 +580,7 @@ describe("what needs attention", () => {
     const shell = sdk()
     grantComponent(shell.cyfr, causes(day())[0].components[0].ref)
     assert.deepEqual(shell.calls.grant, ["catalyst:local.claude"])
-    assert.equal(componentRef("catalyst:local.openai:1.4.1"), "catalyst:local.openai")
+    assert.equal(componentRef("catalyst:local.openai:1.4.2"), "catalyst:local.openai")
     assert.equal(componentRef("catalyst:local.openai"), "catalyst:local.openai")
     assert.equal(componentName("catalyst:local.openai"), "openai")
   })

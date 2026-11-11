@@ -71,15 +71,13 @@ defmodule Sanctum.Test.Settings do
   end
 
   @doc """
-  Read `key` once and age its cached value past the cache's lifetime, so
-  the next read asks the store again.
+  Read `key` once and invalidate its cached value, so the next read asks
+  the store again and, when the store cannot answer, finds the value read.
   """
   @spec expire(String.t()) :: :ok
   def expire(key) when is_binary(key) do
     {:ok, _value} = Store.effective(key)
-    cache = {Store, :value, key}
-    {value, _read_at} = :persistent_term.get(cache)
-    :persistent_term.put(cache, {value, System.monotonic_time(:millisecond) - Store.ttl_ms() - 1})
+    Store.invalidate(key)
   end
 
   @doc """

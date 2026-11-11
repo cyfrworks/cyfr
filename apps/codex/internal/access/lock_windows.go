@@ -39,20 +39,20 @@ func unlockExclusive(f *os.File) {
 	windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &ol)
 }
 
-// replaceWait bounds how long replaceFile keeps trying while a reader
+// replaceWait bounds how long ReplaceFile keeps trying while a reader
 // holds the file it replaces: a reader of a record (readJSON) holds it
 // for the length of one read, and a refused taker reads the holder
 // record every 5 ms for recordWait.
 const replaceWait = 250 * time.Millisecond
 
-// replaceFile renames from over to, written through to the disk before
+// ReplaceFile renames from over to, written through to the disk before
 // it returns: Windows has no directory to sync. A file another process
 // has open for reading cannot be replaced while that handle is open
 // (os.ReadFile opens without FILE_SHARE_DELETE), and MoveFileEx refuses
 // with ERROR_ACCESS_DENIED or ERROR_SHARING_VIOLATION; a reader holds a
 // record only for one read, so the rename is tried again every
 // millisecond within replaceWait before that refusal is answered.
-func replaceFile(from, to string) error {
+func ReplaceFile(from, to string) error {
 	f, err := windows.UTF16PtrFromString(from)
 	if err != nil {
 		return err
@@ -75,6 +75,6 @@ func replaceFile(from, to string) error {
 	}
 }
 
-// syncDir is nothing on Windows: replaceFile writes the rename through,
+// SyncDir is nothing on Windows: ReplaceFile writes the rename through,
 // and a directory handle cannot be flushed.
-func syncDir(string) error { return nil }
+func SyncDir(string) error { return nil }

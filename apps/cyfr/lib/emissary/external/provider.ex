@@ -838,6 +838,9 @@ defmodule Emissary.External.Provider do
             {:error, :not_found} ->
               {:error, {:not_found, "Server", name}}
 
+            {:error, :not_owner} = refused ->
+              refused
+
             {:error, _reason} ->
               {:error, {:unavailable, "The server store"}}
           end
