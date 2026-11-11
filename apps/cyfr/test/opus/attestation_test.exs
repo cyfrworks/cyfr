@@ -142,15 +142,49 @@ defmodule Opus.AttestationTest do
       assert msg =~ "issuer mismatch"
     end
 
-    test "rejects when identity requested but stored identity is nil" do
+    # A keyless verification records no signer (Compendium.Cosign): every
+    # pin on such a row is refused, an empty record as much as a missing one.
+    test "a row that records no signer refuses every pin and admits an unpinned run" do
+      for stored <- [nil, ""] do
+        component = %{
+          "source" => "oci",
+          "signature_verified" => true,
+          "signer_identity" => stored,
+          "signer_issuer" => stored
+        }
+
+        for {identity, issuer} <- [
+              {"dev@cyfr.run", nil},
+              {nil, "https://accounts.google.com"},
+              {"dev@cyfr.run", "https://accounts.google.com"},
+              {"", nil},
+              {nil, ""}
+            ] do
+          {:error, msg} = Attestation.verify(component, identity, issuer)
+          assert msg =~ "records no signer"
+        end
+
+        assert :ok = Attestation.verify(component, nil, nil)
+      end
+    end
+
+    test "a keyed row's pin on its key still verifies, and another key's is refused" do
+      key = "key:sha256:" <> String.duplicate("f", 64)
+
       component = %{
         "source" => "oci",
         "signature_verified" => true,
-        "signer_identity" => nil,
-        "signer_issuer" => nil
+        "signer_identity" => key,
+        "signer_issuer" => "key"
       }
 
-      {:error, msg} = Attestation.verify(component, "dev@cyfr.run", nil)
+      assert :ok = Attestation.verify(component, key, nil)
+      assert :ok = Attestation.verify(component, key, "key")
+      assert :ok = Attestation.verify(component, nil, "key")
+
+      {:error, msg} =
+        Attestation.verify(component, "key:sha256:" <> String.duplicate("e", 64), "key")
+
       assert msg =~ "identity mismatch"
     end
   end

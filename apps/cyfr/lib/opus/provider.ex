@@ -296,10 +296,12 @@ defmodule Opus.Provider do
                 {:record,
                  [
                    Arg.new("identity", :string,
-                     description: "Required signer identity (e.g., 'alice@example.com')"
+                     description:
+                       "The signer identity the component's row must record, exactly: a keyed signature records 'key:sha256:<hex>' of its key; a keyless one records none, so a pin on it is refused"
                    ),
                    Arg.new("issuer", :string,
-                     description: "Required OIDC issuer (e.g., 'https://github.com/login/oauth')"
+                     description:
+                       "The signer issuer the component's row must record, exactly: 'key' for a keyed signature; a keyless one records none, so a pin on it is refused"
                    )
                  ]},
                 description: "Optional signature verification requirements (run action)"
@@ -343,10 +345,12 @@ defmodule Opus.Provider do
                 {:record,
                  [
                    Arg.new("identity", :string,
-                     description: "Required signer identity (e.g., 'alice@example.com')"
+                     description:
+                       "The signer identity the component's row must record, exactly: a keyed signature records 'key:sha256:<hex>' of its key; a keyless one records none, so a pin on it is refused"
                    ),
                    Arg.new("issuer", :string,
-                     description: "Required OIDC issuer (e.g., 'https://github.com/login/oauth')"
+                     description:
+                       "The signer issuer the component's row must record, exactly: 'key' for a keyed signature; a keyless one records none, so a pin on it is refused"
                    )
                  ]},
                 description: "Optional signature verification requirements (run action)"

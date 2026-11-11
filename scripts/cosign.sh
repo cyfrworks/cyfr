@@ -29,8 +29,8 @@
 #                                   upstream's own signed image of this
 #                                   version keyed with upstream's release
 #                                   key and keyless against its signer,
-#                                   recording the key's fingerprint and the
-#                                   configured identity and issuer, and
+#                                   recording the key's fingerprint for the
+#                                   one and no signer for the other, and
 #                                   refuses it keyless against another
 #                                   identity. Needs the network.
 #
@@ -55,15 +55,15 @@ usage() { echo "usage: $0 install DIR | version | check TARGET RUNNER..." >&2; e
 
 # The line Compendium.Cosign.verify/2 of CHECK_IMAGE answers in TARGET
 # (`$1`), run as RUNNER (`$3...`) with the extra run options `$2` (one
-# word list, split on spaces): VERIFIED <identity> <issuer>, or REFUSED and
-# the refusal.
+# word list, split on spaces): VERIFIED and the recorded identity and
+# issuer as Elixir terms, or REFUSED and the refusal.
 module_verify() {
   local target=$1 options=$2
   shift 2
   # shellcheck disable=SC2086
   "$@" $options "$target" /app/bin/cyfr eval "
     case Compendium.Cosign.verify(\"$CHECK_IMAGE\", \"${CHECK_IMAGE#*@}\") do
-      {:ok, signer} -> IO.puts(\"VERIFIED #{signer.identity} #{signer.issuer}\")
+      {:ok, signer} -> IO.puts(\"VERIFIED #{inspect(signer.identity)} #{inspect(signer.issuer)}\")
       refused -> IO.puts(\"REFUSED #{inspect(refused)}\")
     end" 2>&1 | grep -E '^(VERIFIED|REFUSED) ' | tail -1
 }
@@ -83,11 +83,11 @@ check() {
   chmod 0755 "$key"
   chmod 0644 "$key/release-cosign.pub"
   answer="$(module_verify "$target" "-v $key:/run/cosign-check:ro -e CYFR_COSIGN_KEY=/run/cosign-check/release-cosign.pub" "$@")"
-  want="VERIFIED key:sha256:$RELEASE_KEY_SHA256 key"
+  want="VERIFIED \"key:sha256:$RELEASE_KEY_SHA256\" \"key\""
   [ "$answer" = "$want" ] || { echo "cosign: $target's keyed verification of $CHECK_IMAGE answered '$answer', not '$want'" >&2; return 1; }
   echo "Compendium.Cosign in $target verified $CHECK_IMAGE keyed: $answer"
   answer="$(module_verify "$target" "-e CYFR_COSIGN_IDENTITY=$CHECK_IDENTITY -e CYFR_COSIGN_ISSUER=$CHECK_ISSUER" "$@")"
-  want="VERIFIED $CHECK_IDENTITY $CHECK_ISSUER"
+  want="VERIFIED nil nil"
   [ "$answer" = "$want" ] || { echo "cosign: $target's keyless verification of $CHECK_IMAGE answered '$answer', not '$want'" >&2; return 1; }
   echo "Compendium.Cosign in $target verified $CHECK_IMAGE keyless: $answer"
   answer="$(module_verify "$target" "-e CYFR_COSIGN_IDENTITY=^release@example\.com$ -e CYFR_COSIGN_ISSUER=$CHECK_ISSUER" "$@")"

@@ -80,7 +80,7 @@ defmodule Compendium.CosignTest do
   end
 
   describe "the answer binds to the expected digest and names a signer" do
-    test "a bundle-format answer naming the digest verifies for the configured signer", %{
+    test "a bundle-format answer naming the digest verifies and records no signer", %{
       dir: dir
     } do
       use_stand_in(dir,
@@ -89,13 +89,10 @@ defmodule Compendium.CosignTest do
         preamble: true
       )
 
-      # The signer recorded is the identity and issuer cosign held the
-      # certificate to, which its exit 0 confirmed.
-      assert {:ok, %{identity: "^release@example\\.com$", issuer: issuer, verified_at: at}} =
+      # cosign held the certificate to the configured patterns; a pattern
+      # is no identity, and the answer names none it could vouch for.
+      assert {:ok, %{identity: nil, issuer: nil, verified_at: %DateTime{}}} =
                Cosign.verify(@reference, @digest)
-
-      assert issuer == "^https://accounts\\.google\\.com$"
-      assert %DateTime{} = at
 
       # The reference cosign is asked about is the one given, after the
       # flag terminator, with the configured signer.
@@ -163,12 +160,7 @@ defmodule Compendium.CosignTest do
           signed_by: {"release@example.com", "https://accounts.google.com"}
         )
 
-        assert {:ok,
-                %{
-                  identity: "^release@example\\.com$",
-                  issuer: "^https://accounts\\.google\\.com$"
-                }} =
-                 Cosign.verify(@reference, @digest)
+        assert {:ok, %{identity: nil, issuer: nil}} = Cosign.verify(@reference, @digest)
       end
 
       use_stand_in(dir,
@@ -176,7 +168,47 @@ defmodule Compendium.CosignTest do
         signed_by: {"release@example.com", "https://accounts.google.com"}
       )
 
-      assert {:ok, %{identity: "^release@example\\.com$"}} = Cosign.verify(@reference, @digest)
+      assert {:ok, %{identity: nil, issuer: nil}} = Cosign.verify(@reference, @digest)
+    end
+
+    # An unanchored pattern admits a certificate the pattern's own text does
+    # not name: what the row records must not let an exact pin on that text
+    # accept it.
+    test "an exact pin on a keyless row never accepts the certificate a pattern let through", %{
+      dir: dir
+    } do
+      for {pattern, signed_by} <- [
+            {"release@example.com", "release@example.com.evil"},
+            {"keyless@projectsigstore.iam.gserviceaccount.co",
+             "keyless@projectsigstore.iam.gserviceaccount.com"}
+          ] do
+        cosign =
+          stand_in(dir,
+            answer: [entry(@digest)],
+            signed_by: {signed_by, "https://accounts.google.com"}
+          )
+
+        Application.put_env(:cyfr, :sigstore,
+          verification: :keyless,
+          identity: pattern,
+          issuer: "https://accounts.google.com",
+          cosign_path: cosign
+        )
+
+        assert {:ok, signer} = Cosign.verify(@reference, @digest)
+
+        row = %{
+          "source" => Prima.ComponentSource.oci(),
+          "signature_verified" => true,
+          "signer_identity" => signer.identity,
+          "signer_issuer" => signer.issuer
+        }
+
+        assert {:error, _} = Opus.Attestation.verify(row, pattern, nil)
+        assert {:error, _} = Opus.Attestation.verify(row, signed_by, nil)
+        assert {:error, _} = Opus.Attestation.verify(row, nil, "https://accounts.google.com")
+        assert :ok = Opus.Attestation.verify(row, nil, nil)
+      end
     end
 
     @tag :capture_log

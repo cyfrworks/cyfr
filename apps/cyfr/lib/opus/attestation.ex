@@ -15,7 +15,10 @@ defmodule Opus.Attestation do
 
   - **Local/filesystem components**: Trusted by ownership — always pass.
   - **OCI components with verification**: Check that `signature_verified` is true.
-    If caller provides `identity`/`issuer`, match against stored signer metadata.
+    A caller's `identity`/`issuer` pin is held, exactly, to the signer the row
+    records. A keyed verification records the key (`key:sha256:<hex>`, issuer
+    `key`); a keyless one records no signer (`Compendium.Cosign`), so a pin on
+    it is refused.
   - **OCI components without verification**: Rejected when verify opts are provided.
 
   ## Usage
@@ -103,19 +106,18 @@ defmodule Opus.Attestation do
   defp check_identity_match(nil, nil, _stored_identity, _stored_issuer), do: :ok
 
   defp check_identity_match(identity, nil, stored_identity, _stored_issuer) do
-    if identity_matches?(identity, stored_identity) do
-      :ok
-    else
-      {:error,
-       "Signer identity mismatch: expected #{identity}, got #{stored_identity || "unknown"}"}
+    cond do
+      not recorded?(stored_identity) -> {:error, unrecorded("identity", identity)}
+      identity == stored_identity -> :ok
+      true -> {:error, "Signer identity mismatch: expected #{identity}, got #{stored_identity}"}
     end
   end
 
   defp check_identity_match(nil, issuer, _stored_identity, stored_issuer) do
-    if issuer_matches?(issuer, stored_issuer) do
-      :ok
-    else
-      {:error, "Signer issuer mismatch: expected #{issuer}, got #{stored_issuer || "unknown"}"}
+    cond do
+      not recorded?(stored_issuer) -> {:error, unrecorded("issuer", issuer)}
+      issuer == stored_issuer -> :ok
+      true -> {:error, "Signer issuer mismatch: expected #{issuer}, got #{stored_issuer}"}
     end
   end
 
@@ -126,9 +128,10 @@ defmodule Opus.Attestation do
     end
   end
 
-  defp identity_matches?(_expected, nil), do: false
-  defp identity_matches?(expected, stored), do: expected == stored
+  defp recorded?(stored), do: is_binary(stored) and stored != ""
 
-  defp issuer_matches?(_expected, nil), do: false
-  defp issuer_matches?(expected, stored), do: expected == stored
+  defp unrecorded(field, pinned),
+    do:
+      "Signer #{field} pinned to #{pinned}, but this component's row records no signer " <>
+        "#{field} (a keyless verification records none), so the pin is refused"
 end

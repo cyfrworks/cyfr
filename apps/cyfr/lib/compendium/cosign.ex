@@ -18,9 +18,10 @@ defmodule Compendium.Cosign do
   - `timeout_ms` — how long one cosign run may take before it is killed and
     the verification answers `:unavailable` (default 30 s)
 
-  Returns signer identity, issuer, and verification timestamp on success.
+  Returns the signer it can vouch for (a keyed verification's key; none for
+  a keyless one) and the verification timestamp on success.
 
-  ## A verification is bound to a digest and names a signer
+  ## A verification is bound to a digest, and names a signer only by key
 
   cosign is asked about `<registry>/<repository>@<digest>`, never a tag, and
   its answer counts only when it is a JSON array whose first entry's
@@ -28,14 +29,14 @@ defmodule Compendium.Cosign do
 
   - Keyless: cosign is handed the identity and issuer regexps, and its
     exit 0 is its finding that a signature over that digest was made under
-    a certificate whose identity and issuer match them. That finding is the
-    whole of what is recorded: the signer is the configured identity and
-    issuer, never a field of cosign's answer. The answer's `optional`
-    section is the signed payload's annotations, which the signer chooses
-    (cosign 3 adds no certificate fields there for a bundle-format
-    signature), so nothing in it names a signer. The identity and issuer
-    regexps are required; missing values refuse verification before cosign
-    runs.
+    a certificate whose identity and issuer match them. A verification is
+    recorded, and no signer: the regexps are patterns many certificates
+    match, never an identity, and cosign 3's answer carries none of the
+    certificate's fields (its `optional` section is the signed payload's
+    annotations, which the signer chooses). So `identity` and `issuer` are
+    nil, and a run that pins a signer on the row is refused
+    (`Opus.Attestation`). The identity and issuer regexps are required;
+    missing values refuse verification before cosign runs.
   - Keyed: a keyed signature carries no certificate, so the recorded signer
     is the key itself — `identity: "key:sha256:<hex>"` over the bytes of
     the key file handed to cosign, `issuer: "key"` — computed here, never
@@ -82,7 +83,8 @@ defmodule Compendium.Cosign do
   or `{:error, refusal}` on failure.
   """
   @spec verify(String.t(), String.t()) ::
-          {:ok, %{identity: String.t(), issuer: String.t(), verified_at: DateTime.t()}}
+          {:ok,
+           %{identity: String.t() | nil, issuer: String.t() | nil, verified_at: DateTime.t()}}
           | {:error, refusal()}
   def verify(reference, expected_digest)
       when is_binary(reference) and is_binary(expected_digest) do
@@ -301,7 +303,7 @@ defmodule Compendium.Cosign do
            # "--" terminates flag parsing (see :keyed branch above).
            "--",
            reference
-         ], {:certificate, identity, issuer}}
+         ], :certificate}
 
       unset ->
         {:error, {:unset, Enum.map(unset, &elem(&1, 0))}}
@@ -357,9 +359,9 @@ defmodule Compendium.Cosign do
   end
 
   # The answer binds to the pulled manifest only through the digest the
-  # signature covers. The signer is what this server asked cosign to hold
-  # the signature to, which its exit 0 confirmed: the key it handed cosign,
-  # or the identity and issuer regexps a keyless certificate had to match.
+  # signature covers. A keyed signer is the key this server handed cosign;
+  # a keyless verification names no signer, since the patterns cosign held
+  # the certificate to are not one.
   defp check_answer(answer, _expected_digest, _signer) when not is_list(answer),
     do: {:error, :not_an_array}
 
@@ -383,8 +385,8 @@ defmodule Compendium.Cosign do
   defp check_identity(_entry, {:key, identity}),
     do: {:ok, %{identity: identity, issuer: "key", verified_at: DateTime.utc_now()}}
 
-  defp check_identity(_entry, {:certificate, identity, issuer}),
-    do: {:ok, %{identity: identity, issuer: issuer, verified_at: DateTime.utc_now()}}
+  defp check_identity(_entry, :certificate),
+    do: {:ok, %{identity: nil, issuer: nil, verified_at: DateTime.utc_now()}}
 
   defp present?(value), do: is_binary(value) and value != ""
 end
