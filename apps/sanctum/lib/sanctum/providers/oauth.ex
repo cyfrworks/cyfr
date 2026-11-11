@@ -142,8 +142,9 @@ defmodule Sanctum.Providers.OAuth do
   defp format_reason({tag, payload} = signal) when Prima.ConsentSignal.is_signal(tag, payload),
     do: signal
 
-  defp format_reason(reason) when reason in [:identity_stale, :missing_tenant, :not_owner],
-    do: reason
+  defp format_reason(reason)
+       when reason in [:identity_stale, :identity_gone, :missing_tenant, :not_owner],
+       do: reason
 
   defp format_reason({:conflict, message} = conflict) when is_binary(message), do: conflict
 
