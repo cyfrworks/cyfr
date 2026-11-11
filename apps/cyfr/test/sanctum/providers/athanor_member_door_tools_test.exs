@@ -8,6 +8,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   """
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Refusals
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
@@ -189,6 +191,37 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert message == not_restored("The entry is removed", carol.id)
     assert {:ok, %{status: "denied"}} = Users.get(carol.id)
     assert [] = Enum.filter(Sanctum.Door.Store.list(), &(&1.value == identifier))
+  end
+
+  test "door.deny on a member whose slot a successor took answers the ownership refusal, and ejects no one",
+       %{alice: alice, ops: ops, ctx: ctx} do
+    # A claimant runs and this member took a slot; its restore is
+    # registered before each change.
+    for key <- [:standing, :generation, :slot],
+        do: Prima.Test.Env.erase_persistent_term({Arca.ControlPlane, key})
+
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
+    node = "door-deny-#{System.unique_integer([:positive])}"
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+
+    # A successor takes the slot over while this member still reads it held.
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+        set: [owner: node <> "#boot_b", generation: slot.generation + 1]
+      )
+
+    assert Arca.ControlPlane.held?()
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+
+    assert {:error, %Prima.Refusal{class: :not_owner, reason: :not_owner, message: message}} =
+             call(admin, "door", %{"action" => "deny", "value" => alice})
+
+    assert message ==
+             "Sign-in is denied, but 1 of 1 known people were not ejected — #{alice}: " <>
+               "This server does not currently own its control plane — retry shortly"
+
+    assert {:ok, %{status: "active"}} = Users.get(alice)
   end
 
   # A session the door's verdict issued to `user_id`.

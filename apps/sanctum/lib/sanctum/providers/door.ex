@@ -34,6 +34,8 @@ defmodule Sanctum.Providers.Door do
 
   require Logger
 
+  @not_restored "denied people were not restored and stay denied"
+
   alias Sanctum.Context
   alias Sanctum.Door
   alias Sanctum.Door.Store
@@ -141,13 +143,14 @@ defmodule Sanctum.Providers.Door do
           # reopens; the thread seats the deny removed stay removed — a
           # thread's people add them again. Said in the result, not left to guess.
           restored = denied_users(kind, value)
-          failed = restore(restored)
+          failed = refused(restored, &Users.allow/1)
           Sanctum.Notify.allowlist_changed()
 
-          restore_answer(
+          partial(
             failed,
             restored,
             "Sign-in is allowed",
+            @not_restored,
             with_restore_note(render(entry), restored)
           )
 
@@ -164,8 +167,8 @@ defmodule Sanctum.Providers.Door do
       case Store.deny(kind, value, ctx.user_id, note: Map.get(args, "note"), label: label) do
         {:ok, entry} ->
           denied = known_users(kind, value)
-          results = Enum.map(denied, &Users.deny/1)
-          ejected = Enum.count(results, &match?({:ok, _}, &1))
+          failed = refused(denied, &Users.deny/1)
+          ejected = length(denied) - length(failed)
 
           # An identifier nobody here holds can still hold invitations in
           # shared threads. `Users.deny/1` withdraws them for a person it
@@ -177,15 +180,9 @@ defmodule Sanctum.Providers.Door do
 
           Sanctum.Notify.allowlist_changed()
 
-          if ejected == length(denied) do
-            {:ok, rendered}
-          else
-            # The entry is written (the door is shut) but a person's sessions,
-            # keys or rows may survive — say so rather than report a clean eject.
-            {:error,
-             "Sign-in denied, but ejecting #{length(denied) - ejected} of #{length(denied)} " <>
-               "known accounts failed — retry deny to finish"}
-          end
+          # The entry is written (the door is shut) but a person's sessions,
+          # keys or rows may survive — say so rather than report a clean eject.
+          partial(failed, denied, "Sign-in is denied", "known people were not ejected", rendered)
 
         {:error, :platform_admin} ->
           {:error,
@@ -210,7 +207,7 @@ defmodule Sanctum.Providers.Door do
           do: denied_users(entry.kind, entry.value),
           else: []
 
-      failed = restore(restored)
+      failed = refused(restored, &Users.allow/1)
 
       # Removing an allow is closing the door on whoever it admitted, and the
       # credentials it issued would otherwise outlive it by their whole TTL.
@@ -222,10 +219,11 @@ defmodule Sanctum.Providers.Door do
 
       Sanctum.Notify.allowlist_changed()
 
-      restore_answer(
+      partial(
         failed,
         restored,
         "The entry is removed",
+        @not_restored,
         with_restore_note(%{id: id, removed: true, ejected: ejected}, restored)
       )
     else
@@ -286,30 +284,28 @@ defmodule Sanctum.Providers.Door do
     })
   end
 
-  # Each denied person allowed back (`Users.allow/1`), answering the ones
-  # whose allow was refused, each with its refusal.
-  defp restore(people) do
+  # `transition` (`Users.deny/1` or `Users.allow/1`) run for each person,
+  # answering the ones it refused, each with its refusal.
+  defp refused(people, transition) do
     for user <- people,
-        {:error, reason} <- [Users.allow(user)],
+        {:error, reason} <- [transition.(user)],
         do: {user, Sanctum.Refusals.classify(reason)}
   end
 
-  # What a write that restores people answers: its result when every
-  # restore went through, else one refusal of the first failure's class
-  # whose sentence says the write stands and names each person left denied
-  # with their own refusal's sentence.
-  defp restore_answer([], _restored, _done, result), do: {:ok, result}
+  # What an entry's write answers once it has moved its people: its result
+  # when every person moved, else one refusal of the first failure's class
+  # whose sentence says the write stands and names each person who did not
+  # move with their own refusal's sentence.
+  defp partial([], _people, _done, _left, result), do: {:ok, result}
 
-  defp restore_answer([{_user, first} | _] = failed, restored, done, _result) do
+  defp partial([{_user, first} | _] = failed, people, done, left, _result) do
     reasons =
       Enum.map_join(failed, "; ", fn {user, refusal} -> "#{user.id}: #{refusal.message}" end)
 
     {:error,
      %{
        first
-       | message:
-           "#{done}, but #{length(failed)} of #{length(restored)} denied people were not " <>
-             "restored and stay denied — #{reasons}"
+       | message: "#{done}, but #{length(failed)} of #{length(people)} #{left} — #{reasons}"
      }}
   end
 
