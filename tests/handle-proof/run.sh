@@ -18,7 +18,8 @@
 # (`ask-N.json`, answered `answer-N.json`).
 #
 # Usage: CYFR_RUN_DIR=<cyfr.run checkout> tests/handle-proof/run.sh
-# Without CYFR_RUN_DIR it says so and exits 0: CI cannot read cyfr.run's
+# Without CYFR_RUN_DIR it says it did not run and exits 69, a missing
+# prerequisite, which counts as not passed: CI cannot read cyfr.run's
 # source, so the proof runs where both checkouts are. Writes
 # handle-proof.json and handle-proof.md into PROOF_OUT (default: the
 # scratch directory, kept with RELEASE_BOOT_KEEP=1) and prints the table.
@@ -31,8 +32,8 @@
 set -euo pipefail
 
 if [ -z "${CYFR_RUN_DIR:-}" ]; then
-  echo "handle proof: not run: CYFR_RUN_DIR names no cyfr.run checkout, and the registry is built from one"
-  exit 0
+  echo "handle proof: not run: CYFR_RUN_DIR names no cyfr.run checkout, and the registry is built from one" >&2
+  exit 69
 fi
 if [ ! -f "$CYFR_RUN_DIR/cmd/smokeid/main.go" ] || ! git -C "$CYFR_RUN_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
   echo "::error::CYFR_RUN_DIR ($CYFR_RUN_DIR) is no cyfr.run checkout with cmd/smokeid" >&2

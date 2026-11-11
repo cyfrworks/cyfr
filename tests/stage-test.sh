@@ -171,13 +171,20 @@ stage spaced2 -l "$S/logs-spaced2" handoff
 [ ! -s "$STUB_CALLS" ] || fail 'a row ran before the refusal'
 reset_tree
 
-begin 'a row whose queue deadline passes fails, and the rows after it still run'
-table "${toy_rows[@]}" 'release|queue|1|60|always|echo #queue-deadline' 'release|after|1|60|always|echo after'
+begin 'a row whose queue deadline passes or whose prerequisite is missing is not run, another that fails is failed, each fails the stage, and the rows after them still run'
+table "${toy_rows[@]}" 'release|queue|1|60|always|echo #queue-deadline' 'release|missing|1|60|always|exit 69' \
+  'release|broken|1|60|always|exit 3' 'release|after|1|60|always|echo after'
 stage deadline -l "$S/logs-deadline" release
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
 framed deadline 1
-grep -qx 'queue: failed 75 [0-9]*s' "$S/deadline.out" || fail "the deadline row said: $(cat "$S/deadline.out")"
-grep -qx 'after: ok [0-9]*s' "$S/deadline.out" || fail 'the row after it did not run'
+grep -qx 'queue: not run 75 [0-9]*s' "$S/deadline.out" || fail "the deadline row said: $(cat "$S/deadline.out")"
+grep -qx 'missing: not run 69 [0-9]*s' "$S/deadline.out" || fail "the row missing a prerequisite said: $(cat "$S/deadline.out")"
+grep -qx 'broken: failed 3 [0-9]*s' "$S/deadline.out" || fail "the failing row said: $(cat "$S/deadline.out")"
+grep -qx 'after: ok [0-9]*s' "$S/deadline.out" || fail 'the row after them did not run'
+table "${toy_rows[@]}" 'release|missing|1|60|always|exit 69' 'release|after|1|60|always|echo after'
+stage missing-only -l "$S/logs-missing-only" release
+[ "$rc" = 1 ] || fail "a stage whose one red row was not run exited $rc, not 1"
+framed missing-only 1
 table "${toy_rows[@]}"
 
 begin 'a dry run names each row and runs nothing'
@@ -274,6 +281,216 @@ for sig in INT:130 TERM:143; do
   until_true 10 eval '! kill -0 "$sleeper"' || fail "$name: the row's command outlived the stage"
 done
 table "${toy_rows[@]}"
+
+begin 'the handle proof without CYFR_RUN_DIR exits 69 and says it did not run, which the stage reports as not run'
+table "${toy_rows[@]}" "release|handle|1|60|always|env -u CYFR_RUN_DIR bash '$ROOT/tests/handle-proof/run.sh'"
+stage handle -l "$S/logs-handle" release
+[ "$rc" = 1 ] || fail "exited $rc, not 1"
+grep -qx 'handle: not run 69 [0-9]*s' "$S/handle.out" || fail "the handle proof's row said: $(cat "$S/handle.out")"
+grep -qxF 'handle proof: not run: CYFR_RUN_DIR names no cyfr.run checkout, and the registry is built from one' "$S/logs-handle/handle.log" ||
+  fail "the handle proof said: $(cat "$S/logs-handle/handle.log")"
+table "${toy_rows[@]}"
+
+# scripts/nightly.sh in the toy repository, against a stand-in gh that
+# records its arguments, NUL-separated, and exits GH_EXIT.
+cp "$ROOT/scripts/nightly.sh" "$repo/scripts/"
+mkdir -p "$S/bin"
+cat >"$S/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do printf '%s\0' "$a"; done >>"$GH_CALLS"
+exit "${GH_EXIT:-0}"
+EOF
+chmod +x "$S/bin/gh"
+export GH_CALLS="$S/gh-calls"
+nightly() { # NAME ARGS...: runs it; stdout to $S/NAME.out, stderr to $S/NAME.err, status to $rc
+  local name=$1
+  shift
+  : >"$STUB_CALLS"
+  : >"$GH_CALLS"
+  rc=0
+  (cd "$repo" && PATH="$S/bin:$PATH" scripts/nightly.sh "$@") >"$S/$name.out" 2>"$S/$name.err" || rc=$?
+}
+# Every gh call's arguments, a line each, a newline inside one shown as \n
+# and a row's seconds as Ns.
+gh_call() {
+  python3 -I -c '
+import re, sys
+args = open(sys.argv[1], "rb").read().decode().split("\0")[:-1]
+print("\n".join(re.sub(r" [0-9]+s(?=\n|$)", " Ns", a).replace("\n", "\\n") for a in args))' "$GH_CALLS"
+}
+want_call() { # COMMIT STATUS SUMMARY LOGS: the one call scripts/nightly.sh makes
+  printf '%s\n' workflow run host-nightly.yml -f "commit=$1" -f "status=$2" -f "summary=$3" -f "logs=$4"
+}
+call_is() { # NAME COMMIT STATUS SUMMARY LOGS
+  local name=$1
+  shift
+  diff <(want_call "$@") <(gh_call) >/dev/null || fail "$name: gh was called as: $(gh_call | tr '\n' ' ')"
+}
+night_rows=('nightly|first|1|60|always|echo first' 'nightly|second|1|60|always|echo second')
+table "${toy_rows[@]}" "${night_rows[@]}"
+git -C "$repo" add -A
+git -C "$repo" -c user.name=test -c user.email=test@invalid commit -q -m 'the nightly rows and scripts/nightly.sh'
+head=$(git -C "$repo" rev-parse HEAD)
+
+begin 'a green night reports status 0, the commit, the row lines and the log directory, and exits 0 with the stage framed on stdout'
+nightly green -l "$S/logs-green"
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/green.err")"
+framed green 0
+call_is green "$head" 0 'first: ok Ns\nsecond: ok Ns' "$S/logs-green"
+grep -qx 'first' "$S/logs-green/first.log" || fail 'a row log does not hold its output'
+cmp -s "$S/green.out" "$S/logs-green/stage.out" || fail 'stdout is not the stage output it keeps'
+grep -qxF "nightly: reported status 0 for $head" "$S/green.err" || fail "it said: $(cat "$S/green.err")"
+
+begin 'a red night reaches gh with its status, its failed and not-run rows and the tree it tested, and exits with the stage status'
+table "${toy_rows[@]}" "${night_rows[@]}" 'nightly|bad|1|60|always|exit 3' 'nightly|absent|1|60|always|exit 69'
+nightly red -l "$S/logs-red"
+[ "$rc" = 1 ] || fail "exited $rc, not 1"
+call_is red "$head with changes" 1 'first: ok Ns\nsecond: ok Ns\nbad: failed 3 Ns\nabsent: not run 69 Ns' "$S/logs-red"
+
+begin 'a stage that dies before any row is reported with its status and no row'
+table "${toy_rows[@]}" "${night_rows[@]}" 'nightly|x|2|60|always|echo x'
+nightly early -l "$S/logs-early"
+[ "$rc" = 65 ] || fail "exited $rc, not 65"
+call_is early "$head with changes" 65 '' "$S/logs-early"
+grep -qF "a row takes 1 or 4 quarters, not '2'" "$S/logs-early/stage.err" || fail "the stage's refusal is not kept: $(cat "$S/logs-early/stage.err")"
+reset_tree
+
+begin 'a green night whose report does not reach GitHub exits 1 and says so'
+GH_EXIT=1 nightly unreached -l "$S/logs-unreached"
+[ "$rc" = 1 ] || fail "exited $rc, not 1"
+call_is unreached "$head" 0 'first: ok Ns\nsecond: ok Ns' "$S/logs-unreached"
+grep -qF "nightly: the report of status 0 for $head did not reach GitHub (gh exited 1)" "$S/unreached.err" || fail "it said: $(cat "$S/unreached.err")"
+
+begin 'INT and TERM stop the stage and its row, and the stopped night is reported'
+table "${toy_rows[@]}" 'nightly|slow|1|60|always|exec sleep 6108'
+for sig in INT:130 TERM:143; do
+  name=${sig%%:*} want=${sig##*:}
+  : >"$STUB_CALLS"
+  : >"$GH_CALLS"
+  (cd "$repo" && PATH="$S/bin:$PATH" exec "${defaulted[@]}" INT scripts/nightly.sh -l "$S/logs-night-$name") >"$S/night-$name.out" 2>"$S/night-$name.err" &
+  runner=$!
+  until_true 10 grep -q 'sleep 6108' "$STUB_CALLS" || fail "$name: the slow row never started"
+  until_true 10 pgrep -f '^sleep 6108$' >/dev/null || fail "$name: no sleep found"
+  sleeper=$(pgrep -f '^sleep 6108$' | head -1)
+  kill -"$name" "$runner"
+  until_true 10 eval '! kill -0 "$runner"' || {
+    kill -KILL "$runner" "$sleeper" 2>/dev/null
+    fail "$name: the night was still running 10s after the signal"
+  }
+  status=0; wait "$runner" || status=$?
+  [ "$status" = "$want" ] || fail "$name: exited $status, not $want"
+  until_true 10 eval '! kill -0 "$sleeper"' || fail "$name: the row's command outlived the night"
+  call_is "$name" "$head with changes" 143 '' "$S/logs-night-$name"
+done
+reset_tree
+
+begin 'the host nightly workflow holds no expression inside a script and asks for no permission but the watchdog read of the runs'
+# Its two steps are written out to be run as the runner runs a step.
+python3 -I - "$ROOT/.github/workflows/host-nightly.yml" "$S/wf" <<'WF' || fail "the host nightly workflow: $(cat "$S/wf.err" 2>/dev/null)"
+import sys, yaml
+spec = yaml.safe_load(open(sys.argv[1]))
+on = spec.get(True, spec.get("on"))
+errors = []
+if sorted(on) != ["schedule", "workflow_dispatch"]:
+    errors.append(f"it runs on {sorted(on)}")
+if spec.get("permissions") != {}:
+    errors.append(f"the workflow's permissions are {spec.get('permissions')}")
+jobs = spec["jobs"]
+if "permissions" in jobs["report"]:
+    errors.append("the report job asks for permissions")
+if jobs["watchdog"].get("permissions") != {"actions": "read"}:
+    errors.append(f"the watchdog's permissions are {jobs['watchdog'].get('permissions')}")
+for name, job in jobs.items():
+    if len(job["steps"]) != 1:
+        errors.append(f"{name} has {len(job['steps'])} steps")
+    for step in job["steps"]:
+        if "${{" in step["run"]:
+            errors.append(f"{name}'s script holds an expression")
+    open(f"{sys.argv[2]}-{name}.sh", "w").write(job["steps"][0]["run"])
+if errors:
+    open(sys.argv[2] + ".err", "w").write("; ".join(errors))
+    sys.exit(1)
+WF
+
+begin "the workflow's report fails unless the stage exited exactly 0 and the report is what nightly.sh sends"
+sha40=0123456789abcdef0123456789abcdef01234567
+green_rows=$'janitor: ok 9s\ninstall-screen-proof: ok 1702s'
+red_rows=$'janitor: ok 9s\nhandle-proof: not run 69 0s'
+report() { # STATUS SUMMARY [COMMIT [LOGS]]: runs the report step; its exit in $rc
+  : >"$S/step-summary"
+  rc=0
+  env -i PATH="$PATH" GITHUB_STEP_SUMMARY="$S/step-summary" STATUS="$1" SUMMARY="$2" COMMIT="${3-$sha40}" \
+    LOGS="${4-/tmp/cyfr-stage.nightly.Ab1sCd}" bash --noprofile --norc -eo pipefail "$S/wf-report.sh" >"$S/report.out" 2>&1 || rc=$?
+}
+refused() { # WHAT: the report just run exited 1 and printed nothing it was sent
+  [ "$rc" = 1 ] && [ ! -s "$S/step-summary" ] && ! grep -qi 'planted' "$S/report.out" ||
+    fail "a report with $1 exited $rc, printed: $(cat "$S/report.out") $(cat "$S/step-summary")"
+}
+report 0 "$green_rows"
+[ "$rc" = 0 ] || fail "a green report failed: $(cat "$S/report.out")"
+grep -qxF 'install-screen-proof: ok 1702s' "$S/step-summary" || fail "the summary does not hold the rows: $(cat "$S/step-summary")"
+report 0 "$green_rows" "$sha40 with changes"
+[ "$rc" = 0 ] || fail "a green report of a changed tree failed: $(cat "$S/report.out")"
+for status in 1 69 75 143 '' 00 ' 0' '0 ' x; do
+  report "$status" "$red_rows"
+  [ "$rc" = 1 ] || fail "a report of status '$status' exited $rc, not 1"
+done
+report 69 "$red_rows"
+grep -qF 'exited 69: a check failed or did not run' "$S/report.out" || fail "a red report said: $(cat "$S/report.out")"
+report 0 "$green_rows" abc
+[ "$rc" = 1 ] || fail "a report of commit 'abc' exited $rc, not 1"
+# A row is never skipped in the nightly, so no row holds free text: none
+# carries a workflow command, the runner's older ##[ form, or a carriage
+# return, at which the runner splits a line and the summary's fence could
+# close; nor does any other input.
+report 0 $'janitor: ok 9s\n::error::planted'
+refused 'a workflow command line'
+report 0 'handle-proof: skipped (##[error]planted) 0s'
+refused 'a legacy workflow command in a skipped row'
+report 0 $'handle-proof: skipped (\r::error::planted) 0s'
+refused 'a carriage return before a workflow command'
+report 0 $'handle-proof: skipped (\r```\r# PLANTED OUTSIDE FENCE\r```text\r) 0s'
+refused 'carriage returns around a closed fence'
+report 0 $'janitor: ok 9s\r'
+refused 'a carriage return in a row'
+report $'0\r' "$green_rows"
+refused 'a carriage return in the status'
+report 0 "$green_rows" "$sha40"$'\r'
+refused 'a carriage return in the commit'
+report 0 "$green_rows" "$sha40" $'/tmp/cyfr-stage.nightly.Ab1sCd\r'
+refused 'a carriage return in the log path'
+
+begin "the workflow's watchdog passes only on a report run that completed within 26 hours, never on its own"
+mkdir -p "$S/watch-bin" "$S/runner"
+cat >"$S/watch-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$WATCH_CALL"
+cat "$WATCH_RUNS"
+EOF
+chmod +x "$S/watch-bin/gh"
+ago() { date -u -d "$1 hours ago" +%Y-%m-%dT%H:%M:%SZ; }
+run_json() { # EVENT STATUS CONCLUSION HOURS-AGO
+  printf '{"event":"%s","status":"%s","conclusion":%s,"created_at":"%s"}' "$1" "$2" "$3" "$(ago "$4")"
+}
+watchdog() { # RUN...: the watchdog step against a gh that lists RUNs; its exit in $rc
+  local IFS=,
+  printf '{"total_count":%s,"workflow_runs":[%s]}' "$#" "$*" >"$S/runs.json"
+  rc=0
+  env -i PATH="$S/watch-bin:$PATH" RUNNER_TEMP="$S/runner" GH_TOKEN=x REPOSITORY=cyfrworks/cyfr WATCH_RUNS="$S/runs.json" \
+    WATCH_CALL="$S/watch-call" bash --noprofile --norc -eo pipefail "$S/wf-watchdog.sh" >"$S/watch.out" 2>&1 || rc=$?
+}
+watchdog "$(run_json workflow_dispatch completed '"failure"' 2)"
+[ "$rc" = 0 ] || fail "a red report two hours old did not satisfy it: $(cat "$S/watch.out")"
+grep -qx 'event=workflow_dispatch' "$S/watch-call" && grep -qx 'status=completed' "$S/watch-call" && grep -q '^created=>=' "$S/watch-call" ||
+  fail "it asked for: $(tr '\n' ' ' <"$S/watch-call")"
+watchdog "$(run_json workflow_dispatch completed '"success"' 25)"
+[ "$rc" = 0 ] || fail "a green report 25 hours old did not satisfy it: $(cat "$S/watch.out")"
+watchdog "$(run_json schedule completed '"success"' 1)" "$(run_json workflow_dispatch in_progress null 1)" \
+  "$(run_json workflow_dispatch completed '"cancelled"' 1)" "$(run_json workflow_dispatch completed '"success"' 27)"
+[ "$rc" = 1 ] || fail "its own run, a running report, a cancelled one and one 27 hours old satisfied it: $(cat "$S/watch.out")"
+grep -qF 'no report from the host' "$S/watch.out" || fail "it said: $(cat "$S/watch.out")"
+watchdog
+[ "$rc" = 1 ] || fail 'no run at all satisfied it'
 
 begin 'flakes: failing in both and flaky in one only where both runs completed alike, and unknown for an incomplete partition, an exit of 3 or exclusions in one run only, on either side'
 night="$S/night"
@@ -578,5 +795,16 @@ planted 'python3 -I tests/stage-probe.py cyfr-locus:review'
 planted 'python3 -I tests/stage-probe.py --self-check # no image'
 [ -z "$(guard "$S/stages-probe.tsv" "$S/workflows")" ] ||
   fail "a self-check with a comment after it was not counted: $(guard "$S/stages-probe.tsv" "$S/workflows")"
+
+begin "the real table's nightly runs the janitor and the two proofs no workflow runs, each on one quarter"
+status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/nightly-real.out" 2>"$S/nightly-real.err" || status=$?
+[ "$status" = 0 ] || fail "the nightly stage was refused: $(cat "$S/nightly-real.err")"
+grep -qxF 'would run janitor (1 quarter): scripts/janitor.sh' "$S/nightly-real.out" &&
+  grep -qx 'would run install-screen-proof (1 quarter): .* && tests/install-screen-proof/run.sh' "$S/nightly-real.out" &&
+  grep -qxF 'would run handle-proof (1 quarter): tests/handle-proof/run.sh' "$S/nightly-real.out" ||
+  fail "the nightly would run: $(cat "$S/nightly-real.out")"
+# The report's grammar holds no skipped row: every nightly row runs always.
+selected=$(awk -F'\t' '!/^#/ && $1 == "nightly" && $5 != "always" { print $2 }' "$ROOT/scripts/stages.tsv")
+[ -z "$selected" ] || fail "a nightly row has a selector: $selected"
 
 echo 'stage tests passed'

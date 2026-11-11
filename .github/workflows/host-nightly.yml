@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# The verification host's nightly, reported (scripts/nightly.sh,
+# CONTRIBUTING.md). Each night the host runs its nightly stage on main's
+# head, the janitor and the proofs no workflow runs, and triggers this
+# workflow with what the stage did: the commit, the stage's exit, its row
+# lines and the path of its logs on the host, nothing else. The report job
+# fails unless that exit is exactly 0, so a red night, or one whose check
+# did not run, is a failed run, which GitHub tells the account that
+# triggered it of, as it does for every run that account triggers.
+#
+# The watchdog, on a schedule, fails when no report run of this workflow,
+# triggered through workflow_dispatch as the host triggers it, completed
+# within the last 26 hours; its own runs never count. It costs one failed
+# run a day while the host is off, asleep past the night or cannot reach
+# GitHub.
+name: Host nightly
+run-name: ${{ github.event_name == 'schedule' && 'Host nightly watchdog' || format('Host nightly of {0}, exit {1}', inputs.commit, inputs.status) }}
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: The commit the host's nightly tested
+        required: true
+        type: string
+      status:
+        description: The nightly stage's exit status
+        required: true
+        type: string
+      summary:
+        description: The stage's row lines
+        required: false
+        type: string
+      logs:
+        description: The stage's log directory on the host
+        required: true
+        type: string
+  schedule:
+    # 10:17 in Taipei, hours after the host's 04:00 night has reported.
+    - cron: '17 2 * * *'
+permissions: {}
+jobs:
+  report:
+    name: The host's night
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The inputs are the host's, read only through the environment and
+      # held to what scripts/nightly.sh sends before any is printed. The
+      # runner reads a workflow command (::, or ##[ anywhere in a line) in
+      # what a step prints and splits lines at a carriage return, so no
+      # accepted input holds free text: a nightly row is never skipped, and
+      # each pattern below admits neither # nor [ nor a carriage return.
+      - name: The stage exited 0
+        env:
+          COMMIT: ${{ inputs.commit }}
+          STATUS: ${{ inputs.status }}
+          SUMMARY: ${{ inputs.summary }}
+          LOGS: ${{ inputs.logs }}
+        run: |
+          set -uo pipefail
+          row='^[a-z0-9-]+: (ok|failed [0-9]+|not run [0-9]+) [0-9]+s$'
+          well_formed=true
+          [[ $COMMIT =~ ^([0-9a-f]{40}( with changes)?|unknown)$ ]] || well_formed=false
+          [[ $STATUS =~ ^[0-9]{1,3}$ ]] || well_formed=false
+          [[ $LOGS =~ ^/[A-Za-z0-9._/-]+$ ]] || well_formed=false
+          while IFS= read -r line; do
+            [ -z "$line" ] || [[ $line =~ $row ]] || well_formed=false
+          done <<<"$SUMMARY"
+          if ! $well_formed; then
+            echo "::error::the host's report is not what scripts/nightly.sh sends: a commit, an exit status, row lines and a log path"
+            exit 1
+          fi
+          printf '%s\n' "$SUMMARY"
+          {
+            echo "## The host's nightly of $COMMIT"
+            echo
+            echo "The stage exited $STATUS. Its logs are in \`$LOGS\` on the host."
+            echo
+            echo '```text'
+            printf '%s\n' "$SUMMARY"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [ "$STATUS" != 0 ]; then
+            echo "::error::the host's nightly of $COMMIT exited $STATUS: a check failed or did not run; its logs are in $LOGS on the host"
+            exit 1
+          fi
+
+  watchdog:
+    name: A report arrived from the host
+    if: github.event_name == 'schedule' && github.repository == 'cyfrworks/cyfr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      # The query asks GitHub for the completed workflow_dispatch runs, and
+      # the filter holds each run to that itself.
+      - name: A report run completed within 26 hours
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          since=$(date -u -d '26 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh api -X GET "repos/$REPOSITORY/actions/workflows/host-nightly.yml/runs" \
+            -f event=workflow_dispatch -f status=completed -f created=">=$since" -f per_page=100 >"$RUNNER_TEMP/runs.json"
+          count=$(jq --arg since "$since" '[.workflow_runs[]
+            | select(.event == "workflow_dispatch" and (.conclusion == "success" or .conclusion == "failure")
+                and .created_at >= $since)] | length' "$RUNNER_TEMP/runs.json")
+          if [ "$count" = 0 ]; then
+            echo "::error::no report from the host's nightly completed since $since: the host is off, its timer did not run, or scripts/nightly.sh could not reach GitHub (systemctl --user status cyfr-nightly on the host)"
+            exit 1
+          fi
+          echo "$count report runs from the host since $since"
