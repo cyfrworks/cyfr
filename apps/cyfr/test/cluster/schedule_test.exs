@@ -11,14 +11,40 @@ defmodule Cyfr.Cluster.ScheduleTest do
   uniqueness on `(schedule_id, scheduled_for)` plus the transactional
   cursor advance means two members racing one due schedule produce one
   occurrence. Every member arms its own timer for every active schedule,
-  so in a cell that race happens on every tick of every schedule — which
-  is why it is worth a case with two real schedulers rather than three
-  strings standing in for members.
+  a schedule made on a peer included, at its scheduler's standing pass
+  (`Opus.Schedules.Scheduler`), so in a cell that race happens on every
+  tick of every schedule — which is why it is worth a case with two real
+  schedulers rather than three strings standing in for members.
   """
 
   use Cyfr.Cluster.Case, async: false
 
   describe "one due schedule" do
+    test "made on one member and cast to neither, is armed by both schedulers and claimed by one" do
+      athanor = Cell.call(:a, Fixtures, :athanor!, ["schedule-armed"])
+      schedule = Cell.call(:a, Fixtures, :due_schedule!, [athanor.id, 1])
+      boots = for member <- [:a, :b], do: Cell.call(member, Fixtures, :boot, [])
+
+      for member <- [:a, :b],
+          do: Cell.call(member, :erlang, :send, [Opus.Schedules.Scheduler, :standing_pass])
+
+      # Each scheduler armed the row it was never told of; the one whose
+      # claim lost re-arms for the cursor the winner moved, and the winner
+      # once its run has ended.
+      Wait.until!(
+        fn ->
+          Enum.all?([:a, :b], fn member ->
+            state = Cell.call(member, :sys, :get_state, [Opus.Schedules.Scheduler])
+            Map.has_key?(state.timers, schedule.id)
+          end) and Observer.occurrences(schedule.id) != []
+        end,
+        "both schedulers to arm the schedule and one to claim it"
+      )
+
+      assert [row] = Observer.occurrences(schedule.id)
+      assert row["claimed_by"] in boots
+    end
+
     test "is claimed by one member, and the other is told it is held" do
       athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["schedule"])
       schedule = Cell.call(:a, Cyfr.Cluster.Fixtures, :due_schedule!, [athanor.id, 60])
