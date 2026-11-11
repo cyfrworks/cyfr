@@ -25,7 +25,10 @@
 #   GET  /v1/legal/version             {"policy_version", "policies"}
 #   POST /v1/legal/accept              a signed policy.accept
 #   POST /v1/namespaces/personal/claim a signed handle.claim; a name another
-#                                      identifier holds is SLUG_TAKEN
+#                                      identifier holds is SLUG_TAKEN, the
+#                                      reserved name (RESERVED_NAME) is
+#                                      RESERVED and its lookup
+#                                      HANDLE_NOT_FOUND, as at cyfr.run
 #   GET  /account/config.json          the account service's configuration
 #                                      (CYFR plan user-system §7): its
 #                                      directory, itself as the registry,
@@ -80,6 +83,9 @@ MAX_ENTRY = 16_384
 PAGE_BYTES = 65_536 - 1_024
 MAX_POSITION = 2_147_483_647
 POLICY_VERSION = "stand-in-1"
+# The one name the stand-in holds reserved, as cyfr.run holds its own:
+# never claimed, and so never found.
+RESERVED_NAME = "admin"
 PROTOCOL = "cyfr-identity/v2"
 REQUEST_PROTOCOL = "cyfr-registry-request/v2"
 HANDLE_PROTOCOL = "cyfr-handle/v1"
@@ -236,6 +242,8 @@ class StandIn:
         handle = body["handle"]
         if not isinstance(handle, str) or not HANDLE.fullmatch(handle):
             raise registry_refusal(400, "INVALID_USERNAME")
+        if handle == RESERVED_NAME:
+            raise registry_refusal(400, "RESERVED")
         with self.state.lock:
             data = self.state.data
             if data["accepted"].get(identifier) != POLICY_VERSION:
