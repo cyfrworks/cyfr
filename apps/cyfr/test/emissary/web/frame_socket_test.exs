@@ -799,11 +799,16 @@ defmodule Emissary.Web.FrameSocketTest do
 
         :erlang.suspend_process(socket)
 
+        # Every change is in the connection's mailbox before it runs again.
+        # Subscription 2's forwarder hands them on one by one, and the
+        # connection counts what is behind the fact it is handling: resumed
+        # at 1,001 with the rest still on their way, it has 1,000 behind
+        # its first fact, which is not too far, and delivers it.
         try do
           for _ <- 1..1_100, do: changed(source)
 
           wait_until(
-            fn -> elem(Process.info(socket, :message_queue_len), 1) > 1_000 end,
+            fn -> elem(Process.info(socket, :message_queue_len), 1) >= 1_100 end,
             @answer_ms
           )
         after
