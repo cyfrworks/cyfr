@@ -119,7 +119,9 @@ defmodule Compendium.Provisioning do
   # keeper when this request dies mid-way; the whole fill then runs in the
   # background under a claim of its own, where the local half repeats over
   # what is already there. A local half that failed was recorded on the
-  # row and starts nothing more, as a failed fill does. A member that does
+  # row and starts nothing more, as a failed fill does, and so does a claim
+  # whose keeper could not be started, given back with nothing run under it
+  # (`Sanctum.Provisioning`'s "Giving the athanor back"). A member that does
   # not hold its slot starts nothing. A claim another attempt holds means
   # the athanor is being filled already and the sign-in goes on, even when
   # that attempt is a second sign-in answered at the same moment whose

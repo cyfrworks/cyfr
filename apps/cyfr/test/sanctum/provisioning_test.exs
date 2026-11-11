@@ -600,6 +600,69 @@ defmodule Sanctum.ProvisioningTest do
     refute Athanors.provisioning_failure(filled)
   end
 
+  # The whole shipped seed, where the other cases use reduced bundles: a
+  # later seed one of whose components declares an optional dependency the
+  # seed does not ship holds the first walk back, and this goes red.
+  test "with the real shipped seed, the shipped canvas is granted when the sign-in answers, " <>
+         "before any background fill has walked",
+       %{bundle_dir: bundle_dir} do
+    File.cp_r!(Path.expand("../../../../seed/components", __DIR__), bundle_dir)
+
+    canvas =
+      "tincture:local.canvas:" <> Cyfr.Test.SeedBundle.local_unit!("tinctures", "canvas").version
+
+    user = person(System.unique_integer([:positive]))
+    athanor_id = Sanctum.Test.People.athanor!(user).id
+    ctx = Provisioning.person_ctx(user.id, athanor_id)
+
+    # The fill's supervisor is away for the sign-in, so no background fill
+    # starts and what the sign-in answered with is its own local half's.
+    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
+    supervisor = Process.whereis(Compendium.ProvisioningSupervisor)
+    on_exit(fn -> registered!(Compendium.ProvisioningSupervisor, supervisor) end)
+    Process.unregister(Compendium.ProvisioningSupervisor)
+
+    {answer, log} =
+      with_log(fn ->
+        try do
+          Provisioning.after_sign_in(user.id)
+        after
+          registered!(Compendium.ProvisioningSupervisor, supervisor)
+        end
+      end)
+
+    assert answer == :ok
+    assert log =~ "background provisioning not started"
+
+    grant = Sanctum.Consent.TinctureGrant.fetch(ctx, canvas)
+
+    assert match?({:ok, %{revision: 1}}, grant),
+           "the shipped canvas is not granted when the sign-in answers (#{inspect(grant)}); " <>
+             "shipped components declaring an optional dependency the seed lacks: " <>
+             inspect(optional_missing(ctx))
+
+    assert {:ok, %{provisioned_at: nil}} = Athanors.get(athanor_id)
+  end
+
+  # Every installed component that declares an optional dependency not
+  # installed, with those dependencies.
+  defp optional_missing(ctx) do
+    {:ok, rows} = Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), limit: :none)
+
+    for row <- rows,
+        {:ok, [_ | _] = refs} <- [Compendium.Pull.missing_deps(ctx, row, include: :optional)],
+        do: {Prima.ComponentRow.node_key(row), refs}
+  end
+
+  # `name` registered to `supervisor` again, unless something holds the
+  # name already or the supervisor is gone.
+  defp registered!(name, supervisor) do
+    if Process.whereis(name) == nil and Process.alive?(supervisor),
+      do: Process.register(supervisor, name)
+
+    :ok
+  end
+
   test "a first need never waits on the caller already filling the athanor" do
     # The suite runs provisioning inline so its assertions can read rows
     # straight after the call; this one is about the real path, where the
@@ -1562,6 +1625,67 @@ defmodule Sanctum.ProvisioningTest do
       {:ok, hooked} = Athanors.get(hooked.id)
       refute hooked.provisioned_at
       assert %{step: "interrupted"} = Athanors.provisioning_failure(hooked)
+    end
+
+    # The keeper's supervisor away stands for every way it can be missing:
+    # not yet started at boot, gone in a shutdown or in its own restart.
+    test "a claim whose keeper cannot be started is given back and nothing runs under it: " <>
+           "the sign-in goes on, and the verb, a hook, an install and a boot's sync are answered",
+         %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir)
+
+      # A filled athanor, for the boot's sync.
+      synced = person(System.unique_integer([:positive]))
+      :ok = Provisioning.after_sign_in(synced.id)
+      synced_athanor = Sanctum.Test.People.athanor!(synced)
+      assert %DateTime{} = synced_athanor.provisioned_at
+
+      user = person(System.unique_integer([:positive]))
+      athanor = Sanctum.Test.People.athanor!(user)
+      ctx = Provisioning.person_ctx(user.id, athanor.id)
+
+      supervisor = Process.whereis(Sanctum.ProvisioningSupervisor)
+      on_exit(fn -> registered!(Sanctum.ProvisioningSupervisor, supervisor) end)
+      Process.unregister(Sanctum.ProvisioningSupervisor)
+
+      {answers, log} =
+        with_log(fn ->
+          try do
+            %{
+              sign_in: Provisioning.after_sign_in(user.id),
+              verb: Provisioning.provision(athanor, ctx),
+              hook: Provisioning.start_provisioning(ctx),
+              install: Filler.install_shipped(ctx, "catalyst:local.foo"),
+              sync: Filler.sync_seeds()
+            }
+          after
+            registered!(Sanctum.ProvisioningSupervisor, supervisor)
+          end
+        end)
+
+      assert %{sign_in: :ok, hook: :ok, sync: :ok} = answers
+      assert {:error, {:keeper_not_started, {:supervisor_down, {:noproc, _}}}} = answers.verb
+      assert {:error, {:keeper_not_started, {:supervisor_down, {:noproc, _}}}} = answers.install
+      assert log =~ "lease keeper not started"
+      assert log =~ "#{synced_athanor.id}: seed sync skipped"
+
+      # Each claim was given back as it was taken, and nothing ran under
+      # one: no row registered, no failure recorded, nothing filled.
+      for id <- [athanor.id, synced_athanor.id] do
+        assert {:ok, %{outcome: "released"} = claim} =
+                 Claims.current(%Prima.Actor{athanor_id: id})
+
+        refute Claims.live?(claim)
+      end
+
+      assert {:ok, []} = Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx))
+      {:ok, unfilled} = Athanors.get(athanor.id)
+      refute unfilled.provisioned_at
+      refute Athanors.provisioning_failure(unfilled)
+
+      # The supervisor back, the next sign-in fills the athanor.
+      assert :ok = Provisioning.after_sign_in(user.id)
+      assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(athanor.id)
     end
   end
 

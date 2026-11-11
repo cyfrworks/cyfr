@@ -95,7 +95,11 @@ defmodule Sanctum.Provisioning do
   A claim is given back by the attempt that holds it, or — for an attempt
   killed where it stands, which runs no `after` — by its keeper, which
   monitors it. With the keeper gone too nothing releases it and the lease
-  is the bound: one minute from the write that last stood for it.
+  is the bound: one minute from the write that last stood for it. A claim
+  whose keeper cannot be started at all (its supervisor not yet started,
+  or gone in a shutdown or a restart) is given back at once, nothing runs
+  under it, and its taker is answered `{:error, {:keeper_not_started,
+  reason}}` rather than exited.
 
   Either releaser stops what the attempt started beside itself first, and
   waits for it to have stopped (`bounded_work/3`). A release is never what
@@ -557,7 +561,13 @@ defmodule Sanctum.Provisioning do
   # quiesces whatever the attempt started beside itself, so the release
   # never discovers work still running: by then there is none.
   defp held(actor, claim, fun) do
-    keeper = keep(actor, claim)
+    case keep(actor, claim) do
+      {:ok, keeper} -> held_by(keeper, actor, claim, fun)
+      {:error, reason} -> unkept(actor, claim, reason)
+    end
+  end
+
+  defp held_by(keeper, actor, claim, fun) do
     previous = Process.put(@keeper_key, keeper)
 
     try do
@@ -599,20 +609,31 @@ defmodule Sanctum.Provisioning do
   defp keep(actor, claim) do
     attempt = self()
 
-    case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fn ->
-           # A timer, not a receive timeout: the renewal is due when the
-           # lease says, and a message the attempt sends must not put it
-           # off.
-           Process.send_after(self(), :renew, @renew_ms)
-           keep_loop(actor, claim, Process.monitor(attempt), [])
-         end) do
-      {:ok, keeper} ->
-        keeper
+    Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fn ->
+      # A timer, not a receive timeout: the renewal is due when the lease
+      # says, and a message the attempt sends must not put it off.
+      Process.send_after(self(), :renew, @renew_ms)
+      keep_loop(actor, claim, Process.monitor(attempt), [])
+    end)
+  catch
+    # A supervisor not yet started or already gone exits its caller
+    # instead of answering.
+    :exit, reason -> {:error, {:supervisor_down, reason}}
+  end
 
-      {:error, reason} ->
-        Logger.warning("[Provisioning] lease keeper not started: #{inspect(reason)}")
-        nil
-    end
+  # A claim no keeper stands for is given back before anything runs under
+  # it: nothing would renew its lease, release it if the attempt died, or
+  # stop what the attempt started beside itself. The taker is answered, so
+  # a request that took it on its way (a sign-in) goes on, and the next
+  # attempt fills the athanor.
+  defp unkept(actor, claim, reason) do
+    Logger.warning(
+      "[Provisioning] #{claim.athanor_id}: lease keeper not started (#{inspect(reason)}); " <>
+        "the claim is given back and nothing runs under it"
+    )
+
+    _ = Claims.release(actor, claim.owner, claim.fence)
+    {:error, {:keeper_not_started, reason}}
   end
 
   defp keep_loop(actor, claim, ref, started) do
@@ -693,8 +714,6 @@ defmodule Sanctum.Provisioning do
   # The attempt's side of the same handshake. A keeper that has already
   # stopped stopped its attempt's work with it, so its absence is an
   # answer.
-  defp stop_keeper(nil), do: :ok
-
   defp stop_keeper(keeper) do
     ref = Process.monitor(keeper)
     send(keeper, {:stop, self()})
