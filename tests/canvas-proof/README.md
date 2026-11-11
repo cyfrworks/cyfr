@@ -48,6 +48,12 @@ CANVAS_PROOF_VIEWPORT=desktop tests/canvas-proof/run.sh
 CANVAS_PROOF_VIEWPORT=720x720 tests/canvas-proof/run.sh
 ```
 
+On a host whose checks queue through `scripts/heavy-check.sh` the proof
+takes the whole machine, since a busy neighbour breaks the measurement's
+budgets (below): `scripts/heavy-check.sh -- env CANVAS_PROOF_VIEWPORT=desktop
+tests/canvas-proof/run.sh`. On one quarter (`-q 1`) it refuses with 64
+before anything starts.
+
 `desktop` is the PC (1280×900, posture `desk`); `720x720` is the phone
 (posture `hand`). Any other value fails the run before the server starts.
 `CANVAS_PROOF_HOST_CLASS` names the host class the measurement is held to

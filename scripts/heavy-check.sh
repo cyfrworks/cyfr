@@ -16,15 +16,16 @@
 # one or all four:
 #   4  (default) a gate, a close, a full or multi-partition suite, go test
 #      -race, a harness self-test that needs the machine, the load check,
-#      a timing measurement or the compose proof, whose shipped compose
-#      file publishes a fixed port. It sizes itself to the whole machine,
-#      or its tests carry timing bounds, so it runs alone.
+#      a timing measurement, the canvas proof, which is held to speed
+#      budgets, or the compose proof, whose shipped compose file publishes
+#      a fixed port. It sizes itself to the whole machine, or its tests
+#      carry timing bounds, so it runs alone.
 #   1  (-q 1) named test paths in one partition, a compile, dialyzer,
-#      credo, a light self-test, a browser, release or install proof, an
-#      image suite or build, a release boot, the janitor. Four run side by
-#      side, each on a quarter of its own. The command's own grammar
-#      decides what fits one quarter: it sees HEAVY_CHECK_HELD and refuses
-#      what does not.
+#      credo, a light self-test, a browser proof other than the canvas
+#      proof, a release or install proof, an image suite or build, a
+#      release boot, the janitor. Four run side by side, each on a
+#      quarter of its own. The command's own grammar decides what fits one
+#      quarter: it sees HEAVY_CHECK_HELD and refuses what does not.
 # Any other count is refused with 64, two included: no check takes half
 # the machine.
 # The machine is the lock file itself, held exclusively by a check on four
