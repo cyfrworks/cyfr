@@ -2184,7 +2184,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
-    "Sanctum.Session" => [cleanup: 0, destroy: 1, token_hash: 1],
+    "Sanctum.Session" => [cleanup: 0, destroy: 1, load_by_hash: 1, token_hash: 1],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SharedThreads" => [
       attachment: 4,
