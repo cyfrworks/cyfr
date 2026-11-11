@@ -785,7 +785,9 @@ screen_dump() {
 # there the pixels that are that orange now and were not before; orange of
 # the page's own is in both and counts for nothing. 30 pixels is less than
 # the smallest word's highlight and more than a stray pixel. The match
-# must be on the display: one scrolled out of view counts as none.
+# must be on the display: one scrolled out of view counts as none. A page
+# that moves orange of its own between the two dumps would count as a
+# match; nothing CYFR draws is that orange.
 screen_match() {
   local before="$GUEST_DIR/screen-find-before.ppm" after="$GUEST_DIR/screen-find-after.ppm" count
   screen_dump after || return 1
