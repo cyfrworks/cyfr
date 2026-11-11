@@ -852,8 +852,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     refute test_path?("apps/codex/internal/shell/device.go")
     assert test_path?("apps/cyfr/assets/test/account/pages.test.mjs")
     assert test_path?("tests/compose-proof/predicates.sh")
-    assert test_path?("seed/components/catalysts/local/claude-code/0.1.3/src/src/chat.rs")
-    assert "seed/components/catalysts/local/claude-code/0.1.3/src/src/chat.rs" in files
+    assert test_path?("seed/components/catalysts/local/claude-code/0.1.4/src/src/chat.rs")
+    assert "seed/components/catalysts/local/claude-code/0.1.4/src/src/chat.rs" in files
   end
 
   # ==========================================================================
