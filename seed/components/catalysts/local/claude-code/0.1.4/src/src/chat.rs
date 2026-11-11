@@ -649,7 +649,8 @@ pub fn models(listing: &[Value]) -> Value {
 /// A read names the lines its buffer no longer held between its `after`
 /// and its first line (`dropped`). A run's first read starts where no read
 /// of its own stood, so the lines an earlier run read past count there too,
-/// and it counts no loss. Every later read is past this run's own: a gap
+/// and it counts no loss, unless the run starts at the place an earlier
+/// run left (`at`). Every later read is past this run's own: a gap
 /// there is output the harness wrote and no one read (an ask or the turn's
 /// result among it, perhaps), so the turn cannot be answered from what is
 /// left. The session is closed, and the next chat starts the program again
@@ -663,6 +664,13 @@ struct Reader {
 impl Reader {
     fn new(session: &str, after: u64) -> Self {
         Reader { session: session.to_string(), after, first: true }
+    }
+
+    /// A reader that goes on from line `after`, which an earlier run read
+    /// and left: its first read is past a known place, so a gap there is a
+    /// loss like any later read's.
+    fn at(session: &str, after: u64) -> Self {
+        Reader { session: session.to_string(), after, first: false }
     }
 
     /// The next lines with their numbers, waiting at most `wait_ms`;
@@ -898,7 +906,7 @@ fn run<P: Pipe, S: Sink>(
         // the ask's line: what the harness wrote after it (another ask in
         // the same batch among it) is the turn's, and the run that
         // answered the ask never handled it.
-        Input::Answer { after, .. } if opened.resumed => Reader::new(&session, after),
+        Input::Answer { after, .. } if opened.resumed => Reader::at(&session, after),
         // What a running session holds unread is what earlier runs, each
         // answered, left behind: let go before this run sends anything.
         _ => {
@@ -1548,6 +1556,25 @@ mod tests {
                 v["type"] == "control_response" && v["response"]["request_id"] == request_id
             })
             .count()
+    }
+
+    #[test]
+    fn output_lost_after_the_ask_an_answer_goes_on_from_interrupts_the_session() {
+        let ask = r#"{"type":"control_request","request_id":"req-7","request":{"subtype":"can_use_tool","tool_name":"mcp__cyfr__files","input":{"action":"read","path":"a.txt"},"tool_use_id":"toolu_1"}}"#;
+        let unread = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"This output must not disappear."}]},"parent_tool_use_id":null}"#;
+        let mut pipe = Scripted::new(batched(vec![init_line(), ask.into(), unread.into()], "req-7"));
+        let mut deltas = Deltas::new(Vec::new());
+        let req = request(json!({"model":"default","messages":[{"role":"user","content":"Read a.txt"}]}));
+        let answer = chat(&mut pipe, &mut deltas, &req, ID.into(), soon()).unwrap();
+        let call = answer["content"].as_array().unwrap().iter().find(|b| b["type"] == "tool_call").unwrap();
+        let after = call["provider_data"]["after"].as_u64().unwrap();
+        assert!(pipe.held.iter().any(|(seq, _)| *seq == after + 1));
+        pipe.held.retain(|(seq, _)| *seq != after + 1);
+        pipe.resumed = true;
+        let refusal = chat(&mut pipe, &mut deltas, &answered(&answer), "unused".into(), soon())
+            .expect_err("the relay lost output after the ask's line; the answer must not end the turn");
+        assert!(refusal.message.contains("interrupted"), "{refusal:?}");
+        assert!(pipe.log.iter().any(|line| line.starts_with("close ")), "{:?}", pipe.log);
     }
 
     #[test]
