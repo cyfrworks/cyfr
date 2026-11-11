@@ -355,7 +355,7 @@ defmodule Compendium.OCI.ClientTest do
 
     setup :start_registry
 
-    test "the README and every source file are stored in the pulled version, byte for byte",
+    test "the manifest, the README and every source file are stored in the pulled version, byte for byte",
          ctx do
       %{registry: registry, a: a} = ctx
       allow(ctx.agent, ["Bearer tok_a"])
@@ -384,6 +384,8 @@ defmodule Compendium.OCI.ClientTest do
       actor = Sanctum.Context.actor(a)
 
       assert {:ok, ^readme} = Arca.get(actor, version ++ ["README.md"])
+      manifest = config_fixture()
+      assert {:ok, ^manifest} = Arca.get(actor, version ++ ["cyfr-manifest.json"])
 
       for {path, content} <- files do
         assert {:ok, ^content} = Arca.get(actor, version ++ ["src" | String.split(path, "/")]),

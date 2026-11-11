@@ -152,12 +152,13 @@ defmodule Compendium.Providers.AquaListTest do
     # The role is one the fill ships, listed while its file reads.
     assert {:ok, listed} = list(ctx)
     assert "explorer" in names(listed)
+    readable = names(listed) -- ["explorer"]
 
     storage!(UnreadableRole)
     assert {:ok, listed} = list(ctx)
     assert ["aqua" | _] = names(listed)
     refute "explorer" in names(listed)
-    assert Enum.take(names(listed), -3) == @guides
+    assert names(listed) == readable
   end
 
   test "an athanor that holds no agents answers its guides", %{ctx: ctx} do

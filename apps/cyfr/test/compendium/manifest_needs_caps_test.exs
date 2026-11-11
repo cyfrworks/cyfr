@@ -325,11 +325,20 @@ defmodule Compendium.ManifestNeedsCapsTest do
   end
 
   describe "the limits roster stays bound to Prima.Limits" do
-    test "Caps admits every field Limits clamps, and refuses a field it does not" do
+    test "the limit keys Caps admits are exactly the fields Limits clamps" do
       # Caps holds a string-keyed copy (the manifest is JSON; Caps is
       # Apache, Limits is FSL) — this pin is what makes the copy safe. A
       # new clamped limit must be admitted at publish, or manifests
-      # declaring it are refused while every downstream reader accepts it.
+      # declaring it are refused while every downstream reader accepts it;
+      # a key Caps admits that Limits does not clamp is accepted at publish
+      # and raises when the manifest is derived (`limit_key/1`). Caps
+      # exposes no roster, so the admitted set is read from the one place
+      # it is spelled: the `only_keys/3` call `validate_limits/1` makes.
+      assert Enum.sort(caps_limit_keys()) ==
+               Prima.Limits.fields() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+    end
+
+    test "Caps admits every field Limits clamps, and refuses a field it does not" do
       # Each field is asked of Caps itself, under each value form a limit
       # takes.
       forms = [1, "30s", %{"requests" => 1, "window" => "1m"}]
@@ -412,5 +421,45 @@ defmodule Compendium.ManifestNeedsCapsTest do
       assert {:error, {:invalid_dependencies, _}} =
                Manifest.validate(%{"dependencies" => ["catalyst:local.files"]})
     end
+  end
+
+  @caps_source Path.expand("../../../prima/lib/prima/manifest/caps.ex", __DIR__)
+
+  # The limit keys `Prima.Manifest.Caps.validate_limits/1` admits, read from
+  # its `only_keys(limits, keys, :limits)` call with each module attribute
+  # it names resolved from the source's own definition.
+  defp caps_limit_keys do
+    ast = Prima.Test.SourceTree.quoted(@caps_source)
+
+    {_ast, attributes} =
+      Macro.prewalk(ast, %{}, fn
+        {:@, _, [{name, _, [{:sigil_w, _, [{:<<>>, _, [words]}, []]}]}]} = node, acc ->
+          {node, Map.put(acc, name, String.split(words))}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    {_ast, keys} =
+      Macro.prewalk(ast, [], fn
+        {:only_keys, _, [_limits, expression, :limits]} = node, acc ->
+          {node, [resolve_keys(expression, attributes) | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    assert [admitted] = keys, "Caps' source no longer names its limit keys in one only_keys call"
+    admitted
+  end
+
+  defp resolve_keys({:++, _, [left, right]}, attributes),
+    do: resolve_keys(left, attributes) ++ resolve_keys(right, attributes)
+
+  defp resolve_keys({:@, _, [{name, _, nil}]}, attributes), do: Map.fetch!(attributes, name)
+
+  defp resolve_keys(list, _attributes) when is_list(list) do
+    assert Enum.all?(list, &is_binary/1)
+    list
   end
 end
