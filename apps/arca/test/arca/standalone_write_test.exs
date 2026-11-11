@@ -707,9 +707,16 @@ defmodule Arca.StandaloneWriteLockTest do
   defp close_before_count!(writer, conn) do
     assert_receive {:closing, ^conn}, 10_000
     true = :erlang.suspend_process(writer.pid)
-    send(conn, :close)
-    assert_receive {:disconnected, ^conn}, 30_000
-    true = :erlang.resume_process(writer.pid)
+
+    # The writer is this test's task: a test that fails here ends it through
+    # their link before the VM lifts the suspension, and a suspended process
+    # ended inside the driver can take the whole VM with it.
+    try do
+      send(conn, :close)
+      assert_receive {:disconnected, ^conn}, 30_000
+    after
+      true = :erlang.resume_process(writer.pid)
+    end
   end
 
   # A standalone `update_all` of `query` on the pool whose connection the
