@@ -1542,6 +1542,19 @@ defmodule Aqua.Loop do
     end
   end
 
+  # The setup form is the consent sheet for the ref, opened on the sender's
+  # page as a launch that needs consent opens it.
+  defp execute(%State{} = state, _step, %Call{kind: :ui, tool: "request_setup", args: args}) do
+    with ref when is_binary(ref) <- Map.get(args, "component_ref"),
+         {:ok, _parsed} <- Prima.ComponentRef.parse(ref) do
+      announce(state, :consent_required, %{ref: ref, user_id: ctx(state).user_id})
+      {:ok, "The setup form for #{ref} is open for the person"}
+    else
+      _invalid ->
+        {:error, "request_setup.open: component_ref must be a component reference"}
+    end
+  end
+
   defp execute(%State{} = state, _step, %Call{kind: :ui, args: args}) do
     case Aqua.Intents.validate(args) do
       {:ok, intent} ->

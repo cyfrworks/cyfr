@@ -268,6 +268,26 @@ defmodule Aqua.LoopTest do
 
   defp roots, do: Prima.Slots.status(Opus.Slots).root_active
 
+  test "request_setup.open opens the setup form for its component and the turn goes on",
+       %{ctx: ctx, thread: thread} do
+    ref = "catalyst:local.claude:1.4.1"
+
+    script!([
+      calls([{"c1", "request_setup", %{"action" => "open", "component_ref" => ref}}]),
+      reply("ok")
+    ])
+
+    turn = accept!(ctx, thread, "set up the model")
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+    user = ctx.user_id
+
+    assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ^ref, user_id: ^user}},
+                   5_000
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert %{outcome: "ok"} = Enum.find(steps, &(&1.kind == "ui"))
+  end
+
   test "a reply lands as rows before the turn ends, and the root is let go", %{
     ctx: ctx,
     thread: thread
