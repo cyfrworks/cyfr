@@ -1298,12 +1298,20 @@ defmodule Arca.FencedPublicationLockTest do
   @moduledoc """
   `Arca.FencedPublication.publish/3` under real concurrency, on
   connections of its own outside the sandbox: a takeover that holds the
-  lease row while a publication waits on it wins, a publication's shared
-  hold on its member's row does not make the member's next publication
-  wait while a writer of the row does, a reservation that runs out while
-  a publication waits is refused, the sweep never reclaims an attempt a
-  live publication holds, and a publication that outran its budget rolls
-  back with the slot left as it was.
+  lease row while a publication waits on it wins, a publication's hold on
+  its member's row makes neither the member's next publication nor its
+  renew wait while a take does, a renew landing during a publication
+  makes it wait for nothing, a reservation that runs out while a
+  publication waits behind a take is refused, the sweep never reclaims an
+  attempt a live publication holds, and a publication that outran its
+  budget rolls back with the slot left as it was.
+
+  What makes a publication wait is a take or a release, which hold the
+  lease row `FOR UPDATE` from their read to their commit
+  (`Arca.ControlPlane`); `taking/1` stands in for one, the lock taken
+  alone, since the product's take records this process's standing and
+  takes over only a lapsed lease, which would refuse the publication on
+  its own.
 
   PostgreSQL only: SQLite's one write lock serializes every transaction,
   so there is no wait inside one to observe.
@@ -1345,11 +1353,16 @@ defmodule Arca.FencedPublicationLockTest do
     staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
 
     taker =
-      holding(fn ->
-        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node),
-          set: [owner: ctx.node <> "#boot_b", generation: slot.generation + 1, fence: 2]
-        )
-      end)
+      holding(
+        fn ->
+          lock_row!(ctx.node)
+
+          Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node),
+            set: [owner: ctx.node <> "#boot_b", generation: slot.generation + 1, fence: 2]
+          )
+        end,
+        &Arca.Repo.locking_transaction/1
+      )
 
     publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
     refute Task.yield(publisher, 300), "the publication passed a lease row a takeover held"
@@ -1359,7 +1372,7 @@ defmodule Arca.FencedPublicationLockTest do
     assert :not_found = unboxed(fn -> FencedPublication.document(ctx.actor, ctx.key) end)
   end
 
-  test "a member's publications share its lease row, and a writer of the row waits for them",
+  test "a member's publications share its lease row with its renew, and a take waits for them",
        ctx do
     slot = unboxed(fn -> slot!(ctx.node) end)
     staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
@@ -1374,19 +1387,53 @@ defmodule Arca.FencedPublicationLockTest do
                5_000
              )
 
-    # The claimant's renew does.
-    renewer =
+    # Nor does the claimant's renew.
+    assert {1, _} = Task.await(Task.async(fn -> unboxed(fn -> renew!(ctx.node) end) end), 5_000)
+
+    # A take does.
+    taker =
+      Task.async(fn ->
+        unboxed(fn -> Arca.Repo.locking_transaction(fn -> lock_row!(ctx.node) end) end)
+      end)
+
+    refute Task.yield(taker, 300), "a take locked a lease row a publication held"
+    release(verifier)
+    assert {:ok, _row} = Task.await(taker, 25_000)
+  end
+
+  test "a renew landing during a publication waits for nothing and changes nothing it judges",
+       ctx do
+    slot = unboxed(fn -> slot!(ctx.node) end)
+    staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
+    unboxed(fn -> expires_in!(staged, 5_000) end)
+    test = self()
+
+    publisher =
       Task.async(fn ->
         unboxed(fn ->
-          Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node),
-            set: [fence: 2]
+          FencedPublication.publish(
+            %Change{resource: {:document, ctx.actor.athanor_id, ctx.key}, staged: staged},
+            0,
+            slot,
+            also: fn _revision ->
+              send(test, {:publishing, self()})
+
+              receive do
+                :finish -> :ok
+              end
+            end
           )
         end)
       end)
 
-    refute Task.yield(renewer, 300), "a renew wrote a lease row a publication held"
-    release(verifier)
-    assert {1, _} = Task.await(renewer, 25_000)
+    assert_receive {:publishing, pid}, 5_000
+
+    # The renew commits while the publication is open, and the publication
+    # then lands within its budget and its reservation, under the slot.
+    assert {1, _} = Task.await(Task.async(fn -> unboxed(fn -> renew!(ctx.node) end) end), 5_000)
+    send(pid, :finish)
+    assert {:ok, 1} = Task.await(publisher, 25_000)
+    assert %{revision: 1} = unboxed(fn -> FencedPublication.document(ctx.actor, ctx.key) end)
   end
 
   test "a reservation that runs out while the publication waits is refused :expired", ctx do
@@ -1394,15 +1441,12 @@ defmodule Arca.FencedPublicationLockTest do
     staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
     unboxed(fn -> expires_in!(staged, 200) end)
 
-    renewer =
-      holding(fn ->
-        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node), set: [fence: 2])
-      end)
+    taker = taking(ctx.node)
 
     publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
     refute Task.yield(publisher, 400)
 
-    release(renewer)
+    release(taker)
     assert {:error, :expired} = Task.await(publisher, 25_000)
 
     # Unpublished and past its reservation: the sweep's to reclaim.
@@ -1457,14 +1501,11 @@ defmodule Arca.FencedPublicationLockTest do
     staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
     held = Arca.ControlPlane.held()
 
-    renewer =
-      holding(fn ->
-        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node), set: [fence: 2])
-      end)
+    taker = taking(ctx.node)
 
     publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
     Process.sleep(FencedPublication.budget_ms() + 200)
-    release(renewer)
+    release(taker)
 
     assert {:error, :budget} = Task.await(publisher, 25_000)
     assert :not_found = unboxed(fn -> FencedPublication.document(ctx.actor, ctx.key) end)
@@ -1510,6 +1551,26 @@ defmodule Arca.FencedPublicationLockTest do
   defp release(task) do
     send(task.pid, :commit)
     Task.await(task, 25_000)
+  end
+
+  # A take's or a release's hold on the lease row, until `release/1`.
+  defp taking(node), do: holding(fn -> lock_row!(node) end, &Arca.Repo.locking_transaction/1)
+
+  defp lock_row!(node) do
+    from(l in CellLease, where: l.node == ^node)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one!()
+  end
+
+  # The claimant's renew, as `Arca.ControlPlane.renew/1` writes it: the
+  # lease pushed out and the fence raised, no key column changed.
+  defp renew!(node) do
+    now = Arca.ServerMetaStorage.now!()
+
+    Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node),
+      set: [lease_until: DateTime.add(now, 60_000, :millisecond), updated_at: now],
+      inc: [fence: 1]
+    )
   end
 
   defp publish(ctx, staged, revision, slot) do
