@@ -449,6 +449,41 @@ func TestRestoreRefusesAStorageRootItCannotWrite(t *testing.T) {
 	}
 }
 
+// A scaffold directory this person cannot write refuses the same way, on
+// either database, before the first scaffold file is put back: the put-back
+// writes the scaffold first, and a refusal after it would leave the stack
+// partly restored, stopped and barred.
+func TestRestoreRefusesAScaffoldDirectoryItCannotWrite(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("every directory is writable to root, and Windows has no such mode")
+	}
+	for adapter, env := range map[string]map[string]string{
+		"sqlite":   nil,
+		"postgres": {"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL},
+	} {
+		t.Run(adapter, func(t *testing.T) {
+			r := newRestoreScenario(t, shippedCompose(t), env, nil)
+			before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+			keeper := read(t, filepath.Join(r.project, "keeper.seccomp.json"))
+			wit := filepath.Join(r.project, "wit", "cyfr")
+			if err := os.Chmod(wit, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(wit, 0o755) })
+			out, err := r.restore(true)
+			if err == nil || !strings.Contains(err.Error(), "write "+filepath.Join("wit", "cyfr")+":") || !strings.Contains(err.Error(), "run the same cyfr restore as root, with sudo") ||
+				!strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+				t.Fatalf("restore answered %v\n%s", err, out)
+			}
+			r.stoppedUndeclared()
+			r.configAsBefore(before, string(r.env))
+			if got := read(t, filepath.Join(r.project, "keeper.seccomp.json")); got != keeper {
+				t.Error("a scaffold file was put back before the refusal")
+			}
+		})
+	}
+}
+
 // A declaration that fails, prints no id or prints one that does not read
 // leaves the stack stopped and never starts it, the parts being back; the
 // bar stays in .env, so a later 'cyfr up' refuses too.

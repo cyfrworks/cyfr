@@ -856,27 +856,43 @@ func (r *restorer) probeRestoredPostgres() error {
 	return nil
 }
 
-// refuseUnwritableParts refuses, before any part is put back, a storage
-// root or SQLite file this process cannot replace: the image's entrypoint
-// hands the storage root to the image's user at every start, so on native
-// Linux a person who is not root cannot clear or rename what it holds.
-// Every directory the put-back enters is checked, each mount's whole tree
-// and a missing one's nearest existing parent.
+// refuseUnwritableParts refuses, before any part is put back, a place
+// the put-back writes or removes in that this process cannot: the image's
+// entrypoint hands the storage root to the image's user at every start,
+// so on native Linux a person who is not root cannot clear or rename what
+// it holds. The places are putParts's, in its order, so that once this
+// passes no later step fails for a permission: the project directory
+// (publishCompose and the barrier's lowering), each scaffold file's
+// directory, each storage mount's directory and every directory clearDir
+// removes or empties under it, and the SQLite file's directory. A place
+// that does not exist yet is made in its nearest existing parent.
 func (r *restorer) refuseUnwritableParts() error {
-	var dirs []string
-	if r.config.storage == "local" {
-		for _, m := range r.config.storageMounts {
+	c := r.config
+	dirs := []string{"."}
+	for _, name := range r.snap.manifest.Scaffold {
+		_, err := os.Lstat(filepath.Join(r.snap.dir, "scaffold", name))
+		if _, held := os.Lstat(name); errors.Is(err, fs.ErrNotExist) && errors.Is(held, fs.ErrNotExist) {
+			continue
+		}
+		dirs = append(dirs, filepath.Dir(name))
+	}
+	if c.storage == "local" {
+		keep := sqliteKeep(c.sqliteFile)
+		for i, m := range c.storageMounts {
 			if !m.dir {
 				dirs = append(dirs, filepath.Dir(m.host))
 				continue
 			}
+			covered, _ := mountCover(c.storageMounts, i, r.snap.path("storage"), keep)
 			err := filepath.WalkDir(m.host, func(p string, d fs.DirEntry, err error) error {
 				switch {
 				case errors.Is(err, fs.ErrNotExist) && p == m.host:
-					dirs = append(dirs, filepath.Dir(m.host))
+					dirs = append(dirs, m.host)
 					return nil
 				case err != nil:
 					return err
+				case covered[p] && d.IsDir():
+					return fs.SkipDir
 				case d.IsDir():
 					dirs = append(dirs, p)
 				}
@@ -887,8 +903,8 @@ func (r *restorer) refuseUnwritableParts() error {
 			}
 		}
 	}
-	if r.config.adapter == "sqlite" {
-		dirs = append(dirs, filepath.Dir(r.config.sqliteFile))
+	if c.adapter == "sqlite" {
+		dirs = append(dirs, filepath.Dir(c.sqliteFile))
 	}
 	for _, dir := range dirs {
 		for {
@@ -908,7 +924,7 @@ func (r *restorer) refuseUnwritableParts() error {
 // this person. It names no snapshot directory: the refusal is redacted,
 // and .env holds that directory as the barrier's value.
 func unwritable(err error) error {
-	return fmt.Errorf("cyfr restore cannot replace what the CYFR server stores as you (%v): the server's container owns its storage once the stack has run, so run the same cyfr restore as root, with sudo", err)
+	return fmt.Errorf("cyfr restore cannot put the snapshot back as you (%v): the server's container owns its storage once the stack has run, so run the same cyfr restore as root, with sudo", err)
 }
 
 // refuseLiveMembers reads the live slots of the database the restore writes,
@@ -943,13 +959,7 @@ func (r *restorer) putParts() error {
 	}
 	if c.storage == "local" {
 		fmt.Fprintln(r.out, "Putting the storage root back...")
-		keep := map[string]bool{}
-		if c.sqliteFile != "" {
-			for _, suffix := range []string{"", "-wal", "-shm"} {
-				keep[filepath.Clean(c.sqliteFile+suffix)] = true
-			}
-		}
-		if err := restoreStorage(c.storageMounts, r.snap.path("storage"), keep, r.out); err != nil {
+		if err := restoreStorage(c.storageMounts, r.snap.path("storage"), sqliteKeep(c.sqliteFile), r.out); err != nil {
 			return err
 		}
 	}
@@ -960,6 +970,39 @@ func (r *restorer) putParts() error {
 	return r.restorePostgres()
 }
 
+// sqliteKeep are the host paths of the SQLite file at file and its WAL and
+// shared-memory index, which the storage put-back leaves to the
+// database's own (restoreSQLite); none for no file.
+func sqliteKeep(file string) map[string]bool {
+	keep := map[string]bool{}
+	if file != "" {
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			keep[filepath.Clean(file+suffix)] = true
+		}
+	}
+	return keep
+}
+
+// mountCover is what the put-back of mounts[i] leaves alone: covered, the
+// host paths under it it neither removes nor enters (keep and the places
+// a deeper mount covers), and skip, the snapshot paths under src it does
+// not copy in (the deeper mounts' own).
+func mountCover(mounts []storageMount, i int, src string, keep map[string]bool) (covered, skip map[string]bool) {
+	m := mounts[i]
+	covered, skip = maps.Clone(keep), map[string]bool{}
+	for _, deeper := range mounts[i+1:] {
+		rest, ok := deeper.rel, m.rel == ""
+		if !ok {
+			rest, ok = strings.CutPrefix(deeper.rel, m.rel+"/")
+		}
+		if ok {
+			covered[filepath.Join(m.host, filepath.FromSlash(rest))] = true
+			skip[filepath.Join(src, filepath.FromSlash(deeper.rel))] = true
+		}
+	}
+	return covered, skip
+}
+
 // restoreStorage puts the snapshot's storage/ back at the mounts making up
 // the storage root, shallower first. Each mount's own bytes are replaced:
 // what it holds is removed and the snapshot's copied in, but for the host
@@ -967,18 +1010,7 @@ func (r *restorer) putParts() error {
 // does not see through this mount.
 func restoreStorage(mounts []storageMount, src string, keep map[string]bool, out io.Writer) error {
 	for i, m := range mounts {
-		covered := maps.Clone(keep)
-		skip := map[string]bool{}
-		for _, deeper := range mounts[i+1:] {
-			rest, ok := deeper.rel, m.rel == ""
-			if !ok {
-				rest, ok = strings.CutPrefix(deeper.rel, m.rel+"/")
-			}
-			if ok {
-				covered[filepath.Join(m.host, filepath.FromSlash(rest))] = true
-				skip[filepath.Join(src, filepath.FromSlash(deeper.rel))] = true
-			}
-		}
+		covered, skip := mountCover(mounts, i, src, keep)
 		from := filepath.Join(src, filepath.FromSlash(m.rel))
 		if !m.dir {
 			if err := os.MkdirAll(filepath.Dir(m.host), 0700); err != nil {
