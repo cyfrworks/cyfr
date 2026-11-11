@@ -565,8 +565,10 @@ defmodule Compendium.OCI.ClientTest do
   # With signed pulls required, a pull stores a component only when cosign
   # verified the manifest the pull fetched: cosign is asked about
   # `<registry>/<repository>@<digest>` with the digest the pull stores, and
-  # its answer must name that digest and a signer. The stand-in cosign is a
-  # script under the test's own directory, named by the sigstore config.
+  # its answer must name that digest. A keyless verification records no
+  # signer and a keyed one records its key (`Compendium.Cosign`). The
+  # stand-in cosign is a script under the test's own directory, named by the
+  # sigstore config.
   describe "signed pulls" do
     @repo "alice/reagents/pinned"
 
@@ -591,7 +593,7 @@ defmodule Compendium.OCI.ClientTest do
     end
 
     @tag :capture_log
-    test "a tag pull is verified at the digest it fetched and records the signer", ctx do
+    test "a keyless tag pull is verified at the digest it fetched and records no signer", ctx do
       cosign(ctx, signs: ctx.pin)
 
       assert {:ok, %{manifest_digest: pin}} = Client.pull(ctx.a, ctx.tag_ref)
@@ -600,8 +602,10 @@ defmodule Compendium.OCI.ClientTest do
 
       assert {:ok, component} = Compendium.Registry.get(ctx.a, "pinned", "1.0.0", "alice")
       assert component.signature_verified == true
-      assert component.signer_identity == "release@example.com"
-      assert component.signer_issuer == "https://accounts.google.com"
+      # The answer's annotations claim a subject and issuer; a keyless
+      # verification records neither.
+      assert component.signer_identity == nil
+      assert component.signer_issuer == nil
     end
 
     @tag :capture_log
@@ -776,8 +780,9 @@ defmodule Compendium.OCI.ClientTest do
 
   # Writes the stand-in cosign and points the sigstore config at it. It
   # appends the reference it is asked about to `refs`, then: `signs:` answers
-  # a verified entry for that digest only (without certificate claims when
-  # `subject: false`, as a keyed signature answers) and refuses any other
+  # a verified entry for that digest only, in cosign 3's bundle-format shape
+  # with a signer-written subject and issuer among its annotations (none when
+  # `subject: false`), and refuses any other
   # reference as real cosign would; `answers:` names the given digest whatever it was
   # asked; `hangs:` never answers (a short timeout keeps the test bounded;
   # the production default stays 30 s).
@@ -820,9 +825,10 @@ defmodule Compendium.OCI.ClientTest do
       "critical" => %{
         "identity" => %{"docker-reference" => "registry"},
         "image" => %{"docker-manifest-digest" => digest},
-        "type" => "cosign container image signature"
+        "type" => "https://sigstore.dev/cosign/sign/v1"
       },
       "optional" => %{
+        "GIT_VERSION" => "v3.1.4",
         "Subject" => "release@example.com",
         "Issuer" => "https://accounts.google.com"
       }

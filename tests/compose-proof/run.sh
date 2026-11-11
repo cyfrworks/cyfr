@@ -96,10 +96,10 @@
 #          TestSnapshotsHoldNeitherTheTailnetStateNorTheAccessState. The
 #          restore alone runs as root, in a container of a pinned docker
 #          CLI image with the host's docker and the project directory at
-#          its own path, since a non-root person's restore cannot put back
-#          a storage root the container's entrypoint has handed to the
-#          image's user (a defect outside this proof); every other
-#          CYFR command runs as the person.
+#          its own path, as `cyfr restore` tells a person to once the
+#          container's entrypoint has handed the storage root to the
+#          image's user (the restore-person case holds that refusal);
+#          every other CYFR command runs as the person.
 #
 #   shutdown
 #          `docker compose stop cyfr` ends within the stop_grace_period
@@ -131,6 +131,37 @@
 #          bin/cyfr eval <declaration>`, boots past the release's
 #          configuration and answers the restore's id.
 #
+#   restore-person
+#          `cyfr restore` run as the person, who is not root, once the
+#          stack has run and the entrypoint has handed the storage root to
+#          the image's user: refused before any part is put back, with the
+#          sentence that names the same restore as root and says
+#          docker-compose.yml and .env are as they were. Both files are
+#          byte for byte what they were, no restore bar is left in .env,
+#          and `cyfr up` starts the home again.
+#
+#   runtime
+#          a component run on the shipped cyfr by the real runtime: the
+#          project's locus-runtime service started from the Locus image
+#          built from the tree, with every setting the shipped file gives
+#          it and the keys `cyfr init` wrote (the root in cyfr's .env, the
+#          key it derives for wrk_locus beside it), so cyfr dispatches to
+#          the worker URL the shipped file names and the runtime calls back
+#          at the host API address it names, each side checking the other's
+#          signature. The worker URL and the host API URL resolve to the
+#          shipped file's values. A signed-in person grants the seed's
+#          catalyst:local.files through the consent walk (plan, preview,
+#          commit) and runs it through the console twice, writing a mark
+#          to their athanor's files and reading it back, so both runs reach
+#          the host API; each run completes with the catalyst's answer.
+#          The app image's cosign, the one `Compendium.Cosign` finds on
+#          PATH, run in the cyfr service as `docker compose run` runs it
+#          (its entrypoint, its user, the shipped file's environment), is
+#          the version scripts/cosign.sh pins and verifies a signed image
+#          keyed and keyless (scripts/cosign.sh check). The runs wait for
+#          the person's athanor to read filled, the product's own
+#          readiness, before the first one.
+#
 # The project is the run's own: its directory is named for the run, which
 # makes the compose project the command line derives from it one no other
 # stack on this host has; it holds a copy of docker-compose.yml, the
@@ -155,7 +186,10 @@
 # three times fails the run, naming the project). Nothing of a deployed
 # stack on the same host is touched.
 #
-# Usage: tests/compose-proof/run.sh --case bind|modes|interrupt|restore-identity|shutdown|restore
+# Usage: tests/compose-proof/run.sh --case bind|modes|interrupt|restore-identity|shutdown|restore|restore-person
+#        tests/compose-proof/run.sh --case runtime --locus-image LOCUS_IMAGE
+# LOCUS_IMAGE, the runtime case's alone, is the Locus image built from the
+# tree (Dockerfile.locus), which the run does not build.
 # COMPOSE_PROOF_IMAGE names the app image (default cyfr:compose-proof);
 # COMPOSE_PROOF_SKIP_BUILD=1 reuses that image as a previous run or build
 # left it; COMPOSE_PROOF_KEEP=1 keeps the scratch directory. Needs docker,
@@ -164,23 +198,29 @@
 # image it builds, tagged cyfr:compose-proof.
 set -euo pipefail
 
-CASES="bind|modes|interrupt|restore-identity|shutdown|restore"
+CASES="bind|modes|interrupt|restore-identity|shutdown|restore|restore-person|runtime"
 usage() {
-  echo "usage: $0 --case $CASES" >&2
+  echo "usage: $0 --case $CASES [--locus-image LOCUS_IMAGE]" >&2
   exit 2
 }
 
 CASE=""
+LOCUS_IMAGE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --case)
       CASE="${2:-}"
       shift 2
       ;;
+    --locus-image)
+      LOCUS_IMAGE="${2:-}"
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
-case "$CASE" in bind | modes | interrupt | restore-identity | shutdown | restore) ;; *) usage ;; esac
+case "$CASE" in bind | modes | interrupt | restore-identity | shutdown | restore | restore-person | runtime) ;; *) usage ;; esac
+if [ "$CASE" = runtime ]; then [ -n "$LOCUS_IMAGE" ] || usage; else [ -z "$LOCUS_IMAGE" ] || usage; fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -205,10 +245,13 @@ cyfr_id=""
 # The signed-in person's athanor (sign_in).
 SEGMENT=""
 
+# The project's compose command: `compose` runs it, and COMPOSE_CMD spells
+# it whole for a program that runs it (scripts/cosign.sh check run).
+COMPOSE_CMD=(docker compose --project-name "$RUN" --project-directory "$WORK"
+  -f "$WORK/docker-compose.yml" -f "$WORK/docker-compose.override.yml"
+  --profile public --profile tailnet --profile locus-builds)
 compose() {
-  docker compose --project-name "$RUN" --project-directory "$WORK" \
-    -f "$WORK/docker-compose.yml" -f "$WORK/docker-compose.override.yml" \
-    --profile public --profile tailnet --profile locus-builds "$@"
+  "${COMPOSE_CMD[@]}" "$@"
 }
 
 # shellcheck source=tests/compose-proof/cleanup.sh
@@ -315,7 +358,7 @@ cyfr_cli() {
 }
 
 # The docker CLI image the restore-identity case runs `cyfr restore` in, as
-# root (docker:29.8.1-cli).
+# root, as a person's refused restore says to (docker:29.8.1-cli).
 ROOT_CLI_IMAGE="docker:29.8.1-cli@sha256:018edbc908e08fcc9dbf029c812c34251e9b4719e6f71ca0e5eae2a987d014ca"
 
 # The command line's run `$2...` as root, in a container of ROOT_CLI_IMAGE
@@ -876,11 +919,29 @@ project_new() {
   fi
   env_set PROOF_APP_IMAGE "$IMAGE"
   env_set PROOF_TAILSCALE_IMAGE "$STANDIN_IMAGE"
+  if [ "$CASE" = runtime ]; then
+    env_set PROOF_LOCUS_IMAGE "$LOCUS_IMAGE"
+    runtime_overlay
+  fi
   (umask 077 && printf 'tskey-auth-proof%s\n' "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')" >"$AUTH_KEY_FILE")
   ok "wrote $WORK/.env: CYFR_ACCESS=$(env_value CYFR_ACCESS), builds off"
   # Once the project resolves, so a refused copy leaves a project its
   # teardown can take down.
   proof_caddyfile
+}
+
+# The runtime case's overlay: the runtime's profile, which keeps it from
+# every other case, replaced by the Locus image the run names, so `cyfr
+# up` starts it with every other setting the shipped file gives it.
+runtime_overlay() {
+  python3 -I - "$WORK/docker-compose.override.yml" <<'PY' || fail "the overlay holds no runtime block to lift"
+import sys
+path = sys.argv[1]
+text = open(path).read()
+block = '  locus-runtime:\n    profiles: ["proof-never"]\n'
+assert text.count(block) == 1
+open(path, "w").write(text.replace(block, '  locus-runtime:\n    image: ${PROOF_LOCUS_IMAGE:?set PROOF_LOCUS_IMAGE}\n    pull_policy: never\n'))
+PY
 }
 
 # The island networks exist before cyfr joins them, with IPv6: the plain
@@ -2091,6 +2152,169 @@ restore_case() {
 }
 
 # ---------------------------------------------------------------------------
+# restore-person
+# ---------------------------------------------------------------------------
+
+restore_person_case() {
+  local snapshot status compose_before env_before
+  [ "$(id -u)" != 0 ] || fail "the restore-person case is a person's who is not root; this run is root's"
+
+  step "restore-person: a snapshot taken with the stack stopped, then the stack started again"
+  cli_ok down-first down
+  snapshot="$(snapshot_take)"
+  cli_ok up-again up
+  expect_head local localhost
+  ok "snapshot $snapshot; the running home's entrypoint has handed data/ to the image's user"
+  compose_before="$(sha256sum <"$WORK/docker-compose.yml")"
+  env_before="$(sha256sum <"$WORK/.env")"
+
+  step "restore-person: cyfr restore as the person is refused before any part is put back"
+  status=0
+  cli_run restore-person restore "$snapshot" || status=$?
+  [ "$status" -ne 0 ] || fail "cyfr restore as the person exited 0: $(tail -n 20 "$WORK/restore-person.log")"
+  for said in "run the same cyfr restore as root, with sudo" \
+    "nothing of the snapshot was put back" \
+    "docker-compose.yml and .env are as they were. Start the stack again with 'cyfr up'"; do
+    grep -qF -- "$said" "$WORK/restore-person.log" ||
+      fail "the refusal does not say \"$said\": $(tail -n 20 "$WORK/restore-person.log")"
+  done
+  [ "$(sha256sum <"$WORK/docker-compose.yml")" = "$compose_before" ] || fail "the refused restore changed docker-compose.yml"
+  [ "$(sha256sum <"$WORK/.env")" = "$env_before" ] || fail "the refused restore changed .env"
+  [ -z "$(env_value "$(barrier name)")" ] || fail "the refused restore left $(barrier name) in .env"
+  ok "exit $status: $(grep -m1 -F 'as root, with sudo' "$WORK/restore-person.log")"
+
+  step "restore-person: the home starts again"
+  cli_ok up-after up
+  expect_head local localhost
+  ok "cyfr up started the home the refused restore stopped"
+}
+
+# ---------------------------------------------------------------------------
+# runtime
+# ---------------------------------------------------------------------------
+
+# The environment value `$2` of service `$3` in the resolved project `$1`
+# (compose config's JSON), or nothing.
+service_env() {
+  printf '%s' "$1" | python3 -I -c '
+import json, sys
+env = json.load(sys.stdin)["services"][sys.argv[2]].get("environment") or {}
+print(env.get(sys.argv[1]) or "")' "$2" "$3"
+}
+
+# The console's run of catalyst:local.files with the input `$2` (JSON), for
+# the person whose session is `$1`: the session established as a request
+# establishes it, with the interactive origin the console's admission path
+# gives it (`CyfrWeb.ContextGuard`), then the console's adapter onto the
+# operation catalog. Answers the catalyst's answer as JSON, or the case
+# fails.
+files_run() {
+  local answer
+  answer="$(cyfr_rpc "{:ok, console} = Sanctum.Caller.establish({:session, \"$1\"})
+    input = Jason.decode!(~S($2))
+    answer =
+      case PrismWeb.Ops.call_tool(%{console | origin: :interactive}, \"execution/run\",
+             %{\"reference\" => \"catalyst:local.files:0.5.2\", \"input\" => input}) do
+        {:ok, ran} -> %{ok: ran}
+        {:error, reason} -> %{error: inspect(reason)}
+      end
+    IO.puts(\"RAN=\" <> Jason.encode!(answer))" | sed -n 's/^RAN=//p' | tail -1)"
+  printf '%s' "$answer" | python3 -I -c '
+import json, sys
+ran = json.load(sys.stdin)["ok"]
+assert ran["status"] == "completed", ran
+result = ran["result"]
+print(json.dumps(json.loads(result) if isinstance(result, str) else result))' ||
+    fail "the run of catalyst:local.files did not complete: ${answer:0:800}"
+}
+
+runtime_case() {
+  local shipped project workers host_api runtime_id health signed_in token cosign fill granted mark written read_back
+  step "the runtime's wiring is the shipped file's"
+  shipped="$(cd "$WORK" && docker compose --project-name "$RUN-shipped" -f "$WORK/docker-compose.yml" config --format json)"
+  project="$(compose config --format json)"
+  workers="$(service_env "$project" CYFR_LOCUS_RUNTIME_WORKERS cyfr)"
+  host_api="$(service_env "$project" LOCUS_RUNTIME_HOST_API_URL locus-runtime)"
+  [ -n "$workers" ] && [ "$workers" = "$(service_env "$shipped" CYFR_LOCUS_RUNTIME_WORKERS cyfr)" ] ||
+    fail "cyfr's worker URL '$workers' is not the shipped file's"
+  [ -n "$host_api" ] && [ "$host_api" = "$(service_env "$shipped" LOCUS_RUNTIME_HOST_API_URL locus-runtime)" ] ||
+    fail "the runtime's host API URL '$host_api' is not the shipped file's"
+  [ -n "$(env_value CYFR_LOCUS_RUNTIME_ROOT)" ] && [ -n "$(env_value LOCUS_RUNTIME_KEY)" ] ||
+    fail "cyfr init wrote no runtime root or derived key"
+  ok "cyfr dispatches to $workers; the runtime calls $host_api; the root and its derived key are init's"
+
+  step "the runtime is up and healthy"
+  health="" runtime_id=""
+  for _ in $(seq 1 120); do
+    runtime_id="$(compose ps -q locus-runtime 2>/dev/null || true)"
+    [ -z "$runtime_id" ] || health="$(docker inspect --format '{{.State.Health.Status}}' "$runtime_id" 2>/dev/null || true)"
+    [ "$health" = healthy ] && break
+    sleep 1
+  done
+  [ "$health" = healthy ] ||
+    fail "locus-runtime is ${health:-not running} after 120 s: $(docker logs --tail 30 "$runtime_id" 2>&1 || true)"
+  ok "locus-runtime runs $LOCUS_IMAGE and is healthy"
+
+  step "a person signed in on cyfr, as the release proofs sign one in"
+  signed_in="$(cyfr_fixture person operator@example.com compose-proof-runtime)"
+  token="$(jget "$signed_in" token)"
+  [ -n "$token" ] && [ "$token" != null ] || fail "the release fixture signed nobody in: '$signed_in'"
+  ok "operator@example.com is signed in"
+
+  step "the person's athanor reads filled, as the sign-in's fill leaves it"
+  # Polled through the product's own reading (Sanctum.Provisioning.status/1)
+  # under one deadline; nothing but :ready lets the runs start.
+  fill="$(cyfr_rpc "{:ok, ctx} = Sanctum.Caller.establish({:session, \"$token\"})
+    deadline = System.monotonic_time(:millisecond) + 120_000
+    settle = fn settle ->
+      case Sanctum.Provisioning.status(ctx) do
+        :filling ->
+          if System.monotonic_time(:millisecond) < deadline,
+            do: (Process.sleep(250); settle.(settle)),
+            else: :filling
+        other -> other
+      end
+    end
+    IO.puts(\"FILL=#{settle.(settle)}\")" | sed -n 's/^FILL=//p')"
+  [ "$fill" = ready ] || fail "the person's athanor reads '${fill:-nothing}', not ready, within 120 s of the sign-in"
+  ok "the athanor reads ready"
+
+  step "the person grants catalyst:local.files, as the console's consent walk does"
+  # The plan, its preview and the commit (Sanctum.Consent), for the
+  # person's interactive origin: the grant every run of the catalyst is
+  # admitted under.
+  granted="$(cyfr_rpc "{:ok, console} = Sanctum.Caller.establish({:session, \"$token\"})
+    ctx = %{console | origin: :interactive}
+    decisions = %{ref: \"catalyst:local.files\", origins: [:interactive]}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: \"catalyst:local.files\"})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+    {:ok, %{revision: revision}} = Sanctum.Consent.Commit.commit(ctx, %{decisions: decisions,
+      plan_token: plan.plan_token, proof: preview.proof, commit_digest: preview.commit_digest,
+      expected_consent_revision: plan.expected_consent_revision})
+    IO.puts(\"GRANTED=#{revision}\")" | sed -n 's/^GRANTED=//p')"
+  [ -n "$granted" ] || fail "the consent walk for catalyst:local.files committed nothing"
+  ok "catalyst:local.files is granted at consent revision $granted"
+
+  step "the person runs catalyst:local.files on the runtime: a mark written, then read back"
+  mark="$(mark)"
+  written="$(files_run "$token" "{\"action\": \"write_text\", \"path\": \"data/compose-proof.txt\", \"content\": \"$mark\"}")"
+  [ "$(jget "$written" status)" = ok ] && [ "$(jget "$written" bytes_written)" = "${#mark}" ] ||
+    fail "the write answered $written"
+  read_back="$(files_run "$token" '{"action": "read_text", "path": "data/compose-proof.txt"}')"
+  [ "$(jget "$read_back" content)" = "$mark" ] || fail "the read answered $read_back, not the mark $mark"
+  ok "the runtime ran both: wrote ${#mark} bytes and read $mark back"
+
+  step "the app image's cosign, as Compendium.Cosign finds it and as the cyfr service runs it"
+  cosign="$(cyfr_rpc 'IO.puts("COSIGN=" <> (System.find_executable("cosign") || "none"))' | sed -n 's/^COSIGN=//p')"
+  [ -n "$cosign" ] && [ "$cosign" != none ] || fail "the running cyfr finds no cosign on its PATH"
+  # A one-off container of the cyfr service takes the service's fixed
+  # addresses, which the running cyfr holds: the service stops first.
+  compose stop cyfr >"$WORK/stop-cyfr.log" 2>&1 || fail "docker compose stop cyfr failed: $(cat "$WORK/stop-cyfr.log")"
+  "$ROOT/scripts/cosign.sh" check run cyfr "${COMPOSE_CMD[@]}" run --rm --no-deps -T || fail "the cyfr service's cosign does not verify"
+  ok "cyfr finds $cosign, which verifies keyed and keyless as the service runs it"
+}
+
+# ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
 
@@ -2104,6 +2328,8 @@ if [ "${COMPOSE_PROOF_SKIP_BUILD:-}" != 1 ]; then
   ok "built $IMAGE"
 fi
 docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "the image $IMAGE is not built"
+[ -z "$LOCUS_IMAGE" ] || docker image inspect "$LOCUS_IMAGE" >/dev/null 2>&1 ||
+  fail "the Locus image $LOCUS_IMAGE is not built"
 
 project_new
 
@@ -2120,11 +2346,24 @@ case "$CASE" in
   restore-identity)
     restore_identity_case
     ;;
-  shutdown | restore)
+  shutdown | restore | restore-person)
     step "up: a local home, as a project of this run's own"
     cli_ok up-local up
     expect_head local localhost
-    if [ "$CASE" = shutdown ]; then shutdown_case; else restore_case; fi
+    case "$CASE" in
+      shutdown) shutdown_case ;;
+      restore) restore_case ;;
+      restore-person) restore_person_case ;;
+    esac
+    ;;
+  runtime)
+    # The head's predicate holds the project to cyfr and its proxy alone;
+    # this case runs the runtime beside them, and its subject is the
+    # runtime's wiring, not the access head.
+    step "up: a local home with the runtime, as a project of this run's own"
+    cli_ok up-local up
+    await_healthy
+    runtime_case
     ;;
 esac
 

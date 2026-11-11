@@ -101,9 +101,9 @@ jobs:
   # `cyfr init` writes carries no sources to build them from.
   #
   # One build per image and platform. It loads the image for the scan and
-  # pushes the same result by digest alone: no tag names it, so a digest
-  # whose scan fails stays where no version or `latest` reaches it, and a
-  # concurrent run cannot move what this run merges.
+  # the boot and pushes the same result by digest alone: no tag names it,
+  # so a digest whose scan or boot fails stays where no version or `latest`
+  # reaches it, and a concurrent run cannot move what this run merges.
   images:
     needs: [version, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
     if: github.repository == 'cyfrworks/cyfr'
@@ -201,6 +201,15 @@ jobs:
           scripts/ci/scanned-is-pushed.sh "$SCANNED" "$PUSHED" "$DIGEST"
           mkdir -p digest
           echo "$DIGEST" > "digest/$ARCH"
+
+      # On the platform's own runner, so the arm64 image is started on
+      # arm64: a digest whose image does not start and answer its health
+      # probe is never uploaded, so no merge reaches it.
+      - name: The image boots
+        env:
+          IMAGE: ${{ matrix.image }}
+          LOADED: cyfr-scan/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
+        run: scripts/ci/image-boots.sh "$IMAGE" "$LOADED"
 
       - name: Upload the digest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

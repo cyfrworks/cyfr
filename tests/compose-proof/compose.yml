@@ -22,7 +22,10 @@
 #     clients stand for a tailnet's devices;
 #   - the Locus runtime and backends services under a profile no head
 #     selects: the proof is of cyfr and its access, and starts no Locus
-#     service, as builds are off in its .env.
+#     service, as builds are off in its .env. The runtime case alone puts
+#     the Locus image built from the tree in place of the runtime's profile
+#     (run.sh `runtime_overlay`), named by a variable of the run's .env; the
+#     runtime keeps every other setting the shipped file gives it.
 services:
   cyfr:
     image: ${PROOF_APP_IMAGE:?set PROOF_APP_IMAGE}

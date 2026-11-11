@@ -28,6 +28,11 @@ RUN mix local.hex --force && mix local.rebar --force
 # sha256 by the one installer (scripts/wasm-tools.sh).
 COPY scripts/wasm-tools.sh scripts/wasm-tools.sh
 RUN scripts/wasm-tools.sh install /opt/wasm-tools
+# The pinned cosign a pull's signature is verified with
+# (`Compendium.Cosign`, run from PATH), checked against the pinned sha256
+# by its installer (scripts/cosign.sh).
+COPY scripts/cosign.sh scripts/cosign.sh
+RUN scripts/cosign.sh install /opt/cosign
 
 COPY mix.exs mix.lock ./
 COPY --parents apps/*/mix.exs ./
@@ -97,6 +102,7 @@ WORKDIR /app
 
 COPY --from=builder /app/_build/prod/rel/cyfr ./
 COPY --from=builder /opt/wasm-tools/wasm-tools /usr/local/bin/wasm-tools
+COPY --from=builder /opt/cosign/cosign /usr/local/bin/cosign
 
 # License notices (Fair Source: Apache-2.0 default + FSL-1.1-Apache-2.0 on Sanctum)
 COPY LICENSE FAIR_SOURCE.md /app/
@@ -124,6 +130,13 @@ ENV CYFR_SEED_PATH=/app/seed
 RUN mkdir -p /app/data \
     && chown app:app /app/data
 ENV RELEASE_TMP=/tmp
+# cosign's Sigstore trust root cache (TUF metadata, refreshed from
+# Sigstore's repository), which every verification reads and writes. The
+# entrypoint drops to `app` with HOME still /root, where cosign's default
+# cache is unwritable, so the cache sits in the container's own scratch
+# beside the release's temporary files: never in data/, which is the
+# operator's, and rebuilt from the network after a container is recreated.
+ENV TUF_ROOT=/tmp/sigstore
 
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh

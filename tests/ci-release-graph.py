@@ -7,7 +7,8 @@
 # version apps/prima/mix.exs declares, can neither be cancelled nor let a
 # failure pass, builds both images for both platforms with the scan reading
 # the loaded image and each image's upgrade layer refreshed on the UTC date
-# (APT_REFRESH, read by both Dockerfiles), merges each image's two digests
+# (APT_REFRESH, read by both Dockerfiles), boots each loaded image on its
+# platform's runner before its digest is uploaded, merges each image's two digests
 # by exact name, attests the merge's printed digest and hands it to the
 # CLI release, which pins the scaffold's compose to the merged digests,
 # writes release.json, checks it and signs it before GoReleaser attaches
@@ -141,6 +142,9 @@ PUSH_BY_DIGEST = (
     "push-by-digest=true,name-canonical=true,push=true"
 )
 LOAD = "type=docker,name="
+# The boot of each loaded image on its platform's runner
+# (scripts/ci/image-boots.sh), before its digest is uploaded.
+BOOT_RUN = 'scripts/ci/image-boots.sh "$IMAGE" "$LOADED"'
 # The upgrade layer's cache key: one build argument, the output of a step
 # that writes the UTC date on every run, so each image's upgrade refreshes
 # daily (Dockerfile and Dockerfile.locus read it as ARG APT_REFRESH).
@@ -346,6 +350,16 @@ def check_build(wf):
     ]
     if None in order or order != sorted(order):
         return "the digest is not uploaded after the scan and the comparison", name
+    boots = steps_running(job, "scripts/ci/image-boots.sh")
+    if len(boots) != 1 or str(boots[0].get("run", "")).strip() != BOOT_RUN:
+        return f"the loaded image is not booted once by {BOOT_RUN!r}", name
+    if "if" in boots[0]:
+        return f"the boot runs only if {boots[0]['if']}", name
+    if boots[0].get("env") != {"IMAGE": "${{ matrix.image }}", "LOADED": loaded}:
+        return f"the boot starts {boots[0].get('env')}, not {loaded} as its matrix image", name
+    boot = step_index(job, lambda s: "scripts/ci/image-boots.sh" in str(s.get("run")))
+    if boot > order[2]:
+        return "the digest is uploaded before the image booted", name
     return None, name
 
 
@@ -2130,6 +2144,33 @@ def comparison_ignored(wf):
     step["run"] = step["run"].replace('"$DIGEST"\n', '"$DIGEST" || :\n', 1)
 
 
+def boot_step(wf):
+    return next(s for s in wf["jobs"]["images"]["steps"] if "image-boots.sh" in str(s.get("run")))
+
+
+def no_boot(wf):
+    wf["jobs"]["images"]["steps"].remove(boot_step(wf))
+
+
+def boot_amd64_only(wf):
+    boot_step(wf)["if"] = "matrix.platform == 'linux/amd64'"
+
+
+def boot_after_upload(wf):
+    steps = wf["jobs"]["images"]["steps"]
+    step = boot_step(wf)
+    steps.remove(step)
+    steps.append(step)
+
+
+def boot_of_another_image(wf):
+    boot_step(wf)["env"]["LOADED"] = "${{ env.REGISTRY }}/${{ matrix.image }}"
+
+
+def boot_skipped(wf):
+    boot_step(wf)["run"] = "true"
+
+
 def release_widened(wf):
     wf["jobs"]["release"]["permissions"]["packages"] = "write"
 
@@ -2532,6 +2573,11 @@ MUTANTS = [
     ("a scan whose findings never fail it", scan_never_fails),
     ("|| : after the scanned-is-pushed check", comparison_ignored),
     ("packages: write on the CLI release", release_widened),
+    ("no boot of the loaded image", no_boot),
+    ("the boot on amd64 alone", boot_amd64_only),
+    ("the boot after the digest's upload", boot_after_upload),
+    ("the boot of an image the build did not load", boot_of_another_image),
+    ("a boot step that runs nothing", boot_skipped),
     ("no switch to the containerd image store", no_store_switch("images")),
     ("the store switch after buildx's setup", store_switch_after_buildx),
     ("the store switch after the build", store_switch_after_build),

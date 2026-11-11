@@ -1555,9 +1555,9 @@ func (args ExecutionRunArgs) MarshalJSON() ([]byte, error) {
 }
 
 type ExecutionRunArgsVerify struct {
-	// Required signer identity (e.g., 'alice@example.com')
+	// The signer identity the component's row must record, exactly: a keyed signature records 'key:sha256:<hex>' of its key; a keyless one records none, so a pin on it is refused
 	Identity Field[string] `json:"identity,omitzero"`
-	// Required OIDC issuer (e.g., 'https://github.com/login/oauth')
+	// The signer issuer the component's row must record, exactly: 'key' for a keyed signature; a keyless one records none, so a pin on it is refused
 	Issuer Field[string] `json:"issuer,omitzero"`
 }
 
@@ -1596,9 +1596,9 @@ func (args ExecutionRunStreamArgs) MarshalJSON() ([]byte, error) {
 }
 
 type ExecutionRunStreamArgsVerify struct {
-	// Required signer identity (e.g., 'alice@example.com')
+	// The signer identity the component's row must record, exactly: a keyed signature records 'key:sha256:<hex>' of its key; a keyless one records none, so a pin on it is refused
 	Identity Field[string] `json:"identity,omitzero"`
-	// Required OIDC issuer (e.g., 'https://github.com/login/oauth')
+	// The signer issuer the component's row must record, exactly: 'key' for a keyed signature; a keyless one records none, so a pin on it is refused
 	Issuer Field[string] `json:"issuer,omitzero"`
 }
 
