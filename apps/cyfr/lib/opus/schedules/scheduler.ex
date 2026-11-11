@@ -284,9 +284,12 @@ defmodule Opus.Schedules.Scheduler do
 
   @impl true
   # A member that does not hold its cell slot claims no occurrence: the
-  # schedule is asked again at the recheck.
+  # schedule is asked again at the recheck. The message can be an older
+  # timer's, fired as the standing pass replaced it: the timer the state
+  # holds is cancelled, never just dropped, so no timer runs that the
+  # state does not hold.
   def handle_info({:fire, schedule_id}, state) do
-    state = %{state | timers: Map.delete(state.timers, schedule_id)}
+    state = cancel_timer(schedule_id, state)
 
     if Arca.ControlPlane.held?(),
       do: {:noreply, fire_schedule(schedule_id, state)},
@@ -313,7 +316,7 @@ defmodule Opus.Schedules.Scheduler do
   end
 
   def handle_info({:recheck, schedule_id}, state) do
-    state = %{state | timers: Map.delete(state.timers, schedule_id)}
+    state = cancel_timer(schedule_id, state)
 
     if Arca.ControlPlane.held?(),
       do: {:noreply, schedule_timer(schedule_id, state)},

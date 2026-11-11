@@ -208,6 +208,114 @@ defmodule Opus.Schedules.SchedulerTest do
     :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
   end
 
+  # Every timer the scheduler armed while it worked through `fun` that is
+  # still running, beside the ones its state holds.
+  defp armed_while(scheduler, fun) do
+    :erlang.trace_pattern({:erlang, :send_after, 4}, [{:_, [], [{:return_trace}]}], [])
+    :erlang.trace(scheduler, true, [:call, {:tracer, self()}])
+
+    on_exit(fn -> :erlang.trace_pattern({:erlang, :send_after, 4}, false, []) end)
+
+    fun.()
+    _ = :sys.get_state(scheduler)
+    :erlang.trace(scheduler, false, [:call])
+    refs = armed_refs(scheduler, [])
+    live = Enum.filter(refs, &is_integer(Process.read_timer(&1)))
+    state = :sys.get_state(scheduler)
+
+    held = [
+      state.standing_ref,
+      state.recovery_ref | Enum.map(state.timers, fn {_, {ref, _}} -> ref end)
+    ]
+
+    {live, held}
+  end
+
+  defp armed_refs(scheduler, refs) do
+    receive do
+      {:trace, ^scheduler, :return_from, {:erlang, :send_after, 4}, ref} ->
+        armed_refs(scheduler, [ref | refs])
+
+      {:trace, ^scheduler, :call, {:erlang, :send_after, _args}} ->
+        armed_refs(scheduler, refs)
+    after
+      50 -> refs
+    end
+  end
+
+  test "an old timer that fires behind the standing pass that replaced it leaves no timer the state does not hold",
+       %{ctx: ctx} do
+    script!([])
+
+    schedule =
+      create_schedule(ctx, %{next_run_at: DateTime.add(DateTime.utc_now(), 500, :millisecond)})
+
+    scheduler = scheduler!()
+    {old_timer, _armed_for} = :sys.get_state(scheduler).timers[schedule.id]
+    :ok = :sys.suspend(scheduler)
+    on_exit(fn -> if Process.alive?(scheduler), do: :sys.resume(scheduler) end)
+
+    {:ok, _} =
+      CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+        next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+      })
+
+    # The pass is queued first, the old timer's message behind it.
+    send(scheduler, :standing_pass)
+    wait_until(fn -> Process.read_timer(old_timer) == false end, 2_000)
+
+    {live, held} = armed_while(scheduler, fn -> :ok = :sys.resume(scheduler) end)
+    assert live -- held == []
+  end
+
+  test "a retry timer outlives a moved cursor, and a pause cancels it", %{ctx: ctx} do
+    script!([])
+    schedule = create_schedule(ctx, %{next_run_at: DateTime.add(DateTime.utc_now(), -1, :second)})
+    lose_ownership(:lost)
+    scheduler = scheduler!()
+
+    wait_until(
+      fn -> match?({_ref, :retry}, :sys.get_state(scheduler).timers[schedule.id]) end,
+      2_000
+    )
+
+    {retry, :retry} = :sys.get_state(scheduler).timers[schedule.id]
+    Arca.ControlPlane.record(:unclaimed)
+    actor = Sanctum.Context.actor(ctx)
+
+    {:ok, _} =
+      CronSchedule.update(actor, schedule.id, %{
+        next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+      })
+
+    send(scheduler, :standing_pass)
+    assert {^retry, :retry} = :sys.get_state(scheduler).timers[schedule.id]
+
+    {:ok, _} = CronSchedule.update(actor, schedule.id, %{status: "paused"})
+    send(scheduler, :standing_pass)
+    refute Map.has_key?(:sys.get_state(scheduler).timers, schedule.id)
+    assert Process.read_timer(retry) == false
+  end
+
+  test "a long recheck timer is replaced when a peer moves the row", %{ctx: ctx} do
+    script!([])
+
+    schedule =
+      create_schedule(ctx, %{next_run_at: DateTime.add(DateTime.utc_now(), 7200, :second)})
+
+    scheduler = scheduler!()
+    {old, _armed_for} = :sys.get_state(scheduler).timers[schedule.id]
+    next = DateTime.add(DateTime.utc_now(), 10_800, :second)
+    {:ok, _} = CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{next_run_at: next})
+
+    send(scheduler, :standing_pass)
+    assert {new, armed_for} = :sys.get_state(scheduler).timers[schedule.id]
+    assert DateTime.compare(armed_for, next) == :eq
+    refute new == old
+    assert Process.read_timer(old) == false
+    assert is_integer(Process.read_timer(new))
+  end
+
   test "a schedule a peer made due is armed again at the standing pass, its old timer cancelled",
        %{ctx: ctx} do
     script!([{:probe, self()}, %{"ran" => true}])
