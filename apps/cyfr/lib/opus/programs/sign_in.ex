@@ -49,14 +49,15 @@ defmodule Opus.Programs.SignIn do
     Process.flag(:trap_exit, true)
     owner = Keyword.fetch!(args, :owner)
 
+    params = %{
+      program: Keyword.fetch!(args, :program),
+      home_id: Keyword.fetch!(args, :home_id),
+      key: Keyword.fetch!(args, :key),
+      mode: :sign_in
+    }
+
     with {:ok, grant} <- Opus.Programs.hold(Map.put(owner, :sign_in, true)),
-         {:ok, %{session: session}} <-
-           Session.open(grant, %{
-             program: Keyword.fetch!(args, :program),
-             home_id: Keyword.fetch!(args, :home_id),
-             key: Keyword.fetch!(args, :key),
-             mode: :sign_in
-           }) do
+         {:ok, grant, %{session: session}} <- open(grant, owner, params) do
       relay = self()
       reader = spawn_link(fn -> read(relay, grant, session, 0) end)
 
@@ -79,6 +80,26 @@ defmodule Opus.Programs.SignIn do
       {:error, reason} ->
         Opus.Programs.release(owner)
         {:stop, {:shutdown, reason}}
+    end
+  end
+
+  # An open refused for a boot the service no longer runs tells the box the
+  # boot its answer names and holds the owner again, which answers once the
+  # owner is synced under that boot; then it is opened once more.
+  defp open(grant, owner, params) do
+    case Session.open(grant, params) do
+      {:ok, opened} ->
+        {:ok, grant, opened}
+
+      {:error, {:refused, :stale_boot, boot}} when is_binary(boot) and boot != grant.boot ->
+        Opus.Programs.boot_seen(boot)
+
+        with {:ok, grant} <- Opus.Programs.hold(Map.put(owner, :sign_in, true)),
+             {:ok, opened} <- Session.open(grant, params),
+             do: {:ok, grant, opened}
+
+      {:error, _reason} = refused ->
+        refused
     end
   end
 

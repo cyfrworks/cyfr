@@ -1521,8 +1521,24 @@ defmodule Opus.Programs.Box do
   defp settle(state, {:hello} = job, spec, result), do: settle_job(state, job, spec, result)
 
   defp settle(state, job, spec, result) do
-    state |> observe_boot(answer_boot(result)) |> settle_job(job, spec, result)
+    boot = answer_boot(result)
+    state = observe_boot(state, boot)
+
+    if resent?(job, spec, boot, result),
+      do: enqueue_front(state, job),
+      else: settle_job(state, job, spec, result)
   end
+
+  # A home, homes or status call the service refused for a boot it no
+  # longer runs is sent again, after the box greets the boot the answer
+  # names: a restart of the service fails none of them, and the boot that
+  # answered never refuses the same call twice.
+  defp resent?(job, spec, boot, result) when elem(job, 0) in [:home, :homes, :status],
+    do: stale_boot?(spec.boot, boot) and refusal(result) == :stale_boot
+
+  defp resent?(_job, _spec, _boot, _result), do: false
+
+  defp stale_boot?(sent_under, answered), do: is_binary(answered) and answered != sent_under
 
   defp answer_boot({:http, _status, boot, _body}), do: boot
   defp answer_boot({:synced, answer, _names, _count}), do: answer_boot(answer)
@@ -1821,6 +1837,7 @@ defmodule Opus.Programs.Box do
     open = %{
       owner: key,
       grant: grant,
+      params: params,
       pipe: {elem(key, 0), elem(key, 1), params.home_id, params.key},
       holder: holder,
       from: from,
@@ -1855,6 +1872,22 @@ defmodule Opus.Programs.Box do
         else
           if open.from, do: GenServer.reply(open.from, {:error, :deadline})
           unclaimed(state, open, session)
+        end
+
+      # Refused for a boot the service no longer runs: the box greets the
+      # one the answer names, and the open waits for its owner's sync
+      # under it, once.
+      {:error, {:refused, :stale_boot, boot}} when open.from != nil ->
+        if stale_boot?(open.grant.boot, boot) and holds?(state, open) do
+          state = observe_boot(state, boot)
+          entry = state.owners[open.owner]
+
+          state
+          |> park_pipe_open(open.owner, entry, open.holder, open.params, open.deadline, open.from)
+          |> dispatch()
+        else
+          GenServer.reply(open.from, {:error, {:refused, :stale_boot, boot}})
+          state
         end
 
       {:error, reason} ->
