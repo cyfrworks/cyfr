@@ -150,7 +150,8 @@ defmodule Compendium.Component do
   """
   @spec resolve_component(Context.t(), term()) ::
           {:ok, map(), map()}
-          | {:error, {:not_found, {:component, String.t()}} | :projection_unavailable | String.t()}
+          | {:error,
+             {:not_found, {:component, String.t()}} | :projection_unavailable | String.t()}
   def resolve_component(%Context{} = ctx, reference) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->

@@ -966,8 +966,8 @@ defmodule Opus.Provider do
   # stays typed, so the caller is answered in its own class (unavailable
   # or corrupt) and sentence, never as an authority error or a grant to
   # make: the loader's head and lender refusals (`Sanctum.Unauthorized`),
-  # and admission's own reads of the profile rows and the component graph
-  # (`Prima.Refusal`).
+  # and admission's own reads of the profile rows, the component index
+  # and the component graph (`Prima.Refusal`).
   defp format_root_result({:error, {:head_unavailable, _profile_id}} = refused), do: refused
   defp format_root_result({:error, {:head_corrupt, _profile_id}} = refused), do: refused
   defp format_root_result({:error, {:lender_unavailable, _target}} = refused), do: refused
@@ -975,6 +975,7 @@ defmodule Opus.Provider do
   defp format_root_result({:error, {:lender_corrupt, _target, _profile_id}} = refused),
     do: refused
 
+  defp format_root_result({:error, :projection_unavailable} = refused), do: refused
   defp format_root_result({:error, {:unavailable, "Consent profiles"}} = refused), do: refused
   defp format_root_result({:error, {:corrupt, {:profile, _id}}} = refused), do: refused
   defp format_root_result({:error, {:unavailable, "The component graph"}} = refused), do: refused
