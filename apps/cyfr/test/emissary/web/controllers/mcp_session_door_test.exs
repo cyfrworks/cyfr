@@ -158,6 +158,63 @@ defmodule Emissary.Web.MCPSessionDoorTest do
       assert {:error, :not_found} = Arca.McpServerStorage.get(Context.actor(ctx), "relay")
     end
 
+    test "each form of a loopback or private destination is refused at create, update and saved connect",
+         %{as_person: as_person} do
+      forms = [
+        {@private, ["10.0.0.0/8"]},
+        {"http://[::1]:9/mcp", ["::1/128"]},
+        {"http://[::ffff:127.0.0.1]:9/mcp", ["127.0.0.0/8"]},
+        {"http://localhost:9/mcp", ["localhost"]}
+      ]
+
+      for {{url, allowed}, n} <- Enum.with_index(forms, 1) do
+        name = "form-#{n}"
+        Prima.Test.Env.put_app_env(:sanctum, :private_egress_targets, [])
+
+        text =
+          as_person
+          |> call("mcp_servers", %{
+            "action" => "create",
+            "name" => name,
+            "config" => %{"url" => url}
+          })
+          |> refusal!()
+
+        assert text =~ "private IP", text
+        Prima.Test.Env.put_app_env(:sanctum, :private_egress_targets, allowed)
+
+        assert %{"epoch" => 1} =
+                 as_person
+                 |> call("mcp_servers", %{
+                   "action" => "create",
+                   "name" => name,
+                   "config" => %{"url" => url}
+                 })
+                 |> result!()
+
+        Prima.Test.Env.put_app_env(:sanctum, :private_egress_targets, [])
+
+        text =
+          as_person
+          |> call("mcp_servers", %{
+            "action" => "update",
+            "name" => name,
+            "epoch" => 1,
+            "config" => %{"url" => url}
+          })
+          |> refusal!()
+
+        assert text =~ "private IP", text
+
+        assert %{"status" => "error", "error" => error} =
+                 as_person
+                 |> call("mcp_servers", %{"action" => "test", "name" => name})
+                 |> result!()
+
+        assert error =~ "private IP", error
+      end
+    end
+
     test "update refuses them, and a saved server's connect refuses its own",
          %{as_person: as_person, ctx: ctx} do
       # Saved while the operator named loopback, as one who later removed it.
