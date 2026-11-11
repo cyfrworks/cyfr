@@ -742,6 +742,30 @@ export async function awaitFrame(page, known, timeoutMs = 30_000) {
   throw new Error("no frame opened");
 }
 
+// Wait until the pointer over `selector` in `frame` is heard by the frame's
+// own document. Chromium runs a sandboxed frame in a process of its own and
+// sends the pointer there only once the frame's first drawing has reached
+// the browser's hit test; a click before that goes to the shell's page,
+// with the iframe element as its target, and the frame never hears it. A
+// move gives no user activation, so it stands for no input of the person's.
+export async function pointerReaches(page, frame, selector, { timeoutMs = 10_000 } = {}) {
+  await frame.evaluate(() => {
+    window.__pointerReached = false;
+    document.addEventListener("mousemove", () => { window.__pointerReached = true; }, { once: true, capture: true });
+  });
+  const box = await frame.locator(selector).boundingBox();
+  if (!box) throw new Error(`${selector} is not drawn in the frame`);
+  let moves = 0;
+  await waitFor(async () => {
+    // Each move goes to another point, since a browser sends no move for a
+    // pointer that stayed where it was.
+    moves += 1;
+    await page.mouse.move(box.x + box.width / 2 + (moves % 2), box.y + box.height / 2);
+    return frame.evaluate(() => window.__pointerReached);
+  }, { timeoutMs, what: `the pointer to reach ${selector} in the frame` });
+  return moves;
+}
+
 // Close the shown frame `id` from the shell's capsule: the shell revokes
 // its credential and removes it.
 export async function closeFrame(page, id) {

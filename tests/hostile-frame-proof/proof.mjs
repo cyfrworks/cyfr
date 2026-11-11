@@ -41,8 +41,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ATTACKER, BROWSERS, SITE, ask as askRunSh, askHome, awaitFrame, homeOf, launch, launchBrowser, openShell, readHomes,
-  redact, signedIn, sleep, startProxy, startReceiver, waitFor,
+  ATTACKER, BROWSERS, SITE, ask as askRunSh, askHome, awaitFrame, homeOf, launch, launchBrowser, openShell,
+  pointerReaches, readHomes, redact, signedIn, sleep, startProxy, startReceiver, waitFor,
 } from "../browser/lib.mjs";
 
 const RECEIVER = `https://${ATTACKER}`;
@@ -664,6 +664,9 @@ async function prompts(browser, browserName, base, segment, cookie, outDir) {
     const { frame, attributes } = await launch(page, "fullscreen-probe");
     await frame.waitForFunction(() => document.getElementById("state")?.dataset.ready === "yes", null, { timeout: 60_000 });
     record.frame = { sandbox: attributes.sandbox, allow: attributes.allow };
+    // The frame was opened a moment ago: its first click waits until the
+    // browser sends the pointer to it.
+    await pointerReaches(page, frame, "#take");
     for (const expected of PROMPTS) {
       record.attempts[expected.name] = await promptOverFullscreen(page, frame, browserName, expected, outDir);
     }
