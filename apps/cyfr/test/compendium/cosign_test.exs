@@ -80,13 +80,21 @@ defmodule Compendium.CosignTest do
   end
 
   describe "the answer binds to the expected digest and names a signer" do
-    test "an array whose first entry names the digest and a signer verifies", %{dir: dir} do
-      use_stand_in(dir, answer: [entry(@digest)], preamble: true)
+    test "a bundle-format answer naming the digest verifies for the configured signer", %{
+      dir: dir
+    } do
+      use_stand_in(dir,
+        answer: [entry(@digest)],
+        signed_by: {"release@example.com", "https://accounts.google.com"},
+        preamble: true
+      )
 
-      assert {:ok, %{identity: "release@example.com", issuer: issuer, verified_at: at}} =
+      # The signer recorded is the identity and issuer cosign held the
+      # certificate to, which its exit 0 confirmed.
+      assert {:ok, %{identity: "^release@example\\.com$", issuer: issuer, verified_at: at}} =
                Cosign.verify(@reference, @digest)
 
-      assert issuer == "https://accounts.google.com"
+      assert issuer == "^https://accounts\\.google\\.com$"
       assert %DateTime{} = at
 
       # The reference cosign is asked about is the one given, after the
@@ -127,19 +135,48 @@ defmodule Compendium.CosignTest do
       assert {:error, :digest_mismatch} = Cosign.verify(@reference, @digest)
     end
 
-    test "a keyless entry without a subject or an issuer is not a verification", %{dir: dir} do
+    test "a signature by another identity or issuer is cosign's refusal", %{dir: dir} do
+      for signer <- [
+            {"mallory@example.com", "https://accounts.google.com"},
+            {"release@example.com", "https://token.actions.githubusercontent.com"},
+            {"release@example.com.evil", "https://accounts.google.com"}
+          ] do
+        use_stand_in(dir, answer: [entry(@digest)], signed_by: signer)
+
+        assert {:error, {:rejected, "Error: no matching signatures" <> _}} =
+                 Cosign.verify(@reference, @digest)
+      end
+    end
+
+    # The optional section is the signed payload's annotations, which the
+    # signer writes: a claimed subject or issuer there names nobody.
+    test "a subject or issuer the answer's annotations claim is not the recorded signer", %{
+      dir: dir
+    } do
       for optional <- [
-            %{"Issuer" => "https://accounts.google.com"},
-            %{"Subject" => "release@example.com"},
-            %{"Subject" => "", "Issuer" => "https://accounts.google.com"},
+            %{"Subject" => "ceo@example.com", "Issuer" => "https://accounts.google.com"},
+            %{"subject" => "ceo@example.com", "issuer" => "https://example.com"},
             %{}
           ] do
-        use_stand_in(dir, answer: [Map.put(entry(@digest), "optional", optional)])
-        assert {:error, :no_identity} = Cosign.verify(@reference, @digest)
+        use_stand_in(dir,
+          answer: [Map.put(entry(@digest), "optional", optional)],
+          signed_by: {"release@example.com", "https://accounts.google.com"}
+        )
+
+        assert {:ok,
+                %{
+                  identity: "^release@example\\.com$",
+                  issuer: "^https://accounts\\.google\\.com$"
+                }} =
+                 Cosign.verify(@reference, @digest)
       end
 
-      use_stand_in(dir, answer: [Map.delete(entry(@digest), "optional")])
-      assert {:error, :no_identity} = Cosign.verify(@reference, @digest)
+      use_stand_in(dir,
+        answer: [Map.delete(entry(@digest), "optional")],
+        signed_by: {"release@example.com", "https://accounts.google.com"}
+      )
+
+      assert {:ok, %{identity: "^release@example\\.com$"}} = Cosign.verify(@reference, @digest)
     end
 
     @tag :capture_log
@@ -174,7 +211,16 @@ defmodule Compendium.CosignTest do
     end
 
     test "a subject cosign's answer claims is not the recorded signer", %{dir: dir} do
-      key = keyed(dir, answer: [entry(@digest)])
+      key =
+        keyed(dir,
+          answer: [
+            Map.put(entry(@digest), "optional", %{
+              "Subject" => "release@example.com",
+              "Issuer" => "https://accounts.google.com"
+            })
+          ]
+        )
+
       fingerprint = "key:sha256:" <> sha256_hex(File.read!(key))
 
       assert {:ok, %{identity: ^fingerprint, issuer: "key"}} = Cosign.verify(@reference, @digest)
@@ -272,6 +318,11 @@ defmodule Compendium.CosignTest do
   # one per line, then answers `opts[:answer]` as JSON (or `opts[:raw]`),
   # exits `opts[:status]`, or with `hang: true` records its pid and sleeps.
   # `preamble: true` writes the stderr text real cosign prints first.
+  # `signed_by: {subject, issuer}` is the certificate the signature was
+  # made under: as cosign 3 does, the stand-in holds it to the
+  # --certificate-identity-regexp and --certificate-oidc-issuer-regexp it is
+  # handed and, when either does not match, refuses on stderr with exit 1,
+  # answering nothing.
   defp stand_in(dir, opts) do
     path = Path.join(dir, "cosign")
     File.rm(Path.join(dir, "args"))
@@ -291,12 +342,31 @@ defmodule Compendium.CosignTest do
                 "echo '  - The cosign claims were validated' >&2\n",
             else: ""
 
-        preamble <> "cat '#{output}'\nexit #{opts[:status] || 0}\n"
+        preamble <>
+          signer_check(opts[:signed_by]) <> "cat '#{output}'\nexit #{opts[:status] || 0}\n"
       end
 
     File.write!(path, "#!/bin/sh\nprintf '%s\\n' \"$@\" > '#{dir}/args'\n" <> body)
     File.chmod!(path, 0o755)
     path
+  end
+
+  defp signer_check(nil), do: ""
+
+  defp signer_check({subject, issuer}) do
+    """
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --certificate-identity-regexp) identity="$2"; shift 2 ;;
+        --certificate-oidc-issuer-regexp) issuer="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if ! printf '%s' '#{subject}' | grep -Eq -- "$identity" || ! printf '%s' '#{issuer}' | grep -Eq -- "$issuer"; then
+      echo 'Error: no matching signatures: none of the expected identities matched what was in the certificate' >&2
+      exit 1
+    fi
+    """
   end
 
   # A stand-in answering `opts` and a key file under `dir`, configured for
@@ -322,16 +392,18 @@ defmodule Compendium.CosignTest do
   defp invoked_args(dir),
     do: dir |> Path.join("args") |> File.read!() |> String.split("\n", trim: true)
 
+  # An entry as cosign 3 answers one for a bundle-format signature: the
+  # payload's critical section and its annotations, no certificate fields.
   defp entry(digest) do
     %{
       "critical" => %{
-        "identity" => %{"docker-reference" => "registry.example.com/test/repo"},
+        "identity" => %{"docker-reference" => "registry.example.com/test/repo@" <> digest},
         "image" => %{"docker-manifest-digest" => digest},
-        "type" => "cosign container image signature"
+        "type" => "https://sigstore.dev/cosign/sign/v1"
       },
       "optional" => %{
-        "Subject" => "release@example.com",
-        "Issuer" => "https://accounts.google.com"
+        "GIT_HASH" => "0e48502cf5ef34e2e60bbd3617aa19945712f705",
+        "GIT_VERSION" => "v3.1.4"
       }
     }
   end

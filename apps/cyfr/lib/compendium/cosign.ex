@@ -26,10 +26,16 @@ defmodule Compendium.Cosign do
   its answer counts only when it is a JSON array whose first entry's
   `critical.image.docker-manifest-digest` is the digest the caller stored.
 
-  - Keyless: the first entry's `optional` claims must carry a non-empty
-    certificate subject and issuer, which are the recorded signer. The
-    identity and issuer regexps are required; missing values refuse
-    verification before cosign runs.
+  - Keyless: cosign is handed the identity and issuer regexps, and its
+    exit 0 is its finding that a signature over that digest was made under
+    a certificate whose identity and issuer match them. That finding is the
+    whole of what is recorded: the signer is the configured identity and
+    issuer, never a field of cosign's answer. The answer's `optional`
+    section is the signed payload's annotations, which the signer chooses
+    (cosign 3 adds no certificate fields there for a bundle-format
+    signature), so nothing in it names a signer. The identity and issuer
+    regexps are required; missing values refuse verification before cosign
+    runs.
   - Keyed: a keyed signature carries no certificate, so the recorded signer
     is the key itself — `identity: "key:sha256:<hex>"` over the bytes of
     the key file handed to cosign, `issuer: "key"` — computed here, never
@@ -57,7 +63,6 @@ defmodule Compendium.Cosign do
     * `:not_an_array` — the answer is JSON but not an array
     * `:empty` — the answer is an empty array
     * `:digest_mismatch` — the first entry does not name the expected digest
-    * `:no_identity` — the first entry carries no subject or no issuer
   """
   @type refusal ::
           :unavailable
@@ -68,7 +73,6 @@ defmodule Compendium.Cosign do
           | :not_an_array
           | :empty
           | :digest_mismatch
-          | :no_identity
 
   @doc """
   Verify the signature of the image at `reference`, which must name
@@ -121,8 +125,6 @@ defmodule Compendium.Cosign do
 
   def describe(:digest_mismatch),
     do: "cosign verified a different manifest digest than the one pulled"
-
-  def describe(:no_identity), do: "cosign's answer names no signer subject and issuer"
 
   defp timeout_ms(config) do
     case Keyword.get(config, :timeout_ms, @timeout_ms) do
@@ -299,7 +301,7 @@ defmodule Compendium.Cosign do
            # "--" terminates flag parsing (see :keyed branch above).
            "--",
            reference
-         ], :certificate}
+         ], {:certificate, identity, issuer}}
 
       unset ->
         {:error, {:unset, Enum.map(unset, &elem(&1, 0))}}
@@ -355,9 +357,9 @@ defmodule Compendium.Cosign do
   end
 
   # The answer binds to the pulled manifest only through the digest the
-  # signature covers. A keyless answer names a signer only through the
-  # certificate's subject and issuer, and one missing either is not a
-  # verification; a keyed answer's signer is the key handed to cosign.
+  # signature covers. The signer is what this server asked cosign to hold
+  # the signature to, which its exit 0 confirmed: the key it handed cosign,
+  # or the identity and issuer regexps a keyless certificate had to match.
   defp check_answer(answer, _expected_digest, _signer) when not is_list(answer),
     do: {:error, :not_an_array}
 
@@ -381,18 +383,8 @@ defmodule Compendium.Cosign do
   defp check_identity(_entry, {:key, identity}),
     do: {:ok, %{identity: identity, issuer: "key", verified_at: DateTime.utc_now()}}
 
-  defp check_identity(%{"optional" => %{} = claims}, :certificate) do
-    identity = claims["Subject"] || claims["subject"]
-    issuer = claims["Issuer"] || claims["issuer"]
-
-    if present?(identity) and present?(issuer) do
-      {:ok, %{identity: identity, issuer: issuer, verified_at: DateTime.utc_now()}}
-    else
-      {:error, :no_identity}
-    end
-  end
-
-  defp check_identity(_entry, :certificate), do: {:error, :no_identity}
+  defp check_identity(_entry, {:certificate, identity, issuer}),
+    do: {:ok, %{identity: identity, issuer: issuer, verified_at: DateTime.utc_now()}}
 
   defp present?(value), do: is_binary(value) and value != ""
 end

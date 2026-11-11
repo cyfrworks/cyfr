@@ -14,8 +14,9 @@
 #               HEALTHCHECK (readiness: database, cache and registries up);
 #               then the cosign on its PATH, the one `Compendium.Cosign`
 #               runs, run through the image's entrypoint as its user, is the
-#               pinned version and verifies keyed and keyless
-#               (scripts/cosign.sh check)
+#               pinned version, and Compendium.Cosign verifies with it keyed
+#               and keyless and refuses another signer (scripts/cosign.sh
+#               check)
 #   cyfr-locus  the Locus image as docker-compose.yml's locus-builds service
 #               runs it (x-locus-role's capabilities, options and tmpfs
 #               mounts) with a fresh builds key, healthy by the image's own
@@ -77,5 +78,6 @@ done
 echo "$image ($kind) started on $(uname -m) and is healthy"
 
 if [ "$kind" = cyfr ]; then
-  "$root/scripts/cosign.sh" check "$image" docker run --rm || failed "does not verify with its cosign"
+  "$root/scripts/cosign.sh" check "$image" docker run --rm \
+    -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" || failed "does not verify with its cosign"
 fi

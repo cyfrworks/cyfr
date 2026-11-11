@@ -15,20 +15,24 @@
 #                                   the pinned version is kept
 #   scripts/cosign.sh version       print the pinned version
 #   scripts/cosign.sh check TARGET RUNNER...
-#                                   run cosign as RUNNER... TARGET runs it
-#                                   (`docker run --rm` and an image, or
-#                                   `docker compose run --rm --no-deps -T` and
-#                                   the cyfr service: through the image's
+#                                   run in TARGET as RUNNER... runs it
+#                                   (`docker run --rm` with a boot's
+#                                   environment and an image, or `docker
+#                                   compose run --rm --no-deps -T` and the
+#                                   cyfr service: through the image's
 #                                   entrypoint, as its user, with its
-#                                   environment) and hold it to a real
-#                                   verification each way Compendium.Cosign
-#                                   asks for one, with Compendium.Cosign's
-#                                   arguments: upstream's own signed image of
-#                                   this version, keyed with upstream's
-#                                   release key and keyless against its
-#                                   signer, each answer naming the digest
-#                                   asked about; and the version the pinned
-#                                   one. Needs the network.
+#                                   environment): its cosign is the pinned
+#                                   version, and the product's own
+#                                   `Compendium.Cosign.verify/2`, through
+#                                   `bin/cyfr eval` under the CYFR_COSIGN_*
+#                                   settings an operator sets, verifies
+#                                   upstream's own signed image of this
+#                                   version keyed with upstream's release
+#                                   key and keyless against its signer,
+#                                   recording the key's fingerprint and the
+#                                   configured identity and issuer, and
+#                                   refuses it keyless against another
+#                                   identity. Needs the network.
 #
 # The version is the one the release workflow signs with
 # (sigstore/cosign-installer's default in .github/workflows/release.yml).
@@ -49,15 +53,23 @@ CHECK_ISSUER='^https://accounts\.google\.com$'
 
 usage() { echo "usage: $0 install DIR | version | check TARGET RUNNER..." >&2; exit 64; }
 
-# The digest the first entry of cosign's JSON answer `$1` names.
-answered_digest() {
-  printf '%s' "$1" | python3 -I -c '
-import json, sys
-print(json.load(sys.stdin)[0]["critical"]["image"]["docker-manifest-digest"])' 2>/dev/null
+# The line Compendium.Cosign.verify/2 of CHECK_IMAGE answers in TARGET
+# (`$1`), run as RUNNER (`$3...`) with the extra run options `$2` (one
+# word list, split on spaces): VERIFIED <identity> <issuer>, or REFUSED and
+# the refusal.
+module_verify() {
+  local target=$1 options=$2
+  shift 2
+  # shellcheck disable=SC2086
+  "$@" $options "$target" /app/bin/cyfr eval "
+    case Compendium.Cosign.verify(\"$CHECK_IMAGE\", \"${CHECK_IMAGE#*@}\") do
+      {:ok, signer} -> IO.puts(\"VERIFIED #{signer.identity} #{signer.issuer}\")
+      refused -> IO.puts(\"REFUSED #{inspect(refused)}\")
+    end" 2>&1 | grep -E '^(VERIFIED|REFUSED) ' | tail -1
 }
 
 check() {
-  local target=$1 key answer how
+  local target=$1 key answer want
   shift
   answer="$("$@" "$target" cosign version --json 2>&1)" || { echo "cosign: $target runs no cosign: $answer" >&2; return 1; }
   printf '%s' "$answer" | grep -q "\"gitVersion\": *\"v$VERSION\"" ||
@@ -70,19 +82,19 @@ check() {
   # Readable by the image's user, whatever this process's umask.
   chmod 0755 "$key"
   chmod 0644 "$key/release-cosign.pub"
-  for how in keyed keyless; do
-    # The JSON answer is stdout alone; cosign says what it checked on stderr.
-    if [ "$how" = keyed ]; then
-      answer="$("$@" -v "$key:/run/cosign-check:ro" "$target" cosign verify \
-        --key /run/cosign-check/release-cosign.pub --output json -- "$CHECK_IMAGE" 2>"$key/stderr")" || answer=""
-    else
-      answer="$("$@" "$target" cosign verify --certificate-identity-regexp "$CHECK_IDENTITY" \
-        --certificate-oidc-issuer-regexp "$CHECK_ISSUER" --output json -- "$CHECK_IMAGE" 2>"$key/stderr")" || answer=""
-    fi
-    [ "$(answered_digest "$answer")" = "${CHECK_IMAGE#*@}" ] ||
-      { echo "cosign: $target's $how verification of $CHECK_IMAGE did not pass: ${answer:0:400} $(tail -c 800 "$key/stderr")" >&2; return 1; }
-    echo "cosign $VERSION in $target verified $CHECK_IMAGE $how"
-  done
+  answer="$(module_verify "$target" "-v $key:/run/cosign-check:ro -e CYFR_COSIGN_KEY=/run/cosign-check/release-cosign.pub" "$@")"
+  want="VERIFIED key:sha256:$RELEASE_KEY_SHA256 key"
+  [ "$answer" = "$want" ] || { echo "cosign: $target's keyed verification of $CHECK_IMAGE answered '$answer', not '$want'" >&2; return 1; }
+  echo "Compendium.Cosign in $target verified $CHECK_IMAGE keyed: $answer"
+  answer="$(module_verify "$target" "-e CYFR_COSIGN_IDENTITY=$CHECK_IDENTITY -e CYFR_COSIGN_ISSUER=$CHECK_ISSUER" "$@")"
+  want="VERIFIED $CHECK_IDENTITY $CHECK_ISSUER"
+  [ "$answer" = "$want" ] || { echo "cosign: $target's keyless verification of $CHECK_IMAGE answered '$answer', not '$want'" >&2; return 1; }
+  echo "Compendium.Cosign in $target verified $CHECK_IMAGE keyless: $answer"
+  answer="$(module_verify "$target" "-e CYFR_COSIGN_IDENTITY=^release@example\.com$ -e CYFR_COSIGN_ISSUER=$CHECK_ISSUER" "$@")"
+  case "$answer" in
+    "REFUSED {:error, {:rejected, "*) echo "Compendium.Cosign in $target refused $CHECK_IMAGE keyless for another identity" ;;
+    *) echo "cosign: $target's keyless verification of $CHECK_IMAGE for another identity answered '$answer', not cosign's refusal" >&2; return 1 ;;
+  esac
 }
 
 case "${1:-}" in
