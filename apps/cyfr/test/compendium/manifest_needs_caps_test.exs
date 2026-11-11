@@ -325,18 +325,26 @@ defmodule Compendium.ManifestNeedsCapsTest do
   end
 
   describe "the limits roster stays bound to Prima.Limits" do
-    test "Caps admits exactly the fields Limits clamps" do
+    test "Caps admits every field Limits clamps, and refuses a field it does not" do
       # Caps holds a string-keyed copy (the manifest is JSON; Caps is
       # Apache, Limits is FSL) — this pin is what makes the copy safe. A
       # new clamped limit must be admitted at publish, or manifests
       # declaring it are refused while every downstream reader accepts it.
-      caps_roster =
-        Enum.sort(~w(max_memory_bytes max_request_size max_response_size
-                     max_concurrent_tasks timeout batch_timeout rate_limit))
+      # Each field is asked of Caps itself, under each value form a limit
+      # takes.
+      forms = [1, "30s", %{"requests" => 1, "window" => "1m"}]
 
-      limits_roster = Prima.Limits.fields() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+      for field <- Prima.Limits.fields() do
+        key = Atom.to_string(field)
 
-      assert caps_roster == limits_roster
+        assert Enum.any?(forms, fn value ->
+                 Caps.validate(%{"caps" => %{"limits" => %{key => value}}}) == :ok
+               end),
+               "Caps refuses the clamped limit #{key} under every value form"
+      end
+
+      assert {:error, {:invalid_caps, {:unknown_keys, :limits, ["max_disk_bytes"]}}} =
+               Caps.validate(%{"caps" => %{"limits" => %{"max_disk_bytes" => 1}}})
     end
 
     test "one duration grammar: unit-suffixed and bare integer seconds both parse" do
