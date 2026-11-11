@@ -98,7 +98,7 @@ defmodule PrismWeb.LegalLive do
       <div>
         <h2 class="text-lg font-semibold text-white">Legal</h2>
         <p class="text-sm text-gray-400 mt-1">
-          Policy text published by cyfr.run. Lawyer-drafted final copy
+          Policy text published by the registry. Lawyer-drafted final copy
           replaces placeholders before public launch.
         </p>
       </div>

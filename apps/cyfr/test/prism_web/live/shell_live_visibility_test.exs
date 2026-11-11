@@ -144,6 +144,17 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     assert toggle_disabled?(html)
   end
 
+  # `config/test.exs` configures a registry that is not cyfr.run.
+  test "a tincture's report goes to the registry's moderators, never cyfr.run's", %{conn: conn} do
+    {view, html} = mount_desktop(conn)
+    assert html =~ "Report this tincture to the registry&#39;s moderators"
+
+    render_click(view, "open_report", %{"tincture" => "iframe_#{@tincture}"})
+    html = render(view)
+    assert html =~ "Your report goes to the registry&#39;s moderators."
+    refute html =~ "cyfr.run"
+  end
+
   # The address a person copies to share a public tincture is the home's
   # own (`Sanctum.origin/0`), its public URL in a tailnet or public home,
   # never the endpoint's own listener address.

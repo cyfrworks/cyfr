@@ -365,7 +365,7 @@ defmodule PrismWeb.RegistryLive do
         <div>
           <h2 class="text-lg font-semibold text-white">My Registry</h2>
           <p class="text-sm text-gray-400 mt-1">
-            Components you've published to cyfr.run. Deprecate keeps them installable with a warning; yank removes them from search and unpinned resolution.
+            Components you've published to the registry. Deprecate keeps them installable with a warning; yank removes them from search and unpinned resolution.
           </p>
         </div>
         <div class="flex gap-2">
@@ -391,7 +391,7 @@ defmodule PrismWeb.RegistryLive do
           <div>
             <h3 class="text-sm font-semibold text-white">Registry policies</h3>
             <p class="text-xs text-gray-400 mt-1">
-              cyfr.run's policies, version <span class="font-mono">{@policy.version}</span>: {Enum.join(
+              The registry's policies, version <span class="font-mono">{@policy.version}</span>: {Enum.join(
                 @policy.policies,
                 ", "
               )}. The registry asks you to accept its current version before a claim or a token sync.
@@ -415,7 +415,7 @@ defmodule PrismWeb.RegistryLive do
 
       <div :if={!@loading}>
         <div :if={@namespaces == []}>
-          <.empty_state message="You haven't claimed a namespace on cyfr.run yet." />
+          <.empty_state message="You haven't claimed a namespace on the registry yet." />
         </div>
 
         <div

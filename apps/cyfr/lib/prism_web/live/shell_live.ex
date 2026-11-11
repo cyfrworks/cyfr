@@ -3693,7 +3693,7 @@ defmodule PrismWeb.ShellLive do
           phx-click="open_report"
           phx-value-tincture={@tincture.id}
           class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-red-400 hover:border-red-900"
-          title="Report this tincture to cyfr.run moderators"
+          title="Report this tincture to the registry's moderators"
         >
           Report
         </button>

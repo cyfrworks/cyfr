@@ -91,7 +91,7 @@ defmodule Compendium.Registry.CredentialStore do
       {:error, reason} = err ->
         Logger.warning(
           "[CredentialStore] push-token write failed for #{inspect(slug)}: #{inspect(reason)} — " <>
-            "leaving orphan cyfr.run token (server-side reaper backstop)"
+            "leaving an orphan token at the registry (server-side reaper backstop)"
         )
 
         err

@@ -87,6 +87,23 @@ defmodule Compendium.Registry.CredentialStoreTest do
     end
   end
 
+  describe "a refused write" do
+    # A context naming no person cannot hold a token: the write is refused,
+    # and the token the registry minted is left for its reaper.
+    test "logs the orphan as the registry's, never cyfr.run's" do
+      no_person = %{as(@user) | user_id: nil}
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :forbidden} =
+                   CredentialStore.put_push_token(no_person, @reg, "alice", token(), "personal")
+        end)
+
+      assert log =~ "leaving an orphan token at the registry"
+      refute log =~ "cyfr.run"
+    end
+  end
+
   describe "user + registry isolation" do
     test "different users have separate credentials for the same namespace" do
       a = put!(@user, @reg, "alice")

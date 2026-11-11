@@ -392,7 +392,7 @@ defmodule Compendium.Providers.Registry do
         )
       ],
       description:
-        "cyfr.run registry operations, each a request your identity signs: sync your push tokens, claim and verify a publisher namespace by DNS, accept the registry's policies and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
+        "Registry operations, each a request your identity signs: sync your push tokens, claim and verify a publisher namespace by DNS, accept the registry's policies and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
       title: "Registry"
     )
   end
