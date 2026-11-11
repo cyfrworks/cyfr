@@ -393,7 +393,11 @@ func (r *restorer) run() error {
 	if r.ctx.Err() != nil {
 		return errors.New("cyfr restore was interrupted during the stop; the stack is left stopped and nothing was restored. Start it again with 'cyfr up'")
 	}
-	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.refuseUnwritableParts, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers}
+	// The permission check is the last step: the live read before it runs
+	// the image's entrypoint, which hands the storage root to the image's
+	// user, and nothing after it until the put-back's writes runs a
+	// container or changes an owner.
+	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers, r.refuseUnwritableParts}
 	for _, step := range steps {
 		err := step()
 		if err == nil && r.ctx.Err() != nil {

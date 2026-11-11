@@ -484,6 +484,37 @@ func TestRestoreRefusesAScaffoldDirectoryItCannotWrite(t *testing.T) {
 	}
 }
 
+// The live read runs the image's entrypoint, which hands the storage root
+// to the image's user; the permission check comes after it, so a root the
+// read leaves unwritable refuses before any part is put back. The fake's
+// offline eval takes the write bits off data/ as that hand-over does.
+func TestRestoreChecksPermissionsAfterTheLiveRead(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("every directory is writable to root, and Windows has no such mode")
+	}
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	data := filepath.Join(r.project, "data")
+	t.Cleanup(func() { exec.Command("chmod", "-R", "u+w", data).Run() })
+	body := strings.Replace(restoreFakeDocker, "      answer eval ;;", "      chmod -R a-w \"$PWD/data\"\n      answer eval ;;", 1)
+	if body == restoreFakeDocker {
+		t.Fatal("the fake's offline eval did not match")
+	}
+	if err := os.WriteFile(filepath.Join(r.fake, "docker"), []byte(body), 0755); err != nil {
+		t.Fatal(err)
+	}
+	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+	keeper := read(t, filepath.Join(r.project, "keeper.seccomp.json"))
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "write "+data+":") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	r.stoppedUndeclared()
+	r.configAsBefore(before, string(r.env))
+	if got := read(t, filepath.Join(r.project, "keeper.seccomp.json")); got != keeper {
+		t.Error("a scaffold file was put back before the refusal")
+	}
+}
+
 // A declaration that fails, prints no id or prints one that does not read
 // leaves the stack stopped and never starts it, the parts being back; the
 // bar stays in .env, so a later 'cyfr up' refuses too.
