@@ -1280,7 +1280,7 @@ unheld() {
   local queue
   queue=$(default_queue)
   [ "$(printf '%s\n' "$queue" | grep -c .)" = 1 ] || { echo "no one QUEUE default in $check"; return; }
-  awk -F'\t' -v queue="$queue" '!/^#/ && NF == 6 && $4 + 0 >= queue + 0 { print $1 "/" $2 " holds " $4 }' "$1"
+  awk -F'\t' -v queue="$queue" '!/^#/ && NF == 7 && $4 + 0 >= queue + 0 { print $1 "/" $2 " holds " $4 }' "$1"
 }
 t_queue_default() {
   local left awaits
@@ -1290,8 +1290,49 @@ t_queue_default() {
   [ -n "$awaits" ] && [ "$awaits" = "$(default_queue)" ] ||
     fail "await-task's default queue deadline is '$awaits', not heavy-check's $(default_queue)"
   # The control: a row that holds as long as the default is caught.
-  { cat "$root/scripts/stages.tsv"; printf 'release\tlong\t4\t14400\talways\ttrue\n'; } >"$scratch/stages.tsv"
+  { cat "$root/scripts/stages.tsv"; printf 'release\tlong\t4\t14400\t-\talways\ttrue\n'; } >"$scratch/stages.tsv"
   [ "$(unheld "$scratch/stages.tsv")" = 'release/long holds 14400' ] || fail "a row holding the default was not caught: $(unheld "$scratch/stages.tsv")"
+}
+
+# --- a stage's rows side by side on this queue ----------------------------------
+# scripts/stage.sh queues every row that names no folder when the stage
+# starts: two of them hold a quarter each at once, each told its own
+# processors, and a stage stopped while they run stops both and gives every
+# quarter back (the loop below the cases checks that none is left held).
+t_stage_side_by_side() {
+  local repo=$scratch/stage-repo s=0 one two runner held
+  rm -rf "$repo" "$scratch"/stage-logs*
+  mkdir -p "$repo/scripts/lib"
+  git init -q -b main "$repo"
+  cp "$root/scripts/stage.sh" "$check" "$repo/scripts/"
+  cp "$root"/scripts/lib/*.sh "$repo/scripts/lib/"
+  rows() { printf 'handoff\t%s\t1\t60\t-\talways\t%s\n' "$@" >"$repo/scripts/stages.tsv"; }
+  # Each row records its processors and waits, at most 10 s, for the other's.
+  meets() { printf 'echo "$HEAVY_CHECK_CPUS" >"$STAGE_LOGDIR/%s.cpus"; for _ in $(seq 100); do [ -e "$STAGE_LOGDIR/%s.cpus" ] && exit 0; sleep 0.1; done; exit 1' "$1" "$2"; }
+  rows one "$(meets one two)" two "$(meets two one)"
+  git -C "$repo" add -A
+  git -C "$repo" -c user.name=test -c user.email=test@invalid commit -q -m 'the stage runner and a table'
+  (cd "$repo" && STAGE_BASE=HEAD "${clean[@]}" bash scripts/stage.sh -l "$scratch/stage-logs" handoff) >"$scratch/stage.out" 2>&1 || s=$?
+  [ "$s" = 0 ] || fail "the stage exited $s: $(tr '\n' '|' <"$scratch/stage.out")"
+  one=$(cat "$scratch/stage-logs/one.cpus") two=$(cat "$scratch/stage-logs/two.cpus")
+  [ "$one" != "$two" ] || fail "the two rows were both told $one"
+  for held in "$one" "$two"; do
+    case " ${Q[*]:1} " in *" $held "*) ;; *) fail "a row was told '$held', not one quarter's processors" ;; esac
+  done
+  rows slow-one 'exec sleep 6121' slow-two 'exec sleep 6122'
+  (cd "$repo" && STAGE_BASE=HEAD exec "${clean[@]}" bash scripts/stage.sh -l "$scratch/stage-logs-2" handoff) >"$scratch/stage2.out" 2>&1 &
+  runner=$!; started+=("$runner")
+  until_true 10 pgrep -f '^sleep 6121$' >/dev/null && until_true 10 pgrep -f '^sleep 6122$' >/dev/null ||
+    fail 'the two rows never ran side by side'
+  [ "$("${hc[@]}" --status | grep -c '^held quarters=1 ')" = 2 ] || fail "the queue showed: $("${hc[@]}" --status | tr '\n' '|')"
+  held=$(pgrep -f '^sleep 612[12]$' | tr '\n' ' ')
+  s=0
+  kill -TERM "$runner"
+  until_true 10 eval '! kill -0 "$runner"' || fail 'the stage was still running 10 s after TERM'
+  wait "$runner" || s=$?
+  [ "$s" = 143 ] || fail "the stopped stage exited $s, not 143"
+  for one in $held; do dead "$one" || fail "a row's command outlived the stopped stage"; done
+  [ "$("${hc[@]}" --status)" = idle ] || fail "the queue still showed: $("${hc[@]}" --status | tr '\n' '|')"
 }
 
 # --- stopping the check stops its command and frees the host ------------------
@@ -1702,7 +1743,7 @@ cases=(
   whole redaction killed_holder killed_quarter quarters placement quarter_order quarter_stale quarter_stopped
   all_or_none stopped_take precedence expired_waiter admission_stopped ticket_order admission_two_stopped stopped_holder
   waiters_skipped run_record record_watchdog environment status queued_repeat queue_quarter
-  hold hold_frame queue queue_default term int hup usr1 quarter_stop term_queued int_queued hup_queued
+  hold hold_frame queue queue_default stage_side_by_side term int hup usr1 quarter_stop term_queued int_queued hup_queued
   term_queued_quarter int_queued_quarter hup_queued_quarter refusals
   leftover sigkill nested_session registry_nested survivor survivor_remains
   await_result await_died await_line await_nested await_bare await_reused await_explicit

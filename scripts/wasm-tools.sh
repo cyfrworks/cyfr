@@ -57,5 +57,9 @@ curl --proto '=https' --tlsv1.2 -sSfL --max-time 120 --connect-timeout 20 -o "$w
 echo "$sha  $work/$name.tar.gz" | sha256sum -c --quiet -
 tar -xzf "$work/$name.tar.gz" -C "$work"
 mkdir -p "$dir"
-install -m 0755 "$work/$name/wasm-tools" "$dir/wasm-tools"
+# Into place by a rename: two installs into one DIR at once, or a reader
+# running the tool meanwhile, never see a file half written.
+trap 'rm -rf "$work" "$dir/.wasm-tools.$$"' EXIT
+install -m 0755 "$work/$name/wasm-tools" "$dir/.wasm-tools.$$"
+mv -f "$dir/.wasm-tools.$$" "$dir/wasm-tools"
 "$dir/wasm-tools" --version
