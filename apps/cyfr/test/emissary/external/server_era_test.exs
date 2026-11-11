@@ -41,6 +41,28 @@ defmodule Emissary.External.ServerEraTest do
     {Jason.decode!(body), conn}
   end
 
+  # Twelve whitespace chunks 75 ms apart, then the payload: each chunk lands
+  # well inside a 300 ms receive timeout, the whole reply well outside it.
+  defp trickle(conn, payload) do
+    conn =
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_chunked(200)
+
+    conn =
+      Enum.reduce(1..12, conn, fn _, conn ->
+        Process.sleep(75)
+
+        case Plug.Conn.chunk(conn, " ") do
+          {:ok, conn} -> conn
+          {:error, _closed} -> conn
+        end
+      end)
+
+    _ = Plug.Conn.chunk(conn, Jason.encode!(payload))
+    conn
+  end
+
   defp json(conn, payload) do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
@@ -121,6 +143,20 @@ defmodule Emissary.External.ServerEraTest do
       assert reason =~ "listed more than 20 pages of tools"
       assert :counters.get(pages, 1) == 20
       assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
+    end
+
+    test "a listing trickled past its deadline fails the connect", %{stub: stub, url: url} do
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        trickle(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
+      end)
+
+      config = [name: "trickled-list-peer", url: url, athanor_id: "ath_test", timeout_ms: 300]
+      pid = start_supervised!({Server, config})
+
+      assert {:error, reason} = GenServer.call(pid, :get_tools, 10_000)
+      assert reason =~ "did not finish listing its tools within 300 ms"
+      HTTPStub.pass(stub)
     end
 
     # The handshake limit is the server's timeout where that is shorter, so
@@ -217,6 +253,25 @@ defmodule Emissary.External.ServerEraTest do
       assert_received {:method, "notifications/initialized", ["peer-session"]}
       assert_received {:method, "tools/list", ["peer-session"]}
       assert_received {:method, "tools/call", ["peer-session"]}
+    end
+
+    # A trickling peer holds initialize as it could a listing: each chunk
+    # restarts the wait for the next.
+    test "a trickled initialize fails at the request's timeout", %{stub: stub, url: url} do
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+
+        if get_in(body, ["params", "_meta"]),
+          do: Plug.Conn.resp(conn, 400, "Bad Request"),
+          else: trickle(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{}})
+      end)
+
+      config = [name: "trickled-init-peer", url: url, athanor_id: "ath_test", timeout_ms: 300]
+      pid = start_supervised!({Server, config})
+
+      assert {:error, _reason} = GenServer.call(pid, :get_tools, 10_000)
+      assert %{status: :error} = GenServer.call(pid, :status, 5_000)
+      HTTPStub.pass(stub)
     end
   end
 

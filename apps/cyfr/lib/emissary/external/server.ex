@@ -15,7 +15,8 @@ defmodule Emissary.External.Server do
   connection. Connecting is a stateless `tools/list` probe under the current
   protocol revision, falling back to the legacy initialize → initialized
   handshake for third-party servers still on the older revision (see
-  `connect/1`). A legacy peer that issues an `Mcp-Session-Id` at
+  `connect/1`). Every request's timeout bounds its wall time, however the
+  peer trickles its reply. A legacy peer that issues an `Mcp-Session-Id` at
   `initialize` gets it back on every later request until the next connect.
   A paged `tools/list` is followed through its `nextCursor` to the last
   page, and a listing longer than 20 pages, or not finished within the
@@ -1587,8 +1588,13 @@ defmodule Emissary.External.Server do
     end
   end
 
-  defp listed_page({:ok, result, state}, _before, {who, _, _, _} = listing, acc, page) do
+  defp listed_page({:ok, result, state}, _before, {who, _, deadline, limit} = listing, acc, page) do
+    late? = System.monotonic_time(:millisecond) > deadline
+
     case {listed_tools(result), next_cursor(result)} do
+      _page when late? ->
+        {:error, out_of_time(who, limit), state}
+
       {:error, _cursor} ->
         {:error, "#{who} answered tools/list without a list of tools", state}
 
@@ -1696,7 +1702,7 @@ defmodule Emissary.External.Server do
       max_response_bytes: @max_response_body_bytes
     ]
 
-    case Sanctum.Egress.pinned_request(:post, state.url, headers, json_body, opts) do
+    case bounded_request(state, headers, json_body, opts) do
       {:ok, status, resp_headers, resp_body} when status in 200..299 ->
         {read_reply(state, resp_headers, resp_body, body), resp_headers}
 
@@ -1705,6 +1711,24 @@ defmodule Emissary.External.Server do
 
       {:error, reason} ->
         {request_failed(state, reason), []}
+    end
+  end
+
+  # A request's timeout bounds its wall time, not only the wait for each
+  # chunk, which restarts on every chunk that arrives: a peer trickling
+  # bytes would otherwise hold the request, and a handshake or listing
+  # waiting on it, for as long as it kept trickling. A request cut off is
+  # a transport failure, whether it reached the peer not known.
+  defp bounded_request(state, headers, json_body, opts) do
+    task =
+      Task.async(fn ->
+        Sanctum.Egress.pinned_request(:post, state.url, headers, json_body, opts)
+      end)
+
+    case Task.yield(task, state.timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      {:exit, reason} -> {:error, reason}
+      nil -> {:error, :timeout}
     end
   end
 
