@@ -223,9 +223,24 @@ defmodule Opus.Close do
   @spec lost(t()) ::
           {:ok, map()}
           | {:error, String.t() | {:uncertain, String.t()} | {:result_lost, String.t()}}
-  def lost(%__MODULE__{record: record} = close) do
-    message = "Execution attempt ended before it closed"
+  def lost(%__MODULE__{} = close),
+    do: uncertain(close, "Execution attempt ended before it closed")
 
+  @doc """
+  Close a run its runtime abandoned at its time budget: the component was
+  killed, and its native work may still run, so what the run did is not
+  known. It closes as `lost/1` closes, failed with its attempt's outcome
+  `uncertain`, under the runtime's message masked with `secrets`, and
+  answers as `lost/1` answers: `{:error, {:uncertain, message}}`, or the
+  row's own answer when it is no longer running under the attempt.
+  """
+  @spec abandoned(t(), [String.t()], String.t()) ::
+          {:ok, map()}
+          | {:error, String.t() | {:uncertain, String.t()} | {:result_lost, String.t()}}
+  def abandoned(%__MODULE__{} = close, secrets, message) when is_binary(message),
+    do: uncertain(close, SecretMasker.mask(message, secrets))
+
+  defp uncertain(%__MODULE__{record: record} = close, message) do
     if Arca.ControlPlane.held?() do
       failed_record = Record.fail(record, message, :uncertain)
 

@@ -396,6 +396,7 @@ defmodule Emissary.Web.WebhookControllerTest do
 
     defp runnable_hook!(ctx, opts \\ %{}) do
       {type, opts} = Map.pop(opts, :test_component_type, "reagent")
+      {limits, opts} = Map.pop(opts, :limits, %{})
 
       wasm =
         if type == "catalyst",
@@ -437,7 +438,7 @@ defmodule Emissary.Web.WebhookControllerTest do
                 "canonical" => "jcs-1",
                 "nodes" => %{
                   reference => %{
-                    "limits" => Prima.Test.AuthorityFixtures.limits_map(),
+                    "limits" => Prima.Test.AuthorityFixtures.limits_map(limits),
                     "edges" => %{"@ingress" => %{}}
                   }
                 }
@@ -632,6 +633,59 @@ defmodule Emissary.Web.WebhookControllerTest do
       assert retry["status"] == "duplicate",
              "uncertain delivery must not be readmitted: #{inspect(observed)}"
 
+      assert Enum.map(Cyfr.Test.ScriptedWorker.calls(), & &1.execution_id) == [first_execution]
+    end
+
+    test "a delivery whose run is stopped at its time budget keeps its key against another run",
+         %{conn: conn, ctx: ctx} do
+      # Consented two seconds, the run never answers: the worker service
+      # stops it at its budget, its native work possibly still running.
+      %{slug: slug, secret: secret} =
+        runnable_hook!(ctx, %{
+          idempotency_key_header: "X-Cyfr-Delivery",
+          test_component_type: "catalyst",
+          limits: %{"timeout" => "2s"}
+        })
+
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
+      :ok = Cyfr.Test.ScriptedWorker.script([:hang])
+      body = ~s({"event":"once-even-when-it-timed-out"})
+      key = "evt-timeout-#{System.unique_integer([:positive])}"
+
+      first =
+        conn
+        |> put_req_header("x-cyfr-delivery", key)
+        |> post_signed(slug, secret, body)
+        |> json_response(200)
+
+      assert first["status"] == "accepted"
+      request_id = first["request_id"]
+
+      assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _,
+                      %{request_id: ^request_id}},
+                     15_000
+
+      assert [decision] = decisions_for(request_id)
+      assert decision.completion == "uncertain"
+      assert [first_execution] = Enum.map(Cyfr.Test.ScriptedWorker.calls(), & &1.execution_id)
+
+      assert %{
+               status: "failed",
+               error_class: "uncertain",
+               error_message: "Execution timeout" <> _
+             } =
+               Arca.Repo.get!(Arca.Schemas.Execution, first_execution)
+
+      :ok = Cyfr.Test.ScriptedWorker.script([%{"ran" => true}])
+
+      again =
+        build_conn()
+        |> put_req_header("x-cyfr-delivery", key)
+        |> post_signed(slug, secret, body)
+        |> json_response(200)
+
+      assert again["status"] == "duplicate"
       assert Enum.map(Cyfr.Test.ScriptedWorker.calls(), & &1.execution_id) == [first_execution]
     end
 

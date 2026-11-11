@@ -824,10 +824,18 @@ defmodule Locus.Runtime.ModelContractTest do
              played.steps
 
     assert error =~ ~r/^Execution timeout after \d+ms$/
-    assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Schemas.Execution, id)
+    # Killed at its budget, its native work possibly still running: what
+    # the run did is not known.
+    assert %{status: "failed", error_message: ^error, error_class: "uncertain"} =
+             Arca.Repo.get!(Arca.Schemas.Execution, id)
+
     assert %{type: "execution.failed"} = List.last(Map.fetch!(played.seen.streams, id))
     assert [] = agent_rows(played)
     assert {:turn_finished, nil} in played.seen.thread
+
+    # The stopped guest's native work may still run: the run is noted
+    # against the athanor's slot.
+    assert Map.get(Prima.Slots.status(Opus.Slots).unreaped, ctx.athanor_id, 0) == 1
   end
 
   test "an event over the size bound is refused to the guest, and the run goes on", %{ctx: ctx} do

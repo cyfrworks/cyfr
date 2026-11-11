@@ -41,12 +41,18 @@ defmodule Cyfr.Test.ScriptedWorker do
   Its status counts its runners as every worker service does: `busy` while
   a run's process is alive, and `tainted` from a kill until the killed
   process has gone; it keeps no runner fresh or idle, bounds no runner's
-  memory and never refuses one. It ends a runner still running at its
-  assignment's deadline plus the runtime's default watchdog grace
-  (`watchdog_grace_ms:` sets another) and reports the exit, as the
-  runtime's worker service does (`Locus.Runtime.Runner`), so a run that
-  hangs to its deadline ends here as it ends there: no kill was asked of
-  it, and `expired/0` lists it. Its kill is idempotent as
+  memory and never refuses one. A run's script is played in a process of
+  its own beside its runner, as the runtime runs a component beside its
+  attempt (`Locus.Runtime.Attempt`): one that has not answered within its
+  budget, its timeout and no more than what is left of its deadline when
+  it attached, is stopped and its run closed `fail` with
+  `"Execution timeout after Nms"` and `abandoned: true`, as the runtime
+  closes it, and CYFR counts the abandoned run against its athanor. Past
+  that, it ends a runner still running at its assignment's deadline plus
+  the runtime's default watchdog grace (`watchdog_grace_ms:` sets
+  another) and reports the exit, as the runtime's worker service does
+  (`Locus.Runtime.Runner`): no kill was asked of it, and `expired/0`
+  lists it. Its kill is idempotent as
   `c:Prima.WorkerAPI.kill/1` says: `:ok` for an execution a runner of this
   boot holds or already ended, whether by a kill or on its own, and
   `{:error, :not_found}` only for one no runner of this boot ever held,
@@ -75,14 +81,15 @@ defmodule Cyfr.Test.ScriptedWorker do
   - `{:emit, events}` — push the events (maps) on the run's stream before
     the next item.
   - `{:sleep, ms}` — wait before the next item.
-  - `{:probe, pid}` — send `{:scripted_probe, runner, execution_id}` to
+  - `{:probe, pid}` — send `{:scripted_probe, player, execution_id}` to
     `pid` and wait for `:continue` (5 s), so a test can inspect what the
-    run holds while it runs.
+    run holds while it runs. `player` is the process playing the script,
+    linked to the runner: killing it kills the runner.
   - `{:crash, :before_response}` — kill the process waiting on the run,
     once the runner has attached, and wait to be killed.
   - `{:crash, :after_persist}` — kill the process waiting on the run once
     the next answer is written, before that process can return it.
-  - `:hang` — never answer.
+  - `:hang` — never answer: the run is abandoned at its budget.
 
   The process waiting on a run is the one registered under its execution
   id in `Opus.Registry` when the run is started, as dispatch
@@ -649,7 +656,7 @@ defmodule Cyfr.Test.ScriptedWorker do
             }
 
             :ok = GenServer.call(__MODULE__, {:called, call})
-            answer(runner, runner.input)
+            close(runner, played(runner, budget_ms(runner.assignment)))
 
           {:error, _refusal} ->
             {:shutdown, :attempt_open}
@@ -663,25 +670,51 @@ defmodule Cyfr.Test.ScriptedWorker do
     end
   end
 
-  defp answer(runner, %{"operation" => "describe", "params" => params}) do
-    case GenServer.call(__MODULE__, :settings) do
-      %{describe: {:refuse, error}} ->
-        complete(runner, %{"status" => 429, "error" => error})
+  # The run's budget from its attach: its timeout, and no more than what is
+  # left of its subtree's deadline, as the runtime's attempt bounds it.
+  defp budget_ms(assignment) do
+    remaining = assignment.deadline - System.system_time(:millisecond)
+    max(min(assignment.timeout_ms, remaining), 0)
+  end
 
-      %{describe: :answer, window: window, media_types: types} ->
-        complete(runner, %{"status" => 200, "data" => description(params, window, types)})
+  # The script is played in a process linked to the runner, which waits for
+  # its answer no longer than the budget and then stops it unlinked, as the
+  # runtime's attempt stops a component that outran its timeout. A player
+  # that is killed takes its runner with it.
+  defp played(runner, budget_ms) do
+    owner = self()
+    ref = make_ref()
+    player = spawn_link(fn -> send(owner, {ref, answer(runner, runner.input)}) end)
+
+    receive do
+      {^ref, ending} -> ending
+    after
+      budget_ms ->
+        Process.unlink(player)
+        Process.exit(player, :kill)
+        {:abandoned, "Execution timeout after #{budget_ms}ms"}
     end
   end
 
-  defp answer(runner, %{"operation" => "models"}),
-    do: complete(runner, %{"status" => 200, "data" => %{"models" => []}})
+  defp answer(_runner, %{"operation" => "describe", "params" => params}) do
+    case GenServer.call(__MODULE__, :settings) do
+      %{describe: {:refuse, error}} ->
+        {:complete, %{"status" => 429, "error" => error}}
+
+      %{describe: :answer, window: window, media_types: types} ->
+        {:complete, %{"status" => 200, "data" => description(params, window, types)}}
+    end
+  end
+
+  defp answer(_runner, %{"operation" => "models"}),
+    do: {:complete, %{"status" => 200, "data" => %{"models" => []}}}
 
   defp answer(runner, _input), do: next(runner, false)
 
   defp next(runner, crash_after?) do
     case GenServer.call(__MODULE__, :take) do
       nil ->
-        fail(runner, "script exhausted")
+        {:fail, "script exhausted"}
 
       {:emit, events} ->
         _ = host(runner, :push_deltas, %{"deltas" => Enum.map(events, &delta(runner, &1))})
@@ -713,24 +746,32 @@ defmodule Cyfr.Test.ScriptedWorker do
         Process.sleep(:infinity)
 
       {:error, message} ->
-        fail(runner, message)
+        {:fail, message}
 
       {:refuse, %{"type" => _} = error} ->
-        complete(runner, %{"status" => 429, "error" => error})
+        {:complete, %{"status" => 429, "error" => error}}
 
       {:output, value} ->
-        complete(runner, value)
+        {:complete, value}
 
       %{} = data when crash_after? ->
-        # Suspended, the waiter cannot return the answer the close sends it.
-        if is_pid(runner.waiter), do: :erlang.suspend_process(runner.waiter)
-        closed = complete(runner, %{"status" => 200, "data" => data})
-        kill_waiter(runner)
-        closed
+        {:complete_then_kill_waiter, %{"status" => 200, "data" => data}}
 
       %{} = data ->
-        complete(runner, %{"status" => 200, "data" => data})
+        {:complete, %{"status" => 200, "data" => data}}
     end
+  end
+
+  defp close(runner, {:complete, output}), do: complete(runner, output)
+  defp close(runner, {:fail, message}), do: fail(runner, message, false)
+  defp close(runner, {:abandoned, message}), do: fail(runner, message, true)
+
+  defp close(runner, {:complete_then_kill_waiter, output}) do
+    # Suspended, the waiter cannot return the answer the close sends it.
+    if is_pid(runner.waiter), do: :erlang.suspend_process(runner.waiter)
+    closed = complete(runner, output)
+    kill_waiter(runner)
+    closed
   end
 
   defp kill_waiter(%{waiter: waiter}) when is_pid(waiter), do: Process.exit(waiter, :kill)
@@ -770,8 +811,8 @@ defmodule Cyfr.Test.ScriptedWorker do
     end
   end
 
-  defp fail(runner, message) do
-    fields = %{"error" => to_string(message), "abandoned" => false}
+  defp fail(runner, message, abandoned?) do
+    fields = %{"error" => to_string(message), "abandoned" => abandoned?}
 
     case host(runner, :fail, %{"outcome" => outcome(runner, "failed", fields)}) do
       %{"ok" => message} when is_binary(message) -> :normal

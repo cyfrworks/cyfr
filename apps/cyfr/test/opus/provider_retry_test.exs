@@ -254,6 +254,38 @@ defmodule Opus.ProviderRetryTest do
       assert rows(ctx) == before
     end
 
+    test "refuses a scheduled run its runtime stopped at its time budget", %{
+      ctx: ctx,
+      digest: digest
+    } do
+      # Consented two seconds, the run never answers: the worker service
+      # stops it at its budget with its native work possibly still running,
+      # so what it did is not known and it is never run again.
+      consented!(ctx, digest, @consent <> "-short", :active, %{"timeout" => "2s"})
+      script!([:hang])
+      id = Prima.UUID7.execution_id()
+
+      assert {{:error, {:uncertain, "Execution timeout after " <> _}}, _schedule} =
+               scheduled(ctx, id)
+
+      assert {:ok,
+              %Record{
+                status: :failed,
+                error_class: :uncertain,
+                error: "Execution timeout after " <> _
+              }} = Record.get(ctx, id)
+
+      before = rows(ctx)
+      script!([%{"answer" => "sunny"}])
+
+      assert refused(retry(ctx, id)) ==
+               {:conflict,
+                "This run's outcome is uncertain: it is not known to have failed, so it is not " <>
+                  "run again."}
+
+      assert rows(ctx) == before
+    end
+
     test "refuses a failed run whose attempt did not close in the run's own failure", %{
       ctx: ctx
     } do
@@ -390,7 +422,7 @@ defmodule Opus.ProviderRetryTest do
     component.release_digest
   end
 
-  defp consented!(ctx, release_digest, consent_id, status \\ :active) do
+  defp consented!(ctx, release_digest, consent_id, status \\ :active, limits \\ %{}) do
     profile = %{
       id: @profile_id,
       kind: :owner,
@@ -413,7 +445,7 @@ defmodule Opus.ProviderRetryTest do
             "canonical" => "jcs-1",
             "nodes" => %{
               @reference => %{
-                "limits" => AuthorityFixtures.limits_map(),
+                "limits" => AuthorityFixtures.limits_map(limits),
                 "edges" => %{"@ingress" => %{}}
               }
             }

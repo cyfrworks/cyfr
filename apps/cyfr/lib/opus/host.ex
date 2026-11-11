@@ -118,7 +118,7 @@ defmodule Opus.Host do
   | `attach` | `assignment` (token) | the run's vault fields, name to value |
   | `renew` | `attempts` (ids) | attempt id to `{"lease_until": ms}` or `"lost"` |
   | `complete` | `outcome` (`status` `completed`, `output`) | `output`, masked |
-  | `fail` | `outcome` (`status` `failed`, `error`, optional `abandoned`) | the failure as recorded, masked |
+  | `fail` | `outcome` (`status` `failed`, `error`, optional `abandoned`: killed at its budget, closed uncertain) | the failure as recorded, masked |
   | `push_deltas` | `deltas` (each `execution_id`, `attempt`, `fence`, `event` text) | one emit reply per delta |
   | `oauth_token` | `provider` | the token |
   | `take_rate` | `bucket` | `true` |
