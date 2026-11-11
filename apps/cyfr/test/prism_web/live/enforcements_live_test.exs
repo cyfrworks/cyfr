@@ -11,8 +11,9 @@ defmodule PrismWeb.EnforcementsLiveTest do
   use PrismWeb.ConnCase, async: false
 
   setup %{conn: conn} do
-    {view, _html} = conn |> log_in_user(test_user()) |> mount_athanor("/enforcements")
-    {:ok, view: view}
+    conn = log_in_user(conn, test_user())
+    {view, _html} = mount_athanor(conn, "/enforcements")
+    {:ok, conn: conn, view: view}
   end
 
   defp filter(view, params) do
@@ -64,5 +65,31 @@ defmodule PrismWeb.EnforcementsLiveTest do
 
     refute path =~ "?"
     settled_render(view)
+  end
+
+  test "a row's link opens the activities page on its request", %{conn: conn} do
+    request_id = Prima.UUID7.request_id()
+
+    {:ok, _row} =
+      Arca.PolicyLog.record(%{
+        id: Prima.UUID7.generate_id("pl"),
+        request_id: request_id,
+        athanor_id: seated_athanor().id,
+        user_id: "user_enforcements",
+        timestamp: DateTime.utc_now(),
+        event_type: "policy_consultation",
+        component_ref: "formula:local.enforced-fixture:0.1.0",
+        component_type: "formula",
+        decision: "allowed",
+        decision_reason: "the row under test"
+      })
+
+    {view, _html} = mount_athanor(conn, "/enforcements")
+
+    assert {:error, {:live_redirect, %{to: path}}} =
+             view |> element("tbody tr", "formula:local.enforced-fixture") |> render_click()
+
+    {:ok, activities, _html} = live(conn, path)
+    assert :sys.get_state(activities.pid).socket.assigns.expanded_id == request_id
   end
 end
