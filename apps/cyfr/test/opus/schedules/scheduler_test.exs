@@ -955,6 +955,28 @@ defmodule Opus.Schedules.SchedulerTest do
     assert {:ok, %{error_count: 1}} = CronSchedule.get_for_daemon(schedule.id)
   end
 
+  test "a due schedule whose run is skipped is looked at again at the recheck, never fired again at once",
+       %{ctx: ctx} do
+    script!([])
+    schedule = due!(create_schedule(ctx))
+
+    Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^ctx.athanor_id),
+      set: [status: "archived"]
+    )
+
+    capture_log(fn ->
+      scheduler = scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert {timer, :retry} = :sys.get_state(scheduler).timers[schedule.id]
+      assert Process.read_timer(timer) > 15_000
+      assert {:ok, %{error_count: 1}} = CronSchedule.get_for_daemon(schedule.id)
+    end)
+  end
+
   test "a live peer's freshly claimed occurrence is left where it is", %{ctx: ctx} do
     script!([%{"ran" => true}])
     schedule = create_schedule(ctx)

@@ -889,7 +889,8 @@ defmodule Opus.Schedules.Scheduler do
         else
           # The athanor is archived or the creator was denied on this
           # server — the run is skipped and recorded, never the schedule
-          # deleted: the members who remain decide its fate.
+          # deleted: the members who remain decide its fate. The cursor
+          # stays, so the schedule is looked at again at the recheck.
           Logger.warning(
             "[Opus.Schedules.Scheduler] schedule #{schedule_id} athanor #{schedule.athanor_id} or " <>
               "creator #{inspect(schedule.user_id)} no longer active — skipping run"
@@ -897,7 +898,7 @@ defmodule Opus.Schedules.Scheduler do
 
           record_error(ctx, schedule_id, "Athanor or creator no longer active — run skipped")
           emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive")
-          schedule_timer(schedule_id, state)
+          recheck_later(schedule_id, state)
         end
 
       {:ok, _other_status} ->
@@ -924,6 +925,10 @@ defmodule Opus.Schedules.Scheduler do
       retry_later(schedule_id, left_open(state))
   end
 
+  # A run skipped before its claim (a damaged row, or input that does not
+  # read) leaves the cursor where it was: the schedule is looked at again
+  # at the recheck, never re-armed for a cursor already past, which would
+  # fire it again at once.
   defp fire_active_schedule(schedule, ctx, state) do
     case runnable(schedule) do
       {:error, :damaged_reference} ->
@@ -934,7 +939,7 @@ defmodule Opus.Schedules.Scheduler do
 
         emit_schedule_failed(schedule, ctx, :damaged_reference)
         record_error(ctx, schedule.id, "Damaged schedule: no pinned reference")
-        schedule_timer(schedule.id, state)
+        recheck_later(schedule.id, state)
 
       {:error, :invalid_input} ->
         Logger.error(
@@ -943,7 +948,7 @@ defmodule Opus.Schedules.Scheduler do
 
         emit_schedule_failed(schedule, ctx, :invalid_input)
         record_error(ctx, schedule.id, "Invalid JSON input")
-        schedule_timer(schedule.id, state)
+        recheck_later(schedule.id, state)
 
       {:ok, exec_reference, input} ->
         case claim(schedule) do
