@@ -69,7 +69,13 @@ defmodule Sanctum.Providers.McpLog do
             "mcp_log",
             "get",
             "Get mcp log",
-            [Arg.new("id", :string, required: true, description: "Request ID")],
+            [
+              Arg.new("id", :string,
+                required: true,
+                description:
+                  "The row's id, as list answers it: the one recorded call's id, not its ingress request_id."
+              )
+            ],
             kind: :read,
             recorded: false,
             planes: [:external],
