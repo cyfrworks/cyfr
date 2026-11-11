@@ -130,6 +130,13 @@ ENV CYFR_SEED_PATH=/app/seed
 RUN mkdir -p /app/data \
     && chown app:app /app/data
 ENV RELEASE_TMP=/tmp
+# cosign's Sigstore trust root cache (TUF metadata, refreshed from
+# Sigstore's repository), which every verification reads and writes. The
+# entrypoint drops to `app` with HOME still /root, where cosign's default
+# cache is unwritable, so the cache sits in the container's own scratch
+# beside the release's temporary files: never in data/, which is the
+# operator's, and rebuilt from the network after a container is recreated.
+ENV TUF_ROOT=/tmp/sigstore
 
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh

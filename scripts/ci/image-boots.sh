@@ -13,8 +13,9 @@
 #               fresh CYFR_SECRET_KEY_BASE), healthy by the image's own
 #               HEALTHCHECK (readiness: database, cache and registries up);
 #               then the cosign on its PATH, the one `Compendium.Cosign`
-#               runs, answers as the pinned version (scripts/cosign.sh) as
-#               the image's user
+#               runs, run through the image's entrypoint as its user, is the
+#               pinned version and verifies keyed and keyless
+#               (scripts/cosign.sh check)
 #   cyfr-locus  the Locus image as docker-compose.yml's locus-builds service
 #               runs it (x-locus-role's capabilities, options and tmpfs
 #               mounts) with a fresh builds key, healthy by the image's own
@@ -76,9 +77,5 @@ done
 echo "$image ($kind) started on $(uname -m) and is healthy"
 
 if [ "$kind" = cyfr ]; then
-  pinned="$("$root/scripts/cosign.sh" version)"
-  answer="$(docker exec -u app "$name" cosign version --json 2>&1)" || failed "runs no cosign from PATH: $answer"
-  printf '%s' "$answer" | grep -q "\"gitVersion\": *\"v$pinned\"" ||
-    failed "carries a cosign that is not the pinned $pinned: $answer"
-  echo "$image carries cosign $pinned on its PATH"
+  "$root/scripts/cosign.sh" check "$image" docker run --rm || failed "does not verify with its cosign"
 fi
