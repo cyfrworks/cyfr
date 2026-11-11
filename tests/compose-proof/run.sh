@@ -149,8 +149,9 @@
 #          the worker URL the shipped file names and the runtime calls back
 #          at the host API address it names, each side checking the other's
 #          signature. The worker URL and the host API URL resolve to the
-#          shipped file's values. A signed-in person runs the seed's
-#          catalyst:local.files through the console twice, writing a mark
+#          shipped file's values. A signed-in person grants the seed's
+#          catalyst:local.files through the consent walk (plan, preview,
+#          commit) and runs it through the console twice, writing a mark
 #          to their athanor's files and reading it back, so both runs reach
 #          the host API; each run completes with the catalyst's answer.
 #          The app image's cosign, the one `Compendium.Cosign` finds on
@@ -244,10 +245,13 @@ cyfr_id=""
 # The signed-in person's athanor (sign_in).
 SEGMENT=""
 
+# The project's compose command: `compose` runs it, and COMPOSE_CMD spells
+# it whole for a program that runs it (scripts/cosign.sh check run).
+COMPOSE_CMD=(docker compose --project-name "$RUN" --project-directory "$WORK"
+  -f "$WORK/docker-compose.yml" -f "$WORK/docker-compose.override.yml"
+  --profile public --profile tailnet --profile locus-builds)
 compose() {
-  docker compose --project-name "$RUN" --project-directory "$WORK" \
-    -f "$WORK/docker-compose.yml" -f "$WORK/docker-compose.override.yml" \
-    --profile public --profile tailnet --profile locus-builds "$@"
+  "${COMPOSE_CMD[@]}" "$@"
 }
 
 # shellcheck source=tests/compose-proof/cleanup.sh
@@ -2198,13 +2202,23 @@ env = json.load(sys.stdin)["services"][sys.argv[2]].get("environment") or {}
 print(env.get(sys.argv[1]) or "")' "$2" "$3"
 }
 
-# The console's run of catalyst:local.files with the input `$2`, for the
-# person whose session is `$1`: the catalyst's answer as JSON, or the case
+# The console's run of catalyst:local.files with the input `$2` (JSON), for
+# the person whose session is `$1`: the session established as a request
+# establishes it, with the interactive origin the console's admission path
+# gives it (`CyfrWeb.ContextGuard`), then the console's adapter onto the
+# operation catalog. Answers the catalyst's answer as JSON, or the case
 # fails.
 files_run() {
   local answer
-  answer="$(cyfr_fixture console "$1" execution/run \
-    "{\"reference\": \"catalyst:local.files:0.5.2\", \"input\": $2}")"
+  answer="$(cyfr_rpc "{:ok, console} = Sanctum.Caller.establish({:session, \"$1\"})
+    input = Jason.decode!(~S($2))
+    answer =
+      case PrismWeb.Ops.call_tool(%{console | origin: :interactive}, \"execution/run\",
+             %{\"reference\" => \"catalyst:local.files:0.5.2\", \"input\" => input}) do
+        {:ok, ran} -> %{ok: ran}
+        {:error, reason} -> %{error: inspect(reason)}
+      end
+    IO.puts(\"RAN=\" <> Jason.encode!(answer))" | sed -n 's/^RAN=//p' | tail -1)"
   printf '%s' "$answer" | python3 -I -c '
 import json, sys
 ran = json.load(sys.stdin)["ok"]
@@ -2215,7 +2229,7 @@ print(json.dumps(json.loads(result) if isinstance(result, str) else result))' ||
 }
 
 runtime_case() {
-  local shipped project workers host_api runtime_id health signed_in token cosign fill mark written read_back
+  local shipped project workers host_api runtime_id health signed_in token cosign fill granted mark written read_back
   step "the runtime's wiring is the shipped file's"
   shipped="$(cd "$WORK" && docker compose --project-name "$RUN-shipped" -f "$WORK/docker-compose.yml" config --format json)"
   project="$(compose config --format json)"
@@ -2241,12 +2255,6 @@ runtime_case() {
     fail "locus-runtime is ${health:-not running} after 120 s: $(docker logs --tail 30 "$runtime_id" 2>&1 || true)"
   ok "locus-runtime runs $LOCUS_IMAGE and is healthy"
 
-  step "the app image's cosign, as Compendium.Cosign finds it and as the cyfr service runs it"
-  cosign="$(cyfr_rpc 'IO.puts("COSIGN=" <> (System.find_executable("cosign") || "none"))' | sed -n 's/^COSIGN=//p')"
-  [ -n "$cosign" ] && [ "$cosign" != none ] || fail "the running cyfr finds no cosign on its PATH"
-  "$ROOT/scripts/cosign.sh" check run cyfr compose run --rm --no-deps -T || fail "the cyfr service's cosign does not verify"
-  ok "cyfr finds $cosign, which verifies keyed and keyless as the service runs it"
-
   step "a person signed in on cyfr, as the release proofs sign one in"
   signed_in="$(cyfr_fixture person operator@example.com compose-proof-runtime)"
   token="$(jget "$signed_in" token)"
@@ -2271,6 +2279,22 @@ runtime_case() {
   [ "$fill" = ready ] || fail "the person's athanor reads '${fill:-nothing}', not ready, within 120 s of the sign-in"
   ok "the athanor reads ready"
 
+  step "the person grants catalyst:local.files, as the console's consent walk does"
+  # The plan, its preview and the commit (Sanctum.Consent), for the
+  # person's interactive origin: the grant every run of the catalyst is
+  # admitted under.
+  granted="$(cyfr_rpc "{:ok, console} = Sanctum.Caller.establish({:session, \"$token\"})
+    ctx = %{console | origin: :interactive}
+    decisions = %{ref: \"catalyst:local.files\", origins: [:interactive]}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: \"catalyst:local.files\"})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+    {:ok, %{revision: revision}} = Sanctum.Consent.Commit.commit(ctx, %{decisions: decisions,
+      plan_token: plan.plan_token, proof: preview.proof, commit_digest: preview.commit_digest,
+      expected_consent_revision: plan.expected_consent_revision})
+    IO.puts(\"GRANTED=#{revision}\")" | sed -n 's/^GRANTED=//p')"
+  [ -n "$granted" ] || fail "the consent walk for catalyst:local.files committed nothing"
+  ok "catalyst:local.files is granted at consent revision $granted"
+
   step "the person runs catalyst:local.files on the runtime: a mark written, then read back"
   mark="$(mark)"
   written="$(files_run "$token" "{\"action\": \"write_text\", \"path\": \"data/compose-proof.txt\", \"content\": \"$mark\"}")"
@@ -2279,6 +2303,15 @@ runtime_case() {
   read_back="$(files_run "$token" '{"action": "read_text", "path": "data/compose-proof.txt"}')"
   [ "$(jget "$read_back" content)" = "$mark" ] || fail "the read answered $read_back, not the mark $mark"
   ok "the runtime ran both: wrote ${#mark} bytes and read $mark back"
+
+  step "the app image's cosign, as Compendium.Cosign finds it and as the cyfr service runs it"
+  cosign="$(cyfr_rpc 'IO.puts("COSIGN=" <> (System.find_executable("cosign") || "none"))' | sed -n 's/^COSIGN=//p')"
+  [ -n "$cosign" ] && [ "$cosign" != none ] || fail "the running cyfr finds no cosign on its PATH"
+  # A one-off container of the cyfr service takes the service's fixed
+  # addresses, which the running cyfr holds: the service stops first.
+  compose stop cyfr >"$WORK/stop-cyfr.log" 2>&1 || fail "docker compose stop cyfr failed: $(cat "$WORK/stop-cyfr.log")"
+  "$ROOT/scripts/cosign.sh" check run cyfr "${COMPOSE_CMD[@]}" run --rm --no-deps -T || fail "the cyfr service's cosign does not verify"
+  ok "cyfr finds $cosign, which verifies keyed and keyless as the service runs it"
 }
 
 # ---------------------------------------------------------------------------
