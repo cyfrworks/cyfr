@@ -438,7 +438,13 @@ func TestRestoreRefusesAStorageRootItCannotWrite(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(blobs, 0o755) })
 	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
 	out, err := r.restore(true)
-	if err == nil || !strings.Contains(err.Error(), blobs) || !strings.Contains(err.Error(), "run the same cyfr restore as root, with sudo") ||
+	// The refusal names the host path the configuration resolves, which on
+	// macOS is under /private, /var being a link there.
+	resolved, rerr := filepath.EvalSymlinks(blobs)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if err == nil || !strings.Contains(err.Error(), "write "+resolved+":") || !strings.Contains(err.Error(), "run the same cyfr restore as root, with sudo") ||
 		!strings.Contains(err.Error(), "nothing of the snapshot was put back") {
 		t.Fatalf("restore answered %v\n%s", err, out)
 	}
@@ -505,7 +511,12 @@ func TestRestoreChecksPermissionsAfterTheLiveRead(t *testing.T) {
 	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
 	keeper := read(t, filepath.Join(r.project, "keeper.seccomp.json"))
 	out, err := r.restore(true)
-	if err == nil || !strings.Contains(err.Error(), "write "+data+":") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+	resolved, rerr := filepath.EvalSymlinks(data)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if err == nil || !strings.Contains(err.Error(), "write "+resolved+":") || !strings.Contains(err.Error(), "run the same cyfr restore as root, with sudo") ||
+		!strings.Contains(err.Error(), "nothing of the snapshot was put back") {
 		t.Fatalf("restore answered %v\n%s", err, out)
 	}
 	r.stoppedUndeclared()
