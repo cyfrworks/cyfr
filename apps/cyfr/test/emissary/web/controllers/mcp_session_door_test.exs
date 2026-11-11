@@ -192,6 +192,10 @@ defmodule Emissary.Web.MCPSessionDoorTest do
                Arca.McpServerStorage.get(Context.actor(ctx), "relay")
 
       # Its connect validates the saved address again, under today's policy.
+      # Two checks hold this refusal: the connect's own validation and the
+      # egress pin on every request it sends (`Emissary.External.Server`).
+      # Weakening either alone leaves the answer standing, so this proves
+      # the pair, not the first check by itself.
       assert %{"status" => "error", "error" => error} =
                as_person
                |> call("mcp_servers", %{"action" => "test", "name" => "relay"})
