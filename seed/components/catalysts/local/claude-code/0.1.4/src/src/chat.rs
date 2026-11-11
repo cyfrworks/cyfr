@@ -16,7 +16,8 @@
 //! `initialize` answer.
 //!
 //! The catalyst holds nothing between runs: the session is the program's,
-//! a pending ask's id rides on its `tool_call` (`provider_data`), and the
+//! a pending ask's id and its place in the session's output ride on its
+//! `tool_call` (`provider_data`), and the
 //! session id on the response, or on the refusal once the session exists
 //! (`carried`). Nothing the harness writes but its reply's
 //! text and its tool calls reaches the answer: no line, no stderr, no file
@@ -222,9 +223,11 @@ pub enum Input {
     /// The newest user message, as content blocks.
     Message(Vec<Value>),
     /// CYFR's answer to the tool call `id`: the ask `request_id` the
-    /// harness holds for it, with the input it was made with.
+    /// harness holds for it, the number of the ask's line in the session's
+    /// output (`after`), and the input it was made with.
     Answer {
         request_id: String,
+        after: u64,
         name: String,
         arguments: Value,
         content: String,
@@ -361,8 +364,13 @@ fn input(messages: &[Value]) -> Result<Input, String> {
                 .get("request_id")
                 .and_then(Value::as_str)
                 .ok_or("the tool call carries no request_id of this brain's")?;
+            let after = call["provider_data"]
+                .get("after")
+                .and_then(Value::as_u64)
+                .ok_or("the tool call carries no place in this brain's session")?;
             Ok(Input::Answer {
                 request_id: request_id.to_string(),
+                after,
                 name: call.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
                 arguments: match call.get("arguments") {
                     Some(v @ Value::Object(_)) => v.clone(),
@@ -657,9 +665,9 @@ impl Reader {
         Reader { session: session.to_string(), after, first: true }
     }
 
-    /// The next lines, waiting at most `wait_ms`; `None` once the program
-    /// has ended and nothing is left.
-    fn next<P: Pipe>(&mut self, pipe: &mut P, wait_ms: u32) -> Result<Option<Vec<String>>, Refusal> {
+    /// The next lines with their numbers, waiting at most `wait_ms`;
+    /// `None` once the program has ended and nothing is left.
+    fn next<P: Pipe>(&mut self, pipe: &mut P, wait_ms: u32) -> Result<Option<Vec<(u64, String)>>, Refusal> {
         let got = pipe
             .recv(&self.session, self.after, wait_ms)
             .map_err(|code| pipe_refusal(&code))?;
@@ -681,7 +689,7 @@ impl Reader {
         if got.lines.is_empty() && !got.running {
             return Ok(None);
         }
-        Ok(Some(got.lines.into_iter().map(|(_, text)| text).collect()))
+        Ok(Some(got.lines))
     }
 
     /// Read past everything the session holds now, before this run sends
@@ -704,7 +712,7 @@ impl Reader {
         loop {
             let wait = wait_until(deadline).ok_or_else(timed_out)?;
             let lines = self.next(pipe, wait)?.ok_or_else(ended)?;
-            for line in lines {
+            for (_, line) in lines {
                 match harness::read(&line) {
                     Event::Answer { request_id, ok, response } if request_id == id => {
                         return if ok {
@@ -885,12 +893,22 @@ fn run<P: Pipe, S: Sink>(
         }
     }
     let session = opened.session.clone();
-    let mut reader = Reader::new(&session, 0);
-    // What a running session holds unread is what earlier runs, each
-    // answered, left behind: let go before this run sends anything.
-    if opened.resumed {
-        reader.drain(pipe)?;
-    }
+    let mut reader = match request.input {
+        // The answer to an ask goes on reading the running session from
+        // the ask's line: what the harness wrote after it (another ask in
+        // the same batch among it) is the turn's, and the run that
+        // answered the ask never handled it.
+        Input::Answer { after, .. } if opened.resumed => Reader::new(&session, after),
+        // What a running session holds unread is what earlier runs, each
+        // answered, left behind: let go before this run sends anything.
+        _ => {
+            let mut reader = Reader::new(&session, 0);
+            if opened.resumed {
+                reader.drain(pipe)?;
+            }
+            reader
+        }
+    };
     // Once this run sends anything, a failure of the pipe interrupts the
     // session: it is closed, nothing is sent again, and the next message
     // resumes it (`interrupted`).
@@ -1009,7 +1027,7 @@ fn turn<P: Pipe, S: Sink>(
             deltas.flush();
             continue;
         }
-        for line in lines {
+        for (seq, line) in lines {
             let event = harness::read(&line);
             if matches!(
                 event,
@@ -1049,7 +1067,7 @@ fn turn<P: Pipe, S: Sink>(
                             "id": call_id,
                             "name": name,
                             "arguments": arguments,
-                            "provider_data": {"request_id": request_id}
+                            "provider_data": {"request_id": request_id, "after": seq}
                         });
                         let answer = response(&text, &model, Some(call), "tool_call", harness::usage(&Value::Null));
                         stream::close(deltas, &answer);
@@ -1098,13 +1116,15 @@ mod tests {
     type Respond = Box<dyn FnMut(&str) -> Vec<String>>;
 
     /// A pipe that answers each line sent with the lines a script gives,
-    /// and records every call.
+    /// and records every call. Like the relay, it holds each line it
+    /// numbered until a read names an `after` at or above its number.
     struct Scripted {
         resumed: bool,
         running: bool,
         log: Vec<String>,
         sent: Vec<String>,
         out: VecDeque<String>,
+        held: VecDeque<(u64, String)>,
         seq: u64,
         respond: Respond,
         open_error: Option<String>,
@@ -1121,6 +1141,7 @@ mod tests {
                 log: Vec::new(),
                 sent: Vec::new(),
                 out: VecDeque::new(),
+                held: VecDeque::new(),
                 seq: 0,
                 respond: Box::new(respond),
                 open_error: None,
@@ -1164,17 +1185,16 @@ mod tests {
             if let Some(code) = self.recv_errors.pop_front().flatten() {
                 return Err(code);
             }
+            for text in self.out.drain(..) {
+                self.seq += 1;
+                self.held.push_back((self.seq, text));
+            }
+            self.held.retain(|(seq, _)| *seq > after);
             // As the relay counts it: every line between `after` and the
             // first it holds, read past by an earlier reader or lost.
-            let dropped = (self.seq - after) as u32;
-            let lines: Vec<(u64, String)> = self
-                .out
-                .drain(..)
-                .map(|text| {
-                    self.seq += 1;
-                    (self.seq, text)
-                })
-                .collect();
+            let first = self.held.front().map_or(self.seq + 1, |(seq, _)| *seq);
+            let dropped = (first - after - 1) as u32;
+            let lines: Vec<(u64, String)> = self.held.iter().cloned().collect();
             Ok(Received { running: self.running || !lines.is_empty(), lines, dropped })
         }
         fn close(&mut self, session: &str) -> Result<(), String> {
@@ -1244,7 +1264,7 @@ mod tests {
         request(json!({"model": "default", "session": session, "messages": [
             {"role": "user", "content": "Read a.txt"},
             {"role": "assistant", "content": [{"type": "tool_call", "id": "toolu_1", "name": "files",
-              "arguments": {"path": "a.txt"}, "provider_data": {"request_id": "req-7"}}]},
+              "arguments": {"path": "a.txt"}, "provider_data": {"request_id": "req-7", "after": 0}}]},
             {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": "toolu_1", "content": "hi"}]}
         ]}))
     }
@@ -1270,8 +1290,8 @@ mod tests {
     fn a_read_lost_after_the_allow_interrupts_the_session_and_the_next_chat_resumes_it() {
         let mut pipe = Scripted::new(harness_answers(vec![result_line()]));
         pipe.resumed = true;
-        // The drain, then the read after the allow: the box could not answer.
-        pipe.recv_errors = VecDeque::from([None, Some("unavailable".into())]);
+        // The read after the allow: the box could not answer.
+        pipe.recv_errors = VecDeque::from([Some("unavailable".into())]);
         let session = started(&Flags::default());
         let mut deltas = Deltas::new(Vec::new());
         let refusal = chat(&mut pipe, &mut deltas, &continuation(&session), "unused".into(), soon()).unwrap_err();
@@ -1493,6 +1513,85 @@ mod tests {
         assert_eq!(events.last().unwrap(), &json!({"type": "stop", "stop_reason": "end_turn"}));
     }
 
+    /// The continuation of `answer` (a tool call) with CYFR's result `hi`.
+    fn answered(answer: &Value) -> Request {
+        let call = answer["content"].as_array().unwrap().iter().find(|b| b["type"] == "tool_call").unwrap();
+        request(json!({"model": "default", "session": answer["session"], "messages": [
+            {"role": "user", "content": "Read a.txt"},
+            {"role": "assistant", "content": answer["content"]},
+            {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": call["id"], "content": "hi"}]}
+        ]}))
+    }
+
+    /// A harness that writes `batch` in one read for the user's message and
+    /// ends the turn once the ask `last` is answered.
+    fn batched(batch: Vec<String>, last: &'static str) -> impl FnMut(&str) -> Vec<String> {
+        let mut control = harness_answers(batch);
+        move |line| {
+            let v: Value = serde_json::from_str(line).unwrap();
+            match v["type"].as_str() {
+                Some("control_response") if v["response"]["request_id"] == last => vec![
+                    r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]},"parent_tool_use_id":null}"#.into(),
+                    result_line(),
+                ],
+                Some("control_response") => Vec::new(),
+                _ => control(line),
+            }
+        }
+    }
+
+    fn allowed(pipe: &Scripted, request_id: &str) -> usize {
+        pipe.sent
+            .iter()
+            .filter(|line| {
+                let v: Value = serde_json::from_str(line).unwrap();
+                v["type"] == "control_response" && v["response"]["request_id"] == request_id
+            })
+            .count()
+    }
+
+    #[test]
+    fn the_harness_s_ask_after_a_cyfr_ask_in_the_same_read_is_answered_by_the_next_chat() {
+        let ask = r#"{"type":"control_request","request_id":"req-7","request":{"subtype":"can_use_tool","tool_name":"mcp__cyfr__files","input":{"action":"read","path":"a.txt"},"tool_use_id":"toolu_1"}}"#;
+        let bash = r#"{"type":"control_request","request_id":"req-bash","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"pwd"},"tool_use_id":"toolu_bash"}}"#;
+        let mut pipe = Scripted::new(batched(vec![init_line(), ask.into(), bash.into()], "req-bash"));
+        let mut deltas = Deltas::new(Vec::new());
+        let req = request(json!({"model":"default","messages":[{"role":"user","content":"Read a.txt"}]}));
+        let answer = chat(&mut pipe, &mut deltas, &req, ID.into(), soon()).unwrap();
+        assert_eq!(answer["stop_reason"], "tool_call");
+        assert_eq!(allowed(&pipe, "req-bash"), 0, "the run answers at the CYFR ask");
+
+        pipe.resumed = true;
+        let answer = chat(&mut pipe, &mut deltas, &answered(&answer), "unused".into(), soon()).unwrap();
+        assert_eq!(answer["stop_reason"], "end_turn", "{answer}");
+        assert_eq!(allowed(&pipe, "req-7"), 1, "{:?}", pipe.sent);
+        assert_eq!(allowed(&pipe, "req-bash"), 1, "{:?}", pipe.sent);
+    }
+
+    #[test]
+    fn a_second_cyfr_ask_in_the_same_read_is_the_next_chat_s_tool_call() {
+        let ask = |id: &str, path: &str| {
+            json!({"type": "control_request", "request_id": id, "request": {"subtype": "can_use_tool",
+                   "tool_name": "mcp__cyfr__files", "input": {"action": "read", "path": path}, "tool_use_id": format!("toolu_{id}")}})
+            .to_string()
+        };
+        let mut pipe = Scripted::new(batched(vec![init_line(), ask("r1", "a.txt"), ask("r2", "b.txt")], "r2"));
+        let mut deltas = Deltas::new(Vec::new());
+        let req = request(json!({"model":"default","messages":[{"role":"user","content":"Read both"}]}));
+        let first = chat(&mut pipe, &mut deltas, &req, ID.into(), soon()).unwrap();
+        assert_eq!(first["content"][0]["provider_data"]["request_id"], "r1");
+
+        pipe.resumed = true;
+        let second = chat(&mut pipe, &mut deltas, &answered(&first), "unused".into(), soon()).unwrap();
+        assert_eq!(second["stop_reason"], "tool_call");
+        assert_eq!(second["content"][0]["arguments"], json!({"action": "read", "path": "b.txt"}));
+        assert_eq!(second["content"][0]["provider_data"]["request_id"], "r2");
+
+        let last = chat(&mut pipe, &mut deltas, &answered(&second), "unused".into(), soon()).unwrap();
+        assert_eq!(last["stop_reason"], "end_turn", "{last}");
+        assert_eq!((allowed(&pipe, "r1"), allowed(&pipe, "r2")), (1, 1), "{:?}", pipe.sent);
+    }
+
     #[test]
     fn an_ask_for_a_cyfr_tool_answers_a_tool_call_and_the_next_chat_allows_it_with_the_result() {
         let ask = r#"{"type":"control_request","request_id":"req-7","request":{"subtype":"can_use_tool","tool_name":"mcp__cyfr__files","input":{"action":"read","path":"a.txt"},"tool_use_id":"toolu_1"}}"#;
@@ -1506,7 +1605,9 @@ mod tests {
         assert_eq!(call["name"], "files");
         assert_eq!(call["id"], "toolu_1");
         assert_eq!(call["arguments"], json!({"action": "read", "path": "a.txt"}));
-        assert_eq!(call["provider_data"], json!({"request_id": "req-7"}));
+        // Its place: the initialize and tools answers, then the init, the
+        // text and the ask.
+        assert_eq!(call["provider_data"], json!({"request_id": "req-7", "after": 5}));
         assert!(!pipe.log[0].contains("--model"), "the default model sets no flag: {}", pipe.log[0]);
 
         // The next chat carries the result: the live session's ask is
@@ -1524,8 +1625,11 @@ mod tests {
                 _ => Vec::new(),
             }
         });
+        // The running session still holds the read the ask came in, which
+        // the answer reads on from.
         pipe.resumed = true;
-        pipe.out.push_back("left over from the last run".into());
+        pipe.held = (3..=5).zip([init_line(), "{}".into(), ask.into()]).collect();
+        pipe.seq = 5;
         let mut messages = vec![json!({"role": "user", "content": "Read a.txt"})];
         messages.push(json!({"role": "assistant", "content": answer["content"]}));
         messages.push(json!({"role": "tool", "content": [{"type": "tool_result", "tool_call_id": "toolu_1", "name": "files", "content": "hi"}]}));
@@ -1556,7 +1660,7 @@ mod tests {
         ]));
         let messages = json!([
             {"role": "user", "content": "go"},
-            {"role": "assistant", "content": [{"type": "tool_call", "id": "t1", "name": "files", "arguments": {"path": "a"}, "provider_data": {"request_id": "r1"}}]},
+            {"role": "assistant", "content": [{"type": "tool_call", "id": "t1", "name": "files", "arguments": {"path": "a"}, "provider_data": {"request_id": "r1", "after": 4}}]},
             {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": "t1", "content": "body"}]}
         ]);
         let req = request(json!({"model": "haiku", "session": ID, "messages": messages}));
