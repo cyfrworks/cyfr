@@ -14,7 +14,7 @@
 # .github/workflows/release.yml, which runs before an image is published.
 # Every other fixable HIGH or CRITICAL still fails those jobs.
 #
-# All six live in npm's bundled dependencies, pinned by npm's lockfile. The
+# Six live in npm's bundled dependencies, pinned by npm's lockfile. The
 # image's npm is the one Node 24.22.1, the newest Node 24 LTS, bundles:
 # 11.19.1, measured (2026-10-24) carrying brace-expansion 5.0.9 and undici
 # 6.28.0. npm 12.2.1, the newest release, was measured the same day
@@ -33,6 +33,16 @@
 # arbitrary execution by design, under a pooled uid of its own. A denial of
 # service, or a parser disagreeing about an address, sits below what that
 # caller already commands.
+#
+# One lives in the cosign binary the server image carries to verify a
+# component's signature (scripts/cosign.sh installs the release binary by
+# its published checksum). cosign v3.1.4, the newest release on 2026-11-11,
+# is built with golang.org/x/net v0.61.0; cosign's main branch names
+# v0.62.0 and no release carries it. Building cosign in the image to move
+# one module would ship a binary that is no longer the one sigstore
+# published and signed. The server runs cosign only to verify, each run a
+# process of its own under a deadline, and a verification that does not
+# answer refuses the component.
 #
 # misconfigurations: read by the repository's misconfiguration scan in
 # .github/workflows/security.yml, which fails on every other HIGH or
@@ -97,6 +107,17 @@ vulnerabilities:
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
     statement: npm's bundled undici; no npm release ships the fix.
+
+  # golang.org/x/net v0.61.0 inside cosign v3.1.4: denial of service in the
+  # HTML parser on crafted input, fixed at v0.62.0. Lift by moving
+  # scripts/cosign.sh to the first cosign release built with v0.62.0 or
+  # later.
+  - id: CVE-2026-78661
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
+    paths:
+      - "usr/local/bin/cosign"
+    statement: the release cosign binary's golang.org/x/net; no cosign release ships the fix.
 
 misconfigurations:
   # No USER line: both images start as root on purpose. The server's
