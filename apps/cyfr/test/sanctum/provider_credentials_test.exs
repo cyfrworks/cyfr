@@ -6,6 +6,7 @@ defmodule Sanctum.ProviderCredentialsTest do
 
   alias Sanctum.Context
   alias Sanctum.ProviderCredentials
+  alias Sanctum.Test.DirectoryServer
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -21,6 +22,37 @@ defmodule Sanctum.ProviderCredentialsTest do
       permissions: permissions,
       authenticated: true
     )
+  end
+
+  # A person with their own athanor, and the context their session
+  # establishes there.
+  defp signed_in! do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|oauth-client-#{n}",
+        provider: "github",
+        email: "oauth-client#{n}@example.com",
+        verified: true
+      })
+
+    athanor = Sanctum.Test.People.athanor!(user)
+
+    built =
+      Context.build(
+        user_id: user.id,
+        email: user.email,
+        provider: "github",
+        athanor_id: athanor.id,
+        permissions: [:*],
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, session} = Sanctum.TestContext.create_session(built)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+    ctx
   end
 
   # The sources of the statements this process ran, as the handler told it.
@@ -230,6 +262,23 @@ defmodule Sanctum.ProviderCredentialsTest do
 
       Arca.ControlPlane.record(:unclaimed)
       assert {:error, _missing} = ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
+    end
+
+    test "by a person whose account was closed answers the closed-account refusal, and stores nothing" do
+      ctx = signed_in!()
+
+      set_client =
+        &Sanctum.Providers.OAuth.handle(&1, %{
+          "action" => "set_client",
+          "provider" => "google",
+          "client_id" => "closed-id",
+          "client_secret" => "closed-secret"
+        })
+
+      assert DirectoryServer.repeated_once_closed(ctx, set_client) == {:error, :identity_gone}
+
+      assert {:error, :not_found} =
+               Arca.ProviderCredentialStorage.get(Context.actor(ctx), "google")
     end
 
     test "requires provider and client_id" do

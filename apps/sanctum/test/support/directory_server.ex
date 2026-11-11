@@ -628,6 +628,54 @@ defmodule Sanctum.Test.DirectoryServer do
   end
 
   @doc """
+  `write` under the session `ctx` of a person whose account closes
+  between their proof and the change's repeat, as a page repeats a change
+  its person confirmed before the account closed: the person is made a
+  member by a new account with a passkey (`member!/1`, `add_passkey!/3`),
+  `write` is asked and answers the confirmation signal, the passkey's
+  answer to this CYFR's `confirm` request for it confirms the record
+  (`Sanctum.SignIn`), the account is tombstoned and this home's cached
+  head of it verified an hour before the database's clock, so the next
+  read of it asks the directory, and `write` is repeated under the proof.
+  Answers the repeat's answer; its log is captured.
+  """
+  @spec repeated_once_closed(Sanctum.Context.t(), (Sanctum.Context.t() -> term())) :: term()
+  def repeated_once_closed(ctx, write) do
+    import Ecto.Query, only: [from: 2]
+
+    %{account: account, dir: dir} = member!(ctx.user_id)
+    %{passkeys: [passkey]} = account = add_passkey!(dir.dir, account)
+    _head = cached!(account)
+
+    {:error, {:confirmation_required, %{id: id}}} = write.(ctx)
+    binding = {:channel, "directory-server-proof"}
+
+    {:ok, %{request: request}} =
+      Sanctum.SignIn.request(:confirm, binding,
+        ctx: ctx,
+        ref: Prima.Confirmation.ref(id),
+        identifier: account.identifier
+      )
+
+    {:ok, %{purpose: :confirm}} =
+      Sanctum.SignIn.answer(passkey_answer(request, account, passkey), binding)
+
+    tombstone(dir.dir, account.identifier)
+    aged = DateTime.add(Arca.ServerMetaStorage.now!(), -3_600, :second)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^account.identifier),
+        set: [verified_at: aged]
+      )
+
+    {answer, _log} =
+      ExUnit.CaptureLog.with_log(fn -> write.(%{ctx | confirmation_id: id}) end)
+
+    answer
+  end
+
+  @doc """
   Make the person `user_id` this CYFR's member by a new account at a
   scripted directory started for the calling test (`account_person!/2`),
   so a name the registry answers with its identifier and the directory's
