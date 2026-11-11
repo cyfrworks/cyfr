@@ -130,7 +130,7 @@ func TestWindowsDeadlineTerminatesTheJob(t *testing.T) {
 // without FILE_SHARE_DELETE, during which MoveFileEx refuses to replace
 // it, so a holder writing its record while a refused taker in another
 // process read it (every 5 ms for recordWait) failed to take the lock
-// with "Access is denied". replaceFile tries again within replaceWait:
+// with "Access is denied". ReplaceFile tries again within replaceWait:
 // while the reader's handle is open the replacement is neither answered
 // nor refused, it lands once the handle closes, and a handle held past
 // replaceWait is refused with the error the rename gave. The reader here
@@ -151,7 +151,7 @@ func TestReplaceFileWaitsOutAReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	answered := make(chan error, 1)
-	go func() { answered <- replaceFile(tmp, target) }()
+	go func() { answered <- ReplaceFile(tmp, target) }()
 	select {
 	case err := <-answered:
 		t.Fatalf("the replacement answered %v while a reader held the file", err)
@@ -181,7 +181,7 @@ func TestReplaceFileWaitsOutAReader(t *testing.T) {
 	}
 	defer held.Close()
 	started := time.Now()
-	err = replaceFile(tmp, target)
+	err = ReplaceFile(tmp, target)
 	var linkErr *os.LinkError
 	if !errors.As(err, &linkErr) || time.Since(started) < replaceWait {
 		t.Fatalf("a handle held past replaceWait answered %v after %v", err, time.Since(started))

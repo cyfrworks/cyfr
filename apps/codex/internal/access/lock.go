@@ -114,7 +114,7 @@ func (e *Engine) unlock() {
 		return
 	}
 	os.Remove(e.path(holderFile))
-	syncDir(e.path())
+	SyncDir(e.path())
 	unlockExclusive(e.lock)
 	e.lock.Close()
 	e.lock = nil

@@ -815,7 +815,7 @@ func (s *Shell) Resume(ctx context.Context, code string) {
 }
 
 // Rename takes another name for the account being made, whose name
-// someone took meanwhile.
+// someone took meanwhile or the registry keeps reserved.
 func (s *Shell) Rename(ctx context.Context, name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -854,6 +854,10 @@ func (s *Shell) submit(ctx context.Context) {
 	case errors.Is(err, account.ErrNameTaken):
 		m.taken = true
 		s.say("Someone holds the name @%s. Choose another: your account is made, and takes a name once one is free.", m.attempt.Name)
+		return
+	case errors.Is(err, account.ErrNameReserved):
+		m.taken = true
+		s.say("The name @%s is reserved. Choose another: your account is made, and takes a name once one is free.", m.attempt.Name)
 		return
 	case errors.Is(err, account.ErrPolicyChanged):
 		m.attempt.Accepted = ""

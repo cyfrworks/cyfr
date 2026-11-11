@@ -118,6 +118,26 @@ func TestSubmit_ATakenNameAsksAnother(t *testing.T) {
 	}
 }
 
+// A reserved name is found by no lookup, so it reads as free, and its
+// claim is ErrNameReserved; the account stands, and another name is
+// claimed for it.
+func TestSubmit_AReservedNameAsksAnother(t *testing.T) {
+	svc := accounttest.New(t)
+	dev := newDevice(t)
+	if err := account.CheckName(context.Background(), account.Registry{Origin: svc.URL()}, accounttest.Reserved); err != nil {
+		t.Fatalf("CheckName of the reserved name is %v", err)
+	}
+	a, _, key, _ := account.Begin(config(t, svc), accounttest.Reserved, "", dev.Public().(ed25519.PublicKey), now())
+	save := func(account.Attempt) error { return nil }
+	if err := account.Submit(context.Background(), &a, key, now, nil, save); !errors.Is(err, account.ErrNameReserved) {
+		t.Fatalf("a reserved name is %v", err)
+	}
+	a.Name = "mira"
+	if err := account.Submit(context.Background(), &a, key, now, nil, save); err != nil || svc.Holder("mira") != a.Identifier || len(svc.Log(a.Identifier)) != 2 {
+		t.Fatalf("another name: %v", err)
+	}
+}
+
 // A registry that asks for a newer policy than the one accepted is
 // ErrPolicyChanged.
 func TestSubmit_ANewerPolicyIsAskedAgain(t *testing.T) {

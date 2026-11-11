@@ -194,6 +194,16 @@ jobs:
           go test ./cmd/ -race -count=1 -v -run '^TestUpdateHandsOverForReal$' 2>&1 | tee "$RUNNER_TEMP/handover-test.log"
           grep -q -- "--- PASS: TestUpdateHandsOverForReal " "$RUNNER_TEMP/handover-test.log" || { echo "::error::the handover test did not run and pass"; exit 1; }
 
+      # cyfr restore's durable write, where a directory handle cannot be
+      # flushed: the rename is written through and the write answers no
+      # error. It must run and pass here.
+      - name: go test (the restore's durable write ran and passed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./cmd/ -race -count=1 -v -run '^TestWriteDurable_ReplacesTheFileOnEveryPlatform$' 2>&1 | tee "$RUNNER_TEMP/durable-test.log"
+          grep -q -- "--- PASS: TestWriteDurable_ReplacesTheFileOnEveryPlatform " "$RUNNER_TEMP/durable-test.log" || { echo "::error::the restore's durable write test did not run and pass"; exit 1; }
+
   test-macos:
     # The CLI ships for macOS; this runs its checks on the platform's own
     # filesystem, process and trust-store behavior.

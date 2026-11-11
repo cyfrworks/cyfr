@@ -298,7 +298,7 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	defer os.Remove(tmp.Name())
 	err = errors.Join(tmp.Chmod(mode), writeAll(tmp, data), tmp.Sync(), tmp.Close())
 	if err == nil {
-		err = os.Rename(tmp.Name(), target)
+		err = access.ReplaceFile(tmp.Name(), target)
 	}
 	if err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
