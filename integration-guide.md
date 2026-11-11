@@ -396,16 +396,16 @@ unreachable. Branch on `result.isError` for those, not on a code.
 
 **Standard codes.** JSON-RPC's own, and the ones MCP reserves:
 
-| Code | HTTP | Meaning |
-|------|------|---------|
-| -32700 | 400, 415 | The body is not parseable JSON, or not sent as `application/json` |
-| -32600 | 400, 405, 413 | Not a single JSON-RPC request: a batch, an HTTP method other than `POST`, or a body over the size limit |
-| -32601 | 404 | Unknown method |
-| -32602 | 400 | The arguments do not validate, the tool is unknown, or a required field is missing |
-| -32603 | 500 | The request's handler failed before it could answer |
-| -32002 | 400 | `resources/read` of a resource that does not exist |
-| -32020 | 400 | A required MCP header is missing or disagrees with the body ([Required Headers](#required-headers)) |
-| -32022 | 400 | `UnsupportedProtocolVersion`; `error.data.supported` lists the revisions the server speaks |
+| Code | Name | HTTP | Meaning |
+|------|------|------|---------|
+| -32700 | `parse_error` | 400, 415 | The body is not parseable JSON, or not sent as `application/json` |
+| -32600 | `invalid_request` | 400, 405, 413 | Not a single JSON-RPC request: a batch, an HTTP method other than `POST`, or a body over the size limit |
+| -32601 | `method_not_found` | 404 | Unknown method |
+| -32602 | `invalid_params` | 400 | The arguments do not validate, the tool is unknown, or a required field is missing |
+| -32603 | `internal_error` | 500 | The request's handler failed before it could answer |
+| -32002 | `resource_not_found` | 400 | `resources/read` of a resource that does not exist |
+| -32020 | `header_mismatch` | 400 | A required MCP header is missing or disagrees with the body ([Required Headers](#required-headers)) |
+| -32022 | `unsupported_protocol_version` | 400 | `error.data.supported` lists the revisions the server speaks |
 
 > **MCP Tool Reference**: For a complete mapping of CLI commands to MCP tool/action pairs (useful when building HTTP integrations), see [CLI → MCP Tool Reference](component-guide.md#cli--mcp-tool-reference) in the Component Guide.
 
