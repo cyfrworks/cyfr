@@ -1006,7 +1006,8 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "everything consent reads about a component comes through the " <>
-          "`Sanctum.Consent.Components` port, and no sign-in speaks to the registry. " <>
+          "`Sanctum.Consent.Components` port, and the one question a sign-in asks the " <>
+          "registry, the account's name, is Sanctum's own request (`Sanctum.Handle`). " <>
           "A foundation's build does not see the host's boundaries: its pruned code path " <>
           "makes a call an undefined-module warning that names no boundary, and a bare name " <>
           "compiles."
