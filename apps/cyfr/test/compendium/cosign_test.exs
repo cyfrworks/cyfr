@@ -182,17 +182,11 @@ defmodule Compendium.CosignTest do
             {"keyless@projectsigstore.iam.gserviceaccount.co",
              "keyless@projectsigstore.iam.gserviceaccount.com"}
           ] do
-        cosign =
-          stand_in(dir,
-            answer: [entry(@digest)],
-            signed_by: {signed_by, "https://accounts.google.com"}
-          )
-
-        Application.put_env(:cyfr, :sigstore,
-          verification: :keyless,
+        use_stand_in(dir,
+          answer: [entry(@digest)],
+          signed_by: {signed_by, "https://accounts.google.com"},
           identity: pattern,
-          issuer: "https://accounts.google.com",
-          cosign_path: cosign
+          issuer: "https://accounts.google.com"
         )
 
         assert {:ok, signer} = Cosign.verify(@reference, @digest)
@@ -341,9 +335,16 @@ defmodule Compendium.CosignTest do
 
   # -- Stand-in cosign -------------------------------------------------------
 
+  # The keyless signer is @signer's, or the `:identity` and `:issuer` opts
+  # give its patterns.
   defp use_stand_in(dir, opts) do
     cosign = stand_in(dir, opts)
-    Application.put_env(:cyfr, :sigstore, @signer ++ [cosign_path: cosign])
+
+    Application.put_env(
+      :cyfr,
+      :sigstore,
+      Keyword.merge(@signer, Keyword.take(opts, [:identity, :issuer])) ++ [cosign_path: cosign]
+    )
   end
 
   # A shell script in the test's own directory that records its arguments
