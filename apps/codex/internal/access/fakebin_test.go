@@ -127,7 +127,10 @@ func childEnv(extra ...string) []string {
 // takes the lock and waits; `DIR READY docker ARGS…` then runs one docker
 // call through the system implementation; `DIR READY switch MODE ID`
 // recovers and switches to MODE, after its preview. It writes READY once
-// it holds the lock, and READY.done when its work has answered.
+// it holds the lock, and READY.done when its work has answered. With
+// ACCESS_HOLDER_STALL_RECORD it stops at its next write of the holder
+// record, the one that would name a docker call's watchdog, writing that
+// file first: where a test kills it.
 func holderMain(args []string) int {
 	dir, ready, mode := args[0], args[1], args[2]
 	e, err := Open(dir, nil)
@@ -144,6 +147,15 @@ func holderMain(args []string) int {
 	if _, err := e.Lock("holder"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if stalled := os.Getenv("ACCESS_HOLDER_STALL_RECORD"); stalled != "" {
+		e.failWrite = func(name, _ string) error {
+			if filepath.Base(name) == holderFile {
+				os.WriteFile(stalled, nil, 0o600)
+				blockForever()
+			}
+			return nil
+		}
 	}
 	os.WriteFile(ready, []byte(strconv.Itoa(os.Getpid())), 0o600)
 	ctx := context.Background()

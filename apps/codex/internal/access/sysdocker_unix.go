@@ -8,6 +8,7 @@ package access
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -38,16 +39,37 @@ func (s *systemDocker) run(ctx context.Context, bin string, args []string, deadl
 	}
 	cmd := exec.Command(argv[0], append(append(argv[1:len(argv):len(argv)], watchdogArgs(deadline, true)...), append([]string{bin}, args...)...)...)
 	streams(cmd)
-	// The descriptor is fd 3 in the watchdog, outside Go's close-on-exec,
-	// so the lock stays held while the watchdog or docker lives.
-	cmd.ExtraFiles = []*os.File{lock}
+	// The watchdog starts docker only when told to go ahead, a byte on
+	// this pipe written once the holder record names it: a holder killed
+	// before that leaves a watchdog that reads the pipe's end and exits,
+	// never a docker child holding the lock under a record that does not
+	// name it. Both ends are close-on-exec, so no other child keeps the
+	// write end open past this process.
+	ahead, goAhead, err := os.Pipe()
+	if err != nil {
+		return -1, fmt.Errorf("access: start the docker watchdog: %w", err)
+	}
+	defer goAhead.Close()
+	// The descriptors are fd 3 and 4 in the watchdog, outside Go's
+	// close-on-exec, so the lock stays held while the watchdog or docker
+	// lives.
+	cmd.ExtraFiles = []*os.File{lock, ahead}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = waitGrace
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	ahead.Close()
+	if err != nil {
 		return -1, err
 	}
-	s.e.noteWatchdog(cmd.Process.Pid, time.Now().Add(deadline))
+	recorded := s.e.noteWatchdog(cmd.Process.Pid, time.Now().Add(deadline))
 	defer s.e.doneWatchdog(cmd.Process.Pid)
+	if recorded == nil {
+		// A watchdog that has died does not read it; its exit answers below.
+		goAhead.Write([]byte{1})
+	}
+	// Unrecorded, the watchdog reads the pipe's end and exits, docker not
+	// run.
+	goAhead.Close()
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	backstop := time.NewTimer(deadline + waitGrace)
@@ -63,6 +85,9 @@ func (s *systemDocker) run(ctx context.Context, bin string, args []string, deadl
 	case <-backstop.C:
 		cmd.Process.Kill()
 		err = <-done
+	}
+	if recorded != nil {
+		return -1, recorded
 	}
 	if ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
 		return -1, errors.Join(ctx.Err(), err)

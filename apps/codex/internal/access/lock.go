@@ -154,18 +154,20 @@ func (e *Engine) liveHolder(host string) *ErrBusy {
 // noteWatchdog records, durably, the watchdog now holding the lock's
 // descriptor for a docker child and when its deadline ends; doneWatchdog
 // records that it ended. The record names the running child whose
-// deadline ends last, and none between calls.
-func (e *Engine) noteWatchdog(pid int, until time.Time) {
+// deadline ends last, and none between calls. A watchdog starts docker
+// only after noteWatchdog has answered nil (systemDocker.run), so a
+// docker child that runs is one the record names.
+func (e *Engine) noteWatchdog(pid int, until time.Time) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.lock == nil {
-		return
+		return errors.New("access: the engine's lock was let go before its docker call was recorded")
 	}
 	if e.watchdogs == nil {
 		e.watchdogs = map[int]time.Time{}
 	}
 	e.watchdogs[pid] = until.UTC().Truncate(time.Second).Add(time.Second)
-	e.writeHolder()
+	return e.writeHolder()
 }
 
 func (e *Engine) doneWatchdog(pid int) {
@@ -180,7 +182,7 @@ func (e *Engine) doneWatchdog(pid int) {
 
 // writeHolder writes the holder record with its latest running child;
 // e.mu is held.
-func (e *Engine) writeHolder() {
+func (e *Engine) writeHolder() error {
 	e.holder.WatchdogPID, e.holder.Until = 0, nil
 	for pid, until := range e.watchdogs {
 		if e.holder.Until == nil || until.After(*e.holder.Until) {
@@ -188,7 +190,7 @@ func (e *Engine) writeHolder() {
 			e.holder.WatchdogPID, e.holder.Until = pid, &u
 		}
 	}
-	e.writeJSON(e.path(holderFile), e.holder)
+	return e.writeJSON(e.path(holderFile), e.holder)
 }
 
 // requireLock refuses a method that changes the stack without the lock.
