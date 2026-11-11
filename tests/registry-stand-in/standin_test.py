@@ -167,6 +167,12 @@ def registry_checks():
     status, text, _ = own.request("POST", "/v1/namespaces/personal/claim", other)
     check(status == 409 and code_of(text) == "SLUG_TAKEN", "a name another identifier holds is taken", (status, text))
 
+    reserved = dict(request_of("handle_claim"), body={"handle": "admin"})
+    status, text, _ = own.request("POST", "/v1/namespaces/personal/claim", reserved)
+    check(status == 400 and code_of(text) == "RESERVED", "the reserved name's claim is refused as reserved", (status, text))
+    status, text, _ = own.request("GET", "/v1/handles/admin")
+    check(status == 404 and code_of(text) == "HANDLE_NOT_FOUND", "the reserved name is not found", (status, text))
+
     status, text, _ = own.request("GET", "/v1/handles/bob")
     check(status == 404 and code_of(text) == "HANDLE_NOT_FOUND", "an unknown name is not found", (status, text))
 

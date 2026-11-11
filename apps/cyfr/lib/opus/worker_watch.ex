@@ -18,8 +18,7 @@ defmodule Opus.WorkerWatch do
   ## Reading is free; writing is claimed
 
   Every member of the cell polls every worker service, because polling is
-  how `fresh_boot/2` saves dispatch a status round trip and how a member
-  learns which attempts a worker holds. What is claimed is the right to
+  how a member learns which attempts a worker holds. What is claimed is the right to
   *write*: the `job_claims` row `(kind: "worker_watch", key: <service id>)`
   (`Arca.JobClaims`), leased for twice the poll interval — 10 s at the
   default 5 s poll.
@@ -98,18 +97,9 @@ defmodule Opus.WorkerWatch do
 
   Whether a lease stands is decided on the cell's clock
   (`Arca.ServerMetaStorage.now!/0`), because two members could disagree
-  about it and both would write. The poll interval and the freshness of
-  the `fresh_boot/2` entry are bounded local timers on
-  `System.monotonic_time/1`, because they only decide how long one member
-  waits before asking again.
-
-  ## Publishing what a member heard
-
-  The boot heard within the last poll interval is published for
-  `Opus.Dispatch` (`fresh_boot/2`): a start addressed to it
-  needs no status of its own first. This is the member's own reading, so
-  every member publishes; a miss withdraws it, as does a boot change
-  until the claim records the new boot.
+  about it and both would write. The poll interval is a bounded local
+  timer on `System.monotonic_time/1`, because it only decides how long one
+  member waits before asking again.
 
   A tick polls only while this member holds its slot in the cell
   (`Arca.ControlPlane.held?/0`), and an answer landing after that standing
@@ -125,7 +115,7 @@ defmodule Opus.WorkerWatch do
   `:workers`, as a test starts it, the watch polls those endpoints
   whatever the gate says; `:poll_ms`, `:misses`, `:lease_ms`, `:owner`
   (the member the claim is taken for, this boot by default) and `:name`
-  (an atom, the process's and its table's) override the rest.
+  (an atom, the process's) override the rest.
   """
 
   use GenServer
@@ -188,35 +178,6 @@ defmodule Opus.WorkerWatch do
     end
   end
 
-  @doc """
-  The boot of the worker service at `endpoint` as the watch `name` heard
-  it within the last poll interval, or `:unknown`: no watch runs under
-  that name (its `:worker_watch_enabled` switch is off) or the watch exited
-  as it was read, it has not heard from that endpoint, the endpoint's last
-  answer was a miss, its boot changed, or the boot it heard is older than
-  one interval.
-  """
-  @spec fresh_boot(WorkerAPI.endpoint(), atom()) :: {:ok, String.t()} | :unknown
-  def fresh_boot(%{id: id, url: url}, name \\ __MODULE__) when is_atom(name) do
-    with table when table != :undefined <- :ets.whereis(name),
-         [{^id, ^url, boot, heard_at, poll_ms}] <- lookup(table, id),
-         true <- System.monotonic_time(:millisecond) - heard_at <= poll_ms do
-      {:ok, boot}
-    else
-      _unheard -> :unknown
-    end
-  end
-
-  # The table goes with the watch that owns it, which can exit between the
-  # lookup of its name above and this read: a table that is gone has heard
-  # nothing. Any other failure of the read raises.
-  defp lookup(table, id) do
-    :ets.lookup(table, id)
-  rescue
-    error in ArgumentError ->
-      if :ets.info(table) == :undefined, do: [], else: reraise(error, __STACKTRACE__)
-  end
-
   # ---------------------------------------------------------------------------
   # Server
   # ---------------------------------------------------------------------------
@@ -226,10 +187,6 @@ defmodule Opus.WorkerWatch do
     # The claims this watch holds are given up at a clean stop, so a
     # successor takes them at once rather than waiting out a lease.
     Process.flag(:trap_exit, true)
-
-    # Read by dispatch without a call, so a lapse in progress delays no
-    # start; owned here, it goes with the watch.
-    :ets.new(settings.name, [:named_table, :protected, :set, read_concurrency: true])
     send(self(), :poll)
 
     {:ok,
@@ -334,12 +291,11 @@ defmodule Opus.WorkerWatch do
          {:ok, row} <- row(id) do
       case take(state, row, id, now) do
         {:ok, claim} -> write_heard(state, id, claim, boot, attempts, now, 1)
-        {:busy, claim} -> state |> adopt(id, claim) |> heard_locally(id, boot, attempts)
+        {:busy, claim} -> state |> adopt(id, claim) |> put_attempts(id, attempts)
         _unavailable -> state
       end
     else
-      # The store could not answer. Nothing is written and nothing is
-      # published: the `fresh_boot/2` entry ages out on its own interval.
+      # The store could not answer: nothing is written.
       _unavailable -> state
     end
   end
@@ -377,14 +333,14 @@ defmodule Opus.WorkerWatch do
       :lapsed when retries > 0 ->
         case JobClaims.claim(@kind, id, state.owner, state.lease_ms) do
           {:ok, again} -> write_heard(state, id, again, boot, attempts, now, retries - 1)
-          {:busy, peer} -> state |> adopt(id, peer) |> heard_locally(id, boot, attempts)
+          {:busy, peer} -> state |> adopt(id, peer) |> put_attempts(id, attempts)
           _unavailable -> state
         end
 
       # A peer holds the row. Nothing issued under the old claim may land,
       # and asking again would take it from a live holder.
       _taken_or_unavailable ->
-        state |> drop(id) |> heard_locally(id, boot, attempts)
+        state |> drop(id) |> put_attempts(id, attempts)
     end
   end
 
@@ -392,37 +348,23 @@ defmodule Opus.WorkerWatch do
   # naming a boot other than the one the claim recorded means the service
   # restarted, and the old boot's running attempts lapse once before the
   # new boot is recorded. A lapse the store refused leaves the old boot
-  # recorded, so the next status tries again, and no start is addressed to
-  # either boot meanwhile.
+  # recorded, so the next status tries again.
   defp settle_boot(state, id, held, recorded, boot, attempts) do
-    if recorded.boot == nil or recorded.boot == boot do
-      state |> heard_locally(id, boot, attempts)
-    else
-      state = withdraw(state, id)
+    replaced? =
+      recorded.boot != nil and recorded.boot != boot and
+        (recorded.lapsed or
+           lapse_boot(id, recorded.boot, seen(state, id).attempts, "was replaced by #{boot}"))
 
-      if recorded.lapsed or
-           lapse_boot(id, recorded.boot, seen(state, id).attempts, "was replaced by #{boot}") do
-        case JobClaims.record(held, encode(%{recorded | boot: boot, misses: 0, lapsed: false})) do
-          {:ok, done} -> state |> adopt(id, done) |> heard_locally(id, boot, attempts)
-          _taken_or_unavailable -> state |> put_attempts(id, attempts)
-        end
+    state =
+      with true <- replaced?,
+           {:ok, done} <-
+             JobClaims.record(held, encode(%{recorded | boot: boot, misses: 0, lapsed: false})) do
+        adopt(state, id, done)
       else
-        put_attempts(state, id, attempts)
+        _same_unlapsed_or_taken -> state
       end
-    end
-  end
 
-  # What this member learned by hearing, whoever holds the claim: the
-  # attempts the status reported, and the boot published for dispatch. The
-  # boot is published only once the claim records it, so a start is never
-  # addressed across an unsettled restart.
-  defp heard_locally(state, id, boot, attempts) do
-    state = put_attempts(state, id, attempts)
-    recorded = seen(state, id).boot
-
-    if recorded == nil or recorded == boot,
-      do: publish(state, id, boot),
-      else: withdraw(state, id)
+    put_attempts(state, id, attempts)
   end
 
   # ---------------------------------------------------------------------------
@@ -431,7 +373,7 @@ defmodule Opus.WorkerWatch do
 
   defp missed(state, id) do
     seen = seen(state, id)
-    state = state |> put_seen(id, %{seen | unheard: seen.unheard + 1}) |> withdraw(id)
+    state = put_seen(state, id, %{seen | unheard: seen.unheard + 1})
 
     with {:ok, now} <- cell_now(),
          {:ok, row} <- row(id) do
@@ -640,22 +582,6 @@ defmodule Opus.WorkerWatch do
 
   # This member holds no claim, and knows nothing of the cell's record.
   defp drop(state, id), do: put_seen(state, id, %{seen(state, id) | claimed: false})
-
-  defp publish(state, id, boot) do
-    %{url: url} = Map.fetch!(state.workers, id)
-
-    :ets.insert(
-      state.name,
-      {id, url, boot, System.monotonic_time(:millisecond), state.poll_ms}
-    )
-
-    state
-  end
-
-  defp withdraw(state, id) do
-    :ets.delete(state.name, id)
-    state
-  end
 
   defp unheard,
     do: %{boot: nil, attempts: [], misses: 0, lapsed: false, unheard: 0, claimed: false}

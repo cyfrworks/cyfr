@@ -1070,6 +1070,9 @@ defmodule PrismWeb.ComponentsLive do
 
   # Built-in tool results are atom-keyed (`PrismWeb.Ops`), and the
   # registry client atomizes remote search entries at its decode boundary.
+  # `component/inspect` is the exception: it answers string keys
+  # (`Compendium.Component.inspect_component/2`), so the expanded detail
+  # is read by string.
   defp comp_field(c, key) when is_map(c), do: c[key]
   defp comp_field(_, _), do: nil
 
@@ -1443,20 +1446,19 @@ defmodule PrismWeb.ComponentsLive do
                         <.live_loading :if={@expanded_loading} message="Loading…" />
                         <div :if={@expanded_detail} class="space-y-4">
                           <!-- Description -->
-                          <div :if={comp_field(@expanded_detail, :description)}>
+                          <div :if={@expanded_detail["description"] not in [nil, ""]}>
                             <p class="text-sm text-gray-300">
-                              {comp_field(@expanded_detail, :description)}
+                              {@expanded_detail["description"]}
                             </p>
                           </div>
 
                           <!-- Tags -->
                           <div :if={
-                            is_list(comp_field(@expanded_detail, :tags)) &&
-                              comp_field(@expanded_detail, :tags) != []
+                            is_list(@expanded_detail["tags"]) && @expanded_detail["tags"] != []
                           }>
                             <div class="flex flex-wrap gap-1">
                               <span
-                                :for={tag <- comp_field(@expanded_detail, :tags)}
+                                :for={tag <- @expanded_detail["tags"]}
                                 class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-800 text-gray-300"
                               >
                                 {tag}

@@ -644,6 +644,7 @@ defmodule Compendium.Builds do
   end
 
   defp published(:ok), do: :ok
+  defp published({:error, :not_owner} = refused), do: refused
 
   defp published({:error, reason}) do
     Logger.error("[Compendium.Builds] the built artifact was not saved: #{inspect(reason)}")

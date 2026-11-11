@@ -123,6 +123,131 @@ func TestDockerChildKeepsTheLockAfterItsHolderDies(t *testing.T) {
 	}
 }
 
+// A holder killed after it started a docker call's watchdog and before
+// its record named it: the watchdog reads the end of its go-ahead and
+// exits, so docker was never run and the lock is free, never held by a
+// child no record names.
+func TestHolderKilledBeforeItsRecordRunsNoDocker(t *testing.T) {
+	h, state := binaryHome(t, false)
+	dir := t.TempDir()
+	stalled := filepath.Join(dir, "stalled")
+	cmd := exec.Command(exeOrSkip(t), "-access.holder", h.dir, filepath.Join(dir, "ready"), "docker", "ps", "-a")
+	cmd.Env = childEnv("ACCESS_HOLDER_STATE="+state, "ACCESS_HOLDER_STALL_RECORD="+stalled)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	waitFor(t, 20*time.Second, "the holder to reach its record", func() bool { _, err := os.Stat(stalled); return err == nil })
+	if !heldFromOutside(t, h.dir) {
+		t.Fatal("the lock was free while its holder lived")
+	}
+	cmd.Process.Kill()
+	cmd.Wait()
+
+	waitFor(t, 20*time.Second, "the lock to free once the watchdog read its go-ahead's end", func() bool { return !heldFromOutside(t, h.dir) })
+	unlock, err := h.e.Lock("next")
+	if err != nil {
+		t.Fatalf("the next taker answered %v", err)
+	}
+	unlock()
+	if calls := readFakeState(t, state).Calls; len(calls) != 0 {
+		t.Errorf("docker ran for a holder that never recorded the call: %v", calls)
+	}
+}
+
+// A docker call whose record cannot be written is not run: the call
+// answers the write's failure, the watchdog has ended, and the record
+// names no watchdog.
+func TestUnrecordedDockerCallIsNotRun(t *testing.T) {
+	h, state := binaryHome(t, false)
+	unlock, err := h.e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	refused := errors.New("the record's disk is full")
+	h.e.failWrite = func(name, _ string) error {
+		if filepath.Base(name) == holderFile {
+			return refused
+		}
+		return nil
+	}
+	_, err = h.e.Docker().Run(bg, Call{Args: []string{"ps", "-a"}})
+	h.e.failWrite = nil
+	if !errors.Is(err, refused) {
+		t.Fatalf("the call answered %v", err)
+	}
+	if calls := readFakeState(t, state).Calls; len(calls) != 0 {
+		t.Errorf("docker ran unrecorded: %v", calls)
+	}
+	other, _ := Open(h.dir, h.fake)
+	_, err = other.Lock("next")
+	if busy, ok := err.(*ErrBusy); !ok || busy.WatchdogPID != 0 || busy.PID != os.Getpid() {
+		t.Errorf("the next taker answered %#v", err)
+	}
+}
+
+// A watchdog that dies before it reads its go-ahead ends the call with
+// its status: the holder keeps the lock and its record names no watchdog.
+func TestWatchdogDeadBeforeItsGoAheadEndsTheCall(t *testing.T) {
+	h, state := binaryHome(t, false)
+	h.e.docker.(*systemDocker).watchdog = []string{"false"}
+	unlock, err := h.e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	_, err = h.e.Docker().Run(bg, Call{Args: []string{"ps", "-a"}})
+	var call *CallError
+	if !errors.As(err, &call) || call.ExitCode != 1 || call.Deadline {
+		t.Fatalf("the call answered %v", err)
+	}
+	if calls := readFakeState(t, state).Calls; len(calls) != 0 {
+		t.Errorf("docker ran: %v", calls)
+	}
+	other, _ := Open(h.dir, h.fake)
+	_, err = other.Lock("next")
+	if busy, ok := err.(*ErrBusy); !ok || busy.WatchdogPID != 0 || busy.PID != os.Getpid() {
+		t.Errorf("the next taker answered %#v", err)
+	}
+}
+
+// The watchdog runs docker only once its go-ahead arrives: the byte runs
+// it, the descriptor's end without one exits 125, and the deadline, which
+// runs from before the wait, exits 124; docker runs in neither.
+func TestWatchdogWaitsForItsGoAhead(t *testing.T) {
+	run := func(deadline string, signal func(w *os.File)) (int, bool) {
+		t.Helper()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer w.Close()
+		// The watchdog owns and closes the descriptor it is given: a
+		// duplicate, so this test's file never closes a number reused.
+		fd, err := syscall.Dup(int(r.Fd()))
+		r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ran := filepath.Join(t.TempDir(), "ran")
+		go signal(w)
+		var out strings.Builder
+		code := WatchdogMain([]string{"--deadline", deadline, "--go-fd", strconv.Itoa(fd), "--", "sh", "-c", `: > "$0"`, ran}, nil, &out, &out)
+		_, err = os.Stat(ran)
+		return code, err == nil
+	}
+	if code, ran := run("1m", func(w *os.File) { w.Write([]byte{1}) }); code != 0 || !ran {
+		t.Errorf("told to go ahead, the watchdog exited %d, docker run: %v", code, ran)
+	}
+	if code, ran := run("1m", func(w *os.File) { w.Close() }); code != 125 || ran {
+		t.Errorf("its go-ahead ended, the watchdog exited %d, docker run: %v", code, ran)
+	}
+	if code, ran := run("50ms", func(*os.File) {}); code != watchdogDeadline || ran {
+		t.Errorf("never told to go ahead, the watchdog exited %d, docker run: %v", code, ran)
+	}
+}
+
 // The watchdog kills a docker call at its deadline, and the call answers
 // ErrDeadline: an orphan holds the lock no longer than that.
 func TestWatchdogKillsACallAtItsDeadline(t *testing.T) {

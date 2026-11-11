@@ -1037,7 +1037,7 @@ defmodule Opus.Attempt do
   end
 
   # A charge row the store cannot give back now is reclaimed by the
-  # reservation sweep once its holder has ended.
+  # sweeper's reservation sweep (`Opus.Sweeper`) once its holder has ended.
   defp give_back_charge(state) do
     Charge.give_back(state.authority, charge: state.charge, ctx: state.ctx)
   catch

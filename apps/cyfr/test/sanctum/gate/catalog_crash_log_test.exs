@@ -30,7 +30,7 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
     def tools do
       [
         Operation.tool(
-          for action <- ~w(put call) do
+          for action <- ~w(put call stop) do
             Operation.new(
               "crash_log_probe",
               action,
@@ -46,7 +46,13 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
 
     # No clause for "put": the handler's frame holds the context and the
     # arguments it was called with. "call" exits naming the call it made.
+    # "stop" exits with a payload shaped like a raise's, a reason and a
+    # stacktrace, and is an exit all the same.
     @impl true
+    def handle(_tool, _ctx, %{"action" => "stop"}) do
+      exit({:shutdown, [{__MODULE__, :handle, 3, []}]})
+    end
+
     def handle(_tool, _ctx, %{"action" => "call", "value" => value}) do
       target = spawn(fn -> Process.sleep(1_000) end)
       GenServer.call(target, {:put, value}, 20)
@@ -58,14 +64,20 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
     :ok
   end
 
-  test "a supervised handler's crash names the handler by arity, never the context or arguments" do
-    {result, log} = call("put", runner: :supervised)
+  # An error the VM raises (here a function clause) is a crash on either
+  # runner, never an exit.
+  for runner <- [:supervised, :inline] do
+    test "a #{runner} handler's crash names the handler by arity, never the context or arguments" do
+      {result, log} = call("put", runner: unquote(runner))
 
-    assert {:error, {:uncertain, _sentence}} = result
-    assert log =~ "[Sanctum.Dispatch] Tool crash_log_probe exited: "
-    assert log =~ "Sanctum.Gate.CatalogCrashLogTest.Probe, :handle, 3,"
-    refute log =~ @email
-    refute log =~ @value
+      assert {:error, {:uncertain, sentence}} = result
+      assert sentence == Sanctum.Dispatch.uncertain_message("crash_log_probe", :crashed)
+      assert log =~ "[Sanctum.Dispatch] Tool crash_log_probe crashed: "
+      assert log =~ "(FunctionClauseError)"
+      assert log =~ "Sanctum.Gate.CatalogCrashLogTest.Probe.handle/3"
+      refute log =~ @email
+      refute log =~ @value
+    end
   end
 
   test "an inline handler's exit names the call it made by arity, never its request" do
@@ -74,6 +86,21 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
     assert {:error, {:uncertain, _sentence}} = result
     assert log =~ "{GenServer, :call, 3}"
     refute log =~ @value
+  end
+
+  for runner <- [:supervised, :inline] do
+    test "a #{runner} handler's exit is an exit, whatever its payload looks like" do
+      {result, log} = call("stop", runner: unquote(runner))
+
+      assert result ==
+               {:error,
+                {:uncertain, Sanctum.Dispatch.uncertain_message("crash_log_probe", :exited)}}
+
+      assert log =~ "[Sanctum.Dispatch] Tool crash_log_probe exited: "
+      refute log =~ "crashed"
+      refute log =~ @email
+      refute log =~ @value
+    end
   end
 
   defp call(action, opts) do

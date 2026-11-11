@@ -41,6 +41,28 @@ defmodule Emissary.External.ServerEraTest do
     {Jason.decode!(body), conn}
   end
 
+  # Twelve whitespace chunks 75 ms apart, then the payload: each chunk lands
+  # well inside a 300 ms receive timeout, the whole reply well outside it.
+  defp trickle(conn, payload) do
+    conn =
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_chunked(200)
+
+    conn =
+      Enum.reduce(1..12, conn, fn _, conn ->
+        Process.sleep(75)
+
+        case Plug.Conn.chunk(conn, " ") do
+          {:ok, conn} -> conn
+          {:error, _closed} -> conn
+        end
+      end)
+
+    _ = Plug.Conn.chunk(conn, Jason.encode!(payload))
+    conn
+  end
+
   defp json(conn, payload) do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
@@ -88,15 +110,96 @@ defmodule Emissary.External.ServerEraTest do
       # Header and body must agree or a conforming peer refuses the request.
       assert version_header == meta[Protocol.meta_protocol_version_key()]
     end
-  end
 
-  describe "a legacy peer" do
-    test "falls back to the handshake after a bare 4xx", %{stub: stub, url: url} do
-      test_pid = self()
+    test "a paged listing is followed to its last page", %{stub: stub, url: url} do
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+
+        result =
+          case body["params"]["cursor"] do
+            nil -> %{"tools" => [%{"name" => "first"}], "nextCursor" => "page-two"}
+            "page-two" -> %{"tools" => [%{"name" => "second"}], "nextCursor" => "page-three"}
+            "page-three" -> %{"tools" => [%{"name" => "third"}]}
+          end
+
+        json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+      end)
+
+      {_pid, {:ok, tools}} = connect(url, "paging-peer")
+      assert Enum.map(tools, & &1["name"]) == ["first", "second", "third"]
+    end
+
+    test "a listing that never ends fails the connect", %{stub: stub, url: url} do
+      pages = :counters.new(1, [])
 
       HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
-        send(test_pid, {:method, body["method"]})
+        :counters.add(pages, 1, 1)
+        page = %{"tools" => [%{"name" => "t#{body["id"]}"}], "nextCursor" => "more"}
+        json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => page})
+      end)
+
+      {pid, {:error, reason}} = connect(url, "endless-peer")
+      assert reason =~ "listed more than 20 pages of tools"
+      assert :counters.get(pages, 1) == 20
+      assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
+    end
+
+    test "a listing trickled past its deadline fails the connect", %{stub: stub, url: url} do
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        trickle(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
+      end)
+
+      config = [name: "trickled-list-peer", url: url, athanor_id: "ath_test", timeout_ms: 300]
+      pid = start_supervised!({Server, config})
+
+      assert {:error, reason} = GenServer.call(pid, :get_tools, 10_000)
+      assert reason =~ "did not finish listing its tools within 300 ms"
+      HTTPStub.pass(stub)
+    end
+
+    # The handshake limit is the server's timeout where that is shorter, so
+    # a one-second timeout puts the whole listing under one second.
+    test "a slow listing fails at the deadline, not at the page bound",
+         %{stub: stub, url: url} do
+      pages = :counters.new(1, [])
+
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        :counters.add(pages, 1, 1)
+        Process.sleep(300)
+        page = %{"tools" => [%{"name" => "t#{body["id"]}"}], "nextCursor" => "more"}
+        json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => page})
+      end)
+
+      config = [name: "slow-peer", url: url, athanor_id: "ath_test", timeout_ms: 1_000]
+      pid = start_supervised!({Server, config})
+
+      assert {:error, reason} = GenServer.call(pid, :get_tools, 10_000)
+      assert reason =~ "did not finish listing its tools within 1000 ms"
+      assert :counters.get(pages, 1) < 20
+      assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
+      HTTPStub.pass(stub)
+    end
+  end
+
+  describe "a legacy peer" do
+    # A stateful peer on the older revision, as the common servers are: it
+    # issues a session at `initialize` and answers any later request that
+    # does not carry it 400.
+    # `:issue` is the session it issues, `:require` the one it then
+    # requires (the issued one unless the client is configured with its
+    # own) and `:answer` answers everything after the handshake.
+    defp legacy_peer(stub, test_pid, opts \\ []) do
+      issued = Keyword.get(opts, :issue, "peer-session")
+      required = Keyword.get(opts, :require, issued)
+      answer = Keyword.get(opts, :answer, &answer_listing/2)
+
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        session = Plug.Conn.get_req_header(conn, "mcp-session-id")
+        send(test_pid, {:method, body["method"], session})
 
         modern? = get_in(body, ["params", "_meta"]) != nil
 
@@ -107,27 +210,226 @@ defmodule Emissary.External.ServerEraTest do
             Plug.Conn.resp(conn, 400, "Bad Request")
 
           "initialize" ->
-            json(conn, %{
+            conn
+            |> Plug.Conn.put_resp_header("mcp-session-id", issued)
+            |> json(%{
               "jsonrpc" => "2.0",
               "id" => body["id"],
               "result" => %{"serverInfo" => %{"name" => "old", "version" => "1"}}
             })
 
+          _method when session != [required] ->
+            Plug.Conn.resp(conn, 400, "Bad Request: No valid session ID provided")
+
           "notifications/initialized" ->
             Plug.Conn.resp(conn, 202, "")
 
-          "tools/list" ->
-            json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
+          _method ->
+            answer.(conn, body)
         end
       end)
+    end
+
+    defp refuse_echoing_session(conn, body) do
+      [session] = Plug.Conn.get_req_header(conn, "mcp-session-id")
+
+      json(conn, %{
+        "jsonrpc" => "2.0",
+        "id" => body["id"],
+        "error" => %{"code" => -32000, "message" => "session rejected: #{session}"}
+      })
+    end
+
+    defp answer_listing(conn, %{"method" => "tools/list"} = body),
+      do:
+        json(conn, %{
+          "jsonrpc" => "2.0",
+          "id" => body["id"],
+          "result" => %{"tools" => [%{"name" => "echo"}]}
+        })
+
+    defp answer_listing(conn, %{"method" => "tools/call"} = body),
+      do: json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"echo" => true}})
+
+    test "falls back to the handshake after a bare 4xx", %{stub: stub, url: url} do
+      legacy_peer(stub, self())
 
       {pid, {:ok, _tools}} = connect(url, "legacy-peer")
 
       assert %{status: :ready, server_info: %{"name" => "old"}} =
                GenServer.call(pid, :status, 5_000)
 
-      assert_received {:method, "tools/list"}
-      assert_received {:method, "initialize"}
+      assert_received {:method, "tools/list", []}
+      assert_received {:method, "initialize", []}
+    end
+
+    test "every request after initialize carries the session it issued",
+         %{stub: stub, url: url} do
+      legacy_peer(stub, self())
+
+      {pid, {:ok, [%{"name" => "echo"}]}} = connect(url, "session-peer")
+      assert {:ok, %{"echo" => true}} = Server.call_tool(pid, "echo", %{})
+
+      assert_received {:method, "initialize", []}
+      assert_received {:method, "notifications/initialized", ["peer-session"]}
+      assert_received {:method, "tools/list", ["peer-session"]}
+      assert_received {:method, "tools/call", ["peer-session"]}
+    end
+
+    test "the session a peer echoes in a refusal stays out of the log", %{stub: stub, url: url} do
+      legacy_peer(stub, self(), answer: &refuse_echoing_session/2)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {_pid, {:error, reason}} = connect(url, "session-echo-peer")
+          refute reason =~ "peer-session"
+        end)
+
+      assert log =~ "Failed to initialize session-echo-peer"
+      refute log =~ "peer-session"
+    end
+
+    test "the session stays out of the process's status", %{stub: stub, url: url} do
+      legacy_peer(stub, self())
+
+      {pid, {:ok, _tools}} = connect(url, "session-status-peer")
+      refute inspect(:sys.get_status(pid), limit: :infinity) =~ "peer-session"
+      refute inspect(:sys.get_state(pid), limit: :infinity) =~ "peer-session"
+    end
+
+    # Masking leaves out values shorter than eight bytes, so an id that
+    # short could not be kept out of the log: it is not kept at all.
+    test "a session id too short to mask fails the connect", %{stub: stub, url: url} do
+      legacy_peer(stub, self(), issue: "Sess123", answer: &refuse_echoing_session/2)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {_pid, {:error, reason}} = connect(url, "short-session-peer")
+          assert reason =~ "issued a session id too short to keep"
+        end)
+
+      refute log =~ "Sess123"
+      refute_received {:method, "notifications/initialized", _session}
+    end
+
+    test "a session id that is not visible ASCII fails the connect", %{stub: stub, url: url} do
+      legacy_peer(stub, self(), issue: "peer session")
+
+      assert {_pid, {:error, reason}} = connect(url, "spaced-session-peer")
+      assert reason =~ "issued a session id that is not visible ASCII"
+    end
+
+    test "a configured session header wins over the issued one", %{stub: stub, url: url} do
+      legacy_peer(stub, self(), require: "configured-session")
+
+      config = [
+        name: "configured-session-peer",
+        url: url,
+        athanor_id: "ath_test",
+        headers: %{"Mcp-Session-Id" => "configured-session"}
+      ]
+
+      pid = start_supervised!({Server, config})
+      assert {:ok, [%{"name" => "echo"}]} = GenServer.call(pid, :get_tools, 5_000)
+
+      assert_received {:method, "initialize", ["configured-session"]}
+      assert_received {:method, "notifications/initialized", ["configured-session"]}
+      assert_received {:method, "tools/list", ["configured-session"]}
+    end
+
+    test "a reconnect does not send the session issued before it", %{stub: stub, url: url} do
+      legacy_peer(stub, self())
+
+      {pid, {:ok, _tools}} = connect(url, "reconnecting-peer")
+      assert_handshake()
+
+      assert {:ok, :ready} = GenServer.call(pid, :reinitialize, 5_000)
+      assert_handshake()
+    end
+
+    # The probe and initialize carry no session; everything after carries
+    # the one initialize issued.
+    defp assert_handshake do
+      assert_received {:method, "tools/list", []}
+      assert_received {:method, "initialize", []}
+      assert_received {:method, "notifications/initialized", ["peer-session"]}
+      assert_received {:method, "tools/list", ["peer-session"]}
+    end
+
+    # A configured header resolved from the vault stays its own: the issued
+    # id does not replace it on the wire or in the masking.
+    test "a vault session header echoed by the peer stays masked", %{stub: stub, url: url} do
+      ctx = Sanctum.TestContext.local()
+      secret = "configured-vault-session-secret"
+
+      assert {:ok, _entry} =
+               Sanctum.TestContext.create_vault(ctx, %{
+                 name: "era-session-header",
+                 kind: "api_key",
+                 fields: %{"value" => secret},
+                 destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => stub.port}
+               })
+
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        session = Plug.Conn.get_req_header(conn, "mcp-session-id")
+
+        cond do
+          get_in(body, ["params", "_meta"]) != nil ->
+            Plug.Conn.resp(conn, 400, "Bad Request")
+
+          session != [secret] ->
+            Plug.Conn.resp(conn, 400, "Bad Request: No valid session ID provided")
+
+          body["method"] == "initialize" ->
+            conn
+            |> Plug.Conn.put_resp_header("mcp-session-id", "issued-session")
+            |> json(%{
+              "jsonrpc" => "2.0",
+              "id" => body["id"],
+              "result" => %{"serverInfo" => %{"name" => "peer", "version" => secret}}
+            })
+
+          body["method"] == "notifications/initialized" ->
+            Plug.Conn.resp(conn, 202, "")
+
+          true ->
+            json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
+        end
+      end)
+
+      config = [
+        name: "vault-session-peer",
+        url: url,
+        athanor_id: ctx.athanor_id,
+        headers: %{"mcp-session-id" => "vault:era-session-header"}
+      ]
+
+      pid = start_supervised!({Server, config})
+      assert {:ok, []} = GenServer.call(pid, :get_tools, 5_000)
+
+      status = GenServer.call(pid, :status, 5_000)
+      assert status.server_info["version"] == "[REDACTED]"
+      refute inspect(status) =~ secret
+    end
+
+    # A trickling peer holds initialize as it could a listing: each chunk
+    # restarts the wait for the next.
+    test "a trickled initialize fails at the request's timeout", %{stub: stub, url: url} do
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+
+        if get_in(body, ["params", "_meta"]),
+          do: Plug.Conn.resp(conn, 400, "Bad Request"),
+          else: trickle(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{}})
+      end)
+
+      config = [name: "trickled-init-peer", url: url, athanor_id: "ath_test", timeout_ms: 300]
+      pid = start_supervised!({Server, config})
+
+      assert {:error, _reason} = GenServer.call(pid, :get_tools, 10_000)
+      assert %{status: :error} = GenServer.call(pid, :status, 5_000)
+      HTTPStub.pass(stub)
     end
   end
 

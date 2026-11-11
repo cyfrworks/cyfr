@@ -753,6 +753,9 @@ defmodule Opus.Schedules.Provider do
         {:error, :schedule_cap} ->
           {:error, "Schedule limit reached (#{cap} per athanor)"}
 
+        {:error, :conflict} ->
+          {:error, {:conflict, "a live schedule is named #{attrs.name}"}}
+
         {:error, reason} ->
           store_refusal(reason, nil)
       end

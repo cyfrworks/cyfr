@@ -215,9 +215,9 @@ defmodule Arca.PlatformSettings do
 
     # The earlier installation's cached values go with it, and so do the
     # ones cached under this one's keys.
-    invalidate(:all)
+    drop_cached()
     :persistent_term.put(@installed, installed)
-    invalidate(:all)
+    drop_cached()
   end
 
   @doc "The installed declaration, or `nil` before `install_defaults!/1`."
@@ -231,20 +231,37 @@ defmodule Arca.PlatformSettings do
   """
   @spec uninstall() :: :ok
   def uninstall do
-    invalidate(:all)
+    drop_cached()
     :persistent_term.erase(@installed)
     :ok
   end
 
-  @doc "Drop the cached value of `key`, or of every key, so the next read asks the store."
+  @doc """
+  Age the cached value of `key`, or of every key, past the cache's
+  lifetime, so the next read asks the store. The value stays: a `:serve`
+  key whose store cannot answer that read still answers it.
+  """
   @spec invalidate(key() | :all) :: :ok
   def invalidate(:all) do
-    for key <- Map.keys(installed() || %{}), do: :persistent_term.erase(cache_key(key))
+    for key <- Map.keys(installed() || %{}), do: invalidate(key)
     :ok
   end
 
   def invalidate(key) when is_binary(key) do
-    :persistent_term.erase(cache_key(key))
+    case :persistent_term.get(cache_key(key), nil) do
+      {value, _read_at} ->
+        aged = System.monotonic_time(:millisecond) - @ttl_ms
+        :persistent_term.put(cache_key(key), {value, aged})
+
+      nil ->
+        :ok
+    end
+
+    :ok
+  end
+
+  defp drop_cached do
+    for key <- Map.keys(installed() || %{}), do: :persistent_term.erase(cache_key(key))
     :ok
   end
 

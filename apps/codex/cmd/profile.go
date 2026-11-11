@@ -4,9 +4,7 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -17,7 +15,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -28,8 +25,8 @@ func init() {
 	profileGrantCmd.Flags().StringSlice("entry", nil,
 		"Bind a need of the app: need[|account]=id[:lifetime] (repeatable). An id beginning "+
 			"shr_ is a key shared with you, any other an entry of the athanor; |account names an "+
-			"account beside the need's default; the lifetime is standing (the default), 5m, 1h, "+
-			"session or once")
+			"account beside the need's default; the lifetime is standing (the default), 5m, 1h "+
+			"or once")
 	profileGrantCmd.Flags().StringSlice("selection", nil,
 		"Fill a dependency's credential: dep[|account]=id[:lifetime] (repeatable). An id "+
 			"beginning vlt_ or shr_ names an entry, anything else the label of the dependency's "+
@@ -147,8 +144,8 @@ var profileGrantCmd = &cobra.Command{
 		"(or --selection, for a dependency) names another; an optional need is bound only " +
 		"when named. Where several entries can meet a required need and none is suggested, " +
 		"an interactive grant asks and a non-interactive one is refused until the need is " +
-		"named. A binding stands until revoked unless its flag names 5m, 1h, " +
-		sessionLifetimeHelp + " or once (one run). A flag naming need|account or " +
+		"named. A binding stands until revoked unless its flag names 5m, 1h or once " +
+		"(one run). A flag naming need|account or " +
 		"dep|account binds a named account beside that edge's default, an entry, and names " +
 		"that account's slot alone. A re-grant keeps each binding the grant holds, its entry " +
 		"and its lifetime, unless a flag names its slot; one whose time has passed is asked " +
@@ -203,20 +200,6 @@ var profileGrantCmd = &cobra.Command{
 			renderPlanNeeds(os.Stdout, plan)
 		}
 
-		// The session's end is read once, and only when a binding asks to
-		// live as long as the session.
-		var session *sessionEnd
-		endOfSession := func() (time.Time, bool, error) {
-			if session == nil {
-				end, ok, err := whoamiSessionEnd(cmd.Context(), client)
-				if err != nil {
-					return time.Time{}, false, err
-				}
-				session = &sessionEnd{at: end, ok: ok}
-			}
-			return session.at, session.ok, nil
-		}
-
 		note := func(string) {}
 		if !flagJSON {
 			note = func(line string) { fmt.Println(line) }
@@ -229,9 +212,8 @@ var profileGrantCmd = &cobra.Command{
 				ask: func(title string, options []prompt.Option) (string, error) {
 					return askForChoice(cmd.Context(), title, options)
 				},
-				now:        time.Now(),
-				sessionEnd: endOfSession,
-				note:       note,
+				now:  time.Now(),
+				note: note,
 			})
 		if err != nil {
 			if prompt.IsAborted(err) {
@@ -322,19 +304,11 @@ func commitDecisionsOf(decisions ops.ProfilePreviewArgsDecisions) (ops.ProfileCo
 // The decisions a grant makes
 // ---------------------------------------------------------------------------
 
-// lifetimeChoices are the five a binding may live by, in the order they
-// are offered: until revoked, five minutes, one hour, until the time the
-// session is now due to end (at most 24 hours on), and one run.
-var lifetimeChoices = []string{"standing", "5m", "1h", "session", "once"}
-
-// sessionHorizon is the furthest an until-lifetime may reach: the home
-// refuses one more than 24 hours after its commit.
-const sessionHorizon = 24 * time.Hour
-
-type sessionEnd struct {
-	at time.Time
-	ok bool
-}
+// lifetimeChoices are the four a binding may live by from the command
+// line, in the order they are offered: until revoked, five minutes, one
+// hour, and one run. The session lifetime is not among them
+// (sessionLifetimeRefusal).
+var lifetimeChoices = []string{"standing", "5m", "1h", "once"}
 
 // grantFlags are the choices the command line names.
 type grantFlags struct {
@@ -344,13 +318,12 @@ type grantFlags struct {
 }
 
 // grantChooser is how the walk decides what no flag names: whether it may
-// ask, how it asks, the clock an until-lifetime is computed from, the
-// session's end, and where it says what it narrowed or left unbound.
+// ask, how it asks, the clock an until-lifetime is computed from, and
+// where it says what it narrowed or left unbound.
 type grantChooser struct {
 	interactive bool
 	ask         func(title string, options []prompt.Option) (string, error)
 	now         time.Time
-	sessionEnd  func() (time.Time, bool, error)
 	note        func(string)
 }
 
@@ -364,29 +337,6 @@ type grantDecisions struct {
 
 // askForChoice asks the person to pick one option, until ctx ends.
 var askForChoice = prompt.SelectOne
-
-// whoamiSessionEnd is when the command line's session ends, from its own
-// session.whoami: false when its credential is no session (an API key).
-func whoamiSessionEnd(ctx context.Context, client *mcp.Client) (time.Time, bool, error) {
-	who, err := client.CallTool(ctx, ops.Session, ops.SessionWhoamiArgs{})
-	if err != nil {
-		return time.Time{}, false, handleToolError(err)
-	}
-	return sessionEndOf(who)
-}
-
-// sessionEndOf reads session.whoami's session_expires_at.
-func sessionEndOf(who map[string]any) (time.Time, bool, error) {
-	raw, _ := who["session_expires_at"].(string)
-	if raw == "" {
-		return time.Time{}, false, nil
-	}
-	end, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("CYFR answered an unreadable session end %q", raw)
-	}
-	return end, true, nil
-}
 
 // slotFlag is one --entry or --selection: the need or the dependency it
 // names, the account it names beside that edge's default ("" for the
@@ -497,6 +447,9 @@ func splitLifetime(flag, value string) (string, string, error) {
 		return value, "standing", nil
 	}
 	id, choice := value[:at], value[at+1:]
+	if choice == "session" && id != "" {
+		return "", "", fmt.Errorf("%s %q names %s", flag, value, sessionLifetimeRefusal)
+	}
 	for _, known := range lifetimeChoices {
 		if choice == known && id != "" {
 			return id, choice, nil
@@ -506,22 +459,18 @@ func splitLifetime(flag, value string) (string, string, error) {
 		flag, value, choice, strings.Join(lifetimeChoices, ", "))
 }
 
-// What "session" binds, in the words the help and the refusal use: until a
-// time fixed when the grant is made, at most 24 hours on, named by that
-// time and never by what might end a session, since an until is fixed once
-// committed.
-const (
-	sessionLifetimeHelp = "session (until the time your session is now due to end, at most " +
-		"24 hours on, fixed when you grant)"
-	sessionLifetimeRefusal = "the session lifetime lasts until the time this command line's " +
-		"session is now due to end, at most 24 hours on, and this credential is no session " +
-		"(an API key), so it has no such time: choose standing, 5m, 1h or once"
-)
+// sessionLifetimeRefusal is why the command line offers no session
+// lifetime: the session behind a login shell is renewed a minute at a
+// time while the shell runs, and an until is fixed when the grant is
+// committed, so a grant bound to the session's end would lapse within
+// about a minute.
+const sessionLifetimeRefusal = "the session lifetime, which the command line does not " +
+	"offer: its session is renewed a minute at a time, so a grant bound to it would end " +
+	"within about a minute. Choose standing, 5m, 1h or once"
 
 // lifetimeOf is the lifetime a choice sends, computed once, when the
 // command line decides, so the preview and the commit carry the same
-// until. "session" is the time the session is now due to end at, at most
-// 24 hours on, and is said by that time.
+// until.
 func lifetimeOf(choice string, chooser grantChooser) (string, string, error) {
 	until := func(at time.Time) string { return at.UTC().Truncate(time.Second).Format(time.RFC3339) }
 	switch choice {
@@ -531,21 +480,6 @@ func lifetimeOf(choice string, chooser grantChooser) (string, string, error) {
 		return "until", until(chooser.now.Add(5 * time.Minute)), nil
 	case "1h":
 		return "until", until(chooser.now.Add(time.Hour)), nil
-	case "session":
-		end, ok, err := chooser.sessionEnd()
-		if err != nil {
-			return "", "", err
-		}
-		if !ok {
-			return "", "", errors.New(sessionLifetimeRefusal)
-		}
-		if limit := chooser.now.Add(sessionHorizon); end.After(limit) {
-			end = limit
-		}
-		if chooser.note != nil {
-			chooser.note("This session: until " + until(end) + ".")
-		}
-		return "until", until(end), nil
 	}
 	return "", "", fmt.Errorf("a lifetime is %s, not %q", strings.Join(lifetimeChoices, ", "), choice)
 }

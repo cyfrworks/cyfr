@@ -179,6 +179,7 @@ defmodule Sanctum.Consent.Authz do
           | :invalid_request
           | :not_standing
           | :identity_stale
+          | :identity_gone
           | :unavailable
           | :missing_tenant
           | {:conflict, String.t()}
@@ -422,6 +423,7 @@ defmodule Sanctum.Consent.Authz do
   def message(:unavailable), do: "Your standing could not be checked; try again"
 
   def message(:identity_stale), do: Prima.Refusal.message(:identity_stale)
+  def message(:identity_gone), do: Prima.Refusal.message(:identity_gone)
 
   def message(:missing_tenant),
     do: "A change that needs a fresh confirmation is made in an athanor; open one first"
@@ -1015,7 +1017,8 @@ defmodule Sanctum.Consent.Authz do
   # an issuance does (`Sanctum.Issuance.device_hold/1`).
   @spec standing(Context.t()) ::
           :ok
-          | {:error, :not_authenticated | :not_standing | :identity_stale | :unavailable}
+          | {:error,
+             :not_authenticated | :not_standing | :identity_stale | :identity_gone | :unavailable}
   def standing(%Context{} = ctx) do
     case Sanctum.Caller.revalidate_session(ctx) do
       {:ok, _current} -> :ok
@@ -1028,13 +1031,15 @@ defmodule Sanctum.Consent.Authz do
   (`Sanctum.Caller.revalidate_session/1`): `:unauthenticated` is
   `:not_authenticated`, `:not_standing`, `:not_member` and a person who
   stands but for the company sign-in this CYFR requires
-  (`:company_login_required`) are `:not_standing`, a person whose remote identity could not be read fresh
-  is `:identity_stale`, and a refusal this vocabulary does not know is
+  (`:company_login_required`) are `:not_standing`, a person whose remote
+  identity could not be read fresh is `:identity_stale`, a person whose
+  account is gone at its directory is `:identity_gone`, and a refusal this
+  vocabulary does not know is
   `:unavailable`, logged, never a crash, so a refusal revalidation learns
   later still refuses.
   """
   @spec standing_refusal(term()) ::
-          :not_authenticated | :not_standing | :identity_stale | :unavailable
+          :not_authenticated | :not_standing | :identity_stale | :identity_gone | :unavailable
   def standing_refusal(:unauthenticated), do: :not_authenticated
 
   def standing_refusal(reason)
@@ -1042,6 +1047,7 @@ defmodule Sanctum.Consent.Authz do
       do: :not_standing
 
   def standing_refusal(:identity_stale), do: :identity_stale
+  def standing_refusal(:identity_gone), do: :identity_gone
   def standing_refusal(:unavailable), do: :unavailable
 
   def standing_refusal(other) do

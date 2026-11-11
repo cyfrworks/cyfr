@@ -25,6 +25,6 @@ apps/sanctum/test/sanctum/vault_oauth_refresh_test.exs	1	pending
 apps/sanctum/test/sanctum/webhook_entries_test.exs	2	pending
 apps/sanctum/test/support/directory_server.ex	3	pending
 apps/sanctum/test/support/registry_stub.ex	2	pending
-apps/sanctum/test/support/settings.ex	2	pending
+apps/sanctum/test/support/settings.ex	1	pending
 apps/sanctum/test/support/test_context.ex	1	pending
 apps/sanctum/test/support/workos_stub.ex	1	pending

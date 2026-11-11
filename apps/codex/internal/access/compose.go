@@ -170,7 +170,7 @@ func (e *Engine) dropFiles(extra []string, finishing bool) error {
 		e.mu.Unlock()
 	}
 	if len(names) > 0 {
-		syncDir(e.path())
+		SyncDir(e.path())
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("access: remove materialized configuration: %v", errs)

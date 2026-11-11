@@ -41,6 +41,11 @@ type Service struct {
 	Writes int
 }
 
+// Reserved is the one name the registry keeps from every account, as
+// cyfr.run keeps its own: its lookup is not found and its claim refused
+// RESERVED.
+const Reserved = "admin"
+
 // New starts a service, closed when the test ends.
 func New(t *testing.T) *Service {
 	s := &Service{logs: map[string][]any{}, handles: map[string]string{}, accepted: map[string]string{}}
@@ -277,11 +282,15 @@ func (s *Service) registry(w http.ResponseWriter, path string, body []byte) {
 		reply(w, http.StatusOK, map[string]any{"accepted": true})
 		return
 	}
+	name, _ := b["handle"].(string)
+	if name == Reserved {
+		refuse(w, http.StatusBadRequest, "RESERVED")
+		return
+	}
 	if s.Policy != nil && s.accepted[identifier] != s.Policy.Version {
 		refuse(w, http.StatusForbidden, "POLICY_ACCEPTANCE_REQUIRED")
 		return
 	}
-	name, _ := b["handle"].(string)
 	if held, taken := s.handles[name]; taken && held != identifier {
 		refuse(w, http.StatusConflict, "SLUG_TAKEN")
 		return

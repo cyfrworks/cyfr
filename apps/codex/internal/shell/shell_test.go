@@ -22,6 +22,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/cyfr/codex/internal/account"
+	"github.com/cyfr/codex/internal/account/accounttest"
 	"github.com/cyfr/codex/internal/disk"
 	"github.com/cyfr/codex/internal/holder"
 )
@@ -282,6 +283,24 @@ func TestSetup_ATakenNameAsksAnother(t *testing.T) {
 	b.post("/saved", nil)
 	if page := b.page(); !strings.Contains(page, "Someone holds the name @alice") || !strings.Contains(page, `action="/name"`) {
 		t.Fatalf("the taken name asks nothing:\n%s", page)
+	}
+	ticketOf(t, b.post("/name", url.Values{"name": {"alice2"}}), home)
+	rec, _ := holder.Load(b.record)
+	if home.accounts.Holder("alice2") != rec.Identifier || len(home.accounts.Log(rec.Identifier)) != 2 {
+		t.Fatal("the account was made twice, or took no name")
+	}
+}
+
+// A name the registry keeps reserved reads as free until its claim is
+// refused; then another name is asked, as for a taken one, and the
+// account made once takes it.
+func TestSetup_AReservedNameAsksAnother(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	b.setUp(accounttest.Reserved)
+	b.post("/saved", nil)
+	if page := b.page(); !strings.Contains(page, "The name @"+accounttest.Reserved+" is reserved") || !strings.Contains(page, `action="/name"`) {
+		t.Fatalf("the reserved name asks nothing:\n%s", page)
 	}
 	ticketOf(t, b.post("/name", url.Values{"name": {"alice2"}}), home)
 	rec, _ := holder.Load(b.record)

@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,23 +15,45 @@ import (
 // token.
 const registrySyncAnswer = `{"personal_namespace":"alice","memberships":[{"slug":"acme.com","role":"admin"}]}`
 
-// `cyfr registry sync` asks registry.sync and nothing more, and prints the
-// namespaces it answered.
-func TestRegistrySync_AsksSyncAlone(t *testing.T) {
-	onTerminal(t, false)
-	srv := newCLIServer(t, "", registrySyncAnswer)
+// registrySyncAsked is registry.sync's first answer to a login shell's
+// session, as the server gives it: the request to sign and the account
+// page that would sign it with a passkey.
+func registrySyncAsked(t *testing.T) string {
+	t.Helper()
+	asked, _ := registryAsked(t)
+	raw, err := json.Marshal(map[string]any{"request": asked, "url": "https://cyfr.run/account/sign#request"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// `cyfr registry sync` asks registry.sync, signs the request it answers
+// and asks again with the signed request, then prints the namespaces it
+// answered.
+func TestRegistrySync_SignsTheRequestAndAsksAgain(t *testing.T) {
+	saved := registrySigner
+	t.Cleanup(func() { registrySigner = saved })
+	registrySigner = func(context.Context, string, any) (any, error) {
+		return map[string]any{"signed": true}, nil
+	}
+	srv := newCLIServer(t, "", registrySyncAsked(t), registrySyncAnswer)
 
 	out, err := runCLI(t, srv, "registry", "sync")
 	if err != nil {
 		t.Fatalf("cyfr registry sync failed: %v\n%s", err, out)
 	}
 
-	if srv.count() != 1 {
-		t.Fatalf("expected one request, got %d", srv.count())
+	if srv.count() != 2 {
+		t.Fatalf("expected two requests, got %d", srv.count())
 	}
-	name, args := srv.call(0)
-	if want := map[string]any{"action": "sync"}; name != "registry" || !reflect.DeepEqual(args, want) {
-		t.Errorf("expected registry %v, got %s %v", want, name, args)
+	for i, want := range []map[string]any{
+		{"action": "sync"},
+		{"action": "sync", "answer": map[string]any{"signed": true}},
+	} {
+		if name, args := srv.call(i); name != "registry" || !reflect.DeepEqual(args, want) {
+			t.Errorf("request %d: expected registry %v, got %s %v", i, want, name, args)
+		}
 	}
 	for _, want := range []string{"alice", "acme.com"} {
 		if !strings.Contains(out, want) {
@@ -38,28 +62,20 @@ func TestRegistrySync_AsksSyncAlone(t *testing.T) {
 	}
 }
 
-// The sync's fresh confirmation is met as every confirmed change's is: on a
-// terminal the person confirms and the same request is repeated with its id.
-func TestRegistrySync_MeetsItsConfirmationOnATerminal(t *testing.T) {
-	term := onTerminal(t, true)
-	term.enter()
-	srv := newCLIServer(t, soon(), pendingSecret, registrySyncAnswer)
+// Off a terminal the signature cannot be asked: sync says so and asks
+// nothing more than its first request.
+func TestRegistrySync_OffATerminalSaysTheSignatureIsAskedAtOne(t *testing.T) {
+	savedTerminal := askTerminal
+	t.Cleanup(func() { askTerminal = savedTerminal })
+	askTerminal = func() bool { return false }
+	srv := newCLIServer(t, "", registrySyncAsked(t), registrySyncAnswer)
 
 	out, err := runCLI(t, srv, "registry", "sync")
-	if err != nil {
-		t.Fatalf("cyfr registry sync failed: %v\n%s", err, out)
+	if err == nil || !strings.Contains(err.Error()+out, "at a terminal with its PIN or passphrase") {
+		t.Fatalf("cyfr registry sync off a terminal: %v\n%s", err, out)
 	}
-
-	if got := srv.repeats(); !sameIDs(got, []string{"", pendingSecret}) {
-		t.Errorf("the first call carries no id and the repeat its id, got %q", got)
-	}
-	for i := range 2 {
-		if _, args := srv.call(i); !reflect.DeepEqual(args, map[string]any{"action": "sync"}) {
-			t.Errorf("request %d asked %v", i, args)
-		}
-	}
-	if !strings.Contains(out, "acme.com") {
-		t.Errorf("the output lacks the synced membership:\n%s", out)
+	if srv.count() != 1 {
+		t.Errorf("expected one request, got %d", srv.count())
 	}
 }
 

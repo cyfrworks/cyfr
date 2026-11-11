@@ -987,6 +987,7 @@ defmodule Arca.PendingConfirmationsRaceTest do
     record: record
   } do
     {:ok, %{head_hash: head}} = unboxed(fn -> Arca.DirectoryHeads.get(server(), identifier) end)
+    {:ok, slot} = ControlPlane.member_slot()
 
     test = self()
 
@@ -1001,7 +1002,10 @@ defmodule Arca.PendingConfirmationsRaceTest do
               send(test, {:denier, backend()})
 
               gated(fn ->
-                SecurityTransitions.deny_user(server(), user_id, verify: fn _ -> :ok end)
+                SecurityTransitions.deny_user(server(), user_id,
+                  slot: slot,
+                  verify: fn _ -> :ok end
+                )
               end)
             end)
           end)
@@ -1014,6 +1018,7 @@ defmodule Arca.PendingConfirmationsRaceTest do
           Task.async(fn ->
             unboxed(fn ->
               SecurityTransitions.deny_user(server(), user_id,
+                slot: slot,
                 verify: fn _rows ->
                   send(test, :denial_holds)
 

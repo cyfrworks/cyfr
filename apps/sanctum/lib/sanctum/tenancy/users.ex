@@ -200,7 +200,8 @@ defmodule Sanctum.Tenancy.Users do
   seats and invitations in shared threads, archiving every pair they sit
   in and every shared thread they leave empty. Either all of it
   commits or none of it does, and a failure is answered, never reported
-  as an eject. The door entry that keeps them out is written by the
+  as an eject: a member that does not hold its slot is answered
+  `:not_owner` and changes nothing. The door entry that keeps them out is written by the
   caller (`Sanctum.Door.Store.deny/4`).
 
   After the commit, and only from what it returned: the removed sessions'
@@ -212,8 +213,12 @@ defmodule Sanctum.Tenancy.Users do
   """
   @spec deny(user()) :: {:ok, user()} | {:error, term()}
   def deny(%{id: user_id} = user) do
-    with {:ok, change} <-
-           Arca.SecurityTransitions.deny_user(server(), user_id, verify: fn _rows -> :ok end) do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(),
+         {:ok, change} <-
+           Arca.SecurityTransitions.deny_user(server(), user_id,
+             slot: slot,
+             verify: fn _rows -> :ok end
+           ) do
       Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
       Athanors.announce_archived(change.archived_athanor_ids, change)
       Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
@@ -232,8 +237,10 @@ defmodule Sanctum.Tenancy.Users do
   Reverse `deny/1` at the door, as one transaction
   (`Arca.SecurityTransitions.allow_user/3`): the person may sign in again,
   their own athanor is reopened — subject to the server's athanor cap,
-  whose refusal leaves them denied. Revoked sessions and keys stay revoked,
-  their platform administrator's mark stays cleared, and the shared-thread
+  whose refusal leaves them denied, as a member that does not hold its
+  slot is answered `:not_owner` and leaves them denied. Revoked sessions
+  and keys stay revoked, their platform administrator's mark stays
+  cleared, and the shared-thread
   seats and invitations the deny removed are not restored — a thread's
   people add them again. A context read before the deny
   cannot issue a credential after this: the person's generation moved
@@ -241,8 +248,12 @@ defmodule Sanctum.Tenancy.Users do
   """
   @spec allow(user()) :: {:ok, user()} | {:error, term()}
   def allow(%{id: user_id} = user) do
-    with {:ok, change} <-
-           Arca.SecurityTransitions.allow_user(server(), user_id, verify: &restorable/1) do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(),
+         {:ok, change} <-
+           Arca.SecurityTransitions.allow_user(server(), user_id,
+             slot: slot,
+             verify: &restorable/1
+           ) do
       {:ok, standing(user, change.user)}
     end
   end
