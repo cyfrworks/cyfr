@@ -117,6 +117,22 @@ defmodule Opus.AdmissionTest do
     refute current["release_digest"] == old["release_digest"]
   end
 
+  test "a row cached before the component index fell behind answers the index's refusal", %{
+    ctx: ctx
+  } do
+    reference = "#{@root_node}:0.1.0"
+    assert {:ok, _, _, _} = Admission.inspect_component(ctx, reference)
+
+    assert {:ok, _} =
+             Arca.StorageProjectionChanges.begin_edit(
+               Context.actor(ctx),
+               "components",
+               "reagents/local/chain-root/0.1.0"
+             )
+
+    assert {:error, :projection_unavailable} = Admission.inspect_component(ctx, reference)
+  end
+
   defp limits_map do
     %{
       "timeout" => "1m",
