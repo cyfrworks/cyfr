@@ -158,8 +158,11 @@ defmodule Sanctum.Consent.Components do
   process and the answer is the attempt's own — `{:ok, athanor}` filled,
   `{:error, :provisioning_busy}` while another attempt holds the athanor,
   `{:error, {:provisioning_failed, step, detail}}` with the failure on the
-  row. Every other kind is a hook no request path may wait on: the attempt
-  is started in the background and `:ok` answers at once.
+  row. `"sign_in"` runs the fill's local half in the caller's process,
+  which waits on no registry, then starts the whole fill in the background,
+  and answers `:ok` whatever the half's outcome. Every other kind is a
+  hook no request path may wait on: the attempt is started in the
+  background and `:ok` answers at once.
   """
   @callback fill(map(), Context.t() | nil, String.t()) ::
               :ok | {:ok, map()} | {:error, term()}

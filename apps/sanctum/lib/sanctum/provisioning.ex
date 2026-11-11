@@ -43,9 +43,15 @@ defmodule Sanctum.Provisioning do
   held:
 
     * `after_sign_in/1`'s personal fill (`sign_in`): the row and the seat
-      were written by the admission; the fill is asked for and runs in the
-      background under its own claim. A held claim means someone is
-      filling already, and the sign-in adds nothing. No backoff.
+      were written by the admission. The sign-in runs the fill's local
+      half in its own request, under the claim and before the person's
+      session exists, which mints the shipped components' baseline
+      consents without waiting on a registry; then the whole fill runs in
+      the background under a claim of its own (`Compendium.Provisioning`).
+      A local half that fails is recorded on the row and the sign-in goes
+      on. A held claim means someone is filling already, and the sign-in
+      adds nothing, even when the holder is a second sign-in answered at
+      the same moment whose local half has not yet minted. No backoff.
     * `start_provisioning/1`, `ready/1` and `status/1` (`first_need`):
       readers never claim and never wait. They read the claim once and
       answer — filled, filling, failed — and ask for a fill only when
@@ -80,8 +86,9 @@ defmodule Sanctum.Provisioning do
   `{:error, :provisioning_busy}`; its claim, no longer renewed, runs out
   or is released, and the next attempt fills the athanor.
 
-  An attempt settles its claim `ready` or `failed`; an install, a sync and
-  an attempt that found the athanor filled release it.
+  An attempt settles its claim `ready` or `failed`; an install, a sync, a
+  sign-in's local half that stood and an attempt that found the athanor
+  filled release it.
 
   ## Giving the athanor back
 
@@ -142,8 +149,9 @@ defmodule Sanctum.Provisioning do
   @doc """
   Called after an admission commits, at every later sign-in, and whenever
   the person's namespace is recorded (`Sanctum.SignIn.record_namespace/2`):
-  asks for the fill of their own athanor while it is unfilled. Mints
-  nothing: a person's athanor is their admission's (`mint_personal/1`).
+  asks for the fill of their own athanor while it is unfilled, whose local
+  half runs in this call (the moduledoc's entry points). Mints no athanor:
+  a person's athanor is their admission's (`mint_personal/1`).
   """
   @spec after_sign_in(String.t()) :: :ok
   def after_sign_in(user_id) when is_binary(user_id) do
@@ -356,8 +364,8 @@ defmodule Sanctum.Provisioning do
 
   # ---- the athanor's filler ---------------------------------------------------
 
-  # A hook's fill: the component domain starts it in the background and
-  # answers at once, so no request path waits on a registry.
+  # A hook's fill: the component domain answers `:ok` without waiting on a
+  # registry; a sign-in's local half has run by then (`after_sign_in/1`).
   defp request_fill(athanor, acting_ctx, entry_kind) do
     :ok = Sanctum.Consent.Components.fill(athanor, acting_ctx, entry_kind)
   end
@@ -384,17 +392,15 @@ defmodule Sanctum.Provisioning do
         when result: term()
   def under_claim(athanor_id, entry_kind, fun) when is_function(fun, 1) do
     case take_claim(athanor_id, entry_kind) do
-      {:ok, claim} -> hold(athanor_id, claim, fun)
+      {:ok, claim} -> held(actor(athanor_id), claim, fun)
       {:error, _} = error -> error
     end
   end
 
   @doc """
-  Take the athanor's claim without holding it, for a filler that hands the
-  work to another process: the claim is taken here, so a reader arriving
-  straight after already finds the athanor being filled, and `hold/3` runs
-  where the work does. A claim nothing released is `release/2`'s to give
-  back.
+  Take the athanor's claim once, under this member's own slot, without
+  holding it: no keeper renews or releases what this takes, so its lease
+  is the bound. `under_claim/3` takes the claim here and holds it.
   """
   @spec take_claim(String.t(), String.t()) ::
           {:ok, claim()} | {:error, :provisioning_busy | :not_owner} | {:error, term()}
@@ -407,20 +413,6 @@ defmodule Sanctum.Provisioning do
       end
     end
   end
-
-  @doc """
-  Run `fun` under a claim this process now answers for: a keeper renews
-  the lease while it runs, and whatever `fun` did not settle is released
-  when it ends.
-  """
-  @spec hold(String.t(), claim(), (claim() -> result)) :: result when result: term()
-  def hold(athanor_id, claim, fun) when is_function(fun, 1),
-    do: held(actor(athanor_id), claim, fun)
-
-  @doc "Give a taken claim back with no verdict on readiness."
-  @spec release(String.t(), claim()) :: :ok | :stale | {:error, term()}
-  def release(athanor_id, claim),
-    do: Claims.release(actor(athanor_id), claim.owner, claim.fence)
 
   @doc """
   Wait out an attempt in progress, within `wait_ms`, then run `fun`

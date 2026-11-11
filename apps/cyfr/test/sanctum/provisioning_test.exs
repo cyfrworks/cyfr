@@ -496,6 +496,110 @@ defmodule Sanctum.ProvisioningTest do
              Provisioning.provision(athanor, in_athanor)
   end
 
+  # The shipped canvas, copied from the repository's seed into the
+  # suite's: answers the reference of its newest version.
+  defp shipped_canvas!(bundle_dir) do
+    canvas = Path.join([bundle_dir, "tinctures", "local", "canvas"])
+    File.mkdir_p!(Path.dirname(canvas))
+    File.cp_r!(Path.expand("../../../../seed/components/tinctures/local/canvas", __DIR__), canvas)
+    "tincture:local.canvas:" <> Cyfr.Test.SeedBundle.local_unit!("tinctures", "canvas").version
+  end
+
+  test "a sign-in mints the shipped canvas's grant in its own request, while the registry half " <>
+         "still holds the claim and waits on a registry that never answers",
+       %{bundle_dir: bundle_dir} do
+    canvas = shipped_canvas!(bundle_dir)
+    write_bundle!(bundle_dir, deps: ["catalyst:someone.elsewhere"])
+
+    # A registry that takes the connection and never answers, at both of
+    # its endpoints: a pull dials the OCI one.
+    {:ok, registry} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    on_exit(fn -> :gen_tcp.close(registry) end)
+    {:ok, port} = :inet.port(registry)
+    Prima.Test.Env.put_app_env(:cyfr, :registry_url, "127.0.0.1:#{port}")
+    Prima.Test.Env.put_app_env(:cyfr, :oci_registry_url, "127.0.0.1:#{port}")
+
+    # The real path: the whole fill is a task the sign-in does not await,
+    # stopped at the test's end before the paths it fills under are put back.
+    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    user = person(System.unique_integer([:positive]))
+    athanor_id = Sanctum.Test.People.athanor!(user).id
+    actor = %Prima.Actor{athanor_id: athanor_id}
+    ctx = Provisioning.person_ctx(user.id, athanor_id)
+    assert {:error, :ungranted} = Sanctum.Consent.TinctureGrant.fetch(ctx, canvas)
+
+    assert :ok = Provisioning.after_sign_in(user.id)
+
+    # Answered with the canvas's grant already minted, as the person's.
+    assert {:ok, %{revision: 1, profile: %{id: profile_id}}} =
+             Sanctum.Consent.TinctureGrant.fetch(ctx, canvas)
+
+    assert {:ok, %{granted_via: "bootstrap", granted_by: granted_by}, _refs} =
+             Arca.ConsentStorage.get_head(actor, profile_id)
+
+    assert granted_by == user.id
+
+    # The registry half has dialled the registry, and holds the claim
+    # while it waits; the athanor is not filled.
+    assert {:ok, waiting} = :gen_tcp.accept(registry, 30_000)
+    on_exit(fn -> :gen_tcp.close(waiting) end)
+
+    assert {:ok, %{entry_kind: "sign_in", outcome: nil} = claim} = Claims.current(actor)
+    assert Claims.live?(claim)
+    assert {:ok, %{provisioned_at: nil}} = Athanors.get(athanor_id)
+  end
+
+  test "a sign-in whose local half fails goes on, the failure on the row; the next sign-in " <>
+         "runs the local half again and mints the shipped canvas's grant",
+       %{bundle_dir: bundle_dir} do
+    n = System.unique_integer([:positive])
+    parent = self()
+    handler = "prov-local-#{n}"
+
+    :telemetry.attach(
+      handler,
+      [:cyfr, :sanctum, :provisioning, :failed],
+      fn _e, _m, meta, _c -> send(parent, {:failed, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    # No bundle shipped: the local half stops where it copies the bundle in.
+    user = person(n)
+    athanor_id = Sanctum.Test.People.athanor!(user).id
+    actor = %Prima.Actor{athanor_id: athanor_id}
+    ctx = Provisioning.person_ctx(user.id, athanor_id)
+
+    assert :ok = Provisioning.after_sign_in(user.id)
+
+    {:ok, failed} = Athanors.get(athanor_id)
+    refute failed.provisioned_at
+
+    assert Map.delete(Athanors.provisioning_failure(failed), :at) ==
+             %{step: "seed", detail: ":bundle_missing"}
+
+    assert {:ok, %{entry_kind: "sign_in", outcome: "failed"}} = Claims.current(actor)
+
+    # One failure, the local half's: a local half that failed starts no
+    # whole fill after it.
+    assert_receive {:failed, %{step: :seed, athanor_id: ^athanor_id}}
+    refute_receive {:failed, _}, 100
+
+    # The bundle shipped, the next sign-in runs the local half again at
+    # once, with no backoff, and the shipped canvas opens under its grant.
+    canvas = shipped_canvas!(bundle_dir)
+    assert {:error, :ungranted} = Sanctum.Consent.TinctureGrant.fetch(ctx, canvas)
+    assert :ok = Provisioning.after_sign_in(user.id)
+    assert {:ok, %{revision: 1}} = Sanctum.Consent.TinctureGrant.fetch(ctx, canvas)
+
+    {:ok, filled} = Athanors.get(athanor_id)
+    assert %DateTime{} = filled.provisioned_at
+    refute Athanors.provisioning_failure(filled)
+  end
+
   test "a first need never waits on the caller already filling the athanor" do
     # The suite runs provisioning inline so its assertions can read rows
     # straight after the call; this one is about the real path, where the

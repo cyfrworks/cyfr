@@ -118,9 +118,10 @@ defmodule Compendium.Pull do
   @doc """
   The static dependencies of a registered component's manifest that are
   not present in the caller's athanor, as ref strings: `{:ok, refs}`. The
-  required ones by default; `include: :all` adds the optional ones. A
-  stored manifest that does not decode, or a dependency block that does
-  not parse, is damage and the error, never "nothing missing".
+  required ones by default; `include: :all` adds the optional ones, and
+  `include: :optional` names the optional ones alone. A stored manifest
+  that does not decode, or a dependency block that does not parse, is
+  damage and the error, never "nothing missing".
   """
   @spec missing_deps(Context.t(), map(), keyword()) :: {:ok, [String.t()]} | {:error, term()}
   def missing_deps(%Context{} = ctx, component, opts \\ []) when is_map(component) do
@@ -134,6 +135,7 @@ defmodule Compendium.Pull do
         case Keyword.get(opts, :include, :required) do
           :all -> missing ++ optional
           :required -> missing
+          :optional -> optional
         end
 
       {:ok, Enum.map(wanted, & &1.dependency_ref)}

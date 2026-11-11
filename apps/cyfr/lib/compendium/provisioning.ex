@@ -28,10 +28,35 @@ defmodule Compendium.Provisioning do
   `Compendium.ConsentFacts`), and `request/3` here answers it. The
   answer is synchronous for the explicit `provision` verb — a person is
   holding the request open and gets the attempt's own answer — and
-  backgrounded for the first-need hook and the sign-in retries, which no
-  request path may wait on. A background attempt runs under
+  backgrounded for the first-need hook, which no request path may wait
+  on. A sign-in runs the fill's local half in its own request, then asks
+  for the whole fill in the background. A background attempt runs under
   `Compendium.ProvisioningSupervisor`, the task supervisor that owns
   every fill and pull this module starts.
+
+  ## The local half and the registry half
+
+  A fill is a local half and then a registry half. The local half reads
+  and writes only what this server holds: the athanor's roots, the seed
+  bundle copied in and scanned into rows, the shipped AQUA tree, the agent
+  index, and a first consent walk that mints the baseline consent of every
+  source the installed bundle can already run. The registry half pulls the
+  bundle's published closure, walks the consents again, now with every
+  vouched source required to hold one, and marks the athanor ready.
+
+  A sign-in runs the local half in its own request, before the person's
+  session exists, so the athanor a person first reaches already holds the
+  shipped components' consents, the shipped canvas's among them, however
+  slow or unreachable the registry is. That request waits on no registry.
+  A local half that fails is recorded on the row like any failed fill, and
+  the sign-in goes on.
+
+  The first walk mints nothing while any installed component declares an
+  optional dependency that is not installed. A pull could add that node to
+  a closure the walk had already minted, and the registry half's walk
+  revises a moved shape only over nodes the seed ships or the head
+  already names, which a pulled node is not; so the registry half's walk
+  mints every source in that case.
 
   Every attempt ends in a state the athanor's claim and row can name. A
   step that fails, a pull cut at its deadline and an attempt that raises
@@ -75,39 +100,35 @@ defmodule Compendium.Provisioning do
   @doc """
   The component-facts port's fill (`Sanctum.Consent.Components.fill/3`).
   `provision` is the explicit verb: the attempt runs here, in the asking
-  process, and this answers with its outcome. Every other entry kind is a
-  hook: the attempt is started under `Compendium.ProvisioningSupervisor`
-  and this answers `:ok` at once — a request path must never wait on a
-  registry.
+  process, and this answers with its outcome. `sign_in` runs the fill's
+  local half here, then starts the whole fill as a hook does, and answers
+  `:ok`. Every other entry kind is a hook: the attempt is started under
+  `Compendium.ProvisioningSupervisor` and this answers `:ok` at once — a
+  request path must never wait on a registry.
   """
   @spec request(athanor(), Context.t() | nil, String.t()) ::
           :ok | {:ok, athanor()} | {:error, term()}
   def request(athanor, ctx, "provision"), do: provision(athanor, ctx)
-  def request(athanor, ctx, "sign_in"), do: claim_then_background(athanor, ctx)
+  def request(athanor, ctx, "sign_in"), do: sign_in(athanor, ctx)
 
   def request(athanor, ctx, entry_kind) when is_binary(entry_kind),
     do: background(fn -> attempt(athanor, ctx, entry_kind) end)
 
-  # The claim is taken before the task starts, so a reader arriving with
-  # the session already finds the athanor being filled; the task is what
-  # holds it, and `not_started` gives it back when the work will not run.
-  # The member's standing is asked first: one that will not fill must not
-  # take the athanor even briefly, or a reader on the member that would
-  # fill it sees an attempt in progress that is not one.
-  defp claim_then_background(athanor, ctx) do
-    if Arca.ControlPlane.held?(), do: claim_then_fill(athanor, ctx), else: :ok
-  end
-
-  defp claim_then_fill(%{id: athanor_id} = athanor, ctx) do
-    case Athanor.take_claim(athanor_id, "sign_in") do
-      {:ok, claim} ->
-        background(
-          fn -> Athanor.hold(athanor_id, claim, &fill(&1, athanor, ctx)) end,
-          fn -> Athanor.release(athanor_id, claim) end
-        )
-
-      _busy_or_unavailable ->
-        :ok
+  # A sign-in's fill. The local half runs in this request, under the
+  # athanor's claim, which the hold gives back when the half ends, or its
+  # keeper when this request dies mid-way; the whole fill then runs in the
+  # background under a claim of its own, where the local half repeats over
+  # what is already there. A local half that failed was recorded on the
+  # row and starts nothing more, as a failed fill does. A member that does
+  # not hold its slot starts nothing. A claim another attempt holds means
+  # the athanor is being filled already and the sign-in goes on, even when
+  # that attempt is a second sign-in answered at the same moment whose
+  # local half has not yet minted.
+  defp sign_in(%{id: athanor_id} = athanor, ctx) do
+    with true <- Arca.ControlPlane.held?(),
+         :local_done <-
+           Athanor.under_claim(athanor_id, "sign_in", &fill(&1, athanor, ctx, :local)) do
+      background(fn -> attempt(athanor, ctx, "sign_in") end)
     end
 
     :ok
@@ -184,16 +205,17 @@ defmodule Compendium.Provisioning do
   end
 
   # One attempt under a claim already taken — what every filling entry
-  # point runs once it holds the athanor.
-  @spec fill(Athanor.claim(), athanor(), Context.t() | nil) ::
-          {:ok, athanor()} | {:error, term()}
-  defp fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
+  # point runs once it holds the athanor: the whole fill, or a sign-in's
+  # local half (`:local`), which answers `:local_done` when it stood.
+  @spec fill(Athanor.claim(), athanor(), Context.t() | nil, :whole | :local) ::
+          {:ok, athanor()} | :local_done | {:error, term()}
+  defp fill(claim, %{id: athanor_id} = athanor, acting_ctx, steps \\ :whole) do
     # Re-read under the claim: the attempt that just held it may have been
     # filling this very athanor.
     case Athanor.athanor(athanor_id) do
       {:ok, %{provisioned_at: %DateTime{}} = filled} -> {:ok, filled}
-      {:ok, fresh} -> do_fill(claim, fresh, acting_ctx)
-      _ -> do_fill(claim, athanor, acting_ctx)
+      {:ok, fresh} -> run(steps, claim, fresh, acting_ctx)
+      _ -> run(steps, claim, athanor, acting_ctx)
     end
   rescue
     e -> interrupted(claim, athanor, {:raised, e.__struct__})
@@ -212,16 +234,19 @@ defmodule Compendium.Provisioning do
     Athanor.record_failure(claim, athanor, :interrupted, how)
   end
 
+  defp run(:whole, claim, athanor, acting_ctx), do: do_fill(claim, athanor, acting_ctx)
+
+  defp run(:local, claim, %{id: athanor_id} = athanor, acting_ctx) do
+    case local_half(claim, athanor_id, acting_ctx || Athanor.seed_ctx(athanor_id)) do
+      :ok -> :local_done
+      failure -> failed(claim, athanor, failure)
+    end
+  end
+
   defp do_fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
     ctx = acting_ctx || Athanor.seed_ctx(athanor_id)
 
-    # The agents are indexed before the consents are minted: an agent is a
-    # consent source, and its revision bytes are registered by the index
-    # before any consent names it.
-    with :ok <- Arca.ensure_roots(Context.actor(Athanor.seed_ctx(athanor_id))),
-         {:ok, _scan} <- register_bundle(athanor_id, claim),
-         :ok <- aqua_definitions(athanor_id, claim),
-         :ok <- index_agents(ctx, claim),
+    with :ok <- local_half(claim, athanor_id, ctx),
          {:ok, closure} <- pull_required_deps(ctx, claim),
          optional <- pull_optional_deps(ctx, claim),
          {:ok, bootstrap} <- Athanor.bootstrap_consents(ctx, claim),
@@ -234,28 +259,61 @@ defmodule Compendium.Provisioning do
 
       Athanor.mark_filled(athanor)
     else
-      {:error, :claim_lost} ->
-        Athanor.lost(athanor_id)
-
-      {:error, {:closure, detail}} ->
-        Athanor.record_failure(claim, athanor, :closure, detail)
-
-      {:error, {:aqua_template, _} = reason} ->
-        Athanor.record_failure(claim, athanor, :aqua_template, reason)
-
-      # The consent walk could not read what the athanor holds. Recorded
-      # as its own step: an athanor nothing could be read for is not an
-      # athanor whose seed is missing.
-      {:error, {:component_facts, _} = reason} ->
-        Athanor.record_failure(claim, athanor, :bootstrap, reason)
-
-      {:error, reason} ->
-        Athanor.record_failure(claim, athanor, :seed, reason)
-
-      {:unminted, skipped} ->
-        Athanor.record_failure(claim, athanor, :bootstrap, skipped)
+      failure -> failed(claim, athanor, failure)
     end
   end
+
+  # The fill's local half: what it does from what this server holds, and
+  # nothing that waits on a registry. The agents are indexed before the
+  # consents are minted: an agent is a consent source, and its revision
+  # bytes are registered by the index before any consent names it.
+  defp local_half(claim, athanor_id, ctx) do
+    with :ok <- Arca.ensure_roots(Context.actor(Athanor.seed_ctx(athanor_id))),
+         {:ok, _scan} <- register_bundle(athanor_id, claim),
+         :ok <- aqua_definitions(athanor_id, claim),
+         :ok <- index_agents(ctx, claim) do
+      local_consents(ctx, claim)
+    end
+  end
+
+  # The first consent walk: the baseline consent of every source the
+  # installed bundle can already run. A source whose closure waits on a
+  # required pull does not resolve and is skipped; the registry half's
+  # walk, which requires every vouched source to hold a consent, mints it
+  # and decides on anything else skipped here. Nothing is walked while an
+  # optional dependency is missing (the moduledoc's last paragraph).
+  defp local_consents(ctx, claim) do
+    with {:ok, []} <- missing_bundle_deps(ctx, :optional),
+         {:ok, _bootstrap} <- Athanor.bootstrap_consents(ctx, claim) do
+      :ok
+    else
+      {:ok, [_ | _]} -> :ok
+      {:unminted, _skipped} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  # Where an attempt stopped, recorded on the row under the claim it
+  # holds; a claim a successor took records nothing.
+  defp failed(_claim, %{id: athanor_id}, {:error, :claim_lost}), do: Athanor.lost(athanor_id)
+
+  defp failed(claim, athanor, {:error, {:closure, detail}}),
+    do: Athanor.record_failure(claim, athanor, :closure, detail)
+
+  defp failed(claim, athanor, {:error, {:aqua_template, _} = reason}),
+    do: Athanor.record_failure(claim, athanor, :aqua_template, reason)
+
+  # The consent walk could not read what the athanor holds. Recorded as its
+  # own step: an athanor nothing could be read for is not an athanor whose
+  # seed is missing.
+  defp failed(claim, athanor, {:error, {:component_facts, _} = reason}),
+    do: Athanor.record_failure(claim, athanor, :bootstrap, reason)
+
+  defp failed(claim, athanor, {:error, reason}),
+    do: Athanor.record_failure(claim, athanor, :seed, reason)
+
+  defp failed(claim, athanor, {:unminted, skipped}),
+    do: Athanor.record_failure(claim, athanor, :bootstrap, skipped)
 
   # ---------------------------------------------------------------------------
   # Installing one shipped version
@@ -650,7 +708,8 @@ defmodule Compendium.Provisioning do
 
   # Every static dependency the athanor's components declare that is not
   # present; `include: :required` names those the bundle cannot run
-  # without, `:all` adds the optional ones.
+  # without, `:all` adds the optional ones, and `:optional` names the
+  # optional ones alone, each as a component declares it.
   #
   # Every component, not only the seeded ones: `Compendium.Pull` walks a
   # closure by recursion and treats an already-present ref as done, so a
