@@ -1,0 +1,572 @@
+#[allow(warnings)]
+mod bindings;
+mod chat;
+mod ids;
+mod stream;
+
+use bindings::exports::cyfr::catalyst::run::Guest;
+use bindings::cyfr::http::fetch;
+use bindings::cyfr::http::streaming;
+
+use serde_json::{json, Value};
+
+pub(crate) const BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+
+/// The need every request names as its connection. CYFR attaches the key
+/// bound to it, so the catalyst never holds the key and no request it
+/// builds carries one.
+pub(crate) const CONNECTION: &str = "api_key";
+
+struct Component;
+
+impl Guest for Component {
+    fn run(input: String) -> String {
+        match handle_request(&input) {
+            Ok(output) => output,
+            Err(e) => format_error(500, "internal_error", &e),
+        }
+    }
+}
+
+bindings::export!(Component with_types_in bindings);
+
+// ---------------------------------------------------------------------------
+// Request routing
+// ---------------------------------------------------------------------------
+
+fn handle_request(input: &str) -> Result<String, String> {
+    let parsed: Value =
+        serde_json::from_str(input).map_err(|e| format!("Invalid JSON input: {e}"))?;
+
+    let operation = parsed
+        .get("operation")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'operation' field".to_string())?;
+
+    let params = parsed.get("params").cloned().unwrap_or(json!({}));
+    let stream_flag = parsed
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // What the catalyst can do is answered without a request, and a chat
+    // request off the contract, or a model name off the id grammar, is
+    // refused before any request is made. A named model's window is the
+    // Models API's, asked on the connection.
+    let described_model = match operation {
+        "describe" => match params.get("model").and_then(Value::as_str) {
+            None => return Ok(chat::describe()),
+            Some(model) if !chat::model_id(model) => return Ok(chat::unknown_model(model)),
+            Some(model) => Some(model.to_string()),
+        },
+        _ => None,
+    };
+    let chat_request = match operation {
+        "chat" => match chat::parse_request(&params) {
+            Ok(request) if !chat::model_id(&request.model) => {
+                return Ok(chat::unknown_model(&request.model))
+            }
+            Ok(request) => Some(request),
+            Err(message) => return Ok(chat::refuse(400, "invalid_request", &message)),
+        },
+        _ => None,
+    };
+
+    match operation {
+        // model/chat@1
+        "chat" => Ok(chat::chat(&chat_request.expect("parsed above"))),
+        "models" => Ok(chat::models()),
+        "describe" => Ok(chat::describe_model(&described_model.expect("named above"))),
+
+        // Model listing / info
+        "models.list" => models_list(&params),
+        "models.get" => with_model(&params, |model| models_get(model)),
+
+        // Content generation (support both plan names and test names)
+        "generate" | "content.generate" => with_model(&params, |model| {
+            if stream_flag {
+                content_stream(model, &params)
+            } else {
+                content_generate(model, &params)
+            }
+        }),
+
+        // Streaming generation
+        "stream" | "content.stream" => {
+            with_model(&params, |model| content_stream(model, &params))
+        }
+
+        // Token counting
+        "count_tokens" | "tokens.count" => {
+            with_model(&params, |model| tokens_count(model, &params))
+        }
+
+        // Embeddings
+        "embed" | "embeddings.create" => {
+            with_model(&params, |model| embeddings_create(model, &params))
+        }
+
+        // Batch embeddings
+        "batch_embed" | "embeddings.batch" => {
+            with_model(&params, |model| embeddings_batch(model, &params))
+        }
+
+        _ => Ok(format_error(
+            400,
+            "unknown_operation",
+            &format!("Unknown operation: {operation}"),
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Run `operation` with the model `params` names, as the URL path segment it
+/// becomes. A model that is missing, or strays from the id grammar, is
+/// refused before any request.
+fn with_model(
+    params: &Value,
+    operation: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    match params.get("model").and_then(Value::as_str) {
+        Some(model) if chat::model_id(model) => operation(&ids::segment(model)),
+        Some(model) => Ok(chat::unknown_model(model)),
+        None => Ok(format_error(400, "invalid_request", "Missing 'model' in params")),
+    }
+}
+
+/// Build a request body from params, stripping the `model` key (it goes in the URL).
+fn build_body(params: &Value) -> Value {
+    let mut body = params.clone();
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("model");
+    }
+    body
+}
+
+fn format_error(status: i64, error_type: &str, message: &str) -> String {
+    json!({
+        "status": status,
+        "error": {
+            "type": error_type,
+            "message": message,
+        }
+    })
+    .to_string()
+}
+
+/// The host's own error (a refused request, a stream that broke) as the
+/// catalyst's error envelope, its type and message kept.
+fn host_error(err: &Value) -> String {
+    let (err_type, err_msg) = if let Some(obj) = err.as_object() {
+        (
+            obj.get("type").and_then(|v| v.as_str()).unwrap_or("http_error"),
+            obj.get("message").and_then(|v| v.as_str()).unwrap_or("unknown host error"),
+        )
+    } else {
+        ("http_error", err.as_str().unwrap_or("unknown host error"))
+    };
+    format_error(500, err_type, err_msg)
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helpers
+// ---------------------------------------------------------------------------
+
+/// A request in the host's fetch shape, named on the connection: CYFR
+/// attaches the key, and the request carries none.
+fn request(method: &str, url: &str, body: String) -> Value {
+    json!({
+        "method": method,
+        "url": url,
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "body": body,
+        "connection": CONNECTION
+    })
+}
+
+fn http_get(url: &str) -> String {
+    fetch::request(&request("GET", url, String::new()).to_string())
+}
+
+fn http_post(url: &str, body: &Value) -> String {
+    fetch::request(&request("POST", url, body.to_string()).to_string())
+}
+
+/// Parse the host HTTP response into the catalyst output envelope.
+///
+/// Host returns: `{"status": 200, "headers": {...}, "body": "..."}` or `{"error": "..."}`.
+/// Catalyst returns: `{"status": <int>, "data": <parsed_body>}` or `{"status": <int>, "error": <parsed_body>}`.
+fn parse_response(resp_str: &str) -> String {
+    let resp: Value = match serde_json::from_str(resp_str) {
+        Ok(v) => v,
+        Err(e) => {
+            return format_error(500, "parse_error", &format!("Failed to parse HTTP response: {e}"));
+        }
+    };
+
+    // Host-level error (e.g. domain blocked)
+    if let Some(err) = resp.get("error") {
+        return host_error(err);
+    }
+
+    let status = resp.get("status").and_then(|v| v.as_i64()).unwrap_or(500);
+    let body_str = resp.get("body").and_then(|v| v.as_str()).unwrap_or("");
+
+    if status >= 200 && status < 300 {
+        // Success — parse body as JSON
+        let data = serde_json::from_str::<Value>(body_str).unwrap_or(Value::String(body_str.to_string()));
+        json!({"status": status, "data": data}).to_string()
+    } else {
+        // API error — parse body as JSON for structured error info
+        let error = serde_json::from_str::<Value>(body_str).unwrap_or_else(|_| {
+            json!({"type": "api_error", "message": body_str})
+        });
+        json!({"status": status, "error": error}).to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Operations
+// ---------------------------------------------------------------------------
+
+fn models_list(params: &Value) -> Result<String, String> {
+    let mut url = format!("{BASE_URL}/models");
+
+    let mut query = Vec::new();
+    if let Some(ps) = params.get("pageSize").and_then(|v| v.as_i64()) {
+        query.push(format!("pageSize={ps}"));
+    }
+    if let Some(pt) = params.get("pageToken").and_then(|v| v.as_str()) {
+        query.push(format!("pageToken={}", ids::query(pt)));
+    }
+    if !query.is_empty() {
+        url = format!("{url}?{}", query.join("&"));
+    }
+
+    Ok(parse_response(&http_get(&url)))
+}
+
+fn models_get(model: &str) -> Result<String, String> {
+    let url = format!("{BASE_URL}/models/{model}");
+    Ok(parse_response(&http_get(&url)))
+}
+
+fn content_generate(model: &str, params: &Value) -> Result<String, String> {
+    let url = format!("{BASE_URL}/models/{model}:generateContent");
+    let body = build_body(params);
+    Ok(parse_response(&http_post(&url, &body)))
+}
+
+fn tokens_count(model: &str, params: &Value) -> Result<String, String> {
+    let url = format!("{BASE_URL}/models/{model}:countTokens");
+    let body = build_body(params);
+    Ok(parse_response(&http_post(&url, &body)))
+}
+
+fn embeddings_create(model: &str, params: &Value) -> Result<String, String> {
+    let url = format!("{BASE_URL}/models/{model}:embedContent");
+    let body = build_body(params);
+    Ok(parse_response(&http_post(&url, &body)))
+}
+
+fn embeddings_batch(model: &str, params: &Value) -> Result<String, String> {
+    let url = format!("{BASE_URL}/models/{model}:batchEmbedContents");
+    let mut body = build_body(params);
+
+    // Gemini requires "model": "models/{model}" in each request item
+    if let Some(requests) = body.get_mut("requests") {
+        if let Some(arr) = requests.as_array_mut() {
+            for item in arr.iter_mut() {
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert(
+                        "model".to_string(),
+                        Value::String(format!("models/{model}")),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(parse_response(&http_post(&url, &body)))
+}
+
+// ---------------------------------------------------------------------------
+// Streaming
+// ---------------------------------------------------------------------------
+
+fn content_stream(model: &str, params: &Value) -> Result<String, String> {
+    let url = format!("{BASE_URL}/models/{model}:streamGenerateContent?alt=sse");
+    let body = build_body(params);
+
+    let req = request("POST", &url, body.to_string());
+
+    raw_stream(&streaming::request(&req.to_string()), streaming::read, |handle| {
+        let _ = streaming::close(handle);
+    })
+}
+
+/// Read a raw stream to its end and answer its chunks and their text:
+/// `opened` is the host's answer to the stream's request, `read` and
+/// `close` the host's read and close of its handle. A refused request, and
+/// a read that answers an error, answer the host's error. A read's error
+/// ends the stream: the host has let the handle go by then, and every
+/// later read would answer `invalid_handle`, never `done`.
+fn raw_stream(
+    opened: &str,
+    mut read: impl FnMut(&str) -> String,
+    close: impl FnOnce(&str),
+) -> Result<String, String> {
+    let handle_val: Value = serde_json::from_str(opened)
+        .map_err(|e| format!("Failed to parse stream handle response: {e}"))?;
+
+    if let Some(err) = handle_val.get("error") {
+        return Ok(host_error(err));
+    }
+
+    let handle = handle_val
+        .get("handle")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "No 'handle' in stream response".to_string())?;
+
+    let answer = collect(handle, &mut read);
+    close(handle);
+    answer
+}
+
+/// The stream's SSE chunks, read until `done` or an error.
+fn collect(handle: &str, read: &mut impl FnMut(&str) -> String) -> Result<String, String> {
+    let mut chunks: Vec<Value> = Vec::new();
+    let mut combined_text = String::new();
+    let mut buffer = String::new();
+
+    loop {
+        let chunk_val: Value = serde_json::from_str(&read(handle))
+            .map_err(|e| format!("Failed to parse stream chunk: {e}"))?;
+
+        if let Some(err) = chunk_val.get("error") {
+            return Ok(host_error(err));
+        }
+
+        let done = chunk_val
+            .get("done")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let data = chunk_val
+            .get("data")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if !data.is_empty() {
+            buffer.push_str(data);
+
+            // Process complete lines from the buffer
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
+                let trimmed = line.trim();
+                if let Some(json_str) = trimmed.strip_prefix("data: ") {
+                    if json_str == "[DONE]" {
+                        continue;
+                    }
+                    if let Ok(event) = serde_json::from_str::<Value>(json_str) {
+                        extract_text(&event, &mut combined_text);
+                        chunks.push(event);
+                    }
+                }
+            }
+        }
+
+        if done {
+            // Process any remaining data in the buffer
+            let trimmed = buffer.trim();
+            if let Some(json_str) = trimmed.strip_prefix("data: ") {
+                if json_str != "[DONE]" {
+                    if let Ok(event) = serde_json::from_str::<Value>(json_str) {
+                        extract_text(&event, &mut combined_text);
+                        chunks.push(event);
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    Ok(json!({
+        "status": 200,
+        "data": {
+            "chunks": chunks,
+            "combined_text": combined_text
+        }
+    })
+    .to_string())
+}
+
+/// Extract text from a Gemini streaming chunk and append to `combined_text`.
+fn extract_text(chunk: &Value, combined_text: &mut String) {
+    if let Some(candidates) = chunk.get("candidates").and_then(|v| v.as_array()) {
+        for candidate in candidates {
+            if let Some(parts) = candidate
+                .get("content")
+                .and_then(|c| c.get("parts"))
+                .and_then(|p| p.as_array())
+            {
+                for part in parts {
+                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                        combined_text.push_str(text);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Whether a header name carries a credential, as the host reads one: a
+/// request that names a connection and carries such a header is refused by
+/// its shape, since CYFR attaches the key.
+#[cfg(test)]
+pub(crate) fn credential_header(name: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "authorization",
+        "cookie",
+        "proxy-authorization",
+        "x-api-key",
+        "x-auth-token",
+        "x-access-token",
+        "x-csrf-token",
+    ];
+    let name = name.to_ascii_lowercase();
+    NAMES.contains(&name.as_str()) || ["-token", "-key", "-secret"].iter().any(|s| name.ends_with(s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The host's reads of a stream, in order; past them every read
+    /// answers as the host does once it has let the handle go.
+    fn reads(answers: &[Value]) -> (impl FnMut(&str) -> String, std::rc::Rc<std::cell::Cell<usize>>) {
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = count.clone();
+        let answers: Vec<String> = answers.iter().map(Value::to_string).collect();
+        let read = move |handle: &str| {
+            let n = seen.get();
+            seen.set(n + 1);
+            assert!(n < 100, "the stream is read on after its error");
+            answers.get(n).cloned().unwrap_or_else(|| {
+                json!({"error": {"type": "invalid_handle", "message": format!("Unknown stream handle: {handle}")}})
+                    .to_string()
+            })
+        };
+        (read, count)
+    }
+
+    #[test]
+    fn a_raw_stream_ends_at_a_read_that_answers_an_error_and_closes_its_handle() {
+        let (read, count) = reads(&[
+            json!({"data": "data: {\"n\": 1}\n", "done": false, "status": 200}),
+            json!({"error": {"type": "stream_error", "message": "The provider's stream broke."}}),
+        ]);
+        let mut closed = Vec::new();
+        let answer = raw_stream(r#"{"handle": "h1"}"#, read, |h| closed.push(h.to_string())).unwrap();
+        let answer: Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(
+            answer,
+            json!({"status": 500, "error": {"type": "stream_error", "message": "The provider's stream broke."}})
+        );
+        assert_eq!(count.get(), 2);
+        assert_eq!(closed, ["h1"]);
+    }
+
+    #[test]
+    fn a_refused_raw_stream_answers_the_host_s_refusal() {
+        let (read, count) = reads(&[]);
+        let refusal = json!({"error": {"type": "flow_blocked", "message": "No flow reaches this destination."}});
+        let answer = raw_stream(&refusal.to_string(), read, |_| panic!("no handle was opened")).unwrap();
+        let answer: Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(
+            answer,
+            json!({"status": 500, "error": {"type": "flow_blocked", "message": "No flow reaches this destination."}})
+        );
+        assert_eq!(count.get(), 0);
+    }
+
+    #[test]
+    fn a_raw_stream_read_to_done_answers_its_chunks_and_closes_its_handle() {
+        let (read, count) = reads(&[
+            json!({"data": "data: {\"n\": 1}\ndata: {\"n\"", "done": false, "status": 200}),
+            json!({"data": "", "done": false, "status": 200}),
+            json!({"data": ": 2}\ndata: [DONE]\n", "done": true, "status": 200}),
+        ]);
+        let mut closed = Vec::new();
+        let answer = raw_stream(r#"{"handle": "h1"}"#, read, |h| closed.push(h.to_string())).unwrap();
+        let answer: Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(answer, json!({"status": 200, "data": {"chunks": [{"n": 1}, {"n": 2}], "combined_text": ""}}));
+        assert_eq!(count.get(), 3);
+        assert_eq!(closed, ["h1"]);
+    }
+
+    /// Names that would leave, or reshape, the URL they are placed in.
+    const HOSTILE: &[&str] = &[
+        "../tunedModels",
+        "..",
+        "%2e%2e",
+        "%2E%2E%2FtunedModels",
+        "gemini-2.5-pro?alt=json",
+        "gemini-2.5-pro#fragment",
+        "gemini-2.5-pro:countTokens",
+        "models/gemini-2.5-pro",
+        "gemini 2.5 pro",
+        " gemini-2.5-pro",
+        "gemini-2.5-pro\n",
+    ];
+
+    fn run(operation: &str, params: Value) -> Value {
+        let input = json!({"operation": operation, "params": params}).to_string();
+        serde_json::from_str(&handle_request(&input).unwrap()).unwrap()
+    }
+
+    // Every host import panics off wasm, so each answer below was given
+    // without making a request.
+    #[test]
+    fn a_model_name_off_the_id_grammar_is_refused_before_any_request() {
+        for model in HOSTILE {
+            let described = run("describe", json!({"model": model}));
+            assert_eq!(described["status"], 404, "{model:?}");
+            assert_eq!(described["error"]["type"], "unknown_model", "{model:?}");
+
+            let chat = run("chat", json!({"model": model, "messages": [{"role": "user", "content": "hi"}]}));
+            assert_eq!(chat["status"], 404, "{model:?}");
+            assert_eq!(chat["error"]["type"], "unknown_model", "{model:?}");
+
+            let raw = with_model(&json!({"model": model}), |_| unreachable!("no request is made"));
+            let raw: Value = serde_json::from_str(&raw.unwrap()).unwrap();
+            assert_eq!(raw["error"]["type"], "unknown_model", "{model:?}");
+        }
+
+        let missing = with_model(&json!({}), |_| unreachable!("no request is made"));
+        let missing: Value = serde_json::from_str(&missing.unwrap()).unwrap();
+        assert_eq!(missing["error"]["type"], "invalid_request");
+
+        let named = with_model(&json!({"model": "gemini-2.5-pro"}), |model| Ok(model.to_string()));
+        assert_eq!(named.unwrap(), "gemini-2.5-pro");
+    }
+
+    #[test]
+    fn a_request_names_the_connection_and_carries_no_credential() {
+        for req in [
+            request("GET", "https://x/v1beta/models", String::new()),
+            request("POST", "https://x/v1beta/models/m:generateContent", "{}".into()),
+        ] {
+            assert_eq!(req["connection"], CONNECTION);
+            for name in req["headers"].as_object().unwrap().keys() {
+                assert!(!credential_header(name), "{name}");
+            }
+        }
+    }
+}

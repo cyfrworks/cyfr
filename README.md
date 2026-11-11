@@ -213,7 +213,7 @@ cyfr run c:local.claude
 cyfr inspect t:local.weather-lookup:0.1.0
 
 # Pinned to a specific version
-cyfr run c:local.claude:1.4.1
+cyfr run c:local.claude:1.4.2
 
 # Search for available components in the registry
 cyfr search <query>

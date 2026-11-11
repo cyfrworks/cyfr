@@ -8,7 +8,7 @@
 # Usage: scripts/build-seed-guest.sh <version-dir> [--check]
 #   <version-dir>: a seed component version directory, e.g.
 #                  seed/components/formulas/local/list-models/0.6.3 or
-#                  seed/components/catalysts/local/claude/1.4.1
+#                  seed/components/catalysts/local/claude/1.4.2
 #   --check: verify digests against the stamp without a toolchain.
 #
 # Requires Rust with wasm32-wasip2 and cargo-component:
