@@ -60,9 +60,11 @@ defmodule PrismWeb.LoginLive do
      # on that browser, and a person's session the one their requests for
      # a confirmation are bound to.
      |> assign(:bindings, bindings(session))
-     # The session a registry signature completes under: the one its
-     # request was bound to, which the answer was just taken under.
-     |> assign(:session_token, session[to_string(CyfrWeb.SignInResponse.session_key())])
+     # The caller a registry signature completes under: the session its
+     # request was bound to, which the answer is taken under. The socket
+     # keeps the established context, never the token, since a socket's
+     # assigns print in its crash reports.
+     |> assign(:session_caller, session_caller(socket, session))
      |> assign(:browser_binding, session["_csrf_token"])
      # `connect_info` is readable only here, so the address a request is
      # charged to is captured at mount and carried.
@@ -72,6 +74,18 @@ defmodule PrismWeb.LoginLive do
      |> assign(:page_title, "Sign in")
      |> assign(:set_up, set_up?())
      |> assign(:error, error_from_params(params)), layout: false}
+  end
+
+  # Only a connected socket answers an event, so only it establishes.
+  defp session_caller(socket, session) do
+    if connected?(socket) do
+      Sanctum.Caller.establish(
+        {:session, session[to_string(CyfrWeb.SignInResponse.session_key())]},
+        refresh: false
+      )
+    else
+      {:error, :unauthenticated}
+    end
   end
 
   # Every binding this browser's session cookie holds.
@@ -142,8 +156,8 @@ defmodule PrismWeb.LoginLive do
   defp answered(socket, {:error, reason}), do: assign(socket, :error, sentence(reason))
 
   defp registered(socket, outcome) do
-    with {:ok, ctx} <-
-           Sanctum.Caller.establish({:session, socket.assigns.session_token}, refresh: false),
+    with {:ok, ctx} <- socket.assigns.session_caller,
+         {:ok, ctx} <- Sanctum.Caller.revalidate_session(ctx),
          {:ok, result} <- Compendium.complete_registry(ctx, outcome) do
       {:info, done(outcome.registry_request, result)}
     else

@@ -187,6 +187,19 @@ defmodule PrismWeb.LoginLiveTest do
       assert {:ok, %{namespace: "page-person"}} = Sanctum.Tenancy.Users.get(asked.ctx.user_id)
     end
 
+    test "the page keeps the session's caller and never its token", %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      token = Plug.Conn.get_session(asked.conn, session_key())
+      assert is_binary(token)
+
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      refute inspect(assigns, limit: :infinity, printable_limit: :infinity) =~ token
+      assert {:ok, %Sanctum.Context{user_id: user_id}} = assigns.session_caller
+      assert user_id == asked.ctx.user_id
+    end
+
     test "a registry's refusal is the flash the browser returns with, in a person's words",
          %{conn: conn, dir: dir} do
       asked = asked!(conn, dir, %{"action" => "legal_accept", "policy_version" => "2026-09"})
