@@ -18,7 +18,8 @@ defmodule Emissary.External.Server do
   `connect/1`). A legacy peer that issues an `Mcp-Session-Id` at
   `initialize` gets it back on every later request until the next connect.
   A paged `tools/list` is followed through its `nextCursor` to the last
-  page, and a listing longer than 20 pages fails the connect. A reply whose
+  page, and a listing longer than 20 pages, or not finished within the
+  handshake limit of its first request, fails the connect. A reply whose
   content type is `text/event-stream` is read as an event stream, its last
   event the answer; any other is read as JSON.
 
@@ -125,7 +126,9 @@ defmodule Emissary.External.Server do
   @reinit_cooldown_ms 5_000
   # The most pages of a paged `tools/list` read before a connect fails
   # rather than keep a listing it knows is cut short: a consent baseline
-  # missing tools would admit them unseen.
+  # missing tools would admit them unseen. The whole listing also runs
+  # under one deadline, the handshake limit, so a slow pager cannot hold a
+  # connect page after page.
   @max_listing_pages 20
   # The header a Streamable HTTP peer names its session in.
   @session_id_header "mcp-session-id"
@@ -1562,29 +1565,75 @@ defmodule Emissary.External.Server do
   # Every tool a paged `tools/list` holds: `fetch` asks for one page with
   # the params given and answers `{:ok, result, state}` or what the caller
   # passes back as it is. Pages are read while the peer names a next
-  # cursor, to @max_listing_pages.
-  defp list_pages(state, who, fetch), do: list_pages(state, who, fetch, %{}, [], 1)
+  # cursor, to @max_listing_pages, and all of them within the handshake
+  # limit counted from the first request: each page waits only for what
+  # is left of it, and a listing that runs out fails as one too long does.
+  defp list_pages(state, who, fetch) do
+    limit = min(state.timeout_ms, @initialize_timeout_ms)
+    deadline = System.monotonic_time(:millisecond) + limit
+    list_pages(state, {who, fetch, deadline, limit}, %{}, [], 1)
+  end
 
-  defp list_pages(state, who, fetch, params, acc, page) do
-    case fetch.(state, params) do
-      {:ok, result, state} ->
-        case {listed_tools(result), next_cursor(result)} do
-          {:error, _cursor} ->
-            {:error, "#{who} answered tools/list without a list of tools", state}
+  defp list_pages(state, {who, fetch, deadline, limit} = listing, params, acc, page) do
+    remaining = deadline - System.monotonic_time(:millisecond)
 
-          {{:ok, tools}, nil} ->
-            {:ok, acc ++ tools, state}
+    if remaining <= 0 do
+      {:error, out_of_time(who, limit), state}
+    else
+      %{state | timeout_ms: min(state.timeout_ms, remaining)}
+      |> fetch.(params)
+      |> keep_timeout(state.timeout_ms)
+      |> listed_page(state, listing, acc, page)
+    end
+  end
 
-          {{:ok, _tools}, _cursor} when page >= @max_listing_pages ->
-            {:error, "#{who} listed more than #{@max_listing_pages} pages of tools", state}
+  defp listed_page({:ok, result, state}, _before, {who, _, _, _} = listing, acc, page) do
+    case {listed_tools(result), next_cursor(result)} do
+      {:error, _cursor} ->
+        {:error, "#{who} answered tools/list without a list of tools", state}
 
-          {{:ok, tools}, cursor} ->
-            list_pages(state, who, fetch, %{"cursor" => cursor}, acc ++ tools, page + 1)
+      {{:ok, tools}, nil} ->
+        {:ok, acc ++ tools, state}
+
+      {{:ok, _tools}, _cursor} when page >= @max_listing_pages ->
+        {:error, "#{who} listed more than #{@max_listing_pages} pages of tools", state}
+
+      {{:ok, tools}, cursor} ->
+        list_pages(state, listing, %{"cursor" => cursor}, acc ++ tools, page + 1)
+    end
+  end
+
+  # A page that failed because the deadline cut its wait short is the
+  # listing running out of time, not the peer's failure.
+  defp listed_page(failed, before, {who, _, deadline, limit}, _acc, _page)
+       when elem(failed, 0) == :error do
+    if System.monotonic_time(:millisecond) >= deadline do
+      state =
+        case failed do
+          {:error, _reason, %State{} = state} -> state
+          _failed -> before
         end
 
-      other ->
-        other
+      {:error, out_of_time(who, limit), state}
+    else
+      failed
     end
+  end
+
+  defp listed_page(other, _before, _listing, _acc, _page), do: other
+
+  defp out_of_time(who, limit), do: "#{who} did not finish listing its tools within #{limit} ms"
+
+  # A page is fetched with its wait cut to what is left of the deadline;
+  # the state it hands back keeps the timeout it had before.
+  defp keep_timeout(result, timeout_ms) do
+    result
+    |> Tuple.to_list()
+    |> Enum.map(fn
+      %State{} = state -> %{state | timeout_ms: timeout_ms}
+      other -> other
+    end)
+    |> List.to_tuple()
   end
 
   defp next_cursor(%{"nextCursor" => cursor}) when is_binary(cursor) and cursor != "", do: cursor

@@ -122,6 +122,30 @@ defmodule Emissary.External.ServerEraTest do
       assert :counters.get(pages, 1) == 20
       assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
     end
+
+    # The handshake limit is the server's timeout where that is shorter, so
+    # a one-second timeout puts the whole listing under one second.
+    test "a slow listing fails at the deadline, not at the page bound",
+         %{stub: stub, url: url} do
+      pages = :counters.new(1, [])
+
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        :counters.add(pages, 1, 1)
+        Process.sleep(300)
+        page = %{"tools" => [%{"name" => "t#{body["id"]}"}], "nextCursor" => "more"}
+        json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => page})
+      end)
+
+      config = [name: "slow-peer", url: url, athanor_id: "ath_test", timeout_ms: 1_000]
+      pid = start_supervised!({Server, config})
+
+      assert {:error, reason} = GenServer.call(pid, :get_tools, 10_000)
+      assert reason =~ "did not finish listing its tools within 1000 ms"
+      assert :counters.get(pages, 1) < 20
+      assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
+      HTTPStub.pass(stub)
+    end
   end
 
   describe "a legacy peer" do
