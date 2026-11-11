@@ -384,8 +384,18 @@ defmodule Cyfr.Test.Sandbox do
   # what started while the list was read, the second what those started as
   # they were read, and a third finds nothing unless each generation starts
   # the next. Without a bound, such a chain would hold every other
-  # scheduler blocked without end.
+  # scheduler blocked without end. The bound is on how many times the sweep
+  # looks, not on how long it stays alone: a look reads every process it
+  # finds unread, however many, and each read waits for its process.
   @looks 3
+
+  # How many times the sweep reads again once what it killed is gone. What
+  # such a read finds was not known when the kills were sent, so it runs
+  # freely and can start more while it is read and killed: the reads repeat
+  # until one finds nothing. A chain that ends within them is ended with
+  # them; a longer one, or one that never ends, is the limit the failure
+  # then names.
+  @reads 5
 
   # Killed, not asked: a process the test left behind has no one to answer
   # a shutdown to. Each kill is awaited, so the owner outlives them all.
@@ -403,16 +413,28 @@ defmodule Cyfr.Test.Sandbox do
   #     can run while it is read, and start others: the sweep looks again
   #     for what it has not read, `@looks` times at most;
   #   - a process at the highest priority can run at any point. Only OTP's
-  #     own processes and one test's own process run there today.
+  #     own processes run there today, and two test processes for a moment
+  #     each: the worker service pool's, and the one here that checks the
+  #     sweep gives the priority back.
   #
   # A process read before it names where it came from — a task a supervisor
   # has started for a descendant, before its first instructions — is not
   # known for a descendant: it outlives the kills and can run. So can what
   # a chain longer than `@looks` started. Once the killed are gone the
-  # sweep reads once more, with the killed as roots since their children
-  # name them; what it finds it kills, and then it fails the test, naming
-  # them. The suspension this replaces had the same limit and said nothing.
-  defp stop_descendants(test, spared) do
+  # sweep reads again, with the killed as roots since their children name
+  # them; what it finds it kills and awaits, and it reads again, `@reads`
+  # times at most, until a read finds nothing. Then it fails the test,
+  # naming the first of them, and says so when the reads ran out, since
+  # something may then be left. The suspension this replaces had the same
+  # limit and said nothing.
+  @doc """
+  End every process that leads back to `test` (`descendants/2`), the
+  `spared` apart: the sweep of an async test, and the first step of each
+  pass of a sync test's. Answers the pids it killed, or fails the test
+  when, once those were gone, it found more that it had not known.
+  """
+  @spec stop_descendants(pid(), [pid()]) :: [pid()]
+  def stop_descendants(test, spared) do
     sweeping(test)
     listed = Process.list()
 
@@ -432,20 +454,40 @@ defmodule Cyfr.Test.Sandbox do
 
         await(killed)
 
-        case found([test | killed], spared) do
-          [] ->
+        case unknown(test, spared, killed, {0, []}, @reads) do
+          {0, [], _left} ->
             killed
 
-          left ->
-            first = left |> Enum.take(5) |> Enum.map_join("; ", &still_running/1)
-            kill(left)
-            await(left)
-
+          {count, first, left} ->
             ExUnit.Assertions.flunk(
               "the sweep killed #{length(killed)} of the test's processes, and once they " <>
-                "had ended found #{length(left)} more that it had not known, the first: #{first}"
+                "had ended found #{count} more that it had not known, the first: " <>
+                Enum.join(first, "; ") <>
+                if(left == :unread,
+                  do: "; each of its #{@reads} reads found more, so some may be left",
+                  else: ""
+                )
             )
         end
+    end
+  end
+
+  # Kills and awaits what leads back to the test or to anything `killed`,
+  # and reads again with those among the killed, until a read finds none
+  # (`:none`) or the reads run out (`:unread`). Answers how many it found
+  # and the first five as they were before it killed them.
+  defp unknown(_test, _spared, _killed, {count, first}, 0), do: {count, first, :unread}
+
+  defp unknown(test, spared, killed, {count, first}, reads) do
+    case found([test | killed], spared) do
+      [] ->
+        {count, first, :none}
+
+      left ->
+        named = left |> Enum.take(5 - length(first)) |> Enum.map(&still_running/1)
+        kill(left)
+        await(left)
+        unknown(test, spared, left ++ killed, {count + length(left), first ++ named}, reads - 1)
     end
   end
 

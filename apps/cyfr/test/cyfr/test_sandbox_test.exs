@@ -218,6 +218,36 @@ defmodule Cyfr.Test.SandboxTest do
     end
   end
 
+  # The sweep knows a process for a descendant by what it names as where it
+  # came from. This one names a process the sweep kills only once that
+  # process has ended, so no read before the kills knew it: only the read
+  # after them finds it, through the killed pid it names. It then starts
+  # three more, a millisecond apart, each born while the sweep reads for
+  # the one before: the sweep must read until it finds none.
+  test "what names a killed process only after the kills is ended too, with all it starts, " <>
+         "and the sweep fails" do
+    test = self()
+
+    # Stands for a test: its one child is all the sweep knows of.
+    root =
+      spawn(fn ->
+        send(test, {:known, spawn(fn -> Process.sleep(:infinity) end)})
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:known, known}
+    on_exit(fn -> Enum.each([root, known], &Process.exit(&1, :kill)) end)
+    spawn(fn -> names_late(test, known) end)
+    assert_receive {:started, _late}
+
+    error = assert_raise ExUnit.AssertionError, fn -> Sandbox.stop_descendants(root, []) end
+    assert error.message =~ ~r/found \d+ more that it had not known/
+    refute error.message =~ "may be left"
+
+    left = Enum.filter([known | started()], &Process.alive?/1)
+    assert left == [], "#{length(left)} processes outlived a sweep that failed"
+  end
+
   test "a kill pass gives the caller back the priority it had" do
     for priority <- [:low, :normal, :high, :max] do
       was = Process.flag(:priority, priority)
@@ -459,6 +489,51 @@ defmodule Cyfr.Test.SandboxTest do
            end
          ]}
     }
+  end
+
+  # Names `origin` as where it came from once `origin` has ended, and then
+  # starts a chain of three. Every one of them ends with the test.
+  defp names_late(test, origin) do
+    Process.flag(:priority, :high)
+    up = Process.monitor(test)
+    ref = Process.monitor(origin)
+    send(test, {:started, self()})
+
+    receive do
+      {:DOWN, ^ref, :process, ^origin, _reason} ->
+        Process.put(:"$callers", [origin])
+        chain(test, up, 3)
+
+      {:DOWN, ^up, :process, ^test, _reason} ->
+        :ok
+    end
+  end
+
+  # Starts the next link a millisecond from now, if any is left, and waits
+  # for the test's end.
+  defp chain(test, up, links) do
+    if links > 0 do
+      Process.sleep(1)
+
+      spawn(fn ->
+        send(test, {:started, self()})
+        chain(test, Process.monitor(test), links - 1)
+      end)
+    end
+
+    receive do
+      {:DOWN, ^up, :process, ^test, _reason} -> :ok
+    end
+  end
+
+  # Every process that has told the test it started, a chain still growing
+  # included.
+  defp started(pids \\ []) do
+    receive do
+      {:started, pid} -> started([pid | pids])
+    after
+      50 -> pids
+    end
   end
 
   # Starts a child that never ends and reports it, again and again.
