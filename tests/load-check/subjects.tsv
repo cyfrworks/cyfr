@@ -63,16 +63,14 @@ subject	access-test	2	pair	-	45	1200	-	bash tests/release-boot/access-test.sh
 subject	ci-publish-test	2	pair	-	30	1200	-	bash tests/ci-publish-test.sh
 subject	install-verify-test	2	pair	-	30	1200	-	sh tests/install-verify-test.sh
 
-# Every proof, on one quarter, beside a second copy of itself, as each
-# workflow step or its README runs it. The canvas proof runs at both
-# viewports held to the reference host class's budget, as on this host
-# today. A proof that finds no prerequisite exits 69 (77 for the proxy HSTS
-# proof) and is skipped. Recorded medians per run: canvas 401 per viewport,
-# install-screen 279, handle 1053, join 296, pairing 100, identity 158,
-# approval 330 and file-offer 17 and share 25 per viewport, grant 23,
-# hostile-frame 115, tincture 58, frame-facts 13, release boot 98, setup
-# 15; multi-home-smoke, markdown, proxy-hsts and tailnet-real have none.
-subject	canvas	1	pair	release-sqlite	802	3600	-	set -e; for viewport in desktop 720x720; do CANVAS_PROOF_VIEWPORT="$viewport" PROOF_OUT="$LOAD_CHECK_OUT/$viewport" tests/canvas-proof/run.sh; export RELEASE_BOOT_SKIP_BUILD=1; done
+# Every proof but the two below, on one quarter, beside a second copy of
+# itself, as each workflow step or its README runs it. A proof that finds
+# no prerequisite exits 69 (77 for the proxy HSTS proof) and is skipped.
+# Recorded medians per run: install-screen 279, handle 1053, join 296,
+# pairing 100, identity 158, approval 330 and file-offer 17 and share 25
+# per viewport, grant 23, hostile-frame 115, tincture 58, frame-facts 13,
+# release boot 98, setup 15; multi-home-smoke, markdown, proxy-hsts and
+# tailnet-real have none.
 subject	install-screen	1	pair	-	279	3600	-	tests/install-screen-proof/run.sh --out "$LOAD_CHECK_OUT"
 subject	handle	1	pair	release-sqlite	1053	3600	tests/load-check/needs.sh env CYFR_RUN_DIR	PROOF_OUT="$LOAD_CHECK_OUT" tests/handle-proof/run.sh
 subject	join	1	pair	release-sqlite	296	2700	-	PROOF_OUT="$LOAD_CHECK_OUT" tests/join-proof/run.sh
@@ -97,3 +95,9 @@ subject	tailnet-real	1	pair	-	300	1800	tests/load-check/needs.sh env TAILNET_REA
 # (127.0.0.1:1055 in docker-compose.yml), so two copies never run at once:
 # it takes the whole machine and is listed, not measured. Recorded median 89.
 subject	compose	4	-	-	89	1800	-	tests/compose-proof/run.sh
+
+# The canvas proof is held to speed budgets (tests/canvas-proof/README.md),
+# which it fails on one quarter beside a busy machine, so it takes the
+# whole machine and is listed, not measured: both viewports, held to the
+# reference host class's budget. Recorded median 401 per viewport.
+subject	canvas	4	-	-	802	3600	-	set -e; for viewport in desktop 720x720; do CANVAS_PROOF_VIEWPORT="$viewport" PROOF_OUT="$LOAD_CHECK_OUT/$viewport" tests/canvas-proof/run.sh; export RELEASE_BOOT_SKIP_BUILD=1; done

@@ -181,14 +181,15 @@ same worktree refuses, naming the run that holds it.
   It cuts the machine's cores into four quarters of whole cores. A check
   takes all four by default and runs alone: a gate, a full or
   multi-partition suite, `go test -race`, a harness self-test that needs
-  the machine, the compose proof. With `-q 1` it takes one quarter: named
-  test paths in one partition, a compile, dialyzer, credo, a light
-  self-test, a browser or install proof, an image suite or build, a
-  release boot. Four of those run side by side, each on its own quarter's
-  processors, which it is told as `HEAVY_CHECK_CPUS` for the containers it
-  starts. Checks start in the order they queued, none past an earlier
-  one, and `scripts/heavy-check.sh --status` shows who holds which
-  quarters and who waits.
+  the machine, the canvas proof, the compose proof. With `-q 1` it takes
+  one quarter: named test paths in one partition, a compile, dialyzer,
+  credo, a light self-test, any other browser proof or an install proof,
+  an image suite or build, a release boot. Four of those run side by
+  side, each on its own quarter's processors, which it is told as
+  `HEAVY_CHECK_CPUS` for the containers it starts. Checks start in the
+  order they queued, none past an earlier one, and
+  `scripts/heavy-check.sh --status` shows who holds which quarters and
+  who waits.
 - `tests/load-check/run.sh` measures whether each check still passes, and
   how much slower it runs, on a quarter of the host's cores beside busy
   neighbours or a second copy of itself. It takes the whole machine for

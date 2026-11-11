@@ -32,7 +32,19 @@
 # canvas-proof.json and canvas-proof.md into PROOF_OUT (default: the scratch
 # directory, kept with RELEASE_BOOT_KEEP=1) and prints the table. Set
 # RELEASE_BOOT_SKIP_BUILD=1 to reuse a release a previous run built.
+#
+# The measurement is held to speed budgets, which a busy neighbour breaks:
+# under scripts/heavy-check.sh the proof runs on all four quarters and
+# refuses fewer with 64.
 set -euo pipefail
+
+case "${HEAVY_CHECK_HELD:-}" in
+  '' | 4) ;;
+  *)
+    echo '::error::the canvas proof is held to speed budgets and takes the whole host: run it under scripts/heavy-check.sh on all four quarters, without -q 1' >&2
+    exit 64
+    ;;
+esac
 
 VIEWPORT="${CANVAS_PROOF_VIEWPORT:-}"
 case "$VIEWPORT" in

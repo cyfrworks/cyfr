@@ -119,10 +119,11 @@ the four subjects that also run on the whole machine.
 | `gate` | 2 | pair, whole | nothing |
 | `go-race` | 2 | pair, whole | go's race build |
 | `commit-gate-test`, `heavy-check-test`, `contain-test`, `stage-test`, `test-partitioned-test`, `partition-env-test`, `release-boot-test`, `access-test`, `ci-publish-test`, `install-verify-test`: every harness self-test a pull-request workflow runs and no handoff row does | 2 | pair | nothing |
-| `canvas` (both viewports, the reference budget), `handle`, `join`, `pairing`, `identity`, `approval`, `file-offer`, `share`, `grant`, `hostile-frame`, `multi-home-smoke`, `tincture`, `frame-facts`, `release-boot-sqlite` | 1 | pair | the SQLite release |
+| `handle`, `join`, `pairing`, `identity`, `approval`, `file-offer`, `share`, `grant`, `hostile-frame`, `multi-home-smoke`, `tincture`, `frame-facts`, `release-boot-sqlite` | 1 | pair | the SQLite release |
 | `release-boot-postgres` | 1 | pair | the PostgreSQL release |
 | `install-screen`, `markdown`, `setup`, `proxy-hsts`, `tailnet-real` | 1 | pair | nothing |
 | `compose` | 4 | listed, not measured: it publishes the fixed port `127.0.0.1:1055` | |
+| `canvas` (both viewports, the reference budget) | 4 | listed, not measured: it is held to speed budgets, which it failed on one quarter beside a busy machine | |
 
 The gate's close is not a subject: it holds the host for hours and runs
 only for a release with no run on GitHub.
@@ -170,11 +171,11 @@ janitor's rule 3 removes it after seven days unused.
 
 ## Expected time
 
-From the dry run on this host, one round: about 4 h for the first
+From the dry run on this host, one round: about 3 h 40 min for the first
 decisive run (the two suites, the gate, `go test -race`, the ten harness
-self-tests, the canvas proof, and the install, join, pairing and SQLite
-release-boot proofs), of which about 10 min prepare and 10 min warm; about
-5 h 45 min for the whole list with the handle, PostgreSQL boot and
+self-tests, and the install, join, pairing and SQLite release-boot
+proofs), of which about 10 min prepare and 10 min warm; about
+5 h 15 min for the whole list with the handle, PostgreSQL boot and
 real-tailnet settings given. The times assume the four whole-machine
 subjects take twice as long busy on two quarters; their real ratio is
 what the run measures. An alone run after a failure adds its own time.
