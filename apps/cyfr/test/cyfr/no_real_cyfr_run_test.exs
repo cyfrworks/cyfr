@@ -50,6 +50,91 @@ defmodule Cyfr.NoRealCyfrRunTest do
     end
   end
 
+  # What each registry setting boots with, stored as written, and what
+  # refuses the boot. The registry is named in signed requests by a host
+  # name's grammar, so it takes no IPv6 literal; the OCI registry is reached
+  # by URL alone and takes a bracketed one. `none` refuses in any case.
+  @names ~w(registry.example registry.example:8443 REGISTRY.EXAMPLE 127.0.0.1:9 localhost
+            localhost:65535)
+  @refused [
+    "none",
+    "NONE",
+    "None",
+    "::1",
+    "registry.example.",
+    "https://registry.example",
+    "registry.example/path",
+    "registry.example:",
+    "registry.example:0",
+    "registry.example:65536",
+    "registry example"
+  ]
+
+  test "the registry boots with a host name or an IPv4 address and an optional port, and nothing else" do
+    for value <- @names do
+      assert get_in(runtime(:prod, %{"CYFR_REGISTRY_URL" => value}), [:sanctum, :registry_url]) ==
+               value
+    end
+
+    assert get_in(runtime(:prod, %{"CYFR_REGISTRY_URL" => ""}), [:sanctum, :registry_url]) ==
+             "cyfr.run"
+
+    for value <- @refused ++ ["[::1]:9", "[::1]"] do
+      assert_raise RuntimeError,
+                   ~r/CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run or one of its own/,
+                   fn -> runtime(:prod, %{"CYFR_REGISTRY_URL" => value}) end
+    end
+  end
+
+  test "the OCI registry also boots with a bracketed IPv6 address, and with nothing else" do
+    for value <- @names ++ ["[::1]:9", "[::1]", "[2001:db8::1]:5000"] do
+      assert get_in(runtime(:prod, %{"CYFR_OCI_REGISTRY_URL" => value}), [
+               :cyfr,
+               :oci_registry_url
+             ]) ==
+               value
+    end
+
+    for value <- @refused ++ ["[::1]:", "[::1]:0", "[zz::1]:9", "[::1]x"] do
+      assert_raise RuntimeError, ~r/CYFR_OCI_REGISTRY_URL must name the OCI registry/, fn ->
+        runtime(:prod, %{"CYFR_OCI_REGISTRY_URL" => value})
+      end
+    end
+  end
+
+  defmodule IPv6Registry do
+    @moduledoc false
+    def init(opts), do: opts
+    def call(conn, _opts), do: Plug.Conn.send_resp(conn, 200, "local-registry")
+  end
+
+  test "an OCI registry on an IPv6 address the transport reaches is one the boot takes" do
+    {:ok, server} =
+      start_supervised(
+        {Bandit,
+         plug: IPv6Registry,
+         scheme: :http,
+         ip: {0, 0, 0, 0, 0, 0, 0, 1},
+         port: 0,
+         startup_log: false}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    registry = "[::1]:#{port}"
+    Env.put_app_env(:sanctum, :private_egress_targets, ["::1"])
+    Env.put_app_env(:cyfr, :oci_registry_url, registry)
+    ref = %Compendium.OCI.Reference{registry: registry, repository: "demo/catalysts/example"}
+
+    assert {:ok, 200, _headers, "local-registry"} =
+             Compendium.OCI.Transport.request(nil, :get, "/v2/", ref)
+
+    assert get_in(runtime(:prod, %{"CYFR_OCI_REGISTRY_URL" => registry}), [
+             :cyfr,
+             :oci_registry_url
+           ]) ==
+             registry
+  end
+
   # `config/runtime.exs` read for `env` with neither URL set but those in
   # `vars`, and the variables a production boot cannot do without.
   defp runtime(env, vars \\ %{}) do

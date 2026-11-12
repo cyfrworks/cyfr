@@ -529,8 +529,10 @@ if config_env() != :test do
 
   # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
   # Every CYFR names a registry and calls it, in every build: cyfr.run or
-  # its own, a host with an optional port (`Sanctum.registry_url?/1`), and
-  # any other value refuses the boot. Unset, `registry_url` is `"cyfr.run"`
+  # its own, a host name or IPv4 address with an optional port
+  # (`Sanctum.registry_url?/1`); the OCI host may also be a bracketed IPv6
+  # address (`Compendium.RegistryHost.oci_host?/1`). Any other value, and
+  # `none` in any case, refuses the boot. Unset, `registry_url` is `"cyfr.run"`
   # and `oci_registry_url` derives as `"registry.#{registry_url}"`. An
   # install cut off from the internet names a registry of its own; one it
   # cannot reach is answered as unavailable. Self-hosted deployments may
@@ -541,9 +543,12 @@ if config_env() != :test do
   # configure at deploy time. One parse sets both applications' copies.
   registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
 
-  if registry_url_config == "none" or not Sanctum.registry_url?(registry_url_config) do
+  # `none`, in any case, is the mode without a registry, which no CYFR has.
+  if String.downcase(registry_url_config) == "none" or
+       not Sanctum.registry_url?(registry_url_config) do
     raise "[Cyfr] FATAL: CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run " <>
-            "or one of its own: a host with an optional port. Every CYFR names one."
+            "or one of its own: a host name or IPv4 address with an optional port. " <>
+            "Every CYFR names one."
   end
 
   config :cyfr, :registry_url, registry_url_config
@@ -585,9 +590,11 @@ if config_env() != :test do
   oci_registry_url_config =
     env_str.("CYFR_OCI_REGISTRY_URL", "registry.#{registry_url_config}")
 
-  if oci_registry_url_config == "none" or not Sanctum.registry_url?(oci_registry_url_config) do
+  if String.downcase(oci_registry_url_config) == "none" or
+       not Compendium.RegistryHost.oci_host?(oci_registry_url_config) do
     raise "[Cyfr] FATAL: CYFR_OCI_REGISTRY_URL must name the OCI registry components " <>
-            "are pulled from: a host with an optional port."
+            "are pulled from: a host name, an IPv4 address or a bracketed IPv6 address, " <>
+            "with an optional port."
   end
 
   config :cyfr, :oci_registry_url, oci_registry_url_config

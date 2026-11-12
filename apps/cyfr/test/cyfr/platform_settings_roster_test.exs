@@ -1110,19 +1110,6 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end)
     end
 
-    test "a boot that names no registry, or a value that is not a host, is refused" do
-      for value <- ["none", "https://cyfr.run/", "not a host"] do
-        with_env(%{"CYFR_REGISTRY_URL" => value}, fn ->
-          assert refusal!() =~
-                   "CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run or one of its own"
-        end)
-
-        with_env(%{"CYFR_OCI_REGISTRY_URL" => value}, fn ->
-          assert refusal!() =~ "CYFR_OCI_REGISTRY_URL must name the OCI registry"
-        end)
-      end
-    end
-
     test "a directory URL as long as a preview can name is read, and one byte more is refused" do
       fits = directory_url_of(Prima.Confirmation.Preview.max_text())
       over = directory_url_of(Prima.Confirmation.Preview.max_text() + 1)

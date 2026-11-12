@@ -11,6 +11,26 @@ defmodule Compendium.RegistryHost do
   """
 
   @doc """
+  Whether `value` names an OCI registry: what `Sanctum.registry_url?/1`
+  names, or a bracketed IPv6 literal, each with an optional port from 1 to
+  65535. The OCI transport reaches an IPv6 registry by its bracketed URL
+  authority; nothing signed names this host.
+  """
+  @spec oci_host?(term()) :: boolean()
+  def oci_host?(value) when is_binary(value) do
+    case Regex.run(~r/\A\[([0-9A-Fa-f:.]+)\](?::([^:]*))?\z/, value, capture: :all_but_first) do
+      [address | port] ->
+        match?({:ok, _}, :inet.parse_ipv6strict_address(String.to_charlist(address))) and
+          Enum.all?(port, &Sanctum.port?/1)
+
+      nil ->
+        Sanctum.registry_url?(value)
+    end
+  end
+
+  def oci_host?(_value), do: false
+
+  @doc """
   Canonical OCI Distribution host for this deployment: `CYFR_OCI_REGISTRY_URL`,
   or `registry.` before the REST host (`config/runtime.exs`).
   """

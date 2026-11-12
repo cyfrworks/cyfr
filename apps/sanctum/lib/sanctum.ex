@@ -228,8 +228,11 @@ defmodule Sanctum do
   end
 
   @doc """
-  Whether `value` names a registry: a host name or address, in any case,
-  and an optional port from 1 to 65535, with nothing else.
+  Whether `value` names a registry: a host name or an IPv4 address, in any
+  case, and an optional port from 1 to 65535, with nothing else. An IPv6
+  literal is not one: a signed registry request and a handle's answer bind
+  the registry by a host name's grammar (`Prima.RegistryRequest`,
+  `Prima.HandleAnswer`), which cannot spell one.
   """
   @spec registry_url?(term()) :: boolean()
   def registry_url?(value), do: match?({:ok, _host}, parse_registry(value))
@@ -251,9 +254,12 @@ defmodule Sanctum do
   defp parse_registry(_value), do: :error
 
   defp registry_port?(nil), do: true
+  defp registry_port?(port), do: port?(port)
 
-  defp registry_port?(port),
-    do: port =~ ~r/\A[0-9]{1,5}\z/ and String.to_integer(port) in 1..65_535
+  @doc "Whether `value` spells a TCP port, 1 to 65535, in decimal digits alone."
+  @spec port?(term()) :: boolean()
+  def port?(value),
+    do: is_binary(value) and value =~ ~r/\A[0-9]{1,5}\z/ and String.to_integer(value) in 1..65_535
 
   @doc """
   The base URL of a registry host (a name or address with an optional
