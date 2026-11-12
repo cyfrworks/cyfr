@@ -180,6 +180,26 @@ defmodule Cyfr.TestSeamsTest do
     assert permission |> Enum.map(& &1.file) |> Enum.uniq() |> Enum.sort() == @permission_readers
   end
 
+  # A seam is read only through `value/2`, which decides with the
+  # permission its caller was compiled with. `value/3` takes the permission
+  # as an argument, so a call of it with `true` would read a seam in a
+  # release: nothing calls or captures it but the macro's own expansion,
+  # and nothing names the gate but to require it and call `value/2`. Out
+  # of scope: `apply/3` and other indirect calls of `value/3`.
+  test "nothing names the gate but through value/2, and value/3 only in the macro's expansion" do
+    named =
+      for path <- lib_files(),
+          use <- gate_uses(SourceTree.quoted(path), false),
+          use not in [:require, {:call, :value, 2}],
+          do: {Path.relative_to(path, @root), use}
+
+    assert named == [
+             {"apps/prima/lib/prima/test_seam.ex", :defmodule},
+             {"apps/prima/lib/prima/test_seam.ex", {:quoted, {:call, :value, 3}}}
+           ],
+           "the gate named but through value/2: #{inspect(named)}"
+  end
+
   test "the permission is the test configurations' and no other's" do
     setting =
       for path <-
@@ -206,6 +226,44 @@ defmodule Cyfr.TestSeamsTest do
       assert under_test =~ ~r/^  config :prima, test_seams_permitted: true$/m, island
     end
   end
+
+  # Each place `ast` names `Prima.TestSeam`, in source order: `:require`,
+  # `:defmodule`, `{:call, fun, arity}`, `{:capture, fun, arity}`, or
+  # `:other` for any other mention (an alias, an argument); a call inside a
+  # `quote` is `{:quoted, call}`.
+  defp gate_uses({:quote, _, args}, _quoted), do: gate_uses(args, true)
+
+  defp gate_uses({:require, _, [alias | rest]} = ast, quoted) do
+    if gate?(alias), do: [:require | gate_uses(rest, quoted)], else: gate_walk(ast, quoted)
+  end
+
+  defp gate_uses({:defmodule, _, [alias | rest]} = ast, quoted) do
+    if gate?(alias), do: [:defmodule | gate_uses(rest, quoted)], else: gate_walk(ast, quoted)
+  end
+
+  defp gate_uses({:&, _, [{:/, _, [{{:., _, [alias, fun]}, _, []}, arity]}]} = ast, quoted) do
+    if gate?(alias), do: [{:capture, fun, arity}], else: gate_walk(ast, quoted)
+  end
+
+  defp gate_uses({{:., _, [alias, fun]}, _, args} = ast, quoted) when is_list(args) do
+    if gate?(alias) do
+      call = {:call, fun, length(args)}
+      [if(quoted, do: {:quoted, call}, else: call) | gate_uses(args, quoted)]
+    else
+      gate_walk(ast, quoted)
+    end
+  end
+
+  defp gate_uses(ast, quoted), do: if(gate?(ast), do: [:other], else: gate_walk(ast, quoted))
+
+  defp gate_walk({form, _meta, args}, quoted),
+    do: gate_uses(form, quoted) ++ gate_uses(List.wrap(args), quoted)
+
+  defp gate_walk({left, right}, quoted), do: gate_uses(left, quoted) ++ gate_uses(right, quoted)
+  defp gate_walk(list, quoted) when is_list(list), do: Enum.flat_map(list, &gate_uses(&1, quoted))
+  defp gate_walk(_leaf, _quoted), do: []
+
+  defp gate?(ast), do: match?({:__aliases__, _, [:Prima, :TestSeam]}, ast)
 
   defp lib_files do
     for lib <- SourceTree.app_libs(@root),
