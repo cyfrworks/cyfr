@@ -547,8 +547,9 @@ if config_env() != :test do
   if String.downcase(registry_url_config) == "none" or
        not Sanctum.registry_url?(registry_url_config) do
     raise "[Cyfr] FATAL: CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run " <>
-            "or one of its own: a host name or IPv4 address with an optional port. " <>
-            "Every CYFR names one."
+            "or one of its own: a host name or an IPv4 address with an optional port. " <>
+            "The requests its accounts sign name the registry, and they cannot name an " <>
+            "IPv6 address. Every CYFR names one."
   end
 
   config :cyfr, :registry_url, registry_url_config

@@ -84,6 +84,11 @@ defmodule Cyfr.NoRealCyfrRunTest do
                    ~r/CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run or one of its own/,
                    fn -> runtime(:prod, %{"CYFR_REGISTRY_URL" => value}) end
     end
+
+    # Why an IPv6 address, which the OCI registry takes, is not one.
+    assert_raise RuntimeError,
+                 ~r/The requests its accounts sign name the registry, and they cannot name an IPv6 address/,
+                 fn -> runtime(:prod, %{"CYFR_REGISTRY_URL" => "[::1]:9"}) end
   end
 
   test "the OCI registry also boots with a bracketed IPv6 address, and with nothing else" do
