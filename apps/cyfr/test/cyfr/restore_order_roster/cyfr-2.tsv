@@ -29,8 +29,7 @@ apps/cyfr/test/compendium/providers/layout_test.exs	1	pending
 apps/cyfr/test/compendium/providers/registry_test.exs	3	pending
 apps/cyfr/test/compendium/providers/source_test.exs	1	pending
 apps/cyfr/test/compendium/register_mints_nothing_test.exs	1	pending
-apps/cyfr/test/compendium/registry/client_sync_test.exs	7	pending
-apps/cyfr/test/compendium/registry_port_test.exs	3	pending
+apps/cyfr/test/compendium/registry/client_sync_test.exs	6	pending
 apps/cyfr/test/compendium/registry_remove_cascade_test.exs	2	pending
 apps/cyfr/test/compendium/registry_test.exs	3	pending
 apps/cyfr/test/compendium/release_immutability_test.exs	1	pending
