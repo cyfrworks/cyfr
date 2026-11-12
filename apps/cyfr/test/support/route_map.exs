@@ -227,15 +227,6 @@
           pipe_through: ["directory"]
         },
         %{
-          verb: "GET",
-          path: "/v1/identities/:identifier/handle",
-          plug: "Emissary.Web.HandleController",
-          plug_opts: ":name_of",
-          auth: "public_directory",
-          live_view: nil,
-          pipe_through: ["directory"]
-        },
-        %{
           verb: "POST",
           path: "/directory/v1/:identifier/append",
           plug: "Emissary.Web.DirectoryController",
@@ -321,6 +312,15 @@
           path: "/v1/handles/:handle",
           plug: "Emissary.Web.HandleController",
           plug_opts: ":resolve",
+          auth: "public_directory",
+          live_view: nil,
+          pipe_through: ["directory"]
+        },
+        %{
+          verb: "GET",
+          path: "/v1/identities/:identifier/handle",
+          plug: "Emissary.Web.HandleController",
+          plug_opts: ":name_of",
           auth: "public_directory",
           live_view: nil,
           pipe_through: ["directory"]
