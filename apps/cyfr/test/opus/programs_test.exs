@@ -370,16 +370,27 @@ defmodule Opus.ProgramsTest do
       refute_receive {:control, "release", _release, _fields}, 200
     end
 
+    # Only the claim lapses: its row's lease is run out here, as a member
+    # that could not write its renewal leaves it, while the service still
+    # holds the owner under the lease its sync set. A wait for the claim's
+    # own lease would run the service's lease out with it (they are one
+    # `lease_ms`), and the service would answer the renewal unknown.
     test "a claim that only lapsed is asked for again, and the backend runs on",
          %{ctx: ctx, fake: fake} do
-      controller = start_controller(fake, lease_ms: 300)
+      controller = start_controller(fake)
       vault_entry(ctx)
       row = stdio_row(ctx, "lapsing")
       pid = connect(ctx, row)
       assert_receive {:control, "sync", _sync, _fields}, 2_000
       held = claim_row(ctx, row)
 
-      eventually(fn -> not JobClaims.live?(held) end, "the backend claim to run out")
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.where(Arca.Schemas.JobClaim, id: ^held.id),
+          set: [lease_until: DateTime.add(DateTime.utc_now(), -1, :second)]
+        )
+
+      refute JobClaims.live?(claim_row(ctx, row))
       tick(controller)
 
       assert %{owner: owner, fence: fence} = retaken = claim_row(ctx, row)
@@ -2044,6 +2055,55 @@ defmodule Opus.ProgramsTest do
       refute closed == sibling
       refute_receive {:control, "release", _message, _fields}, 300
       assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", sibling, ["still here"])
+    end
+
+    # A close the box owes for an open whose holder died settles on the
+    # service's `unknown_owner` once the owner it named is gone, where a
+    # `lapsed` keeps it owed for the drain.
+    test "a late pipe close settles after its backend owner expires", %{
+      fake: fake,
+      row: row,
+      entry: entry
+    } do
+      controller = start_controller(fake, lease_ms: 500)
+      assert {:ok, %{session: _sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+      Scripted.hold(fake, "opened")
+      opening = Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1") end)
+      assert_receive {:held, "opened", answer}, 2_000
+      key = {:pipe, row.athanor_id, row.id, row.epoch, entry, "pipe-a"}
+      [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
+      Process.exit(holder, :kill)
+
+      eventually(
+        fn ->
+          Agent.get(fake.agent, fn st ->
+            Enum.any?(st.leases, fn {_key, until} ->
+              until <= System.monotonic_time(:millisecond)
+            end)
+          end)
+        end,
+        "the backend owner's lease to expire"
+      )
+
+      send(answer, :go)
+      assert {:error, _} = Task.await(opening, 5_000)
+
+      eventually(
+        fn ->
+          state = :sys.get_state(controller)
+
+          state.pipe_opens == %{} and
+            Enum.all?(state.closing, fn {_id, record} -> not record.inflight end)
+        end,
+        "the late open and its first close to settle"
+      )
+
+      for _ <- 1..3, do: tick(controller)
+
+      eventually(
+        fn -> :sys.get_state(controller).closing == %{} end,
+        "the gone owner to confirm the late close"
+      )
     end
 
     test "a close refused once is owed by the box past its holder's release, and lands on the sweep",

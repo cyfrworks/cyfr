@@ -23,10 +23,18 @@ defmodule Arca.TurnTransitionContractTest do
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
-    Arca.Test.Actor.athanor!()
-    actor = Arca.Test.Actor.local()
-    {:ok, thread} = Threads.create(actor)
-    {:ok, actor: actor, thread: thread}
+
+    # A case racing on connections of its own writes nothing in the
+    # sandbox: on SQLite a sandbox write holds the one write lock until the
+    # case ends, and every racer would wait behind it.
+    if tags[:own_connections] do
+      :ok
+    else
+      Arca.Test.Actor.athanor!()
+      actor = Arca.Test.Actor.local()
+      {:ok, thread} = Threads.create(actor)
+      {:ok, actor: actor, thread: thread}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -898,23 +906,48 @@ defmodule Arca.TurnTransitionContractTest do
   # ---------------------------------------------------------------------------
 
   describe "a transition reads its rows under the turn's lock" do
-    test "of a recovery and a takeover racing on one fence, one lands and one recovery is spent",
-         %{actor: actor, thread: thread} do
-      {turn, _root} = started!(actor, thread)
+    # The two transitions race on connections of their own, outside the
+    # sandbox: on the test's one shared connection each transaction holds
+    # the connection whole, so the two would run one after the other and
+    # the lock would decide nothing. The rows are committed, in an athanor
+    # of this case's own, and erased when it ends.
+    @tag :own_connections
+    test "of a recovery and a takeover racing on one fence, one lands and one recovery is spent" do
+      actor = unboxed_athanor!()
+      {turn, _root} = unboxed(fn -> started!(actor, elem(Threads.create(actor), 1)) end)
       attrs = Map.put(@standing, :fence, turn.fence)
 
       results =
         [&TurnStorage.recover/3, &TurnStorage.takeover/3]
         |> Enum.map(fn transition ->
-          Task.async(fn -> transition.(actor, turn.id, attrs) end)
+          Task.async(fn -> unboxed(fn -> transition.(actor, turn.id, attrs) end) end)
         end)
         |> Enum.map(&Task.await(&1, 25_000))
 
-      assert Enum.count(results, &match?({:ok, _}, &1)) == 1
-      assert Enum.count(results, &match?({:error, _}, &1)) == 1
+      assert Enum.count(results, &match?({:ok, _}, &1)) == 1, inspect(results)
+      assert Enum.count(results, &match?({:error, _}, &1)) == 1, inspect(results)
 
-      assert %{recovery_attempts: 1} = row(turn.id)
+      assert %{recovery_attempts: 1} = unboxed(fn -> row(turn.id) end)
     end
+  end
+
+  defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
+
+  # An athanor no other case names, committed, whose rows go with it when
+  # the case ends.
+  defp unboxed_athanor! do
+    athanor_id = "ath_race_#{System.unique_integer([:positive])}"
+    actor = Arca.Test.Actor.local(athanor_id: athanor_id)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(actor)
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id))
+      end)
+    end)
+
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor_id) end)
+    actor
   end
 
   defp events(execution_id, type) do

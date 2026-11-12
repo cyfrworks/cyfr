@@ -293,17 +293,6 @@ defmodule Cyfr.Cluster.Fixtures do
     |> Enum.map(& &1.id)
   end
 
-  @doc "Decide `approval_id` from this member — a compare-and-set on its status."
-  @spec decide(String.t(), String.t(), String.t()) :: term()
-  def decide(athanor_id, approval_id, to) do
-    case Arca.ThreadStorage.resolve_approval(actor(athanor_id), approval_id, ["pending"], to, %{
-           decided_by: "usr_cluster"
-         }) do
-      {:ok, row} -> {:ok, row.status}
-      other -> other
-    end
-  end
-
   @doc "Spend `turn_id`'s recovery budget down to its stored limit, as that many recoveries would."
   @spec spend_recoveries(String.t(), String.t()) :: :ok
   def spend_recoveries(athanor_id, turn_id) do

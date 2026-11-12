@@ -524,9 +524,9 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     {response.status, Jason.decode!(response.body)}
   end
 
-  defp signed(key, body) do
+  defp signed(key, body, service \\ ScriptedWorker.service()) do
     request = %{
-      service: ScriptedWorker.service(),
+      service: service,
       boot: "boot_test",
       ts: System.system_time(:millisecond),
       nonce: Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
@@ -560,15 +560,28 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
                post(route, signed(dispatch_key(), body), body)
     end
 
+    test "refuses a header made for another service, and one presented again" do
+      body = Jason.encode!(WorkerWire.request_body(:status, %{}))
+      route = WorkerWire.worker_route(:status)
+
+      assert {401, %{"error" => "malformed"}} =
+               post(route, signed(dispatch_key(), body, "wrk_other"), body)
+
+      once = signed(dispatch_key(), body)
+      assert {200, %{"ok" => _status}} = post(route, once, body)
+      assert {401, %{"error" => "replayed"}} = post(route, once, body)
+    end
+
+    # Each request is signed afresh, as a client signs one: a header the
+    # listener has seen is refused `replayed` before its body is read.
     test "refuses a body that is not the one the header named, at another version, or not its route's" do
       body = Jason.encode!(WorkerWire.request_body(:status, %{}))
-      headers = signed(dispatch_key(), body)
 
-      assert {400, %{"error" => "bad_mac"}} =
-               post(WorkerWire.worker_route(:status), headers, body <> " ")
+      assert {401, %{"error" => "bad_mac"}} =
+               post(WorkerWire.worker_route(:status), signed(dispatch_key(), body), body <> " ")
 
       assert {400, %{"error" => "malformed"}} =
-               post(WorkerWire.worker_route(:kill), headers, body)
+               post(WorkerWire.worker_route(:kill), signed(dispatch_key(), body), body)
 
       kill = Jason.encode!(WorkerWire.request_body(:kill, %{"runner" => "r1"}))
 
@@ -585,7 +598,8 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
                  )
       end
 
-      assert {404, %{"error" => "not_found"}} = post("/worker/v1/other", headers, body)
+      assert {404, %{"error" => "not_found"}} =
+               post("/worker/v1/other", signed(dispatch_key(), body), body)
     end
 
     test "refuses a body past the host API's bound without serving it" do

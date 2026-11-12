@@ -54,12 +54,13 @@ defmodule Cyfr.Cluster.Wait do
 
   defp poll(condition, message, started, deadline) do
     case run(condition) do
-      value when value not in [nil, false] ->
+      {:held, value} when value not in [nil, false] ->
         {System.monotonic_time(:millisecond) - started, value}
 
-      _not_yet ->
+      not_yet ->
         if System.monotonic_time(:millisecond) >= deadline do
-          raise "waited #{System.monotonic_time(:millisecond) - started} ms: #{message}"
+          raise "waited #{System.monotonic_time(:millisecond) - started} ms: #{message}" <>
+                  last_raise(not_yet)
         else
           Process.sleep(@poll_ms)
           poll(condition, message, started, deadline)
@@ -69,17 +70,25 @@ defmodule Cyfr.Cluster.Wait do
 
   # A condition that raises has not held yet — a peer that is mid-restart
   # refuses the call that asks it. A condition that is still raising at
-  # the deadline raises through the timeout message instead.
+  # the deadline raises through the timeout message, naming its raise.
   defp run(condition) do
-    condition.()
+    {:held, condition.()}
   catch
-    _kind, _reason -> false
+    kind, reason -> {:raised, Exception.format_banner(kind, reason)}
   end
+
+  defp last_raise({:raised, banner}), do: " (the condition last raised: #{banner})"
+  defp last_raise(_answered), do: ""
 
   @doc """
   Hold `condition` false for `ms`, so a case can say a member did *not*
   act rather than only that it had not acted yet. Answers `:ok`, or raises
   naming when the condition first held.
+
+  A condition that raises fails the hold at once: "never" is a claim about
+  what the condition answered on every poll, and a condition that could
+  not be asked answered nothing, so a broken observation cannot pass for
+  a member that did not act.
   """
   @spec never!((-> as_boolean(term())), String.t(), pos_integer()) :: :ok
   def never!(condition, message, ms),
@@ -90,10 +99,13 @@ defmodule Cyfr.Cluster.Wait do
       :ok
     else
       case run(condition) do
-        value when value not in [nil, false] ->
+        {:raised, banner} ->
+          raise "#{message}: the condition raised instead of answering: #{banner}"
+
+        {:held, value} when value not in [nil, false] ->
           raise message
 
-        _still_false ->
+        {:held, _still_false} ->
           Process.sleep(@poll_ms)
           hold(condition, message, deadline)
       end

@@ -16,7 +16,13 @@ defmodule Cyfr.Test.ScriptedBackends do
   high-water mark, and its body read strictly (`read_control/1`); a session
   message's header is verified under the key of the owner it names, its
   lifetime and owner version against what runs, and its body read strictly
-  (`read_session/1`). Every answer carries `x-cyfr-boot`, and every refusal
+  (`read_session/1`). An owner holds a lease, set by its `sync` and
+  extended by each `renew`; once it has run out the owner is lapsed, as
+  Locus lapses one, and gone once its sessions have drained, which a
+  scripted session does at once: the session message that finds the
+  lease run out is refused `lapsed`, every later one `unknown_owner`, a
+  renewal answers it unknown and a release or a status names it no more,
+  until a sync admits it as a new owner. Every answer carries `x-cyfr-boot`, and every refusal
   is `encode_refusal/1` at its code's status. Each accepted control message
   is reported to the test as `{:control, type, message, fields}`, the
   message as its JSON; each session message as `{:session, type, message,
@@ -69,6 +75,7 @@ defmodule Cyfr.Test.ScriptedBackends do
              boot: "bb_first",
              hwm: {0, 0},
              owners: %{},
+             leases: %{},
              programs: %{},
              sessions: %{},
              keys: %{},
@@ -163,7 +170,15 @@ defmodule Cyfr.Test.ScriptedBackends do
     do:
       Agent.update(
         agent,
-        &%{&1 | boot: boot, hwm: {0, 0}, owners: %{}, sessions: %{}, keys: %{}}
+        &%{
+          &1
+          | boot: boot,
+            hwm: {0, 0},
+            owners: %{},
+            leases: %{},
+            sessions: %{},
+            keys: %{}
+        }
       )
 
   @doc """
@@ -317,6 +332,7 @@ defmodule Cyfr.Test.ScriptedBackends do
 
       true ->
         Agent.update(agent, &%{&1 | hwm: {fields.generation, fields.seq}})
+        lapse_expired(agent)
         send(st.test, {:control, message["type"], message, fields})
         held(agent, message["type"])
 
@@ -378,6 +394,7 @@ defmodule Cyfr.Test.ScriptedBackends do
     Agent.update(agent, fn st ->
       st
       |> put_in([:owners, {athanor, server}], {fields.generation, e})
+      |> put_in([:leases, {athanor, server}], now() + message["lease_ms"])
       |> put_in([:programs, {athanor, server}], message["programs"])
     end)
 
@@ -385,16 +402,30 @@ defmodule Cyfr.Test.ScriptedBackends do
     control_answer(conn, st, %{"status" => "running", "programs" => programs})
   end
 
-  defp handle(conn, agent, %{"type" => "renew", "owners" => owners}, fields) do
-    st = Agent.get(agent, & &1)
+  # An owner is renewed, as Locus renews one, only while it runs at exactly
+  # the message's `(g, e)` and its lease has not run out; a renewal extends
+  # the lease from now by the message's `lease_ms`. Any other is unknown.
+  defp handle(conn, agent, %{"type" => "renew", "owners" => owners} = message, fields) do
+    now = now()
 
     {renewed, unknown} =
-      Enum.split_with(owners, fn %{"athanor" => a, "server" => s, "e" => e} ->
-        Map.get(st.owners, {a, s}) == {fields.generation, e}
+      Agent.get_and_update(agent, fn st ->
+        {renewed, unknown} =
+          Enum.split_with(owners, fn %{"athanor" => a, "server" => s, "e" => e} ->
+            Map.get(st.owners, {a, s}) == {fields.generation, e} and
+              Map.get(st.leases, {a, s}, now) > now
+          end)
+
+        leases =
+          Enum.reduce(renewed, st.leases, fn %{"athanor" => a, "server" => s}, leases ->
+            Map.put(leases, {a, s}, now + message["lease_ms"])
+          end)
+
+        {{renewed, unknown}, %{st | leases: leases}}
       end)
 
     renewed = for owner <- renewed, do: Map.put(owner, "state", "running")
-    control_answer(conn, st, %{"renewed" => renewed, "unknown" => unknown})
+    control_answer(conn, Agent.get(agent, & &1), %{"renewed" => renewed, "unknown" => unknown})
   end
 
   defp handle(conn, agent, %{"type" => "release", "owners" => owners}, fields) do
@@ -490,10 +521,45 @@ defmodule Cyfr.Test.ScriptedBackends do
     control_answer(conn, st, %{"homes" => st.homes |> MapSet.to_list() |> Enum.sort()})
   end
 
+  # An owner whose lease ran out is lapsed, as Locus lapses one
+  # (`Locus.Backends.Owners`): its sessions end and it leaves the owners.
+  # Locus answers `lapsed` while a lapsed owner drains and `unknown_owner`
+  # once it is gone; a scripted session ends at once, so the drain does
+  # too, and only the message that finds the lease run out (Locus's own
+  # admission lapses an owner there) is told `lapsed`. Answers the owners
+  # this call lapsed. Done before each message is answered, so a renewal
+  # answers such an owner unknown and a release or a status names it no
+  # more.
+  defp lapse_expired(agent) do
+    now = now()
+
+    Agent.get_and_update(agent, fn st ->
+      case for {key, until} <- st.leases, until <= now, Map.has_key?(st.owners, key), do: key do
+        [] ->
+          {[], st}
+
+        expired ->
+          sessions =
+            Map.new(st.sessions, fn {id, s} ->
+              if s.owner in expired, do: {id, %{s | running: false}}, else: {id, s}
+            end)
+
+          {expired,
+           %{
+             st
+             | owners: Map.drop(st.owners, expired),
+               leases: Map.drop(st.leases, expired),
+               sessions: sessions
+           }}
+      end
+    end)
+  end
+
   # ————— sessions —————
 
   defp session(conn, agent) do
     {:ok, body, conn} = read_body(conn)
+    lapsed = lapse_expired(agent)
     st = Agent.get(agent, & &1)
     header = get_req_header(conn, LocusBackends.auth_header())
     now = System.os_time(:millisecond)
@@ -501,21 +567,27 @@ defmodule Cyfr.Test.ScriptedBackends do
     with [header] <- header,
          {:ok, fields} <- LocusBackends.verify(:invoke, st.root, header, body, now) do
       case LocusBackends.read_session(body) do
-        {:ok, message} -> session_admitted(conn, agent, st, fields, message, Jason.decode!(body))
-        {:error, error} -> refuse(conn, st, LocusBackends.refusal_for(error))
+        {:ok, message} ->
+          session_admitted(conn, agent, st, fields, message, Jason.decode!(body), lapsed)
+
+        {:error, error} ->
+          refuse(conn, st, LocusBackends.refusal_for(error))
       end
     else
       _unauthenticated -> refuse(conn, st, :unauthorized)
     end
   end
 
-  defp session_admitted(conn, agent, st, fields, message, wire) do
+  defp session_admitted(conn, agent, st, fields, message, wire, lapsed) do
     running = Map.get(st.owners, {fields.athanor, fields.server})
     version = {fields.generation, fields.epoch}
 
     cond do
       fields.boot != st.boot ->
         refuse(conn, st, :stale_boot)
+
+      running == nil and {fields.athanor, fields.server} in lapsed ->
+        refuse(conn, st, :lapsed)
 
       running == nil ->
         refuse(conn, st, :unknown_owner)

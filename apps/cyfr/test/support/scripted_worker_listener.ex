@@ -15,17 +15,32 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   CYFR derives for it: `Opus.Keys.locus_runtime_key/1`); `url/1` is the
   base URL a `t:Prima.WorkerAPI.endpoint/0` names.
 
-  A request is answered as the runtime's listener answers it: the `x-cyfr-auth`
-  header is verified with the service's dispatch key before the body is
-  read (`Prima.WorkerAuth.verify_request_header/3`, `401` with the
-  refusal), the body is read up to `Prima.HostAPI.max_body_bytes/0` (`413`
-  past it) and checked against the hash the header named (`400`
-  `bad_mac`), a body without the wire's version, or at another, is `400`
-  `unknown_version` before its `op` is read, and a body whose `op` is not
-  the route's callback, or whose `args` are not the callback's, is `400`
-  `malformed`. What the module
-  answers crosses as `Prima.WorkerWire.ok/1` or `error/2` with status
-  `200`; a route that is no worker route is `404`.
+  A request is answered as the runtime's listener answers it
+  (`Locus.Runtime.WorkerListener`), checked before its body is read in
+  the order `Prima.WorkerAuth` documents: the route (`404`); the
+  service's dispatch key, without which it is addressed by nobody
+  (`503` `unavailable`); exactly one `x-cyfr-auth` header, then the
+  header itself under that key (`Prima.WorkerAuth.verify_request_header/3`),
+  a header naming another service (`malformed`) and a nonce presented
+  before within the header window (`replayed`), each `401`. A refusal made
+  before the body is read is answered on a closed connection. The body is
+  then read up to `Prima.HostAPI.max_body_bytes/0` (`413` `malformed` past
+  it, on a closed connection, after one more bounded read drops what the
+  client still sends), checked against the hash the header named (`401`
+  `bad_mac`), and read as the route's callback: a body without the wire's
+  version, or at another, is `400` `unknown_version` before its `op` is
+  read, and a body whose `op` is not the route's callback, or whose `args`
+  are not the callback's, is `400` `malformed`. What the module answers
+  crosses as the runtime's does: `200` with `Prima.WorkerWire.ok/1` for a
+  start or a kill done, or the status as `Prima.WorkerAPI.status_to_wire/1`
+  writes it; `200` with the error for a start refused `malformed` and a
+  kill that finds nothing; `503` `unavailable` (with its `message`, when
+  the refusal names one) for a start no runner can take, or a module that
+  exits; `400` `malformed` for any other refusal. A route that is no
+  worker route is `404`.
+
+  The nonces a listener has seen are kept in a table owned by the process
+  that started it, which a listener's whole life is (`start_link/1`).
   """
 
   @behaviour Plug
@@ -50,9 +65,10 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   def start_link(opts) do
     worker = Keyword.fetch!(opts, :worker)
     service = Keyword.fetch!(opts, :service)
+    nonces = :ets.new(__MODULE__, [:set, :public, write_concurrency: true])
 
     Bandit.start_link(
-      plug: {__MODULE__, worker: worker, service: service},
+      plug: {__MODULE__, worker: worker, service: service, nonces: nonces},
       scheme: :http,
       ip: {127, 0, 0, 1},
       port: 0,
@@ -73,97 +89,177 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
     do: %{id: service, url: url(pid), components: components}
 
   @impl Plug
-  def init(opts), do: Map.new(Keyword.take(opts, [:worker, :service]))
+  def init(opts), do: Map.new(Keyword.take(opts, [:worker, :service, :nonces]))
 
   @impl Plug
-  def call(%Plug.Conn{method: "POST"} = conn, opts) do
+  def call(%Plug.Conn{method: "POST"} = conn, opts),
+    do: serve(conn, opts, System.system_time(:millisecond))
+
+  def call(conn, _opts), do: refuse(closing(conn), 404, :not_found)
+
+  defp serve(conn, opts, now) do
+    with {:ok, callback} <- route(conn),
+         {:ok, key} <- dispatch_key(opts.service),
+         {:ok, header} <- header(conn),
+         {:ok, request, body_hash} <- verify_header(key, header, now),
+         :ok <- addressed(request, opts.service),
+         :ok <- fresh(opts.nonces, request, now),
+         {:ok, body, read} <- read(conn),
+         {:ok, args} <- read_request(read, body_hash, body, callback) do
+      answer(read, run(opts.worker, callback, args), callback)
+    else
+      # A refusal after the body was read answers on the conn that read it.
+      {:refused, read, status, reason} -> refuse(read, status, reason)
+      # One made before it ends the connection: the body is still on it.
+      {:refused, status, reason} -> refuse(closing(conn), status, reason)
+      {:over_bound, read} -> read |> refuse(413, :malformed) |> drop()
+    end
+  end
+
+  defp closing(conn), do: put_resp_header(conn, "connection", "close")
+
+  defp route(conn) do
     case WorkerWire.worker_callback(conn.request_path) do
-      {:ok, callback} -> serve(conn, callback, opts)
-      :error -> answer(conn, 404, WorkerWire.error(:not_found))
-    end
-  end
-
-  def call(conn, _opts), do: answer(conn, 404, WorkerWire.error(:not_found))
-
-  # The header is verified before the body is read, so an unauthenticated
-  # caller is refused without the listener reading what it sent.
-  defp serve(conn, callback, opts) do
-    now = System.system_time(:millisecond)
-
-    case WorkerAuth.verify_request_header(dispatch_key(opts.service), header(conn), now) do
-      {:ok, _request, body_hash} -> serve_body(conn, callback, body_hash, opts)
-      {:error, refusal} -> answer(conn, 401, WorkerWire.error(refusal))
-    end
-  end
-
-  defp serve_body(conn, callback, body_hash, opts) do
-    max = HostAPI.max_body_bytes()
-
-    case read_body(conn, length: max, read_length: max) do
-      {:ok, body, conn} ->
-        with :ok <- WorkerAuth.verify_body(body_hash, body),
-             {:ok, ^callback, args} <- decode(body),
-             %{} = answer <- run(opts.worker, callback, args) do
-          answer(conn, 200, answer)
-        else
-          {:error, refusal} -> answer(conn, 400, WorkerWire.error(refusal))
-          {:ok, _other_callback, _args} -> answer(conn, 400, WorkerWire.error(:malformed))
-          :malformed -> answer(conn, 400, WorkerWire.error(:malformed))
-        end
-
-      {:more, _partial, conn} ->
-        answer(conn, 413, WorkerWire.error(:malformed))
-
-      {:error, _reason} ->
-        answer(conn, 400, WorkerWire.error(:malformed))
+      {:ok, callback} -> {:ok, callback}
+      :error -> {:refused, 404, :not_found}
     end
   end
 
   defp header(conn) do
     case get_req_header(conn, WorkerWire.auth_header()) do
-      [header] -> header
-      _none_or_many -> nil
+      [header] -> {:ok, header}
+      _none_or_many -> {:refused, 401, :malformed}
     end
   end
 
-  defp decode(body) do
-    case Jason.decode(body) do
-      {:ok, decoded} -> WorkerWire.read_request_body(WorkerAPI, decoded)
-      {:error, _not_json} -> {:error, :malformed}
+  defp verify_header(key, header, now) do
+    case WorkerAuth.verify_request_header(key, header, now) do
+      {:ok, request, body_hash} -> {:ok, request, body_hash}
+      {:error, reason} -> {:refused, 401, reason}
     end
   end
 
-  defp answer(conn, status, %{} = body) do
+  # The MAC verified under this service's key, so the header is CYFR's;
+  # one naming another service was not made for this one.
+  defp addressed(%{service: service}, service), do: :ok
+  defp addressed(_request, _service), do: {:refused, 401, :malformed}
+
+  # A nonce is refused for two header windows from when it is first seen,
+  # which is as long as the header can verify; a row past that is swept.
+  defp fresh(nonces, %{nonce: nonce}, now) do
+    :ets.select_delete(nonces, [{{:_, :"$1"}, [{:<, :"$1", now}], [true]}])
+
+    if :ets.insert_new(nonces, {nonce, now + 2 * WorkerAuth.window_ms()}),
+      do: :ok,
+      else: {:refused, 401, :replayed}
+  end
+
+  defp read(conn) do
+    max = HostAPI.max_body_bytes()
+
+    case read_body(conn, length: max, read_length: max) do
+      {:ok, body, conn} -> {:ok, body, conn}
+      {:more, _partial, conn} -> {:over_bound, closing(conn)}
+      {:error, _reason} -> {:refused, 400, :malformed}
+    end
+  end
+
+  # What the client still sends of a body past the bound is read once more
+  # and dropped, so a client still writing it reads the refusal.
+  defp drop(conn) do
+    max = HostAPI.max_body_bytes()
+
+    case read_body(conn, length: max, read_length: max) do
+      {_read, _bytes, conn} -> conn
+      {:error, _reason} -> conn
+    end
+  end
+
+  defp read_request(read, body_hash, body, callback) do
+    with :ok <- verify_body(body_hash, body),
+         {:ok, args} <- decode(body, callback) do
+      {:ok, args}
+    else
+      {:refused, status, reason} -> {:refused, read, status, reason}
+    end
+  end
+
+  defp verify_body(body_hash, body) do
+    case WorkerAuth.verify_body(body_hash, body) do
+      :ok -> :ok
+      {:error, reason} -> {:refused, 401, reason}
+    end
+  end
+
+  # The body's version is read before its callback.
+  defp decode(body, callback) do
+    with {:ok, decoded} <- Jason.decode(body),
+         {:ok, ^callback, args} <- WorkerWire.read_request_body(WorkerAPI, decoded) do
+      {:ok, args}
+    else
+      {:error, :unknown_version} -> {:refused, 400, :unknown_version}
+      _ -> {:refused, 400, :malformed}
+    end
+  end
+
+  defp answer(conn, {:ok, value}, _callback), do: send_answer(conn, 200, WorkerWire.ok(value))
+
+  defp answer(conn, {:error, :malformed}, :start),
+    do: send_answer(conn, 200, WorkerWire.error(:malformed))
+
+  defp answer(conn, {:error, :not_found}, :kill),
+    do: send_answer(conn, 200, WorkerWire.error(:not_found))
+
+  defp answer(conn, {:error, :unavailable}, _callback), do: refuse(conn, 503, :unavailable)
+
+  defp answer(conn, {:error, {:unavailable, message}}, _callback),
+    do: send_answer(conn, 503, WorkerWire.error(:unavailable, %{"message" => message}))
+
+  defp answer(conn, {:error, _malformed}, _callback), do: refuse(conn, 400, :malformed)
+
+  # A module that exits is a worker service that could not answer.
+  defp run(worker, :start, %{"assignment" => token, "input" => input, "sealed_keys" => sealed})
+       when is_binary(token) and is_binary(input) and is_binary(sealed) do
+    case worker.start(token, input, sealed) do
+      :ok -> {:ok, true}
+      {:error, refusal} -> {:error, refusal}
+    end
+  catch
+    :exit, _reason -> {:error, :unavailable}
+  end
+
+  defp run(worker, :kill, %{"execution_id" => execution_id})
+       when is_binary(execution_id) and execution_id != "" do
+    case worker.kill(execution_id) do
+      :ok -> {:ok, true}
+      {:error, refusal} -> {:error, refusal}
+    end
+  catch
+    :exit, _reason -> {:error, :unavailable}
+  end
+
+  defp run(worker, :status, args) when map_size(args) == 0 do
+    {:ok, status} = worker.status()
+    {:ok, WorkerAPI.status_to_wire(status)}
+  catch
+    :exit, _reason -> {:error, :unavailable}
+  end
+
+  # Args that are not the callback's are no request of it.
+  defp run(_worker, _callback, _args), do: {:error, :malformed}
+
+  defp refuse(conn, status, reason), do: send_answer(conn, status, WorkerWire.error(reason))
+
+  defp send_answer(conn, status, %{} = body) do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(body))
   end
 
-  defp run(worker, :start, %{"assignment" => token, "input" => input, "sealed_keys" => sealed})
-       when is_binary(token) and is_binary(input) and is_binary(sealed) do
-    case worker.start(token, input, sealed) do
-      :ok -> WorkerWire.ok(true)
-      {:error, refusal} -> WorkerWire.error(refusal)
-    end
-  end
-
-  defp run(worker, :kill, %{"execution_id" => execution_id}) when is_binary(execution_id) do
-    case worker.kill(execution_id) do
-      :ok -> WorkerWire.ok(true)
-      {:error, refusal} -> WorkerWire.error(refusal)
-    end
-  end
-
-  defp run(worker, :status, args) when map_size(args) == 0 do
-    {:ok, status} = worker.status()
-    WorkerWire.ok(status)
-  end
-
-  # Args that are not the callback's are no request of it.
-  defp run(_worker, _callback, _args), do: :malformed
-
   defp dispatch_key(service) do
-    {:ok, worker_key} = Keys.locus_runtime_key(service)
-    WorkerAuth.dispatch_key(worker_key)
+    case Keys.locus_runtime_key(service) do
+      {:ok, worker_key} -> {:ok, WorkerAuth.dispatch_key(worker_key)}
+      _no_key -> {:refused, 503, :unavailable}
+    end
   end
 end

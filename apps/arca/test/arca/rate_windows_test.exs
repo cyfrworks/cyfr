@@ -15,10 +15,10 @@ defmodule Arca.RateWindowsTest do
   suite happened to run in rather than anything about this code.
   """
 
-  # Sixteen members race one bucket, which on SQLite is sixteen claims
-  # queueing on one connection for as long as it takes; a neighbouring
-  # case's write would be told the database is busy, so this one runs
-  # alone.
+  # Sixteen members race one bucket on connections of their own, which on
+  # SQLite is sixteen claims queueing at the write lock for as long as it
+  # takes; a neighbouring case's write would be told the database is busy,
+  # so this one runs alone.
   use ExUnit.Case, async: false
 
   import Ecto.Query
@@ -38,6 +38,8 @@ defmodule Arca.RateWindowsTest do
      actor: Arca.Test.Actor.in_athanor("ath_rw_#{System.unique_integer([:positive])}"),
      bucket: "bucket-#{System.unique_integer([:positive])}"}
   end
+
+  defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
 
   defp row(%Prima.Actor{athanor_id: athanor_id}, bucket) do
     Arca.Repo.one(
@@ -235,13 +237,18 @@ defmodule Arca.RateWindowsTest do
   describe "two members, one bucket" do
     # Nothing in a boot holds an allowance, so sixteen processes
     # claiming one bucket are sixteen members claiming it: the row is the
-    # only thing between them, and it is what this asserts.
+    # only thing between them, and it is what this asserts. Each claims on
+    # a connection of its own, outside the sandbox, as members do, and the
+    # row is committed and removed when the case ends.
     test "sixteen claiming at once admit the cap between them and no more", %{
       actor: actor,
       bucket: bucket
     } do
       cap = 8
-      results = race(16, fn _i -> RateWindows.claim(actor, bucket, cap, 60_000) end)
+      on_exit(fn -> unboxed(fn -> RateWindows.clear(actor, bucket) end) end)
+
+      results =
+        race(16, fn _i -> unboxed(fn -> RateWindows.claim(actor, bucket, cap, 60_000) end) end)
 
       admitted = Enum.count(results, &match?({:ok, _}, &1))
       refused = Enum.count(results, &match?({:refused, _}, &1))
@@ -255,7 +262,7 @@ defmodule Arca.RateWindowsTest do
       # two claims incremented from the same count, and a claim the row
       # would not settle refused rather than admitting on a count it never
       # wrote.
-      assert %RateWindow{count: ^admitted} = row(actor, bucket)
+      assert %RateWindow{count: ^admitted} = unboxed(fn -> row(actor, bucket) end)
     end
 
     test "a claimer that dies leaves its claim counted, because the row holds it", %{

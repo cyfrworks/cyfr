@@ -63,8 +63,10 @@ defmodule Cyfr.Test.ScriptedWorker do
   `Opus.Dispatch` routes every other reference to the worker
   services configured after it, and stopping it removes that entry. A test
   that changes `:locus_runtime_workers` itself restores it on exit.
-  Started for a reference the routing did not name, it refuses the
-  assignment `:malformed`.
+  Started for a reference the routing did not name, or for an execution
+  a runner of this boot still holds, it refuses the assignment
+  `:malformed`, as the runtime's worker service refuses every start it
+  cannot read as one new attempt for itself.
 
   A script is a list consumed in order across runs. A run takes items
   until it reaches an answer:
@@ -358,6 +360,9 @@ defmodule Cyfr.Test.ScriptedWorker do
     with {:ok, assignment} <- Assignment.read(token),
          true <- scripted?(state, assignment.component.ref),
          true <- assignment.service == @service and assignment.boot == state.boot,
+         # A second start of an execution a runner here still holds is
+         # refused, as the runtime's worker service refuses it.
+         false <- holds?(state, assignment.execution_id),
          true <- Prima.Digest.sha256(input) == assignment.input_digest,
          {:ok, worker_key} <- Keys.locus_runtime_key(@service),
          {:ok, %{attempt: attempt} = keys} <-
@@ -572,6 +577,9 @@ defmodule Cyfr.Test.ScriptedWorker do
   catch
     :exit, _gone -> :ok
   end
+
+  defp holds?(state, execution_id),
+    do: Enum.any?(state.runners, fn {_pid, runner} -> runner.execution_id == execution_id end)
 
   defp scripted?(state, reference) do
     case Prima.ComponentRef.to_name_ref(reference) do

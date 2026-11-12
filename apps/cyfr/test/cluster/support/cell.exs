@@ -563,6 +563,11 @@ defmodule Cyfr.Cluster.Cell do
         {:storage_adapter, Arca.Adapters.S3},
         {:s3, Store.s3_config()},
         {:control_plane_claim_enabled, true},
+        # The seed a shipped member is installed with: the AQUA tree and
+        # the shipped catalysts a person's turn reaches
+        # (`Cyfr.Cluster.Person.seed!/0`), where the suite's own seed holds
+        # the AQUA tree alone.
+        {:seed_path, Cyfr.Cluster.Person.seed!()},
         # The control plane writes on its own connection, and writers take
         # turns at the write lock where the store has one, as a
         # deployment's do; `config/test.exs` turns both off for the sandbox.
@@ -582,6 +587,14 @@ defmodule Cyfr.Cluster.Cell do
         # member boots only through its own checked restore step.
         {:provisioning_boot_enabled, true},
         {:thread_recovery, true},
+        # The crew's delivery consumer and the status watch, which the
+        # single-node suite drains or starts by hand, run on a timer and on
+        # wake-ups as a shipped member runs them.
+        {:crew_delivery_enabled, true},
+        {:status_watch_enabled, true},
+        # The projection reconciler at its shipped settings: none are
+        # configured anywhere but `config/test.exs`, which turns it off.
+        {Compendium.ProjectionReconciler, []},
         {:execution_sweeper_enabled, true},
         {:worker_watch_enabled, true},
         {:execution_archive_watch_enabled, true},
@@ -620,7 +633,14 @@ defmodule Cyfr.Cluster.Cell do
       # per-request convenience the single-node suite asserts around). A
       # memo that is never warm cannot show what a cell-wide invalidation
       # is for, so a member holds one for its production-shaped TTL.
-      sanctum: [{:caller_memo_ttl_ms, 60_000}],
+      #
+      # A consent proof is the shipped durable one (`Sanctum.Consent.Proof.DB`,
+      # the default `config/test.exs` replaces with the ETS store), so a
+      # proof previewed on one member commits on another.
+      sanctum: [
+        {:caller_memo_ttl_ms, 60_000},
+        {:consent_proof_store, Sanctum.Consent.Proof.DB}
+      ],
       logger: [{:level, :warning}]
     ]
   end

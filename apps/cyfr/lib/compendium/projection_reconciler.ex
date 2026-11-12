@@ -288,8 +288,8 @@ defmodule Compendium.ProjectionReconciler do
   defp settle_after_ms(opts),
     do: Keyword.get_lazy(opts, :settle_after_ms, fn -> config()[:settle_after_ms] end)
 
-  # `config/config.exs` holds the three settings; `config/test.exs` turns
-  # the process off.
+  # The defaults above are the shipped settings: only `config/test.exs`
+  # names this module, to turn the process off.
   defp config, do: Keyword.merge(@defaults, Application.get_env(:cyfr, __MODULE__, []))
 
   # ---------------------------------------------------------------------------
