@@ -88,7 +88,6 @@ defmodule Prima.EffectsTest do
     {Prima.UUID7, :generate_id},
     {Prima.UUID7, :request_id},
     {Prima.UUID7, :execution_id},
-    {Prima.UUID7, :build_id},
     {Prima.Hex, :short}
   ]
 
