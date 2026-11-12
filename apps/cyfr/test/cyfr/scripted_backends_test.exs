@@ -4,10 +4,11 @@
 defmodule Cyfr.Test.ScriptedBackendsTest do
   @moduledoc """
   The scripted backends service lapses an owner as Locus does
-  (`Locus.Backends.Owners`): once the lease its sync set has run out, a
-  renewal answers it unknown, a release and a status name it no more, and
-  every session message naming it is refused `lapsed` before anything is
-  done for it, until a sync admits it again. A client that went on using
+  (`Locus.Backends.Owners`): once the lease its sync set has run out, the
+  session message that finds it is refused `lapsed` and every later one
+  `unknown_owner`, since a scripted owner drains at once; a renewal
+  answers it unknown and a release and a status name it no more, until a
+  sync admits it again. A client that went on using
   an owner whose lease it let run out is refused here as the service
   refuses it.
   """
@@ -29,7 +30,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
     %{fake: fake, root: root}
   end
 
-  test "an owner whose lease ran out is refused lapsed on every session message, and named by no control",
+  test "an owner a renewal found lapsed is gone: every session message is refused unknown_owner, and no control names it",
        %{fake: fake, root: root} do
     assert %{status: 200} = control(fake, root, 1, sync(root))
     assert %{status: 200, body: %{"status" => "running"}} = open(fake, root, "before")
@@ -44,8 +45,8 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
           %{type: :recv, owner: owner(), e: 1, session: @session, after: 0, max_wait_ms: 0},
           %{type: :close, owner: owner(), e: 1, session: @session}
         ] do
-      assert %{status: 409, body: %{"error" => "lapsed"}} = session(fake, root, message),
-             "#{message.type} was answered for a lapsed owner"
+      assert %{status: 409, body: %{"error" => "unknown_owner"}} = session(fake, root, message),
+             "#{message.type} was answered for a gone owner"
     end
 
     assert %{status: 200, body: %{"released" => []}} =
@@ -55,13 +56,33 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
              control(fake, root, 4, %{type: :status, owners: [owner()]})
   end
 
-  test "a sync admits a lapsed owner's key again", %{fake: fake, root: root} do
+  # Locus's own admission lapses an owner whose lease it finds run out,
+  # and answers that message `lapsed`; once the owner has drained it is
+  # gone, and a later message is answered `unknown_owner`.
+  test "the session message that finds the lease run out is refused lapsed, the next unknown_owner, and a sync admits the owner again",
+       %{fake: fake, root: root} do
     assert %{status: 200} = control(fake, root, 1, sync(root))
     lapse!(fake)
     assert %{status: 409, body: %{"error" => "lapsed"}} = open(fake, root, "lapsed")
+    assert %{status: 409, body: %{"error" => "unknown_owner"}} = open(fake, root, "gone")
 
     assert %{status: 200} = control(fake, root, 2, sync(root))
     assert %{status: 200, body: %{"status" => "running"}} = open(fake, root, "again")
+  end
+
+  test "a gone owner confirms a late close as unknown, rather than draining forever", %{
+    fake: fake,
+    root: root
+  } do
+    assert %{status: 200} = control(fake, root, 1, sync(root))
+    assert %{status: 200, body: %{"session" => id}} = open(fake, root, "late-close")
+    lapse!(fake)
+
+    assert %{status: 200, body: %{"owners" => []}} =
+             control(fake, root, 2, %{type: :status, owners: [owner()]})
+
+    assert %{status: 409, body: %{"error" => "unknown_owner"}} =
+             session(fake, root, %{type: :close, owner: owner(), e: 1, session: id})
   end
 
   defp owner, do: Map.take(@owner, [:athanor, :server])

@@ -327,6 +327,7 @@ defmodule Locus.Backends.OwnersTest do
       assert {:error, :lapsed} = Owners.admit(owners, invoke("srv", {1, 1}))
 
       wait_until(fn -> held(owners) == %{} end, 10_000)
+      assert {:error, :unknown_owner} = Owners.admit(owners, invoke("srv", {1, 1}))
       assert {:ok, _} = sync(owners, "srv", {1, 1}, a)
     end
 

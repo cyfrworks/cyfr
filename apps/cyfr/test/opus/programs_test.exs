@@ -2057,6 +2057,55 @@ defmodule Opus.ProgramsTest do
       assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", sibling, ["still here"])
     end
 
+    # A close the box owes for an open whose holder died settles on the
+    # service's `unknown_owner` once the owner it named is gone, where a
+    # `lapsed` keeps it owed for the drain.
+    test "a late pipe close settles after its backend owner expires", %{
+      fake: fake,
+      row: row,
+      entry: entry
+    } do
+      controller = start_controller(fake, lease_ms: 500)
+      assert {:ok, %{session: _sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+      Scripted.hold(fake, "opened")
+      opening = Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1") end)
+      assert_receive {:held, "opened", answer}, 2_000
+      key = {:pipe, row.athanor_id, row.id, row.epoch, entry, "pipe-a"}
+      [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
+      Process.exit(holder, :kill)
+
+      eventually(
+        fn ->
+          Agent.get(fake.agent, fn st ->
+            Enum.any?(st.leases, fn {_key, until} ->
+              until <= System.monotonic_time(:millisecond)
+            end)
+          end)
+        end,
+        "the backend owner's lease to expire"
+      )
+
+      send(answer, :go)
+      assert {:error, _} = Task.await(opening, 5_000)
+
+      eventually(
+        fn ->
+          state = :sys.get_state(controller)
+
+          state.pipe_opens == %{} and
+            Enum.all?(state.closing, fn {_id, record} -> not record.inflight end)
+        end,
+        "the late open and its first close to settle"
+      )
+
+      for _ <- 1..3, do: tick(controller)
+
+      eventually(
+        fn -> :sys.get_state(controller).closing == %{} end,
+        "the gone owner to confirm the late close"
+      )
+    end
+
     test "a close refused once is owed by the box past its holder's release, and lands on the sweep",
          %{ctx: ctx, fake: fake, row: row, entry: entry} do
       controller = start_controller(fake)
