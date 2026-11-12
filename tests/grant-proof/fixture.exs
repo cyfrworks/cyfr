@@ -55,11 +55,19 @@
 #       and bound to DESTINATION_JSON, sealed and stored as
 #       `Sanctum.Vault.create/2` stores one (`Sanctum.Vault.Payload`, the
 #       vault entry's AAD, `Sanctum.Cipher`, `Arca.VaultStorage.put/3`), and
-#       shared with everyone with no cap (`Arca.Shares.create/3`). Making a
-#       key and a share is the share proof's (`tests/share-proof/`), under
-#       the confirmations it proves with a passkey; here it is the
-#       recipient's grant that is proven. The key is random, made here, and
-#       never leaves this function. Answers the entry's and the share's ids.
+#       shared with everyone with no cap by the store (`Arca.Shares.create/3`)
+#       under a `verify:` that stands in for the owner's confirmation. The
+#       product's door, `share/create` (`Sanctum.Shares.create/2`), asks
+#       the confirmation `credential_sharing` and spends it in that
+#       `verify:`; the owner here cannot prove one: a person the release
+#       fixture's open admission makes pairs no device and records no
+#       passkey, so no paired client stands for her account's key, and
+#       `Arca.PendingConfirmations.confirm/3` refuses her proof `:revoked`.
+#       Making a key and a share through that door, under the confirmations
+#       a passkey proves, is the share proof's (`tests/share-proof/`); here
+#       it is the recipient's grant that is proven. The key is random, made
+#       here, and never leaves this function. Answers the entry's and the
+#       share's ids.
 #
 #   requested DESTINATION_JSON
 #       What the owner's request implies the entry stores: the
@@ -313,7 +321,13 @@ fn args ->
           })
         )
 
-      {:ok, share} = Arca.Shares.create(actor, %{entry_id: entry.id, audience: "everyone"})
+      # The owner's confirmation, which she cannot prove here (the header):
+      # a check that admits, standing in for `Sanctum.Shares.create/2`'s.
+      {:ok, share} =
+        Arca.Shares.create(actor, %{entry_id: entry.id, audience: "everyone"},
+          verify: fn -> :ok end
+        )
+
       answer.(%{entry_id: entry.id, share_id: share.id})
 
     ["requested", destination] ->

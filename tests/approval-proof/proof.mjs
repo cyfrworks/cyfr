@@ -1331,7 +1331,7 @@ async function main() {
     if (!row("named_prompt",
       same(announced, { resolution: "connection_not_granted", announced: true }) &&
         // A need's entries are offered in the order the vault lists them,
-        // by name (`Arca.VaultStorage.list/2`).
+        // by name (`Arca.VaultStorage.list/1`).
         same(openedOn.account, {
           fixed: true, picks: [{ name: HOME.name, pressed: false }, { name: WORK.name, pressed: false }],
         }) &&
