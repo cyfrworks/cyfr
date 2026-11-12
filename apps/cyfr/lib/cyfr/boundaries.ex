@@ -2574,7 +2574,6 @@ defmodule Cyfr.Boundaries do
     # a release never does.
     bearer_provider: :seam,
     tenancy_resolver_override: :seam,
-    tool_providers_lenient: :seam,
     thread_recovery: :seam,
     provisioning_inline: :seam,
     record_sink_inline: :seam,

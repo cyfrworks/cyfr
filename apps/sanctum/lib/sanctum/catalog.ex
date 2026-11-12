@@ -91,11 +91,8 @@ defmodule Sanctum.Catalog do
 
   A provider that cannot load, or does not export `tools/0`, refuses the
   boot: every consent shape is digested against the table, and a partial
-  table would read as the whole. Under test only, a run without the
-  sibling applications (one application's tests) says so with
-  `:tool_providers_lenient`, and each such provider is skipped with its
-  reason logged; a build for any other environment compiles neither that
-  setting's read nor `with_providers/2`. An action the
+  table would read as the whole. A build for any environment but test
+  compiles no `with_providers/2`. An action the
   gates cannot classify, an in-chain action that does not say what its
   answers carry, a handler input the gate cannot honour, and a resource
   read the gate cannot name refuse the boot the same way.
@@ -107,10 +104,9 @@ defmodule Sanctum.Catalog do
     |> install!()
   end
 
-  # The test seams: a planted provider, a lenient roster and a read hook.
-  # All three are compiled into the test build alone, so no setting of a
-  # release can narrow its table, skip a provider it cannot load or run
-  # anything on a read.
+  # The test seams: a planted provider and a read hook. Both are compiled
+  # into the test build alone, so no setting of a release can narrow its
+  # table or run anything on a read.
   if Mix.env() == :test do
     # The resource index's term, which `Sanctum.Resources` writes only
     # through a load: a block run on an unloaded table erases it by its key.
@@ -210,42 +206,16 @@ defmodule Sanctum.Catalog do
     end
 
     defp held_hook(_name), do: nil
-
-    # The roster without the configured providers that cannot load: a
-    # refusal, or — leniently — each skipped with its reason.
-    @spec without_unloadable!([module()], [module()]) :: [module()]
-    defp without_unloadable!(configured, missing) do
-      unless Application.get_env(:sanctum, :tool_providers_lenient, false),
-        do: refuse_unloadable!(missing)
-
-      for module <- missing do
-        Logger.warning(
-          "[Sanctum.Catalog] tool provider #{inspect(module)} skipped (lenient): " <>
-            unloadable_reason(module)
-        )
-      end
-
-      configured -- missing
-    end
-
-    defp unloadable_reason(module) do
-      if Code.ensure_loaded?(module),
-        do: "it does not export tools/0",
-        else: "the module is not available"
-    end
   else
-    @spec without_unloadable!([module()], [module()]) :: no_return()
-    defp without_unloadable!(_configured, missing), do: refuse_unloadable!(missing)
-
     defp read_hook, do: :ok
   end
 
   # The configured providers this boot can load. One that cannot refuses
-  # the boot, the test build's lenient skip aside.
+  # the boot.
   defp loadable_roster!(configured) do
     case Enum.reject(configured, &loadable?/1) do
       [] -> configured
-      missing -> without_unloadable!(configured, missing)
+      missing -> refuse_unloadable!(missing)
     end
   end
 
@@ -1069,8 +1039,8 @@ defmodule Sanctum.Catalog do
 
   @doc """
   Every provider named in config, loaded or not: the boot refuses one that
-  cannot load unless it is lenient, and `available_providers/0` is the set
-  it then loads, which the services and their status read.
+  cannot load, and `available_providers/0` is the set it loads, which the
+  services and their status read.
 
   The single reader of `:sanctum, :tool_providers` — config always sets the
   key, so the default is an empty list, never a hidden second roster.
@@ -1083,8 +1053,7 @@ defmodule Sanctum.Catalog do
 
   @doc """
   The configured tool providers this boot can load: every configured one,
-  less any a lenient boot skipped (`:tool_providers_lenient`), which the
-  boot names when it skips it.
+  since a boot that cannot load one is refused.
   """
   @spec available_providers() :: [module()]
   def available_providers, do: Enum.filter(configured_providers(), &loadable?/1)
