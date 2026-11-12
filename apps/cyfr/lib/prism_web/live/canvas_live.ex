@@ -36,7 +36,7 @@ defmodule PrismWeb.CanvasLive do
   until it is raised again.
 
   Each app's wrapper carries what it stands as for the hook:
-  `data-canvas-place` (`window`, `tile` or `full`), `data-canvas-stack`,
+  `data-canvas-place` (`window`, `tile` or `full`),
   `data-canvas-minimised`, `data-canvas-geometry` (`x y w h`) or
   `data-canvas-side` and `data-canvas-share`, `data-canvas-active` (the
   app the keys and the ring act on: the shown full app, or else the
@@ -285,7 +285,6 @@ defmodule PrismWeb.CanvasLive do
           id={wrapper_id}
           data-canvas-frame={frame.id}
           data-canvas-place={place(frame)}
-          data-canvas-stack={app_attribute(frame, :stack)}
           data-canvas-minimised={app_attribute(frame, :minimised)}
           data-canvas-geometry={geometry_attribute(frame.placement)}
           data-canvas-side={side_attribute(frame.placement)}

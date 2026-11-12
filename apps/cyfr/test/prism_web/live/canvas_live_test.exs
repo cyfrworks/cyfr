@@ -333,7 +333,6 @@ defmodule PrismWeb.CanvasLiveTest do
     window = wrapper_tag(html, column.id)
     assert window =~ ~s(data-canvas-place="window")
     assert window =~ ~s(data-canvas-geometry="2500 5000 3000 4000")
-    assert window =~ ~s(data-canvas-stack="0")
     assert window =~ "left: 25.00%; top: 50.00%; width: 30.00%; height: 40.00%; z-index: 30;"
 
     # A tile stands at its edge and share, and narrows the canvas beside it.
