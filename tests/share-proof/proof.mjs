@@ -1003,8 +1003,9 @@ async function main() {
     await open(anaPage, pagePath(ana.segment, "/vault"));
     const afterNarrow = await sharedWithYou(anaPage);
     // Bea's first sign-in leaves her row as her device's hello admits her
-    // (an open admission, no email and no display name, her name the one
-    // her account holds at the registry, which the sign-in learns),
+    // (an open admission, no email, no display name and no name: her
+    // account's name is claimed at dir.test, and a CYFR's registry answers
+    // no lookup of the name an account holds, which the sign-in asks),
     // active, at security generation 1, her personal
     // athanor the one her sign-in names, and no platform administrator's
     // mark, which only the installation's first person carries. Company
@@ -1018,7 +1019,7 @@ async function main() {
         email_verified: null,
         admission: "open",
         display_name: null,
-        namespace: "share-proof-bea",
+        namespace: null,
         status: "active",
         security_generation: 1,
         prefs: "{}",

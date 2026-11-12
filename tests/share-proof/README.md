@@ -22,9 +22,9 @@ under it. Ana and Bea are signed in by the release fixture
 (`tests/release-boot/fixture.exs` `person`) when the proof asks for them,
 once the administrator has opened the door to newcomers on the Settings
 page (`door.allow` of `*`): each account is published at `dir.test` and
-named there, as an account's birth names it, and each person comes in by
-their device's hello, so `home.test` reads them at the shipped freshness
-bound as it reads any account. `proof.mjs` drives the
+its name claimed there, as an account's birth claims one, and each person
+comes in by their device's hello, so `home.test` reads them at the
+shipped freshness bound as it reads any account. `proof.mjs` drives the
 administrator and Ana in Chromium's full build, each of the
 administrator's confirmations proven with their passkey at the account
 pages, in the tab the system layer opens. It asks `run.sh` for the home's
