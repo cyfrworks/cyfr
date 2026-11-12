@@ -304,11 +304,15 @@ defmodule Cyfr.DocsDriftTest do
   # The glossary names each namespace once, and the retired name of the
   # tenancy unit appears in no tracked file of the tree, the seed, the
   # image suites or the root guides. The pattern is the vocabulary-gate
-  # job's, read from its step in the workflow, which owns it.
+  # job's, read from its script, which owns it.
   # ==========================================================================
 
   @workflow Path.join(@repo_root, ".github/workflows/test.yml")
-  @fossil_step "Retired names stay out and the storage layout is Arca's"
+  # The vocabulary script spells every pattern it refuses, so it exempts
+  # itself: the one exempted path outside the scanned trees, listed beside
+  # them so that it too must be tracked.
+  @vocabulary_path "scripts/ci/vocabulary.sh"
+  @vocabulary Path.join(@repo_root, @vocabulary_path)
 
   # The directories that are namespaces: each application under apps/, and
   # each directory under the control plane's lib/ with a facade module
@@ -365,27 +369,23 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  # The fossil loop of the vocabulary-gate job: the run block of its step,
-  # up to the loop's `do`.
+  # The fossil loop of the vocabulary-gate job: its script up to the
+  # loop's `do`.
   defp fossil_loop do
-    workflow = SourceTree.read(@workflow)
-
     [_, run] =
-      Regex.run(
-        ~r/- name: #{Regex.escape(@fossil_step)}\n\s+run: \|\n(.*?)\n\s+; do\n/s,
-        workflow
-      ) ||
-        flunk("test.yml has no #{inspect(@fossil_step)} step with a fossil loop")
+      Regex.run(~r/\A(.*?)\n\s+; do\n/s, SourceTree.read(@vocabulary)) ||
+        flunk("scripts/ci/vocabulary.sh has no fossil loop")
 
     run
   end
 
   # The exact paths the gate's fossil loop excludes (its `excl=` pathspecs
-  # without a glob), each holding a third party's words, not CYFR's; the
-  # exclusion list lives in the workflow and is read here, not copied.
+  # without a glob), each holding a third party's words, not CYFR's, or the
+  # script's own patterns; the exclusion list lives in the script and is
+  # read here, not copied.
   defp retired_name_exempt do
     [_, excl] =
-      Regex.run(~r/^\s+excl='([^']*)'/m, fossil_loop()) ||
+      Regex.run(~r/^excl='([^']*)'/m, fossil_loop()) ||
         flunk("the fossil loop has no excl= pathspec list")
 
     for ":(exclude)" <> path <- String.split(excl), not String.contains?(path, "*"), do: path
@@ -406,7 +406,9 @@ defmodule Cyfr.DocsDriftTest do
     pattern = retired_name_pattern()
 
     {listing, 0} =
-      System.cmd("git", ["ls-files", "-z", "--", "apps", "seed", "tests", ":(glob)*.md"],
+      System.cmd(
+        "git",
+        ["ls-files", "-z", "--", "apps", "seed", "tests", ":(glob)*.md", @vocabulary_path],
         cd: @repo_root,
         env: [{"GIT_DIR", nil}, {"GIT_WORK_TREE", nil}, {"GIT_INDEX_FILE", nil}]
       )
@@ -2362,16 +2364,17 @@ defmodule Cyfr.DocsDriftTest do
 
     # The vocabulary gate's two file lists: the retired names' paths, and
     # the guides its storage-diagram check reads.
-    workflow = SourceTree.read(@workflow)
+    vocabulary = SourceTree.read(@vocabulary)
 
     gate_lists = [
-      {"the vocabulary gate's paths", ~r/^\s+paths='([^']+)'$/m},
+      {"the vocabulary gate's paths", ~r/^paths='([^']+)'$/m},
       {"the vocabulary gate's storage-diagram files",
-       ~r/^\s+python3 -I scripts\/ci\/storage-diagrams\.py ([^|]+) \|\| fail=1$/m}
+       ~r/^python3 -I scripts\/ci\/storage-diagrams\.py ([^|]+) \|\| fail=1$/m}
     ]
 
     for {copy, pattern} <- gate_lists do
-      [_, files] = Regex.run(pattern, workflow) || flunk("test.yml has no #{copy}")
+      [_, files] =
+        Regex.run(pattern, vocabulary) || flunk("scripts/ci/vocabulary.sh has no #{copy}")
 
       guides =
         files |> String.split() |> Enum.filter(&String.ends_with?(&1, "-guide.md")) |> Enum.sort()
