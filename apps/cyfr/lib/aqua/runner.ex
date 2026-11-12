@@ -233,18 +233,6 @@ defmodule Aqua.Runner do
     Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread_id))
   end
 
-  @doc "Tell a thread's viewers about a row appended outside a turn (a line said aloud)."
-  @spec announce(Aqua.Tape.row()) :: :ok | {:error, term()}
-  def announce(%{thread_id: thread_id, athanor_id: athanor_id} = row) do
-    actor = Prima.Actor.in_athanor(athanor_id)
-
-    Cyfr.Bus.broadcast(
-      actor,
-      Cyfr.Bus.thread(actor, thread_id),
-      Cyfr.Bus.ThreadEvent.new(actor, thread_id, :message, row)
-    )
-  end
-
   # ---------------------------------------------------------------------------
   # API — every call carries the acting member's context
   # ---------------------------------------------------------------------------
