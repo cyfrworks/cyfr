@@ -764,6 +764,31 @@ defmodule Sanctum.TestContext do
     loaded
   end
 
+  @doc """
+  The token of a new session of a new person (`Sanctum.Test.People.linked/1`),
+  in their own athanor: what a request presents as its bearer, as the
+  token a sign-in hands a client.
+  """
+  def session_token! do
+    {:ok, user} =
+      Sanctum.Test.People.linked(%{
+        id: "local|local|session-#{System.unique_integer([:positive])}",
+        provider: "local"
+      })
+
+    ctx =
+      Context.build(
+        user_id: user.id,
+        provider: "local",
+        athanor_id: Sanctum.Test.People.athanor!(user).id,
+        permissions: Context.person_permissions(),
+        auth_method: :oidc
+      )
+
+    {:ok, %{token: token}} = create_session(ctx)
+    token
+  end
+
   defmodule Authenticator do
     @moduledoc """
     A software WebAuthn authenticator for the suite: an ES256 key pair and

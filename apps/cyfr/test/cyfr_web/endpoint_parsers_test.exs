@@ -410,10 +410,9 @@ defmodule CyfrWeb.EndpointParsersTest.MCPTest do
   end
 
   describe "an authenticated caller" do
-    @tag auth: :person
     test "keeps the endpoint's length: a body past a host call's is read whole and reaches the gate",
-         %{conn: authenticated} do
-      [bearer] = get_req_header(authenticated, "authorization")
+         _context do
+      bearer = "Bearer " <> Sanctum.TestContext.session_token!()
       extra = :binary.copy(<<?x>>, 2 * Prima.HostAPI.max_body_bytes())
 
       body =
@@ -534,9 +533,8 @@ defmodule CyfrWeb.EndpointParsersTest.MCPTransportTest do
     :binary.copy(" ", size - byte_size(json)) <> json
   end
 
-  @tag auth: :person
-  test "the authenticated boundary accepts exactly 28 million bytes", %{conn: authenticated} do
-    [bearer] = get_req_header(authenticated, "authorization")
+  test "the authenticated boundary accepts exactly 28 million bytes", _context do
+    bearer = "Bearer " <> Sanctum.TestContext.session_token!()
     payload = padded_body(28_000_000)
 
     conn =
@@ -553,11 +551,8 @@ defmodule CyfrWeb.EndpointParsersTest.MCPTransportTest do
     assert bytes_read() == 28_000_000
   end
 
-  @tag auth: :person
-  test "an authenticated declared length above 28 million bytes is refused unread", %{
-    conn: authenticated
-  } do
-    [bearer] = get_req_header(authenticated, "authorization")
+  test "an authenticated declared length above 28 million bytes is refused unread", _context do
+    bearer = "Bearer " <> Sanctum.TestContext.session_token!()
 
     conn =
       request(:post, "/mcp", body(), "application/json")
@@ -612,12 +607,10 @@ defmodule CyfrWeb.EndpointParsersTest.MCPTransportTest do
       assert response =~ ~s("code":-32600)
     end
 
-    @tag auth: :person
     test "an authenticated large chunked call keeps its connection for the next call", %{
-      port: port,
-      conn: authenticated
+      port: port
     } do
-      [bearer] = get_req_header(authenticated, "authorization")
+      bearer = "Bearer " <> Sanctum.TestContext.session_token!()
       socket = connect(port)
       payload = padded_body(2 * Prima.HostAPI.max_body_bytes())
 
@@ -642,14 +635,12 @@ defmodule CyfrWeb.EndpointParsersTest.MCPTransportTest do
       assert Jason.decode!(response)["id"] == 812
     end
 
-    @tag auth: :person
     test "an authenticated SSE answer finishes and permits a further request on its connection",
          %{
-           port: port,
-           conn: authenticated
+           port: port
          } do
       Cyfr.Test.Settings.put("mcp_subscription_max_ms", 150)
-      [bearer] = get_req_header(authenticated, "authorization")
+      bearer = "Bearer " <> Sanctum.TestContext.session_token!()
       socket = connect(port)
       payload = body("subscriptions/listen", %{"notifications" => %{"toolsListChanged" => true}})
       send_json(socket, payload, bearer, "subscriptions/listen")
@@ -866,11 +857,10 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       end
     end
 
-    @tag auth: :person
     test "holding a valid credential, is held to a host call's body where the pipeline " <>
            "authenticates after the read",
-         %{conn: authenticated, flood: flood} do
-      [bearer] = get_req_header(authenticated, "authorization")
+         %{flood: flood} do
+      bearer = "Bearer " <> Sanctum.TestContext.session_token!()
 
       {status, _headers} =
         :delete
