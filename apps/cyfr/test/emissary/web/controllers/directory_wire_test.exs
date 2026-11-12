@@ -196,18 +196,55 @@ defmodule Emissary.Web.DirectoryWireTest do
   # every client reads it by, its first error naming the code.
   defp assert_named(response, expected, context) do
     assert response.status == expected["status"], "#{context}: #{response.resp_body}"
-    body = Jason.decode!(response.resp_body)
 
     case expected do
       %{"answer" => answer} ->
-        assert body == answer, context
+        assert Jason.decode(response.resp_body) == {:ok, answer},
+               "#{context}: #{response.resp_body}"
 
       %{"code" => code} ->
-        assert %{"errors" => [%{"code" => ^code, "message" => message} | _]} = body, context
-        assert is_binary(message), context
+        assert refusal?(response.resp_body, code),
+               "#{context}: not the refusal #{code} in every client's grammar: #{response.resp_body}"
+    end
+  end
 
-        assert jcs_value?(body),
-               "#{context}: the envelope holds a null or a number no client reads"
+  test "a refusal is read in every client's grammar, on the bytes as sent" do
+    for {raw, read?} <- [
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"}]}), true},
+          {~s({"extra":{"ok":1},"errors":[{"code":"SLUG_TAKEN","message":"refused","x":true},7]}),
+           true},
+          {~S({"errors":[{"code":"SLUG_TAKEN","message":"\\ud800 \ud83d\ude00"}]}), true},
+          {~s({"errors":[]}), false},
+          {~s({"errors":[{"code":4,"message":"refused"}]}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":false}]}), false},
+          {~s({"errors":[{"code":"OTHER","message":"refused"}]}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"extra":null}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"},null]}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"extra":9007199254740992}),
+           false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"extra":0.5}), false},
+          {~S({"errors":[{"code":"SLUG_TAKEN","message":"\ud800"}]}), false},
+          {~S({"errors":[{"code":"SLUG_TAKEN","message":"\udc00"}]}), false},
+          {~S({"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"\ud800":1}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":") <> <<0xED, 0xA0, 0x80>> <> ~s("}]}),
+           false}
+        ] do
+      assert refusal?(raw, "SLUG_TAKEN") == read?, raw
+    end
+  end
+
+  # Whether `raw`, the bytes as sent, are the refusal `code` in the grammar
+  # the fixture's handles comment states: valid UTF-8 that Jason decodes (it
+  # refuses an unpaired surrogate escape, in a key or a value), an object
+  # whose errors is a non-empty list, its first a map with this code and a
+  # string message, and no null and no number outside the safe integers.
+  defp refusal?(raw, code) do
+    with true <- String.valid?(raw),
+         {:ok, %{"errors" => [%{"code" => ^code, "message" => message} | _]} = body}
+         when is_binary(message) <- Jason.decode(raw) do
+      jcs_value?(body)
+    else
+      _ -> false
     end
   end
 

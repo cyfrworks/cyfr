@@ -92,13 +92,16 @@ class StandIn:
             time.sleep(0.05)
         self.port = int(open(ready).read()) if os.path.exists(ready) else None
 
-    def request(self, method, path, body=None, headers=None):
+    def request(self, method, path, body=None, headers=None, raw=False):
+        """The answer's status, its body (the bytes as sent when raw, else
+        their text) and its headers."""
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         data = body if isinstance(body, (bytes, type(None))) else (body if isinstance(body, str) else jcs(body)).encode()
         connection.request(method, path, body=data, headers=dict({"Content-Type": "application/json"}, **(headers or {})))
         response = connection.getresponse()
-        text = response.read().decode("utf-8", "replace")
+        sent = response.read()
         connection.close()
+        text = sent if raw else sent.decode("utf-8", "replace")
         return response.status, text, {k.lower(): v for k, v in response.getheaders()}
 
     def stop(self, signum=signal.SIGTERM):
@@ -276,11 +279,13 @@ def name_checks():
                 claim = step["claim"]
                 for operation, path, body in [("policy.accept", "/v1/legal/accept", {"policy_version": version}),
                                               ("handle.claim", "/v1/namespaces/personal/claim", {"handle": claim["handle"]})]:
-                    status, text, _ = standin.request("POST", path, unsigned(handles["registry"], operation, claim["identifier"], body))
+                    status, sent, _ = standin.request("POST", path, unsigned(handles["registry"], operation, claim["identifier"], body),
+                                                      raw=True)
                 where += ", claim " + claim["handle"]
             else:
-                status, text, _ = standin.request(step["request"]["method"], step["request"]["path"])
+                status, sent, _ = standin.request(step["request"]["method"], step["request"]["path"], raw=True)
                 where += ", %s %s" % (step["request"]["method"], step["request"]["path"])
+            text = sent.decode("utf-8", "replace")
             expect = step["expect"]
             if status != expect["status"]:
                 problems.append("%s: status %d, not %d: %s" % (where, status, expect["status"], text[:200]))
@@ -292,17 +297,24 @@ def name_checks():
                     answer["registry"] = "127.0.0.1"
                 if json.loads(text) != answer:
                     problems.append("%s: answered %s, not %s" % (where, text[:200], jcs(answer)))
-            elif not refusal_of(json.loads(text), expect["code"]):
+            elif not refusal_of(sent, expect["code"]):
                 problems.append("%s: refused %s, not with the code %s in every client's grammar" % (where, text[:200], expect["code"]))
         check(not problems, "names: " + scenario["name"], "\n  ".join(problems))
         standin.stop()
 
 
-# Whether an envelope is the refusal `code` in the grammar every client reads
-# it by: an object whose errors is a non-empty array, its first an object
-# with this code and a string message, the whole in JCS's domain (no null,
-# every number an integer of at most 2^53 - 1 in magnitude).
-def refusal_of(envelope, code):
+# Whether `sent`, an answer's bytes as sent, are the refusal `code` in the
+# grammar every client reads it by (the fixture's handles comment): valid
+# UTF-8, an object whose errors is a non-empty array, its first an object with
+# this code and a string message, the whole in JCS's domain (no null, every
+# number an integer of at most 2^53 - 1 in magnitude) and no string, key or
+# value, holding an unpaired surrogate (json.loads keeps a lone \u escape as
+# one).
+def refusal_of(sent, code):
+    try:
+        envelope = json.loads(sent.decode("utf-8"))
+    except ValueError:
+        return False
     errors = envelope.get("errors") if isinstance(envelope, dict) else None
     first = errors[0] if isinstance(errors, list) and errors else None
     return (isinstance(first, dict) and first.get("code") == code and isinstance(first.get("message"), str)
@@ -311,12 +323,36 @@ def refusal_of(envelope, code):
 
 def jcs_value(value):
     if isinstance(value, dict):
-        return all(jcs_value(v) for v in value.values())
+        return all(jcs_value(k) and jcs_value(v) for k, v in value.items())
     if isinstance(value, list):
         return all(jcs_value(v) for v in value)
-    if isinstance(value, bool) or isinstance(value, str):
+    if isinstance(value, str):
+        return not any(0xD800 <= ord(c) <= 0xDFFF for c in value)
+    if isinstance(value, bool):
         return True
     return isinstance(value, int) and abs(value) <= 2 ** 53 - 1
+
+
+def grammar_checks():
+    cases = [
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"refused"}]}', True),
+        (b'{"extra":{"ok":1},"errors":[{"code":"SLUG_TAKEN","message":"refused","x":true},7]}', True),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"\\\\ud800 \\ud83d\\ude00"}]}', True),
+        (b'{"errors":[]}', False),
+        (b'{"errors":[{"code":4,"message":"refused"}]}', False),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":false}]}', False),
+        (b'{"errors":[{"code":"OTHER","message":"refused"}]}', False),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"extra":null}', False),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"refused"},null]}', False),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"extra":9007199254740992}', False),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"extra":0.5}', False),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"\\ud800"}]}', False),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"\\udc00"}]}', False),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"\\ud800":1}', False),
+        (b'{"errors":[{"code":"SLUG_TAKEN","message":"\xed\xa0\x80"}]}', False),
+    ]
+    for sent, read in cases:
+        check(refusal_of(sent, "SLUG_TAKEN") == read, "the refusal grammar %s %s" % ("reads" if read else "refuses", sent))
 
 
 # A request in the signed shape whose signature is nothing.
@@ -453,6 +489,7 @@ def lifecycle_checks():
 try:
     registry_checks()
     directory_checks()
+    grammar_checks()
     name_checks()
     identity_checks()
     forwarding_checks()
