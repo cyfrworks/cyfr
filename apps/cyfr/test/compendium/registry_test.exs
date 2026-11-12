@@ -595,7 +595,7 @@ defmodule Compendium.RegistryTest do
   end
 
   describe "publish_bytes/3 source field" do
-    test "published components have source: published", %{ctx: ctx} do
+    test "a publish of bytes lands a pulled row: source oci", %{ctx: ctx} do
       {:ok, component} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
           name: "pub-source",
@@ -603,7 +603,7 @@ defmodule Compendium.RegistryTest do
           type: "reagent"
         })
 
-      assert component.source == "published"
+      assert component.source == "oci"
     end
   end
 
