@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The builds memory suite's read of the keeper cgroups a container holds, with docker stubbed.
+"""The builds memory suite's cgroup reads and keeper-client output collection.
 
 That no keeper cgroup is left is answered only by the word `absent` from a
 command that exits 0. A failed exec, and output that answers neither word, are
-no answer.
+no answer. A closed relay's output is read in full before the client reports.
 
 Usage: python3 -I tests/builder-image/memory_test.py
 """
@@ -13,6 +13,9 @@ import json
 import os
 import shlex
 import shutil
+import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -211,6 +214,67 @@ class ReleaseUser(unittest.TestCase):
         uid = stack.POOL_FIRST
         line = f"cyfr-release:x:{uid}:{uid}::/home/x:/bin/sh\n"
         self.assertEqual(memory.release_user(self.lookup(0, line)), "cyfr-release")
+
+
+class ClientOutput(unittest.TestCase):
+    def test_a_closed_relay_delivers_every_byte_before_the_client_reports(self):
+        with tempfile.TemporaryDirectory(prefix="memory-client-") as directory:
+            client_path = os.path.join(directory, "client.mjs")
+            scenario_path = os.path.join(directory, "scenario.json")
+            with open(client_path, "w") as out:
+                out.write(memory.CLIENT.replace("stdout: stdout.slice(-400)", "stdout"))
+            with open(scenario_path, "w") as out:
+                json.dump({"pool": "probe", "timeout_ms": 5000, "spawns": [
+                    {"name": "short", "argv": ["sh", "-c", "echo ran"], "memory_bytes": memory.MIN_BOUND},
+                ]}, out)
+
+            def frame(stream, payload):
+                return bytes([stream]) + struct.pack(">I", len(payload)) + payload
+
+            for trial in range(32):
+                with self.subTest(trial=trial):
+                    parent, child = socket.socketpair()
+                    process = subprocess.Popen(
+                        ["/bin/sh", "-c", 'exec 3<&"$1"; exec node "$2" "$3"', "client",
+                         str(child.fileno()), client_path, scenario_path],
+                        pass_fds=(child.fileno(),), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        env={**os.environ, "RELEASE_TMP": directory})
+                    child.close()
+                    try:
+                        parent.settimeout(5)
+                        with parent.makefile("rb") as lines:
+                            request = json.loads(lines.readline())
+                        os.kill(process.pid, signal.SIGSTOP)
+                        _, status = os.waitpid(process.pid, os.WUNTRACED)
+                        self.assertTrue(os.WIFSTOPPED(status))
+                        output = subprocess.check_output(["/bin/sh", "-c", "printf '%0130000dran\\n' 0"])
+                        # A closed peer makes a late stdin write fail before the
+                        # next read. Stopping the client fixes that order.
+                        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as relay:
+                            relay.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
+                            relay.connect(request["attach"]["path"])
+                            packet = frame(3, request["attach"]["token"].encode())
+                            packet += b"".join(frame(1, output[i:i + 65536]) for i in range(0, len(output), 65536))
+                            relay.sendall(packet + frame(1, b"") + frame(2, b""))
+                        spawn_id = "a" * 32
+                        for reply in (
+                            {"v": 1, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
+                            {"v": 1, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory_exceeded": False},
+                            {"v": 1, "type": "released", "spawn_id": spawn_id},
+                        ):
+                            parent.sendall(json.dumps(reply).encode() + b"\n")
+                        os.kill(process.pid, signal.SIGCONT)
+                        stdout, stderr = process.communicate(timeout=8)
+                        self.assertEqual(process.returncode, 0, stderr.decode())
+                        report = json.loads(stdout.split(b"<<<", 1)[1].split(b">>>", 1)[0])
+                        self.assertFalse(report["timed_out"])
+                        self.assertEqual(report["spawns"][0]["stdout"], output.decode())
+                    finally:
+                        if process.poll() is None:
+                            os.kill(process.pid, signal.SIGCONT)
+                            process.kill()
+                        process.communicate()
+                        parent.close()
 
 
 if __name__ == "__main__":
