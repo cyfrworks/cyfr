@@ -5,11 +5,16 @@ defmodule Sanctum.Directory.Handles do
   @moduledoc """
   The handle registry a CYFR serving a directory serves beside it
   (`ARCHITECTURE.md` §9.1), so a self-hosted directory names itself as the
-  registry its accounts claim their names at: `GET /v1/handles/{handle}`
-  and `POST /v1/namespaces/personal/claim`, a personal handle's answer and
-  claim as `Prima.HandleAnswer` and `Prima.RegistryRequest` define them,
-  and nothing else. It asks no policy acceptance, keeps no bans and serves
-  no legal pages. `Emissary.Web.HandleController` is its one caller.
+  registry its accounts claim their names at: `GET /v1/handles/{handle}`,
+  `GET /v1/identities/{identifier}/handle` and `POST
+  /v1/namespaces/personal/claim`, a personal handle's answer by its name
+  and by the account holding it, and its claim, as `Prima.HandleAnswer`
+  and `Prima.RegistryRequest` define them, and nothing else. The answer by
+  the account is how a home learns the name of a person it signs in
+  (`Sanctum.Handle.name_of/1`), its own people's included when it is its
+  own registry. It asks no policy acceptance, keeps no bans and serves
+  no legal pages. `Emissary.Web.HandleController` and this node's own
+  lookups (`Sanctum.Handle`) are its callers.
 
   ## Serving
 
@@ -35,9 +40,20 @@ defmodule Sanctum.Directory.Handles do
   `:has_other_handle`. The answer names the handle, the account and
   whether the claim made it.
 
+  This node's own lookups of the registry it serves (`Sanctum.Handle`,
+  when this node is the account service's writer and the registry it
+  names is its own origin, scheme and port as well as host) read it where
+  it is kept (`holder/1`, `held/1`), never over HTTP to this node, as the
+  directory's own client reads its logs (`Sanctum.Directory.Client`): its
+  listener need not answer on the address its origin names. They spend no
+  window.
+
   ## Answers
 
-  A handle no one holds is `:handle_not_found`. Every refusal of a request
+  A handle no one holds is `:handle_not_found`, as is an identifier that
+  holds none or is outside its grammar. Either answer is the handle's row
+  alone, whatever the account's log says: the registry keeps a gone
+  account's name, as cyfr.run's does. Every refusal of a request
   is `Prima.RegistryRequest.refusals/0`'s name, beside the directory's own
   `:not_served`, `:read_only` and `{:rate_limited, seconds}`; a store that
   cannot answer is `:directory_unavailable`.
@@ -61,24 +77,43 @@ defmodule Sanctum.Directory.Handles do
   @spec resolve(%{handle: String.t(), source: source()}) ::
           {:ok, HandleAnswer.t()} | {:error, atom() | {atom(), term()}}
   def resolve(%{handle: handle, source: source}) when is_binary(handle) and is_binary(source) do
-    with :ok <- Sanctum.Directory.gate(source, :read),
-         {:ok, directory} <- registry(),
+    with :ok <- Sanctum.Directory.gate(source, :read), do: holder(handle)
+  end
+
+  @doc false
+  # This node's own reads of the registry it serves, for its own lookups
+  # (`Sanctum.Handle`), which read it where it is kept: `resolve/1`'s and
+  # `name_of/1`'s answers without the per-source and per-installation
+  # windows that bound a caller over the network.
+  @spec holder(String.t()) :: {:ok, HandleAnswer.t()} | {:error, atom()}
+  def holder(handle) when is_binary(handle) do
+    with {:ok, directory} <- registry(),
          :ok <- spelled(handle) do
       case Arca.DirectoryHandles.get(Prima.Actor.system(), handle) do
-        {:ok, %{identifier: identifier}} ->
-          {:ok,
-           %HandleAnswer{
-             registry: Encoding.home_host(directory),
-             handle: handle,
-             identifier: identifier,
-             directory: directory
-           }}
+        {:ok, %{identifier: identifier}} -> {:ok, answer(directory, handle, identifier)}
+        {:error, :not_found} -> {:error, :handle_not_found}
+        {:error, _unanswered} -> {:error, :directory_unavailable}
+      end
+    end
+  end
 
-        {:error, :not_found} ->
-          {:error, :handle_not_found}
+  @doc "The one handle `identifier` holds at this registry, as its answer."
+  @spec name_of(%{identifier: String.t(), source: source()}) ::
+          {:ok, HandleAnswer.t()} | {:error, atom() | {atom(), term()}}
+  def name_of(%{identifier: identifier, source: source})
+      when is_binary(identifier) and is_binary(source) do
+    with :ok <- Sanctum.Directory.gate(source, :read), do: held(identifier)
+  end
 
-        {:error, _unanswered} ->
-          {:error, :directory_unavailable}
+  @doc false
+  @spec held(String.t()) :: {:ok, HandleAnswer.t()} | {:error, atom()}
+  def held(identifier) when is_binary(identifier) do
+    with {:ok, directory} <- registry(),
+         :ok <- if(Encoding.identifier?(identifier), do: :ok, else: {:error, :handle_not_found}) do
+      case Arca.DirectoryHandles.of(Prima.Actor.system(), identifier) do
+        {:ok, %{handle: handle}} -> {:ok, answer(directory, handle, identifier)}
+        {:error, :not_found} -> {:error, :handle_not_found}
+        {:error, _unanswered} -> {:error, :directory_unavailable}
       end
     end
   end
@@ -110,6 +145,14 @@ defmodule Sanctum.Directory.Handles do
       :error -> {:error, :not_served}
     end
   end
+
+  defp answer(directory, handle, identifier),
+    do: %HandleAnswer{
+      registry: Encoding.home_host(directory),
+      handle: handle,
+      identifier: identifier,
+      directory: directory
+    }
 
   # A handle is a personal slug; any other spelling is no one's.
   defp spelled(handle) do

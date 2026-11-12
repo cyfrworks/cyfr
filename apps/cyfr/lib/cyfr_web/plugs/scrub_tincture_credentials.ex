@@ -29,7 +29,7 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentials do
   this is the server's own part of keeping it out of logs.
 
   The routes of the identity directory, the handle registry beside it and
-  the account pages (`/directory/…`, `/v1/handles/…`,
+  the account pages (`/directory/…`, `/v1/handles/…`, `/v1/identities/…`,
   `/v1/namespaces/personal/claim`, `/account/…`) are named by their route
   pattern alone (`/directory/v1/:identifier`), and a path under one of
   those prefixes that no route matches by the prefix and a constant
@@ -101,6 +101,11 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentials do
   defp directory_route(["directory" | _rest]), do: "/directory/" <> @redacted
   defp directory_route(["v1", "handles", _handle]), do: "/v1/handles/:handle"
   defp directory_route(["v1", "handles" | _rest]), do: "/v1/handles/" <> @redacted
+
+  defp directory_route(["v1", "identities", _identifier, "handle"]),
+    do: "/v1/identities/:identifier/handle"
+
+  defp directory_route(["v1", "identities" | _rest]), do: "/v1/identities/" <> @redacted
 
   defp directory_route(["v1", "namespaces", "personal", "claim"]),
     do: "/v1/namespaces/personal/claim"
