@@ -10,10 +10,6 @@ import Config
 
 import_config "../../arca/config/config.exs"
 
-# Consent proofs are durable: the plan → preview → commit walk spans human
-# minutes and must survive a restart.
-config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
-
 # Where this deployment is reachable when the operator declared nothing.
 # `CYFR_PUBLIC_URL` overrides it (`:sanctum, :public_url`); an OAuth
 # `redirect_uri` needs an absolute origin either way.
@@ -31,10 +27,6 @@ config :sanctum, :fallback_origin, "http://localhost:4000"
 config :sanctum, ecto_repos: [Arca.Repo]
 
 if config_env() == :test do
-  # Unit tests run on the ETS store; `proof_db_test.exs` exercises the
-  # durable adapter directly.
-  config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory
-
   config :sanctum, :fallback_origin, "http://localhost:4002"
 
   # At-rest encryption needs a keyring before any row is sealed. A build

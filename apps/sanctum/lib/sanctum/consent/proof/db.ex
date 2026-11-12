@@ -11,13 +11,11 @@ defmodule Sanctum.Consent.Proof.DB do
   consumption is `Arca.ConsentProofStorage.take/1`, whose delete count
   picks exactly one winner between concurrent commits.
 
-  Consumption takes the row before it compares, as every store does
-  (`Sanctum.Consent.Proof`): a mismatched attempt burns the token rather
+  Consumption takes the row before it compares (`Sanctum.Consent.Proof`):
+  a mismatched attempt burns the token rather
   than revealing, over repeated tries, which binding was wrong. Expiry is
   checked on read; expired rows are purged opportunistically at mint.
   """
-
-  @behaviour Sanctum.Consent.Proof
 
   alias Sanctum.Consent.Proof
 
@@ -26,7 +24,8 @@ defmodule Sanctum.Consent.Proof.DB do
   # column cannot mint atoms.
   @optional_binding_keys ~w(actor profile_id expected_revision)
 
-  @impl Sanctum.Consent.Proof
+  @doc "Store a single-use proof for `bindings`, valid for `ttl_ms`."
+  @spec mint(Proof.bindings(), pos_integer()) :: {:ok, Proof.token()} | {:error, term()}
   def mint(bindings, ttl_ms) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     Arca.ConsentProofStorage.purge_expired(now)
@@ -49,7 +48,8 @@ defmodule Sanctum.Consent.Proof.DB do
     end
   end
 
-  @impl Sanctum.Consent.Proof
+  @doc "Take the proof `token` names and hold it to `presented`, once."
+  @spec consume(Proof.token(), Proof.bindings()) :: :ok | {:error, Proof.consume_error()}
   def consume(token, presented) do
     # Take first — same burn-on-mismatch contract as the Memory store.
     case Arca.ConsentProofStorage.take(hash(token)) do

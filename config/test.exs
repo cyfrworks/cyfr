@@ -56,10 +56,6 @@ config :cyfr,
 # suite keeps no reserve directory.
 config :cyfr, :storage_reserve_bytes, 64 * 1024 * 1024
 
-# The consent proof store: the suite's is the ETS store, and
-# proof_db_test.exs exercises the durable adapter directly.
-config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory
-
 # The tincture transport rate limit, high enough that no suite trips it:
 # the tincture and canvas controller suites request the same pages from one
 # address, across their tests, past the shipped ceilings. The ceiling tests

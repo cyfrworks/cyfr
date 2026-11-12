@@ -6,6 +6,11 @@ defmodule Sanctum.Consent.ProofTest do
 
   alias Sanctum.Consent.Proof
 
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    :ok
+  end
+
   @bindings %{
     kind: :consent_commit,
     commit_digest: "sha256:commit-one",

@@ -2670,9 +2670,6 @@ defmodule Cyfr.Boundaries do
     # The caller memo's bound (`Sanctum.Caller`), its code's own 2 s in
     # every release; the suite turns the memo off.
     caller_memo_ttl_ms: :seam,
-    # The consent proofs' store (`Sanctum.Consent.Proof`), durable in every
-    # release; the suite holds them in memory.
-    consent_proof_store: :seam,
     # The registry probe's switch, read by `Compendium.Provider.status/0`.
     registry_health_probe: :seam,
 
@@ -2839,13 +2836,6 @@ defmodule Cyfr.Boundaries do
   ]
 
   @internal_strategies [
-    %{
-      behaviour: "Sanctum.Consent.Proof",
-      reason:
-        "two adapters inside Sanctum — `Proof.DB`, which calls `Arca.ConsentProofStorage` " <>
-          "downward, and `Proof.Memory`, which tests need because it forgets. The same " <>
-          "shape as Arca's Local and S3 adapters, not a cross-layer port."
-    },
     %{
       behaviour: "Sanctum.Auth",
       reason:
