@@ -105,7 +105,11 @@ defmodule Sanctum.Caller do
   the key a session was signed for, or a recovery, has already deleted the
   sessions it retired in its own transaction, and their memos are dropped
   once it committed (`drop_retired/2`). A local person's session never
-  reads a directory.
+  reads a directory. Every person is minted with their identity row, so a
+  session or a paired device whose holder has none, whatever the id's
+  shape, stands on nothing: the session is `:unauthenticated` and the
+  device `:not_standing`, while a store that cannot answer is
+  `:unavailable`.
 
   Inside a caller's transaction (a revalidation a write makes under its
   locks) the check reads the cached head alone and writes nothing: a head
@@ -890,12 +894,31 @@ defmodule Sanctum.Caller do
     end
   end
 
-  # A person whose identity row is missing: damage, logged by the person
-  # and refused as `refusal`.
-  defp missing_identity(user_id, refusal) do
-    Logger.error("[Sanctum.Caller] person #{user_id} has no identity row; refusing as #{refusal}")
+  @doc """
+  The identifier of the account a session's or a paired device's holder
+  `user_id` stands on, read from their identity row. Every person is
+  minted with that row, so a holder without one, whatever its id's shape,
+  is damage: logged and refused as `refusal`. A store that cannot answer
+  refuses nothing: `:unavailable`, and the work pauses.
+  """
+  @spec holder_identity(String.t(), refusal) ::
+          {:ok, String.t()} | {:error, refusal | :unavailable}
+        when refusal: atom()
+  def holder_identity(user_id, refusal) when is_binary(user_id) and is_atom(refusal) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{identifier: identifier}} ->
+        {:ok, identifier}
 
-    {:error, refusal}
+      {:error, :not_found} ->
+        Logger.error(
+          "[Sanctum.Caller] holder #{user_id} has no identity row; refusing as #{refusal}"
+        )
+
+        {:error, refusal}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
   end
 
   # A person's session stands only on their account's fresh head
@@ -905,22 +928,12 @@ defmodule Sanctum.Caller do
   # The refresh's walk retires a session its removed key signed for, and
   # every session of the person on a recovery, so the session is read
   # again once the head is fresh: a session the refresh just retired
-  # stands for nothing, whatever was loaded before it. A person's identity
-  # row is minted with their person row, so a person without one stands on
-  # nothing.
+  # stands for nothing, whatever was loaded before it. A holder without
+  # an identity row stands on nothing (`holder_identity/2`).
   defp identity_current(user_id, hash) when is_binary(user_id) and is_binary(hash) do
-    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{identifier: identifier}} ->
-        with :ok <- account_current(identifier), do: session_survives(hash)
-
-      {:error, :not_found} ->
-        if Prima.PersonId.person?(user_id),
-          do: missing_identity(user_id, :unauthenticated),
-          else: :ok
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
+    with {:ok, identifier} <- holder_identity(user_id, :unauthenticated),
+         :ok <- account_current(identifier),
+         do: session_survives(hash)
   end
 
   defp identity_current(_user_id, _hash), do: {:error, :unauthenticated}
@@ -1015,21 +1028,11 @@ defmodule Sanctum.Caller do
 
   # A person's device stands on their account's fresh head as their session
   # does: past the bound with the directory unable to refresh it, the work
-  # pauses and the pairing stands. A person without an identity row stands
-  # on nothing.
+  # pauses and the pairing stands. A holder without an identity row stands
+  # on nothing (`holder_identity/2`).
   defp device_identity(user_id) when is_binary(user_id) do
-    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{identifier: identifier}} ->
-        account_current(identifier)
-
-      {:error, :not_found} ->
-        if Prima.PersonId.person?(user_id),
-          do: missing_identity(user_id, :not_standing),
-          else: :ok
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
+    with {:ok, identifier} <- holder_identity(user_id, :not_standing),
+         do: account_current(identifier)
   end
 
   defp device_identity(_user_id), do: {:error, :not_standing}

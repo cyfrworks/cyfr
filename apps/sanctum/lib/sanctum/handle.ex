@@ -27,6 +27,14 @@ defmodule Sanctum.Handle do
   bounded to 10 seconds and 16 KiB, follows no redirect, sends no
   credential, and the answer is not cached.
 
+  A registry this node serves, where it is its account service's writer
+  (`Sanctum.Directory.writer?/0`) and the registry it names is its own
+  origin, scheme and port as well as host, is read where it is kept (`Sanctum.Directory.Handles`),
+  never over HTTP to this node, as the directory's own client reads the
+  logs it serves: its listener need not answer on the address its origin
+  names. Its answers are the routes' own, so both lookups answer the same
+  either way.
+
   Refusals: `:invalid_handle` (a spelling `Prima.ComponentRef` refuses as
   a personal slug, before any request), `:not_found` (no one holds the
   handle, a reserved one
@@ -50,15 +58,9 @@ defmodule Sanctum.Handle do
   @doc "Resolve `handle` at this deployment's registry (the module doc)."
   @spec resolve(String.t()) :: {:ok, HandleAnswer.t()} | {:error, reason()}
   def resolve(handle) when is_binary(handle) do
-    with :ok <- spelled(handle) do
-      registry = Sanctum.registry_host()
-
-      url =
-        Sanctum.registry_base_url(Sanctum.registry_url()) <>
-          "/v1/handles/" <> URI.encode(handle, &URI.char_unreserved?/1)
-
-      with {:ok, answer} <- url |> fetch() |> answer(handle, registry),
-           do: keys(answer)
+    with :ok <- spelled(handle),
+         {:ok, answer} <- asked(Sanctum.registry_host(), handle) do
+      keys(answer)
     end
   end
 
@@ -77,11 +79,15 @@ defmodule Sanctum.Handle do
     with :ok <- identifier_spelled(identifier) do
       registry = Sanctum.registry_host()
 
-      url =
-        Sanctum.registry_base_url(Sanctum.registry_url()) <>
-          "/v1/identities/" <> identifier <> "/handle"
+      if served_here?() do
+        identifier |> Sanctum.Directory.Handles.held() |> kept()
+      else
+        url =
+          Sanctum.registry_base_url(Sanctum.registry_url()) <>
+            "/v1/identities/" <> identifier <> "/handle"
 
-      url |> fetch() |> name_answer(identifier, registry)
+        url |> fetch() |> name_answer(identifier, registry)
+      end
     end
   end
 
@@ -125,6 +131,43 @@ defmodule Sanctum.Handle do
         {:error, :registry_unavailable}
     end
   end
+
+  # The handle's answer, from the registry this node serves where it is
+  # kept, or over the wire.
+  defp asked(registry, handle) do
+    if served_here?() do
+      handle |> Sanctum.Directory.Handles.holder() |> kept()
+    else
+      url =
+        Sanctum.registry_base_url(Sanctum.registry_url()) <>
+          "/v1/handles/" <> URI.encode(handle, &URI.char_unreserved?/1)
+
+      url |> fetch() |> answer(handle, registry)
+    end
+  end
+
+  # Whether the registry this deployment names is the origin this node
+  # serves as its account service's writer: the registry's endpoint, as
+  # requests to it are sent, and this node's origin, each in the one
+  # spelling a home has (`Sanctum.Directory.served/0`), scheme and port
+  # kept and only a scheme's default port dropped. Another port, another
+  # scheme or a path is another registry, asked over the wire.
+  defp served_here? do
+    endpoint = Sanctum.registry_base_url(Sanctum.registry_url())
+
+    with true <- Sanctum.Directory.writer?(),
+         {:ok, served} <- Sanctum.Directory.served() do
+      Prima.Identity.Encoding.canonical_home(endpoint) == {:ok, served}
+    else
+      _elsewhere -> false
+    end
+  end
+
+  # A served read's refusal, as the wire's would read: no one's name, or a
+  # registry that cannot answer.
+  defp kept({:ok, %HandleAnswer{} = answer}), do: {:ok, answer}
+  defp kept({:error, :handle_not_found}), do: {:error, :not_found}
+  defp kept({:error, _unanswered}), do: {:error, :registry_unavailable}
 
   # The account the answer names, read at its directory: one gone there
   # has no holder.

@@ -139,9 +139,17 @@ same worktree refuses, naming the run that holds it.
   - `handoff`, before you report a change ready, one quarter for each
     check: the format and credo checks, a forced compile on both
     adapters, the generated files' checks, the touched tests on both
-    adapters (all of `apps/arca/test` when Arca changed), `mix dialyzer`
+    adapters (all of `apps/arca/test` when Arca changed), the roster
+    tests that read the whole source tree (the boundaries, the test seams,
+    Sanctum's gate rosters, the restore order, the cross-language drift and
+    the router's route map)
+    and CI's vocabulary scan (`scripts/ci/vocabulary.sh`) on every change,
+    the configuration check when an `apps` source changed, `mix dialyzer`
     when a `lib` file changed, the light self-test of every harness
-    script you touched, and the install proof when its inputs changed;
+    script you touched, and the install proof when its inputs changed.
+    Each app compiled and tested alone (CI's island jobs), the proofs
+    under `tests/` and the suites' untouched files are the pull request's
+    run's;
   - `pull-request`: the pull request's run on GitHub is the check, and it
     runs every check in parallel. `scripts/stage.sh pull-request` runs
     `scripts/commit-gate.sh`, CI's checks on this host, for working

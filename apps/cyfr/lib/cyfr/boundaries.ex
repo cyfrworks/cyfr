@@ -1968,7 +1968,7 @@ defmodule Cyfr.Boundaries do
       served: 0,
       writer?: 0
     ],
-    "Sanctum.Directory.Handles" => [claim: 1, resolve: 1],
+    "Sanctum.Directory.Handles" => [claim: 1, name_of: 1, resolve: 1],
     "Sanctum.Door" => [refusal_message: 0],
     "Sanctum.Door.Store" => [requests: 0],
     "Sanctum.Egress" => [pinned_request: 5],
@@ -2312,7 +2312,8 @@ defmodule Cyfr.Boundaries do
     {:get, "/invite"},
     {:get, "/login"},
     {:get, "/setup"},
-    {:get, "/v1/handles/:handle"}
+    {:get, "/v1/handles/:handle"},
+    {:get, "/v1/identities/:identifier/handle"}
   ]
 
   @doc """
@@ -2838,6 +2839,7 @@ defmodule Cyfr.Boundaries do
     # handle no one holds, a claim its account's log does not verify, the
     # directory's windows. The account's own chain authorizes a claim.
     %{module: Emissary.Web.HandleController, site: :resolve, plane: :external, origin: :none},
+    %{module: Emissary.Web.HandleController, site: :name_of, plane: :external, origin: :none},
     %{module: Emissary.Web.HandleController, site: :claim, plane: :external, origin: :none},
     # A protected command line's session: the unlock's one-time ticket.
     %{

@@ -379,6 +379,62 @@ defmodule Emissary.Web.DeviceChannelTest do
       )
     end
 
+    for {label, holder} <- [
+          {"its person's identity row is gone", :person},
+          {"its client names the system principal", "system"},
+          {"its client names the seed principal", "_seed"},
+          {"its client names a webhook principal", "webhook:wh_holder"},
+          {"its client names a made-up id", "github|https://github.com|holder-ghost"}
+        ] do
+      test "a device whose holder has no identity row, as #{label}, is refused at its next ping",
+           %{session_ctx: session_ctx, user: user} do
+        device = pair!(session_ctx)
+        state = proven(device)
+        {token, _timer} = state.keepalive
+
+        # With the row the ping reads the standing again and answers.
+        assert {:push, {:ping, ""}, state} =
+                 DeviceChannel.handle_info({DeviceChannel, :keepalive, token}, state)
+
+        {token, _timer} = state.keepalive
+
+        case unquote(holder) do
+          :person ->
+            Arca.Repo.delete_all(
+              from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id)
+            )
+
+          holder ->
+            Arca.Repo.update_all(
+              from(c in Arca.Schemas.PairedClient, where: c.id == ^device.client_id),
+              set: [user_id: holder]
+            )
+        end
+
+        assert_refused(
+          DeviceChannel.handle_info({DeviceChannel, :keepalive, token}, state),
+          4403,
+          "forbidden",
+          :established
+        )
+      end
+    end
+
+    test "a device whose holder's identity row cannot be read keeps its channel: the ping " <>
+           "decides nothing",
+         %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+      state = proven(device)
+      {token, _timer} = state.keepalive
+
+      Arca.Repo.query!("ALTER TABLE person_identities RENAME TO person_identities_unavailable")
+
+      assert {:push, {:ping, ""}, state} =
+               DeviceChannel.handle_info({DeviceChannel, :keepalive, token}, state)
+
+      refute state.closed
+    end
+
     test "a glass whose client is gone is not challenged: it says hello again",
          %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
