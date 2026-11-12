@@ -228,26 +228,14 @@ defmodule Arca.JobClaimsTest do
   end
 
   describe "holding a claim inside a locking transaction" do
-    test "the held row is answered as locked, and a checked renewal records the evidence", %{
-      key: key
-    } do
+    test "the held row is answered as locked at the fence it was taken at", %{key: key} do
       {:ok, held} = watch(key, "boot_a")
 
-      assert {:ok, {locked, renewed}} =
-               Arca.Repo.locking_transaction(fn ->
-                 {:ok, locked} = JobClaims.hold(held)
-                 {:ok, renewed} = JobClaims.renew_held(locked, @lease_ms, detail: "complete")
-                 {locked, renewed}
-               end)
+      assert {:ok, {:ok, locked}} = Arca.Repo.locking_transaction(fn -> JobClaims.hold(held) end)
 
       assert locked.fence == held.fence
-      assert renewed.fence == held.fence + 1
-      assert renewed.detail == "complete"
-      assert DateTime.compare(renewed.lease_until, held.lease_until) in [:gt, :eq]
-
-      # The renewed claim is the one a release names.
-      assert :taken = JobClaims.release(held)
-      assert :ok = JobClaims.release(renewed)
+      assert locked.lease_until == held.lease_until
+      assert :ok = JobClaims.release(locked)
     end
 
     test "a fence another write moved is :taken, and a lease that ran out is :lapsed", %{
@@ -258,21 +246,15 @@ defmodule Arca.JobClaimsTest do
       in_tx = fn fun -> Arca.Repo.locking_transaction(fun) end
 
       assert {:ok, :taken} = in_tx.(fn -> JobClaims.hold(held) end)
-      assert {:ok, :taken} = in_tx.(fn -> JobClaims.renew_held(held, @lease_ms) end)
 
       lapsed = lapsed!(key <> "-l", "boot_a")
       assert {:ok, :lapsed} = in_tx.(fn -> JobClaims.hold(lapsed) end)
-      assert {:ok, :lapsed} = in_tx.(fn -> JobClaims.renew_held(lapsed, @lease_ms) end)
     end
 
-    test "outside a transaction neither answers", %{key: key} do
+    test "outside a transaction it does not answer", %{key: key} do
       {:ok, held} = watch(key, "boot_a")
 
       assert_raise ArgumentError, ~r/inside a locking transaction/, fn -> JobClaims.hold(held) end
-
-      assert_raise ArgumentError, ~r/inside a locking transaction/, fn ->
-        JobClaims.renew_held(held, @lease_ms)
-      end
     end
   end
 end

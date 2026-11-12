@@ -29,10 +29,10 @@ defmodule Arca.JobClaims do
     * `renew/3` moves the lease forward, `record/2` writes `detail`
       without moving it, and `release/1` gives the row up by leaving its
       lease already run out. Each answers the row it wrote.
-    * `hold/1` and `renew_held/3` are the same checks as steps of a
-      caller's locking transaction: the row is held at its owner and
-      fence until the caller commits, and the lease is judged on the
-      clock read after the lock was won.
+    * `hold/1` is the same check as a step of a caller's locking
+      transaction: the row is held at its owner and fence until the
+      caller commits, and the lease is judged on the clock read after
+      the lock was won.
 
   ## The fence
 
@@ -108,9 +108,8 @@ defmodule Arca.JobClaims do
         }
 
   @doc """
-  The `key` of a job the cell has exactly one of — retention, the boot
-  reconciliation, the seed release, the notice of stored grants to make
-  again. The kinds that name a thing of their own (a worker service, a
+  The `key` of a job the cell has exactly one of — retention, the seed
+  release, the notice of stored grants to make again. The kinds that name a thing of their own (a worker service, a
   credential) carry that thing's id instead.
   """
   @spec cell_key() :: String.t()
@@ -187,29 +186,6 @@ defmodule Arca.JobClaims do
           do: {:ok, Arca.Data.project(claim)},
           else: :lapsed
     end
-  end
-
-  @doc """
-  `renew/3` as a step of a caller's `Arca.Repo.locking_transaction/2`: the
-  final checked renewal that records the job's evidence and answers the
-  newest claim, which is the one the caller releases after committing.
-
-  Raises outside a transaction and on a store that cannot answer, so the
-  caller's transaction rolls back rather than committing work whose claim
-  it could not renew.
-  """
-  @spec renew_held(held(), pos_integer(), keyword()) :: {:ok, map()} | lost()
-  # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
-  def renew_held(held, lease_ms, opts \\ [])
-
-  def renew_held(%{} = held, lease_ms, opts)
-      when is_integer(lease_ms) and lease_ms > 0 and is_list(opts) do
-    held = identity!(held)
-    in_transaction!("renew_held/3")
-
-    held
-    |> checked_renew(lease_ms, Keyword.get(opts, :detail, :keep))
-    |> Arca.Data.project()
   end
 
   @doc """
