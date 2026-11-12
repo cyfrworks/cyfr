@@ -231,6 +231,14 @@ defmodule Compendium.ProjectionReconcilerTest do
       Arca.Repo.update_all(Arca.Schemas.StorageUnit, set: [updated_at: long_ago])
     end
 
+    # The pending change outlives the shipped settle: its writer is gone.
+    defp backdate_changes! do
+      long_ago =
+        DateTime.add(DateTime.utc_now(), -2 * Arca.StorageUnits.draft_ttl_ms(), :millisecond)
+
+      Arca.Repo.update_all(Arca.Schemas.StorageProjectionChange, set: [updated_at: long_ago])
+    end
+
     test "younger than the settle answers unavailable, never the row before it", %{
       ctx: ctx,
       actor: actor,
@@ -261,8 +269,9 @@ defmodule Compendium.ProjectionReconcilerTest do
       name: name
     } do
       interrupted!(actor, name)
+      backdate_changes!()
 
-      assert :ok = ProjectionReconciler.await(ctx, "components", settle_after_ms: 0)
+      assert :ok = ProjectionReconciler.await(ctx, "components")
       assert caught_up?(actor)
       assert {:ok, %{description: "promoted"}} = Registry.get(ctx, name, "1.0.0")
     end

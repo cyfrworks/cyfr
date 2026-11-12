@@ -14,8 +14,8 @@ defmodule Compendium.Registry do
 
   Everything that mints a row converges on one builder:
 
-  - `publish_bytes/4` (`source: "published"`) — raw WASM from a
-    same-machine caller; refuses tinctures; `origin: :remote` may never
+  - `publish_bytes/4` (`source: "oci"`) — a pulled component's raw
+    WASM (`Compendium.OCI.Client`); refuses tinctures; `origin: :remote` may never
     mint into `local` (`Compendium.NamespacePolicy`).
   - `publish_tincture_archive/4` (`source: "oci"`) — a tar+gzip tincture
     bundle, decompression-bounded (`Compendium.Archive.gunzip_bounded/2`),
@@ -172,7 +172,7 @@ defmodule Compendium.Registry do
              manifest: manifest_bytes,
              manifest_map: manifest_map,
              allow_overwrite: allow_overwrite,
-             source: Keyword.get(opts, :source),
+             source: Compendium.Source.oci(),
              rollback_unit: ComponentPath.version_dir(component_type, publisher, name, version),
              claim: Keyword.get(opts, :claim)
            ) do
@@ -264,9 +264,7 @@ defmodule Compendium.Registry do
   # still holds that claim and the slot it was taken under: a resumed
   # stale fill neither rewrites nor removes what its successor published.
   defp land_row(ctx, name, version, metadata, validation, publisher, opts) do
-    build_opts =
-      [manifest: opts[:manifest], manifest_map: opts[:manifest_map]] ++
-        if opts[:source], do: [source: opts[:source]], else: []
+    build_opts = Keyword.take(opts, [:source, :manifest, :manifest_map])
 
     result =
       with {:ok, component} <-
@@ -1098,12 +1096,13 @@ defmodule Compendium.Registry do
 
   # Default cap for a decompressed tincture archive (256 MB). Tinctures are
   # frontend bundles — typically a few MB — so this is generous headroom while
-  # still bounding a decompression bomb. Operators may override via
-  # `config :cyfr, :tincture_max_decompressed_bytes`.
+  # still bounding a decompression bomb. No release sets
+  # `config :cyfr, :tincture_max_decompressed_bytes`; tests lower it to
+  # reach the ceiling without a 256 MB archive.
   @default_tincture_max_decompressed 256 * 1024 * 1024
 
   @doc """
-  The decompressed-tincture ceiling (config-overridable). Public because it
+  The decompressed-tincture ceiling. Public because it
   is also the largest blob any pull may legitimately carry, so the OCI blob
   transport uses it as its wire-size ceiling, and the bound a pull's src/
   layer inflates under.
@@ -1303,7 +1302,7 @@ defmodule Compendium.Registry do
   defp build_component(ctx, name, version, metadata, validation, publisher, opts) do
     now = DateTime.utc_now()
     component_type = Map.fetch!(metadata, :type)
-    source = Keyword.get(opts, :source, Compendium.Source.published())
+    source = Keyword.fetch!(opts, :source)
     manifest = Keyword.get(opts, :manifest)
 
     # Arca.ComponentStorage validates the source value when writing the row.
