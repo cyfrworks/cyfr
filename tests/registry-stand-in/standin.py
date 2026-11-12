@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The cyfr.run stand-in, a tool for the dev loop (scripts/dev-stack.sh) and
-# the proofs only. It answers for cyfr.run's registry and its identity
+# The cyfr.run stand-in, a tool for the proofs only (the dev loop runs a
+# local cyfr.run, scripts/dev-stack.sh). It answers for cyfr.run's registry and its identity
 # directory on one plain-HTTP listener, and it checks no signature on any
 # registry request or directory entry: a request is read for its fields
 # alone. CYFR's client verifies every chain it reads
@@ -12,7 +12,7 @@
 # (tests/identity-proof/cells.sh), keep the production directory proven.
 #
 #   python3 -I tests/registry-stand-in/standin.py --address A --port P \
-#     --state FILE --ready-file R [--directory URL] [--upstream URL]
+#     --state FILE --ready-file R [--directory URL]
 #
 # It listens on A:P (P 0 takes a free port) and writes the port it took,
 # and a line feed, to R once it serves. It stops on SIGTERM and SIGINT.
@@ -57,11 +57,8 @@
 # operator's tombstone, the stand-in's alone: cyfr.run's is an
 # administrator's action, a CYFR's the operation directory.tombstone.
 #
-# Forwarding, for the dev loop alone: with --upstream URL a GET of a route
-# it does not own goes to that URL with only Accept and User-Agent copied,
-# following no redirect (an upstream 3xx answers 502). Any other method on
-# a route it does not own answers 405 and goes nowhere. Without --upstream
-# nothing leaves the machine.
+# A GET of a route it does not own answers 404, and any other method on
+# one answers 405: nothing is forwarded, and nothing leaves the machine.
 #
 # The state file holds the policy acceptances, the names, the logs and the
 # tombstoned identifiers, written after every write, and the directory URL
@@ -70,7 +67,6 @@
 
 import argparse
 import hashlib
-import http.client
 import http.server
 import json
 import os
@@ -91,7 +87,6 @@ RESERVED_NAME = "admin"
 PROTOCOL = "cyfr-identity/v2"
 REQUEST_PROTOCOL = "cyfr-registry-request/v2"
 HANDLE_PROTOCOL = "cyfr-handle/v1"
-REDIRECTED = "cyfr.run answered with a redirect, which the stand-in does not follow."
 
 # Each grammar pattern is matched whole (fullmatch): a bare match lets `$`
 # match before a final newline.
@@ -172,8 +167,8 @@ class State:
 
 
 class StandIn:
-    def __init__(self, state, address, directory, upstream, origin):
-        self.state, self.address, self.directory, self.upstream = state, address, directory, upstream
+    def __init__(self, state, address, directory, origin):
+        self.state, self.address, self.directory = state, address, directory
         self.origin = origin
 
     def config(self):
@@ -489,31 +484,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(*answer)
         if self.command != "GET":
             return self.send(405, jcs({"error": "method_not_allowed"}), allow="GET")
-        if stand_in.upstream is None:
-            return self.send(404, jcs({"error": "not_found"}))
-        self.forward(stand_in.upstream, url)
-
-    def forward(self, upstream, url):
-        target = urllib.parse.urlsplit(upstream)
-        path = (target.path.rstrip("/") + url.path) + ("?" + url.query if url.query else "")
-        connection_class = http.client.HTTPSConnection if target.scheme == "https" else http.client.HTTPConnection
-        connection = connection_class(target.hostname, target.port, timeout=30)
-        try:
-            connection.putrequest("GET", path, skip_accept_encoding=True)
-            for name in ("Accept", "User-Agent"):
-                value = self.headers.get(name)
-                if value is not None:
-                    connection.putheader(name, value)
-            connection.endheaders()
-            response = connection.getresponse()
-            body = response.read()
-        except OSError:
-            return self.send(502, "cyfr.run did not answer.", "text/plain")
-        finally:
-            connection.close()
-        if 300 <= response.status < 400:
-            return self.send(502, REDIRECTED, "text/plain")
-        self.send(response.status, body, response.getheader("Content-Type") or "application/octet-stream")
+        self.send(404, jcs({"error": "not_found"}))
 
     # Every method, TRACE and CONNECT and any other included, goes to the
     # one router, which answers a method a route does not take 405; the
@@ -525,13 +496,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(description="The cyfr.run stand-in for the dev loop and the proofs.")
+    parser = argparse.ArgumentParser(description="The cyfr.run stand-in for the proofs.")
     parser.add_argument("--address", required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--state", required=True)
     parser.add_argument("--ready-file", required=True)
     parser.add_argument("--directory")
-    parser.add_argument("--upstream")
     args = parser.parse_args(argv)
 
     server = http.server.ThreadingHTTPServer((args.address, args.port), Handler)
@@ -540,7 +510,7 @@ def main(argv):
     origin = "http://%s:%d" % (args.address, port)
     directory = args.directory or origin
     state = State(args.state, directory)
-    server.stand_in = StandIn(state, args.address, directory, args.upstream, origin)
+    server.stand_in = StandIn(state, args.address, directory, origin)
 
     def stop(_signum, _frame):
         raise SystemExit(0)

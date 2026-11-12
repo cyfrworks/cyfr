@@ -39,61 +39,129 @@ missing or wrong header fails CI.
 
 `scripts/dev-stack.sh`, from the checkout, runs CYFR from source the way an
 install runs it: Prism, the server and live reload from `mix phx.server`,
-and the runtime, the backends service (stdio MCP servers) and the builds
+the runtime, the backends service (stdio MCP servers) and the builds
 service in their containers under `cyfr-locus`, each with the shipped
-security options and its egress guard, run from this tree's Locus image.
-Besides the setup the next section names (the pinned `wasm-tools`, the
-prebuilt binaries and the tailwind CLI), it needs Docker with its compose
-plugin, `python3`, and a host that allows unprivileged user namespaces
-(`docker-compose.yml`'s `locus-runtime` service says why).
+security options and its egress guard, run from this tree's Locus image,
+and a cyfr.run of its own on this machine as its registry and account
+service. Besides the setup the next section names (the pinned
+`wasm-tools`, the prebuilt binaries and the tailwind CLI), it needs Docker
+with its compose plugin, `python3`, `openssl`, a host that allows
+unprivileged user namespaces (`docker-compose.yml`'s `locus-runtime`
+service says why), and a checkout of
+[cyfr.run](https://github.com/cyfrworks/cyfr.run) beside this one
+(`../cyfr.run`), or wherever `DEV_STACK_CYFR_RUN` names.
 
-On its first run it makes `.env` mode 0600 and writes into it what a `mix`
-boot needs and nothing sets: `CYFR_SETUP_TOKEN`, the runtime root and the
-backends key, minted as `cyfr init` mints them. Later runs keep every value. The builds key, which
-a `mix` boot refuses without the builds URL only the stack sets, is minted
-for each run unless `.env` sets one. It then builds the tree's Locus image
-with `scripts/image.sh` when the host does not hold it already (every
-worktree at the same inputs shares one), starts a stand-in for cyfr.run
-(`tests/registry-stand-in/standin.py`) and the containers, and runs
-`mix phx.server` in the foreground at http://localhost:4000. The server
-reaches cyfr.run only through the stand-in, whatever `.env` says: a name
-and an identity made in the loop exist at the stand-in alone, kept in
-`data/dev-stack/cyfr-run.json`, and no cyfr.run checkout is needed.
-Component search and metadata pass through it to cyfr.run, and component
-pulls still come from cyfr.run's OCI registry. A new dev database starts
-the stand-in afresh; a database that is not new needs the stand-in state
-it was made with, and the loop refuses, naming the reset (deleting the dev
-database and `data/dev-stack/cyfr-run.json`), when that state is gone. A
-`mix` boot outside the loop names cyfr.run as its registry and account
-service, as a release does, unless `.env` names others. The run that
-writes the setup token prints the setup link,
-`http://localhost:4000/setup#<token>`, as `cyfr init` does: it asks for a
-name and a passkey, which set up CYFR's first person, who administers it,
-and shows their recovery code, all against the stand-in. Prism and the
-server reload as their files change; a change under `apps/locus` or to the
-Locus image's other inputs takes effect at the next start. Ctrl-C stops
-the server and removes the containers; the image stays, so a start with
-nothing changed builds nothing. The image is shared, so the janitor, not
-the loop, removes it once no worktree produces it and no loop uses it:
-run `scripts/janitor.sh --dry-run` to see what it would remove, then
-`scripts/janitor.sh` to remove it by hand. `scripts/dev-stack.sh down` stops
-the server and removes the containers a killed run of the same worktree
-left.
+**The local cyfr.run.** A CYFR always names a registry and calls it, and
+development takes the release's path: the loop's server names
+`cyfr.test` as its registry, `registry.cyfr.test` as its OCI registry and
+`https://cyfr.test` as its account service, whatever `.env` says, and
+prints them as it starts. They are cyfr.run's own local stack (Caddy, the
+`cyfrrun` server, Zot and its PostgreSQL, as that checkout's
+`docker-compose.yml` merges them), run under the compose project
+`cyfr-run-dev`, which serves both names on `127.0.0.1:443`. It is built
+and run from the checkout's committed HEAD: the loop exports that
+commit's tracked files into
+`~/.local/state/cyfr-dev-stack/cyfr-run/<commit>` and runs compose there,
+and prints the commit as it starts. An uncommitted change in the
+checkout is not in the stack, and a new commit there rebuilds it at the
+next start. Nothing in the export reaches outside it: the loop refuses a
+commit holding a symbolic link, or a compose file binding a path, whose
+real path leaves the export, and it removes only the exports it made
+(named for a commit and holding its marker), naming anything else it
+finds there. A `.env` that is tracked in that repository is exported with
+the rest and can enter the builder's cache; the loop's own env file keeps
+it out of the services. The accounts, names and components a loop makes exist
+there alone, and nothing the loop does reaches the public cyfr.run. A
+`mix` boot outside the loop names the public cyfr.run, as a release does,
+unless `.env` names others: the loop is how a developer stays on this
+machine.
+Nothing is seeded: a new athanor's components ship with CYFR, so a fresh
+sign-in pulls nothing, and `cyfr push` publishes into the local registry
+when that is what you test. Its admin pages are at
+https://cyfr.test/admin; the first administrator is made once at
+`https://cyfr.test/admin/bootstrap?token=<ADMIN_TOKEN>`, the token the
+loop mints into the machine's dev-stack directory,
+`~/.local/state/cyfr-dev-stack/cyfr-run.env` (under `XDG_STATE_HOME` when
+it is set, mode 0700), beside the copy of Caddy's certificate authority,
+`cyfr-run-root.crt`. Nothing is written into the cyfr.run checkout, and
+none of its untracked files, its `.env` among them, reaches the stack or
+its images.
+
+One machine runs one local cyfr.run, shared by every worktree's loop: a
+loop starts it when it is not running and leaves it running when it
+stops, and no worktree's `down` stops it. `docker compose -p cyfr-run-dev
+down` stops it for good and keeps its accounts;
+`docker compose -p cyfr-run-dev down -v` resets it, deleting every
+account, name and component in it.
+
+Three things are set once per machine, with administrator rights; the
+loop checks each and never does it, and refuses with the command until it
+is done:
+
+- both names resolve to 127.0.0.1 alone (`::1` beside it is accepted), and to no other address:
+  `echo '127.0.0.1 cyfr.test registry.cyfr.test' | sudo tee -a /etc/hosts`;
+- Docker publishes `127.0.0.1:443`, which rootful Docker and Docker
+  Desktop do as they are; rootless Docker needs
+  `echo net.ipv4.ip_unprivileged_port_start=443 | sudo tee /etc/sysctl.d/90-cyfr-dev.conf && sudo sysctl --system`
+  (443, since the account pages' addresses name no port);
+- the operating system trusts Caddy's certificate authority, which the
+  server's TLS reads (the loop prints the command: on Debian and Ubuntu,
+  `sudo cp ~/.local/state/cyfr-dev-stack/cyfr-run-root.crt /usr/local/share/ca-certificates/cyfr-test-root.crt && sudo update-ca-certificates`;
+  on macOS, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.local/state/cyfr-dev-stack/cyfr-run-root.crt`),
+  and so does the browser that signs in, which the loop cannot see:
+  Chrome and Chromium on Linux read their own store,
+  `certutil -d sql:$HOME/.pki/nssdb -A -t C,, -n cyfr-test -i ~/.local/state/cyfr-dev-stack/cyfr-run-root.crt`
+  (libnss3-tools), and Firefox its profile's. A reset of the local
+  cyfr.run makes a new authority, to trust again.
+
+**A start.** On its first run the loop makes `.env` mode 0600 and writes
+into it what a `mix` boot needs and nothing sets: `CYFR_SETUP_TOKEN`, the
+runtime root and the backends key, minted as `cyfr init` mints them. Later
+runs keep every value. The builds key, which a `mix` boot refuses without
+the builds URL only the stack sets, is minted for each run unless `.env`
+sets one. It then builds the tree's Locus image with `scripts/image.sh`
+when the host does not hold it already (every worktree at the same inputs
+shares one), starts the containers, and runs `mix phx.server` in the
+foreground at http://localhost:4000. The run that writes the setup token
+prints the setup link, `http://localhost:4000/setup#<token>`, as `cyfr
+init` does: it asks for a name and a passkey at the local cyfr.run's
+account pages, which set up CYFR's first person, who administers it, and
+shows their recovery code. Prism and the server reload as their files
+change; a change under `apps/locus` or to the Locus image's other inputs
+takes effect at the next start. Ctrl-C stops the server and removes the
+worktree's containers; the image stays, so a start with nothing changed
+builds nothing. The image is shared, so the janitor, not the loop, removes
+it once no worktree produces it and no loop uses it: run
+`scripts/janitor.sh --dry-run` to see what it would remove, then
+`scripts/janitor.sh` to remove it by hand. `scripts/dev-stack.sh down`
+stops the server and removes the containers a killed run of the same
+worktree left.
+
+A dev database's people are bound to the local cyfr.run their accounts
+were made at, since every account names its account service. The loop
+writes a random id once into the local cyfr.run's PostgreSQL volume; a
+new database records it in `data/dev-stack/cyfr-run.id`, and a database
+that is not new refuses to start when the running local cyfr.run has
+another id (it was reset, or an older copy of its volume was put back),
+or when it has none (it was made beside the stand-in an earlier loop
+ran), since its people's accounts are not there; the refusal names the
+ways out. A `down -v` leaves no way back, so delete the dev database
+(`data/cyfr.db` unless `.env` names another) to start afresh.
+`docker compose -p cyfr-run-dev down -v && rm -f data/cyfr.db*` resets
+both; every other worktree's database then refuses in the same way.
 
 Each worktree runs a loop of its own, beside the others, a test suite, a
 proof or a CI-style run on the same host. Its containers are named
 `cyfr-dev-<seed>`, the worktree's seed, and its ports and networks are a
-slot's, one of twenty, its stand-in on 127.79.K.1 for slot K. A database
-is bound to the slot its stand-in state was made at: the loop takes that
-slot when it is free, and refuses, naming it, when it is not. The first loop on a host keeps
+slot's, one of twenty. The first loop on a host keeps
 http://localhost:4000, so a lone worktree sees no change; a second
 worktree's loop takes the next free slot, Prism on 4010 and so on, and
 prints its address, which the worktree remembers in
 `data/dev-stack.slot` for its next run. A `.env` that sets `CYFR_PORT` or
 another address of the stack refuses a slot it disagrees with, by name.
-With an API key from Prism's API Keys page, `CYFR_TOKEN=<key>
-scripts/dev-stack.sh check` runs a component through the worktree's running
-loop and asserts its answer.
+With an API key from Prism's API Keys page, or the session token of a
+`cyfr login`, `CYFR_TOKEN=<key> scripts/dev-stack.sh check` runs a
+component through the worktree's running loop and asserts its answer.
 
 AQUA answers in its panel once a model provider's key is in the vault, as on
 any install. While a worktree's loop runs, a second start or `down` in the

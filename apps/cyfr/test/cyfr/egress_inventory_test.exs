@@ -95,10 +95,15 @@ defmodule Cyfr.EgressInventoryTest do
     "apps/sanctum/lib/sanctum/egress.ex" => :pinned_owner,
     # A guest's outbound target, pinned by the control plane under the
     # attempt's admitted authority (`egress_pin`), through the above.
-    "apps/cyfr/lib/opus/host/egress.ex" => :guest_pin
+    "apps/cyfr/lib/opus/host/egress.ex" => :guest_pin,
+    # The source development stack's settings task asks whether every
+    # address the local cyfr.run's two names resolve to is this machine's
+    # loopback before the loop starts the server (`scripts/dev-stack.sh`);
+    # it connects to nothing.
+    "apps/cyfr/lib/mix/tasks/cyfr.locus.dev_stack.ex" => :dev_stack_check
   }
 
-  @resolver_patterns ["getaddr(", "Sanctum.Network.pin("]
+  @resolver_patterns ["getaddr(", "getaddrs(", "Sanctum.Network.pin("]
 
   # The operator's private targets (`CYFR_PRIVATE_EGRESS_TARGETS`) are the
   # control plane's own: its outbound callers reach them through
