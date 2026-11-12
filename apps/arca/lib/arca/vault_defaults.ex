@@ -41,20 +41,6 @@ defmodule Arca.VaultDefaults do
   defguardp resolved(athanor_id) when is_binary(athanor_id) and athanor_id != ""
   defguardp provider(hint) when is_binary(hint) and hint != ""
 
-  @doc "The actor's athanor's default for `provider_hint`."
-  @spec get(Prima.Actor.t(), String.t()) :: {:ok, default()} | {:error, :not_found} | refusal()
-  def get(%Prima.Actor{athanor_id: athanor_id}, provider_hint)
-      when resolved(athanor_id) and provider(provider_hint) do
-    Arca.Repo.Errors.with_db_rescue("Arca.VaultDefaults.get", fn ->
-      case Arca.Repo.get_by(VaultDefault, athanor_id: athanor_id, provider_hint: provider_hint) do
-        nil -> {:error, :not_found}
-        row -> {:ok, view(row)}
-      end
-    end)
-  end
-
-  def get(%Prima.Actor{}, provider_hint) when provider(provider_hint), do: {:error, :no_athanor}
-
   @doc "Every default of the actor's athanor, by provider."
   @spec list(Prima.Actor.t()) :: {:ok, [default()]} | refusal()
   def list(%Prima.Actor{athanor_id: athanor_id}) when resolved(athanor_id) do

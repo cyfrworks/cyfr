@@ -18,6 +18,16 @@ defmodule Arca.VaultDefaultsTest do
     {:ok, actor: Arca.Test.Actor.local(), other: Prima.Actor.in_athanor("ath_other")}
   end
 
+  # The athanor's default for `hint`, as the list a reader is given names it.
+  defp default_for(actor, hint) do
+    with {:ok, defaults} <- Arca.VaultDefaults.list(actor) do
+      case Enum.find(defaults, &(&1.provider_hint == hint)) do
+        nil -> {:error, :not_found}
+        default -> {:ok, default}
+      end
+    end
+  end
+
   defp entry!(actor, hint \\ "openai.com") do
     {:ok, entry} =
       Arca.VaultStorage.put(actor, %{
@@ -44,7 +54,7 @@ defmodule Arca.VaultDefaultsTest do
     second = entry!(actor)
 
     # The first entry of the provider became its default when it was put.
-    assert {:ok, %{vault_entry_id: id}} = VaultDefaults.get(actor, "openai.com")
+    assert {:ok, %{vault_entry_id: id}} = default_for(actor, "openai.com")
     assert id == first.id
 
     assert {:ok, default} =
@@ -72,7 +82,7 @@ defmodule Arca.VaultDefaultsTest do
              VaultDefaults.set(actor, "openai.com", %{vault_entry_id: theirs.id})
 
     # The default the athanor had stands.
-    assert {:ok, %{vault_entry_id: id}} = VaultDefaults.get(actor, "openai.com")
+    assert {:ok, %{vault_entry_id: id}} = default_for(actor, "openai.com")
     assert id == own.id
   end
 
@@ -101,7 +111,7 @@ defmodule Arca.VaultDefaultsTest do
     assert {:error, :not_found} =
              VaultDefaults.set(actor, "anthropic.com", %{vault_entry_id: entry.id})
 
-    assert {:error, :not_found} = VaultDefaults.get(actor, "anthropic.com")
+    assert {:error, :not_found} = default_for(actor, "anthropic.com")
   end
 
   test "two athanors choose independently, and clear/2 removes one's", %{
@@ -111,13 +121,13 @@ defmodule Arca.VaultDefaultsTest do
     mine = entry!(actor)
     theirs = entry!(other)
 
-    assert {:ok, %{vault_entry_id: m}} = VaultDefaults.get(actor, "openai.com")
-    assert {:ok, %{vault_entry_id: t}} = VaultDefaults.get(other, "openai.com")
+    assert {:ok, %{vault_entry_id: m}} = default_for(actor, "openai.com")
+    assert {:ok, %{vault_entry_id: t}} = default_for(other, "openai.com")
     assert {m, t} == {mine.id, theirs.id}
 
     assert :ok = VaultDefaults.clear(actor, "openai.com")
-    assert {:error, :not_found} = VaultDefaults.get(actor, "openai.com")
-    assert {:ok, %{vault_entry_id: ^t}} = VaultDefaults.get(other, "openai.com")
+    assert {:error, :not_found} = default_for(actor, "openai.com")
+    assert {:ok, %{vault_entry_id: ^t}} = default_for(other, "openai.com")
     assert :ok = VaultDefaults.clear(actor, "openai.com")
   end
 
@@ -125,7 +135,6 @@ defmodule Arca.VaultDefaultsTest do
     nobody = %Prima.Actor{athanor_id: nil}
 
     QueryCounter.assert_queries(0, fn ->
-      assert {:error, :no_athanor} = VaultDefaults.get(nobody, "openai.com")
       assert {:error, :no_athanor} = VaultDefaults.list(nobody)
 
       assert {:error, :no_athanor} =
