@@ -149,8 +149,9 @@ same worktree refuses, naming the run that holds it.
   - `release`: the gate's close, which holds the host for over an hour,
     run by `scripts/release.sh --gate` for a HEAD with no run on GitHub;
   - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
-    proof, which no workflow runs, each on one quarter: the host's timer
-    runs it once a day on main's head through `scripts/nightly.sh`, which
+    proof, which no workflow runs, each on one quarter, then the canvas
+    proof at both viewports on all four with its reference budget. The host's
+    timer runs it once a day on main's head through `scripts/nightly.sh`, which
     reports the night to GitHub (the nightly, below).
 
   The touched tests are the changed test files and, for each changed or
@@ -229,7 +230,7 @@ same worktree refuses, naming the run that holds it.
   its registry from (`CYFR_RUN_DIR`). Nobody works in either: before each
   night the unit moves both to their origin's main and removes whatever
   else they hold but ignored build output. `scripts/nightly.sh` then runs
-  the nightly stage there, the janitor and the two proofs no workflow runs,
+  the nightly stage there, the janitor and the host's proofs,
   and triggers `.github/workflows/host-nightly.yml` with the commit, the
   stage's exit, its row lines and its logs' path on the host. That run
   fails unless the exit is 0, a check that did not run included, and
@@ -249,7 +250,7 @@ same worktree refuses, naming the run that holds it.
   ```ini
   # cyfr-nightly.service
   [Unit]
-  Description=CYFR nightly: the janitor and the proofs no workflow runs (scripts/nightly.sh)
+  Description=CYFR nightly: the janitor and the host's proofs (scripts/nightly.sh)
 
   [Service]
   Type=oneshot
