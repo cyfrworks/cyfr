@@ -60,10 +60,14 @@ pull-request	gate	4	2700	-	always	scripts/commit-gate.sh -l "$STAGE_LOGDIR/gate"
 release	close	4	10800	-	always	scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"
 
 nightly	janitor	1	1800	-	always	scripts/janitor.sh
-# The proofs no workflow runs, on main's head (scripts/nightly.sh). The
+# The host's proofs, on main's head (scripts/nightly.sh). The
 # install proof's row prepares its images first, in its own row, so a
 # night whose preparation fails reads not run or failed, never passed; the
 # handle proof reads its cyfr.run checkout from CYFR_RUN_DIR, which the
 # timer's unit sets (CONTRIBUTING.md).
 nightly	install-screen-proof	1	3600	-	always	tests/install-screen-proof/prepare.sh && scripts/image.sh --undated app && tests/install-screen-proof/run.sh
 nightly	handle-proof	1	3600	-	always	tests/handle-proof/run.sh
+# The canvas proof builds its release and prepares its browser image and
+# library itself. Its 100 ms reference budget needs all four quarters.
+nightly	canvas-proof-desktop	4	3600	-	always	env CANVAS_PROOF_HOST_CLASS=reference CANVAS_PROOF_VIEWPORT=desktop PROOF_OUT="$STAGE_LOGDIR/canvas/desktop" tests/canvas-proof/run.sh
+nightly	canvas-proof-720x720	4	3600	-	always	env CANVAS_PROOF_HOST_CLASS=reference CANVAS_PROOF_VIEWPORT=720x720 PROOF_OUT="$STAGE_LOGDIR/canvas/720x720" tests/canvas-proof/run.sh

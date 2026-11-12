@@ -9,7 +9,7 @@
 # offline work and reproducing a CI failure: the pull request's run on
 # GitHub is the check), release (the gate's close, which
 # `scripts/release.sh --gate` runs for a HEAD with no run on GitHub) and
-# nightly (the janitor and the proofs no workflow runs, which
+# nightly (the janitor and the host's proofs, which
 # scripts/nightly.sh runs once a day from a timer on the host, on main's
 # head, and reports to GitHub). What each runs is scripts/stages.tsv, one
 # row per check:
