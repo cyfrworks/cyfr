@@ -254,12 +254,30 @@ defmodule Sanctum do
   defp parse_registry(_value), do: :error
 
   defp registry_port?(nil), do: true
-  defp registry_port?(port), do: port?(port)
 
-  @doc "Whether `value` spells a TCP port, 1 to 65535, in decimal digits alone."
-  @spec port?(term()) :: boolean()
-  def port?(value),
-    do: is_binary(value) and value =~ ~r/\A[0-9]{1,5}\z/ and String.to_integer(value) in 1..65_535
+  defp registry_port?(port),
+    do: port =~ ~r/\A[0-9]{1,5}\z/ and String.to_integer(port) in 1..65_535
+
+  @doc """
+  Whether `value` names an OCI registry, which components are pulled from
+  (`CYFR_OCI_REGISTRY_URL`): what `registry_url?/1` names, or a bracketed
+  IPv6 address, each with an optional port from 1 to 65535. The OCI
+  transport reaches an IPv6 registry by its bracketed URL authority, and
+  nothing signed names this host.
+  """
+  @spec oci_registry_url?(term()) :: boolean()
+  def oci_registry_url?(value) when is_binary(value) do
+    case Regex.run(~r/\A\[([0-9A-Fa-f:.]+)\](?::([^:]*))?\z/, value, capture: :all_but_first) do
+      [address | port] ->
+        match?({:ok, _}, :inet.parse_ipv6strict_address(String.to_charlist(address))) and
+          Enum.all?(port, &registry_port?/1)
+
+      nil ->
+        registry_url?(value)
+    end
+  end
+
+  def oci_registry_url?(_value), do: false
 
   @doc """
   The base URL of a registry host (a name or address with an optional

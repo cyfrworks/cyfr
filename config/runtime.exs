@@ -531,7 +531,7 @@ if config_env() != :test do
   # Every CYFR names a registry and calls it, in every build: cyfr.run or
   # its own, a host name or IPv4 address with an optional port
   # (`Sanctum.registry_url?/1`); the OCI host may also be a bracketed IPv6
-  # address (`Compendium.RegistryHost.oci_host?/1`). Any other value, and
+  # address (`Sanctum.oci_registry_url?/1`). Any other value, and
   # `none` in any case, refuses the boot. Unset, `registry_url` is `"cyfr.run"`
   # and `oci_registry_url` derives as `"registry.#{registry_url}"`. An
   # install cut off from the internet names a registry of its own; one it
@@ -592,7 +592,7 @@ if config_env() != :test do
     env_str.("CYFR_OCI_REGISTRY_URL", "registry.#{registry_url_config}")
 
   if String.downcase(oci_registry_url_config) == "none" or
-       not Compendium.RegistryHost.oci_host?(oci_registry_url_config) do
+       not Sanctum.oci_registry_url?(oci_registry_url_config) do
     raise "[Cyfr] FATAL: CYFR_OCI_REGISTRY_URL must name the OCI registry components " <>
             "are pulled from: a host name, an IPv4 address or a bracketed IPv6 address, " <>
             "with an optional port."
