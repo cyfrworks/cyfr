@@ -640,7 +640,6 @@
 0.1	apps/cyfr/test/prism_web/nav_test.exs
 1.2	apps/cyfr/test/prism_web/ops_test.exs
 0.9	apps/cyfr/test/prism_web/phx_value_key_test.exs
-2.1	apps/cyfr/test/prism_web/qr_test.exs
 3.3	apps/cyfr/test/prism_web/sign_in_trace_test.exs
 3.1	apps/cyfr/test/prism_web/tool_seam_test.exs
 0.4	apps/cyfr/test/sanctum/api_key_athanor_scope_test.exs
