@@ -7,7 +7,8 @@ defmodule Sanctum.NamespaceCacheTest do
   suite configuration turns the cache off, so here the setting is absent
   and the code's own minute applies. A read within the minute is served
   from the cache, the write that records a claim drops it, and a read
-  after the minute asks the users row again.
+  after the minute asks the users row again. At the suites' 0 the entry
+  is expired on arrival, so every read asks the row.
   """
   use ExUnit.Case, async: false
 
@@ -81,6 +82,19 @@ defmodule Sanctum.NamespaceCacheTest do
         {3, System.monotonic_time(:millisecond)}
       )
 
+    assert Namespace.lookup(person.id) == "second-ns"
+  end
+
+  test "at 0, the suites' setting, the entry is expired on arrival and every read asks the row" do
+    Prima.Test.Env.put_app_env(:sanctum, :namespace_cache_ttl_ms, 0)
+    person = person()
+    {:ok, _} = Users.set_namespace(person, "first-ns")
+
+    assert Namespace.lookup(person.id) == "first-ns"
+    [{_key, "first-ns", expires_at}] = entry(person.id)
+    assert expires_at <= System.monotonic_time(:millisecond)
+
+    write_below!(person.id, "second-ns")
     assert Namespace.lookup(person.id) == "second-ns"
   end
 end

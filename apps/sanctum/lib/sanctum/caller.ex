@@ -185,34 +185,31 @@ defmodule Sanctum.Caller do
   def establish({:session, token}, opts) when is_binary(token) do
     ttl = memo_ttl_ms()
 
-    if ttl > 0 do
-      # A cold page load establishes the same caller several times inside
-      # a second (the plug, the dead render, the connected mount, the
-      # nested topbar). The short memo collapses those to one pipeline
-      # run. Only successes are cached, and every session mutation
-      # (`Session.destroy/1`, `destroy_by_hash/1`,
-      # `revoke_all_for_user/1`) calls `invalidate_hash/1`, so a revoked
-      # session misses on its very next establish — the TTL
-      # only bounds reads that race the mutation itself, and, on a peer,
-      # an announcement the bus did not deliver. What is cached is an
-      # AUTHORIZATION decision, so the TTL is a security bound and not a
-      # tuning knob: it is how long a revoked authority may outlive its
-      # revocation anywhere in the cell — the same bound `fresh?/1` holds
-      # a retained context to.
-      key = memo_key(token, opts)
+    # A cold page load establishes the same caller several times inside
+    # a second (the plug, the dead render, the connected mount, the
+    # nested topbar). The short memo collapses those to one pipeline
+    # run. Only successes are cached, and every session mutation
+    # (`Session.destroy/1`, `destroy_by_hash/1`,
+    # `revoke_all_for_user/1`) calls `invalidate_hash/1`, so a revoked
+    # session misses on its very next establish — the TTL
+    # only bounds reads that race the mutation itself, and, on a peer,
+    # an announcement the bus did not deliver. What is cached is an
+    # AUTHORIZATION decision, so the TTL is a security bound and not a
+    # tuning knob: it is how long a revoked authority may outlive its
+    # revocation anywhere in the cell — the same bound `fresh?/1` holds
+    # a retained context to. At a TTL of 0 nothing is memoized
+    # (`memoize/3`), so every establish runs the pipeline.
+    key = memo_key(token, opts)
 
-      case Arca.Cache.get(key) do
-        {:ok, %Context{} = ctx} ->
-          {:ok, ctx}
+    case Arca.Cache.get(key) do
+      {:ok, %Context{} = ctx} ->
+        {:ok, ctx}
 
-        :miss ->
-          result = do_establish(token, opts)
+      :miss ->
+        result = do_establish(token, opts)
 
-          with {:ok, ctx} <- result, do: memoize(key, ctx, ttl)
-          result
-      end
-    else
-      do_establish(token, opts)
+        with {:ok, ctx} <- result, do: memoize(key, ctx, ttl)
+        result
     end
   end
 
