@@ -512,7 +512,7 @@ defmodule Cyfr.StorageReserveTest do
       assert Cyfr.StorageReserve.poll(pid) == :depleted
 
       key = "storage-reserve-#{System.unique_integer([:positive])}"
-      assert {:ok, _claim} = Arca.JobClaims.claim("bootstrap", key, "storage-reserve", 60_000)
+      assert {:ok, _claim} = Arca.JobClaims.claim("retention", key, "storage-reserve", 60_000)
     end
   end
 

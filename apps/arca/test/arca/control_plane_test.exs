@@ -108,11 +108,6 @@ defmodule Arca.ControlPlaneTest do
       claimed_here(true)
       refute ControlPlane.held?()
     end
-
-    test "an indefinite hold is the one that does not run out" do
-      :ok = ControlPlane.record({:held, :indefinitely})
-      assert ControlPlane.held?()
-    end
   end
 
   describe "the local clock" do
@@ -572,7 +567,8 @@ defmodule Arca.ControlPlaneTest do
       assert {:ok, :lost} =
                Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(:none) end)
 
-      assert :lost = ControlPlane.check_held(:none)
+      assert {:ok, :lost} =
+               Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(:none) end)
 
       claimed_here(false)
       assert {:ok, :ok} = Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(:none) end)

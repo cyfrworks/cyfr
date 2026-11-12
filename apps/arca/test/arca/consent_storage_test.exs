@@ -517,7 +517,7 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
-  describe "block_dependents/4 and share_heads/2 answer their caller's own" do
+  describe "block_dependents/4 answers its caller's own" do
     setup do
       terry = Arca.Test.Shares.owner!()
       entry = Arca.Test.Shares.entry!(terry.actor)
@@ -542,19 +542,10 @@ defmodule Arca.ConsentStorageTest do
                  "needs_consent"
                )
 
-      assert {:error, :cross_tenant} = ConsentStorage.share_heads(stranger, [share.id])
-      assert {:error, :cross_tenant} = ConsentStorage.share_heads(%Prima.Actor{}, [share.id])
-      # Called through apply/3: the type checker refuses the literal call.
-      assert_raise FunctionClauseError, fn ->
-        apply(ConsentStorage, :share_heads, [nil, [share.id]])
-      end
-
       assert Arca.Test.Shares.profile_status(alice.athanor.id, profile.id) == "active"
 
-      # The owner and the platform reach them.
+      # The owner reaches them.
       pair = {alice.athanor.id, profile.id}
-      assert {:ok, [^pair]} = ConsentStorage.share_heads(terry.actor, [share.id])
-      assert {:ok, [^pair]} = ConsentStorage.share_heads(Prima.Actor.system(), [share.id])
 
       assert {:ok, [^pair]} =
                ConsentStorage.block_dependents(

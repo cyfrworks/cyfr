@@ -489,7 +489,9 @@ defmodule Sanctum.InvitationsTest do
           set: [owner: "successor", generation: slot.generation + 1]
         )
 
-      assert :lost = Arca.ControlPlane.check_held(slot)
+      assert {:ok, :lost} =
+               Arca.Repo.locking_transaction(fn -> Arca.ControlPlane.verify_held(slot) end)
+
       answer = Invitations.redeem_for(hash(code), carol.id)
 
       actual = %{

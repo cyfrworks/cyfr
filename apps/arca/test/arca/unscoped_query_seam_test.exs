@@ -405,7 +405,7 @@ defmodule Arca.UnscopedQuerySeamTest do
     {"apps/arca/lib/arca/consent_storage.ex", "lock_shares"} =>
       "the shares a revision binds, locked by id",
     {"apps/arca/lib/arca/consent_storage.ex", "binding_heads"} =>
-      "the heads binding a share, in every athanor (`head_profiles_referencing_share/2`)",
+      "the heads binding a share, in every athanor (`block_dependents/4`)",
     {"apps/arca/lib/arca/consent_storage.ex", "lock_unrevoked"} =>
       "the dependents `block_dependents/4` locks, by `{athanor_id, id}` pair"
   }

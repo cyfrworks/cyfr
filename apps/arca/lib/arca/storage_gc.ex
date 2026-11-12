@@ -9,8 +9,8 @@ defmodule Arca.StorageGC do
 
   Only a prefix no root keeps is ever collected. The pointer's prefix is
   the unit as readers read it and is removed by the unit's drop
-  (`Arca.StorageUnits.retire/3` and the overlay's delete path), by
-  nothing here.
+  (`Arca.StorageUnits.stamped_retire/4` and `finish_retire/4`, the
+  overlay's delete path), by nothing here.
 
   ## Roots
 

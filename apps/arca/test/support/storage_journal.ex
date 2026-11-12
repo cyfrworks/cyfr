@@ -4,7 +4,7 @@
 defmodule Arca.Test.StorageJournal do
   @moduledoc """
   A unit's commits as a test observes them: the journal rows
-  `Arca.StorageUnits.commit/5` writes, oldest first, in the actor's
+  `Arca.StorageUnits.stamped_commit/6` writes, oldest first, in the actor's
   athanor. A unit with no row is `{:error, :not_found}`; a retired unit
   keeps its journal.
   """

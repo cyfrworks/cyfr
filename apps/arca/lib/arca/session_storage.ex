@@ -63,11 +63,7 @@ defmodule Arca.SessionStorage do
   (`Arca.PairedClients.record_passkey/2`), which must be that person's,
   active and a passkey's, read locked in the transaction
   (`{:error, :client_not_active}`), so a revocation that committed first
-  mints nothing and one that follows ends the session with the client. `also:`
-  (optional) is the higher owner's closure, run in the same transaction
-  after the insert and handed the session's `%{id, user_id}`: it answers
-  `:ok`, or `{:error, reason}` to roll the session back; any other answer
-  raises `ArgumentError`, which rolls the session back too.
+  mints nothing and one that follows ends the session with the client.
 
   Answers `:ok`, or the policy's refusal with nothing written, or
   `{:error, :not_owner}` from a member that no longer owns its slot.
@@ -76,13 +72,11 @@ defmodule Arca.SessionStorage do
   def create_session(token_hash, attrs, opts) when is_binary(token_hash) and is_list(opts) do
     lock = Keyword.fetch!(opts, :lock)
     verify = Keyword.fetch!(opts, :verify)
-    also = Keyword.get(opts, :also, fn _session -> :ok end)
 
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.create_session", fn ->
       Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked ->
         with :ok <- passkey_client_stands(attrs),
-             {:ok, session} <- insert_session(token_hash, attrs),
-             :ok <- also_ran(also.(session)) do
+             :ok <- insert_session(token_hash, attrs) do
           {:ok, :inserted}
         end
       end)
@@ -119,7 +113,7 @@ defmodule Arca.SessionStorage do
 
     with :ok <- bound(attrs.user_id, attrs) do
       Arca.Repo.insert_all(Session, [row])
-      {:ok, %{id: row.id, user_id: row.user_id}}
+      :ok
     end
   end
 
@@ -159,15 +153,6 @@ defmodule Arca.SessionStorage do
   end
 
   defp passkey_client_stands(_attrs), do: :ok
-
-  defp also_ran(:ok), do: :ok
-  defp also_ran({:error, _reason} = refusal), do: refusal
-
-  defp also_ran(other) do
-    raise ArgumentError,
-          "an also: closure answers :ok or {:error, reason}, got " <>
-            Prima.LoggerContext.shape(other)
-  end
 
   @doc """
   Get a session by token_hash. Returns `{:ok, row}` or `{:error, :not_found}`.

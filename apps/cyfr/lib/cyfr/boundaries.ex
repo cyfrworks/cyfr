@@ -2656,7 +2656,6 @@ defmodule Cyfr.Boundaries do
     execution_payload_store: :default,
     read_subtree_concurrency: :default,
     cache_max_binary_bytes: :default,
-    cache_max_compiled_components: :default,
     tincture_max_decompressed_bytes: :default,
 
     # Operator-shaped, with nothing to set them from. Each has a sensible

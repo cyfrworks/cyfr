@@ -21,6 +21,16 @@ defmodule Arca.VaultStorageTest do
     {:ok, actor: actor, other: %Prima.Actor{athanor_id: "ath_other"}}
   end
 
+  # The athanor's default for `hint`, as the list a reader is given names it.
+  defp default_for(actor, hint) do
+    with {:ok, defaults} <- Arca.VaultDefaults.list(actor) do
+      case Enum.find(defaults, &(&1.provider_hint == hint)) do
+        nil -> {:error, :not_found}
+        default -> {:ok, default}
+      end
+    end
+  end
+
   defp put!(actor, over \\ %{}) do
     attrs =
       Map.merge(
@@ -342,15 +352,15 @@ defmodule Arca.VaultStorageTest do
       _second = put!(actor, %{provider_hint: "openai.com"})
       _unnamed = put!(actor, %{provider_hint: ""})
 
-      assert {:ok, %{vault_entry_id: id}} = Arca.VaultDefaults.get(actor, "openai.com")
+      assert {:ok, %{vault_entry_id: id}} = default_for(actor, "openai.com")
 
       assert id == first.id
       assert {:ok, [%{provider_hint: "openai.com"}]} = Arca.VaultDefaults.list(actor)
     end
   end
 
-  describe "list/2" do
-    test "excludes tombstoned rows unless widened", %{actor: actor} do
+  describe "list/1" do
+    test "excludes tombstoned rows", %{actor: actor} do
       live = put!(actor)
       dead = put!(actor)
       {:ok, %{revoked_share_ids: []}} = VaultStorage.tombstone(actor, dead.id)
@@ -359,9 +369,6 @@ defmodule Arca.VaultStorageTest do
       ids = Enum.map(rows, & &1.id)
       assert live.id in ids
       refute dead.id in ids
-
-      {:ok, all} = VaultStorage.list(actor, include_tombstoned: true)
-      assert dead.id in Enum.map(all, & &1.id)
     end
   end
 
@@ -418,11 +425,11 @@ defmodule Arca.VaultStorageTest do
 
     test "removes the default naming the entry in the same transaction", %{actor: actor} do
       entry = put!(actor, %{provider_hint: "anthropic.com"})
-      assert {:ok, %{vault_entry_id: id}} = Arca.VaultDefaults.get(actor, "anthropic.com")
+      assert {:ok, %{vault_entry_id: id}} = default_for(actor, "anthropic.com")
       assert id == entry.id
 
       assert {:ok, %{revoked_share_ids: []}} = VaultStorage.tombstone(actor, entry.id)
-      assert {:error, :not_found} = Arca.VaultDefaults.get(actor, "anthropic.com")
+      assert {:error, :not_found} = default_for(actor, "anthropic.com")
     end
 
     test "frees the living-name slot", %{actor: actor} do

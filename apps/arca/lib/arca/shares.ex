@@ -58,10 +58,9 @@ defmodule Arca.Shares do
   cross athanors by design, each by the one key it is asked for:
   `offered_to/2` (the active shares whose audience holds the person),
   `member?/3` (one seat, read at use), `get_for_source/2` (one share
-  by id, with its source entry's binding facts), `administrator_shares/1`
+  by id, with its source entry's binding facts) and `administrator_shares/1`
   (the active shares to everyone of an owner who holds the platform
-  administrator's mark) and `head_profiles_referencing_share/2`
-  (the profiles binding a share, platform scope only).
+  administrator's mark).
   """
 
   import Ecto.Query
@@ -164,7 +163,7 @@ defmodule Arca.Shares do
   Refusals, each with nothing written, are the module doc's. A row outside
   the share's rules is `{:error, {:invalid, errors}}` before any query.
 
-  `opts[:verify]` is the caller's check, run once every lock is held and
+  `opts[:verify]` (required) is the caller's check, run once every lock is held and
   before the insert: `:ok`, or `{:error, reason}`, which rolls the
   creation back and is answered. A confirmation is spent there, so the
   proof and the share commit together. The rows carry no standing: a
@@ -187,12 +186,10 @@ defmodule Arca.Shares do
              | :no_athanor
              | :no_person
              | term()}
-  def create(actor, attrs, opts \\ [])
-
   def create(%Prima.Actor{athanor_id: athanor_id, user_id: user_id}, attrs, opts)
       when resolved(athanor_id) and is_binary(user_id) and user_id != "" and is_map(attrs) and
              is_list(opts) do
-    verify = Keyword.get(opts, :verify, fn -> :ok end)
+    verify = Keyword.fetch!(opts, :verify)
 
     changeset =
       Share.changeset(%{
@@ -774,23 +771,6 @@ defmodule Arca.Shares do
       {:ok, Enum.map(Arca.Repo.all(query), &offered/1)}
     end)
   end
-
-  @doc """
-  The profiles, in every athanor, whose **head** revision binds the share
-  `share_id`, as `{athanor_id, profile_id}` pairs ordered by athanor and
-  id. Platform scope only; any other actor is `{:error, :cross_tenant}`.
-  """
-  @spec head_profiles_referencing_share(Prima.Actor.t(), String.t()) ::
-          {:ok, [{String.t(), String.t()}]} | {:error, :cross_tenant | term()}
-  def head_profiles_referencing_share(actor, share_id)
-      when platform(actor) and is_binary(share_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Shares.head_profiles_referencing_share", fn ->
-      Arca.ConsentStorage.share_heads(actor, [share_id])
-    end)
-  end
-
-  def head_profiles_referencing_share(%Prima.Actor{}, share_id) when is_binary(share_id),
-    do: {:error, :cross_tenant}
 
   # ---------------------------------------------------------------------------
 

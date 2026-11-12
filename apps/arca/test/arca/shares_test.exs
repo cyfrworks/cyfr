@@ -45,7 +45,7 @@ defmodule Arca.SharesTest do
     test "a share reads back with its entry, audience and caps, and no material or name",
          %{terry: terry, entry: entry} do
       assert {:ok, share} =
-               Shares.create(terry.actor, %{
+               Arca.Test.Shares.create(terry.actor, %{
                  entry_id: entry.id,
                  audience: "everyone",
                  person_daily: 5
@@ -86,7 +86,7 @@ defmodule Arca.SharesTest do
       traders = thread!([terry.user.id])
 
       assert {:ok, %{audience: "thread", thread_id: thread_id}} =
-               Shares.create(terry.actor, %{
+               Arca.Test.Shares.create(terry.actor, %{
                  entry_id: entry.id,
                  audience: "thread",
                  thread_id: traders.id
@@ -127,7 +127,7 @@ defmodule Arca.SharesTest do
             {terry.actor, %{entry_id: theirs.id}, :not_found}
           ] do
         assert {:error, ^refusal} =
-                 Shares.create(actor, Map.merge(%{audience: "everyone"}, attrs)),
+                 Arca.Test.Shares.create(actor, Map.merge(%{audience: "everyone"}, attrs)),
                inspect(refusal)
       end
 
@@ -142,7 +142,7 @@ defmodule Arca.SharesTest do
         )
 
       assert {:error, :not_own_athanor} =
-               Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
+               Arca.Test.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
     end
 
     test "a row outside the share's rules is refused before any query",
@@ -157,7 +157,7 @@ defmodule Arca.SharesTest do
           ] do
         QueryCounter.assert_queries(0, fn ->
           assert {:error, {:invalid, _}} =
-                   Shares.create(terry.actor, Map.put(attrs, :entry_id, entry.id)),
+                   Arca.Test.Shares.create(terry.actor, Map.put(attrs, :entry_id, entry.id)),
                  inspect(attrs)
         end)
       end
@@ -171,10 +171,10 @@ defmodule Arca.SharesTest do
       to_traders = share!(terry.actor, entry.id, %{audience: "thread", thread_id: traders.id})
 
       assert {:error, :already_shared} =
-               Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
+               Arca.Test.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
 
       assert {:error, :already_shared} =
-               Shares.create(terry.actor, %{
+               Arca.Test.Shares.create(terry.actor, %{
                  entry_id: entry.id,
                  audience: "thread",
                  thread_id: traders.id
@@ -183,7 +183,7 @@ defmodule Arca.SharesTest do
       # Another thread is another audience, and a revoked share is no
       # longer the key's holder.
       assert {:ok, _} =
-               Shares.create(terry.actor, %{
+               Arca.Test.Shares.create(terry.actor, %{
                  entry_id: entry.id,
                  audience: "thread",
                  thread_id: other.id
@@ -192,7 +192,7 @@ defmodule Arca.SharesTest do
       assert {:ok, _} = Shares.revoke(terry.actor, everyone.id, "needs_consent")
 
       assert {:ok, again} =
-               Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
+               Arca.Test.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
 
       assert again.id != everyone.id
       assert share_status(terry.actor, to_traders.id) == "active"
@@ -201,7 +201,7 @@ defmodule Arca.SharesTest do
     test "the caller's check runs under the locks and its refusal writes nothing",
          %{terry: terry, entry: entry} do
       assert {:error, :unconfirmed} =
-               Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"},
+               Arca.Test.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"},
                  verify: fn -> {:error, :unconfirmed} end
                )
 
@@ -228,19 +228,17 @@ defmodule Arca.SharesTest do
     test "an actor with no athanor or no person is refused before any query",
          %{entry: entry} do
       QueryCounter.assert_queries(0, fn ->
-        assert {:error, :no_athanor} = Shares.create(%Prima.Actor{}, %{entry_id: entry.id})
+        assert {:error, :no_athanor} =
+                 Arca.Test.Shares.create(%Prima.Actor{}, %{entry_id: entry.id})
 
         assert {:error, :no_person} =
-                 Shares.create(Prima.Actor.in_athanor("ath_x"), %{entry_id: entry.id})
+                 Arca.Test.Shares.create(Prima.Actor.in_athanor("ath_x"), %{entry_id: entry.id})
 
         assert {:error, :no_athanor} = Shares.list(%Prima.Actor{})
         assert {:error, :no_athanor} = Shares.get(%Prima.Actor{}, "shr_x")
         assert {:error, :no_athanor} = Shares.revoke(%Prima.Actor{}, "shr_x", "needs_consent")
         assert {:error, :no_athanor} = Shares.set_caps(%Prima.Actor{}, "shr_x", nil, nil)
         assert {:error, :no_person} = Shares.offered_to(%Prima.Actor{}, [])
-
-        assert {:error, :cross_tenant} =
-                 Shares.head_profiles_referencing_share(Prima.Actor.in_athanor("ath_x"), "shr_x")
 
         assert {:error, :cross_tenant} = Shares.revoke_all(Prima.Actor.in_athanor("ath_x"))
       end)
@@ -514,22 +512,6 @@ defmodule Arca.SharesTest do
       assert Enum.all?(candidates, &(&1.owner_user_id == admin.user.id))
     end
   end
-
-  describe "head_profiles_referencing_share/2" do
-    test "the heads binding the share in every athanor, platform scope only",
-         %{terry: terry, entry: entry} do
-      share = share!(terry.actor, entry.id)
-      alice = owner!()
-      bob = owner!()
-      a = bound!(alice.athanor.id, share.id)
-      b = bound!(bob.athanor.id, share.id)
-
-      assert {:ok, pairs} =
-               Shares.head_profiles_referencing_share(Prima.Actor.system(), share.id)
-
-      assert pairs == Enum.sort([{alice.athanor.id, a.id}, {bob.athanor.id, b.id}])
-    end
-  end
 end
 
 defmodule Arca.SharesConcurrencyTest do
@@ -671,7 +653,9 @@ defmodule Arca.SharesConcurrencyTest do
 
     create =
       waiting(
-        fn -> Arca.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"}) end,
+        fn ->
+          Arca.Test.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
+        end,
         ["vault_entries", "FOR UPDATE"]
       )
 

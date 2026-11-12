@@ -1409,7 +1409,7 @@ defmodule Arca.Overlay do
   `{:error, :missing_unit}` when the unit was dropped under this writer,
   `{:error, :invalid_objects}` when what was staged is not what was
   written, `{:error, :not_owner}` when this member no longer holds its
-  slot in the cell (`Arca.StorageUnits.commit/5`) — in each case nothing
+  slot in the cell (`Arca.StorageUnits.stamped_commit/6`) — in each case nothing
   is published and the staged objects are removed. `{:error, :outcome_unknown}` from the commit leaves the
   staged objects where they are: the outcome is unknown.
   `{:error, :stale_writer}` after the commit is a writer whose draft was

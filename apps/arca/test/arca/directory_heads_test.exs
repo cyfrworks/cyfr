@@ -843,7 +843,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
         head: head,
         expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
       },
-      Arca.Test.Actor.issuance(user_id) ++ opts
+      Keyword.merge(Arca.Test.Actor.issuance(user_id), opts)
     )
   end
 
@@ -914,8 +914,10 @@ defmodule Arca.DirectoryHeadsRaceTest do
     issuer =
       Task.async(fn ->
         unboxed(fn ->
+          # The issuance's check runs with the person's row locked, the
+          # lock the advance waits on.
           session(user_id, kid, old, hash,
-            also: fn _session ->
+            verify: fn _rows ->
               send(test, :issuance_holds)
 
               receive do

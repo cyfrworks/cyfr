@@ -783,7 +783,7 @@ defmodule Sanctum.Consent.Authz do
   end
 
   # The records an open voided to keep its opener within the store's bound
-  # (`Arca.PendingConfirmations.open_per_opener/0`), announced as any void
+  # (`Arca.PendingConfirmations.open/2`), announced as any void
   # is: read back by ref for the operation and expiry the announcement
   # carries. One that cannot be read is not announced.
   defp announce_voided(ctx, refs) do

@@ -57,42 +57,4 @@ defmodule Arca.CacheEvictionTest do
     assert Arca.Cache.get({:bytes_test, :mid}) == :miss
     assert {:ok, _} = Arca.Cache.get({:bytes_test, :new})
   end
-
-  test "compiled components get their own entry cap — byte_size cannot see NIF memory" do
-    original = Application.get_env(:arca, :cache_max_compiled_components)
-    Application.put_env(:arca, :cache_max_compiled_components, 2)
-
-    on_exit(fn ->
-      if original,
-        do: Application.put_env(:arca, :cache_max_compiled_components, original),
-        else: Application.delete_env(:arca, :cache_max_compiled_components)
-
-      for i <- 1..4,
-          do: Arca.Cache.invalidate(Arca.Cache.Keys.compiled_component("sha256:ref#{i}"))
-    end)
-
-    # Clear the shared cache's compiled entries first. The cap is enforced
-    # over every compiled entry in the table at once, so one left behind by
-    # earlier work raises the excess and evicts an entry this test keeps.
-    table = Arca.Cache.table_name()
-
-    for {{:compiled_component, _digest} = key, _value, _expires_at} <- :ets.tab2list(table) do
-      :ets.delete(table, key)
-    end
-
-    for i <- 1..4 do
-      Arca.Cache.put(
-        Arca.Cache.Keys.compiled_component("sha256:ref#{i}"),
-        {:fake_resource, i},
-        :timer.minutes(i)
-      )
-    end
-
-    Arca.Cache.Sweeper.sweep()
-
-    assert Arca.Cache.get(Arca.Cache.Keys.compiled_component("sha256:ref1")) == :miss
-    assert Arca.Cache.get(Arca.Cache.Keys.compiled_component("sha256:ref2")) == :miss
-    assert {:ok, _} = Arca.Cache.get(Arca.Cache.Keys.compiled_component("sha256:ref3"))
-    assert {:ok, _} = Arca.Cache.get(Arca.Cache.Keys.compiled_component("sha256:ref4"))
-  end
 end

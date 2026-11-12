@@ -107,12 +107,19 @@ defmodule Arca.Test.Shares do
     entry
   end
 
+  @doc """
+  `Arca.Shares.create/3` under a caller's check that admits, unless `opts`
+  names one: a storage test is about the write, not the confirmation the
+  identity domain spends there (`Sanctum.Shares`).
+  """
+  @spec create(Prima.Actor.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def create(actor, attrs, opts \\ []),
+    do: Arca.Shares.create(actor, attrs, Keyword.put_new(opts, :verify, fn -> :ok end))
+
   @doc "A share of `entry_id` to `everyone`, or to the audience `attrs` names."
   @spec share!(Prima.Actor.t(), String.t(), map()) :: map()
   def share!(actor, entry_id, attrs \\ %{}) do
-    {:ok, share} =
-      Arca.Shares.create(actor, Map.merge(%{entry_id: entry_id, audience: "everyone"}, attrs))
-
+    {:ok, share} = create(actor, Map.merge(%{entry_id: entry_id, audience: "everyone"}, attrs))
     share
   end
 

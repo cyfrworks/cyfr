@@ -156,10 +156,6 @@ defmodule Arca.PendingConfirmations do
 
   def open(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
-  @doc "The open records one opener holds in an athanor, at most (`open/2`)."
-  @spec open_per_opener() :: pos_integer()
-  def open_per_opener, do: @open_per_opener
-
   @doc """
   Mark the pending record `ref` confirmed with `proof`: `:proof` is
   `"passkey"` or `"device"` (a protected device's signature over the
@@ -288,29 +284,6 @@ defmodule Arca.PendingConfirmations do
   end
 
   def list_open(%Prima.Actor{}, _user_id), do: {:error, :no_athanor}
-
-  @doc """
-  The `Prima.Confirmation` a stored row records, rebuilt from its columns
-  (its `id` the row's `ref`): the record whose digest the proof covers.
-  """
-  @spec confirmation(row()) :: {:ok, Confirmation.t()} | {:error, term()}
-  def confirmation(%{} = row) do
-    with {:ok, preview} <- row.preview |> Jason.decode!() |> Preview.decode() do
-      Confirmation.new(
-        id: row.ref,
-        home: row.home,
-        rp_id: row.rp_id,
-        athanor: row.athanor_id,
-        person: row.user_id,
-        operation: row.operation,
-        args_digest: row.args_digest,
-        action: row.action,
-        preview: preview,
-        challenge: row.challenge,
-        expires_at: DateTime.to_unix(row.expires_at, :millisecond)
-      )
-    end
-  end
 
   @doc false
   @spec void_confirmed_by!(:paired_client, [String.t()]) :: [String.t()]

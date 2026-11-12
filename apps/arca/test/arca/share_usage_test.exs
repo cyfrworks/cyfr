@@ -131,7 +131,7 @@ defmodule Arca.ShareUsageTest do
 
         for field <- [:person_daily, :total_daily] do
           assert {:error, {:invalid, %{^field => _}}} =
-                   Arca.Shares.create(
+                   Arca.Test.Shares.create(
                      terry.actor,
                      Map.put(
                        %{entry_id: entry.id, audience: "thread", thread_id: "sth_x"},

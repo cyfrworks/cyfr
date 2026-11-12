@@ -893,7 +893,7 @@ defmodule Sanctum.Consent.AuthzTest do
     test "one credential's requests hold at most eight open records; the oldest is announced voided",
          %{session_ctx: session_ctx, user: user} do
       capture([[:cyfr, :sanctum, :confirmation, :voided]], user.id)
-      bound = Arca.PendingConfirmations.open_per_opener()
+      bound = 8
 
       [oldest | kept] = for _ <- 1..bound, do: opened!(session_ctx)
       refute_received {:announced, [:cyfr, :sanctum, :confirmation, :voided], _}

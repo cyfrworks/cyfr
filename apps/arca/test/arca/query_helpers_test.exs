@@ -150,7 +150,7 @@ defmodule Arca.QueryHelpersTest do
 
   describe "for_update/1" do
     test "locks the rows it reads on PostgreSQL, and leaves SQLite's query untouched" do
-      query = from(c in Arca.Schemas.JobClaim, where: c.kind == "bootstrap")
+      query = from(c in Arca.Schemas.JobClaim, where: c.kind == "retention")
       locked = QueryHelpers.for_update(query)
       {sql, _params} = Ecto.Adapters.SQL.to_sql(:all, Arca.Repo, locked)
 
@@ -174,7 +174,7 @@ defmodule Arca.QueryHelpersTest do
 
   describe "for_share/1" do
     test "shares the rows it reads on PostgreSQL, and leaves SQLite's query untouched" do
-      query = from(c in Arca.Schemas.JobClaim, where: c.kind == "bootstrap")
+      query = from(c in Arca.Schemas.JobClaim, where: c.kind == "retention")
       shared = QueryHelpers.for_share(query)
       {sql, _params} = Ecto.Adapters.SQL.to_sql(:all, Arca.Repo, shared)
 

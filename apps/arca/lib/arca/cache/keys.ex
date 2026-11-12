@@ -5,11 +5,10 @@ defmodule Arca.Cache.Keys do
   @moduledoc """
   The tenant-keyed `Arca.Cache` key shapes, in one place.
 
-  Every key that carries an athanor (and the content-addressed compiled
-  component) is built here — writers, readers, the invalidation in
-  `Compendium.Registry`, and the caps in `Arca.Cache.Sweeper` (which
-  pattern-matches the compiled-component key) all agree on the shape
-  because none of them spell it themselves. (Keys that carry no athanor —
+  Every key that carries an athanor (and the content-addressed WASM
+  bytes) is built here — writers, readers and the invalidation in
+  `Compendium.Registry` all agree on the shape because none of them spell
+  it themselves. (Keys that carry no athanor —
   a legal-bodies version, a device-login ticket, an OAuth pending state —
   stay spelled at their single owner, except the identity domain's two
   per-person entries, the established-caller memo and the unreachable
@@ -25,19 +24,8 @@ defmodule Arca.Cache.Keys do
   """
 
   @doc """
-  Compiled (NIF) component for a WASM digest. Compilation is a pure function
-  of the bytes, so the key is content-addressed: fifty athanors running the
-  same bundle share one compiled resource, and a re-registered reference
-  simply has a new digest.
-  """
-  def compiled_component(digest), do: {:compiled_component, digest}
-
-  @doc "Match spec shape for every compiled component (Sweeper cap)."
-  def match_compiled_component, do: {:compiled_component, :_}
-
-  @doc """
-  Raw WASM bytes for a digest — the fetch cache one step before
-  `compiled_component/1`, equally content-addressed and shared across
+  Raw WASM bytes for a digest — the fetch cache, content-addressed (a
+  re-registered reference simply has a new digest) and shared across
   athanors. What makes the sharing safe is the verification on both ends
   of a hit: admission compares the served digest against the
   REQUESTING tenant's own row (`Opus.Admission`), and

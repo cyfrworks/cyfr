@@ -207,7 +207,7 @@ defmodule Arca.PendingConfirmationsTest do
   end
 
   describe "open/2" do
-    test "stores the record under its ref, holding no secret, and rebuilds it", %{actor: actor} do
+    test "stores the record under its ref and digest, holding no secret", %{actor: actor} do
       secret = secret()
       first = record(actor, secret: secret)
 
@@ -217,7 +217,6 @@ defmodule Arca.PendingConfirmationsTest do
       assert row.state == "pending"
       assert row.digest == Confirmation.digest(first)
       assert Jason.decode!(row.asker) == @asker
-      assert {:ok, ^first} = PendingConfirmations.confirmation(row)
 
       stored = Arca.Repo.get!(PendingConfirmation, first.id)
       refute inspect(stored, limit: :infinity, printable_limit: :infinity) =~ secret
@@ -254,8 +253,6 @@ defmodule Arca.PendingConfirmationsTest do
 
     test "an opener holds at most eight open records: the oldest is voided as a ninth opens",
          %{actor: actor} do
-      assert PendingConfirmations.open_per_opener() == 8
-
       held =
         for _ <- 1..8 do
           secret = secret()

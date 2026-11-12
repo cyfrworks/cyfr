@@ -966,17 +966,6 @@ defmodule Arca.ConsentStorage do
     Enum.map(ids, &{athanor_id, &1})
   end
 
-  @doc false
-  # The `{athanor_id, profile_id}` pairs, in every athanor, whose head
-  # binds one of `share_ids`, ordered by athanor and id, for the platform's
-  # actor or the shares' owner (`Arca.Shares.head_profiles_referencing_share/2`).
-  # arca:db-raise-ok a step under its caller's rescue; a raise is answered there.
-  @spec share_heads(Prima.Actor.t(), [String.t()]) ::
-          {:ok, [{String.t(), String.t()}]} | {:error, :cross_tenant}
-  def share_heads(%Prima.Actor{} = actor, share_ids) when is_list(share_ids) do
-    with :ok <- owned_by(actor, nil, share_ids), do: {:ok, binding_heads(share_ids)}
-  end
-
   # Whose dependents a caller may reach: the platform's actor any, and an
   # athanor's actor those of its own entry and its own shares alone, read
   # before any lock. A share the athanor does not hold, or an entry of
