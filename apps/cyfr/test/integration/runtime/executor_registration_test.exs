@@ -4,9 +4,8 @@
 defmodule Locus.Runtime.ExecutorRegistrationTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Context
-
-  @test_ref "reagent:local.reg-math:0.1.0"
+  @node "reagent:local.reg-math"
+  @test_ref "#{@node}:0.1.0"
 
   setup tags do
     Arca.Cache.init()
@@ -16,24 +15,6 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    ctx = %Context{
-      user_id: "reg_test_user_#{:rand.uniform(100_000)}",
-      athanor_id: Sanctum.TestContext.athanor_id(),
-      scope: :athanor,
-      permissions: MapSet.new([:execute])
-    }
-
-    admin_ctx = Sanctum.TestContext.local()
-    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
-
-    {:ok, _component} =
-      Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
-        name: "reg-math",
-        version: "0.1.0",
-        type: "reagent",
-        description: "Registration test math component"
-      })
-
     on_exit(fn ->
       File.rm_rf!(test_path)
 
@@ -42,22 +23,49 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    # A person on the console, in their own athanor, running a component
+    # they published and consented as a person consents one: each run is
+    # rooted under that consent's authority (`Opus.run_root/5`).
+    {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+    ctx = %{ctx | origin: :interactive, athanor_id: Sanctum.Test.People.athanor!(user).id}
+    Sanctum.TestContext.ready!(ctx.athanor_id)
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+        name: "reg-math",
+        version: "0.1.0",
+        type: "reagent",
+        description: "Registration test math component"
+      })
+
+    decisions = %{ref: @node}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @node})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
     {:ok, ctx: ctx}
   end
 
-  # Every run's waiter registers for cancellation, including synchronous runs and children.
+  # Every run's waiter registers for cancellation, including synchronous
+  # runs and children; each run here completes with the guest's answer, so
+  # the registry is read after a run that happened.
 
   test "a synchronous run leaves no registry entry behind", %{ctx: ctx} do
     execution_id = "exec_reg_sync_#{System.unique_integer([:positive])}"
 
     # Registration wraps the execution window, and the entry must be gone
     # afterwards.
-    _result =
-      Opus.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
-        type: "reagent",
-        execution_id: execution_id
-      )
-
+    assert {:ok, %{"ran" => true}} = run(ctx, %{"a" => 1, "b" => 2}, execution_id)
     assert Registry.lookup(Opus.Registry, execution_id) == []
   end
 
@@ -71,14 +79,7 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
         # then dispatches the run from the same process.
         {:ok, _} = Registry.register(Opus.Registry, execution_id, :running)
         send(parent, :registered)
-
-        result =
-          Opus.Dispatch.run(ctx, @test_ref, %{"a" => 2, "b" => 3},
-            type: "reagent",
-            execution_id: execution_id
-          )
-
-        send(parent, {:done, result})
+        send(parent, {:done, run(ctx, %{"a" => 2, "b" => 3}, execution_id)})
 
         receive do
           :stop -> :ok
@@ -86,7 +87,7 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
       end)
 
     assert_receive :registered, 5_000
-    assert_receive {:done, _result}, 30_000
+    assert_receive {:done, {:ok, %{"ran" => true}}}, 30_000
 
     # The dispatch's own register/unregister must not steal or clear the
     # streaming task's entry — it stays until the owner process exits.
@@ -94,6 +95,9 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
 
     send(owner, :stop)
   end
+
+  defp run(ctx, input, execution_id),
+    do: Opus.run_root(ctx, :default, @test_ref, input, execution_id: execution_id, type: "reagent")
 
   describe "killing reaches the process running the component" do
     test "a linked child that traps exits survives its parent's kill" do
