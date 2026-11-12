@@ -73,7 +73,8 @@ the rest and can enter the builder's cache; the loop's own env file keeps
 it out of the services. The accounts, names and components a loop makes exist
 there alone, and nothing the loop does reaches the public cyfr.run. A
 `mix` boot outside the loop names the public cyfr.run, as a release does,
-unless `.env` names others: the loop is how a developer stays local.
+unless `.env` names others: the loop is how a developer stays on this
+machine.
 Nothing is seeded: a new athanor's components ship with CYFR, so a fresh
 sign-in pulls nothing, and `cyfr push` publishes into the local registry
 when that is what you test. Its admin pages are at

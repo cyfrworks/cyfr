@@ -433,6 +433,45 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       end)
     end
 
+    # A boot's default is the public cyfr.run in every build, so the loop's
+    # three addresses are all that keep its server on this machine: each
+    # is one the boot accepts (config/runtime.exs reads them with these
+    # predicates), none is the public one, and a loop whose server would be
+    # handed the public names refuses.
+    test "answers three addresses the boot accepts, none of them the public cyfr.run's" do
+      File.write!(".env", complete())
+      settings!()
+
+      registry =
+        for "server " <> line <- answers(),
+            [name, value] = String.split(line, "=", parts: 2),
+            name in @registry_names,
+            into: %{},
+            do: {name, value}
+
+      assert registry == %{
+               "CYFR_REGISTRY_URL" => "cyfr.test",
+               "CYFR_OCI_REGISTRY_URL" => "registry.cyfr.test",
+               "CYFR_DIRECTORY_URL" => "https://cyfr.test"
+             }
+
+      assert Sanctum.registry_url?(registry["CYFR_REGISTRY_URL"])
+      assert Sanctum.oci_registry_url?(registry["CYFR_OCI_REGISTRY_URL"])
+      assert Sanctum.enrollment_directory?(registry["CYFR_DIRECTORY_URL"])
+      refute Enum.any?(Map.values(registry), &String.contains?(&1, "cyfr.run"))
+
+      for public <- ["cyfr.run", "registry.cyfr.run"] do
+        refused("#{public} is the public cyfr.run's name", fn ->
+          DevStack.run(["settings", "stack.json", public, "root.crt"])
+        end)
+      end
+
+      # https://cyfr.run, the public account service, is no name at all.
+      refused("https://cyfr.run is not the local cyfr.run's name", fn ->
+        DevStack.run(["settings", "stack.json", "https://cyfr.run", "root.crt"])
+      end)
+    end
+
     test "refuses the public cyfr.run's name, and a name that is not a DNS name" do
       File.write!(".env", complete())
 

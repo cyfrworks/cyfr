@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The cyfr.run stand-in, a tool for the dev loop (scripts/dev-stack.sh) and
-# the proofs only. It answers for cyfr.run's registry and its identity
+# The cyfr.run stand-in, a tool for the proofs only (the dev loop runs a
+# local cyfr.run, scripts/dev-stack.sh). It answers for cyfr.run's registry and its identity
 # directory on one plain-HTTP listener, and it checks no signature on any
 # registry request or directory entry: a request is read for its fields
 # alone. CYFR's client verifies every chain it reads
@@ -55,7 +55,7 @@
 # operator's tombstone, the stand-in's alone: cyfr.run's is an
 # administrator's action, a CYFR's the operation directory.tombstone.
 #
-# Forwarding, for the dev loop alone: with --upstream URL a GET of a route
+# Forwarding, which no proof uses: with --upstream URL a GET of a route
 # it does not own goes to that URL with only Accept and User-Agent copied,
 # following no redirect (an upstream 3xx answers 502). Any other method on
 # a route it does not own answers 405 and goes nowhere. Without --upstream
@@ -523,7 +523,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(description="The cyfr.run stand-in for the dev loop and the proofs.")
+    parser = argparse.ArgumentParser(description="The cyfr.run stand-in for the proofs.")
     parser.add_argument("--address", required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--state", required=True)
