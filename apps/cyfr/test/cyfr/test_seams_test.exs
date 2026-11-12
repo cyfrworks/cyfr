@@ -103,12 +103,7 @@ defmodule Cyfr.TestSeamsTest do
   # the restores case of tests/release-boot/boot.sh hold the shipped
   # release to the same seams.
   test "every read of a seam's key is inside Prima.TestSeam.value/2, compiled out, or compiled" do
-    seams =
-      for {key, :seam} <-
-            Map.merge(Boundaries.config_key_classes(), Boundaries.test_only_config_key_classes()),
-          into: MapSet.new(@module_keyed),
-          do: key
-
+    seams = seams()
     found = found()
     gated = for %{app: app} = read <- found, app in [:arca, :cyfr, :sanctum], do: read
 
@@ -130,22 +125,14 @@ defmodule Cyfr.TestSeamsTest do
     assert unnamed == [],
            "a read of an application's environment names no key: #{inspect(unnamed)}"
 
-    # Every read here spells `Application` as itself: an alias or an import
-    # of it would hide a read from the walk below.
-    hidden =
-      for path <- lib_files(),
-          SourceTree.read(path) =~ ~r/^\s*(alias|import) (Elixir\.)?Application\b/m,
-          do: Path.relative_to(path, @root)
-
-    assert hidden == []
-
     # A read names its application as a literal atom: one named by a
     # variable, an attribute or a call could be a gated application and
     # read a seam's key past every rule above. The exceptions are the list
     # above; the settings reader's stays one because its roster names no
-    # seam's key. Out of scope: `apply/3` and other indirect calls. This
-    # check holds the honest forms; tests/release-boot/test_seams.exs shows
-    # a release ignoring the switches.
+    # seam's key. Out of scope, for every rule here: `apply/3`,
+    # `Module.concat/1` and other calls built at run time; this check holds
+    # the honest forms, and tests/release-boot/test_seams.exs shows a
+    # release ignoring the switches.
     unnamed_applications =
       for %{app: :unnamed_application, file: file, function: function} <- found,
           do: {file, function}
@@ -184,8 +171,7 @@ defmodule Cyfr.TestSeamsTest do
   # permission its caller was compiled with. `value/3` takes the permission
   # as an argument, so a call of it with `true` would read a seam in a
   # release: nothing calls or captures it but the macro's own expansion,
-  # and nothing names the gate but to require it and call `value/2`. Out
-  # of scope: `apply/3` and other indirect calls of `value/3`.
+  # and nothing names the gate but to require it and call `value/2`.
   test "nothing names the gate but through value/2, and value/3 only in the macro's expansion" do
     named =
       for path <- lib_files(),
@@ -198,6 +184,68 @@ defmodule Cyfr.TestSeamsTest do
              {"apps/prima/lib/prima/test_seam.ex", {:quoted, {:call, :value, 3}}}
            ],
            "the gate named but through value/2: #{inspect(named)}"
+  end
+
+  # The rules above match `Application` (with `:application`) and
+  # `Prima.TestSeam` by name, so each is written by its full plain name and
+  # nothing else, read on the syntax tree: no alias, `require ..., as:` or
+  # import of either; no alias of a prefix of either (`Elixir`, `Prima`),
+  # single or in braces; no alias or nested module that makes `Application`,
+  # `Prima` or `Elixir` name another module; and neither the `Elixir.`
+  # spelling nor the atom of either.
+  test "Application and the gate are written by their full plain names alone" do
+    renamed =
+      for path <- lib_files(),
+          renaming <- renamings(SourceTree.quoted(path)),
+          do: {Path.relative_to(path, @root), renaming}
+
+    assert renamed == []
+  end
+
+  # Each form a file could read a seam's key or reach `value/3` with, past
+  # a check that matched by spelling, is refused; an honest file passes.
+  @refused_forms [
+    "def read, do: Prima.TestSeam.value(true, :shipped, fn -> :read end)",
+    "def read, do: Elixir.Prima.TestSeam.value(true, :shipped, fn -> :read end)",
+    "def read do\n  decision = &Elixir.Prima.TestSeam.value/3\n  decision.(true, :shipped, fn -> :read end)\nend",
+    "require Prima.TestSeam, as: Gate\ndef read, do: Gate.value(true, :shipped, fn -> :read end)",
+    "alias Elixir, as: Root\nalias Root.Application, as: Env\ndef read, do: Env.get_env(:sanctum, :bearer_provider)",
+    "require Application, as: Env\ndef read, do: Env.get_env(:sanctum, :bearer_provider)",
+    "alias Application, as: Env\ndef read, do: Env.get_env(:sanctum, :bearer_provider)",
+    "alias :application, as: Env\ndef read, do: Env.get_env(:sanctum, :bearer_provider)",
+    "import Application\ndef read, do: get_env(:sanctum, :bearer_provider)",
+    "import Prima.TestSeam\ndef read, do: value(true, :shipped, fn -> :read end)",
+    "alias Prima.TestSeam\ndef read, do: TestSeam.value(true, :shipped, fn -> :read end)",
+    "alias Prima.TestSeam, as: Gate\ndef read, do: Gate.value(true, :shipped, fn -> :read end)",
+    "alias Prima\ndef read, do: Prima.TestSeam.value(true, :shipped, fn -> :read end)",
+    "alias Prima, as: P\ndef read, do: P.TestSeam.value(true, :shipped, fn -> :read end)",
+    "alias Prima.{TestSeam}\ndef read, do: TestSeam.value(true, :shipped, fn -> :read end)",
+    "alias Elixir.{Application}\ndef read, do: Application.get_env(:sanctum, :bearer_provider)",
+    "def read, do: Elixir.Application.get_env(:sanctum, :bearer_provider)",
+    "def read, do: :\"Elixir.Application\".get_env(:sanctum, :bearer_provider)",
+    "def read, do: :\"Elixir.Prima.TestSeam\".value(true, :shipped, fn -> :read end)",
+    "alias Sanctum.Fake, as: Prima\nrequire Prima.TestSeam\n" <>
+      "def read, do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)",
+    "alias Sanctum.Fake.Application\ndef read, do: Application.get_env(:sanctum, :bearer_provider)",
+    "defmodule Prima.TestSeam do\nend\nrequire Prima.TestSeam\n" <>
+      "def read, do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)",
+    "def read, do: Application.get_env(:sanctum, :bearer_provider)"
+  ]
+
+  @honest_form """
+  alias Sanctum.Context
+  require Prima.TestSeam
+
+  def read(%Context{}),
+    do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)
+  """
+
+  test "every form that renames, respells or reaches past the gate is refused; an honest file passes" do
+    for form <- @refused_forms do
+      assert refusals(form) != [], "passed: #{form}"
+    end
+
+    assert refusals(@honest_form) == []
   end
 
   test "the permission is the test configurations' and no other's" do
@@ -264,6 +312,137 @@ defmodule Cyfr.TestSeamsTest do
   defp gate_walk(_leaf, _quoted), do: []
 
   defp gate?(ast), do: match?({:__aliases__, _, [:Prima, :TestSeam]}, ast)
+
+  defp seams do
+    for {key, :seam} <-
+          Map.merge(Boundaries.config_key_classes(), Boundaries.test_only_config_key_classes()),
+        into: MapSet.new(@module_keyed),
+        do: key
+  end
+
+  # What every rule above refuses in one file's code, `body` set in a
+  # module of Sanctum's.
+  defp refusals(body) do
+    ast = Code.string_to_quoted!("defmodule Sanctum.SeamReview do\n" <> body <> "\nend\n")
+    seams = seams()
+    reads = reads(ast, %{module: nil, function: nil, gate: :plain})
+
+    renamings(ast) ++
+      for(use <- gate_uses(ast, false), use not in [:require, {:call, :value, 2}], do: use) ++
+      for(
+        %{app: app, key: key, gate: :plain, fun: fun} = read <- reads,
+        app in [:arca, :cyfr, :sanctum] and
+          ((key in seams and fun not in [:compile_env, :compile_env!]) or key in [:bulk, :dynamic]),
+        do: read
+      ) ++ for(%{app: :unnamed_application} = read <- reads, do: read)
+  end
+
+  @full_names [[:"Elixir", :Application], [:"Elixir", :Prima, :TestSeam]]
+  @plain_names [:Application, :Prima, :"Elixir"]
+
+  # Each way `ast` writes `Application`, `:application` or `Prima.TestSeam`
+  # by another name, or makes a plain name reach another module.
+  defp renamings(ast), do: renamings(ast, false)
+
+  defp renamings({:defmodule, _, [{:__aliases__, _, [first | _]} = name, body]}, nested) do
+    if(nested and first in @plain_names, do: [{:nested_module, name}], else: []) ++
+      renamings(name, nested) ++ renamings(body, true)
+  end
+
+  defp renamings({:alias, _, [{{:., _, [base, :{}]}, _, children} | _]} = ast, nested) do
+    renamed =
+      Enum.any?(children, fn
+        {:__aliases__, _, parts} = child ->
+          reaches?(join(base, child)) or List.last(parts) in @plain_names
+
+        _child ->
+          true
+      end)
+
+    if(renamed, do: [{:alias, ast}], else: []) ++ walk_renamings(ast, nested)
+  end
+
+  defp renamings({:alias, _, [target | options]} = ast, nested) do
+    as = options |> List.first([]) |> Keyword.get(:as)
+    introduced = name_of(as) || last_name(target)
+
+    if(reaches?(target) or introduced in @plain_names, do: [{:alias, ast}], else: []) ++
+      walk_renamings(ast, nested)
+  end
+
+  defp renamings({:require, _, [target, options]} = ast, nested) when is_list(options) do
+    as = Keyword.get(options, :as)
+
+    if(as != nil and (reaches?(target) or name_of(as) in @plain_names),
+      do: [{:require, ast}],
+      else: []
+    ) ++ walk_renamings(ast, nested)
+  end
+
+  defp renamings({:import, _, [target | _]} = ast, nested) do
+    if(full?(target), do: [{:import, ast}], else: []) ++ walk_renamings(ast, nested)
+  end
+
+  defp renamings({:__aliases__, _, [:"Elixir" | _] = parts} = ast, _nested) do
+    if parts in @full_names, do: [{:elixir_spelling, ast}], else: []
+  end
+
+  defp renamings(atom, _nested) when atom in [Application, Prima.TestSeam], do: [{:atom, atom}]
+  defp renamings(ast, nested), do: walk_renamings(ast, nested)
+
+  defp walk_renamings({form, _meta, args}, nested),
+    do: renamings(form, nested) ++ renamings(List.wrap(args), nested)
+
+  defp walk_renamings({left, right}, nested),
+    do: renamings(left, nested) ++ renamings(right, nested)
+
+  defp walk_renamings(list, nested) when is_list(list),
+    do: Enum.flat_map(list, &renamings(&1, nested))
+
+  defp walk_renamings(_leaf, _nested), do: []
+
+  # A module expression as written, as the `Elixir.`-rooted name it spells,
+  # or nil when it is not spelled by names alone.
+  defp spelled({:__aliases__, _, [:"Elixir" | _] = parts}),
+    do: if(Enum.all?(parts, &is_atom/1), do: parts)
+
+  defp spelled({:__aliases__, _, parts}),
+    do: if(Enum.all?(parts, &is_atom/1), do: [:"Elixir" | parts])
+
+  defp spelled(:application), do: [:application]
+
+  defp spelled(atom) when is_atom(atom) do
+    case Atom.to_string(atom) do
+      "Elixir." <> _ ->
+        [:"Elixir" | atom |> Module.split() |> Enum.map(&String.to_existing_atom/1)]
+
+      _erlang ->
+        nil
+    end
+  end
+
+  defp spelled(_expression), do: nil
+
+  defp join({:__aliases__, meta, base}, {:__aliases__, _, child}),
+    do: {:__aliases__, meta, base ++ child}
+
+  # Whether a module expression names one of the two modules or a prefix of
+  # one, through which a shorter name would reach it.
+  defp reaches?(expression) do
+    case spelled(expression) do
+      [:application] -> true
+      nil -> false
+      parts -> Enum.any?(@full_names, &(Enum.take(&1, length(parts)) == parts))
+    end
+  end
+
+  defp full?(expression), do: spelled(expression) in [[:application] | @full_names]
+
+  defp name_of({:__aliases__, _, [name]}), do: name
+  defp name_of(_as), do: nil
+
+  defp last_name({:__aliases__, _, parts}), do: List.last(parts)
+  defp last_name(_target), do: nil
 
   defp lib_files do
     for lib <- SourceTree.app_libs(@root),

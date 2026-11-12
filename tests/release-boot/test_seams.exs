@@ -14,7 +14,8 @@
 #     a release handed another value refuses to boot);
 #   - Arca: its member still holds its control-plane slot, its control
 #     plane still writes on its own pool, its SQLite writers still take
-#     write turns, and the decision log keeps its shipped budget;
+#     write turns, the decision log keeps its shipped budget, and a
+#     bookkeeping row still goes to the write-behind;
 #   - the host: each switched process, which this release runs, is
 #     started again and answers that it already runs: its start never read
 #     its switch, which would have answered `:ignore`;
@@ -34,9 +35,8 @@
 # the database-checks switch; whether a fill runs inline
 # (`:provisioning_inline`) needs a registry that never answers, so
 # apps/cyfr/test/sanctum/provisioning_test.exs holds it with
-# `Compendium.Provisioning` compiled without the permission; and the
-# record sink's inline writes (`:record_sink_inline`) show only in when a
-# row lands. apps/cyfr/test/cyfr/test_seams_test.exs holds every read of a
+# `Compendium.Provisioning` compiled without the permission.
+# apps/cyfr/test/cyfr/test_seams_test.exs holds every read of a
 # seam's key inside the gate.
 #
 # Every check runs; a release that fails any raises naming each, and one
@@ -85,6 +85,7 @@ handed =
     {:arca, :control_plane_pool, false},
     {:arca, :write_turn, false},
     {:arca, :decision_log_budget_ms, 1},
+    {:arca, :record_sink_inline, true},
     {:sanctum, :workos_api_url, "https://seam.invalid"},
     {:sanctum, :workos, %{client_id: "client", organization: "org"}},
     {:sanctum, :oidc_reauth_client, CyfrReleaseProof.Seam},
@@ -136,6 +137,29 @@ try do
   end
 
   check.(Arca.DecisionLog.budget_ms() == 500, "read :decision_log_budget_ms")
+
+  # A bookkeeping row still goes to the write-behind, never written in its
+  # caller: with the sink held, it waits in the sink's mailbox. The row
+  # names no vault entry, so its write, once the sink runs again, touches
+  # nothing.
+  sink = Process.whereis(Arca.RecordSink)
+  check.(is_pid(sink), "runs no record sink")
+
+  if is_pid(sink) do
+    :sys.suspend(sink)
+
+    try do
+      {:message_queue_len, waiting} = Process.info(sink, :message_queue_len)
+      :ok = Arca.RecordSink.enqueue({:vault_touch, "ath_release_proof", "ent_release_proof"})
+
+      check.(
+        Process.info(sink, :message_queue_len) == {:message_queue_len, waiting + 1},
+        "read :record_sink_inline: wrote a bookkeeping row in its caller"
+      )
+    after
+      :sys.resume(sink)
+    end
+  end
 
   # The host.
   for {key, module} <- switched do
