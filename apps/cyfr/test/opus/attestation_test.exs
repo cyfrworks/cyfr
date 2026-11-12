@@ -11,9 +11,8 @@ defmodule Opus.AttestationTest do
     # the four answers is the operator's call, and the caller's `:verify`
     # argument comes only from a client's own MCP tool call: children,
     # schedules and tincture ingress are judged by the row alone.
-    test "filesystem and published are trusted by ownership" do
+    test "filesystem is trusted by ownership" do
       assert :trusted = Attestation.attestation(%{"source" => "filesystem"})
-      assert :trusted = Attestation.attestation(%{"source" => "published"})
     end
 
     test "a verified OCI pull is signed" do
@@ -31,6 +30,8 @@ defmodule Opus.AttestationTest do
     test "anything else is unclassified, and the caller must fail closed on it" do
       assert {:unknown_source, nil} = Attestation.attestation(%{"source" => nil})
       assert {:unknown_source, "hg"} = Attestation.attestation(%{"source" => "hg"})
+      # No ingress writes "published": a row that holds it is unclassified.
+      assert {:unknown_source, "published"} = Attestation.attestation(%{"source" => "published"})
     end
   end
 
@@ -40,9 +41,10 @@ defmodule Opus.AttestationTest do
       assert :ok = Attestation.verify(component, nil, nil)
     end
 
-    test "allows published source without any verification" do
+    test "refuses a published source as an unclassified value" do
       component = %{"source" => "published", "signature_verified" => false}
-      assert :ok = Attestation.verify(component, nil, nil)
+      assert {:error, message} = Attestation.verify(component, nil, nil)
+      assert message =~ "signature policy undefined"
     end
 
     test "refuses a nil source as an unclassified value" do
