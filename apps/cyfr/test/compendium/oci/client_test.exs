@@ -704,6 +704,33 @@ defmodule Compendium.OCI.ClientTest do
     end
 
     @tag :capture_log
+    test "a row whose source names no ingress is refused, whatever the setting", ctx do
+      cosign(ctx, signs: "sha256:" <> String.duplicate("1", 64))
+      assert {:ok, _} = Client.pull(ctx.a, ctx.tag_ref)
+      consent!(ctx)
+      assert completed?(run(ctx))
+
+      # No ingress writes "published"; a row that came to hold it by any
+      # other route is not trusted by ownership.
+      import Ecto.Query, only: [from: 2]
+
+      assert {1, _} =
+               Arca.Repo.update_all(
+                 from(c in Arca.Schemas.Component,
+                   where: c.athanor_id == ^ctx.a.athanor_id and c.name == "pinned"
+                 ),
+                 set: [source: "published"]
+               )
+
+      Compendium.Registry.invalidate_executor_caches(ctx.a)
+
+      for required <- [false, true] do
+        Prima.Test.Env.put_app_env(:cyfr, :require_signed_pulls, required)
+        assert run(ctx) == {:error, @refused}
+      end
+    end
+
+    @tag :capture_log
     test "a component whose signature did not verify is refused", ctx do
       # A signature over another manifest: cosign's answer names a digest
       # the pull did not fetch.

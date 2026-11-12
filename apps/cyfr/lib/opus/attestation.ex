@@ -70,7 +70,7 @@ defmodule Opus.Attestation do
   What the row records about this component's provenance, independent of any
   signer the caller asked to pin:
 
-    * `:trusted` — filesystem or published; trusted by ownership.
+    * `:trusted` — filesystem; trusted by ownership.
     * `:signed` — an OCI pull whose cosign signature verified.
     * `:unsigned` — an OCI pull whose signature did not verify.
     * `{:unknown_source, s}` — anything else; a verifier fails CLOSED, so a
@@ -86,10 +86,10 @@ defmodule Opus.Attestation do
     verified = component["signature_verified"]
 
     cond do
-      # `nil` is NOT in this list: a missing source is an unclassified value,
-      # and the closed-vocabulary arm below refuses it (the column is NOT NULL
-      # with a default, so a nil here is a malformed caller, not a real row).
-      source in [Prima.ComponentSource.filesystem(), Prima.ComponentSource.published()] ->
+      # A missing source is an unclassified value, and the closed-vocabulary
+      # arm below refuses it (the column is NOT NULL with a default, so a nil
+      # here is a malformed caller, not a real row).
+      source == Prima.ComponentSource.filesystem() ->
         :trusted
 
       source == Prima.ComponentSource.oci() and verified == true ->

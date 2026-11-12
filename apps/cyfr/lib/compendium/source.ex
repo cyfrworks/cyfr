@@ -9,7 +9,6 @@ defmodule Compendium.Source do
 
   - `"filesystem"` — minted by the scanner from the union: bundled seed
     units and the athanor's own (scaffolded, built, forked) alike.
-  - `"published"` — published directly into this registry.
   - `"oci"` — pulled from a remote registry (WASM and tinctures alike).
 
   `remote?/1` is the one predicate provenance derives `:remote` from;
@@ -21,16 +20,11 @@ defmodule Compendium.Source do
   home of the provenance predicate.
   """
 
-  @published Prima.ComponentSource.published()
   @oci Prima.ComponentSource.oci()
 
   @doc "The scanner's ingress — bundled and user-created rows alike."
   @spec filesystem() :: String.t()
   defdelegate filesystem(), to: Prima.ComponentSource
-
-  @doc "Published directly into this registry."
-  @spec published() :: String.t()
-  defdelegate published(), to: Prima.ComponentSource
 
   @doc "Pulled from a remote registry."
   @spec oci() :: String.t()
@@ -50,5 +44,5 @@ defmodule Compendium.Source do
 
   """
   @spec remote?(term()) :: boolean()
-  def remote?(source), do: source in [@oci, @published]
+  def remote?(source), do: source == @oci
 end
