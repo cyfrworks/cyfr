@@ -788,7 +788,9 @@ defmodule Sanctum.Caller do
 
   def fresh?(%Context{}), do: false
 
-  defp memo_ttl_ms, do: Application.get_env(:sanctum, :caller_memo_ttl_ms, 2_000)
+  # 2 s in every release; the bound is a test seam only a test build reads.
+  defp memo_ttl_ms,
+    do: Sanctum.seam(2_000, fn -> Application.get_env(:sanctum, :caller_memo_ttl_ms, 2_000) end)
 
   @doc """
   Whether the person `user_id` stands on this CYFR now, read from the

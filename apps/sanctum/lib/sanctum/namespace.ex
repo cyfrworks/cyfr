@@ -86,7 +86,11 @@ defmodule Sanctum.Namespace do
   @spec lookup_status(String.t() | nil) :: status()
   def lookup_status(user_id) when is_binary(user_id) and user_id != "" do
     key = {:namespace_slug, user_id}
-    ttl = Application.get_env(:sanctum, :namespace_cache_ttl_ms, @cache_ttl_ms)
+    # The bound is a test seam only a test build reads.
+    ttl =
+      Sanctum.seam(@cache_ttl_ms, fn ->
+        Application.get_env(:sanctum, :namespace_cache_ttl_ms, @cache_ttl_ms)
+      end)
 
     case Arca.Cache.get(key) do
       {:ok, slug} ->

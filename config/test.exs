@@ -155,10 +155,14 @@ config :arca, auto_migrate: false
 # internal host. Tests that exercise the refusal override this.
 config :sanctum, private_egress_targets: ["localhost", "127.0.0.1/8", "::1"]
 
-# Allow tests to inject a membership-resolution override (Sanctum.Tenancy).
-# Compile-time gate: production releases compile this to false and never honor
-# the override. See Sanctum.Tenancy "Test overrides".
-config :sanctum, allow_tenancy_resolver_override: true
+# Sanctum's test seams, compiled in here alone (`Sanctum.seam/2`): a
+# membership-resolution override (`Sanctum.Tenancy`), a fixture's
+# generation snapshot for an issuance (`Sanctum.Issuance`), and the hooks a
+# suite sets at runtime (the caller memo's and the namespace cache's
+# bounds, the scripted WorkOS, OIDC issuer, directory and OAuth provider).
+# Every other build compiles none of them, so no setting a release is
+# given at start-up reaches one.
+config :sanctum, test_seams_permitted: true
 
 # Don't run the background retention sweeper in the test supervision tree —
 # its periodic DB cleanup conflicts with the Ecto sandbox connection lifecycle.
@@ -204,13 +208,6 @@ config :cyfr, Compendium.ProjectionReconciler, enabled: false
 # without the permission — every release — starts the gate whatever the
 # switch says (`Cyfr.Application.bootstrap_skipped?/2`).
 config :cyfr, bootstrap_skip_permitted: true
-
-# Fixtures that build an issuing context by hand pass the generations its
-# rows stand at (`Sanctum.TestContext.snapshot!/1`) as `generation_snapshot:`
-# to `Sanctum.Session.create/2` and `Sanctum.ApiKey.create/3`. Compiled in
-# here alone: every release refuses the option as a context with no
-# generations (`Sanctum.Issuance`).
-config :sanctum, issuance_snapshot_permitted: true
 config :cyfr, provisioning_boot_enabled: false
 
 # Likewise the thread-runner boot recovery reads the repo before any

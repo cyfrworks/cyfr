@@ -260,12 +260,12 @@ defmodule Sanctum.Directory.Client do
   end
 
   # A caller's options over the suite's (`:sanctum, :directory_client`, a
-  # test seam no configuration file or variable sets), each validated the
-  # same way: so a suite reaches its scripted directory through paths that
-  # pass no options, and a release, which never sets the key, uses the
-  # system's resolver and certificate store.
+  # test seam only a test build reads), each validated the same way: so a
+  # suite reaches its scripted directory through paths that pass no
+  # options, and a release uses the system's resolver and certificate
+  # store.
   defp options!(opts) when is_list(opts) do
-    seam = Application.get_env(:sanctum, :directory_client, [])
+    seam = Sanctum.seam([], fn -> Application.get_env(:sanctum, :directory_client, []) end)
     Keyword.merge(validated!(seam), validated!(opts))
   end
 

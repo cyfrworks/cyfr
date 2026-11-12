@@ -168,5 +168,11 @@ defmodule Sanctum.Auth.OIDC do
     end
   end
 
-  defp client, do: Application.get_env(:sanctum, :oidc_reauth_client, __MODULE__.Oidcc)
+  # The token exchange's client is a test seam (`:oidc_reauth_client`)
+  # only a test build reads.
+  defp client,
+    do:
+      Sanctum.seam(__MODULE__.Oidcc, fn ->
+        Application.get_env(:sanctum, :oidc_reauth_client, __MODULE__.Oidcc)
+      end)
 end

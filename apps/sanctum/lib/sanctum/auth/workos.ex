@@ -136,5 +136,6 @@ defmodule Sanctum.Auth.WorkOS do
   end
 
   defp settings, do: Application.get_env(:sanctum, :workos) || %{}
-  defp api, do: Application.get_env(:sanctum, :workos_api_url, @api)
+  # The base URL is a test seam (`:workos_api_url`) only a test build reads.
+  defp api, do: Sanctum.seam(@api, fn -> Application.get_env(:sanctum, :workos_api_url, @api) end)
 end

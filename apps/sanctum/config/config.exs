@@ -39,15 +39,10 @@ if config_env() == :test do
   config :sanctum,
     secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
-  # Allow tests to inject a membership-resolution override
-  # (`Sanctum.Tenancy`). Compile-time gate: production releases compile
-  # this to false and never honor the override.
-  config :sanctum, allow_tenancy_resolver_override: true
-
-  # Let fixtures that build an issuing context by hand pass the generations
-  # its rows stand at (`generation_snapshot:`). Compile-time gate, like the
-  # override above: a release compiles it out and refuses the option.
-  config :sanctum, issuance_snapshot_permitted: true
+  # Sanctum's test seams, compiled in for this build's suite as
+  # `config/test.exs` compiles them in for the umbrella's
+  # (`Sanctum.seam/2`): a release compiles none of them.
+  config :sanctum, test_seams_permitted: true
 
   # No host runs here to claim a control-plane slot, as none claims one in
   # the umbrella's suite (`config/test.exs`): the member counts as holding

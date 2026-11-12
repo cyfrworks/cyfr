@@ -2568,7 +2568,6 @@ defmodule Cyfr.Boundaries do
 
   @config_key_classes %{
     # Test seams: a hook a test sets and no release does.
-    allow_tenancy_resolver_override: :seam,
     # The bearer a test signs in with (`Sanctum.Auth`'s `current_user/1`,
     # read by `CyfrWeb.Plugs.Authenticate`): `CyfrWeb.ConnCase` sets it,
     # a release never does.
@@ -2578,16 +2577,17 @@ defmodule Cyfr.Boundaries do
     provisioning_inline: :seam,
     record_sink_inline: :seam,
     # The issuer's side of a company sign-in (`Sanctum.Auth.OIDC`): a test
-    # stands in its own for the token exchange.
+    # stands in its own for the token exchange; only a test build reads it.
     oidc_reauth_client: :seam,
     # WorkOS's API base URL (`Sanctum.Auth.WorkOS`), which a suite points at
-    # its scripted WorkOS on loopback; a release never sets it, so the
-    # company sign-in reaches https://api.workos.com.
+    # its scripted WorkOS on loopback; only a test build reads it, so a
+    # release's company sign-in reaches https://api.workos.com.
     workos_api_url: :seam,
     # The directory client's resolver and trusted certificates
     # (`Sanctum.Directory.Client`), which a suite sets to reach its
     # scripted directory through paths that pass no options; a caller's
-    # options win, and a release never sets it, so it uses the system's.
+    # options win, and only a test build reads it, so a release uses the
+    # system's.
     directory_client: :seam,
     # The resolver a guest's outbound pin resolves through
     # (`Opus.Host.Egress`), which a suite sets to a scripted resolver so a
@@ -2597,7 +2597,8 @@ defmodule Cyfr.Boundaries do
     # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
     # a hint no shipped preset holds and that preset's token endpoint, which
     # a code exchange and a refresh both reach, never replacing a shipped
-    # one; a release never sets it, so only the shipped presets are read.
+    # one; only a test build reads it, so a release holds the shipped
+    # presets alone.
     scripted_oauth_provider: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
     # lets the sandboxed suite boot omit the boot gate's children and the
@@ -2615,11 +2616,10 @@ defmodule Cyfr.Boundaries do
     # tests, which wait out the production figure; a release never sets it.
     decision_log_budget_ms: :seam,
     # Compiled in by the test configurations alone — `config/test.exs` and,
-    # for the standalone build, `apps/sanctum/config/config.exs` — as
-    # `:allow_tenancy_resolver_override` is; it lets a fixture hand an
-    # issuance a generation snapshot read from the rows (`Sanctum.Issuance`),
-    # which every release refuses.
-    issuance_snapshot_permitted: :seam,
+    # for the standalone build, `apps/sanctum/config/config.exs` — it lets
+    # Sanctum's test seams run (`Sanctum.seam/2`, the resolution override,
+    # an issuance's generation snapshot); every release compiles them out.
+    test_seams_permitted: :seam,
 
     # Boot switches with an in-code default; flipping one is a code change.
     cron_scheduler_enabled: :default,
@@ -2666,9 +2666,12 @@ defmodule Cyfr.Boundaries do
   }
 
   @test_only_config_key_classes %{
+    # The namespace cache's bound (`Sanctum.Namespace`), its code's own in
+    # every release, which reads no setting for it; the suite turns it off.
     namespace_cache_ttl_ms: :seam,
     # The caller memo's bound (`Sanctum.Caller`), its code's own 2 s in
-    # every release; the suite turns the memo off.
+    # every release, which reads no setting for it; the suite turns the
+    # memo off.
     caller_memo_ttl_ms: :seam,
     # The registry probe's switch, read by `Compendium.Provider.status/0`.
     registry_health_probe: :seam,

@@ -170,8 +170,10 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
+  # A test seam only a test build reads: a release holds the shipped
+  # presets alone.
   defp scripted do
-    case Application.get_env(:sanctum, :scripted_oauth_provider) do
+    case Sanctum.seam(nil, fn -> Application.get_env(:sanctum, :scripted_oauth_provider) end) do
       nil ->
         nil
 
