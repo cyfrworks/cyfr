@@ -497,7 +497,6 @@ func TestRecoveryConvergesUnderAComposeSettingInEnv(t *testing.T) {
 				func() error { _, err := e.Start(bg, "up"); return err },
 				func() error { _, err := e.Switch(bg, SwitchRequest{ID: id(5)}); return err },
 				func() error { _, err := e.Join(bg, JoinRequest{ID: id(6)}); return err },
-				func() error { _, err := e.CancelJoin(bg, CancelRequest{ID: id(7), JoinID: id(8)}); return err },
 			} {
 				before := len(h.fake.calls())
 				if err := op(); refusalCode(err) != "compose_env_refused" {

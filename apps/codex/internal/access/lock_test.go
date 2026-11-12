@@ -130,7 +130,6 @@ func TestMutatingMethodsRequireTheLock(t *testing.T) {
 		"Resume":            func() error { _, err := e.Resume(bg); return err },
 		"Switch":            func() error { _, err := e.Switch(bg, SwitchRequest{ID: id(1)}); return err },
 		"Join":              func() error { _, err := e.Join(bg, JoinRequest{ID: id(1)}); return err },
-		"CancelJoin":        func() error { _, err := e.CancelJoin(bg, CancelRequest{ID: id(1)}); return err },
 		"Start":             func() error { _, err := e.Start(bg, "up"); return err },
 		"Stop":              func() error { _, err := e.Stop(bg, "down", true); return err },
 		"ForgetJoin":        func() error { return e.ForgetJoin() },

@@ -125,16 +125,6 @@ func joinDigest(hostname string, newNode bool, fingerprint string) string {
 	return requestDigest(map[string]any{"op": "join", "hostname": hostname, "new_node": newNode, "auth_key_fingerprint": fingerprint})
 }
 
-// CheckHostname answers the machine name a join given name asks for (cyfr
-// when name is ""), or the join's refusal of it.
-func CheckHostname(name string) (string, error) {
-	hostname := joinHostname(name)
-	if !hostnameGrammar.MatchString(hostname) {
-		return "", invalid(hostname, "tailnet_name", hostnameRule)
-	}
-	return hostname, nil
-}
-
 // joinHostname is the machine name a join asks for: cyfr when none.
 func joinHostname(name string) string {
 	if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
@@ -520,33 +510,6 @@ func (e *Engine) cancelJoin(ctx context.Context, j *journal, cancel *CancelReque
 
 func cancelDigest(joinID string) string {
 	return requestDigest(map[string]any{"op": "cancel", "join_id": joinID})
-}
-
-func (e *Engine) doCancelJoin(ctx context.Context, r CancelRequest) (Receipt, error) {
-	if err := e.requireLock(); err != nil {
-		return Receipt{}, err
-	}
-	if _, err := e.readEnv(); err != nil {
-		return Receipt{}, err
-	}
-	digest := cancelDigest(r.JoinID)
-	if rc, ok, err := e.lookup(r.ID, digest); err != nil || ok {
-		if err != nil {
-			return Receipt{}, err
-		}
-		return answer(rc)
-	}
-	j, err := e.readJournal()
-	if err != nil {
-		return Receipt{}, err
-	}
-	if j == nil || j.Op != "join" || j.Join == nil || j.Join.JoinID != r.JoinID || j.Join.State != "waiting" {
-		if j != nil && j.Phase == "uncertain" {
-			return answer(j.receipt())
-		}
-		return e.reject(r.ID, digest, "cancel", Refuse("tailnet_join_not_current", nil))
-	}
-	return e.cancelJoin(context.WithoutCancel(ctx), j, &r)
 }
 
 func (e *Engine) cancelWaitingJoin(ctx context.Context) error {
