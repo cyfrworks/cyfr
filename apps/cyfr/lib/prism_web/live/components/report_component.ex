@@ -24,8 +24,6 @@ defmodule PrismWeb.ReportComponent do
 
   use PrismWeb, :live_component
 
-  require Logger
-
   alias Phoenix.LiveView.JS
 
   @categories [
@@ -104,11 +102,9 @@ defmodule PrismWeb.ReportComponent do
   # Only the node's shutdown stops the task (`send_report/2`).
   def handle_async(:report, {:exit, _reason}, socket), do: {:noreply, socket}
 
-  # The registry call, off the event. It runs to its end whether or not the
-  # page is still there to show it, so it ignores the page's exit: a report
-  # stopped in flight may have reached the registry, and a person left not
-  # knowing would send it again. Its supervisor stops it with the node, and
-  # a crash is answered as unavailable, so the dialog never stays sending.
+  # The registry call, off the event, run to its end (`run_to_end/1`): a
+  # report stopped in flight may have reached the registry, and a person
+  # left not knowing would send it again.
   defp send_report(socket, args) do
     ctx = socket.assigns.context
     tag = CyfrWeb.ContextGuard.capture(ctx)
@@ -116,24 +112,7 @@ defmodule PrismWeb.ReportComponent do
     start_async(
       socket,
       :report,
-      fn ->
-        Process.flag(:trap_exit, true)
-
-        result =
-          try do
-            PrismWeb.Ops.call_tool(ctx, "registry", args)
-          catch
-            kind, reason ->
-              Logger.error(
-                "[ReportComponent] a report crashed: " <>
-                  Prima.LogFilter.format_exception(kind, reason, __STACKTRACE__)
-              )
-
-              {:error, :unavailable}
-          end
-
-        {tag, result}
-      end,
+      fn -> {tag, run_to_end(fn -> call_tool(ctx, "registry", args) end)} end,
       supervisor: Prism.TaskSupervisor
     )
   end
