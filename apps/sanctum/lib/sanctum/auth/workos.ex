@@ -29,12 +29,13 @@ defmodule Sanctum.Auth.WorkOS do
 
   The API's base URL is `https://api.workos.com`; a test stands in its own
   at `:sanctum, :workos_api_url`, a test seam only a test build reads
-  (`Sanctum.seam/2`): a release uses the shipped URL whatever the key says.
+  (`Prima.TestSeam.value/2`): a release uses the shipped URL whatever the key says.
   """
 
   @behaviour Sanctum.CompanyLogin.Issuer
 
   require Logger
+  require Prima.TestSeam
 
   @api "https://api.workos.com"
   @request_ms 15_000
@@ -137,5 +138,6 @@ defmodule Sanctum.Auth.WorkOS do
 
   defp settings, do: Application.get_env(:sanctum, :workos) || %{}
   # The base URL is a test seam (`:workos_api_url`) only a test build reads.
-  defp api, do: Sanctum.seam(@api, fn -> Application.get_env(:sanctum, :workos_api_url, @api) end)
+  defp api,
+    do: Prima.TestSeam.value(@api, fn -> Application.get_env(:sanctum, :workos_api_url, @api) end)
 end

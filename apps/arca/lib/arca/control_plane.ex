@@ -159,6 +159,7 @@ defmodule Arca.ControlPlane do
   import Ecto.Query, only: [from: 2]
 
   require Logger
+  require Prima.TestSeam
 
   alias Arca.Schemas.CellLease
 
@@ -271,14 +272,18 @@ defmodule Arca.ControlPlane do
   defp not_owner, do: {:error, :not_owner}
 
   @doc """
-  Whether a claimant runs in this deployment. The in-code default is
-  true, and no environment variable reads it; only the test configuration
-  turns it off, and only an explicit `false` does. Without a claimant no
-  member holds a slot, so a host-owned write has none to be fenced by
-  (`member_slot/0`).
+  Whether a claimant runs in this deployment: always in a release. Only a
+  test build reads `:control_plane_claim_enabled` (`Prima.TestSeam`), and
+  only an explicit `false` there turns the claimant off. Without a
+  claimant no member holds a slot, so a host-owned write has none to be
+  fenced by (`member_slot/0`).
   """
   @spec claimed?() :: boolean()
-  def claimed?, do: Application.get_env(:arca, :control_plane_claim_enabled, true) != false
+  def claimed?,
+    do:
+      Prima.TestSeam.value(true, fn ->
+        Application.get_env(:arca, :control_plane_claim_enabled, true) != false
+      end)
 
   @doc "The slice of a won lease a member does not count as its own."
   @spec margin_ms() :: pos_integer()
@@ -287,13 +292,18 @@ defmodule Arca.ControlPlane do
   # ---- its own connection ----------------------------------------------------
 
   @doc """
-  Whether the control plane writes on a pool of its own. The in-code
-  default is true, and no environment variable reads it; only the test
-  configuration turns it off, where under the SQL sandbox a second
-  connection would neither see nor roll back a test's rows.
+  Whether the control plane writes on a pool of its own: always in a
+  release. Only a test build reads `:control_plane_pool`
+  (`Prima.TestSeam`), which the test configuration turns off, since under
+  the SQL sandbox a second connection would neither see nor roll back a
+  test's rows.
   """
   @spec own_pool?() :: boolean()
-  def own_pool?, do: Application.get_env(:arca, :control_plane_pool, true) != false
+  def own_pool?,
+    do:
+      Prima.TestSeam.value(true, fn ->
+        Application.get_env(:arca, :control_plane_pool, true) != false
+      end)
 
   @doc """
   The child that is the control plane's pool: `Arca.Repo` again, one

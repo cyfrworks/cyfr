@@ -80,6 +80,7 @@ defmodule Emissary.External.Reconciler do
   use GenServer
 
   require Logger
+  require Prima.TestSeam
 
   alias Cyfr.Bus.{AthanorArchived, VaultEntryChanged}
 
@@ -94,7 +95,7 @@ defmodule Emissary.External.Reconciler do
   @sweep_interval_ms :timer.minutes(5)
 
   def start_link(opts \\ []) do
-    if Cyfr.seam(true, fn ->
+    if Prima.TestSeam.value(true, fn ->
          Application.get_env(:cyfr, :external_server_reconciler_enabled, true)
        end) do
       GenServer.start_link(__MODULE__, opts, name: __MODULE__)

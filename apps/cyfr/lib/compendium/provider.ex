@@ -19,6 +19,7 @@ defmodule Compendium.Provider do
   def service, do: "compendium"
 
   require Logger
+  require Prima.TestSeam
 
   # ============================================================================
   # Status
@@ -44,9 +45,11 @@ defmodule Compendium.Provider do
     # registry is a loopback address no registry answers at, so the
     # probe's answer says nothing about the code under test, and its memo
     # would carry that answer from one test into the next.
-    if Cyfr.seam(true, fn -> Application.get_env(:cyfr, :registry_health_probe, true) end),
-      do: probed_registry_health(Compendium.RegistryHost.canonical_host()),
-      else: "unknown"
+    if Prima.TestSeam.value(true, fn ->
+         Application.get_env(:cyfr, :registry_health_probe, true)
+       end),
+       do: probed_registry_health(Compendium.RegistryHost.canonical_host()),
+       else: "unknown"
   end
 
   defp probed_registry_health(host) do

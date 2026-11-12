@@ -57,7 +57,7 @@ defmodule Sanctum.Directory.Client do
   `getaddr/2` as `:inet` does) and `:cacerts` (DER certificates to trust):
   the address policy and peer verification are not options. The suite
   sets the same two through the test seam `:sanctum, :directory_client`,
-  which only a test build reads (`Sanctum.seam/2`), so the paths that
+  which only a test build reads (`Prima.TestSeam.value/2`), so the paths that
   read a directory without options reach its scripted one; a caller's
   options win over it, and a release takes no options from the key.
 
@@ -90,6 +90,7 @@ defmodule Sanctum.Directory.Client do
   """
 
   require Logger
+  require Prima.TestSeam
 
   alias Prima.Identity
   alias Prima.Identity.{Encoding, Entry}
@@ -265,7 +266,9 @@ defmodule Sanctum.Directory.Client do
   # options, and a release uses the system's resolver and certificate
   # store.
   defp options!(opts) when is_list(opts) do
-    seam = Sanctum.seam([], fn -> Application.get_env(:sanctum, :directory_client, []) end)
+    seam =
+      Prima.TestSeam.value([], fn -> Application.get_env(:sanctum, :directory_client, []) end)
+
     Keyword.merge(validated!(seam), validated!(opts))
   end
 

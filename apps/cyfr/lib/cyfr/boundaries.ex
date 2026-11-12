@@ -1834,9 +1834,6 @@ defmodule Cyfr.Boundaries do
       build_tincture_context: 2,
       origin: 0,
       registry_base_url: 1,
-      # `Compendium.Provisioning`'s inline-fill switch (`:provisioning_inline`),
-      # a test seam read through Sanctum's one permission.
-      seam: 2,
       system_context: 0
     ],
     "Sanctum.Annotations" => [
@@ -2416,11 +2413,11 @@ defmodule Cyfr.Boundaries do
     # Test seams: a hook a test sets and no release does.
     # The bearer a test signs in with (`Sanctum.Auth`'s `current_user/1`,
     # read through `Sanctum.BearerToken.provider/0`): `CyfrWeb.ConnCase`
-    # sets it, and only a test build reads it (`Sanctum.seam/2`).
+    # sets it, and only a test build reads it (`Prima.TestSeam.value/2`).
     bearer_provider: :seam,
     tenancy_resolver_override: :seam,
     # A fill run in the caller's process (`Compendium.Provisioning`); only
-    # a test build reads it (`Sanctum.seam/2`).
+    # a test build reads it (`Prima.TestSeam.value/2`).
     provisioning_inline: :seam,
     record_sink_inline: :seam,
     # The issuer's side of a company sign-in (`Sanctum.Auth.OIDC`): a test
@@ -2439,7 +2436,7 @@ defmodule Cyfr.Boundaries do
     # The resolver a guest's outbound pin resolves through
     # (`Opus.Host.Egress`), which a suite sets to a scripted resolver so a
     # pin's names never reach the network; only a test build reads it
-    # (`Cyfr.seam/2`), so a release's names resolve through `:inet`.
+    # (`Prima.TestSeam.value/2`), so a release's names resolve through `:inet`.
     egress_resolver: :seam,
     # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
     # a hint no shipped preset holds and that preset's token endpoint, which
@@ -2458,19 +2455,19 @@ defmodule Cyfr.Boundaries do
     # close a sync test's one sandbox connection, and by the budget's own
     # tests, which wait out the production figure; a release never sets it.
     decision_log_budget_ms: :seam,
-    # The test permission, one name in both applications that read it,
-    # compiled in by the test configurations alone — `config/test.exs` and,
-    # for Sanctum's standalone build, `apps/sanctum/config/config.exs`. Under
-    # `:cyfr` it lets the host's test seams run (`Cyfr.seam/2`): the boot
-    # switches below and the hooks a suite points at its stand-ins; under
-    # `:sanctum`, Sanctum's (`Sanctum.seam/2`, the resolution override, an
-    # issuance's generation snapshot). Every release compiles them out.
+    # The test permission, `:prima`'s, compiled in by the test
+    # configurations alone — `config/test.exs` and, for the Sanctum and
+    # Arca islands, their own `config/config.exs`. It lets every test seam
+    # run (`Prima.TestSeam.value/2`): the host's boot switches below and the
+    # hooks a suite points at its stand-ins, Sanctum's (with its resolution
+    # override and an issuance's generation snapshot) and Arca's claim, pool
+    # and turns. Every release compiles them out.
     test_seams_permitted: :seam,
 
     # The sandboxed suite's boot switches, each on by default: the boot
     # gate's work, the database checks, the timers and watches, and the
     # recovery and status watch a sandbox connection cannot lend itself
-    # to. Only a test build reads one (`Cyfr.seam/2`), so a release runs
+    # to. Only a test build reads one (`Prima.TestSeam.value/2`), so a release runs
     # all of them whatever its configuration says.
     cron_scheduler_enabled: :seam,
     schedule_notes_enabled: :seam,
@@ -2485,10 +2482,17 @@ defmodule Cyfr.Boundaries do
     database_checks_enabled: :seam,
     thread_recovery: :seam,
 
-    # Boot switches with an in-code default; flipping one is a code change.
-    control_plane_claim_enabled: :default,
-    control_plane_pool: :default,
-    write_turn: :default,
+    # Arca's sandbox switches, each on by default: the member's claim on
+    # its control-plane slot, the control plane's own pool and SQLite's
+    # write turns, which the SQL sandbox cannot lend itself to. Only a test
+    # build reads one (`Prima.TestSeam.value/2`), so a release claims its
+    # slot, writes on its own pool and takes turns whatever its
+    # configuration says.
+    control_plane_claim_enabled: :seam,
+    control_plane_pool: :seam,
+    write_turn: :seam,
+
+    # A boot switch with an in-code default; flipping it is a code change.
     telemetry_console_enabled: :default,
 
     # The at-rest keyring: `Cyfr.Application` resolves it at boot, from
@@ -2526,11 +2530,11 @@ defmodule Cyfr.Boundaries do
     # memo off.
     caller_memo_ttl_ms: :seam,
     # The registry probe's switch, read by `Compendium.Provider.status/0`;
-    # only a test build reads it (`Cyfr.seam/2`), so a release probes.
+    # only a test build reads it (`Prima.TestSeam.value/2`), so a release probes.
     registry_health_probe: :seam,
     # The tincture pipelines' rate ceiling the suite raises
     # (`CyfrWeb.Plugs.TinctureRateLimit`); only a test build reads it
-    # (`Cyfr.seam/2`), so a release meters at each pipeline's own ceiling.
+    # (`Prima.TestSeam.value/2`), so a release meters at each pipeline's own ceiling.
     tincture_rate_limit_max: :seam
   }
 
@@ -2580,7 +2584,7 @@ defmodule Cyfr.Boundaries do
   telemetry roster reads one as an event name.
   """
   @spec config_applications() :: [atom()]
-  def config_applications, do: [:arca, :cyfr, :sanctum]
+  def config_applications, do: [:arca, :cyfr, :prima, :sanctum]
 
   @doc """
   The keys `declared` names under an application that `scanned` never

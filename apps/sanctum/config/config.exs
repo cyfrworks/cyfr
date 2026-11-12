@@ -44,10 +44,10 @@ if config_env() == :test do
   # answer, and none off this machine.
   config :sanctum, :registry_url, "127.0.0.1:19"
 
-  # Sanctum's test seams, compiled in for this build's suite as
-  # `config/test.exs` compiles them in for the umbrella's
-  # (`Sanctum.seam/2`): a release compiles none of them.
-  config :sanctum, test_seams_permitted: true
+  # The test permission, compiled in for this build's suite as
+  # `config/test.exs` compiles it in for the umbrella's
+  # (`Prima.TestSeam`): a release compiles none of the seams.
+  config :prima, test_seams_permitted: true
 
   # No host runs here to claim a control-plane slot, as none claims one in
   # the umbrella's suite (`config/test.exs`): the member counts as holding

@@ -32,7 +32,7 @@ defmodule Cyfr.ContextSwapTest do
     # focus/2's two admitting arms and refocus/2's system arm.
     "apps/sanctum/lib/sanctum/context.ex" => 3,
     # The tenancy-resolver override exists only when compiled with
-    # `:test_seams_permitted` (test builds); production
+    # `:prima, :test_seams_permitted` (test builds); production
     # compiles the branch out entirely. And revalidating an API key's
     # context whose athanor is archived or gone empties the athanor
     # (`keyless_athanor/1`): it narrows onto none, and a key never acts in

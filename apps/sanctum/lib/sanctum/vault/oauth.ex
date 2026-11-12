@@ -55,6 +55,7 @@ defmodule Sanctum.Vault.OAuth do
   """
 
   require Logger
+  require Prima.TestSeam
 
   alias Sanctum.CipherAAD
   alias Sanctum.OAuth.RefreshLock
@@ -143,7 +144,7 @@ defmodule Sanctum.Vault.OAuth do
 
   # A provider the suites script, standing in for a preset no shipped one
   # reaches: `:sanctum, :scripted_oauth_provider`, a test seam only a test
-  # build reads (`Sanctum.seam/2`, as `:sanctum, :oidc_reauth_client` is),
+  # build reads (`Prima.TestSeam.value/2`, as `:sanctum, :oidc_reauth_client` is),
   # names a module whose `preset/1` answers a preset for a hint the
   # shipped table does not hold and whose `post/3` answers that preset's
   # token endpoint, for a code exchange and a refresh alike, in the
@@ -173,7 +174,9 @@ defmodule Sanctum.Vault.OAuth do
   # A test seam only a test build reads: a release holds the shipped
   # presets alone.
   defp scripted do
-    case Sanctum.seam(nil, fn -> Application.get_env(:sanctum, :scripted_oauth_provider) end) do
+    case Prima.TestSeam.value(nil, fn ->
+           Application.get_env(:sanctum, :scripted_oauth_provider)
+         end) do
       nil ->
         nil
 

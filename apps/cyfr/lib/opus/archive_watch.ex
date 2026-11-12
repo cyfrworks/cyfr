@@ -27,6 +27,7 @@ defmodule Opus.ArchiveWatch do
   use GenServer
 
   require Logger
+  require Prima.TestSeam
 
   # The most running executions one archive cancels: an athanor with more
   # than this has a bigger problem than the archive.
@@ -34,7 +35,7 @@ defmodule Opus.ArchiveWatch do
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    if Cyfr.seam(true, fn ->
+    if Prima.TestSeam.value(true, fn ->
          Application.get_env(:cyfr, :execution_archive_watch_enabled, true)
        end) do
       GenServer.start_link(__MODULE__, opts, name: __MODULE__)

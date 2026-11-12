@@ -79,6 +79,7 @@ defmodule Aqua.ScheduleNotes do
   use GenServer
 
   require Logger
+  require Prima.TestSeam
 
   alias Arca.{ConsumerReceipts, JobClaims, ScheduleOccurrences}
   alias Cyfr.Bus.ScheduleCompleted
@@ -102,7 +103,9 @@ defmodule Aqua.ScheduleNotes do
 
   @doc false
   def start_link(opts \\ []) do
-    if Cyfr.seam(true, fn -> Application.get_env(:cyfr, :schedule_notes_enabled, true) end) do
+    if Prima.TestSeam.value(true, fn ->
+         Application.get_env(:cyfr, :schedule_notes_enabled, true)
+       end) do
       GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
     else
       :ignore

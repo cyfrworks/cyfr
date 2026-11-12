@@ -85,6 +85,7 @@ defmodule Cyfr.RetentionScheduler do
   use GenServer
 
   require Logger
+  require Prima.TestSeam
 
   alias Arca.JobClaims
 
@@ -133,7 +134,9 @@ defmodule Cyfr.RetentionScheduler do
   @type stopped :: :taken | :lapsed | :not_held | :unavailable
 
   def start_link(opts \\ []) do
-    if Cyfr.seam(true, fn -> Application.get_env(:cyfr, :retention_scheduler_enabled, true) end) do
+    if Prima.TestSeam.value(true, fn ->
+         Application.get_env(:cyfr, :retention_scheduler_enabled, true)
+       end) do
       GenServer.start_link(__MODULE__, opts, name: __MODULE__)
     else
       :ignore

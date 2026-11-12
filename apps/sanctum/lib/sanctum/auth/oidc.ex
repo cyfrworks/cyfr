@@ -30,10 +30,12 @@ defmodule Sanctum.Auth.OIDC do
 
   The exchange with the issuer is `Sanctum.Auth.OIDC.Oidcc`'s. A test
   stands in its own issuer through `:sanctum, :oidc_reauth_client`, a test
-  seam only a test build reads (`Sanctum.seam/2`): a release uses
+  seam only a test build reads (`Prima.TestSeam.value/2`): a release uses
   `Oidcc` whatever the key says, and every check of the answer is this
   module's either way.
   """
+
+  require Prima.TestSeam
 
   @behaviour Sanctum.CompanyLogin.Issuer
 
@@ -173,7 +175,7 @@ defmodule Sanctum.Auth.OIDC do
   # only a test build reads.
   defp client,
     do:
-      Sanctum.seam(__MODULE__.Oidcc, fn ->
+      Prima.TestSeam.value(__MODULE__.Oidcc, fn ->
         Application.get_env(:sanctum, :oidc_reauth_client, __MODULE__.Oidcc)
       end)
 end
