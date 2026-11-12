@@ -32,7 +32,6 @@ defmodule Prima.ComponentFeaturesTest do
 
     on_exit(fn ->
       Application.put_env(:prima, :wasm_tools, configured)
-      Application.delete_env(:prima, :wasm_tools_timeout_ms)
       :ok = ComponentFeatures.install!()
     end)
 
@@ -138,7 +137,6 @@ defmodule Prima.ComponentFeaturesTest do
   test "a validator past its deadline is killed with its process group, and the component refused" do
     {dir, path} = fake!(&"echo $$ > #{&1}/pid\nexec /bin/sleep 30")
     install!(path)
-    Application.put_env(:prima, :wasm_tools_timeout_ms, 300)
 
     log =
       capture_log(fn ->
@@ -146,7 +144,7 @@ defmodule Prima.ComponentFeaturesTest do
                  {:error, :component_validator_unavailable}
       end)
 
-    assert log =~ "did not answer within 300 ms and was killed"
+    assert log =~ "did not answer within 10000 ms and was killed"
     pid = dir |> Path.join("pid") |> File.read!() |> String.trim()
     Prima.Test.Wait.wait_until(fn -> not running?(pid) end, 5_000, "the validator to be gone")
   end
