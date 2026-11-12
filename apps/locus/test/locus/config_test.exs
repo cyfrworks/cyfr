@@ -465,7 +465,10 @@ defmodule Locus.ConfigTest do
         assert Config.admission_limit_bytes(budget, factor) == limit
       end
 
-      assert Config.backends_admission_limit_bytes() == 1_879_048_192
+      assert Config.admission_limit_bytes(
+               Config.backends_memory_budget(),
+               Config.backends_memory_overcommit()
+             ) == 1_879_048_192
     end
 
     test "every role's CPU quota is microseconds in the keeper's range; zero refuses the boot" do
