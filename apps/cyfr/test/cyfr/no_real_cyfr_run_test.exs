@@ -52,8 +52,10 @@ defmodule Cyfr.NoRealCyfrRunTest do
 
   # What each registry setting boots with, stored as written, and what
   # refuses the boot. The registry is named in signed requests by a host
-  # name's grammar, so it takes no IPv6 literal; the OCI registry is reached
-  # by URL alone and takes a bracketed one. `none` refuses in any case.
+  # name's grammar, so it takes no IPv6 literal, and may sit under a path a
+  # proxy adds; the OCI registry is reached by URL alone and takes a
+  # bracketed one, and its host begins every reference, so it takes no
+  # path. `none` refuses in any case.
   @names ~w(registry.example registry.example:8443 REGISTRY.EXAMPLE 127.0.0.1:9 localhost
             localhost:65535)
   @refused [
@@ -63,7 +65,6 @@ defmodule Cyfr.NoRealCyfrRunTest do
     "::1",
     "registry.example.",
     "https://registry.example",
-    "registry.example/path",
     "registry.example:",
     "registry.example:0",
     "registry.example:65536",
@@ -71,15 +72,22 @@ defmodule Cyfr.NoRealCyfrRunTest do
   ]
 
   test "the registry boots with a host name or an IPv4 address and an optional port, and nothing else" do
-    for value <- @names do
+    for value <- @names ++ ["registry.example:8443/registry", "127.0.0.1:9/a/b/"] do
       assert get_in(runtime(:prod, %{"CYFR_REGISTRY_URL" => value}), [:sanctum, :registry_url]) ==
                value
     end
 
+    # The path is the registry API's alone: the OCI host derives from the
+    # host and port.
+    assert get_in(
+             runtime(:prod, %{"CYFR_REGISTRY_URL" => "registry.example:8443/registry"}),
+             [:cyfr, :oci_registry_url]
+           ) == "registry.registry.example:8443"
+
     assert get_in(runtime(:prod, %{"CYFR_REGISTRY_URL" => ""}), [:sanctum, :registry_url]) ==
              "cyfr.run"
 
-    for value <- @refused ++ ["[::1]:9", "[::1]"] do
+    for value <- @refused ++ ["[::1]:9", "[::1]", "registry.example/a?b", "registry.example/a b"] do
       assert_raise RuntimeError,
                    ~r/CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run or one of its own/,
                    fn -> runtime(:prod, %{"CYFR_REGISTRY_URL" => value}) end
@@ -100,7 +108,9 @@ defmodule Cyfr.NoRealCyfrRunTest do
                value
     end
 
-    for value <- @refused ++ ["[::1]:", "[::1]:0", "[zz::1]:9", "[::1]x"] do
+    for value <-
+          @refused ++
+            ["registry.example/path", "[::1]:9/path", "[::1]:", "[::1]:0", "[zz::1]:9", "[::1]x"] do
       assert_raise RuntimeError, ~r/CYFR_OCI_REGISTRY_URL must name the OCI registry/, fn ->
         runtime(:prod, %{"CYFR_OCI_REGISTRY_URL" => value})
       end

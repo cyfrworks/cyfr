@@ -529,11 +529,11 @@ if config_env() != :test do
 
   # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
   # Every CYFR names a registry and calls it, in every build: cyfr.run or
-  # its own, a host name or IPv4 address with an optional port
+  # its own, a host name or IPv4 address with an optional port and path
   # (`Sanctum.registry_url?/1`); the OCI host may also be a bracketed IPv6
-  # address (`Sanctum.oci_registry_url?/1`). Any other value, and
+  # address, and has no path (`Sanctum.oci_registry_url?/1`). Any other value, and
   # `none` in any case, refuses the boot. Unset, `registry_url` is `"cyfr.run"`
-  # and `oci_registry_url` derives as `"registry.#{registry_url}"`. An
+  # and `oci_registry_url` derives as `"registry."` before its host and port. An
   # install cut off from the internet names a registry of its own; one it
   # cannot reach is answered as unavailable. Self-hosted deployments may
   # override both independently for co-host or split topologies.
@@ -547,7 +547,7 @@ if config_env() != :test do
   if String.downcase(registry_url_config) == "none" or
        not Sanctum.registry_url?(registry_url_config) do
     raise "[Cyfr] FATAL: CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run " <>
-            "or one of its own: a host name or an IPv4 address with an optional port. " <>
+            "or one of its own: a host name or an IPv4 address with an optional port and path. " <>
             "The requests its accounts sign name the registry, and they cannot name an " <>
             "IPv6 address. Every CYFR names one."
   end
@@ -588,8 +588,12 @@ if config_env() != :test do
 
   config :sanctum, :setup_token, setup_token
 
+  # Unset, the OCI host is `registry.` before the registry's host and port,
+  # without the path a proxy serves the registry's API under.
+  [registry_authority | _path] = String.split(registry_url_config, "/", parts: 2)
+
   oci_registry_url_config =
-    env_str.("CYFR_OCI_REGISTRY_URL", "registry.#{registry_url_config}")
+    env_str.("CYFR_OCI_REGISTRY_URL", "registry." <> registry_authority)
 
   if String.downcase(oci_registry_url_config) == "none" or
        not Sanctum.oci_registry_url?(oci_registry_url_config) do

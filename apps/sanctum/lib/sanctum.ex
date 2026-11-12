@@ -223,19 +223,34 @@ defmodule Sanctum do
   """
   @spec registry_host() :: String.t()
   def registry_host do
-    {:ok, host} = parse_registry(registry_url())
+    {:ok, host} = registry_authority(registry_url())
     host
   end
 
   @doc """
   Whether `value` names a registry: a host name or an IPv4 address, in any
-  case, and an optional port from 1 to 65535, with nothing else. An IPv6
-  literal is not one: a signed registry request and a handle's answer bind
-  the registry by a host name's grammar (`Prima.RegistryRequest`,
-  `Prima.HandleAnswer`), which cannot spell one.
+  case, an optional port from 1 to 65535, and an optional path a proxy
+  serves it under, with no query, fragment, space or control character.
+  An IPv6 literal is not one: a signed registry request and a handle's
+  answer bind the registry by a host name's grammar
+  (`Prima.RegistryRequest`, `Prima.HandleAnswer`), which cannot spell one.
   """
   @spec registry_url?(term()) :: boolean()
-  def registry_url?(value), do: match?({:ok, _host}, parse_registry(value))
+  def registry_url?(value), do: match?({:ok, _host}, registry_authority(value))
+
+  # The registry's host and port, before the path a proxy may add, which
+  # its base URL carries and nothing signed names.
+  defp registry_authority(value) when is_binary(value) do
+    case String.split(value, "/", parts: 2) do
+      [authority] ->
+        parse_registry(authority)
+
+      [authority, path] ->
+        if path =~ ~r/\A[^?#\x00-\x20\x7f]*\z/, do: parse_registry(authority), else: :error
+    end
+  end
+
+  defp registry_authority(_value), do: :error
 
   defp parse_registry(value) when is_binary(value) do
     {host, port} =
@@ -260,10 +275,11 @@ defmodule Sanctum do
 
   @doc """
   Whether `value` names an OCI registry, which components are pulled from
-  (`CYFR_OCI_REGISTRY_URL`): what `registry_url?/1` names, or a bracketed
-  IPv6 address, each with an optional port from 1 to 65535. The OCI
-  transport reaches an IPv6 registry by its bracketed URL authority, and
-  nothing signed names this host.
+  (`CYFR_OCI_REGISTRY_URL`): a host name, an IPv4 address or a bracketed
+  IPv6 address, each with an optional port from 1 to 65535, and no path,
+  since the host begins every component reference pulled from it. The
+  OCI transport reaches an IPv6 registry by its bracketed URL authority,
+  and nothing signed names this host.
   """
   @spec oci_registry_url?(term()) :: boolean()
   def oci_registry_url?(value) when is_binary(value) do
@@ -273,7 +289,7 @@ defmodule Sanctum do
           Enum.all?(port, &registry_port?/1)
 
       nil ->
-        registry_url?(value)
+        match?({:ok, _host}, parse_registry(value))
     end
   end
 
