@@ -6,7 +6,9 @@
 #
 # The dependency audit and the image scans compare the tree with advisory
 # feeds that change on their own, so they can fail a pull request for
-# nothing it did. On a pull request that changes no dependency file this
+# nothing it did. On a pull request that changes no dependency file (the
+# locks, the Dockerfiles and compose files, and what else an image holds:
+# the keeper's go.sum and the Rust toolchain's pin) this
 # writes informational=true to GITHUB_OUTPUT, which those steps feed to
 # continue-on-error. Everywhere else it writes nothing and they block: a
 # push to main, a release (test.yml and security.yml called from
@@ -25,6 +27,6 @@ set -euo pipefail
 [ "${GITHUB_EVENT_NAME:-}" = pull_request ] || exit 0
 
 if git diff --quiet HEAD^1 HEAD -- mix.lock ':(glob)**/package-lock.json' \
-  ':(glob)**/Dockerfile*' ':(glob)**/docker-compose*'; then
+  ':(glob)**/Dockerfile*' ':(glob)**/docker-compose*' apps/locus/keeper/go.sum rust-toolchain.toml; then
   echo informational=true >>"$GITHUB_OUTPUT"
 fi
