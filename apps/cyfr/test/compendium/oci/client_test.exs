@@ -668,7 +668,7 @@ defmodule Compendium.OCI.ClientTest do
       key = Path.join(ctx.cosign_dir, "cosign.pub")
       File.write!(key, "-----BEGIN PUBLIC KEY-----\nstand-in\n-----END PUBLIC KEY-----\n")
 
-      Application.put_env(:cyfr, :sigstore,
+      Prima.Test.Env.put_app_env(:cyfr, :sigstore,
         verification: :keyed,
         key_path: key,
         cosign_path: path
