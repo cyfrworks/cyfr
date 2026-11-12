@@ -24,6 +24,17 @@ defmodule Cyfr.TestSeamsTest do
   # turns it off). A module key is named as its source spells it.
   @module_keyed ["Compendium.ProjectionReconciler"]
 
+  # The reads in any application's code whose application is not a literal
+  # atom, by file and function, each with its reason. Exact: another such
+  # read fails until someone decides it.
+  @unnamed_applications %{
+    {"apps/cyfr/lib/cyfr/platform/settings.ex", :configured} =>
+      "the platform settings' reader: each entry's application and key are the " <>
+        "settings roster's (`Cyfr.Platform.Settings.Roster`), which holds no seam's key",
+    {"apps/cyfr/lib/cyfr/release.ex", :repos} =>
+      "the release tasks' read of the repositories under `@app`, which is `:arca`"
+  }
+
   # The decision holds for a seam only where its read goes through it.
   # Every read of the host's application environment in every
   # application's code, read as code: a key `Cyfr.Boundaries` classes
@@ -44,7 +55,7 @@ defmodule Cyfr.TestSeamsTest do
     found =
       for lib <- SourceTree.app_libs(root),
           path <- SourceTree.files!(Path.join([root, lib, "**/*.ex"])),
-          read <- reads(SourceTree.quoted(path), %{module: nil, gate: :plain}),
+          read <- reads(SourceTree.quoted(path), %{module: nil, function: nil, gate: :plain}),
           do: Map.put(read, :file, Path.relative_to(path, root))
 
     outside =
@@ -72,6 +83,28 @@ defmodule Cyfr.TestSeamsTest do
           do: Path.relative_to(path, root)
 
     assert hidden == []
+
+    # A read names its application as a literal atom: one named by a
+    # variable, an attribute or a call could be `:cyfr` and read a seam's
+    # key past every rule above. The exceptions are the list above; the
+    # settings reader's stays one because its roster names no seam's key.
+    # Out of scope: `apply/3` and other indirect calls. This check holds
+    # the honest forms; tests/release-boot/host_seams.exs shows a release
+    # ignoring the switches.
+    unnamed_applications =
+      for %{key: :unnamed_application, file: file, function: function} <- found,
+          do: {file, function}
+
+    assert Enum.sort(unnamed_applications) == Enum.sort(Map.keys(@unnamed_applications)),
+           "reads whose application is not a literal atom: #{inspect(unnamed_applications)}"
+
+    rostered =
+      for %Cyfr.Platform.Settings.Roster.Entry{config: [key | _]} <-
+            Cyfr.Platform.Settings.Roster.entries(),
+          key in seams,
+          do: key
+
+    assert rostered == []
 
     inside = for %{gate: :seam} = read <- found, do: read
     assert Enum.reject(inside, &(&1.key in seams)) == [], inspect(inside)
@@ -105,9 +138,14 @@ defmodule Cyfr.TestSeamsTest do
   # read that names none; `:dynamic` for one named by a value) and its
   # gate: `:seam` inside the function `Cyfr.seam/2` or `/3` is handed,
   # `:plain` otherwise. A piped read (`:cyfr |> Application.get_all_env()`)
-  # is read as the call it is.
+  # is read as the call it is. A read of any application named by anything
+  # but a literal atom is `:unnamed_application`, with the function it sits
+  # in.
   defp reads({:defmodule, _, [{:__aliases__, _, parts}, body]}, scope),
     do: reads(body, %{scope | module: Enum.map_join(parts, ".", &Atom.to_string/1)})
+
+  defp reads({kind, _, [head | body]}, scope) when kind in [:def, :defp, :defmacro, :defmacrop],
+    do: reads(body, %{scope | function: name(head)})
 
   defp reads({{:., _, [{:__aliases__, _, [:Cyfr]}, :seam]}, _, args}, scope) when is_list(args),
     do:
@@ -124,6 +162,20 @@ defmodule Cyfr.TestSeamsTest do
     case read(module(module), fun, rest, scope) do
       nil -> walk(ast, scope)
       read -> [read | reads(args, scope)]
+    end
+  end
+
+  defp reads({{:., _, [module, fun]}, _, [application | rest] = args} = ast, scope)
+       when not is_atom(application) do
+    case read(module(module), fun, rest, scope) do
+      nil ->
+        walk(ast, scope)
+
+      read ->
+        [
+          Map.merge(read, %{key: :unnamed_application, function: scope.function})
+          | reads(args, scope)
+        ]
     end
   end
 
@@ -145,6 +197,9 @@ defmodule Cyfr.TestSeamsTest do
       true -> nil
     end
   end
+
+  defp name({:when, _, [head | _]}), do: name(head)
+  defp name({name, _, _}) when is_atom(name), do: name
 
   defp key([{:__MODULE__, _, _} | _], %{module: module}), do: module
   defp key([key | _], _scope) when is_atom(key), do: key
