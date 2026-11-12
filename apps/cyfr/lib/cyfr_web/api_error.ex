@@ -49,17 +49,6 @@ defmodule CyfrWeb.ApiError do
   def status(class), do: Map.fetch!(@statuses, class)
 
   @doc """
-  Render `reason` — a `%Prima.Refusal{}`, or a reason term classified here
-  (`Sanctum.Refusals.classify/1`) — at the status its class answers with,
-  with its own sentence.
-  """
-  @spec refuse(Plug.Conn.t(), term()) :: Plug.Conn.t()
-  def refuse(%Plug.Conn{} = conn, reason) do
-    refusal = Sanctum.Refusals.classify(reason)
-    __MODULE__.send(conn, status(refusal.class), refusal, nil)
-  end
-
-  @doc """
   Render `reason` at `status`. The body's `code` is the reason's class
   and its `message` the refusal's own sentence, for every caller: the
   message argument, which `Emissary.Web.MCPError` reads, is not read
