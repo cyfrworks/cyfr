@@ -635,10 +635,6 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> render_submit()
 
     assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
-    # The line answered before the command ends: the scripted service
-    # writes back the session it read for a line, so an end it is told of
-    # meanwhile would be lost.
-    answered(view)
 
     Scripted.end_sessions(fake, row.id, 0)
 
@@ -829,7 +825,6 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert_receive {:session, "send", %{"session" => session_b, "lines" => ["code-b"]}, _}, 2_000
     assert session_b != session_a
-    answered(view)
 
     # After its session ended, selecting the same sign-in again starts afresh.
     Scripted.end_sessions(fake, codex.id, 0)
