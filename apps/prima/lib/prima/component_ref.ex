@@ -13,8 +13,8 @@ defmodule Prima.ComponentRef do
   - `type:namespace.name:version` — pinned (e.g., `catalyst:local.claude:0.1.0`)
   - `type:namespace.name` — versionless (e.g., `c:local.claude`)
 
-  The type prefix is **required**. Both `parse/1` and `normalize/1` reject
-  refs without a type prefix.
+  The type prefix is **required**: `parse/1` and `normalize_flexible/1`
+  reject refs without one.
 
   **Shorthand**: `c` = catalyst, `r` = reagent, `f` = formula, `t` = tincture
 
@@ -187,48 +187,11 @@ defmodule Prima.ComponentRef do
   end
 
   @doc """
-  Normalize a component reference string to canonical format.
-
-  Parses the input and returns the canonical string. The type prefix is
-  **required** — untyped refs are rejected with a helpful error message.
-
-  ## Examples
-
-      iex> Prima.ComponentRef.normalize("catalyst:local.my-tool:1.0.0")
-      {:ok, "catalyst:local.my-tool:1.0.0"}
-
-      iex> Prima.ComponentRef.normalize("c:local.my-tool:1.0.0")
-      {:ok, "catalyst:local.my-tool:1.0.0"}
-
-      iex> Prima.ComponentRef.normalize("local.my-tool:1.0.0")
-      {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0 or c:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
-  """
-  @spec normalize(String.t()) :: {:ok, String.t()} | {:error, String.t()}
-  def normalize(ref) when is_binary(ref) do
-    case parse(ref) do
-      {:ok, %__MODULE__{version: nil} = parsed} ->
-        name_part = "#{parsed.namespace}.#{parsed.name}"
-
-        {:error,
-         "version must be explicit " <>
-           "(e.g., #{parsed.type}:#{name_part}:1.0.0). " <>
-           "Run 'cyfr search #{parsed.name}' to find available versions, " <>
-           "or 'cyfr inspect #{parsed.type}:#{name_part}' to see the latest."}
-
-      {:ok, parsed} ->
-        {:ok, __MODULE__.to_string(parsed)}
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  @doc """
   Normalize a component reference, allowing version to be omitted.
 
-  Like `normalize/1` but allows `version: nil` to pass through.
-  Type prefix is still required. Returns `{:ok, struct}` (not a string)
-  so the caller can check whether the version needs resolution.
+  A versionless ref passes through as `version: nil`; the type prefix is
+  required. Returns `{:ok, struct}` (not a string) so the caller can check
+  whether the version needs resolution.
 
   ## Examples
 
@@ -264,51 +227,6 @@ defmodule Prima.ComponentRef do
         error
     end
   end
-
-  @doc """
-  Normalize a component reference, allowing version-less refs.
-
-  Tries strict `normalize/1` first (type + version required). If that fails,
-  falls back to `normalize_flexible/1` which allows `version: nil`. Version-less
-  refs are returned as name-level refs (e.g., `"catalyst:local.claude"`).
-
-  This is the canonical "accept flexible input" function — use it wherever you
-  need to accept both `c:local.claude:0.1.0` and `c:local.claude`.
-
-  ## Examples
-
-      iex> Prima.ComponentRef.normalize_or_name_ref("c:local.claude:0.1.0")
-      {:ok, "catalyst:local.claude:0.1.0"}
-
-      iex> Prima.ComponentRef.normalize_or_name_ref("c:local.claude")
-      {:ok, "catalyst:local.claude"}
-
-      iex> Prima.ComponentRef.normalize_or_name_ref("not valid")
-      {:error, _}
-  """
-  @spec normalize_or_name_ref(String.t()) :: {:ok, String.t()} | {:error, String.t()}
-  def normalize_or_name_ref(ref) when is_binary(ref) do
-    case normalize_flexible(ref) do
-      {:ok, %__MODULE__{version: nil} = parsed} -> {:ok, to_name_ref(parsed)}
-      {:ok, parsed} -> {:ok, __MODULE__.to_string(parsed)}
-      {:error, _} = error -> error
-    end
-  end
-
-  @doc """
-  Check if a component reference has a pinned (explicit) version.
-
-  ## Examples
-
-      iex> Prima.ComponentRef.pinned?(%Prima.ComponentRef{namespace: "local", name: "claude", version: "0.1.0"})
-      true
-
-      iex> Prima.ComponentRef.pinned?(%Prima.ComponentRef{namespace: "local", name: "claude", version: nil})
-      false
-  """
-  @spec pinned?(t()) :: boolean()
-  def pinned?(%__MODULE__{version: nil}), do: false
-  def pinned?(%__MODULE__{version: _}), do: true
 
   @doc """
   Convert a component reference to its name-level form (without version).
@@ -660,9 +578,6 @@ defmodule Prima.ComponentRef do
 
       String.contains?(ns, ":") ->
         {:error, "publisher namespace must not have a port suffix"}
-
-      ns == "localhost" ->
-        {:error, "'localhost' is not a valid publisher namespace"}
 
       looks_like_ipv4?(ns) ->
         {:error, "publisher namespace must not be an IP address (use a DNS hostname)"}

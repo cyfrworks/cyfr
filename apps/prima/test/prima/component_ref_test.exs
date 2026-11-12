@@ -182,50 +182,6 @@ defmodule Prima.ComponentRefTest do
   end
 
   # ============================================================================
-  # normalize/1
-  # ============================================================================
-
-  describe "normalize/1" do
-    test "rejects untyped refs" do
-      assert {:error, msg} = ComponentRef.normalize("local.my-tool:1.0.0")
-      assert msg =~ "type prefix"
-    end
-
-    test "rejects bare name without type" do
-      assert {:error, msg} = ComponentRef.normalize("my-tool")
-      assert msg =~ "type prefix"
-    end
-
-    test "normalizes typed ref preserving type" do
-      assert {:ok, "catalyst:local.claude:0.1.0"} = ComponentRef.normalize("c:local.claude:0.1.0")
-    end
-
-    test "normalizes full type name" do
-      assert {:ok, "catalyst:local.claude:0.1.0"} =
-               ComponentRef.normalize("catalyst:local.claude:0.1.0")
-    end
-
-    test "rejects formula shorthand without version" do
-      assert {:error, msg} = ComponentRef.normalize("f:local.list-models")
-      assert msg =~ "version must be explicit"
-    end
-
-    test "normalizes typed ref with explicit version" do
-      assert {:ok, "catalyst:local.my-tool:0.1.0"} =
-               ComponentRef.normalize("c:local.my-tool:0.1.0")
-    end
-
-    test "rejects a typed ref with a literal 'latest' version token" do
-      assert {:error, msg} = ComponentRef.normalize("c:local.my-tool:latest")
-      assert msg =~ "'latest' is not a version"
-    end
-
-    test "returns error for empty" do
-      assert {:error, _} = ComponentRef.normalize("")
-    end
-  end
-
-  # ============================================================================
   # validate/1
   # ============================================================================
 
@@ -527,70 +483,9 @@ defmodule Prima.ComponentRefTest do
     end
   end
 
-  # ============================================================================
-  # pinned?/1
-  # ============================================================================
-
-  describe "pinned?/1" do
-    test "returns false for nil version" do
-      ref = %ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: nil}
-      refute ComponentRef.pinned?(ref)
-    end
-
-    test "returns true for explicit version" do
-      ref = %ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: "0.1.0"}
-      assert ComponentRef.pinned?(ref)
-    end
-  end
-
   describe "the version segment has one spelling" do
     test "'latest' is not a version token — omit the segment instead" do
       assert {:error, _} = ComponentRef.parse("c:local.claude:latest")
-    end
-  end
-
-  # ============================================================================
-  # normalize_or_name_ref/1
-  # ============================================================================
-
-  describe "normalize_or_name_ref/1" do
-    test "normalizes typed ref with version" do
-      assert {:ok, "catalyst:local.claude:0.1.0"} =
-               ComponentRef.normalize_or_name_ref("c:local.claude:0.1.0")
-    end
-
-    test "normalizes typed ref without version to name ref" do
-      assert {:ok, "catalyst:local.claude"} = ComponentRef.normalize_or_name_ref("c:local.claude")
-    end
-
-    test "expands shorthand types" do
-      assert {:ok, "reagent:local.parser"} = ComponentRef.normalize_or_name_ref("r:local.parser")
-
-      assert {:ok, "formula:local.pipeline"} =
-               ComponentRef.normalize_or_name_ref("f:local.pipeline")
-    end
-
-    test "passes through already-normalized refs" do
-      assert {:ok, "catalyst:local.claude:0.1.0"} =
-               ComponentRef.normalize_or_name_ref("catalyst:local.claude:0.1.0")
-    end
-
-    test "rejects untyped refs" do
-      assert {:error, msg} = ComponentRef.normalize_or_name_ref("local.claude:0.1.0")
-      assert msg =~ "type prefix"
-    end
-
-    test "rejects bare names without type" do
-      assert {:error, msg} = ComponentRef.normalize_or_name_ref("claude")
-      assert msg =~ "type prefix"
-    end
-
-    test "rejects empty string" do
-      assert {:error, _} = ComponentRef.normalize_or_name_ref("")
-    end
-
-    test "rejects invalid name" do
-      assert {:error, _} = ComponentRef.normalize_or_name_ref("c:local.AB-CAPS")
     end
   end
 
@@ -670,9 +565,8 @@ defmodule Prima.ComponentRefTest do
     end
 
     test "bare 'localhost' is syntactically a personal slug (server-side reserves it if needed)" do
-      # Client-side syntactic validation only. `localhost` has no dot so it
-      # doesn't hit the publisher validator; the publisher-specific rejection
-      # for `localhost` applies only if it shows up in a dotted context.
+      # Client-side syntactic validation only: `localhost` has no dot, so it
+      # is read as a personal slug, never a publisher.
       assert :ok = ComponentRef.validate_namespace("localhost")
     end
 
