@@ -1356,7 +1356,7 @@ echo 'ok: the PostgreSQL selection'
 # cyfr-gate-<pid>-<leg>-, the names its sweeps find.
 run_gate pass PROOF_RUN_PREFIX=cyfr-aaaaaaaaaa-1-inherited- -- "$gate" -n 2 -l "$scratch/pass.log"
 pass_id=$gate_pid
-[ "$gate_rc" = 0 ] || fail "a gate whose every step passes exited $gate_rc: $(cat "$scratch/pass.err")"
+[ "$gate_rc" = 0 ] || fail "a gate whose every step passes exited $gate_rc: $(cat "$scratch/pass.out" "$scratch/pass.err")"
 has_line "^run --rm --name cyfr-gate-$pass_id-gate-psql-" "$scratch/pass.trace/docker.calls" ||
   fail "the gate's own client was not named cyfr-gate-$pass_id-gate-: $(grep -- '--name' "$scratch/pass.trace/docker.calls" | head -3)"
 no_line 'cyfr-aaaaaaaaaa-1-inherited-' "$scratch/pass.trace/docker.calls" ||
@@ -1652,7 +1652,7 @@ until_true 300 test -s "$scratch/bootdl.trace/stalled.harness" || fail "the Post
 stalled=$(cat "$scratch/bootdl.trace/stalled.harness")
 gate_status "$b"; [ "$gate_rc" = 1 ] || fail "a gate whose boot reached its deadline exited $gate_rc"
 dead "$stalled" || fail 'the stalled boot outlived its deadline'
-has_line '^boot_postgres=124$' "$scratch/bootdl.log/boot.summary" || fail "the stalled boot was not recorded at its deadline: $(cat "$scratch/bootdl.log/boot.summary")"
+has_line '^boot_postgres=124$' "$scratch/bootdl.log/boot.summary" || fail "the stalled boot was not recorded at its deadline: $(cat "$scratch/bootdl.out" "$scratch/bootdl.err" "$scratch/bootdl.log/boot.summary")"
 has_line '^cleanup=0$' "$scratch/bootdl.log/boot.summary" || fail "the boot leg did not drop its database after the deadline: $(cat "$scratch/bootdl.log/boot.summary")"
 [ ! -s "$scratch/bootdl.trace/databases" ] || fail "the boot leg's database is still there: $(cat "$scratch/bootdl.trace/databases")"
 db=$(sed -n 's/.*CREATE DATABASE "\([a-z0-9_]*\)"$/\1/p' "$scratch/bootdl.trace/docker.calls")
