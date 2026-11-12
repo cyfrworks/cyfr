@@ -15,7 +15,7 @@ defmodule PrismWeb.ShellLive do
   on_mount PrismWeb.SystemLayer.Hook
 
   @gesture_events ~w(frame_move frame_resize frame_tile frame_full frame_minimise frame_raise
-                     frame_close app_open app_restore)
+                     frame_close app_restore)
 
   # How long after the first gesture not yet written the layout is
   # written: every gesture made meanwhile folds into that one write.
@@ -102,9 +102,10 @@ defmodule PrismWeb.ShellLive do
   `posture`, `covered` and `state` come from the glass. From the live,
   visible canvas, `ready` keeps it standing, `failed` before `ready`
   falls it back (below), `open` is the person's open of a listed
-  tincture (`app_open` below), on a subject of a kind the app declares
-  when it names one, which the app is handed at its handshake or, open
-  already, as it is opened again; `press`
+  tincture, placed where the layout has it or as
+  `Prism.Arrangement.open/4` places it, on a subject of a kind the app
+  declares when it names one, which the app is handed at its handshake
+  or, open already, as it is opened again; `press`
   of a binding presses a feed's action through `feed.press` once the
   served version's declaration reads that feed, and `press` of a control
   runs the call the component domain reads it as
@@ -168,18 +169,15 @@ defmodule PrismWeb.ShellLive do
   | `frame_raise` | `frame` | goes above every other |
   | `frame_close` | `frame` | leaves the canvas |
   | `app_restore` | `ref` | a minimised app comes back, raised |
-  | `app_open` | `ref` | opens where the layout places it, or as `Prism.Arrangement.open/4` places it, raised |
 
   `geometry` is `{x, y, w, h}` and `share` a whole number, in hundredths
   of a percent of the canvas, `side` is `left` or `right`, each within the
   layout's bounds (`Prima.Layout`): `x` and `y` from 0 and `w`, `h` and
-  `share` from 1, each to 10000. An event is answered `%{ok: true}`, or
-  `%{error: reason}` with nothing changed: a frame this view does not
-  hold (`not_held`), an app of a canvas not shown (`hidden`), a canvas
-  behind a launch from the picker (`hidden`), a payload of another shape
-  (`malformed`), a placement in the hand, where every app is full
-  (`hand`), an app the layout does not place (`not_placed`) or a document
-  the layout refuses (`invalid`). A gesture
+  `share` from 1, each to 10000. An event changes nothing for a frame
+  this view does not hold, an app of a canvas not shown, a canvas behind
+  a launch from the picker, a payload of another shape, a placement in
+  the hand, where every app is full, an app the layout does not place or
+  a document the layout refuses; no event is answered. A gesture
   is made at once on the frames, keeping every frame still placed, and
   on the person's layout as this view holds it (`Prism.Arrangement`), and
   `installed` is pushed again to every canvas frame.
@@ -639,12 +637,12 @@ defmodule PrismWeb.ShellLive do
 
   # An arrangement gesture the canvas hook sends once the gesture settles
   # (`@gesture_events`): applied to the frames and the person's layout at
-  # once, and written with the next write (`schedule_write/1`). Answered
-  # `%{ok: true}`, or `%{error: reason}` with nothing changed.
+  # once, and written with the next write (`schedule_write/1`); one that
+  # cannot be made changes nothing.
   def handle_event(event, params, socket) when event in @gesture_events and is_map(params) do
     case gestured(socket, event, params) do
-      {:ok, socket} -> {:reply, %{ok: true}, socket}
-      {:error, reason} -> {:reply, %{error: refusal_word(reason)}, socket}
+      {:ok, socket} -> {:noreply, socket}
+      {:error, _refused} -> {:noreply, socket}
     end
   end
 
@@ -1820,13 +1818,10 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  defp read_gesture(socket, event, %{"ref" => ref}) when event in ["app_open", "app_restore"] do
+  defp read_gesture(socket, "app_restore", %{"ref" => ref}) do
     canvas_id = Frames.visible_canvas(socket.assigns.frames)
 
     case listed(socket, ref) do
-      %{} = card when event == "app_open" ->
-        {:ok, canvas_id, open_gesture(socket, canvas_id, card)}
-
       %{} = card ->
         {:ok, canvas_id, {:restore, Frames.ref_of(card)}}
 
@@ -2036,9 +2031,6 @@ defmodule PrismWeb.ShellLive do
       end
     end)
   end
-
-  defp refusal_word({:invalid, _sentence}), do: "invalid"
-  defp refusal_word(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   # ============================================================================
   # The canvases

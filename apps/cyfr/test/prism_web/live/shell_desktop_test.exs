@@ -1071,7 +1071,7 @@ defmodule PrismWeb.ShellDesktopTest do
       view = shell!(conn)
       assert_push_event(view, "chrome", %{chrome: %{}})
 
-      render_hook(view, "app_open", %{"ref" => "tincture:local.notes"})
+      verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.notes"})
       app = Frames.get(frames(view), {:app, "main", "tincture:local.notes"})
       render_hook(view, "frame_full", %{"frame" => app.id})
       assert_push_event(view, "chrome", %{chrome: nil})
