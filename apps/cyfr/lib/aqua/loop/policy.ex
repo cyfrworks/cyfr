@@ -81,11 +81,10 @@ defmodule Aqua.Loop.Policy do
           | {:setup_required, String.t(), {String.t() | nil, String.t()}}
 
   @doc """
-  The decision for `call` under `policy`. `opts`: `:restricted?` (the
-  turn holds a call whose outcome is unknown: only a replay-safe read
-  runs, whatever the policy says), and where the call is made, which a
-  standing allow is judged against and a launch's account is resolved
-  under: `:ctx` (the member's context its rows are read under), `:agent`
+  The decision for `call` under `policy`. A restricted turn's calls reach
+  here only when replay-safe (`Aqua.Loop` denies the rest first). `opts`:
+  where the call is made, which a standing allow is judged against and a
+  launch's account is resolved under: `:ctx` (the member's context its rows are read under), `:agent`
   (the agent's name), `:thread_id`, `:turn_id` and `:execution_id` (the
   turn's root); the turn's sources are read from its row as the call is
   decided, unless `:sources` names them. Without them a key that asks,
@@ -96,11 +95,6 @@ defmodule Aqua.Loop.Policy do
     cond do
       not within?(call, Keyword.get(opts, :narrowed)) ->
         {:deny, outside(call)}
-
-      Keyword.get(opts, :restricted?, false) and not replay_safe?(call) ->
-        {:deny,
-         "#{key(call)} may not run: an earlier call's outcome is unknown, and until a new turn " <>
-           "starts only replay-safe reads run"}
 
       true ->
         decide_open(call, policy, opts)

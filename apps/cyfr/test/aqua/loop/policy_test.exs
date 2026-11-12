@@ -218,20 +218,16 @@ defmodule Aqua.Loop.PolicyTest do
     assert Policy.proposal_digest(card) =~ ~r/^sha256:[0-9a-f]{64}$/
   end
 
-  test "a restricted turn runs replay-safe reads and nothing else, whatever the policy says" do
-    read = resolve!("files", %{"action" => "read", "path" => "a"})
-    write = resolve!("files", %{"action" => "write", "path" => "a", "content" => "b"})
-    ui = resolve!("ui", %{"kind" => "ui.navigate"})
+  # The loop runs only these in a restricted turn (loop_test's stopped
+  # turn carried on: a read runs, a write is denied).
+  test "a read is replay-safe; a write and a ui event are not" do
+    assert Policy.replay_safe?(resolve!("files", %{"action" => "read", "path" => "a"}))
 
-    assert Policy.replay_safe?(read)
-    refute Policy.replay_safe?(write)
-    refute Policy.replay_safe?(ui)
+    refute Policy.replay_safe?(
+             resolve!("files", %{"action" => "write", "path" => "a", "content" => "b"})
+           )
 
-    assert :auto = Policy.decide(read, @policy, restricted?: true)
-    assert {:deny, why} = Policy.decide(write, @policy, restricted?: true)
-    assert why =~ "outcome is unknown"
-    assert {:deny, _} = Policy.decide(ui, @policy, restricted?: true)
-    assert :auto = Policy.decide(ui, @policy, restricted?: false)
+    refute Policy.replay_safe?(resolve!("ui", %{"kind" => "ui.navigate"}))
   end
 
   # ---------------------------------------------------------------------------
