@@ -131,16 +131,22 @@ defmodule Sanctum.CallerTest do
       assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_not_a_real_token")
     end
 
-    test "an authenticated person with nowhere to work is no_athanor" do
-      user = new_user() |> claim!()
+    test "a person left with nowhere to work holds no session: a denial archives the athanor " <>
+           "and the session with it" do
+      # Every admission mints the person's athanor, and the denial is the
+      # one door that archives it; it revokes the person's sessions in the
+      # same transaction, so the session a person carried is refused as
+      # signed out, never established into an athanor they no longer have.
+      {user, home} = new_user() |> claim!() |> member!()
       session = session_for(Map.put(user, :namespace, user.slug))
+      assert {:ok, %Context{athanor_id: id}} = Caller.establish(session.token)
+      assert id == home.id
 
-      case Caller.establish(session.token) do
-        {:error, :no_athanor} -> :ok
-        # A personal athanor may already exist for the slug on this server;
-        # then the resolve legitimately lands there.
-        {:ok, %Context{athanor_id: id}} when is_binary(id) -> :ok
-      end
+      {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+      {:ok, _denied} = Sanctum.Tenancy.Users.deny(row)
+
+      assert {:ok, %{status: "archived"}} = Sanctum.Tenancy.Athanors.get(home.id)
+      assert {:error, :unauthenticated} = Caller.establish(session.token)
     end
   end
 

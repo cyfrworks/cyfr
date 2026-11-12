@@ -40,15 +40,16 @@ defmodule Compendium.Providers.AquaListTest.UnreadableSoul do
   end
 end
 
-# A store that cannot give one role's file.
+# A store that cannot give one shipped crew member's file
+# (seed/aqua/crew/explorer.md).
 defmodule Compendium.Providers.AquaListTest.UnreadableRole do
   @moduledoc false
   use Arca.Storage.TestDouble
 
-  @planner List.last(Compendium.AquaPath.agent_file("planner"))
+  @explorer List.last(Compendium.AquaPath.agent_file("explorer"))
 
   def get(actor, path) do
-    if List.last(path) == @planner,
+    if List.last(path) == @explorer,
       do: {:error, :eacces},
       else: Arca.Adapters.Local.get(actor, path)
   end
@@ -148,10 +149,16 @@ defmodule Compendium.Providers.AquaListTest do
 
   @tag :capture_log
   test "a role that cannot be read stays out, and the list answers the rest", %{ctx: ctx} do
+    # The role is one the fill ships, listed while its file reads.
+    assert {:ok, listed} = list(ctx)
+    assert "explorer" in names(listed)
+    readable = names(listed) -- ["explorer"]
+
     storage!(UnreadableRole)
     assert {:ok, listed} = list(ctx)
     assert ["aqua" | _] = names(listed)
-    refute "planner" in names(listed)
+    refute "explorer" in names(listed)
+    assert names(listed) == readable
   end
 
   test "an athanor that holds no agents answers its guides", %{ctx: ctx} do

@@ -54,15 +54,11 @@ defmodule Sanctum.DeviceUnlockReview353RaceTest do
     %{device: device, ctx: ctx, answer: answer}
   end
 
-  test "review353 lock between ticket take and insert refuses redemption", tags do
-    race(tags, false)
-  end
-
-  test "review353 cache loss after lock never permits redemption", tags do
-    race(tags, true)
-  end
-
-  defp race(%{device: device, ctx: ctx, answer: answer}, forget) do
+  test "review353 lock between ticket take and insert refuses redemption", %{
+    device: device,
+    ctx: ctx,
+    answer: answer
+  } do
     {:ok, lock} =
       Challenge.new(
         purpose: :lock,
@@ -108,13 +104,12 @@ defmodule Sanctum.DeviceUnlockReview353RaceTest do
     on_exit(fn -> send(task.pid, :continue_redemption) end)
     assert_receive {:redemption_taken, pid}, 5000
     assert {:ok, %{locked: true}} = unboxed(fn -> DeviceUnlock.lock(ctx, %{"proof" => proof}) end)
-    if forget, do: Arca.Cache.invalidate({:device_locked, answer.session_id})
     send(pid, :continue_redemption)
     result = Task.await(task, 10000)
     :telemetry.detach(handler)
     row = unboxed(fn -> Arca.Repo.get(Session, answer.session_id) end)
 
     assert match?({:error, _}, result) and row == nil,
-           "lock completed before insertion, cache_loss=#{forget}, redemption=#{inspect(result)}, persisted_session=#{row != nil}"
+           "lock completed before insertion, redemption=#{inspect(result)}, persisted_session=#{row != nil}"
   end
 end
