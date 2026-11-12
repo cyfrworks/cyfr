@@ -95,8 +95,9 @@ test above, or ask us.
 
 **Can I offer "Managed CYFR" as my SaaS?** No — that's a Competing Use.
 
-**Can I contribute to CYFR?** Yes. Contributions to FSL-licensed files are
-licensed back under FSL; Apache-licensed files remain Apache.
+**Can I contribute to CYFR?** Yes. Every contribution is made under Apache-2.0,
+and one merged into an FSL-licensed file ships as part of that file under FSL;
+[`CONTRIBUTING.md`](CONTRIBUTING.md) holds the rule.
 
 **Does the FSL "infect" Apache code?** No. FSL is not a copyleft license.
 Apache files that call into or use FSL files at runtime do not become FSL.
