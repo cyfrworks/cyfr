@@ -50,71 +50,85 @@ defmodule Cyfr.NoRealCyfrRunTest do
     end
   end
 
-  # What each registry setting boots with, stored as written, and what
-  # refuses the boot. The registry is named in signed requests by a host
-  # name's grammar, so it takes no IPv6 literal, and may sit under a path a
-  # proxy adds; the OCI registry is reached by URL alone and takes a
-  # bracketed one, and its host begins every reference, so it takes no
-  # path. `none` refuses in any case.
-  @names ~w(registry.example registry.example:8443 REGISTRY.EXAMPLE 127.0.0.1:9 localhost
-            localhost:65535)
-  @refused [
-    "none",
-    "NONE",
-    "None",
-    "::1",
-    "registry.example.",
-    "https://registry.example",
-    "registry.example:",
-    "registry.example:0",
-    "registry.example:65536",
-    "registry example"
+  # Each form a registry setting may be written in, what the boot does
+  # with it, and, for a value that boots, the scheme its requests use:
+  # {form, value, registry, OCI registry}, each `{:boots, scheme}`,
+  # `:default` or `:refused`. A form boots exactly when it reached a
+  # registry for that setting's purpose before `none` was removed, with one
+  # exception: an IPv6 address reached the registry's search and metadata,
+  # and refused everything its accounts sign, which names the registry by a
+  # host name's grammar, so the registry setting refuses it.
+  @forms [
+    {"a host name", "registry.example", {:boots, "https"}, {:boots, "https"}},
+    {"a host name and port", "registry.example:8443", {:boots, "https"}, {:boots, "https"}},
+    {"an empty port, the scheme's own", "registry.example:", {:boots, "https"},
+     {:boots, "https"}},
+    {"an IPv4 address and port", "203.0.113.7:9", {:boots, "https"}, {:boots, "https"}},
+    {"a bracketed IPv6 address and port", "[2001:db8::1]:5000", :refused, {:boots, "https"}},
+    {"a bracketed IPv6 address", "[2001:db8::1]", :refused, {:boots, "https"}},
+    {"an IPv6 address without brackets", "2001:db8::1", :refused, :refused},
+    {"a path a proxy serves the registry under", "registry.example:8443/registry",
+     {:boots, "https"}, :refused},
+    {"a trailing slash", "registry.example/", {:boots, "https"}, :refused},
+    {"a path with a query", "registry.example/a?b", :refused, :refused},
+    {"a path's empty segment", "registry.example//registry", :refused, :refused},
+    {"a path with a fragment", "registry.example/a#b", :refused, :refused},
+    {"an https scheme", "https://registry.example", :refused, :refused},
+    {"an http scheme", "http://127.0.0.1:9", :refused, :refused},
+    {"userinfo", "user@registry.example", :refused, :refused},
+    {"upper case", "REGISTRY.EXAMPLE", {:boots, "https"}, {:boots, "https"}},
+    {"a trailing dot", "registry.example.", :refused, :refused},
+    {"localhost and port", "localhost:4000", {:boots, "http"}, {:boots, "http"}},
+    {"a loopback IPv4 address", "127.0.0.2:9", {:boots, "http"}, {:boots, "http"}},
+    {"a loopback IPv6 address", "[::1]:9", :refused, {:boots, "http"}},
+    {"an empty value", "", :default, :default},
+    {"none", "none", :refused, :refused},
+    {"NONE", "NONE", :refused, :refused},
+    {"None", "None", :refused, :refused},
+    {"port 0", "registry.example:0", :refused, :refused},
+    {"port 65536", "registry.example:65536", :refused, :refused},
+    {"a space", "registry example", :refused, :refused}
   ]
 
-  test "the registry boots with a host name or an IPv4 address and an optional port, and nothing else" do
-    for value <- @names ++ ["registry.example:8443/registry", "127.0.0.1:9/a/b/"] do
-      assert get_in(runtime(:prod, %{"CYFR_REGISTRY_URL" => value}), [:sanctum, :registry_url]) ==
-               value
+  for {form, value, registry, oci} <- @forms do
+    test "#{form} (#{inspect(value)}): the registry #{inspect(registry)}, the OCI registry #{inspect(oci)}" do
+      assert_setting("CYFR_REGISTRY_URL", unquote(value), unquote(Macro.escape(registry)))
+      assert_setting("CYFR_OCI_REGISTRY_URL", unquote(value), unquote(Macro.escape(oci)))
     end
+  end
 
-    # The path is the registry API's alone: the OCI host derives from the
-    # host and port.
-    assert get_in(
-             runtime(:prod, %{"CYFR_REGISTRY_URL" => "registry.example:8443/registry"}),
-             [:cyfr, :oci_registry_url]
-           ) == "registry.registry.example:8443"
+  defp assert_setting(variable, value, expected) do
+    key =
+      if variable == "CYFR_REGISTRY_URL",
+        do: [:sanctum, :registry_url],
+        else: [:cyfr, :oci_registry_url]
 
-    assert get_in(runtime(:prod, %{"CYFR_REGISTRY_URL" => ""}), [:sanctum, :registry_url]) ==
-             "cyfr.run"
+    read = fn -> runtime(:prod, %{variable => value}) end
 
-    for value <- @refused ++ ["[::1]:9", "[::1]", "registry.example/a?b", "registry.example/a b"] do
-      assert_raise RuntimeError,
-                   ~r/CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run or one of its own/,
-                   fn -> runtime(:prod, %{"CYFR_REGISTRY_URL" => value}) end
+    case expected do
+      {:boots, scheme} ->
+        assert get_in(read.(), key) == value
+        assert Sanctum.registry_base_url(value) == scheme <> "://" <> value
+
+      :default ->
+        assert get_in(read.(), key) in ["cyfr.run", "registry.cyfr.run"]
+
+      :refused ->
+        assert_raise RuntimeError, ~r/#{variable} must name/, read
     end
+  end
 
-    # Why an IPv6 address, which the OCI registry takes, is not one.
+  test "the registry's refusal says why it takes no IPv6 address" do
     assert_raise RuntimeError,
                  ~r/The requests its accounts sign name the registry, and they cannot name an IPv6 address/,
                  fn -> runtime(:prod, %{"CYFR_REGISTRY_URL" => "[::1]:9"}) end
   end
 
-  test "the OCI registry also boots with a bracketed IPv6 address, and with nothing else" do
-    for value <- @names ++ ["[::1]:9", "[::1]", "[2001:db8::1]:5000"] do
-      assert get_in(runtime(:prod, %{"CYFR_OCI_REGISTRY_URL" => value}), [
-               :cyfr,
-               :oci_registry_url
-             ]) ==
-               value
-    end
-
-    for value <-
-          @refused ++
-            ["registry.example/path", "[::1]:9/path", "[::1]:", "[::1]:0", "[zz::1]:9", "[::1]x"] do
-      assert_raise RuntimeError, ~r/CYFR_OCI_REGISTRY_URL must name the OCI registry/, fn ->
-        runtime(:prod, %{"CYFR_OCI_REGISTRY_URL" => value})
-      end
-    end
+  test "the OCI registry derives from the registry's host and port, without its path" do
+    assert get_in(
+             runtime(:prod, %{"CYFR_REGISTRY_URL" => "registry.example:8443/registry"}),
+             [:cyfr, :oci_registry_url]
+           ) == "registry.registry.example:8443"
   end
 
   defmodule IPv6Registry do

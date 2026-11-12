@@ -229,8 +229,9 @@ defmodule Sanctum do
 
   @doc """
   Whether `value` names a registry: a host name or an IPv4 address, in any
-  case, an optional port from 1 to 65535, and an optional path a proxy
-  serves it under, with no query, fragment, space or control character.
+  case, an optional port from 1 to 65535 (empty, the scheme's own), and an
+  optional path a proxy serves it under, with no query, fragment, space or
+  control character.
   An IPv6 literal is not one: a signed registry request and a handle's
   answer bind the registry by a host name's grammar
   (`Prima.RegistryRequest`, `Prima.HandleAnswer`), which cannot spell one.
@@ -245,8 +246,12 @@ defmodule Sanctum do
       [authority] ->
         parse_registry(authority)
 
+      # A path that begins `/` is a scheme's `//` (`https://host`), or an
+      # empty segment, and no registry's.
       [authority, path] ->
-        if path =~ ~r/\A[^?#\x00-\x20\x7f]*\z/, do: parse_registry(authority), else: :error
+        if path =~ ~r/\A(?!\/)[^?#\x00-\x20\x7f]*\z/,
+          do: parse_registry(authority),
+          else: :error
     end
   end
 
@@ -268,7 +273,9 @@ defmodule Sanctum do
 
   defp parse_registry(_value), do: :error
 
+  # An empty port is the scheme's own, as a URL reads it.
   defp registry_port?(nil), do: true
+  defp registry_port?(""), do: true
 
   defp registry_port?(port),
     do: port =~ ~r/\A[0-9]{1,5}\z/ and String.to_integer(port) in 1..65_535
@@ -276,7 +283,8 @@ defmodule Sanctum do
   @doc """
   Whether `value` names an OCI registry, which components are pulled from
   (`CYFR_OCI_REGISTRY_URL`): a host name, an IPv4 address or a bracketed
-  IPv6 address, each with an optional port from 1 to 65535, and no path,
+  IPv6 address, each with an optional port from 1 to 65535 (empty, the
+  scheme's own), and no path,
   since the host begins every component reference pulled from it. The
   OCI transport reaches an IPv6 registry by its bracketed URL authority,
   and nothing signed names this host.
