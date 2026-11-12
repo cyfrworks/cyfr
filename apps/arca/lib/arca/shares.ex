@@ -163,7 +163,7 @@ defmodule Arca.Shares do
   Refusals, each with nothing written, are the module doc's. A row outside
   the share's rules is `{:error, {:invalid, errors}}` before any query.
 
-  `opts[:verify]` is the caller's check, run once every lock is held and
+  `opts[:verify]` (required) is the caller's check, run once every lock is held and
   before the insert: `:ok`, or `{:error, reason}`, which rolls the
   creation back and is answered. A confirmation is spent there, so the
   proof and the share commit together. The rows carry no standing: a
@@ -186,12 +186,10 @@ defmodule Arca.Shares do
              | :no_athanor
              | :no_person
              | term()}
-  def create(actor, attrs, opts \\ [])
-
   def create(%Prima.Actor{athanor_id: athanor_id, user_id: user_id}, attrs, opts)
       when resolved(athanor_id) and is_binary(user_id) and user_id != "" and is_map(attrs) and
              is_list(opts) do
-    verify = Keyword.get(opts, :verify, fn -> :ok end)
+    verify = Keyword.fetch!(opts, :verify)
 
     changeset =
       Share.changeset(%{
@@ -773,7 +771,6 @@ defmodule Arca.Shares do
       {:ok, Enum.map(Arca.Repo.all(query), &offered/1)}
     end)
   end
-
 
   # ---------------------------------------------------------------------------
 

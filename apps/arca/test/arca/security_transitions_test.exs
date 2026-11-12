@@ -1225,7 +1225,7 @@ defmodule Arca.SecurityTransitionsTest do
       entry = Arca.Test.Shares.entry!(terry.actor)
 
       assert {:error, :not_own_athanor} =
-               Arca.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
+               Arca.Test.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
     end
   end
 end
