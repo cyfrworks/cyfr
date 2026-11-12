@@ -141,7 +141,8 @@ same worktree refuses, naming the run that holds it.
     adapters, the generated files' checks, the touched tests on both
     adapters (all of `apps/arca/test` when Arca changed), the roster
     tests that read the whole source tree (the boundaries, the test seams,
-    Sanctum's gate rosters, the restore order and the cross-language drift)
+    Sanctum's gate rosters, the restore order, the cross-language drift and
+    the router's route map)
     and CI's vocabulary scan (`scripts/ci/vocabulary.sh`) on every change,
     the configuration check when an `apps` source changed, `mix dialyzer`
     when a `lib` file changed, the light self-test of every harness
