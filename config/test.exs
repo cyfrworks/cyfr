@@ -68,10 +68,10 @@ config :cyfr, :tincture_rate_limit_max, 1_000_000
 # in a suite. Surfaces render its "unknown" answer.
 config :cyfr, :registry_health_probe, false
 
-# Both registry endpoints point at a closed loopback port: a registry is
-# configured, so the "registry does not answer" paths run, and no test can
-# reach a registry off this machine. `:registry_url` decides whether a
-# registry is configured at all and where its REST API is; `:oci_registry_url`
+# Both registry endpoints point at a closed loopback port: the suite's
+# CYFR names a registry, as every CYFR does, that does not answer, so the
+# "registry does not answer" paths run and no test can reach a registry off
+# this machine. `:registry_url` is where its REST API is; `:oci_registry_url`
 # is what a pull resolves against. A test that needs the public host name
 # sets it locally and asserts through `Compendium.RegistryHost.canonical_host/0`.
 config :cyfr, :registry_url, "127.0.0.1:19"

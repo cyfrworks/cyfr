@@ -406,11 +406,6 @@ defmodule Prima.Refusal do
       {:corrupt,
        "The stored registry credential is damaged; run `cyfr registry sync` to replace it."}
 
-  # A registry operation the person signs (`Prima.RegistryRequest`), refused
-  # before it is sent: this deployment names no registry.
-  defp row(:no_registry),
-    do: {:setup_required, "No registry is configured on this server (CYFR_REGISTRY_URL=none)."}
-
   defp row(:registry_unavailable),
     do: {:unavailable, "The registry could not be reached just now; try again shortly."}
 

@@ -199,8 +199,8 @@ defmodule Sanctum do
   @doc """
   The directory this deployment enrolls its local people at
   (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`; unset, it is
-  `https://cyfr.run` in production and none in development), or `nil` when
-  it names none: local operation and local pairing need none, and
+  `https://cyfr.run` in every build), or `nil` when it names none, as the
+  test configuration does: local operation and local pairing need none, and
   enrollment needs one. No operation takes a
   directory URL. `Sanctum.Supervisor` refuses the boot on a value
   `enrollment_directory?/1` refuses.
@@ -211,28 +211,98 @@ defmodule Sanctum do
   @doc """
   The registry this deployment speaks to (`:sanctum, :registry_url`, from
   the one parse of `CYFR_REGISTRY_URL` that sets Compendium's too): a host
-  with an optional port, or `"none"` for no registry.
+  with an optional port (`registry_url?/1`). Every CYFR names one, cyfr.run
+  or its own; `config/runtime.exs` refuses a boot that names none.
   """
   @spec registry_url() :: String.t()
-  def registry_url, do: Application.get_env(:sanctum, :registry_url, "none")
+  def registry_url, do: Application.fetch_env!(:sanctum, :registry_url)
 
   @doc """
   The registry's canonical host, the name a signed registry request binds
   (`Prima.RegistryRequest`): `registry_url/0` lowercased without its port.
-  `{:error, :no_registry}` when this deployment names no registry, or a
-  value with no host.
   """
-  @spec registry_host() :: {:ok, String.t()} | {:error, :no_registry}
+  @spec registry_host() :: String.t()
   def registry_host do
-    with url when url != "none" <- registry_url(),
-         %URI{host: host} when is_binary(host) and host != "" <- URI.parse("//" <> url),
-         host = String.downcase(host),
-         true <- Prima.Identity.Encoding.host?(host) do
-      {:ok, host}
-    else
-      _none -> {:error, :no_registry}
+    {:ok, host} = registry_authority(registry_url())
+    host
+  end
+
+  @doc """
+  Whether `value` names a registry: a host name or an IPv4 address, in any
+  case, an optional port from 1 to 65535 (empty, the scheme's own), and an
+  optional path a proxy serves it under: segments, none empty, with no
+  trailing `/`, query, fragment, space or control character.
+  An IPv6 literal is not one: a signed registry request and a handle's
+  answer bind the registry by a host name's grammar
+  (`Prima.RegistryRequest`, `Prima.HandleAnswer`), which cannot spell one.
+  """
+  @spec registry_url?(term()) :: boolean()
+  def registry_url?(value), do: match?({:ok, _host}, registry_authority(value))
+
+  # The registry's host and port, before the path a proxy may add, which
+  # its base URL carries and nothing signed names.
+  defp registry_authority(value) when is_binary(value) do
+    case String.split(value, "/", parts: 2) do
+      [authority] ->
+        parse_registry(authority)
+
+      # One or more segments, none empty: a path that begins `/` is a
+      # scheme's `//` (`https://host`), and an empty segment or a trailing
+      # `/` puts `//` in every request, which a CYFR's router forgives and
+      # cyfr.run answers 404.
+      [authority, path] ->
+        if path =~ ~r/\A[^\/?#\x00-\x20\x7f]+(?:\/[^\/?#\x00-\x20\x7f]+)*\z/,
+          do: parse_registry(authority),
+          else: :error
     end
   end
+
+  defp registry_authority(_value), do: :error
+
+  defp parse_registry(value) when is_binary(value) do
+    {host, port} =
+      case String.split(value, ":", parts: 2) do
+        [host] -> {host, nil}
+        [host, port] -> {host, port}
+      end
+
+    host = String.downcase(host)
+
+    if Prima.Identity.Encoding.host?(host) and registry_port?(port),
+      do: {:ok, host},
+      else: :error
+  end
+
+  # An empty port is the scheme's own, as a URL reads it.
+  defp registry_port?(nil), do: true
+  defp registry_port?(""), do: true
+
+  # Digits as a URL reads them, leading zeros among them.
+  defp registry_port?(port),
+    do: port =~ ~r/\A[0-9]+\z/ and String.to_integer(port) in 1..65_535
+
+  @doc """
+  Whether `value` names an OCI registry, which components are pulled from
+  (`CYFR_OCI_REGISTRY_URL`): a host name, an IPv4 address or a bracketed
+  IPv6 address, each with an optional port from 1 to 65535 (empty, the
+  scheme's own), and no path,
+  since the host begins every component reference pulled from it. The
+  OCI transport reaches an IPv6 registry by its bracketed URL authority,
+  and nothing signed names this host.
+  """
+  @spec oci_registry_url?(term()) :: boolean()
+  def oci_registry_url?(value) when is_binary(value) do
+    case Regex.run(~r/\A\[([0-9A-Fa-f:.]+)\](?::([^:]*))?\z/, value, capture: :all_but_first) do
+      [address | port] ->
+        match?({:ok, _}, :inet.parse_ipv6strict_address(String.to_charlist(address))) and
+          Enum.all?(port, &registry_port?/1)
+
+      nil ->
+        match?({:ok, _host}, parse_registry(value))
+    end
+  end
+
+  def oci_registry_url?(_value), do: false
 
   @doc """
   The base URL of a registry host (a name or address with an optional

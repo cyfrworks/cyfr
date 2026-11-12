@@ -499,18 +499,6 @@ defmodule Compendium.Providers.RegistryTest do
       refute_received {:registry_request, _}
     end
 
-    test "no registry refuses before any request is minted", %{ctx: ctx} do
-      Prima.Test.Env.put_app_env(:sanctum, :registry_url, "none")
-
-      for args <- [
-            %{"action" => "sync"},
-            %{"action" => "verify_publisher", "slug" => "acme.com"},
-            %{"action" => "legal_accept", "policy_version" => "2026-09"}
-          ] do
-        assert {:error, :no_registry} = RegistryProvider.handle(ctx, args), inspect(args)
-      end
-    end
-
     test "a caller that is no client of a person's, an API key among them, asks for nothing" do
       key = %{Sanctum.TestContext.local() | auth_method: :api_key}
 

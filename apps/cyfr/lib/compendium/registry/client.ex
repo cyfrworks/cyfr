@@ -150,14 +150,13 @@ defmodule Compendium.Registry.Client do
   Why a signed operation did not complete: the registry's refusals
   (`Prima.RegistryRequest.refusals/0`, `policy_required` carrying the
   version the registry requires; `unknown_identity` among them for an
-  account the registry's directory no longer serves), `:no_registry` when
-  this deployment names none, `:registry_unavailable` for no usable
-  answer, and `:malformed_answer` for an answer that cannot be read.
+  account the registry's directory no longer serves), `:registry_unavailable`
+  for no usable answer, and `:malformed_answer` for an answer that cannot
+  be read.
   """
   @type signed_refusal ::
           Prima.RegistryRequest.refusal()
           | {:policy_required, String.t() | nil}
-          | :no_registry
           | :registry_unavailable
           | :malformed_answer
 
@@ -200,9 +199,6 @@ defmodule Compendium.Registry.Client do
       {:error, :malformed_answer} -> {:error, :malformed_answer}
     end
   end
-
-  defp signed_answer({:error, %Errors{reason: :registry_unconfigured}}),
-    do: {:error, :no_registry}
 
   defp signed_answer({:error, %Errors{}}), do: {:error, :registry_unavailable}
 
