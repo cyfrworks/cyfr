@@ -69,9 +69,8 @@ defmodule Opus.Programs do
   # session, is not on the service any more.
   @stale [:stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
   @ended %{lines: [], dropped: 0, running: false}
-  # A pipe call's deadline when its caller names none, and the margin an
-  # open's holder needs to answer past the deadline that it passed.
-  @default_wait_ms 25_000
+  # The margin an open's holder needs to answer past the deadline that it
+  # passed.
   @answer_margin_ms 1_000
   @relays Opus.Programs.Relays
   @local "local"
@@ -335,16 +334,17 @@ defmodule Opus.Programs do
   appended unless it runs for the key. Answers the session and whether it
   was running (`resumed`); a repeat by the same opener while the session
   is the same answers as the first did. Everything, the owner's
-  acquisition and a retry included, fits `deadline` (Unix milliseconds;
-  #{@default_wait_ms} ms from now when nil): past it the open answers
+  acquisition and a retry included, fits `deadline` (Unix milliseconds):
+  past it the open answers
   `{:error, :deadline}` and leaves nothing it started open. Refused
   otherwise as `hold/2` and the session route refuse.
   """
-  @spec pipe_open(map(), String.t(), String.t(), [String.t()], String.t(), integer() | nil) ::
+  @spec pipe_open(map(), String.t(), String.t(), [String.t()], String.t(), integer()) ::
           {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
-  def pipe_open(row, home_id, key, argv, opener, deadline \\ nil)
-      when is_binary(home_id) and is_binary(key) and is_list(argv) and is_binary(opener) do
-    pipe_open(row, home_id, key, argv, opener, deadline || default_deadline(), 1)
+  def pipe_open(row, home_id, key, argv, opener, deadline)
+      when is_binary(home_id) and is_binary(key) and is_list(argv) and is_binary(opener) and
+             is_integer(deadline) do
+    pipe_open(row, home_id, key, argv, opener, deadline, 1)
   end
 
   # A holder that ended as it was found (its idle period ran out) is
@@ -365,8 +365,6 @@ defmodule Opus.Programs do
     :exit, _ ->
       {:error, :backends_unavailable}
   end
-
-  defp default_deadline, do: System.system_time(:millisecond) + @default_wait_ms
 
   defp left(deadline), do: max(deadline - System.system_time(:millisecond), 1)
 
@@ -431,11 +429,10 @@ defmodule Opus.Programs do
   did not open; `{:error, :uncertain}` when the box's answer did not come
   back, since the lines may have reached the program.
   """
-  @spec pipe_send(String.t(), String.t(), String.t(), [String.t()], integer() | nil) ::
+  @spec pipe_send(String.t(), String.t(), String.t(), [String.t()], integer()) ::
           :ok | {:error, term()}
-  def pipe_send(athanor_id, opener, session, lines, deadline \\ nil) when is_list(lines) do
-    deadline = deadline || default_deadline()
-
+  def pipe_send(athanor_id, opener, session, lines, deadline)
+      when is_list(lines) and is_integer(deadline) do
     case use_pipe(athanor_id, opener, session) do
       {:ok, grant} ->
         case Session.send(grant, session, lines, left(deadline)) do
@@ -481,14 +478,13 @@ defmodule Opus.Programs do
           String.t(),
           non_neg_integer(),
           non_neg_integer(),
-          integer() | nil
+          integer()
         ) ::
           {:ok,
            %{lines: [Prima.LocusBackends.line()], dropped: non_neg_integer(), running: boolean()}}
           | {:error, term()}
-  def pipe_recv(athanor_id, opener, session, after_seq, max_wait_ms, deadline \\ nil) do
-    deadline = deadline || System.system_time(:millisecond) + max_wait_ms + @default_wait_ms
-
+  def pipe_recv(athanor_id, opener, session, after_seq, max_wait_ms, deadline)
+      when is_integer(deadline) do
     case use_pipe(athanor_id, opener, session) do
       {:ok, grant} ->
         slack = max(left(deadline) - max_wait_ms, 1)
@@ -517,10 +513,8 @@ defmodule Opus.Programs do
   that opened it: its program ended and its owner released. A session no
   holder holds any more answers `:ok`.
   """
-  @spec pipe_close(String.t(), String.t(), String.t(), integer() | nil) :: :ok | {:error, term()}
-  def pipe_close(athanor_id, opener, session, deadline \\ nil) do
-    deadline = deadline || default_deadline()
-
+  @spec pipe_close(String.t(), String.t(), String.t(), integer()) :: :ok | {:error, term()}
+  def pipe_close(athanor_id, opener, session, deadline) when is_integer(deadline) do
     case pipe_pid(session) do
       nil -> :ok
       pid -> GenServer.call(pid, {:close, athanor_id, opener, session}, left(deadline))
