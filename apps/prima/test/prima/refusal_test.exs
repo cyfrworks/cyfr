@@ -102,8 +102,6 @@ defmodule Prima.RefusalTest do
       %{input: "192.0.2.10", kind: "domain", rule: "an IP address is not a domain"}},
      :invalid_argument,
      "`192.0.2.10` is not a valid domain: an IP address is not a domain. Nothing was changed. Correct it and run the command again."},
-    {:access_request_reused, :conflict,
-     "This request names a different change than the one first sent under its id. Nothing was changed. Send it again under a new id."},
     {:tailnet_not_joined, :setup_required,
      "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access tailnet` and approve the machine with the link it prints."},
     {{:tailnet_https_off, %{name: "cyfr.tail1a2b3c.ts.net"}}, :setup_required,

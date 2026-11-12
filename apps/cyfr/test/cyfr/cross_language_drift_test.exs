@@ -960,7 +960,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"io.modelcontextprotocol/protocolVersion", [protocol, go]},
       {"io.modelcontextprotocol/clientCapabilities", [protocol, go]},
       {"io.modelcontextprotocol/clientInfo", [protocol, go]},
-      {"io.modelcontextprotocol/serverInfo", [protocol, go]},
+      {"io.modelcontextprotocol/serverInfo", [protocol]},
       # The key a repeated change carries its confirmation's secret under:
       # spelled apart, the server would ignore it and every repeat would
       # open a new record.

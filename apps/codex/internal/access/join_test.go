@@ -296,10 +296,9 @@ func TestAbandonedJoinExpiresAtItsOwnDeadline(t *testing.T) {
 	h.assertConverged()
 }
 
-// Lost replies and owner deaths for a join: approved while its owner is
-// dead, the next recovery freezes the machine and writes the receipt;
-// the request resent answers it with no second container; the same id
-// with another key is access_request_reused.
+// An owner death for a join: approved while its owner is dead, the next
+// recovery freezes the machine and writes the receipt; a keyed join
+// stores no key.
 func TestJoinReceiptsSurviveTheirOwner(t *testing.T) {
 	h := newHome(t)
 	h.killAt("journal:join:waiting", func(e *Engine) { e.Join(bg, JoinRequest{ID: id(1), Hostname: "home"}) })
@@ -308,56 +307,26 @@ func TestJoinReceiptsSurviveTheirOwner(t *testing.T) {
 	if err != nil || len(receipts) != 1 || receipts[0].Payload["name"] != "home.tail1234.ts.net" {
 		t.Fatalf("recovery answered %+v, %v", receipts, err)
 	}
-	runs := func() int {
-		n := 0
-		for _, c := range h.fake.calls() {
-			if c.Args[0] == "run" {
-				n++
-			}
-		}
-		return n
+	if rc, ok, err := h.e.Receipt(id(1)); err != nil || !ok || rc.Payload["join_id"] != receipts[0].Payload["join_id"] {
+		t.Errorf("the join's receipt is %+v, %v, %v", rc, ok, err)
 	}
-	before := runs()
-	again, err := h.e.Join(bg, JoinRequest{ID: id(1), Hostname: "home"})
-	if err != nil || again.Payload["join_id"] != receipts[0].Payload["join_id"] || runs() != before {
-		t.Errorf("the resent join answered %+v, %v (%d runs)", again, err, runs()-before)
-	}
-	if rc, err := h.e.Join(bg, JoinRequest{ID: id(1), Hostname: "home", AuthKey: strings.NewReader(testKey)}); refusalCode(err) != "access_request_reused" {
-		t.Errorf("the same id with a key answered %+v, %v", rc, err)
-	}
-
-	// The same for a completed keyed join and another key.
 	h.join(2, testKey, false)
-	if rc, err := h.e.Join(bg, JoinRequest{ID: id(2), AuthKey: strings.NewReader("tskey-auth-another")}); refusalCode(err) != "access_request_reused" {
-		t.Errorf("the same id with another key answered %+v, %v", rc, err)
-	}
-	if rc, err := h.e.Join(bg, JoinRequest{ID: id(2), AuthKey: strings.NewReader(testKey + "\n")}); err != nil || rc.Payload["join_id"] == "" {
-		t.Errorf("the same id and key answered %+v, %v", rc, err)
-	}
 	assertNoKey(t, h, testKey)
 }
 
-// Cancel: only the attempt waiting now; a lost reply answers its
-// receipt; one whose owner died after its acceptance is completed by the
-// next command's recovery.
+// A cancel of the waiting join whose owner died after its acceptance is
+// completed by the next command's recovery.
 func TestCancelJoin(t *testing.T) {
 	h := newHome(t)
-	old := h.join(1, testKey, false)
+	h.join(1, testKey, false)
 	h.killAt("journal:join:waiting", func(e *Engine) { e.Join(bg, JoinRequest{ID: id(2), NewNode: true}) })
-	rec, _ := h.e.readJoin()
-	if rc, err := h.e.CancelJoin(bg, CancelRequest{ID: id(3), JoinID: old.Payload["join_id"]}); refusalCode(err) != "tailnet_join_not_current" || rc.State != "rejected" {
-		t.Errorf("cancelling the older join answered %+v, %v", rc, err)
-	}
-	h.killAt("journal:cancel:accepted", func(e *Engine) { e.CancelJoin(bg, CancelRequest{ID: id(4), JoinID: rec.JoinID}) })
+	h.killAt("journal:cancel:accepted", func(e *Engine) { e.CancelWaitingJoin(bg) })
 	receipts, err := h.e.Resume(bg)
 	if err != nil || len(receipts) != 1 || receipts[0].Op != "cancel" || receipts[0].Outcome != "ok" {
 		t.Fatalf("recovery of the cancel answered %+v, %v", receipts, err)
 	}
 	if rc, _, _ := h.e.Receipt(id(2)); rc.Code != "tailnet_join_cancelled" {
 		t.Errorf("the join's receipt is %+v", rc)
-	}
-	if rc, err := h.e.CancelJoin(bg, CancelRequest{ID: id(4), JoinID: rec.JoinID}); err != nil || rc.Outcome != "ok" {
-		t.Errorf("the resent cancel answered %+v, %v", rc, err)
 	}
 	if slices.Contains(h.fake.runningServices(), "join") {
 		t.Error("the cancelled join's container runs")
@@ -545,20 +514,23 @@ func TestJoinRefusedBesideARunningJoinContainer(t *testing.T) {
 	}
 }
 
-// CheckHostname answers the name a join asks for, as the join reads it,
-// and refuses a name with the join's own refusal, before any docker call.
-func TestCheckHostnameIsTheJoinsReadOfTheName(t *testing.T) {
+// A join reads the machine name it asks for as cyfr when none is given,
+// trimmed and lowercased, and refuses a name outside the grammar as
+// access_invalid before any docker call.
+func TestAJoinReadsAndRefusesTheName(t *testing.T) {
 	for name, want := range map[string]string{"": "cyfr", " Home ": "home", "home-2": "home-2"} {
-		if got, err := CheckHostname(name); err != nil || got != want {
-			t.Errorf("CheckHostname(%q) = %q, %v, want %q", name, got, err, want)
+		if got := joinHostname(name); got != want || !hostnameGrammar.MatchString(got) {
+			t.Errorf("joinHostname(%q) = %q, want %q", name, got, want)
 		}
 	}
 	h := newHome(t)
 	for _, name := range []string{"home_1", "-home", strings.Repeat("a", 64)} {
-		_, err := CheckHostname(name)
-		_, joinErr := h.e.Join(bg, JoinRequest{ID: id(len(name)), Hostname: name})
-		if refusalCode(err) != "access_invalid" || err.Error() != joinErr.Error() {
-			t.Errorf("CheckHostname(%q) refused %v, and the join %v", name, err, joinErr)
+		before := len(h.fake.calls())
+		if _, err := h.e.Join(bg, JoinRequest{ID: id(len(name)), Hostname: name}); refusalCode(err) != "access_invalid" {
+			t.Errorf("the join of %q answered %v", name, err)
+		}
+		if after := h.fake.calls()[before:]; len(after) != 0 {
+			t.Errorf("the refused join of %q ran docker: %v", name, after)
 		}
 	}
 }

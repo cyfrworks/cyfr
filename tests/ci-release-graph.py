@@ -1354,12 +1354,13 @@ def declare(path, version):
         f.write(f'defmodule Planted.MixProject do\n  def project do\n    [\n      version: "{version}",\n    ]\n  end\nend\n')
 
 
-def helper_env(repo, unproven=True, bin_dir=None):
+def helper_env(repo, bin_dir=None):
     """What the helper runs under: no configuration of the host's git, an
-    identity of its own, the proof of a green HEAD skipped (a disposable
-    repository has no run on GitHub) unless unproven is False, and the
-    range locale; bin_dir, when given, ahead on PATH."""
-    path = os.environ.get("PATH", "/usr/bin:/bin")
+    identity of its own, the range locale, and the stand-in gh and mix
+    (helper_bin) ahead on PATH, gh answering HEAD green on GitHub with its
+    Test run (HELPER_GREEN_RUNS, HELPER_GREEN_TEST) unless the caller's
+    environment says otherwise; bin_dir, when given, ahead of them."""
+    path = helper_bin() + ":" + os.environ.get("PATH", "/usr/bin:/bin")
     env = {
         "PATH": f"{bin_dir}:{path}" if bin_dir else path,
         "HOME": repo,
@@ -1370,9 +1371,9 @@ def helper_env(repo, unproven=True, bin_dir=None):
         "GIT_COMMITTER_NAME": "graph",
         "GIT_COMMITTER_EMAIL": "graph@example.invalid",
         "LC_ALL": range_locale(),
+        "GH_CHECK_RUNS": HELPER_GREEN_RUNS,
+        "GH_WORKFLOW_RUNS": HELPER_GREEN_TEST,
     }
-    if unproven:
-        env["RELEASE_UNPROVEN"] = "1"
     return env
 
 
@@ -1386,8 +1387,9 @@ _HELPER_REPOS = []
 
 
 def helper_repo(script, declared, scripts=None):
-    """A repository of its own holding script as scripts/release.sh, each
-    of scripts ({name: text}) as scripts/NAME, and the root's and five
+    """A repository of its own holding script as scripts/release.sh, the
+    passing audits (HELPER_AUDIT) and each of scripts ({name: text}) as
+    scripts/NAME, and the root's and five
     applications' mix.exs declaring declared, committed, with an origin of
     its own (helper_origin) whose main is that commit."""
     repo = os.path.join(scratch(), "helper-%d" % len(_HELPER_REPOS))
@@ -1395,7 +1397,7 @@ def helper_repo(script, declared, scripts=None):
     os.makedirs(os.path.join(repo, "scripts"))
     with open(os.path.join(repo, "scripts", "release.sh"), "w") as f:
         f.write(script)
-    for name, text in (scripts or {}).items():
+    for name, text in {"dependency-audit.sh": HELPER_AUDIT, **(scripts or {})}.items():
         with open(os.path.join(repo, "scripts", name), "w") as f:
             f.write(text)
         os.chmod(os.path.join(repo, "scripts", name), 0o755)
@@ -1415,11 +1417,11 @@ def helper_origin(repo):
     return repo + "-origin.git"
 
 
-def run_helper(repo, version, answer=None, args=(), unproven=True, bin_dir=None, extra_env=None):
+def run_helper(repo, version, answer=None, args=(), bin_dir=None, extra_env=None):
     """scripts/release.sh VERSION ARGS... in repo, its standard input a
     terminal holding answer when one is given (the dirty-tree prompt asks
-    only on a terminal), else nothing, under helper_env(repo, unproven,
-    bin_dir) and extra_env. Returns (status, output)."""
+    only on a terminal), else nothing, under helper_env(repo, bin_dir)
+    and extra_env. Returns (status, output)."""
     master = slave = None
     stdin = subprocess.DEVNULL
     if answer is not None:
@@ -1430,7 +1432,7 @@ def run_helper(repo, version, answer=None, args=(), unproven=True, bin_dir=None,
         result = subprocess.run(
             ["bash", "--noprofile", "--norc", os.path.join(repo, "scripts", "release.sh"), version, *args],
             cwd=repo,
-            env={**helper_env(repo, unproven, bin_dir), **(extra_env or {})},
+            env={**helper_env(repo, bin_dir), **(extra_env or {})},
             stdin=stdin,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1552,6 +1554,12 @@ esac
 printf '%s' "$json" | jq -r "$filter"
 """
 HELPER_MIX = "#!/usr/bin/env bash\nexit 0\n"
+# HEAD green on GitHub, as gh reads it: its check runs completed, and the
+# Test workflow's latest run on it completed green.
+HELPER_GREEN_RUNS = json.dumps({"check_runs": [{"status": "completed", "conclusion": "success", "name": "codex"}]})
+HELPER_GREEN_TEST = json.dumps({"workflow_runs": [
+    {"path": ".github/workflows/test.yml", "status": "completed", "conclusion": "success", "created_at": "2026-11-04T00:00:00Z"}
+]})
 # The audits the proof is followed by pass; the release stage, as --gate
 # runs it, passes once it has moved HEAD by a commit of its own, as
 # another agent in the checkout could during the stage.
@@ -1610,9 +1618,9 @@ def helper_proof_failure(script):
         ("a Test run in progress", runs(("in_progress", None)), False),
     ]
     for name, workflow_runs, accepted in cases:
-        repo = helper_repo(script, "0.6.0-alpha.1", {"dependency-audit.sh": HELPER_AUDIT})
+        repo = helper_repo(script, "0.6.0-alpha.1")
         head = helper_git(repo, "rev-parse", "HEAD")
-        status, output = run_helper(repo, "0.6.0-alpha.1", unproven=False, bin_dir=helper_bin(),
+        status, output = run_helper(repo, "0.6.0-alpha.1",
                                     extra_env={"GH_CHECK_RUNS": green, "GH_WORKFLOW_RUNS": workflow_runs})
         tagged = helper_git(repo, "rev-list", "-n", "1", "0.6.0-alpha.1") if helper_git(repo, "tag", "-l") else ""
         if accepted and (status != 0 or tagged != head):
@@ -1638,8 +1646,8 @@ def helper_bump_failure(script):
         (HELPER_BASE, "0.1.0", HELPER_MOVING_STAGE),
         ("0.0.1", "0.1.0", HELPER_BUMPING_STAGE),
     ):
-        repo = helper_repo(script, declared, {"dependency-audit.sh": HELPER_AUDIT, "stage.sh": mover})
-        status, output = run_helper(repo, version, args=["--gate"], unproven=False, bin_dir=helper_bin())
+        repo = helper_repo(script, declared, {"stage.sh": mover})
+        status, output = run_helper(repo, version, args=["--gate"])
         tags = helper_git(repo, "tag", "-l")
         moved = helper_git(repo, "log", "-1", "--format=%s")
         if status == 0 or tags or moved != "another agent" or "HEAD moved from the proved" not in output:
@@ -1764,20 +1772,20 @@ def helper_push_failure(script):
         ("ahead of main under --gate", ahead, ["--gate"], "is not main's head on origin"),
         ("with no origin", no_origin, ["--push"], "origin's main could not be read"),
     ):
-        repo = helper_repo(script, HELPER_BASE, {"dependency-audit.sh": HELPER_AUDIT, "stage.sh": recording_stage})
+        repo = helper_repo(script, HELPER_BASE, {"stage.sh": recording_stage})
         move(repo)
         before = helper_state(repo)
         if os.path.exists(ran):
             os.remove(ran)
-        status, output = run_helper(repo, "0.1.0", args=args, unproven="--gate" not in args, bin_dir=helper_bin())
+        status, output = run_helper(repo, "0.1.0", args=args)
         if status == 0 or helper_state(repo) != before or said not in output or os.path.exists(ran):
             return (
                 f"release.sh on a HEAD {name} ({' '.join(args) or 'no flags'}) exits {status}, changed the repository "
                 f"{helper_state(repo) != before} or ran the release stage {os.path.exists(ran)}: {output.strip()[-300:]}"
             )
-    repo = helper_repo(script, HELPER_BASE, {"dependency-audit.sh": HELPER_AUDIT, "stage.sh": HELPER_MAIN_MOVING_STAGE})
+    repo = helper_repo(script, HELPER_BASE, {"stage.sh": HELPER_MAIN_MOVING_STAGE})
     before = helper_state(repo)
-    status, output = run_helper(repo, "0.1.0", args=["--gate"], unproven=False, bin_dir=helper_bin())
+    status, output = run_helper(repo, "0.1.0", args=["--gate"])
     if status == 0 or helper_state(repo) != before or "Main moved during the proof" not in output:
         return f"release.sh went on after main moved during the --gate proof (exit {status}): {output.strip()[-300:]}"
     return None

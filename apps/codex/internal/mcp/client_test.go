@@ -25,7 +25,9 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
-func TestDiscover_AcceptsMatchingVersion(t *testing.T) {
+// A call is one request that declares its own protocol version in _meta,
+// with no handshake before it; a server-minted session id is ignored.
+func TestCallTool_OneRequestDeclaringItsVersion(t *testing.T) {
 	var requestCount int
 	var reqBody []byte
 
@@ -38,9 +40,8 @@ func TestDiscover_AcceptsMatchingVersion(t *testing.T) {
 			JSONRPC: "2.0",
 			ID:      1,
 			Result: map[string]any{
-				"supportedVersions": []string{protocolVersion},
-				"capabilities":      map[string]any{},
-				"_meta":             map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "cyfr", "version": "0.1.0"}},
+				"content": []map[string]any{{"type": "text", "text": `{"status":"ok"}`}},
+				"_meta":   map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "cyfr", "version": "0.1.0"}},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)
@@ -48,8 +49,8 @@ func TestDiscover_AcceptsMatchingVersion(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	if err := c.Discover(t.Context()); err != nil {
-		t.Fatalf("Discover failed: %v", err)
+	if _, err := c.CallTool(t.Context(), "test-tool", nil); err != nil {
+		t.Fatalf("CallTool failed: %v", err)
 	}
 
 	// One request, no handshake follow-up notification.
@@ -64,8 +65,8 @@ func TestDiscover_AcceptsMatchingVersion(t *testing.T) {
 	if err := json.Unmarshal(reqBody, &sent); err != nil {
 		t.Fatalf("failed to parse request body: %v", err)
 	}
-	if sent["method"] != "server/discover" {
-		t.Errorf("expected server/discover, got %v", sent["method"])
+	if sent["method"] != "tools/call" {
+		t.Errorf("expected tools/call, got %v", sent["method"])
 	}
 
 	// Every request declares its own protocol version — there is no handshake
@@ -74,31 +75,6 @@ func TestDiscover_AcceptsMatchingVersion(t *testing.T) {
 	meta, _ := params["_meta"].(map[string]any)
 	if meta["io.modelcontextprotocol/protocolVersion"] != protocolVersion {
 		t.Errorf("expected _meta protocolVersion %q, got %v", protocolVersion, meta)
-	}
-}
-
-func TestDiscover_RejectsUnsupportedProtocol(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      1,
-			Result: map[string]any{
-				"supportedVersions": []string{"2099-01-01"},
-				"capabilities":      map[string]any{},
-				"_meta":             map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "future-server", "version": "9.9.9"}},
-			},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL)
-	err := c.Discover(t.Context())
-	if err == nil {
-		t.Fatal("expected error for unsupported protocol version")
-	}
-	if !errors.Is(err, ErrUnsupportedProtocol) {
-		t.Errorf("expected ErrUnsupportedProtocol, got %v", err)
 	}
 }
 
@@ -486,7 +462,7 @@ func TestRequestHeaders(t *testing.T) {
 			JSONRPC: "2.0",
 			ID:      req.ID,
 			Result: map[string]any{
-				"supportedVersions": []string{protocolVersion},
+				"content": []map[string]any{{"type": "text", "text": `{"status":"ok"}`}},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)
@@ -495,7 +471,7 @@ func TestRequestHeaders(t *testing.T) {
 
 	c := NewClient(srv.URL)
 	c.SessionID = "my-session"
-	if err := c.Discover(t.Context()); err != nil {
+	if _, err := c.CallTool(t.Context(), "test-tool", nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -767,7 +743,7 @@ func TestCallTool_NoWaitOrNoIdRepeatsNothing(t *testing.T) {
 	})
 }
 
-// Only a repeat names a confirmation: discovery and listing carry none.
+// Only a repeat names a confirmation: a first call and a listing carry none.
 func TestWithMeta_CarriesAConfirmationIdOnlyWhenGiven(t *testing.T) {
 	meta := withMeta(map[string]any{}, "", "")["_meta"].(map[string]any)
 	if _, ok := meta[ConfirmationIDKey]; ok {

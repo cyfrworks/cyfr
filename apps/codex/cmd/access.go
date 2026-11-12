@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -45,7 +44,6 @@ type stackEngine interface {
 	StartWithin(ctx context.Context, cause string, health time.Duration) (access.Receipt, error)
 	Stop(ctx context.Context, cause string, all bool) (access.Receipt, error)
 	CloseServe(ctx context.Context) error
-	Resent(id string, c access.RequestContent) (access.Receipt, bool, error)
 }
 
 // openEngine opens the engine of the project at dir; its recovery, starts,
@@ -213,9 +211,6 @@ func describeReceipt(r access.Receipt) string {
 	return line
 }
 
-// requestIDPattern is a request id: 32 lowercase hexadecimal characters.
-var requestIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
-
 // newRequestID mints the request id of one invocation.
 func newRequestID() (string, error) {
 	b := make([]byte, 16)
@@ -226,8 +221,7 @@ func newRequestID() (string, error) {
 }
 
 // joinRequestID is the request id of the join a switch's request id id
-// makes, derived from it: a request resent under its id resends its join
-// under the same one.
+// makes, derived from it.
 func joinRequestID(id string) string {
 	sum := sha256.Sum256([]byte("join\n" + id))
 	return hex.EncodeToString(sum[:16])
@@ -493,51 +487,6 @@ func askJoin(ctx context.Context, in *bufio.Reader, out io.Writer, o accessOptio
 // the command ends there, as no failure (exit 0).
 var errDeclined = errors.New("declined")
 
-// requestContent is everything a `cyfr access` command was asked, which
-// the engine binds its request id to (access.RequestContent).
-func requestContent(target access.Target, o accessOptions, key []byte) access.RequestContent {
-	return access.RequestContent{
-		Mode: target.Mode, Domain: target.Domain, ACMEEmail: target.ACMEEmail,
-		Hostname: o.hostname, NewNode: o.newNode, AuthKeyFingerprint: access.AuthKeyFingerprint(key),
-	}
-}
-
-// answerResent answers a request id the engine already holds the receipt
-// of, or the unfinished operation of, as the request answered when it was
-// first sent, the same sentence and the same exit status, and does
-// nothing else; sent is false when it holds neither. The engine binds the
-// id to what it was first asked (Resent): asked anything else under it, a
-// target or join inputs of another request, it is access_request_reused,
-// whatever the first request's outcome.
-func answerResent(c access.RequestContent, id string, out io.Writer) (sent bool, err error) {
-	e, err := openEngine(".")
-	if err != nil {
-		return true, engineFailure(err)
-	}
-	rec, ok, err := e.Resent(id, c)
-	if err != nil {
-		return true, engineFailure(err)
-	}
-	if !ok {
-		return false, nil
-	}
-	switch {
-	case rec.Op != "switch":
-		return true, refusalError{access.Refuse("access_request_reused", nil)}
-	case rec.State == "accepted":
-		return true, refuseUnfinished([]access.Receipt{rec})
-	}
-	// A receipt read back carries its refusal in itself, with no error
-	// beside it.
-	if err := answerFailure(rec, nil); err != nil {
-		return true, err
-	}
-	if rec.FinalHead != nil {
-		fmt.Fprintf(out, "Done. CYFR is reached %s.\n", reachedBy(*rec.FinalHead))
-	}
-	return true, nil
-}
-
 // printPreview prints a change before it is made: who will reach CYFR and
 // where (reachedBy), each other setting that changes as before → after
 // (changedRows), and, when the address changes and someone may be set up
@@ -627,8 +576,6 @@ func init() {
 	accessCmd.Flags().Bool("new-node", false, "Replace this machine's tailnet identity before joining, so CYFR can take another name")
 	accessCmd.Flags().Bool("yes", false, "Make the change without asking to confirm it")
 	accessCmd.Flags().Bool("resume", false, "Finish an interrupted change under the lock and report what happened")
-	accessCmd.Flags().String("request-id", "", "The request id, 32 lowercase hexadecimal characters (minted when not given)")
-	_ = accessCmd.Flags().MarkHidden("request-id")
 	accessCmd.AddCommand(accessStatusCmd)
 	rootCmd.AddCommand(accessCmd)
 }
@@ -672,8 +619,7 @@ Exit status 3: the change was made and CYFR started, but on this machine only, b
 			return errors.New("name the mode: cyfr access local, cyfr access tailnet or cyfr access public (cyfr access status shows the current one)")
 		}
 		yes, _ := cmd.Flags().GetBool("yes")
-		id, _ := cmd.Flags().GetString("request-id")
-		return runAccess(ctx, args[0], accessFlags(cmd), yes, id, cmd.OutOrStdout())
+		return runAccess(ctx, args[0], accessFlags(cmd), yes, cmd.OutOrStdout())
 	},
 }
 
@@ -693,7 +639,7 @@ var accessStatusCmd = &cobra.Command{
 
 // runAccess is `cyfr access <mode>`: the preview, the confirmation, then the
 // switch under the lock, for tailnet with the join first.
-func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id string, out io.Writer) error {
+func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out io.Writer) error {
 	if mode != access.ModeLocal && mode != access.ModeTailnet && mode != access.ModePublic {
 		return fmt.Errorf("cyfr access takes local, tailnet or public; %q is none of them", mode)
 	}
@@ -701,20 +647,12 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 		return err
 	}
 	target := access.Target{Mode: mode, Domain: o.domain, ACMEEmail: o.acmeEmail}
-	resent := id != ""
-	if resent && !requestIDPattern.MatchString(id) {
-		return fmt.Errorf("--request-id %q is not 32 lowercase hexadecimal characters", id)
-	}
 	key, err := readAuthKey(o.keyFile)
 	if err != nil {
 		return err
 	}
-	content := requestContent(target, o, key)
-	if resent {
-		if sent, err := answerResent(content, id, out); sent {
-			return err
-		}
-	} else if id, err = newRequestID(); err != nil {
+	id, err := newRequestID()
+	if err != nil {
 		return err
 	}
 	if !yes && !askTerminal() {
@@ -774,7 +712,7 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 	// journal's to recover, never a half-made change this command walks
 	// away from.
 	err = answerFailure(e.Switch(context.WithoutCancel(ctx), access.SwitchRequest{
-		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest, Content: content,
+		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
 	}))
 	if local := (startedLocally{}); err != nil && !errors.As(err, &local) {
 		return err

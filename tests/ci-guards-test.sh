@@ -569,7 +569,7 @@ run_world() {
   code=$?
 }
 
-for changed in src/app.ex README.md mix.lock.bak; do
+for changed in src/app.ex README.md mix.lock.bak apps/codex/go.sum; do
   label="world-checks: a pull request that changes $changed is informational"
   merge_repo "$changed"
   run_world GITHUB_EVENT_NAME=pull_request
@@ -577,7 +577,7 @@ for changed in src/app.ex README.md mix.lock.bak; do
 done
 
 for changed in mix.lock package-lock.json apps/x/assets/package-lock.json Dockerfile Dockerfile.locus \
-  tests/y/Dockerfile docker-compose.yml docker-compose.dev.yml; do
+  tests/y/Dockerfile docker-compose.yml docker-compose.dev.yml apps/locus/keeper/go.sum rust-toolchain.toml; do
   label="world-checks: a pull request that changes $changed blocks"
   merge_repo "$changed"
   run_world GITHUB_EVENT_NAME=pull_request

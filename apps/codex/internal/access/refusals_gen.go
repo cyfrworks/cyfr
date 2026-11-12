@@ -47,12 +47,6 @@ var refusalRows = map[string]refusalRow{
 			{Fixed: map[string]string{"mode": "tailnet", "option": "--acme-email"}, Slots: []string{}, Template: "`--acme-email` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."},
 		},
 	},
-	"access_request_reused": {
-		Class: "conflict",
-		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{}, Template: "This request names a different change than the one first sent under its id. Nothing was changed. Send it again under a new id."},
-		},
-	},
 	"tailnet_not_joined": {
 		Class: "setup_required",
 		Variants: []refusalVariant{

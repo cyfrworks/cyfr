@@ -2150,6 +2150,12 @@ jobs:
           # since the catalyst reads those words: the harness's, not CYFR's.
           excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/** :(exclude)apps/codex/internal/holder/bip39_english.txt :(exclude)tests/locus-backends-image/fake-claude.mjs'
           fail=0
+          # A path the list names that is gone, or a pattern git grep cannot
+          # read (exit 2 or more), fails: either would end that part of the
+          # scan silently.
+          for f in $paths; do
+            [ -e "$f" ] || { echo "::error::the scanned path $f does not exist"; fail=1; }
+          done
           for p in \
             '\borg_id\b' \
             '\bproject_id\b' \
@@ -2213,8 +2219,12 @@ jobs:
             'CYFR_WORKER_WATCH_' \
             '(^|[^A-Za-z])([Ee]states?([^a-z]|$)|ESTATES?([^A-Z]|$))|[a-z]Estate' \
             ; do
-            hits="$(git grep -InE "$p" -- $paths $excl || true)"
-            if [ -n "$hits" ]; then
+            status=0
+            hits="$(git grep -InE "$p" -- $paths $excl)" || status=$?
+            if [ "$status" -gt 1 ]; then
+              echo "::error::fossil pattern $p could not be searched (git grep exited $status)"
+              fail=1
+            elif [ -n "$hits" ]; then
               echo "::error::fossil pattern $p"
               echo "$hits"
               fail=1

@@ -86,10 +86,10 @@ type Engine struct {
 // Open opens the engine of the project at projectDir, running docker
 // through d, or through the system implementation when d is nil. A .env
 // compose cannot read, or one that sets any COMPOSE_* key, does not keep
-// it from opening, so recovery can still stop the stack; Start, Switch,
-// Join and CancelJoin refuse it (compose_env_refused, naming the line or
-// the key) before any docker call, and Resume stops and verifies without
-// compose, then refuses it.
+// it from opening, so recovery can still stop the stack; Start, Switch
+// and Join refuse it (compose_env_refused, naming the line or the key)
+// before any docker call, and Resume stops and verifies without compose,
+// then refuses it.
 func Open(projectDir string, d Docker) (*Engine, error) {
 	dir, err := filepath.Abs(projectDir)
 	if err != nil {
@@ -188,11 +188,8 @@ type Receipt struct {
 	Code          string            `json:"code,omitempty"`
 	Payload       map[string]string `json:"payload,omitempty"`
 	FinalHead     *Head             `json:"final_head,omitempty"`
-	// ContentDigest binds a switch's receipt to the whole of what its
-	// command was asked (RequestContent), for Resent.
-	ContentDigest string    `json:"content_digest,omitempty"`
-	Observed      []string  `json:"observed,omitempty"`
-	At            time.Time `json:"at"`
+	Observed      []string          `json:"observed,omitempty"`
+	At            time.Time         `json:"at"`
 }
 
 // Refusal is the code a receipt answers with, nil for a plain success. A
@@ -281,35 +278,12 @@ type SwitchRequest struct {
 	JoinID    string
 	OldDigest string
 	NewDigest string
-	// Content is everything the command was asked, which a resend of its
-	// id must ask again, to Switch as to Resent.
-	Content RequestContent
 }
 
-// RequestContent is the whole of what a `cyfr access` command was asked:
-// the mode, the domain and email, and for tailnet the machine name,
-// --new-node and the auth key's fingerprint (AuthKeyFingerprint, "" with
-// no key). A request id is bound to it whatever the outcome.
-type RequestContent struct {
-	Mode, Domain, ACMEEmail, Hostname string
-	NewNode                           bool
-	AuthKeyFingerprint                string
-}
-
-// Resent answers a request id sent again, reading without the lock: its
-// receipt, or its unfinished journal's answer, when c is the content it
-// was first sent with; a rejected access_request_reused receipt when it is
-// not, which changes and writes nothing; false for an id neither holds.
-func (e *Engine) Resent(id string, c RequestContent) (Receipt, bool, error) {
-	rc, ok, err := e.resent(id, c)
-	r := e.redactor()
-	return r.receipt(rc), ok, r.err(err)
-}
-
-// AuthKeyFingerprint is an auth key's fingerprint as a request binds it:
+// authKeyFingerprint is an auth key's fingerprint as a join's digest binds it:
 // sha256: and the hex of the key's bytes, surrounding space removed; ""
 // for no key. The key itself is never stored.
-func AuthKeyFingerprint(key []byte) string {
+func authKeyFingerprint(key []byte) string {
 	key = bytes.TrimSpace(key)
 	if len(key) == 0 {
 		return ""
@@ -319,9 +293,7 @@ func AuthKeyFingerprint(key []byte) string {
 
 // Switch moves the home to the request's head: stop and verify, commit
 // .env, start what was running with node validation and health, roll back
-// on a failed start. The receipt is its outcome; resending the same id
-// with the same request, its content included, answers the same receipt,
-// and with any other a rejected access_request_reused that changes nothing.
+// on a failed start. The receipt is its outcome.
 // A reopen (Preview.Reopen) is ok only if, once Serve is open, cyfr runs
 // and Serve's configuration is the head's: a home that stopped before the
 // switch was accepted is access_stale, and one that stopped, or whose
@@ -360,14 +332,6 @@ func (e *Engine) Join(ctx context.Context, r JoinRequest) (Receipt, error) {
 type CancelRequest struct {
 	ID     string
 	JoinID string
-}
-
-// CancelJoin cancels the current waiting join; any other answers
-// tailnet_join_not_current.
-func (e *Engine) CancelJoin(ctx context.Context, r CancelRequest) (Receipt, error) {
-	before := e.redactor()
-	rc, err := e.doCancelJoin(ctx, r)
-	return e.leaving(before, rc, err)
 }
 
 // CancelWaitingJoin cancels whatever join waits, for update and restore

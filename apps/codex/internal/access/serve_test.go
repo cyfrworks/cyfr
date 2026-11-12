@@ -445,8 +445,7 @@ func reopenable(t *testing.T) *testHome {
 }
 
 // A reopen killed at any phase is finished by the next command's Resume:
-// Serve open, the receipt ok, and a resend of it answers that receipt
-// without running docker.
+// Serve open and the receipt ok.
 func TestReopenRecoversAtEveryPhase(t *testing.T) {
 	for _, point := range []string{"journal:switch:accepted", "journal:switch:committed", "start:tailnet", "receipt:switch"} {
 		t.Run(point, func(t *testing.T) {
@@ -464,14 +463,6 @@ func TestReopenRecoversAtEveryPhase(t *testing.T) {
 			}
 			if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveOpen(4001) {
 				t.Errorf("Serve did not reopen: %s", got)
-			}
-			before := len(h.fake.calls())
-			again, err := h.e.Switch(bg, r)
-			if err != nil || again.Outcome != "ok" || again.RequestDigest != rc.RequestDigest || again.At != rc.At {
-				t.Errorf("the resent reopen answered %+v, %v", again, err)
-			}
-			if after := h.fake.calls()[before:]; len(after) != 0 {
-				t.Errorf("the resent reopen ran docker: %v", after)
 			}
 			h.assertConverged(tailnetStack...)
 		})
@@ -528,7 +519,7 @@ func TestReopenRefusesAHomeThatStopsBeforeItIsAccepted(t *testing.T) {
 // configuration is the one the head names: a home that stops just after
 // Serve opens, or a configuration rewritten under it, ends with Serve
 // closed and the reopen not applied (access_stale), nothing started
-// again, .env as it was and no journal left; a resend answers the same.
+// again, .env as it was and no journal left.
 func TestReopenClosesServeUnlessTheHomeStillRunsAsTheHeadSays(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -579,15 +570,6 @@ func TestReopenClosesServeUnlessTheHomeStillRunsAsTheHeadSays(t *testing.T) {
 			}
 			if files := h.files(resolvedGlob); len(files) > 0 {
 				t.Errorf("materialized files are left: %v", files)
-			}
-			h.e.failWrite = nil
-			before := len(h.fake.calls())
-			again, err := h.e.Switch(bg, r)
-			if again.Outcome != rc.Outcome || again.At != rc.At || refusalCode(err) != "access_stale" {
-				t.Errorf("the resent reopen answered %+v, %v", again, err)
-			}
-			if after := h.fake.calls()[before:]; len(after) != 0 {
-				t.Errorf("the resent reopen ran docker: %v", after)
 			}
 		})
 	}

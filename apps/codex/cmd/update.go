@@ -1301,7 +1301,7 @@ func sortByDepth(mounts []storageMount) {
 }
 
 // probePostgres reads the PostgreSQL server's major version, which names
-// the dump's image; the URL reaches the container through its environment.
+// the dump's image; the URL reaches the container on its standard input.
 func (u *updater) probePostgres() error {
 	if u.config.adapter != "postgres" {
 		return nil

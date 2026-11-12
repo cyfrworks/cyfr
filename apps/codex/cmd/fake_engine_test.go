@@ -55,10 +55,6 @@ type fakeStack struct {
 	addressChanges       []string
 	join                 func(ctx context.Context, r access.JoinRequest) (access.Receipt, error)
 	joined               map[string]access.Join
-	receipts             map[string]access.Receipt
-	// contents are what each switch's request id was asked, which Resent
-	// binds the id to.
-	contents map[string]access.RequestContent
 	// serveClosed is a tailnet home's Serve closed, which a preview of the
 	// head .env holds answers as a reopen; reopenReceipt, when set, is the
 	// reopen's answer.
@@ -88,7 +84,7 @@ func useFakeEngine(t *testing.T) *fakeStack {
 // terminal init and reach ask on for none; t, when there is one, reports
 // what the fake cannot do.
 func installFakeEngine(t *testing.T) *fakeStack {
-	s := &fakeStack{t: t, joined: map[string]access.Join{}, receipts: map[string]access.Receipt{}, contents: map[string]access.RequestContent{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
+	s := &fakeStack{t: t, joined: map[string]access.Join{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
 	openEngine = func(dir string) (stackEngine, error) {
 		if err := s.openErr; err != nil {
 			return nil, err
@@ -250,21 +246,6 @@ func (e *fakeEngine) CloseServe(ctx context.Context) error {
 	return os.WriteFile(serve, []byte("{}"), 0644)
 }
 
-// Resent answers a resent switch's receipt when c is what its id was
-// first asked, and access_request_reused when it is not, as the engine's.
-func (e *fakeEngine) Resent(id string, c access.RequestContent) (access.Receipt, bool, error) {
-	e.s.mu.Lock()
-	defer e.s.mu.Unlock()
-	rec, ok := e.s.receipts[id]
-	if !ok {
-		return access.Receipt{}, false, nil
-	}
-	if e.s.contents[id] != c {
-		return access.Receipt{RequestID: id, Op: rec.Op, State: "rejected", Code: "access_request_reused"}, true, nil
-	}
-	return rec, true, nil
-}
-
 func (e *fakeEngine) Docker() access.Docker { return fakeRunner{e.s} }
 
 // Redactor is the engine's own redaction pass for the project.
@@ -375,28 +356,13 @@ func (e *fakeEngine) derive(t access.Target, joinID string) (access.Derivation, 
 	return access.Derive(t, cur, join)
 }
 
-// Switch is the switch of a stopped stack, its receipt kept by its
-// request id, which it answers again for the same id.
+// Switch is the switch of a stopped stack.
 func (e *fakeEngine) Switch(ctx context.Context, r access.SwitchRequest) (access.Receipt, error) {
 	rec, err := e.doSwitch(ctx, r)
 	if rec.RequestID == "" {
 		rec.RequestID = r.ID
 	}
-	if rec.Op != "" {
-		e.s.mu.Lock()
-		e.s.receipts[r.ID] = rec
-		e.s.contents[r.ID] = r.Content
-		e.s.mu.Unlock()
-	}
 	return rec, err
-}
-
-// Receipt answers the receipt a switch kept for id.
-func (e *fakeEngine) Receipt(id string) (access.Receipt, bool, error) {
-	e.s.mu.Lock()
-	defer e.s.mu.Unlock()
-	rec, ok := e.s.receipts[id]
-	return rec, ok, nil
 }
 
 // doSwitch fences the request's digests and commits the head's keys to

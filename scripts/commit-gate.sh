@@ -160,7 +160,10 @@
 #   test.yml tailscale-image-guard
 #   test.yml seed-guards
 #   test.yml config-seam
-# and, outside CI, the step benchmark (mix cyfr.bench.step).
+# and, on a host without swtpm, the chip holder's tests in codex-ci.yml's
+# test job's go test step, which skip there (only GitHub sets
+# CYFR_TEST_SWTPM_REQUIRED), and, outside CI, the step benchmark (mix
+# cyfr.bench.step).
 # Without -n a suite runs in eight partitions on a host of sixteen cores
 # or more (two schedulers each) and in four on a smaller one. A PostgreSQL
 # partition holds twenty connections, so the server allows twenty times

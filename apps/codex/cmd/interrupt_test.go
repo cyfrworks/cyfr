@@ -107,7 +107,7 @@ func TestAccessQuestionsEndOnAnInterrupt(t *testing.T) {
 			askTerminal = func() bool { return true }
 			askInput = in
 			err := interruptAt(t, asked, func(ctx context.Context) error {
-				return runAccess(ctx, c.mode, c.o, false, "", &bytes.Buffer{})
+				return runAccess(ctx, c.mode, c.o, false, &bytes.Buffer{})
 			})
 			wantInterrupted(t, err, c.want)
 			if len(s.joins) != c.joins || len(s.switches) != 0 || read(t, ".env") != before {

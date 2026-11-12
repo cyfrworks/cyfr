@@ -261,6 +261,21 @@ func (h *fakeHome) channel(w http.ResponseWriter, r *http.Request) {
 	}
 	binding := map[string]any{"athanor": c.athanor, "client_id": c.id, "device_key": b64(c.pub)}
 	send(map[string]any{"type": "standing", "client_id": c.id, "athanor": c.athanor, "expires_at": c.cert["expires_at"]})
+	// As the CYFR's channel: closed 4408 at the instant the certificate
+	// it stands under expires unrenewed, and the standing read again at
+	// each report and each intent, a client whose standing ended told its
+	// pairing is revoked and closed 4403.
+	done := make(chan struct{})
+	defer close(done)
+	go h.closeAtExpiry(conn, c, done)
+	end := func(code websocket.StatusCode) {
+		if code == 4403 {
+			send(map[string]any{"type": "revoke", "client_id": c.id})
+			conn.Close(code, "forbidden")
+			return
+		}
+		conn.Close(code, "unauthenticated")
+	}
 	for {
 		h.mu.Lock()
 		stalled := h.stalled
@@ -277,6 +292,10 @@ func (h *fakeHome) channel(w http.ResponseWriter, r *http.Request) {
 		}
 		switch m["type"] {
 		case "capabilities":
+			if code := h.stands(c); code != 0 {
+				end(code)
+				return
+			}
 			var caps []string
 			for _, c := range m["capabilities"].([]any) {
 				caps = append(caps, c.(string))
@@ -285,6 +304,11 @@ func (h *fakeHome) channel(w http.ResponseWriter, r *http.Request) {
 			h.capabilities = append(h.capabilities, caps)
 			h.mu.Unlock()
 		case "intent":
+			if code := h.stands(c); code != 0 {
+				send(map[string]any{"type": "answer", "id": m["id"], "error": standingRefusal(code)})
+				end(code)
+				return
+			}
 			result, refusal := h.intent(stringOf(m, "operation"), m["args"].(map[string]any), binding)
 			answer := map[string]any{"type": "answer", "id": m["id"]}
 			if refusal != nil {
@@ -314,6 +338,56 @@ func (h *fakeHome) channel(w http.ResponseWriter, r *http.Request) {
 			send(map[string]any{"type": "certificate", "certificate": cert})
 		}
 	}
+}
+
+// stands reads c's standing again, as the CYFR does at each report and
+// intent: 4403 for a client whose standing ended, 4408 for a certificate
+// expired unrenewed, 0 for one that stands.
+func (h *fakeHome) stands(c *fakeClient) websocket.StatusCode {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch {
+	case c.revoked:
+		return 4403
+	case !time.Now().Before(expiresAt(c.cert)):
+		return 4408
+	}
+	return 0
+}
+
+// standingRefusal is the error an intent is answered with before the
+// close code: the class and the CYFR's sentence for it.
+func standingRefusal(code websocket.StatusCode) map[string]any {
+	if code == 4403 {
+		return map[string]any{"class": "forbidden", "message": "This device's pairing was revoked"}
+	}
+	return map[string]any{"class": "unauthenticated", "message": "The device's certificate has expired; renew it"}
+}
+
+// closeAtExpiry closes conn 4408 when the certificate c stands under
+// expires unrenewed, until done; a renewal moves the instant.
+func (h *fakeHome) closeAtExpiry(conn *websocket.Conn, c *fakeClient, done <-chan struct{}) {
+	for {
+		h.mu.Lock()
+		at := expiresAt(c.cert)
+		h.mu.Unlock()
+		t := time.NewTimer(time.Until(at))
+		select {
+		case <-done:
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		if h.stands(c) == 4408 {
+			conn.Close(4408, "unauthenticated")
+			return
+		}
+	}
+}
+
+func expiresAt(cert map[string]any) time.Time {
+	ms, _ := cert["expires_at"].(json.Number).Int64()
+	return time.UnixMilli(ms)
 }
 
 // hello answers a hello: a sign_in request held for the key it names,
@@ -523,6 +597,16 @@ func (h *fakeHome) closeChannels(code websocket.StatusCode) {
 	for _, c := range conns {
 		c.Close(code, "standing ended")
 	}
+}
+
+// endStanding ends every client's standing here with no announcement to
+// the open channels, which hear it when they read the standing again.
+func (h *fakeHome) endStanding() {
+	h.mu.Lock()
+	for _, c := range h.clients {
+		c.revoked = true
+	}
+	h.mu.Unlock()
 }
 
 // revoke ends every client's standing here, as a revocation does.

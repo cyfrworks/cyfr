@@ -79,7 +79,7 @@ func initThenPublic(ctx context.Context, acmeEmail string, out io.Writer) error 
 	if err := initProject(ctx, initOptions{noPull: true}, nil, out, out); err != nil {
 		return err
 	}
-	return runAccess(ctx, access.ModePublic, accessOptions{domain: "cyfr.example.com", acmeEmail: acmeEmail}, true, "", out)
+	return runAccess(ctx, access.ModePublic, accessOptions{domain: "cyfr.example.com", acmeEmail: acmeEmail}, true, out)
 }
 
 // nothingWritten fails unless the working directory holds exactly names.

@@ -170,10 +170,8 @@ func TestServerTakesActionsFromThePagesAlone(t *testing.T) {
 	if w := request(t, srv, http.MethodPost, "/", "{}", nil); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("a POST of the page answered %d", w.Code)
 	}
-	for _, path := range []string{"/api/nothing", "/api/check", "/api/name", "/api/cancel"} {
-		if w := request(t, srv, http.MethodPost, path, "{}", nil); w.Code != http.StatusNotFound {
-			t.Errorf("the unknown action %s answered %d", path, w.Code)
-		}
+	if w := request(t, srv, http.MethodPost, "/api/nothing", "{}", nil); w.Code != http.StatusNotFound {
+		t.Errorf("an unknown action answered %d", w.Code)
 	}
 	for path, want := range map[string]string{
 		"/api/start":  start,
@@ -283,7 +281,7 @@ func TestPagesAskNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, asked := range []string{"<input", "<select", "<textarea", "data-mode", "data-go", "tailnet", "Tailscale"} {
+	for _, asked := range []string{"<input", "<select", "<textarea"} {
 		if strings.Contains(string(page), asked) {
 			t.Errorf("the pages hold %q", asked)
 		}
