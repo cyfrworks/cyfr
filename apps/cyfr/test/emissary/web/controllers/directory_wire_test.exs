@@ -192,7 +192,8 @@ defmodule Emissary.Web.DirectoryWireTest do
     Jason.decode!(bytes)
   end
 
-  # An answer is the whole object; a refusal is the envelope's first code.
+  # An answer is the whole object; a refusal is the envelope in the grammar
+  # every client reads it by, its first error naming the code.
   defp assert_named(response, expected, context) do
     assert response.status == expected["status"], "#{context}: #{response.resp_body}"
     body = Jason.decode!(response.resp_body)
@@ -204,8 +205,18 @@ defmodule Emissary.Web.DirectoryWireTest do
       %{"code" => code} ->
         assert %{"errors" => [%{"code" => ^code, "message" => message} | _]} = body, context
         assert is_binary(message), context
+
+        assert jcs_value?(body),
+               "#{context}: the envelope holds a null or a number no client reads"
     end
   end
+
+  # Whether a decoded value is in the domain every client's JCS takes: no
+  # null, and every number an integer of at most 2^53 - 1 in magnitude.
+  defp jcs_value?(value) when is_map(value), do: Enum.all?(value, fn {_k, v} -> jcs_value?(v) end)
+  defp jcs_value?(value) when is_list(value), do: Enum.all?(value, &jcs_value?/1)
+  defp jcs_value?(value) when is_integer(value), do: abs(value) <= 9_007_199_254_740_991
+  defp jcs_value?(value), do: is_binary(value) or is_boolean(value)
 
   # A source no other request of the run has presented, so no rate window
   # is reached.

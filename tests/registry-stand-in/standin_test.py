@@ -292,12 +292,31 @@ def name_checks():
                     answer["registry"] = "127.0.0.1"
                 if json.loads(text) != answer:
                     problems.append("%s: answered %s, not %s" % (where, text[:200], jcs(answer)))
-            else:
-                errors = json.loads(text).get("errors") or [{}]
-                if errors[0].get("code") != expect["code"] or not isinstance(errors[0].get("message"), str):
-                    problems.append("%s: refused %s, not with the code %s" % (where, text[:200], expect["code"]))
+            elif not refusal_of(json.loads(text), expect["code"]):
+                problems.append("%s: refused %s, not with the code %s in every client's grammar" % (where, text[:200], expect["code"]))
         check(not problems, "names: " + scenario["name"], "\n  ".join(problems))
         standin.stop()
+
+
+# Whether an envelope is the refusal `code` in the grammar every client reads
+# it by: an object whose errors is a non-empty array, its first an object
+# with this code and a string message, the whole in JCS's domain (no null,
+# every number an integer of at most 2^53 - 1 in magnitude).
+def refusal_of(envelope, code):
+    errors = envelope.get("errors") if isinstance(envelope, dict) else None
+    first = errors[0] if isinstance(errors, list) and errors else None
+    return (isinstance(first, dict) and first.get("code") == code and isinstance(first.get("message"), str)
+            and jcs_value(envelope))
+
+
+def jcs_value(value):
+    if isinstance(value, dict):
+        return all(jcs_value(v) for v in value.values())
+    if isinstance(value, list):
+        return all(jcs_value(v) for v in value)
+    if isinstance(value, bool) or isinstance(value, str):
+        return True
+    return isinstance(value, int) and abs(value) <= 2 ** 53 - 1
 
 
 # A request in the signed shape whose signature is nothing.
