@@ -100,7 +100,8 @@ defmodule Cyfr.TestSeamsTest do
   # Every read of Arca's, Sanctum's and the host's application environment
   # in every application's code, read as code: a key `Cyfr.Boundaries`
   # classes `:seam` is read inside the function `Prima.TestSeam.value/2`
-  # is handed, inside a branch compiled only with the permission, or by
+  # is handed as its read (never in its default), inside a branch compiled
+  # only with the permission, or by
   # `compile_env`, which fixes it when the release is built; and a read
   # inside a seam is a seam's key. tests/release-boot/test_seams.exs and
   # the restores case of tests/release-boot/boot.sh hold the shipped
@@ -221,6 +222,12 @@ defmodule Cyfr.TestSeamsTest do
   # Each form a file could read a seam's key or reach `value/3` with, past
   # a check that matched by spelling, is refused; an honest file passes.
   @refused_forms [
+    "require Prima.TestSeam\n" <>
+      "def read, do: Prima.TestSeam.value(fn -> Application.get_env(:arca, :control_plane_pool, true) end, " <>
+      "fn -> fn -> false end end).()",
+    "require Prima.TestSeam\n" <>
+      "def read, do: Prima.TestSeam.value(pool(), fn -> false end)\n" <>
+      "defp pool, do: Application.get_env(:arca, :control_plane_pool, true)",
     "def read, do: Prima.TestSeam.value(true, :shipped, fn -> :read end)",
     "def read, do: Elixir.Prima.TestSeam.value(true, :shipped, fn -> :read end)",
     "def read do\n  decision = &Elixir.Prima.TestSeam.value/3\n  decision.(true, :shipped, fn -> :read end)\nend",
@@ -508,7 +515,7 @@ defmodule Cyfr.TestSeamsTest do
   # application, its key (the module's name as its source spells it, for
   # `__MODULE__`; `:bulk` for a read that names none; `:dynamic` for one
   # named by a value) and its gate: `:seam` inside the function
-  # `Prima.TestSeam.value/2` or `/3` is handed, `:compiled_out` inside a
+  # `Prima.TestSeam.value/2` is handed as its read, `:compiled_out` inside a
   # branch compiled only with the permission, `:plain` otherwise. A piped
   # read (`:cyfr |> Application.get_all_env()`) is read as the call it is,
   # and `Application.compile_env/4` by the application it names after the
@@ -520,12 +527,16 @@ defmodule Cyfr.TestSeamsTest do
   defp reads({kind, _, [head | body]}, scope) when kind in [:def, :defp, :defmacro, :defmacrop],
     do: reads(body, %{scope | function: name(head)})
 
+  # Only the gate's read, its second argument, is inside the seam: its
+  # default is code every build runs, scanned as any other.
   defp reads({{:., _, [{:__aliases__, _, [:Prima, :TestSeam]}, :value]}, _, args}, scope)
        when is_list(args),
        do:
-         Enum.flat_map(args, fn
-           {:fn, _, _} = read -> reads(read, %{scope | gate: :seam})
-           arg -> reads(arg, scope)
+         args
+         |> Enum.with_index()
+         |> Enum.flat_map(fn
+           {{:fn, _, _} = read, 1} -> reads(read, %{scope | gate: :seam})
+           {arg, _index} -> reads(arg, scope)
          end)
 
   defp reads({:if, _, [condition, clauses]} = ast, scope) when is_list(clauses) do
