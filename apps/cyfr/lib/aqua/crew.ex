@@ -471,8 +471,8 @@ defmodule Aqua.Crew do
   Drain every athanor holding a crew record this consumer has not
   receipted. Answers each athanor's drain. Never raises.
   """
-  @spec drain_all(keyword()) :: %{String.t() => drained()}
-  def drain_all(opts \\ []) do
+  @spec drain_all() :: %{String.t() => drained()}
+  def drain_all do
     @kinds
     |> Enum.flat_map(fn kind ->
       case Arca.Outbox.pending_athanors(@consumer, kind) do
@@ -485,7 +485,7 @@ defmodule Aqua.Crew do
       end
     end)
     |> Enum.uniq()
-    |> Map.new(&{&1, drain(&1, opts)})
+    |> Map.new(&{&1, drain(&1)})
   catch
     # A tick has no caller to answer to: a read that raises must not take
     # the consumer down, whose restart would tick again at once.
@@ -504,15 +504,12 @@ defmodule Aqua.Crew do
   the claim; `{:stopped, reason}` when the claim was lost or a record
   could not be worked. A record a passing refusal left pending is
   counted under `"pending"`. The claim is given up when the drain ends.
-  Never raises.
-
-  `opts`: `:owner` (the claim's owner, this boot by default) and
-  `:lease_ms`.
+  Never raises. The claim is this boot's.
   """
-  @spec drain(String.t(), keyword()) :: drained()
-  def drain(athanor_id, opts \\ []) when is_binary(athanor_id) and athanor_id != "" do
-    owner = Keyword.get(opts, :owner, Prima.Boot.id())
-    lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
+  @spec drain(String.t()) :: drained()
+  def drain(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
+    owner = Prima.Boot.id()
+    lease_ms = @lease_ms
     actor = Prima.Actor.in_athanor(athanor_id)
 
     # Asked first without the claim, so a wake with nothing to do writes

@@ -219,14 +219,20 @@ defmodule Locus.Runtime.OrphanChildrenTest do
 
   test "a child that fails on its own is answered as the failure it is", %{ctx: ctx} do
     assert {:ok, %{status: :completed, output: output}} =
-             Opus.run_root(ctx, :default, Probe.probe_ref(), %{
-               "op" => "call",
-               "request" => %{
-                 "tool" => "execution",
-                 "action" => "run",
-                 "args" => %{"reference" => @trapping, "input" => %{"trap" => true}}
-               }
-             })
+             Opus.run_root(
+               ctx,
+               :default,
+               Probe.probe_ref(),
+               %{
+                 "op" => "call",
+                 "request" => %{
+                   "tool" => "execution",
+                   "action" => "run",
+                   "args" => %{"reference" => @trapping, "input" => %{"trap" => true}}
+                 }
+               },
+               []
+             )
 
     assert %{"error" => %{"type" => "dispatch_error", "message" => message}} =
              raw(output, "result_raw")

@@ -1197,11 +1197,7 @@ defmodule Aqua.Loop do
          {runnable, cards, setup}
        ) do
     decision =
-      Policy.decide(
-        call,
-        state.spec.policy,
-        [restricted?: state.restricted?] ++ place(state)
-      )
+      Policy.decide(call, state.spec.policy, place(state))
 
     case decision do
       :auto ->

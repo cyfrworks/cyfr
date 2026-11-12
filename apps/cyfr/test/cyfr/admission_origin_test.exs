@@ -398,7 +398,8 @@ defmodule Cyfr.AdmissionOriginTest do
           root_execution_id: root.id
         )
 
-      :ok = Opus.Record.write_started(interactive, child)
+      {:ok, grant} = Opus.Record.inherited_grant(interactive.athanor_id, root.id)
+      :ok = Opus.Record.write_started(interactive, child, grant: grant)
 
       assert row_origin(root.id) == :schedule
       assert row_origin(child.id) == :schedule
