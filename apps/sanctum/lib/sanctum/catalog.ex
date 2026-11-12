@@ -581,24 +581,6 @@ defmodule Sanctum.Catalog do
   def host_intercepted?(_name, _action), do: false
 
   @doc """
-  Whether this registry *knows* `tool.action` and says a chain may not run
-  it at all — the answer a surface needs before refusing to offer something.
-
-  Distinct from `not chain_reachable?/2`: a tool the registry has never
-  heard of (a virtual tool the formula dispatches itself, an external
-  `server:tool`) is not refused here, it is simply not this
-  registry's to judge.
-  """
-  @spec in_chain_refused?(String.t(), String.t() | nil) :: boolean()
-  def in_chain_refused?(name, action) when is_binary(name) do
-    not String.contains?(name, ":") and
-      match?({:ok, _}, lookup(name)) and
-      not chain_reachable?(name, action)
-  end
-
-  def in_chain_refused?(_name, _action), do: false
-
-  @doc """
   `in_chain_reachable?/2` with its reason: `:ok`, or the refusal reason
   `Sanctum.Gate.call_in_chain/5` records for a name or action a running
   chain cannot reach. `args` are the call's arguments, whose `action`

@@ -40,7 +40,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   describe "the register action's reach" do
     test "is refused in-chain, so an approved AQUA proposal cannot run it" do
-      assert Sanctum.Catalog.in_chain_refused?("component", "register"),
+      refute Sanctum.Catalog.chain_reachable?("component", "register"),
              """
              `component.register` is reachable in-chain again.
 
@@ -53,7 +53,7 @@ defmodule Compendium.RegisterMintsNothingTest do
     end
 
     test "still reachable from the external plane, so console and CLI keep working" do
-      refute Sanctum.Catalog.in_chain_refused?("component", "list"),
+      assert Sanctum.Catalog.chain_reachable?("component", "list"),
              "sanity: a plainly in-chain action must not read as refused"
 
       {:ok, {_module, definition}} = Sanctum.Catalog.lookup("component")
