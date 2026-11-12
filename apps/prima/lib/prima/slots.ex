@@ -48,9 +48,9 @@ defmodule Prima.Slots do
   is bounded (`4 * max` waiters in all, `4 * key_max` background waiters per
   key) and `wait_ms: 0` never queues, both answered `{:error, :capacity}`.
   `:reject` answers `{:error, :capacity}` at once. A waiter that dies leaves
-  the queue; one cancelled with `cancel/2` is answered
-  `{:error, :cancelled}`; a caller that stopped waiting has any slot handed
-  to it meanwhile given straight back. No waiter leaves a slot behind.
+  the queue; one a force-release ends is answered `{:error, :cancelled}`; a
+  caller that stopped waiting has any slot handed to it meanwhile given
+  straight back. No waiter leaves a slot behind.
 
   ## Release
 
@@ -68,7 +68,7 @@ defmodule Prima.Slots do
   A kill that leaves native work running is noted against its key with
   `note_unreaped/3`, by name: the noting process need not be the holder, and
   the note is acknowledged before the kill it precedes. A key with
-  `unreaped_max` live notes is in a penalty box and refused
+  `unreaped_threshold/1` of its key cap in live notes is in a penalty box and refused
   `{:error, :key_unreaped}` for roots and background work; children pass,
   since their parent already holds a slot. Notes decay after
   `unreaped_ttl_ms`, because native completion is not observable, and a
@@ -127,7 +127,6 @@ defmodule Prima.Slots do
           | {:sweep_interval_ms, pos_integer()}
           | {:hold_ms, non_neg_integer()}
           | {:unreaped_ttl_ms, pos_integer()}
-          | {:unreaped_max, pos_integer()}
   @type holder :: %{
           pid: String.t(),
           alive: boolean(),
@@ -250,7 +249,7 @@ defmodule Prima.Slots do
   `:capacity` (the total cap or the queue is full, the class rejects, or
   `wait_ms` was 0), `:key_cap` (a root at its key's cap), `:key_unreaped`
   (the key is in the penalty box), `:timeout` (waited `wait_ms` and nothing
-  was freed), `:cancelled` (`cancel/2` or a force-release ended the wait),
+  was freed), `:cancelled` (a force-release ended the wait),
   or `:unavailable` (the server is not running). `refusal/1` gives each
   its sentence.
 
@@ -286,13 +285,6 @@ defmodule Prima.Slots do
   """
   @spec release(server(), reference()) :: :ok
   def release(server, ref) when is_reference(ref), do: GenServer.cast(server, {:release, ref})
-
-  @doc """
-  End every wait `pid` has queued; each is answered `{:error, :cancelled}`.
-  A slot `pid` already holds is not touched — `release/2` gives that back.
-  """
-  @spec cancel(server(), pid()) :: :ok | {:error, :unavailable}
-  def cancel(server, pid) when is_pid(pid), do: call(server, {:cancel, pid})
 
   @doc """
   Note that `execution_id` of `key`'s was killed with its native work
@@ -405,7 +397,7 @@ defmodule Prima.Slots do
       sweep_interval_ms: positive!(opts, :sweep_interval_ms, @default_sweep_interval_ms),
       hold_ms: non_negative!(opts, :hold_ms, @default_hold_ms),
       unreaped_ttl_ms: positive!(opts, :unreaped_ttl_ms, @default_unreaped_ttl_ms),
-      unreaped_max: positive!(opts, :unreaped_max, unreaped_threshold(key_max))
+      unreaped_max: unreaped_threshold(key_max)
     }
   end
 
@@ -531,17 +523,6 @@ defmodule Prima.Slots do
       true ->
         queue_or_refuse(state, from, ref, key, class, wait_ms)
     end
-  end
-
-  def handle_call({:cancel, pid}, _from, state) do
-    refs =
-      case Map.get(state.pids, pid) do
-        nil -> []
-        %{waits: refs} -> refs
-      end
-
-    state = Enum.reduce(refs, state, &refuse_waiter(&2, &1, :cancelled))
-    {:reply, :ok, prune_pid(state, pid)}
   end
 
   def handle_call({:note_unreaped, key, execution_id}, _from, state) do
