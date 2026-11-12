@@ -98,9 +98,10 @@
 #            The copy, handed at start-up the switch the sandboxed suite
 #            turns the boot's database checks off with
 #            (`ERL_AFLAGS=-cyfr database_checks_enabled false`), which a
-#            release compiles out (`Prima.TestSeam.value/2`), is then refused for a
-#            keyring other than the one its database was sealed with, and
-#            for a database another version of the schema built.
+#            release compiles out (`Prima.TestSeam.value/2`), is then
+#            refused for a keyring other than the one its database was
+#            sealed with, and for a database another version of the schema
+#            built; handed the test permission itself, it refuses to boot.
 #
 #   reserve  a cell whose storage reserve (`Cyfr.StorageReserve`) shares a
 #            size-limited filesystem with its database: for SQLite the data
@@ -1188,9 +1189,9 @@ server_stop
 
 # The switch the sandboxed suite turns the boot's database checks off with
 # (`config/test.exs`), handed to the release at start-up as `sys.config` or
-# `ERL_AFLAGS` could hand it. It is a test seam (`Prima.TestSeam.value/2`), which a
-# release compiles out: the boots below still check the keyring and the
-# schema.
+# `ERL_AFLAGS` could hand it. It is a test seam (`Prima.TestSeam.value/2`),
+# which a release compiles out: the boots below still check the keyring and
+# the schema.
 SUITE_DATABASE_CHECKS="-cyfr database_checks_enabled false"
 
 # `$1`'s boot under the refusal deadline, its log in `$2`, with the
@@ -1226,6 +1227,15 @@ printf '{"primary":"k1","keys":{"k1":"%s"}}' "$(openssl rand -base64 32 | tr -d 
 refused_with_suite_switch "$COPY" "$WORK/keyring-refused.log" \
   "the crypto keyring is not the one this database was sealed with" "[Cyfr] FATAL: "
 mv "$COPY/keyring.json.own" "$COPY/keyring.json"
+
+step "a release handed the test permission refuses to boot"
+# Arca, Sanctum and the host each compile the permission in
+# (`Prima.TestSeam.value/2`) and record it in their own compile-time
+# environment, which tests/release-boot/test_seams.exs reads: a release
+# handed another value at start-up stops before any application starts.
+refused_with_suite_switch "$COPY" "$WORK/permission-refused.log" \
+  "has a different value set for key :test_seams_permitted during runtime compared to compile time" \
+  "ERROR! the application " "ERL_AFLAGS=-prima test_seams_permitted true"
 
 # ---------------------------------------------------------------------------
 # Case 6b: the same copy, its database built from another version of the
