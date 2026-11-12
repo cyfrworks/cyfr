@@ -34,7 +34,7 @@ service), through its programs controller (`Opus.Programs`, called in the
 running release by `bin/cyfr rpc`): a person signed in on the server
 (tests/release-boot/fixture.exs) defines a `pipe` row with a kept home
 running `cat` over `/mcp`, and makes a login entry for it
-(`Sanctum.Vault.create/2`, kind `login`, confirmed by the setup device as a
+(`Sanctum.Vault.create/2`, kind `login`, confirmed by the person's own device as a
 person confirms entering a credential). A session opened on the row in the
 entry's home round-trips a line, its process running in the entry's kept
 home under the home's uid; the person revokes the entry
@@ -270,8 +270,9 @@ def step(stack, token, body, **names):
 
 
 # A login entry for the row, as a person makes one: entering a credential
-# is a sensitive change, which the setup device confirms (the release
-# fixture's `device_confirm`), and the create is made again under it.
+# is a sensitive change, which the person's own device confirms (the
+# release fixture's `device_confirm`), and the create is made again under
+# it.
 MAKE_ENTRY = """
 params = %{name: name, kind: "login", program: program}
 created =
@@ -308,7 +309,7 @@ def cyfr_controller(image):
     try:
         stack.up_both()
         run("docker", "cp", e2e.FIXTURE, f"{stack.cyfr}:/tmp/fixture.exs")
-        signed_in = stack.fixture("person", "operator@example.com", "locus-backends-pipe")
+        signed_in = stack.fixture("person", "locus-backends-pipe")
         token = signed_in["token"]
         person = e2e.Person(stack.cyfr_base, token)
         expect(signed_in["athanor_id"], "a person is signed in on cyfr, in an athanor of their own", signed_in)

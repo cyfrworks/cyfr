@@ -231,6 +231,10 @@ class CyfrStack(Stack):
         # The deployment file `cyfr init` writes, minted for this run: cyfr
         # reads it (env_file), and compose hands the backends key to
         # locus-backends from it as well as from the Stack's environment.
+        # No registry, and a directory this deployment's egress refuses
+        # (loopback, which no private egress target lists), so nothing of
+        # the run reaches cyfr.run: the fixture's people are cached here
+        # alone and have no name (tests/release-boot/fixture.exs `person`).
         with open(os.path.join(self.project_dir, ".env"), "w", encoding="utf-8") as handle:
             handle.write("\n".join([
                 "CYFR_ACCESS=local",
@@ -241,6 +245,8 @@ class CyfrStack(Stack):
                 "CYFR_LOCUS_BUILDS_KEY=",
                 "CYFR_CORS_ALLOWED_ORIGINS=",
                 "CYFR_AUTO_MIGRATE=on",
+                "CYFR_REGISTRY_URL=none",
+                "CYFR_DIRECTORY_URL=http://127.0.0.1:9",
                 "",
             ]))
         self.cyfr = None
@@ -348,7 +354,7 @@ def cyfr_controller(image):
     try:
         stack.up_both()
         run("docker", "cp", FIXTURE, f"{stack.cyfr}:/tmp/fixture.exs")
-        signed_in = stack.fixture("person", "operator@example.com", "locus-backends-e2e")
+        signed_in = stack.fixture("person", "locus-backends-e2e")
         person = Person(stack.cyfr_base, signed_in["token"])
         expect(signed_in["athanor_id"], "a person is signed in on cyfr, in an athanor of their own", signed_in)
 

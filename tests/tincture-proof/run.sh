@@ -64,7 +64,7 @@ step "starting the release on a fresh SQLite cell, as https://cyfr.test"
 server_start "$CELL"
 
 step "publishing proof-game, private, through the publish check, and granting it"
-person="$(server_fixture "$CELL" person operator@example.com tincture-proof)"
+person="$(server_fixture "$CELL" person tincture-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 segment="$(field "$person" segment)"
 token="$(field "$person" token)"

@@ -48,26 +48,17 @@
 #       platform administrator (`door.allow` of `*` through the gate, under
 #       the session), so a second person can sign in.
 #
-#   share OWNER_USER_ID DESTINATION_JSON
-#       Seeds the owner's key and its share, the one thing this proof seeds
-#       for its share step: an attach-only `api_key` entry of the provider
-#       `grant.test` in the owner's athanor, holding the one field `TOKEN`
-#       and bound to DESTINATION_JSON, sealed and stored as
-#       `Sanctum.Vault.create/2` stores one (`Sanctum.Vault.Payload`, the
-#       vault entry's AAD, `Sanctum.Cipher`, `Arca.VaultStorage.put/3`), and
-#       shared with everyone with no cap by the store (`Arca.Shares.create/3`)
-#       under a `verify:` that stands in for the owner's confirmation. The
-#       product's door, `share/create` (`Sanctum.Shares.create/2`), asks
-#       the confirmation `credential_sharing` and spends it in that
-#       `verify:`; the owner here cannot prove one: a person the release
-#       fixture's open admission makes pairs no device and records no
-#       passkey, so no paired client stands for her account's key, and
-#       `Arca.PendingConfirmations.confirm/3` refuses her proof `:revoked`.
-#       Making a key and a share through that door, under the confirmations
-#       a passkey proves, is the share proof's (`tests/share-proof/`); here
-#       it is the recipient's grant that is proven. The key is random, made
-#       here, and never leaves this function. Answers the entry's and the
-#       share's ids.
+#   share OWNER_SESSION_TOKEN DESTINATION_JSON
+#       The owner's key and its share, made as she makes them, under her
+#       session: an attach-only `api_key` entry of the provider
+#       `grant.test` holding the one field `TOKEN` and bound to
+#       DESTINATION_JSON (`vault.create`), then shared with everyone with
+#       no cap (`share.create`), each a sensitive change her own device
+#       confirms (the release fixture's `confirmed`), once the home refused
+#       the two wrong answers given first: the other person's device's, and
+#       one over a changed record. The key is random, made here, and never
+#       leaves this function. Answers the entry's and the share's ids and,
+#       for each change, the two refusals.
 #
 #   requested DESTINATION_JSON
 #       What the owner's request implies the entry stores: the
@@ -298,37 +289,40 @@ fn args ->
         {:error, reason} -> answer.(%{door: nil, refusal: tag.(reason)})
       end
 
-    ["share", owner_id, destination] ->
-      ctx = person_ctx.(owner_id)
-      actor = Sanctum.Context.actor(ctx)
-      {binding, digest} = requested.(destination)
+    ["share", owner_token, destination] ->
+      {release, _binding} = Code.eval_file(Path.expand("../release-boot/fixture.exs", __DIR__))
+
+      # Each change's confirmation met first by the two wrong answers, and
+      # their refusals kept.
+      confirmed = fn tool, arguments ->
+        "FIXTURE=" <> line =
+          release.(["confirmed", owner_token, tool, Jason.encode!(arguments), "refused"])
+
+        case Jason.decode!(line) do
+          %{"ok" => result, "refused" => refused} -> {result, refused}
+          unconfirmed -> raise "#{tool} was refused: #{inspect(unconfirmed)}"
+        end
+      end
+
       key = "gp-" <> Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
-      {:ok, json} = Sanctum.Vault.Payload.encode_material(%{field => key}, nil)
-      id = Prima.UUID7.generate_id("vlt")
-      aad = Sanctum.CipherAAD.vault_entry(actor.athanor_id, id, provider)
-      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
-      {:ok, entry} =
-        Arca.VaultStorage.put(
-          actor,
-          Map.merge(binding, %{
-            id: id,
-            name: "Probe feed",
-            kind: "api_key",
-            status: "active",
-            sealed_payload: sealed,
-            binding_digest: digest
-          })
-        )
+      {%{"entry" => %{"id" => entry_id}}, entry_refused} =
+        confirmed.("vault/create", %{
+          "name" => "Probe feed",
+          "kind" => "api_key",
+          "fields" => %{field => key},
+          "provider_hint" => provider,
+          "destination" => Jason.decode!(destination)
+        })
 
-      # The owner's confirmation, which she cannot prove here (the header):
-      # a check that admits, standing in for `Sanctum.Shares.create/2`'s.
-      {:ok, share} =
-        Arca.Shares.create(actor, %{entry_id: entry.id, audience: "everyone"},
-          verify: fn -> :ok end
-        )
+      {%{"share" => %{"id" => share_id}}, share_refused} =
+        confirmed.("share/create", %{"entry_id" => entry_id, "audience" => "everyone"})
 
-      answer.(%{entry_id: entry.id, share_id: share.id})
+      answer.(%{
+        entry_id: entry_id,
+        share_id: share_id,
+        refused: %{entry: entry_refused, share: share_refused}
+      })
 
     ["requested", destination] ->
       {binding, digest} = requested.(destination)

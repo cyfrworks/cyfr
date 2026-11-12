@@ -26,10 +26,15 @@
 #       the cached one within `identity_freshness_seconds`, else read again;
 #       `{head}`, or `{refused}` (`identity_stale`, `identity_gone`).
 #
-#   tombstone IDENTIFIER
-#       The operator's tombstone at the directory this CYFR serves
-#       (`Sanctum.Directory.tombstone/1`, the path the operation
-#       `directory.tombstone` takes): `{tombstoned}` or `{refused}`.
+#   tombstone IDENTIFIER SESSION_TOKEN
+#       The operator's tombstone at the directory this CYFR serves, as its
+#       platform administrator's session asks for it: the operation
+#       `directory.tombstone` through the gate, which asks for the
+#       administrator's fresh confirmation, given by the device the
+#       release fixture paired with them (tests/release-boot/fixture.exs,
+#       its `device_confirm`), and the operation asked again under that
+#       confirmation. `{tombstoned}`, or `{refused}` with whatever answered
+#       otherwise, a first call that asked for no confirmation among it.
 
 fn args ->
   import Ecto.Query, only: [from: 2]
@@ -105,10 +110,21 @@ fn args ->
     ["fresh", identifier] ->
       identifier |> Sanctum.IdentityFreshness.fresh?() |> head_answer.() |> answer.()
 
-    ["tombstone", identifier] ->
-      case Sanctum.Directory.tombstone(identifier) do
-        :ok -> answer.(%{tombstoned: identifier})
-        {:error, reason} -> answer.(%{refused: inspect(reason)})
+    ["tombstone", identifier, token] ->
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      tombstone = %{"action" => "tombstone", "identifier" => identifier}
+      call = fn ctx -> Sanctum.Gate.call_external("directory", ctx, tombstone) end
+
+      with {:error, {:confirmation_required, %{id: id}}} <- call.(ctx),
+           {release_fixture, _binding} =
+             Code.eval_file(Path.expand("../release-boot/fixture.exs", __DIR__)),
+           "FIXTURE=" <> confirmed =
+             release_fixture.(["device_confirm", Prima.Confirmation.ref(id)]),
+           %{"ok" => %{"state" => "confirmed"}} <- Jason.decode!(confirmed),
+           {:ok, %{gone: true}} <- call.(%{ctx | confirmation_id: id}) do
+        answer.(%{tombstoned: identifier})
+      else
+        other -> answer.(%{refused: inspect(other)})
       end
   end
 end

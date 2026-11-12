@@ -103,14 +103,24 @@
 #       A thread of the person's, made through the `thread` operation's
 #       `create` as a console makes one, holding no message.
 #
-#   announce SESSION_TOKEN APP THREAD_ID NAME
+#   say SESSION_TOKEN THREAD_ID TEXT
+#       The person's own line TEXT on THREAD_ID, the row a person's send
+#       leaves (`Aqua.Runner`'s `message/4`: the person as author, sent by
+#       `Aqua.Runner.Admission.person()`, a text of what she typed), written
+#       and shown to the thread's panes through `Aqua.Tape.append/3`. A send
+#       writes that row through `Aqua.Tape.accept/3`, which opens its turn
+#       in the same write; this writes the row alone, so no turn exists.
+#       Answers the row's id.
+#
+#   announce SESSION_TOKEN APP THREAD_ID NAME MESSAGE_ID
 #       The resolution a launch of APP naming the account NAME takes
 #       (`Sanctum.Consent.Accounts.resolve/4`); when it is the one a turn
 #       ends on, `connection_not_granted`, the event the loop then announces
 #       on the turn's thread (`Aqua.Loop.end_for_account/2`), announced on
 #       THREAD_ID through `Aqua.Tape.announce/4`: `:consent_required` with
 #       the app, the person, the account and its need (none, the app
-#       declaring one) and no message. No turn exists.
+#       declaring one) and MESSAGE_ID, the message of the turn that asked
+#       (`say`). No turn exists.
 #
 #   account SESSION_TOKEN APP NAME
 #       `Sanctum.Consent.Accounts.resolve/4` for NAME: the entry and the
@@ -631,7 +641,19 @@ fn args ->
       {:ok, thread} = PrismWeb.Ops.call_tool(ctx, "thread", %{"action" => "create"})
       answer.(%{thread_id: Map.get(thread, :id) || Map.get(thread, "id")})
 
-    ["announce", token, app, thread_id, name] ->
+    ["say", token, thread_id, text] ->
+      ctx = person_ctx.(token)
+
+      {:ok, row} =
+        Aqua.Tape.append(ctx, thread_id, %{
+          author: ctx.user_id,
+          sent_by: Aqua.Runner.Admission.person(),
+          content: text
+        })
+
+      answer.(%{message_id: row.id})
+
+    ["announce", token, app, thread_id, name, message_id] ->
       ctx = person_ctx.(token)
 
       case Sanctum.Consent.Accounts.resolve(ctx, :default, app, name) do
@@ -643,7 +665,7 @@ fn args ->
               ref: app,
               user_id: ctx.user_id,
               account: %{name: name, need: nil},
-              message_id: nil
+              message_id: message_id
             })
 
           answer.(%{resolution: "connection_not_granted", announced: true})

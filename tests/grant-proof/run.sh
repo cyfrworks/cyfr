@@ -104,7 +104,7 @@ server_start "$CELL"
 PORT_HOME="$(cell_port "$CELL")"
 
 step "one person, signed in"
-person="$(server_fixture "$CELL" person operator@example.com grant-proof)"
+person="$(server_fixture "$CELL" person grant-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 user_id="$(field "$person" user_id)"
 segment="$(field "$person" segment)"
@@ -124,6 +124,7 @@ destination() {
 }
 
 # Each step the proof asks for (harness.sh `answer_asks`).
+OWNER_TOKEN=""
 answer_ask() {
   local ask="$1" id="$2" op decisions opened owner
   op="$(asked "$ask" op)"
@@ -143,12 +144,13 @@ answer_ask() {
       # fixture's door as the first person was.
       opened="$(grant_fixture door "$token")"
       printf '%s' "$opened" | grep -q '"door":"\*"' || fail "the door did not open to newcomers: $opened"
-      owner="$(server_fixture "$CELL" person owner@example.com grant-proof-owner Olive)"
+      owner="$(server_fixture "$CELL" person grant-proof-owner)"
       [ -n "$owner" ] || fail "the fixture signed the owner in"
+      OWNER_TOKEN="$(field "$owner" token)"
       ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$owner")"
       ;;
     share)
-      ANSWER="$(grant_fixture share "$(asked "$ask" owner)" "$(destination "$ask")")"
+      ANSWER="$(grant_fixture share "$OWNER_TOKEN" "$(destination "$ask")")"
       ;;
     me)
       ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$person")"

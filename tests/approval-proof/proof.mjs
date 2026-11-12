@@ -30,9 +30,10 @@
 //                       and, after a real wait past its instant, refuses
 //                       it; the loaded edge grants GET alone
 //   named_prompt        the grant prompt a launch naming an unbound account
-//                       opens, raised by the event a turn would announce,
-//                       with no turn: the account is bound and the new
-//                       revision holds it
+//                       opens, raised by the event the turn of her line
+//                       would announce, with no turn: the account is bound,
+//                       the new revision holds it, and the pane offers her
+//                       line again as a new turn
 //   revocation          the entry the app's own calls use is revoked on the
 //                       Vault page, and its next use is refused
 //   destination_match   an entry made on the Vault page with no label, for
@@ -168,6 +169,14 @@ const TYPED_ENTRIES = [...ENTRIES, XAI];
 const KEYS = TYPED_ENTRIES.map((e) => e.key);
 // The account a launch names that the app's own calls do not bind yet.
 const ACCOUNT = "Personal";
+// Her line whose turn names that account, and what the thread pane shows
+// once the account is granted: that line offered again as a new turn, or,
+// with no line of that turn left to offer, that the turn ended
+// (`PrismWeb.ThreadPaneLive`'s `after_grant/1`).
+const SENT = "Draft the weekly summary from my Personal account.";
+const RETRY_NOTE = "The account is granted — send that message again, as a new turn?";
+const RETRY_FLASH = "Granted — re-send to continue.";
+const ENDED = "Granted. The turn that asked has ended — send your message again to run it.";
 
 // Each binding's key, `<source node>|<edge key>|<slot>`: the app's own
 // calls on its ingress, a dependency's edge by the dependency's reference.
@@ -1257,7 +1266,16 @@ async function main() {
       }, thread.thread_id).catch(() => null);
       throw new Error(`${error.message} The page showed ${JSON.stringify(shown)}`, { cause: error });
     });
-    const announced = await ask({ op: "announce", thread_id: thread.thread_id, name: ACCOUNT });
+    // Her line on the thread, the row her send leaves, shown in the pane;
+    // the turn it would open ends on the account it names, and the
+    // announcement carries that line's id as the message of the turn that
+    // asked.
+    const said = await ask({ op: "say", thread_id: thread.thread_id, text: SENT });
+    const lineShown = !!said.message_id && await page.locator(`[id="aqua-panel-pane-m-${said.message_id}"]`)
+      .getByText(SENT, { exact: true }).waitFor({ timeout: 30_000 }).then(() => true).catch(() => false);
+    const announced = await ask({
+      op: "announce", thread_id: thread.thread_id, name: ACCOUNT, message_id: said.message_id || "",
+    });
     await granting(page);
     const named = await sheet(page);
     const ownBlock = ownNeed(named, "openai");
@@ -1295,7 +1313,23 @@ async function main() {
       removed: namedReady.removed,
     };
     const committed4 = await confirmGrant(page);
-    const retold = await told(page, "Granted. The turn that asked has ended — send your message again to run it.");
+    // The pane offers her line again: the bar's sentence and its two
+    // controls, the flash beside it, and not the ended-turn sentence. The
+    // offer is left as it is, so no turn starts.
+    const restart = '#aqua-panel-pane button[phx-click="restart_send"]';
+    const bar = await page.waitForSelector(restart, { timeout: 30_000 })
+      .then(() => page.evaluate((selector) => {
+        const row = document.querySelector(selector).parentElement;
+        return {
+          note: row.querySelector("span").textContent.trim(),
+          controls: Array.from(row.querySelectorAll("button"), (b) => b.textContent.trim()),
+        };
+      }, restart)).catch(() => null);
+    const retold = bar && {
+      ...bar,
+      flash: await told(page, RETRY_FLASH),
+      ended_shown: (await page.getByText(ENDED).count()) > 0,
+    };
     const admitted4 = await ask({ op: "admit" });
     const decisions4 = {
       bindings: [
@@ -1325,11 +1359,11 @@ async function main() {
     const namedState = await stateHolds();
     const chatHtml = await page.content();
     record.named_prompt = {
-      thread, announced, opened_on: openedOn, shown: namedShown, committed: committed4, retold,
-      admitted: admitted4, resolved, state: namedState.compared,
+      thread, said, line_shown: lineShown, announced, opened_on: openedOn, shown: namedShown, committed: committed4,
+      retold, admitted: admitted4, resolved, state: namedState.compared,
     };
     if (!row("named_prompt",
-      same(announced, { resolution: "connection_not_granted", announced: true }) &&
+      lineShown && same(announced, { resolution: "connection_not_granted", announced: true }) &&
         // A need's entries are offered in the order the vault lists them,
         // by name (`Arca.VaultStorage.list/1`).
         same(openedOn.account, {
@@ -1342,13 +1376,17 @@ async function main() {
           [KEY.grok]: STANDING,
         })) &&
         same(namedShown.openai_egress, GET_ONLY_SHOWN) &&
-        namedShown.removed.length === 0 && committed4 && retold && same(admitted4, admission(admitted4, made4)) &&
+        namedShown.removed.length === 0 && committed4 &&
+        same(retold, { note: RETRY_NOTE, controls: ["Re-send", "Dismiss"], flash: true, ended_shown: false }) &&
+        same(admitted4, admission(admitted4, made4)) &&
         same(resolved, { resolved: true, entry_id: ids[HOME.name], name: ACCOUNT }) && !holdsKey(chatHtml) &&
         namedState.held,
-      `the prompt a launch naming "${ACCOUNT}" opens, raised by the event a turn would announce and with no turn, ` +
-        "opens on the head's GET only and binds OpenAI Home under that name; the new revision holds it, still GET " +
-        "only, the pane says to send the message again, and no turn or execution exists; the whole state is the model",
-      { announced, opened_on: openedOn, shown: namedShown, retold, resolved, state: namedState.compared })) return;
+      `the prompt a launch naming "${ACCOUNT}" opens, raised by the event a turn of her line would announce and ` +
+        "with no turn, opens on the head's GET only and binds OpenAI Home under that name; the new revision holds " +
+        "it, still GET only, the pane offers her line again as a new turn, and no turn or execution exists; the " +
+        "whole state is the model",
+      { line_shown: lineShown, announced, opened_on: openedOn, shown: namedShown, retold, resolved,
+        state: namedState.compared })) return;
 
     // -----------------------------------------------------------------------
     // revocation

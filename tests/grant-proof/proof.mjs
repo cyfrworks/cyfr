@@ -80,7 +80,16 @@ const REVOKED = ":no_profile";
 // owner's display name and the URLs the tincture's requests name.
 const FEED = { scheme: "https", hosts: [KEPT], methods: ["GET"], paths: ["/feed"] };
 const FEED_HEADER = "x-feed-token";
-const OWNER_NAME = "Olive";
+const OWNER_NAME = "@grant-proof-owner";
+// The home's refusal of an answer that is not the owner's own device's over
+// the record it was asked for (Sanctum.SignIn), as the fixture answers it.
+const ANSWER_REFUSED = { reason: "answer_refused", message: "That answer does not confirm this change here: confirm it again" };
+// The two wrong answers each of the owner's changes meets first: the other
+// person's device's, and one over a changed record.
+const REFUSED = { other: ANSWER_REFUSED, changed: ANSWER_REFUSED };
+// JSON with every object's keys in one order, so two values compare whole.
+const sorted = (value) => JSON.stringify(value, (_key, v) =>
+  v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v);
 const FEED_URL = `https://${KEPT}/feed`;
 const OFF_FEED_URL = `https://${KEPT}/elsewhere`;
 const { homes } = readHomes(homesFile);
@@ -440,8 +449,8 @@ async function main() {
     // -----------------------------------------------------------------------
     // share
     // -----------------------------------------------------------------------
-    // A second person, Olive, signs in and shares a key for the tincture's
-    // key need with everyone (fixture.exs `share`, the step's one seed).
+    // A second person, @grant-proof-owner, signs in and shares a key for
+    // the tincture's key need with everyone (fixture.exs `share`).
     // Nothing of the person's head changes until they grant it.
     const clock = await ask({ op: "clock" });
     const me = await ask({ op: "me" });
@@ -505,6 +514,7 @@ async function main() {
     };
     const sharePreviewHeld = (answer) => previewHeld(answer, sharePreview);
     const held = {
+      refused: sorted(seeded.refused) === sorted({ entry: REFUSED, share: REFUSED }),
       before: sameHead(unshared, { admitted: true, consent_id: flowHead.consent_id }) &&
         rowsHeld("shares", beforeGrant.shares, [shareRow], windowOf(beforeGrant)) &&
         rowsHeld("share_usage", beforeGrant.usage, [], windowOf(beforeGrant)),
@@ -535,8 +545,8 @@ async function main() {
       head: shareHead, granted: granted4, carried, off_destination: offFeed, used, admitted: shareAdmitted, held,
     };
     if (!row("share", Object.values(held).every(Boolean),
-      "a key a second person shares with everyone is offered on the grant prompt as shared by its owner and picked for the tincture's key need; the head is the flows head one revision on under the digest the command line previews for the same decisions; its binding row, the share and its use rows are held whole, every field exact, derived or bound; the tincture's attached request to the entry's destination carries the owner's key in the rule's header, one off it is refused destination_mismatch, one use is counted for the person and the day, and the run is admitted under the new head",
-      { held, offered: offeredSheet, credential: picked && picked.credential.text, head: shareHead,
+      "a key a second person enters and shares with everyone, each change refused first for another person's device's answer and for one over a changed record, then confirmed by her own device, is offered on the grant prompt as shared by its owner and picked for the tincture's key need; the head is the flows head one revision on under the digest the command line previews for the same decisions; its binding row, the share and its use rows are held whole, every field exact, derived or bound; the tincture's attached request to the entry's destination carries the owner's key in the rule's header, one off it is refused destination_mismatch, one use is counted for the person and the day, and the run is admitted under the new head",
+      { held, refused: seeded.refused, offered: offeredSheet, credential: picked && picked.credential.text, head: shareHead,
         digest: previewShown(shareShown), bindings: granted4.bindings, shares: granted4.shares, usage: used.usage,
         carried, off_destination: offFeed, admitted: shareAdmitted })) return;
 

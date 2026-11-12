@@ -56,7 +56,12 @@ const failures = [];
 const bodyOf = (r) => {
   try { return JSON.parse(r.body); } catch (_error) { return null; }
 };
-const refusedAtAdmission = (r) => r.ok === false && r.stage === "admission";
+// A refusal made at admission, read as the SDK rejects it: the wire's
+// class as `code`, its sentence as `message` (Prima.TinctureWire). The
+// three undeclared refusals share the class `forbidden` and differ on the
+// wire by their sentence alone (Emissary.Web.FrameAdmission.undeclared/1).
+const refusedAtAdmission = (code, message) => (r) =>
+  r.ok === false && r.stage === "admission" && r.code === code && r.message === message;
 
 const EXPECTED = [
   { name: "module_script", column: "allowed", holds: (r) => r.ran === true,
@@ -92,11 +97,14 @@ const EXPECTED = [
   { name: "asset_credential_on_data_route", column: "refused", privateOnly: true,
     holds: (r) => r.answered === true && r.status >= 400 && (bodyOf(r) || {}).ok === false,
     what: "the asset credential opens no data route" },
-  { name: "undeclared_invoke", column: "refused", holds: refusedAtAdmission,
+  { name: "undeclared_invoke", column: "refused",
+    holds: refusedAtAdmission("forbidden", "This tincture does not declare that component."),
     what: "a component the declaration does not name is refused at admission" },
-  { name: "undeclared_action", column: "refused", holds: refusedAtAdmission,
+  { name: "undeclared_action", column: "refused",
+    holds: refusedAtAdmission("forbidden", "This tincture does not declare that action."),
     what: "a system action the declaration does not name is refused at admission" },
-  { name: "undeclared_stream", column: "refused", holds: refusedAtAdmission,
+  { name: "undeclared_stream", column: "refused",
+    holds: refusedAtAdmission("forbidden", "This tincture does not declare that stream."),
     what: "a stream the declaration does not name is refused at admission" },
   { name: "fullscreen_undeclared", column: "refused", holds: (r) => r.entered === false,
     what: "fullscreen without the declared capability is refused" },

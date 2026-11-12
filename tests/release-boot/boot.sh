@@ -1030,7 +1030,7 @@ server_start "$ORIGIN"
 # copy's boot must match it rather than record one.
 grep -q "Recorded the crypto keyring fingerprint" "$ORIGIN/boot.log" ||
   fail "the cell's first boot did not record its keyring fingerprint"
-person="$(server_fixture "$ORIGIN" person operator@example.com release-boot-backup)"
+person="$(server_fixture "$ORIGIN" person release-boot-backup)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 user_id="$(field "$person" user_id)"
 token="$(field "$person" token)"
@@ -1311,10 +1311,10 @@ reserve_holder() {
 
 # What the reserve case asks of the running cell, evaluated in it by
 # `bin/cyfr rpc` (`cell_fixture`): every change goes through the gate,
-# a fresh confirmation is given by the setup device the release fixture
-# paired with the person (its `device_confirm`, which alone reads that
-# device's seed from this cell and answers the CYFR's `confirm` request
-# with its key), and each command answers one `RESERVE=` line.
+# a fresh confirmation is given by the device the release fixture's
+# hello paired with the person (its `device_confirm`, which alone reads
+# that device's seed from this cell and answers the CYFR's `confirm`
+# request with its key), and each command answers one `RESERVE=` line.
 RESERVE_FIXTURE="$WORK/reserve.exs"
 cat >"$RESERVE_FIXTURE" <<'ELIXIR'
 fn args ->
@@ -1325,7 +1325,7 @@ fn args ->
 
   case args do
     ["device", token] ->
-      # The device the person's setup admission paired with them.
+      # The device the person's hello paired with them.
       {:ok, ctx} = Sanctum.Caller.establish({:session, token})
 
       [client_id] =
@@ -1468,7 +1468,7 @@ reserve_start
   fail "the cell did not preallocate its reserve file of $RESERVE_BYTES bytes"
 echo "booted ok, holding a reserve file of $RESERVE_BYTES bytes"
 
-reserve_person="$(server_fixture "$RESERVE" person operator@example.com release-boot-reserve)"
+reserve_person="$(server_fixture "$RESERVE" person release-boot-reserve)"
 [ -n "$reserve_person" ] || fail "the fixture signed nobody in"
 reserve_token="$(field "$reserve_person" token)"
 LOG_SECRETS+=("$reserve_token")

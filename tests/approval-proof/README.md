@@ -54,12 +54,17 @@ a run, sends no request and runs no turn:
   a launch names an account its app does not bind. Only a turn ends that
   way, so the fixture stands in for the loop. It first reads the real
   resolution of the account (`Sanctum.Consent.Accounts.resolve/4`), which
-  must answer `connection_not_granted`, the answer a turn ends on. It then
-  announces, on a thread of hers (made by the `thread` operation's `create`,
-  holding no message), exactly what `Aqua.Loop.end_for_account/2` announces:
-  `:consent_required` with the app, her id, the account and its need (none,
-  since the app declares one), and no message (`Aqua.Tape.announce/4`). No
-  turn exists, before or after, and the state shows none.
+  must answer `connection_not_granted`, the answer a turn ends on. On a
+  thread of hers (made by the `thread` operation's `create`), it writes her
+  line, the row a send of hers leaves (her id as author, sent by the person,
+  the text), through `Aqua.Tape.append/3`, which shows it in the pane as a
+  send's row is shown; a send writes that row through `Aqua.Tape.accept/3`
+  with the turn it opens, and the fixture writes the row alone. It then
+  announces on the thread exactly what `Aqua.Loop.end_for_account/2`
+  announces: `:consent_required` with the app, her id, the account and its
+  need (none, since the app declares one), and the id of that line as the
+  message of the turn that asked (`Aqua.Tape.announce/4`). No turn exists,
+  before or after, and the state shows none.
 
 The actual requests, turns and scheduled or webhook execution are the
 named suite cases under [Shown elsewhere](#shown-elsewhere).
@@ -135,8 +140,9 @@ the whole state matches as well.
 Two things are outside the comparison, each because it carries no
 authority:
 
-- **The thread** the announcement goes to. The proof sends nothing on it,
-  and no turn of it exists, which the state's turns and executions show.
+- **The thread** the announcement goes to. It holds her one line, which
+  opens no turn, and no turn of it exists, which the state's turns and
+  executions show.
 - **The component rows** of the tincture and the shipped catalysts. They
   are the installed request the derivations read, never a row the
   comparison checks.
@@ -257,6 +263,13 @@ expects:
   account, root, method and URL) beside its decision, exact. An answer
   moved to another request, or two answers exchanged, fails.
 - **The announcement:** the resolution and that it was announced, exact.
+- **The offer after the grant:** the pane's bar says "The account is
+  granted — send that message again, as a new turn?" with the controls
+  "Re-send" and "Dismiss", in that order, exact; the flash says "Granted —
+  re-send to continue."; the ended-turn sentence, "Granted. The turn that
+  asked has ended — send your message again to run it.", which the pane
+  shows when the turn left no line to offer, is not shown. The offer is
+  left as it is, so no turn starts.
 - **The account:** the entry the account resolves to and its stored name,
   exact.
 
@@ -274,7 +287,7 @@ every commit.
 | `account_choices` | in a grant she makes "OpenAI Work" through "Connect your openai.com account" on the app's own need and "Anthropic" through Connect on the Claude dependency's, each key typed in the credential prompt and confirmed with her passkey; on the Vault page she makes "OpenAI Home" through the form, kind "API key" and label "openai.com", confirmed the same way; reopened, the grant presses OpenAI Work, the openai.com default, on both OpenAI needs with "Change" beside each, and the one Anthropic entry with no "Change" and no picker; she changes the OpenAI dependency's edge to OpenAI Home; the preview names OpenAI Work for the app's own calls, OpenAI Home for the OpenAI edge and Anthropic for the Claude edge, each until revoked, and removes nothing; the whole state is the three entries, each the one her request implies and holding what she typed, the first of each provider its default, and revision 2 with its three binding rows |
 | `commit_bindings` | the re-grant opens on the head's bindings, each until revoked; she makes the OpenAI edge "Once (one run)" and the Claude edge "5 minutes", whose until the preview shows five minutes from her click, and presses "GET only" on the OpenAI catalyst's network row, which then gives GET and not POST; revision 3 holds the three bindings standing, once and until that instant, its blob the narrowed grant |
 | `lifetime_decisions` | the use path admits the app's own calls, admits the once binding for root A and again for root A, refuses it for root B (`grant_expired`), and admits the five-minute binding; the once row is then consumed by root A and each entry used; after a real wait, bounded at 330 s, until the database's time is past the until, the five-minute binding is refused (`grant_expired`) and the standing one still admitted; the loaded OpenAI edge grants GET alone; nothing is sent |
-| `named_prompt` | on a thread of hers, opened in AQUA's panel on the desktop, the fixture announces the setup a launch naming the account "Personal" ends on; the grant prompt opens on the app's own calls with a "Personal" row of that fixed name, both OpenAI entries offered and none pressed; the binding whose until passed opens with no lifetime pressed, the used once binding stays once with "Grant once again" not pressed, and the OpenAI catalyst's network row opens on the head's narrowing, GET given and POST not, "GET only" pressed; she binds OpenAI Home as "Personal" and grants Anthropic until revoked, and narrows nothing herself; the pane then says "Granted. The turn that asked has ended — send your message again to run it."; revision 4 holds the default, the account beside it, the once binding still consumed by root A, and Anthropic until revoked, its blob still GET only on the OpenAI edge; "Personal" now resolves to OpenAI Home; no turn and no execution exists |
+| `named_prompt` | on a thread of hers, opened in AQUA's panel on the desktop, her line "Draft the weekly summary from my Personal account." stands in the pane as a send of hers leaves it, and the fixture announces the setup a launch naming the account "Personal" ends on, for the turn of that line; the grant prompt opens on the app's own calls with a "Personal" row of that fixed name, both OpenAI entries offered and none pressed; the binding whose until passed opens with no lifetime pressed, the used once binding stays once with "Grant once again" not pressed, and the OpenAI catalyst's network row opens on the head's narrowing, GET given and POST not, "GET only" pressed; she binds OpenAI Home as "Personal" and grants Anthropic until revoked, and narrows nothing herself; the pane then offers her line again as a new turn: "The account is granted — send that message again, as a new turn?" with "Re-send" and "Dismiss", the flash "Granted — re-send to continue.", and not "Granted. The turn that asked has ended — send your message again to run it."; revision 4 holds the default, the account beside it, the once binding still consumed by root A, and Anthropic until revoked, its blob still GET only on the OpenAI edge; "Personal" now resolves to OpenAI Home; no turn and no execution exists |
 | `revocation` | she revokes OpenAI Work on the Vault page, which says one profile loses access at its next run; the loader still admits the root, whole; the next use of the app's own calls is refused (`entry_unavailable`, revoked) and the "Personal" account beside it is still admitted; the whole state holds OpenAI Work revoked |
 | `destination_match` | on the Vault page she makes "My xAI key", kind "API key", no label, the one field `API key=<key>`, destination `api.x.ai`, confirmed with her passkey; the whole state adds it, with no default; the seeded Grok catalyst's one profile is the owner's default, its head the bootstrap's revision 1 (`granted_via` `bootstrap`) binding nothing; its grant, opened from its Components row, is titled "Update this grant (consent rev 1)" on the grant sheet, offers My xAI key alone, pressed, reads "You already have an entry for api.x.ai: My xAI key" and "GROK_API_KEY comes from API key", asks no map question, and previews one credential row binding it until revoked with "Fields: GROK_API_KEY from API key", removing nothing; she grants it; the profile's head is then revision 2, granted interactively, its one binding row the entry, standing, at the digest her request implies, and its ingress vault the entry over that destination, by Grok's attach rule, with the projection `{"fields": {"GROK_API_KEY": "API key"}, "scopes": []}`; the whole state is the model |
 
@@ -288,6 +301,7 @@ in the tree.
 |---|---|---|---|
 | Real own/provided attached requests reach only the admitted destination | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs` | "own and provided connections reach the pinned upstream without entering the runner"; "destination and egress refusals contact no upstream" | `Opus.Host.AttachedFetch`, `Sanctum.Attach` |
 | Named account reaches an actually executed child | `apps/cyfr/test/integration/runtime/formula_handler_test.exs` | "a real formula runs two named-account children with distinct upstream credentials" | `Sanctum.Attach` |
+| With no line of the turn that asked to offer, the pane says the turn ended | `apps/cyfr/test/prism_web/live/thread_pane_live_test.exs` | "with no message of the turn that asked to offer, the pane cuts nothing and says so" | `PrismWeb.ThreadPaneLive` |
 | A new grant cannot widen the live turn | `apps/cyfr/test/aqua/loop/loop_test.exs` | "a named-account grant leaves the running turn pinned and only a new turn uses it" | `Aqua.Loop` |
 | Once, expiry, scheduled/webhook fire and revocation at use | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs`; `apps/cyfr/test/opus/schedules/scheduler_test.exs`; `apps/cyfr/test/integration/webhook_flow_test.exs` | "once expiry and revocation refuse subsequent roots before an upstream request"; "a scheduled attached request succeeds before expiry and is refused after it"; "a webhook attached request succeeds before expiry and is refused after it" | `Sanctum.Attach` |
 | External definitions cannot redirect material; disclosed stdio is explicit | `apps/cyfr/test/emissary/external/provider_test.exs`; `apps/cyfr/test/emissary/external/backends_test.exs` | "an external definition cannot send an entry outside its destination"; "stdio refuses an attach-only entry before starting a backend" | `Emissary.External.Provider`, `Emissary.External.Backends` |

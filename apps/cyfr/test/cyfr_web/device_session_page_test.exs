@@ -50,10 +50,16 @@ defmodule CyfrWeb.DeviceSessionPageTest do
     token: token,
     athanor: athanor
   } do
-    ends_in!(session_id, 1_500)
-    expires_at = Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at
     conn = Plug.Test.init_test_session(conn, %{session_key() => token})
     {:ok, view, _html} = live(conn, athanor_path("/settings", athanor))
+
+    # The page mounts under the unlock's own deadline, a minute out. The
+    # session is brought to an end 1.5 s from now once the page stands, and
+    # the page is handed the recheck its deadline's timer sends: it reads
+    # the row's nearer deadline and arms its recheck for that.
+    ends_in!(session_id, 1_500)
+    expires_at = Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at
+    send(view.pid, CyfrWeb.ContextGuard.recheck_message())
 
     # The page holds a recheck armed for its session's own deadline, which
     # no event or announcement need reach.

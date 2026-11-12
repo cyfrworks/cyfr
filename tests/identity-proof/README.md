@@ -13,7 +13,7 @@ secure origin:
 
 | Cell | Name | Configured |
 |---|---|---|
-| the directory | `dir.test` | `CYFR_DIRECTORY_SERVE=writer`: the account's log, the names beside it and the account pages, whose passkeys are bound to `dir.test` |
+| the directory | `dir.test` | `CYFR_DIRECTORY_SERVE=writer`: the account's log, the names beside it and the account pages, whose passkeys are bound to `dir.test`; its first person, the platform administrator who tombstones the account, made by the release fixture's `person` with a device its hello pairs, their own account at the cell's directory stand-in |
 | A | `a.test` | a CYFR that reads accounts at `CYFR_DIRECTORY_URL=https://dir.test` and names at `CYFR_REGISTRY_URL=dir.test`; a `CYFR_SETUP_TOKEN` of the run's own, under which the person sets it up; `CYFR_IDENTITY_FRESHNESS_SECONDS` short (20, `IDENTITY_PROOF_FRESHNESS`) |
 
 The account pages live only at a directory that serves them over HTTPS,
@@ -83,7 +83,7 @@ proof stops at the first row a later one rests on.
 | `remove_key` | the phone adds a passkey with the second code and signs in at A; the laptop removes that passkey at the devices page (`remove_key`); the phone's next page at A lands on the sign-in page within A's freshness bound (plus six seconds for the page loads that ask), its paired client is revoked, and the laptop's session stands |
 | `recover` | "Replace everything" with the second code leaves the account one new code and no key (`recover`); the laptop's next page at A lands on the sign-in page within the bound; the first code no longer opens the recovery page and the laptop's passkey signs in nowhere; a passkey the new code adds on a new device signs in at A as the same person |
 | `directory_down` | with `dir.test` down, A answers the head it verified within its bound and pauses the person past it (`identity_stale`) |
-| `gone` | `dir.test`'s tombstone (`Sanctum.Directory.tombstone/1`, the path the operation `directory.tombstone` takes) answers `410 gone` for the log; the new device's next page at A lands on the sign-in page within the bound, A's cached head is marked gone and answers `identity_gone`, and the passkey's next sign-in at A is refused |
+| `gone` | `dir.test`'s tombstone, the operation `directory.tombstone` through the gate under the directory's platform administrator's session and confirmed by the device the release fixture paired with them (`tests/release-boot/fixture.exs`, `person` and `device_confirm`), answers `410 gone` for the log; the new device's next page at A lands on the sign-in page within the bound, A's cached head is marked gone and answers `identity_gone`, and the passkey's next sign-in at A is refused |
 
 Each retirement is observed by loading a page of A every two seconds from
 the moment the directory took the change, so it includes up to one page

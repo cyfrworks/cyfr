@@ -95,9 +95,9 @@ Every attempt has one column, and the proof fails when an attempt leaves it:
 | `send_beacon` | refused | a beacon to an undeclared origin is refused before it is sent |
 | `redirect_fetch` | refused | an asset fetch redirected to an undeclared origin is not followed there |
 | `asset_credential_on_data_route` | refused | the asset credential opens no data route (private only) |
-| `undeclared_invoke` | refused | a component the declaration does not name is refused at admission |
-| `undeclared_action` | refused | a system action the declaration does not name is refused at admission |
-| `undeclared_stream` | refused | a stream the declaration does not name is refused at admission |
+| `undeclared_invoke` | refused | a component the declaration does not name is refused at admission, `forbidden` with the sentence "This tincture does not declare that component." |
+| `undeclared_action` | refused | a system action the declaration does not name is refused at admission, `forbidden` with the sentence "This tincture does not declare that action." |
+| `undeclared_stream` | refused | a stream the declaration does not name is refused at admission, `forbidden` with the sentence "This tincture does not declare that stream." |
 | `fullscreen_undeclared` | refused | fullscreen without the declared capability is refused |
 | `cookie_and_storage` | refused | the frame reads no cookie and holds no storage |
 | `suspended_invoke` | refused | a call made after the shell suspended the frame is refused |

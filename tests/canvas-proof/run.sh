@@ -167,7 +167,7 @@ step "starting the release on a fresh SQLite cell, as https://cyfr.test"
 server_start "$CELL"
 
 step "the person, the proof's tinctures and the feed's source"
-person="$(server_fixture "$CELL" person operator@example.com canvas-proof)"
+person="$(server_fixture "$CELL" person canvas-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 user_id="$(field "$person" user_id)"
 segment="$(field "$person" segment)"

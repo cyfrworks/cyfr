@@ -61,7 +61,7 @@ step "starting the release on a fresh SQLite cell, as https://cyfr.test"
 server_start "$CELL"
 
 step "publishing the probe (private, and a public copy), its private neighbour and the public neighbour"
-person="$(server_fixture "$CELL" person operator@example.com containment-proof)"
+person="$(server_fixture "$CELL" person containment-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 user_id="$(field "$person" user_id)"
 segment="$(field "$person" segment)"
@@ -108,7 +108,7 @@ ungranted="$(cell_cyfr "$CELL" rpc \
   sed -n 's/^UNGRANTED=//p' | tail -1)"
 [ -n "$ungranted" ] || fail "the waiting tincture's profile was not written"
 # Another session of the same person: the client that asks for a change.
-other="$(server_fixture "$CELL" person operator@example.com containment-proof)"
+other="$(server_fixture "$CELL" person containment-proof)"
 other_token="$(field "$other" token)"
 [ -n "$other_token" ] || fail "the fixture opened no second session"
 
