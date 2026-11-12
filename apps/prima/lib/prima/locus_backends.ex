@@ -360,8 +360,7 @@ defmodule Prima.LocusBackends do
       prefix: @label,
       kind: "invoke",
       fields: @owner_fields ++ [boot: :string, ts: :integer, nonce: :string],
-      header_names: @header_names,
-      body_hash_in_header: true
+      header_names: @header_names
     },
     control: %MacEnvelope{
       prefix: @label,
@@ -373,8 +372,7 @@ defmodule Prima.LocusBackends do
         boot: :string,
         ts: :integer
       ],
-      header_names: @header_names,
-      body_hash_in_header: true
+      header_names: @header_names
     }
   }
 

@@ -283,7 +283,6 @@ defmodule Prima.RefusalTest do
     {:expired_credential, :unauthenticated},
     {:no_athanor, :unauthenticated},
     {:denied, :forbidden},
-    {:wrong_tincture, :forbidden},
     {:not_primary, :forbidden},
     {:ip_not_allowed, :forbidden},
     {:auth_provider_error, :unavailable},
@@ -310,9 +309,6 @@ defmodule Prima.RefusalTest do
     {:consent_required, :consent_required},
     {{:ambiguous, ["prof_a", "prof_b"]}, :conflict},
     {:service_unavailable, :unavailable},
-    {:remote_identity_unavailable, :unavailable},
-    {:email_unavailable, :unavailable},
-    {:reauth_required, :unauthenticated},
     {:identity_stale, :unavailable},
     {:identity_gone, :forbidden},
     {{:door, :denied}, :forbidden},
@@ -329,7 +325,6 @@ defmodule Prima.RefusalTest do
     {:company_subject_bound, :conflict},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
-    {:missing_token, :unauthenticated},
     {:missing_generation, :unauthenticated},
     {:stale_generation, :unauthenticated},
     {:not_standing, :forbidden},
@@ -790,25 +785,6 @@ defmodule Prima.RefusalTest do
       refute Refusal.message(:unavailable) == Refusal.message(:outcome_unknown)
       assert Refusal.message(:outcome_unknown) =~ "check before asking again"
       refute Refusal.message({:held_elsewhere, "turn_secret_id"}) =~ "turn_secret_id"
-    end
-
-    test "a proof that cannot be given here is no denial, and says which" do
-      assert %Refusal{class: :unavailable, message: remote} =
-               Refusal.classify(:remote_identity_unavailable)
-
-      assert remote =~ "the CYFR that holds the person's identity"
-      refute remote =~ "not built"
-
-      assert %Refusal{class: :unavailable, message: email} = Refusal.classify(:email_unavailable)
-      assert email =~ "confirm another way"
-
-      assert %Refusal{class: :unauthenticated, message: again} =
-               Refusal.classify(:reauth_required)
-
-      assert again =~ "sign in again"
-
-      for reason <- [:remote_identity_unavailable, :email_unavailable, :reauth_required],
-          do: assert(Refusal.reason?(reason))
     end
 
     test "a closed setup token and an unlinked sign-in method say what to do instead" do

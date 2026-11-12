@@ -217,8 +217,7 @@ defmodule Prima.WorkerAuth do
           member: :string,
           ts: :integer,
           nonce: :string
-        ],
-    body_hash_in_header: true
+        ]
   }
 
   # A header's longest spelling: its version and kind, then each field as
@@ -237,14 +236,12 @@ defmodule Prima.WorkerAuth do
   @request %MacEnvelope{
     prefix: Prima.MacEnvelope.label(:runtime),
     kind: "request",
-    fields: @dispatch_fields,
-    body_hash_in_header: true
+    fields: @dispatch_fields
   }
   @report %MacEnvelope{
     prefix: Prima.MacEnvelope.label(:runtime),
     kind: "report",
-    fields: @dispatch_fields,
-    body_hash_in_header: true
+    fields: @dispatch_fields
   }
 
   @sealed_directions %{

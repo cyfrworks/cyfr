@@ -17,14 +17,13 @@ defmodule Prima.MacEnvelope do
       values in the envelope's order, then the hex SHA-256 of the raw body,
       one per line.
     * **A header** (`header/4`) carries the signature as
-      `v1 kind=<kind> name=value … mac=<mac>`. `parse/2` reads it back,
-      refusing another version token (`v2`) as `unknown_version` before
-      anything else, and `verify/5` checks its MAC in constant time. An
-      envelope with `body_hash_in_header` also names the body's hex SHA-256
-      in the header (`body=<hex>`, before `mac=`), so a receiver can verify
-      the MAC before it reads the body (`verify_header/4`) and then check
-      the body against that hash (`verify_body/3`); `parse/2` answers it as
-      the message's `:body_hash`.
+      `v1 kind=<kind> name=value … body=<hex> mac=<mac>`. `parse/2` reads it
+      back, refusing another version token (`v2`) as `unknown_version`
+      before anything else, and `verify/5` checks its MAC in constant time.
+      The header names the body's hex SHA-256 (`body=`), so a receiver can
+      verify the MAC before it reads the body (`verify_header/4`) and then
+      check the body against that hash (`verify_body/3`); `parse/2` answers
+      it as the message's `:body_hash`.
     * **A sealed value** (`seal/6`) is `base64url(iv ‖ tag ‖ ciphertext)`,
       unpadded, under AES-256-GCM, its additional data a label followed by
       field values one per line; `open/5` opens it under the same label and
@@ -55,7 +54,7 @@ defmodule Prima.MacEnvelope do
   """
 
   @enforce_keys [:prefix, :kind, :fields]
-  defstruct [:prefix, :kind, :fields, header_names: %{}, body_hash_in_header: false]
+  defstruct [:prefix, :kind, :fields, header_names: %{}]
 
   @type field_type :: :string | :integer
   @type fields :: [{atom(), field_type()}]
@@ -64,8 +63,7 @@ defmodule Prima.MacEnvelope do
           prefix: String.t(),
           kind: String.t(),
           fields: fields(),
-          header_names: %{optional(atom()) => String.t()},
-          body_hash_in_header: boolean()
+          header_names: %{optional(atom()) => String.t()}
         }
 
   @typedoc "A service signing under the island's domain."
@@ -166,7 +164,7 @@ defmodule Prima.MacEnvelope do
       {:ok,
        Enum.join(
          ["#{@version} kind=#{envelope.kind}" | pairs] ++
-           body_pair(envelope, body) ++ ["mac=#{mac}"],
+           ["body=#{Prima.Digest.sha256_hex(body)}", "mac=#{mac}"],
          " "
        )}
     end
@@ -175,8 +173,8 @@ defmodule Prima.MacEnvelope do
   @doc """
   A header's fields and MAC. A header is `v1` followed by `name=value`
   tokens, each separated by one space: `kind` naming the envelope's kind,
-  every field once under its header name, `body` for an envelope with
-  `body_hash_in_header`, and `mac`, in any order and nothing else. A name is
+  every field once under its header name, `body`, and `mac`, in any order
+  and nothing else. A name is
   everything before a token's first `=`; a field value and the MAC are valid
   field text, an integer field's value is its decimal spelling, and `body`
   is 64 lowercase hexadecimal digits. Integer fields come back as integers,
@@ -210,7 +208,7 @@ defmodule Prima.MacEnvelope do
          true <- Enum.sort(Map.keys(pairs)) == expected_names(envelope),
          true <- pairs["kind"] == envelope.kind and Regex.match?(@text, pairs["mac"]),
          {:ok, message} <- read_fields(envelope, pairs),
-         {:ok, message} <- read_body_hash(envelope, pairs, message) do
+         {:ok, message} <- read_body_hash(pairs, message) do
       {:ok, message, pairs["mac"]}
     else
       _ -> {:error, :malformed}
@@ -219,9 +217,8 @@ defmodule Prima.MacEnvelope do
 
   @doc """
   Whether `mac` is the signature of `message` and `body` with `key`,
-  compared in constant time. A message with an invalid field is not, nor,
-  for an envelope with `body_hash_in_header`, one whose `:body_hash` is not
-  the body's.
+  compared in constant time. A message with an invalid field is not, nor
+  one whose `:body_hash` is not the body's.
   """
   @spec verify(t(), binary(), message(), String.t(), binary()) :: boolean()
   def verify(%__MODULE__{} = envelope, key, message, mac, body)
@@ -229,7 +226,7 @@ defmodule Prima.MacEnvelope do
     case values(envelope.fields, message) do
       {:ok, values} ->
         authentic?(key, canonical_string(envelope, values, Prima.Digest.sha256_hex(body)), mac) and
-          named_body?(envelope, message, body)
+          named_body?(message, body)
 
       {:error, _} ->
         false
@@ -239,14 +236,12 @@ defmodule Prima.MacEnvelope do
   @doc """
   Whether `mac` is the signature, with `key`, of `message` and the body
   whose hash the message names as `:body_hash`, compared in constant time.
-  This is the first half of verifying a message before its body is read:
-  only an envelope with `body_hash_in_header` can answer `true`, since
-  only its header names the body. `verify_body/3` is the second half. The
-  pair answers exactly what `verify/5` answers over the same header and
-  body.
+  This is the first half of verifying a message before its body is read;
+  `verify_body/3` is the second half. The pair answers exactly what
+  `verify/5` answers over the same header and body.
   """
   @spec verify_header(t(), binary(), message(), String.t()) :: boolean()
-  def verify_header(%__MODULE__{body_hash_in_header: true} = envelope, key, message, mac)
+  def verify_header(%__MODULE__{} = envelope, key, message, mac)
       when is_binary(key) and is_map(message) and is_binary(mac) do
     with hash when is_binary(hash) and byte_size(hash) == 64 <- Map.get(message, :body_hash),
          true <- Regex.match?(@body_hash, hash),
@@ -257,34 +252,20 @@ defmodule Prima.MacEnvelope do
     end
   end
 
-  def verify_header(%__MODULE__{}, key, message, mac)
-      when is_binary(key) and is_map(message) and is_binary(mac),
-      do: false
-
   @doc """
   Whether `body` is the body a verified header named as the message's
-  `:body_hash`, compared in constant time. An envelope without
-  `body_hash_in_header` names no body, so nothing verifies against it.
+  `:body_hash`, compared in constant time.
   """
   @spec verify_body(t(), message(), binary()) :: boolean()
-  def verify_body(%__MODULE__{body_hash_in_header: true} = envelope, message, body)
-      when is_map(message) and is_binary(body),
-      do: named_body?(envelope, message, body)
-
   def verify_body(%__MODULE__{}, message, body) when is_map(message) and is_binary(body),
-    do: false
+    do: named_body?(message, body)
 
   defp authentic?(key, canonical, mac) do
     expected = mac(key, canonical)
     byte_size(expected) == byte_size(mac) and :crypto.hash_equals(expected, mac)
   end
 
-  defp body_pair(%__MODULE__{body_hash_in_header: true}, body),
-    do: ["body=#{Prima.Digest.sha256_hex(body)}"]
-
-  defp body_pair(_envelope, _body), do: []
-
-  defp named_body?(%__MODULE__{body_hash_in_header: true}, message, body) do
+  defp named_body?(message, body) do
     case Map.get(message, :body_hash) do
       hash when is_binary(hash) and byte_size(hash) == 64 ->
         :crypto.hash_equals(hash, Prima.Digest.sha256_hex(body))
@@ -294,15 +275,11 @@ defmodule Prima.MacEnvelope do
     end
   end
 
-  defp named_body?(_envelope, _message, _body), do: true
-
-  defp read_body_hash(%__MODULE__{body_hash_in_header: true}, pairs, message) do
+  defp read_body_hash(pairs, message) do
     if Regex.match?(@body_hash, pairs["body"]),
       do: {:ok, Map.put(message, :body_hash, pairs["body"])},
       else: :error
   end
-
-  defp read_body_hash(_envelope, _pairs, message), do: {:ok, message}
 
   @doc """
   Seal `plaintext` with a 32-byte `key` to `label` and the message's
@@ -384,8 +361,11 @@ defmodule Prima.MacEnvelope do
     do: Map.get(envelope.header_names, name, Atom.to_string(name))
 
   defp expected_names(envelope) do
-    frame = if envelope.body_hash_in_header, do: ["kind", "body", "mac"], else: ["kind", "mac"]
-    Enum.sort(frame ++ Enum.map(envelope.fields, &header_name(envelope, elem(&1, 0))))
+    Enum.sort([
+      "kind",
+      "body",
+      "mac" | Enum.map(envelope.fields, &header_name(envelope, elem(&1, 0)))
+    ])
   end
 
   defp pairs(tokens) do

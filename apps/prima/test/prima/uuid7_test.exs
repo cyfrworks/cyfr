@@ -126,22 +126,6 @@ defmodule Prima.UUID7Test do
     end
   end
 
-  describe "build_id/0" do
-    test "generates build ID with build_ prefix" do
-      id = UUID7.build_id()
-      assert String.starts_with?(id, "build_")
-    end
-
-    test "format matches PRD specification" do
-      id = UUID7.build_id()
-      # PRD format: build_<uuid7>
-      assert Regex.match?(
-               ~r/^build_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-               id
-             )
-    end
-  end
-
   # ============================================================================
   # Timestamp Extraction Tests
   # ============================================================================

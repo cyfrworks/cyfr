@@ -111,8 +111,8 @@ defmodule Locus.Runtime.Attempt do
   end
 
   defp run(start) do
-    # The starting caller's callers, so its database sandbox allowance
-    # covers what this process and the component's calls read and write.
+    # The starting caller's callers, as a `Task` carries them, so this
+    # process names the work it was started for.
     Process.put(:"$callers", start.callers)
     Prima.LoggerContext.restore(start.logger)
     Prima.LoggerContext.set_execution_id(start.assignment.execution_id)

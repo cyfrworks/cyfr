@@ -21,6 +21,7 @@ func validSpec() Spec {
 		Argv:     []string{"/bin/sh", "-c", "npx -y pkg"},
 		Env:      map[string]string{"NODE_ENV": "production", "API_KEY": "k"},
 		Limits:   protocol.Ceilings,
+		Cgroup:   "/keeper-20007",
 	}
 }
 
@@ -44,11 +45,6 @@ func TestValidSpecPasses(t *testing.T) {
 	if err := validSpec().Validate(); err != nil {
 		t.Fatal(err)
 	}
-	bounded := validSpec()
-	bounded.Cgroup = "/keeper-20007"
-	if err := bounded.Validate(); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestSpecValidationRefusals(t *testing.T) {
@@ -68,6 +64,7 @@ func TestSpecValidationRefusals(t *testing.T) {
 		"another uid's cgroup": func(s *Spec) { s.Cgroup = "/keeper-20008" },
 		"the keeper's cgroup":  func(s *Spec) { s.Cgroup = "/keeper" },
 		"the root cgroup":      func(s *Spec) { s.Cgroup = "/" },
+		"no cgroup":            func(s *Spec) { s.Cgroup = "" },
 	}
 	for name, mutate := range cases {
 		s := validSpec()
