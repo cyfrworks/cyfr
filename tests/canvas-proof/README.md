@@ -54,6 +54,11 @@ budgets (below): `scripts/heavy-check.sh -- env CANVAS_PROOF_VIEWPORT=desktop
 tests/canvas-proof/run.sh`. On one quarter (`-q 1`) it refuses with 64
 before anything starts.
 
+The host's nightly stage runs both viewports on all four quarters, with
+the `reference` budget. Each row builds its release and prepares its pinned
+browser image and library; its records stay under the stage's log directory
+in `canvas/desktop` and `canvas/720x720`.
+
 `desktop` is the PC (1280×900, posture `desk`); `720x720` is the phone
 (posture `hand`). Any other value fails the run before the server starts.
 `CANVAS_PROOF_HOST_CLASS` names the host class the measurement is held to
@@ -271,7 +276,8 @@ p95 in milliseconds of each number, labelled with its clock.
 (`ARCHITECTURE.md` §6.9 names the two) for the run's host class, at both
 viewports: on the `reference` class, the host the budget was stated on, a
 frame open within 100 ms and a validation within 100 ms; on the
-`github-hosted` class, the GitHub-hosted runner, each within 150 ms. A run
+`github-hosted` class, the GitHub-hosted runner, each within 200 ms to catch
+gross regressions across CPU models outside our control. A run
 names its class with `CANVAS_PROOF_HOST_CLASS` (`reference` when unset),
 which `run.sh` hands the proof, and the record carries it as `host.class`.
 A p95 over its class's budget, or a measurement with no p95 to hold to it,

@@ -3,7 +3,7 @@
 
 # The verification host's nightly, reported (scripts/nightly.sh,
 # CONTRIBUTING.md). Each night the host runs its nightly stage on main's
-# head, the janitor and the proofs no workflow runs, and triggers this
+# head, the janitor and the host's proofs, and triggers this
 # workflow with what the stage did: the commit, the stage's exit, its row
 # lines and the path of its logs on the host, nothing else. The report job
 # fails unless that exit is exactly 0, so a red night, or one whose check
