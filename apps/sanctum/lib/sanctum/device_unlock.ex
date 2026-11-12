@@ -125,7 +125,7 @@ defmodule Sanctum.DeviceUnlock do
   with a `sign_in` request held for that channel and the hello's key (the
   module doc). Refusals: `:setup_closed` (a setup token that is not this
   CYFR's), `:invitation_invalid` (an invitation code that names none),
-  `{:invalid_argument, sentence}`, `:no_directory`, `:unavailable`.
+  `{:invalid_argument, sentence}`, `:unavailable`.
   """
   @spec hello(String.t(), hello()) :: {:ok, Prima.SignIn.t()} | {:error, term()}
   def hello(

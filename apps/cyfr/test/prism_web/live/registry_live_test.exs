@@ -105,12 +105,13 @@ defmodule PrismWeb.RegistryLiveTest do
     refute has_element?(view, "form[phx-submit=submit-appeal]")
   end
 
+  # An action named past what a registry request carries (256 bytes) makes
+  # no request to sign.
   test "an appeal whose request cannot be made keeps the form and what was typed",
        %{conn: conn} do
     {view, _html} = mount_athanor(conn, "/registry")
     render_async(view, 5_000)
-    render_click(view, "open-appeal", %{"id" => "cmp_taken_down"})
-    Prima.Test.Env.put_app_env(:sanctum, :directory_url, nil)
+    render_click(view, "open-appeal", %{"id" => String.duplicate("c", 257)})
 
     {submitted, _log} =
       ExUnit.CaptureLog.with_log(fn ->

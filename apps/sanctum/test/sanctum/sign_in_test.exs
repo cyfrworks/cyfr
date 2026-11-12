@@ -107,11 +107,6 @@ defmodule Sanctum.SignInTest do
                dir.url <> "/account/new#name=mira&request=" <> Prima.SignIn.fragment(new)
     end
 
-    test "with no directory to send a browser to, none is minted" do
-      Prima.Test.Env.put_app_env(:sanctum, :directory_url, nil)
-      assert {:error, :no_directory} = SignIn.request(:sign_in, @browser)
-    end
-
     test "a channel's request names the account it speaks for, and has no page", %{
       account: account
     } do

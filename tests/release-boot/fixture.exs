@@ -232,9 +232,7 @@ fn args ->
     alias Prima.Identity
     alias Prima.Identity.{Entry, Key}
 
-    directory =
-      Sanctum.directory_url() ||
-        raise "this deployment names no directory (CYFR_DIRECTORY_URL): an account needs one"
+    directory = Sanctum.directory_url()
 
     {recovery_pub, recovery} =
       :crypto.generate_key(:eddsa, :ed25519, :crypto.hash(:sha256, ["release-proof|", sub]))
