@@ -7,6 +7,9 @@ defmodule Cyfr.TestSeamsTest do
   # release, compiled without it, answers each seam's shipped default and
   # never reads the key (`Prima.TestSeam.value/2`). Async: it reads source
   # files and sets nothing.
+  #
+  # It holds what a lib file's syntax tree writes, not a name or call that code builds (`apply/3`,
+  # `Module.concat/1`, a macro computing what it emits): tests/release-boot/test_seams.exs proves those.
   use ExUnit.Case, async: true
 
   alias Cyfr.Boundaries
@@ -129,10 +132,7 @@ defmodule Cyfr.TestSeamsTest do
     # variable, an attribute or a call could be a gated application and
     # read a seam's key past every rule above. The exceptions are the list
     # above; the settings reader's stays one because its roster names no
-    # seam's key. Out of scope, for every rule here: `apply/3`,
-    # `Module.concat/1` and other calls built at run time; this check holds
-    # the honest forms, and tests/release-boot/test_seams.exs shows a
-    # release ignoring the switches.
+    # seam's key.
     unnamed_applications =
       for %{app: :unnamed_application, file: file, function: function} <- found,
           do: {file, function}
@@ -191,15 +191,31 @@ defmodule Cyfr.TestSeamsTest do
   # nothing else, read on the syntax tree: no alias, `require ..., as:` or
   # import of either; no alias of a prefix of either (`Elixir`, `Prima`),
   # single or in braces; no alias or nested module that makes `Application`,
-  # `Prima` or `Elixir` name another module; and neither the `Elixir.`
-  # spelling nor the atom of either.
+  # `Prima` or `Elixir` name another module; neither the `Elixir.`
+  # spelling nor the atom of either; and every alias, require and import,
+  # inside a quote too, names its target literally.
   test "Application and the gate are written by their full plain names alone" do
-    renamed =
-      for path <- lib_files(),
-          renaming <- renamings(SourceTree.quoted(path)),
-          do: {Path.relative_to(path, @root), renaming}
+    quoted = for path <- lib_files(), do: {Path.relative_to(path, @root), SourceTree.quoted(path)}
 
+    renamed = for {file, ast} <- quoted, renaming <- renamings(ast), do: {file, renaming}
     assert renamed == []
+
+    # The scan reads the directives it holds: the tree writes hundreds.
+    directives =
+      for {_file, ast} <- quoted,
+          {_ast, found} = Macro.prewalk(ast, 0, &count_directive/2),
+          reduce: 0,
+          do: (total -> total + found)
+
+    assert directives > 500
+  end
+
+  # A macro that injects `directive` with the name it is handed, invoked
+  # with `Application`, as a caller's own lines.
+  injected = fn directive ->
+    "defmodule Sanctum.SeamAlias do\n  defmacro bind(target) do\n    quote do\n      " <>
+      directive <>
+      "\n    end\n  end\nend\nrequire Sanctum.SeamAlias\nSanctum.SeamAlias.bind(Application)\n"
   end
 
   # Each form a file could read a seam's key or reach `value/3` with, past
@@ -229,7 +245,12 @@ defmodule Cyfr.TestSeamsTest do
     "alias Sanctum.Fake.Application\ndef read, do: Application.get_env(:sanctum, :bearer_provider)",
     "defmodule Prima.TestSeam do\nend\nrequire Prima.TestSeam\n" <>
       "def read, do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)",
-    "def read, do: Application.get_env(:sanctum, :bearer_provider)"
+    "def read, do: Application.get_env(:sanctum, :bearer_provider)",
+    injected.("alias unquote(target), as: Env") <>
+      "def read, do: Env.get_env(:sanctum, :bearer_provider)",
+    injected.("require unquote(target), as: Env") <>
+      "def read, do: Env.get_env(:sanctum, :bearer_provider)",
+    injected.("import unquote(target)") <> "def read, do: get_env(:sanctum, :bearer_provider)"
   ]
 
   @honest_form """
@@ -349,7 +370,21 @@ defmodule Cyfr.TestSeamsTest do
       renamings(name, nested) ++ renamings(body, true)
   end
 
-  defp renamings({:alias, _, [{{:., _, [base, :{}]}, _, children} | _]} = ast, nested) do
+  defp renamings({directive, _, [target | _]} = ast, nested)
+       when directive in [:alias, :require, :import] do
+    if literal_target?(target),
+      do: directive(ast, nested),
+      else: [{:target_not_a_name, ast}]
+  end
+
+  defp renamings({:__aliases__, _, [:"Elixir" | _] = parts} = ast, _nested) do
+    if parts in @full_names, do: [{:elixir_spelling, ast}], else: []
+  end
+
+  defp renamings(atom, _nested) when atom in [Application, Prima.TestSeam], do: [{:atom, atom}]
+  defp renamings(ast, nested), do: walk_renamings(ast, nested)
+
+  defp directive({:alias, _, [{{:., _, [base, :{}]}, _, children} | _]} = ast, nested) do
     renamed =
       Enum.any?(children, fn
         {:__aliases__, _, parts} = child ->
@@ -362,7 +397,7 @@ defmodule Cyfr.TestSeamsTest do
     if(renamed, do: [{:alias, ast}], else: []) ++ walk_renamings(ast, nested)
   end
 
-  defp renamings({:alias, _, [target | options]} = ast, nested) do
+  defp directive({:alias, _, [target | options]} = ast, nested) do
     as = options |> List.first([]) |> Keyword.get(:as)
     introduced = name_of(as) || last_name(target)
 
@@ -370,7 +405,7 @@ defmodule Cyfr.TestSeamsTest do
       walk_renamings(ast, nested)
   end
 
-  defp renamings({:require, _, [target, options]} = ast, nested) when is_list(options) do
+  defp directive({:require, _, [target, options]} = ast, nested) when is_list(options) do
     as = Keyword.get(options, :as)
 
     if(as != nil and (reaches?(target) or name_of(as) in @plain_names),
@@ -379,16 +414,29 @@ defmodule Cyfr.TestSeamsTest do
     ) ++ walk_renamings(ast, nested)
   end
 
-  defp renamings({:import, _, [target | _]} = ast, nested) do
+  defp directive({:import, _, [target | _]} = ast, nested) do
     if(full?(target), do: [{:import, ast}], else: []) ++ walk_renamings(ast, nested)
   end
 
-  defp renamings({:__aliases__, _, [:"Elixir" | _] = parts} = ast, _nested) do
-    if parts in @full_names, do: [{:elixir_spelling, ast}], else: []
-  end
+  defp directive(ast, nested), do: walk_renamings(ast, nested)
 
-  defp renamings(atom, _nested) when atom in [Application, Prima.TestSeam], do: [{:atom, atom}]
-  defp renamings(ast, nested), do: walk_renamings(ast, nested)
+  # A directive's target written as a module name: an atom, an alias of
+  # names alone, or braces of those.
+  defp literal_target?(atom) when is_atom(atom), do: true
+  defp literal_target?({:__aliases__, _, parts}), do: Enum.all?(parts, &is_atom/1)
+
+  defp literal_target?({{:., _, [base, :{}]}, _, children}),
+    do:
+      literal_target?(base) and Enum.all?(children, &match?({:__aliases__, _, _}, &1)) and
+        Enum.all?(children, &literal_target?/1)
+
+  defp literal_target?(_expression), do: false
+
+  defp count_directive({directive, _, [_ | _]} = ast, count)
+       when directive in [:alias, :require, :import],
+       do: {ast, count + 1}
+
+  defp count_directive(ast, count), do: {ast, count}
 
   defp walk_renamings({form, _meta, args}, nested),
     do: renamings(form, nested) ++ renamings(List.wrap(args), nested)
