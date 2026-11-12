@@ -19,14 +19,15 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   # The plug as a pipeline mounts it: its options through `init/1`.
   defp authenticate(conn, opts \\ []), do: Authenticate.call(conn, Authenticate.init(opts))
 
-  # Test auth provider that returns an authenticated user
+  # Test auth provider that returns an authenticated person: the one the
+  # test put in its process (the plug runs there).
   defmodule TestAuthProvider do
     @behaviour Sanctum.Auth
 
     @impl true
     def current_user(_conn) do
       Sanctum.Context.build(
-        user_id: "test_user_123",
+        user_id: Process.get({__MODULE__, :user_id}),
         email: "test@example.com",
         provider: "test",
         permissions: [:read, :write],
@@ -537,6 +538,29 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       {:ok, test_dir: test_dir, api_key: key_result.api_key}
     end
 
+    test "a key whose creator names nobody is refused at the plug", %{
+      conn: conn,
+      api_key: api_key
+    } do
+      import Ecto.Query
+      hash = :crypto.hash(:sha256, api_key)
+
+      for creator <- ["nobody", "usr_nobody", nil] do
+        {1, _} =
+          Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.key_hash == ^hash),
+            set: [created_by: creator]
+          )
+
+        result =
+          conn
+          |> put_req_header("authorization", "Bearer " <> api_key)
+          |> authenticate(errors: Emissary.Web.MCPError)
+
+        assert result.halted
+        assert result.status == 401
+      end
+    end
+
     test "authenticates with valid API key", %{conn: conn, api_key: api_key} do
       conn =
         conn
@@ -720,6 +744,16 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
 
     test "rejects an authenticated user with no resolved athanor with 403", %{conn: conn} do
+      # A person this server knows, whose own athanor is archived: nowhere
+      # to work.
+      {:ok, person} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|no-athanor-#{System.unique_integer([:positive])}",
+          provider: "github"
+        })
+
+      Sanctum.TestContext.archive!(Sanctum.Test.People.athanor!(person).id)
+      Process.put({__MODULE__.TestAuthProvider, :user_id}, person.id)
       Application.put_env(:sanctum, :bearer_provider, __MODULE__.TestAuthProvider)
 
       conn = authenticate(conn, errors: Emissary.Web.MCPError)

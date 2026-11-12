@@ -293,7 +293,7 @@ defmodule Cyfr.AdmissionOriginTest do
   end
 
   def schedule_fire(_conn) do
-    ctx = Sanctum.TestContext.local()
+    {ctx, _person} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
     runnable!(ctx, [%{"ran" => true}], [:schedule])
     Application.put_env(:cyfr, :cron_scheduler_enabled, true)
 

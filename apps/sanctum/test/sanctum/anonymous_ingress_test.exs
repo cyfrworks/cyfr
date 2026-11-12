@@ -77,11 +77,12 @@ defmodule Sanctum.AnonymousIngressTest do
           verified: true
         })
 
-      # Whoever created it — a member who left, a synthetic principal, nobody
-      # in particular — the channel belongs to the athanor and keeps running.
+      # Whoever created it — a person who is not the athanor's, one of the
+      # server's own principals — the channel belongs to the athanor and
+      # keeps running; a creator that names nobody stands for nothing.
       assert Sanctum.Tenancy.channel_active?(athanor.id, departed.id)
       assert Sanctum.Tenancy.channel_active?(athanor.id, "webhook:hook")
-      assert Sanctum.Tenancy.channel_active?(athanor.id, nil)
+      refute Sanctum.Tenancy.channel_active?(athanor.id, nil)
 
       # An archived athanor closes every channel it owns.
       Sanctum.TestContext.archive!(athanor.id)

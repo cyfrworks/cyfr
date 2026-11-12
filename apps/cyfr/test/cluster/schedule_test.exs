@@ -24,8 +24,7 @@ defmodule Cyfr.Cluster.ScheduleTest do
       athanor = Cell.call(:a, Fixtures, :athanor!, ["schedule-armed"])
 
       # Made by the server itself, a creator never denied, so a fire gets
-      # past the creator's check to its claim (the fixture's creator is no
-      # person on file, which a fire refuses before claiming).
+      # past the creator's check to its claim.
       {:ok, schedule} =
         Cell.call(:a, Arca.CronSchedule, :create, [
           Prima.Actor.in_athanor(athanor.id),

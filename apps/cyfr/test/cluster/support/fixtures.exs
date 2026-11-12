@@ -392,12 +392,15 @@ defmodule Cyfr.Cluster.Fixtures do
   def take_rate(athanor_id, bucket, cap, window_ms),
     do: Arca.RateWindows.claim(actor(athanor_id), bucket, cap, window_ms)
 
-  @doc "A cron schedule of `athanor_id`, due `seconds_ago` seconds ago."
+  @doc """
+  A cron schedule of `athanor_id`, due `seconds_ago` seconds ago, made by
+  the server itself (`system`), a creator never denied.
+  """
   @spec due_schedule!(String.t(), pos_integer()) :: map()
   def due_schedule!(athanor_id, seconds_ago) do
     {:ok, schedule} =
       Arca.CronSchedule.create(actor(athanor_id), %{
-        user_id: "usr_cluster",
+        user_id: "system",
         athanor_id: athanor_id,
         name: "cluster-#{System.unique_integer([:positive])}",
         cron_expression: "0 * * * *",

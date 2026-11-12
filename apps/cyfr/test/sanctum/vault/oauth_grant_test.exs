@@ -98,7 +98,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
     Application.put_env(:sanctum, :scripted_oauth_provider, RaceIdp)
 
-    ctx = Sanctum.TestContext.local()
+    {ctx, _person} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
 
     for provider <- [@provider, RaceIdp.hint()] do
       :ok =

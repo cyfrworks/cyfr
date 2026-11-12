@@ -38,7 +38,9 @@ defmodule Opus.Schedules.SchedulerTest do
     )
 
     Application.put_env(:arca, :base_path, test_path)
-    ctx = Sanctum.TestContext.local()
+    # The schedules' creator: a person this server knows, whose schedules
+    # stand (`Sanctum.Tenancy.channel_active?/2`).
+    {ctx, _person} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
 
     on_exit(fn ->
       Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
@@ -953,6 +955,35 @@ defmodule Opus.Schedules.SchedulerTest do
     assert ScriptedWorker.calls() == []
     assert [] = Arca.Repo.all(Arca.Schemas.Execution)
     assert {:ok, %{error_count: 1}} = CronSchedule.get_for_daemon(schedule.id)
+  end
+
+  test "a due schedule whose creator names nobody, or was denied, is skipped and never run",
+       %{ctx: ctx} do
+    script!([])
+    n = System.unique_integer([:positive])
+    nobody = due!(create_schedule(ctx, %{user_id: "local|local|nobody-#{n}"}))
+    minted_nobody = due!(create_schedule(ctx, %{user_id: "usr_nobody-#{n}"}))
+
+    # A person who is not the athanor's: their denial archives their own
+    # athanor, never this one, so the denial alone stops the schedule.
+    {_ctx, denied} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    denied_one = due!(create_schedule(%{ctx | user_id: denied.id}))
+    {:ok, _} = Sanctum.Tenancy.Users.deny(denied)
+
+    log =
+      capture_log(fn ->
+        scheduler!()
+
+        wait_until(fn ->
+          Enum.all?([nobody, minted_nobody, denied_one], fn schedule ->
+            match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+          end)
+        end)
+      end)
+
+    assert log =~ "no longer active"
+    assert ScriptedWorker.calls() == []
+    assert [] = Arca.Repo.all(Arca.Schemas.Execution)
   end
 
   test "a due schedule whose run is skipped is looked at again at the recheck, never fired again at once",

@@ -221,6 +221,17 @@ defmodule Emissary.Web.WebhookControllerTest do
       assert json_response(conn2, 404)["code"] == "not_found"
       Sanctum.TestContext.reopen!(athanor.id)
 
+      # a creator that names nobody, of any shape, closes it; one of the
+      # server's own principals keeps it
+      for nobody <- ["github|https://github.com|nobody-#{n}", "usr_nobody-#{n}"] do
+        {1, _} = Arca.Repo.update_all(unbind_query(slug), set: [created_by: nobody])
+        assert post_signed(conn, slug, secret, ~s({})).status == 404
+      end
+
+      {1, _} = Arca.Repo.update_all(unbind_query(slug), set: [created_by: "_seed"])
+      refute post_signed(conn, slug, secret, ~s({})).status == 404
+      {1, _} = Arca.Repo.update_all(unbind_query(slug), set: [created_by: creator.id])
+
       # a denied creator closes it too
       {:ok, _} = Sanctum.Tenancy.Users.deny(creator)
       assert post_signed(conn, slug, secret, ~s({})).status == 404

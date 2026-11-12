@@ -566,6 +566,26 @@ defmodule Sanctum.ApiKeyTest do
         )
 
       assert {:ok, _} = ApiKey.validate(key, [])
+      assert {:ok, established} = Sanctum.Caller.establish({:api_key, key})
+
+      # a creator that names nobody, a person's id or any other shape with
+      # no row, closes it at the door and at the revalidation of a context
+      # already established under it
+      for nobody <- ["local|local|nobody-#{n}", "usr_nobody-#{n}"] do
+        creator!("chan2-#{n}", nobody)
+        assert {:error, :channel_closed} = ApiKey.validate(key, [])
+        assert {:error, :revoked} = Sanctum.Caller.establish({:api_key, key})
+
+        assert {:error, :not_standing} =
+                 Sanctum.Caller.revalidate_session(%{established | user_id: nobody})
+      end
+
+      # one of the server's own principals keeps it, with no person behind
+      # it to issue under
+      creator!("chan2-#{n}", "_seed")
+      assert {:ok, %{credential_binding: nil}} = ApiKey.validate(key, [])
+      assert {:ok, _} = Sanctum.Caller.establish({:api_key, key})
+      creator!("chan2-#{n}", creator.id)
 
       # the creator's denial, which archives their athanor, revokes its keys
       # for good — the allow that reopens it does not bring a revoked
@@ -575,6 +595,16 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, _} = Sanctum.Tenancy.Users.allow(creator)
       assert {:error, :revoked} = ApiKey.validate(key, [])
     end
+  end
+
+  # The key named `name` recorded as created by `creator_id`.
+  defp creator!(name, creator_id) do
+    {1, _} =
+      Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
+        set: [created_by: creator_id]
+      )
+
+    :ok
   end
 
   describe "validate without a pre-supplied athanor" do

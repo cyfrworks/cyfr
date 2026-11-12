@@ -611,6 +611,9 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # ==========================================================================
 
   def schedule_fire_refused(_conn, ctx) do
+    # The schedule's creator: a person this server knows, so the fire
+    # stands and the run's own admission is what refuses.
+    {ctx, _person} = Sanctum.TestContext.person!(ctx)
     Application.put_env(:cyfr, :cron_scheduler_enabled, true)
     reference = "reagent:local.#{unique("seam-missing")}:1.0.0"
 

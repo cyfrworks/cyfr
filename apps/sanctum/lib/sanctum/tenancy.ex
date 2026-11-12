@@ -57,11 +57,13 @@ defmodule Sanctum.Tenancy do
   `force: true` — is stamped `source_kind: :identity` with the person's
   and the chosen athanor's generations, read after the door's verdict,
   and no source; a session or key context
-  keeps its source and person generation and takes the new athanor's. A
-  person with no `users` row carries no binding, and can be issued
-  nothing.
+  keeps its source and person generation and takes the new athanor's. One
+  of the server's own principals (`synthetic_principal?/1`) has no `users`
+  row, carries no binding, and can be issued nothing; any other id with
+  no row names nobody, and is `{:error, :not_standing}`.
   """
-  @spec resolve_status(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, :unavailable}
+  @spec resolve_status(Context.t(), keyword()) ::
+          {:ok, Context.t()} | {:error, :not_standing | :unavailable}
   def resolve_status(ctx, opts \\ [])
 
   def resolve_status(%Context{athanor_id: athanor_id} = ctx, opts)
@@ -109,19 +111,28 @@ defmodule Sanctum.Tenancy do
         {ctx, athanor} = apply_person(ctx, user)
         {:ok, bind(ctx, user, athanor)}
 
+      {:error, :not_standing} ->
+        {:error, :not_standing}
+
       {:error, reason} ->
         Logger.error("[Sanctum.Tenancy] resolve failed for #{user_id}: #{inspect(reason)}")
         {:error, :unavailable}
     end
   end
 
-  # A person unknown to the users table (a context minted by a test stub or
-  # a caller that never came through the door) resolves with no binding.
+  # The person's row. One of the server's own principals has none, and
+  # resolves with no binding; any other id with no row names nobody, and
+  # stands on nothing.
   defp user_row(user_id) do
     case Users.get(user_id) do
-      {:ok, user} -> {:ok, user}
-      {:error, :not_found} -> {:ok, nil}
-      {:error, _} = err -> err
+      {:ok, user} ->
+        {:ok, user}
+
+      {:error, :not_found} ->
+        if synthetic_principal?(user_id), do: {:ok, nil}, else: {:error, :not_standing}
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -230,7 +241,9 @@ defmodule Sanctum.Tenancy do
 
   Sessions persist their athanor so the per-request hot path doesn't
   re-resolve, but a change after the session was created MUST take effect
-  immediately: a denied user is dropped to unauthenticated, a cleared
+  immediately: a denied user, or an id with no `users` row that is none of
+  the server's own principals (`synthetic_principal?/1`), is dropped to
+  unauthenticated, a cleared
   platform administrator's mark loses the capability, and a session pointing at an
   athanor that is not the user's own active one is moved to their own —
   a platform admin included, whose capability keeps no athanor. A user
@@ -256,6 +269,9 @@ defmodule Sanctum.Tenancy do
   def revalidate(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
     case user_row(user_id) do
       {:ok, %{status: "denied"}} ->
+        {:ok, %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}}
+
+      {:error, :not_standing} ->
         {:ok, %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}}
 
       {:ok, user} ->
@@ -385,14 +401,13 @@ defmodule Sanctum.Tenancy do
   still act: its athanor is active and its creator has not been denied on
   this server.
 
-  Channels are athanor-owned. `created_by` is nil or
-  one of the server's synthetic principals (`system`, `_seed`,
-  `webhook:<slug>`) for a channel nobody signed in to create — those are
-  never denied. Any other id is read as a person's row: a denied
-  person's channels stop. A minted person id (`usr_…`) with no row is
-  refused — rows are never deleted, so such an id was never a person. An
-  id of any other shape with no row names no person on this server, and
-  the channel stands as the athanor's.
+  Channels are athanor-owned. A creator is a person with a `users` row,
+  or one of the server's own principals (`synthetic_principal?/1`:
+  `system`, `_seed`, `webhook:<slug>`), which are never denied. A denied
+  person's channels stop. Any other creator — an id with no row, or none
+  at all — names nobody, and its channel is refused: rows are never
+  deleted, and every shipped path records a person or one of those
+  principals.
 
   Every caller is a credential path — a webhook, an API key, a tincture
   token, a schedule about to fire — so a store that cannot answer FAILS
@@ -423,10 +438,6 @@ defmodule Sanctum.Tenancy do
 
   defp athanor_active?(_), do: false
 
-  # The server's synthetic principals are never people, so they are never
-  # denied. Every other id is read as a person's row.
-  @synthetic_principals ["system", "_seed"]
-
   defp creator_not_denied?(user_id) when is_binary(user_id) do
     if synthetic_principal?(user_id) do
       true
@@ -439,7 +450,7 @@ defmodule Sanctum.Tenancy do
           true
 
         {:error, :not_found} ->
-          not Prima.PersonId.person?(user_id)
+          false
 
         {:error, reason} ->
           Logger.warning(
@@ -452,10 +463,25 @@ defmodule Sanctum.Tenancy do
     end
   end
 
-  defp creator_not_denied?(_), do: true
+  defp creator_not_denied?(_), do: false
 
-  defp synthetic_principal?(id),
+  # The server's own principals, declared once: `system` (the default of
+  # `Sanctum.Context.internal/1`), `_seed` (`Sanctum.Provisioning.seed_ctx/1`)
+  # and `webhook:<slug>` (a webhook's own context, `Sanctum.Caller`).
+  @synthetic_principals ["system", "_seed"]
+
+  @doc """
+  Whether `id` is one of the server's own principals, the only creators
+  and context ids that are no person and have no `users` row: `system`,
+  `_seed` and `webhook:<slug>`. They are never denied. Any other id names
+  a person only through a row; one with no row names nobody, and stands
+  on nothing (`channel_active?/2`, `resolve_status/2`, `revalidate/1`).
+  """
+  @spec synthetic_principal?(term()) :: boolean()
+  def synthetic_principal?(id) when is_binary(id),
     do: id in @synthetic_principals or String.starts_with?(id, "webhook:")
+
+  def synthetic_principal?(_id), do: false
 
   @doc """
   Whether this person holds the operator capability: an active person
