@@ -79,6 +79,15 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     "live/system_layer.ex" => {1, [{"live/system_layer.ex", :fact}]}
   }
 
+  # The tasks that answer to no focus, by file, and the `handle_async/3`
+  # each answer comes back to in the same file. Each is started by a
+  # public page, which holds no session's context (`@public`), so it
+  # captures no focus and its answer is not delivered through the guard.
+  # The sign-in page's registry completion acts as the session its request
+  # was bound to, read from the store and revalidated, and answers only the
+  # sentence the page shows (`PrismWeb.LoginLive`).
+  @unfocused %{"live/login_live.ex" => {1, :registry}}
+
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/
 
   @task_start ~r/\b(Task\.Supervisor\.(start_child|async|async_nolink)|Task\.(async|start|start_link)|start_async|assign_async)\(/
@@ -163,25 +172,30 @@ defmodule CyfrWeb.ContextGuardRosterTest do
              Enum.join(unguarded, "\n")
   end
 
-  # A public page holds no session's context (`@public`), so a task it
-  # starts answers to no focus: the sign-in page's registry completion
-  # reads the session it was bound to from the store.
-  defp console(sources) do
-    public = for {name, path} <- modules_using(sources, "live_view"), name in @public, do: path
-    Map.drop(sources, public)
-  end
-
   test "every task the console starts is rostered, captures its focus, and is delivered through the guard" do
-    sources = console(sources())
+    sources = sources()
     starts = counts(sources, @task_start)
+    rostered = Map.new(Map.merge(@tasks, @unfocused), fn {path, {n, _}} -> {path, n} end)
 
-    assert starts == Map.new(@tasks, fn {path, {n, _}} -> {path, n} end),
+    assert starts == rostered,
            "the console's task starts and the guard roster differ: #{inspect(starts)}"
 
     # One capture per task started, file by file: a second task in a file
-    # that already captures once is not covered by the first.
-    assert counts(sources, @capture) == starts,
+    # that already captures once is not covered by the first. A task that
+    # answers to no focus captures none.
+    assert counts(sources, @capture) == Map.drop(starts, Map.keys(@unfocused)),
            "the focus captures and the task starts differ, file by file"
+
+    # Only a public page holds no session's context, and the answer such a
+    # task sends back is taken where it was started.
+    public = for {name, path} <- modules_using(sources, "live_view"), name in @public, do: path
+
+    for {path, {_n, answer}} <- @unfocused do
+      assert path in public, "#{path} answers to no focus and is not a public page"
+
+      assert answer_clauses(sources[path], answer) != [],
+             "nothing in #{path} takes #{inspect(answer)}"
+    end
 
     # Clause by clause: one guarded clause of a callback does not cover
     # another that takes the same answer.
