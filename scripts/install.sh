@@ -388,8 +388,4 @@ link_onto_path() {
     sudo ln -sf "$1/cyfr" /usr/local/bin/cyfr </dev/tty
 }
 
-# Test harness sources this file to unit-test the verification functions;
-# only run the installer when executed directly.
-if [ "${CYFR_INSTALL_TEST:-}" != "1" ]; then
-    main
-fi
+main

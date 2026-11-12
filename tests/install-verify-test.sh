@@ -12,9 +12,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 INSTALL_SH="$REPO_ROOT/scripts/install.sh"
 
+# The installer's functions: install.sh without its last line, the call to
+# main, so a case runs them and installs nothing.
+FUNCTIONS="$(mktemp)"
+trap 'rm -f "$FUNCTIONS"' EXIT
+if [ "$(tail -n 1 "$INSTALL_SH")" != main ]; then
+    echo "FAIL: scripts/install.sh no longer ends by calling main"
+    exit 1
+fi
+sed '$d' "$INSTALL_SH" >"$FUNCTIONS"
+
 failures=0
 
-# Run a snippet in a subshell that sources install.sh in test mode.
+# Run a snippet in a subshell that sources the installer's functions.
 # $1 = description, $2 = expected exit (0 or nonzero via "fail"), $3 = snippet,
 # $4 = optional text the output must contain, which pins the refusal reached
 run_case() {
@@ -25,9 +35,7 @@ run_case() {
 
     output="$(
         sh -c "
-            CYFR_INSTALL_TEST=1
-            export CYFR_INSTALL_TEST
-            . '$INSTALL_SH'
+            . '$FUNCTIONS'
             $snippet
         " 2>&1
     )"
@@ -74,7 +82,7 @@ find_tool() {
 }
 
 fixture="$(mktemp -d)"
-trap 'rm -rf "$fixture"' EXIT
+trap 'rm -rf "$fixture" "$FUNCTIONS"' EXIT
 
 # Build a valid fixture: archive + matching checksums.txt
 printf 'binary-bytes-v1' > "$fixture/cyfr_test.tar.gz"
