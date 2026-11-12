@@ -76,20 +76,28 @@
 #       `confirm` request for it (`confirmation.request`, whose subject is
 #       the record's digest), and the device's answer to it, Ed25519 over
 #       the request's digest, given through the gate
-#       (`confirmation.confirm` with the `answer`). With `digest`, `ref` or
-#       `key` the answer is made wrong on purpose: over another digest,
-#       under another ref, or by another key; the home must refuse it.
+#       (`confirmation.confirm` with the `answer`). Each intent is checked
+#       as the channel checks one first: its certificate and the client's
+#       standing read now (`Sanctum.DeviceCerts.verify_request/2`). With
+#       `digest`, `ref`, `key` or `other` the answer is made wrong on
+#       purpose: over another digest (a changed record), under another ref,
+#       by a key of no device, or by another person's device kept at this
+#       home; the home must refuse it.
 #       Answers the record's operation and preview as the home stored them
 #       and the digest its request names, and `ok` with the confirmation's
 #       result or `error` with the refusal; a ref no device here holds
 #       answers `error`.
 #
-#   confirmed SESSION_TOKEN TOOL ARGUMENTS_JSON
+#   confirmed SESSION_TOKEN TOOL ARGUMENTS_JSON [refused]
 #       TOOL called as `console` calls it, and, when the change asks for a
 #       fresh confirmation, the confirmation given by the person's own
 #       device (`device_confirm`) and the call made again under it, as the
-#       console repeats a change once its record is confirmed. Answers
-#       `ok` and the result, or `error` and the refusal.
+#       console repeats a change once its record is confirmed. With
+#       `refused`, the two wrong answers a person can meet are given first,
+#       another person's device's (`device_confirm`'s `other`) and one over
+#       a changed record (`digest`), each answering the home's refusal or
+#       nothing where it was taken. Answers `ok` and the result, with
+#       `refused` the two refusals, or `error` and the refusal.
 #
 #   tincture USER_ID DIR NAME public|private
 #       The files under DIR committed into the person's athanor as the
@@ -577,11 +585,43 @@ fn args ->
     end
   end
 
-  # One intent on the device's channel, through the gate as the channel
-  # dispatches it, under a call id of its own.
-  device_intent = fn ctx, tool, args ->
-    ctx = %{ctx | call_id: Prima.UUID7.generate_id("call")}
-    Sanctum.Gate.call_external(tool, ctx, args, call_id: ctx.call_id, method: "device/intent")
+  # One intent on the device's channel, as the channel dispatches it: its
+  # certificate and the client's standing read now
+  # (`Sanctum.DeviceCerts.verify_request/2`), then through the gate under a
+  # call id of its own.
+  device_intent = fn ctx, certificate, tool, args ->
+    with {:ok, client} <- Sanctum.DeviceCerts.verify_request(certificate, ctx) do
+      client = %{
+        client
+        | request_id: ctx.request_id,
+          client_ip: ctx.client_ip,
+          call_id: Prima.UUID7.generate_id("call"),
+          confirmation_id: nil,
+          origin: :interactive
+      }
+
+      Sanctum.Gate.call_external(tool, client, args,
+        call_id: client.call_id,
+        method: "device/intent"
+      )
+    end
+  end
+
+  # A refusal as a proof compares it: a refusal's reason and the sentence
+  # the person is shown, anything else as written.
+  refusal = fn
+    %Prima.Refusal{reason: reason, message: message} -> %{reason: reason, message: message}
+    other -> inspect(other)
+  end
+
+  # The records of the devices this fixture kept for this home.
+  kept_devices = fn ->
+    device_dir
+    |> Path.join("device-per_*.json")
+    |> Path.wildcard()
+    |> Enum.filter(
+      &(&1 |> File.read!() |> Jason.decode!() |> Map.get("home") == Sanctum.origin())
+    )
   end
 
   # The confirmation `ref` given by the device of the person whose record
@@ -592,15 +632,14 @@ fn args ->
     alias Prima.SignIn.DeviceAnswer
 
     holder =
-      device_dir
-      |> Path.join("device-per_*.json")
-      |> Path.wildcard()
-      |> Enum.filter(&(&1 |> File.read!() |> Jason.decode!() |> Map.get("home") == Sanctum.origin()))
-      |> Enum.find_value(fn path ->
-        with {:ok, {ctx, _certificate, keys}} <- device_channel.(path),
+      Enum.find_value(kept_devices.(), fn path ->
+        with {:ok, {ctx, certificate, keys}} <- device_channel.(path),
              {:ok, %{confirmations: [%{ref: ^ref} = record]}} <-
-               device_intent.(ctx, "confirmation", %{"action" => "pending", "request" => ref}) do
-          {ctx, keys, record}
+               device_intent.(ctx, certificate, "confirmation", %{
+                 "action" => "pending",
+                 "request" => ref
+               }) do
+          {path, ctx, certificate, keys, record}
         else
           _not_its_own -> nil
         end
@@ -610,10 +649,13 @@ fn args ->
       nil ->
         %{error: "no device kept at this home holds #{ref}"}
 
-      {ctx, {device_key, seed}, record} ->
+      {path, ctx, certificate, {device_key, seed}, record} ->
         kid = Prima.Identity.Key.kid(device_key)
 
-        case device_intent.(ctx, "confirmation", %{"action" => "request", "ref" => ref}) do
+        case device_intent.(ctx, certificate, "confirmation", %{
+               "action" => "request",
+               "ref" => ref
+             }) do
           {:ok, %{request: encoded}} ->
             {:ok, request} = Prima.SignIn.decode(encoded)
             sign = fn digest, key -> :crypto.sign(:eddsa, :none, digest, [key, :ed25519]) end
@@ -642,10 +684,25 @@ fn args ->
                      kid: kid,
                      sig: sign.(Prima.SignIn.digest(request), :crypto.strong_rand_bytes(32))
                    }}
+
+                ["other"] ->
+                  other =
+                    Enum.find(kept_devices.(), &(&1 != path)) ||
+                      raise "no other person's device is kept at this home"
+
+                  {:ok, other_seed} =
+                    other
+                    |> File.read!()
+                    |> Jason.decode!()
+                    |> Map.fetch!("seed")
+                    |> Base.url_decode64(padding: false)
+
+                  {other_key, ^other_seed} = :crypto.generate_key(:eddsa, :ed25519, other_seed)
+                  {ref, DeviceAnswer.sign(request, Prima.Identity.Key.kid(other_key), other_seed)}
               end
 
             confirmed =
-              device_intent.(ctx, "confirmation", %{
+              device_intent.(ctx, certificate, "confirmation", %{
                 "action" => "confirm",
                 "ref" => answer_ref,
                 "answer" => DeviceAnswer.encode(signed)
@@ -655,7 +712,7 @@ fn args ->
               %{operation: record.operation, preview: record.preview, digest: request.subject},
               case confirmed do
                 {:ok, result} -> %{ok: result}
-                {:error, reason} -> %{error: inspect(reason)}
+                {:error, reason} -> %{error: refusal.(reason)}
               end
             )
 
@@ -667,37 +724,51 @@ fn args ->
 
   # TOOL called as the console calls it under the session (the `confirmed`
   # command above): a change that asks for a fresh confirmation confirmed
-  # by the person's own device, then called again under it.
-  confirmed_call = fn token, tool, arguments ->
+  # by the person's own device, then called again under it. With
+  # `refused?`, the two wrong answers are given first and their refusals
+  # kept: another person's device's, and one over a changed record.
+  confirmed_call = fn token, tool, arguments, refused? ->
     {:ok, ctx} = Sanctum.Caller.establish({:session, token})
 
-    called =
-      case PrismWeb.Ops.call_tool(ctx, tool, arguments) do
-        {:error, {:confirmation_required, %{id: id}}} ->
-          case confirm_ref.(Prima.Confirmation.ref(id), []) do
-            %{ok: _confirmed} ->
-              PrismWeb.Ops.call_tool(ctx, tool, arguments, confirmation_id: id)
+    case PrismWeb.Ops.call_tool(ctx, tool, arguments) do
+      {:error, {:confirmation_required, %{id: id}}} ->
+        ref = Prima.Confirmation.ref(id)
 
-            refused ->
-              {:error, {:unconfirmed, refused[:error]}}
-          end
+        refusals =
+          if refused?,
+            do:
+              Map.new([other: ["other"], changed: ["digest"]], fn {name, tamper} ->
+                {name, confirm_ref.(ref, tamper)[:error]}
+              end),
+            else: %{}
 
-        other ->
-          other
-      end
+        case confirm_ref.(ref, []) do
+          %{ok: _confirmed} ->
+            case PrismWeb.Ops.call_tool(ctx, tool, arguments, confirmation_id: id) do
+              {:ok, result} when refused? -> %{ok: result, refused: refusals}
+              {:ok, result} -> %{ok: result}
+              {:error, reason} -> %{error: inspect(reason)}
+            end
 
-    case called do
-      {:ok, result} -> %{ok: result}
-      {:error, reason} -> %{error: inspect(reason)}
+          unconfirmed ->
+            %{error: inspect({:unconfirmed, unconfirmed[:error]}), refused: refusals}
+        end
+
+      {:ok, result} ->
+        %{ok: result}
+
+      {:error, reason} ->
+        %{error: inspect(reason)}
     end
   end
 
   case args do
-    ["device_confirm", ref | tamper] when tamper in [[], ["digest"], ["ref"], ["key"]] ->
+    ["device_confirm", ref | tamper]
+    when tamper in [[], ["digest"], ["ref"], ["key"], ["other"]] ->
       answer.(confirm_ref.(ref, tamper))
 
-    ["confirmed", token, tool, arguments] ->
-      answer.(confirmed_call.(token, tool, Jason.decode!(arguments)))
+    ["confirmed", token, tool, arguments | refused] when refused in [[], ["refused"]] ->
+      answer.(confirmed_call.(token, tool, Jason.decode!(arguments), refused == ["refused"]))
 
     ["person", sub] ->
       {person, account} = admitted.(sub)
@@ -850,13 +921,18 @@ fn args ->
     ["vault", token, name, field, value] ->
       # Disclosed, since a proof hands this entry's value to a backend's
       # environment.
-      case confirmed_call.(token, "vault/create", %{
-             "name" => name,
-             "kind" => "api_key",
-             "fields" => %{field => value},
-             "destination" => %{"hosts" => ["fixture.test"]},
-             "disclose" => true
-           }) do
+      case confirmed_call.(
+             token,
+             "vault/create",
+             %{
+               "name" => name,
+               "kind" => "api_key",
+               "fields" => %{field => value},
+               "destination" => %{"hosts" => ["fixture.test"]},
+               "disclose" => true
+             },
+             false
+           ) do
         %{ok: %{entry: entry}} -> answer.(%{id: entry.id, name: entry.name})
         refused -> raise "the vault entry #{name} was not entered: #{inspect(refused)}"
       end

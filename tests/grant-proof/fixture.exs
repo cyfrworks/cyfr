@@ -54,9 +54,11 @@
 #       `grant.test` holding the one field `TOKEN` and bound to
 #       DESTINATION_JSON (`vault.create`), then shared with everyone with
 #       no cap (`share.create`), each a sensitive change her own device
-#       confirms (the release fixture's `confirmed`). The key is random,
-#       made here, and never leaves this function. Answers the entry's and
-#       the share's ids.
+#       confirms (the release fixture's `confirmed`), once the home refused
+#       the two wrong answers given first: the other person's device's, and
+#       one over a changed record. The key is random, made here, and never
+#       leaves this function. Answers the entry's and the share's ids and,
+#       for each change, the two refusals.
 #
 #   requested DESTINATION_JSON
 #       What the owner's request implies the entry stores: the
@@ -290,18 +292,21 @@ fn args ->
     ["share", owner_token, destination] ->
       {release, _binding} = Code.eval_file(Path.expand("../release-boot/fixture.exs", __DIR__))
 
+      # Each change's confirmation met first by the two wrong answers, and
+      # their refusals kept.
       confirmed = fn tool, arguments ->
-        "FIXTURE=" <> line = release.(["confirmed", owner_token, tool, Jason.encode!(arguments)])
+        "FIXTURE=" <> line =
+          release.(["confirmed", owner_token, tool, Jason.encode!(arguments), "refused"])
 
         case Jason.decode!(line) do
-          %{"ok" => result} -> result
-          refused -> raise "#{tool} was refused: #{inspect(refused)}"
+          %{"ok" => result, "refused" => refused} -> {result, refused}
+          unconfirmed -> raise "#{tool} was refused: #{inspect(unconfirmed)}"
         end
       end
 
       key = "gp-" <> Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
 
-      %{"entry" => %{"id" => entry_id}} =
+      {%{"entry" => %{"id" => entry_id}}, entry_refused} =
         confirmed.("vault/create", %{
           "name" => "Probe feed",
           "kind" => "api_key",
@@ -310,10 +315,14 @@ fn args ->
           "destination" => Jason.decode!(destination)
         })
 
-      %{"share" => %{"id" => share_id}} =
+      {%{"share" => %{"id" => share_id}}, share_refused} =
         confirmed.("share/create", %{"entry_id" => entry_id, "audience" => "everyone"})
 
-      answer.(%{entry_id: entry_id, share_id: share_id})
+      answer.(%{
+        entry_id: entry_id,
+        share_id: share_id,
+        refused: %{entry: entry_refused, share: share_refused}
+      })
 
     ["requested", destination] ->
       {binding, digest} = requested.(destination)
