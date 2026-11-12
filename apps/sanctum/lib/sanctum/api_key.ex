@@ -610,9 +610,11 @@ defmodule Sanctum.ApiKey do
   end
 
   # What a key's context was established against: the key itself, its
-  # creator's generation and its athanor's. A key with no person behind it
-  # — an orphan, or one the server's own principals created — carries no
-  # binding: it keeps its primary authentication and can issue nothing.
+  # creator's generation and its athanor's. A key one of the server's own
+  # principals created has no person behind it and carries no binding: it
+  # keeps its primary authentication and can issue nothing. A creator with
+  # no row that is none of those principals names nobody, and the key is
+  # refused as `channel_active?/2` refuses it.
   defp key_binding(%{id: id, created_by: creator, athanor_id: athanor_id}) do
     case Sanctum.Tenancy.generation_snapshot(creator || "", athanor_id) do
       {:ok, snapshot} ->
@@ -625,7 +627,9 @@ defmodule Sanctum.ApiKey do
          }}
 
       {:error, :not_found} ->
-        {:ok, nil}
+        if Sanctum.Tenancy.synthetic_principal?(creator),
+          do: {:ok, nil},
+          else: {:error, :channel_closed}
 
       {:error, :unavailable} ->
         {:error, :database_error}

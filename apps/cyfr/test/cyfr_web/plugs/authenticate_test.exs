@@ -19,14 +19,15 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   # The plug as a pipeline mounts it: its options through `init/1`.
   defp authenticate(conn, opts \\ []), do: Authenticate.call(conn, Authenticate.init(opts))
 
-  # Test auth provider that returns an authenticated user
+  # Test auth provider that returns an authenticated person: the one the
+  # test put in its process (the plug runs there).
   defmodule TestAuthProvider do
     @behaviour Sanctum.Auth
 
     @impl true
     def current_user(_conn) do
       Sanctum.Context.build(
-        user_id: "test_user_123",
+        user_id: Process.get({__MODULE__, :user_id}),
         email: "test@example.com",
         provider: "test",
         permissions: [:read, :write],
@@ -720,6 +721,16 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
 
     test "rejects an authenticated user with no resolved athanor with 403", %{conn: conn} do
+      # A person this server knows, whose own athanor is archived: nowhere
+      # to work.
+      {:ok, person} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|no-athanor-#{System.unique_integer([:positive])}",
+          provider: "github"
+        })
+
+      Sanctum.TestContext.archive!(Sanctum.Test.People.athanor!(person).id)
+      Process.put({__MODULE__.TestAuthProvider, :user_id}, person.id)
       Application.put_env(:sanctum, :bearer_provider, __MODULE__.TestAuthProvider)
 
       conn = authenticate(conn, errors: Emissary.Web.MCPError)

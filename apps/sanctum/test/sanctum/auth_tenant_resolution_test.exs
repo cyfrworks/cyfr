@@ -54,14 +54,6 @@ defmodule Sanctum.AuthTenantResolutionTest do
       {:ok, result} = Tenancy.resolve_status(ctx)
       assert result.athanor_id == "ath_acme"
     end
-
-    test "with force and no person, the athanor stays unresolved (nil)" do
-      Application.delete_env(:sanctum, :tenancy_resolver_override)
-
-      ctx = oauth_shaped_context()
-      {:ok, result} = Tenancy.resolve_status(ctx, force: true)
-      assert result.athanor_id == nil
-    end
   end
 
   describe "the platform administrator's mark is the first person's, and resolution only reads it" do
@@ -70,7 +62,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
       ctx = oauth_shaped_context()
 
       # Resolution alone mints nothing.
-      assert {:ok, %{platform_admin: false}} = Tenancy.resolve_status(ctx, force: true)
+      assert {:error, :not_standing} = Tenancy.resolve_status(ctx, force: true)
       assert {:error, :not_found} = Tenancy.Users.get(ctx.user_id)
 
       # The setup admission's mint writes the mark on the first person's row.
@@ -95,14 +87,21 @@ defmodule Sanctum.AuthTenantResolutionTest do
       assert %User{platform_admin_at: nil} = Arca.Repo.get!(User, later.id)
     end
 
-    test "a user with no person row stays unresolved, and resolution writes none" do
+    test "an id with no person row is refused, and resolution writes none" do
       Application.delete_env(:sanctum, :tenancy_resolver_override)
       ctx = oauth_shaped_context()
 
-      {:ok, result} = Tenancy.resolve_status(ctx, force: true)
+      for user_id <- [ctx.user_id, "usr_never-seen"] do
+        assert {:error, :not_standing} =
+                 Tenancy.resolve_status(%{ctx | user_id: user_id}, force: true)
 
-      assert result.athanor_id == nil
-      assert {:error, :not_found} = Tenancy.Users.get(ctx.user_id)
+        assert {:error, :not_found} = Tenancy.Users.get(user_id)
+      end
+
+      # One of the server's own principals has no row, and resolves with
+      # no binding.
+      assert {:ok, %{credential_binding: nil}} =
+               Tenancy.resolve_status(%{ctx | user_id: "_seed"}, force: true)
     end
   end
 

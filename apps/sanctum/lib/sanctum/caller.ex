@@ -264,18 +264,11 @@ defmodule Sanctum.Caller do
     # The stored row must not remain a standing execution channel once its
     # athanor is archived or its creator denied here.
     if Sanctum.Tenancy.channel_active?(webhook.athanor_id, webhook.created_by) do
-      # namespace is identity-only (not path-bearing): the creator's, for
-      # attribution; nil if the webhook is orphaned.
-      namespace =
-        case webhook.created_by do
-          user_id when is_binary(user_id) and user_id != "" -> Sanctum.Namespace.lookup(user_id)
-          _ -> nil
-        end
-
       ctx =
         Context.build(
           user_id: "webhook:#{webhook.slug}",
-          namespace: namespace,
+          # Identity-only (not path-bearing): the creator's, for attribution.
+          namespace: Sanctum.Namespace.lookup(webhook.created_by),
           permissions: [:execute],
           athanor_id: webhook.athanor_id,
           auth_method: :webhook,
@@ -651,7 +644,8 @@ defmodule Sanctum.Caller do
   `Session.load/1`, so nothing about it can be assumed done).
 
   An unauthenticated context is `{:denied, ctx}` — the door stopped
-  admitting its person after the session was minted.
+  admitting its person after the session was minted — and so is one whose
+  id names nobody (`Sanctum.Tenancy.resolve_status/2`'s `:not_standing`).
   """
   @spec establish_context(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, refusal()}
   def establish_context(ctx, opts \\ [])
@@ -672,8 +666,15 @@ defmodule Sanctum.Caller do
 
   defp resolve(ctx) do
     case Sanctum.Tenancy.resolve_status(ctx) do
-      {:ok, ctx} -> {:ok, ctx}
-      {:error, :unavailable} -> {:error, :unavailable}
+      {:ok, ctx} ->
+        {:ok, ctx}
+
+      # An id that names nobody stands nowhere, as a denied person does.
+      {:error, :not_standing} ->
+        {:error, {:denied, ensure_namespace(%{ctx | authenticated: false})}}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
     end
   end
 
@@ -1101,16 +1102,14 @@ defmodule Sanctum.Caller do
   defp stored_key(_source, _ctx), do: {:error, :unauthenticated}
 
   # The channel rule a key stands by (`Sanctum.Tenancy.channel_active?/2`):
-  # its creator not denied. A creator id that names no row stands only if
-  # it was never a person's.
+  # its creator not denied. A creator that names no row stands only as one
+  # of the server's own principals.
   defp key_creator(%{status: "denied"}, _user_id), do: {:error, :not_standing}
   defp key_creator(%{}, _user_id), do: :ok
 
-  defp key_creator(nil, user_id) when is_binary(user_id) do
-    if Prima.PersonId.person?(user_id), do: {:error, :not_standing}, else: :ok
+  defp key_creator(nil, user_id) do
+    if Sanctum.Tenancy.synthetic_principal?(user_id), do: :ok, else: {:error, :not_standing}
   end
-
-  defp key_creator(nil, _user_id), do: :ok
 
   defp key_athanor(%{status: "active"}), do: :ok
   defp key_athanor(_athanor), do: {:error, :not_standing}

@@ -829,7 +829,7 @@ defmodule Aqua.ScheduleNotesSchedulerTest do
     ]
 
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
-    ctx = Sanctum.TestContext.local()
+    {ctx, _person} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
 
     on_exit(fn ->
       Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)

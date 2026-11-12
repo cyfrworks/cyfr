@@ -96,14 +96,16 @@ defmodule Sanctum.TenancyTest do
       :ok
     end
 
-    test "no athanor of their own leaves athanor_id unresolved" do
-      ctx = %Context{user_id: "nobody-#{System.unique_integer([:positive])}", athanor_id: nil}
-      assert {:ok, %{athanor_id: nil}} = Tenancy.resolve_status(ctx, force: true)
+    test "an id that names no person is refused" do
+      for uid <- ["nobody-#{System.unique_integer([:positive])}", "usr_never-seen"] do
+        ctx = %Context{user_id: uid, athanor_id: nil}
+        assert {:error, :not_standing} = Tenancy.resolve_status(ctx, force: true)
+      end
     end
 
     test "the person's own athanor is the working athanor" do
-      uid = "u-ath-#{System.unique_integer([:positive])}"
-      athanor = athanor!("home-a", uid)
+      %{id: uid} = user = person!("home-a")
+      athanor = Sanctum.Test.People.athanor!(user)
 
       {:ok, result} = Tenancy.resolve_status(%Context{user_id: uid, athanor_id: nil}, force: true)
       assert result.scope == :athanor
@@ -142,15 +144,13 @@ defmodule Sanctum.TenancyTest do
       uid = "u-admin-#{System.unique_integer([:positive])}"
 
       ctx = %Context{user_id: uid, athanor_id: nil, email: "admin@example.com"}
-      {:ok, result} = Tenancy.resolve_status(ctx, force: true)
-
-      refute result.platform_admin
+      assert {:error, :not_standing} = Tenancy.resolve_status(ctx, force: true)
       assert {:error, :not_found} = Sanctum.Tenancy.Users.get(uid)
     end
 
     test "an archived own athanor leaves none" do
-      uid = "u-archived-#{System.unique_integer([:positive])}"
-      a = athanor!("arch-a", uid)
+      %{id: uid} = user = person!("arch-a")
+      a = Sanctum.Test.People.athanor!(user)
       Sanctum.TestContext.archive!(a.id)
 
       {:ok, result} =
@@ -160,8 +160,8 @@ defmodule Sanctum.TenancyTest do
     end
 
     test "another person's athanor is never chosen, even named by the context" do
-      uid = "u-owner-#{System.unique_integer([:positive])}"
-      own = athanor!("owner-own", uid)
+      %{id: uid} = user = person!("owner-own")
+      own = Sanctum.Test.People.athanor!(user)
       theirs = athanor!("owner-theirs")
 
       for named <- [nil, theirs.id] do
@@ -276,8 +276,8 @@ defmodule Sanctum.TenancyTest do
     end
 
     test "a stale capability on the context does not survive revalidation" do
-      uid = "u-reval-down-#{System.unique_integer([:positive])}"
-      athanor = athanor!("home-c", uid)
+      %{id: uid} = user = person!("home-c")
+      athanor = Sanctum.Test.People.athanor!(user)
 
       ctx = %Context{
         user_id: uid,
@@ -293,8 +293,8 @@ defmodule Sanctum.TenancyTest do
     end
 
     test "moves a session naming another athanor to the person's own" do
-      uid = "u-reval-switch-#{System.unique_integer([:positive])}"
-      athanor = athanor!("home-d", uid)
+      %{id: uid} = user = person!("home-d")
+      athanor = Sanctum.Test.People.athanor!(user)
 
       # Session points at an athanor that is not the user's.
       ctx = %Context{user_id: uid, athanor_id: "ath_other", scope: :athanor, authenticated: true}
@@ -302,6 +302,30 @@ defmodule Sanctum.TenancyTest do
       {:ok, revalidated} = Tenancy.revalidate(ctx)
       assert revalidated.scope == :athanor
       assert revalidated.athanor_id == athanor.id
+    end
+
+    test "an id that names no person is dropped to unauthenticated, as a denied person is" do
+      for uid <- ["u-reval-nobody-#{System.unique_integer([:positive])}", "usr_never-seen"] do
+        ctx = %Context{
+          user_id: uid,
+          athanor_id: "ath_other",
+          scope: :athanor,
+          authenticated: true
+        }
+
+        assert {:ok, %{authenticated: false, athanor_id: nil}} = Tenancy.revalidate(ctx)
+      end
+
+      # One of the server's own principals has no row, and stays
+      # authenticated.
+      ctx = %Context{
+        user_id: "_seed",
+        athanor_id: "ath_other",
+        scope: :athanor,
+        authenticated: true
+      }
+
+      assert {:ok, %{authenticated: true}} = Tenancy.revalidate(ctx)
     end
   end
 
@@ -319,15 +343,16 @@ defmodule Sanctum.TenancyTest do
       assert Tenancy.channel_active?(athanor.id, user.id)
       # a creator who is not the athanor's person leaves the channel running
       assert Tenancy.channel_active?(athanor.id, bystander.id)
-      # synthetic principals are never denied
+      # the server's own principals are never denied
       assert Tenancy.channel_active?(athanor.id, "webhook:abc")
       assert Tenancy.channel_active?(athanor.id, "system")
-      assert Tenancy.channel_active?(athanor.id, nil)
+      assert Tenancy.channel_active?(athanor.id, "_seed")
 
-      # rows are never deleted: a minted id without one was never a person
+      # rows are never deleted: an id with no row, of any shape, or no id
+      # at all, names nobody
       refute Tenancy.channel_active?(athanor.id, "usr_never-seen")
-      # an id of another shape with no row names no person here
-      assert Tenancy.channel_active?(athanor.id, "someone-else")
+      refute Tenancy.channel_active?(athanor.id, "someone-else")
+      refute Tenancy.channel_active?(athanor.id, nil)
 
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
       refute Tenancy.channel_active?(athanor.id, user.id)

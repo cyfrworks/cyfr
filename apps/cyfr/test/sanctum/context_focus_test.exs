@@ -17,8 +17,13 @@ defmodule Sanctum.ContextFocusTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    alice = "github|https://github.com|alice-#{System.unique_integer([:positive])}"
-    a = own!(alice, "A")
+    {:ok, %{id: alice}} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|alice-#{System.unique_integer([:positive])}",
+        provider: "github"
+      })
+
+    a = Sanctum.Test.People.athanor!(alice)
     b = own!("github|https://github.com|someone", "B")
 
     # The operator is a person with their own athanor and the mark.

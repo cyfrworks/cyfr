@@ -69,7 +69,7 @@ defmodule Opus.Schedules.OwnershipFenceTest do
     )
 
     Application.put_env(:arca, :base_path, test_path)
-    ctx = Sanctum.TestContext.local()
+    {ctx, _person} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
 
     on_exit(fn ->
       Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
@@ -1896,7 +1896,7 @@ defmodule Opus.Schedules.OwnershipFenceFeedsTest do
     )
 
     Application.put_env(:arca, :base_path, test_path)
-    ctx = Sanctum.TestContext.local()
+    {ctx, _person} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
 
     on_exit(fn ->
       Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
