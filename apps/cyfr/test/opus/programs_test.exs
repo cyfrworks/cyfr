@@ -370,16 +370,27 @@ defmodule Opus.ProgramsTest do
       refute_receive {:control, "release", _release, _fields}, 200
     end
 
+    # Only the claim lapses: its row's lease is run out here, as a member
+    # that could not write its renewal leaves it, while the service still
+    # holds the owner under the lease its sync set. A wait for the claim's
+    # own lease would run the service's lease out with it (they are one
+    # `lease_ms`), and the service would answer the renewal unknown.
     test "a claim that only lapsed is asked for again, and the backend runs on",
          %{ctx: ctx, fake: fake} do
-      controller = start_controller(fake, lease_ms: 300)
+      controller = start_controller(fake)
       vault_entry(ctx)
       row = stdio_row(ctx, "lapsing")
       pid = connect(ctx, row)
       assert_receive {:control, "sync", _sync, _fields}, 2_000
       held = claim_row(ctx, row)
 
-      eventually(fn -> not JobClaims.live?(held) end, "the backend claim to run out")
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.where(Arca.Schemas.JobClaim, id: ^held.id),
+          set: [lease_until: DateTime.add(DateTime.utc_now(), -1, :second)]
+        )
+
+      refute JobClaims.live?(claim_row(ctx, row))
       tick(controller)
 
       assert %{owner: owner, fence: fence} = retaken = claim_row(ctx, row)
