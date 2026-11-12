@@ -30,10 +30,13 @@
 #       `*` admits newcomers, which the proof opens as an administrator
 #       does (`door.allow`). A person made before comes in by the same
 #       hello: the door admits them and their standing device is given a
-#       new certificate. Nothing is written to cyfr.run, which holds real
-#       people's accounts: where the deployment reads it, the account is
-#       cached here alone, as a first read leaves it, no name is claimed,
-#       and its person pauses past the bound on a public home.
+#       new certificate. Nothing is sent to cyfr.run, which holds real
+#       people's accounts: where the deployment's directory is cyfr.run, or
+#       one its egress refuses (the compose proof's and the Locus image
+#       tests' deployments name one, so that no read of theirs leaves the
+#       machine), the account is cached here alone, as a first read leaves
+#       it, and its person pauses past the bound on a public home; where its
+#       registry is cyfr.run or none, no name is claimed.
 #
 #       The device's key is an Ed25519 seed: drawn here for the
 #       installation's first person, and SUB's own for every later one, so
@@ -273,20 +276,42 @@ fn args ->
   # The account published at its directory, as the account pages publish
   # one: the genesis registered, then the key appended after it. Each
   # answers `:exists` for an entry already there, so an account published
-  # once is found as written. At cyfr.run the account is never published:
-  # its head is cached here alone, as a first read leaves it.
+  # once is found as written. At cyfr.run, which is never asked, and at a
+  # directory this deployment's egress refuses, so that nothing leaves the
+  # machine, the account's head is cached here alone, as a first read
+  # leaves it.
   published = fn account ->
     alias Sanctum.Directory.Client
 
-    if URI.parse(account.directory_url).host == "cyfr.run" do
+    cache_alone = fn ->
       {:ok, _head} =
         Arca.DirectoryHeads.put(
           Prima.Actor.system(),
-          Map.take(account, [:identifier, :genesis, :directory_url, :head_hash, :state, :keys_added])
+          Map.take(account, [
+            :identifier,
+            :genesis,
+            :directory_url,
+            :head_hash,
+            :state,
+            :keys_added
+          ])
         )
+    end
+
+    if URI.parse(account.directory_url).host == "cyfr.run" do
+      cache_alone.()
     else
-      {:ok, _registered} = Client.register(account.genesis)
-      {:ok, _appended} = Client.append(account.identifier, account.directory_url, account.added)
+      case Client.register(account.genesis) do
+        {:ok, _registered} ->
+          {:ok, _appended} =
+            Client.append(account.identifier, account.directory_url, account.added)
+
+        {:error, :egress_refused} ->
+          cache_alone.()
+
+        refused ->
+          raise "#{account.directory_url} did not take #{account.identifier}: #{inspect(refused)}"
+      end
     end
 
     account

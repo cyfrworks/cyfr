@@ -910,7 +910,12 @@ project_new() {
   [ -f "$WORK/.env" ] || fail "cyfr init wrote no .env"
   # The run's own settings: its images, migration, the private host the
   # shutdown case's upstream is, and builds off as an operator turns them
-  # off, both empty.
+  # off, both empty. No registry, and a directory this deployment's egress
+  # refuses (loopback, which no private egress target lists), so nothing
+  # of the run reaches cyfr.run: the fixture's people are cached here
+  # alone and have no name (tests/release-boot/fixture.exs `person`).
+  env_set CYFR_REGISTRY_URL none
+  env_set CYFR_DIRECTORY_URL http://127.0.0.1:9
   env_set CYFR_AUTO_MIGRATE on
   env_set CYFR_LOCUS_BUILDS_URL ""
   env_set CYFR_LOCUS_BUILDS_KEY ""
