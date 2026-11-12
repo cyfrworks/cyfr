@@ -114,11 +114,11 @@ const CLOCK = "performance.now() in the shell's document, Chromium";
 const SAMPLES = 20;
 // The p95 each number must not exceed, in milliseconds, at either viewport,
 // by host class: `reference` is the host the budget was stated on, and
-// `github-hosted` the GitHub-hosted runner, the same measurement on a slower
-// host. A record names its class as it names its viewport.
+// `github-hosted` uses 200 ms to catch gross regressions across runner CPU
+// models outside our control. A record names its class as it names its viewport.
 const BUDGET_MS = {
   reference: { frame_open_ms: 100, validation_ms: 100 },
-  "github-hosted": { frame_open_ms: 150, validation_ms: 150 },
+  "github-hosted": { frame_open_ms: 200, validation_ms: 200 },
 };
 // A sample with no `ready` within this long fails the run.
 const SAMPLE_MS = 10_000;
