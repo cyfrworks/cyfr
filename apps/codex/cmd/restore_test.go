@@ -718,8 +718,8 @@ func (e failedStartOpensServe) StartWithin(ctx context.Context, cause string, he
 func (e failedStartOpensServe) Docker() access.Docker { return e.docker }
 
 // On PostgreSQL the dump goes through pg_restore in the server's own major,
-// on its stdin, the URL in the container's environment and never on an
-// argv or in the output; a pg_restore that fails is not declared.
+// on its stdin after the URL's line, the URL never on an argv or in the
+// output; a pg_restore that fails is not declared.
 func TestRestoreLoadsTheDumpWithoutTheURLOnArgv(t *testing.T) {
 	compose := shippedCompose(t)
 	pg := map[string]string{"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL}
