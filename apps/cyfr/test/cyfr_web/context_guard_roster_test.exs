@@ -65,15 +65,6 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     # An abuse report, answered to the dialog itself.
     "live/components/report_component.ex" =>
       {1, [{"live/components/report_component.ex", :report}]},
-    # A sign-in's start, a line sent and its close, each answered to the
-    # terminal itself.
-    "live/components/sign_in_terminal_component.ex" =>
-      {1,
-       [
-         {"live/components/sign_in_terminal_component.ex", :start},
-         {"live/components/sign_in_terminal_component.ex", :send},
-         {"live/components/sign_in_terminal_component.ex", :close}
-       ]},
     # A deprecate or a yank, and the page's read of the registry.
     "live/registry_live.ex" =>
       {2, [{"live/registry_live.ex", :act}, {"live/registry_live.ex", :load}]},

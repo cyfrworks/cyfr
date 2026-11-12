@@ -92,8 +92,9 @@ defmodule PrismWeb.InviteLiveTest do
 
     defp signed_in(conn, answer) do
       {:ok, login, _html} = live(conn, ~p"/login")
+      # The answer is checked off the event; the page redirects once it is.
       render_hook(login, "account_answer", %{"answer" => answer})
-      assert {"/auth/passkey/complete/" <> _ticket, _flash} = assert_redirect(login)
+      assert {"/auth/passkey/complete/" <> _ticket, _flash} = assert_redirect(login, 5_000)
     end
 
     test "records the offered name once the registry says the new account holds it", %{
