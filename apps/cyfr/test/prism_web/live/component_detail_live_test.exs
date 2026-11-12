@@ -207,10 +207,34 @@ defmodule PrismWeb.ComponentDetailLiveTest do
         assert has_element?(view, "#report-modal"),
                "the async answer changed the dialog without revalidating its session context"
 
-        refute render(view) =~ "Report submitted. Thanks."
+        html = render(view)
+        refute html =~ "Report submitted. Thanks."
+        assert html =~ "Your session could not be checked just now."
       after
         Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
       end
+    end
+
+    # A component's own flash shows only when it also redirects; the
+    # guard's sentence is shown by the page the dialog is on.
+    test "a submit when the person's session cannot be checked says so and sends nothing",
+         %{conn: conn, ctx: ctx, user: user} do
+      publish_reportable!(ctx)
+      registry!(ctx, user, "/v1/abuse-reports")
+      view = reporting!(conn)
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+
+      try do
+        html = submitted(view)
+        assert is_binary(html)
+        assert has_element?(view, "#report-modal")
+        assert render(view) =~ "Your session could not be checked just now."
+        assert has_element?(view, "#report-modal button[type=submit]", "Submit report")
+      after
+        Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
+      end
+
+      refute_receive {:registry_request, _}, 200
     end
 
     # A stated limit: the registry keeps every report it is sent as its own

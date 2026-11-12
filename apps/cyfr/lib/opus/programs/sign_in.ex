@@ -253,7 +253,4 @@ defmodule Opus.Programs.SignIn do
         send(relay, {:read_failed, reason})
     end
   end
-
-  @doc false
-  def kept_lines, do: @kept_lines
 end

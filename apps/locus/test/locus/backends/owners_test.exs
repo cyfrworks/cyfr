@@ -476,6 +476,54 @@ defmodule Locus.Backends.OwnersTest do
   end
 
   describe "sessions" do
+    for ending <- [:close, :retire, :lapse] do
+      @tag ending: ending
+      test "a #{ending} wakes an in-flight receive and no later line revives its session", ctx do
+        owners = start_owners(ctx)
+        kept = [program("cat", "exec cat", home: :kept)]
+        assert {:ok, _} = sync(owners, "a", {1, 1}, kept)
+        assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "cat", home_id: @home)
+        pid = session_pid(owners, "a", {1, 1}, id)
+        assert :running = Backend.send_lines(pid, ["before"])
+        assert lines(pid, 1) == ["before"]
+
+        receiving = Task.async(fn -> Backend.recv(pid, 1, 5_000) end)
+        wait_until(fn -> :sys.get_state(pid).waiters != [] end, 2_000)
+
+        case ctx.ending do
+          :close ->
+            assert :ok = Backend.close(pid)
+
+          :retire ->
+            assert {:ok, %{state: :absent}} =
+                     control(owners, 1, %{
+                       type: :home,
+                       op: :retire,
+                       athanor: @athanor,
+                       home_id: @home
+                     })
+
+          :lapse ->
+            advance(ctx, 30_000)
+            assert :ok = LeaseSweeper.sweep(owners)
+        end
+
+        assert %{running: false, lines: []} = Task.await(receiving)
+
+        if ctx.ending == :lapse do
+          wait_until(
+            fn -> Owners.admit(owners, invoke("a", {1, 1})) == {:error, :unknown_owner} end,
+            5_000
+          )
+
+          refute Process.alive?(pid)
+        else
+          assert :ended = Backend.send_lines(pid, ["after"])
+          assert %{running: false, lines: []} = Backend.recv(pid, 1, 0)
+        end
+      end
+    end
+
     test "an open attaches by its key while the process runs, and starts it again once it ended",
          ctx do
       owners = start_owners(ctx)

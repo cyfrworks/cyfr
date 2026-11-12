@@ -891,7 +891,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       }
 
       assert {:ok, %{status: :completed, output: output}} =
-               Opus.run_root(person, :default, app <> ":1.0.0", input)
+               Opus.run_root(person, :default, app <> ":1.0.0", input, [])
 
       assert %{"op" => "steps", "results" => [work, home, default, elsewhere]} = decoded(output)
 

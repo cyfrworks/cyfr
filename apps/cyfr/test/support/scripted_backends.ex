@@ -711,26 +711,30 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp handle_session(conn, agent, fields, %{type: :send, session: id, lines: lines}) do
+    status =
+      Agent.get_and_update(agent, fn st ->
+        case st.sessions[id] do
+          nil ->
+            {:unknown_session, st}
+
+          %{running: false} ->
+            {:ended, st}
+
+          s ->
+            for line <- lines,
+                {:ok, %{"method" => method, "id" => _}} <- [Jason.decode(line)],
+                do: send(st.test, {:invoke, method, fields})
+
+            s = Enum.reduce(lines, s, &program_line(st, elem(s.owner, 1), &2, &1))
+            {:running, %{st | sessions: Map.put(st.sessions, id, %{s | active: now()})}}
+        end
+      end)
+
     st = Agent.get(agent, & &1)
 
-    case st.sessions[id] do
-      nil ->
-        refuse(conn, st, :unknown_session)
-
-      %{running: false} ->
-        session_answer(conn, st, %{"status" => "ended"})
-
-      s ->
-        for line <- lines,
-            {:ok, %{"method" => method, "id" => _}} <- [Jason.decode(line)],
-            do: send(st.test, {:invoke, method, fields})
-
-        Agent.update(agent, fn st ->
-          s = Enum.reduce(lines, s, &program_line(st, elem(s.owner, 1), &2, &1))
-          %{touch(st, id) | sessions: Map.put(st.sessions, id, %{s | active: now()})}
-        end)
-
-        session_answer(conn, st, %{"status" => "running"})
+    case status do
+      :unknown_session -> refuse(conn, st, :unknown_session)
+      status -> session_answer(conn, st, %{"status" => Atom.to_string(status)})
     end
   end
 

@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 apps/cyfr/test/aqua/agent_config_test.exs	1	pending
 apps/cyfr/test/aqua/aloud_test.exs	1	pending
-apps/cyfr/test/aqua/approvals_test.exs	3	pending
+apps/cyfr/test/aqua/approvals_test.exs	1	pending
 apps/cyfr/test/aqua/aqua_tool_edits_test.exs	1	pending
 apps/cyfr/test/aqua/attachment_write_race_test.exs	3	pending
 apps/cyfr/test/aqua/attachments_test.exs	3	pending

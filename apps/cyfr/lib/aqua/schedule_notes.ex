@@ -137,11 +137,11 @@ defmodule Aqua.ScheduleNotes do
   Drain every athanor holding a record this consumer has not receipted.
   Answers each athanor's drain. Never raises.
   """
-  @spec drain_all(keyword()) :: %{String.t() => drained()}
-  def drain_all(opts \\ []) do
+  @spec drain_all() :: %{String.t() => drained()}
+  def drain_all do
     case Arca.Outbox.pending_athanors(@consumer, @kind) do
       {:ok, athanors} ->
-        Map.new(athanors, &{&1, drain(&1, opts)})
+        Map.new(athanors, &{&1, drain(&1)})
 
       {:error, reason} ->
         Logger.warning("[ScheduleNotes] pending records not read: #{inspect(reason)}")
@@ -171,13 +171,12 @@ defmodule Aqua.ScheduleNotes do
   worked and waits for the next drain, after the outcomes before it. The
   claim is given up when the drain ends. Never raises.
 
-  `opts`: `:owner` (the claim's owner, this boot by default) and
-  `:lease_ms`.
+  `opts`: `:owner`, the claim's owner, this boot by default.
   """
   @spec drain(String.t(), keyword()) :: drained()
   def drain(athanor_id, opts \\ []) when is_binary(athanor_id) and athanor_id != "" do
     owner = Keyword.get(opts, :owner, Prima.Boot.id())
-    lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
+    lease_ms = @lease_ms
     actor = Prima.Actor.in_athanor(athanor_id)
 
     # Asked first without the claim, so a wake with nothing to do writes

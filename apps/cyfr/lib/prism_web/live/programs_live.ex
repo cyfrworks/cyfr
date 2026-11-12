@@ -40,6 +40,13 @@ defmodule PrismWeb.ProgramsLive do
   A definition the catalog refuses says why in its form. A server saved
   whose connect is refused, and a Test whose connect is refused, say why
   in the flash, and a definition saved with warnings shows them.
+
+  Adding a row, and a row's Test, Refresh, Restart, hosts and Reset
+  folder, call off the page's process (`call/5`): a connect waits up to a
+  minute, and the browser gives up on an event it waits on for 30
+  seconds. The page says what it is doing until the answer comes, takes
+  no other of these meanwhile, and the call runs to its end if the person
+  leaves (`PrismWeb.Ops.run_to_end/1`).
   """
 
   use PrismWeb, :live_view
@@ -62,6 +69,9 @@ defmodule PrismWeb.ProgramsLive do
   @placeholder_env "GITHUB_PERSONAL_ACCESS_TOKEN=vault:github-token"
 
   @forms ~w(config stdio pipe)
+
+  # The events that call off the page's process, one at a time.
+  @calls ~w(add_server add_stdio add_pipe test refresh restart reset_home set_hosts)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -86,11 +96,17 @@ defmodule PrismWeb.ProgramsLive do
       |> assign(:install, nil)
       |> assign(:logins, [])
       |> assign(:terminal, nil)
+      # What the page is doing until a call's answer comes; nil when idle.
+      |> assign(:working, nil)
 
     {:ok, socket}
   end
 
   @impl true
+  def handle_event(event, _params, %{assigns: %{working: working}} = socket)
+      when event in @calls and is_binary(working),
+      do: {:noreply, socket}
+
   def handle_event("toggle_add", %{"form" => form}, socket) when form in @forms do
     show = if socket.assigns.show_add == form, do: nil, else: form
 
@@ -201,42 +217,23 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  def handle_event("test", %{"name" => name}, socket) do
-    case call_tool(socket, "mcp_servers/test", %{"name" => name}) do
-      {:ok, %{error: sentence}} when is_binary(sentence) ->
-        {:noreply, socket |> refresh_servers() |> put_flash(:error, "Test #{name}: #{sentence}")}
-
-      {:ok, result} ->
-        status = result[:status] || "unknown"
-        {:noreply, socket |> refresh_servers() |> put_flash(:info, "Test #{name}: #{status}")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Test failed: #{error_message(reason)}")}
-    end
-  end
+  def handle_event("test", %{"name" => name}, socket),
+    do:
+      {:noreply,
+       call(socket, "Testing #{name}…", {:test, name}, "mcp_servers/test", %{"name" => name})}
 
   def handle_event("refresh", %{"name" => name}, socket) do
-    case call_tool(socket, "mcp_servers/refresh", %{"name" => name}) do
-      {:ok, _} ->
-        {:noreply, socket |> refresh_servers() |> put_flash(:info, "Refreshed #{name}.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Refresh failed: #{error_message(reason)}")}
-    end
+    {:noreply,
+     call(socket, "Refreshing #{name}…", {:refresh, name}, "mcp_servers/refresh", %{
+       "name" => name
+     })}
   end
 
   def handle_event("restart", %{"name" => name}, socket) do
-    case call_tool(socket, "mcp_servers/restart", %{"name" => name}) do
-      {:ok, result} ->
-        {:noreply,
-         socket
-         |> refresh_servers()
-         |> expand_server(name)
-         |> put_flash(:info, "Restarted #{name}: #{result[:status] || "unknown"}")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Restart failed: #{error_message(reason)}")}
-    end
+    {:noreply,
+     call(socket, "Restarting #{name}…", {:restart, name}, "mcp_servers/restart", %{
+       "name" => name
+     })}
   end
 
   def handle_event("toggle_expand", %{"name" => name}, socket) do
@@ -258,13 +255,10 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   def handle_event("reset_home", %{"entry" => entry}, socket) when entry != "" do
-    case call_tool(socket, "mcp_servers/reset_home", %{"entry" => entry}) do
-      {:ok, _} ->
-        {:noreply, socket |> refresh_servers() |> put_flash(:info, "The folder is empty again.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Reset failed: #{error_message(reason)}")}
-    end
+    {:noreply,
+     call(socket, "Emptying the folder…", :reset_home, "mcp_servers/reset_home", %{
+       "entry" => entry
+     })}
   end
 
   def handle_event("reset_home", _params, socket),
@@ -282,21 +276,10 @@ defmodule PrismWeb.ProgramsLive do
       |> Map.delete("hosts")
       |> put_present("hosts", host_list(params))
 
-    case call_tool(socket, "mcp_servers/update", %{
-           "name" => name,
-           "epoch" => detail && detail[:epoch],
-           "config" => config
-         }) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> refresh_servers()
-         |> expand_server(name)
-         |> put_flash(:info, "The program's hosts are saved; its next start resolves them.")}
+    args = %{"name" => name, "epoch" => detail && detail[:epoch], "config" => config}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Saving the hosts failed: #{error_message(reason)}")}
-    end
+    {:noreply,
+     call(socket, "Saving #{name}'s hosts…", {:set_hosts, name}, "mcp_servers/update", args)}
   end
 
   @impl true
@@ -379,49 +362,132 @@ defmodule PrismWeb.ProgramsLive do
     {:noreply, socket}
   end
 
-  # ————— defining a row —————
+  @impl true
+  def handle_async(:call, {:ok, {tag, answer, outcome}}, socket),
+    do:
+      CyfrWeb.ContextGuard.deliver(
+        assign(socket, :working, nil),
+        tag,
+        &{:noreply, called(&1, answer, outcome)}
+      )
 
-  defp create(socket, name, config) do
-    case call_tool(socket, "mcp_servers/create", %{"name" => name, "config" => config}) do
-      {:ok, result} ->
-        {:noreply,
-         socket
-         |> refresh_servers()
-         |> assign(:show_add, nil)
-         |> assign(:form_error, nil)
-         |> assign(:prefill, %{})
-         |> added_flash(name, result)
-         |> warnings_flash(result)}
+  # Only the node's shutdown stops a call (`run_to_end/1`).
+  def handle_async(:call, {:exit, _reason}, socket), do: {:noreply, socket}
 
-      {:error, reason} ->
-        {:noreply, assign(socket, :form_error, "Failed to add: #{error_message(reason)}")}
-    end
+  # ————— a row's call —————
+
+  # The call, off the event and run to its end, then the list read again,
+  # and the row it names read again when it is the one expanded.
+  defp call(socket, working, answer, tool, args) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+    expand = expanded_after(answer)
+
+    socket
+    |> assign(:working, working)
+    |> start_async(
+      :call,
+      fn ->
+        outcome =
+          run_to_end(fn ->
+            result = call_tool(ctx, tool, args)
+            {result, servers(ctx), expand && detail(ctx, expand)}
+          end)
+
+        {tag, answer, outcome}
+      end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
+
+  defp expanded_after({kind, name}) when kind in [:restart, :set_hosts], do: name
+  defp expanded_after(_answer), do: nil
+
+  defp called(socket, answer, {:error, _crashed} = result),
+    do: answered(socket, answer, result)
+
+  defp called(socket, answer, {result, servers, detail}) do
+    socket = assign(socket, :servers, servers)
+
+    socket =
+      case expanded_after(answer) do
+        name when is_binary(name) and is_map(detail) -> expanded(socket, name, detail)
+        _none -> socket
+      end
+
+    answered(socket, answer, result)
+  end
+
+  defp answered(socket, {:test, name}, {:ok, %{error: sentence}}) when is_binary(sentence),
+    do: put_flash(socket, :error, "Test #{name}: #{sentence}")
+
+  defp answered(socket, {:test, name}, {:ok, result}),
+    do: put_flash(socket, :info, "Test #{name}: #{result[:status] || "unknown"}")
+
+  defp answered(socket, {:test, _name}, {:error, reason}),
+    do: put_flash(socket, :error, "Test failed: #{error_message(reason)}")
+
+  defp answered(socket, {:refresh, name}, {:ok, _}),
+    do: put_flash(socket, :info, "Refreshed #{name}.")
+
+  defp answered(socket, {:refresh, _name}, {:error, reason}),
+    do: put_flash(socket, :error, "Refresh failed: #{error_message(reason)}")
+
+  defp answered(socket, {:restart, name}, {:ok, result}),
+    do: put_flash(socket, :info, "Restarted #{name}: #{result[:status] || "unknown"}")
+
+  defp answered(socket, {:restart, _name}, {:error, reason}),
+    do: put_flash(socket, :error, "Restart failed: #{error_message(reason)}")
+
+  defp answered(socket, :reset_home, {:ok, _}),
+    do: put_flash(socket, :info, "The folder is empty again.")
+
+  defp answered(socket, :reset_home, {:error, reason}),
+    do: put_flash(socket, :error, "Reset failed: #{error_message(reason)}")
+
+  defp answered(socket, {:set_hosts, _name}, {:ok, _}),
+    do: put_flash(socket, :info, "The program's hosts are saved; its next start resolves them.")
+
+  defp answered(socket, {:set_hosts, _name}, {:error, reason}),
+    do: put_flash(socket, :error, "Saving the hosts failed: #{error_message(reason)}")
+
+  defp answered(socket, {:create, name}, {:ok, result}) do
+    socket
+    |> assign(:show_add, nil)
+    |> assign(:form_error, nil)
+    |> assign(:prefill, %{})
+    |> added_flash(name, result)
+    |> warnings_flash(result)
   end
 
   # A pipe program: the row, then (from an install, or for any kept home)
   # a login entry for it and the sign-in terminal on it.
-  defp install(socket, name, config) do
-    with {:ok, result} <-
-           call_tool(socket, "mcp_servers/create", %{"name" => name, "config" => config}) do
-      socket =
-        socket
-        |> refresh_servers()
-        |> assign(:show_add, nil)
-        |> assign(:form_error, nil)
-        |> assign(:prefill, %{})
-        |> assign(:install, nil)
-        |> added_flash(name, result)
-        |> warnings_flash(result)
+  defp answered(socket, {:install, name, config}, {:ok, result}) do
+    socket =
+      socket
+      |> assign(:install, nil)
+      |> answered({:create, name}, {:ok, result})
 
-      if config["home"] == "kept" and present?(config["login_command"]) do
-        {:noreply, new_login(socket, name)}
-      else
-        {:noreply, socket}
-      end
-    else
-      {:error, reason} ->
-        {:noreply, assign(socket, :form_error, "Failed to add: #{error_message(reason)}")}
-    end
+    if config["home"] == "kept" and present?(config["login_command"]),
+      do: new_login(socket, name),
+      else: socket
+  end
+
+  defp answered(socket, _adding, {:error, reason}),
+    do: assign(socket, :form_error, "Failed to add: #{error_message(reason)}")
+
+  # ————— defining a row —————
+
+  defp create(socket, name, config) do
+    args = %{"name" => name, "config" => config}
+    {:noreply, call(socket, "Adding #{name}…", {:create, name}, "mcp_servers/create", args)}
+  end
+
+  defp install(socket, name, config) do
+    args = %{"name" => name, "config" => config}
+
+    {:noreply,
+     call(socket, "Adding #{name}…", {:install, name, config}, "mcp_servers/create", args)}
   end
 
   # The program fields both program forms share: the env, the home, the
@@ -607,13 +673,16 @@ defmodule PrismWeb.ProgramsLive do
 
   # ————— reading —————
 
-  defp expand_server(socket, name) do
-    detail =
-      case call_tool(socket, "mcp_servers/get", %{"name" => name}) do
-        {:ok, result} -> result
-        {:error, _} -> nil
-      end
+  defp expand_server(socket, name), do: expanded(socket, name, detail(socket, name))
 
+  defp detail(socket_or_ctx, name) do
+    case call_tool(socket_or_ctx, "mcp_servers/get", %{"name" => name}) do
+      {:ok, result} -> result
+      {:error, _} -> nil
+    end
+  end
+
+  defp expanded(socket, name, detail) do
     servers =
       if detail do
         Enum.map(socket.assigns.servers, fn s ->
@@ -635,14 +704,13 @@ defmodule PrismWeb.ProgramsLive do
     |> assign(:detail, detail)
   end
 
-  defp refresh_servers(socket) do
-    servers =
-      case call_tool(socket, "mcp_servers/list", %{}) do
-        {:ok, %{servers: list}} -> list
-        _ -> []
-      end
+  defp refresh_servers(socket), do: assign(socket, :servers, servers(socket))
 
-    assign(socket, :servers, servers)
+  defp servers(socket_or_ctx) do
+    case call_tool(socket_or_ctx, "mcp_servers/list", %{}) do
+      {:ok, %{servers: list}} -> list
+      _ -> []
+    end
   end
 
   # The athanor's login entries, each with the program its destination
@@ -720,6 +788,10 @@ defmodule PrismWeb.ProgramsLive do
           </.button>
         </:actions>
       </.page_header>
+
+      <p :if={@working} role="status" data-test="programs-working" class="text-sm text-gray-300">
+        {@working}
+      </p>
 
       <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
 

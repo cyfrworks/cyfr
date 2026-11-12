@@ -125,7 +125,7 @@ defmodule Opus.StepSpansTest do
           before = fetches.()
 
           assert {:ok, %{output: %{"status" => 200}}} =
-                   Opus.run_root(ctx, :default, "catalyst:local.step-stub", input)
+                   Opus.run_root(ctx, :default, "catalyst:local.step-stub", input, [])
 
           {form, fetches.() - before}
         end

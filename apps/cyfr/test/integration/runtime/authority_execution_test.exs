@@ -73,11 +73,17 @@ defmodule Locus.Runtime.AuthorityExecutionTest do
 
   test "a self-invoking chain keeps the consented authority at every level", %{ctx: ctx} do
     {:ok, run_result} =
-      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
-        "op" => "chain",
-        "depth" => 2,
-        "leaf" => nil
-      })
+      Opus.run_root(
+        ctx,
+        :default,
+        Probe.probe_ref(),
+        %{
+          "op" => "chain",
+          "depth" => 2,
+          "leaf" => nil
+        },
+        []
+      )
 
     assert run_result.status == :completed
 
@@ -125,10 +131,16 @@ defmodule Locus.Runtime.AuthorityExecutionTest do
 
   test "guest emits are attributed: origin and emitting node in the envelope", %{ctx: ctx} do
     {:ok, run_result} =
-      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
-        "op" => "emit",
-        "events" => [%{"note" => "one"}]
-      })
+      Opus.run_root(
+        ctx,
+        :default,
+        Probe.probe_ref(),
+        %{
+          "op" => "emit",
+          "events" => [%{"note" => "one"}]
+        },
+        []
+      )
 
     assert run_result.status == :completed
 
@@ -152,14 +164,20 @@ defmodule Locus.Runtime.AuthorityExecutionTest do
     # expanded the manifest allowlist), the action is in-chain-annotated,
     # and the caller identity holds the permission — all three legs.
     {:ok, run_result} =
-      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
-        "op" => "call",
-        "request" => %{
-          "tool" => "component",
-          "action" => "search",
-          "args" => %{"query" => "nested-probe"}
-        }
-      })
+      Opus.run_root(
+        ctx,
+        :default,
+        Probe.probe_ref(),
+        %{
+          "op" => "call",
+          "request" => %{
+            "tool" => "component",
+            "action" => "search",
+            "args" => %{"query" => "nested-probe"}
+          }
+        },
+        []
+      )
 
     assert run_result.status == :completed
 
@@ -172,10 +190,16 @@ defmodule Locus.Runtime.AuthorityExecutionTest do
     # dispatch — this is the only layer, and its verdict reaches the guest
     # as an encoded error naming the authority denial.
     {:ok, run_result} =
-      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
-        "op" => "call",
-        "request" => %{"tool" => "webhook", "action" => "list", "args" => %{}}
-      })
+      Opus.run_root(
+        ctx,
+        :default,
+        Probe.probe_ref(),
+        %{
+          "op" => "call",
+          "request" => %{"tool" => "webhook", "action" => "list", "args" => %{}}
+        },
+        []
+      )
 
     assert run_result.status == :completed
 

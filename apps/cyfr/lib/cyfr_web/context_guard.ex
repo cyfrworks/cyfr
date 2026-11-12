@@ -209,6 +209,10 @@ defmodule CyfrWeb.ContextGuard do
 
   defp on_info(%Session{kind: :created}, socket), do: {:halt, socket}
   defp on_info(@recheck, socket), do: settle(socket, :halt)
+
+  defp on_info({__MODULE__, :say, sentence}, socket),
+    do: {:halt, LiveView.put_flash(socket, :error, sentence)}
+
   defp on_info(_message, socket), do: proceed(socket)
 
   defp caller?(socket, fun) do
@@ -335,8 +339,9 @@ defmodule CyfrWeb.ContextGuard do
   is read once more, so the callback gets the socket with a current
   context, or it does not run. A refused context is handed to the view,
   which redirects (`recheck_message/0`); a store that cannot answer says
-  so. Refused, the answer is `{:noreply, socket}` — an `update` reshapes
-  it.
+  so, and a component's sentence is handed to its view to show, as a
+  component's own flash is shown only with a redirect. Refused, the
+  answer is `{:noreply, socket}` — an `update` reshapes it.
   """
   @spec guard(Socket.t(), (Socket.t() -> result)) :: result | {:noreply, Socket.t()}
         when result: term()
@@ -351,10 +356,10 @@ defmodule CyfrWeb.ContextGuard do
             fun.(assign(socket, :context, fresh))
 
           {:error, :unavailable} ->
-            {:noreply, LiveView.put_flash(socket, :error, @unavailable)}
+            {:noreply, say(socket, @unavailable)}
 
           {:error, :identity_stale} ->
-            {:noreply, LiveView.put_flash(socket, :error, @identity_stale)}
+            {:noreply, say(socket, @identity_stale)}
 
           {:error, _refused} ->
             send(self(), @recheck)
@@ -365,6 +370,16 @@ defmodule CyfrWeb.ContextGuard do
         fun.(socket)
     end
   end
+
+  # LiveView shows a component's flash only when the component also
+  # redirects, so a component's refusal is handed to its view, on the same
+  # process, whose hook shows it (`on_info/2`).
+  defp say(%Socket{assigns: %{myself: %Phoenix.LiveComponent.CID{}}} = socket, sentence) do
+    send(self(), {__MODULE__, :say, sentence})
+    socket
+  end
+
+  defp say(socket, sentence), do: LiveView.put_flash(socket, :error, sentence)
 
   # ---------------------------------------------------------------------------
   # Bare contexts

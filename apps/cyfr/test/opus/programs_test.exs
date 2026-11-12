@@ -79,6 +79,10 @@ defmodule Opus.ProgramsTest do
 
   defp supervise_controller(opts), do: Scripted.supervise_controller(opts)
 
+  # A pipe call's deadline, as the host call gives one (`Opus.Host.Pipe.deadline/1`):
+  # Unix milliseconds, here a window no case outlasts.
+  defp soon, do: System.system_time(:millisecond) + 25_000
+
   defp tick(controller) do
     send(controller, :tick)
     await_idle(controller)
@@ -218,12 +222,7 @@ defmodule Opus.ProgramsTest do
     assert %{
              boot: "bb_first",
              generation: 1,
-             pool_size: 32,
-             memory: %{
-               budget_bytes: 1_879_048_192,
-               admission_limit_bytes: 1_879_048_192,
-               held_bytes: 0
-             }
+             pool_size: 32
            } = :sys.get_state(controller)
   end
 
@@ -1603,7 +1602,7 @@ defmodule Opus.ProgramsTest do
          %{fake: fake, row: row, admin: admin, entry: entry} do
       # A live owner answers the sign-in's hold at once, with the grant of
       # the boot it was synced under.
-      assert {:ok, %{session: _}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      assert {:ok, %{session: _}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
       Scripted.restart(fake, "bb_second")
 
       assert {:ok, %{session: _token}} =
@@ -1845,7 +1844,7 @@ defmodule Opus.ProgramsTest do
       start_controller(fake)
 
       assert {:ok, %{session: first, resumed: false}} =
-               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1")
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1", soon())
 
       assert_receive {:session, "open",
                       %{
@@ -1859,57 +1858,62 @@ defmodule Opus.ProgramsTest do
       # A repeat by the same attempt answers as the first did, though the
       # box now attaches to the running session.
       assert {:ok, %{session: ^first, resumed: false}} =
-               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1")
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1", soon())
 
       assert {:ok, %{session: ^first, resumed: true}} =
-               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2")
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2", soon())
 
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", first, ["hello"])
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", first, ["hello"], soon())
       assert_receive {:session, "send", %{"lines" => ["hello"], "session" => ^first}, _}, 2_000
       Scripted.write(fake, row.id, "world")
 
       assert {:ok, %{lines: [%{text: "world"} = line], dropped: 0, running: true}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_2", first, 0, 1_000)
+               Programs.pipe_recv(ctx.athanor_id, "att_2", first, 0, 1_000, soon())
 
       # Read again by the same `after`, the same line.
-      assert {:ok, %{lines: [^line]}} = Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0)
+      assert {:ok, %{lines: [^line]}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0, soon())
 
       # Only an attempt that opened the session uses it, and only in its
       # own athanor.
       flush_sessions()
-      assert {:error, :denied} = Programs.pipe_send(ctx.athanor_id, "att_3", first, ["x"])
-      assert {:error, :denied} = Programs.pipe_recv(ctx.athanor_id, "att_3", first, 0, 0)
-      assert {:error, :denied} = Programs.pipe_close(ctx.athanor_id, "att_3", first)
-      assert {:error, :denied} = Programs.pipe_send("ath_other", "att_1", first, ["x"])
+      assert {:error, :denied} = Programs.pipe_send(ctx.athanor_id, "att_3", first, ["x"], soon())
+      assert {:error, :denied} = Programs.pipe_recv(ctx.athanor_id, "att_3", first, 0, 0, soon())
+      assert {:error, :denied} = Programs.pipe_close(ctx.athanor_id, "att_3", first, soon())
+      assert {:error, :denied} = Programs.pipe_send("ath_other", "att_1", first, ["x"], soon())
       refute_received {:session, _type, _message, _fields}
 
       # Its program ends: a read says so, and the next open starts it again.
       Scripted.end_sessions(fake, row.id)
 
       assert {:ok, %{running: false}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_2", first, line.seq, 0)
+               Programs.pipe_recv(ctx.athanor_id, "att_2", first, line.seq, 0, soon())
 
       assert {:ok, %{session: second, resumed: false}} =
-               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2")
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2", soon())
 
       refute second == first
 
       # The ended session is no one's any more: no lines, not running.
       assert {:ok, %{lines: [], dropped: 0, running: false}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0)
+               Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0, soon())
 
-      assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", first, ["x"])
+      assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", first, ["x"], soon())
     end
 
     test "a pipe open after a backends restart is opened under the new boot, its owner synced again",
          %{fake: fake, row: row, entry: entry} do
       start_controller(fake)
-      assert {:ok, %{session: _first}} = Programs.pipe_open(row, entry, "pipe-k1", [], "att_1")
+
+      assert {:ok, %{session: _first}} =
+               Programs.pipe_open(row, entry, "pipe-k1", [], "att_1", soon())
+
       Scripted.restart(fake, "bb_second")
 
       # The box's resync under the new boot ends the key's holder, and the
       # open is carried on by a fresh one.
-      assert {:ok, %{session: _second}} = Programs.pipe_open(row, entry, "pipe-k2", [], "att_2")
+      assert {:ok, %{session: _second}} =
+               Programs.pipe_open(row, entry, "pipe-k2", [], "att_2", soon())
 
       assert_receive {:control, "sync", _message, %{boot: "bb_second"}}, 2_000
       assert_receive {:session, "open", %{"key" => "pipe-k2"}, %{boot: "bb_second"}}, 2_000
@@ -1918,20 +1922,25 @@ defmodule Opus.ProgramsTest do
     test "a close ends the session and releases the owner; a repeat is harmless",
          %{ctx: ctx, fake: fake, row: row, entry: entry} do
       start_controller(fake)
-      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
 
-      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
+      assert {:ok, %{session: session}} =
+               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+
+      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session, soon())
       assert_closed_then_released(row, session)
-      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
+      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session, soon())
 
       assert {:ok, %{lines: [], running: false}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0)
+               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0, soon())
     end
 
     test "a session no attempt uses for the idle period ends, and its owner is released",
          %{fake: fake, row: row, entry: entry} do
       start_controller(fake, idle_ms: 200)
-      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+
+      assert {:ok, %{session: session}} =
+               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+
       assert_closed_then_released(row, session, 5_000)
       assert Programs.mounts() == []
     end
@@ -1943,24 +1952,34 @@ defmodule Opus.ProgramsTest do
       start_controller(fake)
       other = login_entry(ctx, "claude-second", "claude")
 
-      assert {:ok, %{session: mine}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
-      assert {:ok, %{session: kept}} = Programs.pipe_open(row, other, "pipe-k", [], "att_1")
+      assert {:ok, %{session: mine}} =
+               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+
+      assert {:ok, %{session: kept}} =
+               Programs.pipe_open(row, other, "pipe-k", [], "att_1", soon())
+
       flush_sessions()
 
       assert {:ok, _} = Sanctum.Vault.revoke(ctx, entry)
       assert_receive {:session, "close", %{"session" => ^mine}, _}, 3_000
       refute_received {:session, "close", %{"session" => ^kept}, _}
 
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", kept, ["still here"])
-      assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", mine, ["gone"])
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", kept, ["still here"], soon())
+
+      assert {:error, :ended} =
+               Programs.pipe_send(ctx.athanor_id, "att_1", mine, ["gone"], soon())
     end
 
     test "a sweep ends a session whose entry changed with no signal said, and no other",
          %{ctx: ctx, fake: fake, row: row, entry: entry} do
       start_controller(fake)
       other = login_entry(ctx, "claude-second", "claude")
-      assert {:ok, %{session: mine}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
-      assert {:ok, %{session: kept}} = Programs.pipe_open(row, other, "pipe-k", [], "att_1")
+
+      assert {:ok, %{session: mine}} =
+               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+
+      assert {:ok, %{session: kept}} =
+               Programs.pipe_open(row, other, "pipe-k", [], "att_1", soon())
 
       assert [{ctx.athanor_id, entry, "claude"}, {ctx.athanor_id, other, "claude"}] |> Enum.sort() ==
                Enum.sort(Programs.mounts())
@@ -1977,12 +1996,15 @@ defmodule Opus.ProgramsTest do
     test "a send whose connection is reset after it arrived is uncertain, never safe to repeat",
          %{ctx: ctx, fake: fake, row: row, entry: entry} do
       start_controller(fake)
-      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+
+      assert {:ok, %{session: session}} =
+               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+
       flush_sessions()
       Scripted.set(fake, :reset_send, true)
 
       assert {:error, :uncertain} =
-               Programs.pipe_send(ctx.athanor_id, "att_1", session, ["once"])
+               Programs.pipe_send(ctx.athanor_id, "att_1", session, ["once"], soon())
 
       # It reached the box.
       assert_received {:session, "send", %{"lines" => ["once"]}, _}
@@ -1991,8 +2013,13 @@ defmodule Opus.ProgramsTest do
     test "a holder killed has its session closed by the box, its row's other holder untouched",
          %{ctx: ctx, fake: fake, row: row, entry: entry} do
       start_controller(fake)
-      assert {:ok, %{session: first}} = Programs.pipe_open(row, entry, "pipe-a", [], "att_1")
-      assert {:ok, %{session: second}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+
+      assert {:ok, %{session: first}} =
+               Programs.pipe_open(row, entry, "pipe-a", [], "att_1", soon())
+
+      assert {:ok, %{session: second}} =
+               Programs.pipe_open(row, entry, "pipe-b", [], "att_1", soon())
+
       [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, first})
       flush_sessions()
 
@@ -2001,7 +2028,7 @@ defmodule Opus.ProgramsTest do
       Process.exit(pid, :kill)
       assert_receive {:session, "close", %{"session" => ^first}, _}, 2_000
       refute_receive {:control, "release", _message, _fields}, 300
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", second, ["still here"])
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", second, ["still here"], soon())
     end
 
     test "one deadline covers the owner's acquisition and the open; nothing of a late open runs",
@@ -2035,12 +2062,15 @@ defmodule Opus.ProgramsTest do
     test "a holder killed before it hears the box's answer leaves the box its session to close",
          %{ctx: ctx, fake: fake, row: row, entry: entry} do
       start_controller(fake)
-      assert {:ok, %{session: sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+
+      assert {:ok, %{session: sibling}} =
+               Programs.pipe_open(row, entry, "pipe-b", [], "att_1", soon())
+
       flush_sessions()
       Scripted.hold(fake, "opened")
 
       opening =
-        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1") end)
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", soon()) end)
 
       # The backend's session stands; its answer is on its way when the
       # holder that asked is killed.
@@ -2054,7 +2084,7 @@ defmodule Opus.ProgramsTest do
       assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
       refute closed == sibling
       refute_receive {:control, "release", _message, _fields}, 300
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", sibling, ["still here"])
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", sibling, ["still here"], soon())
     end
 
     # A close the box owes for an open whose holder died settles on the
@@ -2066,9 +2096,15 @@ defmodule Opus.ProgramsTest do
       entry: entry
     } do
       controller = start_controller(fake, lease_ms: 500)
-      assert {:ok, %{session: _sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+
+      assert {:ok, %{session: _sibling}} =
+               Programs.pipe_open(row, entry, "pipe-b", [], "att_1", soon())
+
       Scripted.hold(fake, "opened")
-      opening = Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1") end)
+
+      opening =
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", soon()) end)
+
       assert_receive {:held, "opened", answer}, 2_000
       key = {:pipe, row.athanor_id, row.id, row.epoch, entry, "pipe-a"}
       [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
@@ -2109,13 +2145,18 @@ defmodule Opus.ProgramsTest do
     test "a close refused once is owed by the box past its holder's release, and lands on the sweep",
          %{ctx: ctx, fake: fake, row: row, entry: entry} do
       controller = start_controller(fake)
-      assert {:ok, %{session: _sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
-      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-a", [], "att_1")
+
+      assert {:ok, %{session: _sibling}} =
+               Programs.pipe_open(row, entry, "pipe-b", [], "att_1", soon())
+
+      assert {:ok, %{session: session}} =
+               Programs.pipe_open(row, entry, "pipe-a", [], "att_1", soon())
+
       flush_sessions()
       Scripted.refuse_once(fake, "close", "unavailable")
 
       # The holder closes and releases; the box's close is refused.
-      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
+      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session, soon())
       assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
       refute_receive {:control, "release", _message, _fields}, 300
 
@@ -2128,7 +2169,10 @@ defmodule Opus.ProgramsTest do
     test "a late first answer never closes the session a second open of the key was given",
          %{ctx: ctx, fake: fake, row: row, entry: entry} do
       start_controller(fake)
-      assert {:ok, %{session: _sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_0")
+
+      assert {:ok, %{session: _sibling}} =
+               Programs.pipe_open(row, entry, "pipe-b", [], "att_0", soon())
+
       flush_sessions()
 
       # The first open's session stands at the backend, its answer held
@@ -2143,19 +2187,24 @@ defmodule Opus.ProgramsTest do
       assert {:error, :deadline} = Task.await(first, 3_000)
 
       # A second open of the key is given the session.
-      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-a", [], "att_2")
+      assert {:ok, %{session: session}} =
+               Programs.pipe_open(row, entry, "pipe-a", [], "att_2", soon())
+
       flush_sessions()
 
       # The first answer, late, closes nothing of it.
       send(answer, :go)
       refute_receive {:session, "close", %{"session" => ^session}, _}, 1_000
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", session, ["intact"])
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", session, ["intact"], soon())
     end
 
     test "a success queued before the deadline and handled after it is closed, never given",
          %{fake: fake, row: row, entry: entry} do
       start_controller(fake)
-      assert {:ok, %{session: sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_0")
+
+      assert {:ok, %{session: sibling}} =
+               Programs.pipe_open(row, entry, "pipe-b", [], "att_0", soon())
+
       flush_sessions()
       box = GenServer.whereis(Programs.via("local"))
 
@@ -2186,7 +2235,10 @@ defmodule Opus.ProgramsTest do
       entry: entry
     } do
       controller = start_controller(fake)
-      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+
+      assert {:ok, %{session: session}} =
+               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+
       [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, session})
       monitor = Process.monitor(pid)
 
@@ -2197,7 +2249,7 @@ defmodule Opus.ProgramsTest do
       assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 3_000
 
       assert {:ok, %{lines: [], running: false}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0)
+               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0, soon())
     end
   end
 
@@ -2479,7 +2531,7 @@ defmodule Opus.ProgramsTest do
     controller = start_controller(fake)
     row = pipe_row(ctx, "ceiling-pipe")
     entry = login_entry(ctx, "ceiling-login", "ceiling-pipe")
-    assert {:ok, _} = Programs.pipe_open(row, entry, "before", [], "att_before")
+    assert {:ok, _} = Programs.pipe_open(row, entry, "before", [], "att_before", soon())
     assert_receive {:session, "open", %{"key" => "before"}, _}, 2_000
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 1)
     Scripted.hold(fake, "sync")
@@ -2487,7 +2539,9 @@ defmodule Opus.ProgramsTest do
     assert_receive {:held, "sync", held}, 2_000
     on_exit(fn -> send(held, :go) end)
     assert :sys.get_state(controller).athanor_memory_bytes == 1
-    opening = Task.async(fn -> Programs.pipe_open(row, entry, "after", [], "att_after") end)
+
+    opening =
+      Task.async(fn -> Programs.pipe_open(row, entry, "after", [], "att_after", soon()) end)
 
     overtook =
       receive do
