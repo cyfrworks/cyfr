@@ -568,9 +568,9 @@ async function entryIds(page, vault, count) {
 // set up with it through its setup link, and the session their browser
 // then holds handed to run.sh (`admin_session`), which reads it from the
 // cookie: their person, athanor and route segment. The setup page asks
-// nothing, so they finish their name on the Settings page, which records
-// it once the registry home.test names (dir.test) answers it with their
-// account's identifier.
+// nothing: their Settings page names them from their first sign-in on,
+// with the name home.test asked by their identifier at the registry it
+// names (dir.test).
 async function signUpAdmin(page) {
   const made = await createAccount(page, adminKeys, { directory: DIR, name: ADMIN_NAME, secrets: codes });
   const { token } = await ask({ op: "setup_token" }, { secret: true });
@@ -581,8 +581,6 @@ async function signUpAdmin(page) {
   let named = null;
   if (adminSegment) {
     await open(page, pagePath(adminSegment, "/settings"));
-    await page.locator('[data-test="identity-name-input"]').fill(ADMIN_NAME);
-    await page.locator('[data-test="identity-name-form"] button[type="submit"]').click();
     named = await page.locator('[data-test="identity-name"]').innerText({ timeout: 30_000 })
       .then((text) => text.trim()).catch(() => null);
   }
