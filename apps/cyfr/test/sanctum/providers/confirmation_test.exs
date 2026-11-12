@@ -199,7 +199,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
   end
 
   test "request, confirm and cancel take the ref alone: the secret is never an argument" do
-    %{operations: operations} = Sanctum.Providers.Confirmation.definition()
+    {:ok, {_provider, %{operations: operations}}} = Sanctum.Catalog.lookup("confirmation")
 
     assert Enum.map(operations, & &1.action) == ~w(request confirm pending cancel)
 
