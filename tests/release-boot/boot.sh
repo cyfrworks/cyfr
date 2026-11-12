@@ -18,7 +18,10 @@
 #            makes before it snapshots a cell, run as the update runs it
 #            (`bin/cyfr eval`, which starts no application), answers the
 #            running cell's one slot under this release, and none once the
-#            cell has stopped. Then a public home `cyfr access public
+#            cell has stopped. The stopped release then reads none of
+#            Sanctum's test seams, with each seam's key and the test
+#            permission set at runtime (tests/release-boot/test_seams.exs).
+#            Then a public home `cyfr access public
 #            --domain cyfr.example.com` writes answers as https://cyfr.example.com
 #            (`Sanctum.origin()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
@@ -452,6 +455,17 @@ import json, sys
 sys.exit(0 if json.load(sys.stdin)["slots"] == [] else 1)' ||
   fail "live slots of the stopped cell were not empty: $stopped"
 echo "the stopped cell: $stopped"
+
+# Sanctum's test seams, held to this release's compiled permission
+# (tests/release-boot/test_seams.exs): every seam's key, and the permission,
+# set at runtime, and the release answers as it ships.
+step "the release reads none of Sanctum's test seams"
+seams="$(cell_cyfr "$CELL" eval \
+  "Code.eval_file(\"$ROOT/tests/release-boot/test_seams.exs\")" 2>&1)" ||
+  fail "the test-seam probe failed in the release: $seams"
+printf '%s\n' "$seams" | grep -qx 'CYFR_TEST_SEAMS=ok' ||
+  fail "the test-seam probe printed no answer: $seams"
+echo "the release keeps every seam's shipped value"
 
 after="$(cell_pending "$CELL")"
 if [ "${after:-1}" -ne 0 ]; then

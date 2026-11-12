@@ -42,6 +42,28 @@ defmodule Sanctum.TestSeamsTest do
     end
   end
 
+  # The decision above holds for a seam only where its read goes through
+  # it: each seam's key is read in one place, inside `Sanctum.seam/2`'s
+  # read. tests/release-boot/test_seams.exs holds the shipped release's
+  # compiled permission to the same seams.
+  test "every seam's key is read inside Sanctum.seam/2 and nowhere else" do
+    root = Path.expand("../../../..", __DIR__)
+    sources = Path.wildcard(Path.join(root, "apps/*/lib/**/*.ex"))
+
+    for {key, _default} <- @seams do
+      read = "Application.get_env(:sanctum, :#{key}"
+
+      reads =
+        for path <- sources,
+            text = File.read!(path),
+            {at, _length} <- :binary.matches(text, read),
+            do: {Path.relative_to(path, root), binary_part(text, max(at - 120, 0), min(at, 120))}
+
+      assert [{_path, before}] = reads, "#{key} is read #{length(reads)} times: #{inspect(reads)}"
+      assert before =~ "Sanctum.seam(", "#{key} is read outside Sanctum.seam/2"
+    end
+  end
+
   test "the permission is the test configurations' and no other's" do
     root = Path.expand("../../../..", __DIR__)
 
