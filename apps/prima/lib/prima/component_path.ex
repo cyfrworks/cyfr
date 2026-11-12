@@ -247,7 +247,7 @@ defmodule Prima.ComponentPath do
   defp grant_admits?(grant, path, with_slash) when is_binary(grant) do
     if String.ends_with?(grant, "/"),
       do: String.starts_with?(path, grant) or String.starts_with?(with_slash, grant),
-      else: path == grant or with_slash == grant
+      else: path == grant
   end
 
   defp grant_admits?(_grant, _path, _with_slash), do: false

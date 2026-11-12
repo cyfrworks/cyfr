@@ -58,8 +58,7 @@ defmodule Prima.SlotsTest do
             [policy: %{grandchild: :wait}],
             [hold_ms: -1],
             [sweep_interval_ms: 0],
-            [unreaped_ttl_ms: 0],
-            [unreaped_max: 0]
+            [unreaped_ttl_ms: 0]
           ] do
         assert_raise ArgumentError, fn -> Slots.start_link(bad) end
       end
@@ -297,22 +296,6 @@ defmodule Prima.SlotsTest do
 
       release_holder(holder)
       wait_until(fn -> Slots.status(server).active == 0 end)
-    end
-
-    test "a queued waiter cancelled from outside is answered :cancelled" do
-      server = start_slots(max: 1, child_reserve: 0)
-      holder = hold(server, nil, :root)
-      waiter = wait_for(server, nil, :root)
-      wait_until(fn -> Slots.status(server).queued == 1 end)
-
-      assert :ok = Slots.cancel(server, waiter)
-      assert_receive {:waited, ^waiter, {:error, :cancelled}}, 2_000
-      assert %{queued: 0, active: 1} = Slots.status(server)
-
-      # Cancelling a process with no wait is a no-op, and a slot the
-      # process holds is not touched.
-      assert :ok = Slots.cancel(server, holder)
-      assert %{active: 1} = Slots.status(server)
     end
 
     test "a caller that stopped waiting has a slot granted meanwhile given straight back" do
@@ -743,12 +726,6 @@ defmodule Prima.SlotsTest do
         Slots.status(server).unreaped == %{}
       end)
     end
-
-    test "the threshold is configurable" do
-      server = start_slots(max: 16, key_max: 4, unreaped_max: 1)
-      assert {:ok, 1} = Slots.note_unreaped(server, "ath_one", "exec_probe")
-      assert {:error, :key_unreaped} = Slots.acquire(server, "ath_one", :root)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -914,7 +891,6 @@ defmodule Prima.SlotsTest do
       assert {:error, :unavailable} = Slots.acquire(server, "ath_a", :root)
       assert {:error, :unavailable} = Slots.acquire(server, "ath_a", :root, wait_ms: 0)
       assert :ok = Slots.release(server, make_ref())
-      assert {:error, :unavailable} = Slots.cancel(server, self())
       assert {:error, :unavailable} = Slots.note_unreaped(server, "ath_a", "exec")
       assert {:ok, 0} = Slots.note_unreaped(server, nil, "exec")
       assert {:error, :unavailable} = Slots.force_release_all(server)

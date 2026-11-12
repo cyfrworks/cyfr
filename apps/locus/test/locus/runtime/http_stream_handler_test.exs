@@ -317,9 +317,8 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
   # ============================================================================
 
   describe "stream timeout from node limits" do
-    test "times out per the node's consented timeout, not the 60s fallback" do
-      # A "0s" consented timeout makes the derived deadline elapse immediately;
-      # the 60s fallback would never fire within test time.
+    test "times out per the node's consented timeout" do
+      # A "0s" consented timeout makes the derived deadline elapse immediately.
       edge =
         EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 

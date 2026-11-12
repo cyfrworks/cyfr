@@ -628,8 +628,7 @@ defmodule Prima.BuilderProtocolTest do
     @backends %MacEnvelope{
       prefix: "cyfr-locus/v1/backends",
       kind: "request",
-      fields: [ts: :integer, nonce: :string],
-      body_hash_in_header: true
+      fields: [ts: :integer, nonce: :string]
     }
 
     test "a header for the backends service, or under its key, never verifies as builds" do

@@ -5,8 +5,9 @@ defmodule Locus.Runtime.HttpStreamHandlerBoundaryTest do
   @moduledoc """
   The streaming imports keep the promise every host import keeps: a host
   function never raises into WASM. A malformed request, a handle that does
-  not exist and a stream that cannot be started each answer the guest a
-  typed error, with a host client that holds no context of its own. A
+  not exist and a request from a node with no consented edge each answer
+  the guest a typed error, with a host client that holds no context of its
+  own. A
   stream's address is asked of CYFR when it opens and again right before
   it is sent, and the relay asks once more before it connects: no stream
   is sent on another's pin, and a stream that outlives its pin keeps the
@@ -204,11 +205,7 @@ defmodule Locus.Runtime.HttpStreamHandlerBoundaryTest do
     end
   end
 
-  test "the streaming task supervisor being down is a refusal, not a fault" do
-    # `Task.Supervisor.start_child/2` answers `{:error, …}` rather than
-    # raising, and the hard match turned that into a MatchError inside the
-    # host function. Simulated by asking for a stream while the supervisor is
-    # not there to take it.
+  test "a well-formed request from a node with no consented edge is a refusal, not a fault" do
     {ns, _ref} = imports()
 
     request =

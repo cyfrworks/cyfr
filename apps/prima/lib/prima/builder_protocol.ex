@@ -214,8 +214,7 @@ defmodule Prima.BuilderProtocol do
   @request %MacEnvelope{
     prefix: @label,
     kind: "request",
-    fields: [ts: :integer, nonce: :string],
-    body_hash_in_header: true
+    fields: [ts: :integer, nonce: :string]
   }
 
   @type language :: :rust | :javascript

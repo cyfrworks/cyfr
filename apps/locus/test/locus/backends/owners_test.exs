@@ -1213,8 +1213,7 @@ defmodule Locus.Backends.OwnersTest do
       assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
     end
 
-    test "a released owner serves no open: lapsed while it retires, unknown once gone, nothing started",
-         ctx do
+    test "a released owner serves no open: unknown at once, nothing started", ctx do
       owners = start_owners(ctx)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
@@ -1223,15 +1222,9 @@ defmodule Locus.Backends.OwnersTest do
       release = %{type: :release, owners: [%{athanor: @athanor, server: "a", e: 1}]}
       assert {:ok, %{released: [%{server: "a"}]}} = control(owners, 1, release)
 
-      assert open(owners, "a", {1, 1}, "b2") in [{:error, :lapsed}, {:error, :unknown_owner}]
-
-      wait_until(
-        fn -> Owners.admit(owners, invoke("a", {1, 1})) == {:error, :unknown_owner} end,
-        5_000
-      )
-
-      assert {:error, :unknown_owner} = open(owners, "a", {1, 1}, "b3")
       # A release unroutes the owner at once and stops its sessions after.
+      assert {:error, :unknown_owner} = open(owners, "a", {1, 1}, "b2")
+      assert Owners.admit(owners, invoke("a", {1, 1})) == {:error, :unknown_owner}
       wait_until(fn -> not Process.alive?(pid) end, 5_000)
       assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
     end

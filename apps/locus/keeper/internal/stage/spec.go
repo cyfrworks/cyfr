@@ -47,8 +47,8 @@ type Spec struct {
 	Control bool `json:"control"`
 	// Cgroup is the memory-bounded group the keeper moved this process
 	// into before it sent the spec, as /proc/self/cgroup names it. The stage
-	// executes the command only from inside it; an empty internal spec
-	// skips this check. Client spawn requests always require a bound.
+	// executes the command only from inside it: a spec naming none is
+	// refused, so no command runs outside a bound.
 	Cgroup string `json:"cgroup"`
 }
 
@@ -81,7 +81,7 @@ func (s Spec) Validate() error {
 	}
 	// A pooled uid's group is named for its uid; a kept spawn's for the
 	// spawn, since the spawns of one kept home share its uid.
-	if s.Cgroup != "" && s.Cgroup != "/"+cgroup.Name(s.UID) &&
+	if s.Cgroup != "/"+cgroup.Name(s.UID) &&
 		!(s.Kept && strings.HasPrefix(s.Cgroup, "/"+cgroup.SpawnName("")) && cgroup.ValidName(strings.TrimPrefix(s.Cgroup, "/"))) {
 		return fmt.Errorf("cgroup %q is not the group of uid %d", s.Cgroup, s.UID)
 	}

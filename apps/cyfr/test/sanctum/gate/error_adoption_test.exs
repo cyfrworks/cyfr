@@ -59,7 +59,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # attach rule, field map, named accounts, provided configuration,
     # lender and flows each say theirs.
     "apps/prima/lib/prima/authority/blob.ex" => 25,
-    "apps/prima/lib/prima/component_ref.ex" => 20,
+    "apps/prima/lib/prima/component_ref.ex" => 19,
     # An external MCP server's own faults, said to the operator: among
     # them a session id it issued that is not visible ASCII or too short
     # to keep, and a listing of more pages than the client reads. A connect

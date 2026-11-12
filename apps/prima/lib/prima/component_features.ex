@@ -71,7 +71,7 @@ defmodule Prima.ComponentFeatures do
   @refused Enum.flat_map(@families, &elem(&1, 1))
 
   # How long one run may take before it is killed and the component
-  # refused unchecked (`config :prima, :wasm_tools_timeout_ms`).
+  # refused unchecked.
   @timeout_ms 10_000
 
   @key {__MODULE__, :validator}
@@ -204,13 +204,6 @@ defmodule Prima.ComponentFeatures do
     {:error, :component_validator_unavailable}
   end
 
-  defp timeout_ms do
-    case Application.get_env(:prima, :wasm_tools_timeout_ms, @timeout_ms) do
-      ms when is_integer(ms) and ms > 0 -> ms
-      _ -> @timeout_ms
-    end
-  end
-
   # `head -c` ends the validator's input after exactly the component's
   # bytes: a port cannot close the write end of its program's input and
   # still read its exit status.
@@ -240,7 +233,7 @@ defmodule Prima.ComponentFeatures do
     # A writer of its own: a busy port suspends the process that writes
     # to it, and the deadline below must not wait on that.
     writer = spawn(fn -> feed(port, bytes) end)
-    answer = await(port, System.monotonic_time(:millisecond) + timeout_ms())
+    answer = await(port, System.monotonic_time(:millisecond) + @timeout_ms)
     Process.exit(writer, :kill)
     answer
   rescue
@@ -277,7 +270,7 @@ defmodule Prima.ComponentFeatures do
     after
       remaining ->
         kill(port)
-        {:unavailable, "it did not answer within #{timeout_ms()} ms and was killed"}
+        {:unavailable, "it did not answer within #{@timeout_ms} ms and was killed"}
     end
   end
 

@@ -119,9 +119,8 @@ defmodule Locus.Config do
   compose setting no release reads) less the service's own headroom, and `:backends_memory_overcommit` (`F`) how far
   the bounds the sessions hold may add up past it, kept as the exact
   fraction it was written as (`{numerator, denominator}`), so the
-  admission limit, `floor(B * F)` (`backends_admission_limit_bytes/0`), is
-  exact. A factor below 1, or one that is not a plain decimal, refuses the
-  boot.
+  admission limit, `floor(B * F)` (`admission_limit_bytes/2`), is exact.
+  A factor below 1, or one that is not a plain decimal, refuses the boot.
 
   A node's logging is the release's one setting whichever role it serves:
   `:log_level` and `:log_format` become the logger's when a release node
@@ -802,14 +801,6 @@ defmodule Locus.Config do
   @doc "The overcommit factor `F`, as the exact fraction `{numerator, denominator}`."
   @spec backends_memory_overcommit() :: {pos_integer(), pos_integer()}
   def backends_memory_overcommit, do: get(:backends_memory_overcommit)
-
-  @doc """
-  The backends service's admission limit: `floor(B * F)` bytes, the most
-  the bounds of the sessions it holds may add up to.
-  """
-  @spec backends_admission_limit_bytes() :: pos_integer()
-  def backends_admission_limit_bytes,
-    do: admission_limit_bytes(backends_memory_budget(), backends_memory_overcommit())
 
   @doc "`floor(budget * factor)`, exact, for a factor kept as `{numerator, denominator}`."
   @spec admission_limit_bytes(pos_integer(), {pos_integer(), pos_integer()}) :: pos_integer()

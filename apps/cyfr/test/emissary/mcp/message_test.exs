@@ -60,7 +60,6 @@ defmodule Emissary.MCP.MessageTest do
       assert code({:malformed_resource, :execution}) == -33100
       # unauthenticated
       assert code({:consent_class_required, :not_authenticated}) == -33001
-      assert code(:missing_token) == -33001
     end
 
     test "a consent signal answers with its own tag's code" do

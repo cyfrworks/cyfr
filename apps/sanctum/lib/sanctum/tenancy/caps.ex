@@ -74,22 +74,9 @@ defmodule Sanctum.Tenancy.Caps do
 
   @behaviour Prima.Caps
 
-  @type key ::
-          :max_athanors
-          | :max_pairs_per_person
-          | :max_shared_threads_per_person
-          | :max_people_per_thread
-          | :max_threads_per_athanor
-          | :athanor_storage_bytes
+  @type key :: Prima.Caps.key()
 
-  @keys [
-    :max_athanors,
-    :max_pairs_per_person,
-    :max_shared_threads_per_person,
-    :max_people_per_thread,
-    :max_threads_per_athanor,
-    :athanor_storage_bytes
-  ]
+  @keys Prima.Caps.keys()
 
   @doc """
   The cap set for `key`, `nil` when off, or `{:error, :unavailable}` when
