@@ -172,30 +172,57 @@ defmodule Cyfr.GenServerCatchallTest do
   end
 
   describe "an execution's attempt" do
+    # Ended by its waiter, the attempt lapses what was dispatched to this
+    # boot, which it reads on the sandbox connection.
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
     # One unnamed attempt per open execution, registered under its id, so
-    # it is probed on an instance of its own.
+    # it is probed on an instance of its own. It is opened as admission
+    # opens one, under this boot (`Opus.Admission`), by a waiter of its
+    # own, so the probe also sees the attempt end when its waiter does.
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
         ctx = Sanctum.TestContext.local()
         record = Opus.Record.new(ctx, "catalyst:local.catchall:0.1.0", %{})
+        test = self()
 
-        {:ok, pid} =
-          Opus.Attempt.open(
-            execution_id: record.id,
-            attempt: record.attempt,
-            ctx: ctx,
-            authority: Prima.Authority.zero(),
-            component_ref: "catalyst:local.catchall:0.1.0",
-            close: %Opus.Close{ctx: ctx, record: record, admission: []},
-            worker: Cyfr.Test.AttemptFixtures.unreachable_worker("wrk_catchall")
-          )
+        waiter =
+          Task.async(fn ->
+            {:ok, pid} =
+              Opus.Attempt.open(
+                execution_id: record.id,
+                attempt: record.attempt,
+                ctx: ctx,
+                authority: Prima.Authority.zero(),
+                component_ref: "catalyst:local.catchall:0.1.0",
+                close: %Opus.Close{ctx: ctx, record: record, admission: []},
+                worker: Cyfr.Test.AttemptFixtures.unreachable_worker("wrk_catchall"),
+                boot_id: Opus.Record.boot_id()
+              )
 
-        assert capture_log(fn ->
-                 send(pid, unquote(Macro.escape(message)))
-                 :sys.get_state(pid)
-               end) =~ "unexpected message"
+            send(test, {:opened, pid})
+            receive do: (:done -> :ok)
+          end)
 
-        assert Process.alive?(pid)
+        assert_receive {:opened, pid}, 5_000
+
+        log =
+          capture_log(fn ->
+            send(pid, unquote(Macro.escape(message)))
+            :sys.get_state(pid)
+            assert Process.alive?(pid)
+
+            ref = Process.monitor(pid)
+            send(waiter.pid, :done)
+            Task.await(waiter)
+            assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 10_000
+          end)
+
+        assert log =~ "unexpected message"
+        refute log =~ "FunctionClauseError"
       end
     end
   end
