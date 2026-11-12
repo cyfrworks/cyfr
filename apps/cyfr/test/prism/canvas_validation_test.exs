@@ -49,7 +49,7 @@ defmodule Prism.CanvasValidationTest do
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)
       File.rm_rf(base)
-      reload_registry()
+      reload_registry(athanor.id)
     end)
 
     {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}

@@ -300,26 +300,28 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  Reload the tincture registry against the database as it now stands. The
-  registry is one server-wide process, so it is allowed the test's checkout
-  while the test holds one; from an `on_exit` callback, after the test's own
-  checkout is gone, its reload runs on a checkout lent to it alone.
+  Reload the tincture registry's rows of `athanor_id` against the database
+  as it now stands. The registry is one server-wide process, so it is
+  allowed the test's checkout while the test holds one; from an `on_exit`
+  callback, after the test's own checkout is gone, its reload runs on a
+  checkout lent to it alone, and an athanor gone with the test's checkout
+  leaves no rows.
   """
-  def reload_registry do
+  def reload_registry(athanor_id) do
     registry = Process.whereis(Prism.TinctureRegistry)
 
     case Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo) do
       :ok ->
         try do
           Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-          :ok = Prism.TinctureRegistry.reload()
+          :ok = Prism.TinctureRegistry.reload_athanor(athanor_id)
         after
           Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
         end
 
       {:already, _} ->
         Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-        :ok = Prism.TinctureRegistry.reload()
+        :ok = Prism.TinctureRegistry.reload_athanor(athanor_id)
     end
   end
 end
