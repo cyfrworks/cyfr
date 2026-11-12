@@ -15,8 +15,8 @@ defmodule Cyfr.TestSeamsTest do
 
   # Configuration read under the module's own name rather than a key, and
   # a seam's all the same: the projection reconciler's (`config/test.exs`
-  # turns it off).
-  @module_keyed [Compendium.ProjectionReconciler]
+  # turns it off). A module key is named as its source spells it.
+  @module_keyed ["Compendium.ProjectionReconciler"]
 
   # The decision holds for a seam only where its read goes through it.
   # Every read of the host's application environment in every
@@ -57,7 +57,7 @@ defmodule Cyfr.TestSeamsTest do
     # more is a key to drop from `Cyfr.Boundaries` and `config/test.exs`.
     assert inside |> Enum.map(& &1.key) |> Enum.sort() ==
              Enum.sort([
-               Compendium.ProjectionReconciler,
+               "Compendium.ProjectionReconciler",
                :crew_delivery_enabled,
                :cron_scheduler_enabled,
                :database_checks_enabled,
@@ -76,11 +76,11 @@ defmodule Cyfr.TestSeamsTest do
              ])
   end
 
-  # The reads of `:cyfr`'s environment in `ast`, each with its key (a
-  # module's own name for `__MODULE__`) and its gate: `:seam` inside the
+  # The reads of `:cyfr`'s environment in `ast`, each with its key (the
+  # module's name as its source spells it, for `__MODULE__`) and its gate: `:seam` inside the
   # function `Cyfr.seam/2` or `/3` is handed, `:plain` otherwise.
   defp reads({:defmodule, _, [{:__aliases__, _, parts}, body]}, scope),
-    do: reads(body, %{scope | module: Module.concat(parts)})
+    do: reads(body, %{scope | module: Enum.map_join(parts, ".", &Atom.to_string/1)})
 
   defp reads({{:., _, [{:__aliases__, _, [:Cyfr]}, :seam]}, _, args}, scope) when is_list(args),
     do:
