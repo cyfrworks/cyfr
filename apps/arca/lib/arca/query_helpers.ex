@@ -196,4 +196,27 @@ defmodule Arca.QueryHelpers do
       _sqlite -> query
     end
   end
+
+  @doc """
+  Hold the rows `query` reads against a writer of their key, or of the
+  whole row by `for_update/1`, until the enclosing transaction ends.
+
+  PostgreSQL gets `FOR KEY SHARE`: any number of readers hold the row at
+  once, `for_update/1`, a `DELETE` or an `UPDATE` that changes a key
+  column waits for all of them, and an `UPDATE` of any other column
+  (PostgreSQL's `FOR NO KEY UPDATE`) does not wait and is not waited
+  for. A key column here is one of a unique index a foreign key could
+  reference: a partial or an expression unique index does not count, so
+  an `UPDATE` of a column only such an index covers does not wait
+  either. A reader that may meet such an update reads the row it holds
+  again for what it changed. SQLite gets the query back unchanged, as
+  `for_share/1` does.
+  """
+  @spec for_key_share(Ecto.Queryable.t()) :: Ecto.Queryable.t()
+  def for_key_share(query) do
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.Postgres -> lock(query, "FOR KEY SHARE")
+      _sqlite -> query
+    end
+  end
 end
