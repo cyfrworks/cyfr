@@ -96,14 +96,10 @@ defmodule PrismWeb.ReportComponent do
     end)
   end
 
-  # An async answer reaches a component past every hook of the view's, so
-  # it is held to the person's standing here, as an event is.
   @impl true
-  def handle_async(:report, {:ok, {tag, result}}, socket) do
-    CyfrWeb.ContextGuard.guard(assign(socket, :submitting, false), fn current ->
-      CyfrWeb.ContextGuard.deliver(current, tag, &reported(&1, result))
-    end)
-  end
+  def handle_async(:report, {:ok, {tag, result}}, socket),
+    do:
+      CyfrWeb.ContextGuard.deliver(assign(socket, :submitting, false), tag, &reported(&1, result))
 
   # Only the node's shutdown stops the task (`send_report/2`).
   def handle_async(:report, {:exit, _reason}, socket), do: {:noreply, socket}

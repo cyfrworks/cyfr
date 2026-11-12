@@ -408,19 +408,24 @@ defmodule CyfrWeb.ContextGuard do
   def capture(_none), do: {nil, nil}
 
   @doc """
-  Deliver a deferred result to the socket only if it was computed for the
-  tenant and focus the socket works in now; otherwise it is dropped and
-  the callback answers `{:noreply, socket}`. The view's hook has already
-  brought the socket's context up to date when this runs.
+  Deliver a deferred result to the socket only if its context stands
+  (`guard/2`) and the result was computed for the tenant and focus the
+  socket works in now; otherwise it is dropped and the callback answers
+  `{:noreply, socket}`, or the guard's refusal. A message has passed the
+  view's hook, which leaves the context fresh, so the guard reads nothing
+  more for it; an async answer, to a view or a component, passes no hook,
+  and this is where its standing is checked.
   """
   @spec deliver(Socket.t(), tag(), (Socket.t() -> result)) :: result | {:noreply, Socket.t()}
         when result: term()
   def deliver(%Socket{} = socket, {athanor_id, _validated_at}, fun)
       when is_function(fun, 1) do
-    case socket.assigns[:context] do
-      %Context{athanor_id: ^athanor_id} -> fun.(socket)
-      _ -> discard(socket)
-    end
+    guard(socket, fn socket ->
+      case socket.assigns[:context] do
+        %Context{athanor_id: ^athanor_id} -> fun.(socket)
+        _ -> discard(socket)
+      end
+    end)
   end
 
   defp discard(socket) do
