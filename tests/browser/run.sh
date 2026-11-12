@@ -51,7 +51,7 @@ step "starting the release on a fresh SQLite cell, as https://cyfr.test"
 server_start "$CELL"
 
 step "publishing frame-probe and frame-neighbour, public, in a signed-in person's athanor, and granting frame-probe"
-person="$(server_fixture "$CELL" person operator@example.com browser-harness)"
+person="$(server_fixture "$CELL" person browser-harness)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 user_id="$(field "$person" user_id)"
 segment="$(field "$person" segment)"

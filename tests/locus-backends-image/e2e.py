@@ -348,7 +348,7 @@ def cyfr_controller(image):
     try:
         stack.up_both()
         run("docker", "cp", FIXTURE, f"{stack.cyfr}:/tmp/fixture.exs")
-        signed_in = stack.fixture("person", "operator@example.com", "locus-backends-e2e")
+        signed_in = stack.fixture("person", "locus-backends-e2e")
         person = Person(stack.cyfr_base, signed_in["token"])
         expect(signed_in["athanor_id"], "a person is signed in on cyfr, in an athanor of their own", signed_in)
 

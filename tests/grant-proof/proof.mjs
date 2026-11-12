@@ -80,7 +80,7 @@ const REVOKED = ":no_profile";
 // owner's display name and the URLs the tincture's requests name.
 const FEED = { scheme: "https", hosts: [KEPT], methods: ["GET"], paths: ["/feed"] };
 const FEED_HEADER = "x-feed-token";
-const OWNER_NAME = "Olive";
+const OWNER_NAME = "@grant-proof-owner";
 const FEED_URL = `https://${KEPT}/feed`;
 const OFF_FEED_URL = `https://${KEPT}/elsewhere`;
 const { homes } = readHomes(homesFile);
@@ -440,8 +440,8 @@ async function main() {
     // -----------------------------------------------------------------------
     // share
     // -----------------------------------------------------------------------
-    // A second person, Olive, signs in and shares a key for the tincture's
-    // key need with everyone (fixture.exs `share`, the step's one seed).
+    // A second person, @grant-proof-owner, signs in and shares a key for
+    // the tincture's key need with everyone (fixture.exs `share`).
     // Nothing of the person's head changes until they grant it.
     const clock = await ask({ op: "clock" });
     const me = await ask({ op: "me" });

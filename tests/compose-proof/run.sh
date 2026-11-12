@@ -1178,7 +1178,7 @@ bind_case() {
 # The person modes signs in, and the MCP protocol version /mcp speaks.
 sign_in() {
   local signed_in token
-  signed_in="$(cyfr_fixture person operator@example.com compose-proof-modes)"
+  signed_in="$(cyfr_fixture person compose-proof-modes)"
   token="$(jget "$signed_in" token)"
   [ -n "$token" ] && [ "$token" != null ] || fail "the release fixture signed nobody in: '$signed_in'"
   # The person's athanor, by the route segment its pages are under.
@@ -1191,7 +1191,7 @@ sign_in() {
   COOKIE="$(cyfr_rpc "{answer, _} = Code.eval_file(\"/tmp/session.exs\"); IO.puts(answer.([\"$token\"]))" | sed -n 's/^COOKIE=//p' | tail -1)"
   [ -n "$COOKIE" ] || fail "the release minted no session cookie"
   (umask 077 && printf 'cookie: _cyfr_key=%s\n' "$COOKIE" >"$WORK/cookie.headers")
-  ok "operator@example.com is signed in; /mcp speaks $MCP_VERSION"
+  ok "compose-proof-modes is signed in; /mcp speaks $MCP_VERSION"
 }
 
 # Forged forwarding and identity headers change neither the answer nor
@@ -1994,13 +1994,13 @@ print(f"{sum(float(n) * units[u] for n, u in parts):g}")')"
   ok "cyfr's stop_grace_period is ${grace} s"
 
   step "a person signed in on cyfr, as the release proofs sign one in"
-  signed_in="$(cyfr_fixture person operator@example.com compose-proof-shutdown)"
+  signed_in="$(cyfr_fixture person compose-proof-shutdown)"
   token="$(printf '%s' "$signed_in" | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["token"])')" ||
     fail "the release fixture signed nobody in: '$signed_in'"
   (umask 077 && printf 'authorization: Bearer %s\n' "$token" >"$WORK/session.headers")
   MCP_VERSION="$(cyfr_rpc 'IO.puts("VERSION=" <> Prima.MCP.Protocol.version())' | sed -n 's/^VERSION=//p')"
   [ -n "$MCP_VERSION" ] || fail "cyfr named no MCP protocol version"
-  ok "operator@example.com is signed in; /mcp speaks $MCP_VERSION"
+  ok "compose-proof-modes is signed in; /mcp speaks $MCP_VERSION"
 
   step "the MCP upstream, on the project's default network"
   UPSTREAM="${RUN}-upstream"
@@ -2256,7 +2256,7 @@ runtime_case() {
   ok "locus-runtime runs $LOCUS_IMAGE and is healthy"
 
   step "a person signed in on cyfr, as the release proofs sign one in"
-  signed_in="$(cyfr_fixture person operator@example.com compose-proof-runtime)"
+  signed_in="$(cyfr_fixture person compose-proof-runtime)"
   token="$(jget "$signed_in" token)"
   [ -n "$token" ] && [ "$token" != null ] || fail "the release fixture signed nobody in: '$signed_in'"
   ok "operator@example.com is signed in"

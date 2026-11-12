@@ -12,14 +12,14 @@
 # only the digests and sizes it computes from the bytes read, never the
 # bytes.
 #
-#   person EMAIL SUB NAME
-#       The person the GitHub identity SUB is linked to, made the first
-#       time and signed in with the verified EMAIL and the name NAME, by the
-#       release fixture's `person` (tests/release-boot/fixture.exs): the
-#       installation's first person by its setup admission, every later one
-#       by an open admission's rows once the door's `*` admits. Answers the
-#       person, their own athanor, its route segment, their namespace and
-#       the session token.
+#   person SUB
+#       The person of the account SUB names, made the first time and
+#       signed in by the release fixture's `person`
+#       (tests/release-boot/fixture.exs): their device's hello, the
+#       installation's first person under the setup token, every later one
+#       by the door once its `*` admits. Answers the person, their own
+#       athanor, its route segment, their namespace (the name their account
+#       holds at the registry, SUB) and the session token.
 #
 #   admit SESSION_TOKEN
 #       The door opened to newcomers by the session's person, an
@@ -172,17 +172,15 @@ fn args ->
   end
 
   case args do
-    ["person", email, sub, name] ->
+    ["person", sub] ->
       {release, _binding} = Code.eval_file(Path.expand("../release-boot/fixture.exs", __DIR__))
-      "FIXTURE=" <> signed_in = release.(["person", email, sub, name])
+      "FIXTURE=" <> signed_in = release.(["person", sub])
       %{"user_id" => user_id, "token" => token} = Jason.decode!(signed_in)
       ctx = person_ctx.(user_id)
       {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
 
       answer.(%{
         user_id: user.id,
-        email: user.email,
-        name: user.display_name,
         namespace: user.namespace,
         athanor_id: ctx.athanor_id,
         segment: segment.(ctx.athanor_id),

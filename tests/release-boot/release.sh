@@ -270,8 +270,9 @@ cell_value() {
 # database adapter the release was COMPILED for (runtime.exs refuses a
 # disagreement), auto-migration on, the listener ports, the host API on
 # loopback, the runtime's service id, the operators, and the pinned
-# validator, and the cell's own directory (`cell_directory_start`), its
-# address a private egress target as an operator names one. `$2` is the
+# validator, and the cell's own directory (`cell_directory_start`), which
+# is its registry too, its address a private egress target as an operator
+# names one, and no OCI registry. `$2` is the
 # PostgreSQL URL of the cell's database, ignored for SQLite.
 cell_new() {
   local cell="$1" url="${2:-}" directory_port targets
@@ -296,6 +297,8 @@ cell_new() {
   mkdir -p "$cell/directory"
   printf 'http://%s:%s\n' "$CELL_DIRECTORY_ADDRESS" "$directory_port" >"$cell/directory/url"
   cell_set "$cell" CYFR_DIRECTORY_URL "http://$CELL_DIRECTORY_ADDRESS:$directory_port"
+  cell_set "$cell" CYFR_REGISTRY_URL "$CELL_DIRECTORY_ADDRESS:$directory_port"
+  cell_set "$cell" CYFR_OCI_REGISTRY_URL none
   targets="$(cell_value "$cell" CYFR_PRIVATE_EGRESS_TARGETS)"
   cell_set "$cell" CYFR_PRIVATE_EGRESS_TARGETS "${targets:+$targets,}$CELL_DIRECTORY_ADDRESS"
 }
@@ -303,9 +306,10 @@ cell_new() {
 # A cell's directory: the cyfr.run stand-in
 # (tests/registry-stand-in/standin.py) on CELL_DIRECTORY_ADDRESS, at the
 # port cell_new picked, its state, ready file and log in `$cell/directory/`.
-# Its people's accounts are published there (tests/release-boot/fixture.exs),
-# so a public cell reads them again past the freshness bound as it reads any
-# account, and nothing reaches cyfr.run. It starts with the cell's server
+# Its people's accounts are published there and named in its registry
+# (tests/release-boot/fixture.exs), so a public cell reads them again past
+# the freshness bound as it reads any account and learns their names as it
+# learns any, and nothing reaches cyfr.run. It starts with the cell's server
 # (`server_start`) while the deployment file still names it, a proof being
 # free to name another directory, and stops with it (`server_halt`).
 CELL_DIRECTORY_ADDRESS=127.78.0.2
