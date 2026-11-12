@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -46,7 +47,7 @@ func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 	askTerminal = func() bool { return true }
 	askInput = strings.NewReader("yes\n")
 	var out bytes.Buffer
-	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com", acmeEmail: "ops@example.com"}, false, "", &out); err != nil {
+	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com", acmeEmail: "ops@example.com"}, false, &out); err != nil {
 		t.Fatalf("cyfr access public: %v\n%s", err, out.String())
 	}
 	text := out.String()
@@ -87,7 +88,7 @@ func TestAccessListsNoConsequenceWhenNoOneIsSetUp(t *testing.T) {
 	askTerminal = func() bool { return true }
 	askInput = strings.NewReader("yes\n")
 	var out bytes.Buffer
-	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, "", &out); err != nil {
+	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, &out); err != nil {
 		t.Fatalf("cyfr access public: %v\n%s", err, out.String())
 	}
 	want := "CYFR will be reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n" +
@@ -108,13 +109,13 @@ func TestAccessChangesNothingUnconfirmed(t *testing.T) {
 	askTerminal = func() bool { return true }
 	askInput = strings.NewReader("no\n")
 	var declined bytes.Buffer
-	err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, "", &declined)
+	err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, &declined)
 	if err != nil || !strings.HasSuffix(declined.String(), "Make this change? (yes/no) [no]: Nothing changed.\n") {
 		t.Errorf("a declined change answered %v:\n%s", err, declined.String())
 	}
 	askTerminal = func() bool { return false }
 	locks := s.locks
-	err = runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, "", &bytes.Buffer{})
+	err = runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "Nothing changed: there is no terminal to confirm the change on. Run it again with --yes") || s.locks != locks {
 		t.Errorf("a change with no terminal and no --yes answered %v (locks %d → %d)", err, locks, s.locks)
 	}
@@ -122,7 +123,7 @@ func TestAccessChangesNothingUnconfirmed(t *testing.T) {
 		t.Errorf("an unconfirmed change switched %+v", s.switches)
 	}
 	var out bytes.Buffer
-	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, "", &out); err != nil || accessOf(t) != access.ModePublic {
+	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, &out); err != nil || accessOf(t) != access.ModePublic {
 		t.Errorf("--yes did not make the change: %v", err)
 	}
 	// The fake engine's preview names no change of address here.
@@ -149,7 +150,7 @@ func TestAccessWithoutAConfirmationShowsTheChangeAndMakesNone(t *testing.T) {
 	askTerminal = func() bool { return false }
 	askInput = noInput{t}
 	var out bytes.Buffer
-	err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, "", &out)
+	err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, &out)
 	if err == nil || !strings.Contains(err.Error(), "Nothing changed: there is no terminal to confirm the change on. Run it again with --yes") || ExitStatus(err) != exitFailure {
 		t.Errorf("an unconfirmed change answered %v", err)
 	}
@@ -158,7 +159,7 @@ func TestAccessWithoutAConfirmationShowsTheChangeAndMakesNone(t *testing.T) {
 	}
 	for name, o := range map[string]accessOptions{"a machine not joined": {}, "a new node": {newNode: true}} {
 		out.Reset()
-		err := runAccess(context.Background(), access.ModeTailnet, o, false, "", &out)
+		err := runAccess(context.Background(), access.ModeTailnet, o, false, &out)
 		if err == nil || !strings.Contains(err.Error(), "Nothing changed: this machine must join your tailnet before the change can be shown") {
 			t.Errorf("%s: an unconfirmed tailnet change answered %v", name, err)
 		}
@@ -172,26 +173,29 @@ func TestAccessWithoutAConfirmationShowsTheChangeAndMakesNone(t *testing.T) {
 }
 
 // For tailnet the machine joins first, printing the approval link, under a
-// join request id derived from the switch's, so a resent request resends
-// its join; the switch takes the joined machine. A machine already joined
+// join request id derived from the switch's; the switch takes the joined
+// machine. A machine already joined
 // is not joined again, and --new-node always joins.
 func TestAccessTailnetJoinsFirstUnlessJoined(t *testing.T) {
 	s := newAccessProject(t)
-	const id = "0123456789abcdef0123456789abcdef"
 	var out bytes.Buffer
-	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{hostname: "home"}, true, id, &out); err != nil {
+	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{hostname: "home"}, true, &out); err != nil {
 		t.Fatalf("cyfr access tailnet: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "open this link and approve the machine:\n  https://login.tailscale.com/a/approve-test\n") {
 		t.Errorf("the approval link is not printed:\n%s", out.String())
 	}
+	if len(s.switches) != 1 || !requestIDPattern.MatchString(s.switches[0].ID) {
+		t.Fatalf("the switch was %+v", s.switches)
+	}
+	id := s.switches[0].ID
 	if len(s.joins) != 1 || s.joins[0].ID != joinRequestID(id) || s.joins[0].Hostname != "home" || s.joins[0].NewNode {
 		t.Fatalf("the join was %+v", s.joins)
 	}
 	if joinRequestID(id) == id || !requestIDPattern.MatchString(joinRequestID(id)) || joinRequestID(id) != joinRequestID(id) {
 		t.Errorf("the join's request id %q is no request id of its own", joinRequestID(id))
 	}
-	if len(s.switches) != 1 || s.switches[0].ID != id || s.switches[0].JoinID != "join-"+joinRequestID(id) {
+	if s.switches[0].JoinID != "join-"+joinRequestID(id) {
 		t.Fatalf("the switch was %+v", s.switches)
 	}
 	if host, _ := projectEnv(t).value("CYFR_HOST"); host != "cyfr.tail1234.ts.net" {
@@ -201,7 +205,7 @@ func TestAccessTailnetJoinsFirstUnlessJoined(t *testing.T) {
 	// Joined already: the preview takes the machine as it is.
 	s = newAccessProject(t)
 	s.joined[""] = access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
-	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, true, "", &bytes.Buffer{}); err != nil {
+	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, true, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.joins) != 0 || len(s.switches) != 1 || s.switches[0].JoinID != "" {
@@ -211,7 +215,7 @@ func TestAccessTailnetJoinsFirstUnlessJoined(t *testing.T) {
 	// --new-node replaces the identity, so it joins.
 	s = newAccessProject(t)
 	s.joined[""] = access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
-	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, true, "", &bytes.Buffer{}); err != nil {
+	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, true, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.joins) != 1 || !s.joins[0].NewNode {
@@ -255,7 +259,7 @@ func TestAccessRefusalsAreTheirSentences(t *testing.T) {
 			if c.prepare != nil {
 				c.prepare(s)
 			}
-			err := runAccess(context.Background(), c.mode, c.o, true, "", &bytes.Buffer{})
+			err := runAccess(context.Background(), c.mode, c.o, true, &bytes.Buffer{})
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("cyfr access answered %v, want %q", err, c.want)
 			}
@@ -265,11 +269,10 @@ func TestAccessRefusalsAreTheirSentences(t *testing.T) {
 			}
 		})
 	}
-	s := newAccessProject(t)
-	if err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, "NOT-HEX", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "--request-id") || s.locks != 0 {
-		t.Errorf("a request id that is none answered %v", err)
-	}
 }
+
+// requestIDPattern is a request id: 32 lowercase hexadecimal characters.
+var requestIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // `cyfr access status` reads without the lock, so it answers while another
 // command holds it, and prints how the home is reached, what runs, the
@@ -393,7 +396,7 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		askTerminal = func() bool { return true }
 		askInput = answers("no")
 		var out bytes.Buffer
-		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{hostname: "home"}, false, "", &out)
+		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{hostname: "home"}, false, &out)
 		if err != nil || !strings.HasSuffix(out.String(), "Join it? (yes/no) [no]: Nothing changed.\n") || len(s.joins) != 0 {
 			t.Fatalf("a declined join answered %v and joined %v:\n%s", err, s.joins, out.String())
 		}
@@ -406,7 +409,7 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		askTerminal = func() bool { return true }
 		askInput = answers("yes", "no")
 		var out bytes.Buffer
-		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, false, "", &out)
+		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, false, &out)
 		want := "Make this change? (yes/no) [no]: Nothing changed. This machine stays on your tailnet as cyfr.tail1234.ts.net; run cyfr access tailnet again when you want CYFR reached there.\n"
 		if err != nil || !strings.HasSuffix(out.String(), want) || len(s.joins) != 1 || len(s.switches) != 0 {
 			t.Fatalf("a declined change after a join answered %v (joins %d, switches %d), want it to end %q:\n%s", err, len(s.joins), len(s.switches), want, out.String())
@@ -418,7 +421,7 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		askTerminal = func() bool { return true }
 		askInput = answers("no")
 		var out bytes.Buffer
-		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, "", &out)
+		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, &out)
 		if err != nil || !strings.HasSuffix(out.String(), "Nothing changed.\n") || len(s.joins) != 0 || len(s.switches) != 0 {
 			t.Fatalf("a declined new node answered %v, joined %v", err, s.joins)
 		}
@@ -435,7 +438,7 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		askTerminal = func() bool { return true }
 		askInput = answers("yes", "no")
 		var out bytes.Buffer
-		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, "", &out)
+		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, &out)
 		want := removedOld
 		if err != nil || !strings.HasSuffix(out.String(), want) || len(s.joins) != 1 || len(s.switches) != 0 {
 			t.Fatalf("a declined change after a new node answered %v (joins %d, switches %d), want %q\n%s", err, len(s.joins), len(s.switches), want, out.String())
@@ -505,7 +508,7 @@ func TestAccessSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testi
 			askTerminal = func() bool { return true }
 			askInput = answers("yes", "no")
 			var out bytes.Buffer
-			err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, "", &out)
+			err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, &out)
 			if err != nil || !strings.HasSuffix(out.String(), c.want) || len(s.joins) != 1 || len(s.switches) != 0 {
 				t.Fatalf("a change declined after a new node's join answered %v (joins %d, switches %d), want %q\n%s", err, len(s.joins), len(s.switches), c.want, out.String())
 			}
@@ -594,7 +597,7 @@ func TestAccessRefusesJoinOptionsForAJoinedMachine(t *testing.T) {
 			s := newAccessProject(t)
 			s.joined[""] = access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
 			before := read(t, ".env")
-			err := runAccess(context.Background(), access.ModeTailnet, c.o, true, "", &bytes.Buffer{})
+			err := runAccess(context.Background(), access.ModeTailnet, c.o, true, &bytes.Buffer{})
 			if err == nil || !strings.Contains(err.Error(), "This machine is already on your tailnet as `cyfr.tail1234.ts.net`") || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "Run `cyfr access tailnet --new-node` with it") {
 				t.Fatalf("cyfr access tailnet %s answered %v", name, err)
 			}
@@ -603,37 +606,10 @@ func TestAccessRefusesJoinOptionsForAJoinedMachine(t *testing.T) {
 			}
 			// With no terminal and no --yes, the same refusal, not a
 			// preview that --yes would then refuse.
-			if err := runAccess(context.Background(), access.ModeTailnet, c.o, false, "", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "This machine is already on your tailnet as `cyfr.tail1234.ts.net`") {
+			if err := runAccess(context.Background(), access.ModeTailnet, c.o, false, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "This machine is already on your tailnet as `cyfr.tail1234.ts.net`") {
 				t.Errorf("cyfr access tailnet %s with no terminal answered %v", name, err)
 			}
 		})
-	}
-}
-
-// A request id resent after its switch finished answers its receipt as the
-// first send did, the same sentence and exit status, with no second
-// switch; a receipt of another change under the id is access_request_reused.
-func TestAccessAnswersAResentRequestFromItsReceipt(t *testing.T) {
-	const id = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
-	s := newAccessProject(t)
-	var first, second bytes.Buffer
-	err1 := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, id, &first)
-	err2 := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, id, &second)
-	if err1 != nil || err2 != nil || first.String() == "" || !strings.HasSuffix(first.String(), second.String()) || len(s.switches) != 1 {
-		t.Fatalf("resending %s answered %v then %v, %q then %q, with %d switches", id, err1, err2, first.String(), second.String(), len(s.switches))
-	}
-	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "other.example.com"}, true, id, &bytes.Buffer{}); err == nil || err.Error() != access.Refuse("access_request_reused", nil).Message() {
-		t.Errorf("another change under the id answered %v", err)
-	}
-
-	const failed = "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
-	rolled := access.Receipt{Op: "switch", State: "completed", Outcome: "rolled_back", Code: "access_rolled_back", Payload: map[string]string{"new": "public", "old": "local", "reason": "cyfr did not become healthy"}}
-	s.switchReceipt = &rolled
-	err1 = runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, failed, &bytes.Buffer{})
-	s.switchReceipt = nil
-	err2 = runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, failed, &bytes.Buffer{})
-	if err1 == nil || err2 == nil || err1.Error() != err2.Error() || ExitStatus(err1) != ExitStatus(err2) || len(s.switches) != 2 {
-		t.Errorf("resending a rolled-back request answered %v (exit %d) then %v (exit %d), %d switches", err1, ExitStatus(err1), err2, ExitStatus(err2), len(s.switches))
 	}
 }
 
@@ -649,60 +625,12 @@ func TestAccessRolledBackExitsOne(t *testing.T) {
 			s := newAccessProject(t)
 			rolled := access.Receipt{Op: "switch", State: "completed", Outcome: "rolled_back", Code: "access_rolled_back", Payload: payload}
 			s.switchReceipt = &rolled
-			err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, "", &bytes.Buffer{})
+			err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, &bytes.Buffer{})
 			if want := access.Refuse("access_rolled_back", payload).Message(); err == nil || err.Error() != want || ExitStatus(err) != exitFailure {
 				t.Errorf("a rollback answered %v (exit %d), want %q and exit 1", err, ExitStatus(err), want)
 			}
 		})
 	}
-}
-
-// A resent request id answers its receipt only for the same request: a
-// different target or different join inputs under the id is
-// access_request_reused, whatever the first request's outcome.
-func TestAccessBindsAResentIDToItsRequest(t *testing.T) {
-	reused := access.Refuse("access_request_reused", nil).Message()
-	for name, first := range map[string]access.Receipt{
-		"rejected":    {Op: "switch", State: "rejected", Code: "access_stale", Payload: map[string]string{"words": "local"}},
-		"rolled back": {Op: "switch", State: "completed", Outcome: "rolled_back", Code: "access_rolled_back", Payload: map[string]string{"new": "public", "old": "local", "reason": "cyfr did not become healthy"}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			s := newAccessProject(t)
-			const id = "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
-			s.switchReceipt = &first
-			if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "first.example.com"}, true, id, &bytes.Buffer{}); err == nil {
-				t.Fatal("the first request succeeded")
-			}
-			s.switchReceipt = nil
-			for target, o := range map[string]accessOptions{"local": {}, "public": {domain: "second.example.com"}} {
-				if err := runAccess(context.Background(), target, o, true, id, &bytes.Buffer{}); err == nil || err.Error() != reused {
-					t.Errorf("%s %+v under the %s id answered %v, want access_request_reused", target, o, name, err)
-				}
-			}
-			// The same request answers as it first did.
-			again := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "first.example.com"}, true, id, &bytes.Buffer{})
-			if want := first.Refusal().Message(); again == nil || again.Error() != want || len(s.switches) != 1 {
-				t.Errorf("the same request under the %s id answered %v after %d switches, want %q from the first", name, again, len(s.switches), want)
-			}
-		})
-	}
-	t.Run("ok, other join inputs", func(t *testing.T) {
-		s := newAccessProject(t)
-		const id = "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1"
-		if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, true, id, &bytes.Buffer{}); err != nil {
-			t.Fatal(err)
-		}
-		keyFile := filepath.Join(t.TempDir(), "authkey")
-		if err := os.WriteFile(keyFile, []byte("tskey-auth-kTEST\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		for _, o := range []accessOptions{{newNode: true, hostname: "replacement"}, {newNode: true}, {keyFile: keyFile, newNode: true}} {
-			err := runAccess(context.Background(), access.ModeTailnet, o, true, id, &bytes.Buffer{})
-			if err == nil || err.Error() != reused || len(s.joins) != 1 {
-				t.Errorf("the id resent with %+v answered %v after %d joins, want access_request_reused", o, err, len(s.joins))
-			}
-		}
-	})
 }
 
 // A tailnet home whose Serve is closed, its machine not ready when it
@@ -717,14 +645,14 @@ func TestAccessTailnetServesAClosedHomeAgain(t *testing.T) {
 	}
 	s := newAccessProject(t)
 	s.joined[""] = access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
-	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, true, "", &bytes.Buffer{}); err != nil {
+	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, true, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	s.switches, s.serveClosed = nil, true
 	askTerminal = func() bool { return true }
 	askInput = answers("yes")
 	var out bytes.Buffer
-	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, false, "", &out); err != nil {
+	if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, false, &out); err != nil {
 		t.Fatalf("cyfr access tailnet answered %v\n%s", err, out.String())
 	}
 	for _, want := range []string{
@@ -745,23 +673,19 @@ func TestAccessTailnetServesAClosedHomeAgain(t *testing.T) {
 	s.serveClosed = true
 	local := startedLocalFor("switch", "tailnet_https_off", httpsOff())
 	s.reopenReceipt = &local
-	err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, true, "", &bytes.Buffer{})
+	err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, true, &bytes.Buffer{})
 	if want := access.Refuse("tailnet_https_off", httpsOff()).Message(); err == nil || err.Error() != want || ExitStatus(err) != exitStartedLocally {
 		t.Errorf("a reopen on a machine still not ready answered %v (exit %d), want %q and exit 3", err, ExitStatus(err), want)
 	}
 }
 
-// The command tree is the contract's: `cyfr access <mode>` with its flags,
-// the hidden --request-id and `cyfr access status`, and `cyfr setup` with
-// no subcommand.
+// The command tree is the contract's: `cyfr access <mode>` with its flags
+// and `cyfr access status`, and `cyfr setup` with no subcommand.
 func TestAccessCommandsAreTheContractsSurface(t *testing.T) {
-	for _, name := range []string{"domain", "acme-email", "tailscale-auth-key-file", "hostname", "new-node", "yes", "resume", "request-id"} {
+	for _, name := range []string{"domain", "acme-email", "tailscale-auth-key-file", "hostname", "new-node", "yes", "resume"} {
 		if accessCmd.Flags().Lookup(name) == nil {
 			t.Errorf("cyfr access has no --%s", name)
 		}
-	}
-	if f := accessCmd.Flags().Lookup("request-id"); f == nil || !f.Hidden {
-		t.Errorf("--request-id is not hidden")
 	}
 	for _, name := range []string{"no-pull", "force"} {
 		if initCmd.Flags().Lookup(name) == nil {
@@ -840,7 +764,7 @@ func TestAccessOpensTheJoinLinkOnADisplay(t *testing.T) {
 			askTerminal = func() bool { return true }
 			askInput = answers("yes", "yes")
 			var out bytes.Buffer
-			if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{noOpen: c.noOpen}, c.yes, "", &out); err != nil {
+			if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{noOpen: c.noOpen}, c.yes, &out); err != nil {
 				t.Fatalf("access: %v\n%s", err, out.String())
 			}
 			opened := c.display && !c.noOpen
@@ -911,7 +835,7 @@ func TestAccessReadsWhetherAnyoneIsSetUpFromTheLog(t *testing.T) {
 			s.answer("logs.exit", c.exit)
 			stubLauncher(t, true, nil)
 			var out bytes.Buffer
-			if err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, "", &out); err != nil {
+			if err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, &out); err != nil {
 				t.Fatalf("cyfr access local: %v\n%s", err, out.String())
 			}
 			if out.String() != c.want {
@@ -953,7 +877,7 @@ func TestAccessPreviewWithoutATerminalKeepsTheListUnlessNeverBooted(t *testing.T
 			s.answer("logs.exit", "0")
 			askTerminal = func() bool { return false }
 			var out bytes.Buffer
-			err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, false, "", &out)
+			err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, false, &out)
 			if err == nil || !strings.Contains(err.Error(), "Nothing changed: there is no terminal to confirm the change on.") {
 				t.Fatalf("cyfr access local with no terminal answered %v\n%s", err, out.String())
 			}

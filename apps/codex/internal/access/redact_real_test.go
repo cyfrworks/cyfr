@@ -476,8 +476,6 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 		l.out("Receipt", append(receiptTexts(again), errTexts(err)...)...)
 		raw, _, err := e.receiptOf(r.ID)
 		l.raw("receiptOf", append(errPayloads(err), raw.Payload), []*Head{raw.FinalHead})
-		resent, _, err := e.Resent(r.ID, r.Content)
-		l.out("Resent", append(receiptTexts(resent), errTexts(err)...)...)
 		reads(e, l)
 		settle(e, l)
 	})

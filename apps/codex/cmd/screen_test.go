@@ -387,7 +387,7 @@ func TestAccessRewritesTheScreensFiles(t *testing.T) {
 			}
 		}
 		var out bytes.Buffer
-		if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, "", &out); err != nil {
+		if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, &out); err != nil {
 			t.Fatalf("cyfr access public: %v\n%s", err, out.String())
 		}
 		if !screen {

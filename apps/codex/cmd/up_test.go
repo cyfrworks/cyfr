@@ -361,7 +361,7 @@ func TestComposeKeysInEnvAreRefusedBeforeAnyDockerCall(t *testing.T) {
 			return runRestore(context.Background(), r.dir, true, &bytes.Buffer{}, &bytes.Buffer{})
 		},
 		"access": func(*restoreScenario) error {
-			return runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, "", &bytes.Buffer{})
+			return runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, &bytes.Buffer{})
 		},
 		"access resume": func(*restoreScenario) error { return runAccessResume(context.Background(), &bytes.Buffer{}) },
 		"init": func(*restoreScenario) error {
@@ -888,7 +888,7 @@ func TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	var out bytes.Buffer
-	if err := runAccess(ctx, access.ModeTailnet, accessOptions{}, true, "", &out); err != nil {
+	if err := runAccess(ctx, access.ModeTailnet, accessOptions{}, true, &out); err != nil {
 		t.Fatalf("cyfr access tailnet answered %v\n%s", err, out.String())
 	}
 	for _, want := range []string{"CYFR answers on this computer only right now. Once the tailnet machine checks out,", "Done. CYFR is reached by your devices on Tailscale at https://cyfr.tail1234.ts.net.\n", "  Serve: open\n"} {

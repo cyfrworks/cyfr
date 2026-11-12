@@ -166,7 +166,7 @@ func (e *Engine) doJoin(ctx context.Context, r JoinRequest) (Receipt, error) {
 		}
 		return answer(rc)
 	}
-	if rc, blocked, err := e.blocked(r.ID, digest, "join", ""); blocked || err != nil {
+	if rc, blocked, err := e.blocked(r.ID, digest, "join"); blocked || err != nil {
 		return rc, err
 	}
 	refuse := func(err error) (Receipt, error) {

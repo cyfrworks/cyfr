@@ -188,11 +188,8 @@ type Receipt struct {
 	Code          string            `json:"code,omitempty"`
 	Payload       map[string]string `json:"payload,omitempty"`
 	FinalHead     *Head             `json:"final_head,omitempty"`
-	// ContentDigest binds a switch's receipt to the whole of what its
-	// command was asked (RequestContent), for Resent.
-	ContentDigest string    `json:"content_digest,omitempty"`
-	Observed      []string  `json:"observed,omitempty"`
-	At            time.Time `json:"at"`
+	Observed      []string          `json:"observed,omitempty"`
+	At            time.Time         `json:"at"`
 }
 
 // Refusal is the code a receipt answers with, nil for a plain success. A
@@ -282,7 +279,7 @@ type SwitchRequest struct {
 	OldDigest string
 	NewDigest string
 	// Content is everything the command was asked, which a resend of its
-	// id must ask again, to Switch as to Resent.
+	// id must ask again.
 	Content RequestContent
 }
 
@@ -294,16 +291,6 @@ type RequestContent struct {
 	Mode, Domain, ACMEEmail, Hostname string
 	NewNode                           bool
 	AuthKeyFingerprint                string
-}
-
-// Resent answers a request id sent again, reading without the lock: its
-// receipt, or its unfinished journal's answer, when c is the content it
-// was first sent with; a rejected access_request_reused receipt when it is
-// not, which changes and writes nothing; false for an id neither holds.
-func (e *Engine) Resent(id string, c RequestContent) (Receipt, bool, error) {
-	rc, ok, err := e.resent(id, c)
-	r := e.redactor()
-	return r.receipt(rc), ok, r.err(err)
 }
 
 // AuthKeyFingerprint is an auth key's fingerprint as a request binds it:

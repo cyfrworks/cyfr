@@ -190,7 +190,6 @@ type journal struct {
 	Op            string    `json:"op"`
 	RequestID     string    `json:"request_id"`
 	RequestDigest string    `json:"request_digest"`
-	ContentDigest string    `json:"content_digest,omitempty"`
 	Phase         string    `json:"phase"`
 	At            time.Time `json:"at"`
 
@@ -261,7 +260,7 @@ func (e *Engine) reached(point string) {
 
 // receiptOf is the answer journal j gives while it is unfinished.
 func (j *journal) receipt() Receipt {
-	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, ContentDigest: j.ContentDigest, Op: j.Op, State: "accepted", Phase: j.Phase, At: j.At}
+	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "accepted", Phase: j.Phase, At: j.At}
 	if j.Phase == "uncertain" {
 		r.Code = "access_uncertain"
 		r.Payload = map[string]string{"observed": observedText(j.Observed)}
@@ -505,12 +504,7 @@ func reused(id, digest, op string) Receipt {
 // receipt, written so a resend of the same id answers the same: nothing
 // changed.
 func (e *Engine) reject(id, digest, op string, ref *Refusal) (Receipt, error) {
-	return e.rejectContent(id, digest, "", op, ref)
-}
-
-// rejectContent is reject for a request bound to its content.
-func (e *Engine) rejectContent(id, digest, content, op string, ref *Refusal) (Receipt, error) {
-	r := Receipt{RequestID: id, RequestDigest: digest, ContentDigest: content, Op: op, State: "rejected", Code: ref.Code, Payload: ref.Payload, At: e.now()}
+	r := Receipt{RequestID: id, RequestDigest: digest, Op: op, State: "rejected", Code: ref.Code, Payload: ref.Payload, At: e.now()}
 	if err := e.writeReceipt(r); err != nil {
 		return r, err
 	}

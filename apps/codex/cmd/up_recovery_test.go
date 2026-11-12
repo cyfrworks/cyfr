@@ -165,14 +165,21 @@ func interruptedSwitch(t *testing.T) (*stateDocker, string, string) {
 	project := access.ProjectName(".")
 	docker.save(map[string]stateContainer{project + "-cyfr-1": {Service: "cyfr", State: "running"}})
 
-	const id = "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e"
-	stdout, stderr, status := runAsCyfr(t, "real-state-kill", dir, "access", "public", "--domain", "cyfr.example.com", "--yes", "--request-id", id)
+	stdout, stderr, status := runAsCyfr(t, "real-state-kill", dir, "access", "public", "--domain", "cyfr.example.com", "--yes")
 	if status != -1 {
 		t.Fatalf("the switch was not killed inside its start (exit %d):\n%s\n%s", status, stdout, stderr)
 	}
-	if _, err := os.Stat(filepath.Join(".cyfr", "journal.json")); err != nil {
+	data, err := os.ReadFile(filepath.Join(".cyfr", "journal.json"))
+	if err != nil {
 		t.Fatalf("the killed switch left no journal: %v", err)
 	}
+	var left struct {
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal(data, &left); err != nil || left.RequestID == "" {
+		t.Fatalf("the killed switch's journal names no request id (%v):\n%s", err, data)
+	}
+	id := left.RequestID
 	if mode, _ := projectEnv(t).value("CYFR_ACCESS"); mode != access.ModePublic {
 		t.Fatalf("the killed switch did not commit .env before its start (CYFR_ACCESS is %q)", mode)
 	}

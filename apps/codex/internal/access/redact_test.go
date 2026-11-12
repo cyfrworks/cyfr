@@ -152,8 +152,6 @@ func TestReceiptsAndJournalsArePersistedRedacted(t *testing.T) {
 	}
 	again, _, err := h.e.Receipt(r.ID)
 	texts = append(texts, fmt.Sprintf("%+v %v", again, err))
-	resent, _, err := h.e.Resent(r.ID, r.Content)
-	texts = append(texts, fmt.Sprintf("%+v %v", resent, err))
 	s, err := h.e.Status(bg)
 	texts = append(texts, fmt.Sprintf("%+v %v", s, err))
 	for path, data := range h.snapshot() {

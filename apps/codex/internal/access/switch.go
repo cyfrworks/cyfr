@@ -280,14 +280,13 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 		}
 		return answer(rc)
 	}
-	content := contentDigest(r.Content)
-	if rc, blocked, err := e.blocked(r.ID, digest, "switch", content); blocked || err != nil {
+	if rc, blocked, err := e.blocked(r.ID, digest, "switch"); blocked || err != nil {
 		return rc, err
 	}
 	refuse := func(err error) (Receipt, error) {
 		var ref *Refusal
 		if errors.As(err, &ref) {
-			return e.rejectContent(r.ID, digest, content, "switch", ref)
+			return e.reject(r.ID, digest, "switch", ref)
 		}
 		return Receipt{}, err
 	}
@@ -334,7 +333,7 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 	}
 
 	j := &journal{
-		Op: "switch", RequestID: r.ID, RequestDigest: digest, ContentDigest: content,
+		Op: "switch", RequestID: r.ID, RequestDigest: digest,
 		NewHead: &d.Head, OldKeys: st.heldKeys(), NewKeys: keysOf(d.Head),
 		Running: cyfrRunning(cs), Services: []string{cyfrService}, Reopen: reopen,
 	}
@@ -393,7 +392,7 @@ func (e *Engine) runSwitch(ctx context.Context, j *journal) (Receipt, error) {
 // (started_local); one that has not joined, or has HTTPS off, is a start
 // that failed, but for a reopen, which only ever reopened Serve.
 func (e *Engine) startTarget(ctx context.Context, j *journal) (Receipt, error) {
-	done := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, ContentDigest: j.ContentDigest, Op: j.Op, State: "completed", Outcome: "ok", FinalHead: j.NewHead}
+	done := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "completed", Outcome: "ok", FinalHead: j.NewHead}
 	if !j.Running {
 		return e.finishAnswer(j, done)
 	}
@@ -472,7 +471,7 @@ func rolledBackLocal(j *journal, why string, local *Refusal) *Refusal {
 }
 
 func (e *Engine) completed(j *journal, outcome string, ref *Refusal, final *Head) Receipt {
-	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, ContentDigest: j.ContentDigest, Op: j.Op, State: "completed", Outcome: outcome, FinalHead: final}
+	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "completed", Outcome: outcome, FinalHead: final}
 	if ref != nil {
 		r.Code, r.Payload = ref.Code, ref.Payload
 	}
@@ -516,7 +515,7 @@ func (e *Engine) outcomeUnknown(j *journal, err error) (Receipt, error) {
 // blocked answers a mutating method while the journal holds another
 // operation: an uncertain one with its receipt, a waiting join with
 // access_busy naming it, anything else as unfinished.
-func (e *Engine) blocked(id, digest, op, content string) (Receipt, bool, error) {
+func (e *Engine) blocked(id, digest, op string) (Receipt, bool, error) {
 	j, err := e.readJournal()
 	if err != nil || j == nil {
 		return Receipt{}, false, err
@@ -526,10 +525,10 @@ func (e *Engine) blocked(id, digest, op, content string) (Receipt, bool, error) 
 		rc, err := answer(j.receipt())
 		return rc, true, err
 	case j.Op == "join" && j.Join != nil && j.Join.State == "waiting":
-		rc, err := e.rejectContent(id, digest, content, op, joinBusy(j.Join.JoinID, j.Join.Deadline))
+		rc, err := e.reject(id, digest, op, joinBusy(j.Join.JoinID, j.Join.Deadline))
 		return rc, true, err
 	}
-	rc, err := answer(Receipt{RequestID: id, RequestDigest: digest, ContentDigest: content, Op: op, State: "rejected", Code: "access_outcome_unknown",
+	rc, err := answer(Receipt{RequestID: id, RequestDigest: digest, Op: op, State: "rejected", Code: "access_outcome_unknown",
 		Payload: map[string]string{"reason": "the " + j.Op + " " + j.RequestID + " is unfinished"}})
 	return rc, true, err
 }
