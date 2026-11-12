@@ -57,6 +57,27 @@ defmodule Arca.StorageUnitsTest do
 
   defp row(id), do: Arca.Repo.get!(StorageUnit, id)
 
+  defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
+
+  # An athanor no other case names, committed, whose rows go with it when
+  # the case ends: a commit also moves the athanor's projection root, a
+  # row every case of a well-known athanor would read.
+  defp unboxed_actor! do
+    athanor_id = "ath_units_race_#{System.unique_integer([:positive])}"
+    actor = actor(athanor_id)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        import Ecto.Query, only: [from: 2]
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(actor)
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id))
+      end)
+    end)
+
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor_id) end)
+    actor
+  end
+
   defp age_draft!(id) do
     import Ecto.Query, only: [from: 2]
 
@@ -244,26 +265,39 @@ defmodule Arca.StorageUnitsTest do
                Arca.Test.StorageJournal.journal(actor, @root, key)
     end
 
-    test "racing commits with one expected revision: exactly one commits", %{
-      actor: actor,
-      key: key
-    } do
-      commit!(actor, key, "rev_1")
-      {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_shared")
+    # The commits race on connections of their own, outside the sandbox,
+    # as writers on several members do: on the test's one shared
+    # connection each commit's transaction holds the connection whole, so
+    # they would commit one after another and the pointer compare would
+    # meet no contender. The rows are committed in an athanor of the
+    # case's own, erased when it ends.
+    test "racing commits with one expected revision: exactly one commits", %{key: key} do
+      actor = unboxed_actor!()
+
+      draft =
+        unboxed(fn ->
+          commit!(actor, key, "rev_1")
+          {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_shared")
+          draft
+        end)
 
       # One token, so nothing but the pointer compare decides the race.
       results =
         1..6
         |> Enum.map(fn i ->
           Task.async(fn ->
-            StorageUnits.commit(actor, draft, "rev_1", "wrt_shared", identity("rev_race_#{i}"))
+            unboxed(fn ->
+              StorageUnits.commit(actor, draft, "rev_1", "wrt_shared", identity("rev_race_#{i}"))
+            end)
           end)
         end)
         |> Task.await_many(30_000)
 
       assert Enum.count(results, &(&1 == :committed)) == 1, inspect(results)
       assert Enum.count(results, &(&1 == {:error, :stale_revision})) == 5, inspect(results)
-      assert {:ok, [_rev_1, _the_winner]} = Arca.Test.StorageJournal.journal(actor, @root, key)
+
+      assert {:ok, [_rev_1, _the_winner]} =
+               unboxed(fn -> Arca.Test.StorageJournal.journal(actor, @root, key) end)
     end
 
     test "a stale draft token commits nothing", %{actor: actor, key: key} do

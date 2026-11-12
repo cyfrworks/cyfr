@@ -1190,7 +1190,14 @@ defmodule Arca.OverlayTest do
                Arca.get(actor, scroll ++ [@skill_manifest])
     end
 
-    test "of concurrent creators of one name, exactly one lands", %{actor: actor} do
+    # The creators race on connections of their own, outside the sandbox,
+    # as writers on several members do: on the test's one shared
+    # connection each one's transaction holds the connection whole, so the
+    # draft would meet no second holder. The rows are committed in an
+    # athanor of the case's own, erased when it ends.
+    test "of concurrent creators of one name, exactly one lands" do
+      actor = unboxed_actor!()
+
       # The question is asked under the unit's draft, so a creator either
       # finds the draft held by another or, holding it, finds the unit
       # there — a probe outside the draft would let several pass it and
@@ -1202,7 +1209,9 @@ defmodule Arca.OverlayTest do
         results =
           1..8
           |> Enum.map(fn i ->
-            Task.async(fn -> create(actor, unit, "creator #{i}", if_absent: true) end)
+            Task.async(fn ->
+              unboxed(fn -> create(actor, unit, "creator #{i}", if_absent: true) end)
+            end)
           end)
           |> Task.await_many(30_000)
 
@@ -1211,9 +1220,29 @@ defmodule Arca.OverlayTest do
         assert Enum.count(results, &(&1 in [{:error, :exists}, {:error, :stale_writer}])) == 7,
                inspect(results)
 
-        assert [_the_one_commit] = journal(actor, unit)
+        assert [_the_one_commit] = unboxed(fn -> journal(actor, unit) end)
       end
     end
+  end
+
+  defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
+
+  # An athanor no other case names, committed, whose rows go with it when
+  # the case ends: a commit also moves the athanor's projection root, a
+  # row every case of a well-known athanor would read.
+  defp unboxed_actor! do
+    athanor_id = "ath_overlay_race_#{System.unique_integer([:positive])}"
+    actor = Arca.Test.Actor.local(athanor_id: athanor_id)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(actor)
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id))
+      end)
+    end)
+
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor_id) end)
+    actor
   end
 
   describe "update/3 — one serialized read-modify-write" do
