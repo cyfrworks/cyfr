@@ -65,12 +65,12 @@ defmodule Compendium.RegistryPortTest do
              Compendium.Registry.Client.search(ctx, %{"q" => "anything"})
   end
 
-  test "a signed registry request and a handle resolution refuse no_registry, before any I/O" do
+  # A handle's resolution refuses the same, which its owner's suite holds
+  # (apps/sanctum/test/sanctum/handle_test.exs).
+  test "a signed registry request refuses no_registry, before any I/O" do
     ExUnit.CaptureLog.capture_log(fn ->
       assert {:error, :no_registry} =
                Compendium.Registry.Client.signed("tokens.mint", ~s({"operation":"tokens.mint"}))
     end)
-
-    assert {:error, :no_registry} = Sanctum.Handle.resolve("alice")
   end
 end

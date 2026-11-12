@@ -39,8 +39,10 @@ defmodule CyfrWeb.Plugs.TinctureRateLimit do
   can each pass the cap check) is acceptable for rate limits (not a
   security boundary).
 
-  `config :cyfr, :tincture_rate_limit_max` overrides `max_requests` when set
-  (used by the test env so unrelated controller suites don't trip the limit).
+  `config :cyfr, :tincture_rate_limit_max` overrides `max_requests` in a
+  test build alone (`Cyfr.seam/2`), so unrelated controller suites don't
+  trip the limit; a release meters at `max_requests` whatever its
+  configuration says.
   """
 
   @asset_prefix Prima.TinctureUrl.asset_prefix()
@@ -61,7 +63,9 @@ defmodule CyfrWeb.Plugs.TinctureRateLimit do
   end
 
   def call(conn, %{bucket: bucket, max_requests: default_max, window_ms: window_ms} = opts) do
-    max_requests = Application.get_env(:cyfr, :tincture_rate_limit_max) || default_max
+    max_requests =
+      Cyfr.seam(nil, fn -> Application.get_env(:cyfr, :tincture_rate_limit_max) end) ||
+        default_max
 
     case Prima.RateLimiter.check(key(conn, bucket), max_requests, window_ms) do
       :ok ->

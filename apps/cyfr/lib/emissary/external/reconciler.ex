@@ -94,7 +94,9 @@ defmodule Emissary.External.Reconciler do
   @sweep_interval_ms :timer.minutes(5)
 
   def start_link(opts \\ []) do
-    if Application.get_env(:cyfr, :external_server_reconciler_enabled, true) do
+    if Cyfr.seam(true, fn ->
+         Application.get_env(:cyfr, :external_server_reconciler_enabled, true)
+       end) do
       GenServer.start_link(__MODULE__, opts, name: __MODULE__)
     else
       :ignore

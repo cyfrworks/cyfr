@@ -102,7 +102,7 @@ defmodule Aqua.ScheduleNotes do
 
   @doc false
   def start_link(opts \\ []) do
-    if Application.get_env(:cyfr, :schedule_notes_enabled, true) do
+    if Cyfr.seam(true, fn -> Application.get_env(:cyfr, :schedule_notes_enabled, true) end) do
       GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
     else
       :ignore

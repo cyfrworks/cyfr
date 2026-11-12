@@ -591,7 +591,7 @@ defmodule Opus.WorkerWatch do
   # ---------------------------------------------------------------------------
 
   defp enabled? do
-    Application.get_env(:cyfr, :worker_watch_enabled, true)
+    Cyfr.seam(true, fn -> Application.get_env(:cyfr, :worker_watch_enabled, true) end)
   end
 
   defp settings(opts) do

@@ -45,7 +45,7 @@ defmodule Compendium.Provider do
         # No registry is not a registry that is down.
         "disabled"
 
-      Application.get_env(:cyfr, :registry_health_probe, true) ->
+      Cyfr.seam(true, fn -> Application.get_env(:cyfr, :registry_health_probe, true) end) ->
         probed_registry_health(Compendium.RegistryHost.canonical_host())
 
       true ->

@@ -203,11 +203,13 @@ config :cyfr, Compendium.ProjectionReconciler, enabled: false
 
 # The boot's security reconcile and seed offer write rows before any
 # test's sandbox checkout, so the sandboxed suite boot omits both; their
-# own tests run them directly. Omitting the security gate takes BOTH this
-# compile-time permission and the runtime switch below: a build compiled
-# without the permission — every release — starts the gate whatever the
-# switch says (`Cyfr.Application.bootstrap_skipped?/2`).
-config :cyfr, bootstrap_skip_permitted: true
+# own tests run them directly. Every `:cyfr` switch in this file that
+# turns boot work off (the gate's, the database checks', the timers' and
+# watches', the recovery's), and the stand-ins' hooks, is a test seam
+# (`Cyfr.seam/2`): it takes BOTH this compile-time permission and its
+# runtime value, so a build compiled without the permission — every
+# release — runs as it ships whatever its configuration says.
+config :cyfr, test_seams_permitted: true
 config :cyfr, provisioning_boot_enabled: false
 
 # Likewise the thread-runner boot recovery reads the repo before any

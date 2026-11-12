@@ -1711,166 +1711,6 @@ defmodule Cyfr.Boundaries do
     %{
       from: "PrismWeb.ModelCatalog",
       into: "Arca.Cache",
-      functions: [:get],
-      reason:
-        "a run's model catalogue is kept per athanor for a while; a read answers it or " <>
-          "a miss, and drops an expired entry as it finds it, which is the cache's own " <>
-          "housekeeping."
-    },
-    %{
-      from: "PrismWeb.ShellLive",
-      into: "Arca.Cache",
-      functions: [:get],
-      reason:
-        "the shell's tincture scan is marked running per athanor so two refreshes " <>
-          "start one scan; a read answers the mark or a miss, and drops an expired mark " <>
-          "as it finds it, which is the cache's own housekeeping."
-    },
-    %{
-      from: "PrismWeb.ShellLive",
-      into: "Arca.Cache.Keys",
-      functions: [:tincture_scan_running],
-      reason:
-        "the scan mark's key is the cache's own spelling for the actor's athanor, so " <>
-          "the shell and the scan name one entry; it reads nothing."
-    },
-    %{
-      from: "PrismWeb.ThreadPaneLive",
-      into: "Arca.Execution",
-      functions: [:get_tenant],
-      reason:
-        "a pending card offers \"for this schedule\" only where its run was started " <>
-          "by one: the pane reads the run's execution row once, under the pane's actor, " <>
-          "for its schedule id alone."
-    },
-    %{
-      from: "PrismWeb.ThreadPaneLive",
-      into: "Arca.ThreadStorage",
-      functions: [:children, :get, :get_message, :latest_messages, :payload, :resolution],
-      reason:
-        "the pane opens a thread, its latest messages and a room's crew threads under the " <>
-          "pane's actor, and decodes a message's stored payload and resolution with the " <>
-          "store's own projections, which read no row; the assistant owns every thread write."
-    },
-    # --- the MCP surface's web adapters ---
-    %{
-      from: "Emissary.Web.ExecutionEventsController",
-      into: "Arca.Execution",
-      functions: [:get_tenant],
-      reason:
-        "an execution's event stream opens only on an execution the caller's actor " <>
-          "finds in its own tenant, read once before the read is authorized; the " <>
-          "engine owns every execution write."
-    },
-    %{
-      from: "Emissary.Web.HealthController",
-      into: "Arca.Cache",
-      functions: [:get, :table_name],
-      reason:
-        "the readiness probe answers from its last checks within the cache window, " <>
-          "and checks that the cache's table exists: server-local memory, never a row."
-    },
-    %{
-      from: "Emissary.Web.HealthController",
-      into: "Arca.ControlPlane",
-      functions: [:held?],
-      reason:
-        "a server that lost its control-plane slot is not ready: the probe asks " <>
-          "whether this server holds the slot, which reads its own lease state and no row."
-    },
-    %{
-      from: "Emissary.Web.HealthController",
-      into: "Arca.Health",
-      functions: [:check],
-      reason:
-        "the probe asks the storage layer whether the database answers, which " <>
-          "`Arca.Health` owns and which reads no table."
-    },
-    %{
-      from: "Emissary.Web.HealthController",
-      into: "Arca.PlatformSettings",
-      functions: [:effective],
-      reason:
-        "the probe's cache window is a platform setting, read as it stands; no " <>
-          "athanor's row."
-    },
-    %{
-      from: "Emissary.Web.TinctureAssets",
-      into: "Arca",
-      functions: [:get, :serve_to_conn],
-      reason:
-        "a tincture's files are read and streamed from the storage facade under the " <>
-          "frame credential's actor, tenant-relative, once the asset server has found " <>
-          "the version and its served type."
-    },
-    %{
-      from: "Emissary.Web.FrameAdmission",
-      into: "Arca.PlatformSettings",
-      functions: [:effective],
-      reason:
-        "the frame invocation rate's bounds are platform settings, read as they stand " <>
-          "on each request and each stream connection's bind; no athanor's row."
-    }
-  ]
-
-  @surface_writes [
-    %{
-      from: "Emissary.Web.HealthController",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the readiness probe keeps its checks for the cache window, so several " <>
-          "monitors' probes cost one check: server-local memory, never a row."
-    },
-    %{
-      from: "Emissary.Web.HealthController",
-      into: "Arca",
-      functions: [:delete, :put],
-      reason:
-        "the storage check writes and removes one fixed probe object under the " <>
-          "`system/` global root, so a full disk, a read-only volume or a broken " <>
-          "object-store credential flips readiness; it holds no athanor's data."
-    },
-    %{
-      from: "Emissary.Web.WebhookController",
-      into: "Arca.WebhookDeliveryStorage",
-      functions: [:settle],
-      reason:
-        "the delivery task settles the idempotency claim the ingress plug staked " <>
-          "(`CyfrWeb.Plugs.WebhookIdempotency`), the one code that knows how the " <>
-          "delivery ended: kept when it succeeded, re-deliverable when it failed. " <>
-          "The claim holds no athanor's data."
-    },
-    %{
-      from: "CyfrWeb.Plugs.WebhookIdempotency",
-      into: "Arca.WebhookDeliveryStorage",
-      functions: [:record, :release],
-      reason:
-        "a delivery's idempotency key is claimed before the delivery is admitted and " <>
-          "released when it is not taken up, so a retried delivery runs once: the claim " <>
-          "is the ingress plug's own, keyed by the webhook and the sender's key, and " <>
-          "holds no athanor's data."
-    },
-    %{
-      from: "PrismWeb.AquaPanelLive",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the panel keeps its open state, thread and placement per browser session, under " <>
-          "a hash of its token, for a bounded time: server-local memory, never a row."
-    },
-    %{
-      from: "PrismWeb.LoginLive",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the login page leaves a single-use ticket, bound to the browser, for the " <>
-          "callback that completes the sign-in, for a bounded time: server-local memory, " <>
-          "never a row."
-    },
-    %{
-      from: "PrismWeb.ModelCatalog",
-      into: "Arca.Cache",
       functions: [:invalidate, :put],
       reason:
         "a run's model catalogue is kept per athanor for a bounded time and dropped " <>
@@ -2578,7 +2418,6 @@ defmodule Cyfr.Boundaries do
     # sets it, and only a test build reads it (`Sanctum.seam/2`).
     bearer_provider: :seam,
     tenancy_resolver_override: :seam,
-    thread_recovery: :seam,
     # A fill run in the caller's process (`Compendium.Provisioning`); only
     # a test build reads it (`Sanctum.seam/2`).
     provisioning_inline: :seam,
@@ -2598,8 +2437,8 @@ defmodule Cyfr.Boundaries do
     directory_client: :seam,
     # The resolver a guest's outbound pin resolves through
     # (`Opus.Host.Egress`), which a suite sets to a scripted resolver so a
-    # pin's names never reach the network; a release never sets it, so
-    # names resolve through `:inet`.
+    # pin's names never reach the network; only a test build reads it
+    # (`Cyfr.seam/2`), so a release's names resolve through `:inet`.
     egress_resolver: :seam,
     # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
     # a hint no shipped preset holds and that preset's token endpoint, which
@@ -2607,10 +2446,6 @@ defmodule Cyfr.Boundaries do
     # one; only a test build reads it, so a release holds the shipped
     # presets alone.
     scripted_oauth_provider: :seam,
-    # Compiled in by `config/test.exs` alone; with the runtime switch off it
-    # lets the sandboxed suite boot omit the boot gate's children and the
-    # no-person notice (`Cyfr.Application.bootstrap_skipped?/2`).
-    bootstrap_skip_permitted: :seam,
     # Compiled in by `config/test.exs` alone, shortening the transports'
     # retry backoff base (`Compendium.Transport.Retry`); never read at runtime.
     transport_retry_base_ms: :seam,
@@ -2622,27 +2457,37 @@ defmodule Cyfr.Boundaries do
     # close a sync test's one sandbox connection, and by the budget's own
     # tests, which wait out the production figure; a release never sets it.
     decision_log_budget_ms: :seam,
-    # Compiled in by the test configurations alone — `config/test.exs` and,
-    # for the standalone build, `apps/sanctum/config/config.exs` — it lets
-    # Sanctum's test seams run (`Sanctum.seam/2`, the resolution override,
-    # an issuance's generation snapshot); every release compiles them out.
+    # The test permission, one name in both applications that read it,
+    # compiled in by the test configurations alone — `config/test.exs` and,
+    # for Sanctum's standalone build, `apps/sanctum/config/config.exs`. Under
+    # `:cyfr` it lets the host's test seams run (`Cyfr.seam/2`): the boot
+    # switches below and the hooks a suite points at its stand-ins; under
+    # `:sanctum`, Sanctum's (`Sanctum.seam/2`, the resolution override, an
+    # issuance's generation snapshot). Every release compiles them out.
     test_seams_permitted: :seam,
 
+    # The sandboxed suite's boot switches, each on by default: the boot
+    # gate's work, the database checks, the timers and watches, and the
+    # recovery and status watch a sandbox connection cannot lend itself
+    # to. Only a test build reads one (`Cyfr.seam/2`), so a release runs
+    # all of them whatever its configuration says.
+    cron_scheduler_enabled: :seam,
+    schedule_notes_enabled: :seam,
+    crew_delivery_enabled: :seam,
+    status_watch_enabled: :seam,
+    execution_sweeper_enabled: :seam,
+    execution_archive_watch_enabled: :seam,
+    worker_watch_enabled: :seam,
+    external_server_reconciler_enabled: :seam,
+    provisioning_boot_enabled: :seam,
+    retention_scheduler_enabled: :seam,
+    database_checks_enabled: :seam,
+    thread_recovery: :seam,
+
     # Boot switches with an in-code default; flipping one is a code change.
-    cron_scheduler_enabled: :default,
-    schedule_notes_enabled: :default,
-    crew_delivery_enabled: :default,
-    status_watch_enabled: :default,
-    execution_sweeper_enabled: :default,
-    execution_archive_watch_enabled: :default,
-    worker_watch_enabled: :default,
-    external_server_reconciler_enabled: :default,
-    provisioning_boot_enabled: :default,
-    retention_scheduler_enabled: :default,
     control_plane_claim_enabled: :default,
     control_plane_pool: :default,
     write_turn: :default,
-    database_checks_enabled: :default,
     telemetry_console_enabled: :default,
 
     # The at-rest keyring: `Cyfr.Application` resolves it at boot, from
@@ -2679,12 +2524,13 @@ defmodule Cyfr.Boundaries do
     # every release, which reads no setting for it; the suite turns the
     # memo off.
     caller_memo_ttl_ms: :seam,
-    # The registry probe's switch, read by `Compendium.Provider.status/0`.
+    # The registry probe's switch, read by `Compendium.Provider.status/0`;
+    # only a test build reads it (`Cyfr.seam/2`), so a release probes.
     registry_health_probe: :seam,
-
-    # `TinctureRateLimit`'s own moduledoc calls this an override an operator
-    # sets, and only the suite can set it.
-    tincture_rate_limit_max: :missing_lever
+    # The tincture pipelines' rate ceiling the suite raises
+    # (`CyfrWeb.Plugs.TinctureRateLimit`); only a test build reads it
+    # (`Cyfr.seam/2`), so a release meters at each pipeline's own ceiling.
+    tincture_rate_limit_max: :seam
   }
 
   @doc """
