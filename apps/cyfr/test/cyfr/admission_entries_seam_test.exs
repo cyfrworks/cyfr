@@ -266,15 +266,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   end
 
   def mcp_batch(conn, _ctx) do
-    conn =
-      conn
-      |> put_req_header("content-type", "application/json")
-      |> Phoenix.ConnTest.dispatch(
-        CyfrWeb.Endpoint,
-        :post,
-        "/mcp",
-        Jason.encode!([%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"}])
-      )
+    conn = mcp_post_as_is(conn, [%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"}])
 
     assert json_response(conn, 400)["error"]["code"] == -32_600
     {request_id_of(conn), refused("invalid_argument", :established)}
@@ -330,11 +322,9 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   end
 
   def missing_protocol_header(conn, _ctx) do
-    # `post/3` rather than `mcp_post/2`: no protocol version anywhere.
+    # `mcp_post_as_is/2` rather than `mcp_post/3`: no protocol version anywhere.
     conn =
-      conn
-      |> put_req_header("content-type", "application/json")
-      |> post("/mcp", %{
+      mcp_post_as_is(conn, %{
         "jsonrpc" => "2.0",
         "id" => 1,
         "method" => "tools/call",

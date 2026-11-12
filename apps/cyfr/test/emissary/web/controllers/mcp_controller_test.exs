@@ -1051,7 +1051,7 @@ defmodule Emissary.Web.MCPControllerTest do
         |> recycle()
         |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-protocol-version", "1999-01-01")
-        |> post("/mcp", %{
+        |> mcp_post_as_is(%{
           "jsonrpc" => "2.0",
           "id" => 1,
           "method" => "server/discover",
@@ -1074,7 +1074,7 @@ defmodule Emissary.Web.MCPControllerTest do
         |> recycle()
         |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-protocol-version", Prima.MCP.Protocol.version())
-        |> post("/mcp", %{
+        |> mcp_post_as_is(%{
           "jsonrpc" => "2.0",
           "id" => 1,
           "method" => "server/discover",
@@ -1094,7 +1094,7 @@ defmodule Emissary.Web.MCPControllerTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
+        |> mcp_post_as_is(%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
 
       response = json_response(conn, 400)
 
@@ -1171,7 +1171,7 @@ defmodule Emissary.Web.MCPControllerTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+        |> mcp_post_as_is(%{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
 
       assert json_response(conn, 400)
       assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
@@ -1200,18 +1200,11 @@ defmodule Emissary.Web.MCPControllerTest do
 
     test "included on batch rejection response", %{conn: conn} do
       # Send a batch (array) which should be rejected
-      # Must encode manually since Phoenix ConnTest.post/3 expects a map
-      batch_body =
-        Jason.encode!([
+      conn =
+        mcp_post_as_is(conn, [
           %{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"},
           %{"jsonrpc" => "2.0", "id" => 2, "method" => "server/discover"}
         ])
-
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> Plug.Conn.put_req_header("content-type", "application/json")
-        |> Phoenix.ConnTest.dispatch(CyfrWeb.Endpoint, :post, "/mcp", batch_body)
 
       # Through the real pipeline Plug.Parsers delivers the array as
       # %{"_json" => [...]} — assert the dedicated batch rejection fires,

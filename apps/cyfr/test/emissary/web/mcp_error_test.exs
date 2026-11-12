@@ -3,23 +3,23 @@
 
 defmodule Emissary.Web.MCPErrorTest do
   @moduledoc """
-  Checks that JSON-RPC error responses echo valid request ids.
+  A JSON-RPC error answer carries the request id the door recovered from
+  the body it read, and a null id when it read none.
   """
   use Emissary.Web.ConnCase, async: true
 
   alias Prima.MCP.Message
 
   describe "request id echoing" do
-    test "a rate-limit rejection echoes the request id", %{conn: conn} do
+    # Each body is sent as bytes, as a client sends it: the id an answer
+    # carries is the one the door recovers from what it parsed, and a
+    # refusal made before the body is read recovers none.
+    test "a protocol-version mismatch, refused after the body is read, echoes the request id",
+         %{conn: conn} do
       conn =
         conn
-        |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-protocol-version", "not-a-version")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 4242,
-          "method" => "tools/list"
-        })
+        |> mcp_post_as_is(%{"jsonrpc" => "2.0", "id" => 4242, "method" => "tools/list"})
 
       body = json_response(conn, 400)
       assert body["id"] == 4242
@@ -30,48 +30,33 @@ defmodule Emissary.Web.MCPErrorTest do
     test "a string request id round-trips unchanged", %{conn: conn} do
       conn =
         conn
-        |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-protocol-version", "nope")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => "req-abc-1",
-          "method" => "tools/list"
-        })
+        |> mcp_post_as_is(%{"jsonrpc" => "2.0", "id" => "req-abc-1", "method" => "tools/list"})
 
       assert json_response(conn, 400)["id"] == "req-abc-1"
     end
 
-    test "an origin rejection echoes the request id", %{conn: conn} do
+    test "an origin rejection, made before the body is read, carries a null id",
+         %{conn: conn} do
       conn =
         conn
-        |> put_req_header("content-type", "application/json")
         |> put_req_header("origin", "https://evil.example.com")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 77,
-          "method" => "tools/list"
-        })
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 77, "method" => "tools/list"})
 
       body = json_response(conn, 403)
-      assert body["id"] == 77
+      assert body["jsonrpc"] == "2.0"
+      assert body["id"] == nil
       assert body["error"]["message"] =~ "Origin not allowed"
     end
 
     test "a batch rejection carries a nil id, which is correct", %{conn: conn} do
       # A batch has no single id to echo, and JSON-RPC allows null only here.
-      # ConnTest.post/3 takes a map, so the array is encoded by hand.
-      batch_body =
-        Jason.encode!([
-          %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"},
-          %{"jsonrpc" => "2.0", "id" => 2, "method" => "tools/list"}
-        ])
+      batch_body = [
+        %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"},
+        %{"jsonrpc" => "2.0", "id" => 2, "method" => "tools/list"}
+      ]
 
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> Phoenix.ConnTest.dispatch(CyfrWeb.Endpoint, :post, "/mcp", batch_body)
-
-      body = json_response(conn, 400)
+      body = conn |> mcp_post_as_is(batch_body) |> json_response(400)
       assert body["id"] == nil
       assert body["error"]["message"] =~ "Batch requests not supported"
     end
@@ -83,8 +68,7 @@ defmodule Emissary.Web.MCPErrorTest do
     test "malformed JSON answers -32700 in the JSON-RPC envelope", %{conn: conn} do
       conn =
         conn
-        |> put_req_header("content-type", "application/json")
-        |> post("/mcp", ~s({"jsonrpc":"2.0","id":7,))
+        |> mcp_post_as_is(~s({"jsonrpc":"2.0","id":7,))
 
       body = json_response(conn, 400)
       assert body["jsonrpc"] == "2.0"
@@ -97,7 +81,7 @@ defmodule Emissary.Web.MCPErrorTest do
       conn =
         conn
         |> put_req_header("content-type", "text/plain")
-        |> post("/mcp", "jsonrpc 2.0 tools/list")
+        |> mcp_post_as_is("jsonrpc 2.0 tools/list")
 
       body = json_response(conn, 400)
       assert body["error"]["code"] == Message.error_code(:parse_error)

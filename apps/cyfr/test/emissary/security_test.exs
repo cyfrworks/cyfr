@@ -206,30 +206,33 @@ defmodule Emissary.SecurityTest do
     end
   end
 
-  describe "rate limiting and resource exhaustion" do
-    test "many rapid requests are handled", %{conn: conn} do
-      # Send many rapid requests
-      results =
-        for i <- 1..100 do
-          conn
-          |> recycle()
-          |> put_req_header("content-type", "application/json")
-          |> mcp_post(%{
-            "jsonrpc" => "2.0",
-            "id" => i,
-            "method" => "server/discover"
-          })
-        end
+  describe "the transport rate limit" do
+    # The shipped ceiling: 120 requests a minute from one address, discovery
+    # among them (`mcp_rate_limit_max`, `mcp_rate_limit_window_ms`). The
+    # case's conn comes from an address no other test shares.
+    @ceiling 120
 
-      # All 100 complete, and each answer carries back its own id. The
-      # limiter does not gate `server/discover`, so admitting 429/503 here
-      # made the assertion true whether the endpoint served the burst or
-      # shed it — and it could not have caught a response handed to the
-      # wrong request either.
-      for {result, i} <- Enum.with_index(results, 1) do
-        assert result.status == 200
-        assert json_response(result, 200)["id"] == i
+    test "serves discovery up to the shipped ceiling, each answer its own, and refuses the next",
+         %{conn: conn} do
+      discover = fn id ->
+        conn
+        |> recycle()
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => id, "method" => "server/discover"})
       end
+
+      for id <- 1..@ceiling do
+        assert %{"id" => ^id, "result" => %{}} = json_response(discover.(id), 200)
+      end
+
+      over = discover.(@ceiling + 1)
+
+      # Refused before the body is read, so no id is recovered from it.
+      assert %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => code}} =
+               json_response(over, 429)
+
+      assert code == Prima.MCP.Message.error_code(:rate_limited)
+      assert [retry_after] = get_resp_header(over, "retry-after")
+      assert String.to_integer(retry_after) in 1..60
     end
   end
 end
