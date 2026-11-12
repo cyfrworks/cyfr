@@ -2446,10 +2446,6 @@ defmodule Cyfr.Boundaries do
     # one; only a test build reads it, so a release holds the shipped
     # presets alone.
     scripted_oauth_provider: :seam,
-    # Compiled in by `config/test.exs` alone, it lets the host's test seams
-    # run (`Cyfr.seam/2`): the boot switches below and the hooks a suite
-    # points at its stand-ins; every release compiles them out.
-    bootstrap_skip_permitted: :seam,
     # Compiled in by `config/test.exs` alone, shortening the transports'
     # retry backoff base (`Compendium.Transport.Retry`); never read at runtime.
     transport_retry_base_ms: :seam,
@@ -2461,10 +2457,13 @@ defmodule Cyfr.Boundaries do
     # close a sync test's one sandbox connection, and by the budget's own
     # tests, which wait out the production figure; a release never sets it.
     decision_log_budget_ms: :seam,
-    # Compiled in by the test configurations alone — `config/test.exs` and,
-    # for the standalone build, `apps/sanctum/config/config.exs` — it lets
-    # Sanctum's test seams run (`Sanctum.seam/2`, the resolution override,
-    # an issuance's generation snapshot); every release compiles them out.
+    # The test permission, one name in both applications that read it,
+    # compiled in by the test configurations alone — `config/test.exs` and,
+    # for Sanctum's standalone build, `apps/sanctum/config/config.exs`. Under
+    # `:cyfr` it lets the host's test seams run (`Cyfr.seam/2`): the boot
+    # switches below and the hooks a suite points at its stand-ins; under
+    # `:sanctum`, Sanctum's (`Sanctum.seam/2`, the resolution override, an
+    # issuance's generation snapshot). Every release compiles them out.
     test_seams_permitted: :seam,
 
     # The sandboxed suite's boot switches, each on by default: the boot

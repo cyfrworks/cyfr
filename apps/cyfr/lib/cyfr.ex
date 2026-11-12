@@ -78,7 +78,7 @@ defmodule Cyfr do
   # config:compile-runtime-ok — the permission is compiled in on purpose: a
   # release is built without it, so no setting it is given at start-up
   # (`sys.config`, `ERL_AFLAGS`) reaches a test seam.
-  @test_seams_permitted Application.compile_env(:cyfr, :bootstrap_skip_permitted, false)
+  @test_seams_permitted Application.compile_env(:cyfr, :test_seams_permitted, false)
 
   @doc false
   # A test seam's value: what `read` answers in a build compiled with the

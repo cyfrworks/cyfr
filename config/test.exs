@@ -209,7 +209,7 @@ config :cyfr, Compendium.ProjectionReconciler, enabled: false
 # (`Cyfr.seam/2`): it takes BOTH this compile-time permission and its
 # runtime value, so a build compiled without the permission — every
 # release — runs as it ships whatever its configuration says.
-config :cyfr, bootstrap_skip_permitted: true
+config :cyfr, test_seams_permitted: true
 config :cyfr, provisioning_boot_enabled: false
 
 # Likewise the thread-runner boot recovery reads the repo before any

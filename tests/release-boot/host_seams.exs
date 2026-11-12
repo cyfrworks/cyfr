@@ -3,7 +3,7 @@
 #
 # The host's test seams in the running release, evaluated inside it by
 # `bin/cyfr rpc` (tests/release-boot/boot.sh): a release is compiled
-# without the test permission (`:cyfr, :bootstrap_skip_permitted`), so no
+# without the test permission (`:cyfr, :test_seams_permitted`), so no
 # setting it is given reaches a seam (`Cyfr.seam/2`). The permission, and
 # every switch the sandboxed suite turns a timer or a watch off with
 # (`config/test.exs`), is set here at runtime, as `sys.config` or
@@ -40,11 +40,11 @@ switched = [
   cron_scheduler_enabled: Opus.Schedules.Scheduler
 ]
 
-keys = [:bootstrap_skip_permitted | Keyword.keys(switched)]
+keys = [:test_seams_permitted | Keyword.keys(switched)]
 saved = for key <- keys, do: {key, Application.fetch_env(:cyfr, key)}
 
 try do
-  Application.put_env(:cyfr, :bootstrap_skip_permitted, true)
+  Application.put_env(:cyfr, :test_seams_permitted, true)
   for {key, _module} <- switched, do: Application.put_env(:cyfr, key, false)
 
   check.(

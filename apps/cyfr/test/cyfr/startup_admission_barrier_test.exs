@@ -328,7 +328,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
         for path <-
               Path.wildcard(Path.join(root, "config/*.exs")) ++
                 Path.wildcard(Path.join(root, "apps/*/config/*.exs")),
-            File.read!(path) =~ ~r/^config :cyfr,.*bootstrap_skip_permitted/m,
+            File.read!(path) =~ ~r/^config :cyfr,.*test_seams_permitted/m,
             do: Path.relative_to(path, root)
 
       assert setting == ["config/test.exs"]

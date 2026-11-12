@@ -3,7 +3,7 @@
 
 defmodule Cyfr.TestSeamsTest do
   # The host's test seams are read only by a build compiled with the test
-  # permission (`:cyfr, :bootstrap_skip_permitted`): a release, compiled
+  # permission (`:cyfr, :test_seams_permitted`): a release, compiled
   # without it, answers each seam's shipped default and never reads the
   # key (`Cyfr.seam/2`). Async: it reads source files and sets nothing.
   use ExUnit.Case, async: true
