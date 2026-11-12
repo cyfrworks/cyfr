@@ -538,6 +538,29 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       {:ok, test_dir: test_dir, api_key: key_result.api_key}
     end
 
+    test "a key whose creator names nobody is refused at the plug", %{
+      conn: conn,
+      api_key: api_key
+    } do
+      import Ecto.Query
+      hash = :crypto.hash(:sha256, api_key)
+
+      for creator <- ["nobody", "usr_nobody", nil] do
+        {1, _} =
+          Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.key_hash == ^hash),
+            set: [created_by: creator]
+          )
+
+        result =
+          conn
+          |> put_req_header("authorization", "Bearer " <> api_key)
+          |> authenticate(errors: Emissary.Web.MCPError)
+
+        assert result.halted
+        assert result.status == 401
+      end
+    end
+
     test "authenticates with valid API key", %{conn: conn, api_key: api_key} do
       conn =
         conn
