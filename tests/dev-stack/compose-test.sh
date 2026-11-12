@@ -345,6 +345,8 @@ case " $* " in
   # The question an earlier loop asked of the volume: when it was made,
   # which a volume replaced within the same second answers alike.
   " volume inspect "*) echo "$STUB_VOLUME_MADE" ;;
+  # The server's image the stack's compose built, the same id until a build.
+  " image inspect --format {{.Id}} cyfr-run-dev-cyfrrun ") echo "${STUB_STACK_IMAGE-sha256:stub-cyfrrun}" ;;
   " network ls -q ") [ -z "${STUB_NETWORKS:-}" ] || echo stub-networks ;;
   " network inspect "*) printf '%s\n' "${STUB_NETWORKS:-}" ;;
   *" up "*)
@@ -694,7 +696,7 @@ status_is() { [ "$(cat "$case_dir/status")" = "$1" ] || echo "the run exited $(c
 calls() {
   local acting="compose --env-file /dev/null -p $case_project --profile locus-builds -f docker-compose.yml -f docker-compose.dev.yml "
   record docker.calls | while IFS= read -r line; do
-    case "$line" in *" -p cyfr-run-dev "* | "volume inspect "*) continue ;; esac
+    case "$line" in *" -p cyfr-run-dev "* | "volume inspect "* | "image inspect "*) continue ;; esac
     printf '%s\n' "${line/#"$acting"/compose }"
   done
 }
@@ -714,15 +716,23 @@ stack_calls() {
       "$acting"exec\ -T\ -u\ postgres\ postgres\ sh\ -c\ *) echo "stack exec -T -u postgres postgres sh -c ID" ;;
       "$names"*) printf 'names %s\n' "${line#"$names"}" ;;
       "$acting"*) printf 'stack %s\n' "${line#"$acting"}" ;;
-      *" -p cyfr-run-dev "* | "volume inspect "*) printf '%s\n' "$line" ;;
+      *" -p cyfr-run-dev "* | "volume inspect "* | "image inspect "*) printf '%s\n' "$line" ;;
     esac
   done
 }
 # A start of the local cyfr.run: its names read, its declarations
-# resolved, its start, its authority copied out and its id read.
+# resolved, the server's image looked at, its start (with a build and the
+# built image's id read, unless KEPT says the commit's image is the one
+# recorded), its authority copied out and its id read.
 started_stack() {
-  printf '%s\n' "names config --variables" "stack config --format json" "stack up --detach --build --wait" \
-    "stack cp caddy:/data/caddy/pki/authorities/local/root.crt $case_dir/$machine/cyfr-run-root.crt" \
+  local inspect="image inspect --format {{.Id}} cyfr-run-dev-cyfrrun"
+  printf '%s\n' "names config --variables" "stack config --format json" "$inspect"
+  if [ "${1:-}" = kept ]; then
+    echo "stack up --detach --wait"
+  else
+    printf '%s\n' "stack up --detach --build --wait" "$inspect"
+  fi
+  printf '%s\n' "stack cp caddy:/data/caddy/pki/authorities/local/root.crt $case_dir/$machine/cyfr-run-root.crt" \
     "stack exec -T -u postgres postgres sh -c ID"
 }
 # The expected calls: the leftovers removed at slot R (remembered, else 0),
@@ -796,7 +806,7 @@ CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$
     echo "the run did not say what it wrote: $(cat "$case_dir/out")"
   [ "$(calls)" = "$(full_run "$slot_a" "$root" "$backends" "$builds")" ] || echo "docker was handed: $(calls)"
   [ "$(stack_calls)" = "$(started_stack)" ] || echo "the local cyfr.run's docker calls: $(stack_calls)"
-  [ "$(record docker.calls | head -n 5 | cut -d'|' -f1)" = "$(record docker.calls | grep -E -e ' -p cyfr-run-dev ' | cut -d'|' -f1)" ] ||
+  [ "$(record docker.calls | head -n 7 | cut -d'|' -f1)" = "$(record docker.calls | grep -E -e ' -p cyfr-run-dev ' -e '^image inspect ' | cut -d'|' -f1)" ] ||
     echo "the local cyfr.run did not start before the worktree's stack: $(record docker.calls | cut -d'|' -f1)"
   # The export holds the commit's tracked files and the loop's marker,
   # and nothing else.
@@ -1520,6 +1530,18 @@ case_stack_env() {
   status_is 0
   token_two="$(sed -n 's/^ADMIN_TOKEN=//p' "$env_file")"
   [ "$token_two" = "$token_one" ] || echo "a second run minted another ADMIN_TOKEN"
+  # The first start built the server's image and recorded it; the second,
+  # at the same commit with that image still there, builds nothing, so
+  # compose recreates no container of the stack the other loops share.
+  [ "$(cat "$case_dir/$machine/cyfr-run.image" 2>/dev/null)" = "$fake_commit sha256:stub-cyfrrun" ] ||
+    echo "the built image was recorded as $(cat "$case_dir/$machine/cyfr-run.image" 2>&1)"
+  [ "$(stack_calls)" = "$(started_stack kept)" ] || echo "a second start of the same commit built the server again: $(stack_calls)"
+  # An image gone since (another id, or none) is built again.
+  rm -rf "$case_dir/log" && mkdir -p "$case_dir/log"
+  launch STUB_SERVER_STATUS=0 STUB_STACK_IMAGE=sha256:another
+  echo "$?" >"$case_dir/status"
+  status_is 0
+  [ "$(stack_calls)" = "$(started_stack)" ] || echo "a start whose recorded image is gone did not build it: $(stack_calls)"
   nothing_left
 }
 # Names that do not resolve to 127.0.0.1 refuse with the hosts entry,
@@ -1637,6 +1659,7 @@ break_script anyexport "everything beside the running export removed" case_expor
 break_script outlinks "a link out of the export kept" case_export_symlink 's/^            if real != root and not real.startswith\(root \+ os.sep\):$/            if False:/'
 break_script outbinds "a bind outside the export left to Docker" case_export_symlink 's/^        if real != inside and not real.startswith\(inside \+ os.sep\):$/        if False:/'
 break_script createdat "a database bound by its volume's making" "case_volume_replaced case_same_stack" 's/^  \[\[ "\$STACK_ID" =~ \^\[0-9a-f\]\{32\}\$ \]\] \|\| die .*$/  STACK_ID="$(docker volume inspect --format "{{.CreatedAt}}" cyfr-run-dev_postgres-data)"/'
+break_script alwaysbuild "the server's image built on every start" case_stack_env 's/^  \[ "\$\(cat "\$STACK_IMAGE" 2>\/dev\/null\)" = "\$commit \$\(docker image inspect --format .\{\{\.Id\}\}. "\$image" 2>\/dev\/null\)" \] \|\|$/  false ||/'
 break_script remint "the ADMIN_TOKEN minted afresh on every start" case_stack_env 's/^  \[ ! -f "\$STACK_ENV" \] \|\| token=.*$/  :/'
 break_script nocheckout "no refusal of an absent cyfr.run checkout" case_cyfr_run_absent 's/^    die "the local cyfr.run is built from a cyfr.run checkout.s committed HEAD.*$/    true/'
 break_script unbound "a database taken whatever local cyfr.run it was made at" "case_stack_reset case_volume_replaced" 's/^      \[ "\$recorded" = "\$STACK_ID" \] \|\|$/      true ||/'

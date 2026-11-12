@@ -50,7 +50,10 @@
 # mode 0700), which is compose's project directory: nothing Docker makes
 # lands in the checkout, and no untracked file of it, its .env among
 # them, reaches an image. An uncommitted change there is not in the stack;
-# a new commit rebuilds it at the next start. It serves https://cyfr.test
+# a new commit rebuilds it at the next start. The server's image is built
+# once for a commit, its id recorded in cyfr-run.image, and again only when
+# that image is gone: every build is a new image, which compose would
+# recreate the server for under every other worktree's loop. It serves https://cyfr.test
 # and registry.cyfr.test on 127.0.0.1:443, and the server's registry, OCI
 # registry and account service are those three whatever .env says (`mix
 # cyfr.locus.dev_stack`). Every name its files interpolate comes from its
@@ -121,6 +124,8 @@ CYFR_RUN="${DEV_STACK_CYFR_RUN:-$(dirname "$ROOT")/cyfr.run}"
 MACHINE="${XDG_STATE_HOME:-$HOME/.local/state}/cyfr-dev-stack"
 STACK_ENV="$MACHINE/cyfr-run.env"
 STACK_ROOT="$MACHINE/cyfr-run-root.crt"
+# The commit the server's image was last built from, and that image's id.
+STACK_IMAGE="$MACHINE/cyfr-run.image"
 BOUND=data/dev-stack/cyfr-run.id
 STACK_DIR=""
 # The marker the loop writes last into an export it finished, and the
@@ -634,14 +639,23 @@ for name, service in sorted(s.items()):
             sys.exit("its %s service binds %s, which is outside the export" % (name, source))
 if not any(v.get("type") == "volume" and v.get("source") == "postgres-data" and v.get("target") == "/var/lib/postgresql/data"
            for v in s.get("postgres", {}).get("volumes", [])):
-    sys.exit("its postgres service keeps no volume postgres-data at /var/lib/postgresql/data")' "$PRIVATE/cyfr-run.json" "$DOMAIN" "$STACK_DIR" 2>&1)" ||
+    sys.exit("its postgres service keeps no volume postgres-data at /var/lib/postgresql/data")
+print(s["cyfrrun"].get("image") or "%s-cyfrrun" % c["name"])' "$PRIVATE/cyfr-run.json" "$DOMAIN" "$STACK_DIR" 2>&1)" ||
     die "the local stack of $CYFR_RUN's commit $commit is not the one the loop runs: $why."
+  # The server's image is built when this commit has none recorded, or the
+  # one recorded is gone: every build of it is a new image, which compose
+  # would recreate the server for, under every other worktree's loop.
+  local image="$why" up=(up --detach --wait) built=""
+  [ "$(cat "$STACK_IMAGE" 2>/dev/null)" = "$commit $(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)" ] ||
+    up=(up --detach --build --wait) built=1
   echo "dev-stack: starting the local cyfr.run from $CYFR_RUN's commit $commit, its committed HEAD (an uncommitted change there is not in it, and a new commit rebuilds it at the next start), unless it runs already; its first start builds it."
   set +e
-  stack_compose up --detach --build --wait 2>&1 | tee "$PRIVATE/cyfr-run.up" >&2
+  stack_compose "${up[@]}" 2>&1 | tee "$PRIVATE/cyfr-run.up" >&2
   status="${PIPESTATUS[0]}"
   set -e
   [ "$status" = 0 ] || die "$(up_refusal "$(cat "$PRIVATE/cyfr-run.up")")"
+  [ -z "$built" ] || printf '%s %s\n' "$commit" "$(docker image inspect --format '{{.Id}}' "$image")" >"$STACK_IMAGE" ||
+    die "$STACK_IMAGE could not be written."
   drop_exports "$commit"
   stack_compose cp caddy:/data/caddy/pki/authorities/local/root.crt "$STACK_ROOT" >/dev/null 2>&1 &&
     [ -s "$STACK_ROOT" ] || die "the local cyfr.run's certificate authority could not be copied out of its caddy service."
