@@ -4,8 +4,8 @@
 defmodule Cyfr.NoRealCyfrRunTest do
   @moduledoc """
   No person is ever made at the real cyfr.run from a test: the test node's
-  registry is the discard address `config/test.exs` names and it pins no
-  directory. A development build and a release share one default, cyfr.run
+  registry and account service are the discard address `config/test.exs`
+  names. A development build and a release share one default, cyfr.run
   for the registry and the account service, so a CYFR takes one path
   whatever it was built as.
   """
@@ -18,7 +18,7 @@ defmodule Cyfr.NoRealCyfrRunTest do
   @root Path.expand("../../../..", __DIR__)
   @discard "127.0.0.1:19"
 
-  test "the test node's registry is config/test.exs's discard address, and it pins no directory" do
+  test "the test node's registry and account service are config/test.exs's discard address" do
     assert File.read!(Path.join(@root, "config/test.exs")) =~
              ~s(config :sanctum, :registry_url, "#{@discard}")
 
@@ -26,7 +26,11 @@ defmodule Cyfr.NoRealCyfrRunTest do
     assert Application.get_env(:cyfr, :registry_url) == @discard
     assert Application.get_env(:cyfr, :oci_registry_url) == @discard
     assert Sanctum.registry_base_url(@discard) == "http://#{@discard}"
-    assert Sanctum.directory_url() == nil
+
+    assert File.read!(Path.join(@root, "config/test.exs")) =~
+             ~s(config :sanctum, :directory_url, "http://#{@discard}")
+
+    assert Sanctum.directory_url() == "http://#{@discard}"
   end
 
   for env <- [:dev, :prod] do

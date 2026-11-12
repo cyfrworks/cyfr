@@ -44,6 +44,9 @@ if config_env() == :test do
   # answer, and none off this machine.
   config :sanctum, :registry_url, "127.0.0.1:19"
 
+  # The account service every CYFR names, at the same closed port.
+  config :sanctum, :directory_url, "http://127.0.0.1:19"
+
   # The test permission, compiled in for this build's suite as
   # `config/test.exs` compiles it in for the umbrella's
   # (`Prima.TestSeam`): a release compiles none of the seams.

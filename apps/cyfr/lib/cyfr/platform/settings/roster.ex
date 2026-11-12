@@ -224,7 +224,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_ACCESS",
      "How CYFR is reached: `local` (this computer alone, at `http://localhost:<CYFR_PORT>`), `tailnet` (your devices on Tailscale, through Tailscale Serve) or `public` (anyone on the internet, through Caddy). `cyfr init` and `cyfr access <mode>` write it with every setting it implies, the boot refuses a setting that contradicts it and names the command that fixes it, and a release refuses to start without it; a development or test boot without it is `local`."},
     {"CYFR_REGISTRY_URL",
-     "The component registry: a host name or IPv4 address, with an optional port and an optional path a proxy serves it under, whose segments are not empty and which does not end in `/` (default `cyfr.run` in every build), which a person's registry requests are signed for and names resolve at. Every CYFR names one and calls it: cyfr.run, or its own, which an install cut off from the internet names; a registry it cannot reach is answered as unavailable, and an athanor fills from what CYFR ships without it. An IPv6 address is not one, since a signed registry request names its registry by a host name's grammar; any other value, and `none` in any case, refuses the boot."},
+     "The component registry: a host name or IPv4 address, with an optional port and an optional path a proxy serves it under, whose segments are not empty and which does not end in `/` (default `cyfr.run` in every build), which a person's registry requests are signed for and names resolve at. Every CYFR names one and calls it: cyfr.run, or its own, which an install cut off from the internet names. A CYFR that serves an account service (`CYFR_DIRECTORY_SERVE`) and names itself here answers its people's names and serves no components. A registry it cannot reach is answered as unavailable, and an athanor fills from what CYFR ships without it. An IPv6 address is not one, since a signed registry request names its registry by a host name's grammar; any other value, and `none` in any case, refuses the boot."},
     {"CYFR_REQUIRE_SIGNED_PULLS",
      "Refuse a component pull whose OCI signature cannot be verified (default off: the component is stored as unverified)."},
     {"CYFR_S3_ACCESS_KEY_ID", "The object store's access key ID, with `CYFR_STORAGE=s3`."},
@@ -385,7 +385,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "frame_invocation_max" => "The invocations one tincture frame may make per window.",
     "frame_invocation_window_ms" => "The frame invocation limit's window, in milliseconds.",
     "directory_serve" =>
-      "Whether this CYFR serves an account service: `off`, `writer` (the one writer of the accounts it keeps, with their names and account pages) or `mirror` (their history, accepting no write).",
+      "Whether this CYFR serves an account service: `off`, `writer` (the one writer of the accounts it keeps, with their names and account pages) or `mirror` (their history, accepting no write). Either way it serves no component registry: no component search, publish tokens, registry policies or component storage.",
     "directory_max_identities" =>
       "Accounts an account service this CYFR serves keeps; at capacity a new account is refused, while existing accounts and their recovery stay available.",
     "directory_log_bytes" =>

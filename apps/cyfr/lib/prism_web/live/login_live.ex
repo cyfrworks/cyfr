@@ -245,7 +245,7 @@ defmodule PrismWeb.LoginLive do
   # that this browser holds no sign-in to finish.
   defp sentence(:answer_refused), do: @lost
   defp sentence({:door, _reason}), do: Sanctum.Door.refusal_message()
-  defp sentence(reason) when reason in [:unavailable, :no_directory], do: @unavailable
+  defp sentence(:unavailable), do: @unavailable
 
   defp sentence(reason) do
     if Prima.Refusal.reason?(reason) do
