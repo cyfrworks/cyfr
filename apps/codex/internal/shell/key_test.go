@@ -20,7 +20,7 @@ import (
 func firstUse(t *testing.T, home *fakeHome, path string) *Shell {
 	t.Helper()
 	cfg := Config{Address: "https://one.example", Record: path, DataDir: filepath.Dir(path), Clients: &memoryClients{},
-		Chip: func() bool { return false }, Detect: func(string) disk.Report { return disk.Report{} }, Noun: "command line"}
+		Chip: func() bool { return false }, Detect: func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }, Noun: "command line"}
 	if home != nil {
 		cfg.Address, cfg.Client, cfg.Directory = home.address(), home.srv.Client(), home.accounts.URL()
 	}

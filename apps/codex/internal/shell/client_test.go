@@ -56,7 +56,7 @@ func commandLine(t *testing.T, home *fakeHome, dir string, clients *memoryClient
 	sh, err := New(Config{
 		Address: home.address(), Client: home.srv.Client(), Record: filepath.Join(dir, "key.json"), DataDir: dir,
 		Clients: clients, Directory: home.accounts.URL(),
-		Detect:     func(string) disk.Report { return disk.Report{} },
+		Detect:     func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} },
 		Chip:       func() bool { return false },
 		Noun:       "command line",
 		Tokens:     func() string { return setup },

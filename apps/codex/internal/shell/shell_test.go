@@ -631,6 +631,29 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 	_ = websocket.StatusNormalClosure
 }
 
+// A standing that ends with no announcement to the open channel is heard
+// at the box's next report, as the CYFR reads the standing again at each
+// one: the box locks, saying why, and drops the certificate.
+func TestChannel_AStandingEndedUnannouncedEndsAtTheNextReport(t *testing.T) {
+	oldEvery := reportEvery.Get()
+	reportEvery.Set(50 * time.Millisecond)
+	t.Cleanup(func() { reportEvery.Set(oldEvery) })
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	setUpAndOpen(t, home, b)
+	home.endStanding()
+	deadline := time.Now().Add(5 * time.Second)
+	for b.shell.Unlocked() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if b.shell.Unlocked() || !strings.Contains(b.page(), "it was removed, or CYFR does not admit your account") {
+		t.Fatal("a standing ended unannounced did not lock the box at its next report")
+	}
+	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
+		t.Fatalf("the client kept %+v", c)
+	}
+}
+
 // A change of CYFR's address leaves the box a certificate for its old
 // address. The box does not present it, which the CYFR would answer with a
 // challenge for that address, but drops it and says hello again with no
