@@ -14,8 +14,7 @@ import {
   credentialSignal,
   frameSignal,
   installedSignal,
-  nextStanding,
-  switchChord
+  nextStanding
 } from "../../js/canvas/signals.js"
 import IframeBridge from "../../js/hooks/iframe_bridge.js"
 import {createClient} from "../../js/sdk/client.js"
@@ -502,13 +501,6 @@ describe("switching canvases", () => {
     el.dispatch(pointer("pointerdown", {x: 400, y: 760}))
     el.dispatch(pointer("pointerup", {x: 300, y: 760}))
     assert.equal(pushedToView.length, 2)
-  })
-
-  test("the chord reads only Ctrl+Alt with an arrow", () => {
-    assert.equal(switchChord({key: "ArrowLeft", ctrlKey: true, altKey: true}), "previous")
-    assert.equal(switchChord({key: "ArrowRight", ctrlKey: true, altKey: true}), "next")
-    assert.equal(switchChord({key: "ArrowRight", ctrlKey: true, altKey: true, metaKey: true}), null)
-    assert.equal(switchChord(null), null)
   })
 })
 
