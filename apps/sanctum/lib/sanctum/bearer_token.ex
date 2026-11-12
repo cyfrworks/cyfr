@@ -16,4 +16,13 @@ defmodule Sanctum.BearerToken do
       _ -> nil
     end
   end
+
+  @doc """
+  The bearer provider the test harness installs (`Sanctum.Auth`'s
+  `current_user/1`, `:sanctum, :bearer_provider`), or `nil`. A test seam
+  only a test build reads (`Sanctum.seam/2`): every release answers `nil`,
+  whatever the key says, so no bearer of a provider's is ever asked about.
+  """
+  @spec provider() :: module() | nil
+  def provider, do: Sanctum.seam(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)
 end

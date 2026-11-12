@@ -23,9 +23,8 @@ defmodule Sanctum.TestSeamsTest do
   ]
 
   # The application whose code reads each seam: Sanctum's own, but for the
-  # host's bearer route (`CyfrWeb.Plugs.Authenticate`) and inline fill
-  # (`Compendium.Provisioning`).
-  @seam_readers %{bearer_provider: "apps/cyfr/lib", provisioning_inline: "apps/cyfr/lib"}
+  # host's inline fill (`Compendium.Provisioning`).
+  @seam_readers %{provisioning_inline: "apps/cyfr/lib"}
 
   setup do
     for {key, _default} <- @seams do

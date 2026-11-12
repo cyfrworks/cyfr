@@ -608,7 +608,7 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Annotations Sanctum.ApiKey Sanctum.BearerToken Sanctum.Caller
+        Sanctum.Annotations Sanctum.ApiKey Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
         Sanctum.Context Sanctum.Decisions
         Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Invitations
@@ -624,8 +624,6 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Caller` and `Sanctum.Context` alone) and the web tier's shared " <>
           "ingress plugs (`CyfrWeb.Plugs.*`), which are the auth fabric's own " <>
           "ingress — a wide roster is the entry point doing its job. " <>
-          "`Sanctum` itself is `Sanctum.seam/2` alone, through which the identity plug " <>
-          "reads the test bearer seam that only a test build reads. " <>
           "`Sanctum.Consent` is the shell's read of whether a tincture has an active " <>
           "public profile (`Sanctum.Consent.profiles/2`). " <>
           "`Sanctum.SharedThreads` is the shared-thread download's seat check and read " <>
@@ -1996,8 +1994,8 @@ defmodule Cyfr.Boundaries do
       build_tincture_context: 2,
       origin: 0,
       registry_base_url: 1,
-      # The host's two Sanctum test seams (`:bearer_provider`,
-      # `:provisioning_inline`) read through Sanctum's one permission.
+      # `Compendium.Provisioning`'s inline-fill switch (`:provisioning_inline`),
+      # a test seam read through Sanctum's one permission.
       seam: 2,
       system_context: 0
     ],
@@ -2014,7 +2012,9 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Auth.OIDC" => [issuer: 0],
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
-    "Sanctum.BearerToken" => [read: 1],
+    # `provider/0`: the identity plug's test bearer provider, which every
+    # release answers nil (`:bearer_provider`, a seam of Sanctum's own).
+    "Sanctum.BearerToken" => [provider: 0, read: 1],
     "Sanctum.Caller" => [
       drop_memo: 1,
       establish: 2,
@@ -2574,8 +2574,8 @@ defmodule Cyfr.Boundaries do
   @config_key_classes %{
     # Test seams: a hook a test sets and no release does.
     # The bearer a test signs in with (`Sanctum.Auth`'s `current_user/1`,
-    # read by `CyfrWeb.Plugs.Authenticate`): `CyfrWeb.ConnCase` sets it,
-    # and only a test build reads it (`Sanctum.seam/2`).
+    # read through `Sanctum.BearerToken.provider/0`): `CyfrWeb.ConnCase`
+    # sets it, and only a test build reads it (`Sanctum.seam/2`).
     bearer_provider: :seam,
     tenancy_resolver_override: :seam,
     thread_recovery: :seam,
