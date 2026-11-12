@@ -44,7 +44,8 @@ defmodule Locus.Runtime.ExecutorCancelPenaltyTest do
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
     Application.put_env(:arca, :base_path, test_path)
 
-    ctx = Sanctum.TestContext.local(:api)
+    ctx = %{Sanctum.TestContext.local(:api) | athanor_id: Prima.UUID7.generate_id("ath")}
+    Arca.Test.Actor.athanor!(ctx.athanor_id)
 
     # The penalty box outlives a force-release: what this suite fills for
     # its tenant, it empties.
@@ -70,7 +71,6 @@ defmodule Locus.Runtime.ExecutorCancelPenaltyTest do
     on_exit(fn -> :telemetry.detach(handler) end)
 
     Sanctum.TestContext.ready!(ctx.athanor_id)
-    Prima.Test.Slots.clear_unreaped(@slots, ctx.athanor_id)
     {:ok, ctx: ctx}
   end
 

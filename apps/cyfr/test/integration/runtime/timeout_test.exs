@@ -26,7 +26,8 @@ defmodule Locus.Runtime.TimeoutTest do
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local(:api)
+    ctx = %{Sanctum.TestContext.local(:api) | athanor_id: Prima.UUID7.generate_id("ath")}
+    Arca.Test.Actor.athanor!(ctx.athanor_id)
 
     # Plant the test WASM in a private seed so bootstrap can mint it.
     Cyfr.Test.SeedBundle.isolate!()
@@ -51,6 +52,7 @@ defmodule Locus.Runtime.TimeoutTest do
     {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
 
     on_exit(fn ->
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       if original_base_path,
@@ -58,6 +60,7 @@ defmodule Locus.Runtime.TimeoutTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    Cyfr.Test.Sandbox.stop_work_on_exit()
     Sanctum.TestContext.ready!(ctx.athanor_id)
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
