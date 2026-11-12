@@ -41,18 +41,23 @@
 # The local cyfr.run is one per machine, shared by every worktree's loop:
 # cyfr.run's own local stack (Caddy, the cyfrrun server, Zot and its
 # PostgreSQL), its docker-compose.prod.yml and docker-compose.local.yml
-# merged as that checkout's docker-compose.yml merges them, built from the
-# cyfr.run checkout DEV_STACK_CYFR_RUN names (default: cyfr.run beside
-# this checkout), under the compose project cyfr-run-dev. It serves
-# https://cyfr.test and registry.cyfr.test on 127.0.0.1:443, and the
-# server's registry, OCI registry and account service are those three
-# whatever .env says (`mix cyfr.locus.dev_stack`). Every name its files
-# interpolate comes from its env file alone, never the caller's
-# environment or that checkout's .env, and nothing is written into that
-# checkout: the env file, with the ADMIN_TOKEN that gates its first
-# administrator, minted once, and the copy of its certificate authority
-# live in the machine's dev-stack directory, $XDG_STATE_HOME/cyfr-dev-stack
-# (default ~/.local/state/cyfr-dev-stack), mode 0700. A loop starts it,
+# merged as that checkout's docker-compose.yml merges them, under the
+# compose project cyfr-run-dev. It is built and run from the committed
+# HEAD of the cyfr.run checkout DEV_STACK_CYFR_RUN names (default:
+# cyfr.run beside this checkout), its tracked files exported into
+# cyfr-run/<commit> under the machine's dev-stack directory,
+# $XDG_STATE_HOME/cyfr-dev-stack (default ~/.local/state/cyfr-dev-stack,
+# mode 0700), which is compose's project directory: nothing Docker makes
+# lands in the checkout, and no untracked file of it, its .env among
+# them, reaches an image. An uncommitted change there is not in the stack;
+# a new commit rebuilds it at the next start. It serves https://cyfr.test
+# and registry.cyfr.test on 127.0.0.1:443, and the server's registry, OCI
+# registry and account service are those three whatever .env says (`mix
+# cyfr.locus.dev_stack`). Every name its files interpolate comes from its
+# env file alone, never the caller's environment: the env file, with the
+# ADMIN_TOKEN that gates its first administrator, minted once, and the
+# copy of its certificate authority live in the machine's dev-stack
+# directory too. A loop starts it,
 # under a machine-wide lock beside the claims, when it is not running,
 # and leaves it running on every exit; `down` never stops it. The machine
 # makes the two names resolve to 127.0.0.1 and trusts the authority once;
@@ -60,11 +65,12 @@
 #
 # Every genesis a dev database's people sign names the local cyfr.run's
 # account service, so a database is bound to the local cyfr.run whose
-# accounts it holds, whatever slot it runs at: data/dev-stack/cyfr-run.made
-# records when its PostgreSQL volume was made. A new database (the task
-# says which) records the running one; a database that is not new refuses
-# when the record names another, since its people's accounts are gone, and
-# names the reset.
+# accounts it holds, whatever slot it runs at: data/dev-stack/cyfr-run.id
+# records that cyfr.run's id, a random value the loop writes once into its
+# PostgreSQL volume, which goes with the volume. A new database (the task
+# says which) records the running one's; a database that is not new
+# refuses when the record names another, or none, since its people's
+# accounts are not here, and names the ways out.
 #
 # One run of a worktree's loop holds the project's lock (beside the
 # claims) for its whole life, before anything of its checkout is written
@@ -115,8 +121,9 @@ CYFR_RUN="${DEV_STACK_CYFR_RUN:-$(dirname "$ROOT")/cyfr.run}"
 MACHINE="${XDG_STATE_HOME:-$HOME/.local/state}/cyfr-dev-stack"
 STACK_ENV="$MACHINE/cyfr-run.env"
 STACK_ROOT="$MACHINE/cyfr-run-root.crt"
-MADE=data/dev-stack/cyfr-run.made
-STACK_MADE=""
+BOUND=data/dev-stack/cyfr-run.id
+STACK_DIR=""
+STACK_ID=""
 STACK_NAMES=""
 LOCK=""
 LOCK_FD=""
@@ -452,35 +459,55 @@ sys.exit(1)' "$1" "$2" || return 1
 }
 
 # bind_database: whether the dev database is new, from the task. A new one
-# records the local cyfr.run its people are made at; one that is not
-# refuses when the record names another, whose accounts went with it.
+# records the id of the local cyfr.run its people are made at; one that is
+# not refuses when the record names another, whose accounts are not here.
 bind_database() {
-  local out new recorded
+  local out new recorded delete
   out="$(task database 2>&1)" || die "$(refusal "$out")"
   new="$(value DEV_STACK_DATABASE_NEW "$out")"
+  delete="delete the dev database and start again: rm -f data/cyfr.db* (or the file CYFR_DATABASE_PATH names; under PostgreSQL, drop the database CYFR_DATABASE_URL names)"
   case "$new" in
     1)
-      mkdir -p "$(dirname "$MADE")" && printf '%s\n' "$STACK_MADE" >"$MADE"
+      mkdir -p "$(dirname "$BOUND")" && printf '%s\n' "$STACK_ID" >"$BOUND"
       ;;
     0)
-      recorded="$(cat "$MADE" 2>/dev/null || true)"
-      [ "$recorded" = "$STACK_MADE" ] ||
-        die "This database's people were made at a local cyfr.run that is gone, and their accounts with it ($MADE records ${recorded:-none}; the running one was made $STACK_MADE). Delete the dev database (data/cyfr.db unless .env names another) and start again."
+      recorded="$(cat "$BOUND" 2>/dev/null || true)"
+      [ -n "$recorded" ] ||
+        die "This database's people were made before the loop recorded the local cyfr.run that holds their accounts ($BOUND is absent), beside the stand-in an earlier loop ran, and no local cyfr.run holds them: $delete."
+      [ "$recorded" = "$STACK_ID" ] ||
+        die "This database's people were made at another local cyfr.run than the running one ($BOUND records $recorded; the running one is $STACK_ID), and their accounts are there alone. If that one was reset (\`docker compose -p $STACK down -v\`), it is gone for good: $delete. If this database is the newer one and the running cyfr.run an older copy of the volume ${STACK}_postgres-data put back since, put back the copy this database was made at, or $delete."
       ;;
     *) die "mix cyfr.locus.dev_stack did not say whether the dev database is new." ;;
   esac
 }
 
-# stack_compose ARGS: the local cyfr.run's compose, under its fixed
-# project, from the checkout's production and local files merged as its
-# docker-compose.yml merges them, every name they interpolate from
-# STACK_ENV alone: the caller's environment sets none of them, and the
-# checkout's .env is never read.
+# stack_compose [--env-file FILE] ARGS: the local cyfr.run's compose, under
+# its fixed project, from the export's production and local files merged
+# as its docker-compose.yml merges them, with the export as its project
+# directory, every name they interpolate from STACK_ENV (or FILE) alone:
+# the caller's environment sets none of them.
 stack_compose() {
-  local unset=() name
+  local unset=() name env_file="$STACK_ENV"
+  if [ "$1" = --env-file ]; then env_file="$2" && shift 2; fi
   for name in $STACK_NAMES; do unset+=(-u "$name"); done
-  env "${unset[@]}" docker compose --env-file "$STACK_ENV" -p "$STACK" \
-    -f "$CYFR_RUN/docker-compose.prod.yml" -f "$CYFR_RUN/docker-compose.local.yml" "$@"
+  env "${unset[@]}" docker compose --env-file "$env_file" -p "$STACK" --project-directory "$STACK_DIR" \
+    -f "$STACK_DIR/docker-compose.prod.yml" -f "$STACK_DIR/docker-compose.local.yml" "$@"
+}
+
+# export_cyfr_run COMMIT: the checkout's tracked files at COMMIT, exported
+# once into the machine's dev-stack directory (STACK_DIR), the directory
+# compose builds and runs the local cyfr.run from: nothing Docker creates
+# lands in the checkout, and none of its untracked files, its .env among
+# them, reaches a build context or an image. The export appears whole or
+# not at all.
+export_cyfr_run() {
+  STACK_DIR="$MACHINE/cyfr-run/$1"
+  [ ! -d "$STACK_DIR" ] || return 0
+  local partial="$MACHINE/cyfr-run/.partial.$1.$$"
+  rm -rf "$partial" && mkdir -p "$partial" &&
+    git -C "$CYFR_RUN" archive --format=tar "$1" | tar -x -C "$partial" &&
+    mv "$partial" "$STACK_DIR" ||
+    die "$CYFR_RUN's commit $1 could not be exported into $MACHINE/cyfr-run."
 }
 
 # stack_env: the local cyfr.run's env file, mode 0600 in the machine's
@@ -512,31 +539,35 @@ up_refusal() {
 }
 
 # start_cyfr_run: the local cyfr.run running, started under the machine's
-# lock when it is not, with what it declares checked, its authority copied
-# out and its PostgreSQL volume's making read (STACK_MADE). Nothing stops
-# it here: every worktree's loop shares it.
+# lock when it is not, from the export of the checkout's HEAD, with what it
+# declares checked, its authority copied out and its id read (STACK_ID).
+# Nothing stops it here: every worktree's loop shares it.
 start_cyfr_run() {
-  [ -f "$CYFR_RUN/docker-compose.prod.yml" ] && [ -f "$CYFR_RUN/docker-compose.local.yml" ] ||
-    die "the local cyfr.run is built from a cyfr.run checkout, and $CYFR_RUN holds none (no docker-compose.prod.yml and docker-compose.local.yml); clone https://github.com/cyfrworks/cyfr.run.git there, or name another checkout with DEV_STACK_CYFR_RUN=<path>."
+  local commit fd status
+  commit="$(git -C "$CYFR_RUN" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" &&
+    git -C "$CYFR_RUN" cat-file -e "$commit:docker-compose.prod.yml" 2>/dev/null &&
+    git -C "$CYFR_RUN" cat-file -e "$commit:docker-compose.local.yml" 2>/dev/null ||
+    die "the local cyfr.run is built from a cyfr.run checkout's committed HEAD, and $CYFR_RUN holds none (no commit with docker-compose.prod.yml and docker-compose.local.yml); clone https://github.com/cyfrworks/cyfr.run.git there, or name another checkout with DEV_STACK_CYFR_RUN=<path>."
   CYFR_RUN="$(cd "$CYFR_RUN" && pwd)"
-  local fd up status volume
   exec {fd}>>"$(runtime_dir)/$STACK.lock"
   if ! flock -n "$fd"; then
     echo "dev-stack: another loop is starting the local cyfr.run; waiting for it."
     flock "$fd"
   fi
   stack_env
-  STACK_NAMES="$(docker compose --env-file /dev/null -p "$STACK" -f "$CYFR_RUN/docker-compose.prod.yml" \
-    -f "$CYFR_RUN/docker-compose.local.yml" config --variables 2>/dev/null | awk 'NR > 1 { print $1 }')" ||
-    die "docker compose could not read $CYFR_RUN's docker-compose.prod.yml and docker-compose.local.yml."
+  export_cyfr_run "$commit"
+  STACK_NAMES="$(stack_compose --env-file /dev/null config --variables 2>/dev/null | awk 'NR > 1 { print $1 }')" ||
+    die "docker compose could not read the docker-compose.prod.yml and docker-compose.local.yml of $CYFR_RUN's commit $commit."
   stack_compose config --format json >"$PRIVATE/cyfr-run.json" 2>"$PRIVATE/cyfr-run.err" ||
-    die "docker compose could not resolve $CYFR_RUN's local stack: $(tail -n 1 "$PRIVATE/cyfr-run.err")"
+    die "docker compose could not resolve the local stack of $CYFR_RUN's commit $commit: $(tail -n 1 "$PRIVATE/cyfr-run.err")"
   # What the local cyfr.run declares, as compose resolved it: Caddy on
-  # 127.0.0.1:443 alone, the server's apex DOMAIN, and the PostgreSQL
-  # volume whose making binds a database's people to it.
-  volume="$(python3 -I -c '
-import json, sys
-c, domain = json.load(open(sys.argv[1])), sys.argv[2]
+  # 127.0.0.1:443 alone, the server's apex DOMAIN, PostgreSQL's volume, and
+  # every file it binds held by the export, since Docker would make a
+  # directory for one that is missing.
+  local why
+  why="$(python3 -I -c '
+import json, os, sys
+c, domain, root = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
 s = c.get("services", {})
 ports = [(p.get("host_ip"), str(p.get("published")), p.get("target")) for p in s.get("caddy", {}).get("ports", [])]
 if ports != [("127.0.0.1", "443", 443)]:
@@ -544,22 +575,32 @@ if ports != [("127.0.0.1", "443", 443)]:
 for name in ("caddy", "cyfrrun"):
     if s.get(name, {}).get("environment", {}).get("DOMAIN") != domain:
         sys.exit("its %s service is not for %s" % (name, domain))
-for v in s.get("postgres", {}).get("volumes", []):
-    if v.get("type") == "volume" and v.get("target") == "/var/lib/postgresql/data":
-        print(c["volumes"][v["source"]]["name"])
-        sys.exit(0)
-sys.exit("its postgres service keeps no volume at /var/lib/postgresql/data")' "$PRIVATE/cyfr-run.json" "$DOMAIN" 2>&1)" ||
-    die "$CYFR_RUN's local stack is not the one the loop runs: $volume."
-  echo "dev-stack: starting the local cyfr.run from $CYFR_RUN, unless it runs already; its first start builds it."
+for name, service in sorted(s.items()):
+    for v in service.get("volumes", []):
+        if v.get("type") == "bind" and not os.path.exists(v.get("source", "")):
+            sys.exit("its %s service binds %s, which the commit does not hold" % (name, os.path.relpath(v.get("source", ""), root)))
+if not any(v.get("type") == "volume" and v.get("source") == "postgres-data" and v.get("target") == "/var/lib/postgresql/data"
+           for v in s.get("postgres", {}).get("volumes", [])):
+    sys.exit("its postgres service keeps no volume postgres-data at /var/lib/postgresql/data")' "$PRIVATE/cyfr-run.json" "$DOMAIN" "$STACK_DIR" 2>&1)" ||
+    die "the local stack of $CYFR_RUN's commit $commit is not the one the loop runs: $why."
+  echo "dev-stack: starting the local cyfr.run from $CYFR_RUN's commit $commit, its committed HEAD (an uncommitted change there is not in it, and a new commit rebuilds it at the next start), unless it runs already; its first start builds it."
   set +e
   stack_compose up --detach --build --wait 2>&1 | tee "$PRIVATE/cyfr-run.up" >&2
   status="${PIPESTATUS[0]}"
   set -e
   [ "$status" = 0 ] || die "$(up_refusal "$(cat "$PRIVATE/cyfr-run.up")")"
+  # The exports of other commits, which the running stack no longer reads.
+  find "$MACHINE/cyfr-run" -mindepth 1 -maxdepth 1 ! -name "$commit" -exec rm -rf {} + 2>/dev/null || true
   stack_compose cp caddy:/data/caddy/pki/authorities/local/root.crt "$STACK_ROOT" >/dev/null 2>&1 &&
     [ -s "$STACK_ROOT" ] || die "the local cyfr.run's certificate authority could not be copied out of its caddy service."
-  STACK_MADE="$(docker volume inspect --format '{{.CreatedAt}}' "$volume" 2>/dev/null)" && [ -n "$STACK_MADE" ] ||
-    die "docker could not say when the local cyfr.run's volume $volume was made."
+  # The stack's id: random, written once into its PostgreSQL volume and
+  # read at every start, so it goes with the volume and no other volume
+  # has it.
+  STACK_ID="$(stack_compose exec -T -u postgres postgres sh -c '
+f=/var/lib/postgresql/data/cyfr-dev-stack.id
+[ -s "$f" ] || { umask 077 && od -An -tx1 -N16 /dev/urandom | tr -d " \n" >"$f.new" && mv "$f.new" "$f"; }
+cat "$f"' 2>/dev/null)" || STACK_ID=""
+  [[ "$STACK_ID" =~ ^[0-9a-f]{32}$ ]] || die "the local cyfr.run's id could not be read from, or written into, its PostgreSQL volume."
   exec {fd}>&-
   printf '%s\n' \
     "dev-stack: the local cyfr.run serves https://$DOMAIN and registry.$DOMAIN on 127.0.0.1:443 (compose project $STACK); every worktree's loop shares it, and it keeps running when this loop stops." \

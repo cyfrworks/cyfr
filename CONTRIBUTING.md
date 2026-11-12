@@ -57,9 +57,14 @@ development takes the release's path: the loop's server names
 `https://cyfr.test` as its account service, whatever `.env` says, and
 prints them as it starts. They are cyfr.run's own local stack (Caddy, the
 `cyfrrun` server, Zot and its PostgreSQL, as that checkout's
-`docker-compose.yml` merges them), built from the checkout and run under
-the compose project `cyfr-run-dev`, which serves both names on
-`127.0.0.1:443`. The accounts, names and components a loop makes exist
+`docker-compose.yml` merges them), run under the compose project
+`cyfr-run-dev`, which serves both names on `127.0.0.1:443`. It is built
+and run from the checkout's committed HEAD: the loop exports that
+commit's tracked files into
+`~/.local/state/cyfr-dev-stack/cyfr-run/<commit>` and runs compose there,
+and prints the commit as it starts. An uncommitted change in the
+checkout is not in the stack, and a new commit there rebuilds it at the
+next start. The accounts, names and components a loop makes exist
 there alone, and nothing the loop does reaches the public cyfr.run. A
 `mix` boot outside the loop names the public cyfr.run, as a release does,
 unless `.env` names others: the loop is how a developer stays local.
@@ -72,7 +77,8 @@ loop mints into the machine's dev-stack directory,
 `~/.local/state/cyfr-dev-stack/cyfr-run.env` (under `XDG_STATE_HOME` when
 it is set, mode 0700), beside the copy of Caddy's certificate authority,
 `cyfr-run-root.crt`. Nothing is written into the cyfr.run checkout, and
-its `.env` is never read.
+none of its untracked files, its `.env` among them, reaches the stack or
+its images.
 
 One machine runs one local cyfr.run, shared by every worktree's loop: a
 loop starts it when it is not running and leaves it running when it
@@ -85,7 +91,7 @@ Three things are set once per machine, with administrator rights; the
 loop checks each and never does it, and refuses with the command until it
 is done:
 
-- both names resolve to this machine's loopback:
+- both names resolve to 127.0.0.1 alone (`::1` beside it is accepted), and to no other address:
   `echo '127.0.0.1 cyfr.test registry.cyfr.test' | sudo tee -a /etc/hosts`;
 - Docker publishes `127.0.0.1:443`, which rootful Docker and Docker
   Desktop do as they are; rootless Docker needs
@@ -125,14 +131,17 @@ stops the server and removes the containers a killed run of the same
 worktree left.
 
 A dev database's people are bound to the local cyfr.run their accounts
-were made at, since every account names its account service: a new
-database records it in `data/dev-stack/cyfr-run.made`, and a database that
-is not new refuses to start once that local cyfr.run has been reset (or
-when it was made beside the stand-in an earlier loop ran), since its
-people's accounts are gone; delete the dev database (`data/cyfr.db`
-unless `.env` names another) to start afresh. `docker compose -p
-cyfr-run-dev down -v && rm -f data/cyfr.db*` resets both; every other
-worktree's database then refuses in the same way.
+were made at, since every account names its account service. The loop
+writes a random id once into the local cyfr.run's PostgreSQL volume; a
+new database records it in `data/dev-stack/cyfr-run.id`, and a database
+that is not new refuses to start when the running local cyfr.run has
+another id (it was reset, or an older copy of its volume was put back),
+or when it has none (it was made beside the stand-in an earlier loop
+ran), since its people's accounts are not there; the refusal names the
+ways out. A `down -v` leaves no way back, so delete the dev database
+(`data/cyfr.db` unless `.env` names another) to start afresh.
+`docker compose -p cyfr-run-dev down -v && rm -f data/cyfr.db*` resets
+both; every other worktree's database then refuses in the same way.
 
 Each worktree runs a loop of its own, beside the others, a test suite, a
 proof or a CI-style run on the same host. Its containers are named

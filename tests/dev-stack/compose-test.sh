@@ -76,7 +76,7 @@ fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # The boundary cases, defined below; DEV_STACK_CASES names some of them.
-BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_new_database case_same_stack case_stack_reset case_cyfr_run_absent case_stack_env case_unresolved case_untrusted case_port_443"
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_new_database case_same_stack case_stack_reset case_cyfr_run_absent case_stack_env case_unresolved case_untrusted case_port_443 case_mixed_address case_missing_bind case_volume_replaced case_new_commit"
 for c in ${DEV_STACK_CASES:-}; do
   case " $BOUNDARY_CASES " in
     *" $c "*) ;;
@@ -320,7 +320,9 @@ stubs="$scratch/bin"
 mkdir -p "$stubs"
 cat >"$stubs/docker" <<'STUB'
 #!/usr/bin/env bash
-printf '%s|LOCUS_RUNTIME_KEY=%s|CYFR_LOCUS_BACKENDS_KEY=%s|CYFR_LOCUS_BUILDS_KEY=%s|slot=%s\n' "$*" \
+# One record a call: a script handed to `sh -c` keeps to its line.
+args="$*"
+printf '%s|LOCUS_RUNTIME_KEY=%s|CYFR_LOCUS_BACKENDS_KEY=%s|CYFR_LOCUS_BUILDS_KEY=%s|slot=%s\n' "${args//$'\n'/ }" \
   "${LOCUS_RUNTIME_KEY-unset}" "${CYFR_LOCUS_BACKENDS_KEY-unset}" "${CYFR_LOCUS_BUILDS_KEY-unset}" \
   "${DEV_STACK_SLOT-unset}" >>"$STUB_LOG/docker.calls"
 env | sed -n 's/^\(COMPOSE_[A-Z_]*\)=.*/\1/p' | sort | tr '\n' ' ' >>"$STUB_LOG/docker.env"
@@ -339,6 +341,9 @@ case " $* " in
     [ -z "${STUB_STACK_UP_OUTPUT:-}" ] || echo "$STUB_STACK_UP_OUTPUT" >&2
     exit "${STUB_STACK_UP_STATUS:-0}"
     ;;
+  *" -p cyfr-run-dev "*" exec -T -u postgres postgres "*) echo "$STUB_STACK_ID" ;;
+  # The question an earlier loop asked of the volume: when it was made,
+  # which a volume replaced within the same second answers alike.
   " volume inspect "*) echo "$STUB_VOLUME_MADE" ;;
   " network ls -q ") [ -z "${STUB_NETWORKS:-}" ] || echo stub-networks ;;
   " network inspect "*) printf '%s\n' "${STUB_NETWORKS:-}" ;;
@@ -474,6 +479,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
     environment:
       DOMAIN: "${DOMAIN:-cyfr.run}"
   cyfrrun:
@@ -499,10 +506,21 @@ services:
 volumes:
   postgres-data:
 YAML
+printf '{$DOMAIN} {\n}\n' >"$fake_run/Caddyfile"
+# commit_run DIR: DIR's files committed, as a cyfr.run checkout holds them.
+commit_run() {
+  git -C "$1" add -A -- . ':!.env' && git -C "$1" -c user.name=test -c user.email=test@example.invalid \
+    -c commit.gpgsign=false commit -q -m "the local stack" && git -C "$1" rev-parse HEAD
+}
+git init -q "$fake_run"
+fake_commit="$(commit_run "$fake_run")"
+# Its .env, untracked, which no export holds and no image reaches.
 printf 'DOMAIN=cyfr.run\nADMIN_TOKEN=the-checkouts-own\n' >"$fake_run/.env"
-fake_listing() { (cd "$fake_run" && find . -printf '%p %m %s\n' | sort && sha256sum ./*); }
+fake_listing() { (cd "$fake_run" && find . -printf '%p %m %s %T@\n' | sort && sha256sum ./*); }
 fake_before="$(fake_listing)"
-# The PostgreSQL volume's making the stubbed docker answers.
+# The id the stubbed docker answers for the local cyfr.run's PostgreSQL
+# volume, and the making it answers for that volume.
+stack_id="$(printf '5a%.0s' {1..16})"
 made_at="2026-11-12T08:00:00Z"
 # The stubbed mix's resolver: a hosts table of the test's own, never the
 # machine's hosts file, mapping both names to 127.0.0.1, or neither.
@@ -510,6 +528,8 @@ resolving="$scratch/resolving.inetrc"
 unresolving="$scratch/unresolving.inetrc"
 printf '{lookup, [file]}.\n{hosts_file, "/dev/null"}.\n{host, {127,0,0,1}, ["cyfr.test", "registry.cyfr.test"]}.\n' >"$resolving"
 printf '{lookup, [file]}.\n{hosts_file, "/dev/null"}.\n' >"$unresolving"
+mixed="$scratch/mixed.inetrc"
+printf '{lookup, [file]}.\n{hosts_file, "/dev/null"}.\n{host, {127,0,0,1}, ["cyfr.test", "registry.cyfr.test"]}.\n{host, {203,0,113,9}, ["cyfr.test", "registry.cyfr.test"]}.\n' >"$mixed"
 # The authority the stubbed docker copies out: a root the operating
 # system's store holds, or one it does not.
 trusted_root="$scratch/trusted-root.crt"
@@ -618,7 +638,8 @@ launch() {
   (cd "$case_dir" && exec env -i PATH="$stubs:$PATH" HOME="$HOME" LC_ALL=C.UTF-8 TMPDIR="$case_dir/tmp" \
     XDG_RUNTIME_DIR="${run_dir:-$case_dir/run}" XDG_STATE_HOME="$case_dir/state" DEV_STACK_GRACE=1 \
     STUB_IMAGE="$stub_image" STUB_LOG="$case_dir/log" STUB_EBINS="$ebins" STUB_TOKEN="$token" \
-    REAL_DOCKER="$REAL_DOCKER" ERL_INETRC="$resolving" STUB_ROOT="$trusted_root" STUB_VOLUME_MADE="$made_at" "$@" \
+    REAL_DOCKER="$REAL_DOCKER" ERL_INETRC="$resolving" STUB_ROOT="$trusted_root" STUB_VOLUME_MADE="$made_at" \
+    STUB_STACK_ID="$stack_id" "$@" \
     python3 -I -c 'import os, signal, sys
 for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
     signal.signal(s, signal.SIG_DFL)
@@ -679,14 +700,18 @@ calls() {
 }
 # The local cyfr.run's docker calls, without the keys: `names ARGS` for
 # its compose reading the names its files interpolate, `stack ARGS` for
-# its compose under its env file, and the volume's inspection.
+# its compose under its env file, each from the export of COMMIT (the
+# fake checkout's by default) as its project directory, and the script
+# that reads its id as `stack exec ... sh -c ID`.
 machine="state/cyfr-dev-stack"
 stack_calls() {
-  local files="-p cyfr-run-dev -f $fake_run/docker-compose.prod.yml -f $fake_run/docker-compose.local.yml "
+  local export="$case_dir/$machine/cyfr-run/${1:-$fake_commit}"
+  local files="-p cyfr-run-dev --project-directory $export -f $export/docker-compose.prod.yml -f $export/docker-compose.local.yml "
   local names="compose --env-file /dev/null $files" acting="compose --env-file $case_dir/$machine/cyfr-run.env $files"
   record docker.calls | while IFS= read -r line; do
     line="${line%%|*}"
     case "$line" in
+      "$acting"exec\ -T\ -u\ postgres\ postgres\ sh\ -c\ *) echo "stack exec -T -u postgres postgres sh -c ID" ;;
       "$names"*) printf 'names %s\n' "${line#"$names"}" ;;
       "$acting"*) printf 'stack %s\n' "${line#"$acting"}" ;;
       *" -p cyfr-run-dev "* | "volume inspect "*) printf '%s\n' "$line" ;;
@@ -694,11 +719,11 @@ stack_calls() {
   done
 }
 # A start of the local cyfr.run: its names read, its declarations
-# resolved, its start, its authority copied out and its volume inspected.
+# resolved, its start, its authority copied out and its id read.
 started_stack() {
   printf '%s\n' "names config --variables" "stack config --format json" "stack up --detach --build --wait" \
     "stack cp caddy:/data/caddy/pki/authorities/local/root.crt $case_dir/$machine/cyfr-run-root.crt" \
-    "volume inspect --format {{.CreatedAt}} cyfr-run-dev_postgres-data"
+    "stack exec -T -u postgres postgres sh -c ID"
 }
 # The expected calls: the leftovers removed at slot R (remembered, else 0),
 # the networks listed, the declarations at slot K, the start with the keys,
@@ -771,8 +796,14 @@ CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$
     echo "the run did not say what it wrote: $(cat "$case_dir/out")"
   [ "$(calls)" = "$(full_run "$slot_a" "$root" "$backends" "$builds")" ] || echo "docker was handed: $(calls)"
   [ "$(stack_calls)" = "$(started_stack)" ] || echo "the local cyfr.run's docker calls: $(stack_calls)"
-  [ "$(record docker.calls | head -n 5 | cut -d'|' -f1)" = "$(record docker.calls | grep -E -e ' -p cyfr-run-dev ' -e '^volume inspect ' | cut -d'|' -f1)" ] ||
+  [ "$(record docker.calls | head -n 5 | cut -d'|' -f1)" = "$(record docker.calls | grep -E -e ' -p cyfr-run-dev ' | cut -d'|' -f1)" ] ||
     echo "the local cyfr.run did not start before the worktree's stack: $(record docker.calls | cut -d'|' -f1)"
+  # The export holds the commit's tracked files, and nothing else.
+  local export="$case_dir/$machine/cyfr-run/$fake_commit"
+  [ "$(cd "$export" 2>/dev/null && find . -type f | sort)" = $'./Caddyfile\n./docker-compose.local.yml\n./docker-compose.prod.yml' ] ||
+    echo "the export of $fake_commit holds: $(cd "$export" 2>/dev/null && find . | sort | tr '\n' ' ')"
+  grep -qxF "dev-stack: starting the local cyfr.run from $fake_run's commit $fake_commit, its committed HEAD (an uncommitted change there is not in it, and a new commit rebuilds it at the next start), unless it runs already; its first start builds it." "$case_dir/out" ||
+    echo "the run did not name the commit it runs: $(cat "$case_dir/out")"
   grep -qxF "dev-stack: its registry is cyfr.test, its OCI registry registry.cyfr.test and its account service https://cyfr.test: the local cyfr.run." "$case_dir/out" ||
     echo "the run did not print the server's registry: $(cat "$case_dir/out")"
   grep -qxF "dev-stack: its admin pages are at https://cyfr.test/admin; its first administrator is made once at https://cyfr.test/admin/bootstrap?token=<ADMIN_TOKEN>, the token in $case_dir/$machine/cyfr-run.env." "$case_dir/out" ||
@@ -1230,20 +1261,26 @@ case_down_orphan() {
   kill -KILL "$pid" 2>/dev/null
 }
 
-# made_record TEXT: the worktree's record of the local cyfr.run its
-# database's people were made at.
-made_record() { mkdir -p "$case_dir/data/dev-stack" && printf '%s\n' "$1" >"$case_dir/data/dev-stack/cyfr-run.made"; }
-# A new database records the local cyfr.run it is made at, whatever an
-# earlier record named.
+# bound_record TEXT: the worktree's record of the id of the local cyfr.run
+# its database's people were made at.
+bound_record() { mkdir -p "$case_dir/data/dev-stack" && printf '%s\n' "$1" >"$case_dir/data/dev-stack/cyfr-run.id"; }
+delete_sentence="delete the dev database and start again: rm -f data/cyfr.db* (or the file CYFR_DATABASE_PATH names; under PostgreSQL, drop the database CYFR_DATABASE_URL names)"
+# other_sentence RECORDED: the refusal of a database made at another local
+# cyfr.run than the running one.
+other_sentence() {
+  echo "dev-stack: This database's people were made at another local cyfr.run than the running one (data/dev-stack/cyfr-run.id records $1; the running one is $stack_id), and their accounts are there alone. If that one was reset (\`docker compose -p cyfr-run-dev down -v\`), it is gone for good: $delete_sentence. If this database is the newer one and the running cyfr.run an older copy of the volume cyfr-run-dev_postgres-data put back since, put back the copy this database was made at, or $delete_sentence."
+}
+# A new database records the id of the local cyfr.run it is made at,
+# whatever an earlier record named.
 case_new_database() {
   prepare "$1" new-database "$complete" 0600
   command=""
-  made_record "2020-01-01T00:00:00Z"
+  bound_record "$(printf '0b%.0s' {1..16})"
   launch STUB_SERVER_STATUS=0
   echo "$?" >"$case_dir/status"
   status_is 0
-  [ "$(cat "$case_dir/data/dev-stack/cyfr-run.made")" = "$made_at" ] ||
-    echo "a new database recorded $(cat "$case_dir/data/dev-stack/cyfr-run.made"), not the running local cyfr.run's $made_at"
+  [ "$(cat "$case_dir/data/dev-stack/cyfr-run.id")" = "$stack_id" ] ||
+    echo "a new database recorded $(cat "$case_dir/data/dev-stack/cyfr-run.id"), not the running local cyfr.run's $stack_id"
   nothing_left
 }
 # A database that is not new runs at whatever slot is free while the local
@@ -1252,41 +1289,111 @@ case_same_stack() {
   prepare "$1" same-stack "$complete" 0600 "$slot_b"
   command=""
   mkdir -p "$case_dir/data" && : >"$case_dir/data/cyfr.db"
-  made_record "$made_at"
+  bound_record "$stack_id"
   launch STUB_SERVER_STATUS=0
   echo "$?" >"$case_dir/status"
   status_is 0
   [ "$(calls | sed -n 3p)" = "$(declared "$slot_b")" ] || echo "the remembered slot $slot_b was not taken: $(calls)"
-  [ "$(cat "$case_dir/data/dev-stack/cyfr-run.made")" = "$made_at" ] || echo "the record changed: $(cat "$case_dir/data/dev-stack/cyfr-run.made")"
+  [ "$(cat "$case_dir/data/dev-stack/cyfr-run.id")" = "$stack_id" ] || echo "the record changed: $(cat "$case_dir/data/dev-stack/cyfr-run.id")"
   nothing_left
 }
-# A database that is not new, made at a local cyfr.run that has been reset
-# since, or with no record at all, refuses with the reset before any slot
-# is taken, and leaves the local cyfr.run running.
+# A database that is not new, made at another local cyfr.run, or with no
+# record at all, refuses with the ways out before any slot is taken, and
+# leaves the local cyfr.run running.
 case_stack_reset() {
-  local recorded
-  for recorded in "2020-01-01T00:00:00Z" ""; do
+  local recorded want
+  for recorded in "$(printf '0b%.0s' {1..16})" ""; do
     prepare "$1" stack-reset "$complete" 0600
     command=""
     mkdir -p "$case_dir/data" && : >"$case_dir/data/cyfr.db"
-    [ -z "$recorded" ] || made_record "$recorded"
+    if [ -n "$recorded" ]; then
+      bound_record "$recorded"
+      want="$(other_sentence "$recorded")"
+    else
+      want="dev-stack: This database's people were made before the loop recorded the local cyfr.run that holds their accounts (data/dev-stack/cyfr-run.id is absent), beside the stand-in an earlier loop ran, and no local cyfr.run holds them: $delete_sentence."
+    fi
     launch STUB_SERVER_STATUS=0
     echo "$?" >"$case_dir/status"
-    [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on though its database's local cyfr.run is gone"
-    [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: This database's people were made at a local cyfr.run that is gone, and their accounts with it (data/dev-stack/cyfr-run.made records ${recorded:-none}; the running one was made $made_at). Delete the dev database (data/cyfr.db unless .env names another) and start again." ] ||
-      echo "the refusal does not name the reset: $(tail -n 1 "$case_dir/err")"
+    [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on though its database's local cyfr.run is not the running one"
+    [ "$(tail -n 1 "$case_dir/err")" = "$want" ] || echo "the refusal does not name the ways out: $(tail -n 1 "$case_dir/err")"
     [ "$(calls)" = "$(leftovers 0)" ] || echo "docker ran past the refusal: $(calls)"
     [ "$(stack_calls)" = "$(started_stack)" ] || echo "the local cyfr.run's docker calls: $(stack_calls)"
     [ ! -e "$case_dir/data/dev-stack.slot" ] || echo "the loop remembered slot $(cat "$case_dir/data/dev-stack.slot")"
     nothing_left
   done
 }
+# A volume removed and made again within one second keeps its making's
+# time: a database bound by that time is refused once the volume is
+# another, since the binding is the id inside the volume.
+case_volume_replaced() {
+  prepare "$1" volume-replaced "$complete" 0600
+  command=""
+  mkdir -p "$case_dir/data" && : >"$case_dir/data/cyfr.db"
+  bound_record "$made_at"
+  # The record a loop bound by the volume's making kept, which such a loop
+  # accepts once the replaced volume answers the same time.
+  printf '%s\n' "$made_at" >"$case_dir/data/dev-stack/cyfr-run.made"
+  launch STUB_SERVER_STATUS=0
+  echo "$?" >"$case_dir/status"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "a retained database was accepted after its volume was replaced with an identical CreatedAt"
+  [ "$(tail -n 1 "$case_dir/err")" = "$(other_sentence "$made_at")" ] || echo "the refusal: $(tail -n 1 "$case_dir/err")"
+  nothing_left
+}
+# A commit that lacks a file the stack binds refuses before Docker could
+# make a directory for it, and nothing lands in the checkout.
+case_missing_bind() {
+  local other="$scratch/missing-bind-cyfr.run" before
+  rm -rf "$other" && cp -r "$fake_run" "$other"
+  git -C "$other" rm -q Caddyfile
+  commit_run "$other" >/dev/null
+  before="$(cd "$other" && find . -printf '%p %m %s %T@\n' | sort)"
+  stack "$1" missing-bind "$complete" 0600 "" STUB_SERVER_STATUS=0 DEV_STACK_CYFR_RUN="$other"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "a commit with no Caddyfile for the caddy service to bind was accepted"
+  case "$(tail -n 1 "$case_dir/err")" in
+    "dev-stack: the local stack of $other's commit "*" is not the one the loop runs: its caddy service binds Caddyfile, which the commit does not hold.") ;;
+    *) echo "the refusal does not name the missing bind: $(tail -n 1 "$case_dir/err")" ;;
+  esac
+  record docker.calls | grep -q " up " && echo "docker started the stack with a bind source missing: $(stack_calls)"
+  [ "$(cd "$other" && find . -printf '%p %m %s %T@\n' | sort)" = "$before" ] || echo "the run changed the checkout"
+  nothing_left
+}
+# A new commit in the checkout is exported and run at the next start, and
+# the export of the commit before it goes.
+case_new_commit() {
+  local other="$scratch/new-commit-cyfr.run" second
+  rm -rf "$other" && cp -r "$fake_run" "$other"
+  stack "$1" new-commit "$complete" 0600 "" STUB_SERVER_STATUS=0 DEV_STACK_CYFR_RUN="$other"
+  status_is 0
+  printf '# a later commit\n' >>"$other/Caddyfile"
+  # An uncommitted change is not in the stack.
+  printf 'uncommitted\n' >"$other/uncommitted.txt"
+  second="$(git -C "$other" add Caddyfile && git -C "$other" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false commit -q -m later && git -C "$other" rev-parse HEAD)"
+  rm -rf "$case_dir/log" && mkdir -p "$case_dir/log"
+  launch STUB_SERVER_STATUS=0 DEV_STACK_CYFR_RUN="$other"
+  echo "$?" >"$case_dir/status"
+  status_is 0
+  [ "$(stack_calls "$second")" = "$(started_stack)" ] || echo "the second start did not run the new commit's export: $(stack_calls "$second")"
+  [ "$(ls -A "$case_dir/$machine/cyfr-run")" = "$second" ] || echo "the exports left: $(ls -A "$case_dir/$machine/cyfr-run" | tr '\n' ' ')"
+  grep -qx '# a later commit' "$case_dir/$machine/cyfr-run/$second/Caddyfile" || echo "the export is not the new commit's"
+  [ ! -e "$case_dir/$machine/cyfr-run/$second/uncommitted.txt" ] || echo "an uncommitted file reached the export"
+  nothing_left
+}
+# A name the hosts table maps to loopback and to another address refuses,
+# naming the other address.
+case_mixed_address() {
+  stack "$1" mixed-address "$complete" 0600 "" STUB_SERVER_STATUS=0 ERL_INETRC="$mixed"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on with a name that also resolves to 203.0.113.9"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: cyfr.test resolves to 203.0.113.9, which is not 127.0.0.1, and both names must resolve to 127.0.0.1 alone on this machine, where the local cyfr.run answers. Map both once: echo '127.0.0.1 cyfr.test registry.cyfr.test' | sudo tee -a /etc/hosts" ] ||
+    echo "the refusal: $(tail -n 1 "$case_dir/err")"
+  calls | grep -q " up " && echo "the worktree's stack started with a name that resolves elsewhere: $(calls)"
+  nothing_left
+}
 # A cyfr.run checkout that is not where the loop looks refuses, naming
 # where it looked and how to name another, before anything is started.
 case_cyfr_run_absent() {
   stack "$1" cyfr-run-absent "$complete" 0600 "" STUB_SERVER_STATUS=0 DEV_STACK_CYFR_RUN="$scratch/no-cyfr.run"
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on with no cyfr.run checkout"
-  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: the local cyfr.run is built from a cyfr.run checkout, and $scratch/no-cyfr.run holds none (no docker-compose.prod.yml and docker-compose.local.yml); clone https://github.com/cyfrworks/cyfr.run.git there, or name another checkout with DEV_STACK_CYFR_RUN=<path>." ] ||
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: the local cyfr.run is built from a cyfr.run checkout's committed HEAD, and $scratch/no-cyfr.run holds none (no commit with docker-compose.prod.yml and docker-compose.local.yml); clone https://github.com/cyfrworks/cyfr.run.git there, or name another checkout with DEV_STACK_CYFR_RUN=<path>." ] ||
     echo "the refusal does not say where it looked: $(tail -n 1 "$case_dir/err")"
   [ -z "$(record docker.calls)" ] || echo "docker ran with no cyfr.run checkout: $(record docker.calls)"
   [ -z "$(record server.env)" ] || echo "the server started with no cyfr.run checkout"
@@ -1294,8 +1401,13 @@ case_cyfr_run_absent() {
   rm -rf "$scratch/other-cyfr.run" && cp -r "$fake_run" "$scratch/other-cyfr.run"
   stack "$1" cyfr-run-named "$complete" 0600 "" STUB_SERVER_STATUS=0 DEV_STACK_CYFR_RUN="$scratch/other-cyfr.run"
   status_is 0
-  record docker.calls | grep -qF -- "-p cyfr-run-dev -f $scratch/other-cyfr.run/docker-compose.prod.yml -f $scratch/other-cyfr.run/docker-compose.local.yml up " ||
-    echo "the named checkout was not the one started: $(record docker.calls | cut -d'|' -f1)"
+  [ "$(stack_calls)" = "$(started_stack)" ] || echo "the named checkout's commit was not the one started: $(record docker.calls | cut -d'|' -f1)"
+  # A directory with files but no commit is no checkout.
+  rm -rf "$scratch/uncommitted-cyfr.run" && mkdir -p "$scratch/uncommitted-cyfr.run" &&
+    cp "$fake_run"/docker-compose.*.yml "$scratch/uncommitted-cyfr.run/"
+  stack "$1" cyfr-run-uncommitted "$complete" 0600 "" STUB_SERVER_STATUS=0 DEV_STACK_CYFR_RUN="$scratch/uncommitted-cyfr.run"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on from a directory with no commit"
+  [ -z "$(record docker.calls)" ] || echo "docker ran from a directory with no commit: $(record docker.calls)"
 }
 # The local cyfr.run's settings come from its env file alone: the
 # caller's DOMAIN, ADMIN_TOKEN and port reach none of its compose calls,
@@ -1329,7 +1441,7 @@ case_stack_env() {
 case_unresolved() {
   stack "$1" unresolved "$complete" 0600 "" STUB_SERVER_STATUS=0 ERL_INETRC="$unresolving"
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on with names that do not resolve"
-  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: cyfr.test and registry.cyfr.test must resolve to 127.0.0.1 on this machine, where the local cyfr.run answers. Map both once: echo '127.0.0.1 cyfr.test registry.cyfr.test' | sudo tee -a /etc/hosts" ] ||
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: cyfr.test does not resolve to 127.0.0.1, and both names must resolve to 127.0.0.1 alone on this machine, where the local cyfr.run answers. Map both once: echo '127.0.0.1 cyfr.test registry.cyfr.test' | sudo tee -a /etc/hosts" ] ||
     echo "the refusal does not name the hosts entry: $(tail -n 1 "$case_dir/err")"
   calls | grep -q " up " && echo "the worktree's stack started with names that do not resolve: $(calls)"
   [ -z "$(record server.env)" ] || echo "the server started with names that do not resolve"
@@ -1431,11 +1543,15 @@ break_script discard "no delete after a failed read" "case_failed_read case_fail
 break_script keep "the private directory kept" "case_check case_provision" 's/^  \[ -z "\$PRIVATE" \] \|\| rm -rf "\$PRIVATE"$/  true/'
 break_script stackdown "the local cyfr.run stopped on the way out" "case_provision case_server_ends" 's/^  if \[ -n "\$STARTED" \]; then$/  [ -z "$STACK_NAMES" ] || stack_compose down >\/dev\/null 2>\&1 || true\n&/'
 break_script stackcaller "the caller's environment left to the local cyfr.run's compose" case_stack_env 's/^  for name in \$STACK_NAMES; do unset\+=\(-u "\$name"\); done$/  :/'
-break_script stackfile "the local cyfr.run's env file not handed to its compose" case_provision 's/^  env "\$\{unset\[@\]\}" docker compose --env-file "\$STACK_ENV" -p "\$STACK" \\$/  env "${unset[@]}" docker compose --env-file \/dev\/null -p "$STACK" \\/'
+break_script stackfile "the local cyfr.run's env file not handed to its compose" case_provision 's/--env-file "\$env_file" -p "\$STACK"/--env-file \/dev\/null -p "$STACK"/'
+break_script noexport "the local cyfr.run run from the checkout itself" "case_provision case_new_commit" 's|^  STACK_DIR="\$MACHINE/cyfr-run/\$1"$|  STACK_DIR="$CYFR_RUN"|'
+break_script nobind "a bind source the commit lacks left to Docker" case_missing_bind 's/ and not os\.path\.exists\(v\.get\("source", ""\)\):$/ and False:/'
+break_script oldexports "the exports of earlier commits kept" case_new_commit '/^  find "\$MACHINE\/cyfr-run" -mindepth 1 -maxdepth 1/d'
+break_script createdat "a database bound by its volume's making" "case_volume_replaced case_same_stack" 's/^  \[\[ "\$STACK_ID" =~ \^\[0-9a-f\]\{32\}\$ \]\] \|\| die .*$/  STACK_ID="$(docker volume inspect --format "{{.CreatedAt}}" cyfr-run-dev_postgres-data)"/'
 break_script remint "the ADMIN_TOKEN minted afresh on every start" case_stack_env 's/^  \[ ! -f "\$STACK_ENV" \] \|\| token=.*$/  :/'
-break_script nocheckout "no refusal of an absent cyfr.run checkout" case_cyfr_run_absent 's/^  \[ -f "\$CYFR_RUN\/docker-compose.prod.yml" \] && \[ -f "\$CYFR_RUN\/docker-compose.local.yml" \] \|\|$/  true ||/'
-break_script unbound "a database taken whatever local cyfr.run it was made at" case_stack_reset 's/^      \[ "\$recorded" = "\$STACK_MADE" \] \|\|$/      true ||/'
-break_script unrecorded "a new database's local cyfr.run not recorded" case_new_database 's/^      mkdir -p "\$\(dirname "\$MADE"\)" && printf .*$/      :/'
+break_script nocheckout "no refusal of an absent cyfr.run checkout" case_cyfr_run_absent 's/^    die "the local cyfr.run is built from a cyfr.run checkout.s committed HEAD.*$/    true/'
+break_script unbound "a database taken whatever local cyfr.run it was made at" "case_stack_reset case_volume_replaced" 's/^      \[ "\$recorded" = "\$STACK_ID" \] \|\|$/      true ||/'
+break_script unrecorded "a new database's local cyfr.run not recorded" case_new_database 's/^      mkdir -p "\$\(dirname "\$BOUND"\)" && printf .*$/      :/'
 
 # ships_neither TARBALL: the scaffold holds the shipped compose file and
 # neither the override nor the script that starts it.

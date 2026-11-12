@@ -68,7 +68,10 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       File.cd!(cwd)
       File.rm_rf!(dir)
       Mix.shell(shell)
-      :inet_db.del_host({127, 0, 0, 1})
+
+      for address <- [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}, {0x2001, 0xDB8, 0, 0, 0, 0, 0, 1}],
+          do: :inet_db.del_host(address)
+
       :inet_db.set_hosts_file(hosts_file)
       :inet_db.set_lookup(lookup)
 
@@ -461,26 +464,57 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       File.write!(".env", complete())
 
       want =
-        "Map both once: echo '127.0.0.1 cyfr.test registry.cyfr.test' | sudo tee -a /etc/hosts"
+        ", and both names must resolve to 127.0.0.1 alone on this machine, where the local " <>
+          "cyfr.run answers. Map both once: echo '127.0.0.1 cyfr.test registry.cyfr.test' " <>
+          "| sudo tee -a /etc/hosts"
 
       :inet_db.del_host({127, 0, 0, 1})
+      refused("cyfr.test does not resolve to 127.0.0.1" <> want)
 
-      refused(
-        "cyfr.test and registry.cyfr.test must resolve to 127.0.0.1 on this machine, " <>
-          "where the local cyfr.run answers. " <> want
-      )
-
-      # One name on another address, the other absent.
+      # One name on another loopback address, where nothing answers.
       :inet_db.add_host({127, 0, 0, 2}, [~c"cyfr.test"])
-      refused("cyfr.test and registry.cyfr.test must resolve to 127.0.0.1")
+      refused("cyfr.test resolves to 127.0.0.2, which is not 127.0.0.1" <> want)
       :inet_db.del_host({127, 0, 0, 2})
 
       :inet_db.add_host({127, 0, 0, 1}, [~c"cyfr.test"])
-      refused("registry.cyfr.test must resolve to 127.0.0.1 on this machine")
+      refused("registry.cyfr.test does not resolve to 127.0.0.1" <> want)
 
       resolving()
       settings!()
       assert answers() == answered()
+    end
+
+    # A name the hosts file maps to loopback and to another address could
+    # be pinned to the other one.
+    test "refuses a name with a non-loopback address beside loopback" do
+      File.write!(".env", complete())
+      :inet_db.del_host({127, 0, 0, 1})
+
+      File.write!(
+        "mixed.hosts",
+        "127.0.0.1 cyfr.test registry.cyfr.test\n203.0.113.9 cyfr.test registry.cyfr.test\n"
+      )
+
+      :inet_db.set_hosts_file(String.to_charlist(Path.expand("mixed.hosts")))
+      assert {:ok, {127, 0, 0, 1}} = :inet.getaddr(~c"cyfr.test", :inet)
+      assert {:ok, addresses} = :inet.getaddrs(~c"cyfr.test", :inet)
+      assert {203, 0, 113, 9} in addresses
+      refused("cyfr.test resolves to 203.0.113.9, which is not 127.0.0.1, and both names must")
+    end
+
+    test "accepts ::1 beside 127.0.0.1, and refuses any other IPv6 address" do
+      File.write!(".env", complete())
+      :inet_db.add_host({0, 0, 0, 0, 0, 0, 0, 1}, [~c"cyfr.test", ~c"registry.cyfr.test"])
+      settings!()
+      assert answers() == answered()
+
+      :inet_db.add_host({0x2001, 0xDB8, 0, 0, 0, 0, 0, 1}, [~c"registry.cyfr.test"])
+      refused("registry.cyfr.test resolves to 2001:db8::1, which is not 127.0.0.1")
+
+      # IPv6 alone is not enough: the server pins an IPv4 address first.
+      :inet_db.del_host({0x2001, 0xDB8, 0, 0, 0, 0, 0, 1})
+      :inet_db.del_host({127, 0, 0, 1})
+      refused("cyfr.test does not resolve to 127.0.0.1")
     end
 
     test "refuses an authority the operating system does not trust, naming how to trust it" do

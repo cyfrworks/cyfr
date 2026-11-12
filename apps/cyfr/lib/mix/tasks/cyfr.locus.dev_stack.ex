@@ -41,8 +41,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
       mix cyfr.locus.dev_stack settings DECLARATIONS DOMAIN ROOT
 
-  refuses unless both names resolve, as the server resolves them
-  (`Sanctum.Network`), to 127.0.0.1, where the local cyfr.run answers, and
+  refuses unless every address both names resolve to, IPv4 and IPv6, is
+  this machine's loopback where the local cyfr.run answers (127.0.0.1, or
+  ::1 beside it; the server pins the IPv4 one, `Sanctum.Network`), and
   unless ROOT, the PEM of the local cyfr.run's certificate authority, is
   in the operating system's trust store the server's TLS reads
   (`:public_key.cacerts_get/0`); each refusal names the one command, run
@@ -105,6 +106,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   # in the order the lines are written.
   @provisioned [@setup, @root, @backends_key]
   @keys [@root, @backends_key, @builds_key]
+
+  @loopback6 [{0, 0, 0, 0, 0, 0, 0, 1}, {0, 0, 0, 0, 0, 0xFFFF, 0x7F00, 1}]
 
   @impl Mix.Task
   def run(args) do
@@ -225,21 +228,39 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  # Each name resolves as the server resolves it (`Sanctum.Network`, IPv4
-  # first) to 127.0.0.1, where the local cyfr.run publishes its HTTPS.
+  # Every address each name resolves to, IPv4 and IPv6, is this machine's
+  # loopback where the local cyfr.run answers: 127.0.0.1, or ::1 or the
+  # IPv4-mapped 127.0.0.1 a resolver may answer for it, with at least one
+  # IPv4 address, which the server pins first (`Sanctum.Network`). A name
+  # with any other address beside it could be pinned elsewhere.
   defp resolves(names) do
-    case Enum.reject(
-           names,
-           &(:inet.getaddr(String.to_charlist(&1), :inet) == {:ok, {127, 0, 0, 1}})
-         ) do
-      [] ->
+    case Enum.find_value(names, &unresolved/1) do
+      nil ->
         :ok
 
-      unresolved ->
+      reason ->
         {:error,
-         "#{Enum.join(unresolved, " and ")} must resolve to 127.0.0.1 on this machine, where " <>
+         "#{reason}, and both names must resolve to 127.0.0.1 alone on this machine, where " <>
            "the local cyfr.run answers. Map both once: echo '127.0.0.1 #{Enum.join(names, " ")}' " <>
            "| sudo tee -a /etc/hosts"}
+    end
+  end
+
+  defp unresolved(name) do
+    v4 = addresses(name, :inet)
+    v6 = addresses(name, :inet6)
+
+    case Enum.reject(v4, &(&1 == {127, 0, 0, 1})) ++ Enum.reject(v6, &(&1 in @loopback6)) do
+      [other | _] -> "#{name} resolves to #{:inet.ntoa(other)}, which is not 127.0.0.1"
+      [] when v4 == [] -> "#{name} does not resolve to 127.0.0.1"
+      [] -> nil
+    end
+  end
+
+  defp addresses(name, family) do
+    case :inet.getaddrs(String.to_charlist(name), family) do
+      {:ok, addresses} -> addresses
+      {:error, _} -> []
     end
   end
 
