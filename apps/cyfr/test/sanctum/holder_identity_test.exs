@@ -7,8 +7,9 @@ defmodule Sanctum.HolderIdentityTest do
   (`Sanctum.Caller.holder_identity/2`): a real session token whose holder
   has no identity row, whatever the id's shape, the server's own
   principals among them, is refused at the bearer plug and at a console
-  mount; with the row it stands; and a store that cannot read the row
-  answers unavailable, never a refusal.
+  mount, each with the answer that door gives it; with the row it stands;
+  and a store that cannot read the row answers unavailable, never a
+  refusal.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -66,18 +67,42 @@ defmodule Sanctum.HolderIdentityTest do
     seated
   end
 
+  @unauthenticated %{
+    "code" => "unauthenticated",
+    "message" => "The presented credential is not valid. If it expired, sign in again."
+  }
+  @no_athanor %{
+    "code" => "forbidden",
+    "message" => "Unauthorized: your account has no athanor — contact your administrator"
+  }
+
+  # Each holder with no identity row, and what each door answers it: the
+  # bearer plug's halt and body (`:denied` for the anonymous surface's
+  # denied context, carried on unhalted), and the console mount's redirect.
   @holders [
-    {"a person", :person},
-    {"the system principal", "system"},
-    {"the seed principal", "_seed"},
-    {"a webhook principal", "webhook:wh_holder"},
-    {"a made-up id", "github|https://github.com|holder-ghost"}
+    {"a person", :person, {401, @unauthenticated}, "/login"},
+    {"the system principal", "system", {403, @no_athanor}, "/login?error=no_athanor"},
+    {"the seed principal", "_seed", {403, @no_athanor}, "/login?error=no_athanor"},
+    {"a webhook principal", "webhook:wh_holder", {403, @no_athanor}, "/login?error=no_athanor"},
+    {"a made-up id", "github|https://github.com|holder-ghost", :denied, "/login"}
   ]
 
-  # Admitted as an authenticated caller: neither halted nor carried on as
-  # the anonymous surface's denied context.
-  defp admitted?(conn),
-    do: not conn.halted and match?(%{authenticated: true}, conn.assigns[:context])
+  # The person's identity rows unreadable: the store cannot answer.
+  defp outage! do
+    Arca.Repo.query!("ALTER TABLE person_identities RENAME TO person_identities_unavailable")
+  end
+
+  defp assert_answer(conn, {status, body}, _holder) do
+    assert conn.halted
+    assert conn.status == status
+    assert Jason.decode!(conn.resp_body) == body
+  end
+
+  defp assert_answer(conn, :denied, holder) do
+    refute conn.halted
+    assert conn.status == nil
+    assert %{authenticated: false, user_id: ^holder, athanor_id: nil} = conn.assigns.context
+  end
 
   defp bearer(conn, token) do
     conn
@@ -95,30 +120,32 @@ defmodule Sanctum.HolderIdentityTest do
       assert user_id == seated.user_id
     end
 
-    for {label, holder} <- @holders do
+    for {label, holder, answer, _to} <- @holders do
       test "whose holder is #{label} with no identity row is refused", %{conn: conn} do
         seated = rowless!(seated!(), unquote(holder))
 
         capture_log(fn ->
           conn = bearer(conn, seated.token)
 
-          refute admitted?(conn)
-          if unquote(holder) == :person, do: assert(conn.status == 401)
+          assert_answer(conn, unquote(Macro.escape(answer)), unquote(holder))
         end)
       end
     end
 
     test "whose identity row the store cannot read answers 503, never a refusal", %{conn: conn} do
       seated = seated!()
-      Arca.Repo.query!("ALTER TABLE person_identities RENAME TO person_identities_unavailable")
+      outage!()
 
       capture_log(fn ->
         conn = bearer(conn, seated.token)
         assert conn.halted
         assert conn.status == 503
-      end)
 
-      assert {:ok, _} = Arca.Repo.query("SELECT 1")
+        assert Jason.decode!(conn.resp_body) == %{
+                 "code" => "unavailable",
+                 "message" => "Authentication service unavailable — retry shortly"
+               }
+      end)
     end
   end
 
@@ -130,18 +157,29 @@ defmodule Sanctum.HolderIdentityTest do
       assert {:ok, _view, _html} = live(conn, athanor_path("/settings", seated.athanor))
     end
 
-    for {label, holder} <- @holders do
-      test "whose holder is #{label} with no identity row mounts nothing", %{conn: conn} do
+    for {label, holder, _answer, to} <- @holders do
+      test "whose holder is #{label} with no identity row is sent to #{to}", %{conn: conn} do
         seated = rowless!(seated!(), unquote(holder))
         conn = Plug.Test.init_test_session(conn, %{session_key() => seated.token})
 
         capture_log(fn ->
-          assert {:error, {_redirect, %{to: to}}} =
+          assert {:error, {:redirect, %{to: unquote(to)}}} =
                    live(conn, athanor_path("/settings", seated.athanor))
-
-          refute to =~ "/settings"
         end)
       end
+    end
+
+    test "whose identity row the store cannot read is sent to /login?error=unavailable", %{
+      conn: conn
+    } do
+      seated = seated!()
+      conn = Plug.Test.init_test_session(conn, %{session_key() => seated.token})
+      outage!()
+
+      capture_log(fn ->
+        assert {:error, {:redirect, %{to: "/login?error=unavailable"}}} =
+                 live(conn, athanor_path("/settings", seated.athanor))
+      end)
     end
   end
 end
