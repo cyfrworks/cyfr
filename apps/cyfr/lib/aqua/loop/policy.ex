@@ -50,9 +50,6 @@ defmodule Aqua.Loop.Policy do
   which the person's approval lets flow to every exit of the tree. They
   are part of the proposal its digest hashes, so a source the turn reads
   after the card, or another grant, is not what was approved.
-
-  `touched_refs/1` names the components a turn's closed write,
-  destructive and execute calls reached, from their durable rows.
   """
 
   alias Aqua.Loop.Binding.Call
@@ -349,38 +346,6 @@ defmodule Aqua.Loop.Policy do
   def launch_account(%Call{}, _ctx), do: {:ok, nil}
 
   @doc """
-  The component references a turn's closed write, destructive and
-  execute calls reached, from their `tool_call` payloads: an argument
-  named `reference` or `ref`, and a `path` at or below a component version
-  directory as the component path grammar reads one
-  (`Compendium.parse_component_path/1`). Name level,
-  so any version of a touched component counts.
-  """
-  @spec touched_refs([map()]) :: MapSet.t()
-  def touched_refs(calls) when is_list(calls) do
-    calls
-    |> Enum.filter(fn call ->
-      Aqua.Kinds.kind_for(call["tool"] || "", call["action"] || "") in [
-        :write,
-        :destructive,
-        :execute
-      ]
-    end)
-    |> Enum.flat_map(fn call ->
-      args = call["arguments"] || %{}
-
-      refs =
-        [args["reference"], args["ref"]]
-        |> Enum.filter(&is_binary/1)
-        |> Enum.map(&name_level/1)
-
-      refs ++ path_refs(args["path"])
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> MapSet.new()
-  end
-
-  @doc """
   The card a call that asks becomes: today's intent shape, which the
   console card and the wire read — the proposal canonical, the kind and
   the standing from the catalog, never from the model. A launch's card
@@ -645,23 +610,4 @@ defmodule Aqua.Loop.Policy do
     {:ok, digest} = Prima.JCS.hash(proposal)
     digest
   end
-
-  defp name_level(reference), do: Aqua.Hands.name_level(reference)
-
-  # A path names a component when the layout's one parser reads a version
-  # directory in it, the same parser the unit locator and the `source` tool
-  # read it with; any other path names none. Its segments are split as
-  # every door that writes it splits them, empty ones dropped, so
-  # `components//…` and `/components/…` name the unit the write lands in.
-  defp path_refs(path) when is_binary(path) do
-    case Compendium.parse_component_path(String.split(path, "/", trim: true)) do
-      {:ok, %{type: type, publisher: publisher, name: name}} ->
-        [Prima.ComponentRef.build(type, publisher, name)]
-
-      :error ->
-        []
-    end
-  end
-
-  defp path_refs(_), do: []
 end
