@@ -349,8 +349,8 @@ defmodule Arca.VaultStorageTest do
     end
   end
 
-  describe "list/2" do
-    test "excludes tombstoned rows unless widened", %{actor: actor} do
+  describe "list/1" do
+    test "excludes tombstoned rows", %{actor: actor} do
       live = put!(actor)
       dead = put!(actor)
       {:ok, %{revoked_share_ids: []}} = VaultStorage.tombstone(actor, dead.id)
@@ -359,9 +359,6 @@ defmodule Arca.VaultStorageTest do
       ids = Enum.map(rows, & &1.id)
       assert live.id in ids
       refute dead.id in ids
-
-      {:ok, all} = VaultStorage.list(actor, include_tombstoned: true)
-      assert dead.id in Enum.map(all, & &1.id)
     end
   end
 

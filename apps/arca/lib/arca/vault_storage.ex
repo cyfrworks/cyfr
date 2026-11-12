@@ -364,27 +364,19 @@ defmodule Arca.VaultStorage do
   def get_by_name(%Prima.Actor{}, name) when is_binary(name),
     do: {:error, :no_athanor}
 
-  @doc "Living entries in the actor's athanor. `include_tombstoned: true` widens to all."
-  @spec list(Prima.Actor.t(), keyword()) :: {:ok, [entry()]} | refusal()
-  def list(actor, opts \\ [])
-
-  def list(%Prima.Actor{athanor_id: athanor_id}, opts)
-      when resolved(athanor_id) and is_list(opts) do
+  @doc "Living entries in the actor's athanor: every one not tombstoned."
+  @spec list(Prima.Actor.t()) :: {:ok, [entry()]} | refusal()
+  def list(%Prima.Actor{athanor_id: athanor_id}) when resolved(athanor_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.list", fn ->
       query =
-        from(v in VaultEntry, order_by: v.name)
+        from(v in VaultEntry, where: v.status != "tombstoned", order_by: v.name)
         |> Arca.QueryHelpers.where_athanor(athanor_id)
-
-      query =
-        if Keyword.get(opts, :include_tombstoned, false),
-          do: query,
-          else: where(query, [v], v.status != "tombstoned")
 
       {:ok, Enum.map(Arca.Repo.all(query), &view/1)}
     end)
   end
 
-  def list(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :no_athanor}
+  def list(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc "Update the mutable label. Everything else has its own verb."
   @spec update_meta(Prima.Actor.t(), String.t(), %{name: String.t()}) ::
