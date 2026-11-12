@@ -8,10 +8,9 @@ defmodule PrismWeb.SystemLayer.Prompt do
       %{id: binary, kind: kind, action: Sanctum.Pairing.action() | nil, subject: map}
 
   `action` names the action the prompt confirms, from Sanctum's action
-  table (`Sanctum.Pairing.actions/0`): a grant, an unlock, a credential
-  entry and the pairing prompt each name one; a sign-in confirms no
-  action and carries `nil`, as does a confirmation whose record
-  this client could not read. Whether the change needs a fresh
+  table (`Sanctum.Pairing.actions/0`): a grant, a credential entry and
+  the pairing prompt each name one; a confirmation whose record this
+  client could not read carries `nil`. Whether the change needs a fresh
   confirmation is decided where the change is, never by the prompt.
   `subject` is what the prompt shows and what its confirmation
   dispatches:
@@ -54,8 +53,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
       and `return`, the grant it goes back to: `%{prompt, need}` for a need
       of the app, `%{prompt, from, dep, need}` for a dependency's. Any
       other prompt names none of them, and nothing is prefilled;
-    * `:unlock` — optionally `name`, the vault entry it concerns;
-    * `:sign_in` — optionally `message`, a sentence saying why;
     * `:share` — the sharing sheet (`PrismWeb.SystemLayer.Share`), under
       the action `:credential_sharing`: `entry_id` and `name`, the
       person's own vault entry it shares, and `threads`, the shared
@@ -86,7 +83,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
   Anything else is refused as `:invalid_prompt`: nothing is drawn.
   """
 
-  @kinds [:grant, :unlock, :sign_in, :credential_entry, :share, :pairing, :request, :confirmation]
+  @kinds [:grant, :credential_entry, :share, :pairing, :request, :confirmation]
   @keys [:id, :kind, :action, :subject]
   @max_id_bytes 128
 
@@ -99,8 +96,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
   @typedoc "What a prompt asks for."
   @type kind ::
           :grant
-          | :unlock
-          | :sign_in
           | :credential_entry
           | :share
           | :pairing
@@ -186,9 +181,9 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp action_named(_name), do: nil
 
-  defp action(kind, nil) when kind in [:sign_in, :confirmation], do: :ok
+  defp action(:confirmation, nil), do: :ok
 
-  defp action(kind, action) when kind in [:grant, :unlock, :credential_entry, :confirmation] do
+  defp action(kind, action) when kind in [:grant, :credential_entry, :confirmation] do
     if action in Sanctum.Pairing.actions(), do: :ok, else: {:error, :invalid_prompt}
   end
 
@@ -271,9 +266,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
       do: {:ok, subject},
       else: {:error, :invalid_prompt}
   end
-
-  defp subject(:unlock, subject), do: optional_text(subject, :name)
-  defp subject(:sign_in, subject), do: optional_text(subject, :message)
 
   defp subject(:pairing, subject) when map_size(subject) == 0, do: {:ok, %{}}
 
@@ -385,20 +377,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
     do: is_list(methods) and Enum.all?(methods, &(&1 in @methods))
 
   defp optional_field?(_field), do: false
-
-  defp optional_text(subject, key) do
-    case Map.drop(subject, [key]) do
-      rest when map_size(rest) == 0 ->
-        case Map.get(subject, key) do
-          nil -> {:ok, %{}}
-          text when is_binary(text) and text != "" -> {:ok, %{key => text}}
-          _other -> {:error, :invalid_prompt}
-        end
-
-      _rest ->
-        {:error, :invalid_prompt}
-    end
-  end
 
   defp plan?(%{plan_token: token} = plan) when is_binary(token) and token != "" do
     case Map.get(plan, :expected_consent_revision) do
