@@ -35,7 +35,7 @@ A CYFR sends its people to one account service, the one `CYFR_DIRECTORY_URL` nam
 
 Any CYFR can serve its own account service (`CYFR_DIRECTORY_SERVE=writer`, the [configuration guide](configuration-guide.md)) and name itself in `CYFR_DIRECTORY_URL` and `CYFR_REGISTRY_URL`. Its people's passkeys then live at that CYFR's address, and every account made there names it, so it keeps its address for good, and losing it loses every account it serves. Its operator can close an account for good: every CYFR that admitted it then ends its sessions and devices, and its name stays reserved.
 
-Such a CYFR serves its people's accounts and names, and no component registry: no component search, no publish tokens, no registry policies and no component storage. Its athanors fill from what CYFR ships, and its people's pulls, searches, syncs and publishes fail.
+Such a CYFR serves its people's accounts and names, and no component registry: no component search, no publish tokens, no registry policies and no component storage. Its athanors fill from what CYFR ships, and the components that ship still pull and are still found: a search answers the local matches and says its results are incomplete. What needs the registry does not work there: a pull of a published component, `cyfr registry sync`, and a publish, which refuses for want of the push token a sync would have minted.
 
 The account service is trusted to keep each log in one order and to answer honestly. Signatures stop it forging a change, but a dishonest service could withhold a change or keep answering an old log as current, and nothing detects that.
 
