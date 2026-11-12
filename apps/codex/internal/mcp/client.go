@@ -27,9 +27,6 @@ const protocolVersion = "2026-07-28"
 // ErrAuthRequired is returned when the caller presented no usable credential.
 var ErrAuthRequired = fmt.Errorf("authentication required")
 
-// ErrUnsupportedProtocol is returned when the server's protocol version doesn't match the client's.
-var ErrUnsupportedProtocol = fmt.Errorf("unsupported protocol version")
-
 // ConfirmationIDKey is the request metadata key a tools/call repeats a
 // sensitive change under. Its value is the secret id the
 // confirmation_required signal answered: it rides `params._meta`, which no
@@ -95,42 +92,6 @@ func (c *Client) setCredential(req *http.Request) {
 	if c.SessionID != "" {
 		req.Header.Set("Authorization", "Bearer "+c.SessionID)
 	}
-}
-
-// Discover asks the server which protocol revisions it speaks, and fails if
-// none of them is ours. There is no handshake to perform — every request carries
-// its own version — so this is purely a compatibility check a caller may run
-// once, and never a precondition for anything else.
-func (c *Client) Discover(ctx context.Context) error {
-	req := JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      int(c.nextID.Add(1)),
-		Method:  "server/discover",
-		Params:  map[string]any{},
-	}
-
-	resp, err := c.doRequest(ctx, req)
-	if err != nil {
-		return fmt.Errorf("server/discover: %w", err)
-	}
-	if resp.Error != nil {
-		return fmt.Errorf("server/discover error: %s", resp.Error.Message)
-	}
-
-	resultBytes, _ := json.Marshal(resp.Result)
-	var discovered DiscoverResult
-	if json.Unmarshal(resultBytes, &discovered) != nil {
-		return nil // Unreadable result is not fatal; the next real call decides.
-	}
-
-	for _, v := range discovered.SupportedVersions {
-		if v == protocolVersion {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("%w: server speaks %v, client supports %q",
-		ErrUnsupportedProtocol, discovered.SupportedVersions, protocolVersion)
 }
 
 // routingHeaders mirrors body fields into the headers the protocol requires, so
