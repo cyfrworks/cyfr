@@ -239,8 +239,6 @@ defmodule Arca.SharesTest do
         assert {:error, :no_athanor} = Shares.set_caps(%Prima.Actor{}, "shr_x", nil, nil)
         assert {:error, :no_person} = Shares.offered_to(%Prima.Actor{}, [])
 
-        assert {:error, :cross_tenant} =
-                 Shares.head_profiles_referencing_share(Prima.Actor.in_athanor("ath_x"), "shr_x")
 
         assert {:error, :cross_tenant} = Shares.revoke_all(Prima.Actor.in_athanor("ath_x"))
       end)
@@ -515,21 +513,7 @@ defmodule Arca.SharesTest do
     end
   end
 
-  describe "head_profiles_referencing_share/2" do
-    test "the heads binding the share in every athanor, platform scope only",
-         %{terry: terry, entry: entry} do
-      share = share!(terry.actor, entry.id)
-      alice = owner!()
-      bob = owner!()
-      a = bound!(alice.athanor.id, share.id)
-      b = bound!(bob.athanor.id, share.id)
 
-      assert {:ok, pairs} =
-               Shares.head_profiles_referencing_share(Prima.Actor.system(), share.id)
-
-      assert pairs == Enum.sort([{alice.athanor.id, a.id}, {bob.athanor.id, b.id}])
-    end
-  end
 end
 
 defmodule Arca.SharesConcurrencyTest do
