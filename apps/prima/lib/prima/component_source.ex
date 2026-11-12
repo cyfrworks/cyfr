@@ -8,7 +8,6 @@ defmodule Prima.ComponentSource do
 
   - `"filesystem"` — minted by the scanner from the union: bundled seed
     units and an athanor's own (scaffolded, built, forked) alike.
-  - `"published"` — published directly into this registry.
   - `"oci"` — pulled from a remote registry (WASM and tinctures alike).
 
   Two sides agree on the roster: the component domain classifies a row as
@@ -16,16 +15,11 @@ defmodule Prima.ComponentSource do
   """
 
   @filesystem "filesystem"
-  @published "published"
   @oci "oci"
 
   @doc "The scanner's ingress — bundled and user-created rows alike."
   @spec filesystem() :: String.t()
   def filesystem, do: @filesystem
-
-  @doc "Published directly into this registry."
-  @spec published() :: String.t()
-  def published, do: @published
 
   @doc "Pulled from a remote registry."
   @spec oci() :: String.t()
@@ -33,5 +27,5 @@ defmodule Prima.ComponentSource do
 
   @doc "The closed roster — what the row store admits."
   @spec values() :: [String.t()]
-  def values, do: [@filesystem, @published, @oci]
+  def values, do: [@filesystem, @oci]
 end

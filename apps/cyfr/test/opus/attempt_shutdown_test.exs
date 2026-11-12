@@ -52,6 +52,8 @@ defmodule Opus.AttemptShutdownTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
+    ctx = %{Sanctum.TestContext.local(:api) | athanor_id: Prima.UUID7.generate_id("ath")}
+    Arca.Test.Actor.athanor!(ctx.athanor_id)
     Process.register(self(), __MODULE__)
 
     handler = "unreaped-kill-#{System.unique_integer([:positive])}"
@@ -59,13 +61,15 @@ defmodule Opus.AttemptShutdownTest do
 
     on_exit(fn ->
       :telemetry.detach(handler)
-      Prima.Test.Slots.clear_unreaped(@slots, Sanctum.TestContext.local(:api).athanor_id)
+      Prima.Test.Slots.clear_unreaped(@slots, ctx.athanor_id)
     end)
+
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     listener =
       start_supervised!({ScriptedWorkerListener, worker: KillRecorder, service: @service})
 
-    {:ok, endpoint: ScriptedWorkerListener.endpoint(listener, @service)}
+    {:ok, ctx: ctx, endpoint: ScriptedWorkerListener.endpoint(listener, @service)}
   end
 
   @doc false
@@ -74,14 +78,14 @@ defmodule Opus.AttemptShutdownTest do
 
   # An attached attempt opened by a process of its own, which exits when
   # told to.
-  defp opened_by_waiter!(endpoint) do
+  defp opened_by_waiter!(ctx, endpoint) do
     test = self()
 
     waiter =
       spawn(fn ->
         fixture =
           AttemptFixtures.attached!(
-            ctx: Sanctum.TestContext.local(:api),
+            ctx: ctx,
             service_id: @service,
             worker: endpoint
           )
@@ -97,8 +101,8 @@ defmodule Opus.AttemptShutdownTest do
   defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
   test "a stop after the waiter exited, before its exit was handled, kills the runner and lapses the row",
-       %{endpoint: endpoint} do
-    {waiter, fixture} = opened_by_waiter!(endpoint)
+       %{ctx: ctx, endpoint: endpoint} do
+    {waiter, fixture} = opened_by_waiter!(ctx, endpoint)
 
     # The waiter's exit reaches the attempt while it handles nothing.
     :ok = :sys.suspend(fixture.pid)
@@ -132,9 +136,10 @@ defmodule Opus.AttemptShutdownTest do
   end
 
   test "a stop while the waiter lives kills nothing and leaves the row to the waiter", %{
+    ctx: ctx,
     endpoint: endpoint
   } do
-    {waiter, fixture} = opened_by_waiter!(endpoint)
+    {waiter, fixture} = opened_by_waiter!(ctx, endpoint)
 
     :ok = DynamicSupervisor.terminate_child(Attempt.Supervisor, fixture.pid)
 
