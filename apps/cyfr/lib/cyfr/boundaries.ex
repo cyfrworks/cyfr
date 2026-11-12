@@ -2839,8 +2839,8 @@ defmodule Cyfr.Boundaries do
     %{
       behaviour: "Sanctum.Auth",
       reason:
-        "declared and implemented inside Sanctum (`auth/oauth.ex`, `auth/oidc.ex`) and " <>
-          "selected by configuration. An internal strategy behaviour, not a port."
+        "declared inside Sanctum and implemented by no shipped module: the test " <>
+          "harness's bearer (`:bearer_provider`) alone. Not a port."
     },
     %{
       behaviour: "Sanctum.CompanyLogin.Issuer",

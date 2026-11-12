@@ -291,19 +291,19 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     erin_session = session_for(erin.id, nil)
     alice_session = session_for(alice, "alice#{n}@example.com")
 
-    assert {:ok, _} = Sanctum.Session.get(dave_session.token)
+    assert {:ok, _} = Sanctum.Session.load(dave_session.token)
 
     assert {:ok, %{id: ^dave_allow, removed: true, ejected: 1}} =
              call(admin, "door", %{"action" => "remove", "id" => dave_allow})
 
     assert {:error, :not_allowed} = Sanctum.Door.admit_person(dave)
-    assert {:error, :invalid_session} = Sanctum.Session.get(dave_session.token)
+    assert {:error, :invalid_session} = Sanctum.Session.load(dave_session.token)
 
     # The people other entries still admit keep what they hold.
     assert {:ok, :allowed} = Sanctum.Door.admit_person(erin)
-    assert {:ok, _} = Sanctum.Session.get(erin_session.token)
+    assert {:ok, _} = Sanctum.Session.load(erin_session.token)
     assert {:ok, :allowed} = Sanctum.Door.admit_person(%{id: alice})
-    assert {:ok, _} = Sanctum.Session.get(alice_session.token)
+    assert {:ok, _} = Sanctum.Session.load(alice_session.token)
 
     # Closing a door is not denying a person.
     assert {:ok, %{status: "active"}} = Users.get(dave.id)

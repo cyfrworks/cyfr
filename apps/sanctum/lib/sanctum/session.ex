@@ -423,25 +423,6 @@ defmodule Sanctum.Session do
   defp client_stands(_row), do: {:error, :invalid_session}
 
   @doc """
-  Get session details from token.
-
-  Returns the full session map if valid and not expired.
-  """
-  @spec get(String.t()) :: {:ok, session()} | {:error, :invalid_session | :database_error}
-  def get(token) when is_binary(token) do
-    case get_session_direct(token) do
-      {:ok, row} ->
-        {:ok, row_to_external(row, token)}
-
-      {:error, :not_found} ->
-        {:error, :invalid_session}
-
-      {:error, :database_error} ->
-        {:error, :database_error}
-    end
-  end
-
-  @doc """
   When the session whose row key is `token_hash` (`token_hash/1`, a
   context's `session_token_hash`) ends unless activity extends it: its
   row's `expires_at`. `{:error, :invalid_session}` when no living session

@@ -6,20 +6,9 @@ defmodule Sanctum.Auth do
   Behaviour for a bearer-credential provider, the test harness's seam
   (`current_user/1`). No shipped module signs anyone in through it: a
   person signs in with their account (`Sanctum.SignIn`).
-
-  `authenticate/1` returns a `Sanctum.Context` for the credentials it is
-  handed; whose they are, and whether they may sign in, is never the
-  provider's decision.
   """
 
   alias Sanctum.Context
-
-  @doc """
-  Authenticate with provided credentials/params.
-
-  Returns `{:ok, context}` on success, `{:error, reason}` on failure.
-  """
-  @callback authenticate(params :: map()) :: {:ok, Context.t()} | {:error, term()}
 
   @doc """
   The context a bearer credential of the method's OWN issue names, or
