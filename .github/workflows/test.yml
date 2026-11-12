@@ -2219,8 +2219,8 @@ jobs:
             'CYFR_WORKER_WATCH_' \
             '(^|[^A-Za-z])([Ee]states?([^a-z]|$)|ESTATES?([^A-Z]|$))|[a-z]Estate' \
             ; do
-            hits="$(git grep -InE "$p" -- $paths $excl)"
-            status=$?
+            status=0
+            hits="$(git grep -InE "$p" -- $paths $excl)" || status=$?
             if [ "$status" -gt 1 ]; then
               echo "::error::fossil pattern $p could not be searched (git grep exited $status)"
               fail=1
