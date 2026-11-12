@@ -3,20 +3,19 @@
 Thanks for your interest in improving CYFR. Issues and pull requests are
 welcome.
 
-## Licensing of contributions (inbound = outbound)
+## Licensing of contributions
 
-CYFR uses **mixed per-file licensing** (see [`LICENSE`](LICENSE) and
-[`FAIR_SOURCE.md`](FAIR_SOURCE.md)). Contributions are accepted under the
-license of the **file being changed**:
+Every contribution is made under **Apache-2.0**, whichever file it changes.
+By submitting a contribution, you license it under Apache-2.0. There is no
+separate CLA and no sign-off requirement.
 
-- Files under `apps/sanctum/**` are **FSL-1.1-Apache-2.0**. Contributions
-  to those files are made under FSL-1.1-Apache-2.0.
-- Every other file is **Apache-2.0**. Contributions to those files are made
-  under Apache-2.0.
+CYFR Works Inc. distributes the repository under **mixed per-file
+licensing** (see [`LICENSE`](LICENSE) and [`FAIR_SOURCE.md`](FAIR_SOURCE.md)):
 
-By submitting a contribution, you agree to license it under the license that
-already applies to the file(s) you change. There is no separate CLA and no
-sign-off requirement.
+- Files under `apps/sanctum/**` ship as **FSL-1.1-Apache-2.0**. A
+  contribution merged into one of them is distributed as part of that file
+  under FSL-1.1-Apache-2.0, as section 4 of Apache-2.0 permits.
+- Every other file ships as **Apache-2.0**.
 
 ## New files
 
