@@ -90,8 +90,9 @@ defmodule PrismWeb.SignInTraceTest do
       |> DirectoryServer.passkey_answer(account, hd(account.passkeys))
       |> Prima.SignIn.fragment()
 
+    # The answer is checked off the event; the page redirects once it is.
     render_hook(login, "account_answer", %{"answer" => answer})
-    {ticket_path, _flash} = assert_redirect(login)
+    {ticket_path, _flash} = assert_redirect(login, 5_000)
     assert ticket_path =~ "/auth/passkey/complete/"
 
     signed_in = page |> recycle() |> get(ticket_path)
