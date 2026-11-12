@@ -398,9 +398,6 @@ func makeHome(spec Spec) error {
 // group the spec names: a command asked to run under a bound never runs
 // outside one.
 func checkCgroup(spec Spec) error {
-	if spec.Cgroup == "" {
-		return nil
-	}
 	raw, err := os.ReadFile(cgroup.SelfPath)
 	if err != nil {
 		return err
