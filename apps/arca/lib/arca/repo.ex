@@ -59,6 +59,41 @@ defmodule Arca.Repo do
   @spec adapter() :: module()
   def adapter, do: Application.get_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3)
 
+  # Every start of the repository, the boot's migration pool, the pool, the
+  # control plane's own and an offline task's among them: on SQLite one
+  # connection opens the file first, creating it, sets its journal mode and
+  # closes, before the pool opens its connections side by side. A file's
+  # first change of journal mode takes an exclusive lock, which two
+  # connections opening a fresh file at once contend for and SQLite may
+  # refuse at once, past any busy timeout; a file already in WAL takes no
+  # such lock, so the pool's connections, and this one when another pool of
+  # the node holds the file, open without one. A file that cannot be opened
+  # refuses the start, naming it. Two OS processes opening one fresh file at
+  # once are not ordered here.
+  @impl true
+  def init(:supervisor, config) do
+    case adapter() do
+      Ecto.Adapters.SQLite3 -> initialized!(config)
+      _other -> :ok
+    end
+
+    {:ok, config}
+  end
+
+  def init(:runtime, config), do: {:ok, config}
+
+  # The pool's `:before_disconnect` hook is for the pool's connections: this
+  # one closes before any of them opens.
+  defp initialized!(config) do
+    case config |> Keyword.delete(:before_disconnect) |> Exqlite.Connection.connect() do
+      {:ok, connection} ->
+        :ok = Exqlite.Connection.disconnect(:normal, connection)
+
+      {:error, %Exqlite.Error{message: message}} ->
+        raise "[Arca] Cannot open the database #{config[:database]}: #{message}"
+    end
+  end
+
   # SQLite's write lock: how long one lock-taking statement may wait inside
   # the driver, the jitter between attempts, the option that marks a read
   # transaction for `prepare_transaction/2`, and the one that carries a

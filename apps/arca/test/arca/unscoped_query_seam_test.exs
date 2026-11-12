@@ -51,6 +51,7 @@ defmodule Arca.UnscopedQuerySeamTest do
     "disconnect_all" => "closes the pool's connections",
     "get_dynamic_repo" => "the process's repository",
     "in_transaction?" => "whether this process is inside a transaction",
+    "init" => "the start hook, which opens a SQLite file once before the pool",
     "load" => "builds a struct from data already read",
     "locking_transaction" => "a transaction, whose own queries the scan reads",
     "migrations_path" => "where the migrations live",

@@ -34,10 +34,6 @@ defmodule Arca.DbRescueSeamTest do
     "apps/arca/lib/arca/api_key_storage.ex" => 1,
     # create_webhook: same constraint-vs-outage branch as create_key.
     "apps/arca/lib/arca/webhook_storage.ex" => 1,
-    # configure_database: a failed boot-time PRAGMA is tolerated at
-    # `Logger.warning` and answers `:ok` — neither the helper's error-level
-    # log nor a refusal fits a tuning step the server must boot past.
-    "apps/arca/lib/arca/supervisor.ex" => 1,
     # write/1 + write_single/1: the write-behind's own fallback logic — a
     # failed batch retries per item, so the rescue cannot answer the one
     # constant the helper returns. DB errors only: a structurally-bad
