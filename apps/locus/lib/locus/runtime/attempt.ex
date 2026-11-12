@@ -236,16 +236,24 @@ defmodule Locus.Runtime.Attempt do
   defp close(client, {:abandoned, reason}), do: fail(client, reason, abandoned: true)
 
   defp fail(client, reason, opts) do
-    case HostClient.fail(client, failure_message(reason), opts) do
-      {:ok, message} -> {:normal, {:error, failed(message, opts)}}
-      {:error, _refusal} -> {{:shutdown, :attempt_open}, {:error, @ended}}
+    message = failure_message(reason)
+
+    case HostClient.fail(client, message, opts) do
+      {:ok, recorded} -> {:normal, {:error, failed(recorded, opts)}}
+      {:error, _refusal} -> {{:shutdown, :attempt_open}, {:error, unclosed(message, opts)}}
     end
   end
 
   # A run abandoned was killed with its native work possibly still running:
-  # its caller is told the outcome is not known.
+  # its caller is told the outcome is not known. That is what this process
+  # knows of the run whether or not CYFR accepted the close (refused for a
+  # row a cancel already ended, unanswered, lost), so a refused close tells
+  # it too, in the runtime's own sentence.
   defp failed(message, opts),
     do: if(Keyword.get(opts, :abandoned, false), do: {:uncertain, message}, else: message)
+
+  defp unclosed(message, opts),
+    do: if(Keyword.get(opts, :abandoned, false), do: {:uncertain, message}, else: @ended)
 
   defp failure_message(reason) when is_binary(reason), do: reason
 

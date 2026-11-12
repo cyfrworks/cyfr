@@ -182,7 +182,12 @@ defmodule Locus.Runtime.OrphanChildrenTest do
     timeout = ~r/^Execution timeout after (\d+)ms$/
 
     for id <- held do
-      assert %{error_message: message} = Arca.Repo.get!(Arca.Schemas.Execution, id)
+      assert %{error_message: message, error_class: "uncertain"} =
+               Arca.Repo.get!(Arca.Schemas.Execution, id)
+
+      assert %{outcome: "uncertain"} =
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
+
       assert [_, ms] = Regex.run(timeout, message)
       assert String.to_integer(ms) in 1..1000
       wait_until(fn -> Opus.Attempt.whereis(id) == nil end)
@@ -227,6 +232,44 @@ defmodule Locus.Runtime.OrphanChildrenTest do
              raw(output, "result_raw")
 
     refute message =~ "Execution timeout"
+  end
+
+  # The runtime killed the child at its budget, then a cancel ended its row
+  # before the report of that kill landed: the close is refused, and the
+  # formula still reads what the runtime knows, that the child's work may
+  # have happened.
+  for op <- ["call", "spawn_await"] do
+    @op op
+    test "a child killed at its budget and then cancelled is answered uncertain (#{op})",
+         %{ctx: ctx} do
+      root_id = Prima.UUID7.execution_id()
+      hold_children!(root_id)
+
+      TwoServices.hold!(
+        :fail,
+        fn row, call ->
+          row != nil and row.parent_execution_id == root_id and
+            call.args["outcome"]["abandoned"] == true and
+            Regex.match?(~r/^Execution timeout after \d+ms$/, call.args["outcome"]["error"])
+        end,
+        once: true
+      )
+
+      start_root(ctx, root_id, %{"op" => @op, "request" => request("run", @brief)})
+      assert_receive {:held, child_id, _tool}, 30_000
+      assert_receive {:held, ^child_id, failure}, 30_000
+
+      # The runtime has already killed the child at its one-second budget.
+      assert {:ok, %{cancelled: true}} = Opus.cancel(ctx, child_id)
+      TwoServices.release!(failure)
+
+      assert_receive {:root, {:ok, %{output: output}}}, 30_000
+
+      assert %{"error" => %{"type" => "uncertain", "message" => message}} =
+               raw(output, "result_raw")
+
+      assert message =~ ~r/^Execution timeout after \d+ms$/
+    end
   end
 
   # ---------------------------------------------------------------------------
