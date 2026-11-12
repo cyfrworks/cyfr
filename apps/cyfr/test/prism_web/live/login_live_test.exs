@@ -330,6 +330,33 @@ defmodule PrismWeb.LoginLiveTest do
       assert {:ok, %{namespace: "gone-person"}} = Sanctum.Tenancy.Users.get(asked.ctx.user_id)
     end
 
+    test "a session revoked while the registry answers stores no namespace or token", %{
+      conn: conn,
+      dir: dir
+    } do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_mint(asked.account, "revoked-person")
+      {:ok, before} = Sanctum.Tenancy.Users.get(asked.ctx.user_id)
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+      assert is_binary(handed(view, signed_at_pages(asked)))
+      assert_receive {:held, stub}, @answered_ms
+      assert {:ok, count} = Sanctum.Session.revoke_all_for_user(asked.ctx.user_id)
+      assert count > 0
+      send(stub, :release)
+      assert {"/", %{"error" => message}} = assert_redirect(view, @answered_ms)
+      assert message =~ "That did not go through"
+
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(
+                 asked.ctx,
+                 Compendium.RegistryHost.canonical_host(),
+                 "revoked-person"
+               )
+
+      assert {:ok, after_user} = Sanctum.Tenancy.Users.get(asked.ctx.user_id)
+      assert after_user.namespace == before.namespace
+    end
+
     test "the page never keeps the session's token", %{conn: conn, dir: dir} do
       asked = asked!(conn, dir, %{"action" => "sync"})
       token = Plug.Conn.get_session(asked.conn, session_key())

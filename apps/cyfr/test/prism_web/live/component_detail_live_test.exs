@@ -191,6 +191,62 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       refute_receive {:registry_request, _second}, 500
     end
 
+    test "an answer that comes when the person's session cannot be checked changes nothing",
+         %{conn: conn, ctx: ctx, user: user} do
+      publish_reportable!(ctx)
+      registry!(ctx, user, "/v1/abuse-reports")
+      view = reporting!(conn)
+      assert is_binary(submitted(view))
+      assert_receive {:held, stub}, @answered_ms
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+
+      try do
+        send(stub, :release)
+        render_async(view, @answered_ms)
+
+        assert has_element?(view, "#report-modal"),
+               "the async answer changed the dialog without revalidating its session context"
+
+        refute render(view) =~ "Report submitted. Thanks."
+      after
+        Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
+      end
+    end
+
+    # A stated limit: the registry keeps every report it is sent as its own
+    # (it merges none), and nothing here remembers a report in flight past
+    # the page that sent it. A person who leaves while one is sent, comes
+    # back and sends it again before the first is answered files two.
+    test "a report sent again from a reopened page while the first is in flight is filed as a second",
+         %{conn: conn, ctx: ctx, user: user} do
+      publish_reportable!(ctx)
+      registry!(ctx, user, "/v1/components/reagent/local/reportable/1.0.0")
+      view = reporting!(conn)
+      assert is_binary(submitted(view))
+      assert_receive {:held, first}, @answered_ms
+      {_ref, _topic, proxy} = view.proxy
+      Process.unlink(proxy)
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      again = reporting!(conn)
+      assert is_binary(submitted(again))
+      # This stub serves connections in order: release the first read
+      # before it can accept the second read already in flight.
+      send(first, :release)
+      assert_receive {:held, second}, @answered_ms
+      send(second, :release)
+
+      Prima.Test.Wait.wait_until(
+        fn -> render(again) =~ "Report submitted. Thanks." end,
+        @answered_ms
+      )
+
+      assert_receive {:registry_request, %{method: "POST", path: "/v1/abuse-reports"}},
+                     @answered_ms
+
+      assert_receive {:registry_request, %{method: "POST", path: "/v1/abuse-reports"}},
+                     @answered_ms
+    end
+
     test "a report the person left while it was sent is filed once",
          %{conn: conn, ctx: ctx, user: user} do
       publish_reportable!(ctx)
