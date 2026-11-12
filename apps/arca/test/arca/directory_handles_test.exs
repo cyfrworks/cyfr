@@ -46,6 +46,8 @@ defmodule Arca.DirectoryHandlesTest do
     assert {:ok, %{handle: "alice", identifier: ^alice}, :exists} = claim(alice, "alice")
     assert {:ok, %{identifier: ^alice}} = DirectoryHandles.get(server(), "alice")
     assert {:error, :not_found} = DirectoryHandles.get(server(), "nobody")
+    assert {:ok, %{handle: "alice"}} = DirectoryHandles.of(server(), alice)
+    assert {:error, :not_found} = DirectoryHandles.of(server(), identifier())
     assert nonces(alice) == 2
   end
 
@@ -95,6 +97,7 @@ defmodule Arca.DirectoryHandlesTest do
 
     member = Prima.Actor.in_athanor("ath_test")
     assert {:error, :cross_tenant} = DirectoryHandles.get(member, "alice")
+    assert {:error, :cross_tenant} = DirectoryHandles.of(member, identifier())
     assert {:error, :cross_tenant} = DirectoryHandles.claim(member, %{})
   end
 end

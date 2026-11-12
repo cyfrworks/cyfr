@@ -13,6 +13,8 @@ defmodule Emissary.Web.HandleController do
 
     * `GET /v1/handles/:handle` — the account holding one exact handle:
       `cyfr-handle/v1`'s answer bytes (`Prima.HandleAnswer.encode/1`).
+    * `GET /v1/identities/:identifier/handle` — the one handle an
+      account holds, by its identifier: the same answer's bytes.
     * `POST /v1/namespaces/personal/claim` — a signed `handle.claim`
       request, `cyfr-registry-request/v2`: `201` with `{"handle",
       "identifier"}` for a handle it made the account's, `200` for one
@@ -37,17 +39,12 @@ defmodule Emissary.Web.HandleController do
   alias Sanctum.Directory.Handles
 
   @doc "`GET /v1/handles/:handle`."
-  def resolve(conn, %{"handle" => handle}) do
-    case Handles.resolve(%{handle: handle, source: source(conn)}) do
-      {:ok, answer} ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(200, HandleAnswer.encode(answer))
+  def resolve(conn, %{"handle" => handle}),
+    do: answer(conn, Handles.resolve(%{handle: handle, source: source(conn)}))
 
-      {:error, reason} ->
-        refuse(conn, reason)
-    end
-  end
+  @doc "`GET /v1/identities/:identifier/handle`."
+  def name_of(conn, %{"identifier" => identifier}),
+    do: answer(conn, Handles.name_of(%{identifier: identifier, source: source(conn)}))
 
   @doc "`POST /v1/namespaces/personal/claim`."
   def claim(conn, _params) do
@@ -61,6 +58,14 @@ defmodule Emissary.Web.HandleController do
         refuse(conn, reason)
     end
   end
+
+  defp answer(conn, {:ok, answer}) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(200, HandleAnswer.encode(answer))
+  end
+
+  defp answer(conn, {:error, reason}), do: refuse(conn, reason)
 
   # The body's JSON object in its JCS form; a body the parsers passed
   # over, or one that is no object, is no request.
