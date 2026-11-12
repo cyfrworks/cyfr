@@ -183,8 +183,10 @@ answer_ask() {
     admit) ANSWER="$(approval_fixture admit "$token" "$APP")" ;;
     use) ANSWER="$(approval_fixture use "$token" "$APP" "$ask")" ;;
     thread) ANSWER="$(approval_fixture thread "$token")" ;;
+    say) ANSWER="$(approval_fixture say "$token" "$(asked "$ask" thread_id)" "$(asked "$ask" text)")" ;;
     announce)
-      ANSWER="$(approval_fixture announce "$token" "$APP" "$(asked "$ask" thread_id)" "$(asked "$ask" name)")"
+      ANSWER="$(approval_fixture announce "$token" "$APP" "$(asked "$ask" thread_id)" "$(asked "$ask" name)" \
+        "$(asked "$ask" message_id)")"
       ;;
     account) ANSWER="$(approval_fixture account "$token" "$APP" "$(asked "$ask" name)")" ;;
     *) fail "the proof asked for '$op', which this script does not do" ;;
