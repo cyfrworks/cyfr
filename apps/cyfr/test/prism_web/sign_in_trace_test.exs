@@ -12,8 +12,8 @@ defmodule PrismWeb.SignInTraceTest do
   browser sets the session's cookie; and the console mounts on the
   athanor that fill left, its context established from that cookie.
 
-  Fills run in the background here (`provisioning_inline: false`), and no
-  athanor is stubbed: the page can mount only because the fill happened.
+  The fill runs in the background, and no athanor is stubbed: the page
+  can mount only because the fill happened.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -35,12 +35,11 @@ defmodule PrismWeb.SignInTraceTest do
     File.cp_r!(Path.join(@repo_root, "seed/components"), Path.join(seed_dir, "components"))
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    # The storage roots are the persistence layer's; the directory and the
-    # inline provisioning are the identity domain's. The registry is the
-    # suite's, a closed loopback port (`config/test.exs`).
+    # The storage roots are the persistence layer's; the directory is the
+    # identity domain's. The registry is the suite's, a closed loopback
+    # port (`config/test.exs`).
     Prima.Test.Env.put_app_env(:arca, :base_path, test_dir)
     Prima.Test.Env.put_app_env(:arca, :seed_path, seed_dir)
-    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
 
     tls = DirectoryServer.tls()
     DirectoryServer.listen!()

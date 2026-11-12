@@ -23,7 +23,6 @@ defmodule Aqua.RunnerTest do
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
-  alias Sanctum.Consent.{Bootstrap}
 
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
@@ -52,7 +51,8 @@ defmodule Aqua.RunnerTest do
     # for this test alone, under the partition's storage root: nothing else
     # names the tree, and it is removed, and nothing else, when the test ends.
     {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
-    ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
+    athanor = Sanctum.Test.People.athanor!(user)
+    ctx = %{ctx | athanor_id: athanor.id}
     tree = own_tree!(ctx)
     keys = [cyfr: :locus_runtime_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
@@ -77,11 +77,11 @@ defmodule Aqua.RunnerTest do
     # The sends here are the console's: a person on an interactive surface,
     # the origin `CyfrWeb.ContextGuard` gives the context it establishes.
     ctx = %{ctx | origin: :interactive}
-    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
-    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert @soul in minted
+
+    # Filled now, through the explicit verb, as a person's athanor stands
+    # once its fill has run; the soul's consent is among what it minted.
+    {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(athanor, ctx)
+    {:ok, [_soul]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @soul)
     # The model catalyst unseals its key when its runner attaches; the key
     # is lent to a script's turns over the API as well as the person's.
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"},

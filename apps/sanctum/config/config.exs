@@ -62,8 +62,5 @@ if config_env() == :test do
   config :sanctum, :caller_memo_ttl_ms, 0
   config :sanctum, :namespace_cache_ttl_ms, 0
 
-  # Same for the provisioning retries a sign-in kicks off.
-  config :sanctum, provisioning_inline: true
-
   config :logger, level: :warning
 end

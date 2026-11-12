@@ -32,10 +32,7 @@
 # so its boots case holds that one; the boot's own reads (the gate, the
 # database checks, the recovery and the status watch) are read before
 # anything can be set here, so its restores case boots a release handed
-# the database-checks switch; whether a fill runs inline
-# (`:provisioning_inline`) needs a registry that never answers, so
-# apps/cyfr/test/sanctum/provisioning_test.exs holds it with
-# `Compendium.Provisioning` compiled without the permission.
+# the database-checks switch.
 # apps/cyfr/test/cyfr/test_seams_test.exs holds every read of a
 # seam's key inside the gate.
 #

@@ -49,6 +49,10 @@ defmodule PrismWeb.ShellSetupGrantTest do
     Prima.Test.Env.put_app_env(:arca, :base_path, Path.join(dir, "base"))
     Prima.Test.Env.put_app_env(:arca, :seed_path, seed)
     Prima.Test.Env.put_app_env(:cyfr, :registry_url, "127.0.0.1:19")
+
+    # The fill the sign-in starts runs in the background under the paths
+    # above: it stops before they are put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
     :ok
   end
 
@@ -59,8 +63,12 @@ defmodule PrismWeb.ShellSetupGrantTest do
     athanor = Sanctum.Test.People.athanor!(user.user_id)
     assert athanor.provisioned_at == nil
 
-    # The sign-in that follows an admission.
-    :ok = Sanctum.Provisioning.after_sign_in(user.user_id)
+    # The sign-in that follows an admission, and the registry half it
+    # started in the background.
+    assert {:ok, :failed} =
+             Cyfr.Test.Fill.settled!(athanor.id, fn ->
+               Sanctum.Provisioning.after_sign_in(user.user_id)
+             end)
 
     # The registry half failed where it pulls, and the athanor is not filled.
     {:ok, row} = Athanors.get(athanor.id)
@@ -102,6 +110,8 @@ defmodule PrismWeb.ShellSetupGrantTest do
     assert :sys.get_state(view.pid).socket.assigns.grant_prompts == %{}
     refute render(view) =~ ~s(data-kind="grant")
     refute Enum.any?(shell_frames(view), &(&1.state == :refused))
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   defp shell_frames(view), do: Frames.list(:sys.get_state(view.pid).socket.assigns.frames)

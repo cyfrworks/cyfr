@@ -163,6 +163,10 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
       Process.exit(server, :normal)
     end)
 
+    # A fill a case starts runs in the background under the paths and the
+    # registry above: it stops before they are put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     n = System.unique_integer([:positive])
 
     ctx =
@@ -569,13 +573,15 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     Agent.update(stall, fn _ -> "someone/catalysts/below" end)
     Application.put_env(:cyfr, :provisioning_required_pull_budget_ms, @cut_budget_ms)
 
-    started = System.monotonic_time(:millisecond)
-    :ok = Provisioning.start_provisioning(ctx)
-    elapsed = System.monotonic_time(:millisecond) - started
-
-    # The suite fills inline, so the attempt ran here: bounded by the
-    # budget plus the seed scan and one answered pull, never by the
+    # The attempt runs in the background and settles failed: bounded by
+    # the budget plus the seed scan and one answered pull, never by the
     # transport's own minutes-long patience.
+    started = System.monotonic_time(:millisecond)
+
+    assert {:ok, :failed} =
+             Cyfr.Test.Fill.settled!(athanor.id, fn -> Provisioning.start_provisioning(ctx) end)
+
+    elapsed = System.monotonic_time(:millisecond) - started
     assert elapsed < 10 * @cut_budget_ms
 
     {:ok, athanor} = Athanors.get(athanor.id)
@@ -634,7 +640,8 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
       })
     )
 
-    assert :ok = Provisioning.after_sign_in(ctx.user_id)
+    assert {:ok, :ready} =
+             Cyfr.Test.Fill.settled!(athanor.id, fn -> Provisioning.after_sign_in(ctx.user_id) end)
 
     {:ok, filled} = Athanors.get(athanor.id)
     assert %DateTime{} = filled.provisioned_at, inspect(Athanors.provisioning_failure(filled))
@@ -653,8 +660,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   end
 
   test "the seed sync heals a dependency an earlier attempt lost", %{ctx: ctx, athanor: athanor} do
-    :ok = Provisioning.start_provisioning(ctx)
-    {:ok, athanor} = Athanors.get(athanor.id)
+    {:ok, athanor} = Provisioning.provision(athanor, ctx)
     assert %DateTime{} = athanor.provisioned_at, inspect(Athanors.settings(athanor))
 
     # A transient outage at an earlier sync leaves one dependency of the
@@ -732,9 +738,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # pull stalls on the registry until the attempt's deadline — long enough
     # to race it.
     setup %{stall: stall} do
-      Application.put_env(:sanctum, :provisioning_inline, false)
       Application.put_env(:cyfr, :provisioning_required_pull_budget_ms, 3_000)
-      on_exit(fn -> Application.put_env(:sanctum, :provisioning_inline, true) end)
 
       # A fill or a pull still running when the paths are restored would
       # work against the repository's own trees.

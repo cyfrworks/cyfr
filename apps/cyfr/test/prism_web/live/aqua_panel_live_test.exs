@@ -980,7 +980,6 @@ defmodule PrismWeb.AquaPanelLiveTest do
   end
 
   test "a message sent while the athanor is prepared is held, offered back after a reload, and accepted once" do
-    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
     {person, own, conn, ctx} = unfilled!()
     hold_fill!(own)
 
@@ -1059,10 +1058,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
   end
 
   test "a desktop on an athanor still being filled does not wait for the fill" do
-    # The real path: the fill is a task nothing awaits, so a mount cannot be
-    # held open by it. The suite otherwise fills inline so its assertions can
-    # read rows straight after the call.
-    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
+    # The fill is a task nothing awaits, so a mount cannot be held open by it.
     {_person, own, conn, _ctx} = unfilled!()
     hold_fill!(own)
 
