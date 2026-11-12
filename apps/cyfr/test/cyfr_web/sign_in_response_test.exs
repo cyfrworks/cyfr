@@ -25,6 +25,16 @@ defmodule CyfrWeb.SignInResponseTest do
     assert SignInResponse.session_key() == CyfrWeb.ContextGuard.session_key()
   end
 
+  test "a refused passkey return sends the browser to the sign-in page with the reason", %{
+    conn: conn
+  } do
+    refused = get(conn, "/auth/passkey/complete/no-such-ticket")
+    assert redirected_to(refused) == "/login"
+
+    assert Phoenix.Flash.get(refused.assigns.flash, :error) ==
+             "That sign-in expired. Please try again."
+  end
+
   describe "respond/3 — a proceed" do
     test "a ticket's token becomes the session and the console root is the landing" do
       conn =
