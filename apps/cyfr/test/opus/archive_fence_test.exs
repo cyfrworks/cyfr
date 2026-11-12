@@ -309,13 +309,16 @@ defmodule Opus.ArchiveFenceTest do
 
       # A child never refreshes its parent's standing: one admitted under
       # the old root's row now is refused.
+      child =
+        Record.new(ctx, "reagent:local.fence-child:0.1.0", %{},
+          parent_execution_id: old.execution_id,
+          root_execution_id: old.execution_id
+        )
+
       assert {:error, :not_standing} =
-               Record.write_started(
-                 ctx,
-                 Record.new(ctx, "reagent:local.fence-child:0.1.0", %{},
-                   parent_execution_id: old.execution_id,
-                   root_execution_id: old.execution_id
-                 )
+               with(
+                 {:ok, grant} <- Record.inherited_grant(ctx.athanor_id, old.execution_id),
+                 do: Record.write_started(ctx, child, grant: grant)
                )
     end
 

@@ -163,7 +163,11 @@ defmodule Opus.AttemptAbandonedTest do
         root_execution_id: parent.execution_id
       )
 
-    :ok = Opus.Record.write_started(parent.ctx, child, parent_attempt: parent.attempt)
+    {:ok, grant} = Opus.Record.inherited_grant(parent.ctx.athanor_id, parent.execution_id)
+
+    :ok =
+      Opus.Record.write_started(parent.ctx, child, parent_attempt: parent.attempt, grant: grant)
+
     child
   end
 
