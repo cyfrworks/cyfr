@@ -19,7 +19,7 @@ defmodule Cyfr.Cluster.Support do
   compiles and loads, and compiling twice would redefine every module.
   """
 
-  @files ~w(wait.exs store.exs observer.exs wire.exs barrier.exs holder.exs boot.exs fixtures.exs cell.exs)
+  @files ~w(wait.exs store.exs observer.exs wire.exs barrier.exs holder.exs boot.exs fixtures.exs person.exs cell.exs)
 
   @key {__MODULE__, :modules}
 

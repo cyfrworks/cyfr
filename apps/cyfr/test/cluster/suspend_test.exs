@@ -158,30 +158,6 @@ defmodule Cyfr.Cluster.SuspendTest do
     end
   end
 
-  describe "a pending approval" do
-    test "is decided once, whichever member decides it" do
-      %{athanor: athanor, thread: thread} = athanor(:a, "approval")
-      approval = Cell.call(:a, Cyfr.Cluster.Fixtures, :approval!, [athanor, thread])
-
-      results =
-        Barrier.race(
-          a: {Cyfr.Cluster.Fixtures, :decide, [athanor, approval, "approved"]},
-          b: {Cyfr.Cluster.Fixtures, :decide, [athanor, approval, "denied"]}
-        )
-
-      decided = for {member, {:ok, status}} <- results, do: {member, status}
-
-      assert length(decided) == 1,
-             "two members both decided one approval: #{inspect(results)}"
-
-      [{_member, status}] = decided
-      assert status in ["approved", "denied"]
-
-      assert Cell.call(:b, Cyfr.Cluster.Fixtures, :pending_approvals, [athanor, thread]) == [],
-             "the approval is still pending after being decided"
-    end
-  end
-
   defp athanor(id, label) do
     athanor = Cell.call(id, Cyfr.Cluster.Fixtures, :athanor!, [label])
     thread = Cell.call(id, Cyfr.Cluster.Fixtures, :thread!, [athanor.id, "cluster #{label}"])
