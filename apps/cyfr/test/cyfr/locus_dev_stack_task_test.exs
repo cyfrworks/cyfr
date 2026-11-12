@@ -10,12 +10,17 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   runtime's checked against `tests/fixtures/worker_auth.json`), or
   Prism's port; a setting that disagrees with the declarations is
   refused by name, and nothing is written when anything is refused. The
-  server's registry and directory are the slot's cyfr.run stand-in
-  whatever `.env` says. It also says whether the dev database the
-  checkout configures is yet to be made.
+  server's registry, OCI registry and account service are the local
+  cyfr.run's whatever `.env` says, and the settings refuse until both of
+  its names resolve to 127.0.0.1 and its certificate authority is in the
+  operating system's trust store. It also says whether the dev database
+  the checkout configures is yet to be made.
 
-  The working directory, the shell and the variables are node-wide, so
-  this module runs alone and restores them.
+  The working directory, the shell, the variables and the resolver's
+  lookup are node-wide, so this module runs alone and restores them. The
+  names resolve here through the resolver's own hosts table alone, never
+  the machine's hosts file, and the trusted authority is one the operating
+  system's store already holds.
   """
 
   use ExUnit.Case, async: false
@@ -32,11 +37,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
              CYFR_LOCUS_BACKENDS_URL CYFR_PRIVATE_EGRESS_TARGETS CYFR_LOCUS_BUILDS_URL)
   @provisioned ~w(CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY
                   CYFR_LOCUS_BUILDS_KEY)
-  @stand_in_names ~w(CYFR_REGISTRY_URL CYFR_DIRECTORY_URL CYFR_OCI_REGISTRY_URL)
+  @registry_names ~w(CYFR_REGISTRY_URL CYFR_DIRECTORY_URL CYFR_OCI_REGISTRY_URL)
   @database_names ~w(CYFR_DATA_PATH CYFR_DATABASE_PATH CYFR_DATABASE_URL)
   @names ["RELEASE_ROOT", "CYFR_HOST_API_URL", "CYFR_BIND_ADDRESS", "CYFR_ACCESS"] ++
-           @server ++ @provisioned ++ @stand_in_names ++ @database_names
-  @stand_in "127.79.3.1:4732"
+           @server ++ @provisioned ++ @registry_names ++ @database_names
+  @domain "cyfr.test"
+  @hosts [~c"cyfr.test", ~c"registry.cyfr.test"]
 
   @setup_token String.duplicate("5e", 32)
   @backends_key String.duplicate("b1", 32)
@@ -49,6 +55,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     shell = Mix.shell()
     cwd = File.cwd!()
     saved = Map.new(@names, &{&1, System.get_env(&1)})
+    lookup = :inet_db.res_option(:lookup)
+    hosts_file = :inet_db.res_option(:hosts_file)
 
     dir =
       Path.join(
@@ -60,6 +68,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       File.cd!(cwd)
       File.rm_rf!(dir)
       Mix.shell(shell)
+      :inet_db.del_host({127, 0, 0, 1})
+      :inet_db.set_hosts_file(hosts_file)
+      :inet_db.set_lookup(lookup)
 
       for {name, value} <- saved,
           do: if(value, do: System.put_env(name, value), else: System.delete_env(name))
@@ -73,6 +84,16 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     File.write!("stack.json", Jason.encode!(declarations()))
     {:ok, dir: dir}
   end
+
+  # The local cyfr.run's names on this machine's loopback, as a hosts entry
+  # maps them, in the resolver's own table, the one it reads.
+  defp resolving do
+    :inet_db.set_lookup([:file])
+    :inet_db.set_hosts_file(~c"/dev/null")
+    :inet_db.add_host({127, 0, 0, 1}, @hosts)
+  end
+
+  defp pem(der), do: :public_key.pem_encode([{:Certificate, der, :not_encrypted}])
 
   # docker-compose.dev.yml as `docker compose config --format json`
   # resolves it, its values the test's own, and the fields the task reads
@@ -122,11 +143,11 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       "server CYFR_HOST_API_BIND=172.16.250.1",
       "server CYFR_HOST_API_PORT=4566",
       "server CYFR_LOCUS_BACKENDS_URL=http://172.16.251.2:4101",
-      "server CYFR_PRIVATE_EGRESS_TARGETS=172.16.251.2,127.79.3.1",
+      "server CYFR_PRIVATE_EGRESS_TARGETS=172.16.251.2,cyfr.test,registry.cyfr.test",
       "server CYFR_LOCUS_BUILDS_URL=http://172.16.252.2:4100",
-      "server CYFR_REGISTRY_URL=127.79.3.1:4732",
-      "server CYFR_DIRECTORY_URL=http://127.79.3.1:4732",
-      "server CYFR_OCI_REGISTRY_URL=registry.cyfr.run"
+      "server CYFR_REGISTRY_URL=cyfr.test",
+      "server CYFR_OCI_REGISTRY_URL=registry.cyfr.test",
+      "server CYFR_DIRECTORY_URL=https://cyfr.test"
     ]
   end
 
@@ -153,7 +174,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       ]
   end
 
-  defp settings!, do: DevStack.run(["settings", "stack.json", @stand_in])
+  defp settings!, do: DevStack.run(["settings", "stack.json", @domain, "root.crt"])
 
   defp answers do
     receive do
@@ -174,6 +195,16 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   defp mode(path), do: File.stat!(path).mode &&& 0o777
 
   describe "settings" do
+    # The names resolve, and the authority is trusted, unless a test says
+    # otherwise. Only these tests replace the resolver's table: the
+    # database tests reach their server by name.
+    setup do
+      resolving()
+      [{:cert, der, _} | _] = :public_key.cacerts_get()
+      File.write!("root.crt", pem(der))
+      :ok
+    end
+
     test "derives CYFR's settings from the declarations and answers each service's key" do
       File.write!(".env", complete())
       settings!()
@@ -350,7 +381,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       CYFR_HOST_API_BIND=172.16.250.1
       CYFR_HOST_API_URL=http://172.16.250.1:4566/
       CYFR_LOCUS_BACKENDS_URL=http://172.16.251.2:4101/
-      CYFR_PRIVATE_EGRESS_TARGETS= 172.16.251.2 , 127.79.3.1
+      CYFR_PRIVATE_EGRESS_TARGETS= 172.16.251.2 , cyfr.test,registry.cyfr.test
       CYFR_BIND_ADDRESS=127.0.0.1
       """)
 
@@ -386,7 +417,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       end
     end
 
-    test "names the slot's stand-in as the registry and the directory, whatever .env says" do
+    test "names the local cyfr.run as registry, OCI registry and account service, whatever .env says" do
       File.write!(".env", """
       #{complete()}CYFR_REGISTRY_URL=cyfr.run
       CYFR_DIRECTORY_URL=https://cyfr.run
@@ -399,20 +430,78 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       end)
     end
 
-    test "refuses a stand-in that is not on this machine's 127.79.0.0/16" do
+    test "refuses the public cyfr.run's name, and a name that is not a DNS name" do
       File.write!(".env", complete())
 
-      for stand_in <- [
-            "127.0.0.1:4702",
-            "127.79.0.1",
-            "10.79.0.1:4702",
-            "127.79.0.1:0",
-            "cyfr.run:443"
+      for domain <- ["cyfr.run", "registry.cyfr.run", "a.b.cyfr.run"] do
+        refused(
+          "#{domain} is the public cyfr.run's name; the dev stack's cyfr.run is a local one.",
+          fn ->
+            DevStack.run(["settings", "stack.json", domain, "root.crt"])
+          end
+        )
+      end
+
+      for domain <- [
+            "cyfr",
+            "Cyfr.test",
+            "cyfr.test:443",
+            "https://cyfr.test",
+            "-a.test",
+            "cyfr..test",
+            ""
           ] do
-        refused("#{stand_in} is not the stand-in's address", fn ->
-          DevStack.run(["settings", "stack.json", stand_in])
+        refused("#{domain} is not the local cyfr.run's name, a lowercase DNS name.", fn ->
+          DevStack.run(["settings", "stack.json", domain, "root.crt"])
         end)
       end
+    end
+
+    test "refuses until both names resolve to 127.0.0.1, naming the hosts entry" do
+      File.write!(".env", complete())
+
+      want =
+        "Map both once: echo '127.0.0.1 cyfr.test registry.cyfr.test' | sudo tee -a /etc/hosts"
+
+      :inet_db.del_host({127, 0, 0, 1})
+
+      refused(
+        "cyfr.test and registry.cyfr.test must resolve to 127.0.0.1 on this machine, " <>
+          "where the local cyfr.run answers. " <> want
+      )
+
+      # One name on another address, the other absent.
+      :inet_db.add_host({127, 0, 0, 2}, [~c"cyfr.test"])
+      refused("cyfr.test and registry.cyfr.test must resolve to 127.0.0.1")
+      :inet_db.del_host({127, 0, 0, 2})
+
+      :inet_db.add_host({127, 0, 0, 1}, [~c"cyfr.test"])
+      refused("registry.cyfr.test must resolve to 127.0.0.1 on this machine")
+
+      resolving()
+      settings!()
+      assert answers() == answered()
+    end
+
+    test "refuses an authority the operating system does not trust, naming how to trust it" do
+      File.write!(".env", complete())
+      %{cert: der} = :public_key.pkix_test_root_cert(~c"CYFR dev stack test", [])
+      File.write!("untrusted.crt", pem(der))
+
+      refused(
+        ~r/\AThe local cyfr\.run's certificate authority \(untrusted\.crt\) is not in this machine's trust store, which the server's TLS reads\. Trust it once: sudo .*untrusted\.crt/,
+        fn -> DevStack.run(["settings", "stack.json", @domain, "untrusted.crt"]) end
+      )
+
+      File.write!("empty.crt", "")
+
+      refused("empty.crt holds no certificate as PEM.", fn ->
+        DevStack.run(["settings", "stack.json", @domain, "empty.crt"])
+      end)
+
+      refused("absent.crt holds no certificate as PEM.", fn ->
+        DevStack.run(["settings", "stack.json", @domain, "absent.crt"])
+      end)
     end
 
     test "refuses a setting its own resolver refuses with the boot's sentence" do
@@ -454,14 +543,14 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
   describe "endpoint" do
     test "answers Prism's declared port and writes nothing" do
-      DevStack.run(["endpoint", "stack.json", @stand_in])
+      DevStack.run(["endpoint", "stack.json", @domain])
       assert answers() == ["CYFR_PORT=4555"]
       refute File.exists?(".env")
 
       File.write!(".env", "CYFR_PORT=4000\n")
 
       refused("CYFR_PORT is 4000, and the dev stack needs 4555", fn ->
-        DevStack.run(["endpoint", "stack.json", @stand_in])
+        DevStack.run(["endpoint", "stack.json", @domain])
       end)
     end
   end
@@ -525,8 +614,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
     for release_root <- [Path.join(dir, "release"), ""],
         args <- [
-          ["settings", "stack.json", @stand_in],
-          ["endpoint", "stack.json", @stand_in],
+          ["settings", "stack.json", @domain, "root.crt"],
+          ["endpoint", "stack.json", @domain],
           ["database"],
           []
         ] do
@@ -548,7 +637,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
           [],
           ["settings"],
           ["settings", "stack.json"],
-          ["settings", "stack.json", "a", "b"],
+          ["settings", "stack.json", @domain],
+          ["settings", "stack.json", @domain, "root.crt", "b"],
           ["endpoint"],
           ["endpoint", "stack.json"],
           ["database", "data/cyfr.db"],

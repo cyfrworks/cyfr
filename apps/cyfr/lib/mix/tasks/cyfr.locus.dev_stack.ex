@@ -24,23 +24,31 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   from the runtime's callback address, `CYFR_LOCUS_BACKENDS_URL` and
   `CYFR_LOCUS_BUILDS_URL` from each island guard's fixed address and
   port, and `CYFR_PRIVATE_EGRESS_TARGETS`, the backends guard's address
-  and the stand-in's. A value `.env` or the environment sets for one of
-  them, a `CYFR_HOST_API_URL` other than the callback address, or a
-  `CYFR_BIND_ADDRESS` other than Prism's, is refused by name: each would
-  serve Prism, or send runs, calls or builds, somewhere the stack is not.
+  and the local cyfr.run's two names. A value `.env` or the environment
+  sets for one of them, a `CYFR_HOST_API_URL` other than the callback
+  address, or a `CYFR_BIND_ADDRESS` other than Prism's, is refused by
+  name: each would serve Prism, or send runs, calls or builds, somewhere
+  the stack is not.
 
-  STAND_IN is the slot's cyfr.run stand-in (`tests/registry-stand-in/`),
-  `127.79.<slot>.1:<port>`. Whatever `.env` says, the server's registry
-  is that address (`CYFR_REGISTRY_URL`), its directory the same address
-  over HTTP (`CYFR_DIRECTORY_URL`), and its OCI registry stays cyfr.run's
-  (`CYFR_OCI_REGISTRY_URL=registry.cyfr.run`), so a person the stack makes
-  exists only at the stand-in and components still pull from cyfr.run.
+  DOMAIN is the local cyfr.run every worktree's loop shares
+  (`scripts/dev-stack.sh`), `cyfr.test`: a name of this machine, never
+  cyfr.run's, which is refused. Whatever `.env` says, the server's
+  registry is DOMAIN (`CYFR_REGISTRY_URL`), its OCI registry
+  `registry.DOMAIN` (`CYFR_OCI_REGISTRY_URL`) and its account service
+  `https://DOMAIN` (`CYFR_DIRECTORY_URL`), the addresses the local
+  cyfr.run derives from its own `DOMAIN`, so a person the stack makes,
+  and every pull and publish, exists only there.
 
-      mix cyfr.locus.dev_stack settings DECLARATIONS STAND_IN
+      mix cyfr.locus.dev_stack settings DECLARATIONS DOMAIN ROOT
 
-  first writes into `.env`, made mode 0600 before it is written, each
-  setting a mix boot needs that neither `.env` nor the environment sets:
-  `CYFR_SETUP_TOKEN`, `CYFR_LOCUS_RUNTIME_ROOT` and `CYFR_LOCUS_BACKENDS_KEY` minted as
+  refuses unless both names resolve, as the server resolves them
+  (`Sanctum.Network`), to 127.0.0.1, where the local cyfr.run answers, and
+  unless ROOT, the PEM of the local cyfr.run's certificate authority, is
+  in the operating system's trust store the server's TLS reads
+  (`:public_key.cacerts_get/0`); each refusal names the one command, run
+  once on the machine, that settles it. It then writes into `.env`, made
+  mode 0600 before it is written, each setting a mix boot needs that
+  neither `.env` nor the environment sets: `CYFR_SETUP_TOKEN`, `CYFR_LOCUS_RUNTIME_ROOT` and `CYFR_LOCUS_BACKENDS_KEY` minted as
   `cyfr init` mints them, 32 random bytes as 64 lowercase hexadecimal
   digits. `CYFR_LOCUS_BUILDS_KEY`, which a boot refuses without its URL, is
   never written: unset, it is minted for the run. A value already set is
@@ -54,7 +62,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   `LOCUS_RUNTIME_KEY`, the runtime's id's key derived from the root
   (`Prima.WorkerAuth.worker_key/2`), and the backends and builds keys.
 
-      mix cyfr.locus.dev_stack endpoint DECLARATIONS STAND_IN
+      mix cyfr.locus.dev_stack endpoint DECLARATIONS DOMAIN
 
   writes nothing and prints `CYFR_PORT=<port>`, Prism's port, where
   `scripts/dev-stack.sh check` reaches the server, after the same refusals.
@@ -65,8 +73,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   database the checkout configures does not exist yet (under SQLite, its
   file, `data/cyfr.db` unless `CYFR_DATABASE_PATH` names another; under
   PostgreSQL, the database `CYFR_DATABASE_URL` names), else
-  `DEV_STACK_DATABASE_NEW=0`: the script clears the stand-in's state with a
-  new database, and binds the loop to the stand-in's slot otherwise.
+  `DEV_STACK_DATABASE_NEW=0`: the script records which local cyfr.run a
+  new database's people are made at, and refuses one that is not new once
+  that cyfr.run has been reset.
 
   Both refuse a `RELEASE_ROOT`: the stack is a mix boot from the checkout,
   never a release.
@@ -75,7 +84,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   Every file it touches is the operator's, read or written before any
   boot, with no Arca configured: the checkout's `.env` and `.env.example`,
-  and the declarations the script resolved into its private directory.
+  the declarations the script resolved into its private directory, and the
+  local cyfr.run's certificate authority it copied out.
   """
 
   use Boundary, classify_to: Cyfr
@@ -114,10 +124,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  defp answer(["settings", declarations, stand_in]) do
-    with {:ok, stack} <- declared(declarations, stand_in),
+  defp answer(["settings", declarations, domain, root]) do
+    with {:ok, stack} <- declared(declarations, domain),
          env = environment(),
          :ok <- agree(stack, env),
+         :ok <- resolves(stack.names),
+         :ok <- trusted(root),
          {:ok, lines} <- provision(env),
          {:ok, builds_key} <- builds_key(env),
          :ok <- write(lines),
@@ -128,15 +140,15 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
       for {@setup, token} <- lines,
           do: info("setup http://localhost:#{stack.prism_port}/setup##{token}")
 
-      for {name, value} <- stack.server ++ stack.stand_in, do: info("server #{name}=#{value}")
+      for {name, value} <- stack.server ++ stack.registry, do: info("server #{name}=#{value}")
       info("server #{@builds_key}=#{builds_key}")
       for {name, value} <- keys, do: info("compose #{name}=#{value}")
       :ok
     end
   end
 
-  defp answer(["endpoint", declarations, stand_in]) do
-    with {:ok, stack} <- declared(declarations, stand_in),
+  defp answer(["endpoint", declarations, domain]) do
+    with {:ok, stack} <- declared(declarations, domain),
          :ok <- agree(stack, environment()) do
       info("CYFR_PORT=" <> stack.prism_port)
     end
@@ -150,16 +162,16 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   defp answer(_args) do
     {:error,
-     "usage: mix cyfr.locus.dev_stack settings DECLARATIONS STAND_IN | " <>
-       "endpoint DECLARATIONS STAND_IN | database"}
+     "usage: mix cyfr.locus.dev_stack settings DECLARATIONS DOMAIN ROOT | " <>
+       "endpoint DECLARATIONS DOMAIN | database"}
   end
 
   defp info(line), do: Mix.shell().info(line)
 
   # The stack docker-compose.dev.yml declares, as compose resolved it, and
-  # the slot's stand-in.
-  defp declared(path, stand_in) do
-    with {:ok, stand_in} <- stand_in(stand_in),
+  # the local cyfr.run's names.
+  defp declared(path, domain) do
+    with {:ok, domain} <- domain(domain),
          {:ok, json} <- resolution(path),
          {:ok, prism_port} <- prism(json["x-prism"]),
          {:ok, proxy_port} <- proxy(json["x-prism-proxy"]),
@@ -179,29 +191,95 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
            {"CYFR_HOST_API_BIND", runtime.host_api_bind},
            {"CYFR_HOST_API_PORT", runtime.host_api_port},
            {"CYFR_LOCUS_BACKENDS_URL", "http://#{backends.address}:#{backends.port}"},
-           {"CYFR_PRIVATE_EGRESS_TARGETS", "#{backends.address},#{stand_in.address}"},
+           {"CYFR_PRIVATE_EGRESS_TARGETS", "#{backends.address},#{domain},registry.#{domain}"},
            {"CYFR_LOCUS_BUILDS_URL", "http://#{builds.address}:#{builds.port}"}
          ],
-         stand_in: [
-           {"CYFR_REGISTRY_URL", "#{stand_in.address}:#{stand_in.port}"},
-           {"CYFR_DIRECTORY_URL", "http://#{stand_in.address}:#{stand_in.port}"},
-           {"CYFR_OCI_REGISTRY_URL", "registry.cyfr.run"}
+         names: [domain, "registry." <> domain],
+         registry: [
+           {"CYFR_REGISTRY_URL", domain},
+           {"CYFR_OCI_REGISTRY_URL", "registry." <> domain},
+           {"CYFR_DIRECTORY_URL", "https://" <> domain}
          ]
        }}
     end
   end
 
-  # The slot's stand-in: an address of 127.79.0.0/16, which is this
-  # machine's loopback, and a port. The private egress list takes
-  # addresses alone, so naming 127.0.0.1 would open every local port to the
-  # server's own outbound calls; the stand-in's address opens its own.
-  defp stand_in(text) do
-    with [address, port] <- String.split(text, ":"),
-         {:ok, {127, 79, _, _}} <- :inet.parse_ipv4strict_address(String.to_charlist(address)),
-         true <- port?(port) do
-      {:ok, %{address: address, port: port}}
+  # The local cyfr.run's apex: a lowercase DNS name that is not cyfr.run
+  # or under it. The server's own outbound calls reach it by name
+  # (`CYFR_PRIVATE_EGRESS_TARGETS` matches the host), so naming 127.0.0.1
+  # would open every local port to them.
+  defp domain(text) do
+    labels = String.split(text, ".")
+
+    cond do
+      text == "cyfr.run" or String.ends_with?(text, ".cyfr.run") ->
+        {:error,
+         "#{text} is the public cyfr.run's name; the dev stack's cyfr.run is a local one."}
+
+      length(labels) >= 2 and
+          Enum.all?(labels, &Regex.match?(~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/, &1)) ->
+        {:ok, text}
+
+      true ->
+        {:error, "#{text} is not the local cyfr.run's name, a lowercase DNS name."}
+    end
+  end
+
+  # Each name resolves as the server resolves it (`Sanctum.Network`, IPv4
+  # first) to 127.0.0.1, where the local cyfr.run publishes its HTTPS.
+  defp resolves(names) do
+    case Enum.reject(
+           names,
+           &(:inet.getaddr(String.to_charlist(&1), :inet) == {:ok, {127, 0, 0, 1}})
+         ) do
+      [] ->
+        :ok
+
+      unresolved ->
+        {:error,
+         "#{Enum.join(unresolved, " and ")} must resolve to 127.0.0.1 on this machine, where " <>
+           "the local cyfr.run answers. Map both once: echo '127.0.0.1 #{Enum.join(names, " ")}' " <>
+           "| sudo tee -a /etc/hosts"}
+    end
+  end
+
+  # The local cyfr.run's certificate authority in the operating system's
+  # trust store, which the server's TLS reads: Mint verifies against
+  # `:public_key.cacerts_get/0` when it is given no CA file.
+  defp trusted(path) do
+    with {:ok, pem} <- File.read(path),
+         [{:Certificate, der, :not_encrypted}] <- :public_key.pem_decode(pem) do
+      if Enum.any?(os_cacerts(), &(elem(&1, 1) == der)),
+        do: :ok,
+        else:
+          {:error,
+           "The local cyfr.run's certificate authority (#{path}) is not in this machine's " <>
+             "trust store, which the server's TLS reads. Trust it once: #{trust_command(path)}"}
     else
-      _ -> {:error, "#{text} is not the stand-in's address: 127.79.<slot>.1:<port>."}
+      _ -> {:error, "#{path} holds no certificate as PEM."}
+    end
+  end
+
+  # An operating system store that cannot be read trusts nothing.
+  defp os_cacerts do
+    :public_key.cacerts_get()
+  rescue
+    _ -> []
+  end
+
+  defp trust_command(path) do
+    cond do
+      match?({:unix, :darwin}, :os.type()) ->
+        "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain " <>
+          path
+
+      System.find_executable("update-ca-trust") ->
+        "sudo cp #{path} /etc/pki/ca-trust/source/anchors/cyfr-test-root.crt && " <>
+          "sudo update-ca-trust"
+
+      true ->
+        "sudo cp #{path} /usr/local/share/ca-certificates/cyfr-test-root.crt && " <>
+          "sudo update-ca-certificates"
     end
   end
 

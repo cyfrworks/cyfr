@@ -5,17 +5,21 @@
 # The source development stack (CONTRIBUTING.md, "Running from source"):
 # CYFR run from this checkout with `mix phx.server`, beside the runtime,
 # backends and builds services of docker-compose.yml, run from this tree's
-# Locus image (docker-compose.dev.yml).
+# Locus image (docker-compose.dev.yml), and a local cyfr.run as its
+# registry and account service.
 #
-#   scripts/dev-stack.sh          provision .env on its first run, build the
-#                                 image when this tree's is not on the host,
-#                                 start the containers, then run CYFR in the
-#                                 foreground until it stops or is stopped,
-#                                 removing the containers on every exit
+#   scripts/dev-stack.sh          provision .env on its first run, start the
+#                                 local cyfr.run when it is not running,
+#                                 build the image when this tree's is not on
+#                                 the host, start the containers, then run
+#                                 CYFR in the foreground until it stops or
+#                                 is stopped, removing this worktree's
+#                                 containers on every exit
 #   scripts/dev-stack.sh check    run a component through the running server
 #                                 as a signed-in person and assert its answer
 #   scripts/dev-stack.sh down     stop the server a killed run left, and
-#                                 remove the stack's containers and networks
+#                                 remove this worktree's containers and
+#                                 networks
 #   scripts/dev-stack.sh slot K   print slot K's values, one NAME=value a line
 #                                 (tests/dev-stack/compose-test.sh reads them)
 #
@@ -24,29 +28,43 @@
 # (scripts/lib/run-names.sh), whatever the caller's COMPOSE_* say. Its
 # ports and subnets are its slot's: slot K, from 0 to 19, puts Prism on
 # 4000 + 10K and its proxy on 4001 + 10K, the runtime on 127.0.0.1:4700 +
-# 10K, the host API on 4701 + 10K at the runtime network's gateway, the
-# cyfr.run stand-in on 127.79.K.1:4702 + 10K, and the runtime, backends
-# and builds networks on 172.16.(100 + 3K), (101 + 3K) and (102 +
-# 3K).0/24. A loop takes the slot data/dev-stack.slot remembers while it
-# is free, else the first free one from 0, so a lone loop keeps
-# localhost:4000, and it remembers the slot it takes. A slot is free when
-# no other loop holds its claim (a lock under XDG_RUNTIME_DIR, else
-# TMPDIR, held for the loop's life), nothing listens on its ports and no
-# Docker network overlaps its subnets; when none is, the loop refuses
+# 10K, the host API on 4701 + 10K at the runtime network's gateway, and
+# the runtime, backends and builds networks on 172.16.(100 + 3K), (101 +
+# 3K) and (102 + 3K).0/24. A loop takes the slot data/dev-stack.slot
+# remembers while it is free, else the first free one from 0, so a lone
+# loop keeps localhost:4000, and it remembers the slot it takes. A slot is
+# free when no other loop holds its claim (a lock under XDG_RUNTIME_DIR,
+# else TMPDIR, held for the loop's life), nothing listens on its ports and
+# no Docker network overlaps its subnets; when none is, the loop refuses
 # naming each slot's holder.
 #
-# The stand-in (tests/registry-stand-in/standin.py) answers for cyfr.run's
-# registry and directory, so a person the loop makes exists there alone;
-# it forwards the GETs it does not own, component search and metadata, to
-# https://cyfr.run. The server's registry and directory are the stand-in
-# whatever .env says (`mix cyfr.locus.dev_stack`). The loop starts it
-# before the server and stops it on every exit path. Its state is
-# data/dev-stack/cyfr-run.json, which records the address it serves: every
-# genesis a dev database's people signed names that address, so a
-# database is bound to the slot its state file names. A new database (the
-# task says which) clears the state; a database that is not new takes its
-# slot when it is free and refuses otherwise, and without a state file it
-# refuses, naming the reset either way.
+# The local cyfr.run is one per machine, shared by every worktree's loop:
+# cyfr.run's own local stack (Caddy, the cyfrrun server, Zot and its
+# PostgreSQL), its docker-compose.prod.yml and docker-compose.local.yml
+# merged as that checkout's docker-compose.yml merges them, built from the
+# cyfr.run checkout DEV_STACK_CYFR_RUN names (default: cyfr.run beside
+# this checkout), under the compose project cyfr-run-dev. It serves
+# https://cyfr.test and registry.cyfr.test on 127.0.0.1:443, and the
+# server's registry, OCI registry and account service are those three
+# whatever .env says (`mix cyfr.locus.dev_stack`). Every name its files
+# interpolate comes from its env file alone, never the caller's
+# environment or that checkout's .env, and nothing is written into that
+# checkout: the env file, with the ADMIN_TOKEN that gates its first
+# administrator, minted once, and the copy of its certificate authority
+# live in the machine's dev-stack directory, $XDG_STATE_HOME/cyfr-dev-stack
+# (default ~/.local/state/cyfr-dev-stack), mode 0700. A loop starts it,
+# under a machine-wide lock beside the claims, when it is not running,
+# and leaves it running on every exit; `down` never stops it. The machine
+# makes the two names resolve to 127.0.0.1 and trusts the authority once;
+# the settings task refuses until it has, naming the command.
+#
+# Every genesis a dev database's people sign names the local cyfr.run's
+# account service, so a database is bound to the local cyfr.run whose
+# accounts it holds, whatever slot it runs at: data/dev-stack/cyfr-run.made
+# records when its PostgreSQL volume was made. A new database (the task
+# says which) records the running one; a database that is not new refuses
+# when the record names another, since its people's accounts are gone, and
+# names the reset.
 #
 # One run of a worktree's loop holds the project's lock (beside the
 # claims) for its whole life, before anything of its checkout is written
@@ -89,9 +107,17 @@ case "$GRACE" in '' | *[!0-9]*) echo "dev-stack: DEV_STACK_GRACE is $GRACE, not 
 
 SLOTS=20
 REMEMBERED=data/dev-stack.slot
-STAND_IN_STATE=data/dev-stack/cyfr-run.json
-STAND_IN_LOG=data/dev-stack/cyfr-run.log
-RESET="reset by deleting the dev database and $STAND_IN_STATE"
+# The local cyfr.run: its apex, its compose project, its checkout and the
+# machine's dev-stack directory.
+DOMAIN=cyfr.test
+STACK=cyfr-run-dev
+CYFR_RUN="${DEV_STACK_CYFR_RUN:-$(dirname "$ROOT")/cyfr.run}"
+MACHINE="${XDG_STATE_HOME:-$HOME/.local/state}/cyfr-dev-stack"
+STACK_ENV="$MACHINE/cyfr-run.env"
+STACK_ROOT="$MACHINE/cyfr-run-root.crt"
+MADE=data/dev-stack/cyfr-run.made
+STACK_MADE=""
+STACK_NAMES=""
 LOCK=""
 LOCK_FD=""
 CLAIM_FD=""
@@ -101,8 +127,6 @@ IMAGE=""
 SLOT_ENV=()
 SERVER=""
 SERVER_ENDED=""
-STAND_IN=""
-BOUND=""
 STARTED=""
 
 die() {
@@ -117,8 +141,7 @@ slot_env() {
     "DEV_STACK_PRISM_PORT=$((4000 + 10 * k))" "DEV_STACK_PROXY_PORT=$((4001 + 10 * k))" \
     "DEV_STACK_RUNTIME_PORT=$((4700 + 10 * k))" "DEV_STACK_HOST_API_PORT=$((4701 + 10 * k))" \
     "DEV_STACK_RUNTIME_NET=172.16.$((100 + 3 * k))" "DEV_STACK_BACKENDS_NET=172.16.$((101 + 3 * k))" \
-    "DEV_STACK_BUILDS_NET=172.16.$((102 + 3 * k))" \
-    "DEV_STACK_STAND_IN_ADDRESS=127.79.$k.1" "DEV_STACK_STAND_IN_PORT=$((4702 + 10 * k))"
+    "DEV_STACK_BUILDS_NET=172.16.$((102 + 3 * k))"
 }
 # slot_value NAME: the slot in use's NAME.
 slot_value() { printf '%s\n' "${SLOT_ENV[@]}" | sed -n "s/^$1=//p"; }
@@ -163,20 +186,19 @@ lock() {
     LOCK_FD=""
     die "another run of this worktree's dev stack (pid ${holder:-unknown}, checkout ${checkout:-unknown}) holds $LOCK; stop it, or wait for it to end."
   fi
-  # This run's pid and checkout, beside the server and the stand-in a
-  # killed run recorded, which `down` and a start still read; the file
-  # stays the one the lock is on.
+  # This run's pid and checkout, beside the server a killed run recorded,
+  # which `down` and a start still read; the file stays the one the lock
+  # is on.
   local recorded
-  recorded="$(sed -n '/^\(server\|stand-in\) /p' "$LOCK")"
+  recorded="$(sed -n '/^server /p' "$LOCK")"
   printf 'pid %s\ncheckout %s\n%s' "$$" "$ROOT" "${recorded:+$recorded$'\n'}" >"$LOCK"
 }
 
-# record: this run's lock record, its server and stand-in with their start
-# times, so a run killed outright leaves what `down` stops.
+# record: this run's lock record, its server with its start time, so a
+# run killed outright leaves what `down` stops.
 record() {
   {
     printf 'pid %s\ncheckout %s\n' "$$" "$ROOT"
-    [ -z "$STAND_IN" ] || printf 'stand-in %s %s\n' "$STAND_IN" "$(started "$STAND_IN")"
     [ -z "$SERVER" ] || [ -n "$SERVER_ENDED" ] || printf 'server %s %s\n' "$SERVER" "$(started "$SERVER")"
   } >"$LOCK"
 }
@@ -258,7 +280,7 @@ claim() {
   fi
   printf 'pid %s\nstarted %s\ncheckout %s\n' "$$" "$(started "$$")" "$ROOT" >"$file"
   for listener in 127.0.0.1:$((4000 + 10 * k)) 127.0.0.1:$((4001 + 10 * k)) 127.0.0.1:$((4700 + 10 * k)) \
-    127.0.0.1:$((4701 + 10 * k)) "127.79.$k.1:$((4702 + 10 * k))"; do
+    127.0.0.1:$((4701 + 10 * k)); do
     if who="$(held "${listener%:*}" "${listener##*:}")"; then
       : >"$file"
       exec {fd}>&-
@@ -276,21 +298,13 @@ claim() {
   CLAIM_FD="$fd" CLAIM_FILE="$file"
 }
 
-# take_slot: the slot the database is bound to (BOUND) when it is free, or
-# a refusal naming it and the reset; else the slot this worktree remembers
-# while it is free, else the first free one, remembered for the next run;
-# or a refusal naming every slot's holder.
+# take_slot: the slot this worktree remembers while it is free, else the
+# first free one, remembered for the next run; or a refusal naming every
+# slot's holder.
 take_slot() {
   local first k nets taken=()
   first="$(remembered)"
   nets="$(networks)"
-  if [ -n "$BOUND" ]; then
-    claim "$BOUND" "$nets" ||
-      die "This database's people were made at slot $BOUND, which is taken ($WHY). Stop what holds slot $BOUND, or $RESET."
-    use_slot "$BOUND"
-    mkdir -p "$(dirname "$REMEMBERED")" && printf '%s\n' "$BOUND" >"$REMEMBERED"
-    return 0
-  fi
   for k in "$first" $(seq 0 $((SLOTS - 1))); do
     [ "$k" != "$first" ] || [ "${#taken[@]}" = 0 ] || continue
     if claim "$k" "$nets"; then
@@ -305,19 +319,15 @@ take_slot() {
   die "every slot is taken: $(printf '%s; ' "${taken[@]}" | sed 's/; $//')."
 }
 
-# orphan KIND: the process group of the server, or the stand-in (KIND
-# `server` or `stand-in`), a killed run recorded, when its leader is still
-# the process the run started; nothing otherwise.
+# orphan: the process group of the server a killed run recorded, when its
+# leader is still the process the run started; nothing otherwise.
 orphan() {
   local pgid started
-  read -r pgid started < <(sed -n "s/^$1 //p" "$LOCK" 2>/dev/null) || return 0
+  read -r pgid started < <(sed -n "s/^server //p" "$LOCK" 2>/dev/null) || return 0
   [ -n "${pgid:-}" ] && [ -n "${started:-}" ] || return 0
   [ "$(started "$pgid")" = "$started" ] && echo "$pgid"
   return 0
 }
-
-# kept KIND: the lock record's KIND line, if any.
-kept() { sed -n "/^$1 /p" "$LOCK" 2>/dev/null || true; }
 
 # gone GROUP: no process is left in GROUP, waited for up to 5 s.
 gone() {
@@ -341,8 +351,9 @@ stop() {
 }
 
 # Ends every run, a signal's included: the server first, then every
-# container and network of the stack. A second signal does not cut it
-# short.
+# container and network of this worktree's stack; the local cyfr.run,
+# which other worktrees' loops share, keeps running. A second signal does
+# not cut it short.
 finish() {
   local status=$?
   trap '' INT TERM HUP
@@ -355,26 +366,21 @@ finish() {
     stop "$SERVER"
     wait "$SERVER" 2>/dev/null || true
   fi
-  # The stand-in after the server that calls it.
-  if [ -n "$STAND_IN" ]; then
-    stop "$STAND_IN"
-    wait "$STAND_IN" 2>/dev/null || true
-  fi
   if [ -n "$STARTED" ]; then
     echo "dev-stack: removing the containers." >&2
     compose down --remove-orphans >/dev/null 2>&1 ||
       echo "dev-stack: the containers could not be removed; \`scripts/dev-stack.sh down\` removes them." >&2
   fi
-  # A server's or stand-in's record goes only once its group is gone: this
-  # run's own, which it stopped above; a killed run's stays for `down`.
+  # A server's record goes only once its group is gone: this run's own,
+  # which it stopped above; a killed run's stays for `down`.
   if [ -n "$LOCK_FD" ]; then
-    local left="" kind pid
-    for kind in server stand-in; do
-      case "$kind" in server) pid="$SERVER" ;; *) pid="$STAND_IN" ;; esac
-      if [ -n "$pid" ] && gone "$pid"; then continue; fi
-      [ -z "$(kept "$kind")" ] || left="$left$(kept "$kind")"$'\n'
-    done
-    printf '%s' "$left" >"$LOCK"
+    if [ -n "$SERVER" ] && gone "$SERVER"; then
+      : >"$LOCK"
+    else
+      local left
+      left="$(sed -n '/^server /p' "$LOCK")"
+      printf '%s' "${left:+$left$'\n'}" >"$LOCK"
+    fi
   fi
   # The claim's record emptied while the claim is still held: the exit lets
   # the claim go.
@@ -446,51 +452,118 @@ sys.exit(1)' "$1" "$2" || return 1
 }
 
 # bind_database: whether the dev database is new, from the task. A new one
-# clears the stand-in's state; one that is not binds the loop (BOUND) to
-# the slot the state file's address names, or refuses with the reset.
+# records the local cyfr.run its people are made at; one that is not
+# refuses when the record names another, whose accounts went with it.
 bind_database() {
-  local out new address
+  local out new recorded
   out="$(task database 2>&1)" || die "$(refusal "$out")"
   new="$(value DEV_STACK_DATABASE_NEW "$out")"
   case "$new" in
     1)
-      rm -f "$STAND_IN_STATE"
-      return 0
+      mkdir -p "$(dirname "$MADE")" && printf '%s\n' "$STACK_MADE" >"$MADE"
       ;;
-    0) ;;
+    0)
+      recorded="$(cat "$MADE" 2>/dev/null || true)"
+      [ "$recorded" = "$STACK_MADE" ] ||
+        die "This database's people were made at a local cyfr.run that is gone, and their accounts with it ($MADE records ${recorded:-none}; the running one was made $STACK_MADE). Delete the dev database (data/cyfr.db unless .env names another) and start again."
+      ;;
     *) die "mix cyfr.locus.dev_stack did not say whether the dev database is new." ;;
   esac
-  [ -f "$STAND_IN_STATE" ] ||
-    die "This database's people were made beside a stand-in whose state is gone ($STAND_IN_STATE). Reset by deleting the dev database and $STAND_IN_STATE."
-  address="$(python3 -I -c 'import json, sys
-print(json.load(open(sys.argv[1])).get("directory", ""))' "$STAND_IN_STATE" 2>/dev/null)" || address=""
-  BOUND="$(printf '%s' "$address" | sed -n 's|^http://127\.79\.\([0-9]*\)\.1:[0-9]*$|\1|p')"
-  slot_ok "$BOUND" && [ "$address" = "http://127.79.$BOUND.1:$((4702 + 10 * BOUND))" ] ||
-    die "$STAND_IN_STATE names $address, the address of no slot. Reset by deleting the dev database and $STAND_IN_STATE."
 }
 
-# start_stand_in: the slot's stand-in, in a process group of its own, up
-# before the server it answers; its log in $STAND_IN_LOG.
-start_stand_in() {
-  local address port n=0
-  address="$(slot_value DEV_STACK_STAND_IN_ADDRESS)" port="$(slot_value DEV_STACK_STAND_IN_PORT)"
-  mkdir -p "$(dirname "$STAND_IN_STATE")"
-  (exec {LOCK_FD}>&- {CLAIM_FD}>&- &&
-    exec python3 -I -c 'import os, sys; os.setpgid(0, 0); os.execvp(sys.argv[1], sys.argv[1:])' \
-      python3 -I "$ROOT/tests/registry-stand-in/standin.py" --address "$address" --port "$port" \
-      --state "$STAND_IN_STATE" --ready-file "$PRIVATE/stand-in.ready" --upstream https://cyfr.run \
-      </dev/null >"$STAND_IN_LOG" 2>&1) &
-  STAND_IN=$!
-  record
-  until [ -s "$PRIVATE/stand-in.ready" ]; do
-    if ! kill -0 "$STAND_IN" 2>/dev/null || [ "$n" -ge 100 ]; then
-      tail -n 5 "$STAND_IN_LOG" >&2 || true
-      die "the cyfr.run stand-in did not start on $address:$port; its log ends above."
-    fi
-    sleep 0.1
-    n=$((n + 1))
-  done
-  echo "dev-stack: the cyfr.run stand-in answers at http://$address:$port."
+# stack_compose ARGS: the local cyfr.run's compose, under its fixed
+# project, from the checkout's production and local files merged as its
+# docker-compose.yml merges them, every name they interpolate from
+# STACK_ENV alone: the caller's environment sets none of them, and the
+# checkout's .env is never read.
+stack_compose() {
+  local unset=() name
+  for name in $STACK_NAMES; do unset+=(-u "$name"); done
+  env "${unset[@]}" docker compose --env-file "$STACK_ENV" -p "$STACK" \
+    -f "$CYFR_RUN/docker-compose.prod.yml" -f "$CYFR_RUN/docker-compose.local.yml" "$@"
+}
+
+# stack_env: the local cyfr.run's env file, mode 0600 in the machine's
+# dev-stack directory: its apex, its loopback port and the ADMIN_TOKEN
+# that gates its first administrator, minted once and kept, since compose
+# recreates a service whose environment changed.
+stack_env() {
+  local token=""
+  (umask 077 && mkdir -p "$MACHINE") && chmod 700 "$MACHINE" ||
+    die "$MACHINE could not be made this user's alone (mode 0700)."
+  [ ! -f "$STACK_ENV" ] || token="$(sed -n 's/^ADMIN_TOKEN=//p' "$STACK_ENV")"
+  [[ "$token" =~ ^[0-9a-f]{64}$ ]] || token="$(openssl rand -hex 32)"
+  (umask 077 && printf 'DOMAIN=%s\nCYFR_LOCAL_HTTPS_PORT=443\nADMIN_TOKEN=%s\n' "$DOMAIN" "$token" >"$STACK_ENV") ||
+    die "$STACK_ENV could not be written."
+}
+
+# up_refusal OUTPUT: the refusal for a start of the local cyfr.run whose
+# compose OUTPUT ends in its failure.
+up_refusal() {
+  case "$1" in
+    *"privileged port 443"* | *"443"*"ermission denied"*)
+      echo "Docker cannot publish the local cyfr.run on 127.0.0.1:443 without privileges here (rootless Docker). Allow it once on this machine: echo net.ipv4.ip_unprivileged_port_start=443 | sudo tee /etc/sysctl.d/90-cyfr-dev.conf && sudo sysctl --system"
+      ;;
+    *"443"*"already allocated"* | *"443"*"already in use"*)
+      echo "Something else holds 127.0.0.1:443, where the local cyfr.run answers; stop it, then start again. \`ss -ltnp 'sport = :443'\` (\`lsof -nP -iTCP:443 -sTCP:LISTEN\` on macOS) names it."
+      ;;
+    *) echo "the local cyfr.run did not start; docker's output ends above." ;;
+  esac
+}
+
+# start_cyfr_run: the local cyfr.run running, started under the machine's
+# lock when it is not, with what it declares checked, its authority copied
+# out and its PostgreSQL volume's making read (STACK_MADE). Nothing stops
+# it here: every worktree's loop shares it.
+start_cyfr_run() {
+  [ -f "$CYFR_RUN/docker-compose.prod.yml" ] && [ -f "$CYFR_RUN/docker-compose.local.yml" ] ||
+    die "the local cyfr.run is built from a cyfr.run checkout, and $CYFR_RUN holds none (no docker-compose.prod.yml and docker-compose.local.yml); clone https://github.com/cyfrworks/cyfr.run.git there, or name another checkout with DEV_STACK_CYFR_RUN=<path>."
+  CYFR_RUN="$(cd "$CYFR_RUN" && pwd)"
+  local fd up status volume
+  exec {fd}>>"$(runtime_dir)/$STACK.lock"
+  if ! flock -n "$fd"; then
+    echo "dev-stack: another loop is starting the local cyfr.run; waiting for it."
+    flock "$fd"
+  fi
+  stack_env
+  STACK_NAMES="$(docker compose --env-file /dev/null -p "$STACK" -f "$CYFR_RUN/docker-compose.prod.yml" \
+    -f "$CYFR_RUN/docker-compose.local.yml" config --variables 2>/dev/null | awk 'NR > 1 { print $1 }')" ||
+    die "docker compose could not read $CYFR_RUN's docker-compose.prod.yml and docker-compose.local.yml."
+  stack_compose config --format json >"$PRIVATE/cyfr-run.json" 2>"$PRIVATE/cyfr-run.err" ||
+    die "docker compose could not resolve $CYFR_RUN's local stack: $(tail -n 1 "$PRIVATE/cyfr-run.err")"
+  # What the local cyfr.run declares, as compose resolved it: Caddy on
+  # 127.0.0.1:443 alone, the server's apex DOMAIN, and the PostgreSQL
+  # volume whose making binds a database's people to it.
+  volume="$(python3 -I -c '
+import json, sys
+c, domain = json.load(open(sys.argv[1])), sys.argv[2]
+s = c.get("services", {})
+ports = [(p.get("host_ip"), str(p.get("published")), p.get("target")) for p in s.get("caddy", {}).get("ports", [])]
+if ports != [("127.0.0.1", "443", 443)]:
+    sys.exit("its caddy service publishes %s, not 127.0.0.1:443 alone" % ports)
+for name in ("caddy", "cyfrrun"):
+    if s.get(name, {}).get("environment", {}).get("DOMAIN") != domain:
+        sys.exit("its %s service is not for %s" % (name, domain))
+for v in s.get("postgres", {}).get("volumes", []):
+    if v.get("type") == "volume" and v.get("target") == "/var/lib/postgresql/data":
+        print(c["volumes"][v["source"]]["name"])
+        sys.exit(0)
+sys.exit("its postgres service keeps no volume at /var/lib/postgresql/data")' "$PRIVATE/cyfr-run.json" "$DOMAIN" 2>&1)" ||
+    die "$CYFR_RUN's local stack is not the one the loop runs: $volume."
+  echo "dev-stack: starting the local cyfr.run from $CYFR_RUN, unless it runs already; its first start builds it."
+  set +e
+  stack_compose up --detach --build --wait 2>&1 | tee "$PRIVATE/cyfr-run.up" >&2
+  status="${PIPESTATUS[0]}"
+  set -e
+  [ "$status" = 0 ] || die "$(up_refusal "$(cat "$PRIVATE/cyfr-run.up")")"
+  stack_compose cp caddy:/data/caddy/pki/authorities/local/root.crt "$STACK_ROOT" >/dev/null 2>&1 &&
+    [ -s "$STACK_ROOT" ] || die "the local cyfr.run's certificate authority could not be copied out of its caddy service."
+  STACK_MADE="$(docker volume inspect --format '{{.CreatedAt}}' "$volume" 2>/dev/null)" && [ -n "$STACK_MADE" ] ||
+    die "docker could not say when the local cyfr.run's volume $volume was made."
+  exec {fd}>&-
+  printf '%s\n' \
+    "dev-stack: the local cyfr.run serves https://$DOMAIN and registry.$DOMAIN on 127.0.0.1:443 (compose project $STACK); every worktree's loop shares it, and it keeps running when this loop stops." \
+    "dev-stack: its admin pages are at https://$DOMAIN/admin; its first administrator is made once at https://$DOMAIN/admin/bootstrap?token=<ADMIN_TOKEN>, the token in $STACK_ENV."
 }
 
 run() {
@@ -499,12 +572,10 @@ run() {
   lock
   private
   local left
-  left="$(orphan server)"
+  left="$(orphan)"
   [ -z "$left" ] ||
     die "the server a killed run of this worktree left still runs (process group $left); \`scripts/dev-stack.sh down\` stops it."
-  left="$(orphan stand-in)"
-  [ -z "$left" ] ||
-    die "the cyfr.run stand-in a killed run of this worktree left still runs (process group $left); \`scripts/dev-stack.sh down\` stops it."
+  start_cyfr_run
   # The image's tag names it in the declarations; the image itself is
   # built, when the host lacks it, once the settings are agreed.
   image --tag-only
@@ -519,8 +590,8 @@ run() {
   take_slot
   declarations
 
-  local out status line wrote="" setup="" server=() keys=() port=""
-  out="$(task settings "$PRIVATE/stack.json" "$(slot_value DEV_STACK_STAND_IN_ADDRESS):$(slot_value DEV_STACK_STAND_IN_PORT)" 2>&1)" &&
+  local out status line wrote="" setup="" server=() keys=() port="" registry="" oci="" directory=""
+  out="$(task settings "$PRIVATE/stack.json" "$DOMAIN" "$STACK_ROOT" 2>&1)" &&
     status=0 || status=$?
   [ "$status" = 0 ] || die "$(refusal "$out")"
   while IFS= read -r line; do
@@ -532,26 +603,32 @@ run() {
     esac
   done <<<"$out"
   for line in "${server[@]}"; do
-    case "$line" in CYFR_PORT=*) port="${line#*=}" ;; esac
+    case "$line" in
+      CYFR_PORT=*) port="${line#*=}" ;;
+      CYFR_REGISTRY_URL=*) registry="${line#*=}" ;;
+      CYFR_OCI_REGISTRY_URL=*) oci="${line#*=}" ;;
+      CYFR_DIRECTORY_URL=*) directory="${line#*=}" ;;
+    esac
   done
-  [ -n "$port" ] && [ "${#keys[@]}" = 3 ] || die "mix cyfr.locus.dev_stack printed no settings."
+  [ -n "$port" ] && [ -n "$registry" ] && [ -n "$oci" ] && [ -n "$directory" ] && [ "${#keys[@]}" = 3 ] ||
+    die "mix cyfr.locus.dev_stack printed no settings."
   [ -z "$wrote" ] || echo "dev-stack: .env is mode 0600 and now sets ${wrote// /, }."
 
   # This tree's image, with this run as its use; built only when the host
   # lacks it, so an unchanged tree starts without a build.
   image --for "$$"
-  start_stand_in
   STARTED=1
   if ! (export "${keys[@]}" && compose up --detach --no-build --wait locus-runtime locus-backends locus-builds); then
     compose logs --tail 30 >&2 || true
     die "the containers did not start; their logs end above."
   fi
 
-  printf '\n%s\n%s\n' \
+  printf '\n%s\n%s\n%s\n' \
     "dev-stack: the runtime, backends and builds services run from this tree." \
-    "dev-stack: CYFR starts at http://localhost:$port and reloads as its files change."
+    "dev-stack: CYFR starts at http://localhost:$port and reloads as its files change." \
+    "dev-stack: its registry is $registry, its OCI registry $oci and its account service $directory: the local cyfr.run."
   [ -z "$setup" ] || echo "dev-stack: set up its first person, who administers it, at $setup"
-  printf '%s\n\n' "dev-stack: Ctrl-C stops it and removes the containers."
+  printf '%s\n\n' "dev-stack: Ctrl-C stops it and removes this worktree's containers."
   # The server in a process group of its own, so the whole of it stops
   # with the run, and its settings in its environment alone. The run, not
   # the terminal, stops it: Ctrl-C reaches the script, whose exit stops
@@ -638,7 +715,7 @@ check() {
   use_slot "$(cat "$REMEMBERED")"
   image --tag-only
   declarations
-  out="$(task endpoint "$PRIVATE/stack.json" "$(slot_value DEV_STACK_STAND_IN_ADDRESS):$(slot_value DEV_STACK_STAND_IN_PORT)" 2>&1)" ||
+  out="$(task endpoint "$PRIVATE/stack.json" "$DOMAIN" 2>&1)" ||
     die "$(refusal "$out")"
   port="$(value CYFR_PORT "$out")"
   [ -n "$port" ] || die "mix cyfr.locus.dev_stack printed no port."
@@ -661,21 +738,20 @@ check() {
   echo "dev-stack: catalyst:local.files wrote, read back and deleted $nonce through $MCP and the runtime container."
 }
 
+# down: this worktree's server a killed run left, then its containers and
+# networks; never the local cyfr.run, which other worktrees' loops share.
 down() {
   lock
-  # The server first, then the stand-in it called, whatever fails after:
-  # each record goes only once its group is gone.
-  local left kind rest
-  for kind in server stand-in; do
-    left="$(orphan "$kind")"
-    [ -n "$left" ] || continue
-    echo "dev-stack: stopping the $kind a killed run left (process group $left)."
+  # The server first, whatever fails after: its record goes only once its
+  # group is gone.
+  local left
+  left="$(orphan)"
+  if [ -n "$left" ]; then
+    echo "dev-stack: stopping the server a killed run left (process group $left)."
     stop "$left"
-    gone "$left" || die "the $kind a killed run left (process group $left) outlived KILL; its record stays for the next \`scripts/dev-stack.sh down\`."
-    # The stand-in's record stays until its own turn.
-    rest="$([ "$kind" = stand-in ] || kept stand-in)"
-    printf 'pid %s\ncheckout %s\n%s' "$$" "$ROOT" "${rest:+$rest$'\n'}" >"$LOCK"
-  done
+    gone "$left" || die "the server a killed run left (process group $left) outlived KILL; its record stays for the next \`scripts/dev-stack.sh down\`."
+    printf 'pid %s\ncheckout %s\n' "$$" "$ROOT" >"$LOCK"
+  fi
   use_slot "$(remembered)"
   image --tag-only
   env_file
