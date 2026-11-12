@@ -54,10 +54,13 @@ defmodule Cyfr.NoRealCyfrRunTest do
   # with it, and, for a value that boots, the scheme its requests use:
   # {form, value, registry, OCI registry}, each `{:boots, scheme}`,
   # `:default` or `:refused`. A form boots exactly when it reached a
-  # registry for that setting's purpose before `none` was removed, with one
-  # exception: an IPv6 address reached the registry's search and metadata,
-  # and refused everything its accounts sign, which names the registry by a
-  # host name's grammar, so the registry setting refuses it.
+  # registry for that setting's purpose before `none` was removed, with two
+  # narrowings of forms that half-worked. An IPv6 address reached the
+  # registry's search and metadata and refused everything its accounts
+  # sign, which names the registry by a host name's grammar. A path's empty
+  # segment or trailing `/` put `//` in every request, which a CYFR's router
+  # forgives and cyfr.run redirects, and no registry request follows a
+  # redirect.
   @forms [
     {"a host name", "registry.example", {:boots, "https"}, {:boots, "https"}},
     {"a host name and port", "registry.example:8443", {:boots, "https"}, {:boots, "https"}},
@@ -69,7 +72,10 @@ defmodule Cyfr.NoRealCyfrRunTest do
     {"an IPv6 address without brackets", "2001:db8::1", :refused, :refused},
     {"a path a proxy serves the registry under", "registry.example:8443/registry",
      {:boots, "https"}, :refused},
-    {"a trailing slash", "registry.example/", {:boots, "https"}, :refused},
+    {"a path of segments", "registry.example/a/b", {:boots, "https"}, :refused},
+    {"a trailing slash", "registry.example/", :refused, :refused},
+    {"a path's trailing slash", "registry.example:8443/registry/", :refused, :refused},
+    {"an empty segment inside a path", "registry.example/a//b", :refused, :refused},
     {"a path with a query", "registry.example/a?b", :refused, :refused},
     {"a path's empty segment", "registry.example//registry", :refused, :refused},
     {"a path with a fragment", "registry.example/a#b", :refused, :refused},

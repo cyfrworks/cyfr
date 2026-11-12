@@ -230,8 +230,8 @@ defmodule Sanctum do
   @doc """
   Whether `value` names a registry: a host name or an IPv4 address, in any
   case, an optional port from 1 to 65535 (empty, the scheme's own), and an
-  optional path a proxy serves it under, with no query, fragment, space or
-  control character.
+  optional path a proxy serves it under: segments, none empty, with no
+  trailing `/`, query, fragment, space or control character.
   An IPv6 literal is not one: a signed registry request and a handle's
   answer bind the registry by a host name's grammar
   (`Prima.RegistryRequest`, `Prima.HandleAnswer`), which cannot spell one.
@@ -246,10 +246,12 @@ defmodule Sanctum do
       [authority] ->
         parse_registry(authority)
 
-      # A path that begins `/` is a scheme's `//` (`https://host`), or an
-      # empty segment, and no registry's.
+      # One or more segments, none empty: a path that begins `/` is a
+      # scheme's `//` (`https://host`), and an empty segment or a trailing
+      # `/` puts `//` in every request, which cyfr.run redirects and no
+      # registry request follows.
       [authority, path] ->
-        if path =~ ~r/\A(?!\/)[^?#\x00-\x20\x7f]*\z/,
+        if path =~ ~r/\A[^\/?#\x00-\x20\x7f]+(?:\/[^\/?#\x00-\x20\x7f]+)*\z/,
           do: parse_registry(authority),
           else: :error
     end
