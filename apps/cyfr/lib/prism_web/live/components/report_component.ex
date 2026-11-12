@@ -14,9 +14,17 @@ defmodule PrismWeb.ReportComponent do
   on screen) and calls `open/2`; everything after that is this component's.
   On success the parent receives `{:report_component, :submitted}` and
   flashes — a LiveComponent has no flash of its own.
+
+  The report is sent off the event (`send_report/2`): a registry request
+  has no total deadline, and the browser gives up on an event it waits on
+  for 30 seconds. While it is sent the dialog stays open and says so, and
+  takes neither a second submit nor a close; the answer closes it or
+  shows the refusal.
   """
 
   use PrismWeb, :live_component
+
+  require Logger
 
   alias Phoenix.LiveView.JS
 
@@ -50,6 +58,10 @@ defmodule PrismWeb.ReportComponent do
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}
 
   @impl true
+  def handle_event(event, _params, %{assigns: %{submitting: true}} = socket)
+      when event in ["close_report", "submit_report"],
+      do: {:noreply, socket}
+
   def handle_event("close_report", _params, socket) do
     {:noreply, assign(socket, open: false, error: nil)}
   end
@@ -72,8 +84,6 @@ defmodule PrismWeb.ReportComponent do
           {:noreply, assign(socket, :error, "Details too long (max #{@details_max} chars).")}
 
         true ->
-          socket = assign(socket, :submitting, true)
-
           args = %{
             "action" => "report",
             "category" => category,
@@ -81,21 +91,60 @@ defmodule PrismWeb.ReportComponent do
             "details" => details
           }
 
-          case PrismWeb.Ops.call_tool(socket.assigns.context, "registry", args) do
-            {:ok, _body} ->
-              send(self(), {:report_component, :submitted})
-              {:noreply, assign(socket, open: false, submitting: false, error: nil)}
-
-            {:error, reason} ->
-              {:noreply,
-               assign(socket,
-                 submitting: false,
-                 error: PrismWeb.Ops.error_message(reason)
-               )}
-          end
+          {:noreply, socket |> assign(submitting: true, error: nil) |> send_report(args)}
       end
     end)
   end
+
+  @impl true
+  def handle_async(:report, {:ok, {tag, result}}, socket),
+    do:
+      CyfrWeb.ContextGuard.deliver(assign(socket, :submitting, false), tag, &reported(&1, result))
+
+  # Only the node's shutdown stops the task (`send_report/2`).
+  def handle_async(:report, {:exit, _reason}, socket), do: {:noreply, socket}
+
+  # The registry call, off the event. It runs to its end whether or not the
+  # page is still there to show it, so it ignores the page's exit: a report
+  # stopped in flight may have reached the registry, and a person left not
+  # knowing would send it again. Its supervisor stops it with the node, and
+  # a crash is answered as unavailable, so the dialog never stays sending.
+  defp send_report(socket, args) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+
+    start_async(
+      socket,
+      :report,
+      fn ->
+        Process.flag(:trap_exit, true)
+
+        result =
+          try do
+            PrismWeb.Ops.call_tool(ctx, "registry", args)
+          catch
+            kind, reason ->
+              Logger.error(
+                "[ReportComponent] a report crashed: " <>
+                  Prima.LogFilter.format_exception(kind, reason, __STACKTRACE__)
+              )
+
+              {:error, :unavailable}
+          end
+
+        {tag, result}
+      end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
+
+  defp reported(socket, {:ok, _body}) do
+    send(self(), {:report_component, :submitted})
+    {:noreply, assign(socket, open: false, error: nil)}
+  end
+
+  defp reported(socket, {:error, reason}),
+    do: {:noreply, assign(socket, :error, PrismWeb.Ops.error_message(reason))}
 
   @impl true
   def render(assigns) do
@@ -160,6 +209,7 @@ defmodule PrismWeb.ReportComponent do
                 type="button"
                 phx-click="close_report"
                 phx-target={@myself}
+                disabled={@submitting}
                 class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700"
               >
                 Cancel
@@ -170,7 +220,7 @@ defmodule PrismWeb.ReportComponent do
                 phx-disable-with="Sending…"
                 class="px-3 py-1.5 text-xs rounded bg-red-900 text-red-100 border border-red-700 hover:bg-red-800 disabled:opacity-50"
               >
-                Submit report
+                {if @submitting, do: "Sending…", else: "Submit report"}
               </button>
             </div>
           </form>

@@ -330,11 +330,13 @@ defmodule CyfrWeb.ContextGuard do
   Run a LiveComponent callback on a current context.
 
   A component's `handle_event` and `update` run without the view's hooks,
-  so each one that acts on `assigns.context` runs inside this: the
-  callback gets the socket with a current context, or it does not run. A
-  refused context is handed to the view, which redirects
-  (`recheck_message/0`); a store that cannot answer says so. Refused, the
-  answer is `{:noreply, socket}` — an `update` reshapes it.
+  so each one that acts on `assigns.context` runs inside this, as every
+  `deliver/3` does: a context still fresh goes on unread, and a stale one
+  is read once more, so the callback gets the socket with a current
+  context, or it does not run. A refused context is handed to the view,
+  which redirects (`recheck_message/0`); a store that cannot answer says
+  so. Refused, the answer is `{:noreply, socket}` — an `update` reshapes
+  it.
   """
   @spec guard(Socket.t(), (Socket.t() -> result)) :: result | {:noreply, Socket.t()}
         when result: term()
@@ -408,19 +410,26 @@ defmodule CyfrWeb.ContextGuard do
   def capture(_none), do: {nil, nil}
 
   @doc """
-  Deliver a deferred result to the socket only if it was computed for the
-  tenant and focus the socket works in now; otherwise it is dropped and
-  the callback answers `{:noreply, socket}`. The view's hook has already
-  brought the socket's context up to date when this runs.
+  Deliver a deferred result to the socket only if its context stands
+  (`guard/2`) and the result was computed for the tenant and focus the
+  socket works in now; otherwise it is dropped and the callback answers
+  `{:noreply, socket}`, or the guard's refusal. An async answer, to a view
+  or a component, passes none of the view's hooks, and this is where its
+  standing is checked. A message has passed the view's hook: a context
+  still fresh here is not read again; one gone stale since the hook is
+  read once more, and a delivery whose standing cannot then be confirmed
+  is dropped, as an event arriving at that instant is refused.
   """
   @spec deliver(Socket.t(), tag(), (Socket.t() -> result)) :: result | {:noreply, Socket.t()}
         when result: term()
   def deliver(%Socket{} = socket, {athanor_id, _validated_at}, fun)
       when is_function(fun, 1) do
-    case socket.assigns[:context] do
-      %Context{athanor_id: ^athanor_id} -> fun.(socket)
-      _ -> discard(socket)
-    end
+    guard(socket, fn socket ->
+      case socket.assigns[:context] do
+        %Context{athanor_id: ^athanor_id} -> fun.(socket)
+        _ -> discard(socket)
+      end
+    end)
   end
 
   defp discard(socket) do

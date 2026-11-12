@@ -19,6 +19,15 @@ defmodule PrismWeb.LoginLiveTest do
 
   @token String.duplicate("5e", 32)
 
+  # How long a test waits for the registry's answer to reach the page,
+  # which comes after the event has answered.
+  @answered_ms 5_000
+
+  # The browser gives up on a pushed event it waits on for 30 seconds and
+  # reloads (the shipped script's push timeout); a test stands that wait
+  # in with this one.
+  @push_timeout_ms 1_000
+
   setup_all do
     %{tls: DirectoryServer.tls()}
   end
@@ -174,7 +183,9 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, view, _html} = live(asked.conn, ~p"/login")
       render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
 
-      assert {"/", %{"info" => "Your push tokens are synced."}} = assert_redirect(view)
+      assert {"/", %{"info" => "Your push tokens are synced."}} =
+               assert_redirect(view, @answered_ms)
+
       assert_received {:registry_request, %{method: "POST", path: "/v1/tokens/mint"}}
 
       assert {:ok, %{token: "cyfr_pt_page"}} =
@@ -205,11 +216,145 @@ defmodule PrismWeb.LoginLiveTest do
         Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
 
         render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
-        assert {"/", %{"info" => "Your push tokens are synced."}} = assert_redirect(view)
+
+        assert {"/", %{"info" => "Your push tokens are synced."}} =
+                 assert_redirect(view, @answered_ms)
+
         assert_received {:registry_request, %{method: "POST", path: "/v1/tokens/mint"}}
       after
         Arca.Repo.query("ALTER TABLE sessions_unavailable RENAME TO sessions")
       end
+    end
+
+    # A registry that holds the mint until the test releases it, then
+    # answers it: the test is told `{:held, stub}` while it holds, and
+    # `:answered` once it answers.
+    defp held_mint(account, slug) do
+      test = self()
+
+      registry(account, fn %{path: "/v1/tokens/mint"} ->
+        send(test, {:held, self()})
+
+        receive do
+          :release -> :ok
+        end
+
+        send(test, :answered)
+
+        {200,
+         Sanctum.Test.RegistryStub.answer(%{
+           "personal_namespace" => %{"slug" => slug, "token" => "cyfr_pt_" <> slug},
+           "memberships" => []
+         })}
+      end)
+    end
+
+    # The account pages' answer handed to the page as the browser hands it:
+    # a push waited on no longer than the browser waits (`@push_timeout_ms`).
+    defp handed(view, answer) do
+      task = Task.async(fn -> render_hook(view, "account_answer", %{"answer" => answer}) end)
+
+      case Task.yield(task, @push_timeout_ms) do
+        {:ok, html} -> html
+        nil -> :unanswered
+      end
+    end
+
+    test "the page answers at once, says it is sending, and shows the registry's answer whenever it comes",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_mint(asked.account, "slow-person")
+      answer = signed_at_pages(asked)
+
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+      html = handed(view, answer)
+      assert_receive {:held, stub}, @answered_ms
+
+      try do
+        assert is_binary(html), "the page did not answer while the registry held the request"
+        assert html =~ "Sending what you signed."
+        refute_vocabulary(html)
+
+        # The same answer again starts no second call: its request was taken.
+        assert is_binary(handed(view, answer))
+
+        # Held past the browser's wait, and past it twice, the page still
+        # waits for the registry.
+        Process.sleep(2 * @push_timeout_ms)
+        assert render(view) =~ "Sending what you signed."
+      after
+        send(stub, :release)
+      end
+
+      assert {"/", %{"info" => "Your push tokens are synced."}} =
+               assert_redirect(view, @answered_ms)
+
+      assert_received {:registry_request, %{path: "/v1/tokens/mint"}}
+      refute_received {:registry_request, _second}
+    end
+
+    test "a mint the registry makes after the person left is stored", %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_mint(asked.account, "gone-person")
+
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+      assert is_binary(handed(view, signed_at_pages(asked)))
+      assert_receive {:held, stub}, @answered_ms
+
+      # The browser's connection gone: the page stops as a closed socket
+      # stops it.
+      {_ref, _topic, proxy} = view.proxy
+      Process.unlink(proxy)
+      page = Process.monitor(view.pid)
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert_receive {:DOWN, ^page, :process, _pid, {:shutdown, :closed}}, @answered_ms
+
+      send(stub, :release)
+      assert_receive :answered, @answered_ms
+
+      Prima.Test.Wait.wait_until(
+        fn ->
+          match?(
+            {:ok, %{token: "cyfr_pt_gone-person"}},
+            Compendium.Registry.CredentialStore.get(
+              asked.ctx,
+              Compendium.RegistryHost.canonical_host(),
+              "gone-person"
+            )
+          )
+        end,
+        @answered_ms,
+        "the minted token to be stored"
+      )
+
+      assert {:ok, %{namespace: "gone-person"}} = Sanctum.Tenancy.Users.get(asked.ctx.user_id)
+    end
+
+    test "a session revoked while the registry answers stores no namespace or token", %{
+      conn: conn,
+      dir: dir
+    } do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_mint(asked.account, "revoked-person")
+      {:ok, before} = Sanctum.Tenancy.Users.get(asked.ctx.user_id)
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+      assert is_binary(handed(view, signed_at_pages(asked)))
+      assert_receive {:held, stub}, @answered_ms
+      assert {:ok, count} = Sanctum.Session.revoke_all_for_user(asked.ctx.user_id)
+      assert count > 0
+      send(stub, :release)
+      assert {"/", %{"error" => message}} = assert_redirect(view, @answered_ms)
+      assert message =~ "That did not go through"
+
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(
+                 asked.ctx,
+                 Compendium.RegistryHost.canonical_host(),
+                 "revoked-person"
+               )
+
+      assert {:ok, after_user} = Sanctum.Tenancy.Users.get(asked.ctx.user_id)
+      assert after_user.namespace == before.namespace
     end
 
     test "the page never keeps the session's token", %{conn: conn, dir: dir} do
@@ -237,7 +382,7 @@ defmodule PrismWeb.LoginLiveTest do
         render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
       end)
 
-      assert {"/", %{"error" => message}} = assert_redirect(view)
+      assert {"/", %{"error" => message}} = assert_redirect(view, @answered_ms)
       assert message =~ "This account is not registered."
       refute_vocabulary(message)
     end

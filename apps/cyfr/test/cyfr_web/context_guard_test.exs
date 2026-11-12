@@ -383,6 +383,144 @@ defmodule CyfrWeb.ContextGuardTest do
       assert {:noreply, ^moved} = ContextGuard.deliver(moved, tag, &{:delivered, &1})
     end
 
+    # A context still fresh when deliver/3 runs is not read again: the store
+    # made unavailable shows it. The same answer to a context past its
+    # freshness is read once more, and the read refused drops it.
+    test "a fresh context is delivered without reading the store", %{conn: conn} do
+      bound!(60_000)
+      {_conn, token, _hash} = signed_in(conn, test_user())
+      {:ok, ctx} = Caller.establish(token)
+      assert Caller.fresh?(ctx)
+      tag = ContextGuard.capture(ctx)
+      socket = %{socket_with(ctx) | private: %{live_temp: %{}}}
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+
+      try do
+        assert {:delivered, ^socket} = ContextGuard.deliver(socket, tag, &{:delivered, &1})
+
+        bound!(0)
+        assert {:noreply, refused} = ContextGuard.deliver(socket, tag, &{:delivered, &1})
+
+        assert refused.assigns.flash == %{
+                 "error" => "Your session could not be checked just now. Try again shortly."
+               }
+      after
+        Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
+      end
+    end
+
+    test "a report's async answer to a revoked session changes nothing and rechecks the page", %{
+      conn: conn
+    } do
+      bound!(0)
+      user = test_user()
+      {_conn, token, _hash} = signed_in(conn, user)
+      {:ok, ctx} = Caller.establish(token)
+
+      socket =
+        Phoenix.Component.assign(socket_with(ctx), open: true, submitting: true, error: nil)
+
+      tag = ContextGuard.capture(ctx)
+      assert {:ok, count} = Sanctum.Session.revoke_all_for_user(user.user_id)
+      assert count > 0
+      assert {:error, :unauthenticated} = ContextGuard.check(ctx)
+
+      assert {:noreply, answer} =
+               PrismWeb.ReportComponent.handle_async(:report, {:ok, {tag, {:ok, %{}}}}, socket)
+
+      assert answer.assigns.open
+      refute_receive {:report_component, :submitted}
+      assert_receive {CyfrWeb.ContextGuard, :recheck}
+    end
+
+    test "a brain-options async answer is held when its session store cannot answer", %{
+      conn: conn
+    } do
+      bound!(0)
+      {_conn, token, _hash} = signed_in(conn, test_user())
+      {:ok, ctx} = Caller.establish(token)
+
+      socket =
+        Phoenix.Component.assign(%{socket_with(ctx) | private: %{live_temp: %{}}},
+          brain_options: %{}
+        )
+
+      tag = ContextGuard.capture(ctx)
+      options = %{"aqua" => [%{"name" => "budget", "kind" => "integer"}]}
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+
+      try do
+        assert {:error, :unavailable} = ContextGuard.check(ctx)
+
+        assert {:noreply, answer} =
+                 PrismWeb.AquaLive.AgentsComponent.handle_async(
+                   :brain_options,
+                   {:ok, {tag, options}},
+                   socket
+                 )
+
+        assert answer.assigns.brain_options == %{}
+      after
+        Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
+      end
+    end
+
+    # One rule for every delivery: a context the hook found fresh that has
+    # gone stale before deliver/3 runs is read once more, and a standing
+    # that cannot then be confirmed drops the result, as an event arriving
+    # at that instant is refused. The session itself still stands.
+    test "a delivery whose context went stale after the hook is dropped while the store cannot answer",
+         %{conn: conn} do
+      bound!(2_000)
+      {conn, token, _hash} = signed_in(conn, test_user())
+      {view, _html} = mount_athanor(conn, "/components")
+      observer = self()
+      reference = "reagent:local.review-result:1.0.0"
+
+      # Pause a real page after its standing hook, like a descheduled
+      # process. The result and the session are otherwise unchanged.
+      :sys.replace_state(view.pid, fn state ->
+        socket =
+          Phoenix.LiveView.attach_hook(state.socket, :review_pause, :handle_info, fn
+            {:deliver, _tag, {:pull_complete, ^reference, _answer}}, current ->
+              send(observer, {:after_hook, current.assigns.context})
+
+              receive do
+                :continue_review -> {:cont, current}
+              after
+                10_000 -> raise "the review did not release the delivery"
+              end
+
+            _message, current ->
+              {:cont, current}
+          end)
+
+        %{state | socket: socket}
+      end)
+
+      tag = ContextGuard.capture(:sys.get_state(view.pid).socket)
+      send(view.pid, {:deliver, tag, {:pull_complete, reference, {:error, :unavailable}}})
+      assert_receive {:after_hook, checked}, 5_000
+      assert Caller.fresh?(checked)
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+
+      html =
+        try do
+          Prima.Test.Wait.wait_until(fn -> not Caller.fresh?(checked) end, 3_000)
+          send(view.pid, :continue_review)
+          render(view)
+        after
+          send(view.pid, :continue_review)
+          Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
+        end
+
+      assert {:ok, ctx} = Caller.establish(token)
+      assert {:ok, _still_stands} = Caller.revalidate_session(ctx)
+
+      refute html =~ "Failed to pull #{reference}"
+      assert html =~ "Your session could not be checked just now."
+    end
+
     test "a page drops a task's answer computed for another focus", %{conn: conn} do
       {conn, _token, _hash} = signed_in(conn, test_user())
       {view, _html} = mount_athanor(conn, "/components")
