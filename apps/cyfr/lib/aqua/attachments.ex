@@ -121,21 +121,6 @@ defmodule Aqua.Attachments do
   end
 
   @doc """
-  Remove the files `refs` names under a message whose row never landed,
-  for a caller holding refs `store/4` just answered it in the same
-  process (`Aqua.Aloud`), never refs a client names: a client's discard
-  is `discard_unsent/3`.
-  """
-  @spec discard(Context.t(), String.t(), String.t(), [ref()]) :: :ok
-  def discard(%Context{} = ctx, thread_id, message_id, refs) when is_list(refs) do
-    Enum.each(refs, fn ref ->
-      with {:ok, blob} <- blob_path(thread_id, message_id, ref) do
-        Arca.delete(Sanctum.Context.actor(ctx), blob)
-      end
-    end)
-  end
-
-  @doc """
   Remove the files the caller's own session stored for a message that has
   not been sent: a send refused after its files were stored, or a held
   send the person gives up. Only the names `store/4` remembered for this

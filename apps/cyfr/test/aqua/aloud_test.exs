@@ -62,6 +62,15 @@ defmodule Aqua.AloudTest do
     row.payload
   end
 
+  # The private originals' bytes gone from storage, where the thread's
+  # attachment paths put them (`Aqua.Attachments.blob_path/3`).
+  defp remove_blobs!(ctx, thread_id, message_id, refs) do
+    for ref <- refs do
+      {:ok, blob} = Aqua.Attachments.blob_path(thread_id, message_id, ref)
+      :ok = Arca.delete(Sanctum.Context.actor(ctx), blob)
+    end
+  end
+
   test "a private line reaches the shared thread only when it is said aloud", %{
     ctx: ctx,
     bob: bob,
@@ -289,7 +298,7 @@ defmodule Aqua.AloudTest do
 
     # And they are the thread's own copy: removing the private original
     # leaves them where they were said.
-    :ok = Aqua.Attachments.discard(ctx, private.id, message_id, refs)
+    remove_blobs!(ctx, private.id, message_id, refs)
 
     assert {:ok, %{bytes: "BA117"}} =
              SharedThreads.attachment(bob.user.id, trip.id, posted.id, stored)
@@ -317,7 +326,7 @@ defmodule Aqua.AloudTest do
         payload: %{"attachments" => refs}
       })
 
-    :ok = Aqua.Attachments.discard(ctx, private.id, message_id, refs)
+    remove_blobs!(ctx, private.id, message_id, refs)
 
     assert {:error, :attachment_missing} = Aloud.post(ctx, private.id, [m.id], trip.id)
     assert contents(ctx.user_id, trip) == []
