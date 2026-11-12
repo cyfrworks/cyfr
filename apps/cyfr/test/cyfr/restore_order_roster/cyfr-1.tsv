@@ -23,7 +23,7 @@ apps/cyfr/test/sanctum/consent_after_install_test.exs	7	pending
 apps/cyfr/test/sanctum/device_write_window_test.exs	1	pending
 apps/cyfr/test/sanctum/gate/admission_latency_test.exs	5	pending
 apps/cyfr/test/sanctum/gate/bulk_content_refusal_log_test.exs	1	pending
-apps/cyfr/test/sanctum/gate/catalog_test.exs	9	pending
+apps/cyfr/test/sanctum/gate/catalog_test.exs	5	pending
 apps/cyfr/test/sanctum/gate/provider_contract_test.exs	2	pending
 apps/cyfr/test/sanctum/gate/provider_test.exs	1	pending
 apps/cyfr/test/sanctum/gate/request_log_athanor_test.exs	1	pending

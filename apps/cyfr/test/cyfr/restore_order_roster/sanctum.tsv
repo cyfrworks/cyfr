@@ -11,7 +11,6 @@ apps/sanctum/test/sanctum/cipher/rotation_test.exs	3	pending
 apps/sanctum/test/sanctum/client_ip_proxy_trust_test.exs	2	pending
 apps/sanctum/test/sanctum/client_ip_test.exs	8	pending
 apps/sanctum/test/sanctum/company_login_test.exs	3	pending
-apps/sanctum/test/sanctum/consent/proof_db_test.exs	1	pending
 apps/sanctum/test/sanctum/directory_test.exs	2	pending
 apps/sanctum/test/sanctum/door_test.exs	1	pending
 apps/sanctum/test/sanctum/handle_test.exs	1	pending
