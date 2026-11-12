@@ -108,11 +108,6 @@ defmodule Arca.ControlPlaneTest do
       claimed_here(true)
       refute ControlPlane.held?()
     end
-
-    test "an indefinite hold is the one that does not run out" do
-      :ok = ControlPlane.record({:held, :indefinitely})
-      assert ControlPlane.held?()
-    end
   end
 
   describe "the local clock" do

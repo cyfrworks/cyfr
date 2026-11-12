@@ -186,10 +186,9 @@ defmodule Arca.ControlPlane do
 
   @typedoc """
   What this member holds: its slot for a further `ms` milliseconds on the
-  local monotonic clock, its slot indefinitely (no claimant runs, so
-  nothing can take it), nothing after a lapse, or nothing recorded yet.
+  local monotonic clock, nothing after a lapse, or nothing recorded yet.
   """
-  @type standing :: {:held, non_neg_integer() | :indefinitely} | :lost | :unclaimed
+  @type standing :: {:held, non_neg_integer()} | :lost | :unclaimed
 
   @typedoc """
   The slot this member won: the row's key, the boot holding it, the
@@ -212,7 +211,6 @@ defmodule Arca.ControlPlane do
   @spec held?() :: boolean()
   def held? do
     case :persistent_term.get(@standing_key, :unclaimed) do
-      {:held, :indefinitely} -> true
       {:held, deadline} -> System.monotonic_time(:millisecond) < deadline
       :lost -> false
       # With a claimant, a member that has recorded nothing holds nothing:
@@ -668,9 +666,6 @@ defmodule Arca.ControlPlane do
   monotonic clock — see the module doc for why it is not a deadline.
   """
   @spec record(standing()) :: :ok
-  def record({:held, :indefinitely} = standing),
-    do: :persistent_term.put(@standing_key, standing)
-
   def record({:held, ms}) when is_integer(ms) and ms >= 0,
     do: :persistent_term.put(@standing_key, {:held, System.monotonic_time(:millisecond) + ms})
 
