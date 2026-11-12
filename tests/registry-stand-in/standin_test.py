@@ -15,6 +15,9 @@
 #     answer is `unverified` for a signature (the stand-in checks none, and
 #     a step refused that way changes nothing at a directory), a tombstone
 #     step made through the stand-in's own operator route;
+#   - the names: every scenario of directory_wire.json's handles section,
+#     a claim signed by nothing (the stand-in checks no signature) after its
+#     identifier accepts the policy;
 #   - the account log's grammar: every chain of tests/fixtures/identity.json
 #     with an entry naming a passkey's maker (`aaguid`) is posted entry by
 #     entry, and its last entry is accepted, or refused with the field the
@@ -149,14 +152,15 @@ def registry_checks():
     check(status == 201, "the vectors' policy.accept, at the current version, is accepted", (status, text))
 
     status, text, _ = own.request("POST", "/v1/namespaces/personal/claim", claim)
-    expected = dict(answer_named("an answer")["result"], registry="127.0.0.1", directory=base)
-    want = jcs(dict(expected, protocol="cyfr-handle/v1"))
-    check(status == 201 and text == want,
-          "the vectors' handle.claim is claimed, answered in cyfr-handle/v1 naming the stand-in's own directory",
-          (status, text, want))
+    claimed = jcs({"handle": "alice", "identifier": claim["identifier"]})
+    check(status == 201 and text == claimed, "the vectors' handle.claim is claimed, answered with its name and identifier",
+          (status, text, claimed))
 
     status, again, _ = own.request("POST", "/v1/namespaces/personal/claim", claim)
-    check(status == 201 and again == text, "a repeated claim by the same identifier answers the same", (status, again))
+    check(status == 200 and again == claimed, "a repeated claim by the same identifier answers 200 and the same", (status, again))
+
+    expected = dict(answer_named("an answer")["result"], registry="127.0.0.1", directory=base)
+    want = jcs(dict(expected, protocol="cyfr-handle/v1"))
 
     status, text, _ = own.request("GET", "/v1/handles/alice")
     check(status == 200 and text == want, "the claimed name resolves to the vectors' answer, rehosted", (status, text))
@@ -195,8 +199,9 @@ def registry_checks():
           and json.loads(text).get("registry") == "http://127.0.0.1:%d" % pinned.port,
           "a stand-in started with --directory names that directory, and itself as the registry", (status, text))
     pinned.request("POST", "/v1/legal/accept", request_of("policy_accept", policy_version=version))
-    status, text, _ = pinned.request("POST", "/v1/namespaces/personal/claim", claim)
-    check(status == 201 and json.loads(text).get("directory") == "https://dir.test",
+    pinned.request("POST", "/v1/namespaces/personal/claim", claim)
+    status, text, _ = pinned.request("GET", "/v1/handles/alice")
+    check(status == 200 and json.loads(text).get("directory") == "https://dir.test",
           "a stand-in started with --directory names that directory in its answers", (status, text))
     pinned.stop()
 
@@ -244,6 +249,62 @@ def directory_checks():
                     problems.append("%s: an entry is not on the wire as its canonical bytes" % where)
         check(not problems, "directory: " + name, "\n  ".join(problems))
         standin.stop()
+
+
+# ---- the names -----------------------------------------------------------------
+
+def name_checks():
+    handles = DIRECTORY["handles"]
+    for number, scenario in enumerate(handles["scenarios"]):
+        standin = StandIn("names-%d" % number, "--directory", DIRECTORY["directory"])
+        _, text, _ = standin.request("GET", "/v1/legal/version")
+        version = json.loads(text)["policy_version"]
+        problems = []
+        for index, step in enumerate(scenario["steps"], 1):
+            where = "step %d" % index
+            if "register" in step:
+                status, text, _ = standin.request("POST", "/directory/v1/register", DIRECTORY["entries"][step["register"]])
+                if status != 200:
+                    problems.append("%s, register: status %d: %s" % (where, status, text[:200]))
+                continue
+            if "tombstone" in step:
+                status, text, _ = standin.request("POST", "/stand-in/tombstone/" + step["tombstone"])
+                if status != 200:
+                    problems.append("%s, tombstone: status %d: %s" % (where, status, text[:200]))
+                continue
+            if "claim" in step:
+                claim = step["claim"]
+                for operation, path, body in [("policy.accept", "/v1/legal/accept", {"policy_version": version}),
+                                              ("handle.claim", "/v1/namespaces/personal/claim", {"handle": claim["handle"]})]:
+                    status, text, _ = standin.request("POST", path, unsigned(handles["registry"], operation, claim["identifier"], body))
+                where += ", claim " + claim["handle"]
+            else:
+                status, text, _ = standin.request(step["request"]["method"], step["request"]["path"])
+                where += ", %s %s" % (step["request"]["method"], step["request"]["path"])
+            expect = step["expect"]
+            if status != expect["status"]:
+                problems.append("%s: status %d, not %d: %s" % (where, status, expect["status"], text[:200]))
+            elif "answer" in expect:
+                # The stand-in names its own address as the registry, the host
+                # CYFR asks it at.
+                answer = dict(expect["answer"])
+                if "registry" in answer:
+                    answer["registry"] = "127.0.0.1"
+                if json.loads(text) != answer:
+                    problems.append("%s: answered %s, not %s" % (where, text[:200], jcs(answer)))
+            else:
+                errors = json.loads(text).get("errors") or [{}]
+                if errors[0].get("code") != expect["code"] or not isinstance(errors[0].get("message"), str):
+                    problems.append("%s: refused %s, not with the code %s" % (where, text[:200], expect["code"]))
+        check(not problems, "names: " + scenario["name"], "\n  ".join(problems))
+        standin.stop()
+
+
+# A request in the signed shape whose signature is nothing.
+def unsigned(registry, operation, identifier, body):
+    return {"protocol": "cyfr-registry-request/v2", "registry": registry, "operation": operation,
+            "identifier": identifier, "signer": "unsigned", "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+            "expires_at": int(time.time() * 1000) + 120000, "body": body, "sig": "unsigned"}
 
 
 # ---- the account log's grammar ------------------------------------------------
@@ -373,6 +434,7 @@ def lifecycle_checks():
 try:
     registry_checks()
     directory_checks()
+    name_checks()
     identity_checks()
     forwarding_checks()
     lifecycle_checks()
