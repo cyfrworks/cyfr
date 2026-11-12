@@ -792,7 +792,46 @@ defmodule PrismWeb.ProgramsLiveTest do
     running!(view)
   end
 
-  # One terminal, one session: selecting another target closes the session
+  # The backends service keys a session by its caller, program and home:
+  # the same entry opened again before the old relay closed would resume
+  # the session that close then ends. Here the old relay is busy with a
+  # held line; the new terminal's start waits off the event for the close.
+  test "signing the same entry in again closes the old session before the new one opens",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = pipe_row!(athanor)
+    a = login!(user, athanor, "claude-login", "claude")
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    sign_in(view, "claude", a)
+    assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, @answered_ms
+    running!(view)
+    assert_receive {:session, "recv", %{"session" => old}, _fields}, @answered_ms
+    Scripted.hold(fake, "send")
+    view |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "busy"}) |> render_submit()
+    assert_receive {:held, "send", sending}, @answered_ms
+
+    try do
+      html =
+        pushed(fn ->
+          view
+          |> form(~s([data-test="home-actions"] form[phx-submit="sign_in"]), %{"entry" => a})
+          |> render_submit()
+        end)
+
+      assert is_binary(html), "the page did not answer while the old relay was busy"
+      assert html =~ "Starting…"
+      refute_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2 * @push_timeout_ms
+    after
+      send(sending, :go)
+    end
+
+    assert_receive {:session, "close", %{"session" => ^old}, _fields}, @answered_ms
+    assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, @answered_ms
+    running!(view)
+    assert Enum.count(Scripted.sessions(fake, row.id), fn {_id, s} -> s.running end) == 1
+  end
+
+  # One terminal, one session: selecting another target closes the session  # One terminal, one session: selecting another target closes the session
   # running, the new terminal sends to its own, and its heading names it.
   test "selecting another program's sign-in closes the one running and sends to the new one",
        %{conn: conn, athanor: athanor, user: user} do
@@ -878,10 +917,11 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute log =~ canary
   end
 
-  # Two sign-ins chosen before the first one's start was heard: the first
-  # session, whose terminal is gone, is closed when its start arrives, and
-  # the second is the one Send reaches.
-  test "a sign-in started for a terminal no longer open is closed",
+  # Two sign-ins chosen before the first one's start was answered: the
+  # second starts nothing, since the first's session is not known yet and
+  # so could not be closed before another opens; the first is the one Send
+  # reaches. Chosen again once the first runs, the second closes it first.
+  test "a sign-in chosen while another is still starting starts nothing",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()
     pipe_row!(athanor)
@@ -892,7 +932,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     {view, _html} = mount_athanor(conn, "/programs", athanor)
 
     # Both choices queue before the page handles either, as two quick clicks
-    # do: A's start, sent from its terminal's first update, lands after B's.
+    # do.
     :sys.suspend(view.pid)
 
     first =
@@ -909,17 +949,15 @@ defmodule PrismWeb.ProgramsLiveTest do
     Task.await(second)
 
     assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
+    running!(view)
+    assert_receive {:session, "recv", %{"session" => session_a}, _fields}, 2_000
+    refute_received {:session, "open", %{"home_id" => ^b}, _fields}
+    assert has_element?(view, ~s([data-test="sign-in-terminal"]), "claude")
+
+    render_submit(view, "sign_in", %{"name" => "codex", "entry" => b})
+    assert_receive {:session, "close", %{"session" => ^session_a}, _fields}, 2_000
     assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
-    assert_receive {:session, "recv", %{"session" => _}, _fields}, 2_000
-
-    session_a =
-      receive do
-        {:session, "close", %{"session" => session}, _fields} -> session
-      after
-        2_000 -> flunk("the first sign-in's session was never closed")
-      end
-
-    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
+    running!(view)
     assert has_element?(view, ~s([data-test="sign-in-terminal"]), "codex")
 
     view

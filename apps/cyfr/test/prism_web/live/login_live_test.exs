@@ -13,6 +13,7 @@ defmodule PrismWeb.LoginLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import PrismWeb.Vocabulary, only: [refute_vocabulary: 1]
 
   alias Sanctum.Test.DirectoryServer
@@ -233,6 +234,91 @@ defmodule PrismWeb.LoginLiveTest do
       end)
     end
 
+    # A sync signed for a person whose account's head is stale, so the check
+    # reads the directory, which holds the read until the test releases it:
+    # answers the request asked, the page and the held read.
+    defp checking!(conn, dir, tls) do
+      observer = self()
+      armed = :atomics.new(1, [])
+      inner = DirectoryServer.handler(dir.dir)
+
+      slow =
+        DirectoryServer.Server.start(
+          tls[:server_config],
+          fn request ->
+            if :atomics.get(armed, 1) == 1 do
+              send(observer, {:checking_held, self()})
+
+              receive do
+                :release_check -> :ok
+              end
+
+              :atomics.put(armed, 1, 0)
+            end
+
+            inner.(request)
+          end,
+          self()
+        )
+
+      on_exit(fn -> DirectoryServer.Server.stop(slow) end)
+      url = "https://dir-a.test:#{slow.port}"
+      Prima.Test.Env.put_app_env(:sanctum, :directory_url, url)
+      asked = asked!(conn, %{dir | url: url}, %{"action" => "sync"})
+      identifier = asked.account.identifier
+
+      Arca.Repo.update_all(
+        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identifier),
+        set: [verified_at: DateTime.add(DateTime.utc_now(), -31_536_000, :second)]
+      )
+
+      registry(asked.account, fn %{path: "/v1/tokens/mint"} ->
+        send(observer, :minted)
+
+        {200,
+         Sanctum.Test.RegistryStub.answer(%{
+           "personal_namespace" => %{"slug" => "left-person", "token" => "cyfr_pt_left-person"},
+           "memberships" => []
+         })}
+      end)
+
+      :atomics.put(armed, 1, 1)
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+      assert is_binary(handed(view, signed_at_pages(asked)))
+      assert_receive {:checking_held, held}, @answered_ms
+      {asked, view, held}
+    end
+
+    # The request is spent when the check begins; what it asked for is done
+    # by the call that outlives the page, never by a page that left.
+    test "a sync whose answer is still being checked when the person leaves is completed and stored",
+         %{conn: conn, dir: dir, tls: tls} do
+      {asked, view, held} = checking!(conn, dir, tls)
+      {_ref, _topic, proxy} = view.proxy
+      Process.unlink(proxy)
+      page = Process.monitor(view.pid)
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert_receive {:DOWN, ^page, :process, _pid, {:shutdown, :closed}}, @answered_ms
+
+      send(held, :release_check)
+      assert_receive :minted, @answered_ms
+
+      Prima.Test.Wait.wait_until(
+        fn ->
+          match?(
+            {:ok, %{token: "cyfr_pt_left-person"}},
+            Compendium.Registry.CredentialStore.get(
+              asked.ctx,
+              Compendium.RegistryHost.canonical_host(),
+              "left-person"
+            )
+          )
+        end,
+        @answered_ms,
+        "the push token the registry minted to be stored"
+      )
+    end
+
     test "completes the sync the passkey signed, under the session that asked, and says so",
          %{conn: conn, dir: dir} do
       asked = asked!(conn, dir, %{"action" => "sync"})
@@ -325,7 +411,7 @@ defmodule PrismWeb.LoginLiveTest do
       end
     end
 
-    test "the page answers at once, says it is sending, and shows the registry's answer whenever it comes",
+    test "the page answers at once, says it is checking, and shows the registry's answer whenever it comes",
          %{conn: conn, dir: dir} do
       asked = asked!(conn, dir, %{"action" => "sync"})
       held_mint(asked.account, "slow-person")
@@ -338,7 +424,7 @@ defmodule PrismWeb.LoginLiveTest do
       try do
         assert is_binary(html), "the page did not answer while the registry held the request"
         html = render(view)
-        assert html =~ "Sending what you signed."
+        assert html =~ "Checking what you signed."
         refute_vocabulary(html)
 
         # The same answer again starts no second call: its request was taken.
@@ -347,7 +433,7 @@ defmodule PrismWeb.LoginLiveTest do
         # Held past the browser's wait, and past it twice, the page still
         # waits for the registry.
         Process.sleep(2 * @push_timeout_ms)
-        assert render(view) =~ "Sending what you signed."
+        assert render(view) =~ "Checking what you signed."
       after
         send(stub, :release)
       end

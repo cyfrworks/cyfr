@@ -335,17 +335,15 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # The session the terminal open now started, so selecting another target
-  # closes it first. One a terminal no longer open started (the person
-  # chose another target before its start was heard here) is closed now:
-  # no session outlives the terminal it was opened for.
+  # The session the terminal open now started (nil when none did), so
+  # selecting another target hands it to the next terminal to close first.
   def handle_info({SignInTerminalComponent, :started, id, token}, socket) do
     case socket.assigns.terminal do
       %{id: ^id} = terminal ->
-        {:noreply, assign(socket, :terminal, %{terminal | token: token})}
+        {:noreply, assign(socket, :terminal, %{terminal | token: token, started: true})}
 
       _other ->
-        {:noreply, close_sign_in(socket, token)}
+        {:noreply, socket}
     end
   end
 
@@ -368,13 +366,8 @@ defmodule PrismWeb.ProgramsLive do
         &{:noreply, called(&1, answer, outcome)}
       )
 
-  # A sign-in closed: there is nothing to show.
-  def handle_async(:close_sign_in, {:ok, {tag, _closed}}, socket),
-    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, &1})
-
   # Only the node's shutdown stops a call (`run_to_end/1`).
-  def handle_async(name, {:exit, _reason}, socket) when name in [:call, :close_sign_in],
-    do: {:noreply, socket}
+  def handle_async(:call, {:exit, _reason}, socket), do: {:noreply, socket}
 
   # ————— a row's call —————
 
@@ -656,38 +649,28 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   # One sign-in at a time: a terminal for a new target closes the session
-  # of the one before (or, when that session's start has not been heard
-  # here yet, closes it when it is: the `:started` above), and each
-  # terminal is a component of its own, so selecting a target, or the same
-  # one again after its session ended, starts afresh and never reaches the
-  # previous session.
+  # of the one before it as its own start's first step, so the old session
+  # is closed before the new one opens (`PrismWeb.SignInTerminalComponent`);
+  # and each terminal is a component of its own, so selecting a target, or
+  # the same one again after its session ended, starts afresh and never
+  # reaches the previous session. A terminal still starting is not
+  # replaced: its session is not known yet, so nothing could close it
+  # first.
+  defp open_terminal(%{assigns: %{terminal: %{started: false}}} = socket, _name, _entry),
+    do: socket
+
   defp open_terminal(socket, name, entry) do
     id = "sign-in-#{System.unique_integer([:positive])}"
+    predecessor = socket.assigns.terminal && socket.assigns.terminal.token
 
-    socket
-    |> close_terminal()
-    |> assign(:terminal, %{id: id, row: name, entry: entry, token: nil})
-  end
-
-  defp close_terminal(%{assigns: %{terminal: %{token: token}}} = socket) when is_binary(token),
-    do: close_sign_in(socket, token)
-
-  defp close_terminal(socket), do: socket
-
-  # A sign-in's close, off the page's process and run to its end: the relay
-  # answers it only once it has finished what it is doing, a line it is
-  # sending included, up to 35 s. Nothing waits on its answer; a relay
-  # already ended has nothing to close.
-  defp close_sign_in(socket, token) do
-    ctx = socket.assigns.context
-    tag = CyfrWeb.ContextGuard.capture(ctx)
-
-    start_async(
-      socket,
-      :close_sign_in,
-      fn -> {tag, run_to_end(fn -> Opus.Programs.sign_in_close(ctx, token) end)} end,
-      supervisor: Prism.TaskSupervisor
-    )
+    assign(socket, :terminal, %{
+      id: id,
+      row: name,
+      entry: entry,
+      token: nil,
+      started: false,
+      predecessor: predecessor
+    })
   end
 
   # ————— reading —————
@@ -821,6 +804,7 @@ defmodule PrismWeb.ProgramsLive do
         context={@context}
         row={@terminal.row}
         entry={@terminal.entry}
+        predecessor={@terminal.predecessor}
       />
 
       <.card :if={@show_add == "pipe"}>

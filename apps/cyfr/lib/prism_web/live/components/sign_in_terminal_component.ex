@@ -7,13 +7,18 @@ defmodule PrismWeb.SignInTerminalComponent do
   runs on a pseudo-terminal in a login entry's kept home, and its lines and
   the person's input go both ways.
 
-  On its first update it asks `mcp_servers.sign_in` for the row and the
-  entry, which opens the session and starts a relay bound to the person's
-  session, and attaches the page's process to it
-  (`Opus.Programs.sign_in_attach/3`); the start tells the page
-  `{PrismWeb.SignInTerminalComponent, :started, id, token}` so it closes
-  this session before it opens a terminal for another target: each
-  terminal holds one session, under an id of its own. The page forwards each relay message,
+  On its first update it closes the session of the terminal it replaces
+  (`predecessor`, a token, when there is one) and then asks
+  `mcp_servers.sign_in` for the row and the entry, which opens the session
+  and starts a relay bound to the person's session; its answer attaches
+  the page's process to it (`Opus.Programs.sign_in_attach/3`) and tells the
+  page `{PrismWeb.SignInTerminalComponent, :started, id, token}` (token nil
+  when it did not start), so the page hands that session to the terminal
+  for another target as its predecessor: each terminal holds one session,
+  under an id of its own. The close comes before the open, in one call,
+  because the backends service keys a session by its caller, program and
+  home: the same entry opened again resumes the session a later close
+  would end. The page forwards each relay message,
   `{Opus.Programs, token, {:lines, lines}}` or `{:ended, reason}`, here as
   the `relay` assign. The frame keeps the last #{500} lines, each with its
   terminal control sequences removed; a line the person types goes to the
@@ -97,6 +102,7 @@ defmodule PrismWeb.SignInTerminalComponent do
      |> assign(:lines, %Lines{})
      |> assign(:state, :starting)
      |> assign(:asked, false)
+     |> assign(:predecessor, nil)
      |> assign(:sending, false)
      |> assign(:closing, false)
      |> assign(:reason, nil)
@@ -138,6 +144,11 @@ defmodule PrismWeb.SignInTerminalComponent do
 
   def handle_event("send", _params, socket), do: {:noreply, socket}
 
+  # A start in flight is answered before the terminal closes: its session
+  # is closed, by a later terminal or this one, only once it is known.
+  def handle_event("close", _params, %{assigns: %{state: :starting}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("close", _params, %{assigns: %{closing: true}} = socket),
     do: {:noreply, socket}
 
@@ -175,24 +186,20 @@ defmodule PrismWeb.SignInTerminalComponent do
   # Only the node's shutdown stops a call (`run_to_end/1`).
   def handle_async(_name, {:exit, _reason}, socket), do: {:noreply, socket}
 
-  # The start, off the update that first renders the terminal: it opens
-  # the session, and the answer attaches this page's process to it. The
-  # page is told of the session as soon as it is open, whether or not this
-  # terminal is still there to take the answer, so it closes one opened
-  # for a terminal it has since replaced (`PrismWeb.ProgramsLive`).
+  # The start, off the update that first renders the terminal: the
+  # predecessor's session closed, then this one opened, in that order in
+  # one call; the answer attaches this page's process to it. The close
+  # waits for the predecessor's relay to finish what it is doing, up to
+  # 35 s, and the open follows whatever the close answered.
   defp start(socket) do
     args = %{"name" => socket.assigns.row, "entry" => socket.assigns.entry}
-    page = self()
-    id = socket.assigns.id
+    predecessor = socket.assigns.predecessor
 
     socket
     |> assign(:asked, true)
     |> ask(:start, fn ctx ->
-      with {:ok, result} <- call_tool(ctx, "mcp_servers/sign_in", args) do
-        token = result[:session] || result["session"]
-        if is_binary(token), do: send(page, {__MODULE__, :started, id, token})
-        {:ok, result}
-      end
+      if predecessor, do: Opus.Programs.sign_in_close(ctx, predecessor)
+      call_tool(ctx, "mcp_servers/sign_in", args)
     end)
   end
 
@@ -208,7 +215,13 @@ defmodule PrismWeb.SignInTerminalComponent do
     )
   end
 
-  defp started(socket, {:ok, result}) do
+  defp started(socket, result) do
+    socket = attached(socket, result)
+    send(self(), {__MODULE__, :started, socket.assigns.id, socket.assigns.token})
+    socket
+  end
+
+  defp attached(socket, {:ok, result}) do
     with token when is_binary(token) <- result[:session] || result["session"],
          :ok <- Opus.Programs.sign_in_attach(socket.assigns.context, token, self()) do
       socket |> assign(:token, token) |> assign(:state, :running)
@@ -218,7 +231,7 @@ defmodule PrismWeb.SignInTerminalComponent do
     end
   end
 
-  defp started(socket, {:error, reason}), do: ended(socket, reason)
+  defp attached(socket, {:error, reason}), do: ended(socket, reason)
 
   # A line's answer can come after the relay said how the sign-in ended,
   # whose words it never replaces.
@@ -270,7 +283,12 @@ defmodule PrismWeb.SignInTerminalComponent do
         <span class="text-sm text-gray-300">
           Sign in <span class="font-mono text-blue-400">{@row}</span>
         </span>
-        <.button variant="ghost" phx-click="close" phx-target={@myself} disabled={@closing}>
+        <.button
+          variant="ghost"
+          phx-click="close"
+          phx-target={@myself}
+          disabled={@closing or @state == :starting}
+        >
           {if @closing, do: "Closing…", else: "Close"}
         </.button>
       </div>

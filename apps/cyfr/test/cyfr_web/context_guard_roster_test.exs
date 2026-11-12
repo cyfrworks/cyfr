@@ -78,9 +78,8 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     "live/registry_live.ex" =>
       {2, [{"live/registry_live.ex", :act}, {"live/registry_live.ex", :load}]},
     # A program row's call: adding one, or its Test, Refresh, Restart,
-    # hosts or Reset folder; and the close of a sign-in another replaced.
-    "live/programs_live.ex" =>
-      {2, [{"live/programs_live.ex", :call}, {"live/programs_live.ex", :close_sign_in}]},
+    # hosts or Reset folder.
+    "live/programs_live.ex" => {1, [{"live/programs_live.ex", :call}]},
     # A thread with people, made in the overlay; a person added in a thread.
     "live/chat_overlay_live.ex" => {1, [{"live/chat_overlay_live.ex", :create}]},
     "live/shared_thread_live.ex" => {1, [{"live/shared_thread_live.ex", :add}]},
@@ -104,10 +103,11 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   # captures no focus and its answer is not delivered through the guard.
   # The sign-in page's check of an answer acts as no session: the request
   # it answers is bound to this browser, and it answers only the outcome
-  # the page acts on. Its registry completion acts as the session its
-  # request was bound to, read from the store and revalidated, and answers
-  # only the sentence the page shows (`PrismWeb.LoginLive`).
-  @unfocused %{"live/login_live.ex" => {2, [:answer, :registry]}}
+  # the page acts on. A registry signature it carries is completed in the
+  # same task as the session its request was bound to, read from the store
+  # and revalidated, and answers only the sentence the page shows
+  # (`PrismWeb.LoginLive`).
+  @unfocused %{"live/login_live.ex" => {1, [:answer]}}
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/
 
