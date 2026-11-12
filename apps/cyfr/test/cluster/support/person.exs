@@ -21,8 +21,8 @@ defmodule Cyfr.Cluster.Person do
   each member's scripted worker service (`Cyfr.Cluster.Boot.start_worker!/1`),
   so the component is the only stand-in. The seed tree the athanor is
   filled from is the run's own (`seed!/0`), laid once by the control node
-  and pointed at by both members (`use_seed!/1`): a member's suite seed
-  carries the AQUA tree alone.
+  and read by both members: the suite's own seed carries the AQUA tree
+  alone.
   """
 
   @compile {:no_warn_undefined,
@@ -62,27 +62,29 @@ defmodule Cyfr.Cluster.Person do
   @doc """
   The run's seed tree: the repository's AQUA tree and the newest shipped
   version of each catalyst a turn on the soul reaches, without build
-  droppings. Laid once per run under the run's temporary directory, on
-  the control node; both members read it in place, since they share this
-  host's filesystem.
+  droppings. Laid once per run, at a path the run's own prefix names
+  (`Cyfr.Cluster.Store.prefix/0`), under the run's temporary directory;
+  a tree is whole once its marker is written, which is last. Both members
+  are booted reading it in place (`Cyfr.Cluster.Cell`), since they share
+  this host's filesystem.
   """
   @spec seed!() :: Path.t()
   def seed! do
-    case :persistent_term.get({__MODULE__, :seed}, nil) do
-      nil ->
-        dir = lay_seed!()
-        :persistent_term.put({__MODULE__, :seed}, dir)
-        dir
+    run = String.replace(Cyfr.Cluster.Store.prefix(), "/", "_")
+    dir = Path.join(System.tmp_dir!(), "cyfr_#{run}_seed")
+    marker = Path.join(dir, ".laid")
 
-      dir ->
-        dir
+    unless File.exists?(marker) do
+      File.rm_rf!(dir)
+      lay_seed!(dir)
+      File.write!(marker, "")
     end
+
+    dir
   end
 
-  defp lay_seed! do
+  defp lay_seed!(dir) do
     repo = Path.expand("../../../../../seed", __DIR__)
-    token = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
-    dir = Path.join(System.tmp_dir!(), "cyfr_cluster_seed_#{token}")
     File.mkdir_p!(dir)
     File.cp_r!(Path.join(repo, "aqua"), Path.join(dir, "aqua"))
 
@@ -99,13 +101,7 @@ defmodule Cyfr.Cluster.Person do
         File.cp!(file, destination)
       end
     end
-
-    dir
   end
-
-  @doc "On a member: read the seed tree at `dir` from now on."
-  @spec use_seed!(Path.t()) :: :ok
-  def use_seed!(dir), do: Application.put_env(:arca, :seed_path, dir)
 
   # ---------------------------------------------------------------------------
   # The person, on a member

@@ -26,9 +26,6 @@ defmodule Cyfr.Cluster.PersonTest do
   @slot_bound_ms 15_000 + 5_000
 
   setup do
-    seed = Person.seed!()
-    for member <- [:a, :b], do: Cell.call(member, Person, :use_seed!, [seed])
-
     on_exit(fn ->
       for member <- [:a, :b] do
         try do

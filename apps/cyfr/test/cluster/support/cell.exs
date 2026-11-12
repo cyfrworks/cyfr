@@ -563,6 +563,11 @@ defmodule Cyfr.Cluster.Cell do
         {:storage_adapter, Arca.Adapters.S3},
         {:s3, Store.s3_config()},
         {:control_plane_claim_enabled, true},
+        # The seed a shipped member is installed with: the AQUA tree and
+        # the shipped catalysts a person's turn reaches
+        # (`Cyfr.Cluster.Person.seed!/0`), where the suite's own seed holds
+        # the AQUA tree alone.
+        {:seed_path, Cyfr.Cluster.Person.seed!()},
         # The control plane writes on its own connection, and writers take
         # turns at the write lock where the store has one, as a
         # deployment's do; `config/test.exs` turns both off for the sandbox.
