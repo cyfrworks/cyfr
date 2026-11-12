@@ -1,5 +1,5 @@
 {
-  "comment": "Apache-2.0. Copyright 2026 CYFR Works Inc. Directory HTTP conformance (cyfr-directory/v2), consumed by CYFR and cyfr.run. Each scenario uses a fresh directory, rate windows and settings; omitted settings use production defaults. Requests are literal JSON objects, serialized compactly with UTF-8; null body means no body. The optional source is presented through a trusted proxy, default 198.51.100.1. Query values are strings. A step {\"tombstone\": identifier} is the operator's tombstone, made through each side's own administrator path (cyfr.run's admin action, a CYFR's directory.tombstone), not over this wire. Expect body fields are a top-level subset with exact nested values; omitted fields are unconstrained, null must be present. Only retry_after uses {min,max}, an inclusive integer range, and a header {body_field:retry_after} must equal that returned integer in decimal. Only listed response headers are constrained: names are case-insensitive, values exact. Content-Type is unconstrained; the response body must still decode as JSON except on a 413. A 413 constrains only status because the endpoint owns its error representation. Entry objects in response entries must also appear as canonical JCS bytes on the wire. keys carries unpadded base64url Ed25519 seeds and public keys, and for alg es256 the P-256 private scalar, uncompressed point and credential id; entries carries pre-signed canonical JCS strings (cyfr-identity/v2), a passkey's made at https://dir.test with relying party dir.test. A write answers 200 with identifier, seq, entry_hash and result (created, exists or accepted), and exists also names the current head; an entry already the one after its prev is exists, a prev that is not the head is stale_head. A malformed entry, a non-genesis at register and a genesis at append are invalid; any other refusal of the chain is unverified with its reason, but duplicate_key, which is 409. Entries signed by a recovery key may spend the recovery reserve; a genesis and an entry a listed key signs may not. Scenarios intentionally omit not_served, read_only and the daily write window, which CYFR tests separately.",
+  "comment": "Apache-2.0. Copyright 2026 CYFR Works Inc. Directory HTTP conformance (cyfr-directory/v2), consumed by CYFR and cyfr.run. Each scenario uses a fresh directory, rate windows and settings; omitted settings use production defaults. Requests are literal JSON objects, serialized compactly with UTF-8; null body means no body. The optional source is presented through a trusted proxy, default 198.51.100.1. Query values are strings. A step {\"tombstone\": identifier} is the operator's tombstone, made through each side's own administrator path (cyfr.run's admin action, a CYFR's directory.tombstone), not over this wire. Expect body fields are a top-level subset with exact nested values; omitted fields are unconstrained, null must be present. Only retry_after uses {min,max}, an inclusive integer range, and a header {body_field:retry_after} must equal that returned integer in decimal. Only listed response headers are constrained: names are case-insensitive, values exact. Content-Type is unconstrained; the response body must still decode as JSON except on a 413. A 413 constrains only status because the endpoint owns its error representation. Entry objects in response entries must also appear as canonical JCS bytes on the wire. keys carries unpadded base64url Ed25519 seeds and public keys, and for alg es256 the P-256 private scalar, uncompressed point and credential id; entries carries pre-signed canonical JCS strings (cyfr-identity/v2), a passkey's made at https://dir.test with relying party dir.test. A write answers 200 with identifier, seq, entry_hash and result (created, exists or accepted), and exists also names the current head; an entry already the one after its prev is exists, a prev that is not the head is stale_head. A malformed entry, a non-genesis at register and a genesis at append are invalid; any other refusal of the chain is unverified with its reason, but duplicate_key, which is 409. Entries signed by a recovery key may spend the recovery reserve; a genesis and an entry a listed key signs may not. Scenarios intentionally omit not_served, read_only and the daily write window, which CYFR tests separately. The handles section is the handle registry's name routes, with a comment of its own.",
   "directory": "https://dir.test",
   "keys": {
     "alice-recovery": {
@@ -10927,5 +10927,307 @@
         }
       ]
     }
-  ]
+  ],
+  "handles": {
+    "comment": "The handle registry's name routes beside the directory, consumed by CYFR's account service (Emissary.Web.HandleController), cyfr.run's registry and the cyfr.run stand-in: GET /v1/handles/{handle}, GET /v1/identities/{identifier}/handle and POST /v1/namespaces/personal/claim. Each scenario starts from an empty directory and registry. The server serves the directory named at the top of this file and is the registry at the host named by registry. Steps run in order: {\"register\": entry} posts that entry of entries to /directory/v1/register and needs a 200, its answer being the scenarios' above; {\"claim\": {signer, identifier, handle}} posts a handle.claim (cyfr-registry-request/v2) for that identifier and handle, signed when it is sent by that key of keys as its recovery signer and expiring within the protocol's lifetime; a registry that asks for its policies' acceptance before a claim (cyfr.run, the stand-in) has that identifier accept its current version first, its own way, and CYFR asks none; {\"tombstone\": identifier} is the operator's tombstone, as above; {\"request\": {method, path}} sends that request with no body. Each request comes from a source of its own, so no rate window is reached. An expect names the status and either answer, the response's JSON object with exactly these fields and values, or code, a refusal in the grammar every client reads it by (Prima.RegistryRequest.refusal/1 under Sanctum.Handle and the registry client, the account pages' registry.js refusal, which cyfr.run serves too, and the command line's RegistryRefusal): one JSON object whose errors is a non-empty array, whose first element is an object with this code and a message that is a string, the whole holding no null and no number that is not an integer of at most 2^53 - 1 in magnitude, and every string in it, keys included, well-formed Unicode as sent: valid UTF-8 with no unpaired surrogate, whether as bytes or as a \\u escape, checked on the bytes before a decoder repairs them; other keys, at any level, are not pinned, since every client passes them over. These are what CYFR's client depends on (Sanctum.Handle, Prima.HandleAnswer, the account pages' registry.js): a 200 whose answer has exactly the cyfr-handle/v1 fields, a 404 for no one's name, and a refusal's code. Not pinned, by choice, as the client tolerates them: a refusal's message text, Content-Type and its charset, every other header (security and caching headers among them), the answer's byte form (registry_wire.json's answers hold it), the rate limiter's windows, shape and retry-after, the status of a store error, a node serving no directory (not_served) and a mirror's claim (read_only), which only CYFR answers, a name reserved by a takedown or by the registry's reserved list, which only cyfr.run and the stand-in hold, and the signed request's own refusals, which registry_wire.json holds.",
+    "registry": "dir.test",
+    "scenarios": [
+      {
+        "name": "a claim, its repeat, and the name answered by name and by identifier",
+        "steps": [
+          {
+            "register": "genesis-alice"
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/handles/alice"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/identities/per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db/handle"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          },
+          {
+            "claim": {
+              "signer": "alice-recovery",
+              "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+              "handle": "alice"
+            },
+            "expect": {
+              "status": 201,
+              "answer": {
+                "handle": "alice",
+                "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db"
+              }
+            }
+          },
+          {
+            "claim": {
+              "signer": "alice-recovery",
+              "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+              "handle": "alice"
+            },
+            "expect": {
+              "status": 200,
+              "answer": {
+                "handle": "alice",
+                "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db"
+              }
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/handles/alice"
+            },
+            "expect": {
+              "status": 200,
+              "answer": {
+                "protocol": "cyfr-handle/v1",
+                "registry": "dir.test",
+                "handle": "alice",
+                "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+                "directory": "https://dir.test"
+              }
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/identities/per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db/handle"
+            },
+            "expect": {
+              "status": 200,
+              "answer": {
+                "protocol": "cyfr-handle/v1",
+                "registry": "dir.test",
+                "handle": "alice",
+                "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+                "directory": "https://dir.test"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "a name another holds, and a second name",
+        "steps": [
+          {
+            "register": "genesis-alice"
+          },
+          {
+            "register": "genesis-bob"
+          },
+          {
+            "claim": {
+              "signer": "alice-recovery",
+              "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+              "handle": "alice"
+            },
+            "expect": {
+              "status": 201,
+              "answer": {
+                "handle": "alice",
+                "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db"
+              }
+            }
+          },
+          {
+            "claim": {
+              "signer": "bob-recovery",
+              "identifier": "per_d253cff746e0b24615ebc366326a5de49558958e5ba0ce0618a0f718356bab77",
+              "handle": "alice"
+            },
+            "expect": {
+              "status": 409,
+              "code": "SLUG_TAKEN"
+            }
+          },
+          {
+            "claim": {
+              "signer": "alice-recovery",
+              "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+              "handle": "alice-2"
+            },
+            "expect": {
+              "status": 409,
+              "code": "ALREADY_CLAIMED"
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/handles/alice"
+            },
+            "expect": {
+              "status": 200,
+              "answer": {
+                "protocol": "cyfr-handle/v1",
+                "registry": "dir.test",
+                "handle": "alice",
+                "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+                "directory": "https://dir.test"
+              }
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/handles/alice-2"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/identities/per_d253cff746e0b24615ebc366326a5de49558958e5ba0ce0618a0f718356bab77/handle"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          }
+        ]
+      },
+      {
+        "name": "no one's name: unknown, outside the grammar, nameless",
+        "steps": [
+          {
+            "register": "genesis-bob"
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/handles/carol"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/handles/Alice"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/identities/per_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/handle"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/identities/per_x/handle"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/identities/alice/handle"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/identities/per_d253cff746e0b24615ebc366326a5de49558958e5ba0ce0618a0f718356bab77/handle"
+            },
+            "expect": {
+              "status": 404,
+              "code": "HANDLE_NOT_FOUND"
+            }
+          }
+        ]
+      },
+      {
+        "name": "a gone account keeps its name",
+        "steps": [
+          {
+            "register": "genesis-alice"
+          },
+          {
+            "claim": {
+              "signer": "alice-recovery",
+              "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+              "handle": "alice"
+            },
+            "expect": {
+              "status": 201,
+              "answer": {
+                "handle": "alice",
+                "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db"
+              }
+            }
+          },
+          {
+            "tombstone": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db"
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/handles/alice"
+            },
+            "expect": {
+              "status": 200,
+              "answer": {
+                "protocol": "cyfr-handle/v1",
+                "registry": "dir.test",
+                "handle": "alice",
+                "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+                "directory": "https://dir.test"
+              }
+            }
+          },
+          {
+            "request": {
+              "method": "GET",
+              "path": "/v1/identities/per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db/handle"
+            },
+            "expect": {
+              "status": 200,
+              "answer": {
+                "protocol": "cyfr-handle/v1",
+                "registry": "dir.test",
+                "handle": "alice",
+                "identifier": "per_55517eb234def1888e2058267bb50e18067f21a124b6d6163a2e74d2d6d7a4db",
+                "directory": "https://dir.test"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
 }

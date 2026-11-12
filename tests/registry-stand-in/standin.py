@@ -24,7 +24,9 @@
 #                                      or HANDLE_NOT_FOUND
 #   GET  /v1/legal/version             {"policy_version", "policies"}
 #   POST /v1/legal/accept              a signed policy.accept
-#   POST /v1/namespaces/personal/claim a signed handle.claim; a name another
+#   POST /v1/namespaces/personal/claim a signed handle.claim, 201 {"handle",
+#                                      "identifier"}, or 200 for a name the
+#                                      identifier already holds; a name another
 #                                      identifier holds is SLUG_TAKEN, the
 #                                      reserved name (RESERVED_NAME) is
 #                                      RESERVED and its lookup
@@ -255,7 +257,7 @@ class StandIn:
                 raise registry_refusal(409, "ALREADY_CLAIMED")
             data["names"][handle] = identifier
             self.state.save()
-        return 201, jcs(self.answer_for(handle, identifier))
+        return (201 if holder is None else 200), jcs({"handle": handle, "identifier": identifier})
 
     # ---- the directory ------------------------------------------------------
 

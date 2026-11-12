@@ -485,9 +485,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "directory_wire.json" => [
       {"apps/codex/internal/account/wire_test.go", ~w(keys scenarios)},
       {"apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs",
-       ~w(directory entries keys scenarios)},
+       ~w(directory entries handles keys scenarios)},
       {"tests/handle-proof/models-test.mjs", ~w(entries)},
-      {"tests/registry-stand-in/standin_test.py", ~w(directory entries scenarios)}
+      {"tests/registry-stand-in/standin_test.py", ~w(directory entries handles scenarios)}
     ],
     # cyfr.run reads its vendored copy too (internal/identity/vectors_test.go,
     # beside internal/identity/testdata/SOURCE, which names this file's
