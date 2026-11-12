@@ -142,13 +142,13 @@ defmodule Sanctum.Vault.OAuth do
   end
 
   # A provider the suites script, standing in for a preset no shipped one
-  # reaches: `:sanctum, :scripted_oauth_provider`, a test seam no
-  # configuration file or variable sets (as `:sanctum, :oidc_reauth_client`
-  # is), names a module whose `preset/1` answers a preset for a hint the
+  # reaches: `:sanctum, :scripted_oauth_provider`, a test seam only a test
+  # build reads (`Sanctum.seam/2`, as `:sanctum, :oidc_reauth_client` is),
+  # names a module whose `preset/1` answers a preset for a hint the
   # shipped table does not hold and whose `post/3` answers that preset's
   # token endpoint, for a code exchange and a refresh alike, in the
   # network's place. It never replaces a shipped preset, and a release
-  # never sets it.
+  # never reads it.
   defp scripted_preset(provider_hint) do
     case scripted() do
       nil ->

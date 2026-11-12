@@ -57,9 +57,9 @@ defmodule Sanctum.Directory.Client do
   `getaddr/2` as `:inet` does) and `:cacerts` (DER certificates to trust):
   the address policy and peer verification are not options. The suite
   sets the same two through the test seam `:sanctum, :directory_client`,
-  which no configuration file or variable sets, so the paths that read a
-  directory without options reach its scripted one; a caller's options
-  win over it.
+  which only a test build reads (`Sanctum.seam/2`), so the paths that
+  read a directory without options reach its scripted one; a caller's
+  options win over it, and a release takes no options from the key.
 
   ## Answers
 

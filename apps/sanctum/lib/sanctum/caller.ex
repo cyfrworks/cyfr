@@ -767,8 +767,9 @@ defmodule Sanctum.Caller do
   end
 
   @doc """
-  Whether `ctx` was validated within the caller bound
-  (`config :sanctum, :caller_memo_ttl_ms`, 2 s): a holder acts on a fresh
+  Whether `ctx` was validated within the caller bound, 2 s (a release
+  uses that value and never reads `:caller_memo_ttl_ms`, a test seam only
+  a test build reads, `Sanctum.seam/2`): a holder acts on a fresh
   context as it is and revalidates one that is not
   (`revalidate_session/1`). It is the establish memo's own TTL — one
   bound on how long a read of the store is trusted, whether a memo or a

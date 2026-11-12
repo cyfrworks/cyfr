@@ -28,8 +28,8 @@ defmodule Sanctum.Auth.WorkOS do
       read.
 
   The API's base URL is `https://api.workos.com`; a test stands in its own
-  at `:sanctum, :workos_api_url`, a seam deliberately undeclared in
-  config.
+  at `:sanctum, :workos_api_url`, a test seam only a test build reads
+  (`Sanctum.seam/2`): a release uses the shipped URL whatever the key says.
   """
 
   @behaviour Sanctum.CompanyLogin.Issuer

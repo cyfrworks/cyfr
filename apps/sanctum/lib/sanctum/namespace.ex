@@ -33,8 +33,10 @@ defmodule Sanctum.Namespace do
   # the users row changes only through `Users.set_namespace/2` (which
   # invalidates below), so a short TTL keeps the read off the hot path.
   # Only positive results cache: an unclaimed person stays on the live path
-  # so a fresh claim is visible immediately. (The test config sets the TTL
-  # to 0: a sandbox rollback is a write no invalidation sees.)
+  # so a fresh claim is visible immediately. A release uses this TTL and
+  # never reads `:namespace_cache_ttl_ms`, a test seam only a test build
+  # reads (`Sanctum.seam/2`); the test config sets it to 0, since a sandbox
+  # rollback is a write no invalidation sees.
   @cache_ttl_ms 60_000
 
   @doc """
