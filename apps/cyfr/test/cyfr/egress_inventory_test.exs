@@ -112,8 +112,7 @@ defmodule Cyfr.EgressInventoryTest do
   # The programs controller lives in the execution domain but decides no
   # guest's target: it is the control plane's own caller of its backends
   # service, which the operator's private targets name (compose's
-  # `locus-backends`), as its controller did from Emissary before S1 moved
-  # it. Exactly these files, and only for that call.
+  # `locus-backends`). Exactly these files, and only for that call.
   @control_plane_callers ~w(apps/cyfr/lib/opus/programs/box.ex apps/cyfr/lib/opus/programs/session.ex)
 
   defp root, do: Path.expand("../../../..", __DIR__)

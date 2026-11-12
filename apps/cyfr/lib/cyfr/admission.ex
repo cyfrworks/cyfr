@@ -27,9 +27,9 @@ defmodule Cyfr.Admission do
     * `:device_channel` — a paired glass's socket on the endpoint, whose
       discrete intents reach the gate once the glass has proven its key.
 
-  Two are declared and deferred (`fetch/1`): `:unix_socket`, a local
-  socket on a device, and `:compositor`, a compositor or physical jack,
-  which appears as a body and never as a namespace. A deferred row is
+  Two are declared and deferred: `:unix_socket`, a local socket on a
+  device, and `:compositor`, a compositor or physical jack, which appears
+  as a body and never as a namespace. A deferred row is
   refused by its shape: it names no listener, socket or entry, and the
   boot refuses any listener or socket no built path names.
 
