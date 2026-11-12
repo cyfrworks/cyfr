@@ -273,8 +273,6 @@ defmodule Sanctum do
       else: :error
   end
 
-  defp parse_registry(_value), do: :error
-
   # An empty port is the scheme's own, as a URL reads it.
   defp registry_port?(nil), do: true
   defp registry_port?(""), do: true
