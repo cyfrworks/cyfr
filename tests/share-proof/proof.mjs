@@ -845,7 +845,7 @@ async function main() {
     // Bea when they are made; Ana's first sign-in binds the share of the
     // key that fits the openai catalyst's need, Company AI's.
     const allowed = [await door(admin, settings, "*", "allow")];
-    ana = await ask({ op: "sign_in", name: "ana", email: "ana@example.com" });
+    ana = await ask({ op: "sign_in", name: "ana" });
     // The loader's decision on her root names the profile and consent it
     // roots on: the ids the model takes for the profile and head the
     // bootstrap minted.
@@ -985,7 +985,7 @@ async function main() {
     // -----------------------------------------------------------------------
     // Bea signs in once and is seated with the administrator in a shared
     // thread, Traders, which the narrowing names.
-    bea = await ask({ op: "sign_in", name: "bea", email: "bea@example.com" });
+    bea = await ask({ op: "sign_in", name: "bea" });
     const traders = await ask({ op: "thread", member: bea.user_id, name: "Traders" });
     await open(admin, vault);
     const audience = admin.locator(`${byYouRow(ai.share)} form[data-test="share-audience-form"]`);
@@ -1002,9 +1002,10 @@ async function main() {
     const rowBinding = await ask({ op: "row_binding", user_id: ana.user_id, share_id: ai.share });
     await open(anaPage, pagePath(ana.segment, "/vault"));
     const afterNarrow = await sharedWithYou(anaPage);
-    // Bea's first sign-in leaves her row as the release fixture's person
-    // is made and signs in (an open admission, her GitHub email verified,
-    // "Release proof"), active, at security generation 1, her personal
+    // Bea's first sign-in leaves her row as her device's hello admits her
+    // (an open admission, no email and no display name, her name the one
+    // her account holds at the registry, which the sign-in learns),
+    // active, at security generation 1, her personal
     // athanor the one her sign-in names, and no platform administrator's
     // mark, which only the installation's first person carries. Company
     // AI's share is to Traders alone, which Ana is not in: her claim of it is refused as not
@@ -1013,11 +1014,11 @@ async function main() {
     model.bea = {
       user: {
         id: bea.user_id,
-        email: "bea@example.com",
-        email_verified: true,
+        email: null,
+        email_verified: null,
         admission: "open",
-        display_name: "Release proof",
-        namespace: null,
+        display_name: null,
+        namespace: "share-proof-bea",
         status: "active",
         security_generation: 1,
         prefs: "{}",

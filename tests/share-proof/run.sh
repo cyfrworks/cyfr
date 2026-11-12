@@ -103,10 +103,10 @@ share_fixture() {
 # session's token stays in the scratch directory, where the fixture's
 # commands for that person take it from (`token_of`).
 sign_in() {
-  local email="$1" sub="$2" person token cookie
-  person="$(server_fixture "$CELL" person "$email" "$sub" 2>>"$WORK/fixture.err")" || person=""
+  local sub="$1" person token cookie
+  person="$(server_fixture "$CELL" person "$sub" 2>>"$WORK/fixture.err")" || person=""
   [ -n "$person" ] || {
-    printf '{"error":"%s was not signed in"}\n' "$email"
+    printf '{"error":"%s was not signed in"}\n' "$sub"
     return
   }
   token="$(field "$person" token)"
@@ -142,10 +142,7 @@ browser_home "$DIR" dir.test
 openssl rand -hex 32 | tr -d '\n' >"$WORK/setup-token"
 identity_directory dir.test
 identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
-# The people the release fixture signs in (Ana, Bea) have accounts this
-# CYFR caches and the directory never saw, so the bound is the run's whole
-# length: their sessions stand on the head cached at their sign-in.
-identity_reaches_directory "$CELL" dir.test "CYFR_IDENTITY_FRESHNESS_SECONDS=3600"
+identity_reaches_directory "$CELL" dir.test
 identity_env "$CELL" CYFR_REGISTRY_URL dir.test
 identity_env "$CELL" CYFR_SETUP_TOKEN "$(cat "$WORK/setup-token")"
 
@@ -166,7 +163,7 @@ answer_ask() {
   local ask="$1" op ana_token ana_id bea_id
   op="$(asked "$ask" op)"
   case "$op" in
-    sign_in) ANSWER="$(sign_in "$(asked "$ask" email)" "share-proof-$(asked "$ask" name)")" ;;
+    sign_in) ANSWER="$(sign_in "share-proof-$(asked "$ask" name)")" ;;
     clock) ANSWER="$(share_fixture clock)" ;;
     setup_token)
       ANSWER="$(python3 -c "import json, sys; print(json.dumps({'token': open(sys.argv[1]).read().strip()}))" "$WORK/setup-token")"
