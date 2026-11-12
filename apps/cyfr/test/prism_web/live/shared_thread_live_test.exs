@@ -123,6 +123,61 @@ defmodule PrismWeb.SharedThreadLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # A name is asked of the registry, which holds it here until the test
+  # releases it, past the browser's 30 s wait on the event (stood in for
+  # by one second), then answers that no one holds it.
+  test "adding someone by a name the registry holds answers at once, says so, asks once, and shows the refusal",
+       %{conn: conn, alice: alice, thread: thread} do
+    test = self()
+
+    RegistryStub.start!(fn %{method: "GET", path: "/v1/handles/" <> _} ->
+      send(test, {:held, self()})
+
+      receive do
+        :release -> :ok
+      end
+
+      RegistryStub.refusal(:handle_not_found)
+    end)
+
+    pane = open!(conn, alice, thread.id)
+
+    add = fn ->
+      task =
+        Task.async(fn ->
+          pane |> form("#shared-add", %{"person" => "@slow-name"}) |> render_submit()
+        end)
+
+      case Task.yield(task, 1_000) do
+        {:ok, html} -> html
+        nil -> :unanswered
+      end
+    end
+
+    html = add.()
+    assert_receive {:held, held}, 5_000
+
+    try do
+      assert is_binary(html), "the pane did not answer while the registry held the name"
+      assert html =~ "Adding…"
+      assert is_binary(add.())
+      Process.sleep(2_000)
+      assert render(pane) =~ "Adding…"
+    after
+      send(held, :release)
+    end
+
+    html = render_async(pane, 5_000)
+    refute html =~ "Adding…"
+
+    assert :sys.get_state(pane.pid).socket.assigns.flash["error"] ==
+             "No one holds that handle at the registry."
+
+    refute_receive {:held, _second}, 500
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "the header lists the people and invitations, and any of them adds by name, removes, withdraws, renames and makes an invitation link",
        %{conn: conn, alice: alice, bob: bob, thread: thread} do
     carol = test_user()
@@ -140,6 +195,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
     assert has_element?(pane, "#shared-people", waiting)
 
     pane |> form("#shared-add", %{"person" => "@#{carol.namespace}"}) |> render_submit()
+    render_async(pane, 5_000)
     assert seated(alice, thread) == Enum.sort([alice.user_id, bob.user_id, carol.user_id])
 
     pane

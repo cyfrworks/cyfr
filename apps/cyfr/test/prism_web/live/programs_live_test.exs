@@ -48,6 +48,34 @@ defmodule PrismWeb.ProgramsLiveTest do
 
   defp flash(view, kind), do: :sys.get_state(view.pid).socket.assigns.flash[kind]
 
+  # How long a test waits for a call's answer to reach the page.
+  @answered_ms 5_000
+
+  # The page's answer to a call it makes off the event.
+  defp answered(view), do: render_async(view, @answered_ms)
+
+  # The browser gives up on a pushed event it waits on for 30 seconds and
+  # reloads (the shipped script's push timeout); a test stands that wait
+  # in with this one.
+  @push_timeout_ms 1_000
+
+  # An event as the browser pushes it: waited on no longer than the
+  # browser waits.
+  defp pushed(fun) do
+    task = Task.async(fun)
+
+    case Task.yield(task, @push_timeout_ms) do
+      {:ok, html} -> html
+      nil -> :unanswered
+    end
+  end
+
+  # The calls the page has running off its events.
+  defp running_calls(view) do
+    {:ok, pids} = Phoenix.LiveView.Channel.async_pids(view.pid)
+    pids
+  end
+
   @root :crypto.strong_rand_bytes(32)
 
   test "a stdio server whose command expands a vault-bound name is added with its warning",
@@ -81,6 +109,8 @@ defmodule PrismWeb.ProgramsLiveTest do
       "env" => "GITHUB_TOKEN=vault:gh"
     })
     |> render_submit()
+
+    answered(view)
 
     warning =
       "Backend 'github' expands GITHUB_TOKEN, a vault-bound env name, in its command: the " <>
@@ -118,15 +148,16 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert html =~ "Each env line is NAME=value"
 
-    html =
-      view
-      |> form("form[phx-submit=add_stdio]", %{
-        "name" => "github",
-        "backend" => "github",
-        "command" => "npx -y @modelcontextprotocol/server-github",
-        "env" => "GITHUB_TOKEN=vault:gh\n\nNODE_ENV=production"
-      })
-      |> render_submit()
+    view
+    |> form("form[phx-submit=add_stdio]", %{
+      "name" => "github",
+      "backend" => "github",
+      "command" => "npx -y @modelcontextprotocol/server-github",
+      "env" => "GITHUB_TOKEN=vault:gh\n\nNODE_ENV=production"
+    })
+    |> render_submit()
+
+    html = answered(view)
 
     assert html =~ "No backends service is configured"
     assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "github")
@@ -147,6 +178,8 @@ defmodule PrismWeb.ProgramsLiveTest do
     view
     |> form("form[phx-submit=add_server]", %{"name" => "relay", "config" => config})
     |> render_submit()
+
+    answered(view)
 
     error = view |> element("form[phx-submit=add_server] div.text-red-400") |> render()
     assert error =~ "Failed to add: Header"
@@ -192,17 +225,91 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> form("form[phx-submit=add_server]", %{"name" => "local", "config" => config})
     |> render_submit()
 
+    answered(view)
+
     assert {:ok, _} = Arca.McpServerStorage.get(ctx(athanor), "local")
     assert flash(view, "error") =~ "'local' added — "
 
     # The edited row's Test says why, in the refusal's own words.
     view |> element("tr[phx-value-name=edited]") |> render_click()
     view |> element(~s(button[phx-click="test"][phx-value-name="edited"])) |> render_click()
+    answered(view)
 
     assert flash(view, "error") ==
              "Test edited: " <> Sanctum.Refusals.render(:destination_mismatch)
 
     refute flash(view, "error") =~ "openai-key"
+  end
+
+  # A connect waits up to a minute (`timeout_ms`), longer than the browser
+  # waits on the event; the server here holds the first request until the
+  # test releases it, then refuses it.
+  test "a Test held past the browser's wait answers at once, says so, starts no second call, and shows its answer",
+       %{conn: conn, athanor: athanor} do
+    stub = HTTPStub.open()
+    test = self()
+    seen = :counters.new(1, [])
+
+    HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      request = Jason.decode!(body)
+      :counters.add(seen, 1, 1)
+
+      if :counters.get(seen, 1) == 1 do
+        send(test, {:held, self()})
+
+        receive do
+          :release -> :ok
+        end
+      end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => request["id"],
+          "error" => %{"code" => -32001, "message" => "held and refused"}
+        })
+      )
+    end)
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "slow",
+        url: "http://127.0.0.1:#{stub.port}/mcp"
+      })
+
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("slow", athanor.id) end)
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    html = pushed(fn -> render_click(view, "test", %{"name" => "slow"}) end)
+    assert_receive {:held, held}, @answered_ms
+
+    try do
+      assert is_binary(html), "the page did not answer while the server held the connect"
+      assert html =~ "Testing slow…"
+      [call] = running_calls(view)
+
+      # A second Test, and another row call, while it runs start nothing.
+      assert is_binary(pushed(fn -> render_click(view, "test", %{"name" => "slow"}) end))
+      assert is_binary(pushed(fn -> render_click(view, "refresh", %{"name" => "slow"}) end))
+      assert running_calls(view) == [call]
+
+      # Held past the browser's wait, and past it twice, the page still
+      # says it is testing.
+      Process.sleep(2 * @push_timeout_ms)
+      assert render(view) =~ "Testing slow…"
+    after
+      send(held, :release)
+    end
+
+    html = answered(view)
+    refute html =~ "Testing slow…"
+    assert flash(view, "error") =~ "Test slow: "
+    assert flash(view, "error") =~ "held and refused"
   end
 
   @echoed "sk-echo-live-0123456789"
@@ -242,20 +349,22 @@ defmodule PrismWeb.ProgramsLiveTest do
           "headers" => %{"Authorization" => "vault:echo-key"}
         })
 
-      added =
-        view
-        |> form("form[phx-submit=add_server]", %{"name" => "echo", "config" => config})
-        |> render_submit()
+      view
+      |> form("form[phx-submit=add_server]", %{"name" => "echo", "config" => config})
+      |> render_submit()
+
+      added = answered(view)
 
       assert flash(view, "error") == "'echo' added — rejected credential [REDACTED]"
       refute added =~ @echoed
 
       view |> element("tr[phx-value-name=echo]") |> render_click()
 
-      tested =
-        view
-        |> element(~s(button[phx-click="test"][phx-value-name="echo"]))
-        |> render_click()
+      view
+      |> element(~s(button[phx-click="test"][phx-value-name="echo"]))
+      |> render_click()
+
+      tested = answered(view)
 
       assert flash(view, "error") == "Test echo: rejected credential [REDACTED]"
       refute tested =~ @echoed
@@ -480,6 +589,11 @@ defmodule PrismWeb.ProgramsLiveTest do
     entry.id
   end
 
+  # The terminal running: its start answered and the page attached to its
+  # session, so a line the program writes now reaches the page.
+  defp running!(view),
+    do: assert(eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end))
+
   # Until `fun` holds, or a bound passes.
   defp eventually(fun, tries \\ 50) do
     cond do
@@ -504,6 +618,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> render_submit()
 
     assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^entry}, _}, 2_000
+    running!(view)
     assert has_element?(view, ~s([data-test="sign-in-terminal"]))
 
     # The program's line, with the colour a terminal draws it in, shows as text.
@@ -530,6 +645,110 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute has_element?(view, ~s([data-test="terminal-input"]))
   end
 
+  # A start waits on the backends service, here held at its open, and a
+  # line sent waits on the relay, here held at the service's send: each
+  # past the browser's wait.
+  test "a sign-in's start and a line sent, each held past the browser's wait, answer at once and say so",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = pipe_row!(athanor)
+    entry = login!(user, athanor, "claude-login", "claude")
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+
+    Scripted.hold(fake, "opened")
+
+    html =
+      pushed(fn ->
+        view
+        |> form(~s([data-test="home-actions"] form[phx-submit="sign_in"]), %{"entry" => entry})
+        |> render_submit()
+      end)
+
+    assert_receive {:held, "opened", opened}, @answered_ms
+
+    try do
+      assert is_binary(html), "the page did not answer while the service held the start"
+      assert html =~ "Starting…"
+      Process.sleep(2 * @push_timeout_ms)
+      assert render(view) =~ "Starting…"
+    after
+      send(opened, :go)
+    end
+
+    running!(view)
+    Scripted.hold(fake, "send")
+    input = ~s([data-test="terminal-input"])
+
+    html =
+      pushed(fn ->
+        view |> form(input, %{"sign_in_line" => "code-1"}) |> render_submit()
+      end)
+
+    assert_receive {:held, "send", sending}, @answered_ms
+
+    try do
+      assert is_binary(html), "the page did not answer while the service held the line"
+      assert html =~ "Sending…"
+      [call] = running_calls(view)
+
+      # A second line while the first is sent starts nothing.
+      assert is_binary(
+               pushed(fn ->
+                 view |> form(input, %{"sign_in_line" => "code-2"}) |> render_submit()
+               end)
+             )
+
+      assert running_calls(view) == [call]
+    after
+      send(sending, :go)
+    end
+
+    assert_receive {:session, "send", %{"lines" => ["code-1"]}, _fields}, @answered_ms
+    html = answered(view)
+    refute html =~ "Sending…"
+    refute_received {:session, "send", %{"lines" => ["code-2"]}, _fields}
+
+    Scripted.end_sessions(fake, row.id, 0)
+
+    assert eventually(fn ->
+             has_element?(view, ~s([data-test="terminal-ended"]), "Signed in.")
+           end)
+  end
+
+  # A line sent as the command ends: its answer, that the session ended,
+  # reaches the page after the relay said how it ended (the line's task is
+  # held back here until it has), and the end's own words stay.
+  test "a line answered after the sign-in ended leaves the end's words",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = pipe_row!(athanor)
+    entry = login!(user, athanor, "claude-login", "claude")
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    sign_in(view, "claude", entry)
+    running!(view)
+
+    Scripted.hold(fake, "send")
+    view |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "late"}) |> render_submit()
+    assert_receive {:held, "send", sending}, @answered_ms
+    [call] = running_calls(view)
+    :erlang.suspend_process(call)
+
+    try do
+      Scripted.end_sessions(fake, row.id, 0)
+      send(sending, :go)
+
+      assert eventually(fn ->
+               has_element?(view, ~s([data-test="terminal-ended"]), "Signed in.")
+             end)
+    after
+      :erlang.resume_process(call)
+    end
+
+    answered(view)
+    assert has_element?(view, ~s([data-test="terminal-ended"]), "Signed in.")
+  end
+
   # One terminal, one session: selecting another target closes the session
   # running, the new terminal sends to its own, and its heading names it.
   test "selecting another program's sign-in closes the one running and sends to the new one",
@@ -543,6 +762,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     {view, _html} = mount_athanor(conn, "/programs", athanor)
     sign_in(view, "claude", a)
     assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
+    running!(view)
     Scripted.write(fake, claude.id, "first")
     assert eventually(fn -> has_element?(view, ~s([data-test="terminal-lines"]), "first") end)
     assert_receive {:session, "recv", %{"session" => session_a}, _fields}, 2_000
@@ -585,6 +805,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     {view, _html} = mount_athanor(conn, "/programs", athanor)
     sign_in(view, "claude", entry)
     assert_receive {:session, "open", %{"home_id" => ^entry}, _fields}, 2_000
+    running!(view)
     Scripted.write(fake, row.id, canary)
     assert eventually(fn -> has_element?(view, ~s([data-test="terminal-lines"]), canary) end)
 
@@ -692,6 +913,8 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> form(~s([data-test="home-actions"] form[phx-submit="reset_home"]), %{"entry" => entry})
     |> render_submit()
 
+    answered(view)
+
     assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry}, _fields}, 2_000
     assert flash(view, "info") == "The folder is empty again."
     assert render(view) =~ "Reset folder"
@@ -714,6 +937,8 @@ defmodule PrismWeb.ProgramsLiveTest do
       "disk_mib" => "2048"
     })
     |> render_submit()
+
+    answered(view)
 
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "claude")
     assert row.transport == "pipe"
@@ -757,6 +982,8 @@ defmodule PrismWeb.ProgramsLiveTest do
     })
     |> render_submit()
 
+    answered(view)
+
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "gh")
     assert row.transport == "stdio"
     assert row.home == "kept"
@@ -782,6 +1009,8 @@ defmodule PrismWeb.ProgramsLiveTest do
     })
     |> render_submit()
 
+    answered(view)
+
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
     assert Jason.decode!(row.hosts) == ["api.example.com", "registry.npmjs.org"]
 
@@ -794,16 +1023,19 @@ defmodule PrismWeb.ProgramsLiveTest do
            )
 
     view |> form("form#hosts-fetch", %{"hosts" => "api.example.com"}) |> render_submit()
+    answered(view)
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
     assert Jason.decode!(row.hosts) == ["api.example.com"]
 
     view |> form("form#hosts-fetch", %{"hosts" => "*.example.com"}) |> render_submit()
+    answered(view)
     assert flash(view, "error") =~ "config.hosts"
 
     assert {:ok, %{hosts: ~s(["api.example.com"])}} =
              Arca.McpServerStorage.get(ctx(athanor), "fetch")
 
     view |> form("form#hosts-fetch", %{"hosts" => ""}) |> render_submit()
+    answered(view)
     assert {:ok, %{hosts: nil}} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
     assert has_element?(view, ~s([data-test="program-hosts"]), "every public host")
   end

@@ -10,7 +10,7 @@ defmodule PrismWeb.SignInTerminalComponent do
   On its first update it asks `mcp_servers.sign_in` for the row and the
   entry, which opens the session and starts a relay bound to the person's
   session, and attaches the page's process to it
-  (`Opus.Programs.sign_in_attach/3`), telling the page
+  (`Opus.Programs.sign_in_attach/3`); the start tells the page
   `{PrismWeb.SignInTerminalComponent, :started, id, token}` so it closes
   this session before it opens a terminal for another target: each
   terminal holds one session, under an id of its own. The page forwards each relay message,
@@ -28,6 +28,15 @@ defmodule PrismWeb.SignInTerminalComponent do
   comprehension (whose per-line variables LiveView keeps), so the page's
   state in a crash report or LiveView's termination log carries none of
   their text.
+
+  The start, each line sent and the close call off the page's process
+  (`ask/3`): a start waits on the backends service for minutes and a line
+  or a close up to 35 s, and the browser gives up on an event it waits on
+  for 30 seconds. The relay is no task's: it runs under its own
+  supervisor and is attached here only once its start is answered, so a
+  page gone before that leaves it to end unattended. The frame says
+  Starting…, Sending… or Closing… until the answer comes, and takes no
+  second line or close meanwhile.
   """
 
   defmodule Lines do
@@ -87,6 +96,9 @@ defmodule PrismWeb.SignInTerminalComponent do
      |> assign(:token, nil)
      |> assign(:lines, %Lines{})
      |> assign(:state, :starting)
+     |> assign(:asked, false)
+     |> assign(:sending, false)
+     |> assign(:closing, false)
      |> assign(:reason, nil)
      |> assign(:sent, 0)}
   end
@@ -100,7 +112,7 @@ defmodule PrismWeb.SignInTerminalComponent do
   def update(assigns, socket) do
     socket = assign(socket, Map.drop(assigns, [:relay, :flash, :myself]))
 
-    if socket.assigns.token do
+    if socket.assigns.asked do
       {:ok, socket}
     else
       {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, start(&1)})
@@ -109,39 +121,114 @@ defmodule PrismWeb.SignInTerminalComponent do
   end
 
   @impl true
-  def handle_event("send", %{"sign_in_line" => line}, %{assigns: %{state: :running}} = socket) do
+  def handle_event(
+        "send",
+        %{"sign_in_line" => line},
+        %{assigns: %{state: :running, sending: false}} = socket
+      ) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case Opus.Programs.sign_in_send(socket.assigns.context, socket.assigns.token, line) do
-        :ok -> {:noreply, update(socket, :sent, &(&1 + 1))}
-        {:error, reason} -> {:noreply, ended(socket, reason)}
-      end
+      token = socket.assigns.token
+
+      {:noreply,
+       socket
+       |> assign(:sending, true)
+       |> ask(:send, &Opus.Programs.sign_in_send(&1, token, line))}
     end)
   end
 
   def handle_event("send", _params, socket), do: {:noreply, socket}
 
+  def handle_event("close", _params, %{assigns: %{closing: true}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("close", _params, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      if socket.assigns.token,
-        do: Opus.Programs.sign_in_close(socket.assigns.context, socket.assigns.token)
+      case socket.assigns.token do
+        nil ->
+          send(self(), {__MODULE__, :closed})
+          {:noreply, socket}
 
-      send(self(), {__MODULE__, :closed})
-      {:noreply, socket}
+        token ->
+          {:noreply,
+           socket
+           |> assign(:closing, true)
+           |> ask(:close, &Opus.Programs.sign_in_close(&1, token))}
+      end
     end)
   end
 
+  @impl true
+  def handle_async(:start, {:ok, {tag, result}}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, started(&1, result)})
+
+  def handle_async(:send, {:ok, {tag, result}}, socket),
+    do:
+      CyfrWeb.ContextGuard.deliver(
+        assign(socket, :sending, false),
+        tag,
+        &{:noreply, sent(&1, result)}
+      )
+
+  def handle_async(:close, {:ok, {tag, _result}}, socket),
+    do: CyfrWeb.ContextGuard.deliver(assign(socket, :closing, false), tag, &closed/1)
+
+  # Only the node's shutdown stops a call (`run_to_end/1`).
+  def handle_async(_name, {:exit, _reason}, socket), do: {:noreply, socket}
+
+  # The start, off the update that first renders the terminal: it opens
+  # the session, and the answer attaches this page's process to it. The
+  # page is told of the session as soon as it is open, whether or not this
+  # terminal is still there to take the answer, so it closes one opened
+  # for a terminal it has since replaced (`PrismWeb.ProgramsLive`).
   defp start(socket) do
     args = %{"name" => socket.assigns.row, "entry" => socket.assigns.entry}
+    page = self()
+    id = socket.assigns.id
 
-    with {:ok, result} <- call_tool(socket.assigns.context, "mcp_servers/sign_in", args),
-         token when is_binary(token) <- result[:session] || result["session"],
+    socket
+    |> assign(:asked, true)
+    |> ask(:start, fn ctx ->
+      with {:ok, result} <- call_tool(ctx, "mcp_servers/sign_in", args) do
+        token = result[:session] || result["session"]
+        if is_binary(token), do: send(page, {__MODULE__, :started, id, token})
+        {:ok, result}
+      end
+    end)
+  end
+
+  # A call of this terminal's, off the page's process and run to its end;
+  # its answer, `name`, comes back to `handle_async/3` held to the
+  # person's standing.
+  defp ask(socket, name, fun) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+
+    start_async(socket, name, fn -> {tag, run_to_end(fn -> fun.(ctx) end)} end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
+
+  defp started(socket, {:ok, result}) do
+    with token when is_binary(token) <- result[:session] || result["session"],
          :ok <- Opus.Programs.sign_in_attach(socket.assigns.context, token, self()) do
-      send(self(), {__MODULE__, :started, socket.assigns.id, token})
       socket |> assign(:token, token) |> assign(:state, :running)
     else
       {:error, reason} -> ended(socket, reason)
       _ -> ended(socket, "the sign-in did not start")
     end
+  end
+
+  defp started(socket, {:error, reason}), do: ended(socket, reason)
+
+  # A line's answer can come after the relay said how the sign-in ended,
+  # whose words it never replaces.
+  defp sent(%{assigns: %{state: :ended}} = socket, _result), do: socket
+  defp sent(socket, :ok), do: update(socket, :sent, &(&1 + 1))
+  defp sent(socket, {:error, reason}), do: ended(socket, reason)
+
+  defp closed(socket) do
+    send(self(), {__MODULE__, :closed})
+    {:noreply, socket}
   end
 
   defp relay(socket, {:lines, lines}) when is_list(lines) do
@@ -183,7 +270,9 @@ defmodule PrismWeb.SignInTerminalComponent do
         <span class="text-sm text-gray-300">
           Sign in <span class="font-mono text-blue-400">{@row}</span>
         </span>
-        <.button variant="ghost" phx-click="close" phx-target={@myself}>Close</.button>
+        <.button variant="ghost" phx-click="close" phx-target={@myself} disabled={@closing}>
+          {if @closing, do: "Closing…", else: "Close"}
+        </.button>
       </div>
       <pre
         id={"#{@id}-lines"}
@@ -210,7 +299,9 @@ defmodule PrismWeb.SignInTerminalComponent do
           placeholder="type an answer and press Enter"
           class="font-mono"
         />
-        <.button type="submit" variant="ghost">Send</.button>
+        <.button type="submit" variant="ghost" disabled={@sending}>
+          {if @sending, do: "Sending…", else: "Send"}
+        </.button>
       </form>
     </div>
     """

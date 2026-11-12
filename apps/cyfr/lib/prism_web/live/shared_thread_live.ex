@@ -60,6 +60,8 @@ defmodule PrismWeb.SharedThreadLive do
       |> assign(:last_seq, 0)
       |> assign(:input, "")
       |> assign(:renaming?, false)
+      # Someone being added by name, until the answer comes.
+      |> assign(:adding?, false)
       |> assign(:invite_link, nil)
       |> stream_configure(:messages, dom_id: &("shared-m-" <> &1.id))
       |> stream(:messages, [])
@@ -108,20 +110,16 @@ defmodule PrismWeb.SharedThreadLive do
     end
   end
 
+  # A name is asked of the registry, so the person is added off the
+  # pane's process (`add/2`): the browser gives up on an event it waits on
+  # for 30 seconds.
+  def handle_event("add", _params, %{assigns: %{adding?: true}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("add", %{"person" => person}, socket) do
     case person_name(person) do
-      {:ok, name} ->
-        tool(socket, "shared_thread/add", %{"handle" => name}, fn socket, _added ->
-          socket
-          |> load_people()
-          |> put_flash(
-            :info,
-            "Added. If they have never signed in here, their seat waits for their first sign-in."
-          )
-        end)
-
-      {:error, sentence} ->
-        {:noreply, put_flash(socket, :error, sentence)}
+      {:ok, name} -> {:noreply, add(socket, name)}
+      {:error, sentence} -> {:noreply, put_flash(socket, :error, sentence)}
     end
   end
 
@@ -269,6 +267,45 @@ defmodule PrismWeb.SharedThreadLive do
 
   defp call(socket, tool, args),
     do: call_tool(socket, tool, Map.put(args, "thread", socket.assigns.thread_id))
+
+  @impl true
+  def handle_async(:add, {:ok, {tag, result}}, socket),
+    do:
+      CyfrWeb.ContextGuard.deliver(
+        assign(socket, :adding?, false),
+        tag,
+        &{:noreply, added(&1, result)}
+      )
+
+  # Only the node's shutdown stops it (`run_to_end/1`).
+  def handle_async(:add, {:exit, _reason}, socket), do: {:noreply, socket}
+
+  # The add, off the event and run to its end: a person added stays added
+  # if the pane goes.
+  defp add(socket, name) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+    args = %{"handle" => name, "thread" => socket.assigns.thread_id}
+
+    socket
+    |> assign(:adding?, true)
+    |> start_async(
+      :add,
+      fn -> {tag, run_to_end(fn -> call_tool(ctx, "shared_thread/add", args) end)} end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
+
+  defp added(socket, {:ok, _added}) do
+    socket
+    |> load_people()
+    |> put_flash(
+      :info,
+      "Added. If they have never signed in here, their seat waits for their first sign-in."
+    )
+  end
+
+  defp added(socket, {:error, reason}), do: put_flash(socket, :error, error_message(reason))
 
   # A control's call, and what the pane does when it answers.
   defp tool(socket, tool, args, done) do
@@ -459,8 +496,12 @@ defmodule PrismWeb.SharedThreadLive do
             aria-label="Add someone by name"
             class="flex-1 rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white placeholder-gray-500"
           />
-          <button type="submit" class="rounded bg-gray-700 px-2 py-1 text-xs text-gray-100">
-            Add
+          <button
+            type="submit"
+            disabled={@adding?}
+            class="rounded bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:opacity-50"
+          >
+            {if @adding?, do: "Adding…", else: "Add"}
           </button>
         </form>
       </header>

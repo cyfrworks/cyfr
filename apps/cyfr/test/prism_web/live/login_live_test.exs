@@ -106,8 +106,73 @@ defmodule PrismWeb.LoginLiveTest do
       |> Prima.SignIn.fragment()
 
     render_hook(view, "account_answer", %{"answer" => answer})
-    {path, _flash} = assert_redirect(view)
+    {path, _flash} = assert_redirect(view, @answered_ms)
     assert "/auth/passkey/complete/" <> _ticket = path
+  end
+
+  # The account's directory, read for an account this CYFR has not read
+  # yet, holds the read here until the test releases it, past the
+  # browser's 30 s wait on the event (stood in for by `@push_timeout_ms`).
+  test "an answer whose account's directory is slow answers at once, says it is checking, checks once, and shows its outcome",
+       %{conn: conn, dir: dir, tls: tls} do
+    first!(dir)
+    test = self()
+    inner = DirectoryServer.handler(dir.dir)
+
+    slow =
+      DirectoryServer.Server.start(
+        tls[:server_config],
+        fn request ->
+          send(test, {:held, self()})
+
+          receive do
+            :release -> :ok
+          end
+
+          inner.(request)
+        end,
+        self()
+      )
+
+    on_exit(fn -> DirectoryServer.Server.stop(slow) end)
+    url = "https://dir-a.test:#{slow.port}"
+    Prima.Test.Env.put_app_env(:sanctum, :directory_url, url)
+    newcomer = dir.dir |> DirectoryServer.account!(url) |> passkey!(dir)
+
+    {:ok, view, _html} = live(conn, ~p"/login")
+    view |> element(~s([data-test="sign-in"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: hop})
+    [_page, fragment] = String.split(hop, "#", parts: 2)
+    {:ok, map} = Prima.SignIn.parse_fragment(fragment)
+    {:ok, request} = Prima.SignIn.decode(map)
+
+    answer =
+      request
+      |> DirectoryServer.passkey_answer(newcomer, hd(newcomer.passkeys))
+      |> Prima.SignIn.fragment()
+
+    html = handed(view, answer)
+    assert_receive {:held, held}, @answered_ms
+
+    try do
+      assert is_binary(html), "the page did not answer while the directory held the read"
+      assert html =~ "Checking what you signed."
+      refute_vocabulary(html)
+
+      # The same answer again starts no second check.
+      assert is_binary(handed(view, answer))
+      Process.sleep(2 * @push_timeout_ms)
+      assert render(view) =~ "Checking what you signed."
+    after
+      send(held, :release)
+    end
+
+    # The door does not admit this account: the page says so, as it does
+    # for any answer the door refuses.
+    html = render_async(view, @answered_ms)
+    assert html =~ Sanctum.Door.refusal_message()
+    refute html =~ "Checking what you signed."
+    refute_receive {:held, _second}, 500
   end
 
   describe "a registry signature's return" do
@@ -272,6 +337,7 @@ defmodule PrismWeb.LoginLiveTest do
 
       try do
         assert is_binary(html), "the page did not answer while the registry held the request"
+        html = render(view)
         assert html =~ "Sending what you signed."
         refute_vocabulary(html)
 
@@ -393,7 +459,8 @@ defmodule PrismWeb.LoginLiveTest do
       registry(asked.account, fn _request -> flunk("nothing is sent") end)
 
       {:ok, view, _html} = live(conn, ~p"/login")
-      html = render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
+      render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
+      html = render_async(view, @answered_ms)
 
       assert html =~ "nobody was signed in"
       refute_received {:registry_request, _}
@@ -404,7 +471,8 @@ defmodule PrismWeb.LoginLiveTest do
     first!(dir)
     {:ok, view, _html} = live(conn, ~p"/login")
 
-    html = render_hook(view, "account_answer", %{"answer" => "not-an-answer"})
+    render_hook(view, "account_answer", %{"answer" => "not-an-answer"})
+    html = render_async(view, @answered_ms)
     assert html =~ "nobody was signed in"
     refute_vocabulary(html)
   end
