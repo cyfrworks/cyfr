@@ -52,7 +52,9 @@ defmodule Sanctum.TestSeamsTest do
           File.read!(path) =~ ~r/^\s*config :sanctum,.*test_seams_permitted/m,
           do: Path.relative_to(path, root)
 
-    assert Enum.sort(setting) == ["apps/sanctum/config/config.exs", "config/test.exs"]
+    # The standalone build holds no `config/test.exs`; the umbrella holds both.
+    assert "apps/sanctum/config/config.exs" in setting
+    assert setting -- ["apps/sanctum/config/config.exs", "config/test.exs"] == []
 
     # The standalone build's file sets it under test alone.
     [_shipped, under_test] =
