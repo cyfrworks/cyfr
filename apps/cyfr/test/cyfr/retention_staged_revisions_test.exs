@@ -158,14 +158,22 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
     unit: unit
   } do
     old = lay_orphan(ctx, unit, 3)
-    state = %{interval: :timer.hours(999)}
+    Prima.Test.Env.put_app_env(:cyfr, :retention_scheduler_enabled, true)
 
     ControlPlane.record(:lost)
-    assert {:noreply, ^state} = Cyfr.RetentionScheduler.handle_info(:run_cleanup, state)
+    tick!()
     assert staged(ctx, unit) == [old]
 
     ControlPlane.record(:unclaimed)
-    assert {:noreply, ^state} = Cyfr.RetentionScheduler.handle_info(:run_cleanup, state)
+    tick!()
     assert staged(ctx, unit) == []
+  end
+
+  # One tick of the shipped scheduler, entered by its start: its first
+  # cycle runs before it answers a call, and its stop cancels the next.
+  defp tick! do
+    pid = start_supervised!(Cyfr.RetentionScheduler)
+    _ = :sys.get_state(pid)
+    :ok = stop_supervised(Cyfr.RetentionScheduler)
   end
 end

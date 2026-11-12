@@ -39,14 +39,14 @@ defmodule Cyfr.ControlPlaneWorkersTest do
         Arca.Test.Actor.issuance("user_1")
       )
 
-    state = %{interval: :timer.hours(999)}
+    Prima.Test.Env.put_app_env(:cyfr, :retention_scheduler_enabled, true)
 
     ControlPlane.record(:lost)
-    assert {:noreply, ^state} = Cyfr.RetentionScheduler.handle_info(:run_cleanup, state)
+    tick!()
     assert sessions(hash) == 1
 
     ControlPlane.record(:unclaimed)
-    assert {:noreply, ^state} = Cyfr.RetentionScheduler.handle_info(:run_cleanup, state)
+    tick!()
     assert sessions(hash) == 0
   end
 
@@ -65,6 +65,14 @@ defmodule Cyfr.ControlPlaneWorkersTest do
       assert :ignore = Aqua.Runner.start_link({thread_id, "ath_test"})
       assert Aqua.Runner.whereis(thread_id) == nil
     end
+  end
+
+  # One tick of the shipped scheduler, entered by its start: its first
+  # cycle runs before it answers a call, and its stop cancels the next.
+  defp tick! do
+    pid = start_supervised!(Cyfr.RetentionScheduler)
+    _ = :sys.get_state(pid)
+    :ok = stop_supervised(Cyfr.RetentionScheduler)
   end
 
   defp sessions(hash) do
