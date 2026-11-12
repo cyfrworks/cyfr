@@ -155,14 +155,14 @@ config :arca, auto_migrate: false
 # internal host. Tests that exercise the refusal override this.
 config :sanctum, private_egress_targets: ["localhost", "127.0.0.1/8", "::1"]
 
-# Sanctum's test seams, compiled in here alone (`Sanctum.seam/2`): a
-# membership-resolution override (`Sanctum.Tenancy`), a fixture's
-# generation snapshot for an issuance (`Sanctum.Issuance`), and the hooks a
-# suite sets at runtime (the caller memo's and the namespace cache's
-# bounds, the scripted WorkOS, OIDC issuer, directory and OAuth provider).
-# Every other build compiles none of them, so no setting a release is
-# given at start-up reaches one.
-config :sanctum, test_seams_permitted: true
+# The test permission (`Prima.TestSeam`), compiled in here and in the
+# islands' own test configurations alone: every test-only switch below and
+# hook a suite sets at runtime, in Sanctum, the host and Arca, is read only
+# by a build compiled with it, and so are Sanctum's membership-resolution
+# override (`Sanctum.Tenancy`) and a fixture's generation snapshot for an
+# issuance (`Sanctum.Issuance`). Every other build compiles none of them,
+# so a release runs as it ships whatever its start-up configuration says.
+config :prima, test_seams_permitted: true
 
 # Don't run the background retention sweeper in the test supervision tree —
 # its periodic DB cleanup conflicts with the Ecto sandbox connection lifecycle.
@@ -206,10 +206,8 @@ config :cyfr, Compendium.ProjectionReconciler, enabled: false
 # own tests run them directly. Every `:cyfr` switch in this file that
 # turns boot work off (the gate's, the database checks', the timers' and
 # watches', the recovery's), and the stand-ins' hooks, is a test seam
-# (`Cyfr.seam/2`): it takes BOTH this compile-time permission and its
-# runtime value, so a build compiled without the permission — every
-# release — runs as it ships whatever its configuration says.
-config :cyfr, test_seams_permitted: true
+# (`Prima.TestSeam`): it takes BOTH the compile-time permission above and
+# its runtime value.
 config :cyfr, provisioning_boot_enabled: false
 
 # Likewise the thread-runner boot recovery reads the repo before any
@@ -243,7 +241,8 @@ config :cyfr, worker_watch_enabled: false
 # renewing a DB lease) and is exercised directly. The key is
 # `Arca.ControlPlane`'s, which holds the lease row: off, it answers as a
 # member that claims no slot, from the cached standing, and every boot
-# holds.
+# holds. It is a test seam (`Prima.TestSeam`), as the pool and the turns
+# below are: a release claims its slot whatever its configuration says.
 config :arca, control_plane_claim_enabled: false
 
 # The control plane's own pool is off under the SQL sandbox: a second

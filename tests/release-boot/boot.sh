@@ -20,13 +20,11 @@
 #            running cell's one slot under this release, and none once the
 #            cell has stopped. A bearer provider set in the running release
 #            is never asked, and a bearer only it could claim is refused 401.
-#            The running release reads none of the host's test seams, with
-#            the switches the suite turns its timers and watches off with,
-#            and the test permission, set at runtime
-#            (tests/release-boot/host_seams.exs).
-#            The stopped release then reads none of
-#            Sanctum's test seams, with each seam's key and the test
-#            permission set at runtime (tests/release-boot/test_seams.exs).
+#            The running release reads none of Arca's, Sanctum's or the
+#            host's test seams, with each seam's key the probe reads and
+#            the test permission set at runtime: it still holds its slot,
+#            writes on its own pool and takes write turns, and starts every
+#            switched process as it ships (tests/release-boot/test_seams.exs).
 #            Then a public home `cyfr access public
 #            --domain cyfr.example.com` writes answers as https://cyfr.example.com
 #            (`Sanctum.origin()`), with nothing written for it but the
@@ -100,7 +98,7 @@
 #            The copy, handed at start-up the switch the sandboxed suite
 #            turns the boot's database checks off with
 #            (`ERL_AFLAGS=-cyfr database_checks_enabled false`), which a
-#            release compiles out (`Cyfr.seam/2`), is then refused for a
+#            release compiles out (`Prima.TestSeam.value/2`), is then refused for a
 #            keyring other than the one its database was sealed with, and
 #            for a database another version of the schema built.
 #
@@ -490,17 +488,17 @@ asked="$(cell_cyfr "$CELL" rpc '
   fail "a bearer only a provider set at run time could claim answered $bearer (provider asked: '$asked'): $(cat "$WORK/bearer.json" 2>/dev/null)"
 echo "a bearer the injected provider would accept: 401, the provider never asked"
 
-# The host's test seams, held to this release's compiled permission
-# (tests/release-boot/host_seams.exs): the permission and the suite's
-# switches set at runtime, and every switched process still starts as it
+# Every application's test seams, held to this release's compiled
+# permission (tests/release-boot/test_seams.exs): the permission and every
+# seam's key the probe reads set at runtime, and the release answers as it
 # ships.
-step "the running release reads none of the host's test seams"
-host_seams="$(cell_cyfr "$CELL" rpc \
-  "Code.eval_file(\"$ROOT/tests/release-boot/host_seams.exs\")" 2>&1)" ||
-  fail "the host's test-seam probe failed in the release: $host_seams"
-printf '%s\n' "$host_seams" | grep -qx 'CYFR_HOST_SEAMS=ok' ||
-  fail "the host's test-seam probe printed no answer: $host_seams"
-echo "the release starts every switched process as it ships"
+step "the running release reads none of the test seams"
+seams="$(cell_cyfr "$CELL" rpc \
+  "Code.eval_file(\"$ROOT/tests/release-boot/test_seams.exs\")" 2>&1)" ||
+  fail "the test-seam probe failed in the release: $seams"
+printf '%s\n' "$seams" | grep -qx 'CYFR_TEST_SEAMS=ok' ||
+  fail "the test-seam probe printed no answer: $seams"
+echo "the release keeps every seam's shipped value"
 
 server_stop
 
@@ -511,17 +509,6 @@ import json, sys
 sys.exit(0 if json.load(sys.stdin)["slots"] == [] else 1)' ||
   fail "live slots of the stopped cell were not empty: $stopped"
 echo "the stopped cell: $stopped"
-
-# Sanctum's test seams, held to this release's compiled permission
-# (tests/release-boot/test_seams.exs): every seam's key, and the permission,
-# set at runtime, and the release answers as it ships.
-step "the release reads none of Sanctum's test seams"
-seams="$(cell_cyfr "$CELL" eval \
-  "Code.eval_file(\"$ROOT/tests/release-boot/test_seams.exs\")" 2>&1)" ||
-  fail "the test-seam probe failed in the release: $seams"
-printf '%s\n' "$seams" | grep -qx 'CYFR_TEST_SEAMS=ok' ||
-  fail "the test-seam probe printed no answer: $seams"
-echo "the release keeps every seam's shipped value"
 
 after="$(cell_pending "$CELL")"
 if [ "${after:-1}" -ne 0 ]; then
@@ -1201,7 +1188,7 @@ server_stop
 
 # The switch the sandboxed suite turns the boot's database checks off with
 # (`config/test.exs`), handed to the release at start-up as `sys.config` or
-# `ERL_AFLAGS` could hand it. It is a test seam (`Cyfr.seam/2`), which a
+# `ERL_AFLAGS` could hand it. It is a test seam (`Prima.TestSeam.value/2`), which a
 # release compiles out: the boots below still check the keyring and the
 # schema.
 SUITE_DATABASE_CHECKS="-cyfr database_checks_enabled false"

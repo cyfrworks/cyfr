@@ -14,7 +14,9 @@ defmodule Prima.EffectsTest do
 
   The roster keeps its categories apart: the eight runtime primitives (the
   process and state owners), identifiers, encryption IVs, compile-time
-  embeds, and the one code-loading probe of an optional provider callback.
+  embeds, the one macro that reads configuration while its caller
+  compiles, and the one code-loading probe of an optional provider
+  callback.
   """
   use ExUnit.Case, async: true
 
@@ -48,6 +50,10 @@ defmodule Prima.EffectsTest do
     Prima.WorkerAuth => {:encryption_iv, [:entropy]},
     Prima.WIT => {:compile_time, [:file]},
     Prima.Version => {:compile_time, [:mix]},
+    # The test seams' gate: its macro reads the test permission while the
+    # module that calls it compiles (`Application.compile_env/4`), and its
+    # decision reaches nothing.
+    Prima.TestSeam => {:macro, [:app_env]},
     Prima.Provider => {:code_probe, [:code]}
   }
 
@@ -212,7 +218,9 @@ defmodule Prima.EffectsTest do
       end
 
       assert reaching(modules, :app_spec) == []
-      assert reaching(modules, :app_env) == [Prima.ComponentFeatures, Prima.JsonFormatter]
+
+      assert reaching(modules, :app_env) ==
+               [Prima.ComponentFeatures, Prima.JsonFormatter, Prima.TestSeam]
     end
 
     test "a compile-time row's beam reaches nothing" do
@@ -266,7 +274,7 @@ defmodule Prima.EffectsTest do
       assert for({m, {:primitive, _}} <- @roster, do: m) |> Enum.sort() == @primitives
 
       categories = @roster |> Map.values() |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
-      assert categories == [:code_probe, :compile_time, :encryption_iv, :id, :primitive]
+      assert categories == [:code_probe, :compile_time, :encryption_iv, :id, :macro, :primitive]
 
       for {module, _pin} <- @id_entropy_pins, do: assert({:id, _} = @roster[module])
       for {module, _pin} <- @iv_entropy_pins, do: assert({:encryption_iv, _} = @roster[module])

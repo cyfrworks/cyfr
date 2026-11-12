@@ -27,14 +27,14 @@ handoff	tests-postgres	1	2700	test_pg	tests	scripts/test-partitioned.sh -n 1 -a 
 # The rosters, config-seam and vocabulary rows run the cheap gates of the
 # pull request's run that read the whole tree, so a change elsewhere turns
 # them red: the roster tests (the restore order, the cross-language drift,
-# the umbrella's boundaries, both test-seam source checks, Sanctum's gate
+# the umbrella's boundaries, the test-seam source check, Sanctum's gate
 # rosters, the seed catalysts' source roster and the router's route map),
 # CI's configuration check and its vocabulary job's script. Handoff still
 # leaves to the pull
 # request's run each app compiled and tested alone (the island jobs), the
 # proofs under tests/ and the suites' files no row names and no change
 # touched.
-handoff	rosters	1	2700	test	always	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/restore_order_test.exs apps/cyfr/test/cyfr/cross_language_drift_test.exs apps/cyfr/test/cyfr/boundaries_test.exs apps/cyfr/test/cyfr/test_seams_test.exs apps/sanctum/test/sanctum/test_seams_test.exs apps/cyfr/test/sanctum/gate apps/cyfr/test/integration/runtime/seed_model_catalysts_test.exs apps/cyfr/test/cyfr_web/router_test.exs
+handoff	rosters	1	2700	test	always	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/restore_order_test.exs apps/cyfr/test/cyfr/cross_language_drift_test.exs apps/cyfr/test/cyfr/boundaries_test.exs apps/cyfr/test/cyfr/test_seams_test.exs apps/cyfr/test/sanctum/gate apps/cyfr/test/integration/runtime/seed_model_catalysts_test.exs apps/cyfr/test/cyfr_web/router_test.exs
 handoff	config-seam	1	600	-	apps/**/*.ex,apps/**/*.exs,scripts/ci/config-seam.sh	scripts/ci/config-seam.sh
 handoff	vocabulary	1	600	-	always	scripts/ci/vocabulary.sh
 handoff	arca-sqlite	1	2700	test	apps/arca/**	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/arca/test

@@ -11,7 +11,8 @@ defmodule Arca.DecisionLog do
 
   Audit is best-effort for the operation: the caller of `append/3` or
   `finish/4` waits on the database at most `budget_ms/0` (500 ms, unless
-  `:decision_log_budget_ms` is set), checkout included, and is answered a
+  a test build sets `:decision_log_budget_ms`, a test seam that
+  `Prima.TestSeam` keeps from every release), checkout included, and is answered a
   typed `Arca.DecisionLog.AuditFailure` when the write did not finish in
   time, never an unbounded wait. Neither retries anything;
   what the caller does with a failure is the caller's, and no failure here
@@ -93,6 +94,7 @@ defmodule Arca.DecisionLog do
 
   require Arca.Repo.Errors
   require Logger
+  require Prima.TestSeam
 
   alias Arca.Schemas.DecisionLog, as: Row
   alias Prima.Decision
@@ -139,7 +141,11 @@ defmodule Arca.DecisionLog do
 
   @doc "The database waiting budget of one append or finish, in milliseconds."
   @spec budget_ms() :: pos_integer()
-  def budget_ms, do: Application.get_env(:arca, :decision_log_budget_ms, @budget_ms)
+  def budget_ms,
+    do:
+      Prima.TestSeam.value(@budget_ms, fn ->
+        Application.get_env(:arca, :decision_log_budget_ms, @budget_ms)
+      end)
 
   @doc "How many writers this node runs at once; a write past them is `:capacity`."
   @spec max_writers() :: pos_integer()

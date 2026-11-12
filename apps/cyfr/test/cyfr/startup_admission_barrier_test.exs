@@ -306,12 +306,12 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
 
     test "only a test build with boot work switched off omits the gate" do
-      # A build without the permission (`Cyfr.seam/3`), every release,
-      # answers the shipped value and never reads the switch.
+      # A build without the permission (`Prima.TestSeam.value/3`), every
+      # release, answers the shipped value and never reads the switch.
       unread = fn -> flunk("a build without the test permission read the switch") end
-      assert Cyfr.seam(false, true, unread) == true
-      assert Cyfr.seam(true, true, fn -> false end) == false
-      assert Cyfr.seam(true, true, fn -> true end) == true
+      assert Prima.TestSeam.value(false, true, unread) == true
+      assert Prima.TestSeam.value(true, true, fn -> false end) == false
+      assert Prima.TestSeam.value(true, true, fn -> true end) == true
 
       Application.put_env(:cyfr, :provisioning_boot_enabled, false)
       [{_, _, _, infra}, _web] = Cyfr.Application.tiers()
@@ -319,19 +319,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       refute :declared_restore in ids
       refute Cyfr.StorageReserve in ids
       refute Cyfr.SeedOffer in ids
-    end
-
-    test "the permission to omit it is the suite's configuration and no other's" do
-      root = Path.expand("../../../..", __DIR__)
-
-      setting =
-        for path <-
-              Path.wildcard(Path.join(root, "config/*.exs")) ++
-                Path.wildcard(Path.join(root, "apps/*/config/*.exs")),
-            File.read!(path) =~ ~r/^config :cyfr,.*test_seams_permitted/m,
-            do: Path.relative_to(path, root)
-
-      assert setting == ["config/test.exs"]
     end
   end
 

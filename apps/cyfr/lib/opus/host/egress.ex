@@ -84,11 +84,13 @@ defmodule Opus.Host.Egress do
   starts it once for the node, before the host listener whose calls
   write it.
 
-  Names resolve through `:inet`, or, in a test build alone (`Cyfr.seam/2`),
+  Names resolve through `:inet`, or, in a test build alone (`Prima.TestSeam.value/2`),
   through the module the application's `:egress_resolver` names, a test's
   scripted resolver, which answers `getaddr/2` as `:inet` does; a release
   resolves through `:inet` whatever its configuration says.
   """
+
+  require Prima.TestSeam
 
   alias Opus.Attempt
   alias Prima.Authority
@@ -114,7 +116,9 @@ defmodule Opus.Host.Egress do
   @spec pin(Attempt.caller(), PinnedTarget.request() | attached()) :: answer()
   def pin(caller, %{url: url, purpose: _purpose} = request) when is_binary(url) do
     now = System.system_time(:millisecond)
-    resolver = Cyfr.seam(:inet, fn -> Application.get_env(:cyfr, :egress_resolver, :inet) end)
+
+    resolver =
+      Prima.TestSeam.value(:inet, fn -> Application.get_env(:cyfr, :egress_resolver, :inet) end)
 
     with {:ok, chain} <- Attempt.call(caller.execution_id, caller, :chain) do
       case decide(caller, request, chain, resolver, now) do

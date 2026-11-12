@@ -88,6 +88,8 @@ defmodule Arca.WriteTurn do
 
   use GenServer
 
+  require Prima.TestSeam
+
   @kinds [:audit, :control_plane]
 
   # Where a process keeps the turn it holds.
@@ -136,13 +138,15 @@ defmodule Arca.WriteTurn do
   # ---- a writer's side --------------------------------------------------------
 
   @doc """
-  Whether the lock step asks for turns. The in-code default is true, and
-  no environment variable reads it; only an explicit `false` turns it off,
-  which the test configurations set for the SQL sandbox (see the
-  moduledoc).
+  Whether the lock step asks for turns: always in a release. Only a test
+  build reads `:write_turn` (`Prima.TestSeam`), and only an explicit
+  `false` there turns them off, which the test configurations set for
+  the SQL sandbox (see the moduledoc).
   """
   @spec enabled?() :: boolean()
-  def enabled?, do: Application.get_env(:arca, :write_turn, true) != false
+  def enabled?,
+    do:
+      Prima.TestSeam.value(true, fn -> Application.get_env(:arca, :write_turn, true) != false end)
 
   @doc """
   Ask for a turn and wait for it until `deadline`, an absolute instant on

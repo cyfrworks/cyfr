@@ -84,6 +84,7 @@ defmodule Aqua.Crew do
   use GenServer
 
   require Logger
+  require Prima.TestSeam
 
   alias Aqua.Runner
   alias Aqua.Runner.Admission
@@ -436,7 +437,9 @@ defmodule Aqua.Crew do
 
   @doc false
   def start_link(opts \\ []) do
-    if Cyfr.seam(true, fn -> Application.get_env(:cyfr, :crew_delivery_enabled, true) end) do
+    if Prima.TestSeam.value(true, fn ->
+         Application.get_env(:cyfr, :crew_delivery_enabled, true)
+       end) do
       GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
     else
       :ignore

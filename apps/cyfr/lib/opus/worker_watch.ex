@@ -121,6 +121,7 @@ defmodule Opus.WorkerWatch do
   use GenServer
 
   require Logger
+  require Prima.TestSeam
 
   alias Arca.JobClaims
   alias Opus.{Attempt, Lapse, WorkerClient}
@@ -591,7 +592,7 @@ defmodule Opus.WorkerWatch do
   # ---------------------------------------------------------------------------
 
   defp enabled? do
-    Cyfr.seam(true, fn -> Application.get_env(:cyfr, :worker_watch_enabled, true) end)
+    Prima.TestSeam.value(true, fn -> Application.get_env(:cyfr, :worker_watch_enabled, true) end)
   end
 
   defp settings(opts) do

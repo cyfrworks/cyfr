@@ -61,6 +61,7 @@ defmodule Opus.Sweeper do
 
   use GenServer
   require Logger
+  require Prima.TestSeam
 
   alias Opus.{Attempt, Dispatch, Lapse}
 
@@ -76,7 +77,9 @@ defmodule Opus.Sweeper do
     # sandbox (the lent connection outlives its owning test) — the gate
     # `Opus.Schedules.Scheduler` and `Cyfr.RetentionScheduler` have too;
     # test config turns it off and the sweep logic is exercised directly.
-    if Cyfr.seam(true, fn -> Application.get_env(:cyfr, :execution_sweeper_enabled, true) end) do
+    if Prima.TestSeam.value(true, fn ->
+         Application.get_env(:cyfr, :execution_sweeper_enabled, true)
+       end) do
       GenServer.start_link(__MODULE__, opts, name: __MODULE__)
     else
       :ignore

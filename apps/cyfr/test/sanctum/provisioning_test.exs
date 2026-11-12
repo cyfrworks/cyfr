@@ -498,9 +498,13 @@ defmodule Sanctum.ProvisioningTest do
 
   # `Sanctum` compiled again under the permission the environment holds
   # now, replacing the loaded module.
-  defp compile_sanctum! do
+  defp compile_provisioning! do
     Code.compiler_options(ignore_module_conflict: true)
-    Code.compile_file(Path.expand("../../../../apps/sanctum/lib/sanctum.ex", __DIR__))
+
+    Code.compile_file(
+      Path.expand("../../../../apps/cyfr/lib/compendium/provisioning.ex", __DIR__)
+    )
+
     :ok
   end
 
@@ -530,19 +534,25 @@ defmodule Sanctum.ProvisioningTest do
 
     # The real path: the whole fill is a task the sign-in does not await,
     # stopped at the test's end before the paths it fills under are put back.
-    # It is a release's: `Sanctum` compiled as a release compiles it, without
-    # the test permission, and the inline switch set as start-up
-    # configuration could set it, which such a build never reads
-    # (`Sanctum.seam/2`). A fill that ran inline would wait here on the
-    # registry, bounded by the pull budget, and the claim would be failed.
-    # Put back in order when the test ends: the permission, then `Sanctum`
-    # compiled with it, then the compiler's options.
+    # It is a release's: `Compendium.Provisioning`, whose read the switch is,
+    # compiled as a release compiles it, without the test permission, and
+    # the inline switch set as start-up configuration could set it, which
+    # such a build never reads (`Prima.TestSeam.value/2`). A fill that ran
+    # inline would wait here on the registry, bounded by the pull budget,
+    # and the claim would be failed. Put back in order when the test ends:
+    # the permission, then the module compiled with it, then the compiler's
+    # options.
     options = Code.compiler_options()
     on_exit(fn -> Code.compiler_options(options) end)
-    on_exit(fn -> compile_sanctum!() end)
-    Prima.Test.Env.put_app_env(:sanctum, :test_seams_permitted, false)
-    compile_sanctum!()
-    assert Sanctum.seam(:shipped, fn -> :read end) == :shipped
+    on_exit(fn -> compile_provisioning!() end)
+    Prima.Test.Env.put_app_env(:prima, :test_seams_permitted, false)
+    compile_provisioning!()
+
+    assert Code.eval_string(
+             "require Prima.TestSeam; Prima.TestSeam.value(:shipped, fn -> :read end)"
+           ) ==
+             {:shipped, []}
+
     Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, true)
     Prima.Test.Env.put_app_env(:cyfr, :provisioning_required_pull_budget_ms, 10_000)
     Cyfr.Test.Sandbox.stop_work_on_exit()

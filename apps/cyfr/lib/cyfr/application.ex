@@ -23,6 +23,7 @@ defmodule Cyfr.Application do
     check: [aliases: true]
 
   require Logger
+  require Prima.TestSeam
 
   use Application
 
@@ -773,11 +774,13 @@ defmodule Cyfr.Application do
       # status watch they read.
       {Aqua.Supervisor,
        thread_recovery:
-         Cyfr.seam(true, fn -> Application.get_env(:cyfr, :thread_recovery, true) end),
+         Prima.TestSeam.value(true, fn -> Application.get_env(:cyfr, :thread_recovery, true) end),
        status_watch:
          switch!(
            :status_watch_enabled,
-           Cyfr.seam(true, fn -> Application.get_env(:cyfr, :status_watch_enabled, true) end)
+           Prima.TestSeam.value(true, fn ->
+             Application.get_env(:cyfr, :status_watch_enabled, true)
+           end)
          )},
       Emissary.Supervisor,
       # Recurring component executions: the runs the scheduler fires are
@@ -835,11 +838,14 @@ defmodule Cyfr.Application do
   end
 
   # The boot gate, the seed offer and the no-person notice: a test seam
-  # (`Cyfr.seam/2`), so only a build compiled with the test permission
+  # (`Prima.TestSeam.value/2`), so only a build compiled with the test permission
   # (`config/test.exs` alone sets it) omits them, when its switch turns
   # boot work off; a release runs them whatever its configuration says.
   defp boot_work?,
-    do: Cyfr.seam(true, fn -> Application.get_env(:cyfr, :provisioning_boot_enabled, true) end)
+    do:
+      Prima.TestSeam.value(true, fn ->
+        Application.get_env(:cyfr, :provisioning_boot_enabled, true)
+      end)
 
   # The execution slots (`Opus.Slots`) boot on the caps the operator
   # configured (`CYFR_OPUS_MAX_CONCURRENT`,
@@ -954,7 +960,7 @@ defmodule Cyfr.Application do
   # `Arca.SchemaFingerprint`, `Arca.TenantTables` and
   # `Cyfr.KeyringFingerprint` directly. The schema check is a call in
   # `start/2`; the keyring check is the tree's one-shot child. The switch
-  # is a test seam (`Cyfr.seam/2`): a release runs both checks whatever its
+  # is a test seam (`Prima.TestSeam.value/2`): a release runs both checks whatever its
   # configuration says.
   defp schema_check! do
     if database_checks?() do
@@ -970,7 +976,10 @@ defmodule Cyfr.Application do
   end
 
   defp database_checks?,
-    do: Cyfr.seam(true, fn -> Application.get_env(:cyfr, :database_checks_enabled, true) end)
+    do:
+      Prima.TestSeam.value(true, fn ->
+        Application.get_env(:cyfr, :database_checks_enabled, true)
+      end)
 
   # The claimant is a permanent GenServer with a DB lease; the test
   # suite's sandbox cannot lend it a connection, so the suite turns it off

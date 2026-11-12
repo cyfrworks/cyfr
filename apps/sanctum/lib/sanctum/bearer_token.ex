@@ -8,6 +8,8 @@ defmodule Sanctum.BearerToken do
   Reads the first Authorization header and returns a nonempty bearer token or nil.
   """
 
+  require Prima.TestSeam
+
   @doc "The bearer token from the first authorization header, or `nil`."
   @spec read(Plug.Conn.t()) :: String.t() | nil
   def read(%Plug.Conn{} = conn) do
@@ -20,9 +22,10 @@ defmodule Sanctum.BearerToken do
   @doc """
   The bearer provider the test harness installs (`Sanctum.Auth`'s
   `current_user/1`, `:sanctum, :bearer_provider`), or `nil`. A test seam
-  only a test build reads (`Sanctum.seam/2`): every release answers `nil`,
+  only a test build reads (`Prima.TestSeam.value/2`): every release answers `nil`,
   whatever the key says, so no bearer of a provider's is ever asked about.
   """
   @spec provider() :: module() | nil
-  def provider, do: Sanctum.seam(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)
+  def provider,
+    do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)
 end

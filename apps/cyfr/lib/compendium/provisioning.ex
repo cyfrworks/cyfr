@@ -77,6 +77,7 @@ defmodule Compendium.Provisioning do
   """
 
   require Logger
+  require Prima.TestSeam
 
   alias Compendium.{AutoIndexer, Pull}
   alias Sanctum.Context
@@ -149,9 +150,11 @@ defmodule Compendium.Provisioning do
         not_started.()
         :ok
 
-      # A test seam only a test build reads (`Sanctum.seam/2`): a release
+      # A test seam only a test build reads (`Prima.TestSeam.value/2`): a release
       # always fills in the background.
-      Sanctum.seam(false, fn -> Application.get_env(:sanctum, :provisioning_inline, false) end) ->
+      Prima.TestSeam.value(false, fn ->
+        Application.get_env(:sanctum, :provisioning_inline, false)
+      end) ->
         fun.()
         :ok
 

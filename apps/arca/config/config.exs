@@ -100,6 +100,11 @@ if config_env() == :test do
   # the test's, and every assertion reads the row right after the call.
   config :arca, record_sink_inline: true
 
+  # The test permission, compiled in for this build's suite as
+  # `config/test.exs` compiles it in for the umbrella's: the three switches
+  # below are test seams (`Prima.TestSeam`), which a release never reads.
+  config :prima, test_seams_permitted: true
+
   # The control plane's own pool is off under the sandbox, as in
   # `config/test.exs`: a second connection neither sees nor rolls back a
   # test's rows, and on SQLite it waits behind a test's open write.

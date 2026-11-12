@@ -15,7 +15,8 @@ defmodule Arca.RecordSink do
   sweep; tests use it for ordering); `terminate/2` drains the buffered
   items — casts still in the mailbox at shutdown are lost, which is the
   write-behind's honest cost. With `config :arca, record_sink_inline:
-  true` (the test env) every enqueue writes at once in the caller — the
+  true` (the test env, a test seam only a test build reads:
+  `Prima.TestSeam`) every enqueue writes at once in the caller — the
   sandbox never sees another process's writes.
 
   ## Where it starts
@@ -35,6 +36,7 @@ defmodule Arca.RecordSink do
 
   require Logger
   require Arca.Repo.Errors
+  require Prima.TestSeam
   import Ecto.Query
 
   @flush_ms 250
@@ -105,7 +107,9 @@ defmodule Arca.RecordSink do
     end
   end
 
-  defp inline?, do: Application.get_env(:arca, :record_sink_inline, false)
+  defp inline?,
+    do:
+      Prima.TestSeam.value(false, fn -> Application.get_env(:arca, :record_sink_inline, false) end)
 
   # ---------------------------------------------------------------------------
   # GenServer

@@ -19,6 +19,7 @@ defmodule Compendium.Provider do
   def service, do: "compendium"
 
   require Logger
+  require Prima.TestSeam
 
   # ============================================================================
   # Status
@@ -45,7 +46,9 @@ defmodule Compendium.Provider do
         # No registry is not a registry that is down.
         "disabled"
 
-      Cyfr.seam(true, fn -> Application.get_env(:cyfr, :registry_health_probe, true) end) ->
+      Prima.TestSeam.value(true, fn ->
+        Application.get_env(:cyfr, :registry_health_probe, true)
+      end) ->
         probed_registry_health(Compendium.RegistryHost.canonical_host())
 
       true ->

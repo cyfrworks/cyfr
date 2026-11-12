@@ -26,6 +26,7 @@ defmodule Sanctum.Namespace do
   """
 
   require Logger
+  require Prima.TestSeam
 
   alias Sanctum.Tenancy.Users
 
@@ -35,7 +36,7 @@ defmodule Sanctum.Namespace do
   # Only positive results cache: an unclaimed person stays on the live path
   # so a fresh claim is visible immediately. A release uses this TTL and
   # never reads `:namespace_cache_ttl_ms`, a test seam only a test build
-  # reads (`Sanctum.seam/2`); the test config sets it to 0, since a sandbox
+  # reads (`Prima.TestSeam.value/2`); the test config sets it to 0, since a sandbox
   # rollback is a write no invalidation sees.
   @cache_ttl_ms 60_000
 
@@ -90,7 +91,7 @@ defmodule Sanctum.Namespace do
     key = {:namespace_slug, user_id}
     # The bound is a test seam only a test build reads.
     ttl =
-      Sanctum.seam(@cache_ttl_ms, fn ->
+      Prima.TestSeam.value(@cache_ttl_ms, fn ->
         Application.get_env(:sanctum, :namespace_cache_ttl_ms, @cache_ttl_ms)
       end)
 

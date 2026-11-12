@@ -71,13 +71,14 @@ defmodule Compendium.ProjectionReconciler do
 
   `enabled`, `interval_ms` and `settle_after_ms` are fixed in a release.
   `config :cyfr, Compendium.ProjectionReconciler` is read through
-  `Cyfr.seam/2`, so only a build that permits test seams takes other
+  `Prima.TestSeam.value/2`, so only a build that permits test seams takes other
   values.
   """
 
   use GenServer
 
   require Logger
+  require Prima.TestSeam
 
   alias Arca.{StorageProjectionChanges, StorageProjectionRoots}
   alias Sanctum.Context
@@ -293,7 +294,7 @@ defmodule Compendium.ProjectionReconciler do
     do:
       Keyword.merge(
         @defaults,
-        Cyfr.seam([], fn -> Application.get_env(:cyfr, __MODULE__, []) end)
+        Prima.TestSeam.value([], fn -> Application.get_env(:cyfr, __MODULE__, []) end)
       )
 
   # ---------------------------------------------------------------------------
