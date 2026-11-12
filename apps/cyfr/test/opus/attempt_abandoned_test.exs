@@ -25,8 +25,11 @@ defmodule Opus.AttemptAbandonedTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+    ctx = %{Sanctum.TestContext.local(:api) | athanor_id: Prima.UUID7.generate_id("ath")}
+    Arca.Test.Actor.athanor!(ctx.athanor_id)
+    fixture = AttemptFixtures.attached!(ctx: ctx)
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, fixture.athanor_id) end)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
     {:ok, fixture: fixture, id: fixture.execution_id}
   end
 
