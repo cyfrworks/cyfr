@@ -624,10 +624,6 @@ defmodule Compendium do
   @spec skills_index_limit() :: pos_integer()
   defdelegate skills_index_limit(), to: AquaSkills, as: :index_limit
 
-  @doc "Whether a name is a valid agent or skill name (`Compendium.AquaPath.valid_name?/1`)."
-  @spec valid_agent_name?(term()) :: boolean()
-  defdelegate valid_agent_name?(name), to: AquaPath, as: :valid_name?
-
   @doc "The storage path of an agent's file (`Compendium.AquaPath.agent_file/1`)."
   @spec agent_file_path(String.t()) :: [String.t()]
   defdelegate agent_file_path(name), to: AquaPath, as: :agent_file
@@ -635,8 +631,4 @@ defmodule Compendium do
   @doc "The storage path of a skill's directory (`Compendium.AquaPath.skill_dir/1`)."
   @spec skill_dir(String.t()) :: [String.t()]
   defdelegate skill_dir(name), to: AquaPath
-
-  @doc "Whether an agent name is the soul's (`Compendium.AquaPath.soul?/1`)."
-  @spec soul_agent_file?(term()) :: boolean()
-  defdelegate soul_agent_file?(name), to: AquaPath, as: :soul?
 end

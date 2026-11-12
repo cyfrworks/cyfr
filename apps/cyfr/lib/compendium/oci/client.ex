@@ -608,7 +608,7 @@ defmodule Compendium.OCI.Client do
 
     # origin: :remote marks these publishes as carrying registry-sourced
     # content, so Registry refuses the local namespace even if a future ref
-    # shape slips past refuse_local_namespace/1. The row's source says how
+    # shape slips past refuse_local_namespace/1. The registry records how
     # the bytes arrived: pulled — "oci", whatever the type.
     case component_ref.type do
       "tincture" ->
@@ -627,7 +627,6 @@ defmodule Compendium.OCI.Client do
           [
             allow_overwrite: true,
             origin: :remote,
-            source: Compendium.Source.oci(),
             unit_files: unit_files
           ] ++ claim
         )
