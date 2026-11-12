@@ -132,8 +132,8 @@ defmodule Sanctum do
   def seam(default, read), do: seam(@test_seams_permitted, default, read)
 
   @doc false
-  # Pure decision seam, as `Cyfr.Application.bootstrap_skipped?/2` is: the
-  # build's permission, the shipped default and the seam's read.
+  # Pure decision seam, as `Cyfr.seam/3` is: the build's permission, the
+  # shipped default and the seam's read.
   @spec seam(boolean(), value, (-> value)) :: value when value: term()
   def seam(true, _default, read) when is_function(read, 0), do: read.()
   def seam(false, default, read) when is_function(read, 0), do: default

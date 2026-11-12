@@ -26,10 +26,6 @@ defmodule Cyfr.Application do
 
   use Application
 
-  # config:compile-runtime-ok — the permission is compiled in on purpose: a
-  # release is built without it, so no runtime setting can omit the gate.
-  @bootstrap_skip_permitted Application.compile_env(:cyfr, :bootstrap_skip_permitted, false)
-
   @impl true
   def start(_type, _args) do
     # A stop in this VM may have marked the LiveView socket draining; a
@@ -643,11 +639,10 @@ defmodule Cyfr.Application do
   # authority away and writes rows, which the latch never refuses. A
   # reserve directory the boot cannot use stops its start, and the boot.
   # Only the sandboxed test boot omits both, where no process may write
-  # before a test checks out the sandbox — see `bootstrap_skipped?/2`.
+  # before a test checks out the sandbox — see `boot_work?/0`.
   defp gate do
-    if bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()),
-      do: [],
-      else: [
+    if boot_work?(),
+      do: [
         %{
           id: :declared_restore,
           start: {__MODULE__, :declared_restore, []},
@@ -656,7 +651,8 @@ defmodule Cyfr.Application do
         },
         # 5 s: its stop, which holds no work in flight.
         Supervisor.child_spec(Cyfr.StorageReserve, shutdown: 5_000)
-      ]
+      ],
+      else: []
   end
 
   @doc """
@@ -776,9 +772,13 @@ defmodule Cyfr.Application do
       # Off in the test env: suites drive runners directly, and start the
       # status watch they read.
       {Aqua.Supervisor,
-       thread_recovery: Application.get_env(:cyfr, :thread_recovery, true),
+       thread_recovery:
+         Cyfr.seam(true, fn -> Application.get_env(:cyfr, :thread_recovery, true) end),
        status_watch:
-         switch!(:status_watch_enabled, Application.get_env(:cyfr, :status_watch_enabled, true))},
+         switch!(
+           :status_watch_enabled,
+           Cyfr.seam(true, fn -> Application.get_env(:cyfr, :status_watch_enabled, true) end)
+         )},
       Emissary.Supervisor,
       # Recurring component executions: the runs the scheduler fires are
       # tasks of their own, monitored by it. Last among the domains, so a
@@ -822,9 +822,9 @@ defmodule Cyfr.Application do
   # athanors that exist. Its start returns before the offer runs, so the
   # web tier does not wait for it; its failure is logged and never stops
   # the boot, and as a temporary child it restarts nothing. The sandboxed
-  # test boot omits it with the gate's runtime switch.
+  # test boot omits it with the gate.
   defp seed_offer do
-    if boot_work_enabled?(), do: [seed_offer_spec()], else: []
+    if boot_work?(), do: [seed_offer_spec()], else: []
   end
 
   @doc false
@@ -834,15 +834,12 @@ defmodule Cyfr.Application do
     Supervisor.child_spec({Cyfr.SeedOffer, sync: &Compendium.sync_seeds/0}, restart: :temporary)
   end
 
-  @doc false
-  # Pure decision seam: the gate is omitted only when the build was
-  # compiled with the test permission (`config/test.exs` alone sets it)
-  # AND the runtime switch turns boot work off. Either alone keeps it.
-  @spec bootstrap_skipped?(boolean(), boolean()) :: boolean()
-  def bootstrap_skipped?(skip_permitted?, boot_work_enabled?),
-    do: skip_permitted? == true and boot_work_enabled? == false
-
-  defp boot_work_enabled?, do: Application.get_env(:cyfr, :provisioning_boot_enabled, true)
+  # The boot gate, the seed offer and the no-person notice: a test seam
+  # (`Cyfr.seam/2`), so only a build compiled with the test permission
+  # (`config/test.exs` alone sets it) omits them, when its switch turns
+  # boot work off; a release runs them whatever its configuration says.
+  defp boot_work?,
+    do: Cyfr.seam(true, fn -> Application.get_env(:cyfr, :provisioning_boot_enabled, true) end)
 
   # The execution slots (`Opus.Slots`) boot on the caps the operator
   # configured (`CYFR_OPUS_MAX_CONCURRENT`,
@@ -956,9 +953,11 @@ defmodule Cyfr.Application do
   # test's sandbox; the suite turns them off and exercises
   # `Arca.SchemaFingerprint`, `Arca.TenantTables` and
   # `Cyfr.KeyringFingerprint` directly. The schema check is a call in
-  # `start/2`; the keyring check is the tree's one-shot child.
+  # `start/2`; the keyring check is the tree's one-shot child. The switch
+  # is a test seam (`Cyfr.seam/2`): a release runs both checks whatever its
+  # configuration says.
   defp schema_check! do
-    if Application.get_env(:cyfr, :database_checks_enabled, true) do
+    if database_checks?() do
       Arca.SchemaFingerprint.verify!()
       Arca.TenantTables.verify_roster!()
     end
@@ -967,10 +966,11 @@ defmodule Cyfr.Application do
   end
 
   defp database_checks do
-    if Application.get_env(:cyfr, :database_checks_enabled, true),
-      do: [Cyfr.KeyringFingerprint.Check],
-      else: []
+    if database_checks?(), do: [Cyfr.KeyringFingerprint.Check], else: []
   end
+
+  defp database_checks?,
+    do: Cyfr.seam(true, fn -> Application.get_env(:cyfr, :database_checks_enabled, true) end)
 
   # The claimant is a permanent GenServer with a DB lease; the test
   # suite's sandbox cannot lend it a connection, so the suite turns it off
@@ -1066,7 +1066,7 @@ defmodule Cyfr.Application do
   # connection here, skips it, and a store that cannot answer says
   # nothing rather than blocking the boot.
   defp notice_if_no_person do
-    unless bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()) do
+    if boot_work?() do
       case Sanctum.Tenancy.Users.list_by_id(limit: 1) do
         {:ok, []} -> Logger.warning(not_set_up_marker() <> " " <> not_set_up_notice())
         _people_or_unanswered -> :ok

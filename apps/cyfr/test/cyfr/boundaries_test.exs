@@ -1371,7 +1371,6 @@ defmodule Cyfr.BoundariesTest do
       assert gaps == [
                :oci_max_blob_bytes,
                :platform_ceiling,
-               :tincture_rate_limit_max,
                :webhook_max_body_bytes
              ]
     end

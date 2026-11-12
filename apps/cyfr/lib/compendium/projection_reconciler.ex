@@ -287,7 +287,12 @@ defmodule Compendium.ProjectionReconciler do
 
   # The defaults above are the shipped settings: only `config/test.exs`
   # names this module, to turn the process off.
-  defp config, do: Keyword.merge(@defaults, Application.get_env(:cyfr, __MODULE__, []))
+  defp config,
+    do:
+      Keyword.merge(
+        @defaults,
+        Cyfr.seam([], fn -> Application.get_env(:cyfr, __MODULE__, []) end)
+      )
 
   # ---------------------------------------------------------------------------
   # The process

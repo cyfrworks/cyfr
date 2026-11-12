@@ -209,7 +209,7 @@ defmodule Opus.Schedules.Scheduler do
     # Long-lived, querying on boot and on timers: under the test sandbox
     # it would keep a lent connection past its owner's exit, so its own
     # suite starts it explicitly and nothing else runs it there.
-    if Application.get_env(:cyfr, :cron_scheduler_enabled, true) do
+    if Cyfr.seam(true, fn -> Application.get_env(:cyfr, :cron_scheduler_enabled, true) end) do
       GenServer.start_link(__MODULE__, opts, name: __MODULE__)
     else
       :ignore

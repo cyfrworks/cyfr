@@ -133,7 +133,7 @@ defmodule Cyfr.RetentionScheduler do
   @type stopped :: :taken | :lapsed | :not_held | :unavailable
 
   def start_link(opts \\ []) do
-    if Application.get_env(:cyfr, :retention_scheduler_enabled, true) do
+    if Cyfr.seam(true, fn -> Application.get_env(:cyfr, :retention_scheduler_enabled, true) end) do
       GenServer.start_link(__MODULE__, opts, name: __MODULE__)
     else
       :ignore

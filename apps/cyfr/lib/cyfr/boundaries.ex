@@ -2418,7 +2418,6 @@ defmodule Cyfr.Boundaries do
     # sets it, and only a test build reads it (`Sanctum.seam/2`).
     bearer_provider: :seam,
     tenancy_resolver_override: :seam,
-    thread_recovery: :seam,
     # A fill run in the caller's process (`Compendium.Provisioning`); only
     # a test build reads it (`Sanctum.seam/2`).
     provisioning_inline: :seam,
@@ -2438,8 +2437,8 @@ defmodule Cyfr.Boundaries do
     directory_client: :seam,
     # The resolver a guest's outbound pin resolves through
     # (`Opus.Host.Egress`), which a suite sets to a scripted resolver so a
-    # pin's names never reach the network; a release never sets it, so
-    # names resolve through `:inet`.
+    # pin's names never reach the network; only a test build reads it
+    # (`Cyfr.seam/2`), so a release's names resolve through `:inet`.
     egress_resolver: :seam,
     # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
     # a hint no shipped preset holds and that preset's token endpoint, which
@@ -2447,9 +2446,9 @@ defmodule Cyfr.Boundaries do
     # one; only a test build reads it, so a release holds the shipped
     # presets alone.
     scripted_oauth_provider: :seam,
-    # Compiled in by `config/test.exs` alone; with the runtime switch off it
-    # lets the sandboxed suite boot omit the boot gate's children and the
-    # no-person notice (`Cyfr.Application.bootstrap_skipped?/2`).
+    # Compiled in by `config/test.exs` alone, it lets the host's test seams
+    # run (`Cyfr.seam/2`): the boot switches below and the hooks a suite
+    # points at its stand-ins; every release compiles them out.
     bootstrap_skip_permitted: :seam,
     # Compiled in by `config/test.exs` alone, shortening the transports'
     # retry backoff base (`Compendium.Transport.Retry`); never read at runtime.
@@ -2468,21 +2467,28 @@ defmodule Cyfr.Boundaries do
     # an issuance's generation snapshot); every release compiles them out.
     test_seams_permitted: :seam,
 
+    # The sandboxed suite's boot switches, each on by default: the boot
+    # gate's work, the database checks, the timers and watches, and the
+    # recovery and status watch a sandbox connection cannot lend itself
+    # to. Only a test build reads one (`Cyfr.seam/2`), so a release runs
+    # all of them whatever its configuration says.
+    cron_scheduler_enabled: :seam,
+    schedule_notes_enabled: :seam,
+    crew_delivery_enabled: :seam,
+    status_watch_enabled: :seam,
+    execution_sweeper_enabled: :seam,
+    execution_archive_watch_enabled: :seam,
+    worker_watch_enabled: :seam,
+    external_server_reconciler_enabled: :seam,
+    provisioning_boot_enabled: :seam,
+    retention_scheduler_enabled: :seam,
+    database_checks_enabled: :seam,
+    thread_recovery: :seam,
+
     # Boot switches with an in-code default; flipping one is a code change.
-    cron_scheduler_enabled: :default,
-    schedule_notes_enabled: :default,
-    crew_delivery_enabled: :default,
-    status_watch_enabled: :default,
-    execution_sweeper_enabled: :default,
-    execution_archive_watch_enabled: :default,
-    worker_watch_enabled: :default,
-    external_server_reconciler_enabled: :default,
-    provisioning_boot_enabled: :default,
-    retention_scheduler_enabled: :default,
     control_plane_claim_enabled: :default,
     control_plane_pool: :default,
     write_turn: :default,
-    database_checks_enabled: :default,
     telemetry_console_enabled: :default,
 
     # The at-rest keyring: `Cyfr.Application` resolves it at boot, from
@@ -2519,12 +2525,13 @@ defmodule Cyfr.Boundaries do
     # every release, which reads no setting for it; the suite turns the
     # memo off.
     caller_memo_ttl_ms: :seam,
-    # The registry probe's switch, read by `Compendium.Provider.status/0`.
+    # The registry probe's switch, read by `Compendium.Provider.status/0`;
+    # only a test build reads it (`Cyfr.seam/2`), so a release probes.
     registry_health_probe: :seam,
-
-    # `TinctureRateLimit`'s own moduledoc calls this an override an operator
-    # sets, and only the suite can set it.
-    tincture_rate_limit_max: :missing_lever
+    # The tincture pipelines' rate ceiling the suite raises
+    # (`CyfrWeb.Plugs.TinctureRateLimit`); only a test build reads it
+    # (`Cyfr.seam/2`), so a release meters at each pipeline's own ceiling.
+    tincture_rate_limit_max: :seam
   }
 
   @doc """

@@ -74,4 +74,26 @@ defmodule Cyfr do
       TelemetryBridge
     ],
     check: [aliases: true]
+
+  # config:compile-runtime-ok — the permission is compiled in on purpose: a
+  # release is built without it, so no setting it is given at start-up
+  # (`sys.config`, `ERL_AFLAGS`) reaches a test seam.
+  @test_seams_permitted Application.compile_env(:cyfr, :bootstrap_skip_permitted, false)
+
+  @doc false
+  # A test seam's value: what `read` answers in a build compiled with the
+  # test permission (`config/test.exs` alone sets it), else `default`, with
+  # `read` never called, so a release reads no seam's key at all. The
+  # host's seams are the boot switches the sandboxed suite turns off (the
+  # boot gate, the database checks, the timers and watches) and the hooks
+  # it points at its stand-ins.
+  @spec seam(value, (-> value)) :: value when value: term()
+  def seam(default, read), do: seam(@test_seams_permitted, default, read)
+
+  @doc false
+  # Pure decision seam, as `Sanctum.seam/3` is: the build's permission,
+  # the shipped default and the seam's read.
+  @spec seam(boolean(), value, (-> value)) :: value when value: term()
+  def seam(true, _default, read) when is_function(read, 0), do: read.()
+  def seam(false, default, read) when is_function(read, 0), do: default
 end

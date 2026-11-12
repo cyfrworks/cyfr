@@ -306,10 +306,12 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
 
     test "only a test build with boot work switched off omits the gate" do
-      refute Cyfr.Application.bootstrap_skipped?(false, false)
-      refute Cyfr.Application.bootstrap_skipped?(false, true)
-      refute Cyfr.Application.bootstrap_skipped?(true, true)
-      assert Cyfr.Application.bootstrap_skipped?(true, false)
+      # A build without the permission (`Cyfr.seam/3`), every release,
+      # answers the shipped value and never reads the switch.
+      unread = fn -> flunk("a build without the test permission read the switch") end
+      assert Cyfr.seam(false, true, unread) == true
+      assert Cyfr.seam(true, true, fn -> false end) == false
+      assert Cyfr.seam(true, true, fn -> true end) == true
 
       Application.put_env(:cyfr, :provisioning_boot_enabled, false)
       [{_, _, _, infra}, _web] = Cyfr.Application.tiers()

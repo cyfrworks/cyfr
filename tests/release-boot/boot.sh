@@ -20,6 +20,10 @@
 #            running cell's one slot under this release, and none once the
 #            cell has stopped. A bearer provider set in the running release
 #            is never asked, and a bearer only it could claim is refused 401.
+#            The running release reads none of the host's test seams, with
+#            the switches the suite turns its timers and watches off with,
+#            and the test permission, set at runtime
+#            (tests/release-boot/host_seams.exs).
 #            The stopped release then reads none of
 #            Sanctum's test seams, with each seam's key and the test
 #            permission set at runtime (tests/release-boot/test_seams.exs).
@@ -93,6 +97,12 @@
 #            the marker before its gate opens, so the pre-backup session is
 #            refused, the person's vault entry answers `entry_unavailable`
 #            to a host-side read, and the tincture's profile needs consent.
+#            The copy, handed at start-up the switch the sandboxed suite
+#            turns the boot's database checks off with
+#            (`ERL_AFLAGS=-cyfr database_checks_enabled false`), which a
+#            release compiles out (`Cyfr.seam/2`), is then refused for a
+#            keyring other than the one its database was sealed with, and
+#            for a database another version of the schema built.
 #
 #   reserve  a cell whose storage reserve (`Cyfr.StorageReserve`) shares a
 #            size-limited filesystem with its database: for SQLite the data
@@ -479,6 +489,18 @@ asked="$(cell_cyfr "$CELL" rpc '
 [ "$bearer" = 401 ] && [ "$asked" = false ] ||
   fail "a bearer only a provider set at run time could claim answered $bearer (provider asked: '$asked'): $(cat "$WORK/bearer.json" 2>/dev/null)"
 echo "a bearer the injected provider would accept: 401, the provider never asked"
+
+# The host's test seams, held to this release's compiled permission
+# (tests/release-boot/host_seams.exs): the permission and the suite's
+# switches set at runtime, and every switched process still starts as it
+# ships.
+step "the running release reads none of the host's test seams"
+host_seams="$(cell_cyfr "$CELL" rpc \
+  "Code.eval_file(\"$ROOT/tests/release-boot/host_seams.exs\")" 2>&1)" ||
+  fail "the host's test-seam probe failed in the release: $host_seams"
+printf '%s\n' "$host_seams" | grep -qx 'CYFR_HOST_SEAMS=ok' ||
+  fail "the host's test-seam probe printed no answer: $host_seams"
+echo "the release starts every switched process as it ships"
 
 server_stop
 
@@ -1177,6 +1199,47 @@ if tail -n +"$((seen + 1))" "$COPY/boot.log" | grep -q "declared restore"; then
 fi
 server_stop
 
+# The switch the sandboxed suite turns the boot's database checks off with
+# (`config/test.exs`), handed to the release at start-up as `sys.config` or
+# `ERL_AFLAGS` could hand it. It is a test seam (`Cyfr.seam/2`), which a
+# release compiles out: the boots below still check the keyring and the
+# schema.
+SUITE_DATABASE_CHECKS="-cyfr database_checks_enabled false"
+
+# `$1`'s boot under the refusal deadline, its log in `$2`, with the
+# suite's switch and the rest of the arguments as overrides: it must stop on
+# its own, non-zero, naming `$3` after `$4`. 124 and 137 are the deadline's.
+refused_with_suite_switch() {
+  local cell="$1" log="$2" sentence="$3" prefix="$4" status
+  shift 4
+  set +e
+  cell_env "$cell" ERL_AFLAGS="$SUITE_DATABASE_CHECKS" "$@" \
+    timeout -k "$BOOT_KILL_AFTER" "$BOOT_DEADLINE" "$REL/bin/cyfr" start >"$log" 2>&1
+  status=$?
+  set -e
+  if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+    echo "::error::the release did not refuse on its own (exit $status; 124 and 137 are the deadline's)" >&2
+    redact_log "$cell" <"$log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
+    exit 1
+  fi
+  if ! grep -qF -- "$prefix" "$log" || ! grep -qF -- "$sentence" "$log"; then
+    echo "::error::the refused boot did not say: $sentence" >&2
+    redact_log "$cell" <"$log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
+    exit 1
+  fi
+  echo "the boot exited $status:"
+  grep -oF -- "$sentence" "$log" | head -1
+}
+
+step "a keyring other than the one the database was sealed with is refused, with the suite's database-checks switch handed to the release"
+# The copy's own keyring is set aside for one boot and a fresh one stands
+# in its place; the next case boots with its own again.
+mv "$COPY/keyring.json" "$COPY/keyring.json.own"
+printf '{"primary":"k1","keys":{"k1":"%s"}}' "$(openssl rand -base64 32 | tr -d '\n')" >"$COPY/keyring.json"
+refused_with_suite_switch "$COPY" "$WORK/keyring-refused.log" \
+  "the crypto keyring is not the one this database was sealed with" "[Cyfr] FATAL: "
+mv "$COPY/keyring.json.own" "$COPY/keyring.json"
+
 # ---------------------------------------------------------------------------
 # Case 6b: the same copy, its database built from another version of the
 # schema
@@ -1198,33 +1261,17 @@ staled="$(cell_cyfr "$COPY" eval '{:ok, :ok, _} = Ecto.Migrator.with_repo(Arca.R
 end); IO.puts("STALE_SCHEMA=ok")' | grep -c '^STALE_SCHEMA=ok' || true)"
 [ "$staled" = 1 ] || fail "the copy's database could not be made an older schema's"
 
+# Handed the suite's database-checks switch too: the schema check still
+# runs.
 STALE_LOG="$WORK/stale.log"
 STALE_SENTENCE="was built from a different schema (an-older-schema)"
-set +e
-cell_env "$COPY" CYFR_LOG_LEVEL=info timeout -k "$BOOT_KILL_AFTER" "$BOOT_DEADLINE" "$REL/bin/cyfr" start >"$STALE_LOG" 2>&1
-status=$?
-set -e
-
-if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-  echo "::error::the release did not refuse a database built from another schema on its own (exit $status; 124 and 137 are the deadline's)" >&2
-  redact_log "$COPY" <"$STALE_LOG" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
-  exit 1
-fi
-
-if ! grep -qF -- "[Arca] FATAL: " "$STALE_LOG" || ! grep -qF -- "$STALE_SENTENCE" "$STALE_LOG"; then
-  echo "::error::the refused boot did not name the schema the database was built from" >&2
-  redact_log "$COPY" <"$STALE_LOG" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
-  exit 1
-fi
+refused_with_suite_switch "$COPY" "$STALE_LOG" "$STALE_SENTENCE" "[Arca] FATAL: " CYFR_LOG_LEVEL=info
 
 if grep -q "pins could not be read" "$STALE_LOG"; then
   echo "::error::the settings read the database before the schema check refused it" >&2
   redact_log "$COPY" <"$STALE_LOG" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
   exit 1
 fi
-
-echo "the boot exited $status, naming the database to recreate:"
-grep -o "\[Arca\] FATAL: .*$STALE_SENTENCE" "$STALE_LOG" | head -1
 
 # ---------------------------------------------------------------------------
 # Case 7: the storage reserve, on a filesystem that fills
