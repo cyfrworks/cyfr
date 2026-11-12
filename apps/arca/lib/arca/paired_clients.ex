@@ -209,36 +209,6 @@ defmodule Arca.PairedClients do
   def enroll(%Prima.Actor{}, _attrs, _opts), do: {:error, :no_athanor}
 
   @doc """
-  The device client an enrollment committed under the request id
-  `request_id` (its `source_id`), in whichever athanor: for the platform's
-  own actor, which a lost enrollment answer is resumed under before any
-  context exists. `{:error, :not_found}` when none.
-  """
-  @spec enrolled(Prima.Actor.t(), String.t()) ::
-          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
-  # arca:unscoped-ok an enrollment is resumed by its request id and the proof of its key before any context exists; only the platform's own actor asks.
-  def enrolled(%Prima.Actor{scope: :platform, system: true}, request_id)
-      when is_binary(request_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.PairedClients.enrolled", fn ->
-      case Arca.Repo.one(
-             from(p in PairedClient,
-               where:
-                 p.source_kind == "device_cert" and p.source_id == ^request_id and
-                   not is_nil(p.holder_kind),
-               order_by: [asc: p.inserted_at],
-               limit: 1
-             )
-           ) do
-        nil -> {:error, :not_found}
-        row -> {:ok, row}
-      end
-    end)
-    |> Arca.Data.project()
-  end
-
-  def enrolled(%Prima.Actor{}, _request_id), do: {:error, :cross_tenant}
-
-  @doc """
   The client of the passkey `attrs.kid` of the person `attrs.user_id` in
   the actor's athanor, as a sign-in by it records it: the one that stands
   when there is one, else a new row (`source_kind` `passkey`, its own id

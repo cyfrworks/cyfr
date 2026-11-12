@@ -264,21 +264,6 @@ defmodule Arca.PairedClientsTest do
                0
     end
 
-    test "is found by the request id its enrollment committed under, for the platform's actor alone",
-         %{actor: actor} do
-      user_id = person!()
-      identity!(user_id)
-      attrs = device_attrs(user_id, %{source_id: "req_found"})
-
-      {:ok, row} =
-        PairedClients.enroll(actor, attrs, also: fn _ -> {:ok, nil} end)
-
-      assert {:ok, %{id: id}} = PairedClients.enrolled(Prima.Actor.system(), "req_found")
-      assert id == row.id
-      assert {:error, :not_found} = PairedClients.enrolled(Prima.Actor.system(), "req_absent")
-      assert {:error, :cross_tenant} = PairedClients.enrolled(actor, "req_found")
-    end
-
     test "its revocation deletes the sessions its unlock created and answers their hashes", %{
       actor: actor
     } do
