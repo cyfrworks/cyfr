@@ -551,7 +551,7 @@ describe("the street desktop 0.2.0", () => {
     const labels = p.hits().map((h) => h.getAttribute("aria-label"))
     assert.deepEqual(labels.filter((l) => l.startsWith("Waiting on you")).map((l) => l.split(", ")[1]), ["Approve in Trip planning"], "the dropped one does not board the tram")
     assert.deepEqual(labels.filter((l) => l.startsWith("Thread")).map((l) => l.split(",")[0]), ["Thread One again"])
-    assert.deepEqual(labels.filter((l) => l.startsWith("Runs at")).map((l) => l.replace(/^Runs at \S+ /, "")), ["digest ok"])
+    assert.deepEqual(labels.filter((l) => l.startsWith("Runs at")).map((l) => l.replace(/^Runs at (\S+ )?\d\d:\d\d /, "")), ["digest ok"])
     assert.match(p.board().textContent, /^1 thing waits on you/)
     assert.doesNotMatch(p.board().textContent, /granted|as of|trying again|could not be read/)
     assert.equal(p.opened.length, opens, "the page opened no stream again by itself")
