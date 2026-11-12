@@ -149,7 +149,9 @@ defmodule Compendium.Provisioning do
         not_started.()
         :ok
 
-      Application.get_env(:sanctum, :provisioning_inline, false) ->
+      # A test seam only a test build reads (`Sanctum.seam/2`): a release
+      # always fills in the background.
+      Sanctum.seam(false, fn -> Application.get_env(:sanctum, :provisioning_inline, false) end) ->
         fun.()
         :ok
 

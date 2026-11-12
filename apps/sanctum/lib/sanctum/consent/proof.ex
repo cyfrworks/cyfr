@@ -26,10 +26,12 @@ defmodule Sanctum.Consent.Proof do
   unusable for probing which binding was wrong, and the caller's remedy —
   re-preview to see the current digest — is the right one anyway.
 
-  The shipped store is `Sanctum.Consent.Proof.DB` (single-use rows keyed
-  by token hash); `Sanctum.Consent.Proof.Memory` is the node-local
-  alternative tests pin explicitly.
+  The store is `Sanctum.Consent.Proof.DB`: single-use rows keyed by token
+  hash, so a proof survives a restart and is consumed on whichever member
+  takes the commit.
   """
+
+  alias Sanctum.Consent.Proof.DB
 
   @type token :: String.t()
 
@@ -45,12 +47,6 @@ defmodule Sanctum.Consent.Proof do
   @type consume_error ::
           :not_found | :expired | {:binding_mismatch, atom()} | {:invalid_bindings, atom()}
 
-  @doc "Mint a single-use proof for a set of bindings."
-  @callback mint(bindings(), ttl_ms :: pos_integer()) :: {:ok, token()} | {:error, term()}
-
-  @doc "Consume a proof, verifying it was minted for exactly these bindings."
-  @callback consume(token(), bindings()) :: :ok | {:error, consume_error()}
-
   # Two minutes: long enough for an operator to read a consent sheet and
   # click, short enough that a leaked token is near-worthless. Mirrors the
   # OAuth pending-state TTL.
@@ -58,31 +54,30 @@ defmodule Sanctum.Consent.Proof do
 
   @required_bindings [:kind, :commit_digest, :athanor_id]
 
-  # One spelling of the token mint for both stores, so they cannot differ
-  # on token strength.
+  # The token's strength, spelled once.
   @token_bytes 32
 
-  @doc "Mint a fresh single-use proof token — the one spelling both stores use."
+  @doc "Mint a fresh single-use proof token."
   @spec mint_token() :: String.t()
   def mint_token, do: Base.url_encode64(:crypto.strong_rand_bytes(@token_bytes), padding: false)
 
   @doc """
-  Mint a proof through the configured store.
+  Mint a proof in the store.
   """
   @spec mint(bindings(), keyword()) :: {:ok, token()} | {:error, term()}
   def mint(bindings, opts \\ []) do
     with :ok <- validate_bindings(bindings) do
-      store().mint(bindings, Keyword.get(opts, :ttl_ms, @default_ttl_ms))
+      DB.mint(bindings, Keyword.get(opts, :ttl_ms, @default_ttl_ms))
     end
   end
 
   @doc """
-  Consume a proof through the configured store.
+  Consume a proof from the store.
   """
   @spec consume(token(), bindings()) :: :ok | {:error, consume_error()}
   def consume(token, bindings) when is_binary(token) do
     with :ok <- validate_bindings(bindings) do
-      store().consume(token, bindings)
+      DB.consume(token, bindings)
     end
   end
 
@@ -91,8 +86,7 @@ defmodule Sanctum.Consent.Proof do
   @doc """
   Compare two binding sets, returning the first field that differs.
 
-  Shared by every store implementation so "what counts as the same
-  authorization" is defined once. The digest comparison is constant-time —
+  The store's one definition of "what counts as the same authorization". The digest comparison is constant-time —
   a proof consumer is an oracle otherwise.
   """
   @spec compare(bindings(), bindings()) :: :ok | {:error, {:binding_mismatch, atom()}}
@@ -132,14 +126,4 @@ defmodule Sanctum.Consent.Proof do
   end
 
   defp validate_bindings(_bindings), do: {:error, {:invalid_bindings, :bindings}}
-
-  @doc """
-  The selected adapter (`:sanctum, :consent_proof_store`). Proofs are
-  single-use REPLAY protection, so an unset key must not silently
-  downgrade to a node-local in-memory store: the durable store is the
-  default here as it is in the shipped config, and tests override to
-  `Memory` explicitly.
-  """
-  @spec store() :: module()
-  def store, do: Application.get_env(:sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB)
 end

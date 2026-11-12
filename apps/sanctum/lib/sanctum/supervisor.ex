@@ -43,12 +43,7 @@ defmodule Sanctum.Supervisor do
         # This domain's own fire-and-forget writes off a caller's hot path:
         # the session slide an establish triggers (`Sanctum.Caller`). On
         # demand only — nothing is started here.
-        {Task.Supervisor, name: Sanctum.TaskSupervisor},
-        # Single-use consent authorizations. The shipped store is the DB
-        # (config.exs pins Proof.DB); the in-memory GenServer starts only
-        # when a deployment explicitly configures it, so production does
-        # not carry a live, never-called singleton.
-        maybe_proof_memory()
+        {Task.Supervisor, name: Sanctum.TaskSupervisor}
       ]
       |> List.flatten()
 
@@ -88,13 +83,6 @@ defmodule Sanctum.Supervisor do
             "optional path, with no user, query or fragment, at most " <>
             "#{Prima.Confirmation.Preview.max_text()} bytes long"
         )
-  end
-
-  defp maybe_proof_memory do
-    case Sanctum.Consent.Proof.store() do
-      Sanctum.Consent.Proof.Memory -> [Sanctum.Consent.Proof.Memory]
-      _ -> []
-    end
   end
 
   # A registry and the processes that hold references into it restart

@@ -22,9 +22,6 @@ defmodule Emissary.TestAuthProvider do
     do: @prefix <> Base.url_encode64(:erlang.term_to_binary(overrides))
 
   @impl true
-  def authenticate(_params), do: {:error, :not_implemented}
-
-  @impl true
   def current_user(conn) do
     with @prefix <> encoded <- Sanctum.BearerToken.read(conn),
          {:ok, binary} <- Base.url_decode64(encoded),

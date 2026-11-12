@@ -10,10 +10,6 @@ import Config
 
 import_config "../../arca/config/config.exs"
 
-# Consent proofs are durable: the plan → preview → commit walk spans human
-# minutes and must survive a restart.
-config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
-
 # Where this deployment is reachable when the operator declared nothing.
 # `CYFR_PUBLIC_URL` overrides it (`:sanctum, :public_url`); an OAuth
 # `redirect_uri` needs an absolute origin either way.
@@ -31,10 +27,6 @@ config :sanctum, :fallback_origin, "http://localhost:4000"
 config :sanctum, ecto_repos: [Arca.Repo]
 
 if config_env() == :test do
-  # Unit tests run on the ETS store; `proof_db_test.exs` exercises the
-  # durable adapter directly.
-  config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory
-
   config :sanctum, :fallback_origin, "http://localhost:4002"
 
   # At-rest encryption needs a keyring before any row is sealed. A build
@@ -47,15 +39,10 @@ if config_env() == :test do
   config :sanctum,
     secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
-  # Allow tests to inject a membership-resolution override
-  # (`Sanctum.Tenancy`). Compile-time gate: production releases compile
-  # this to false and never honor the override.
-  config :sanctum, allow_tenancy_resolver_override: true
-
-  # Let fixtures that build an issuing context by hand pass the generations
-  # its rows stand at (`generation_snapshot:`). Compile-time gate, like the
-  # override above: a release compiles it out and refuses the option.
-  config :sanctum, issuance_snapshot_permitted: true
+  # Sanctum's test seams, compiled in for this build's suite as
+  # `config/test.exs` compiles them in for the umbrella's
+  # (`Sanctum.seam/2`): a release compiles none of them.
+  config :sanctum, test_seams_permitted: true
 
   # No host runs here to claim a control-plane slot, as none claims one in
   # the umbrella's suite (`config/test.exs`): the member counts as holding

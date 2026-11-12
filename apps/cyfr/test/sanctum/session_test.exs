@@ -166,17 +166,6 @@ defmodule Sanctum.SessionTest do
     end
   end
 
-  describe "get/1" do
-    test "returns full session for valid token", %{ctx: ctx} do
-      {:ok, created} = Session.create(ctx)
-      {:ok, retrieved} = Session.get(created.token)
-
-      assert retrieved.token == created.token
-      assert retrieved.user_id == created.user_id
-      assert retrieved.created_at == created.created_at
-    end
-  end
-
   describe "refresh/1" do
     test "extends session expiration", %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
@@ -204,7 +193,7 @@ defmodule Sanctum.SessionTest do
 
       assert :ok = Session.refresh_if_stale(session.token)
 
-      {:ok, after_, _} = DateTime.from_iso8601(elem(Session.get(session.token), 1).expires_at)
+      {:ok, after_} = Session.expires_at_by_hash(Session.token_hash(session.token))
       assert DateTime.compare(after_, before) == :eq
     end
 
@@ -221,7 +210,7 @@ defmodule Sanctum.SessionTest do
 
       assert :ok = Session.refresh_if_stale(session.token)
 
-      {:ok, refreshed, _} = DateTime.from_iso8601(elem(Session.get(session.token), 1).expires_at)
+      {:ok, refreshed} = Session.expires_at_by_hash(token_hash)
       assert DateTime.diff(refreshed, DateTime.utc_now(), :hour) >= 719
     end
 
@@ -236,7 +225,7 @@ defmodule Sanctum.SessionTest do
       own = Sanctum.Test.People.athanor!(user)
       {:ok, session} = Session.create(Sanctum.TestContext.issuer!(%{local | athanor_id: own.id}))
       token_hash = :crypto.hash(:sha256, session.token)
-      expiry = fn -> elem(Session.get(session.token), 1).expires_at end
+      expiry = fn -> elem(Session.expires_at_by_hash(token_hash), 1) end
       refresh = {Task.Supervisor, :start_child, 2}
 
       # A fresh session is not due: the load says so and no refresh starts.
@@ -265,8 +254,7 @@ defmodule Sanctum.SessionTest do
       assert started_refresh?(calls)
 
       Prima.Test.Wait.wait_until(fn ->
-        {:ok, at, _} = DateTime.from_iso8601(expiry.())
-        DateTime.diff(at, DateTime.utc_now(), :hour) >= 719
+        DateTime.diff(expiry.(), DateTime.utc_now(), :hour) >= 719
       end)
     end
 

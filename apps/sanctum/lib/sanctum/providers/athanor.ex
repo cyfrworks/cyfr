@@ -154,8 +154,7 @@ defmodule Sanctum.Providers.Athanor do
   # and a platform context's wider scope stops here, not in the handler. A
   # caller who is not the owner is refused as a missing athanor is, naming
   # what they named, and only the owner hears that an athanor is archived.
-  @doc false
-  def resolve(%Context{} = ctx, args, opts \\ []) do
+  defp resolve(%Context{} = ctx, args, opts \\ []) do
     named = Map.get(args, "athanor")
 
     with {:ok, athanor} <- lookup(ctx, named, opts) do
@@ -206,8 +205,7 @@ defmodule Sanctum.Providers.Athanor do
   defp or_not_found({:error, :not_found}, named), do: {:error, {:not_found, "Athanor", named}}
   defp or_not_found({:error, _unreadable}, _named), do: {:error, {:unavailable, "Storage"}}
 
-  @doc false
-  def render(athanor) do
+  defp render(athanor) do
     %{
       id: athanor.id,
       name: athanor.name,

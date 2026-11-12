@@ -116,13 +116,13 @@ defmodule CyfrWeb.Plugs.Authenticate do
     errors.halt(conn, 503, :auth_provider_error, "Authentication service unavailable")
   end
 
-  # A bearer the test harness's provider issues (`Sanctum.Auth`'s
-  # `current_user/1`, `:sanctum, :bearer_provider`); a release sets none,
-  # and a request with no session or key reaches the public surface as an
-  # unauthenticated context (no permissions, no resolved athanor), its
-  # tenant-scoped routes rejected downstream.
+  # A bearer the test harness's provider issues (`Sanctum.BearerToken.provider/0`,
+  # which every release answers nil): a request with no session or key
+  # reaches the public surface as an unauthenticated context (no
+  # permissions, no resolved athanor), its tenant-scoped routes rejected
+  # downstream.
   defp get_context(conn) do
-    auth_provider = Application.get_env(:sanctum, :bearer_provider)
+    auth_provider = Sanctum.BearerToken.provider()
 
     if is_nil(auth_provider) do
       unauthenticated_context()

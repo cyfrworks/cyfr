@@ -976,20 +976,12 @@ defmodule Sanctum.Gate.CatalogTest do
   describe "providers must load" do
     setup do
       original = Application.get_env(:sanctum, :tool_providers, [])
-      lenient = Application.get_env(:sanctum, :tool_providers_lenient)
-
-      on_exit(fn ->
-        Application.put_env(:sanctum, :tool_providers, original)
-
-        if is_nil(lenient),
-          do: Application.delete_env(:sanctum, :tool_providers_lenient),
-          else: Application.put_env(:sanctum, :tool_providers_lenient, lenient)
-      end)
+      on_exit(fn -> Application.put_env(:sanctum, :tool_providers, original) end)
 
       {:ok, original: original}
     end
 
-    test "a configured provider that cannot load is named, and refuses the boot unless lenient",
+    test "a configured provider that cannot load is named, and refuses the boot",
          %{original: original} do
       # Each boot is run inside a block that puts the member's table back.
       Catalog.with_providers([], fn ->
@@ -1001,37 +993,19 @@ defmodule Sanctum.Gate.CatalogTest do
           original ++ [Sanctum.Gate.CatalogTest.NoSuchProvider]
         )
 
-        Application.put_env(:sanctum, :tool_providers_lenient, false)
-
         assert_raise RuntimeError,
                      ~r/failed to load: \[Sanctum\.Gate\.CatalogTest\.NoSuchProvider\].*refusing to boot/,
                      fn -> Catalog.load!() end
 
         # A refused boot wrote nothing.
         assert Catalog.operations() == before
-
-        Application.put_env(:sanctum, :tool_providers_lenient, true)
-
-        log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = Catalog.load!() end)
-
-        assert log =~
-                 "Sanctum.Gate.CatalogTest.NoSuchProvider skipped (lenient): " <>
-                   "the module is not available"
-
-        assert Catalog.operations() == before
       end)
     end
 
-    test "a module that exports no tools/0 refuses the boot, or is skipped with its reason",
-         %{original: original} do
+    test "a module that exports no tools/0 refuses the boot", %{original: original} do
       Catalog.with_providers([], fn ->
         Application.put_env(:sanctum, :tool_providers, original ++ [Sanctum.Gate.CatalogTest])
-        Application.put_env(:sanctum, :tool_providers_lenient, false)
         assert_raise RuntimeError, ~r/failed to load.*CatalogTest/, fn -> Catalog.load!() end
-
-        Application.put_env(:sanctum, :tool_providers_lenient, true)
-        log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = Catalog.load!() end)
-        assert log =~ "Sanctum.Gate.CatalogTest skipped (lenient): it does not export tools/0"
       end)
     end
 

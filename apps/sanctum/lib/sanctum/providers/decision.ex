@@ -180,8 +180,6 @@ defmodule Sanctum.Providers.Decision do
     {:error, Prima.Provider.invalid_action("decision", action_enum("decision"))}
   end
 
-  def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
-
   # ============================================================================
   # The decision projection
   # ============================================================================

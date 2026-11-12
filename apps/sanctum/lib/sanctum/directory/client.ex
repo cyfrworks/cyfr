@@ -57,9 +57,9 @@ defmodule Sanctum.Directory.Client do
   `getaddr/2` as `:inet` does) and `:cacerts` (DER certificates to trust):
   the address policy and peer verification are not options. The suite
   sets the same two through the test seam `:sanctum, :directory_client`,
-  which no configuration file or variable sets, so the paths that read a
-  directory without options reach its scripted one; a caller's options
-  win over it.
+  which only a test build reads (`Sanctum.seam/2`), so the paths that
+  read a directory without options reach its scripted one; a caller's
+  options win over it, and a release takes no options from the key.
 
   ## Answers
 
@@ -260,12 +260,12 @@ defmodule Sanctum.Directory.Client do
   end
 
   # A caller's options over the suite's (`:sanctum, :directory_client`, a
-  # test seam no configuration file or variable sets), each validated the
-  # same way: so a suite reaches its scripted directory through paths that
-  # pass no options, and a release, which never sets the key, uses the
-  # system's resolver and certificate store.
+  # test seam only a test build reads), each validated the same way: so a
+  # suite reaches its scripted directory through paths that pass no
+  # options, and a release uses the system's resolver and certificate
+  # store.
   defp options!(opts) when is_list(opts) do
-    seam = Application.get_env(:sanctum, :directory_client, [])
+    seam = Sanctum.seam([], fn -> Application.get_env(:sanctum, :directory_client, []) end)
     Keyword.merge(validated!(seam), validated!(opts))
   end
 

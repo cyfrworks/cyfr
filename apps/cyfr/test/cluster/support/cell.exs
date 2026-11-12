@@ -633,14 +633,7 @@ defmodule Cyfr.Cluster.Cell do
       # per-request convenience the single-node suite asserts around). A
       # memo that is never warm cannot show what a cell-wide invalidation
       # is for, so a member holds one for its production-shaped TTL.
-      #
-      # A consent proof is the shipped durable one (`Sanctum.Consent.Proof.DB`,
-      # the default `config/test.exs` replaces with the ETS store), so a
-      # proof previewed on one member commits on another.
-      sanctum: [
-        {:caller_memo_ttl_ms, 60_000},
-        {:consent_proof_store, Sanctum.Consent.Proof.DB}
-      ],
+      sanctum: [{:caller_memo_ttl_ms, 60_000}],
       logger: [{:level, :warning}]
     ]
   end

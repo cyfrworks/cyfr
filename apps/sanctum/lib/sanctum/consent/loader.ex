@@ -182,7 +182,7 @@ defmodule Sanctum.Consent.Loader do
   """
   @spec load_root(Context.t(), map(), keyword()) ::
           {:ok, Authority.t(), stamp()} | {:error, load_error()}
-  def load_root(%Context{} = ctx, profile, opts \\ []) when is_map(profile) do
+  def load_root(%Context{} = ctx, profile, opts) when is_map(profile) do
     actor = Context.actor(ctx)
 
     with :ok <- check_profile_status(profile),
@@ -776,7 +776,7 @@ defmodule Sanctum.Consent.Loader do
   end
 
   defp evaluate_activation(_ctx, profile, consent, opts) do
-    live = Keyword.get(opts, :live, {:error, {:incomplete, :not_resolved}})
+    live = Keyword.fetch!(opts, :live)
     shape = compare_shape(Keyword.get(opts, :live_shape_digest), consent.shape_digest)
 
     with {:ok, granted_digest} <- hash_activation(consent.activation) do

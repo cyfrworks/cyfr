@@ -18,7 +18,12 @@
 #            makes before it snapshots a cell, run as the update runs it
 #            (`bin/cyfr eval`, which starts no application), answers the
 #            running cell's one slot under this release, and none once the
-#            cell has stopped. Then a public home `cyfr access public
+#            cell has stopped. A bearer provider set in the running release
+#            is never asked, and a bearer only it could claim is refused 401.
+#            The stopped release then reads none of
+#            Sanctum's test seams, with each seam's key and the test
+#            permission set at runtime (tests/release-boot/test_seams.exs).
+#            Then a public home `cyfr access public
 #            --domain cyfr.example.com` writes answers as https://cyfr.example.com
 #            (`Sanctum.origin()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
@@ -38,6 +43,8 @@
 #            the account as its first person, the platform administrator,
 #            and the command line as their device, and a command-line
 #            session that `cyfr whoami` answers under ends with its shell;
+#            the person's namespace is cached for its shipped lifetime with
+#            the test seam's key set to 0 in the running release;
 #            run again it unlocks the same device with no code, no other
 #            person made. A second cell, whose registry and directory are
 #            `.invalid` names, meets an account service that does not
@@ -443,6 +450,36 @@ sys.exit(0 if ok else 1)' "$(cell_node "$CELL")" "$VERSION" ||
   fail "live slots of the running cell were not its one slot under $VERSION: $running"
 echo "the running cell: $running"
 
+# The test bearer seam (`:sanctum, :bearer_provider`), set in the running
+# release to a provider that would accept any bearer and records being
+# asked: a request carrying a bearer nothing else claims is refused as
+# unauthenticated, and the provider is never asked, since the release
+# compiles the seam out (tests/release-boot/test_seams.exs holds the others).
+step "the running release asks no bearer provider set at run time"
+cell_cyfr "$CELL" rpc '
+  defmodule CyfrReleaseProof.Bearer do
+    def current_user(_conn) do
+      :persistent_term.put({__MODULE__, :asked}, true)
+      %Sanctum.Context{user_id: "usr_release_proof", authenticated: true, permissions: MapSet.new([:*])}
+    end
+  end
+
+  Application.put_env(:sanctum, :bearer_provider, CyfrReleaseProof.Bearer)' >/dev/null ||
+  fail "could not set a bearer provider in the running release"
+bearer="$(curl -sS -m 30 -o "$WORK/bearer.json" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
+  -H 'authorization: Bearer release-proof.any-bearer' -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \
+  -H 'mcp-method: tools/list' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}')" ||
+  bearer="none"
+asked="$(cell_cyfr "$CELL" rpc '
+  asked = :persistent_term.get({CyfrReleaseProof.Bearer, :asked}, false)
+  Application.delete_env(:sanctum, :bearer_provider)
+  IO.puts("CYFR_BEARER_ASKED=" <> to_string(asked))' | sed -n 's/^CYFR_BEARER_ASKED=//p' | tail -1)"
+[ "$bearer" = 401 ] && [ "$asked" = false ] ||
+  fail "a bearer only a provider set at run time could claim answered $bearer (provider asked: '$asked'): $(cat "$WORK/bearer.json" 2>/dev/null)"
+echo "a bearer the injected provider would accept: 401, the provider never asked"
+
 server_stop
 
 step "live slots: none once the cell has stopped"
@@ -452,6 +489,17 @@ import json, sys
 sys.exit(0 if json.load(sys.stdin)["slots"] == [] else 1)' ||
   fail "live slots of the stopped cell were not empty: $stopped"
 echo "the stopped cell: $stopped"
+
+# Sanctum's test seams, held to this release's compiled permission
+# (tests/release-boot/test_seams.exs): every seam's key, and the permission,
+# set at runtime, and the release answers as it ships.
+step "the release reads none of Sanctum's test seams"
+seams="$(cell_cyfr "$CELL" eval \
+  "Code.eval_file(\"$ROOT/tests/release-boot/test_seams.exs\")" 2>&1)" ||
+  fail "the test-seam probe failed in the release: $seams"
+printf '%s\n' "$seams" | grep -qx 'CYFR_TEST_SEAMS=ok' ||
+  fail "the test-seam probe printed no answer: $seams"
+echo "the release keeps every seam's shipped value"
 
 after="$(cell_pending "$CELL")"
 if [ "${after:-1}" -ne 0 ]; then
@@ -704,6 +752,22 @@ echo "cyfr login --setup --name proof: the account $identifier made at the stand
 grep -qF "User ID: $person" "$HEADLESS/shell.log" || fail "cyfr whoami in cyfr login's shell did not name $person"
 grep -qx "Platform admin: yes" "$HEADLESS/shell.log" || fail "the first person set up from the command line is not the platform administrator"
 grep -qx "whoami exit 0" "$HEADLESS/shell.log" || fail "cyfr whoami in cyfr login's shell failed"
+
+# The namespace cache keeps the person's slug for its shipped lifetime
+# with `:namespace_cache_ttl_ms` set to 0 in the running release, which
+# compiles that test seam out (tests/release-boot/test_seams.exs holds the
+# others): a build that read the key would cache nothing.
+cached="$(cell_cyfr "$HEADLESS" rpc '
+  key = {:namespace_slug, "'"$person"'"}
+  Application.put_env(:sanctum, :namespace_cache_ttl_ms, 0)
+  :ok = Arca.Cache.invalidate(key)
+  {:ok, slug} = Sanctum.Namespace.lookup_status("'"$person"'")
+  IO.puts("CYFR_NAMESPACE_CACHED=" <> to_string(Arca.Cache.get(key) == {:ok, slug}))
+  Application.delete_env(:sanctum, :namespace_cache_ttl_ms)' |
+  sed -n 's/^CYFR_NAMESPACE_CACHED=//p' | tail -1)"
+[ "$cached" = true ] ||
+  fail "the release did not cache $person's namespace for its shipped lifetime with the seam's key set to 0 (answered '$cached')"
+echo "the namespace cache keeps its shipped lifetime whatever :namespace_cache_ttl_ms says"
 
 # Run again, the same person unlocks again with the passphrase: their code
 # is saved, so none is shown, nothing waits for Enter, and no person or

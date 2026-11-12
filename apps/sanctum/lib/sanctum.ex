@@ -118,6 +118,26 @@ defmodule Sanctum do
 
   alias Sanctum.Context
 
+  # config:compile-runtime-ok — the permission is compiled in on purpose: a
+  # release is built without it, so no setting it is given at start-up
+  # (`sys.config`, `ERL_AFLAGS`) reaches a test seam.
+  @test_seams_permitted Application.compile_env(:sanctum, :test_seams_permitted, false)
+
+  @doc false
+  # A test seam's value: what `read` answers in a build compiled with the
+  # test permission (`config/test.exs` alone sets it, and the standalone
+  # build's own configuration under test), else `default`, with `read`
+  # never called, so a release reads no seam's key at all.
+  @spec seam(value, (-> value)) :: value when value: term()
+  def seam(default, read), do: seam(@test_seams_permitted, default, read)
+
+  @doc false
+  # Pure decision seam, as `Cyfr.Application.bootstrap_skipped?/2` is: the
+  # build's permission, the shipped default and the seam's read.
+  @spec seam(boolean(), value, (-> value)) :: value when value: term()
+  def seam(true, _default, read) when is_function(read, 0), do: read.()
+  def seam(false, default, read) when is_function(read, 0), do: default
+
   @doc """
   The externally reachable base URL of this instance, without a trailing
   slash, or `nil` when the operator has not declared one

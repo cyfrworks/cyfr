@@ -522,8 +522,8 @@ defmodule Sanctum.DoorTest do
       # the door is re-asked about everyone instead.
       assert {:ok, 1} = Door.reconcile()
 
-      assert {:error, :invalid_session} = Sanctum.Session.get(stranger_session.token)
-      assert {:ok, _} = Sanctum.Session.get(local_session.token)
+      assert {:error, :invalid_session} = Sanctum.Session.load(stranger_session.token)
+      assert {:ok, _} = Sanctum.Session.load(local_session.token)
     end
 
     test "ejecting is not denying: standing survives", %{directory: directory} do
@@ -533,7 +533,7 @@ defmodule Sanctum.DoorTest do
 
       :ok = Store.remove(wildcard.id)
       assert {:ok, 1} = Door.reconcile()
-      assert {:error, :invalid_session} = Sanctum.Session.get(session.token)
+      assert {:error, :invalid_session} = Sanctum.Session.load(session.token)
 
       {:ok, after_eject} = Sanctum.Tenancy.Users.get(stranger.id)
       assert after_eject.status == "active"
@@ -623,7 +623,7 @@ defmodule Sanctum.DoorTest do
       assert {:ok, 1} = Door.reconcile()
       assert_received :signed_in_between_pages
 
-      assert {:error, :invalid_session} = Sanctum.Session.get(session.token)
+      assert {:error, :invalid_session} = Sanctum.Session.load(session.token)
       assert {:error, _} = Sanctum.ApiKey.validate(key.api_key)
     end
   end

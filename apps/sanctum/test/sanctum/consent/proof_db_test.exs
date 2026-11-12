@@ -4,8 +4,6 @@
 defmodule Sanctum.Consent.ProofDBTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Consent.Proof
-
   @digest "sha256:" <> String.duplicate("ab", 32)
 
   setup tags do
@@ -114,23 +112,6 @@ defmodule Sanctum.Consent.ProofDBTest do
 
       assert Enum.count(results, &(&1 == :ok)) == 1
       assert Enum.count(results, &(&1 == {:error, :not_found})) == 1
-    end
-  end
-
-  describe "through the configured-store front" do
-    test "Proof.mint/consume round-trips via the DB store when configured" do
-      original = Application.get_env(:sanctum, :consent_proof_store)
-      Application.put_env(:sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB)
-
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:sanctum, :consent_proof_store, original),
-          else: Application.delete_env(:sanctum, :consent_proof_store)
-      end)
-
-      {:ok, token} = Proof.mint(bindings())
-      assert :ok = Proof.consume(token, bindings())
-      assert {:error, :not_found} = Proof.consume(token, bindings())
     end
   end
 end

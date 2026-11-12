@@ -641,9 +641,6 @@ defmodule Sanctum.Vault do
   defp binding_shown(binding) do
     destination =
       case read_destination(binding.destination) do
-        {:ok, %Prima.Destination{program: program}} when is_binary(program) ->
-          %{"program" => program}
-
         {:ok, destination} ->
           admitted = Prima.Destination.admitted(destination)
 

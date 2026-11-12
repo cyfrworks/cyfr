@@ -29,8 +29,9 @@ defmodule Sanctum.Auth.OIDC do
       once the token's issuer is this one and its nonce the attempt's.
 
   The exchange with the issuer is `Sanctum.Auth.OIDC.Oidcc`'s. A test
-  stands in its own issuer through `:sanctum, :oidc_reauth_client`, a seam
-  deliberately undeclared in config: every check of the answer is this
+  stands in its own issuer through `:sanctum, :oidc_reauth_client`, a test
+  seam only a test build reads (`Sanctum.seam/2`): a release uses
+  `Oidcc` whatever the key says, and every check of the answer is this
   module's either way.
   """
 
@@ -168,5 +169,11 @@ defmodule Sanctum.Auth.OIDC do
     end
   end
 
-  defp client, do: Application.get_env(:sanctum, :oidc_reauth_client, __MODULE__.Oidcc)
+  # The token exchange's client is a test seam (`:oidc_reauth_client`)
+  # only a test build reads.
+  defp client,
+    do:
+      Sanctum.seam(__MODULE__.Oidcc, fn ->
+        Application.get_env(:sanctum, :oidc_reauth_client, __MODULE__.Oidcc)
+      end)
 end

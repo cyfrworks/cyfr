@@ -335,7 +335,9 @@ defmodule Sanctum.Consent.LoaderTest do
     profile = profile_summary()
     seed(ctx, profile, consent())
 
-    assert {:error, {:setup_required, payload}} = Loader.load_root(ctx, profile, [])
+    assert {:error, {:setup_required, payload}} =
+             Loader.load_root(ctx, profile, live: {:error, {:incomplete, :not_resolved}})
+
     assert payload.profile_id == "prof-1"
     assert payload.node_ref == Fixtures.formula_ref()
     assert payload.reason == :not_resolved

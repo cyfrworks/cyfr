@@ -156,7 +156,7 @@ defmodule Opus.Providers.FeedTest do
       for action <- ~w(bind list remove),
           do: assert(Sanctum.Catalog.chain_reachable?("feed", action))
 
-      assert Sanctum.Catalog.in_chain_refused?("feed", "press")
+      refute Sanctum.Catalog.chain_reachable?("feed", "press")
     end
 
     test "the two streams a canvas reads, each with its shape, refresh and filter" do

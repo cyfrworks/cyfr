@@ -217,8 +217,6 @@ defmodule Sanctum.Providers.McpLog do
     {:error, Prima.Provider.invalid_action("mcp_log", action_enum("mcp_log"))}
   end
 
-  def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
-
   # ============================================================================
   # The correlation
   # ============================================================================

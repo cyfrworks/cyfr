@@ -386,7 +386,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
         profile = %{id: id, kind: :owner, source_ref: ref, label: "default", status: :active}
 
         assert {:error, {:invalid_blob, {:invalid_resource, ^ref, "@ingress", :storage, _why}}} =
-                 Loader.load_root(%{ctx | origin: :interactive}, profile),
+                 Loader.load_root(%{ctx | origin: :interactive}, profile, []),
                pattern
       end
     end
@@ -778,7 +778,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       profile = %{id: unusable, kind: :owner, source_ref: ref, label: "default", status: :active}
 
       assert {:error, {:invalid_blob, {:invalid_resource, ^ref, "@ingress", :storage, _why}}} =
-               Loader.load_root(%{ctx | origin: :interactive}, profile)
+               Loader.load_root(%{ctx | origin: :interactive}, profile, [])
 
       for args <- [%{"domain" => "refused.example"}, %{"path" => "data/secrets/key.txt"}] do
         assert {:error, {:head_corrupt, ^unusable}} = grants(ctx, args), inspect(args)

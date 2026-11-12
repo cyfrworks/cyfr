@@ -33,8 +33,10 @@ defmodule Sanctum.Namespace do
   # the users row changes only through `Users.set_namespace/2` (which
   # invalidates below), so a short TTL keeps the read off the hot path.
   # Only positive results cache: an unclaimed person stays on the live path
-  # so a fresh claim is visible immediately. (The test config sets the TTL
-  # to 0: a sandbox rollback is a write no invalidation sees.)
+  # so a fresh claim is visible immediately. A release uses this TTL and
+  # never reads `:namespace_cache_ttl_ms`, a test seam only a test build
+  # reads (`Sanctum.seam/2`); the test config sets it to 0, since a sandbox
+  # rollback is a write no invalidation sees.
   @cache_ttl_ms 60_000
 
   @doc """
@@ -86,7 +88,11 @@ defmodule Sanctum.Namespace do
   @spec lookup_status(String.t() | nil) :: status()
   def lookup_status(user_id) when is_binary(user_id) and user_id != "" do
     key = {:namespace_slug, user_id}
-    ttl = Application.get_env(:sanctum, :namespace_cache_ttl_ms, @cache_ttl_ms)
+    # The bound is a test seam only a test build reads.
+    ttl =
+      Sanctum.seam(@cache_ttl_ms, fn ->
+        Application.get_env(:sanctum, :namespace_cache_ttl_ms, @cache_ttl_ms)
+      end)
 
     case Arca.Cache.get(key) do
       {:ok, slug} ->

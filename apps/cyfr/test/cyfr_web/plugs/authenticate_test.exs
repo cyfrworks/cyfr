@@ -24,9 +24,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     @behaviour Sanctum.Auth
 
     @impl true
-    def authenticate(_params), do: {:error, :not_implemented}
-
-    @impl true
     def current_user(_conn) do
       Sanctum.Context.build(
         user_id: "test_user_123",
@@ -44,9 +41,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   # Test auth provider with an athanor for tests where an auth provider is configured
   defmodule StubAuthProvider do
     @behaviour Sanctum.Auth
-
-    @impl true
-    def authenticate(_params), do: {:error, :not_implemented}
 
     @impl true
     def current_user(_conn) do
@@ -67,18 +61,12 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     @behaviour Sanctum.Auth
 
     @impl true
-    def authenticate(_params), do: {:error, :not_implemented}
-
-    @impl true
     def current_user(_conn), do: nil
   end
 
   # Test auth provider that checks for Bearer token
   defmodule BearerAuthProvider do
     @behaviour Sanctum.Auth
-
-    @impl true
-    def authenticate(_params), do: {:error, :not_implemented}
 
     @impl true
     def current_user(conn) do
@@ -670,9 +658,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     @behaviour Sanctum.Auth
 
     @impl true
-    def authenticate(_params), do: {:error, :not_implemented}
-
-    @impl true
     def current_user(_conn), do: {:error, :connection_refused}
   end
 
@@ -749,9 +734,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   # Auth provider that returns a user with no athanor (triggers tenant resolution)
   defmodule NoAthanorAuthProvider do
     @behaviour Sanctum.Auth
-
-    @impl true
-    def authenticate(_params), do: {:error, :not_implemented}
 
     @impl true
     def current_user(_conn) do

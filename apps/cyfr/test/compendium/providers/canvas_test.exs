@@ -142,7 +142,7 @@ defmodule Compendium.Providers.CanvasTest do
           do: assert(Sanctum.Catalog.chain_reachable?("canvas", action))
 
       for action <- ~w(activate restore),
-          do: assert(Sanctum.Catalog.in_chain_refused?("canvas", action))
+          do: refute(Sanctum.Catalog.chain_reachable?("canvas", action))
     end
   end
 

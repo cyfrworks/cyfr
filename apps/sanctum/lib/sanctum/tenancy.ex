@@ -24,8 +24,9 @@ defmodule Sanctum.Tenancy do
   Tests can bypass the resolution by setting
   `config :sanctum, :tenancy_resolver_override, MyResolver` — the override's
   `resolve/1` runs instead. This is honored only when the compile-time flag
-  `config :sanctum, :allow_tenancy_resolver_override, true` is set (test/dev);
-  production releases compile it out entirely, so the override can never run.
+  `config :sanctum, :test_seams_permitted, true` is set (the test
+  configurations alone); every other build compiles it out entirely, so the
+  override can never run.
   """
 
   require Logger
@@ -75,7 +76,7 @@ defmodule Sanctum.Tenancy do
   # prod config, where the flag is false — gets the plain path with
   # NO override code at all, so the override can never bypass the
   # resolution regardless of how the app env is set at runtime.
-  if Application.compile_env(:sanctum, :allow_tenancy_resolver_override, false) do
+  if Application.compile_env(:sanctum, :test_seams_permitted, false) do
     defp do_resolve(%Context{} = ctx) do
       case Application.get_env(:sanctum, :tenancy_resolver_override) do
         nil ->

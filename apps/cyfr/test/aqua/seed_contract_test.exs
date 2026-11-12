@@ -354,7 +354,11 @@ defmodule Aqua.SeedContractTest do
 
     [
       if(not MapSet.member?(granted, key), do: "is not in the manifest caps"),
-      if(Sanctum.Catalog.in_chain_refused?(tool, action), do: "is not reachable from a chain")
+      if(
+        match?({:ok, _}, Sanctum.Catalog.get_tool(tool)) and
+          not Sanctum.Catalog.chain_reachable?(tool, action),
+        do: "is not reachable from a chain"
+      )
     ]
     |> Enum.reject(&is_nil/1)
   end

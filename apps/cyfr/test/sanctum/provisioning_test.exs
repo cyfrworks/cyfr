@@ -496,6 +496,14 @@ defmodule Sanctum.ProvisioningTest do
              Provisioning.provision(athanor, in_athanor)
   end
 
+  # `Sanctum` compiled again under the permission the environment holds
+  # now, replacing the loaded module.
+  defp compile_sanctum! do
+    Code.compiler_options(ignore_module_conflict: true)
+    Code.compile_file(Path.expand("../../../../apps/sanctum/lib/sanctum.ex", __DIR__))
+    :ok
+  end
+
   # The shipped canvas, copied from the repository's seed into the
   # suite's: answers the reference of its newest version.
   defp shipped_canvas!(bundle_dir) do
@@ -506,7 +514,8 @@ defmodule Sanctum.ProvisioningTest do
   end
 
   test "a sign-in mints the shipped canvas's grant in its own request, while the registry half " <>
-         "still holds the claim and waits on a registry that never answers",
+         "still holds the claim and waits on a registry that never answers, in a build " <>
+         "without the test permission even with the inline switch set",
        %{bundle_dir: bundle_dir} do
     canvas = shipped_canvas!(bundle_dir)
     write_bundle!(bundle_dir, deps: ["catalyst:someone.elsewhere"])
@@ -521,7 +530,21 @@ defmodule Sanctum.ProvisioningTest do
 
     # The real path: the whole fill is a task the sign-in does not await,
     # stopped at the test's end before the paths it fills under are put back.
-    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
+    # It is a release's: `Sanctum` compiled as a release compiles it, without
+    # the test permission, and the inline switch set as start-up
+    # configuration could set it, which such a build never reads
+    # (`Sanctum.seam/2`). A fill that ran inline would wait here on the
+    # registry, bounded by the pull budget, and the claim would be failed.
+    # Put back in order when the test ends: the permission, then `Sanctum`
+    # compiled with it, then the compiler's options.
+    options = Code.compiler_options()
+    on_exit(fn -> Code.compiler_options(options) end)
+    on_exit(fn -> compile_sanctum!() end)
+    Prima.Test.Env.put_app_env(:sanctum, :test_seams_permitted, false)
+    compile_sanctum!()
+    assert Sanctum.seam(:shipped, fn -> :read end) == :shipped
+    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, true)
+    Prima.Test.Env.put_app_env(:cyfr, :provisioning_required_pull_budget_ms, 10_000)
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     user = person(System.unique_integer([:positive]))

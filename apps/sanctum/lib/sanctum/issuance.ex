@@ -10,7 +10,7 @@ defmodule Sanctum.Issuance do
   # `credential_binding` (an admitted sign-in's `:identity`, a session's,
   # a key's, or a paired device's), or — for the few fixtures that build a
   # context by hand, and only in a build compiled with
-  # `:issuance_snapshot_permitted` — a `:generation_snapshot` read from the
+  # `:test_seams_permitted` — a `:generation_snapshot` read from the
   # rows (`Sanctum.Tenancy.generation_snapshot/2`). Neither is
   # `{:error, :missing_generation}`, and so is a key with no person behind
   # it. The rows it names are then locked and reread inside the issuing
@@ -45,7 +45,7 @@ defmodule Sanctum.Issuance do
   # config:compile-runtime-ok — the permission is compiled in on purpose: a
   # release is built without it, so no runtime setting can hand an issuance
   # a snapshot in place of its context's own binding.
-  @snapshot_permitted Application.compile_env(:sanctum, :issuance_snapshot_permitted, false)
+  @snapshot_permitted Application.compile_env(:sanctum, :test_seams_permitted, false)
 
   # The words an issuance, or a write held as one (`device_hold/1`),
   # refuses its caller's standing with: no standing read
