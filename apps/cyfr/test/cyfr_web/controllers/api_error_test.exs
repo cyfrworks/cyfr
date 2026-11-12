@@ -54,6 +54,13 @@ defmodule CyfrWeb.ApiErrorTest do
 
   defp body(conn), do: Jason.decode!(conn.resp_body)
 
+  # A refusal rendered at its class's status (`status/1`) through
+  # `send/4`, the renderer's entry every route calls.
+  defp answer(conn, reason) do
+    refusal = Sanctum.Refusals.classify(reason)
+    ApiError.send(conn, ApiError.status(refusal.class), refusal, nil)
+  end
+
   test "every class has its status" do
     assert Map.keys(@statuses) |> Enum.sort() == Enum.sort(Prima.Refusal.classes())
 
@@ -87,7 +94,7 @@ defmodule CyfrWeb.ApiErrorTest do
   end
 
   test "a refusal answers at its class's status with its class and sentence" do
-    conn = ApiError.refuse(conn(:get, "/"), :no_agent)
+    conn = answer(conn(:get, "/"), :no_agent)
 
     assert conn.status == 503
 
@@ -100,12 +107,12 @@ defmodule CyfrWeb.ApiErrorTest do
   test "a 401 carries the challenge, and no other status does" do
     assert ["Bearer"] ==
              conn(:get, "/")
-             |> ApiError.refuse(:invalid_api_key)
+             |> answer(:invalid_api_key)
              |> Plug.Conn.get_resp_header("www-authenticate")
 
     assert [] ==
              conn(:get, "/")
-             |> ApiError.refuse(:ip_not_allowed)
+             |> answer(:ip_not_allowed)
              |> Plug.Conn.get_resp_header("www-authenticate")
   end
 
@@ -129,7 +136,7 @@ defmodule CyfrWeb.ApiErrorTest do
   end
 
   test "an authorization refusal is classed by its own vocabulary" do
-    conn = ApiError.refuse(conn(:get, "/"), {:missing_permission, :execute})
+    conn = answer(conn(:get, "/"), {:missing_permission, :execute})
 
     assert conn.status == 403
     assert %{"code" => "forbidden", "message" => message} = body(conn)
@@ -138,7 +145,7 @@ defmodule CyfrWeb.ApiErrorTest do
 
   test "a consent signal carries its data" do
     signal = {:consent_required, %{"detail" => "scope widened"}}
-    conn = ApiError.refuse(conn(:get, "/"), signal)
+    conn = answer(conn(:get, "/"), signal)
 
     assert conn.status == 403
 
@@ -158,7 +165,7 @@ defmodule CyfrWeb.ApiErrorTest do
          expires_at: ~U[2026-09-29 12:05:00Z]
        }}
 
-    conn = ApiError.refuse(conn(:post, "/"), signal)
+    conn = answer(conn(:post, "/"), signal)
 
     # The request stands and waits for its confirmation: neither a denial
     # (403) nor a conflict (409).
@@ -182,7 +189,7 @@ defmodule CyfrWeb.ApiErrorTest do
   test "the shared vector's pending confirmation answers its status and body, byte for byte" do
     %{"value" => value, "http" => %{"status" => status, "body" => body}} = signal_vector()
 
-    conn = ApiError.refuse(conn(:post, "/"), produced(value))
+    conn = answer(conn(:post, "/"), produced(value))
 
     assert conn.status == status
     assert conn.resp_body == body
@@ -190,7 +197,7 @@ defmodule CyfrWeb.ApiErrorTest do
 
   test "a confirmation signal that names no confirmation is internal, not 428" do
     ExUnit.CaptureLog.capture_log(fn ->
-      conn = ApiError.refuse(conn(:post, "/"), {:confirmation_required, %{operation: "x/y"}})
+      conn = answer(conn(:post, "/"), {:confirmation_required, %{operation: "x/y"}})
 
       assert conn.status == 500
       assert body(conn) == %{"code" => "internal", "message" => Prima.Refusal.unconfirmed()}
@@ -199,7 +206,7 @@ defmodule CyfrWeb.ApiErrorTest do
 
   test "an unknown term is internal and never spelled" do
     ExUnit.CaptureLog.capture_log(fn ->
-      conn = ApiError.refuse(conn(:get, "/"), {:secret, %{"token" => "sk-live"}})
+      conn = answer(conn(:get, "/"), {:secret, %{"token" => "sk-live"}})
 
       assert conn.status == 500
       assert body(conn) == %{"code" => "internal", "message" => Prima.Refusal.unconfirmed()}
