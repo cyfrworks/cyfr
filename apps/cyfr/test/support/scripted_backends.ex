@@ -25,12 +25,16 @@ defmodule Cyfr.Test.ScriptedBackends do
   fields}`; and each JSON-RPC request a `send` carries as
   `{:invoke, method, fields}`.
 
-  Each session is a scripted MCP program: it answers `initialize`,
-  `tools/list` (the tools the test sets for its server, as full names
-  `<backend>__<tool>`: `github__search` unless set) and `tools/call`
-  (`found`), each answer a line in its buffer that `recv` reads past
-  `after`, waiting up to its `max_wait_ms`; a method the test sets
-  `:silent` is never answered. A session the script ends
+  Each session is a scripted MCP program, answering as a server over stdio
+  does: `initialize`, `tools/list` (the tools the test sets for its server
+  with `set(fake, :tools, %{server_id => full_names})`, as full names
+  `<backend>__<tool>`: `github__search` unless set), paged one tool a page
+  under `nextCursor` unless `set(fake, :page_size, n)`, `tools/call`
+  (`found`) and `ping`; a cursor it never issued, a call of a tool it
+  does not list and any other method are answered with a JSON-RPC error.
+  Each answer is a line in its buffer that `recv` reads past `after`,
+  waiting up to its `max_wait_ms`; a method the test sets `:silent` is
+  never answered. A session the script ends
   (`end_sessions/2`, a reset or retire of its home, or an idle period set
   with `set(fake, :idle_ms, ms)`: no `send` and no `recv` arriving within
   it, a waiting recv counting at its arrival alone) answers `running:
@@ -735,15 +739,24 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   defp now, do: System.monotonic_time(:millisecond)
 
-  # The scripted program: a JSON-RPC request is answered with a line, a
-  # notification with nothing.
+  # The scripted program, answering as an MCP server over stdio does: a
+  # JSON-RPC request is answered with a line, a notification with nothing.
+  # `tools/list` pages its listing (`:page_size` tools a page, one unless
+  # set) under an opaque `nextCursor`; a cursor it never issued, a call of
+  # a tool it does not list and a method it does not serve are answered
+  # with JSON-RPC errors (-32602, -32602, -32601), never an empty result.
   defp program_line(st, server, s, line) do
     case Jason.decode(line) do
-      {:ok, %{"method" => method, "id" => id}} when id != nil ->
+      {:ok, %{"method" => method, "id" => id} = request} when id != nil ->
         if method in st.silent do
           s
         else
-          answer = %{"jsonrpc" => "2.0", "id" => id, "result" => result(st, server, s, method)}
+          answer =
+            case reply(st, server, s, method, Map.get(request, "params") || %{}) do
+              {:ok, result} -> %{"jsonrpc" => "2.0", "id" => id, "result" => result}
+              {:error, error} -> %{"jsonrpc" => "2.0", "id" => id, "error" => error}
+            end
+
           emit(s, Jason.encode!(answer))
         end
 
@@ -754,30 +767,69 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   defp emit(s, text), do: %{s | seq: s.seq + 1, lines: [{s.seq + 1, text} | s.lines]}
 
-  defp result(_st, _server, _s, "initialize"),
-    do: %{
-      "protocolVersion" => Prima.MCP.Protocol.legacy_version(),
-      "capabilities" => %{"tools" => %{}},
-      "serverInfo" => %{"name" => "scripted", "version" => "1"}
-    }
+  defp reply(_st, _server, _s, "initialize", _params),
+    do:
+      {:ok,
+       %{
+         "protocolVersion" => Prima.MCP.Protocol.legacy_version(),
+         "capabilities" => %{"tools" => %{}},
+         "serverInfo" => %{"name" => "scripted", "version" => "1"}
+       }}
 
-  defp result(st, server, s, "tools/list") do
-    prefix = s.program <> "__"
+  defp reply(st, server, s, "tools/list", params) do
+    names = listed(st, server, s)
+    size = Map.get(st, :page_size, 1)
 
-    names =
-      for name <- Map.get(st.tools, server, ["github__search"]),
-          String.starts_with?(name, prefix),
-          do: String.replace_prefix(name, prefix, "")
+    case page_start(params["cursor"], length(names)) do
+      {:ok, start} ->
+        tools =
+          for name <- Enum.slice(names, start, size),
+              do: %{"name" => name, "inputSchema" => %{"type" => "object"}}
 
-    %{
-      "tools" => for(name <- names, do: %{"name" => name, "inputSchema" => %{"type" => "object"}})
-    }
+        if start + size < length(names),
+          do: {:ok, %{"tools" => tools, "nextCursor" => cursor(start + size)}},
+          else: {:ok, %{"tools" => tools}}
+
+      :error ->
+        {:error, %{"code" => -32_602, "message" => "Invalid cursor"}}
+    end
   end
 
-  defp result(_st, _server, _s, "tools/call"),
-    do: %{"content" => [%{"type" => "text", "text" => "found"}]}
+  defp reply(st, server, s, "tools/call", %{"name" => name}) do
+    if name in listed(st, server, s),
+      do: {:ok, %{"content" => [%{"type" => "text", "text" => "found"}]}},
+      else: {:error, %{"code" => -32_602, "message" => "Unknown tool: #{name}"}}
+  end
 
-  defp result(_st, _server, _s, _method), do: %{}
+  defp reply(_st, _server, _s, "ping", _params), do: {:ok, %{}}
+
+  defp reply(_st, _server, _s, method, _params),
+    do: {:error, %{"code" => -32_601, "message" => "Method not found: #{method}"}}
+
+  # The program's own tool names: the test's full names for its server
+  # (`github__search` unless set), without its `<backend>__` prefix.
+  defp listed(st, server, s) do
+    prefix = s.program <> "__"
+
+    for name <- Map.get(st.tools, server, ["github__search"]),
+        String.starts_with?(name, prefix),
+        do: String.replace_prefix(name, prefix, "")
+  end
+
+  defp cursor(start), do: Base.url_encode64("page:#{start}", padding: false)
+
+  defp page_start(nil, _count), do: {:ok, 0}
+
+  defp page_start(cursor, count) when is_binary(cursor) do
+    with {:ok, "page:" <> digits} <- Base.url_decode64(cursor, padding: false),
+         {start, ""} when start > 0 and start < count <- Integer.parse(digits) do
+      {:ok, start}
+    else
+      _ -> :error
+    end
+  end
+
+  defp page_start(_cursor, _count), do: :error
 
   defp pop_refusal(agent, what) do
     Agent.get_and_update(agent, fn st ->

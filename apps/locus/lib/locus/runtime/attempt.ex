@@ -43,8 +43,11 @@ defmodule Locus.Runtime.Attempt do
   process started (`Locus.Runtime.Subtree.track/1`), so a kill stops them all. A
   child's process tells its owner when CYFR has closed its attempt
   (`Locus.Runtime.Subtree.settled/0`), then answers its waiting process what the
-  close recorded, masked: `{Locus.Runtime.Attempt, pid, {:ok, output}}` or
-  `{Locus.Runtime.Attempt, pid, {:error, message}}`. The process exits `:normal`
+  close recorded, masked: `{Locus.Runtime.Attempt, pid, {:ok, output}}`,
+  `{Locus.Runtime.Attempt, pid, {:error, message}}`, or, for a run it
+  killed with the component's native work possibly still running,
+  `{Locus.Runtime.Attempt, pid, {:error, {:uncertain, message}}}`: what the
+  child did is not known. The process exits `:normal`
   once CYFR has closed the attempt, and `{:shutdown, :attempt_open}` when
   it leaves the attempt open.
   """
@@ -80,7 +83,7 @@ defmodule Locus.Runtime.Attempt do
         }
 
   @typedoc "What a waiting process is answered: the close as CYFR recorded it."
-  @type answer :: {:ok, term()} | {:error, String.t()}
+  @type answer :: {:ok, term()} | {:error, String.t() | {:uncertain, String.t()}}
 
   @cancelled "Execution cancelled before it completed"
 
@@ -233,11 +236,24 @@ defmodule Locus.Runtime.Attempt do
   defp close(client, {:abandoned, reason}), do: fail(client, reason, abandoned: true)
 
   defp fail(client, reason, opts) do
-    case HostClient.fail(client, failure_message(reason), opts) do
-      {:ok, message} -> {:normal, {:error, message}}
-      {:error, _refusal} -> {{:shutdown, :attempt_open}, {:error, @ended}}
+    message = failure_message(reason)
+
+    case HostClient.fail(client, message, opts) do
+      {:ok, recorded} -> {:normal, {:error, failed(recorded, opts)}}
+      {:error, _refusal} -> {{:shutdown, :attempt_open}, {:error, unclosed(message, opts)}}
     end
   end
+
+  # A run abandoned was killed with its native work possibly still running:
+  # its caller is told the outcome is not known. That is what this process
+  # knows of the run whether or not CYFR accepted the close (refused for a
+  # row a cancel already ended, unanswered, lost), so a refused close tells
+  # it too, in the runtime's own sentence.
+  defp failed(message, opts),
+    do: if(Keyword.get(opts, :abandoned, false), do: {:uncertain, message}, else: message)
+
+  defp unclosed(message, opts),
+    do: if(Keyword.get(opts, :abandoned, false), do: {:uncertain, message}, else: @ended)
 
   defp failure_message(reason) when is_binary(reason), do: reason
 

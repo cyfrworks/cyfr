@@ -27,11 +27,11 @@ defmodule Cyfr.Test.Settings do
   alias Arca.PlatformSettings, as: Store
   alias Cyfr.Platform.Settings.Roster
 
-  # Controller suites drive hundreds of `/mcp` requests from one address
-  # within one window, and a subscription stream would otherwise stay open
-  # to the production bound: short enough that the graceful close is what
-  # the assertions observe.
-  @suite %{"mcp_rate_limit_max" => 1_000_000, "mcp_subscription_max_ms" => 50}
+  # A subscription stream would otherwise stay open to the production
+  # bound: short enough that the graceful close is what the assertions
+  # observe. The MCP rate limit keeps its shipped value: each MCP case test
+  # comes from an address of its own (`Emissary.Web.ConnCase`).
+  @suite %{"mcp_subscription_max_ms" => 50}
 
   @doc "The values the suite installs over the roster's defaults."
   @spec suite() :: %{String.t() => term()}

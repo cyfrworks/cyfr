@@ -66,152 +66,6 @@ defmodule Compendium.OCI.ClientTest do
   end
 
   # ============================================================================
-  # Tar Roundtrip Tests (validates source tarball creation/extraction logic)
-  # ============================================================================
-
-  describe "source tarball roundtrip" do
-    # Helper to create tar via temp file (OTP 28 compatible)
-    defp create_test_tar(entries) do
-      tmp = Path.join(System.tmp_dir!(), "cyfr_test_tar_#{:rand.uniform(1_000_000)}.tar")
-      :ok = :erl_tar.create(String.to_charlist(tmp), entries)
-      {:ok, tar_binary} = File.read(tmp)
-      File.rm!(tmp)
-      tar_binary
-    end
-
-    test "tar.gz create and extract roundtrip preserves files" do
-      files = [
-        {"Cargo.toml", "[package]\nname = \"test\""},
-        {"src/lib.rs", "fn main() {}"},
-        {"src/utils/helper.rs", "pub fn help() {}"}
-      ]
-
-      tar_entries =
-        Enum.map(files, fn {path, content} ->
-          {String.to_charlist(path), content}
-        end)
-
-      tar_binary = create_test_tar(tar_entries)
-      gzipped = :zlib.gzip(tar_binary)
-
-      # Extract tarball (same as maybe_store_source)
-      ungzipped = :zlib.gunzip(gzipped)
-      {:ok, extracted} = :erl_tar.extract({:binary, ungzipped}, [:memory])
-
-      extracted_map =
-        Map.new(extracted, fn {name, content} ->
-          {to_string(name), content}
-        end)
-
-      assert extracted_map["Cargo.toml"] == "[package]\nname = \"test\""
-      assert extracted_map["src/lib.rs"] == "fn main() {}"
-      assert extracted_map["src/utils/helper.rs"] == "pub fn help() {}"
-    end
-
-    test "empty tar creates valid gzip" do
-      tar_binary = create_test_tar([])
-      gzipped = :zlib.gzip(tar_binary)
-
-      ungzipped = :zlib.gunzip(gzipped)
-      {:ok, extracted} = :erl_tar.extract({:binary, ungzipped}, [:memory])
-      assert extracted == []
-    end
-
-    test "tar handles binary content" do
-      binary_content = :crypto.strong_rand_bytes(256)
-
-      tar_binary = create_test_tar([{~c"binary.wasm", binary_content}])
-      gzipped = :zlib.gzip(tar_binary)
-
-      ungzipped = :zlib.gunzip(gzipped)
-      {:ok, [{name, content}]} = :erl_tar.extract({:binary, ungzipped}, [:memory])
-      assert to_string(name) == "binary.wasm"
-      assert content == binary_content
-    end
-  end
-
-  # ============================================================================
-  # Pull Layer Storage Integration Tests
-  # ============================================================================
-
-  describe "pull layer storage" do
-    setup do
-      test_dir = Path.join(System.tmp_dir!(), "cyfr_client_test_#{:rand.uniform(100_000)}")
-      File.mkdir_p!(test_dir)
-      previous_base = Application.get_env(:arca, :base_path)
-      Application.put_env(:arca, :base_path, test_dir)
-
-      ctx = Sanctum.TestContext.local()
-
-      on_exit(fn ->
-        if previous_base,
-          do: Application.put_env(:arca, :base_path, previous_base),
-          else: Application.delete_env(:arca, :base_path)
-
-        File.rm_rf!(test_dir)
-      end)
-
-      {:ok, ctx: ctx, test_dir: test_dir}
-    end
-
-    test "Arca stores and reads manifest json", %{ctx: ctx} do
-      unit = ["components", "catalysts", "testpub", "my-tool", "1.0.0"]
-      path = unit ++ ["cyfr-manifest.json"]
-      content = Jason.encode!(%{"name" => "my-tool", "version" => "1.0.0", "schema" => %{}})
-
-      Arca.Test.UnitFixtures.lay_unit!(ctx, unit, [{"cyfr-manifest.json", content}])
-
-      {:ok, read_content} = Arca.get(Sanctum.Context.actor(ctx), path)
-      assert read_content == content
-    end
-
-    test "Arca stores and reads README", %{ctx: ctx} do
-      unit = ["components", "reagents", "cyfr", "data-proc", "2.0.0"]
-      path = unit ++ ["README.md"]
-      readme = "# Data Processor\n\nProcesses data."
-
-      Arca.Test.UnitFixtures.lay_unit!(ctx, unit, [
-        {"cyfr-manifest.json", ~s({"type":"reagent"})},
-        {"README.md", readme}
-      ])
-
-      {:ok, read_content} = Arca.get(Sanctum.Context.actor(ctx), path)
-      assert read_content == readme
-    end
-
-    test "Arca stores extracted source files at correct paths", %{ctx: ctx} do
-      base = ["components", "catalysts", "cyfr", "tool", "1.0.0"]
-
-      # Simulate what maybe_store_source does
-      files = [
-        {["src", "Cargo.toml"], "[package]\nname = \"tool\""},
-        {["src", "src", "lib.rs"], "fn main() {}"}
-      ]
-
-      Arca.Test.UnitFixtures.lay_unit!(
-        ctx,
-        base,
-        [{"cyfr-manifest.json", ~s({"type":"catalyst"})}] ++
-          for({segments, content} <- files, do: {Enum.join(segments, "/"), content})
-      )
-
-      # Verify files can be read back
-      {:ok, cargo_content} = Arca.get(Sanctum.Context.actor(ctx), base ++ ["src", "Cargo.toml"])
-      assert cargo_content =~ "tool"
-
-      {:ok, lib_content} = Arca.get(Sanctum.Context.actor(ctx), base ++ ["src", "src", "lib.rs"])
-      assert lib_content =~ "fn main()"
-    end
-
-    test "reading non-existent file from Arca returns error", %{ctx: ctx} do
-      path =
-        ["components", "reagents", "cyfr", "nonexistent", "1.0.0", "README.md"]
-
-      assert {:error, _} = Arca.get(Sanctum.Context.actor(ctx), path)
-    end
-  end
-
-  # ============================================================================
   # Digest-Pinned Manifest Verification
   # ============================================================================
 
@@ -492,12 +346,52 @@ defmodule Compendium.OCI.ClientTest do
     end
   end
 
-  # A pull's src/ layer inflates under the version's ceiling: a small blob
-  # that expands past it refuses the pull before anything is stored.
+  # A pull's README and src/ layers ride the unit it stores: the README at
+  # the version's root, each source file under src/ at its own path. Its
+  # src/ layer inflates under the version's ceiling: a small blob that
+  # expands past it refuses the pull before anything is stored.
   describe "a pull's source layer" do
     @repo "alice/reagents/pinned"
 
     setup :start_registry
+
+    test "the manifest, the README and every source file are stored in the pulled version, byte for byte",
+         ctx do
+      %{registry: registry, a: a} = ctx
+      allow(ctx.agent, ["Bearer tok_a"])
+
+      binary = :crypto.strong_rand_bytes(256)
+
+      files = [
+        {"Cargo.toml", "[package]\nname = \"pinned\""},
+        {"src/lib.rs", "fn main() {}"},
+        {"src/utils/helper.rs", "pub fn help() {}"},
+        {"assets/blob.bin", binary}
+      ]
+
+      {:ok, layer} =
+        Compendium.Archive.create_tar_gz(
+          for {path, content} <- files, do: {String.to_charlist(path), content}
+        )
+
+      with_source(ctx.agent, layer)
+      readme = "# Pinned\n\nA reagent."
+      with_readme(ctx.agent, 200, readme)
+
+      assert {:ok, %{status: "pulled"}} = Client.pull(a, "#{registry}/#{@repo}:1.0.0")
+
+      version = Compendium.ComponentPath.version_dir("reagent", "alice", "pinned", "1.0.0")
+      actor = Sanctum.Context.actor(a)
+
+      assert {:ok, ^readme} = Arca.get(actor, version ++ ["README.md"])
+      manifest = config_fixture()
+      assert {:ok, ^manifest} = Arca.get(actor, version ++ ["cyfr-manifest.json"])
+
+      for {path, content} <- files do
+        assert {:ok, ^content} = Arca.get(actor, version ++ ["src" | String.split(path, "/")]),
+               "src/#{path} was not stored as the layer carried it"
+      end
+    end
 
     @tag :capture_log
     test "a layer that inflates past the version's ceiling refuses the pull", ctx do
@@ -891,10 +785,11 @@ defmodule Compendium.OCI.ClientTest do
     do: Agent.get_and_update(agent, &{Enum.reverse(&1.requests), %{&1 | requests: []}})
 
   # Adds a README layer to the manifest whose blob the registry answers
-  # with `status`, and answers its digest.
-  defp with_readme(agent, status) do
-    readme = "readme-#{System.unique_integer([:positive])}"
+  # with `status` (with `readme` as its body under 200), and answers its
+  # digest.
+  defp with_readme(agent, status, readme \\ "readme-#{System.unique_integer([:positive])}") do
     digest = Prima.Digest.sha256(readme)
+    blob = if status == 200, do: readme, else: {:status, status}
 
     Agent.update(agent, fn state ->
       manifest =
@@ -912,7 +807,7 @@ defmodule Compendium.OCI.ClientTest do
         end)
         |> Jason.encode!()
 
-      %{state | manifest: manifest, blobs: Map.put(state.blobs, digest, {:status, status})}
+      %{state | manifest: manifest, blobs: Map.put(state.blobs, digest, blob)}
     end)
 
     digest

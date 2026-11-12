@@ -27,6 +27,23 @@ defmodule Emissary.Web.HealthControllerTest do
     end
   end
 
+  describe "the health rate limit" do
+    # The `:health_throttle` pipeline's shipped ceiling: 60 requests a minute
+    # from one address, the liveness and readiness probes counted together.
+    test "refuses the probe past the shipped 60 a minute from one address", %{conn: conn} do
+      conn = %{conn | remote_ip: {198, 51, 100, 60}}
+
+      for n <- 1..60 do
+        path = if rem(n, 2) == 0, do: "/api/health", else: "/api/health/ready"
+        assert get(conn, path).status == 200
+      end
+
+      over = get(conn, "/api/health")
+      assert over.status == 429
+      assert [_seconds] = get_resp_header(over, "retry-after")
+    end
+  end
+
   describe "GET /api/health/ready" do
     test "returns ready with all subsystem checks", %{conn: conn} do
       conn = get(conn, "/api/health/ready")

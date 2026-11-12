@@ -4,10 +4,11 @@
 defmodule Arca.ConsumerReceiptsLeaseWaitTest do
   @moduledoc """
   A receipt written alone (`Arca.ConsumerReceipts.record/4`) waits on the
-  member's lease row after it has held its job claim: a claim that runs
-  out during that wait, on the database clock, writes nothing, though
-  the member stays live. PostgreSQL only: SQLite's one write lock leaves
-  no wait between the two.
+  member's lease row after it has held its job claim, behind a take of
+  the slot: a claim that runs out during that wait, on the database clock,
+  writes nothing, though the member stays live. The member's renew makes
+  it wait for nothing. PostgreSQL only: SQLite's one write lock leaves no
+  wait between the two.
   """
 
   use ExUnit.Case, async: false
@@ -66,10 +67,10 @@ defmodule Arca.ConsumerReceiptsLeaseWaitTest do
     blocker =
       Task.async(fn ->
         unboxed(fn ->
+          # This boot taking its own live slot again, held open: the take
+          # holds the lease row until it commits, and the member stays live.
           Arca.Repo.locking_transaction(fn ->
-            from(l in CellLease, where: l.node == ^ctx.node)
-            |> Arca.QueryHelpers.for_update()
-            |> Arca.Repo.one!()
+            {:ok, _slot} = ControlPlane.take(ctx.node, ctx.node <> "#boot", 60_000)
 
             %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
             send(test, {:lease_row_locked, backend})
@@ -144,6 +145,53 @@ defmodule Arca.ConsumerReceiptsLeaseWaitTest do
     end
   end
 
+  test "a renew landing while a receipt is in flight waits for nothing, and the receipt lands",
+       ctx do
+    test = self()
+
+    assert {:ok, claim} =
+             unboxed(fn ->
+               JobClaims.claim("schedule_notes", ctx.athanor_id, "boot_receipt_wait", 30_000)
+             end)
+
+    source = %{
+      source_kind: "schedule_occurrence",
+      source_id: ctx.source_id,
+      source_revision: "r1"
+    }
+
+    receipt = Map.merge(source, %{consumer: "schedule_notes", outcome: "applied"})
+
+    writer =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            :ok = ConsumerReceipts.record!(ctx.actor, claim, ctx.slot, receipt)
+            send(test, {:recorded, self()})
+
+            receive do
+              :commit -> :ok
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> stop_task(writer.pid) end)
+    assert_receive {:recorded, pid}, 5_000
+
+    assert {:ok, _renewed} =
+             Task.await(
+               Task.async(fn -> unboxed(fn -> ControlPlane.renew(60_000) end) end),
+               5_000
+             )
+
+    send(pid, :commit)
+    assert {:ok, :ok} = Task.await(writer, 10_000)
+
+    assert {:ok, "applied"} =
+             unboxed(fn -> ConsumerReceipts.outcome(ctx.actor, "schedule_notes", source) end)
+  end
+
   defp blocked_on_lease?(backend) do
     %{rows: [[count]]} =
       Arca.Repo.query!(
@@ -151,7 +199,7 @@ defmodule Arca.ConsumerReceiptsLeaseWaitTest do
         SELECT count(*) FROM pg_stat_activity
         WHERE datname = current_database()
           AND $1 = ANY(pg_blocking_pids(pid))
-          AND query LIKE 'SELECT%cell_leases%FOR SHARE%'
+          AND query LIKE 'SELECT%cell_leases%FOR KEY SHARE%'
         """,
         [backend]
       )

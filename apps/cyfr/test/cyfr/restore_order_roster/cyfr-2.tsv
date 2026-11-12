@@ -19,7 +19,7 @@ apps/cyfr/test/compendium/facade_test.exs	1	pending
 apps/cyfr/test/compendium/fork_test.exs	1	pending
 apps/cyfr/test/compendium/manifest_needs_caps_test.exs	1	pending
 apps/cyfr/test/compendium/oci/blob_test.exs	2	pending
-apps/cyfr/test/compendium/oci/client_test.exs	16	pending
+apps/cyfr/test/compendium/oci/client_test.exs	15	pending
 apps/cyfr/test/compendium/projection_reconciler_test.exs	4	pending
 apps/cyfr/test/compendium/provenance_test.exs	2	pending
 apps/cyfr/test/compendium/provider_test.exs	12	pending
@@ -49,7 +49,7 @@ apps/cyfr/test/emissary/web/controllers/health_controller_test.exs	2	pending
 apps/cyfr/test/emissary/web/controllers/mcp_confirmation_repeat_test.exs	4	pending
 apps/cyfr/test/emissary/web/controllers/mcp_controller_test.exs	2	pending
 apps/cyfr/test/emissary/web/controllers/oauth_callback_controller_test.exs	1	pending
-apps/cyfr/test/emissary/web/controllers/tincture_controller_test.exs	2	pending
+apps/cyfr/test/emissary/web/controllers/tincture_controller_test.exs	1	pending
 apps/cyfr/test/emissary/web/controllers/webhook_controller_test.exs	7	pending
 apps/cyfr/test/emissary/web/device_channel_test.exs	3	pending
 apps/cyfr/test/emissary/web/pulled_tincture_test.exs	2	pending

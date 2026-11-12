@@ -68,7 +68,7 @@ defmodule Emissary.MCP.ServerDiscoverTest do
       conn
       |> put_req_header("content-type", "application/json")
       |> put_req_header("mcp-protocol-version", "1999-01-01")
-      |> post("/mcp", %{
+      |> mcp_post_as_is(%{
         "jsonrpc" => "2.0",
         "id" => 9,
         "method" => "server/discover",

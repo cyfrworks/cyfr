@@ -57,9 +57,11 @@ config :cyfr, :storage_reserve_bytes, 64 * 1024 * 1024
 # proof_db_test.exs exercises the durable adapter directly.
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory
 
-# The tincture transport rate limit, high enough that no suite trips it;
-# TinctureRateLimitTest and the tincture controller's 429 tests override
-# it per test.
+# The tincture transport rate limit, high enough that no suite trips it:
+# the tincture and canvas controller suites request the same pages from one
+# address, across their tests, past the shipped ceilings. The ceiling tests
+# (the tincture and tincture data controllers', TinctureRateLimitTest)
+# remove or lower it per test.
 config :cyfr, :tincture_rate_limit_max, 1_000_000
 
 # No network from tests: the registry health probe is a real DNS + TLS
