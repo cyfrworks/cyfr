@@ -166,7 +166,7 @@ defmodule Sanctum.TestSeamsTest do
   # handed; `:compiled_out`, inside a branch compiled only with the test
   # permission; `:plain` otherwise.
   defp reads({{:., _, [module, :seam]}, _, args} = ast, scope) when is_list(args) do
-    if module(module, scope) == Sanctum,
+    if module(module, scope) == ["Sanctum"],
       do:
         Enum.flat_map(args, fn
           {:fn, _, _} = read -> reads(read, %{scope | gate: :seam})
@@ -212,13 +212,14 @@ defmodule Sanctum.TestSeamsTest do
   defp walk(list, scope) when is_list(list), do: Enum.flat_map(list, &reads(&1, scope))
   defp walk(_leaf, _scope), do: []
 
-  defp env_reader?(Application, fun), do: fun in @readers
-  defp env_reader?(:application, fun), do: fun in [:get_env, :get_all_env, :get_key]
+  defp env_reader?(["Application"], fun), do: fun in @readers
+  defp env_reader?({:erlang, :application}, fun), do: fun in [:get_env, :get_all_env, :get_key]
   defp env_reader?(_module, _fun), do: false
 
   defp permission?({{:., _, [module, :compile_env]}, _, args}, scope),
     do:
-      module(module, scope) == Application and match?([:sanctum, :test_seams_permitted | _], args)
+      module(module, scope) == ["Application"] and
+        match?([:sanctum, :test_seams_permitted | _], args)
 
   defp permission?(_condition, _scope), do: false
 
@@ -236,7 +237,7 @@ defmodule Sanctum.TestSeamsTest do
 
     imports =
       Enum.any?(nodes, fn
-        {:import, _, [target | _]} -> module(target, %{aliases: aliases}) == Application
+        {:import, _, [target | _]} -> module(target, %{aliases: aliases}) == ["Application"]
         _node -> false
       end)
 
@@ -250,7 +251,7 @@ defmodule Sanctum.TestSeamsTest do
 
       base ->
         for {:__aliases__, _, parts} <- children,
-            do: {List.last(parts), Module.concat([base | parts])}
+            do: {List.last(parts), base ++ Enum.map(parts, &Atom.to_string/1)}
     end
   end
 
@@ -264,21 +265,34 @@ defmodule Sanctum.TestSeamsTest do
         _other -> nil
       end
 
-    if name && module, do: [{name, module}], else: []
+    if name && is_list(module), do: [{name, module}], else: []
   end
 
   defp aliased(_target, _options), do: []
 
-  # A module expression as the module it names: an atom as itself, an
-  # alias through the file's aliases unless it starts at `Elixir`.
-  defp module(atom, _scope) when is_atom(atom), do: atom
-  defp module({:__aliases__, _, [:"Elixir" | parts]}, _scope), do: Module.concat(parts)
+  # A module expression as the module it names, spelled as its name's
+  # segments (`["Application"]`), so reading names makes no atoms: an
+  # alias through the file's aliases unless it starts at `Elixir`, an
+  # Elixir module atom by its segments, and an Erlang module as
+  # `{:erlang, atom}`.
+  defp module(atom, _scope) when is_atom(atom) do
+    case Atom.to_string(atom) do
+      "Elixir." <> _name -> Module.split(atom)
+      _erlang -> {:erlang, atom}
+    end
+  end
+
+  defp module({:__aliases__, _, [:"Elixir" | parts]}, _scope),
+    do: Enum.map(parts, &Atom.to_string/1)
+
   defp module({:__aliases__, _, [head | _]}, _scope) when not is_atom(head), do: nil
 
   defp module({:__aliases__, _, [head | rest]}, scope) do
+    rest = Enum.map(rest, &Atom.to_string/1)
+
     case Map.fetch(scope.aliases, head) do
-      {:ok, aliased} -> Module.concat([aliased | rest])
-      :error -> Module.concat([head | rest])
+      {:ok, aliased} -> aliased ++ rest
+      :error -> [Atom.to_string(head) | rest]
     end
   end
 
