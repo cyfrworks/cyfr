@@ -17,8 +17,15 @@ defmodule Sanctum.TestSeamsTest do
     directory_client: [],
     scripted_oauth_provider: nil,
     caller_memo_ttl_ms: 2_000,
-    namespace_cache_ttl_ms: 60_000
+    namespace_cache_ttl_ms: 60_000,
+    bearer_provider: nil,
+    provisioning_inline: false
   ]
+
+  # The application whose code reads each seam: Sanctum's own, but for the
+  # host's bearer route (`CyfrWeb.Plugs.Authenticate`) and inline fill
+  # (`Compendium.Provisioning`).
+  @seam_readers %{bearer_provider: "apps/cyfr/lib", provisioning_inline: "apps/cyfr/lib"}
 
   setup do
     for {key, _default} <- @seams do
@@ -53,12 +60,6 @@ defmodule Sanctum.TestSeamsTest do
   # Operator-shaped, with no lever to set it yet (`Cyfr.Boundaries` classes
   # it `:missing_lever`): no shipped file sets it, and no seam reads it.
   @missing_levers [:platform_ceiling]
-
-  # Sanctum's keys read in another application's code and not yet through a
-  # seam: the bearer route of `CyfrWeb.Plugs.Authenticate` and
-  # `Compendium.Provisioning`'s inline fill, both left for the cyfr slice's
-  # own pass. Exact: each is still read there, by that application alone.
-  @elsewhere %{bearer_provider: "apps/cyfr/lib", provisioning_inline: "apps/cyfr/lib"}
 
   # The one reader whose application and key are values, not names: the
   # platform settings' (`Cyfr.Platform.Settings`), whose pairs are its
@@ -97,9 +98,24 @@ defmodule Sanctum.TestSeamsTest do
 
     by_class = Enum.group_by(classed, & &1.class, & &1.key)
 
-    # Each seam read once, inside its seam: a seam read elsewhere, or not at
-    # all, is not the seam this suite proves.
-    assert Enum.sort(Map.get(by_class, :seam, [])) == Enum.sort(Keyword.keys(@seams))
+    present = fn file -> File.exists?(Path.join(root, file)) end
+
+    # Each seam read once, inside its seam, in the application that reads
+    # it: a seam read elsewhere, or not at all, is not the seam this suite
+    # proves. A build without the host's code holds Sanctum's own.
+    seams_here =
+      for {key, _default} <- @seams,
+          present.(Map.get(@seam_readers, key, "apps/sanctum/lib")),
+          do: key
+
+    assert Enum.sort(Map.get(by_class, :seam, [])) == Enum.sort(seams_here)
+
+    for %{class: :seam, key: key, file: file} <- classed,
+        do:
+          assert(
+            String.starts_with?(file, Map.get(@seam_readers, key, "apps/sanctum/lib") <> "/")
+          )
+
     assert Map.get(by_class, :compiled_out) == [:tenancy_resolver_override]
 
     assert by_class |> Map.get(:compiled, []) |> Enum.uniq() |> Enum.sort() ==
@@ -109,13 +125,6 @@ defmodule Sanctum.TestSeamsTest do
     shipped_read = MapSet.new(Map.get(by_class, :shipped, []))
     assert MapSet.equal?(shipped_read, MapSet.new(@shipped)), inspect(shipped_read)
     assert Enum.uniq(Map.get(by_class, :missing_lever, [])) == @missing_levers
-
-    present = fn file -> File.exists?(Path.join(root, file)) end
-
-    for {key, lib} <- @elsewhere, present.(lib) do
-      assert [_ | _] = reads_of = Enum.filter(classed, &(&1.key == key))
-      assert Enum.all?(reads_of, &String.starts_with?(&1.file, lib <> "/")), inspect(reads_of)
-    end
 
     dynamic = for %{class: :dynamic, file: file} <- classed, uniq: true, do: file
     assert dynamic == Enum.filter(@dynamic_readers, present)
@@ -245,17 +254,7 @@ defmodule Sanctum.TestSeamsTest do
   defp class(%{key: key}) when key in @shipped, do: :shipped
   defp class(%{key: key}) when key in @missing_levers, do: :missing_lever
 
-  defp class(%{key: key, file: file}) do
-    case @elsewhere do
-      %{^key => lib} ->
-        if String.starts_with?(file, lib <> "/"),
-          do: :elsewhere,
-          else: {:refused, :read_outside_its_application}
-
-      %{} ->
-        {:refused, :read_outside_a_seam}
-    end
-  end
+  defp class(%{}), do: {:refused, :read_outside_a_seam}
 
   # The shipped keys no shipped configuration file sets and no boot writes:
   # `config :sanctum, …` in config/config.exs, prod.exs and runtime.exs and,

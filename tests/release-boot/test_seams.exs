@@ -15,7 +15,11 @@
 #     client takes no suite options, the OAuth presets take no scripted
 #     provider and the caller memo keeps its 2 s bound, whatever their keys
 #     say (the namespace cache's lifetime needs a person's row, so the
-#     headless case of tests/release-boot/boot.sh holds it);
+#     headless case of tests/release-boot/boot.sh holds it, and the bearer
+#     provider needs a request, so its boots case holds that one; whether a
+#     fill runs inline, `:provisioning_inline`, has no observable a release
+#     shows without tracing a private function, so the source check in
+#     apps/sanctum/test/sanctum/test_seams_test.exs alone holds it);
 #   - an issuance refuses a fixture's generation snapshot;
 #   - `Sanctum.Tenancy`'s compiled code names no resolver override.
 #

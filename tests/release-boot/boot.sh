@@ -18,7 +18,9 @@
 #            makes before it snapshots a cell, run as the update runs it
 #            (`bin/cyfr eval`, which starts no application), answers the
 #            running cell's one slot under this release, and none once the
-#            cell has stopped. The stopped release then reads none of
+#            cell has stopped. A bearer provider set in the running release
+#            is never asked, and a bearer only it could claim is refused 401.
+#            The stopped release then reads none of
 #            Sanctum's test seams, with each seam's key and the test
 #            permission set at runtime (tests/release-boot/test_seams.exs).
 #            Then a public home `cyfr access public
@@ -447,6 +449,36 @@ ok = (answer["release"] == version and len(slots) == 1
 sys.exit(0 if ok else 1)' "$(cell_node "$CELL")" "$VERSION" ||
   fail "live slots of the running cell were not its one slot under $VERSION: $running"
 echo "the running cell: $running"
+
+# The test bearer seam (`:sanctum, :bearer_provider`), set in the running
+# release to a provider that would accept any bearer and records being
+# asked: a request carrying a bearer nothing else claims is refused as
+# unauthenticated, and the provider is never asked, since the release
+# compiles the seam out (tests/release-boot/test_seams.exs holds the others).
+step "the running release asks no bearer provider set at run time"
+cell_cyfr "$CELL" rpc '
+  defmodule CyfrReleaseProof.Bearer do
+    def current_user(_conn) do
+      :persistent_term.put({__MODULE__, :asked}, true)
+      %Sanctum.Context{user_id: "usr_release_proof", authenticated: true, permissions: MapSet.new([:*])}
+    end
+  end
+
+  Application.put_env(:sanctum, :bearer_provider, CyfrReleaseProof.Bearer)' >/dev/null ||
+  fail "could not set a bearer provider in the running release"
+bearer="$(curl -sS -m 30 -o "$WORK/bearer.json" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
+  -H 'authorization: Bearer release-proof.any-bearer' -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \
+  -H 'mcp-method: tools/list' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}')" ||
+  bearer="none"
+asked="$(cell_cyfr "$CELL" rpc '
+  asked = :persistent_term.get({CyfrReleaseProof.Bearer, :asked}, false)
+  Application.delete_env(:sanctum, :bearer_provider)
+  IO.puts("CYFR_BEARER_ASKED=" <> to_string(asked))' | sed -n 's/^CYFR_BEARER_ASKED=//p' | tail -1)"
+[ "$bearer" = 401 ] && [ "$asked" = false ] ||
+  fail "a bearer only a provider set at run time could claim answered $bearer (provider asked: '$asked'): $(cat "$WORK/bearer.json" 2>/dev/null)"
+echo "a bearer the injected provider would accept: 401, the provider never asked"
 
 server_stop
 

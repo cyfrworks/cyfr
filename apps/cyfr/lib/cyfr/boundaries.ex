@@ -608,7 +608,7 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.Annotations Sanctum.ApiKey Sanctum.BearerToken Sanctum.Caller
+        Sanctum Sanctum.Annotations Sanctum.ApiKey Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
         Sanctum.Context Sanctum.Decisions
         Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Invitations
@@ -624,6 +624,8 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Caller` and `Sanctum.Context` alone) and the web tier's shared " <>
           "ingress plugs (`CyfrWeb.Plugs.*`), which are the auth fabric's own " <>
           "ingress — a wide roster is the entry point doing its job. " <>
+          "`Sanctum` itself is `Sanctum.seam/2` alone, through which the identity plug " <>
+          "reads the test bearer seam that only a test build reads. " <>
           "`Sanctum.Consent` is the shell's read of whether a tincture has an active " <>
           "public profile (`Sanctum.Consent.profiles/2`). " <>
           "`Sanctum.SharedThreads` is the shared-thread download's seat check and read " <>
@@ -1994,6 +1996,9 @@ defmodule Cyfr.Boundaries do
       build_tincture_context: 2,
       origin: 0,
       registry_base_url: 1,
+      # The host's two Sanctum test seams (`:bearer_provider`,
+      # `:provisioning_inline`) read through Sanctum's one permission.
+      seam: 2,
       system_context: 0
     ],
     "Sanctum.Annotations" => [
@@ -2570,10 +2575,12 @@ defmodule Cyfr.Boundaries do
     # Test seams: a hook a test sets and no release does.
     # The bearer a test signs in with (`Sanctum.Auth`'s `current_user/1`,
     # read by `CyfrWeb.Plugs.Authenticate`): `CyfrWeb.ConnCase` sets it,
-    # a release never does.
+    # and only a test build reads it (`Sanctum.seam/2`).
     bearer_provider: :seam,
     tenancy_resolver_override: :seam,
     thread_recovery: :seam,
+    # A fill run in the caller's process (`Compendium.Provisioning`); only
+    # a test build reads it (`Sanctum.seam/2`).
     provisioning_inline: :seam,
     record_sink_inline: :seam,
     # The issuer's side of a company sign-in (`Sanctum.Auth.OIDC`): a test
