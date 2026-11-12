@@ -502,7 +502,7 @@ defmodule Compendium.Providers.Component do
             result
           end
 
-        {:ok, enrich_component_with_media(ctx, result)}
+        {:ok, result}
 
       error ->
         error
