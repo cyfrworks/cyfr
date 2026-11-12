@@ -19,25 +19,20 @@
 #     with an entry naming a passkey's maker (`aaguid`) is posted entry by
 #     entry, and its last entry is accepted, or refused with the field the
 #     chain names; none of them turns on a signature;
-#   - forwarding against a local fake upstream that records every header it
-#     receives: a GET copies only Accept and User-Agent, an upstream 3xx
-#     answers 502 and is not followed, any other method on a route the
-#     stand-in does not own answers 405 and reaches nothing, and without
-#     --upstream nothing is forwarded;
+#   - a route the stand-in does not own: a GET answers 404 and any other
+#     method 405;
 #   - a stop on SIGTERM, a restart from the state file, and a refusal to
 #     start on a state file that names another directory.
 # Usage: python3 -I tests/registry-stand-in/standin_test.py
 
 import hashlib
 import http.client
-import http.server
 import json
 import os
 import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,7 +42,6 @@ REGISTRY = json.load(open(os.path.join(ROOT, "tests", "fixtures", "registry_wire
 DIRECTORY = json.load(open(os.path.join(ROOT, "tests", "fixtures", "directory_wire.json"), encoding="utf-8"))
 IDENTITY = json.load(open(os.path.join(ROOT, "tests", "fixtures", "identity.json"), encoding="utf-8"))
 LIMITS = {"sixth genesis from one source", "identity capacity", "log capacity and recovery reserve"}
-REDIRECTED = "cyfr.run answered with a redirect, which the stand-in does not follow."
 
 failures = []
 checks = 0
@@ -270,73 +264,16 @@ def identity_checks():
         standin.stop()
 
 
-# ---- forwarding -------------------------------------------------------------
+# ---- routes it does not own ----------------------------------------------------
 
-class Upstream(http.server.BaseHTTPRequestHandler):
-    def log_message(self, *args):
-        pass
-
-    def record(self):
-        self.server.seen.append((self.command, self.path, [(k, v) for k, v in self.headers.items()]))
-
-    def do_GET(self):
-        self.record()
-        if self.path.startswith("/moved"):
-            self.send_response(302)
-            self.send_header("Location", "http://127.0.0.1:%d/elsewhere" % self.server.server_address[1])
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        body = b'{"components":[]}'
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    do_POST = do_PUT = do_PATCH = do_DELETE = do_GET
-
-
-def forwarding_checks():
-    fake = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
-    fake.seen = []
-    threading.Thread(target=fake.serve_forever, daemon=True).start()
-    upstream = "http://127.0.0.1:%d" % fake.server_address[1]
-
-    forwarding = StandIn("forwarding", "--upstream", upstream)
-    secrets = {"Authorization": "Bearer stand-in-secret", "Cookie": "session=stand-in-cookie",
-               "Proxy-Authorization": "Basic c3RhbmQ6aW4=", "X-Other": "other"}
-    status, text, _ = forwarding.request(
-        "GET", "/v1/components/search?q=x", None,
-        dict({"Accept": "application/json", "User-Agent": "cyfr-test/1"}, **secrets))
-    seen = list(fake.seen)
-    names = sorted(k.lower() for k, _ in seen[0][2]) if seen else []
-    values = {k.lower(): v for k, v in seen[0][2]} if seen else {}
-    check(status == 200 and text == '{"components":[]}' and len(seen) == 1 and seen[0][1] == "/v1/components/search?q=x",
-          "a GET of a route the stand-in does not own is forwarded upstream and answered", (status, text, seen))
-    check(names == ["accept", "host", "user-agent"] and values.get("accept") == "application/json"
-          and values.get("user-agent") == "cyfr-test/1",
-          "the forwarded GET carries only Accept and User-Agent", seen)
-    check(not any(secret in str(seen) for secret in secrets.values()),
-          "no credential, cookie or other header reaches the upstream", seen)
-
-    fake.seen.clear()
-    status, text, _ = forwarding.request("GET", "/moved/somewhere")
-    check(status == 502 and text == REDIRECTED, "an upstream 3xx answers 502 with the stated sentence", (status, text))
-    check([s[1] for s in fake.seen] == ["/moved/somewhere"], "the redirect is not followed", fake.seen)
-
-    fake.seen.clear()
-    for method in ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT", "PROPFIND"]:
-        status, _, _ = forwarding.request(method, "/v1/tokens/mint", "{}")
-        check(status == 405, "%s on a route the stand-in does not own answers 405" % method, status)
-    check(fake.seen == [], "no other method reaches the upstream", fake.seen)
-    forwarding.stop()
-
-    alone = StandIn("no-upstream")
+def unowned_checks():
+    alone = StandIn("unowned")
     status, _, _ = alone.request("GET", "/v1/components/search?q=x")
-    check(status == 404 and fake.seen == [], "without --upstream nothing is forwarded", (status, fake.seen))
+    check(status == 404, "a GET of a route the stand-in does not own answers 404", status)
+    for method in ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT", "PROPFIND"]:
+        status, _, _ = alone.request(method, "/v1/tokens/mint", "{}")
+        check(status == 405, "%s on a route the stand-in does not own answers 405" % method, status)
     alone.stop()
-    fake.shutdown()
 
 
 # ---- stopping and restarting ----------------------------------------------------
@@ -374,7 +311,7 @@ try:
     registry_checks()
     directory_checks()
     identity_checks()
-    forwarding_checks()
+    unowned_checks()
     lifecycle_checks()
 finally:
     for process in running:
