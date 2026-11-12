@@ -114,6 +114,8 @@ until_true() {
 # A process that exists and has not exited; a zombie has exited.
 alive() {
   local s
+  # An empty pid makes /proc/$1/stat read the host's /proc/stat.
+  case ${1:-} in ''|0*|*[!0-9]*) return 1 ;; esac
   read -r s 2>/dev/null <"/proc/$1/stat" || return 1
   s=${s##*) }
   case $s in Z*|X*) return 1 ;; esac
@@ -1586,6 +1588,47 @@ t_survivor_remains() {
   forget_killed
 }
 
+# A kill between truncating the holder record and writing its new line
+# leaves an empty record. The watchdog still stops the command and frees
+# the locks; an empty record is not a pid the cleanup can wait on.
+t_killed_record() {
+  local size p file next
+  cat > "$scratch/record-write" <<'RECORDWRITE'
+printf() {
+  if [[ ${FUNCNAME[1]:-} == write_record && -n ${7:-} ]]; then
+    # The caller's redirection has already truncated the holder file.
+    echo "$BASHPID" > "$RECORD_MARK"
+    kill -STOP "$BASHPID"
+  fi
+  builtin printf "$@"
+}
+RECORDWRITE
+  for size in 4 1; do
+    rm -f "$scratch/record.mark" "$scratch/record-next"
+    BASH_ENV="$scratch/record-write" RECORD_MARK="$scratch/record.mark" \
+      "${hc[@]}" -q "$size" -- sleep 120 >"$scratch/record.task" 2>&1 &
+    p=$!; started+=("$p")
+    until_true 10 test -s "$scratch/record.mark" || fail 'the producer did not reach the record rewrite'
+    [ "$(cat "$scratch/record.mark")" = "$p" ] || fail 'stopped a process other than the producer'
+    until_true 10 is_stopped "$p" || fail 'the producer did not stop inside the rewrite'
+    case $size in
+      4) file=lock.holder next=1 ;;
+      1) file=lock.quarter1.holder next=4 ;;
+    esac
+    [ -e "$scratch/$file" ] && [ ! -s "$scratch/$file" ] || fail 'the interrupted record was not empty'
+    kill -KILL "$p"; wait "$p" 2>/dev/null || :
+    [ "$(AWAIT_POLL_SECONDS=1 AWAIT_PID=$p await "$scratch/record.task" '' 60)" = 3 ] || fail 'the interrupted writer was not reported dead'
+    host_free || fail 'the interrupted writer kept the host'
+    [ "$(status_of "${hc[@]}" --status)" = 0 ] && [ "$(cat "$scratch/out")" = idle ] || fail 'an empty record was shown as held'
+    # The next check uses a different record, leaving the empty one in
+    # place to prove that it neither blocks admission nor names a live run.
+    [ "$(status_of "${hc[@]}" -q "$next" -w 5 -- touch "$scratch/record-next")" = 0 ] || fail 'an empty record blocked the next check'
+    [ -e "$scratch/record-next" ] || fail 'the next check did not run'
+    [ -e "$scratch/$file" ] && [ ! -s "$scratch/$file" ] || fail 'the empty record was replaced before cleanup'
+    forget_killed
+  done
+}
+
 # --- await-task.sh -------------------------------------------------------------------
 # await FILE [REGEX [DEADLINE]]: the waiter's status; its stdout in $scratch/out.
 await() { status_of bash "$await" "$@"; }
@@ -1745,7 +1788,7 @@ cases=(
   waiters_skipped run_record record_watchdog environment status queued_repeat queue_quarter
   hold hold_frame queue queue_default stage_side_by_side term int hup usr1 quarter_stop term_queued int_queued hup_queued
   term_queued_quarter int_queued_quarter hup_queued_quarter refusals
-  leftover sigkill nested_session registry_nested survivor survivor_remains
+  leftover sigkill nested_session registry_nested survivor survivor_remains killed_record
   await_result await_died await_line await_nested await_bare await_reused await_explicit
   await_statuses await_usage await_zombie await_queue
 )
