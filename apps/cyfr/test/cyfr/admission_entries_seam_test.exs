@@ -94,6 +94,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.DirectoryController, :from} => :directory_from_unserved,
     {Emissary.Web.DirectoryController, :append} => :directory_append_unserved,
     {Emissary.Web.HandleController, :resolve} => :handle_resolve_unserved,
+    {Emissary.Web.HandleController, :name_of} => :handle_name_of_unserved,
     {Emissary.Web.HandleController, :claim} => :handle_claim_unserved,
     {PrismWeb.DeviceUnlockController, :redeem} => :device_unlock_ticket_unknown,
     {Emissary.Web.DeviceSessionController, :create} => :device_session_ticket_unknown,
@@ -517,6 +518,9 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # The handle registry beside the directory, which a node serving none
   # answers as the directory does.
   def handle_resolve_unserved(_conn, _ctx), do: directory_unserved(:get, "/v1/handles/seam")
+
+  def handle_name_of_unserved(_conn, _ctx),
+    do: directory_unserved(:get, "/v1/identities/per_seam/handle")
 
   def handle_claim_unserved(_conn, _ctx),
     do: directory_unserved(:post, "/v1/namespaces/personal/claim")

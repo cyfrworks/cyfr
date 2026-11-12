@@ -36,7 +36,8 @@
 #       tests' deployments name one, so that no read of theirs leaves the
 #       machine), the account is cached here alone, as a first read leaves
 #       it, and its person pauses past the bound on a public home; where its
-#       registry is cyfr.run or none, no name is claimed.
+#       registry is cyfr.run, or its directory holds no account, no name is
+#       claimed.
 #
 #       The device's key is an Ed25519 seed: drawn here for the
 #       installation's first person, and SUB's own for every later one, so
@@ -287,7 +288,8 @@ fn args ->
   # once is found as written. At cyfr.run, which is never asked, and at a
   # directory this deployment's egress refuses, so that nothing leaves the
   # machine, the account's head is cached here alone, as a first read
-  # leaves it.
+  # leaves it. Answers the account with `published?`, whether its
+  # directory holds it.
   published = fn account ->
     alias Sanctum.Directory.Client
 
@@ -306,33 +308,39 @@ fn args ->
         )
     end
 
-    if URI.parse(account.directory_url).host == "cyfr.run" do
-      cache_alone.()
-    else
-      case Client.register(account.genesis) do
-        {:ok, _registered} ->
-          {:ok, _appended} =
-            Client.append(account.identifier, account.directory_url, account.added)
+    published? =
+      if URI.parse(account.directory_url).host == "cyfr.run" do
+        cache_alone.()
+        false
+      else
+        case Client.register(account.genesis) do
+          {:ok, _registered} ->
+            {:ok, _appended} =
+              Client.append(account.identifier, account.directory_url, account.added)
 
-        {:error, :egress_refused} ->
-          cache_alone.()
+            true
 
-        refused ->
-          raise "#{account.directory_url} did not take #{account.identifier}: #{inspect(refused)}"
+          {:error, :egress_refused} ->
+            cache_alone.()
+            false
+
+          refused ->
+            raise "#{account.directory_url} did not take #{account.identifier}: #{inspect(refused)}"
+        end
       end
-    end
 
-    account
+    Map.put(account, :published?, published?)
   end
 
   # The name SUB claimed for the account at this deployment's registry, as
   # an account's birth claims one: `handle.claim` signed by its recovery
-  # key, after `policy.accept` of the version the registry asks for. A
-  # deployment that names no registry, or names cyfr.run, gets no claim,
-  # and its person has no name.
+  # key, after `policy.accept` of the version the registry asks for. An
+  # account its directory does not hold has no name a registry would give
+  # it, and a deployment that names cyfr.run gets no claim: its person has
+  # no name.
   named = fn account, sub ->
-    case Sanctum.registry_host() do
-      {:ok, host} when host != "cyfr.run" ->
+    case {account.published?, Sanctum.registry_host()} do
+      {true, host} when host != "cyfr.run" ->
         send_signed = fn operation, body ->
           {:ok, request} =
             Prima.RegistryRequest.new(
@@ -364,7 +372,7 @@ fn args ->
             raise "the registry gave #{account.identifier} no name #{sub}: #{inspect(refused)}"
         end
 
-      _none ->
+      _unnamed ->
         :ok
     end
   end

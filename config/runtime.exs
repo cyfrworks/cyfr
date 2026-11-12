@@ -528,22 +528,30 @@ if config_env() != :test do
   config :sanctum, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
 
   # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
-  # Default in production: `registry_url` is `"cyfr.run"` and
-  # `oci_registry_url` derives as `"registry.#{registry_url}"`. In
-  # development an unset registry is `none`, so a dev boot outside
-  # `scripts/dev-stack.sh`, which names its own stand-in, makes no person at
-  # the real cyfr.run. Self-hosted deployments may override both
-  # independently for co-host or split topologies.
+  # Every CYFR names a registry and calls it, in every build: cyfr.run or
+  # its own, a host name or IPv4 address with an optional port and path
+  # (`Sanctum.registry_url?/1`); the OCI host may also be a bracketed IPv6
+  # address, and has no path (`Sanctum.oci_registry_url?/1`). Any other value, and
+  # `none` in any case, refuses the boot. Unset, `registry_url` is `"cyfr.run"`
+  # and `oci_registry_url` derives as `"registry."` before its host and port. An
+  # install cut off from the internet names a registry of its own; one it
+  # cannot reach is answered as unavailable. Self-hosted deployments may
+  # override both independently for co-host or split topologies.
   #
   # A person's push tokens are minted by a request their identity signs
   # (`registry.sync`), so there is no static username/password to
-  # configure at deploy time. `none` means no registry: an appliance that
-  # runs only what it ships. Sign-in never needs one (`Sanctum.SignIn`);
-  # pulls, publishing and a person's registry requests refuse with a typed
-  # error (`Compendium.RegistryHost`, `Sanctum.registry_host/0`). One parse
-  # sets both applications' copies.
-  registry_url_config =
-    env_str.("CYFR_REGISTRY_URL", if(config_env() == :dev, do: "none", else: "cyfr.run"))
+  # configure at deploy time. One parse sets both applications' copies.
+  registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
+
+  # `none`, in any case, is the mode without a registry, which no CYFR has.
+  if String.downcase(registry_url_config) == "none" or
+       not Sanctum.registry_url?(registry_url_config) do
+    raise "[Cyfr] FATAL: CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run " <>
+            "or one of its own: a host name or an IPv4 address with an optional port and an " <>
+            "optional path, whose segments are not empty and which does not end in /. " <>
+            "The requests its accounts sign name the registry, and they cannot name an " <>
+            "IPv6 address. Every CYFR names one."
+  end
 
   config :cyfr, :registry_url, registry_url_config
   config :sanctum, :registry_url, registry_url_config
@@ -551,14 +559,14 @@ if config_env() != :test do
   # The directory this deployment registers its local people at: an https
   # directory URL, or an http one on a loopback host
   # (`Sanctum.enrollment_directory?/1`). Unset, it is `https://cyfr.run`
-  # (the directory cyfr.run hosts) in production and none in development,
-  # as the registry is. Nothing reads a directory from a request. The
+  # (the directory cyfr.run hosts) in every build, as the registry is.
+  # Nothing reads a directory from a request. The
   # confirmation that shows a recovery code again names the directory in
   # its preview, so it is no longer than a preview's text.
   {:ok, directory_url} = Prima.EnvValue.text(getenv, "CYFR_DIRECTORY_URL")
-  directory_url = directory_url || if(config_env() == :dev, do: nil, else: "https://cyfr.run")
+  directory_url = directory_url || "https://cyfr.run"
 
-  unless is_nil(directory_url) or Sanctum.enrollment_directory?(directory_url) do
+  unless Sanctum.enrollment_directory?(directory_url) do
     raise "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be a directory URL: an origin and an " <>
             "optional path, with no user, query or fragment, at most " <>
             "#{Prima.Confirmation.Preview.max_text()} bytes long, over https, or over " <>
@@ -581,11 +589,19 @@ if config_env() != :test do
 
   config :sanctum, :setup_token, setup_token
 
+  # Unset, the OCI host is `registry.` before the registry's host and port,
+  # without the path a proxy serves the registry's API under.
+  [registry_authority | _path] = String.split(registry_url_config, "/", parts: 2)
+
   oci_registry_url_config =
-    env_str.(
-      "CYFR_OCI_REGISTRY_URL",
-      if(registry_url_config == "none", do: "none", else: "registry.#{registry_url_config}")
-    )
+    env_str.("CYFR_OCI_REGISTRY_URL", "registry." <> registry_authority)
+
+  if String.downcase(oci_registry_url_config) == "none" or
+       not Sanctum.oci_registry_url?(oci_registry_url_config) do
+    raise "[Cyfr] FATAL: CYFR_OCI_REGISTRY_URL must name the OCI registry components " <>
+            "are pulled from: a host name, an IPv4 address or a bracketed IPv6 address, " <>
+            "with an optional port."
+  end
 
   config :cyfr, :oci_registry_url, oci_registry_url_config
 

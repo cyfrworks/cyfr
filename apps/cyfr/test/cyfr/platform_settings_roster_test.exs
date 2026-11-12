@@ -1102,10 +1102,11 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         assert config[:sanctum][:registry_url] == "cyfr.run"
       end)
 
-      with_env(%{"CYFR_REGISTRY_URL" => "none"}, fn ->
+      with_env(%{"CYFR_REGISTRY_URL" => "registry.example.com:8443"}, fn ->
         config = read_prod_config!()
-        assert config[:cyfr][:registry_url] == "none"
-        assert config[:sanctum][:registry_url] == "none"
+        assert config[:cyfr][:registry_url] == "registry.example.com:8443"
+        assert config[:sanctum][:registry_url] == "registry.example.com:8443"
+        assert config[:cyfr][:oci_registry_url] == "registry.registry.example.com:8443"
       end)
     end
 

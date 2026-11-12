@@ -164,7 +164,7 @@ defmodule Sanctum.HandleTest do
     end)
   end
 
-  test "a spelling the slug grammar refuses, and no registry, ask nothing" do
+  test "a spelling the slug grammar refuses asks nothing" do
     RegistryStub.start!(fn _ -> flunk("no request is sent") end)
 
     for handle <- ["Alice", "a/b", "", "-alice", String.duplicate("a", 40)] do
@@ -172,9 +172,6 @@ defmodule Sanctum.HandleTest do
     end
 
     assert {:error, :invalid_handle} = Handle.resolve(nil)
-
-    Application.put_env(:sanctum, :registry_url, "none")
-    assert {:error, :no_registry} = Handle.resolve("alice")
 
     refute_received {:registry_request, _}
   end

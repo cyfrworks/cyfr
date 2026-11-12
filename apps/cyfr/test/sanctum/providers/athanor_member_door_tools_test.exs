@@ -453,10 +453,6 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     assert message =~ "not a handle"
 
-    Application.put_env(:sanctum, :registry_url, "none")
-    assert {:error, reason} = call(admin, "door", %{"action" => "allow", "value" => "@alice"})
-    assert %{reason: :no_registry} = Refusals.classify(reason)
-
     assert Sanctum.Door.Store.list() == before
   end
 

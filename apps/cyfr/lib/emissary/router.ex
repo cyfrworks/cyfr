@@ -338,13 +338,17 @@ defmodule Emissary.Router do
       end
 
       # The handle registry a CYFR serving a directory serves beside it
-      # (`Sanctum.Directory.Handles`): a handle's answer and a personal
-      # handle's signed claim, and no other registry route. Bounded and
-      # metered as the directory is.
+      # (`Sanctum.Directory.Handles`): a handle's answer by its name and by
+      # the account holding it, and a personal handle's signed claim, and no
+      # other registry route. Bounded and metered as the directory is.
       scope "/v1", Emissary.Web do
         pipe_through :directory
 
         get "/handles/:handle", HandleController, :resolve,
+          metadata: %{auth: :public_directory},
+          log: false
+
+        get "/identities/:identifier/handle", HandleController, :name_of,
           metadata: %{auth: :public_directory},
           log: false
 

@@ -55,10 +55,14 @@ defmodule Emissary.Web.DirectoryPrivacyTest do
       ExUnit.CaptureLog.capture_log([level: :info], fn ->
         get(conn, "/v1/handles/" <> canary)
         get(conn, "/v1/handles/" <> canary <> "/more")
+        get(conn, "/v1/identities/" <> canary <> "/handle")
+        get(conn, "/v1/identities/" <> canary)
       end)
 
     assert log =~ "GET /v1/handles/:handle"
     assert log =~ "GET /v1/handles/[REDACTED]"
+    assert log =~ "GET /v1/identities/:identifier/handle"
+    assert log =~ "GET /v1/identities/[REDACTED]"
     refute log =~ canary
 
     # The account pages read no account: at debug too, their lines name the

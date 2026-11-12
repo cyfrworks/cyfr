@@ -298,7 +298,7 @@ cell_new() {
   printf 'http://%s:%s\n' "$CELL_DIRECTORY_ADDRESS" "$directory_port" >"$cell/directory/url"
   cell_set "$cell" CYFR_DIRECTORY_URL "http://$CELL_DIRECTORY_ADDRESS:$directory_port"
   cell_set "$cell" CYFR_REGISTRY_URL "$CELL_DIRECTORY_ADDRESS:$directory_port"
-  cell_set "$cell" CYFR_OCI_REGISTRY_URL none
+  cell_set "$cell" CYFR_OCI_REGISTRY_URL 127.0.0.1:9
   targets="$(cell_value "$cell" CYFR_PRIVATE_EGRESS_TARGETS)"
   cell_set "$cell" CYFR_PRIVATE_EGRESS_TARGETS "${targets:+$targets,}$CELL_DIRECTORY_ADDRESS"
 }

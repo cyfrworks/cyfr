@@ -192,7 +192,7 @@ defmodule Sanctum.DeviceCerts do
   @spec issue(map(), String.t()) :: {:ok, DeviceCert.t()} | {:error, term()}
   def issue(%{id: client_id, kid: kid, athanor_id: athanor_id, user_id: user_id} = client, head)
       when is_binary(kid) and is_binary(head) do
-    with {:ok, identifier} <- identifier(user_id),
+    with {:ok, identifier} <- Sanctum.Caller.holder_identity(user_id, :not_standing),
          {:ok, seconds} <- cert_seconds(),
          {:ok, home} <- Sanctum.SignIn.audience(),
          now = System.os_time(:millisecond),
@@ -433,7 +433,7 @@ defmodule Sanctum.DeviceCerts do
   # retired the client is seen.
   defp attributed_renewal(row, source) do
     with :ok <- device_bound(claim_named(:device_verification, {:client, row.id})),
-         {:ok, identifier} <- identifier(row.user_id),
+         {:ok, identifier} <- Sanctum.Caller.holder_identity(row.user_id, :not_standing),
          :ok <- fresh(identifier),
          {:ok, row} <- paired_client(row.athanor_id, row.user_id, row.id),
          {:ok, standing} <- standing(row.user_id, row.athanor_id) do
@@ -542,7 +542,7 @@ defmodule Sanctum.DeviceCerts do
   defp checked_request(certificate, client, now, carried) do
     with :ok <- names_client(certificate, client),
          {:ok, row} <- certified_client(certificate),
-         {:ok, identifier} <- identifier(row.user_id),
+         {:ok, identifier} <- Sanctum.Caller.holder_identity(row.user_id, :not_standing),
          :ok <- same(identifier, certificate.identifier),
          :ok <- fresh(identifier),
          {:ok, head} <- recorded(row, certificate),
@@ -591,16 +591,6 @@ defmodule Sanctum.DeviceCerts do
 
   defp names_client(%DeviceCert{client_id: id}, %{client_id: id}), do: :ok
   defp names_client(%DeviceCert{}, _client), do: {:error, :client_mismatch}
-
-  # The account the person's identity row names.
-  defp identifier(user_id) do
-    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{identifier: identifier}} when is_binary(identifier) -> {:ok, identifier}
-      {:ok, _none} -> {:error, :not_standing}
-      {:error, :not_found} -> {:error, :not_standing}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
 
   # The account's head within freshness's policy: a refresh walks the
   # entries after the cached head before it answers, so a key it removes

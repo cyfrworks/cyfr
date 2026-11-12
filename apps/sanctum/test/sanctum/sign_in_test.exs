@@ -707,15 +707,6 @@ defmodule Sanctum.SignInTest do
                  operation: "publisher.claim",
                  body: %{"slug" => "no-dot"}
                )
-
-      Prima.Test.Env.put_app_env(:sanctum, :registry_url, "none")
-
-      assert {:error, :no_registry} =
-               SignIn.request(:registry, binding,
-                 ctx: ctx,
-                 operation: "policy.accept",
-                 body: @accept
-               )
     end
 
     test "binds a device to its channel and a browser to its session; nothing else asks", %{

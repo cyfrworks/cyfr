@@ -639,20 +639,18 @@ defmodule Compendium.Provisioning do
   end
 
   # The bundle's optional dependencies — the model catalysts — are pulled
-  # when a registry is configured to pull them from, as a courtesy with a
-  # budget: a registry that is slow, unreachable or unset-by-default and
-  # absent leaves the athanor provisioned on what the bundle ships, its
+  # from the registry as a courtesy with a budget: a registry that is slow
+  # or unreachable leaves the athanor provisioned on what the bundle ships, its
   # activations covering what is there, and the catalysts arrive when a
   # model is connected. An optional dependency that fails to pull is never
   # a provisioning failure.
   defp pull_optional_deps(ctx, claim) do
     optional =
-      with true <- Compendium.RegistryHost.configured?(),
-           {:ok, all} <- missing_bundle_deps(ctx, :all),
+      with {:ok, all} <- missing_bundle_deps(ctx, :all),
            {:ok, required} <- missing_bundle_deps(ctx, :required) do
         all -- required
       else
-        _none_or_unreadable -> []
+        _unreadable -> []
       end
 
     case bounded_pull(ctx, optional, @optional_pull_budget_ms, claim) do

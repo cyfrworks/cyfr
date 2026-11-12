@@ -396,45 +396,9 @@ defmodule Sanctum.ProvisioningTest do
     assert {:ok, %{entry_kind: "install_shipped", outcome: "released"}} = Claims.current(actor)
   end
 
-  test "with no registry, a bundle whose OPTIONAL dependency is not installed still provisions",
-       %{bundle_dir: bundle_dir} do
-    write_bundle!(bundle_dir,
-      deps: [%{"ref" => "catalyst:someone.elsewhere", "optional" => true}]
-    )
-
-    previous = Application.get_env(:cyfr, :registry_url)
-    Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
-
-    on_exit(fn ->
-      if is_nil(previous),
-        do: Application.delete_env(:cyfr, :registry_url),
-        else: Application.put_env(:cyfr, :registry_url, previous)
-    end)
-
-    n = System.unique_integer([:positive])
-    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
-
-    athanor = unfilled!(ctx.user_id, "Offline #{n}")
-    in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
-
-    {:ok, athanor} = Athanors.get(athanor.id)
-    assert athanor.provisioned_at
-
-    {:ok, [profile]} =
-      Arca.ProfileStorage.list_for_source(
-        Prima.Actor.in_athanor(athanor.id),
-        "catalyst:local.foo"
-      )
-
-    assert profile.kind == "owner"
-  end
-
   test "with a registry that does not answer, an OPTIONAL dependency is left out and the athanor still provisions",
        %{bundle_dir: bundle_dir} do
-    # The suite's registry host is a closed port: configured, unreachable.
-    assert Compendium.RegistryHost.configured?()
-
+    # The suite's registry host is a closed port: named, unreachable.
     write_bundle!(bundle_dir,
       deps: [%{"ref" => "catalyst:someone.elsewhere", "optional" => true}]
     )

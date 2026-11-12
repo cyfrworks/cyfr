@@ -87,15 +87,6 @@ defmodule Sanctum.Providers.SessionTest do
     refute_received {:registry_request, _}
   end
 
-  test "with no registry, nothing can be checked", %{ctx: ctx, user: user} do
-    Prima.Test.Env.put_app_env(:sanctum, :registry_url, "none")
-
-    assert {:error, %Prima.Refusal{reason: :no_registry, class: :setup_required}} =
-             name(ctx, "mira")
-
-    assert recorded(user) == nil
-  end
-
   test "a name another person here holds is refused, and a name recorded before is kept",
        %{ctx: ctx, user: user, account: account, dir: dir} do
     RegistryStub.handles!(%{"held" => account.identifier, "mine" => account.identifier}, dir.url)

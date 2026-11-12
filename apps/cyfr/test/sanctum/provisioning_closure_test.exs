@@ -5,12 +5,10 @@ defmodule Sanctum.ProvisioningClosureTest do
   @moduledoc """
   Provisioning against the real tracked bundle. Everything the bundle
   depends on ships in the seed — the two hands and every shipped
-  `model/chat@1` catalyst — so an athanor fills with no registry at all,
-  AQUA is consented with its whole closure present, and each model
-  catalyst waits only for a key. Both registry endpoints are pinned,
-  because they are separate settings and a pull dials the OCI one:
-  `:registry_url` decides whether a registry is configured at all,
-  `:oci_registry_url` is what a blob fetch resolves against.
+  `model/chat@1` catalyst — so an athanor fills while the registry does
+  not answer (the suite's, `config/test.exs`, a closed loopback port for
+  both endpoints), AQUA is consented with its whole closure present, and
+  each model catalyst waits only for a key.
   """
   use ExUnit.Case, async: false
 
@@ -29,7 +27,7 @@ defmodule Sanctum.ProvisioningClosureTest do
     copy_bundle!(Path.join(seed_dir, "components"))
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :oci_registry_url, cyfr: :registry_url]
+    keys = [arca: :base_path, arca: :seed_path]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_dir)
     Application.put_env(:arca, :seed_path, seed_dir)
@@ -47,65 +45,57 @@ defmodule Sanctum.ProvisioningClosureTest do
     :ok
   end
 
-  for {label, rest_host, oci_host} <- [
-        {"no registry is configured", "none", "none"},
-        {"the registry does not answer", "127.0.0.1:19", "127.0.0.1:19"}
-      ] do
-    test "the real bundle provisions from its seed alone when #{label}" do
-      Application.put_env(:cyfr, :registry_url, unquote(rest_host))
-      Application.put_env(:cyfr, :oci_registry_url, unquote(oci_host))
+  test "the real bundle provisions from its seed alone when the registry does not answer" do
+    n = System.unique_integer([:positive])
 
-      n = System.unique_integer([:positive])
+    ctx =
+      Sanctum.Context.build(
+        user_id: "github|https://github.com|offline-#{n}",
+        athanor_id: Sanctum.TestContext.athanor_id(),
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+      |> Sanctum.TestContext.via(:prism)
 
-      ctx =
-        Sanctum.Context.build(
-          user_id: "github|https://github.com|offline-#{n}",
-          athanor_id: Sanctum.TestContext.athanor_id(),
-          permissions: [:*],
-          scope: :athanor,
-          auth_method: :oidc,
-          authenticated: true
-        )
-        |> Sanctum.TestContext.via(:prism)
+    {:ok, slugs} = Athanors.person_slugs(nil, "Offline #{n}")
 
-      {:ok, slugs} = Athanors.person_slugs(nil, "Offline #{n}")
+    {:ok, athanor} =
+      Athanors.create_personal(
+        %{name: "Offline #{n}", owner_user_id: ctx.user_id, created_by: ctx.user_id},
+        slugs
+      )
 
-      {:ok, athanor} =
-        Athanors.create_personal(
-          %{name: "Offline #{n}", owner_user_id: ctx.user_id, created_by: ctx.user_id},
-          slugs
-        )
+    in_athanor = %{ctx | athanor_id: athanor.id}
+    :ok = Provisioning.start_provisioning(in_athanor)
 
-      in_athanor = %{ctx | athanor_id: athanor.id}
-      :ok = Provisioning.start_provisioning(in_athanor)
+    {:ok, athanor} = Athanors.get(athanor.id)
 
-      {:ok, athanor} = Athanors.get(athanor.id)
+    assert %DateTime{} = athanor.provisioned_at,
+           "the athanor did not provision: #{inspect(Athanors.settings(athanor))}"
 
-      assert %DateTime{} = athanor.provisioned_at,
-             "the athanor did not provision: #{inspect(Athanors.settings(athanor))}"
+    refute Athanors.provisioning_failure(athanor)
 
-      refute Athanors.provisioning_failure(athanor)
-
-      # Every model catalyst is a row of the athanor: shipped, never pulled.
-      for unit <- SeedBundle.model_chat_units() do
-        assert {:ok, %{publisher: "local"}} =
-                 Compendium.Registry.get_latest(in_athanor, unit.name, "local", "catalyst"),
-               "#{unit.ref} is not registered"
-      end
-
-      # The soul is consented and loads: its whole closure is the local seed.
-      assert {:ok, [_profile]} =
-               Arca.ConsentStorage.profiles(Sanctum.Context.actor(in_athanor), "agent:local.aqua")
-
-      assert {:ok, %Prima.Authority{} = auth} =
-               Opus.authority_for(in_athanor, :default, "agent:local.aqua")
-
-      assert auth.cursor == {:bound, "agent:local.aqua"}
-
-      # A second provisioning is a no-op.
-      assert {:ok, %{provisioned_at: at}} = Provisioning.provision(athanor, in_athanor)
-      assert at == athanor.provisioned_at
+    # Every model catalyst is a row of the athanor: shipped, never pulled.
+    for unit <- SeedBundle.model_chat_units() do
+      assert {:ok, %{publisher: "local"}} =
+               Compendium.Registry.get_latest(in_athanor, unit.name, "local", "catalyst"),
+             "#{unit.ref} is not registered"
     end
+
+    # The soul is consented and loads: its whole closure is the local seed.
+    assert {:ok, [_profile]} =
+             Arca.ConsentStorage.profiles(Sanctum.Context.actor(in_athanor), "agent:local.aqua")
+
+    assert {:ok, %Prima.Authority{} = auth} =
+             Opus.authority_for(in_athanor, :default, "agent:local.aqua")
+
+    assert auth.cursor == {:bound, "agent:local.aqua"}
+
+    # A second provisioning is a no-op.
+    assert {:ok, %{provisioned_at: at}} = Provisioning.provision(athanor, in_athanor)
+    assert at == athanor.provisioned_at
   end
 
   # The tracked bundle, minus Rust build output that may sit beside a source tree.

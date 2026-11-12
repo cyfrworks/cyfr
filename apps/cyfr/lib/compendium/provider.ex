@@ -25,10 +25,10 @@ defmodule Compendium.Provider do
   # ============================================================================
 
   @doc """
-  The registry's health, for `system.status`: `"disabled"` when no registry
-  is configured, `"unknown"` when the probe is switched off (the suite's
-  `:registry_health_probe`), else the probe's answer — `"ok"`, `"error"`
-  or `"unreachable"`. A degraded registry is a state, never a raise.
+  The registry's health, for `system.status`: `"unknown"` when the probe
+  is switched off (the suite's `:registry_health_probe`), else the probe's
+  answer — `"ok"`, `"error"` or `"unreachable"`. A degraded registry is a
+  state, never a raise.
   """
   @impl true
   def status, do: %{"registry" => registry_health()}
@@ -40,21 +40,13 @@ defmodule Compendium.Provider do
   @registry_health_ttl_ms 30_000
 
   defp registry_health do
-    cond do
-      not Compendium.RegistryHost.configured?() ->
-        # No registry is not a registry that is down.
-        "disabled"
-
-      Cyfr.seam(true, fn -> Application.get_env(:cyfr, :registry_health_probe, true) end) ->
-        probed_registry_health(Compendium.RegistryHost.canonical_host())
-
-      true ->
-        # The test env turns the probe off (`config/test.exs`): the suite's
-        # registry is a loopback address no registry answers at, so the
-        # probe's answer says nothing about the code under test, and its
-        # memo would carry that answer from one test into the next.
-        "unknown"
-    end
+    # The test env turns the probe off (`config/test.exs`): the suite's
+    # registry is a loopback address no registry answers at, so the
+    # probe's answer says nothing about the code under test, and its memo
+    # would carry that answer from one test into the next.
+    if Cyfr.seam(true, fn -> Application.get_env(:cyfr, :registry_health_probe, true) end),
+      do: probed_registry_health(Compendium.RegistryHost.canonical_host()),
+      else: "unknown"
   end
 
   defp probed_registry_health(host) do
