@@ -49,10 +49,8 @@ config :arca,
 # unbounded connections on the object-store path.
 config :arca, :read_subtree_concurrency, 10
 
-# The shared-cache sweeper's budgets: raw binaries held (bytes) and
-# compiled components pinned (count).
+# The shared-cache sweeper's budget for raw binaries held (bytes).
 config :arca, :cache_max_binary_bytes, 256 * 1024 * 1024
-config :arca, :cache_max_compiled_components, 32
 
 if config_env() == :test do
   # A sandboxed pool over a database keyed by checkout, out of the

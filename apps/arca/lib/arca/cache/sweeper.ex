@@ -90,7 +90,6 @@ defmodule Arca.Cache.Sweeper do
 
     enforce_cap(table, Arca.Cache.max_entries())
     enforce_binary_budget(table)
-    enforce_compiled_cap(table)
     expired
   rescue
     e in ArgumentError ->
@@ -135,8 +134,7 @@ defmodule Arca.Cache.Sweeper do
   # The entry cap counts rows, not bytes — 10k multi-MB WASM blobs is a very
   # different table than 10k session rows. Binary values get their own byte
   # budget, evicting nearest-to-expiry first. Non-binary values are left to
-  # the entry cap: their real weight (NIF resources) is off-heap and
-  # invisible to byte_size anyway — see enforce_compiled_cap/1.
+  # the entry cap.
   defp enforce_binary_budget(table) do
     budget = Application.get_env(:arca, :cache_max_binary_bytes, 268_435_456)
 
@@ -167,33 +165,6 @@ defmodule Arca.Cache.Sweeper do
           {:halt, remaining}
         end
       end)
-    end
-  end
-
-  # Compiled components hold Wasmex NIF resources whose memory lives off-heap
-  # where byte_size cannot see it, so they get a small entry cap of their
-  # own. Eviction is safe: the cache is pure (a miss recompiles), the
-  # generation key prevents cross-engine reuse, and an in-flight execution
-  # holding the term keeps the resource alive.
-  defp enforce_compiled_cap(table) do
-    cap = Application.get_env(:arca, :cache_max_compiled_components, 32)
-
-    # The key shape comes from Arca.Cache.Keys so a change there cannot
-    # silently turn this cap into a no-op.
-    compiled =
-      :ets.select(table, [
-        {{Arca.Cache.Keys.match_compiled_component(), :_, :"$1"}, [], [{{:"$_", :"$1"}}]}
-      ])
-      |> Enum.map(fn {{key, _value, _expires}, expires_at} -> {key, expires_at} end)
-      |> Enum.reject(fn {key, _expires_at} -> protected?(key) end)
-
-    excess = length(compiled) - cap
-
-    if excess > 0 do
-      compiled
-      |> Enum.sort_by(fn {_key, expires_at} -> expires_at end)
-      |> Enum.take(excess)
-      |> Enum.each(fn {key, _expires_at} -> :ets.delete(table, key) end)
     end
   end
 
