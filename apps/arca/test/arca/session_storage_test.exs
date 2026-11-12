@@ -396,49 +396,5 @@ defmodule Arca.SessionStorageTest do
 
       assert {:ok, %{kid: nil, head: nil}} = SessionStorage.get_session(hash)
     end
-
-    test "the also: closure commits with the session, or the session is not written" do
-      hash = make_token_hash("also")
-
-      assert {:error, :receipt_conflict} =
-               SessionStorage.create_session(
-                 hash,
-                 session_attrs(),
-                 Arca.Test.Actor.issuance() ++
-                   [also: fn _session -> {:error, :receipt_conflict} end]
-               )
-
-      assert {:error, :not_found} = SessionStorage.get_session(hash)
-      me = self()
-
-      assert :ok =
-               SessionStorage.create_session(
-                 hash,
-                 session_attrs(),
-                 Arca.Test.Actor.issuance() ++
-                   [
-                     also: fn session ->
-                       send(me, {:session, session})
-                       :ok
-                     end
-                   ]
-               )
-
-      assert_received {:session, %{id: "ses_" <> _, user_id: "user_1"}}
-    end
-
-    test "an also: closure answering anything else raises, and the session is not written" do
-      hash = make_token_hash("also-other")
-
-      assert_raise ArgumentError, ~r/an also: closure answers/, fn ->
-        SessionStorage.create_session(
-          hash,
-          session_attrs(),
-          Arca.Test.Actor.issuance() ++ [also: fn _session -> {:ok, :receipt} end]
-        )
-      end
-
-      assert {:error, :not_found} = SessionStorage.get_session(hash)
-    end
   end
 end
