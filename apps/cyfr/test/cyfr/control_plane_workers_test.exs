@@ -43,6 +43,9 @@ defmodule Cyfr.ControlPlaneWorkersTest do
 
     ControlPlane.record(:lost)
     tick!()
+    # Without the slot the tick does nothing at all: it does not even ask
+    # for the cycle's claim.
+    assert {:error, :not_found} = Arca.JobClaims.read("retention", Arca.JobClaims.cell_key())
     assert sessions(hash) == 1
 
     ControlPlane.record(:unclaimed)
