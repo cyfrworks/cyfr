@@ -1439,7 +1439,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `tool_denied` | MCP tool not covered by the granted tool patterns |
 | `flow_blocked` | A tool server's tool refused before its arguments left: the run read a source class its grant declares no flow of to `server:<name>` |
 | `encoding_error` | A tool's result could not be encoded as JSON |
-| `uncertain` | The call may have taken effect and no result says whether it did: its handler stopped once it may have acted ("Tool <name> crashed; its outcome is unknown", or exited, timed out or was cancelled), or the host call's answer was lost. Check before repeating it |
+| `uncertain` | The call may have taken effect and no result says whether it did: its handler stopped once it may have acted ("Tool <name> crashed; its outcome is unknown", or exited, timed out or was cancelled), a component it ran was stopped with its work possibly still running ("Execution timeout after Nms", or cancelled before it completed), or the host call's answer was lost. Check before repeating it |
 | `unknown` | The host produced a result in an unexpected shape |
 
 `setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan` and a `cyfr profile grant <ref>` command). Formulas can surface this to users via `emit`.

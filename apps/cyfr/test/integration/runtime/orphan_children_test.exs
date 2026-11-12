@@ -13,7 +13,8 @@ defmodule Locus.Runtime.OrphanChildrenTest do
   runner, bounded by the smaller of its own node's timeout and what
   remained of its parent's subtree deadline when it was admitted: held at
   a host call past that, its call is killed and its row fails with the
-  timeout, and the formula's guest is answered so. A formula whose run was
+  timeout, and the formula's guest is answered so, as a call whose outcome
+  is not known. A formula whose run was
   cancelled or has closed admits no new child through `execution.run`,
   `execution.run_stream` or a spawn its runner asks for: no row, no charge
   row and no invoke slot is left behind. A `run_stream` child takes a
@@ -43,6 +44,7 @@ defmodule Locus.Runtime.OrphanChildrenTest do
 
   @probe_node "formula:local.nested-probe"
   @brief "formula:local.brief-probe:0.1.0"
+  @trapping "reagent:local.trapping-child:1.0.0"
   @ended "The call failed."
 
   setup tags do
@@ -74,7 +76,17 @@ defmodule Locus.Runtime.OrphanChildrenTest do
     # The probe under another name, consented one second, is an edge of the
     # probe's own consent.
     :ok = Probe.publish_probe!(ctx, name: "brief-probe", limits: brief_limits())
-    :ok = Probe.publish_probe!(ctx, isolate: false, dependencies: [@brief])
+
+    # A reagent that traps on `{"trap": true}`: a child that fails on its
+    # own, its runtime killing nothing.
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm("reagent"), %{
+        name: "trapping-child",
+        version: "1.0.0",
+        type: "reagent"
+      })
+
+    :ok = Probe.publish_probe!(ctx, isolate: false, dependencies: [@brief, @trapping])
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     Sanctum.TestContext.ready!(ctx.athanor_id)
     assert @probe_node in minted
@@ -177,20 +189,44 @@ defmodule Locus.Runtime.OrphanChildrenTest do
     end
 
     # The formula's guest was answered each child's end, the called one's
-    # and the spawned one's as the timeout.
+    # and the spawned one's as the timeout, and as a call whose outcome is
+    # not known: a child killed at its budget may have done its work.
     assert_receive {:root, {:ok, %{output: output}}}, 30_000
     %{"results" => [spawned, streamed, called, awaited]} = decoded(output)
     assert %{"task_id" => _} = Jason.decode!(spawned)
     assert %{"output" => %{"execution_id" => _}} = Jason.decode!(streamed)
-    assert Jason.decode!(called)["error"]["message"] =~ ~r/Execution timeout after \d+ms/
 
-    assert %{"status" => "error", "error" => %{"message" => spawned_answer}} =
-             Jason.decode!(awaited)
+    assert %{"error" => %{"type" => "uncertain", "message" => called_answer}} =
+             Jason.decode!(called)
 
-    assert spawned_answer =~ ~r/Execution timeout after \d+ms/
+    assert called_answer =~ ~r/^Execution timeout after \d+ms$/
+
+    assert %{
+             "status" => "error",
+             "error" => %{"type" => "uncertain", "message" => spawned_answer}
+           } = Jason.decode!(awaited)
+
+    assert spawned_answer =~ ~r/^Execution timeout after \d+ms$/
 
     wait_until(fn -> Sanctum.TestContext.invoke_budget(authority).in_flight == 0 end)
     assert charges(ctx, authority) == []
+  end
+
+  test "a child that fails on its own is answered as the failure it is", %{ctx: ctx} do
+    assert {:ok, %{status: :completed, output: output}} =
+             Opus.run_root(ctx, :default, Probe.probe_ref(), %{
+               "op" => "call",
+               "request" => %{
+                 "tool" => "execution",
+                 "action" => "run",
+                 "args" => %{"reference" => @trapping, "input" => %{"trap" => true}}
+               }
+             })
+
+    assert %{"error" => %{"type" => "dispatch_error", "message" => message}} =
+             raw(output, "result_raw")
+
+    refute message =~ "Execution timeout"
   end
 
   # ---------------------------------------------------------------------------

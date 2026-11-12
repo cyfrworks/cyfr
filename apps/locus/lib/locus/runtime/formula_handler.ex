@@ -436,6 +436,11 @@ defmodule Locus.Runtime.FormulaHandler do
   end
 
   defp answered({:ok, output}), do: {:ok, output}
+  # A child killed with its work possibly still running is answered as a
+  # call whose outcome is not known, so its guest checks before repeating it.
+  defp answered({:error, {:uncertain, message}}),
+    do: {:refused, encode_error(:uncertain, message)}
+
   defp answered({:error, message}), do: {:refused, encode_error(:dispatch_error, message)}
 
   # A child admitted but not started is closed failed, which gives back
@@ -554,6 +559,10 @@ defmodule Locus.Runtime.FormulaHandler do
         {:ok, output} ->
           emit_telemetry(host.execution_id, "execution.run", :ok, start_time)
           encode_success(output)
+
+        {:error, {:uncertain, message}} ->
+          emit_telemetry(host.execution_id, "execution.run", :error, start_time)
+          encode_error(:uncertain, message)
 
         {:error, message} ->
           emit_telemetry(host.execution_id, "execution.run", :error, start_time)
