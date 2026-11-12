@@ -240,7 +240,9 @@ defmodule Emissary.Web.HandleControllerTest do
     {pub, priv} = keypair()
     {device_pub, _device_priv} = device = keypair()
     signer = Identity.recovery_signer(pub)
-    source = "203.0.113.4"
+    # Each account from a source of its own: a source registers five a
+    # minute.
+    source = "198.51.100.#{rem(System.unique_integer([:positive]), 254) + 1}"
 
     {:ok, genesis} =
       Entry.new(
@@ -308,10 +310,7 @@ defmodule Emissary.Web.HandleControllerTest do
   # stack, where it binds the edge network's: the lookup reads the
   # registry where it is kept.
   test "a sign-in on a home that names itself as its account service learns the person's name, and its names resolve" do
-    {:ok, closed} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
-    {:ok, port} = :inet.port(closed)
-    :ok = :gen_tcp.close(closed)
-    home = "http://127.0.0.1:#{port}"
+    home = "http://127.0.0.1:#{closed_port()}"
     self_named!(home)
     account = named_account!(home, "mira")
 
@@ -322,6 +321,79 @@ defmodule Emissary.Web.HandleControllerTest do
     assert {:ok, %HandleAnswer{identifier: identifier}} = Sanctum.Handle.resolve("mira")
     assert identifier == account.identifier
     assert {:error, :not_found} = Sanctum.Handle.resolve("nobody")
+  end
+
+  # A loopback port nothing listens on.
+  defp closed_port do
+    {:ok, closed} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(closed)
+    :ok = :gen_tcp.close(closed)
+    port
+  end
+
+  defp registry!(registry) do
+    for app <- [:sanctum, :cyfr], do: Prima.Test.Env.put_app_env(app, :registry_url, registry)
+  end
+
+  test "a registry on this home's host at another port is another registry, asked over the wire" do
+    home = "http://127.0.0.1:#{closed_port()}"
+    self_named!(home)
+    account = named_account!(home, "mira")
+    registry!("127.0.0.1:#{closed_port()}")
+
+    assert {:error, :registry_unavailable} = Sanctum.Handle.name_of(account.identifier)
+    assert {:error, :registry_unavailable} = Sanctum.Handle.resolve("mira")
+  end
+
+  # Whether a home reads its own names where they are kept: only when the
+  # registry it names is the origin it serves, in a home's one spelling.
+  # Every other registry is asked over the wire, here a loopback port that
+  # answers nothing.
+  test "a home reads its own names only where the registry it names is its own origin" do
+    port = closed_port()
+
+    cases = [
+      {"a default port, spelled", "http://127.0.0.1", "127.0.0.1:80", :here},
+      {"a default port, unspelled", "http://127.0.0.1", "127.0.0.1", :here},
+      {"https's default port, spelled", "https://home.test", "home.test:443", :here},
+      {"https's default port, unspelled", "https://home.test", "home.test", :here},
+      {"another scheme", "https://127.0.0.1:#{port}", "127.0.0.1:#{port}", :wire},
+      {"a path a proxy adds", "http://127.0.0.1:#{port}", "127.0.0.1:#{port}/registry", :wire}
+    ]
+
+    for {{why, home, registry, where}, n} <- Enum.with_index(cases) do
+      handle = "case-#{n}"
+      self_named!(home)
+      account = named_account!(home, handle)
+      registry!(registry)
+
+      case where do
+        :here ->
+          assert {:ok, %HandleAnswer{handle: ^handle}} =
+                   Sanctum.Handle.name_of(account.identifier),
+                 why
+
+          assert {:ok, %HandleAnswer{identifier: identifier}} = Sanctum.Handle.resolve(handle),
+                 why
+
+          assert identifier == account.identifier, why
+
+        :wire ->
+          assert {:error, :registry_unavailable} = Sanctum.Handle.name_of(account.identifier),
+                 why
+
+          assert {:error, :registry_unavailable} = Sanctum.Handle.resolve(handle), why
+      end
+    end
+
+    # A mirror of its own origin reads over the wire, as the directory's own
+    # client does.
+    home = "http://127.0.0.1:#{port}"
+    self_named!(home)
+    account = named_account!(home, "mirrored")
+    Cyfr.Test.Settings.put("directory_serve", "mirror")
+    assert {:error, :registry_unavailable} = Sanctum.Handle.name_of(account.identifier)
+    assert {:error, :registry_unavailable} = Sanctum.Handle.resolve("mirrored")
   end
 
   # The registry a CYFR reached over HTTP: this endpoint on loopback,

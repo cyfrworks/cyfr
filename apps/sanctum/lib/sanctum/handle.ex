@@ -29,7 +29,7 @@ defmodule Sanctum.Handle do
 
   A registry this node serves, where it is its account service's writer
   (`Sanctum.Directory.writer?/0`) and the registry it names is its own
-  origin's host, is read where it is kept (`Sanctum.Directory.Handles`),
+  origin, scheme and port as well as host, is read where it is kept (`Sanctum.Directory.Handles`),
   never over HTTP to this node, as the directory's own client reads the
   logs it serves: its listener need not answer on the address its origin
   names. Its answers are the routes' own, so both lookups answer the same
@@ -79,7 +79,7 @@ defmodule Sanctum.Handle do
   def name_of(identifier) when is_binary(identifier) do
     with :ok <- identifier_spelled(identifier),
          {:ok, registry} <- Sanctum.registry_host() do
-      if served_here?(registry) do
+      if served_here?() do
         identifier |> Sanctum.Directory.Handles.held() |> kept()
       else
         url =
@@ -136,7 +136,7 @@ defmodule Sanctum.Handle do
   # The handle's answer, from the registry this node serves where it is
   # kept, or over the wire.
   defp asked(registry, handle) do
-    if served_here?(registry) do
+    if served_here?() do
       handle |> Sanctum.Directory.Handles.holder() |> kept()
     else
       url =
@@ -147,13 +147,18 @@ defmodule Sanctum.Handle do
     end
   end
 
-  # Whether the registry this deployment names is the one this node serves
-  # as its account service's writer, compared by host, the name a registry
-  # request and an answer bind.
-  defp served_here?(registry) do
+  # Whether the registry this deployment names is the origin this node
+  # serves as its account service's writer: the registry's endpoint, as
+  # requests to it are sent, and this node's origin, each in the one
+  # spelling a home has (`Sanctum.Directory.served/0`), scheme and port
+  # kept and only a scheme's default port dropped. Another port, another
+  # scheme or a path is another registry, asked over the wire.
+  defp served_here? do
+    endpoint = Sanctum.registry_base_url(Sanctum.registry_url())
+
     with true <- Sanctum.Directory.writer?(),
          {:ok, served} <- Sanctum.Directory.served() do
-      Prima.Identity.Encoding.home_host(served) == registry
+      Prima.Identity.Encoding.canonical_home(endpoint) == {:ok, served}
     else
       _elsewhere -> false
     end

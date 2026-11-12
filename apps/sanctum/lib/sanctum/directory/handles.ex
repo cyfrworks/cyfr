@@ -42,10 +42,11 @@ defmodule Sanctum.Directory.Handles do
 
   This node's own lookups of the registry it serves (`Sanctum.Handle`,
   when this node is the account service's writer and the registry it
-  names is its own host) read it where it is kept (`holder/1`, `held/1`),
-  never over HTTP to this node, as the directory's own client reads its
-  logs (`Sanctum.Directory.Client`): its listener need not answer on the
-  address its origin names. They spend no window.
+  names is its own origin, scheme and port as well as host) read it where
+  it is kept (`holder/1`, `held/1`), never over HTTP to this node, as the
+  directory's own client reads its logs (`Sanctum.Directory.Client`): its
+  listener need not answer on the address its origin names. They spend no
+  window.
 
   ## Answers
 
