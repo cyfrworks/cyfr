@@ -86,26 +86,19 @@ defmodule Opus.Programs do
   `:root` (the local box's service URL and 32-byte key) and `:cluster`
   (true: no box). With either of the first two absent or invalid the local
   box's start answers `:ignore` and there is no box. The registry comes
-  first, then the sign-in relays, then the boxes: a box that dies restarts
+  first, then the sign-in relays, then the box: a box that dies restarts
   alone, and its holders, refused by the service once its lease lapses,
-  hold their owners again. `:boxes` replaces the local one with a list of box option lists
-  (`Opus.Programs.Box.start_link/1`, each without its `:name`).
+  hold their owners again.
   """
   def start_link(opts \\ []), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
 
   @impl true
   def init(opts) do
-    boxes =
-      case Keyword.fetch(opts, :boxes) do
-        {:ok, boxes} -> boxes
-        :error -> [local_box(opts)]
-      end
-
     Supervisor.init(
       [
         {Registry, keys: :unique, name: @registry},
-        {DynamicSupervisor, name: @relays, strategy: :one_for_one}
-        | Enum.map(boxes, &box_child/1)
+        {DynamicSupervisor, name: @relays, strategy: :one_for_one},
+        box_child(local_box(opts))
       ],
       strategy: :rest_for_one,
       max_restarts: 10,
