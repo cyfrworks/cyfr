@@ -16,9 +16,11 @@ defmodule Cyfr.Test.ScriptedBackends do
   high-water mark, and its body read strictly (`read_control/1`); a session
   message's header is verified under the key of the owner it names, its
   lifetime and owner version against what runs, and its body read strictly
-  (`read_session/1`). A `renew` renews an owner only while its lease, set
-  by its `sync` and extended by each renewal, has not run out, as Locus
-  renews one. Every answer carries `x-cyfr-boot`, and every refusal
+  (`read_session/1`). An owner holds a lease, set by its `sync` and
+  extended by each `renew`; once it has run out the owner is lapsed, as
+  Locus lapses one: a renewal answers it unknown, a release or a status
+  names it no more, its sessions end, and a session message naming it is
+  refused `lapsed` until a sync admits it again. Every answer carries `x-cyfr-boot`, and every refusal
   is `encode_refusal/1` at its code's status. Each accepted control message
   is reported to the test as `{:control, type, message, fields}`, the
   message as its JSON; each session message as `{:session, type, message,
@@ -72,6 +74,7 @@ defmodule Cyfr.Test.ScriptedBackends do
              hwm: {0, 0},
              owners: %{},
              leases: %{},
+             lapsed: MapSet.new(),
              programs: %{},
              sessions: %{},
              keys: %{},
@@ -166,7 +169,16 @@ defmodule Cyfr.Test.ScriptedBackends do
     do:
       Agent.update(
         agent,
-        &%{&1 | boot: boot, hwm: {0, 0}, owners: %{}, leases: %{}, sessions: %{}, keys: %{}}
+        &%{
+          &1
+          | boot: boot,
+            hwm: {0, 0},
+            owners: %{},
+            leases: %{},
+            lapsed: MapSet.new(),
+            sessions: %{},
+            keys: %{}
+        }
       )
 
   @doc """
@@ -320,6 +332,7 @@ defmodule Cyfr.Test.ScriptedBackends do
 
       true ->
         Agent.update(agent, &%{&1 | hwm: {fields.generation, fields.seq}})
+        lapse_expired(agent)
         send(st.test, {:control, message["type"], message, fields})
         held(agent, message["type"])
 
@@ -382,6 +395,7 @@ defmodule Cyfr.Test.ScriptedBackends do
       st
       |> put_in([:owners, {athanor, server}], {fields.generation, e})
       |> put_in([:leases, {athanor, server}], now() + message["lease_ms"])
+      |> Map.update!(:lapsed, &MapSet.delete(&1, {athanor, server}))
       |> put_in([:programs, {athanor, server}], message["programs"])
     end)
 
@@ -508,10 +522,41 @@ defmodule Cyfr.Test.ScriptedBackends do
     control_answer(conn, st, %{"homes" => st.homes |> MapSet.to_list() |> Enum.sort()})
   end
 
+  # An owner whose lease ran out is lapsed, as Locus's sweep lapses one
+  # (`Locus.Backends.Owners`): its sessions end and it leaves the owners,
+  # so a renewal answers it unknown, a release or a status names it no
+  # more, and a session message naming it is refused `lapsed` until a sync
+  # admits its key again. Done before each message is answered.
+  defp lapse_expired(agent) do
+    now = now()
+
+    Agent.update(agent, fn st ->
+      case for {key, until} <- st.leases, until <= now, Map.has_key?(st.owners, key), do: key do
+        [] ->
+          st
+
+        expired ->
+          sessions =
+            Map.new(st.sessions, fn {id, s} ->
+              if s.owner in expired, do: {id, %{s | running: false}}, else: {id, s}
+            end)
+
+          %{
+            st
+            | owners: Map.drop(st.owners, expired),
+              leases: Map.drop(st.leases, expired),
+              lapsed: MapSet.union(st.lapsed, MapSet.new(expired)),
+              sessions: sessions
+          }
+      end
+    end)
+  end
+
   # ————— sessions —————
 
   defp session(conn, agent) do
     {:ok, body, conn} = read_body(conn)
+    lapse_expired(agent)
     st = Agent.get(agent, & &1)
     header = get_req_header(conn, LocusBackends.auth_header())
     now = System.os_time(:millisecond)
@@ -534,6 +579,9 @@ defmodule Cyfr.Test.ScriptedBackends do
     cond do
       fields.boot != st.boot ->
         refuse(conn, st, :stale_boot)
+
+      running == nil and MapSet.member?(st.lapsed, {fields.athanor, fields.server}) ->
+        refuse(conn, st, :lapsed)
 
       running == nil ->
         refuse(conn, st, :unknown_owner)
