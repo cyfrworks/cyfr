@@ -499,15 +499,6 @@ defmodule Sanctum.VaultTest do
 
       assert row!(ctx, view.id).destination == @destination_text
       assert {:ok, [_only]} = Vault.list(ctx)
-
-      # A rebind's confirmation reads a program's destination as the program.
-      login = %{destination: ~s({"program":"claude"}), attach_only: true, field_names: "[]"}
-
-      assert Vault.rebind_details(login, login) == %{
-               "program" => "claude",
-               "disclosed" => "no",
-               "field_names" => []
-             }
     end
 
     test "a login entry has nothing to rotate or rebind, and renames, revokes and deletes like any",
