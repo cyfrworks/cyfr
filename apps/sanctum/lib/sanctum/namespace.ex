@@ -37,7 +37,9 @@ defmodule Sanctum.Namespace do
   # so a fresh claim is visible immediately. A release uses this TTL and
   # never reads `:namespace_cache_ttl_ms`, a test seam only a test build
   # reads (`Prima.TestSeam.value/2`); the test config sets it to 0, since a sandbox
-  # rollback is a write no invalidation sees.
+  # rollback is a write no invalidation sees. At 0 an entry is expired on
+  # arrival (`Arca.Cache.get/1` serves one only before its expiry), so every
+  # read asks the row.
   @cache_ttl_ms 60_000
 
   @doc """
@@ -103,7 +105,7 @@ defmodule Sanctum.Namespace do
         case Users.get(user_id) do
           {:ok, %{namespace: slug}} when is_binary(slug) ->
             if Prima.ComponentRef.valid_personal_slug?(slug) do
-              if ttl > 0, do: Arca.Cache.put(key, slug, ttl)
+              Arca.Cache.put(key, slug, ttl)
               {:ok, slug}
             else
               Logger.warning(

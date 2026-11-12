@@ -290,6 +290,45 @@ defmodule Sanctum.CallerTest do
     end
   end
 
+  describe "the establish memo at the shipped bound and at 0" do
+    test "with no setting, the shipped 2 s: a second establish is the memo's, kept no longer than 2 s" do
+      Prima.Test.Env.delete_app_env(:sanctum, :caller_memo_ttl_ms)
+      on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_}) end)
+
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+      hash = Session.token_hash(session.token)
+
+      assert {:ok, ctx} = Caller.establish(session.token)
+
+      [{_key, %Context{}, expires_at}] =
+        :ets.lookup(Arca.Cache.table_name(), Arca.Cache.Keys.established(hash, nil))
+
+      left = expires_at - System.monotonic_time(:millisecond)
+      assert left > 0 and left < 2_000
+
+      # A row removed below the memo, with no invalidation: the memo answers.
+      :ok = Arca.SessionStorage.delete_session(hash)
+      assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token)
+      assert user_id == ctx.user_id
+    end
+
+    test "at 0, the suites' setting, nothing is memoized and every establish reads the store" do
+      Prima.Test.Env.put_app_env(:sanctum, :caller_memo_ttl_ms, 0)
+
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+      hash = Session.token_hash(session.token)
+
+      assert {:ok, _ctx} = Caller.establish(session.token)
+      assert {:ok, _ctx} = Caller.establish(session.token)
+      assert Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) == []
+
+      :ok = Arca.SessionStorage.delete_session(hash)
+      assert {:error, :unauthenticated} = Caller.establish(session.token)
+    end
+  end
+
   describe "revalidate_session/1" do
     # The stored session says who the caller is; the admission the caller
     # is inside says how the run began, which paired client it came from
