@@ -345,10 +345,7 @@ defmodule PrismWeb.ProgramsLive do
         {:noreply, assign(socket, :terminal, %{terminal | token: token})}
 
       _other ->
-        CyfrWeb.ContextGuard.guard(socket, fn socket ->
-          Opus.Programs.sign_in_close(socket.assigns.context, token)
-          {:noreply, socket}
-        end)
+        {:noreply, close_sign_in(socket, token)}
     end
   end
 
@@ -371,8 +368,13 @@ defmodule PrismWeb.ProgramsLive do
         &{:noreply, called(&1, answer, outcome)}
       )
 
+  # A sign-in closed: there is nothing to show.
+  def handle_async(:close_sign_in, {:ok, {tag, _closed}}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, &1})
+
   # Only the node's shutdown stops a call (`run_to_end/1`).
-  def handle_async(:call, {:exit, _reason}, socket), do: {:noreply, socket}
+  def handle_async(name, {:exit, _reason}, socket) when name in [:call, :close_sign_in],
+    do: {:noreply, socket}
 
   # ————— a row's call —————
 
@@ -660,16 +662,33 @@ defmodule PrismWeb.ProgramsLive do
   # one again after its session ended, starts afresh and never reaches the
   # previous session.
   defp open_terminal(socket, name, entry) do
-    close_terminal(socket)
     id = "sign-in-#{System.unique_integer([:positive])}"
-    assign(socket, :terminal, %{id: id, row: name, entry: entry, token: nil})
+
+    socket
+    |> close_terminal()
+    |> assign(:terminal, %{id: id, row: name, entry: entry, token: nil})
   end
 
-  defp close_terminal(%{assigns: %{terminal: %{token: token}, context: context}})
-       when is_binary(token),
-       do: Opus.Programs.sign_in_close(context, token)
+  defp close_terminal(%{assigns: %{terminal: %{token: token}}} = socket) when is_binary(token),
+    do: close_sign_in(socket, token)
 
-  defp close_terminal(_socket), do: :ok
+  defp close_terminal(socket), do: socket
+
+  # A sign-in's close, off the page's process and run to its end: the relay
+  # answers it only once it has finished what it is doing, a line it is
+  # sending included, up to 35 s. Nothing waits on its answer; a relay
+  # already ended has nothing to close.
+  defp close_sign_in(socket, token) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+
+    start_async(
+      socket,
+      :close_sign_in,
+      fn -> {tag, run_to_end(fn -> Opus.Programs.sign_in_close(ctx, token) end)} end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
 
   # ————— reading —————
 

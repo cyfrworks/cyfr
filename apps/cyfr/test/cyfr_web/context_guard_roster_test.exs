@@ -78,8 +78,9 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     "live/registry_live.ex" =>
       {2, [{"live/registry_live.ex", :act}, {"live/registry_live.ex", :load}]},
     # A program row's call: adding one, or its Test, Refresh, Restart,
-    # hosts or Reset folder.
-    "live/programs_live.ex" => {1, [{"live/programs_live.ex", :call}]},
+    # hosts or Reset folder; and the close of a sign-in another replaced.
+    "live/programs_live.ex" =>
+      {2, [{"live/programs_live.ex", :call}, {"live/programs_live.ex", :close_sign_in}]},
     # A thread with people, made in the overlay; a person added in a thread.
     "live/chat_overlay_live.ex" => {1, [{"live/chat_overlay_live.ex", :create}]},
     "live/shared_thread_live.ex" => {1, [{"live/shared_thread_live.ex", :add}]},

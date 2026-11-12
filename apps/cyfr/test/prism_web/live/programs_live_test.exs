@@ -635,6 +635,10 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> render_submit()
 
     assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
+    # The line answered before the command ends: the scripted service
+    # writes back the session it read for a line, so an end it is told of
+    # meanwhile would be lost.
+    answered(view)
 
     Scripted.end_sessions(fake, row.id, 0)
 
@@ -749,6 +753,49 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert has_element?(view, ~s([data-test="terminal-ended"]), "Signed in.")
   end
 
+  # The relay answers a close only once it has finished what it is doing:
+  # here a line it is sending, held at the service past the browser's
+  # wait. Picking another sign-in meanwhile answers at once, and the old
+  # session is closed once the relay is free.
+  test "picking another sign-in while the open one's relay is busy answers at once and closes the old one after",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    pipe_row!(athanor)
+    pipe_row!(athanor, "codex")
+    a = login!(user, athanor, "claude-login", "claude")
+    b = login!(user, athanor, "codex-login", "codex")
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    sign_in(view, "claude", a)
+    assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, @answered_ms
+    running!(view)
+    assert_receive {:session, "recv", %{"session" => session_a}, _fields}, @answered_ms
+
+    Scripted.hold(fake, "send")
+    view |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "busy"}) |> render_submit()
+    assert_receive {:held, "send", sending}, @answered_ms
+
+    try do
+      view |> element("tr[phx-value-name=codex]") |> render_click()
+
+      html =
+        pushed(fn ->
+          view
+          |> form(~s([data-test="home-actions"] form[phx-submit="sign_in"]), %{"entry" => b})
+          |> render_submit()
+        end)
+
+      assert is_binary(html), "the page did not answer while the old sign-in's relay was busy"
+      assert has_element?(view, ~s([data-test="sign-in-terminal"]), "codex")
+    after
+      send(sending, :go)
+    end
+
+    assert_receive {:session, "close", %{"session" => ^session_a}, _fields}, @answered_ms
+    assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, @answered_ms
+    running!(view)
+  end
+
   # One terminal, one session: selecting another target closes the session
   # running, the new terminal sends to its own, and its heading names it.
   test "selecting another program's sign-in closes the one running and sends to the new one",
@@ -782,6 +829,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert_receive {:session, "send", %{"session" => session_b, "lines" => ["code-b"]}, _}, 2_000
     assert session_b != session_a
+    answered(view)
 
     # After its session ended, selecting the same sign-in again starts afresh.
     Scripted.end_sessions(fake, codex.id, 0)
