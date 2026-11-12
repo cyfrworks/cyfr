@@ -39,6 +39,11 @@ if config_env() == :test do
   config :sanctum,
     secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
+  # The registry every CYFR names, here the closed loopback port the
+  # umbrella's suite names (`config/test.exs`): a registry that does not
+  # answer, and none off this machine.
+  config :sanctum, :registry_url, "127.0.0.1:19"
+
   # Sanctum's test seams, compiled in for this build's suite as
   # `config/test.exs` compiles them in for the umbrella's
   # (`Sanctum.seam/2`): a release compiles none of them.

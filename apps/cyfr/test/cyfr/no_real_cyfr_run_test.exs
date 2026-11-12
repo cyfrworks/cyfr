@@ -3,11 +3,11 @@
 
 defmodule Cyfr.NoRealCyfrRunTest do
   @moduledoc """
-  No person is ever made at the real cyfr.run from a test or a dev boot.
-  The test node's registry is the discard address `config/test.exs` names
-  and it pins no directory; and a development configuration that sets
-  neither `CYFR_REGISTRY_URL` nor `CYFR_DIRECTORY_URL` names no registry
-  and no directory, where production's defaults stay cyfr.run.
+  No person is ever made at the real cyfr.run from a test: the test node's
+  registry is the discard address `config/test.exs` names and it pins no
+  directory. A development build and a release share one default, cyfr.run
+  for the registry and the account service, so a CYFR takes one path
+  whatever it was built as.
   """
 
   # The runtime configuration is read under a changed process environment.
@@ -29,18 +29,14 @@ defmodule Cyfr.NoRealCyfrRunTest do
     assert Sanctum.directory_url() == nil
   end
 
-  test "a development configuration with neither URL set names no registry and no directory" do
-    config = runtime(:dev)
-    assert get_in(config, [:sanctum, :registry_url]) == "none"
-    assert get_in(config, [:cyfr, :registry_url]) == "none"
-    assert get_in(config, [:cyfr, :oci_registry_url]) == "none"
-    assert Keyword.fetch!(config[:sanctum], :directory_url) == nil
-  end
-
-  test "production's defaults stay cyfr.run" do
-    config = runtime(:prod)
-    assert get_in(config, [:sanctum, :registry_url]) == "cyfr.run"
-    assert get_in(config, [:sanctum, :directory_url]) == "https://cyfr.run"
+  for env <- [:dev, :prod] do
+    test "a #{env} configuration with neither URL set names cyfr.run" do
+      config = runtime(unquote(env))
+      assert get_in(config, [:sanctum, :registry_url]) == "cyfr.run"
+      assert get_in(config, [:cyfr, :registry_url]) == "cyfr.run"
+      assert get_in(config, [:cyfr, :oci_registry_url]) == "registry.cyfr.run"
+      assert get_in(config, [:sanctum, :directory_url]) == "https://cyfr.run"
+    end
   end
 
   test "a directory over http is accepted on this machine's loopback alone" do

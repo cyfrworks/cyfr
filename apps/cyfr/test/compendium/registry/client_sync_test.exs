@@ -357,20 +357,6 @@ defmodule Compendium.Registry.ClientSyncTest do
                  "type" => "reagent"
                })
     end
-
-    test "discover is refused as unconfigured when no registry is configured", %{
-      ctx: ctx,
-      stub: stub
-    } do
-      # `CYFR_REGISTRY_URL=none`; `point_at_stub/1` restores the URL.
-      _ = stub
-      Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
-
-      {:error, refusal} = Provider.handle("component", ctx, %{"action" => "discover"})
-
-      assert %Prima.Refusal{reason: {:registry, :registry_unconfigured}} = refusal
-      assert err_msg(refusal) =~ "No registry is configured on this server"
-    end
   end
 
   # ============================================================================

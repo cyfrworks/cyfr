@@ -1102,11 +1102,25 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         assert config[:sanctum][:registry_url] == "cyfr.run"
       end)
 
-      with_env(%{"CYFR_REGISTRY_URL" => "none"}, fn ->
+      with_env(%{"CYFR_REGISTRY_URL" => "registry.example.com:8443"}, fn ->
         config = read_prod_config!()
-        assert config[:cyfr][:registry_url] == "none"
-        assert config[:sanctum][:registry_url] == "none"
+        assert config[:cyfr][:registry_url] == "registry.example.com:8443"
+        assert config[:sanctum][:registry_url] == "registry.example.com:8443"
+        assert config[:cyfr][:oci_registry_url] == "registry.registry.example.com:8443"
       end)
+    end
+
+    test "a boot that names no registry, or a value that is not a host, is refused" do
+      for value <- ["none", "https://cyfr.run/", "not a host"] do
+        with_env(%{"CYFR_REGISTRY_URL" => value}, fn ->
+          assert refusal!() =~
+                   "CYFR_REGISTRY_URL must name this CYFR's registry, cyfr.run or one of its own"
+        end)
+
+        with_env(%{"CYFR_OCI_REGISTRY_URL" => value}, fn ->
+          assert refusal!() =~ "CYFR_OCI_REGISTRY_URL must name the OCI registry"
+        end)
+      end
     end
 
     test "a directory URL as long as a preview can name is read, and one byte more is refused" do

@@ -199,8 +199,8 @@ defmodule Sanctum do
   @doc """
   The directory this deployment enrolls its local people at
   (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`; unset, it is
-  `https://cyfr.run` in production and none in development), or `nil` when
-  it names none: local operation and local pairing need none, and
+  `https://cyfr.run` in every build), or `nil` when it names none, as the
+  test configuration does: local operation and local pairing need none, and
   enrollment needs one. No operation takes a
   directory URL. `Sanctum.Supervisor` refuses the boot on a value
   `enrollment_directory?/1` refuses.
@@ -211,28 +211,49 @@ defmodule Sanctum do
   @doc """
   The registry this deployment speaks to (`:sanctum, :registry_url`, from
   the one parse of `CYFR_REGISTRY_URL` that sets Compendium's too): a host
-  with an optional port, or `"none"` for no registry.
+  with an optional port (`registry_url?/1`). Every CYFR names one, cyfr.run
+  or its own; `config/runtime.exs` refuses a boot that names none.
   """
   @spec registry_url() :: String.t()
-  def registry_url, do: Application.get_env(:sanctum, :registry_url, "none")
+  def registry_url, do: Application.fetch_env!(:sanctum, :registry_url)
 
   @doc """
   The registry's canonical host, the name a signed registry request binds
   (`Prima.RegistryRequest`): `registry_url/0` lowercased without its port.
-  `{:error, :no_registry}` when this deployment names no registry, or a
-  value with no host.
   """
-  @spec registry_host() :: {:ok, String.t()} | {:error, :no_registry}
+  @spec registry_host() :: String.t()
   def registry_host do
-    with url when url != "none" <- registry_url(),
-         %URI{host: host} when is_binary(host) and host != "" <- URI.parse("//" <> url),
-         host = String.downcase(host),
-         true <- Prima.Identity.Encoding.host?(host) do
-      {:ok, host}
-    else
-      _none -> {:error, :no_registry}
-    end
+    {:ok, host} = parse_registry(registry_url())
+    host
   end
+
+  @doc """
+  Whether `value` names a registry: a host name or address, in any case,
+  and an optional port from 1 to 65535, with nothing else.
+  """
+  @spec registry_url?(term()) :: boolean()
+  def registry_url?(value), do: match?({:ok, _host}, parse_registry(value))
+
+  defp parse_registry(value) when is_binary(value) do
+    {host, port} =
+      case String.split(value, ":", parts: 2) do
+        [host] -> {host, nil}
+        [host, port] -> {host, port}
+      end
+
+    host = String.downcase(host)
+
+    if Prima.Identity.Encoding.host?(host) and registry_port?(port),
+      do: {:ok, host},
+      else: :error
+  end
+
+  defp parse_registry(_value), do: :error
+
+  defp registry_port?(nil), do: true
+
+  defp registry_port?(port),
+    do: port =~ ~r/\A[0-9]{1,5}\z/ and String.to_integer(port) in 1..65_535
 
   @doc """
   The base URL of a registry host (a name or address with an optional

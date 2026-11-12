@@ -220,7 +220,7 @@ fn args ->
       reason = String.to_existing_atom(reason)
 
       others =
-        ~w(identity_stale unavailable banned registry_unavailable no_registry
+        ~w(identity_stale unavailable banned registry_unavailable
            registry_token_missing unknown_identity directory_unavailable wrong_directory
            policy_required)a -- [reason]
 

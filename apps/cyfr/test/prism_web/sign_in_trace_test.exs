@@ -35,13 +35,11 @@ defmodule PrismWeb.SignInTraceTest do
     File.cp_r!(Path.join(@repo_root, "seed/components"), Path.join(seed_dir, "components"))
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    # The storage roots are the persistence layer's; the registry endpoints
-    # (both, because a pull dials the OCI one) are the host's; the
-    # directory and the inline provisioning are the identity domain's.
+    # The storage roots are the persistence layer's; the directory and the
+    # inline provisioning are the identity domain's. The registry is the
+    # suite's, a closed loopback port (`config/test.exs`).
     Prima.Test.Env.put_app_env(:arca, :base_path, test_dir)
     Prima.Test.Env.put_app_env(:arca, :seed_path, seed_dir)
-    Prima.Test.Env.put_app_env(:cyfr, :registry_url, "none")
-    Prima.Test.Env.put_app_env(:cyfr, :oci_registry_url, "none")
     Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
 
     tls = DirectoryServer.tls()
