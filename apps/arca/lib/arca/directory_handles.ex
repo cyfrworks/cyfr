@@ -47,6 +47,21 @@ defmodule Arca.DirectoryHandles do
 
   def get(%Prima.Actor{}, _handle), do: {:error, :cross_tenant}
 
+  @doc "The handle `identifier` holds, or `{:error, :not_found}`: an account holds at most one."
+  @spec of(Prima.Actor.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
+  def of(%Prima.Actor{scope: :platform}, identifier) when is_binary(identifier) do
+    Arca.Repo.Errors.with_db_rescue("Arca.DirectoryHandles.of", fn ->
+      case Arca.Repo.get_by(DirectoryHandle, identifier: identifier) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def of(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
+
   @doc """
   Claim `attrs.handle` for the account `attrs.identifier` under the
   request's `:nonce` (16 bytes) and `:expires_at` (a `DateTime`), as the

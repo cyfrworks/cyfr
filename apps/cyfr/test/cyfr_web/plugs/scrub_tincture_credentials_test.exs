@@ -84,6 +84,8 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentialsTest do
           {"/directory/#{@person}", "/directory/[REDACTED]"},
           {"/v1/handles/mira", "/v1/handles/:handle"},
           {"/v1/handles/mira/more", "/v1/handles/[REDACTED]"},
+          {"/v1/identities/#{@person}/handle", "/v1/identities/:identifier/handle"},
+          {"/v1/identities/#{@person}", "/v1/identities/[REDACTED]"},
           {"/v1/namespaces/personal/claim", "/v1/namespaces/personal/claim"},
           {"/v1/namespaces/personal/claim/mira", "/v1/namespaces/personal/claim/[REDACTED]"},
           {"/account/sign", "/account/:name"},
@@ -101,14 +103,20 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentialsTest do
   end
 
   test "every route under a directory prefix is named by its own pattern and logs no dispatch" do
-    prefixes = ["/directory/", "/v1/handles/", "/v1/namespaces/personal/claim", "/account/"]
+    prefixes = [
+      "/directory/",
+      "/v1/handles/",
+      "/v1/identities/",
+      "/v1/namespaces/personal/claim",
+      "/account/"
+    ]
 
     routes =
       for %{path: path, verb: verb} <- Phoenix.Router.routes(CyfrWeb.Router),
           String.starts_with?(path, prefixes),
           do: {verb, path}
 
-    assert length(routes) == 7
+    assert length(routes) == 8
 
     for {verb, route} <- routes do
       concrete =

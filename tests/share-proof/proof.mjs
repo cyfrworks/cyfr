@@ -568,9 +568,9 @@ async function entryIds(page, vault, count) {
 // set up with it through its setup link, and the session their browser
 // then holds handed to run.sh (`admin_session`), which reads it from the
 // cookie: their person, athanor and route segment. The setup page asks
-// nothing, so they finish their name on the Settings page, which records
-// it once the registry home.test names (dir.test) answers it with their
-// account's identifier.
+// nothing: their Settings page names them from their first sign-in on,
+// with the name home.test asked by their identifier at the registry it
+// names (dir.test).
 async function signUpAdmin(page) {
   const made = await createAccount(page, adminKeys, { directory: DIR, name: ADMIN_NAME, secrets: codes });
   const { token } = await ask({ op: "setup_token" }, { secret: true });
@@ -581,8 +581,6 @@ async function signUpAdmin(page) {
   let named = null;
   if (adminSegment) {
     await open(page, pagePath(adminSegment, "/settings"));
-    await page.locator('[data-test="identity-name-input"]').fill(ADMIN_NAME);
-    await page.locator('[data-test="identity-name-form"] button[type="submit"]').click();
     named = await page.locator('[data-test="identity-name"]').innerText({ timeout: 30_000 })
       .then((text) => text.trim()).catch(() => null);
   }
@@ -1003,10 +1001,10 @@ async function main() {
     await open(anaPage, pagePath(ana.segment, "/vault"));
     const afterNarrow = await sharedWithYou(anaPage);
     // Bea's first sign-in leaves her row as her device's hello admits her
-    // (an open admission, no email, no display name and no name: her
-    // account's name is claimed at dir.test, and a CYFR's registry answers
-    // no lookup of the name an account holds, which the sign-in asks),
-    // active, at security generation 1, her personal
+    // (an open admission, no email and no display name), named as her
+    // account's name is at dir.test, the registry home.test names, which
+    // the sign-in asks by her identifier, active, at security generation 1,
+    // her personal
     // athanor the one her sign-in names, and no platform administrator's
     // mark, which only the installation's first person carries. Company
     // AI's share is to Traders alone, which Ana is not in: her claim of it is refused as not
@@ -1019,7 +1017,7 @@ async function main() {
         email_verified: null,
         admission: "open",
         display_name: null,
-        namespace: null,
+        namespace: "share-proof-bea",
         status: "active",
         security_generation: 1,
         prefs: "{}",
