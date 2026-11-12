@@ -41,6 +41,8 @@
 #            the account as its first person, the platform administrator,
 #            and the command line as their device, and a command-line
 #            session that `cyfr whoami` answers under ends with its shell;
+#            the person's namespace is cached for its shipped lifetime with
+#            the test seam's key set to 0 in the running release;
 #            run again it unlocks the same device with no code, no other
 #            person made. A second cell, whose registry and directory are
 #            `.invalid` names, meets an account service that does not
@@ -718,6 +720,22 @@ echo "cyfr login --setup --name proof: the account $identifier made at the stand
 grep -qF "User ID: $person" "$HEADLESS/shell.log" || fail "cyfr whoami in cyfr login's shell did not name $person"
 grep -qx "Platform admin: yes" "$HEADLESS/shell.log" || fail "the first person set up from the command line is not the platform administrator"
 grep -qx "whoami exit 0" "$HEADLESS/shell.log" || fail "cyfr whoami in cyfr login's shell failed"
+
+# The namespace cache keeps the person's slug for its shipped lifetime
+# with `:namespace_cache_ttl_ms` set to 0 in the running release, which
+# compiles that test seam out (tests/release-boot/test_seams.exs holds the
+# others): a build that read the key would cache nothing.
+cached="$(cell_cyfr "$HEADLESS" rpc '
+  key = {:namespace_slug, "'"$person"'"}
+  Application.put_env(:sanctum, :namespace_cache_ttl_ms, 0)
+  :ok = Arca.Cache.invalidate(key)
+  {:ok, slug} = Sanctum.Namespace.lookup_status("'"$person"'")
+  IO.puts("CYFR_NAMESPACE_CACHED=" <> to_string(Arca.Cache.get(key) == {:ok, slug}))
+  Application.delete_env(:sanctum, :namespace_cache_ttl_ms)' |
+  sed -n 's/^CYFR_NAMESPACE_CACHED=//p' | tail -1)"
+[ "$cached" = true ] ||
+  fail "the release did not cache $person's namespace for its shipped lifetime with the seam's key set to 0 (answered '$cached')"
+echo "the namespace cache keeps its shipped lifetime whatever :namespace_cache_ttl_ms says"
 
 # Run again, the same person unlocks again with the passphrase: their code
 # is saved, so none is shown, nothing waits for Enter, and no person or

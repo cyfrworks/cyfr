@@ -42,26 +42,85 @@ defmodule Sanctum.TestSeamsTest do
     end
   end
 
+  # Every other key of Sanctum's environment the code reads, by its class.
+  # Shipped: a shipped configuration file sets it, or the boot writes it
+  # (`Cyfr.Application` writes the keyring), checked below where the
+  # umbrella's configuration is present.
+  @shipped ~w(access_mode company_login crypto_keyring directory_url fallback_origin
+              oidc_client oidc_issuer private_egress_targets proxy_trust public_url
+              registry_url secret_key_base setup_token tool_providers workos)a
+
+  # Operator-shaped, with no lever to set it yet (`Cyfr.Boundaries` classes
+  # it `:missing_lever`): no shipped file sets it, and no seam reads it.
+  @missing_levers [:platform_ceiling]
+
+  # Sanctum's keys read in another application's code and not yet through a
+  # seam: the bearer route of `CyfrWeb.Plugs.Authenticate` and
+  # `Compendium.Provisioning`'s inline fill, both left for the cyfr slice's
+  # own pass. Exact: each is still read there, by that application alone.
+  @elsewhere %{bearer_provider: "apps/cyfr/lib", provisioning_inline: "apps/cyfr/lib"}
+
+  # The one reader whose application and key are values, not names: the
+  # platform settings' (`Cyfr.Platform.Settings`), whose pairs are its
+  # roster's and are written at boot.
+  @dynamic_readers ["apps/cyfr/lib/cyfr/platform/settings.ex"]
+
+  @readers [:get_env, :fetch_env, :fetch_env!, :get_all_env, :compile_env, :compile_env!]
+
   # The decision above holds for a seam only where its read goes through
-  # it: each seam's key is read in one place, inside `Sanctum.seam/2`'s
-  # read. tests/release-boot/test_seams.exs holds the shipped release's
-  # compiled permission to the same seams.
-  test "every seam's key is read inside Sanctum.seam/2 and nowhere else" do
+  # it. Every read of Sanctum's application environment in every
+  # application's code, read as code: inside the function `Sanctum.seam/2`
+  # is handed, or inside a branch compiled only with the permission, is a
+  # seam's; a `compile_env` read is fixed when the release is built, and
+  # the release refuses to boot under another value; anything else names a
+  # key of the classes above. A key that is not a literal atom fails.
+  # tests/release-boot/test_seams.exs holds the shipped release to the
+  # same seams.
+  test "every read of Sanctum's environment is a seam's, compiled, or a key of its stated class" do
     root = Path.expand("../../../..", __DIR__)
-    sources = Path.wildcard(Path.join(root, "apps/*/lib/**/*.ex"))
 
-    for {key, _default} <- @seams do
-      read = "Application.get_env(:sanctum, :#{key}"
+    found =
+      for lib <- Prima.Test.SourceTree.app_libs(root),
+          path <- Prima.Test.SourceTree.files!(Path.join([root, lib, "**/*.ex"])),
+          quoted = Prima.Test.SourceTree.quoted(path),
+          names = attributes(quoted),
+          read <- reads(quoted, :plain),
+          do: resolve(read, names, Path.relative_to(path, root))
 
-      reads =
-        for path <- sources,
-            text = File.read!(path),
-            {at, _length} <- :binary.matches(text, read),
-            do: {Path.relative_to(path, root), binary_part(text, max(at - 120, 0), min(at, 120))}
+    classed = Enum.map(found, &Map.put(&1, :class, class(&1)))
 
-      assert [{_path, before}] = reads, "#{key} is read #{length(reads)} times: #{inspect(reads)}"
-      assert before =~ "Sanctum.seam(", "#{key} is read outside Sanctum.seam/2"
+    unclassed =
+      for %{class: {:refused, why}} = read <- classed, do: {why, Map.delete(read, :class)}
+
+    assert unclassed == [],
+           "reads of Sanctum's environment no class admits: #{inspect(unclassed)}"
+
+    by_class = Enum.group_by(classed, & &1.class, & &1.key)
+
+    # Each seam read once, inside its seam: a seam read elsewhere, or not at
+    # all, is not the seam this suite proves.
+    assert Enum.sort(Map.get(by_class, :seam, [])) == Enum.sort(Keyword.keys(@seams))
+    assert Map.get(by_class, :compiled_out) == [:tenancy_resolver_override]
+
+    assert by_class |> Map.get(:compiled, []) |> Enum.uniq() |> Enum.sort() ==
+             [:directory_request_ms, :test_seams_permitted]
+
+    # The lists above hold what is read, no more.
+    shipped_read = MapSet.new(Map.get(by_class, :shipped, []))
+    assert MapSet.equal?(shipped_read, MapSet.new(@shipped)), inspect(shipped_read)
+    assert Enum.uniq(Map.get(by_class, :missing_lever, [])) == @missing_levers
+
+    present = fn file -> File.exists?(Path.join(root, file)) end
+
+    for {key, lib} <- @elsewhere, present.(lib) do
+      assert [_ | _] = reads_of = Enum.filter(classed, &(&1.key == key))
+      assert Enum.all?(reads_of, &String.starts_with?(&1.file, lib <> "/")), inspect(reads_of)
     end
+
+    dynamic = for %{class: :dynamic, file: file} <- classed, uniq: true, do: file
+    assert dynamic == Enum.filter(@dynamic_readers, present)
+
+    if present.("config/runtime.exs"), do: assert(shipped_unset(root) == [])
   end
 
   test "the permission is the test configurations' and no other's" do
@@ -86,5 +145,164 @@ defmodule Sanctum.TestSeamsTest do
       |> String.split("if config_env() == :test do", parts: 2)
 
     assert under_test =~ "test_seams_permitted: true"
+  end
+
+  # The reads of an application's environment in `ast`, each with its
+  # application and key (`:dynamic` where it is not a literal atom) and the
+  # gate it sits under: `:seam`, inside the function `Sanctum.seam/2` is
+  # handed; `:compiled_out`, inside a branch compiled only with the test
+  # permission; `:plain` otherwise.
+  defp reads({{:., _, [{:__aliases__, _, [:Sanctum]}, :seam]}, _, args}, gate)
+       when is_list(args) do
+    Enum.flat_map(args, fn
+      {:fn, _, _} = read -> reads(read, :seam)
+      arg -> reads(arg, gate)
+    end)
+  end
+
+  defp reads({:if, _, [condition, clauses]} = ast, gate) when is_list(clauses) do
+    if permission?(condition),
+      do:
+        reads(condition, gate) ++
+          reads(Keyword.get(clauses, :do), :compiled_out) ++
+          reads(Keyword.get(clauses, :else), gate),
+      else: walk(ast, gate)
+  end
+
+  defp reads({:|>, _, [subject, {{:., _, [module, fun]}, meta, args}]}, gate)
+       when is_list(args) do
+    if env_reader?(module, fun),
+      do: [read(fun, meta, [subject | args], gate) | reads([subject | args], gate)],
+      else: reads(subject, gate) ++ reads(args, gate)
+  end
+
+  defp reads({{:., _, [module, fun]}, meta, args} = ast, gate) when is_list(args) do
+    if env_reader?(module, fun),
+      do: [read(fun, meta, args, gate) | reads(args, gate)],
+      else: walk(ast, gate)
+  end
+
+  defp reads(ast, gate), do: walk(ast, gate)
+
+  defp walk({form, _meta, args}, gate), do: reads(form, gate) ++ reads(List.wrap(args), gate)
+  defp walk({left, right}, gate), do: reads(left, gate) ++ reads(right, gate)
+  defp walk(list, gate) when is_list(list), do: Enum.flat_map(list, &reads(&1, gate))
+  defp walk(_leaf, _gate), do: []
+
+  defp env_reader?({:__aliases__, _, [:Application]}, fun), do: fun in @readers
+  defp env_reader?(:application, fun), do: fun in [:get_env, :get_all_env, :get_key]
+  defp env_reader?(_module, _fun), do: false
+
+  defp permission?({{:., _, [{:__aliases__, _, [:Application]}, :compile_env]}, _, args}),
+    do: match?([:sanctum, :test_seams_permitted | _], args)
+
+  defp permission?(_condition), do: false
+
+  defp read(fun, meta, args, gate) do
+    {app, key} =
+      case args do
+        [app, key | _] -> {app, key}
+        [app] -> {app, :dynamic}
+        [] -> {:dynamic, :dynamic}
+      end
+
+    %{fun: fun, line: meta[:line], app: app, key: key, gate: gate}
+  end
+
+  # A read's application and key as names: a literal atom, or a module
+  # attribute the file sets to one (`@app :cyfr`); anything else is
+  # `:dynamic`.
+  defp resolve(read, names, file),
+    do:
+      %{read | app: literal(read.app, names), key: literal(read.key, names)}
+      |> Map.put(:file, file)
+
+  defp literal(atom, _names) when is_atom(atom), do: atom
+  defp literal({:@, _, [{name, _, _}]}, names), do: Map.get(names, name, :dynamic)
+  defp literal(_value, _names), do: :dynamic
+
+  defp attributes(quoted) do
+    for {:@, _, [{name, _, [value]}]} <- flatten(quoted),
+        is_atom(value),
+        into: %{},
+        do: {name, value}
+  end
+
+  # A read of another application's environment is not this check's; one
+  # whose application is a value may be Sanctum's.
+  defp class(%{app: app}) when app not in [:sanctum, :dynamic], do: :other
+
+  defp class(%{app: :dynamic, file: file}),
+    do: if(file in @dynamic_readers, do: :dynamic, else: {:refused, :application_not_a_name})
+
+  defp class(%{key: :dynamic}), do: {:refused, :key_not_a_name}
+
+  defp class(%{gate: :seam, key: key}),
+    do: if(key in Keyword.keys(@seams), do: :seam, else: {:refused, :unlisted_seam})
+
+  defp class(%{gate: :compiled_out}), do: :compiled_out
+  defp class(%{fun: fun}) when fun in [:compile_env, :compile_env!], do: :compiled
+  defp class(%{key: key}) when key in @shipped, do: :shipped
+  defp class(%{key: key}) when key in @missing_levers, do: :missing_lever
+
+  defp class(%{key: key, file: file}) do
+    case @elsewhere do
+      %{^key => lib} ->
+        if String.starts_with?(file, lib <> "/"),
+          do: :elsewhere,
+          else: {:refused, :read_outside_its_application}
+
+      %{} ->
+        {:refused, :read_outside_a_seam}
+    end
+  end
+
+  # The shipped keys no shipped configuration file sets and no boot writes:
+  # `config :sanctum, …` in config/config.exs, prod.exs and runtime.exs and,
+  # outside its test branch, apps/sanctum/config/config.exs; and
+  # `Application.put_env(:sanctum, key, …)` in an application's code.
+  defp shipped_unset(root) do
+    files =
+      ~w(config/config.exs config/prod.exs config/runtime.exs apps/sanctum/config/config.exs)
+
+    set =
+      for file <- files,
+          path = Path.join(root, file),
+          File.exists?(path),
+          key <- configured(Code.string_to_quoted!(File.read!(path))),
+          into: MapSet.new(),
+          do: key
+
+    written =
+      for lib <- Prima.Test.SourceTree.app_libs(root),
+          path <- Prima.Test.SourceTree.files!(Path.join([root, lib, "**/*.ex"])),
+          {_, _, _} = node <- flatten(Prima.Test.SourceTree.quoted(path)),
+          match?(
+            {{:., _, [{:__aliases__, _, [:Application]}, :put_env]}, _, [:sanctum, key, _]}
+            when is_atom(key),
+            node
+          ),
+          into: MapSet.new(),
+          do: node |> elem(2) |> Enum.at(1)
+
+    Enum.reject(@shipped, &(MapSet.member?(set, &1) or MapSet.member?(written, &1)))
+  end
+
+  # The keys `config :sanctum, …` sets in a configuration file's code,
+  # outside any `if config_env() == :test` branch.
+  defp configured({:if, _, [{:==, _, [{:config_env, _, _}, :test]}, _clauses]}), do: []
+
+  defp configured({:config, _, [:sanctum, keywords]}) when is_list(keywords),
+    do: Keyword.keys(keywords)
+
+  defp configured({:config, _, [:sanctum, key, _value]}) when is_atom(key), do: [key]
+  defp configured({form, _, args}), do: configured(form) ++ configured(List.wrap(args))
+  defp configured({left, right}), do: configured(left) ++ configured(right)
+  defp configured(list) when is_list(list), do: Enum.flat_map(list, &configured/1)
+  defp configured(_leaf), do: []
+
+  defp flatten(ast) do
+    {_ast, nodes} = Macro.prewalk(ast, [], fn node, acc -> {node, [node | acc]} end)
+    nodes
   end
 end
