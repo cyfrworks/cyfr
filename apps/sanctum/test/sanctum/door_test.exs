@@ -439,7 +439,7 @@ defmodule Sanctum.DoorTest do
       refute Map.has_key?(shown, :label)
     end
 
-    test "with the registry down, no registry, or a handle no one holds, nothing is written" do
+    test "with the registry down, or a handle no one holds, nothing is written" do
       RegistryStub.handles!(%{"alice" => :close})
 
       ExUnit.CaptureLog.capture_log(fn ->
@@ -450,10 +450,6 @@ defmodule Sanctum.DoorTest do
       RegistryStub.handles!(%{})
       assert {:error, :handle_not_found} = door("allow", "@nobody")
       assert {:error, :handle_not_found} = door("deny", "@nobody")
-
-      Application.put_env(:sanctum, :registry_url, "none")
-      assert {:error, :no_registry} = door("allow", "@alice")
-      assert {:error, :no_registry} = door("deny", "@alice")
 
       assert Store.list() == []
       assert Store.requests() == []

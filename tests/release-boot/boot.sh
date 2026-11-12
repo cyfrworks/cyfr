@@ -661,12 +661,13 @@ grep -q '/setup#'"$token" "$HEADLESS/cli.log" ||
 
 # The stand-in is the cell's registry and its directory, over plain HTTP
 # on loopback, its address a private egress target as an operator names
-# one, and the cell pulls from no OCI registry: nothing reaches cyfr.run.
+# one, and its OCI host is a loopback address its egress refuses: nothing
+# reaches cyfr.run.
 stand_in_start "$WORK/cyfr-run"
 STAND_IN_URL="http://$STAND_IN_ADDRESS:$STAND_IN_PORT"
 cell_set "$HEADLESS" CYFR_REGISTRY_URL "$STAND_IN_ADDRESS:$STAND_IN_PORT"
 cell_set "$HEADLESS" CYFR_DIRECTORY_URL "$STAND_IN_URL"
-cell_set "$HEADLESS" CYFR_OCI_REGISTRY_URL none
+cell_set "$HEADLESS" CYFR_OCI_REGISTRY_URL 127.0.0.1:9
 targets="$(cell_value "$HEADLESS" CYFR_PRIVATE_EGRESS_TARGETS)"
 cell_set "$HEADLESS" CYFR_PRIVATE_EGRESS_TARGETS "${targets:+$targets,}$STAND_IN_ADDRESS"
 echo "the cyfr.run stand-in answers at $STAND_IN_URL"
@@ -823,7 +824,7 @@ cell_set "$SILENT" CYFR_HEADLESS on
 # Names that resolve nowhere: the registry and the directory never answer.
 cell_set "$SILENT" CYFR_REGISTRY_URL registry.invalid
 cell_set "$SILENT" CYFR_DIRECTORY_URL https://directory.invalid
-cell_set "$SILENT" CYFR_OCI_REGISTRY_URL none
+cell_set "$SILENT" CYFR_OCI_REGISTRY_URL registry.invalid
 server_start "$SILENT"
 cell_cli "$SILENT" context add silent "http://127.0.0.1:$PORT"
 headless_shell "$SILENT"

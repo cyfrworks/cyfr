@@ -64,8 +64,8 @@ pulls still come from cyfr.run's OCI registry. A new dev database starts
 the stand-in afresh; a database that is not new needs the stand-in state
 it was made with, and the loop refuses, naming the reset (deleting the dev
 database and `data/dev-stack/cyfr-run.json`), when that state is gone. A
-`mix` boot outside the loop names no registry or directory unless `.env`
-does. The run that
+`mix` boot outside the loop names cyfr.run as its registry and account
+service, as a release does, unless `.env` names others. The run that
 writes the setup token prints the setup link,
 `http://localhost:4000/setup#<token>`, as `cyfr init` does: it asks for a
 name and a passkey, which set up CYFR's first person, who administers it,

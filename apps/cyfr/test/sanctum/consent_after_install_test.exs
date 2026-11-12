@@ -124,10 +124,10 @@ defmodule Sanctum.ConsentAfterInstallTest do
       )
       |> Sanctum.TestContext.via(:prism)
 
-    # Filled offline: each consent covers the closure that exists, and a
-    # turn can pin it.
-    Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
-    Application.put_env(:cyfr, :oci_registry_url, Compendium.RegistryHost.none())
+    # Filled with the registry unreachable: each consent covers the closure
+    # that exists, and a turn can pin it.
+    Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
+    Application.put_env(:cyfr, :oci_registry_url, "127.0.0.1:19")
 
     {:ok, slugs} = Athanors.person_slugs(nil, "Installed #{n}")
 

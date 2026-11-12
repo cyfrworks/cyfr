@@ -648,31 +648,17 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, ~s([data-test="agents-unavailable"]))
     end
 
-    test "a catalyst the athanor does not hold is offered an Install, which refuses without a registry",
+    test "a catalyst the athanor does not hold is offered an Install, which refuses while the registry cannot be reached",
          %{conn: conn, ctx: ctx} do
       # The soul names a model catalyst nothing here holds: the page says so
       # and offers to fetch it, rather than leaving a dead end.
       :ok = soul_names_missing_catalyst!(ctx)
-
-      previous = Application.get_env(:cyfr, :registry_url)
-      Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
-
-      on_exit(fn ->
-        if previous,
-          do: Application.put_env(:cyfr, :registry_url, previous),
-          else: Application.delete_env(:cyfr, :registry_url)
-      end)
 
       # The soul's card: a crew member whose brain is not here says so on
       # its own card.
       {view, _html} = mount_athanor(conn, "/aqua")
       assert has_element?(view, "#aqua-card-aqua", "not installed here yet")
       assert has_element?(view, "#aqua-card-aqua button[phx-click=install_catalyst]")
-
-      # With no registry the refusal is the outcome, and it never became a
-      # request: `Compendium.Pull` asks before it resolves a tag.
-      assert {:error, %Compendium.OCI.Errors{reason: :registry_unconfigured}} =
-               Compendium.Pull.oci_reference_for("catalyst:moonmoon69.claude")
 
       before = Task.Supervisor.children(Prism.TaskSupervisor)
 
@@ -704,8 +690,8 @@ defmodule PrismWeb.AquaLiveTest do
                "#aqua-card-aqua button[phx-click=install_catalyst]:not([disabled])"
              )
 
-      # The fetch has answered; it is gone before the registry setting it
-      # read is restored and before the sandbox it queried is released.
+      # The fetch has answered; it is gone before the sandbox it queried is
+      # released.
       Prima.Test.Wait.wait_until(
         fn -> not Enum.any?(Task.Supervisor.children(Prism.TaskSupervisor), &(&1 in fetch)) end,
         5_000,

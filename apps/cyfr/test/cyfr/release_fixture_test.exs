@@ -53,9 +53,15 @@ defmodule Cyfr.ReleaseFixtureTest do
     directory = DirectoryServer.start!(tls)
     Sanctum.Test.Newcomers.directory!(directory.url)
 
-    # No registry: the fixture claims no name, and the sign-in learns none.
-    Prima.Test.Env.put_app_env(:sanctum, :registry_url, "none")
-    Prima.Test.Env.put_app_env(:cyfr, :registry_url, "none")
+    # A registry that takes the name the fixture claims for each account
+    # and names no one, so the sign-in learns none.
+    Sanctum.Test.RegistryStub.start!(fn
+      %{method: "POST", path: "/v1/namespaces/personal/claim"} ->
+        {200, Sanctum.Test.RegistryStub.answer(%{})}
+
+      _other ->
+        Sanctum.Test.RegistryStub.refusal(:handle_not_found)
+    end)
 
     # The installation holds no person inside this test's transaction,
     # whatever the suite committed: the fixture's first person is setup's.

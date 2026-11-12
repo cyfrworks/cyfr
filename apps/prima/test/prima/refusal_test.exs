@@ -184,7 +184,6 @@ defmodule Prima.RefusalTest do
     {:invalid_component_type, :invalid_argument},
     {{:corrupt, {:settings, :retention}}, :corrupt},
     {{:corrupt, :registry_credential}, :corrupt},
-    {:no_registry, :setup_required},
     {:registry_unavailable, :unavailable},
     {:registry_token_missing, :unauthenticated},
     {:malformed_answer, :unavailable},

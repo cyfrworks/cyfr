@@ -212,8 +212,7 @@ defmodule Sanctum.SignIn do
       the device shows, as its hello reported them.
 
   Refusals: `:no_directory` (a browser's request with no directory to
-  send it to), `:no_registry` (a registry request where this deployment
-  names no registry), `{:not_found, "confirmation", ref}`, `:not_pending`,
+  send it to), `{:not_found, "confirmation", ref}`, `:not_pending`,
   `:unauthenticated`, `{:invalid_argument, sentence}`, `:unavailable`.
   """
   @spec request(Prima.SignIn.purpose(), binding(), keyword()) ::
@@ -356,27 +355,25 @@ defmodule Sanctum.SignIn do
   # (`Prima.RegistryRequest.max_ahead_ms/0`), and a request this CYFR
   # still takes an answer to is one the registry still takes.
   defp registry_request(identifier, opts) do
-    with {:ok, registry} <- Sanctum.registry_host() do
-      %{
-        "protocol" => Prima.RegistryRequest.protocol(),
-        "registry" => registry,
-        "operation" => opts[:operation],
-        "identifier" => identifier,
-        "nonce" => Encoding.b64(:crypto.strong_rand_bytes(Prima.RegistryRequest.nonce_bytes())),
-        "expires_at" => System.system_time(:millisecond) + Prima.SignIn.lifetime_ms(),
-        "body" => opts[:body]
-      }
-      |> Prima.RegistryRequest.to_sign()
-      |> case do
-        {:ok, request} ->
-          {:ok, request}
+    %{
+      "protocol" => Prima.RegistryRequest.protocol(),
+      "registry" => Sanctum.registry_host(),
+      "operation" => opts[:operation],
+      "identifier" => identifier,
+      "nonce" => Encoding.b64(:crypto.strong_rand_bytes(Prima.RegistryRequest.nonce_bytes())),
+      "expires_at" => System.system_time(:millisecond) + Prima.SignIn.lifetime_ms(),
+      "body" => opts[:body]
+    }
+    |> Prima.RegistryRequest.to_sign()
+    |> case do
+      {:ok, request} ->
+        {:ok, request}
 
-        {:error, :unknown_operation} ->
-          {:error, {:invalid_argument, "The registry knows no such operation"}}
+      {:error, :unknown_operation} ->
+        {:error, {:invalid_argument, "The registry knows no such operation"}}
 
-        {:error, _malformed} ->
-          {:error, {:invalid_argument, "The registry request's arguments are not valid"}}
-      end
+      {:error, _malformed} ->
+        {:error, {:invalid_argument, "The registry request's arguments are not valid"}}
     end
   end
 
@@ -1070,7 +1067,7 @@ defmodule Sanctum.SignIn do
   Refusals: `:invalid_name` (not a name's spelling, before any request),
   `:name_not_theirs` (the registry names another account by it),
   `:name_unheld` (no account holds it, or the one that did is closed),
-  `:no_registry`, `:registry_unavailable` (no usable answer),
+  `:registry_unavailable` (no usable answer),
   `:unauthenticated` (a person here with no account), `:unavailable`, and
   `record_namespace/2`'s own.
   """
@@ -1080,7 +1077,6 @@ defmodule Sanctum.SignIn do
              :invalid_name
              | :name_not_theirs
              | :name_unheld
-             | :no_registry
              | :registry_unavailable
              | :unauthenticated
              | :unavailable
@@ -1097,7 +1093,6 @@ defmodule Sanctum.SignIn do
       {:ok, %Prima.HandleAnswer{}} -> {:error, :name_not_theirs}
       {:error, :invalid_handle} -> {:error, :invalid_name}
       {:error, :not_found} -> {:error, :name_unheld}
-      {:error, :no_registry} -> {:error, :no_registry}
       {:error, _unanswered} -> {:error, :registry_unavailable}
     end
   end

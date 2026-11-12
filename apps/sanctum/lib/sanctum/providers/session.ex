@@ -333,14 +333,6 @@ defmodule Sanctum.Providers.Session do
         "cyfr.run could not check that name just now; try again shortly"
       )
 
-  defp name_refusal(:no_registry, _name),
-    do:
-      refused(
-        :setup_required,
-        :no_registry,
-        "This CYFR is set up without cyfr.run, so it cannot check a name"
-      )
-
   defp name_refusal(:namespace_owned_by_another_identity, name),
     do:
       refused(

@@ -36,8 +36,8 @@ defmodule Sanctum.Handle do
   either way.
 
   Refusals: `:invalid_handle` (a spelling `Prima.ComponentRef` refuses as
-  a personal slug, before any request), `:no_registry` (before any
-  request), `:not_found` (no one holds the handle, a reserved one
+  a personal slug, before any request), `:not_found` (no one holds the
+  handle, a reserved one
   included, or its account is gone), `:registry_unavailable` (the
   registry or the directory it names unreachable, slow, refused by the
   address policy, a log that does not verify, or any answer but the ones
@@ -53,14 +53,13 @@ defmodule Sanctum.Handle do
   @response_bytes 16_384
 
   @type reason ::
-          :invalid_handle | :no_registry | :not_found | :registry_unavailable | :malformed_answer
+          :invalid_handle | :not_found | :registry_unavailable | :malformed_answer
 
   @doc "Resolve `handle` at this deployment's registry (the module doc)."
   @spec resolve(String.t()) :: {:ok, HandleAnswer.t()} | {:error, reason()}
   def resolve(handle) when is_binary(handle) do
     with :ok <- spelled(handle),
-         {:ok, registry} <- Sanctum.registry_host(),
-         {:ok, answer} <- asked(registry, handle) do
+         {:ok, answer} <- asked(Sanctum.registry_host(), handle) do
       keys(answer)
     end
   end
@@ -71,14 +70,15 @@ defmodule Sanctum.Handle do
   The name `identifier` holds at this deployment's registry (the module
   doc): `cyfr-handle/v1` for that identifier, or `:not_found` when it holds
   none. Refusals: `:invalid_identifier` (before any request),
-  `:no_registry`, `:not_found`, `:registry_unavailable` and
+  `:not_found`, `:registry_unavailable` and
   `:malformed_answer` (an answer for another identifier or registry, or
   outside its grammar).
   """
   @spec name_of(String.t()) :: {:ok, HandleAnswer.t()} | {:error, reason() | :invalid_identifier}
   def name_of(identifier) when is_binary(identifier) do
-    with :ok <- identifier_spelled(identifier),
-         {:ok, registry} <- Sanctum.registry_host() do
+    with :ok <- identifier_spelled(identifier) do
+      registry = Sanctum.registry_host()
+
       if served_here?() do
         identifier |> Sanctum.Directory.Handles.held() |> kept()
       else
@@ -108,7 +108,6 @@ defmodule Sanctum.Handle do
           {:ok, String.t()}
           | {:error,
              {:invalid_argument, String.t()}
-             | :no_registry
              | :handle_not_found
              | :registry_unavailable}
   def identifier(handle) do
@@ -128,8 +127,8 @@ defmodule Sanctum.Handle do
       {:error, :malformed_answer} ->
         {:error, :registry_unavailable}
 
-      {:error, reason} when reason in [:no_registry, :registry_unavailable] ->
-        {:error, reason}
+      {:error, :registry_unavailable} ->
+        {:error, :registry_unavailable}
     end
   end
 

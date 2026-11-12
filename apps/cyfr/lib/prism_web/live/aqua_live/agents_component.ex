@@ -79,8 +79,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # Installing a model catalyst is an OCI fetch that can take seconds, so it
   # runs as a supervised task and answers into the page's mailbox — never
-  # inline in the click, which would hold the LiveView. With no registry
-  # configured the refusal comes back without a request being made.
+  # inline in the click, which would hold the LiveView.
   def handle_event("install_catalyst", %{"ref" => ref}, socket) when is_binary(ref) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       ctx = socket.assigns.context
