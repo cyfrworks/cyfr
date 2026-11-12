@@ -21,8 +21,6 @@ defmodule Cyfr.Cluster.PersonTest do
 
   use Cyfr.Cluster.Case, async: false
 
-  alias Cyfr.Cluster.Person
-
   # A member's slot lease and its renewal tick (`cell_test.exs`): a killed
   # member's slot is takeable within their sum.
   @slot_bound_ms 15_000 + 5_000

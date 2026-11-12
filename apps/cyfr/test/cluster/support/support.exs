@@ -89,7 +89,7 @@ defmodule Cyfr.Cluster.Case do
 
   using do
     quote do
-      alias Cyfr.Cluster.{Barrier, Cell, Fixtures, Holder, Observer, Wait, Wire}
+      alias Cyfr.Cluster.{Barrier, Cell, Fixtures, Holder, Observer, Person, Wait, Wire}
 
       # This suite's own modules are compiled by `setup_all` rather than
       # by the compiler, so at the moment a case is compiled none of them
@@ -103,6 +103,7 @@ defmodule Cyfr.Cluster.Case do
                   Cyfr.Cluster.Fixtures,
                   Cyfr.Cluster.Holder,
                   Cyfr.Cluster.Observer,
+                  Cyfr.Cluster.Person,
                   Cyfr.Cluster.Wait,
                   Cyfr.Cluster.Wire
                 ]}
