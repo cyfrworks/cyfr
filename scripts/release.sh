@@ -141,13 +141,9 @@ fi
 # partition on the host's fixture server, localhost:5432, so the release
 # names none, and its logs stay in a fresh directory named before it
 # starts and again when it ends, /tmp/cyfr-stage.release.*, the stage's
-# own log name (scripts/stage.sh), which the janitor keeps seven days. RELEASE_UNPROVEN=1 skips the proof, for a
-# disposable repository that has no run on GitHub
-# (tests/ci-release-graph.py); no release is cut under it.
+# own log name (scripts/stage.sh), which the janitor keeps seven days.
 HEAD_SHA="$(git rev-parse HEAD)"
-if [ "${RELEASE_UNPROVEN:-}" = "1" ]; then
-  echo "Warning: RELEASE_UNPROVEN=1: HEAD $HEAD_SHA is tagged without a proof that it is green."
-elif [ -n "$GATE" ]; then
+if [ -n "$GATE" ]; then
   GATE_LOGS="$(mktemp -d /tmp/cyfr-stage.release.XXXXXX)"
   echo "Running the release stage on HEAD $HEAD_SHA; its logs go to $GATE_LOGS"
   if ! scripts/stage.sh -l "$GATE_LOGS" release; then
@@ -207,23 +203,20 @@ fi
 # between fails the tag's own run, which then publishes nothing, and the
 # tag names a version that never shipped. The audits run here again, the
 # same ones security.yml's elixir-audit job runs
-# (scripts/dependency-audit.sh), right before the tag. RELEASE_UNPROVEN=1
-# skips them with the proof.
-if [ "${RELEASE_UNPROVEN:-}" != "1" ]; then
-  echo "Running the dependency audits against the advisories published since HEAD's run..."
-  # The locked dependencies first, as security.yml's job fetches them before
-  # it audits: `mix deps.audit` loads the project, which refuses a deps/ that
-  # lags mix.lock, and this checkout may not have fetched since the lock
-  # changed. Fetching changes nothing in the tree; the lock is HEAD's.
-  if ! mix deps.get; then
-    echo "Error: the locked dependencies could not be fetched (above), so the audits cannot run."
-    exit 1
-  fi
-  if ! scripts/dependency-audit.sh; then
-    echo "Error: the dependency audits failed (above); the tag's own run would fail the same way and publish nothing."
-    echo "Update the dependency, prove the change by its pull request, and cut the release from that."
-    exit 1
-  fi
+# (scripts/dependency-audit.sh), right before the tag.
+echo "Running the dependency audits against the advisories published since HEAD's run..."
+# The locked dependencies first, as security.yml's job fetches them before
+# it audits: `mix deps.audit` loads the project, which refuses a deps/ that
+# lags mix.lock, and this checkout may not have fetched since the lock
+# changed. Fetching changes nothing in the tree; the lock is HEAD's.
+if ! mix deps.get; then
+  echo "Error: the locked dependencies could not be fetched (above), so the audits cannot run."
+  exit 1
+fi
+if ! scripts/dependency-audit.sh; then
+  echo "Error: the dependency audits failed (above); the tag's own run would fail the same way and publish nothing."
+  echo "Update the dependency, prove the change by its pull request, and cut the release from that."
+  exit 1
 fi
 
 # Portable in-place sed (macOS requires -i '', Linux requires -i)
