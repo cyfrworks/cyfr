@@ -17,9 +17,11 @@
 #     say (the namespace cache's lifetime needs a person's row, so the
 #     headless case of tests/release-boot/boot.sh holds it, and the bearer
 #     provider needs a request, so its boots case holds that one; whether a
-#     fill runs inline, `:provisioning_inline`, has no observable a release
-#     shows without tracing a private function, so the source check in
-#     apps/sanctum/test/sanctum/test_seams_test.exs alone holds it);
+#     fill runs inline, `:provisioning_inline`, shows in a sign-in that
+#     returns while the registry half still waits, which needs a registry
+#     that never answers, so the sign-in test in
+#     apps/cyfr/test/sanctum/provisioning_test.exs holds it, with `Sanctum`
+#     compiled without the permission);
 #   - an issuance refuses a fixture's generation snapshot;
 #   - `Sanctum.Tenancy`'s compiled code names no resolver override.
 #
