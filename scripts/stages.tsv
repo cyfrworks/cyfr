@@ -24,7 +24,18 @@ handoff	compile-postgres	1	1200	dev_pg	apps/**,config/**,mix.exs,mix.lock	env MI
 handoff	generated	1	600	dev	apps/**,config/**	mix ops.gen.cli --check && mix cyfr.gen.configuration_guide --check
 handoff	tests-sqlite	1	2700	test	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
 handoff	tests-postgres	1	2700	test_pg	tests	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors $STAGE_TESTS
-handoff	rosters	1	2700	test	always	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/restore_order_test.exs apps/cyfr/test/cyfr/cross_language_drift_test.exs
+# The rosters, config-seam and vocabulary rows run the cheap gates of the
+# pull request's run that read the whole tree, so a change elsewhere turns
+# them red: the roster tests (the restore order, the cross-language drift,
+# the umbrella's boundaries, both test-seam source checks, Sanctum's gate
+# rosters and the seed catalysts' source roster), CI's configuration check
+# and its vocabulary job's script. Handoff still leaves to the pull
+# request's run each app compiled and tested alone (the island jobs), the
+# proofs under tests/ and the suites' files no row names and no change
+# touched.
+handoff	rosters	1	2700	test	always	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/restore_order_test.exs apps/cyfr/test/cyfr/cross_language_drift_test.exs apps/cyfr/test/cyfr/boundaries_test.exs apps/cyfr/test/cyfr/test_seams_test.exs apps/sanctum/test/sanctum/test_seams_test.exs apps/cyfr/test/sanctum/gate apps/cyfr/test/integration/runtime/seed_model_catalysts_test.exs
+handoff	config-seam	1	600	-	apps/**/*.ex,apps/**/*.exs,scripts/ci/config-seam.sh	scripts/ci/config-seam.sh
+handoff	vocabulary	1	600	-	always	scripts/ci/vocabulary.sh
 handoff	arca-sqlite	1	2700	test	apps/arca/**	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/arca/test
 handoff	arca-postgres	1	2700	test_pg	apps/arca/**	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors apps/arca/test
 handoff	dialyzer	1	2400	dev	apps/*/lib/**	mix dialyzer
