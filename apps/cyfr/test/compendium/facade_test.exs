@@ -117,7 +117,6 @@ defmodule Compendium.FacadeTest do
     skill_dir: 1,
     skills_index: 2,
     skills_index_limit: 0,
-    soul_agent_file?: 1,
     sync_seeds: 0,
     tincture_allow_attribute: 1,
     tincture_asset_rules: 0,
@@ -143,8 +142,7 @@ defmodule Compendium.FacadeTest do
     tincture_request_operation: 1,
     tincture_sandbox_tokens: 1,
     tincture_served_types: 0,
-    tincture_templates: 0,
-    valid_agent_name?: 1
+    tincture_templates: 0
   ]
 
   test "the root answers exactly its roster" do
@@ -186,12 +184,8 @@ defmodule Compendium.FacadeTest do
       assert Compendium.manifest_leaves(leaves) ==
                Compendium.ComponentPath.manifest_leaves(leaves)
 
-      assert Compendium.valid_agent_name?("scout")
-      refute Compendium.valid_agent_name?("../scout")
       assert Compendium.agent_file_path("scout") == Compendium.AquaPath.agent_file("scout")
       assert Compendium.skill_dir("summarise") == Compendium.AquaPath.skill_dir("summarise")
-      assert Compendium.soul_agent_file?("aqua")
-      refute Compendium.soul_agent_file?("scout")
     end
 
     test "agents and skills answer as Compendium.AquaAgent and Compendium.AquaSkills", %{
