@@ -324,11 +324,11 @@ defmodule Cyfr.Cell do
   @doc """
   Start this member's claimant of its cell slot. Every option defaults to
   this member's own: `:name` (this module), `:lease_ms` and `:renew_ms`
-  (the slot lease and its renewal), `:cluster` (`:cyfr, :cluster`),
-  `:node_name` (the slot this member claims, its node's name), `:facts`
-  (`facts/0`, what this member can see of the conditions a cluster boot
-  is refused on) and `:release` (the release this boot runs,
-  `Prima.Version.current/0`).
+  (the slot lease and its renewal), `:node_name` (the slot this member
+  claims, its node's name), `:facts` (`facts/0`, what this member can see
+  of the conditions a cluster boot is refused on) and `:release` (the
+  release this boot runs, `Prima.Version.current/0`). Whether it claims as
+  a cluster member is `:cyfr, :cluster`'s.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -344,7 +344,7 @@ defmodule Cyfr.Cell do
 
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
     renew_ms = Keyword.get(opts, :renew_ms, @renew_ms)
-    cluster? = Keyword.get(opts, :cluster, Application.get_env(:cyfr, :cluster, false)) == true
+    cluster? = Application.get_env(:cyfr, :cluster, false) == true
     me = Prima.Boot.id()
     slot = Keyword.get(opts, :node_name, node_name())
 

@@ -521,11 +521,11 @@ defmodule Cyfr.CellTest do
 
     test "a cluster member boots once every condition holds", %{node: node} do
       claim_enabled(true)
+      Prima.Test.Env.put_app_env(:cyfr, :cluster, true)
 
       start_cell!(
         name: nil,
         node_name: node,
-        cluster: true,
         facts: fn -> @cell_facts end,
         lease_ms: 60_000,
         renew_ms: 60_000
@@ -544,13 +544,13 @@ defmodule Cyfr.CellTest do
 
     test "a cluster member that misses one condition refuses to boot", %{node: node} do
       claim_enabled(true)
+      Prima.Test.Env.put_app_env(:cyfr, :cluster, true)
       facts = %{@cell_facts | topologies: []}
 
       assert {:error, {%RuntimeError{message: message}, _stack}} =
                Cell.start_link(
                  name: nil,
                  node_name: node,
-                 cluster: true,
                  facts: fn -> facts end,
                  lease_ms: 60_000,
                  renew_ms: 60_000
@@ -567,13 +567,13 @@ defmodule Cyfr.CellTest do
       node: node
     } do
       claim_enabled(true)
+      Prima.Test.Env.put_app_env(:cyfr, :cluster, true)
       peer = node <> "-peer"
       assert {:ok, _} = ControlPlane.take(peer, "boot-peer", 60_000)
 
       start_cell!(
         name: nil,
         node_name: node,
-        cluster: true,
         facts: fn -> @cell_facts end,
         lease_ms: 60_000,
         renew_ms: 60_000
