@@ -53,8 +53,8 @@ defmodule Locus.Runtime.HttpStreamHandler do
   - Request body checked against the node's `max_request_size`
   - Response bytes capped at `max_response_size` both when the collector
     buffers them and when the guest reads them
-  - Stream timeout comes from the node's consented `timeout` limit
-    (60s fallback only when the limits carry an unparseable duration)
+  - Stream timeout comes from the node's consented `timeout` limit, which
+    parses whenever the node's limits do
   - Max concurrent streams per execution (fixed at 3)
   - Auto-cleanup on timeout or on execution completion
   """
