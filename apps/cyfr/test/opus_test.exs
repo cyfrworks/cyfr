@@ -73,7 +73,7 @@ defmodule OpusTest do
     Application.put_env(:cyfr, :locus_runtime_workers, [])
 
     assert {:error, :execution_unavailable} =
-             Opus.run_root(ctx, :default, "reagent:local.off-graph:1.0.0", %{})
+             Opus.run_root(ctx, :default, "reagent:local.off-graph:1.0.0", %{}, [])
 
     assert Arca.Repo.all(Arca.Schemas.Execution) == []
     assert Arca.Repo.all(Arca.Schemas.PolicyLog) == []

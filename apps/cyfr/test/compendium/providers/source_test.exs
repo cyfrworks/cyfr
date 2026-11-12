@@ -15,7 +15,6 @@ defmodule Compendium.Providers.SourceTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Hands
-  alias Aqua.Loop.{Binding, Policy}
   alias Compendium.Providers.Source
   alias Opus.GuestStorage
   alias Prima.Authority.Blob.Edge
@@ -75,14 +74,6 @@ defmodule Compendium.Providers.SourceTest do
     }
 
     GuestStorage.run(scope, op, %{"path" => path, "content" => Base.encode64("{}")})
-  end
-
-  # What the launch rule counts a closed `source` call at `path` as having
-  # written to.
-  defp touched(action, path) do
-    Policy.touched_refs([
-      %{"tool" => "source", "action" => action, "arguments" => %{"path" => path}}
-    ])
   end
 
   setup tags do
@@ -453,10 +444,10 @@ defmodule Compendium.Providers.SourceTest do
     end
   end
 
-  # The other doors a component path reaches: the athanor's files, a
-  # guest's storage and the launch rule's count of what a turn wrote to.
+  # The other doors a component path reaches: the athanor's files and a
+  # guest's storage.
   describe "one grammar at every door" do
-    test "a path the grammar reads as a local version is written at every door and counted",
+    test "a path the grammar reads as a local version is written at every door",
          %{ctx: ctx} do
       actor = Sanctum.Context.actor(ctx)
 
@@ -465,28 +456,11 @@ defmodule Compendium.Providers.SourceTest do
 
       assert {:ok, _} = Arca.Files.write(actor, "#{@dir}/src/by_files.rs", "{}")
       assert {:ok, %{"written" => true}} = guest(ctx, :write, "#{@dir}/src/by_guest.rs")
-
-      for action <- @mutations do
-        assert touched(action, "#{@dir}/src/lib.rs") == MapSet.new(["catalyst:local.widget"])
-      end
     end
 
-    test "a spelling with empty segments lands in the unit, is counted, and a run of it asks",
-         %{ctx: ctx} do
+    test "a spelling with empty segments lands in the unit", %{ctx: ctx} do
       actor = Sanctum.Context.actor(ctx)
       file = String.split(@dir, "/") ++ ["src", "lib.rs"]
-
-      {:ok, launch} =
-        Binding.resolve("execution", %{
-          "action" => "run",
-          "reference" => "catalyst:local.widget:0.1.0"
-        })
-
-      policy = %{"execution.run" => "auto"}
-      consented = fn ref -> String.starts_with?(ref, "catalyst:local.widget") end
-
-      # Every launch asks, consented and untouched included.
-      assert :ask = Policy.decide(launch, policy, consented?: consented, touched: MapSet.new())
 
       for path <- [
             "components//catalysts/local/widget/0.1.0/src/lib.rs",
@@ -502,17 +476,10 @@ defmodule Compendium.Providers.SourceTest do
                  })
 
         assert {:ok, ^content} = Arca.get(actor, file), "#{path} did not land in widget"
-
-        touched = touched("write", path)
-
-        assert touched == MapSet.new(["catalyst:local.widget"]),
-               "#{path} named #{inspect(touched)}"
-
-        assert :ask = Policy.decide(launch, policy, consented?: consented, touched: touched)
       end
     end
 
-    test "a path the grammar refuses is refused at every door and names no component",
+    test "a path the grammar refuses is refused at every door",
          %{ctx: ctx} do
       actor = Sanctum.Context.actor(ctx)
 
@@ -522,7 +489,6 @@ defmodule Compendium.Providers.SourceTest do
                    Source.handle("source", ctx, mutation(action, path))
 
           assert msg =~ "not a component version's own source"
-          assert touched(action, path) == MapSet.new(), "#{path} named a component"
         end
 
         assert {:error, {:invalid_argument, msg}} = Arca.Files.write(actor, path, "{}")

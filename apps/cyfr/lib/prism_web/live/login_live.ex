@@ -28,10 +28,11 @@ defmodule PrismWeb.LoginLive do
   bound to (`Compendium.complete_registry/2`): the signed request sent to
   the registry and what its success does done, as the `registry` tool
   completes a terminal's; the outcome is the flash the browser returns
-  with. The page answers the event at once and says it is sending; the
-  registry is called off the event, since a registry request has no total
-  deadline and the browser gives up on an event it waits on for 30
-  seconds. The call outlives the page (`complete/2`).
+  with. The answer is checked, and a registry signature sent, off the
+  event, in one call that outlives the page (`check/2`): the account's
+  directory is read for the answer, a registry request has no total
+  deadline, and the browser gives up on an event it waits on for 30
+  seconds. The page answers the event at once and says it is checking.
 
   A CYFR with no person yet offers nothing but the way to set up.
   """
@@ -71,9 +72,9 @@ defmodule PrismWeb.LoginLive do
      |> assign(:user_agent, if(connected?(socket), do: get_connect_info(socket, :user_agent)))
      |> assign(:page_title, "Sign in")
      |> assign(:set_up, set_up?())
-     # Where the browser goes when the registry answers a signature this
-     # page is completing; nil while it completes none.
-     |> assign(:sending, nil)
+     # True while an answer handed here is checked, and a registry
+     # signature it carries sent.
+     |> assign(:checking, false)
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
@@ -98,15 +99,12 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  def handle_event("account_answer", %{"answer" => answer}, socket)
-      when is_binary(answer) and answer != "" do
-    outcome =
-      Sanctum.SignIn.answer(answer, socket.assigns.bindings,
-        user_agent: socket.assigns.user_agent
-      )
+  def handle_event("account_answer", _params, %{assigns: %{checking: true}} = socket),
+    do: {:noreply, socket}
 
-    {:noreply, answered(socket, outcome)}
-  end
+  def handle_event("account_answer", %{"answer" => answer}, socket)
+      when is_binary(answer) and answer != "",
+      do: {:noreply, socket |> assign(:checking, true) |> check(answer)}
 
   def handle_event("account_answer", _params, socket), do: {:noreply, socket}
 
@@ -134,9 +132,6 @@ defmodule PrismWeb.LoginLive do
     redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")
   end
 
-  defp answered(socket, {:ok, %{purpose: :registry} = outcome}),
-    do: socket |> assign(:sending, outcome.back || ~p"/") |> complete(outcome)
-
   defp answered(socket, {:ok, %{back: back}}) when is_binary(back),
     do: redirect(socket, to: back)
 
@@ -145,35 +140,52 @@ defmodule PrismWeb.LoginLive do
   defp answered(socket, {:error, reason}), do: assign(socket, :error, sentence(reason))
 
   @impl true
-  def handle_async(:registry, {:ok, {kind, message}}, socket),
-    do: {:noreply, socket |> put_flash(kind, message) |> redirect(to: socket.assigns.sending)}
+  def handle_async(:answer, {:ok, {:registered, back, {kind, message}}}, socket),
+    do: {:noreply, socket |> put_flash(kind, message) |> redirect(to: back)}
 
-  def handle_async(:registry, {:exit, reason}, socket) do
-    Logger.warning(
-      "[LoginLive] a registry completion exited: " <> Prima.LoggerContext.shape(reason)
-    )
+  def handle_async(:answer, {:ok, outcome}, socket),
+    do: {:noreply, socket |> assign(:checking, false) |> answered(outcome)}
 
-    message = "That did not go through: " <> Ops.error_message(:unavailable)
-    {:noreply, socket |> put_flash(:error, message) |> redirect(to: socket.assigns.sending)}
+  # Only the node's shutdown stops it (`run_to_end/1`).
+  def handle_async(:answer, {:exit, reason}, socket) do
+    Logger.warning("[LoginLive] an answer's check exited: " <> Prima.LoggerContext.shape(reason))
+    {:noreply, socket |> assign(:checking, false) |> assign(:error, @unavailable)}
   end
 
-  # The registry call, off the event. It runs to its end whether or not the
-  # page is still there to show it, so it ignores the page's exit: stopped
-  # in flight, a mint the registry made would be a live token this CYFR
-  # never stored, which the registry reaps only after a year idle. Its
-  # supervisor stops it with the node.
-  defp complete(socket, outcome) do
+  # The answer, checked off the event against the request it answers,
+  # under the bindings the page read from this browser's cookie at mount,
+  # and what its purpose does done (`Sanctum.SignIn.answer/3`). It acts as
+  # no session: the request it answers, taken from the store when the
+  # check begins, is bound to this browser and names whose answer it must
+  # be. A registry signature it carries is completed in the same call
+  # (`registered/2`), under the session the request was bound to. It runs
+  # to its end whether or not the page is still there (`run_to_end/1`):
+  # the request is spent when the check begins, so everything it asked
+  # for is done here or not at all. Stopped in flight, a mint the registry
+  # made would be a live token this CYFR never stored, which the registry
+  # reaps only after a year idle. Only the page's own steps wait for the
+  # page: the sign-in's one-time ticket and the redirect, which only a
+  # browser still there can use.
+  defp check(socket, answer) do
     bindings = socket.assigns.bindings
+    user_agent = socket.assigns.user_agent
 
     start_async(
       socket,
-      :registry,
-      fn ->
-        Process.flag(:trap_exit, true)
-        registered(bindings, outcome)
-      end,
+      :answer,
+      fn -> run_to_end(fn -> checked(answer, bindings, user_agent) end) end,
       supervisor: Prism.TaskSupervisor
     )
+  end
+
+  defp checked(answer, bindings, user_agent) do
+    case Sanctum.SignIn.answer(answer, bindings, user_agent: user_agent) do
+      {:ok, %{purpose: :registry} = outcome} ->
+        {:registered, outcome.back || ~p"/", registered(bindings, outcome)}
+
+      outcome ->
+        outcome
+    end
   end
 
   defp registered(bindings, outcome) do
@@ -331,15 +343,15 @@ defmodule PrismWeb.LoginLive do
           </div>
 
           <p
-            :if={@sending}
+            :if={@checking}
             role="status"
-            data-test="registry-sending"
+            data-test="answer-checking"
             class="text-sm text-gray-300 text-center"
           >
-            Sending what you signed. You will see the answer when it comes.
+            Checking what you signed. You will see the answer when it comes.
           </p>
 
-          <div :if={@set_up and !@sending} class="space-y-4">
+          <div :if={@set_up and !@checking} class="space-y-4">
             <div
               :if={@error}
               role="alert"

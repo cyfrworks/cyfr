@@ -294,7 +294,11 @@ defmodule Opus.RecordTest do
           parent_execution_id: root.id
         )
 
-      :ok = Record.write_started(ctx, child, retention_class: "chat_step")
+      :ok =
+        Record.write_started(ctx, child,
+          retention_class: "chat_step",
+          grant: inherited!(ctx, root.id)
+        )
 
       # A `model/chat@1` answer, as its catalyst completes it: the usage is
       # the answer's data's.
@@ -443,18 +447,14 @@ defmodule Opus.RecordTest do
       record =
         Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: parent)
 
-      :ok = Record.write_started(ctx, record)
+      :ok = Record.write_started(ctx, record, grant: inherited!(ctx, parent))
 
       db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.parent_execution_id == parent
     end
 
-    test "a child whose parent is not a row is admitted under no grant", %{ctx: ctx} do
-      record =
-        Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: "exec_parent-456")
-
-      assert {:error, :not_standing} = Record.write_started(ctx, record)
-      refute Arca.Repo.get(Arca.Schemas.Execution, record.id)
+    test "a child whose parent is not a row inherits no grant", %{ctx: ctx} do
+      assert {:error, :not_standing} = Record.inherited_grant(ctx.athanor_id, "exec_parent-456")
     end
 
     test "parent_execution_id nil when not set", %{ctx: ctx} do
@@ -596,7 +596,7 @@ defmodule Opus.RecordTest do
       record =
         Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: parent)
 
-      :ok = Record.write_started(ctx, record)
+      :ok = Record.write_started(ctx, record, grant: inherited!(ctx, parent))
 
       {:ok, loaded} = Record.get(ctx, record.id)
       assert loaded.parent_execution_id == parent
@@ -1012,6 +1012,12 @@ defmodule Opus.RecordTest do
 
   # A parent row, admitted with its attempt: a child inherits the grant it
   # stores.
+  # The stamp a child of `parent` is admitted under, as admission names it.
+  defp inherited!(ctx, parent) do
+    {:ok, grant} = Record.inherited_grant(ctx.athanor_id, parent)
+    grant
+  end
+
   defp parent!(ctx) do
     parent = Record.new(ctx, "formula:local.parent:1.0.0", %{}, component_type: :formula)
     :ok = Record.write_started(ctx, parent)

@@ -16,10 +16,19 @@ defmodule Opus.ChainScopeTest do
     {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
+  # A child is admitted under the stamp its parent's attempt stores, as
+  # admission names it (`Opus.Record.inherited_grant/2`).
   defp record!(ctx, opts) do
     record = Record.new(ctx, "reagent:local.scoped:1.0.0", %{}, opts)
-    :ok = Record.write_started(ctx, record)
+    :ok = Record.write_started(ctx, record, inherited(ctx, record))
     record
+  end
+
+  defp inherited(_ctx, %Record{parent_execution_id: nil}), do: []
+
+  defp inherited(ctx, %Record{parent_execution_id: parent}) do
+    {:ok, grant} = Record.inherited_grant(ctx.athanor_id, parent)
+    [grant: grant]
   end
 
   describe "root_execution_id stamping" do

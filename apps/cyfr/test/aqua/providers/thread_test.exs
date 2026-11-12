@@ -375,8 +375,8 @@ defmodule Aqua.Providers.ThreadTest do
     end
 
     test "refusals are the typed vocabulary, not sentences", %{ctx: ctx, thread: thread} do
-      assert {:error, {:invalid_argument, _}} =
-               call(ctx, %{"action" => "send", "thread" => thread.id})
+      assert {:refused, {:invalid_argument, _}} =
+               admission(ctx, "thread", %{"action" => "send", "thread" => thread.id})
 
       assert {:refused, {:invalid_argument, _}} =
                admission(ctx, "thread", %{"action" => "approve", "thread" => thread.id})
@@ -513,9 +513,10 @@ defmodule Aqua.Providers.ThreadTest do
     } do
       base = %{"action" => "aloud", "thread" => thread.id, "target_thread" => shared.id}
 
-      # The validator does not look inside arrays: a non-string element
-      # is a typed refusal here, not a clause error in storage.
-      assert {:error, {:invalid_argument, _}} = call(ctx, Map.put(base, "message_ids", [1]))
+      # The gate casts each element: a non-string one is refused before
+      # anything is read.
+      assert {:refused, {:invalid_argument, _}} =
+               admission(ctx, "thread", Map.put(base, "message_ids", [1]))
 
       too_many = Enum.map(1..51, &"msg_#{&1}")
       assert {:error, {:invalid_argument, _}} = call(ctx, Map.put(base, "message_ids", too_many))

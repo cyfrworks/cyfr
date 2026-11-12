@@ -23,6 +23,14 @@ defmodule PrismWeb.RegistryLive do
   new tab (`system_layer:hop`), so this page stays; the answer returns to
   the sign-in page in that tab, which completes the act and says what it
   did (`PrismWeb.LoginLive`).
+
+  The registry is read, and a deprecate or a yank sent, off the page's
+  process (`start_async/4`): a registry request has no total deadline, a
+  read is one per namespace, and the browser gives up on an event it
+  waits on for 30 seconds. A deprecate or a yank is sent once, its button
+  says so until the registry answers, and it runs to its end if the
+  person leaves (`PrismWeb.Ops.run_to_end/1`); a read in flight is
+  replaced by the next.
   """
 
   use PrismWeb, :live_view
@@ -36,27 +44,29 @@ defmodule PrismWeb.RegistryLive do
   @impl true
   def mount(_params, _session, socket) do
     # Render instantly with the sidebar highlighted + a spinner in the main
-    # panel, then trigger the load as a separate message so the first paint
-    # doesn't block on the cyfr.run round-trip. The load handler below
-    # flips `:loading` to false and fills `:components`.
+    # panel; the registry's answer (`load_registry/1`) flips `:loading` to
+    # false and fills `:components`.
     if connected?(socket) do
       actor = Sanctum.Context.actor(socket.assigns[:context])
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.components(actor))
-      send(self(), :load_registry)
     end
 
-    {:ok,
-     socket
-     |> assign(:page_title, "My Registry")
-     |> assign(:active_nav, "registry")
-     |> assign(:namespaces, [])
-     |> assign(:components, [])
-     |> assign(:loading, true)
-     |> assign(:error, nil)
-     |> assign(:deprecate_pending, nil)
-     |> assign(:yank_pending, nil)
-     |> assign(:policy, nil)
-     |> assign_appeal_idle()}
+    socket =
+      socket
+      |> assign(:page_title, "My Registry")
+      |> assign(:active_nav, "registry")
+      |> assign(:namespaces, [])
+      |> assign(:components, [])
+      |> assign(:loading, true)
+      |> assign(:error, nil)
+      |> assign(:deprecate_pending, nil)
+      |> assign(:yank_pending, nil)
+      # The reference a deprecate or a yank is sent for, until the registry answers.
+      |> assign(:acting, nil)
+      |> assign(:policy, nil)
+      |> assign_appeal_idle()
+
+    {:ok, if(connected?(socket), do: load_registry(socket), else: socket)}
   end
 
   defp assign_appeal_idle(socket) do
@@ -67,6 +77,10 @@ defmodule PrismWeb.RegistryLive do
   end
 
   @impl true
+  def handle_event(event, _params, %{assigns: %{acting: acting}} = socket)
+      when event in ["deprecate", "yank"] and is_binary(acting),
+      do: {:noreply, socket}
+
   def handle_event("open-deprecate", %{"reference" => reference}, socket) do
     {:noreply, assign(socket, :deprecate_pending, reference)}
   end
@@ -162,20 +176,8 @@ defmodule PrismWeb.RegistryLive do
         {:noreply, put_flash(socket, :error, "Deprecate requires a reason.")}
 
       true ->
-        case call_tool(socket, "component/deprecate", %{
-               "reference" => reference,
-               "reason" => reason
-             }) do
-          {:ok, _} ->
-            {:noreply,
-             socket
-             |> put_flash(:info, "Deprecated #{reference}.")
-             |> assign(:deprecate_pending, nil)
-             |> load_registry()}
-
-          {:error, err} ->
-            {:noreply, put_flash(socket, :error, "Deprecate failed: #{error_message(err)}")}
-        end
+        args = %{"reference" => reference, "reason" => reason}
+        {:noreply, act(socket, :deprecate, reference, "component/deprecate", args)}
     end
   end
 
@@ -188,35 +190,14 @@ defmodule PrismWeb.RegistryLive do
     else
       args = %{"reference" => reference}
       args = if reason == "", do: args, else: Map.put(args, "reason", reason)
-
-      case call_tool(socket, "component/yank", args) do
-        {:ok, _} ->
-          {:noreply,
-           socket
-           |> put_flash(:info, "Yanked #{reference}.")
-           |> assign(:yank_pending, nil)
-           |> load_registry()}
-
-        {:error, err} ->
-          {:noreply, put_flash(socket, :error, "Yank failed: #{error_message(err)}")}
-      end
+      {:noreply, act(socket, :yank, reference, "component/yank", args)}
     end
   end
 
-  def handle_event("reload", _params, socket) do
-    # Two-step so the spinner is actually painted before the RPC starts.
-    # Flipping loading→true in the same render cycle as load_registry/1
-    # collapses to a single diff with loading→false; splitting via :message
-    # gives the client a distinct "loading" frame to render the spinner.
-    send(self(), :load_registry)
-    {:noreply, assign(socket, :loading, true)}
-  end
+  def handle_event("reload", _params, socket),
+    do: {:noreply, socket |> assign(:loading, true) |> load_registry()}
 
   @impl true
-  def handle_info(:load_registry, socket) do
-    {:noreply, load_registry(socket)}
-  end
-
   def handle_info(%Cyfr.Bus.Components{}, socket) do
     {:noreply, load_registry(socket)}
   end
@@ -225,6 +206,56 @@ defmodule PrismWeb.RegistryLive do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
+
+  @impl true
+  def handle_async(:act, {:ok, {tag, act, reference, result}}, socket),
+    do:
+      CyfrWeb.ContextGuard.deliver(
+        assign(socket, :acting, nil),
+        tag,
+        &{:noreply, acted(&1, act, reference, result)}
+      )
+
+  def handle_async(:load, {:ok, {tag, loaded}}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, loaded(&1, loaded)})
+
+  # Only the node's shutdown stops an act (`run_to_end/1`); a read is
+  # stopped only by the next one.
+  def handle_async(_name, {:exit, _reason}, socket), do: {:noreply, socket}
+
+  # A deprecate or a yank, off the event and run to its end.
+  defp act(socket, act, reference, tool, args) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+
+    socket
+    |> assign(:acting, reference)
+    |> start_async(
+      :act,
+      fn -> {tag, act, reference, run_to_end(fn -> call_tool(ctx, tool, args) end)} end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
+
+  defp acted(socket, :deprecate, reference, {:ok, _}) do
+    socket
+    |> put_flash(:info, "Deprecated #{reference}.")
+    |> assign(:deprecate_pending, nil)
+    |> load_registry()
+  end
+
+  defp acted(socket, :yank, reference, {:ok, _}) do
+    socket
+    |> put_flash(:info, "Yanked #{reference}.")
+    |> assign(:yank_pending, nil)
+    |> load_registry()
+  end
+
+  defp acted(socket, :deprecate, _reference, {:error, err}),
+    do: put_flash(socket, :error, "Deprecate failed: #{error_message(err)}")
+
+  defp acted(socket, :yank, _reference, {:error, err}),
+    do: put_flash(socket, :error, "Yank failed: #{error_message(err)}")
 
   defp sync(socket) do
     case sign(socket, "registry/sync", %{}) do
@@ -254,13 +285,13 @@ defmodule PrismWeb.RegistryLive do
 
   # The registry's current policy version and its policies, for the
   # acceptance the registry may ask for before a claim or a mint.
-  defp load_policy(socket) do
-    case call_tool(socket, "registry/legal_version", %{}) do
+  defp policy(ctx) do
+    case call_tool(ctx, "registry/legal_version", %{}) do
       {:ok, %{"policy_version" => version} = answer} when is_binary(version) ->
-        assign(socket, :policy, %{version: version, policies: policy_titles(answer)})
+        %{version: version, policies: policy_titles(answer)}
 
       _unavailable ->
-        assign(socket, :policy, nil)
+        nil
     end
   end
 
@@ -269,35 +300,44 @@ defmodule PrismWeb.RegistryLive do
 
   defp policy_titles(_answer), do: []
 
+  # The page's read of the registry, off the page's process; a read still
+  # in flight is stopped, since only the newest is shown.
   defp load_registry(socket) do
-    socket = load_policy(socket)
-    namespaces = owned_namespaces(socket)
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+    personal = socket.assigns[:personal_namespace_slug]
 
-    case fetch_components(socket, namespaces) do
-      {:ok, components} ->
-        socket
-        |> assign(:namespaces, namespaces)
-        |> assign(:components, components)
-        |> assign(:loading, false)
-        |> assign(:error, nil)
+    socket
+    |> cancel_async(:load)
+    |> start_async(:load, fn -> {tag, read_registry(ctx, personal)} end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
 
-      {:error, err} ->
-        socket
-        |> assign(:namespaces, namespaces)
-        |> assign(:components, [])
-        |> assign(:loading, false)
-        |> assign(:error, error_message(err))
+  defp read_registry(ctx, personal) do
+    namespaces = owned_namespaces(ctx, personal)
+    %{policy: policy(ctx), namespaces: namespaces, components: fetch_components(ctx, namespaces)}
+  end
+
+  defp loaded(socket, %{policy: policy, namespaces: namespaces, components: components}) do
+    socket =
+      socket
+      |> assign(:policy, policy)
+      |> assign(:namespaces, namespaces)
+      |> assign(:loading, false)
+
+    case components do
+      {:ok, components} -> socket |> assign(:components, components) |> assign(:error, nil)
+      {:error, err} -> socket |> assign(:components, []) |> assign(:error, error_message(err))
     end
   end
 
   # Personal-namespace slug is already computed by `PrismWeb.Focus`; publisher
   # memberships come from `registry.whoami`. Both are strings, and a slug
   # that is both is listed once.
-  defp owned_namespaces(socket) do
-    personal = socket.assigns[:personal_namespace_slug]
-
+  defp owned_namespaces(ctx, personal) do
     memberships =
-      case call_tool(socket, "registry/whoami", %{}) do
+      case call_tool(ctx, "registry/whoami", %{}) do
         {:ok, %{memberships: ms}} when is_list(ms) ->
           Enum.flat_map(ms, fn m ->
             case m.slug do
@@ -316,12 +356,12 @@ defmodule PrismWeb.RegistryLive do
     |> Enum.sort()
   end
 
-  defp fetch_components(_socket, []), do: {:ok, []}
+  defp fetch_components(_ctx, []), do: {:ok, []}
 
-  defp fetch_components(socket, namespaces) do
+  defp fetch_components(ctx, namespaces) do
     results =
       Enum.map(namespaces, fn ns ->
-        case call_tool(socket, "component/discover", %{"namespace" => ns}) do
+        case call_tool(ctx, "component/discover", %{"namespace" => ns}) do
           {:ok, %{components: comps}} when is_list(comps) -> {ns, {:ok, comps}}
           {:ok, _other} -> {ns, {:ok, []}}
           {:error, err} -> {ns, {:error, err}}
@@ -538,9 +578,10 @@ defmodule PrismWeb.RegistryLive do
               <button
                 type="submit"
                 phx-disable-with="Yanking…"
+                disabled={@acting != nil}
                 class="px-3 py-1.5 text-xs rounded bg-red-900 text-red-100 border border-red-700 hover:bg-red-800 disabled:opacity-50"
               >
-                Confirm yank
+                {if @acting, do: "Yanking…", else: "Confirm yank"}
               </button>
             </div>
           </form>
@@ -645,9 +686,10 @@ defmodule PrismWeb.RegistryLive do
               <button
                 type="submit"
                 phx-disable-with="Deprecating…"
+                disabled={@acting != nil}
                 class="px-3 py-1.5 text-xs rounded bg-yellow-900 text-yellow-100 border border-yellow-700 hover:bg-yellow-800 disabled:opacity-50"
               >
-                Confirm deprecate
+                {if @acting, do: "Deprecating…", else: "Confirm deprecate"}
               </button>
             </div>
           </form>

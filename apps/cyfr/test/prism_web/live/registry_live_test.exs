@@ -75,12 +75,16 @@ defmodule PrismWeb.RegistryLiveTest do
       )
 
     {view, _html} = mount_athanor(conn, "/registry")
+    render_async(view, 5_000)
+
+    render_async(view, 5_000)
     assert "acme.dev" in :sys.get_state(view.pid).socket.assigns.namespaces
   end
 
   test "an appeal is a request the person's passkey signs, with no sign-in method asked",
        %{conn: conn, user: user} do
     {view, _html} = mount_athanor(conn, "/registry")
+    render_async(view, 5_000)
     html = render_click(view, "open-appeal", %{"id" => "cmp_taken_down"})
     refute html =~ "GitHub"
     refute html =~ "provider"
@@ -104,6 +108,7 @@ defmodule PrismWeb.RegistryLiveTest do
   test "an appeal whose request cannot be made keeps the form and what was typed",
        %{conn: conn} do
     {view, _html} = mount_athanor(conn, "/registry")
+    render_async(view, 5_000)
     render_click(view, "open-appeal", %{"id" => "cmp_taken_down"})
     Prima.Test.Env.put_app_env(:sanctum, :directory_url, nil)
 
@@ -123,6 +128,9 @@ defmodule PrismWeb.RegistryLiveTest do
     refute Compendium.RegistryHost.canonical_rest_host() =~ "cyfr.run"
 
     {view, _html} = mount_athanor(conn, "/registry")
+    render_async(view, 5_000)
+
+    render_async(view, 5_000)
     html = render(view)
     assert html =~ "Components you&#39;ve published to the registry."
     assert html =~ "The registry&#39;s policies, version"
@@ -132,6 +140,7 @@ defmodule PrismWeb.RegistryLiveTest do
   test "the registry's policies are shown, and accepting asks a passkey to sign their version",
        %{conn: conn, user: user} do
     {view, _html} = mount_athanor(conn, "/registry")
+    render_async(view, 5_000)
     html = render(view)
     assert html =~ "Terms of Service"
     assert html =~ "Accept version 2026-09"
@@ -146,9 +155,118 @@ defmodule PrismWeb.RegistryLiveTest do
     assert html =~ "Sign your acceptance of version 2026-09"
   end
 
+  describe "a yank sent to the registry" do
+    # How long a test waits for the registry's answer to reach the page.
+    @answered_ms 5_000
+
+    # The browser gives up on a pushed event it waits on for 30 seconds and
+    # reloads (the shipped script's push timeout); a test stands that wait
+    # in with this one.
+    @push_timeout_ms 1_000
+
+    # The registry, holding the yank until the test releases it (the test
+    # is told `{:held, stub}`), and the person's push token for their
+    # namespace.
+    defp held_yank!(user) do
+      test = self()
+
+      RegistryStub.start!(fn
+        %{method: "POST", path: "/v1/components/" <> _} ->
+          send(test, {:held, self()})
+
+          receive do
+            :release -> :ok
+          end
+
+          {200, RegistryStub.answer(%{"status" => "yanked"})}
+
+        %{method: "GET"} ->
+          {404, ""}
+      end)
+
+      ctx = %{
+        Sanctum.TestContext.local()
+        | user_id: user.user_id,
+          athanor_id: seated_athanor().id
+      }
+
+      :ok =
+        Compendium.Registry.CredentialStore.put_push_token(
+          ctx,
+          Compendium.RegistryHost.canonical_host(),
+          user.namespace,
+          "cyfr_pt_yank",
+          "personal"
+        )
+    end
+
+    # An event as the browser pushes it: waited on no longer than the
+    # browser waits.
+    defp pushed(fun) do
+      task = Task.async(fun)
+
+      case Task.yield(task, @push_timeout_ms) do
+        {:ok, html} -> html
+        nil -> :unanswered
+      end
+    end
+
+    defp registry_requests do
+      receive do
+        {:registry_request, %{method: method, path: path}} ->
+          [{method, path} | registry_requests()]
+      after
+        0 -> []
+      end
+    end
+
+    test "a yank held past the browser's wait answers at once, says so, is sent once, and its answer reloads the page",
+         %{conn: conn, user: user} do
+      held_yank!(user)
+      reference = "reagent:#{user.namespace}.held:1.0.0"
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, @answered_ms)
+      registry_requests()
+      render_click(view, "open-yank", %{"reference" => reference})
+      yank = fn -> render_submit(view, "yank", %{"reference" => reference, "reason" => ""}) end
+
+      html = pushed(yank)
+      assert_receive {:held, stub}, @answered_ms
+
+      try do
+        assert is_binary(html), "the page did not answer while the registry held the yank"
+        assert html =~ "Yanking…"
+
+        # A second yank while the first is sent sends nothing.
+        assert is_binary(pushed(yank))
+
+        # Held past the browser's wait, and past it twice, the page still
+        # says it is yanking.
+        Process.sleep(2 * @push_timeout_ms)
+        assert render(view) =~ "Yanking…"
+      after
+        send(stub, :release)
+      end
+
+      Prima.Test.Wait.wait_until(
+        fn -> render(view) =~ "Yanked #{reference}." end,
+        @answered_ms,
+        "the registry's answer to reach the page"
+      )
+
+      render_async(view, @answered_ms)
+      refute render(view) =~ "Yanking…"
+      sent = registry_requests()
+      assert [{"POST", _yank}] = Enum.filter(sent, &(elem(&1, 0) == "POST"))
+      # The page read the registry again once it answered.
+      assert {"GET", "/v1/legal/version"} in sent
+    end
+  end
+
   test "a sync asks a passkey to sign the mint and sends nothing until it is signed",
        %{conn: conn, user: user} do
     {view, _html} = mount_athanor(conn, "/registry")
+    render_async(view, 5_000)
     html = render_click(view, "sync", %{})
 
     assert %Prima.RegistryRequest{

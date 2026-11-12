@@ -23,6 +23,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
   @lease_ms 300
   # A session id of the wire's form that no open answered.
   @session "ss_" <> String.duplicate("0", 32)
+  @home "vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b"
 
   setup do
     root = :crypto.strong_rand_bytes(32)
@@ -83,6 +84,110 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
 
     assert %{status: 409, body: %{"error" => "unknown_owner"}} =
              session(fake, root, %{type: :close, owner: owner(), e: 1, session: id})
+  end
+
+  for ending <- [:exit, :close, :retire, :lapse] do
+    @tag :send_end_race
+    @tag ending: ending
+    test "a session's #{ending} stands when an in-flight line resumes", ctx do
+      %{fake: fake, root: root, ending: ending} = ctx
+      message = sync(root)
+
+      message = %{
+        message
+        | lease_ms: if(ending == :lapse, do: @lease_ms, else: 30_000),
+          programs: Enum.map(message.programs, &%{&1 | home: :kept})
+      }
+
+      assert %{status: 200} = control(fake, root, 1, message)
+      open = Map.put(open_message(), :home_id, @home)
+      assert %{status: 200, body: %{"session" => id}} = session(fake, root, open)
+
+      Scripted.hold(fake, "send")
+
+      sending =
+        Task.async(fn ->
+          session(fake, root, %{
+            type: :send,
+            owner: owner(),
+            e: 1,
+            session: id,
+            lines: List.duplicate(Jason.encode!(%{jsonrpc: "2.0", id: 1, method: "ping"}), 1_000)
+          })
+        end)
+
+      assert_receive {:held, "send", handler}, 2_000
+      priority = Process.flag(:priority, :high)
+      send(handler, :go)
+
+      # The first invoke follows the session read. Pause the handler while
+      # the remaining batch is delivered, before a split write can land.
+      assert_receive {:invoke, "ping", _fields}, 2_000
+      assert :erlang.suspend_process(handler)
+
+      try do
+        case ending do
+          :exit ->
+            Scripted.end_sessions(fake, @owner.server, 0)
+
+          :close ->
+            assert %{status: 200, body: %{"status" => "closed"}} =
+                     session(fake, root, %{type: :close, owner: owner(), e: 1, session: id})
+
+          :retire ->
+            assert %{status: 200} =
+                     control(fake, root, 2, %{
+                       type: :home,
+                       op: :retire,
+                       athanor: @owner.athanor,
+                       home_id: @home
+                     })
+
+          :lapse ->
+            lapse!(fake)
+
+            assert %{status: 200, body: %{"owners" => []}} =
+                     control(fake, root, 2, %{type: :status, owners: [owner()]})
+        end
+      after
+        :erlang.resume_process(handler)
+        Process.flag(:priority, priority)
+      end
+
+      assert %{status: 200, body: %{"status" => status}} = Task.await(sending)
+      assert status in ["running", "ended"]
+
+      if ending == :lapse do
+        assert %{status: 409, body: %{"error" => "unknown_owner"}} =
+                 session(fake, root, %{
+                   type: :recv,
+                   owner: owner(),
+                   e: 1,
+                   session: id,
+                   after: 0,
+                   max_wait_ms: 0
+                 })
+
+        assert %{status: 200} = control(fake, root, 3, sync(root))
+      else
+        assert %{status: 200, body: %{"running" => false} = received} =
+                 session(fake, root, %{
+                   type: :recv,
+                   owner: owner(),
+                   e: 1,
+                   session: id,
+                   after: 0,
+                   max_wait_ms: 0
+                 })
+
+        if ending == :exit, do: assert(received["exit_code"] == 0)
+      end
+
+      assert %{status: 200, body: %{"session" => fresh, "resumed" => false}} =
+               session(fake, root, open)
+
+      assert fresh != id
+    end
   end
 
   defp owner, do: Map.take(@owner, [:athanor, :server])

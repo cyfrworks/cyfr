@@ -117,7 +117,7 @@ defmodule Opus do
   """
   @spec run_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
-  def run_root(%Context{} = ctx, profile_selector, reference, input, opts \\ []) do
+  def run_root(%Context{} = ctx, profile_selector, reference, input, opts) do
     with {:ok, admitted, _execution_id} <-
            admit_root(ctx, profile_selector, reference, input, opts),
          do: Dispatch.dispatch(admitted)
@@ -580,7 +580,7 @@ defmodule Opus do
   (`t:Opus.TurnRoot.claim/0`).
   """
   @spec claim_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  defdelegate claim_turn_root(ctx, agent_ref, opts \\ []), to: TurnRoot, as: :claim
+  defdelegate claim_turn_root(ctx, agent_ref, opts), to: TurnRoot, as: :claim
 
   @doc """
   Pause the turn root: keeper stopped, rows moved, slot released

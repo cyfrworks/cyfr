@@ -13,6 +13,7 @@ defmodule PrismWeb.LoginLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import PrismWeb.Vocabulary, only: [refute_vocabulary: 1]
 
   alias Sanctum.Test.DirectoryServer
@@ -106,8 +107,73 @@ defmodule PrismWeb.LoginLiveTest do
       |> Prima.SignIn.fragment()
 
     render_hook(view, "account_answer", %{"answer" => answer})
-    {path, _flash} = assert_redirect(view)
+    {path, _flash} = assert_redirect(view, @answered_ms)
     assert "/auth/passkey/complete/" <> _ticket = path
+  end
+
+  # The account's directory, read for an account this CYFR has not read
+  # yet, holds the read here until the test releases it, past the
+  # browser's 30 s wait on the event (stood in for by `@push_timeout_ms`).
+  test "an answer whose account's directory is slow answers at once, says it is checking, checks once, and shows its outcome",
+       %{conn: conn, dir: dir, tls: tls} do
+    first!(dir)
+    test = self()
+    inner = DirectoryServer.handler(dir.dir)
+
+    slow =
+      DirectoryServer.Server.start(
+        tls[:server_config],
+        fn request ->
+          send(test, {:held, self()})
+
+          receive do
+            :release -> :ok
+          end
+
+          inner.(request)
+        end,
+        self()
+      )
+
+    on_exit(fn -> DirectoryServer.Server.stop(slow) end)
+    url = "https://dir-a.test:#{slow.port}"
+    Prima.Test.Env.put_app_env(:sanctum, :directory_url, url)
+    newcomer = dir.dir |> DirectoryServer.account!(url) |> passkey!(dir)
+
+    {:ok, view, _html} = live(conn, ~p"/login")
+    view |> element(~s([data-test="sign-in"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: hop})
+    [_page, fragment] = String.split(hop, "#", parts: 2)
+    {:ok, map} = Prima.SignIn.parse_fragment(fragment)
+    {:ok, request} = Prima.SignIn.decode(map)
+
+    answer =
+      request
+      |> DirectoryServer.passkey_answer(newcomer, hd(newcomer.passkeys))
+      |> Prima.SignIn.fragment()
+
+    html = handed(view, answer)
+    assert_receive {:held, held}, @answered_ms
+
+    try do
+      assert is_binary(html), "the page did not answer while the directory held the read"
+      assert html =~ "Checking what you signed."
+      refute_vocabulary(html)
+
+      # The same answer again starts no second check.
+      assert is_binary(handed(view, answer))
+      Process.sleep(2 * @push_timeout_ms)
+      assert render(view) =~ "Checking what you signed."
+    after
+      send(held, :release)
+    end
+
+    # The door does not admit this account: the page says so, as it does
+    # for any answer the door refuses.
+    html = render_async(view, @answered_ms)
+    assert html =~ Sanctum.Door.refusal_message()
+    refute html =~ "Checking what you signed."
+    refute_receive {:held, _second}, 500
   end
 
   describe "a registry signature's return" do
@@ -166,6 +232,91 @@ defmodule PrismWeb.LoginLiveTest do
           {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
         end
       end)
+    end
+
+    # A sync signed for a person whose account's head is stale, so the check
+    # reads the directory, which holds the read until the test releases it:
+    # answers the request asked, the page and the held read.
+    defp checking!(conn, dir, tls) do
+      observer = self()
+      armed = :atomics.new(1, [])
+      inner = DirectoryServer.handler(dir.dir)
+
+      slow =
+        DirectoryServer.Server.start(
+          tls[:server_config],
+          fn request ->
+            if :atomics.get(armed, 1) == 1 do
+              send(observer, {:checking_held, self()})
+
+              receive do
+                :release_check -> :ok
+              end
+
+              :atomics.put(armed, 1, 0)
+            end
+
+            inner.(request)
+          end,
+          self()
+        )
+
+      on_exit(fn -> DirectoryServer.Server.stop(slow) end)
+      url = "https://dir-a.test:#{slow.port}"
+      Prima.Test.Env.put_app_env(:sanctum, :directory_url, url)
+      asked = asked!(conn, %{dir | url: url}, %{"action" => "sync"})
+      identifier = asked.account.identifier
+
+      Arca.Repo.update_all(
+        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identifier),
+        set: [verified_at: DateTime.add(DateTime.utc_now(), -31_536_000, :second)]
+      )
+
+      registry(asked.account, fn %{path: "/v1/tokens/mint"} ->
+        send(observer, :minted)
+
+        {200,
+         Sanctum.Test.RegistryStub.answer(%{
+           "personal_namespace" => %{"slug" => "left-person", "token" => "cyfr_pt_left-person"},
+           "memberships" => []
+         })}
+      end)
+
+      :atomics.put(armed, 1, 1)
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+      assert is_binary(handed(view, signed_at_pages(asked)))
+      assert_receive {:checking_held, held}, @answered_ms
+      {asked, view, held}
+    end
+
+    # The request is spent when the check begins; what it asked for is done
+    # by the call that outlives the page, never by a page that left.
+    test "a sync whose answer is still being checked when the person leaves is completed and stored",
+         %{conn: conn, dir: dir, tls: tls} do
+      {asked, view, held} = checking!(conn, dir, tls)
+      {_ref, _topic, proxy} = view.proxy
+      Process.unlink(proxy)
+      page = Process.monitor(view.pid)
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert_receive {:DOWN, ^page, :process, _pid, {:shutdown, :closed}}, @answered_ms
+
+      send(held, :release_check)
+      assert_receive :minted, @answered_ms
+
+      Prima.Test.Wait.wait_until(
+        fn ->
+          match?(
+            {:ok, %{token: "cyfr_pt_left-person"}},
+            Compendium.Registry.CredentialStore.get(
+              asked.ctx,
+              Compendium.RegistryHost.canonical_host(),
+              "left-person"
+            )
+          )
+        end,
+        @answered_ms,
+        "the push token the registry minted to be stored"
+      )
     end
 
     test "completes the sync the passkey signed, under the session that asked, and says so",
@@ -260,7 +411,7 @@ defmodule PrismWeb.LoginLiveTest do
       end
     end
 
-    test "the page answers at once, says it is sending, and shows the registry's answer whenever it comes",
+    test "the page answers at once, says it is checking, and shows the registry's answer whenever it comes",
          %{conn: conn, dir: dir} do
       asked = asked!(conn, dir, %{"action" => "sync"})
       held_mint(asked.account, "slow-person")
@@ -272,7 +423,8 @@ defmodule PrismWeb.LoginLiveTest do
 
       try do
         assert is_binary(html), "the page did not answer while the registry held the request"
-        assert html =~ "Sending what you signed."
+        html = render(view)
+        assert html =~ "Checking what you signed."
         refute_vocabulary(html)
 
         # The same answer again starts no second call: its request was taken.
@@ -281,7 +433,7 @@ defmodule PrismWeb.LoginLiveTest do
         # Held past the browser's wait, and past it twice, the page still
         # waits for the registry.
         Process.sleep(2 * @push_timeout_ms)
-        assert render(view) =~ "Sending what you signed."
+        assert render(view) =~ "Checking what you signed."
       after
         send(stub, :release)
       end
@@ -393,7 +545,8 @@ defmodule PrismWeb.LoginLiveTest do
       registry(asked.account, fn _request -> flunk("nothing is sent") end)
 
       {:ok, view, _html} = live(conn, ~p"/login")
-      html = render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
+      render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
+      html = render_async(view, @answered_ms)
 
       assert html =~ "nobody was signed in"
       refute_received {:registry_request, _}
@@ -404,7 +557,8 @@ defmodule PrismWeb.LoginLiveTest do
     first!(dir)
     {:ok, view, _html} = live(conn, ~p"/login")
 
-    html = render_hook(view, "account_answer", %{"answer" => "not-an-answer"})
+    render_hook(view, "account_answer", %{"answer" => "not-an-answer"})
+    html = render_async(view, @answered_ms)
     assert html =~ "nobody was signed in"
     refute_vocabulary(html)
   end

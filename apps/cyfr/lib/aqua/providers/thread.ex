@@ -747,39 +747,32 @@ defmodule Aqua.Providers.Thread do
   # attached under it, the agent and model, the sender's client id, and
   # the shared thread open beside it — read server-side under the
   # sender's seat into the text the turn reads beside the task
-  # (`Aqua.Loop.Turn`), never stored.
+  # (`Aqua.Loop.Turn`), never stored. The gate has cast every argument
+  # against the declaration, so only an empty send is refused here.
   defp act("send", ctx, id, args) do
     text = args["message"]
     attachments = args["attachments"] || []
 
-    cond do
-      not is_binary(text) or (String.trim(text) == "" and attachments == []) ->
-        {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
-
-      not is_list(attachments) or not Enum.all?(attachments, &is_map/1) ->
-        {:error, {:invalid_argument, "send takes 'attachments' as the refs attach answered"}}
-
-      not (is_nil(args["room"]) or is_map(args["room"])) ->
-        {:error, {:invalid_argument, "send takes 'room' as an object"}}
-
-      true ->
-        message_id =
-          case args["id"] do
-            mid when is_binary(mid) and mid != "" -> mid
-            _ -> Prima.UUID7.generate_id("msg")
-          end
-
-        opts =
-          [id: message_id, attachments: attachments]
-          |> put_opt(:client_id, args["client_id"])
-          |> put_opt(:model, args["model"])
-          |> put_opt(:agent, args["agent"])
-          |> put_opt(:room, args["room"])
-
-        case Runner.send_message(ctx, id, text, opts) do
-          {:ok, accepted} -> {:ok, Map.merge(accepted, waiting(ctx, id))}
-          {:error, reason} -> {:error, refusal(reason, id)}
+    if String.trim(text) == "" and attachments == [] do
+      {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
+    else
+      message_id =
+        case args["id"] do
+          mid when is_binary(mid) and mid != "" -> mid
+          _ -> Prima.UUID7.generate_id("msg")
         end
+
+      opts =
+        [id: message_id, attachments: attachments]
+        |> put_opt(:client_id, args["client_id"])
+        |> put_opt(:model, args["model"])
+        |> put_opt(:agent, args["agent"])
+        |> put_opt(:room, args["room"])
+
+      case Runner.send_message(ctx, id, text, opts) do
+        {:ok, accepted} -> {:ok, Map.merge(accepted, waiting(ctx, id))}
+        {:error, reason} -> {:error, refusal(reason, id)}
+      end
     end
   end
 
@@ -955,18 +948,11 @@ defmodule Aqua.Providers.Thread do
   # this wraps it exactly as every other action wraps the runner.
   defp act("aloud", ctx, id, %{"message_ids" => ids, "target_thread" => target_thread})
        when is_list(ids) and is_binary(target_thread) do
-    # Keep the direct domain entry bounded too: every selected message
-    # copies bytes into the shared thread.
-    cond do
-      not Enum.all?(ids, &is_binary/1) ->
-        {:error, {:invalid_argument, "aloud takes a list of message ids"}}
-
-      length(ids) > @aloud_max ->
-        {:error, {:invalid_argument, "aloud takes at most #{@aloud_max} messages at a time"}}
-
-      true ->
-        say_aloud(ctx, id, ids, target_thread)
-    end
+    # Bounded in number too: every selected message copies bytes into
+    # the shared thread.
+    if length(ids) > @aloud_max,
+      do: {:error, {:invalid_argument, "aloud takes at most #{@aloud_max} messages at a time"}},
+      else: say_aloud(ctx, id, ids, target_thread)
   end
 
   defp say_aloud(ctx, id, ids, target_thread) do

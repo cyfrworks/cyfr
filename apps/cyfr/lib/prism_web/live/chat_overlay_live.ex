@@ -60,6 +60,8 @@ defmodule PrismWeb.ChatOverlayLive do
       |> assign(:unread, %{})
       |> assign(:shared, nil)
       |> assign(:with_people?, false)
+      # A thread with people being made, until its answer comes.
+      |> assign(:creating?, false)
       |> assign(:error, nil)
 
     if connected?(socket) do
@@ -225,35 +227,73 @@ defmodule PrismWeb.ChatOverlayLive do
 
   # A thread with people: its title, then each person named by their
   # handle. The thread is made first; a name that cannot be added is said,
-  # and the thread opens with whoever could be.
+  # and the thread opens with whoever could be. Each name is asked of the
+  # registry, so the thread is made off the overlay's process (`create/3`):
+  # the browser gives up on an event it waits on for 30 seconds.
+  def handle_event("create_shared", _params, %{assigns: %{creating?: true}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("create_shared", %{"title" => title} = params, socket) do
-    with {:ok, names} <- people_names(params["people"] || ""),
-         {:ok, %{id: id}} <- call_tool(socket, "shared_thread/create", %{"title" => title}) do
-      unadded =
-        for name <- names,
-            {:error, reason} <-
-              [call_tool(socket, "shared_thread/add", %{"thread" => id, "handle" => name})],
-            do: "#{name} (#{error_message(reason)})"
-
-      socket =
-        socket
-        |> assign(:with_people?, false)
-        |> load()
-        |> open_shared(id)
-
-      if unadded == [],
-        do: {:noreply, socket},
-        else: {:noreply, assign(socket, :error, "Not added: " <> Enum.join(unadded, "; "))}
-    else
-      {:error, sentence} when is_binary(sentence) ->
-        {:noreply, assign(socket, :error, sentence)}
-
-      {:error, reason} ->
-        {:noreply, assign(socket, :error, "Could not make the thread: #{error_message(reason)}")}
+    case people_names(params["people"] || "") do
+      {:ok, names} -> {:noreply, create(socket, title, names)}
+      {:error, sentence} -> {:noreply, assign(socket, :error, sentence)}
     end
   end
 
   def handle_event("dismiss_error", _params, socket), do: {:noreply, assign(socket, :error, nil)}
+
+  @impl true
+  def handle_async(:create, {:ok, {tag, made}}, socket),
+    do:
+      CyfrWeb.ContextGuard.deliver(
+        assign(socket, :creating?, false),
+        tag,
+        &{:noreply, created(&1, made)}
+      )
+
+  # Only the node's shutdown stops it (`run_to_end/1`).
+  def handle_async(:create, {:exit, _reason}, socket), do: {:noreply, socket}
+
+  # The thread and its people, off the event and run to its end: a thread
+  # made, or a person added, stays made if the person leaves.
+  defp create(socket, title, names) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+
+    socket
+    |> assign(:creating?, true)
+    |> assign(:error, nil)
+    |> start_async(:create, fn -> {tag, run_to_end(fn -> made(ctx, title, names) end)} end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
+
+  defp made(ctx, title, names) do
+    with {:ok, %{id: id}} <- call_tool(ctx, "shared_thread/create", %{"title" => title}) do
+      unadded =
+        for name <- names,
+            {:error, reason} <-
+              [call_tool(ctx, "shared_thread/add", %{"thread" => id, "handle" => name})],
+            do: "#{name} (#{error_message(reason)})"
+
+      {:ok, id, unadded}
+    end
+  end
+
+  defp created(socket, {:ok, id, unadded}) do
+    socket =
+      socket
+      |> assign(:with_people?, false)
+      |> load()
+      |> open_shared(id)
+
+    if unadded == [],
+      do: socket,
+      else: assign(socket, :error, "Not added: " <> Enum.join(unadded, "; "))
+  end
+
+  defp created(socket, {:error, reason}),
+    do: assign(socket, :error, "Could not make the thread: #{error_message(reason)}")
 
   # The names a person typed, by handle, split on commas and spaces. A name
   # is lowercase letters and digits joined by single hyphens.
@@ -462,9 +502,10 @@ defmodule PrismWeb.ChatOverlayLive do
                 />
                 <button
                   type="submit"
-                  class="min-h-6 rounded bg-accent-primary px-2 py-1 text-xs text-white hover:bg-accent-hover"
+                  disabled={@creating?}
+                  class="min-h-6 rounded bg-accent-primary px-2 py-1 text-xs text-white hover:bg-accent-hover disabled:opacity-50"
                 >
-                  Start the thread
+                  {if @creating?, do: "Starting the thread…", else: "Start the thread"}
                 </button>
               </form>
               <p :if={@threads == []} class="px-3 py-2 text-xs text-text-muted">

@@ -50,9 +50,6 @@ defmodule Aqua.Loop.Policy do
   which the person's approval lets flow to every exit of the tree. They
   are part of the proposal its digest hashes, so a source the turn reads
   after the card, or another grant, is not what was approved.
-
-  `touched_refs/1` names the components a turn's closed write,
-  destructive and execute calls reached, from their durable rows.
   """
 
   alias Aqua.Loop.Binding.Call
@@ -81,11 +78,10 @@ defmodule Aqua.Loop.Policy do
           | {:setup_required, String.t(), {String.t() | nil, String.t()}}
 
   @doc """
-  The decision for `call` under `policy`. `opts`: `:restricted?` (the
-  turn holds a call whose outcome is unknown: only a replay-safe read
-  runs, whatever the policy says), and where the call is made, which a
-  standing allow is judged against and a launch's account is resolved
-  under: `:ctx` (the member's context its rows are read under), `:agent`
+  The decision for `call` under `policy`. A restricted turn's calls reach
+  here only when replay-safe (`Aqua.Loop` denies the rest first). `opts`:
+  where the call is made, which a standing allow is judged against and a
+  launch's account is resolved under: `:ctx` (the member's context its rows are read under), `:agent`
   (the agent's name), `:thread_id`, `:turn_id` and `:execution_id` (the
   turn's root); the turn's sources are read from its row as the call is
   decided, unless `:sources` names them. Without them a key that asks,
@@ -96,11 +92,6 @@ defmodule Aqua.Loop.Policy do
     cond do
       not within?(call, Keyword.get(opts, :narrowed)) ->
         {:deny, outside(call)}
-
-      Keyword.get(opts, :restricted?, false) and not replay_safe?(call) ->
-        {:deny,
-         "#{key(call)} may not run: an earlier call's outcome is unknown, and until a new turn " <>
-           "starts only replay-safe reads run"}
 
       true ->
         decide_open(call, policy, opts)
@@ -353,38 +344,6 @@ defmodule Aqua.Loop.Policy do
   end
 
   def launch_account(%Call{}, _ctx), do: {:ok, nil}
-
-  @doc """
-  The component references a turn's closed write, destructive and
-  execute calls reached, from their `tool_call` payloads: an argument
-  named `reference` or `ref`, and a `path` at or below a component version
-  directory as the component path grammar reads one
-  (`Compendium.parse_component_path/1`). Name level,
-  so any version of a touched component counts.
-  """
-  @spec touched_refs([map()]) :: MapSet.t()
-  def touched_refs(calls) when is_list(calls) do
-    calls
-    |> Enum.filter(fn call ->
-      Aqua.Kinds.kind_for(call["tool"] || "", call["action"] || "") in [
-        :write,
-        :destructive,
-        :execute
-      ]
-    end)
-    |> Enum.flat_map(fn call ->
-      args = call["arguments"] || %{}
-
-      refs =
-        [args["reference"], args["ref"]]
-        |> Enum.filter(&is_binary/1)
-        |> Enum.map(&name_level/1)
-
-      refs ++ path_refs(args["path"])
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> MapSet.new()
-  end
 
   @doc """
   The card a call that asks becomes: today's intent shape, which the
@@ -651,23 +610,4 @@ defmodule Aqua.Loop.Policy do
     {:ok, digest} = Prima.JCS.hash(proposal)
     digest
   end
-
-  defp name_level(reference), do: Aqua.Hands.name_level(reference)
-
-  # A path names a component when the layout's one parser reads a version
-  # directory in it, the same parser the unit locator and the `source` tool
-  # read it with; any other path names none. Its segments are split as
-  # every door that writes it splits them, empty ones dropped, so
-  # `components//…` and `/components/…` name the unit the write lands in.
-  defp path_refs(path) when is_binary(path) do
-    case Compendium.parse_component_path(String.split(path, "/", trim: true)) do
-      {:ok, %{type: type, publisher: publisher, name: name}} ->
-        [Prima.ComponentRef.build(type, publisher, name)]
-
-      :error ->
-        []
-    end
-  end
-
-  defp path_refs(_), do: []
 end

@@ -72,124 +72,24 @@ defmodule Aqua.Loop.PolicyTest do
     assert Policy.within?(resolve!("request_setup.open", %{}), ["files.read"])
   end
 
-  test "a launch always asks, consented or not, touched or not, unless it is denied or no component" do
+  test "a launch always asks, unless it is denied or names no component" do
     launch =
       resolve!("execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"})
 
-    consented = fn ref -> String.starts_with?(ref, "formula:local.demo") end
-
     # Every launch asks, whatever the policy says: only an approved card
     # launches.
-    assert :ask = Policy.decide(launch, @policy, consented?: consented)
-    assert :ask = Policy.decide(launch, @policy, consented?: fn _ -> false end)
-
-    assert :ask =
-             Policy.decide(launch, @policy,
-               consented?: consented,
-               touched: MapSet.new(["formula:local.demo"])
-             )
-
-    assert {:deny, _} =
-             Policy.decide(launch, Map.put(@policy, "execution.run", "deny"),
-               consented?: consented
-             )
+    assert :ask = Policy.decide(launch, @policy, [])
+    assert {:deny, _} = Policy.decide(launch, Map.put(@policy, "execution.run", "deny"), [])
 
     # A policy that names no `execution.run` denies the launch: an agent
     # launches only what its own policy grants.
     for policy <- [%{}, Map.delete(@policy, "execution.run")] do
       assert {:deny, "execution.run is not in the agent's policy"} =
-               Policy.decide(launch, policy, consented?: consented)
+               Policy.decide(launch, policy, [])
     end
 
     bad = resolve!("execution", %{"action" => "run", "reference" => "not a ref"})
     assert {:refuse, _} = Policy.decide(bad, @policy, [])
-  end
-
-  test "what the turn wrote to is read from the closed calls' rows" do
-    calls = [
-      %{
-        "tool" => "files",
-        "action" => "read",
-        "arguments" => %{"path" => "components/formulas/local/demo/1.0.0/x"}
-      },
-      %{
-        "tool" => "files",
-        "action" => "write",
-        "arguments" => %{"path" => "components/formulas/local/demo/1.0.0/src/lib.rs"}
-      },
-      %{
-        "tool" => "component",
-        "action" => "register",
-        "arguments" => %{"reference" => "reagent:local.tool:2.0.0"}
-      },
-      %{
-        "tool" => "build",
-        "action" => "compile",
-        "arguments" => %{"ref" => "catalyst:local.thing:0.1.0"}
-      }
-    ]
-
-    touched = Policy.touched_refs(calls)
-    assert MapSet.member?(touched, "formula:local.demo")
-    assert MapSet.member?(touched, "catalyst:local.thing")
-    refute MapSet.member?(touched, "formula:local.other")
-  end
-
-  test "a run after a source write and a compile of the same component still needs a card" do
-    launch =
-      resolve!("execution", %{"action" => "run", "reference" => "catalyst:local.widget:0.1.0"})
-
-    consented = fn ref -> String.starts_with?(ref, "catalyst:local.widget") end
-
-    closed =
-      for {action, extra} <- [
-            {"write", %{"content" => "fn main() {}"}},
-            {"edit", %{"edits" => []}},
-            {"delete", %{}}
-          ] do
-        [
-          %{
-            "tool" => "source",
-            "action" => action,
-            "arguments" =>
-              Map.put(extra, "path", "components/catalysts/local/widget/0.1.0/src/lib.rs")
-          },
-          %{
-            "tool" => "build",
-            "action" => "compile",
-            "arguments" => %{"reference" => "catalyst:local.widget:0.1.0"}
-          }
-        ]
-      end
-
-    for calls <- closed do
-      touched = Policy.touched_refs(calls)
-      assert MapSet.member?(touched, "catalyst:local.widget")
-      assert :ask = Policy.decide(launch, @policy, consented?: consented, touched: touched)
-    end
-  end
-
-  test "a launch of what the same batch writes to needs a card, whatever has closed" do
-    launch =
-      resolve!("execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"})
-
-    consented = fn ref -> String.starts_with?(ref, "formula:local.demo") end
-
-    # Nothing has closed yet, which is the state every call in one model
-    # response is decided in. Every launch asks, whatever the policy says.
-    assert :ask = Policy.decide(launch, @policy, consented?: consented, touched: MapSet.new())
-
-    # The same response also proposes writing to it.
-    writes =
-      Policy.touched_refs([
-        %{
-          "tool" => "files",
-          "action" => "write",
-          "arguments" => %{"path" => "components/formulas/local/demo/1.0.0/src/lib.rs"}
-        }
-      ])
-
-    assert :ask = Policy.decide(launch, @policy, consented?: consented, touched: writes)
   end
 
   test "reads overlap; everything else runs alone" do
@@ -218,20 +118,16 @@ defmodule Aqua.Loop.PolicyTest do
     assert Policy.proposal_digest(card) =~ ~r/^sha256:[0-9a-f]{64}$/
   end
 
-  test "a restricted turn runs replay-safe reads and nothing else, whatever the policy says" do
-    read = resolve!("files", %{"action" => "read", "path" => "a"})
-    write = resolve!("files", %{"action" => "write", "path" => "a", "content" => "b"})
-    ui = resolve!("ui", %{"kind" => "ui.navigate"})
+  # The loop runs only these in a restricted turn (loop_test's stopped
+  # turn carried on: a read runs, a write is denied).
+  test "a read is replay-safe; a write and a ui event are not" do
+    assert Policy.replay_safe?(resolve!("files", %{"action" => "read", "path" => "a"}))
 
-    assert Policy.replay_safe?(read)
-    refute Policy.replay_safe?(write)
-    refute Policy.replay_safe?(ui)
+    refute Policy.replay_safe?(
+             resolve!("files", %{"action" => "write", "path" => "a", "content" => "b"})
+           )
 
-    assert :auto = Policy.decide(read, @policy, restricted?: true)
-    assert {:deny, why} = Policy.decide(write, @policy, restricted?: true)
-    assert why =~ "outcome is unknown"
-    assert {:deny, _} = Policy.decide(ui, @policy, restricted?: true)
-    assert :auto = Policy.decide(ui, @policy, restricted?: false)
+    refute Policy.replay_safe?(resolve!("ui", %{"kind" => "ui.navigate"}))
   end
 
   # ---------------------------------------------------------------------------
