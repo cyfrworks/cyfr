@@ -124,7 +124,7 @@ defmodule Arca.ControlPlane do
   transaction also asks for the control plane's turn (`Arca.WriteTurn`),
   which is issued ahead of every queued audit writer. Where the pool is
   configured and not running, the write fails; it never falls back to
-  the ordinary pool. The reads (`check_held/1`, `roster/0`,
+  the ordinary pool. The reads (`roster/0`,
   `live_member?/1`, `slot/1`) write nothing and stay on the ordinary
   pool, and `verify_held/1` runs in its caller's transaction.
 
@@ -581,19 +581,6 @@ defmodule Arca.ControlPlane do
           do: :ok,
           else: :lost
     end
-  end
-
-  @doc """
-  `verify_held/1` in a locking transaction of its own, for a caller that
-  holds none: `:ok` while `slot` still names the row under a standing
-  lease, `:lost` once it does not. A store that cannot answer raises, as
-  `verify_held/1` does.
-  """
-  @spec check_held(slot() | :none) :: :ok | :lost
-  # arca:db-raise-ok a store that cannot answer raises, as its doc says
-  def check_held(slot) do
-    {:ok, standing} = Arca.Repo.locking_transaction(fn -> verify_held(slot) end)
-    standing
   end
 
   # ---- the roster ------------------------------------------------------------

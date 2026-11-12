@@ -606,7 +606,12 @@ defmodule Arca.WriteTurnLockTest do
 
     assert_receive :holder_released, 15_000
     assert lock_free?()
-    assert :lost = run(fn -> ControlPlane.check_held(slot) end)
+
+    assert {:ok, :lost} =
+             run(fn ->
+               Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(slot) end)
+             end)
+
     refute ControlPlane.held?()
   end
 

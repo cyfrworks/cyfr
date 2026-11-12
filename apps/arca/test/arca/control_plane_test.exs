@@ -567,7 +567,8 @@ defmodule Arca.ControlPlaneTest do
       assert {:ok, :lost} =
                Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(:none) end)
 
-      assert :lost = ControlPlane.check_held(:none)
+      assert {:ok, :lost} =
+               Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(:none) end)
 
       claimed_here(false)
       assert {:ok, :ok} = Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(:none) end)

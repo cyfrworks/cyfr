@@ -172,7 +172,10 @@ defmodule Arca.StaleMemberUnitRemovalTest do
         ControlPlane.record_slot(old)
         ControlPlane.record_generation(old.generation)
         ControlPlane.record(:lost)
-        assert ControlPlane.check_held(old) == :lost
+
+        assert {:ok, :lost} =
+                 Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(old) end)
+
         assert ControlPlane.member_slot() == {:error, :not_owner}
 
         # Control: the same member's commit is refused for the slot.
