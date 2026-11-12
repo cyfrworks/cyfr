@@ -212,6 +212,9 @@ defmodule Prima.RefusalTest do
     {{:timeout, :parent_deadline}, :timeout},
     {{:rate_limited, 5}, :rate_limited},
     {{:attestation_failed, :signed_pulls_required}, :forbidden},
+    {{:attestation_failed, :signer_mismatch}, :forbidden},
+    {{:attestation_failed, :pinned_signer_unverified}, :forbidden},
+    {{:attestation_failed, :unknown_source}, :forbidden},
     {{:core_module, "The binary is a core WebAssembly module, not a component."},
      :invalid_argument},
     {{:setup_required, :registry_binding}, :setup_required},
@@ -723,7 +726,15 @@ defmodule Prima.RefusalTest do
     test "admission's refusals read as their rows" do
       assert Refusal.message({:rate_limited, 7}) == "Too many requests; retry in 7 s."
 
-      assert Refusal.message({:attestation_failed, :signer_mismatch}) ==
+      for cause <- [:signer_mismatch, :pinned_signer_unverified] do
+        assert Refusal.message({:attestation_failed, cause}) ==
+                 "The component's signer is not the one this run pins."
+      end
+
+      assert Refusal.message({:attestation_failed, :signed_pulls_required}) ==
+               "The component's signature could not be verified; signed pulls are required."
+
+      assert Refusal.message({:attestation_failed, :unknown_source}) ==
                "The component's signature could not be verified; signed pulls are required."
 
       assert Refusal.message({:setup_required, :registry_binding}) ==
