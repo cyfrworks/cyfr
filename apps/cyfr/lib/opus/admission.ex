@@ -842,7 +842,8 @@ defmodule Opus.Admission do
         verify_signer(run, identity, issuer)
 
       {:unknown_source, _} ->
-        verify_signer(run, identity, issuer)
+        {:error, reason} = Attestation.verify(run.component, identity, issuer)
+        attestation_failed(run, :unknown_source, reason)
     end
   end
 

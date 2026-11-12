@@ -801,6 +801,10 @@ defmodule Prima.Refusal do
       {:unavailable,
        "The component could not be checked, so it was not admitted; try again later."}
 
+  defp row({:attestation_failed, cause})
+       when cause in [:signer_mismatch, :pinned_signer_unverified],
+       do: {:forbidden, "The component's signer is not the one this run pins."}
+
   # A component whose signature or attestation does not verify.
   defp row({:attestation_failed, _what}),
     do:

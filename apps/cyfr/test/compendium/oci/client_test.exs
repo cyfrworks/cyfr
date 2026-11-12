@@ -616,6 +616,7 @@ defmodule Compendium.OCI.ClientTest do
     @run_ref "reagent:alice.pinned:1.0.0"
     @refused "Execution failed: The component's signature could not be verified; " <>
                "signed pulls are required."
+    @pin_refused "Execution failed: The component's signer is not the one this run pins."
 
     setup :start_registry
 
@@ -694,8 +695,12 @@ defmodule Compendium.OCI.ClientTest do
 
       assert completed?(run(ctx))
 
+      assert run(ctx, %{"identity" => "release@example.com"}) == {:error, @pin_refused}
+      assert run(ctx, %{"issuer" => "https://accounts.google.com"}) == {:error, @pin_refused}
+
       require_signed_pulls!()
       assert run(ctx) == {:error, @refused}
+      assert run(ctx, %{"identity" => "release@example.com"}) == {:error, @pin_refused}
     end
 
     @tag :capture_log
@@ -717,22 +722,27 @@ defmodule Compendium.OCI.ClientTest do
 
     @tag :capture_log
     test "a pin naming another signer is refused, and the key that signed runs", ctx do
-      require_signed_pulls!()
       signer = keyed!(ctx)
       assert {:ok, _} = Client.pull(ctx.a, ctx.tag_ref)
       consent!(ctx)
 
       other = "key:sha256:" <> String.duplicate("f", 64)
-      assert run(ctx, %{signer | "identity" => other}) == {:error, @refused}
-      assert run(ctx, %{signer | "issuer" => "https://accounts.google.com"}) == {:error, @refused}
 
-      assert completed?(run(ctx, signer))
-      assert completed?(run(ctx))
+      for required <- [false, true] do
+        Prima.Test.Env.put_app_env(:cyfr, :require_signed_pulls, required)
+
+        assert run(ctx, %{signer | "identity" => other}) == {:error, @pin_refused}
+
+        assert run(ctx, %{signer | "issuer" => "https://accounts.google.com"}) ==
+                 {:error, @pin_refused}
+
+        assert completed?(run(ctx, signer))
+        assert completed?(run(ctx))
+      end
     end
 
     @tag :capture_log
     test "a keyless-verified component runs unpinned and refuses any pin", ctx do
-      require_signed_pulls!()
       cosign(ctx, signs: ctx.pin)
       assert {:ok, _} = Client.pull(ctx.a, ctx.tag_ref)
       consent!(ctx)
@@ -740,10 +750,13 @@ defmodule Compendium.OCI.ClientTest do
       assert {:ok, %{signature_verified: true, signer_identity: nil}} =
                Compendium.Registry.get(ctx.a, "pinned", "1.0.0", "alice")
 
-      assert completed?(run(ctx))
-      # The keyless signer's own subject and issuer, as its answer names them.
-      assert run(ctx, %{"identity" => "release@example.com"}) == {:error, @refused}
-      assert run(ctx, %{"issuer" => "https://accounts.google.com"}) == {:error, @refused}
+      for required <- [false, true] do
+        Prima.Test.Env.put_app_env(:cyfr, :require_signed_pulls, required)
+        assert completed?(run(ctx))
+        # The keyless signer's own subject and issuer, as its answer names them.
+        assert run(ctx, %{"identity" => "release@example.com"}) == {:error, @pin_refused}
+        assert run(ctx, %{"issuer" => "https://accounts.google.com"}) == {:error, @pin_refused}
+      end
     end
   end
 
