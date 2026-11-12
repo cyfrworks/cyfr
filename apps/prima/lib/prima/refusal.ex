@@ -888,9 +888,6 @@ defmodule Prima.Refusal do
   # A minted tincture token presented to mint its own successor.
   defp row(:not_primary), do: {:forbidden, "A minted tincture token cannot mint another"}
 
-  defp row(:wrong_tincture),
-    do: {:forbidden, "This credential opens a different tincture"}
-
   defp row(:ip_not_allowed), do: {:forbidden, "Request IP not in API key allowlist"}
   defp row(:origin_rejected), do: {:forbidden, "Origin not allowed"}
   defp row(:frame_request), do: {:forbidden, "A request made by a frame is refused"}
@@ -934,19 +931,6 @@ defmodule Prima.Refusal do
 
   defp row(:service_unavailable),
     do: {:unavailable, "The service is unavailable — retry shortly"}
-
-  # A sensitive change's refusals that are no denial: the proof the change
-  # needs cannot be given here, or not yet.
-  defp row(:remote_identity_unavailable),
-    do: {:unavailable, "This needs the CYFR that holds the person's identity: do it there."}
-
-  defp row(:email_unavailable),
-    do: {:unavailable, "No one-time code can be emailed to you here; confirm another way."}
-
-  defp row(:reauth_required),
-    do:
-      {:unauthenticated,
-       "Your first passkey needs a recent sign-in here: sign in again, then register it."}
 
   # The door's refusal of a person or an account at a sign-in
   # (`Sanctum.Door`): one sentence whichever entry refused, so a stranger
@@ -1037,8 +1021,6 @@ defmodule Prima.Refusal do
   # Webhook ingress.
   defp row(:missing_idempotency_key),
     do: {:invalid_argument, "This webhook requires an idempotency key on every delivery"}
-
-  defp row(:missing_token), do: {:unauthenticated, "No session token provided"}
 
   defp row(:unsupported_content_type),
     do: {:invalid_argument, "Unsupported content type — send the delivery as application/json"}
