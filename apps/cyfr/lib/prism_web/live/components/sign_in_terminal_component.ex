@@ -24,7 +24,7 @@ defmodule PrismWeb.SignInTerminalComponent do
   terminal control sequences removed; a line the person types goes to the
   program with `Opus.Programs.sign_in_send/3`. Close ends the session
   (`Opus.Programs.sign_in_close/2`) and tells the page
-  `{PrismWeb.SignInTerminalComponent, :closed}`. CYFR stores nothing of
+  `{PrismWeb.SignInTerminalComponent, :closed, id}`. CYFR stores nothing of
   what passes: the program keeps its own sign-in in its home. What the
   person types is sent and never kept here; its field, `sign_in_line`, is
   one `Prima.Sanitizer.filter_parameters/0` names, so no event log shows it.
@@ -144,10 +144,11 @@ defmodule PrismWeb.SignInTerminalComponent do
 
   def handle_event("send", _params, socket), do: {:noreply, socket}
 
-  # A start in flight is answered before the terminal closes: its session
-  # is closed, by a later terminal or this one, only once it is known.
+  # Closed while its start is in flight, the terminal says it is closing,
+  # and closes the session the start opened as soon as the start answers,
+  # before anything else (`told/1`).
   def handle_event("close", _params, %{assigns: %{state: :starting}} = socket),
-    do: {:noreply, socket}
+    do: {:noreply, assign(socket, :closing, true)}
 
   def handle_event("close", _params, %{assigns: %{closing: true}} = socket),
     do: {:noreply, socket}
@@ -156,7 +157,7 @@ defmodule PrismWeb.SignInTerminalComponent do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case socket.assigns.token do
         nil ->
-          send(self(), {__MODULE__, :closed})
+          send(self(), {__MODULE__, :closed, socket.assigns.id})
           {:noreply, socket}
 
         token ->
@@ -168,9 +169,20 @@ defmodule PrismWeb.SignInTerminalComponent do
     end)
   end
 
+  # A start's answer the guard refuses leaves the terminal ended, its
+  # sentence shown by the page; the session it opened is attached to
+  # nothing, and its relay ends it within 30 s.
   @impl true
-  def handle_async(:start, {:ok, {tag, result}}, socket),
-    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, started(&1, result)})
+  def handle_async(:start, {:ok, {tag, result}}, socket) do
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.deliver(
+        ended(socket, :unavailable),
+        tag,
+        &{:noreply, started(&1, result)}
+      )
+
+    {:noreply, told(socket)}
+  end
 
   def handle_async(:send, {:ok, {tag, result}}, socket),
     do:
@@ -215,14 +227,43 @@ defmodule PrismWeb.SignInTerminalComponent do
     )
   end
 
-  defp started(socket, result) do
-    socket = attached(socket, result)
-    send(self(), {__MODULE__, :started, socket.assigns.id, socket.assigns.token})
+  # Asked to close while it started: the session the start opened, if it
+  # opened one, is closed before anything else, never attached.
+  defp started(%{assigns: %{closing: true}} = socket, result) do
+    socket = assign(socket, :state, :starting)
+
+    case session_of(result) do
+      token when is_binary(token) ->
+        socket |> assign(:token, token) |> ask(:close, &Opus.Programs.sign_in_close(&1, token))
+
+      nil ->
+        socket
+    end
+  end
+
+  defp started(socket, result), do: attached(socket, result)
+
+  # The page told how the start ended (the session it opened, or nil), so
+  # it hands that session to the next terminal to close first; and a
+  # terminal asked to close that holds no session closes now.
+  defp told(socket) do
+    %{id: id, token: token, closing: closing} = socket.assigns
+    send(self(), {__MODULE__, :started, id, token})
+    if closing and is_nil(token), do: send(self(), {__MODULE__, :closed, id})
     socket
   end
 
-  defp attached(socket, {:ok, result}) do
-    with token when is_binary(token) <- result[:session] || result["session"],
+  defp session_of({:ok, result}) do
+    case result[:session] || result["session"] do
+      token when is_binary(token) -> token
+      _none -> nil
+    end
+  end
+
+  defp session_of(_refused), do: nil
+
+  defp attached(socket, {:ok, _} = result) do
+    with token when is_binary(token) <- session_of(result),
          :ok <- Opus.Programs.sign_in_attach(socket.assigns.context, token, self()) do
       socket |> assign(:token, token) |> assign(:state, :running)
     else
@@ -240,7 +281,7 @@ defmodule PrismWeb.SignInTerminalComponent do
   defp sent(socket, {:error, reason}), do: ended(socket, reason)
 
   defp closed(socket) do
-    send(self(), {__MODULE__, :closed})
+    send(self(), {__MODULE__, :closed, socket.assigns.id})
     {:noreply, socket}
   end
 
@@ -287,7 +328,7 @@ defmodule PrismWeb.SignInTerminalComponent do
           variant="ghost"
           phx-click="close"
           phx-target={@myself}
-          disabled={@closing or @state == :starting}
+          disabled={@closing}
         >
           {if @closing, do: "Closing…", else: "Close"}
         </.button>
@@ -298,7 +339,9 @@ defmodule PrismWeb.SignInTerminalComponent do
         class="max-h-96 min-h-32 overflow-y-auto whitespace-pre-wrap break-all px-4 py-3 font-mono text-xs text-gray-200"
         data-test="terminal-lines"
       >{Lines.text(@lines)}</pre>
-      <p :if={@state == :starting} class="px-4 pb-2 text-xs text-gray-500">Starting…</p>
+      <p :if={@state == :starting and not @closing} class="px-4 pb-2 text-xs text-gray-500">
+        Starting…
+      </p>
       <p :if={@state == :ended} class="px-4 pb-2 text-xs text-amber-400" data-test="terminal-ended">
         {@reason}
       </p>

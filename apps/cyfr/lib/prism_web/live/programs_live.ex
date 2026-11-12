@@ -336,19 +336,31 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   # The session the terminal open now started (nil when none did), so
-  # selecting another target hands it to the next terminal to close first.
+  # selecting another target hands it to the next terminal to close first;
+  # a target chosen while it started opens now.
   def handle_info({SignInTerminalComponent, :started, id, token}, socket) do
     case socket.assigns.terminal do
-      %{id: ^id} = terminal ->
-        {:noreply, assign(socket, :terminal, %{terminal | token: token, started: true})}
+      %{id: ^id, next: next} = terminal ->
+        socket = assign(socket, :terminal, %{terminal | token: token, started: true})
+
+        case next do
+          {name, entry} -> {:noreply, open_terminal(socket, name, entry)}
+          nil -> {:noreply, socket}
+        end
 
       _other ->
         {:noreply, socket}
     end
   end
 
-  def handle_info({SignInTerminalComponent, :closed}, socket),
-    do: {:noreply, socket |> assign(:terminal, nil) |> refresh_servers()}
+  # Only the terminal open now closes it: one it replaced may still be
+  # answering its own close.
+  def handle_info({SignInTerminalComponent, :closed, id}, socket) do
+    case socket.assigns.terminal do
+      %{id: ^id} -> {:noreply, socket |> assign(:terminal, nil) |> refresh_servers()}
+      _other -> {:noreply, socket}
+    end
+  end
 
   def handle_info(%Cyfr.Bus.McpServers{}, socket), do: {:noreply, refresh_servers(socket)}
 
@@ -653,11 +665,14 @@ defmodule PrismWeb.ProgramsLive do
   # is closed before the new one opens (`PrismWeb.SignInTerminalComponent`);
   # and each terminal is a component of its own, so selecting a target, or
   # the same one again after its session ended, starts afresh and never
-  # reaches the previous session. A terminal still starting is not
-  # replaced: its session is not known yet, so nothing could close it
-  # first.
-  defp open_terminal(%{assigns: %{terminal: %{started: false}}} = socket, _name, _entry),
-    do: socket
+  # reaches the previous session. A terminal still starting is replaced
+  # once its start answers, since its session is not known before: it is
+  # told to close meanwhile, and says so, and the target last chosen opens
+  # when it has answered (the `:started` above).
+  defp open_terminal(%{assigns: %{terminal: %{started: false} = terminal}} = socket, name, entry) do
+    send_update(SignInTerminalComponent, id: terminal.id, closing: true)
+    assign(socket, :terminal, %{terminal | next: {name, entry}})
+  end
 
   defp open_terminal(socket, name, entry) do
     id = "sign-in-#{System.unique_integer([:positive])}"
@@ -669,7 +684,8 @@ defmodule PrismWeb.ProgramsLive do
       entry: entry,
       token: nil,
       started: false,
-      predecessor: predecessor
+      predecessor: predecessor,
+      next: nil
     })
   end
 

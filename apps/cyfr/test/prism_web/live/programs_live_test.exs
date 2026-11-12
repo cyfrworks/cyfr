@@ -917,46 +917,62 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute log =~ canary
   end
 
-  # Two sign-ins chosen before the first one's start was answered: the
-  # second starts nothing, since the first's session is not known yet and
-  # so could not be closed before another opens; the first is the one Send
-  # reaches. Chosen again once the first runs, the second closes it first.
-  test "a sign-in chosen while another is still starting starts nothing",
+  # Closed while its start is held at the service: the frame says it is
+  # closing, and the session the start opens is closed as soon as the
+  # start answers, never attached, well before the relay's own 30 s.
+  test "Close while a sign-in is still starting closes the session it opens as soon as it answers",
        %{conn: conn, athanor: athanor, user: user} do
-    controller!()
+    fake = controller!()
+    row = pipe_row!(athanor)
+    a = login!(user, athanor, "claude-login", "claude")
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    Scripted.hold(fake, "opened")
+    sign_in(view, "claude", a)
+    assert_receive {:held, "opened", opened}, @answered_ms
+
+    try do
+      html =
+        view
+        |> element(~s([data-test="sign-in-terminal"] button[phx-click="close"]))
+        |> render_click()
+
+      assert html =~ "Closing…"
+      refute html =~ "Starting…"
+    after
+      send(opened, :go)
+    end
+
+    assert_receive {:session, "close", %{"session" => closed}, _fields}, @answered_ms
+    assert eventually(fn -> not has_element?(view, ~s([data-test="sign-in-terminal"])) end)
+    assert %{^closed => %{running: false}} = Scripted.sessions(fake, row.id)
+  end
+
+  # Chosen while another program's sign-in is still starting: that one
+  # says it is closing, its session is closed when its start answers, and
+  # only then does the one chosen open.
+  test "another program chosen while a sign-in is still starting opens once that one's session is closed",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
     pipe_row!(athanor)
     pipe_row!(athanor, "codex")
     a = login!(user, athanor, "claude-login", "claude")
     b = login!(user, athanor, "codex-login", "codex")
-
     {view, _html} = mount_athanor(conn, "/programs", athanor)
+    Scripted.hold(fake, "opened")
+    sign_in(view, "claude", a)
+    assert_receive {:held, "opened", opened}, @answered_ms
 
-    # Both choices queue before the page handles either, as two quick clicks
-    # do.
-    :sys.suspend(view.pid)
+    try do
+      html = pushed(fn -> sign_in(view, "codex", b) end)
+      assert is_binary(html), "the page did not answer while the first start was held"
+      assert has_element?(view, ~s([data-test="sign-in-terminal"]), "claude")
+      assert has_element?(view, ~s([data-test="sign-in-terminal"] button), "Closing…")
+    after
+      send(opened, :go)
+    end
 
-    first =
-      Task.async(fn -> render_submit(view, "sign_in", %{"name" => "claude", "entry" => a}) end)
-
-    Process.sleep(100)
-
-    second =
-      Task.async(fn -> render_submit(view, "sign_in", %{"name" => "codex", "entry" => b}) end)
-
-    Process.sleep(100)
-    :sys.resume(view.pid)
-    Task.await(first)
-    Task.await(second)
-
-    assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
-    running!(view)
-    assert_receive {:session, "recv", %{"session" => session_a}, _fields}, 2_000
-    refute_received {:session, "open", %{"home_id" => ^b}, _fields}
-    assert has_element?(view, ~s([data-test="sign-in-terminal"]), "claude")
-
-    render_submit(view, "sign_in", %{"name" => "codex", "entry" => b})
-    assert_receive {:session, "close", %{"session" => ^session_a}, _fields}, 2_000
-    assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
+    assert_receive {:session, "close", %{"session" => first}, _fields}, @answered_ms
+    assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, @answered_ms
     running!(view)
     assert has_element?(view, ~s([data-test="sign-in-terminal"]), "codex")
 
@@ -964,8 +980,73 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-b"})
     |> render_submit()
 
-    assert_receive {:session, "send", %{"session" => session_b, "lines" => ["code-b"]}, _}, 2_000
-    assert session_b != session_a
+    assert_receive {:session, "send", %{"session" => second, "lines" => ["code-b"]}, _}, 2_000
+    assert second != first
+  end
+
+  # A start whose answer comes when the person's session cannot be
+  # checked: the frame leaves Starting…, the guard's sentence shows, and
+  # the session the start opened, attached to nothing, is ended by its
+  # relay within 30 s.
+  test "a start answered when the session cannot be checked ends the frame, says why, and its relay ends unattended",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = pipe_row!(athanor)
+    a = login!(user, athanor, "claude-login", "claude")
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    Scripted.hold(fake, "opened")
+    sign_in(view, "claude", a)
+    assert_receive {:held, "opened", opened}, @answered_ms
+    Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+
+    try do
+      send(opened, :go)
+      html = answered(view)
+      refute html =~ "Starting…"
+      assert has_element?(view, ~s([data-test="terminal-ended"]))
+      assert eventually(fn -> render(view) =~ "Your session could not be checked just now." end)
+    after
+      Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
+    end
+
+    [{_id, relay, _type, _modules}] = DynamicSupervisor.which_children(Opus.Programs.Relays)
+    assert :sys.get_state(relay).subscriber == nil
+    ended = Process.monitor(relay)
+    assert_receive {:DOWN, ^ended, :process, ^relay, _reason}, 35_000
+    assert Enum.all?(Scripted.sessions(fake, row.id), fn {_id, s} -> not s.running end)
+  end
+
+  # The same refusal, then the store answers again: Close works on the
+  # ended frame, and Sign in opens a new terminal.
+  test "a start refused at delivery can be closed and signed in again once the store answers",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    pipe_row!(athanor)
+    entry = login!(user, athanor, "claude-login", "claude")
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    Scripted.hold(fake, "opened")
+    sign_in(view, "claude", entry)
+    assert_receive {:held, "opened", held}, @answered_ms
+    old = :sys.get_state(view.pid).socket.assigns.terminal.id
+    Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+
+    try do
+      send(held, :go)
+      answered(view)
+      assert eventually(fn -> render(view) =~ "Your session could not be checked just now." end)
+    after
+      Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
+    end
+
+    refute has_element?(view, ~s([data-test="sign-in-terminal"] button[disabled]), "Close"),
+           "the start's call has ended, but Close is disabled"
+
+    view |> element(~s([data-test="sign-in-terminal"] button), "Close") |> render_click()
+    refute has_element?(view, ~s([data-test="sign-in-terminal"]))
+    render_click(view, "sign_in", %{"name" => "claude", "entry" => entry})
+
+    refute :sys.get_state(view.pid).socket.assigns.terminal.id == old,
+           "the refused start left the page starting, with every new sign-in ignored"
   end
 
   # Signs `name` in with `entry`, its row expanded first unless it is.
