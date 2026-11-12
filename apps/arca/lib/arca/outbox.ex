@@ -15,7 +15,7 @@ defmodule Arca.Outbox do
   that consumer has none (`pending/3`). Delivery may repeat; the receipt
   is how a consumer deduplicates by source and revision.
 
-  Which consumers read a kind is declared here (`consumers/1`), so that
+  Which consumers read a kind is declared here, a closed roster, so that
   retention (`Arca.Retention.OutboxRecords`) keeps a record until the last
   of them has receipted it, and then for the athanor's retention value
   after the newest of those receipts; the receipts go with it. A record
@@ -43,10 +43,6 @@ defmodule Arca.Outbox do
 
   # Every kind a record may carry has its consumers declared.
   true = Enum.sort(Map.keys(@consumers)) == Enum.sort(Prima.OutboxRecord.kinds())
-
-  @doc "The consumers that read records of `kind`, a closed roster."
-  @spec consumers(String.t()) :: [String.t()]
-  def consumers(kind) when is_binary(kind), do: Map.get(@consumers, kind, [])
 
   @doc "Every consumer any kind declares."
   @spec all_consumers() :: [String.t()]
@@ -143,31 +139,6 @@ defmodule Arca.Outbox do
        )}
     end)
   end
-
-  @doc """
-  The record of `source` and `kind` in the actor's athanor, or
-  `{:error, :not_found}`.
-  """
-  @spec get(Prima.Actor.t(), Prima.OutboxRecord.source(), String.t()) ::
-          {:ok, Prima.OutboxRecord.t()}
-          | {:error, :no_athanor | :not_found | :unreadable | :database_error}
-  def get(%Prima.Actor{athanor_id: athanor_id}, %{} = source, kind)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(kind) do
-    Errors.with_db_rescue("Arca.Outbox.get", fn ->
-      from(r in OutboxRecord,
-        where: r.athanor_id == ^athanor_id and r.kind == ^kind,
-        where: r.source_kind == ^source.source_kind and r.source_id == ^source.source_id,
-        where: r.source_revision == ^source.source_revision
-      )
-      |> Arca.Repo.one()
-      |> case do
-        nil -> {:error, :not_found}
-        row -> row |> Map.from_struct() |> Prima.OutboxRecord.from_stored()
-      end
-    end)
-  end
-
-  def get(%Prima.Actor{}, _source, _kind), do: {:error, :no_athanor}
 
   @doc """
   Delete — or, with `dry_run`, count — the records in the actor's

@@ -91,9 +91,6 @@ defmodule Arca.OutboxTest do
 
       assert read.source_revision == "2026-10-16T12:00:01.000001Z"
       assert Prima.OutboxRecord.note_revision_read(read) == :absent
-
-      assert {:ok, ^read} =
-               Outbox.get(actor(athanor), Prima.OutboxRecord.source(record), "schedule_outcome")
     end
 
     test "of another occurrence is another record, whatever the schedule's revision", %{
@@ -143,14 +140,7 @@ defmodule Arca.OutboxTest do
   end
 
   describe "the consumers" do
-    test "are declared for every kind, the crew kinds read by crew_delivery" do
-      assert Outbox.consumers("schedule_outcome") == ["schedule_notes"]
-      assert Outbox.consumers("crew_request") == ["crew_delivery"]
-      assert Outbox.consumers("crew_reply") == ["crew_delivery"]
-      assert Outbox.consumers("crew_note") == []
-
-      for kind <- Prima.OutboxRecord.kinds(), do: assert(Outbox.consumers(kind) != [], kind)
-
+    test "are schedule_notes and crew_delivery" do
       assert Enum.sort(Outbox.all_consumers()) == ["crew_delivery", "schedule_notes"]
     end
 
@@ -192,9 +182,6 @@ defmodule Arca.OutboxTest do
                  record
                  | snapshot: Map.reject(record.snapshot, fn {_k, v} -> is_nil(v) end)
                }
-
-        assert {:ok, ^read} =
-                 Outbox.get(actor(athanor), Prima.OutboxRecord.source(record), record.kind)
 
         assert :ok =
                  ConsumerReceipts.put!(
