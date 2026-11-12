@@ -288,6 +288,56 @@ defmodule Arca.OutboxTest do
   end
 
   describe "retention" do
+    test "a crew request is pruned once the consumer that delivers it has its receipt", %{
+      athanor: athanor
+    } do
+      at = ~U[2026-11-05 12:00:00.000001Z]
+
+      records = [
+        Prima.OutboxRecord.crew_request(%{
+          athanor_id: athanor,
+          request_id: "msg_#{System.unique_integer([:positive])}",
+          inserted_at: at,
+          room_thread_id: "thr_room",
+          member: "reviewer",
+          task: "read the diff",
+          tools: nil,
+          options: %{},
+          person_id: "usr_1",
+          origin: :interactive
+        }),
+        Prima.OutboxRecord.crew_reply(%{
+          athanor_id: athanor,
+          turn_id: "turn_#{System.unique_integer([:positive])}",
+          ended_at: at,
+          asking_thread_id: "thr_room",
+          request_ids: ["msg_1"],
+          member: "reviewer",
+          outcome: "needs_you",
+          text: "which branch?",
+          person_id: "usr_1",
+          origin: :interactive
+        })
+      ]
+
+      {:ok, claim} = JobClaims.claim("crew_delivery", athanor, "crew-holder", 30_000)
+      long_ago = DateTime.add(DateTime.utc_now(), -40 * 86_400, :second)
+      cutoff = DateTime.add(DateTime.utc_now(), -30 * 86_400, :second)
+
+      for record <- records do
+        assert :ok = Outbox.put!(actor(athanor), record)
+
+        receipt =
+          Prima.OutboxRecord.source(record)
+          |> Map.merge(%{consumer: "crew_delivery", outcome: "applied"})
+
+        assert :ok = ConsumerReceipts.record(actor(athanor), claim, :none, receipt)
+        aged!(record, long_ago)
+        assert {:ok, 1} = Outbox.prune(actor(athanor), cutoff, false)
+        refute row?(record)
+      end
+    end
+
     test "prunes a record every consumer receipted, its value after the newest receipt, with its receipts",
          %{athanor: athanor, neighbour: neighbour} do
       done = record(athanor)
