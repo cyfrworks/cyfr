@@ -18,7 +18,6 @@ defmodule Aqua.ApprovalsTest do
   alias Aqua.Loop.{Binding, Policy}
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
-  alias Sanctum.Consent.{Bootstrap}
   alias Sanctum.Tenancy.Users
 
   @soul "agent:local.aqua"
@@ -42,6 +41,10 @@ defmodule Aqua.ApprovalsTest do
       end
     end)
 
+    # A fill a call asks for runs in the background under the path above:
+    # it stops before the path is put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     Cyfr.Test.SeedBundle.lay!(~w(claude files http), formulas: ~w(list-models))
 
     ctx = Sanctum.TestContext.local(:prism)
@@ -49,15 +52,13 @@ defmodule Aqua.ApprovalsTest do
     {:ok, ctx: ctx, thread: thread, pins: pins}
   end
 
-  # The athanor `ctx` works in, made one a turn can run in: the shipped
-  # tree indexed and the soul's consent minted. Answers a thread there,
+  # The athanor `ctx` works in, made one a turn can run in: filled through
+  # the explicit verb, the soul's consent among what it minted. Answers a thread there,
   # subscribed to, and the pins a turn of the soul starts with.
   defp ready!(ctx) do
-    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
-    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert @soul in minted
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+    {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(athanor, ctx)
+    {:ok, [_soul]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @soul)
 
     {:ok, %{profile_id: profile_id, consent_id: consent_id}} =
       Opus.authority_for(ctx, :default, @soul)
