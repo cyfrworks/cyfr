@@ -605,6 +605,148 @@ defmodule Compendium.OCI.ClientTest do
     end
   end
 
+  # What a run of a pulled component is answered at admission
+  # (`Opus.Admission`), entered as a client's `/mcp` tool call is
+  # (`Sanctum.Gate.call_external/3`), from the row the pull recorded: with
+  # signed pulls required, a row that records no verified signature is
+  # refused, whenever it was pulled; a pinned signer must be the one the
+  # row records, and a keyless verification records none.
+  describe "signed pulls at admission" do
+    @repo "alice/reagents/pinned"
+    @run_ref "reagent:alice.pinned:1.0.0"
+    @refused "Execution failed: The component's signature could not be verified; " <>
+               "signed pulls are required."
+
+    setup :start_registry
+
+    setup ctx do
+      dir = Path.join(System.tmp_dir!(), "cyfr_oci_admit_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      # `cosign/2` writes the sigstore setting; this restores it.
+      Prima.Test.Env.delete_app_env(:cyfr, :sigstore)
+      Prima.Test.Env.put_app_env(:cyfr, :require_signed_pulls, false)
+
+      allow(ctx.agent, ["Bearer tok_a"])
+      Sanctum.TestContext.ready!(ctx.a.athanor_id)
+
+      {:ok, cosign_dir: dir, tag_ref: "#{ctx.registry}/#{@repo}:1.0.0"}
+    end
+
+    # The person's grant to the pulled component through the consent walk,
+    # as they make it, admitting runs over `/mcp`.
+    defp consent!(ctx) do
+      person = Sanctum.TestContext.via(ctx.a, :prism)
+      decisions = %{ref: @run_ref, origins: [:interactive, :programmatic]}
+      {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: @run_ref})
+      {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
+
+      {:ok, _} =
+        Sanctum.Consent.Commit.commit(person, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+
+      :ok
+    end
+
+    defp run(ctx, verify \\ nil) do
+      args = %{"action" => "run", "reference" => @run_ref, "input" => %{"a" => 1, "b" => 2}}
+      args = if verify, do: Map.put(args, "verify", verify), else: args
+      Sanctum.Gate.call_external("execution", Sanctum.TestContext.via(ctx.a, :mcp), args)
+    end
+
+    defp require_signed_pulls!, do: Prima.Test.Env.put_app_env(:cyfr, :require_signed_pulls, true)
+
+    # A keyed signer over a stand-in key; answers the row's signer.
+    defp keyed!(ctx) do
+      path = cosign(ctx, signs: ctx.pin, subject: false)
+      key = Path.join(ctx.cosign_dir, "cosign.pub")
+      File.write!(key, "-----BEGIN PUBLIC KEY-----\nstand-in\n-----END PUBLIC KEY-----\n")
+
+      Prima.Test.Env.put_app_env(:cyfr, :sigstore,
+        verification: :keyed,
+        key_path: key,
+        cosign_path: path
+      )
+
+      fingerprint = :sha256 |> :crypto.hash(File.read!(key)) |> Base.encode16(case: :lower)
+      %{"identity" => "key:sha256:" <> fingerprint, "issuer" => "key"}
+    end
+
+    defp completed?({:ok, %{status: "completed"}}), do: true
+    defp completed?(_answer), do: false
+
+    @tag :capture_log
+    test "a component pulled unsigned before signed pulls were required is refused", ctx do
+      # cosign finds no signature over the pulled manifest; with the
+      # setting off the pull stores the component unverified.
+      cosign(ctx, signs: "sha256:" <> String.duplicate("1", 64))
+      assert {:ok, _} = Client.pull(ctx.a, ctx.tag_ref)
+      consent!(ctx)
+
+      assert {:ok, %{source: "oci", signature_verified: false}} =
+               Compendium.Registry.get(ctx.a, "pinned", "1.0.0", "alice")
+
+      assert completed?(run(ctx))
+
+      require_signed_pulls!()
+      assert run(ctx) == {:error, @refused}
+    end
+
+    @tag :capture_log
+    test "a component whose signature did not verify is refused", ctx do
+      # A signature over another manifest: cosign's answer names a digest
+      # the pull did not fetch.
+      cosign(ctx, answers: "sha256:" <> String.duplicate("0", 64))
+      assert {:ok, _} = Client.pull(ctx.a, ctx.tag_ref)
+      consent!(ctx)
+
+      assert {:ok, %{source: "oci", signature_verified: false}} =
+               Compendium.Registry.get(ctx.a, "pinned", "1.0.0", "alice")
+
+      assert completed?(run(ctx))
+
+      require_signed_pulls!()
+      assert run(ctx) == {:error, @refused}
+    end
+
+    @tag :capture_log
+    test "a pin naming another signer is refused, and the key that signed runs", ctx do
+      require_signed_pulls!()
+      signer = keyed!(ctx)
+      assert {:ok, _} = Client.pull(ctx.a, ctx.tag_ref)
+      consent!(ctx)
+
+      other = "key:sha256:" <> String.duplicate("f", 64)
+      assert run(ctx, %{signer | "identity" => other}) == {:error, @refused}
+      assert run(ctx, %{signer | "issuer" => "https://accounts.google.com"}) == {:error, @refused}
+
+      assert completed?(run(ctx, signer))
+      assert completed?(run(ctx))
+    end
+
+    @tag :capture_log
+    test "a keyless-verified component runs unpinned and refuses any pin", ctx do
+      require_signed_pulls!()
+      cosign(ctx, signs: ctx.pin)
+      assert {:ok, _} = Client.pull(ctx.a, ctx.tag_ref)
+      consent!(ctx)
+
+      assert {:ok, %{signature_verified: true, signer_identity: nil}} =
+               Compendium.Registry.get(ctx.a, "pinned", "1.0.0", "alice")
+
+      assert completed?(run(ctx))
+      # The keyless signer's own subject and issuer, as its answer names them.
+      assert run(ctx, %{"identity" => "release@example.com"}) == {:error, @refused}
+      assert run(ctx, %{"issuer" => "https://accounts.google.com"}) == {:error, @refused}
+    end
+  end
+
   defp start_registry(_context) do
     test_dir =
       Path.join(System.tmp_dir!(), "cyfr_oci_entitle_#{System.unique_integer([:positive])}")

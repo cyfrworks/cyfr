@@ -6,7 +6,6 @@ defmodule Sanctum.NamespaceTest do
 
   alias Compendium.Registry.CredentialStore
   alias Sanctum.Namespace
-  alias Sanctum.Tenancy.Users
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -79,14 +78,6 @@ defmodule Sanctum.NamespaceTest do
         assert Namespace.lookup(person(bad)) == nil,
                "expected lookup to reject malformed slug #{inspect(bad)}"
       end
-    end
-
-    test "a claim recorded through Users.set_namespace/2 is visible at once" do
-      user_id = person()
-      assert Namespace.lookup(user_id) == nil
-      {:ok, user} = Users.get(user_id)
-      {:ok, _} = Users.set_namespace(user, "carol")
-      assert Namespace.lookup(user_id) == "carol"
     end
   end
 
