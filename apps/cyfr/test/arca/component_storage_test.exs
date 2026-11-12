@@ -427,7 +427,7 @@ defmodule Arca.ComponentStorageTest do
           component_attrs("twin", "1.0.0", %{
             id: Ecto.UUID.generate(),
             component_type: "reagent",
-            source: Compendium.Source.published()
+            source: Compendium.Source.oci()
           })
         )
 
@@ -446,7 +446,7 @@ defmodule Arca.ComponentStorageTest do
                  ]
                })
 
-      assert names(actor) == [{"twin", "reagent", "published"}]
+      assert names(actor) == [{"twin", "reagent", "oci"}]
     end
 
     @tag :capture_log

@@ -11,7 +11,7 @@ defmodule Compendium.Provenance do
     `Compendium.AquaTemplate.status/1`); a reset restores what
     the release ships.
   - `:user` — the athanor's own: scaffolded, built, or forked here.
-  - `:remote` — pulled from a registry (`source` `"oci"`/`"published"`).
+  - `:remote` — pulled from a registry (`source` `"oci"`).
 
   Provenance is DERIVED, never stored: the registry row's `source` column
   answers only the ingress channel, and whether the seed ships a unit is
