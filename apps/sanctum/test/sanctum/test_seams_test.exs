@@ -73,7 +73,12 @@ defmodule Sanctum.TestSeamsTest do
   # is handed, or inside a branch compiled only with the permission, is a
   # seam's; a `compile_env` read is fixed when the release is built, and
   # the release refuses to boot under another value; anything else names a
-  # key of the classes above. A key that is not a literal atom fails.
+  # key of the classes above. A key that is not a literal atom fails. A
+  # call's module is resolved as the compiler resolves it, through the
+  # file's aliases (`Elixir.Application`, `alias Application, as: A`) and
+  # an `import Application`. It holds the one door this codebase gives a
+  # hook, the application environment, and no other (a `System.get_env`
+  # or a `:persistent_term` read is the behavioural probes' to catch).
   # tests/release-boot/test_seams.exs holds the shipped release to the
   # same seams.
   test "every read of Sanctum's environment is a seam's, compiled, or a key of its stated class" do
@@ -84,7 +89,7 @@ defmodule Sanctum.TestSeamsTest do
           path <- Prima.Test.SourceTree.files!(Path.join([root, lib, "**/*.ex"])),
           quoted = Prima.Test.SourceTree.quoted(path),
           names = attributes(quoted),
-          read <- reads(quoted, :plain),
+          read <- reads(quoted, scope(quoted)),
           do: resolve(read, names, Path.relative_to(path, root))
 
     classed = Enum.map(found, &Map.put(&1, :class, class(&1)))
@@ -160,51 +165,124 @@ defmodule Sanctum.TestSeamsTest do
   # gate it sits under: `:seam`, inside the function `Sanctum.seam/2` is
   # handed; `:compiled_out`, inside a branch compiled only with the test
   # permission; `:plain` otherwise.
-  defp reads({{:., _, [{:__aliases__, _, [:Sanctum]}, :seam]}, _, args}, gate)
-       when is_list(args) do
-    Enum.flat_map(args, fn
-      {:fn, _, _} = read -> reads(read, :seam)
-      arg -> reads(arg, gate)
-    end)
-  end
-
-  defp reads({:if, _, [condition, clauses]} = ast, gate) when is_list(clauses) do
-    if permission?(condition),
+  defp reads({{:., _, [module, :seam]}, _, args} = ast, scope) when is_list(args) do
+    if module(module, scope) == Sanctum,
       do:
-        reads(condition, gate) ++
-          reads(Keyword.get(clauses, :do), :compiled_out) ++
-          reads(Keyword.get(clauses, :else), gate),
-      else: walk(ast, gate)
+        Enum.flat_map(args, fn
+          {:fn, _, _} = read -> reads(read, %{scope | gate: :seam})
+          arg -> reads(arg, scope)
+        end),
+      else: walk(ast, scope)
   end
 
-  defp reads({:|>, _, [subject, {{:., _, [module, fun]}, meta, args}]}, gate)
+  defp reads({:if, _, [condition, clauses]} = ast, scope) when is_list(clauses) do
+    if permission?(condition, scope),
+      do:
+        reads(condition, scope) ++
+          reads(Keyword.get(clauses, :do), %{scope | gate: :compiled_out}) ++
+          reads(Keyword.get(clauses, :else), scope),
+      else: walk(ast, scope)
+  end
+
+  defp reads({:|>, _, [subject, {{:., _, [module, fun]}, meta, args}]}, scope)
        when is_list(args) do
-    if env_reader?(module, fun),
-      do: [read(fun, meta, [subject | args], gate) | reads([subject | args], gate)],
-      else: reads(subject, gate) ++ reads(args, gate)
+    if env_reader?(module(module, scope), fun),
+      do: [read(fun, meta, [subject | args], scope.gate) | reads([subject | args], scope)],
+      else: reads(subject, scope) ++ reads(args, scope)
   end
 
-  defp reads({{:., _, [module, fun]}, meta, args} = ast, gate) when is_list(args) do
-    if env_reader?(module, fun),
-      do: [read(fun, meta, args, gate) | reads(args, gate)],
-      else: walk(ast, gate)
+  defp reads({{:., _, [module, fun]}, meta, args} = ast, scope) when is_list(args) do
+    if env_reader?(module(module, scope), fun),
+      do: [read(fun, meta, args, scope.gate) | reads(args, scope)],
+      else: walk(ast, scope)
   end
 
-  defp reads(ast, gate), do: walk(ast, gate)
+  # A call of an imported `Application` function, by its bare name.
+  defp reads({fun, meta, args} = ast, %{imports_application: true} = scope)
+       when is_atom(fun) and is_list(args) do
+    if fun in @readers,
+      do: [read(fun, meta, args, scope.gate) | reads(args, scope)],
+      else: walk(ast, scope)
+  end
 
-  defp walk({form, _meta, args}, gate), do: reads(form, gate) ++ reads(List.wrap(args), gate)
-  defp walk({left, right}, gate), do: reads(left, gate) ++ reads(right, gate)
-  defp walk(list, gate) when is_list(list), do: Enum.flat_map(list, &reads(&1, gate))
-  defp walk(_leaf, _gate), do: []
+  defp reads(ast, scope), do: walk(ast, scope)
 
-  defp env_reader?({:__aliases__, _, [:Application]}, fun), do: fun in @readers
+  defp walk({form, _meta, args}, scope), do: reads(form, scope) ++ reads(List.wrap(args), scope)
+  defp walk({left, right}, scope), do: reads(left, scope) ++ reads(right, scope)
+  defp walk(list, scope) when is_list(list), do: Enum.flat_map(list, &reads(&1, scope))
+  defp walk(_leaf, _scope), do: []
+
+  defp env_reader?(Application, fun), do: fun in @readers
   defp env_reader?(:application, fun), do: fun in [:get_env, :get_all_env, :get_key]
   defp env_reader?(_module, _fun), do: false
 
-  defp permission?({{:., _, [{:__aliases__, _, [:Application]}, :compile_env]}, _, args}),
-    do: match?([:sanctum, :test_seams_permitted | _], args)
+  defp permission?({{:., _, [module, :compile_env]}, _, args}, scope),
+    do:
+      module(module, scope) == Application and match?([:sanctum, :test_seams_permitted | _], args)
 
-  defp permission?(_condition), do: false
+  defp permission?(_condition, _scope), do: false
+
+  # What a file's aliases make of its names, and whether it imports
+  # `Application`, read once per file: `alias A.B` names `B`, `alias A.B,
+  # as: C` names `C`, `alias A.{B, C}` names both.
+  defp scope(quoted) do
+    nodes = flatten(quoted)
+
+    aliases =
+      for {:alias, _, [target | options]} <- nodes,
+          {name, module} <- aliased(target, List.first(options) || []),
+          into: %{},
+          do: {name, module}
+
+    imports =
+      Enum.any?(nodes, fn
+        {:import, _, [target | _]} -> module(target, %{aliases: aliases}) == Application
+        _node -> false
+      end)
+
+    %{gate: :plain, aliases: aliases, imports_application: imports}
+  end
+
+  defp aliased({{:., _, [base, :{}]}, _, children}, _options) do
+    case module(base, %{aliases: %{}}) do
+      nil ->
+        []
+
+      base ->
+        for {:__aliases__, _, parts} <- children,
+            do: {List.last(parts), Module.concat([base | parts])}
+    end
+  end
+
+  defp aliased({:__aliases__, _, parts} = target, options) when is_list(options) do
+    module = module(target, %{aliases: %{}})
+
+    name =
+      case Keyword.get(options, :as) do
+        {:__aliases__, _, [as]} -> as
+        nil -> List.last(parts)
+        _other -> nil
+      end
+
+    if name && module, do: [{name, module}], else: []
+  end
+
+  defp aliased(_target, _options), do: []
+
+  # A module expression as the module it names: an atom as itself, an
+  # alias through the file's aliases unless it starts at `Elixir`.
+  defp module(atom, _scope) when is_atom(atom), do: atom
+  defp module({:__aliases__, _, [:"Elixir" | parts]}, _scope), do: Module.concat(parts)
+  defp module({:__aliases__, _, [head | _]}, _scope) when not is_atom(head), do: nil
+
+  defp module({:__aliases__, _, [head | rest]}, scope) do
+    case Map.fetch(scope.aliases, head) do
+      {:ok, aliased} -> Module.concat([aliased | rest])
+      :error -> Module.concat([head | rest])
+    end
+  end
+
+  defp module(_expression, _scope), do: nil
 
   defp read(fun, meta, args, gate) do
     {app, key} =
