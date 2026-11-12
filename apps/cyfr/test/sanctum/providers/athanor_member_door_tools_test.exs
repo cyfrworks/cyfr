@@ -571,25 +571,18 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert focused == personal.id
   end
 
-  describe "Sanctum.Providers.Athanor.resolve/3 returns a focused context" do
-    # Every downstream act (provisioning above all) must run at
-    # `scope: :athanor` with the resolved athanor bound — a platform
-    # context's wider scope stops at resolve, not in the handler, and only
-    # the athanor's person gets it there.
-    test "a person's context is rebound to the athanor they name",
-         %{alice: alice, ctx: ctx} do
+  describe "athanor.get names the athanor each caller may work in" do
+    # A platform context's wider scope stops at the athanor the call names:
+    # only the athanor's person reaches it there.
+    test "a person reads the athanor they name", %{alice: alice, ctx: ctx} do
       a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
       %{id: athanor_id} = personal!(alice)
 
-      assert {:ok, athanor, focused} =
-               Sanctum.Providers.Athanor.resolve(a, %{"athanor" => athanor_id})
-
-      assert athanor.id == athanor_id
-      assert focused.athanor_id == athanor_id
-      assert focused.scope == :athanor
+      assert {:ok, %{id: ^athanor_id}} =
+               call(a, "athanor", %{"action" => "get", "athanor" => athanor_id})
     end
 
-    test "a platform context narrows to its person's own athanor, and opens no other",
+    test "a platform context reads its person's own athanor, and opens no other",
          %{alice: alice, ops: ops} do
       %{id: theirs} = personal!(alice)
 
@@ -602,19 +595,13 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
         )
 
       # Another person's: the platform scope and the capability open nothing.
-      assert {:error, {:not_found, "Athanor", id}} =
-               Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => theirs})
-
-      assert id == theirs
+      assert {:error, {:not_found, "Athanor", ^theirs}} =
+               call(operator, "athanor", %{"action" => "get", "athanor" => theirs})
 
       %{id: athanor_id} = personal!(ops)
 
-      assert {:ok, athanor, focused} =
-               Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => athanor_id})
-
-      assert athanor.id == athanor_id
-      assert focused.athanor_id == athanor_id
-      assert focused.scope == :athanor
+      assert {:ok, %{id: ^athanor_id}} =
+               call(operator, "athanor", %{"action" => "get", "athanor" => athanor_id})
     end
 
     test "an athanor the store cannot read is unavailable, never not found",
@@ -625,7 +612,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
 
       assert {:error, {:unavailable, "Storage"}} =
-               Sanctum.Providers.Athanor.resolve(a, %{"athanor" => athanor_id})
+               call(a, "athanor", %{"action" => "get", "athanor" => athanor_id})
     end
   end
 
