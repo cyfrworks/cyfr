@@ -59,12 +59,13 @@ defmodule Cyfr.NoRealCyfrRunTest do
   # registry's search and metadata and refused everything its accounts
   # sign, which names the registry by a host name's grammar. A path's empty
   # segment or trailing `/` put `//` in every request, which a CYFR's router
-  # forgives and cyfr.run redirects, and no registry request follows a
-  # redirect.
+  # forgives and cyfr.run answers 404.
   @forms [
     {"a host name", "registry.example", {:boots, "https"}, {:boots, "https"}},
     {"a host name and port", "registry.example:8443", {:boots, "https"}, {:boots, "https"}},
     {"an empty port, the scheme's own", "registry.example:", {:boots, "https"},
+     {:boots, "https"}},
+    {"a port with leading zeros", "registry.example:000443", {:boots, "https"},
      {:boots, "https"}},
     {"an IPv4 address and port", "203.0.113.7:9", {:boots, "https"}, {:boots, "https"}},
     {"a bracketed IPv6 address and port", "[2001:db8::1]:5000", :refused, {:boots, "https"}},
@@ -168,6 +169,42 @@ defmodule Cyfr.NoRealCyfrRunTest do
              :oci_registry_url
            ]) ==
              registry
+  end
+
+  test "a registry on a port written with leading zeros is reached, and the boot takes it" do
+    {:ok, server} =
+      start_supervised(
+        {Bandit,
+         plug: IPv6Registry, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    registry = "127.0.0.1:" <> String.pad_leading(Integer.to_string(port), 6, "0")
+    Env.put_app_env(:sanctum, :private_egress_targets, ["127.0.0.1"])
+    Env.put_app_env(:sanctum, :registry_url, registry)
+    Env.put_app_env(:cyfr, :registry_url, registry)
+    Env.put_app_env(:cyfr, :oci_registry_url, registry)
+    ref = %Compendium.OCI.Reference{registry: registry, repository: "demo/catalysts/example"}
+
+    assert {:ok, 200, _headers, "local-registry"} =
+             Compendium.Registry.Transport.request(
+               :get,
+               "http://" <> registry <> "/v1/components",
+               [],
+               nil,
+               retry: false
+             )
+
+    assert {:ok, 200, _headers, "local-registry"} =
+             Compendium.OCI.Transport.request(nil, :get, "/v2/", ref)
+
+    assert get_in(runtime(:prod, %{"CYFR_REGISTRY_URL" => registry}), [:sanctum, :registry_url]) ==
+             registry
+
+    assert get_in(runtime(:prod, %{"CYFR_OCI_REGISTRY_URL" => registry}), [
+             :cyfr,
+             :oci_registry_url
+           ]) == registry
   end
 
   # `config/runtime.exs` read for `env` with neither URL set but those in

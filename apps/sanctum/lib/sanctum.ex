@@ -248,8 +248,8 @@ defmodule Sanctum do
 
       # One or more segments, none empty: a path that begins `/` is a
       # scheme's `//` (`https://host`), and an empty segment or a trailing
-      # `/` puts `//` in every request, which cyfr.run redirects and no
-      # registry request follows.
+      # `/` puts `//` in every request, which a CYFR's router forgives and
+      # cyfr.run answers 404.
       [authority, path] ->
         if path =~ ~r/\A[^\/?#\x00-\x20\x7f]+(?:\/[^\/?#\x00-\x20\x7f]+)*\z/,
           do: parse_registry(authority),
@@ -277,8 +277,9 @@ defmodule Sanctum do
   defp registry_port?(nil), do: true
   defp registry_port?(""), do: true
 
+  # Digits as a URL reads them, leading zeros among them.
   defp registry_port?(port),
-    do: port =~ ~r/\A[0-9]{1,5}\z/ and String.to_integer(port) in 1..65_535
+    do: port =~ ~r/\A[0-9]+\z/ and String.to_integer(port) in 1..65_535
 
   @doc """
   Whether `value` names an OCI registry, which components are pulled from
