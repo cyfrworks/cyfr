@@ -16,7 +16,9 @@ defmodule Cyfr.Test.ScriptedBackends do
   high-water mark, and its body read strictly (`read_control/1`); a session
   message's header is verified under the key of the owner it names, its
   lifetime and owner version against what runs, and its body read strictly
-  (`read_session/1`). Every answer carries `x-cyfr-boot`, and every refusal
+  (`read_session/1`). A `renew` renews an owner only while its lease, set
+  by its `sync` and extended by each renewal, has not run out, as Locus
+  renews one. Every answer carries `x-cyfr-boot`, and every refusal
   is `encode_refusal/1` at its code's status. Each accepted control message
   is reported to the test as `{:control, type, message, fields}`, the
   message as its JSON; each session message as `{:session, type, message,
@@ -65,6 +67,7 @@ defmodule Cyfr.Test.ScriptedBackends do
              boot: "bb_first",
              hwm: {0, 0},
              owners: %{},
+             leases: %{},
              programs: %{},
              sessions: %{},
              keys: %{},
@@ -159,7 +162,7 @@ defmodule Cyfr.Test.ScriptedBackends do
     do:
       Agent.update(
         agent,
-        &%{&1 | boot: boot, hwm: {0, 0}, owners: %{}, sessions: %{}, keys: %{}}
+        &%{&1 | boot: boot, hwm: {0, 0}, owners: %{}, leases: %{}, sessions: %{}, keys: %{}}
       )
 
   @doc """
@@ -374,6 +377,7 @@ defmodule Cyfr.Test.ScriptedBackends do
     Agent.update(agent, fn st ->
       st
       |> put_in([:owners, {athanor, server}], {fields.generation, e})
+      |> put_in([:leases, {athanor, server}], now() + message["lease_ms"])
       |> put_in([:programs, {athanor, server}], message["programs"])
     end)
 
@@ -381,16 +385,30 @@ defmodule Cyfr.Test.ScriptedBackends do
     control_answer(conn, st, %{"status" => "running", "programs" => programs})
   end
 
-  defp handle(conn, agent, %{"type" => "renew", "owners" => owners}, fields) do
-    st = Agent.get(agent, & &1)
+  # An owner is renewed, as Locus renews one, only while it runs at exactly
+  # the message's `(g, e)` and its lease has not run out; a renewal extends
+  # the lease from now by the message's `lease_ms`. Any other is unknown.
+  defp handle(conn, agent, %{"type" => "renew", "owners" => owners} = message, fields) do
+    now = now()
 
     {renewed, unknown} =
-      Enum.split_with(owners, fn %{"athanor" => a, "server" => s, "e" => e} ->
-        Map.get(st.owners, {a, s}) == {fields.generation, e}
+      Agent.get_and_update(agent, fn st ->
+        {renewed, unknown} =
+          Enum.split_with(owners, fn %{"athanor" => a, "server" => s, "e" => e} ->
+            Map.get(st.owners, {a, s}) == {fields.generation, e} and
+              Map.get(st.leases, {a, s}, now) > now
+          end)
+
+        leases =
+          Enum.reduce(renewed, st.leases, fn %{"athanor" => a, "server" => s}, leases ->
+            Map.put(leases, {a, s}, now + message["lease_ms"])
+          end)
+
+        {{renewed, unknown}, %{st | leases: leases}}
       end)
 
     renewed = for owner <- renewed, do: Map.put(owner, "state", "running")
-    control_answer(conn, st, %{"renewed" => renewed, "unknown" => unknown})
+    control_answer(conn, Agent.get(agent, & &1), %{"renewed" => renewed, "unknown" => unknown})
   end
 
   defp handle(conn, agent, %{"type" => "release", "owners" => owners}, fields) do
