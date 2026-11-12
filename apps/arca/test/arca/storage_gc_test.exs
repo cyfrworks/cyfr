@@ -381,7 +381,7 @@ defmodule Arca.StorageGCTest do
         commit_identity: "usr_slow"
       }
 
-      assert {:error, refused} = StorageUnits.commit(actor, draft, nil, token, identity)
+      assert {:error, refused} = commit_unit(actor, draft, nil, token, identity)
       assert refused in [:stale_writer, :missing_unit]
       assert {:error, :not_found} = pointer(actor, unit)
     end
@@ -405,7 +405,7 @@ defmodule Arca.StorageGCTest do
                StorageGC.candidates(actor, roots, now: now)
 
       assert :committed =
-               StorageUnits.commit(actor, draft, nil, token, %{
+               commit_unit(actor, draft, nil, token, %{
                  new_revision: revision,
                  content_identity: Prima.Digest.sha256("late"),
                  commit_identity: "usr_late"
@@ -441,7 +441,7 @@ defmodule Arca.StorageGCTest do
       # Both commits happen after the snapshot and before its final check.
       # A reader could resolve `one` between these commits.
       assert :committed =
-               StorageUnits.commit(actor, draft, nil, token, %{
+               commit_unit(actor, draft, nil, token, %{
                  new_revision: one,
                  content_identity: Prima.Digest.sha256("one"),
                  commit_identity: actor.user_id
@@ -877,7 +877,7 @@ defmodule Arca.StorageGCTest do
       {:ok, draft} = StorageUnits.register_draft(other, root, key, token)
 
       :committed =
-        StorageUnits.commit(other, draft, nil, token, %{
+        commit_unit(other, draft, nil, token, %{
           new_revision: mine,
           content_identity: Prima.Digest.sha256("theirs"),
           commit_identity: "usr_other"
@@ -899,6 +899,15 @@ defmodule Arca.StorageGCTest do
       touched = storage_messages()
       assert Enum.any?(touched, &match?({:list, _athanor}, &1))
       assert touched |> Enum.map(&elem(&1, 1)) |> Enum.uniq() == [actor.athanor_id]
+    end
+  end
+
+  # The pointer move as a writer makes it, answering what moved and not
+  # the projection generation.
+  defp commit_unit(actor, unit, expected, token, identity) do
+    case StorageUnits.stamped_commit(actor, unit, expected, token, identity) do
+      {:committed, _generation} -> :committed
+      refusal -> refusal
     end
   end
 end

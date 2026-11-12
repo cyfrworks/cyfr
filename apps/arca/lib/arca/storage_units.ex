@@ -26,7 +26,7 @@ defmodule Arca.StorageUnits do
     2. The writer stages its objects under the revision's prefix
        (`Arca.Storage.UnitLocator.revision_prefix/2`), outside any
        transaction.
-    3. `commit/5` is one short transaction: it verifies the writing
+    3. `stamped_commit/6` is one short transaction: it verifies the writing
        member still holds its slot in the cell, rechecks that the row is
        the actor's athanor's and not retired, compares the pointer with
        the revision the writer staged against and the draft token with the
@@ -220,7 +220,10 @@ defmodule Arca.StorageUnits do
   `identity.new_revision`, sets the state `committed` and appends one
   journal row — or does none of it. The draft token stays the writer's:
   the writer holds the unit until `release_served/4`, so nothing lands
-  over the revision between its commit and its release. Answers `t:Arca.Schemas.StorageUnit.commit_result/0`:
+  over the revision between its commit and its release. Answers
+  `{:committed, generation}`, the projection generation the commit
+  stamped on the unit — the one `Arca.StorageProjectionChanges.mark_ready/5`
+  is handed once the committed revision is served — or
   `:stale_revision` when the pointer moved, `:stale_writer` when the draft
   is no longer the writer's, `:missing_unit` for a row that is absent,
   retired, retiring or another athanor's, `:not_owner` when the writing
@@ -234,27 +237,7 @@ defmodule Arca.StorageUnits do
   the pointer does not move, or waits until the commit has landed. A
   member's cached standing outlives the row it stands for by up to a
   renewal, so the cached check every gate makes on the way in is never
-  what lets a pointer move. `stamped_commit/6` names the writer instead.
-  """
-  @spec commit(Prima.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
-          StorageUnit.commit_result() | {:error, :not_owner | :no_athanor}
-  def commit(
-        %Prima.Actor{} = actor,
-        %StorageUnit{} = unit,
-        expected_revision,
-        writer_token,
-        identity
-      ) do
-    case stamped_commit(actor, unit, expected_revision, writer_token, identity) do
-      {:committed, _generation} -> :committed
-      {:error, _} = refusal -> refusal
-    end
-  end
-
-  @doc """
-  `commit/5`, answering the projection generation the commit stamped on
-  the unit — the one `Arca.StorageProjectionChanges.mark_ready/5` is
-  handed once the committed revision is served.
+  what lets a pointer move.
 
   `:claim` in `opts` — `%{owner: owner, fence: fence, slot: slot}`, a
   provisioning claim and the member slot it was taken under — makes the
@@ -263,7 +246,7 @@ defmodule Arca.StorageUnits do
   slot the member holds now, so an attempt whose member lost its slot, or
   whose claim a successor took, moves no pointer even after the member
   has won a newer slot back. Either loss answers `{:error, :not_owner}`.
-  Without it the writer is the member as it stands (`commit/5`).
+  Without it the writer is the member as it stands.
   """
   @spec stamped_commit(
           Prima.Actor.t(),
@@ -347,24 +330,6 @@ defmodule Arca.StorageUnits do
       rescuing_db("current_under", fn -> {:ok, committed_under(athanor, root)} end)
     end
     |> Arca.Data.project()
-  end
-
-  @doc """
-  Retire a unit's row — the drop, rows only: readers see no unit from
-  here on, the draft token is cleared, and the pointer keeps its last
-  revision for the journal's sake. `stamped_retire/4` and
-  `finish_retire/4` with nothing between them; a unit that never had a
-  row gets a retired one. `{:error, :stale_writer}` while another
-  writer's live draft holds the unit, and `{:error, :not_owner}` from a
-  member whose slot is not live, as `stamped_retire/4` answers.
-  """
-  @spec retire(Prima.Actor.t(), String.t(), String.t()) ::
-          :ok | {:error, :not_owner | :stale_writer} | refusal()
-  def retire(%Prima.Actor{} = actor, root, unit_key) do
-    case stamped_retire(actor, root, unit_key) do
-      {:retiring, _generation, token} -> finish_retire(actor, root, unit_key, token)
-      {:error, _} = refusal -> refusal
-    end
   end
 
   @doc """

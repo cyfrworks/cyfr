@@ -60,31 +60,6 @@ defmodule Arca.Schemas.StorageUnit do
 
   @type t :: %__MODULE__{}
 
-  @typedoc """
-  What a commit answers, the one vocabulary the storage-unit facade
-  returns:
-
-    * `:committed` — the pointer moved and the journal grew by one row.
-    * `{:error, :stale_revision}` — the pointer no longer names the
-      revision the writer staged against; another commit landed first.
-    * `{:error, :stale_writer}` — the unit's `draft_writer_token` is not
-      the writer's; another writer took the draft.
-    * `{:error, :missing_unit}` — no row for the key, or the unit is
-      retired.
-    * `{:error, :invalid_objects}` — the staged object set is not a
-      complete, valid revision; nothing was committed.
-    * `{:error, :outcome_unknown}` — the store could not answer; the
-      outcome is unknown to the writer and nothing may be assumed.
-  """
-  @type commit_result ::
-          :committed
-          | {:error,
-             :stale_revision
-             | :stale_writer
-             | :missing_unit
-             | :invalid_objects
-             | :outcome_unknown}
-
   @states ~w(draft committed retiring retired)
 
   schema "storage_units" do

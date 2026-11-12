@@ -171,7 +171,7 @@ defmodule Arca.StorageProjectionChangesTest do
     } do
       # The removal makes the row it deletes under, and retires it.
       generation = retire!(actor, key)
-      assert :ok = StorageUnits.retire(actor, @root, key)
+      assert :ok = retire_unit(actor, @root, key)
 
       assert %{tombstone: true, ready: false} = row(actor, key)
       assert row(actor, key).generation > generation
@@ -490,6 +490,15 @@ defmodule Arca.StorageProjectionChangesTest do
                )
 
       refute_receive {:changed, _, _, _}, 100
+    end
+  end
+
+  # A unit's drop with nothing between its two steps, as the overlay's
+  # delete takes them.
+  defp retire_unit(actor, root, key) do
+    case StorageUnits.stamped_retire(actor, root, key) do
+      {:retiring, _generation, token} -> StorageUnits.finish_retire(actor, root, key, token)
+      refusal -> refusal
     end
   end
 end

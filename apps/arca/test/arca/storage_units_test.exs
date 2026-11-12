@@ -43,7 +43,7 @@ defmodule Arca.StorageUnitsTest do
     {:ok, draft} = StorageUnits.register_draft(actor, @root, key, token)
 
     assert :committed =
-             StorageUnits.commit(
+             commit_unit(
                actor,
                draft,
                draft.current_revision,
@@ -136,7 +136,7 @@ defmodule Arca.StorageUnitsTest do
 
       # The writer that lost the draft cannot commit what it staged.
       assert {:error, :stale_writer} =
-               StorageUnits.commit(actor, draft, nil, "wrt_dead", identity("rev_dead"))
+               commit_unit(actor, draft, nil, "wrt_dead", identity("rev_dead"))
 
       assert {:error, :not_found} = StorageUnits.current(actor, @root, key)
     end
@@ -159,7 +159,7 @@ defmodule Arca.StorageUnitsTest do
       key: key
     } do
       first = commit!(actor, key, "rev_1")
-      assert :ok = StorageUnits.retire(actor, @root, key)
+      assert :ok = retire_unit(actor, @root, key)
 
       assert {:ok, %{id: id, state: "draft", current_revision: nil}} =
                StorageUnits.register_draft(actor, @root, key, "wrt_2")
@@ -171,7 +171,7 @@ defmodule Arca.StorageUnitsTest do
     end
   end
 
-  describe "commit/5" do
+  describe "stamped_commit/6" do
     test "moves the pointer, keeps the token and appends exactly one journal row; the release " <>
            "clears the token",
          %{
@@ -180,7 +180,7 @@ defmodule Arca.StorageUnitsTest do
          } do
       {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_1")
 
-      assert :committed = StorageUnits.commit(actor, draft, nil, "wrt_1", identity("rev_1"))
+      assert :committed = commit_unit(actor, draft, nil, "wrt_1", identity("rev_1"))
 
       # The writer still holds the unit: nobody else registers or commits
       # until the writer releases the committed revision.
@@ -254,10 +254,10 @@ defmodule Arca.StorageUnitsTest do
       assert first.current_revision == "rev_1" and second.current_revision == "rev_1"
 
       assert :committed =
-               StorageUnits.commit(actor, second, "rev_1", "wrt_second", identity("rev_second"))
+               commit_unit(actor, second, "rev_1", "wrt_second", identity("rev_second"))
 
       assert {:error, :stale_revision} =
-               StorageUnits.commit(actor, first, "rev_1", "wrt_first", identity("rev_first"))
+               commit_unit(actor, first, "rev_1", "wrt_first", identity("rev_first"))
 
       assert {:ok, %{current_revision: "rev_second"}} = StorageUnits.current(actor, @root, key)
 
@@ -287,7 +287,7 @@ defmodule Arca.StorageUnitsTest do
         |> Enum.map(fn i ->
           Task.async(fn ->
             unboxed(fn ->
-              StorageUnits.commit(actor, draft, "rev_1", "wrt_shared", identity("rev_race_#{i}"))
+              commit_unit(actor, draft, "rev_1", "wrt_shared", identity("rev_race_#{i}"))
             end)
           end)
         end)
@@ -304,7 +304,7 @@ defmodule Arca.StorageUnitsTest do
       {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_1")
 
       assert {:error, :stale_writer} =
-               StorageUnits.commit(actor, draft, nil, "wrt_forged", identity("rev_1"))
+               commit_unit(actor, draft, nil, "wrt_forged", identity("rev_1"))
 
       assert {:error, :not_found} = StorageUnits.current(actor, @root, key)
       assert {:ok, []} = Arca.Test.StorageJournal.journal(actor, @root, key)
@@ -323,17 +323,17 @@ defmodule Arca.StorageUnitsTest do
       assert {:retiring, _generation, token} = StorageUnits.stamped_retire(actor, @root, key)
 
       assert {:error, :missing_unit} =
-               StorageUnits.commit(actor, draft, nil, "wrt_1", identity("rev_1"))
+               commit_unit(actor, draft, nil, "wrt_1", identity("rev_1"))
 
       assert :ok = StorageUnits.finish_retire(actor, @root, key, token)
 
       assert {:error, :missing_unit} =
-               StorageUnits.commit(actor, draft, nil, "wrt_1", identity("rev_1"))
+               commit_unit(actor, draft, nil, "wrt_1", identity("rev_1"))
 
       ghost = %StorageUnit{draft | id: "unit_ghost"}
 
       assert {:error, :missing_unit} =
-               StorageUnits.commit(actor, ghost, nil, "wrt_1", identity("rev_1"))
+               commit_unit(actor, ghost, nil, "wrt_1", identity("rev_1"))
 
       assert {:ok, []} = Arca.Test.StorageJournal.journal(actor, @root, key)
     end
@@ -347,7 +347,7 @@ defmodule Arca.StorageUnitsTest do
       # A content identity the journal's insert refuses, inside the
       # transaction, after the pointer has moved.
       assert_raise Ecto.InvalidChangesetError, fn ->
-        StorageUnits.commit(
+        commit_unit(
           actor,
           draft,
           nil,
@@ -453,12 +453,12 @@ defmodule Arca.StorageUnitsTest do
       {:ok, next} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
 
       # The unit is another writer's while its draft lives.
-      assert {:error, :stale_writer} = StorageUnits.retire(actor, @root, key)
+      assert {:error, :stale_writer} = retire_unit(actor, @root, key)
       assert {:ok, %{current_revision: "rev_1"}} = StorageUnits.current(actor, @root, key)
       assert %{draft_writer_token: "wrt_2"} = row(draft.id)
 
       assert :ok = StorageUnits.abandon_draft(actor, next, "wrt_2")
-      assert :ok = StorageUnits.retire(actor, @root, key)
+      assert :ok = retire_unit(actor, @root, key)
       assert {:error, :not_found} = StorageUnits.current(actor, @root, key)
 
       assert %{state: "retired", current_revision: "rev_1", draft_writer_token: nil} =
@@ -466,13 +466,13 @@ defmodule Arca.StorageUnitsTest do
 
       # A retired unit is taken again — what an earlier removal left is
       # cleared under the lease — and a unit with no row gets a retired one.
-      assert :ok = StorageUnits.retire(actor, @root, key)
+      assert :ok = retire_unit(actor, @root, key)
       assert %{state: "retired", current_revision: "rev_1"} = row(draft.id)
 
       assert {:error, :not_found} =
                Arca.Test.StorageJournal.journal(actor, @root, "catalysts/local/none/9.9.9")
 
-      assert :ok = StorageUnits.retire(actor, @root, "catalysts/local/none/9.9.9")
+      assert :ok = retire_unit(actor, @root, "catalysts/local/none/9.9.9")
 
       assert {:ok, []} =
                Arca.Test.StorageJournal.journal(actor, @root, "catalysts/local/none/9.9.9")
@@ -483,7 +483,7 @@ defmodule Arca.StorageUnitsTest do
       # A draft that outlived its lifetime is a dead writer's, and no bar.
       {:ok, revived} = StorageUnits.register_draft(actor, @root, key, "wrt_3")
       age_draft!(revived.id)
-      assert :ok = StorageUnits.retire(actor, @root, key)
+      assert :ok = retire_unit(actor, @root, key)
       assert %{state: "retired", draft_writer_token: nil} = row(draft.id)
     end
 
@@ -505,7 +505,7 @@ defmodule Arca.StorageUnitsTest do
       assert {:error, :stale_writer} = StorageUnits.stamped_retire(actor, @root, key)
 
       assert {:error, :missing_unit} =
-               StorageUnits.commit(actor, draft, "rev_1", token, identity("rev_2"))
+               commit_unit(actor, draft, "rev_1", token, identity("rev_2"))
 
       assert {:ok, %{state: "retiring"}} = StorageUnits.held(actor, @root, key, token)
 
@@ -559,7 +559,7 @@ defmodule Arca.StorageUnitsTest do
       commit!(actor, key, "rev_1")
       {:ok, _draft} = StorageUnits.register_draft(actor, @root, key <> "-draft", "wrt_d")
       commit!(actor, key <> "-gone", "rev_g")
-      :ok = StorageUnits.retire(actor, @root, key <> "-gone")
+      :ok = retire_unit(actor, @root, key <> "-gone")
 
       {:ok, _} = StorageUnits.register_draft(actor, "aqua", "crew/scribe.md", "wrt_a")
 
@@ -585,7 +585,7 @@ defmodule Arca.StorageUnitsTest do
 
       # The other athanor's removal makes and retires a row of its own, and
       # leaves this athanor's unit as it stands.
-      assert :ok = StorageUnits.retire(other, @root, key)
+      assert :ok = retire_unit(other, @root, key)
       assert %{state: "committed", current_revision: "rev_1"} = row(draft.id)
       assert {:ok, %{current_revision: "rev_1"}} = StorageUnits.current(actor, @root, key)
 
@@ -593,7 +593,7 @@ defmodule Arca.StorageUnitsTest do
       {:ok, held} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
 
       assert {:error, :missing_unit} =
-               StorageUnits.commit(other, held, "rev_1", "wrt_2", identity("rev_theirs"))
+               commit_unit(other, held, "rev_1", "wrt_2", identity("rev_theirs"))
 
       assert :ok = StorageUnits.abandon_draft(other, held, "wrt_2")
       assert row(draft.id).draft_writer_token == "wrt_2"
@@ -612,16 +612,34 @@ defmodule Arca.StorageUnitsTest do
       assert {:error, :no_athanor} = StorageUnits.abandon_draft(nobody, unit, "wrt_1")
       assert {:error, :no_athanor} = StorageUnits.current(nobody, @root, key)
       assert {:error, :no_athanor} = StorageUnits.current_under(nobody, @root)
-      assert {:error, :no_athanor} = StorageUnits.retire(nobody, @root, key)
+      assert {:error, :no_athanor} = retire_unit(nobody, @root, key)
 
       assert {:error, :no_athanor} =
-               StorageUnits.commit(nobody, unit, nil, "wrt_1", identity("rev_1"))
+               commit_unit(nobody, unit, nil, "wrt_1", identity("rev_1"))
 
       # And an empty athanor is no athanor.
       blank = %Prima.Actor{athanor_id: ""}
       assert {:error, :no_athanor} = StorageUnits.register_draft(blank, @root, key, "wrt_1")
 
       assert {:error, :not_found} = StorageUnits.current(actor("ath_a"), @root, key)
+    end
+  end
+
+  # The pointer move as a writer makes it, answering what moved and not
+  # the projection generation.
+  defp commit_unit(actor, unit, expected, token, identity) do
+    case StorageUnits.stamped_commit(actor, unit, expected, token, identity) do
+      {:committed, _generation} -> :committed
+      refusal -> refusal
+    end
+  end
+
+  # A unit's drop with nothing between its two steps, as the overlay's
+  # delete takes them.
+  defp retire_unit(actor, root, key) do
+    case StorageUnits.stamped_retire(actor, root, key) do
+      {:retiring, _generation, token} -> StorageUnits.finish_retire(actor, root, key, token)
+      refusal -> refusal
     end
   end
 end
