@@ -1096,12 +1096,13 @@ defmodule Compendium.Registry do
 
   # Default cap for a decompressed tincture archive (256 MB). Tinctures are
   # frontend bundles — typically a few MB — so this is generous headroom while
-  # still bounding a decompression bomb. Operators may override via
-  # `config :cyfr, :tincture_max_decompressed_bytes`.
+  # still bounding a decompression bomb. No release sets
+  # `config :cyfr, :tincture_max_decompressed_bytes`; tests lower it to
+  # reach the ceiling without a 256 MB archive.
   @default_tincture_max_decompressed 256 * 1024 * 1024
 
   @doc """
-  The decompressed-tincture ceiling (config-overridable). Public because it
+  The decompressed-tincture ceiling. Public because it
   is also the largest blob any pull may legitimately carry, so the OCI blob
   transport uses it as its wire-size ceiling, and the bound a pull's src/
   layer inflates under.
