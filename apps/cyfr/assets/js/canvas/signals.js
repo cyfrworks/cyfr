@@ -73,17 +73,6 @@ export function bearerSignal(payload) {
     : null
 }
 
-// The canvas switch a keydown asks for: `previous` for Ctrl+Alt+ArrowLeft,
-// `next` for Ctrl+Alt+ArrowRight, null for anything else. Heard on the
-// shell's page alone, since a frame's keys stay in the frame's document;
-// with a window active, the same arrows tile it instead (`windowChord`).
-export function switchChord(event) {
-  if (!chord(event)) return null
-  if (event.key === "ArrowLeft") return "previous"
-  if (event.key === "ArrowRight") return "next"
-  return null
-}
-
 // What a keydown asks of the windows, heard on the shell's page alone (a
 // frame's keys stay in the frame): with Ctrl+Alt held, ArrowLeft and
 // ArrowRight tile the active window at that side (`{act: "tile", side}`),

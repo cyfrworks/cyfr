@@ -67,7 +67,7 @@ defmodule PrismWeb.PasskeyController do
   defp refused(conn, status, message) do
     conn
     |> CyfrWeb.Plugs.CallIdentity.refused(status, message)
-    |> SignInResponse.put_flash_if_available(:error, message)
+    |> put_flash(:error, message)
     |> redirect(to: "/login")
   end
 end

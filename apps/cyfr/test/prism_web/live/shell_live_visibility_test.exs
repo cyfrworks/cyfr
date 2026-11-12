@@ -44,7 +44,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)
       File.rm_rf(base)
-      Prism.TinctureRegistry.reload()
+      reload_registry(athanor.id)
     end)
 
     {:ok, conn: conn, ctx: ctx}

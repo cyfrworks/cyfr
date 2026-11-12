@@ -49,7 +49,7 @@ defmodule Prism.CanvasValidationTest do
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)
       File.rm_rf(base)
-      reload_registry()
+      reload_registry(athanor.id)
     end)
 
     {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}
@@ -248,13 +248,6 @@ defmodule Prism.CanvasValidationTest do
              )
 
       assert CanvasValidation.needed?(%{empty | working: "1.0.0", kept: "0.9.0"}, "1.0.1")
-    end
-
-    test "each event reports its outcome" do
-      assert CanvasValidation.outcome(:ready) == "ready"
-      assert CanvasValidation.outcome(:deadline) == "not_ready"
-      assert CanvasValidation.outcome(:failed) == "died"
-      assert CanvasValidation.outcome(:gone) == "died"
     end
   end
 

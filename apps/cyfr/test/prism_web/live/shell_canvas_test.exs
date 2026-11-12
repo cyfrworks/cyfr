@@ -51,7 +51,7 @@ defmodule PrismWeb.ShellCanvasTest do
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)
       File.rm_rf(base)
-      reload_registry()
+      reload_registry(athanor.id)
     end)
 
     {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}
@@ -379,6 +379,12 @@ defmodule PrismWeb.ShellCanvasTest do
   defp canvas_stream_ended(socket, sub) do
     assert_receive {:socket, ^socket, %{"sub" => ^sub, "type" => "ended"} = ended}, 10_000
     ended
+  end
+
+  # The visible canvas's open of the listed tincture `ref`, a person's verb.
+  defp open!(view, ref) do
+    shown = canvas(view, Frames.visible_canvas(frames(view)))
+    canvas_verb!(view, shown.id, :open, %{"ref" => ref})
   end
 
   defp canvas_verb!(view, frame_id, verb, args \\ %{}),
@@ -3488,7 +3494,6 @@ defmodule PrismWeb.ShellCanvasTest do
 
       geometry = %{"x" => 500, "y" => 600, "w" => 4000, "h" => 5000}
       render_hook(view, "frame_move", %{"frame" => dash.id, "geometry" => geometry})
-      assert_reply(view, %{ok: true})
       revision = assigns(view).layout_base.revision
       send(view.pid, :write_layout)
       settle!(view, fn -> assigns(view).layout_base.revision == revision + 1 end)
@@ -3525,8 +3530,7 @@ defmodule PrismWeb.ShellCanvasTest do
       render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
       view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
       settle!(view, fn -> assigns(view).posture == "hand" end)
-      render_hook(view, "app_open", %{"ref" => "tincture:local.app-dash"})
-      assert_reply(view, %{ok: true})
+      open!(view, "tincture:local.app-dash")
       assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
 
       html = render(view)
@@ -3611,8 +3615,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # revision, it lets it go all the same.
       canvas!(ctx, "markets-two")
       versions!(ctx, "markets-two", %{working: "1.0.0"})
-      render_hook(view, "app_open", %{"ref" => "tincture:local.fallback-app"})
-      assert_reply(view, %{ok: true})
+      open!(view, "tincture:local.fallback-app")
       layout!(user, athanor, [entry("main", "tincture:local.markets-two")])
       send(view.pid, :write_layout)
       _ = render(view)
@@ -3825,11 +3828,8 @@ defmodule PrismWeb.ShellCanvasTest do
     defp app_frame(view, name),
       do: Frames.get(frames(view), {:app, "main", "tincture:local.#{name}"})
 
-    defp gesture!(view, event, params) do
-      render_hook(view, event, params)
-      assert_reply(view, reply)
-      reply
-    end
+    # A settled gesture as the canvas hook sends it, which nothing answers.
+    defp gesture!(view, event, params), do: render_hook(view, event, params)
 
     defp written!(view) do
       send(view.pid, :write_layout)
@@ -3855,15 +3855,12 @@ defmodule PrismWeb.ShellCanvasTest do
       dash = app_frame(view, "app-dash")
       assert %{placement: {:window, _}, state: :live} = dash
 
-      assert gesture!(view, "frame_move", %{"frame" => dash.id, "geometry" => @moved}) == %{
-               ok: true
-             }
+      gesture!(view, "frame_move", %{"frame" => dash.id, "geometry" => @moved})
 
-      assert gesture!(view, "frame_resize", %{
-               "frame" => app_frame(view, "side-dash").id,
-               "share" => 3500
-             }) ==
-               %{ok: true}
+      gesture!(view, "frame_resize", %{
+        "frame" => app_frame(view, "side-dash").id,
+        "share" => 3500
+      })
 
       # Made at once on the frames, before any write.
       moved = %{x: 500, y: 600, w: 4000, h: 5000}
@@ -3909,7 +3906,7 @@ defmodule PrismWeb.ShellCanvasTest do
             {"frame_tile", %{"side" => "left", "share" => 2000}},
             {"frame_full", %{}}
           ] do
-        assert gesture!(view, event, Map.put(params, "frame", dash.id)) == %{ok: true}, event
+        gesture!(view, event, Map.put(params, "frame", dash.id))
         assert identity(app_frame(view, "app-dash")) == identity(dash), event
       end
 
@@ -3930,23 +3927,23 @@ defmodule PrismWeb.ShellCanvasTest do
       assert_push_event(view, "canvas_installed", %{frame: ^main_id})
       dash = app_frame(view, "app-dash")
 
-      assert gesture!(view, "frame_minimise", %{"frame" => dash.id}) == %{ok: true}
+      gesture!(view, "frame_minimise", %{"frame" => dash.id})
       assert %{minimised: true, visible: false} = app_frame(view, "app-dash")
       assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: installed})
       assert %{open: true} = Enum.find(installed, &(&1.name == "app-dash"))
 
-      assert gesture!(view, "app_restore", %{"ref" => "tincture:local.app-dash"}) == %{ok: true}
+      gesture!(view, "app_restore", %{"ref" => "tincture:local.app-dash"})
       assert %{minimised: false, visible: true} = app_frame(view, "app-dash")
       assert identity(app_frame(view, "app-dash")) == identity(dash)
       assert_push_event(view, "canvas_installed", %{frame: ^main_id})
 
-      assert gesture!(view, "frame_close", %{"frame" => dash.id}) == %{ok: true}
+      gesture!(view, "frame_close", %{"frame" => dash.id})
       assert app_frame(view, "app-dash") == nil
       assert row(dash.id).state == "revoked"
       assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: installed})
       assert %{open: false} = Enum.find(installed, &(&1.name == "app-dash"))
 
-      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      open!(view, "tincture:local.loose-dash")
       assert %{placement: {:window, _}, visible: true} = app_frame(view, "loose-dash")
       assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: installed})
       assert %{open: true} = Enum.find(installed, &(&1.name == "loose-dash"))
@@ -3963,30 +3960,30 @@ defmodule PrismWeb.ShellCanvasTest do
       side = app_frame(view, "side-dash")
       before = frames(view)
 
-      for {event, params, error} <- [
-            {"frame_move", %{"frame" => "frm_nobody_held", "geometry" => @moved}, "not_held"},
-            {"frame_move", %{"frame" => dash.id, "geometry" => %{@moved | "x" => 10_001}},
-             "invalid"},
-            {"frame_move", %{"frame" => dash.id, "geometry" => %{@moved | "w" => 0}}, "invalid"},
-            {"frame_move", %{"frame" => dash.id, "geometry" => %{@moved | "h" => 2.5}},
-             "malformed"},
-            {"frame_resize", %{"frame" => side.id, "share" => 0}, "invalid"},
-            {"frame_resize", %{"frame" => side.id, "share" => 10_001}, "invalid"},
-            {"frame_tile", %{"frame" => dash.id, "share" => 2000}, "malformed"},
-            {"frame_tile", %{"frame" => dash.id, "side" => "top", "share" => 2000}, "malformed"},
-            {"frame_raise", %{"frame" => canvas(view).id}, "not_held"},
-            {"app_open", %{"ref" => "tincture:local.nobody"}, "not_listed"},
-            {"app_restore", %{"ref" => "tincture:local.loose-dash"}, "not_placed"}
+      for {event, params} <- [
+            {"frame_move", %{"frame" => "frm_nobody_held", "geometry" => @moved}},
+            {"frame_move", %{"frame" => dash.id, "geometry" => %{@moved | "x" => 10_001}}},
+            {"frame_move", %{"frame" => dash.id, "geometry" => %{@moved | "w" => 0}}},
+            {"frame_move", %{"frame" => dash.id, "geometry" => %{@moved | "h" => 2.5}}},
+            {"frame_resize", %{"frame" => side.id, "share" => 0}},
+            {"frame_resize", %{"frame" => side.id, "share" => 10_001}},
+            {"frame_tile", %{"frame" => dash.id, "share" => 2000}},
+            {"frame_tile", %{"frame" => dash.id, "side" => "top", "share" => 2000}},
+            {"frame_raise", %{"frame" => canvas(view).id}},
+            {"app_restore", %{"ref" => "tincture:local.nobody"}},
+            {"app_restore", %{"ref" => "tincture:local.loose-dash"}}
           ] do
-        assert gesture!(view, event, params) == %{error: error}, inspect({event, params})
+        gesture!(view, event, params)
+        assert frames(view) == before, inspect({event, params})
+        assert assigns(view).pending == [], inspect({event, params})
       end
-
-      assert frames(view) == before
-      assert assigns(view).pending == []
 
       # An app of a canvas the glass no longer shows is not arranged.
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert gesture!(view, "frame_raise", %{"frame" => dash.id}) == %{error: "hidden"}
+      hidden = app_frame(view, "app-dash")
+      gesture!(view, "frame_raise", %{"frame" => dash.id})
+      assert app_frame(view, "app-dash") == hidden
+      assert assigns(view).pending == []
 
       written!(view)
       assert %{revision: 1} = stored(user, athanor)
@@ -3998,11 +3995,9 @@ defmodule PrismWeb.ShellCanvasTest do
       dash = app_frame(view, "app-dash")
       side = app_frame(view, "side-dash")
 
-      assert gesture!(view, "frame_move", %{"frame" => dash.id, "geometry" => @moved}) == %{
-               ok: true
-             }
+      gesture!(view, "frame_move", %{"frame" => dash.id, "geometry" => @moved})
 
-      assert gesture!(view, "frame_minimise", %{"frame" => side.id}) == %{ok: true}
+      gesture!(view, "frame_minimise", %{"frame" => side.id})
 
       # Another screen of the person arranges meanwhile: it closes the tile
       # and opens another app.
@@ -4041,17 +4036,18 @@ defmodule PrismWeb.ShellCanvasTest do
          %{conn: conn} do
       view = shell!(conn)
       dash = app_frame(view, "app-dash")
-      assert gesture!(view, "frame_full", %{"frame" => dash.id}) == %{ok: true}
+      gesture!(view, "frame_full", %{"frame" => dash.id})
       assert %{key: {:app, "main", "tincture:local.app-dash"}} = Frames.active(frames(view))
       assert %{visible: false} = app_frame(view, "side-dash")
 
-      assert gesture!(view, "app_open", %{"ref" => "tincture:local.side-dash"}) == %{ok: true}
+      # From the shelf, the canvas being hidden under the full app.
+      gesture!(view, "app_restore", %{"ref" => "tincture:local.side-dash"})
       assert Frames.active(frames(view)) == nil
       assert %{visible: true, state: :live} = app_frame(view, "side-dash")
       assert %{visible: false, placement: :full} = app_frame(view, "app-dash")
       assert %{state: :live, visible: true} = canvas(view)
 
-      assert gesture!(view, "frame_raise", %{"frame" => dash.id}) == %{ok: true}
+      gesture!(view, "frame_raise", %{"frame" => dash.id})
       assert %{key: {:app, "main", "tincture:local.app-dash"}} = Frames.active(frames(view))
     end
 
@@ -4100,9 +4096,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert app_frame(view, "app-dash") == nil
       assert row(dash.id).state == "revoked"
 
-      assert gesture!(view, "frame_move", %{"frame" => side.id, "geometry" => @moved}) == %{
-               ok: true
-             }
+      gesture!(view, "frame_move", %{"frame" => side.id, "geometry" => @moved})
 
       assert app_frame(view, "app-dash") == nil
 
@@ -4127,7 +4121,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert_push_event(view, "canvas_installed", %{frame: ^work_id, tinctures: told})
       assert %{open: false} = Enum.find(told, &(&1.name == "app-dash"))
 
-      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      open!(view, "tincture:local.loose-dash")
       assert_push_event(view, "canvas_installed", %{frame: ^main_id, tinctures: hidden})
       assert %{open: true} = Enum.find(hidden, &(&1.name == "app-dash"))
       assert %{open: false} = Enum.find(hidden, &(&1.name == "loose-dash"))
@@ -4235,9 +4229,7 @@ defmodule PrismWeb.ShellCanvasTest do
       dash = app_frame(view, "app-dash")
       saved = dash.placement
 
-      assert gesture!(view, "frame_move", %{"frame" => dash.id, "geometry" => @moved}) == %{
-               ok: true
-             }
+      gesture!(view, "frame_move", %{"frame" => dash.id, "geometry" => @moved})
 
       Process.cancel_timer(assigns(view).write_timer)
 
@@ -4279,7 +4271,7 @@ defmodule PrismWeb.ShellCanvasTest do
     test "a window opened just before a switch is saved though another screen published meanwhile",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
-      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      open!(view, "tincture:local.loose-dash")
       assert %{placement: {:window, geometry}} = app_frame(view, "loose-dash")
       Process.cancel_timer(assigns(view).write_timer)
       assert assigns(view).pending != []
@@ -4316,7 +4308,7 @@ defmodule PrismWeb.ShellCanvasTest do
     test "a window survives a reload of the document, even inside the write window",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
-      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      open!(view, "tincture:local.loose-dash")
       assert %{placement: {:window, geometry}, id: first_id} = app_frame(view, "loose-dash")
       assert assigns(view).pending != []
 
@@ -4343,10 +4335,11 @@ defmodule PrismWeb.ShellCanvasTest do
 
       dash = app_frame(view, "app-dash")
 
-      assert gesture!(view, "frame_tile", %{"frame" => dash.id, "side" => "left", "share" => 2000}) ==
-               %{error: "hand"}
+      gesture!(view, "frame_tile", %{"frame" => dash.id, "side" => "left", "share" => 2000})
+      assert %{placement: :full} = app_frame(view, "app-dash")
+      assert assigns(view).pending == []
 
-      assert gesture!(view, "frame_raise", %{"frame" => dash.id}) == %{ok: true}
+      gesture!(view, "frame_raise", %{"frame" => dash.id})
       assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
       assert %{placement: :full, visible: false} = app_frame(view, "side-dash")
     end

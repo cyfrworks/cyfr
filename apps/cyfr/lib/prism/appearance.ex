@@ -46,14 +46,6 @@ defmodule Prism.Appearance do
   @typedoc "A desktop's chrome as the canvas hook applies it, or nil for Prism's default."
   @type chrome :: %{String.t() => term()} | nil
 
-  @doc "Prism's theme: the mode its screen and its system layer wear."
-  @spec mode() :: String.t()
-  def mode, do: @mode
-
-  @doc "Prism's accent colour, `#rrggbb`."
-  @spec accent() :: String.t()
-  def accent, do: @accent
-
   @doc """
   The appearance block from what the person's browser reported when the
   view connected (`report`, the connect parameters, string-keyed):

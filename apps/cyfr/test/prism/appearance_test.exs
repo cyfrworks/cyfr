@@ -22,8 +22,7 @@ defmodule Prism.AppearanceTest do
 
   test "the accent is the console's own, as app.css spells it" do
     [_, accent] = Regex.run(~r/--color-accent-primary:\s*(#[0-9a-f]{6});/, File.read!(@app_css))
-    assert Appearance.accent() == accent
-    assert Appearance.mode() == "dark"
+    assert %{"accent" => ^accent, "mode" => "dark"} = Appearance.block(%{})
   end
 
   test "what the browser reports is taken where the wire takes it, and its default otherwise" do
@@ -33,7 +32,7 @@ defmodule Prism.AppearanceTest do
              "safe_areas" => %{"top" => 47, "right" => 0, "bottom" => 33.6, "left" => 9000}
            }) == %{
              "mode" => "dark",
-             "accent" => Appearance.accent(),
+             "accent" => "#6366f1",
              "locale" => "pt-PT",
              "time_zone" => "Europe/Lisbon",
              "safe_areas" => %{"top" => 47, "right" => 0, "bottom" => 34, "left" => 512}

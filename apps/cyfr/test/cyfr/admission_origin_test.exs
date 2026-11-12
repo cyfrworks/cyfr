@@ -520,14 +520,14 @@ defmodule Cyfr.AdmissionOriginTest do
       idle = {:app, "work", "tincture:local.idle"}
 
       frames =
-        %{Prism.Frames.new() | canvas: "main"}
-        |> Prism.Frames.put(
-          shell_frame({:app, "main", "tincture:local.shown"}, {:window, @window}, false)
-        )
-        |> Prism.Frames.put(
-          shell_frame({:app, "work", "tincture:local.kept"}, {:window, @window}, true)
-        )
-        |> Prism.Frames.put(shell_frame(idle, {:tile, :right, 2500}, false))
+        [
+          shell_frame({:app, "main", "tincture:local.shown"}, {:window, @window}, false),
+          shell_frame({:app, "work", "tincture:local.kept"}, {:window, @window}, true),
+          shell_frame(idle, {:tile, :right, 2500}, false)
+        ]
+        |> Enum.reduce(%{Prism.Frames.new() | canvas: "main"}, fn frame, t ->
+          %{t | frames: Map.put(t.frames, frame.key, frame), order: t.order ++ [frame.key]}
+        end)
         |> Prism.Frames.visibility()
 
       assert Prism.Frames.plan(frames) == [{:freeze, idle}]

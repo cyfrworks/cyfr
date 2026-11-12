@@ -233,6 +233,10 @@ defmodule PrismWeb.CompanyLoginControllerTest do
       started = conn |> browser(nil) |> post(~p"/auth/company")
 
       assert redirected_to(started) == "/login"
+
+      assert Phoenix.Flash.get(started.assigns.flash, :error) ==
+               "Sign in, then sign in with your company."
+
       refute_received {:authorize, _request}
     end
 

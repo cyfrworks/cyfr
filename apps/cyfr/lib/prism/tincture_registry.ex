@@ -20,8 +20,8 @@ defmodule Prism.TinctureRegistry do
   none or whose chrome no longer holds, which then wears the default.
 
   Reads go straight to a protected ETS table owned by the GenServer, so
-  lookups never queue behind a `reload/1` scan (which walks Arca and can be
-  slow on an object-store backend). The table is named after the registered
+  lookups never queue behind a scan (which walks Arca and can be slow on
+  an object-store backend). The table is named after the registered
   process name, so `server` must be that name (an atom), not a pid.
 
   A shell-plane UI cache, member-facing only: the public `/t/` route is
@@ -32,7 +32,7 @@ defmodule Prism.TinctureRegistry do
   for an athanor scans exactly that athanor (a `{:scanned, id}` marker
   row remembers it), so boot never walks every athanor's tree and a
   server with a thousand furnaces pays only for the ones whose shell is
-  actually opened. `reload/1` remains the full rescan.
+  actually opened.
 
   The marker holds the epoch the component registry had acknowledged for
   the athanor's `components/` root when the scan began
@@ -118,21 +118,10 @@ defmodule Prism.TinctureRegistry do
   end
 
   @doc """
-  Rescan every active athanor. Boot and the seed sync use this; a change
-  inside one athanor uses `reload_athanor/2`.
-  """
-  @spec reload(atom()) :: :ok
-  def reload(server \\ __MODULE__) do
-    # The scan is I/O-bound (Arca walk + per-manifest reads); the default 5s
-    # call timeout is too tight on object-store backends.
-    GenServer.call(server, :reload, 30_000)
-  end
-
-  @doc """
   Rescan one athanor's tinctures and replace exactly that athanor's rows.
 
   Reloads and prunes only the specified athanor's tinctures. Other
-  athanors are refreshed by their own reload or a full `reload/1`.
+  athanors are refreshed by their own reload.
   """
   @spec reload_athanor(atom(), String.t()) :: :ok
   def reload_athanor(server \\ __MODULE__, athanor_id) when is_binary(athanor_id) do
@@ -149,13 +138,6 @@ defmodule Prism.TinctureRegistry do
       |> :ets.new([:named_table, :protected, :set, read_concurrency: true])
 
     {:ok, %{table: table, watching: MapSet.new()}}
-  end
-
-  @impl true
-  def handle_call(:reload, _from, state) do
-    count = store_tinctures(state.table, scan_tinctures())
-    Logger.info("[TinctureRegistry] reloaded #{count} tincture(s)")
-    {:reply, :ok, watch_scanned(state)}
   end
 
   @impl true
@@ -188,11 +170,6 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  defp watch_scanned(state) do
-    :ets.select(state.table, [{{{:scanned, :"$1"}, :_}, [], [:"$1"]}])
-    |> Enum.reduce(state, &watch(&2, &1))
-  end
-
   defp scan_athanor_into(table, athanor_id, epoch) do
     count =
       case Sanctum.Tenancy.Athanors.get(athanor_id) do
@@ -200,8 +177,7 @@ defmodule Prism.TinctureRegistry do
           store_athanor_tinctures(table, athanor_id, scan_one(athanor))
 
         # Archived, gone, or unreadable: it contributes nothing, and its rows
-        # go with it. `scan_tinctures/0` reaches the same end by not
-        # enumerating it.
+        # go with it.
         _ ->
           store_athanor_tinctures(table, athanor_id, [])
       end
@@ -229,25 +205,9 @@ defmodule Prism.TinctureRegistry do
   end
 
   # Insert the fresh rows first (a list insert is a single atomic ETS op),
-  # then prune keys that vanished — readers never observe an empty table
-  # mid-reload. Returns the fresh tincture count. The 3-tuple match keeps
-  # {:scanned, id} marker rows out of the prune; the full scan then marks
-  # every athanor it walked as scanned, at the epoch it began from.
-  defp store_tinctures(table, {tinctures, epochs}) do
-    old_keys =
-      :ets.select(table, [{{{:"$1", :"$2", :"$3"}, :_}, [], [{{:"$1", :"$2", :"$3"}}]}])
-
-    count = replace(table, old_keys, tinctures)
-
-    for athanor_id <- Enum.uniq(Enum.map(tinctures, & &1.athanor_id)) do
-      :ets.insert(table, {{:scanned, athanor_id}, Map.get(epochs, athanor_id, :unknown)})
-    end
-
-    count
-  end
-
-  # The same insert-then-prune, with the prune confined to one athanor's
-  # keys so a single-tenant reload cannot delete another tenant's rows.
+  # then prune the athanor's keys that vanished — readers never observe an
+  # empty table mid-reload, and a single-tenant reload cannot delete
+  # another tenant's rows. Returns the fresh tincture count.
   defp store_athanor_tinctures(table, athanor_id, tinctures) do
     old_keys =
       :ets.select(table, [{{{athanor_id, :"$1", :"$2"}, :_}, [], [{{athanor_id, :"$1", :"$2"}}]}])
@@ -273,27 +233,11 @@ defmodule Prism.TinctureRegistry do
 
   # Scanning runs through Arca (`list_recursive` + `get`) so the registry
   # populates identically on the Local FS adapter and any configured
-  # object-store adapter. The walk is roster-driven: every active athanor
-  # row, opened with its own internal context — paths are tenant-relative,
-  # so there is no reaching across athanors from one context — and never a
-  # whole-root filesystem walk, so nothing outside a registered athanor is
-  # ever read and an archived athanor drops out by not being enumerated.
-  defp scan_tinctures do
-    athanors = Sanctum.Tenancy.Athanors.list_active()
-    epochs = Map.new(athanors, &{&1.id, scan_epoch(&1.id)})
-
-    tinctures =
-      athanors
-      |> Enum.flat_map(&scan_athanor/1)
-      |> pick_latest_versions()
-
-    {tinctures, epochs}
-  end
-
-  # One athanor's scan, version-picked the same way the full scan is — the
-  # grouping in `pick_latest_versions/1` is keyed by athanor, so running it
-  # over one athanor's rows gives that athanor exactly the rows it would
-  # have got from the full walk.
+  # object-store adapter. Each athanor is opened with its own internal
+  # context — paths are tenant-relative, so there is no reaching across
+  # athanors from one context — and never through a whole-root filesystem
+  # walk, so nothing outside a registered athanor is ever read. Its rows
+  # are version-picked by `pick_latest_versions/1`.
   defp scan_one(athanor) do
     athanor
     |> scan_athanor()

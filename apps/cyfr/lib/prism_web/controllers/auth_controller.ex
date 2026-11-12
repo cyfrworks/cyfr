@@ -128,7 +128,7 @@ defmodule PrismWeb.AuthController do
   defp to_login(conn, status, message) do
     conn
     |> CallIdentity.refused(status, message)
-    |> SignInResponse.put_flash_if_available(:error, message)
+    |> put_flash(:error, message)
     |> redirect(to: "/login")
   end
 end

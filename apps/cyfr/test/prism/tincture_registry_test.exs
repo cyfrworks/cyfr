@@ -248,40 +248,6 @@ defmodule Prism.TinctureRegistryTest do
     end
   end
 
-  describe "reload/0" do
-    test "rescans filesystem" do
-      name = :test_reload
-      {:ok, pid} = TinctureRegistry.start_link(name: name)
-      # The initial scan runs in handle_continue; a call synchronizes with it.
-      :sys.get_state(pid)
-
-      assert length(TinctureRegistry.list_tinctures(name, lookup("ath_test"))) == 1
-
-      unheard!(pid, Sanctum.Context.actor(lookup("ath_test")))
-
-      # Add a new tincture
-      manifest = %{
-        "name" => "new-tincture",
-        "type" => "tincture",
-        "version" => "0.1.0",
-        "publisher" => "local",
-        "tincture" => %{"entry" => "index.html"}
-      }
-
-      lay!("ath_test", "local", "new-tincture", "0.1.0", manifest)
-
-      assert {:ok, _} = Compendium.acknowledged_projection_epoch(lookup("ath_test"), "components")
-      assert held(name, "ath_test") == ["test-dash"]
-      :ok = TinctureRegistry.reload(name)
-      assert held(name, "ath_test") == ["new-tincture", "test-dash"]
-
-      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
-      assert length(tinctures) == 2
-
-      GenServer.stop(pid)
-    end
-  end
-
   describe "reload_athanor/2" do
     # An athanor-scoped reload must pick up its changes without reading other athanors.
     test "picks up one athanor's change and leaves the others alone" do

@@ -4,8 +4,7 @@
 defmodule PrismWeb.SystemLayer do
   @moduledoc """
   The system layer: what Prism alone draws above every frame — grant,
-  unlock, sign-in, credential-entry, sharing, pairing, request and
-  confirmation prompts, the fallback's notice, and the restore checklist. It presents a prompt
+  credential-entry, sharing, pairing, request and confirmation prompts, the fallback's notice, and the restore checklist. It presents a prompt
   and never
   decides one: the operation a confirmation dispatches is decided where
   the change is, in Sanctum, which checks the caller's standing and any
@@ -40,8 +39,7 @@ defmodule PrismWeb.SystemLayer do
   layer is uncovered. The browser clears a prompt's forms as it closes, so
   a typed value is typed again. A prompt
   (`PrismWeb.SystemLayer.Prompt`) arrives by `show/2`, which is
-  `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`; `prompt:
-  nil` clears the open one. A prompt that arrives while another is open
+  `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`. A prompt that arrives while another is open
   waits behind it in arrival order; one whose id is already open or
   waiting is the same prompt and is taken once. The view withdraws a
   prompt it placed with `send_update(PrismWeb.SystemLayer, id: id,
@@ -148,10 +146,6 @@ defmodule PrismWeb.SystemLayer do
       grant prompt, and once that is confirmed the restore is asked again;
       versions published since the canvas fell back are reported and
       nothing is merged. Trying again dispatches nothing;
-    * a sign-in — nothing: identity is established at the authentication
-      boundary, so confirming leaves for the sign-in page;
-    * an unlock — no operation unlocks the vault, so an unlock prompt has
-      no confirm control and can only be dismissed;
     * a re-enable from the restore checklist — `key.reenable` or
       `webhook.reenable` of the item the person chose (below).
 
@@ -256,7 +250,6 @@ defmodule PrismWeb.SystemLayer do
   # has refused the record before the page says it expired.
   @expiry_grace_ms 250
   @stream "confirmation.changes"
-  @sign_in_path "/login"
 
   # Where a page keeps the secrets of the changes it asked for.
   @asks :system_layer_asks
@@ -283,12 +276,8 @@ defmodule PrismWeb.SystemLayer do
   @spec desktop_layer_id() :: String.t()
   def desktop_layer_id, do: "system-layer-desktop"
 
-  @doc "The stream the layer listens on."
-  @spec stream() :: String.t()
-  def stream, do: @stream
-
   @doc "Show `prompt` in the layer mounted under `id`."
-  @spec show(String.t(), Prompt.t() | nil) :: :ok
+  @spec show(String.t(), Prompt.t()) :: :ok
   def show(id \\ @layer_id, prompt) do
     send_update(__MODULE__, id: id, prompt: prompt)
     :ok
@@ -1310,8 +1299,6 @@ defmodule PrismWeb.SystemLayer do
   # prompt's list, is read after (`load_shown/1`), under the guard.
   defp arrive(socket, prompt), do: socket |> place(prompt) |> load_shown()
 
-  defp place(socket, nil), do: step(socket)
-
   defp place(socket, prompt) do
     case Prompt.validate(prompt) do
       {:ok, prompt} ->
@@ -1428,7 +1415,7 @@ defmodule PrismWeb.SystemLayer do
 
   def handle_event("confirm", %{"id" => id}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, [:grant, :sign_in]) do
+      case open(socket, id, [:grant]) do
         {:ok, prompt} -> confirm(socket, prompt)
         :none -> {:noreply, socket}
       end
@@ -1570,10 +1557,6 @@ defmodule PrismWeb.SystemLayer do
   # ---------------------------------------------------------------------------
   # Confirmations
   # ---------------------------------------------------------------------------
-
-  defp confirm(socket, %{kind: :sign_in} = prompt) do
-    {:noreply, socket |> settle(prompt, :confirmed) |> redirect(to: @sign_in_path)}
-  end
 
   # A grant commits the walk the sheet holds at the moment of the confirm,
   # never one the sheet has moved past: the confirm asks the sheet, which
@@ -3072,7 +3055,7 @@ defmodule PrismWeb.SystemLayer do
         Approve
       </button>
       <button
-        :if={@may and @prompt.kind in [:grant, :sign_in]}
+        :if={@may and @prompt.kind == :grant}
         type="button"
         phx-click="confirm"
         phx-target={@myself}
@@ -3081,7 +3064,7 @@ defmodule PrismWeb.SystemLayer do
         data-test="prompt-confirm"
         class={[button_class(true), "disabled:opacity-50"]}
       >
-        {confirm_label(@prompt)}
+        Grant
       </button>
       <button
         :if={@prompt.kind == :credential_entry}
@@ -3122,8 +3105,6 @@ defmodule PrismWeb.SystemLayer do
   end
 
   defp title(%{kind: :grant, subject: %{ref: ref}}), do: "Grant #{ref}"
-  defp title(%{kind: :unlock}), do: "Unlock the vault"
-  defp title(%{kind: :sign_in}), do: "Sign in"
 
   defp title(%{kind: :credential_entry, subject: %{return: _return, provider: provider}}),
     do: "Connect your #{provider} account"
@@ -3141,16 +3122,6 @@ defmodule PrismWeb.SystemLayer do
   defp description(%{kind: :grant}),
     do:
       "Approve what this app may use and reach, as listed below. Nothing is granted until you do."
-
-  defp description(%{kind: :unlock, subject: subject}) do
-    concerning = if name = subject[:name], do: " for #{name}", else: ""
-
-    "An app asks to unlock the vault#{concerning}. Nothing on this server unlocks the " <>
-      "vault, so there is nothing to confirm here."
-  end
-
-  defp description(%{kind: :sign_in, subject: subject}),
-    do: subject[:message] || "Sign in to go on. You leave this page to do it."
 
   defp description(%{kind: :credential_entry}),
     do:
@@ -3181,9 +3152,6 @@ defmodule PrismWeb.SystemLayer do
     do:
       "A client of yours asked for a change that needs a fresh confirmation. Check what it " <>
         "would change and who asked before you confirm."
-
-  defp confirm_label(%{kind: :grant}), do: "Grant"
-  defp confirm_label(%{kind: :sign_in}), do: "Sign in"
 
   defp dismiss_label(%{kind: :confirmation}, %{own: true, status: :waiting}), do: "Cancel"
   defp dismiss_label(%{kind: :confirmation}, %{own: false, status: :pending}), do: "Not now"

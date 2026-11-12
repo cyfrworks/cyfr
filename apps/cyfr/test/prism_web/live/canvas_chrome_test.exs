@@ -29,7 +29,7 @@ defmodule PrismWeb.CanvasChromeTest do
 
     on_exit(fn ->
       File.rm_rf(base)
-      reload_registry()
+      reload_registry(athanor.id)
     end)
 
     {:ok, conn: conn, user: user, ctx: ctx}
@@ -355,11 +355,14 @@ defmodule PrismWeb.CanvasChromeTest do
           {"frame_move", %{"geometry" => %{"x" => 100, "y" => 100, "w" => 4000, "h" => 4000}}}
         ] do
       render_hook(view, event, Map.put(params, "frame", window.id))
-      assert_reply(view, %{ok: true})
 
       assert %{id: id, src: src} = app_frame(view, "slot-dash")
       assert {id, src} == {window.id, window.src}, event
       assert wrappers(view) == before, event
     end
+
+    # Each gesture was made: the last one leaves the app a window again.
+    assert %{placement: {:window, %{x: 100, y: 100, w: 4000, h: 4000}}} =
+             app_frame(view, "slot-dash")
   end
 end

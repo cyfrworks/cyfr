@@ -514,7 +514,6 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert Terminal.text("\e]0;title\aPaste code: ") == "Paste code: "
     assert Terminal.text("\e[?25lplain\e(B") == "plain"
-    assert Terminal.max_lines() == 500
   end
 
   # What `gh auth login` wrote on the pty in the S1 hand check: a terminal
@@ -679,6 +678,35 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
     assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
     refute has_element?(view, ~s([data-test="terminal-ended"]))
+  end
+
+  # A program that writes more than the terminal keeps: the person reads its
+  # last 500 lines, the earlier ones gone.
+  test "the terminal keeps a program's last 500 lines",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = pipe_row!(athanor)
+    entry = login!(user, athanor, "claude-login", "claude")
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    sign_in(view, "claude", entry)
+    assert_receive {:session, "open", %{"home_id" => ^entry}, _fields}, 2_000
+
+    written = for n <- 1..510, do: "line-" <> String.pad_leading(Integer.to_string(n), 3, "0")
+    Enum.each(written, &Scripted.write(fake, row.id, &1))
+
+    shown = fn ->
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-test="terminal-lines"]))
+      |> LazyHTML.text()
+      |> String.split("\n", trim: true)
+    end
+
+    assert eventually(fn -> List.last(shown.()) == "line-510" end, 200)
+    assert shown.() == Enum.drop(written, 10)
+    assert hd(shown.()) == "line-011"
   end
 
   # A program's terminal text may be a credential: the page shows it, and

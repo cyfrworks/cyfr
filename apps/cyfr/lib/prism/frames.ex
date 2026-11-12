@@ -23,9 +23,7 @@ defmodule Prism.Frames do
       (`launch/3`).
 
   A tincture belongs to the canvas it was opened on. Only this module's own
-  open path makes a frame under a canvas or a validation key: `put/2`
-  refuses one, so a canvas frame created by anything but `Prism.Frames` is
-  impossible.
+  open path makes a frame under a canvas or a validation key.
 
   ## Opening
 
@@ -78,9 +76,8 @@ defmodule Prism.Frames do
   `stack` (the layout's `order`: the stacking order of windows, the
   left-to-right order of tiles), and `minimised` or not. In the hand
   posture every app stands `:full`, whatever the layout stores for it, in
-  stacking order. Moving, resizing, raising, minimising and restoring an
-  app (`place/3`, `resize/3`, `raise/2`, `minimise/2`, `restore/2`) and an
-  arrangement that places a held app anew keep its frame: its id, its
+  stacking order. An arrangement that places a held app anew, moved,
+  resized, raised, minimised or restored, keeps its frame: its id, its
   credential and its page stay. Only closing an app, or a layout that no
   longer places it, discards its frame.
 
@@ -144,9 +141,6 @@ defmodule Prism.Frames do
   no store. The functions that take a context first are the effects:
   each reaches a credential only through `Sanctum.TinctureAuth`.
   """
-
-  # `raise/2` raises an app over its canvas; the exception is `Kernel.raise/2`.
-  import Kernel, except: [raise: 2]
 
   require Logger
 
@@ -324,15 +318,6 @@ defmodule Prism.Frames do
   @doc "The posture the value arranges for, `desk` or `hand`."
   @spec posture(t()) :: Prima.Layout.posture_name()
   def posture(%__MODULE__{posture: posture}), do: posture
-
-  @doc "The card id of the active `full` frame's tincture, or nil."
-  @spec active_tincture(t()) :: String.t() | nil
-  def active_tincture(t) do
-    case active(t) do
-      %{tincture_id: tincture_id} -> tincture_id
-      nil -> nil
-    end
-  end
 
   @doc "How many frame messages were dropped."
   @spec dropped(t()) :: non_neg_integer()
@@ -597,21 +582,6 @@ defmodule Prism.Frames do
   # ============================================================================
 
   @doc """
-  Hold `frame`, after every frame already held; a frame under a key
-  already held replaces it in place. A frame under a canvas or validation
-  key raises: only this module's own open path makes one.
-  """
-  @spec put(t(), frame()) :: t()
-  def put(%__MODULE__{}, %{key: {kind, _id}}) when kind in [:canvas, :validation],
-    do:
-      Kernel.raise(
-        ArgumentError,
-        "a canvas or validation frame is made only by Prism.Frames' open path"
-      )
-
-  def put(%__MODULE__{} = t, %{key: _key} = frame), do: hold(t, frame)
-
-  @doc """
   Forget the frame under `key`. When it was the active launch, the latest
   launch still held becomes active.
   """
@@ -634,84 +604,6 @@ defmodule Prism.Frames do
   end
 
   def activate(%__MODULE__{} = t, _key), do: t
-
-  @doc """
-  Stand the app under `key` at `placement`, a window, a tile or full,
-  keeping its frame. Any other key, or a frame not held, changes nothing.
-  """
-  @spec place(t(), key(), app_placement()) :: t()
-  def place(%__MODULE__{} = t, {:app, _, _} = key, placement) do
-    if app_placement?(placement),
-      do: transition(t, key, &%{&1 | placement: placement}),
-      else: t
-  end
-
-  def place(%__MODULE__{} = t, _key, _placement), do: t
-
-  @doc """
-  Resize the app under `key`, keeping its frame: a window to `geometry`,
-  a tile to a `share` of the width. A size of the other kind, or an app
-  that is full, changes nothing.
-  """
-  @spec resize(t(), key(), Prima.Layout.geometry() | pos_integer()) :: t()
-  def resize(%__MODULE__{} = t, {:app, _, _} = key, size) do
-    transition(t, key, fn
-      %{placement: {:window, _}} = frame when is_map(size) ->
-        %{frame | placement: {:window, size}}
-
-      %{placement: {:tile, side, _}} = frame when is_integer(size) ->
-        %{frame | placement: {:tile, side, size}}
-
-      frame ->
-        frame
-    end)
-  end
-
-  def resize(%__MODULE__{} = t, _key, _size), do: t
-
-  @doc """
-  Raise the app under `key` above every other app of its canvas, keeping
-  its frame. Raising the topmost app changes nothing.
-  """
-  @spec raise(t(), key()) :: t()
-  def raise(%__MODULE__{} = t, {:app, canvas_id, _} = key) do
-    others =
-      for %{key: {:app, ^canvas_id, _} = other, stack: stack} <- list(t), other != key, do: stack
-
-    transition(t, key, fn frame ->
-      case others do
-        [] ->
-          frame
-
-        _ ->
-          if frame.stack > Enum.max(others),
-            do: frame,
-            else: %{frame | stack: Enum.max(others) + 1}
-      end
-    end)
-  end
-
-  def raise(%__MODULE__{} = t, _key), do: t
-
-  @doc "Minimise the app under `key`, keeping its frame and its placement."
-  @spec minimise(t(), key()) :: t()
-  def minimise(t, {:app, _, _} = key), do: transition(t, key, &%{&1 | minimised: true})
-  def minimise(t, _key), do: t
-
-  @doc "Show the minimised app under `key` again where it stood, raised."
-  @spec restore(t(), key()) :: t()
-  def restore(t, {:app, _, _} = key),
-    do: t |> transition(key, &%{&1 | minimised: false}) |> raise(key)
-
-  def restore(t, _key), do: t
-
-  defp app_placement?(:full), do: true
-  defp app_placement?({:window, %{x: _, y: _, w: _, h: _}}), do: true
-
-  defp app_placement?({:tile, side, share}) when side in [:left, :right] and is_integer(share),
-    do: true
-
-  defp app_placement?(_placement), do: false
 
   @doc """
   Each frame's visibility: with a frame active (`active/1`), it alone is

@@ -357,10 +357,11 @@ defmodule PrismWeb.SystemLayerTest do
     }
   end
 
-  defp sign_in(id), do: %{id: id, kind: :sign_in, action: nil, subject: %{}}
-
   defp credential(id, name),
     do: %{id: id, kind: :credential_entry, action: :credential_entry, subject: %{name: name}}
+
+  # A prompt that reads nothing to be drawn: a credential entry.
+  defp plain(id), do: credential(id, "entry-#{id}")
 
   # A grant's confirm is answered in a later message (the layer asks its
   # sheet for the walk, then commits), so an outcome is waited for.
@@ -417,16 +418,6 @@ defmodule PrismWeb.SystemLayerTest do
       html = render(view)
       assert html =~ ~s(data-open="false")
       refute html =~ ~s(id="system-layer-title")
-    end
-
-    test "an unlock has nothing to confirm and can be dismissed", %{view: view} do
-      html = prompt(view, %{id: "u1", kind: :unlock, action: :vault_unlock, subject: %{}})
-
-      assert html =~ "Nothing on this server unlocks the vault"
-      refute has_element?(view, ~s([phx-click="confirm"]))
-
-      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
-      assert outcome("u1") == :dismissed
     end
   end
 
@@ -1063,7 +1054,7 @@ defmodule PrismWeb.SystemLayerTest do
       })
 
       prompt(view, grant(ctx, "g-other"))
-      prompt(view, sign_in("s-last"))
+      prompt(view, plain("s-last"))
 
       assert %{
                current: %{id: "g-raised"},
@@ -3904,10 +3895,10 @@ defmodule PrismWeb.SystemLayerTest do
       assert %{listen: false, listening: nil} = layer_assigns(view, "system-layer-panel")
 
       # What it is shown, it draws and reports, under its own id.
-      prompt(view, sign_in("quiet-sign-in"))
-      assert has_element?(view, ~s(#system-layer-panel-dialog [data-kind="sign_in"]))
+      prompt(view, plain("quiet-entry"))
+      assert has_element?(view, ~s(#system-layer-panel-dialog [data-kind="credential_entry"]))
       view |> element(~s(#system-layer-panel button[phx-click="dismiss"])) |> render_click()
-      assert outcome("quiet-sign-in") == :dismissed
+      assert outcome("quiet-entry") == :dismissed
       end_views()
     end
   end
@@ -3919,13 +3910,13 @@ defmodule PrismWeb.SystemLayerTest do
       malformed = [
         {"m1", %{id: "m1", kind: :grant, action: :grant, subject: %{}}},
         {"m2", %{id: "m2", kind: :teleport, action: nil, subject: %{}}},
-        {"m3", %{id: "m3", kind: :sign_in, action: :grant, subject: %{}}},
+        {"m3", %{id: "m3", kind: :pairing, action: :grant, subject: %{}}},
         {"m4", %{id: "m4", kind: :grant, action: :everything, subject: grant(ctx, "x").subject}},
         {"m4a", grant(ctx, "m4a") |> update_in([:subject], &Map.delete(&1, :athanor_id))},
         {"m5", %{id: "m5", kind: :credential_entry, action: :credential_entry, subject: %{}}},
         {"m6", %{id: "m6", kind: :safe_mode, action: nil, subject: %{reason: :crashed}}},
-        {"m7", Map.put(sign_in("m7"), :operation, "vault.delete")},
-        {nil, %{kind: :sign_in}},
+        {"m7", Map.put(plain("m7"), :operation, "vault.delete")},
+        {nil, %{kind: :pairing}},
         {nil, "sign in please"}
       ]
 
@@ -4057,7 +4048,7 @@ defmodule PrismWeb.SystemLayerTest do
       view: view,
       ctx: ctx
     } do
-      prompt(view, sign_in("first"))
+      prompt(view, plain("first"))
       prompt(view, grant(ctx, "second"))
       html = prompt(view, credential("third", "queued-entry"))
 
@@ -4079,31 +4070,11 @@ defmodule PrismWeb.SystemLayerTest do
     end
 
     test "the same prompt sent twice is taken once", %{view: view} do
-      prompt(view, sign_in("once"))
-      html = prompt(view, sign_in("once"))
+      prompt(view, plain("once"))
+      html = prompt(view, plain("once"))
 
       refute html =~ "waiting"
       no_outcome("once")
-    end
-
-    test "clearing the open prompt shows the next one and reports nothing", %{view: view} do
-      prompt(view, sign_in("a"))
-      prompt(view, sign_in("b"))
-      prompt(view, nil)
-
-      assert open_prompt(view) == "b"
-      no_outcome("a")
-    end
-  end
-
-  describe "sign-in" do
-    setup :signed_in
-
-    test "confirming leaves for the sign-in page", %{view: view} do
-      prompt(view, sign_in("s1"))
-
-      assert {:error, {:redirect, %{to: "/login"}}} =
-               view |> element(~s(button[phx-click="confirm"])) |> render_click()
     end
   end
 
@@ -4672,7 +4643,7 @@ defmodule PrismWeb.SystemLayerTest do
     # be held still when it is sent.
     defp cancelled_fact(view, row) do
       ctx = view_context(view)
-      {:ok, grant} = Sanctum.Gate.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "confirmation.changes", nil)
 
       fact =
         Cyfr.Bus.Confirmation.new(Context.actor(ctx), :cancelled,
@@ -4988,7 +4959,7 @@ defmodule PrismWeb.SystemLayerTest do
       ctx = view_context(view)
       tag = CyfrWeb.ContextGuard.capture(ctx)
       layer = "listener-probe"
-      {:ok, grant} = Sanctum.Gate.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "confirmation.changes", nil)
       {:ok, pid} = PrismWeb.SystemLayer.Listener.start(self(), layer, ctx, grant, tag)
       expires_at = DateTime.utc_now()
 
@@ -5030,7 +5001,7 @@ defmodule PrismWeb.SystemLayerTest do
       ctx = view_context(view)
       tag = CyfrWeb.ContextGuard.capture(ctx)
       layer = "listener-deadline"
-      {:ok, grant} = Sanctum.Gate.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "confirmation.changes", nil)
       due = %{grant | deadline: DateTime.add(DateTime.utc_now(), 300, :millisecond)}
       {:ok, pid} = PrismWeb.SystemLayer.Listener.start(self(), layer, ctx, due, tag)
       monitor = Process.monitor(pid)
@@ -5053,7 +5024,7 @@ defmodule PrismWeb.SystemLayerTest do
       ctx = view_context(view)
       tag = CyfrWeb.ContextGuard.capture(ctx)
       layer = "listener-overflow"
-      {:ok, grant} = Sanctum.Gate.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "confirmation.changes", nil)
       {:ok, pid} = PrismWeb.SystemLayer.Listener.start(self(), layer, ctx, grant, tag)
       monitor = Process.monitor(pid)
 
@@ -5704,10 +5675,6 @@ defmodule PrismWeb.SystemLayerTest do
 
       %{
         grant: {grant(ctx, "k-grant"), "Approve what this app may use and reach"},
-        unlock:
-          {%{id: "k-unlock", kind: :unlock, action: :vault_unlock, subject: %{}},
-           "An app asks to unlock the vault"},
-        sign_in: {sign_in("k-sign-in"), "Sign in to go on."},
         credential_entry:
           {credential("k-credential", "probe"), "The value goes straight to your vault"},
         share:

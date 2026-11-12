@@ -76,10 +76,6 @@ defmodule PrismWeb.SignInTerminalComponent do
   @spec text(String.t()) :: String.t()
   def text(line) when is_binary(line), do: String.replace(line, @control, "")
 
-  @doc "The most lines the frame keeps."
-  @spec max_lines() :: pos_integer()
-  def max_lines, do: @max_lines
-
   @impl true
   def mount(socket) do
     {:ok,

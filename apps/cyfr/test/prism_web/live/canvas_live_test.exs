@@ -36,7 +36,7 @@ defmodule PrismWeb.CanvasLiveTest do
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)
       File.rm_rf(base)
-      reload_registry()
+      reload_registry(athanor.id)
     end)
 
     {:ok, conn: conn, user: user, ctx: ctx}
@@ -333,7 +333,6 @@ defmodule PrismWeb.CanvasLiveTest do
     window = wrapper_tag(html, column.id)
     assert window =~ ~s(data-canvas-place="window")
     assert window =~ ~s(data-canvas-geometry="2500 5000 3000 4000")
-    assert window =~ ~s(data-canvas-stack="0")
     assert window =~ "left: 25.00%; top: 50.00%; width: 30.00%; height: 40.00%; z-index: 30;"
 
     # A tile stands at its edge and share, and narrows the canvas beside it.

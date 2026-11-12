@@ -40,7 +40,7 @@ defmodule PrismWeb.ShellFrameTest do
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)
       File.rm_rf(base)
-      reload_registry()
+      reload_registry(athanor.id)
     end)
 
     {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}
@@ -164,8 +164,13 @@ defmodule PrismWeb.ShellFrameTest do
   defp opened(view), do: view |> assigns() |> Map.fetch!(:frames) |> Prism.Frames.list()
   defp dropped(view), do: view |> assigns() |> Map.fetch!(:frames) |> Prism.Frames.dropped()
 
-  defp active(view),
-    do: view |> assigns() |> Map.fetch!(:frames) |> Prism.Frames.active_tincture()
+  # The card id of the active frame's tincture, or nil.
+  defp active(view) do
+    case view |> assigns() |> Map.fetch!(:frames) |> Prism.Frames.active() do
+      %{tincture_id: tincture_id} -> tincture_id
+      nil -> nil
+    end
+  end
 
   # The bearer the bridge is handed for `frame_id`.
   defp bearer!(view, frame_id) do
