@@ -91,9 +91,9 @@ defmodule Opus.Programs.Box do
   last confirmed on its sync; while it differs from the one read, the
   owner is synced again at every tick this member holds its slot, and a
   pipe open of it waits for that sync's answer, so the service never
-  admits a pipe by a ceiling the platform no longer names. A hello's answer tells the box's
-  memory (`memory{budget_bytes, admission_limit_bytes, held_bytes}`), which
-  this controller keeps beside its pool's size.
+  admits a pipe by a ceiling the platform no longer names. A hello's answer
+  tells the box's pool size, a quarter of which (at least one) is the most
+  programs one athanor's owners may define.
 
   Nothing is sent, and no claim renewed, while this member does not hold its
   slot in the cell (`Arca.ControlPlane.held?/0`) or its generation cannot be
@@ -205,8 +205,6 @@ defmodule Opus.Programs.Box do
       :boot,
       :generation,
       :pool_size,
-      # The box's memory as its last hello answered it.
-      :memory,
       :inflight,
       generation_source: &Arca.ControlPlane.generation/0,
       # The periods the caller fixed; the rest are read at every tick.
@@ -1551,7 +1549,7 @@ defmodule Opus.Programs.Box do
          state,
          {:hello},
          spec,
-         {:http, 200, _boot, %{boot: boot, pool: pool, memory: memory}}
+         {:http, 200, _boot, %{boot: boot, pool: pool}}
        ) do
     Logger.info(
       "[Opus.Programs] greeted the backends service #{boot} under generation #{spec.generation}"
@@ -1561,8 +1559,7 @@ defmodule Opus.Programs.Box do
       state
       | boot: boot,
         generation: spec.generation,
-        pool_size: pool.size,
-        memory: memory
+        pool_size: pool.size
     }
 
     resyncs = for {key, %{live?: false}} <- state.owners, do: {:sync, key}

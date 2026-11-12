@@ -963,7 +963,7 @@ defmodule Aqua.ApprovalsTest do
   end
 
   describe "ttl_seconds/1" do
-    test "is the athanor's setting in hours, else the configured default, never a bad value" do
+    test "is the athanor's setting in hours, else 24, never a bad value" do
       ctx = Sanctum.TestContext.local(:prism)
       assert Approvals.ttl_seconds(ctx) == 24 * 3600
 
@@ -986,26 +986,6 @@ defmodule Aqua.ApprovalsTest do
       {:ok, _} =
         Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => 0}})
 
-      assert Approvals.ttl_seconds(ctx) == 24 * 3600
-    end
-
-    test "refuses a configured default that is not a positive integer" do
-      ctx = Sanctum.TestContext.local(:prism)
-      configured = Application.get_env(:cyfr, Approvals)
-
-      on_exit(fn ->
-        if is_nil(configured),
-          do: Application.delete_env(:cyfr, Approvals),
-          else: Application.put_env(:cyfr, Approvals, configured)
-      end)
-
-      for bad <- [0, -1, "24", nil] do
-        Application.put_env(:cyfr, Approvals, expiry_hours: bad)
-        assert_raise ArgumentError, ~r/expiry_hours/, fn -> Approvals.ttl_seconds(ctx) end
-      end
-
-      # No configured value at all is the code's own default, 24 hours.
-      Application.put_env(:cyfr, Approvals, [])
       assert Approvals.ttl_seconds(ctx) == 24 * 3600
     end
   end

@@ -34,9 +34,7 @@ defmodule Compendium.Providers.Source do
   covers component code. A read's answer is the athanor's own file, read
   through the caller's storage grant (`sources: [:files_by_grant]`); a
   write, an edit and a delete answer only the path they changed
-  (`sources: []`). Every call carries `path`, so
-  `Aqua.Loop.Policy.touched_refs/1` counts the component as touched and a
-  run of it later in the turn asks for a card.
+  (`sources: []`).
   """
 
   @behaviour Prima.Provider

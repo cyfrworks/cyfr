@@ -360,10 +360,10 @@ defmodule Opus.Record do
   child's row takes its parent's.
 
   `opts` carry what the admission settled: `:grant`, the
-  `Prima.ExecutionGrant` the run is admitted under (when absent, a root's
-  athanor standing read now, `Sanctum.ExecutionStanding.capture/1`, or the
-  stamp its parent's current attempt stores, which a child inherits
-  unchanged); `:retention_class`, the class its payloads are kept under
+  `Prima.ExecutionGrant` the run is admitted under (a child's admission
+  names the stamp it inherits, `inherited_grant/2`; when absent, a root's
+  athanor standing read now, `Sanctum.ExecutionStanding.capture/1`);
+  `:retention_class`, the class its payloads are kept under
   (`default_retention_class/1` of `ctx` when absent); and
   `:retained_input`, the map kept as the input payload in place of the
   input, when the sent input carries transient content (the row's hash
@@ -419,22 +419,18 @@ defmodule Opus.Record do
     end
   end
 
-  # The grant `record` is admitted under: the one admission settled, else a
-  # root's athanor standing read now or the stamp its parent's current
-  # attempt stores. `{:error, :not_standing}` when neither stands,
-  # `{:error, :unavailable}` when the store cannot answer.
+  # The grant `record` is admitted under: the one admission settled, else,
+  # for a root, its athanor standing read now (`{:error, :not_standing}`
+  # when it does not stand).
   defp admission_grant(record, opts) do
     case Keyword.get(opts, :grant) do
-      %Prima.ExecutionGrant{} = grant -> {:ok, grant}
-      nil -> stored_or_captured_grant(record)
+      %Prima.ExecutionGrant{} = grant ->
+        {:ok, grant}
+
+      nil when is_nil(record.parent_execution_id) ->
+        Sanctum.ExecutionStanding.capture(record_to_ctx(record))
     end
   end
-
-  defp stored_or_captured_grant(%__MODULE__{parent_execution_id: nil} = record),
-    do: Sanctum.ExecutionStanding.capture(record_to_ctx(record))
-
-  defp stored_or_captured_grant(%__MODULE__{athanor_id: athanor_id, parent_execution_id: parent}),
-    do: inherited_grant(athanor_id, parent)
 
   @doc """
   The grant a child of `parent_execution_id` in `athanor_id` inherits: the

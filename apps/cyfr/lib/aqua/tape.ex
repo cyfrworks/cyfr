@@ -616,11 +616,6 @@ defmodule Aqua.Tape do
   def crew_thread(%Context{} = ctx, room_id, member),
     do: Threads.crew_thread(Sanctum.Context.actor(ctx), room_id, member)
 
-  @doc "The child threads of a room, archived ones included."
-  @spec children(Context.t(), String.t()) :: [map()] | {:error, term()}
-  def children(%Context{} = ctx, room_id),
-    do: Threads.children(Sanctum.Context.actor(ctx), room_id)
-
   @doc """
   Retire a child thread, its open turns cancelled with their replies in
   the same transaction (`Arca.ThreadStorage.archive/3`), under the stamp

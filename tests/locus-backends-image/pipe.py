@@ -289,13 +289,17 @@ created =
 reply.(%{entry: view.id, athanor: Sanctum.Context.athanor!(ctx)})
 """
 
-OPEN = """
+# Each pipe call carries the deadline the host gives a pipe call that
+# arrives now (`Opus.Host.Pipe.deadline/1`, from the call header's time).
+DEADLINE = "deadline = Opus.Host.Pipe.deadline(%{ts: System.system_time(:millisecond)})\n"
+
+OPEN = DEADLINE + """
 {:ok, row} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), program)
-reply.(shape.(Opus.Programs.pipe_open(row, entry, key, argv, opener)))
+reply.(shape.(Opus.Programs.pipe_open(row, entry, key, argv, opener, deadline)))
 """
 
-SEND = "reply.(shape.(Opus.Programs.pipe_send(athanor, opener, session, lines)))"
-RECV = "reply.(shape.(Opus.Programs.pipe_recv(athanor, opener, session, 0, 5000)))"
+SEND = DEADLINE + "reply.(shape.(Opus.Programs.pipe_send(athanor, opener, session, lines, deadline)))"
+RECV = DEADLINE + "reply.(shape.(Opus.Programs.pipe_recv(athanor, opener, session, 0, 5000, deadline)))"
 REVOKE = "reply.(shape.(Sanctum.Vault.revoke(ctx, entry)))"
 
 
