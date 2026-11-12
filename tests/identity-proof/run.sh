@@ -12,7 +12,9 @@
 # second recovery code, a key removed and the account replaced with a
 # code, and the account gone; this script answers its asks for the
 # servers' part (`ask-N.json`, answered `answer-N.json`): A's setup token,
-# what A holds, the directory down on purpose and the tombstone.
+# what A holds, the directory down on purpose and the tombstone, which the
+# directory's platform administrator asks for and confirms with the setup
+# device the release fixture paired with them.
 #
 # Usage: tests/identity-proof/run.sh
 # Writes identity-proof.json and identity-proof.md into PROOF_OUT (default:
@@ -86,6 +88,15 @@ server_start "$DIR"
 identity_front_start "$DIR"
 identity_start "$A"
 
+# The directory's platform administrator, its first person, made by the
+# release fixture with the device its hello pairs with them, which gives
+# the fresh confirmation the tombstone asks of them (fixture.exs).
+step "the directory's platform administrator"
+admin="$(server_fixture "$DIR" person identity-proof-operator)"
+[ -n "$admin" ] || fail "the release fixture made no administrator at the directory"
+ADMIN_TOKEN="$(field "$admin" token)"
+LOG_SECRETS+=("$ADMIN_TOKEN")
+
 # Each step the proof asks for (harness.sh `answer_asks`, which removes
 # each ask before its answer appears).
 answer_ask() {
@@ -109,7 +120,7 @@ answer_ask() {
       ANSWER="{\"mode\": \"$(asked "$ask" mode)\"}"
       ;;
     tombstone)
-      ANSWER="$(identity_fixture "$DIR" tombstone "$(asked "$ask" identifier)")"
+      ANSWER="$(identity_fixture "$DIR" tombstone "$(asked "$ask" identifier)" "$ADMIN_TOKEN")"
       ;;
     *) fail "the proof asked for '$op', which this script does not do" ;;
   esac
