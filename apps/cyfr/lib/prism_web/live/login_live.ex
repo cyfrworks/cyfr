@@ -28,7 +28,10 @@ defmodule PrismWeb.LoginLive do
   bound to (`Compendium.complete_registry/2`): the signed request sent to
   the registry and what its success does done, as the `registry` tool
   completes a terminal's; the outcome is the flash the browser returns
-  with.
+  with. The page answers the event at once and says it is sending; the
+  registry is called off the event, since a registry request has no total
+  deadline and the browser gives up on an event it waits on for 30
+  seconds. The call outlives the page (`complete/2`).
 
   A CYFR with no person yet offers nothing but the way to set up.
   """
@@ -68,6 +71,9 @@ defmodule PrismWeb.LoginLive do
      |> assign(:user_agent, if(connected?(socket), do: get_connect_info(socket, :user_agent)))
      |> assign(:page_title, "Sign in")
      |> assign(:set_up, set_up?())
+     # Where the browser goes when the registry answers a signature this
+     # page is completing; nil while it completes none.
+     |> assign(:sending, nil)
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
@@ -128,10 +134,8 @@ defmodule PrismWeb.LoginLive do
     redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")
   end
 
-  defp answered(socket, {:ok, %{purpose: :registry} = outcome}) do
-    {kind, message} = registered(socket, outcome)
-    socket |> put_flash(kind, message) |> redirect(to: outcome.back || ~p"/")
-  end
+  defp answered(socket, {:ok, %{purpose: :registry} = outcome}),
+    do: socket |> assign(:sending, outcome.back || ~p"/") |> complete(outcome)
 
   defp answered(socket, {:ok, %{back: back}}) when is_binary(back),
     do: redirect(socket, to: back)
@@ -140,8 +144,40 @@ defmodule PrismWeb.LoginLive do
 
   defp answered(socket, {:error, reason}), do: assign(socket, :error, sentence(reason))
 
-  defp registered(socket, outcome) do
-    with {:ok, ctx} <- session_caller(socket.assigns.bindings),
+  @impl true
+  def handle_async(:registry, {:ok, {kind, message}}, socket),
+    do: {:noreply, socket |> put_flash(kind, message) |> redirect(to: socket.assigns.sending)}
+
+  def handle_async(:registry, {:exit, reason}, socket) do
+    Logger.warning(
+      "[LoginLive] a registry completion exited: " <> Prima.LoggerContext.shape(reason)
+    )
+
+    message = "That did not go through: " <> Ops.error_message(:unavailable)
+    {:noreply, socket |> put_flash(:error, message) |> redirect(to: socket.assigns.sending)}
+  end
+
+  # The registry call, off the event. It runs to its end whether or not the
+  # page is still there to show it, so it ignores the page's exit: stopped
+  # in flight, a mint the registry made would be a live token this CYFR
+  # never stored, which the registry reaps only after a year idle. Its
+  # supervisor stops it with the node.
+  defp complete(socket, outcome) do
+    bindings = socket.assigns.bindings
+
+    start_async(
+      socket,
+      :registry,
+      fn ->
+        Process.flag(:trap_exit, true)
+        registered(bindings, outcome)
+      end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
+
+  defp registered(bindings, outcome) do
+    with {:ok, ctx} <- session_caller(bindings),
          {:ok, result} <- Compendium.complete_registry(ctx, outcome) do
       {:info, done(outcome.registry_request, result)}
     else
@@ -294,7 +330,16 @@ defmodule PrismWeb.LoginLive do
             </p>
           </div>
 
-          <div :if={@set_up} class="space-y-4">
+          <p
+            :if={@sending}
+            role="status"
+            data-test="registry-sending"
+            class="text-sm text-gray-300 text-center"
+          >
+            Sending what you signed. You will see the answer when it comes.
+          </p>
+
+          <div :if={@set_up and !@sending} class="space-y-4">
             <div
               :if={@error}
               role="alert"

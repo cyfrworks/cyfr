@@ -62,6 +62,9 @@ defmodule CyfrWeb.ContextGuardRosterTest do
        ]},
     "live/components_live.ex" => {4, [{"live/components_live.ex", :deliver}]},
     "live/builds_live.ex" => {1, [{"live/builds_live.ex", :deliver}]},
+    # An abuse report, answered to the dialog itself.
+    "live/components/report_component.ex" =>
+      {1, [{"live/components/report_component.ex", :report}]},
     "live/shell_live.ex" => {1, [{"live/shell_live.ex", :deliver}]},
     # A model catalyst's install, answered to the page, and each ready
     # brain's options, answered to the agents section itself.
@@ -160,8 +163,16 @@ defmodule CyfrWeb.ContextGuardRosterTest do
              Enum.join(unguarded, "\n")
   end
 
+  # A public page holds no session's context (`@public`), so a task it
+  # starts answers to no focus: the sign-in page's registry completion
+  # reads the session it was bound to from the store.
+  defp console(sources) do
+    public = for {name, path} <- modules_using(sources, "live_view"), name in @public, do: path
+    Map.drop(sources, public)
+  end
+
   test "every task the console starts is rostered, captures its focus, and is delivered through the guard" do
-    sources = sources()
+    sources = console(sources())
     starts = counts(sources, @task_start)
 
     assert starts == Map.new(@tasks, fn {path, {n, _}} -> {path, n} end),
