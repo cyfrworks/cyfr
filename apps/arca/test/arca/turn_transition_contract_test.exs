@@ -23,10 +23,18 @@ defmodule Arca.TurnTransitionContractTest do
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
-    Arca.Test.Actor.athanor!()
-    actor = Arca.Test.Actor.local()
-    {:ok, thread} = Threads.create(actor)
-    {:ok, actor: actor, thread: thread}
+
+    # A case racing on connections of its own writes nothing in the
+    # sandbox: on SQLite a sandbox write holds the one write lock until the
+    # case ends, and every racer would wait behind it.
+    if tags[:own_connections] do
+      :ok
+    else
+      Arca.Test.Actor.athanor!()
+      actor = Arca.Test.Actor.local()
+      {:ok, thread} = Threads.create(actor)
+      {:ok, actor: actor, thread: thread}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -903,6 +911,7 @@ defmodule Arca.TurnTransitionContractTest do
     # the connection whole, so the two would run one after the other and
     # the lock would decide nothing. The rows are committed, in an athanor
     # of this case's own, and erased when it ends.
+    @tag :own_connections
     test "of a recovery and a takeover racing on one fence, one lands and one recovery is spent" do
       actor = unboxed_athanor!()
       {turn, _root} = unboxed(fn -> started!(actor, elem(Threads.create(actor), 1)) end)

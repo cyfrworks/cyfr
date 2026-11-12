@@ -65,7 +65,9 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
 
     # Registration wraps the execution window, and the entry must be gone
     # afterwards.
-    assert {:ok, %{"ran" => true}} = run(ctx, %{"a" => 1, "b" => 2}, execution_id)
+    assert {:ok, %{status: :completed, output: %{"ran" => true}}} =
+             run(ctx, %{"a" => 1, "b" => 2}, execution_id)
+
     assert Registry.lookup(Opus.Registry, execution_id) == []
   end
 
@@ -87,7 +89,7 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
       end)
 
     assert_receive :registered, 5_000
-    assert_receive {:done, {:ok, %{"ran" => true}}}, 30_000
+    assert_receive {:done, {:ok, %{status: :completed, output: %{"ran" => true}}}}, 30_000
 
     # The dispatch's own register/unregister must not steal or clear the
     # streaming task's entry — it stays until the owner process exits.
@@ -97,7 +99,8 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
   end
 
   defp run(ctx, input, execution_id),
-    do: Opus.run_root(ctx, :default, @test_ref, input, execution_id: execution_id, type: "reagent")
+    do:
+      Opus.run_root(ctx, :default, @test_ref, input, execution_id: execution_id, type: "reagent")
 
   describe "killing reaches the process running the component" do
     test "a linked child that traps exits survives its parent's kill" do
