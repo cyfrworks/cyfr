@@ -211,8 +211,10 @@ defmodule Emissary.Web.DeviceChannel do
       hello again), or a verification bound
       is spent (reason `rate_limited; retry_after_s=N`, the seconds until
       the bound opens again; the recorded sentence says whether it was
-      the address's and the installation's or this device's own). The
-      glass retries later, as it does after any close it does not read.
+      the address's and the installation's or this device's own), or the
+      person stands but for their company's sign-in, which they give in a
+      browser (reason `forbidden`; the pairing stands).
+      The glass retries later, as it does after any close it does not read.
 
   A renewal the gate refused was recorded by the gate; the close records
   nothing more.

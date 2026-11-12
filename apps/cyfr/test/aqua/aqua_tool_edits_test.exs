@@ -296,7 +296,8 @@ defmodule Aqua.AquaToolEditsTest do
       DateTime.add(DateTime.utc_now(), -2 * Arca.StorageUnits.draft_ttl_ms(), :millisecond)
 
     Arca.Repo.update_all(Arca.Schemas.StorageUnit, set: [updated_at: long_ago])
-    assert :ok = Compendium.ProjectionReconciler.await(ctx, "aqua", settle_after_ms: 0)
+    Arca.Repo.update_all(Arca.Schemas.StorageProjectionChange, set: [updated_at: long_ago])
+    assert :ok = Compendium.ProjectionReconciler.await(ctx, "aqua")
 
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     assert Enum.any?(rows, &(&1.name == "tracker"))

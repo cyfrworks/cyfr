@@ -99,21 +99,18 @@ defmodule Compendium.ProjectionReconciler do
   for a context with no athanor, and the store's own error when it cannot
   answer.
 
-  `opts` takes `settle_after_ms:` in place of the configured one. Inside a
-  reconciliation of this process the reconciliation is the barrier, and
-  `:ok` is answered at once.
+  Inside a reconciliation of this process the reconciliation is the
+  barrier, and `:ok` is answered at once.
   """
-  @spec await(Context.t(), root(), keyword()) ::
+  @spec await(Context.t(), root()) ::
           :ok | {:error, :projection_unavailable | :no_athanor | term()}
-  def await(ctx, root, opts \\ [])
-
-  def await(%Context{} = ctx, root, opts) when root in @roots and is_list(opts) do
+  def await(%Context{} = ctx, root) when root in @roots do
     if Process.get(@reconciling) do
       :ok
     else
       case StorageProjectionRoots.epoch(Context.actor(ctx), root) do
         {:ok, %{epoch: epoch, acknowledged_epoch: epoch}} -> :ok
-        {:ok, _behind} -> reconciled(reconcile(ctx, root, opts))
+        {:ok, _behind} -> reconciled(reconcile(ctx, root))
         {:error, _} = error -> error
       end
     end
