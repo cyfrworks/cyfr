@@ -69,8 +69,10 @@ defmodule Compendium.ProjectionReconciler do
   be right — a lost notification, a crashed or absent process costs the
   next reader a reconciliation.
 
-  Configuration: `config :cyfr, Compendium.ProjectionReconciler` with
-  `enabled`, `interval_ms` and `settle_after_ms`.
+  `enabled`, `interval_ms` and `settle_after_ms` are fixed in a release.
+  `config :cyfr, Compendium.ProjectionReconciler` is read through
+  `Cyfr.seam/2`, so only a build that permits test seams takes other
+  values.
   """
 
   use GenServer
