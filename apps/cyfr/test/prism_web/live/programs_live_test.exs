@@ -514,7 +514,6 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert Terminal.text("\e]0;title\aPaste code: ") == "Paste code: "
     assert Terminal.text("\e[?25lplain\e(B") == "plain"
-    assert Terminal.max_lines() == 500
   end
 
   # What `gh auth login` wrote on the pty in the S1 hand check: a terminal

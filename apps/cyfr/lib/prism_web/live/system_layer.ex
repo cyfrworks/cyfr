@@ -276,10 +276,6 @@ defmodule PrismWeb.SystemLayer do
   @spec desktop_layer_id() :: String.t()
   def desktop_layer_id, do: "system-layer-desktop"
 
-  @doc "The stream the layer listens on."
-  @spec stream() :: String.t()
-  def stream, do: @stream
-
   @doc "Show `prompt` in the layer mounted under `id`."
   @spec show(String.t(), Prompt.t()) :: :ok
   def show(id \\ @layer_id, prompt) do

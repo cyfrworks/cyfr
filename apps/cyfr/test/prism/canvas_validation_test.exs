@@ -249,13 +249,6 @@ defmodule Prism.CanvasValidationTest do
 
       assert CanvasValidation.needed?(%{empty | working: "1.0.0", kept: "0.9.0"}, "1.0.1")
     end
-
-    test "each event reports its outcome" do
-      assert CanvasValidation.outcome(:ready) == "ready"
-      assert CanvasValidation.outcome(:deadline) == "not_ready"
-      assert CanvasValidation.outcome(:failed) == "died"
-      assert CanvasValidation.outcome(:gone) == "died"
-    end
   end
 
   describe "an outcome" do

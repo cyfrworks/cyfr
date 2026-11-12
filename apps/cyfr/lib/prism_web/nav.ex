@@ -212,10 +212,6 @@ defmodule PrismWeb.Nav do
   def href(%{path: path}, athanor_route), do: href(path, athanor_route)
   def href(path, athanor_route) when is_binary(path), do: PrismWeb.Focus.path(athanor_route, path)
 
-  @doc "The desktop's path, focused on an athanor as any athanor page is."
-  @spec desktop_path() :: String.t()
-  def desktop_path, do: @desktop_path
-
   @doc """
   Whether `mode` shows the page at `path` (query string allowed): one of
   its items, or a record under one, or the desktop, shown in every UI

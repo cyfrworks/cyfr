@@ -37,8 +37,8 @@ defmodule PrismWeb.NavTest do
     assert Nav.shown?("/executions/exec_abc", "dev")
 
     for mode <- ~w(lite dev) do
-      assert Nav.shown?(Nav.desktop_path(), mode)
-      assert Nav.shown?(Nav.desktop_path() <> "?publisher=acme&tincture_name=widget", mode)
+      assert Nav.shown?("/", mode)
+      assert Nav.shown?("/?publisher=acme&tincture_name=widget", mode)
       refute Nav.shown?("/tinctures", mode)
       refute Nav.shown?("/canvas", mode)
       refute Nav.shown?("/chat", mode)

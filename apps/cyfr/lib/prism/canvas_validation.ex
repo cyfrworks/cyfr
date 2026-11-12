@@ -116,11 +116,10 @@ defmodule Prism.CanvasValidation do
     frames
   end
 
-  @doc "The outcome `event` reports to `canvas.activate`."
-  @spec outcome(event()) :: String.t()
-  def outcome(:ready), do: "ready"
-  def outcome(:deadline), do: "not_ready"
-  def outcome(event) when event in [:failed, :gone], do: "died"
+  # The outcome `event` reports to `canvas.activate`.
+  defp outcome(:ready), do: "ready"
+  defp outcome(:deadline), do: "not_ready"
+  defp outcome(event) when event in [:failed, :gone], do: "died"
 
   @doc """
   The canvas whose validation frame `frame_id` is, while `frames` holds
