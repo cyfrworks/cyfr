@@ -35,8 +35,9 @@ const (
 	resolvedFront = "compose.resolved."
 )
 
-// Receipts are kept at least this long and at least this many: a lost
-// reply resent within either bound is answered from its receipt.
+// Receipts are kept at least this long and at least this many, for the
+// status's last outcome and the recovery of an operation whose receipt
+// was written before its journal was removed.
 const (
 	receiptAge   = 24 * time.Hour
 	receiptCount = 256
@@ -313,8 +314,8 @@ func (e *Engine) finish(j *journal, r Receipt) (Receipt, error) {
 	return r, nil
 }
 
-// writeReceipt writes r durably, its free text redacted (redactor), so a
-// resend answers it redacted too.
+// writeReceipt writes r durably, its free text redacted (redactor), so
+// whatever reads it back reads it redacted too.
 func (e *Engine) writeReceipt(r Receipt) error {
 	return e.writeJSON(e.receiptPath(r.RequestID), e.redactor().receipt(r))
 }
@@ -463,46 +464,17 @@ func canonicalJSON(fields map[string]any) []byte {
 	return []byte(b.String())
 }
 
-// lookup answers a request id already seen: its unfinished journal's
-// phase, its receipt when the digest is the same, access_request_reused
-// when it is not. ok is false for an id never accepted.
-func (e *Engine) lookup(id, digest string) (Receipt, bool, error) {
+// checkRequestID refuses an id outside the request id grammar, which
+// names its journal entry and its receipt's file.
+func checkRequestID(id string) error {
 	if !requestID.MatchString(id) {
-		return Receipt{}, false, fmt.Errorf("access: the request id %q is not 32 lowercase hexadecimal characters", id)
+		return fmt.Errorf("access: the request id %q is not 32 lowercase hexadecimal characters", id)
 	}
-	j, err := e.readJournal()
-	if err != nil {
-		return Receipt{}, false, err
-	}
-	if j != nil {
-		switch {
-		case j.RequestID == id && j.RequestDigest != digest:
-			return reused(id, digest, j.Op), true, nil
-		case j.RequestID == id:
-			return j.receipt(), true, nil
-		case j.Op == "cancel" && j.Join != nil && j.Join.RequestID == id && j.Join.RequestDigest != digest:
-			return reused(id, digest, "join"), true, nil
-		case j.Op == "cancel" && j.Join != nil && j.Join.RequestID == id:
-			return Receipt{RequestID: id, RequestDigest: digest, Op: "join", State: "accepted", Phase: "cancelling", At: j.At}, true, nil
-		}
-	}
-	r, ok, err := e.readReceipt(id)
-	if err != nil || !ok {
-		return Receipt{}, false, err
-	}
-	if r.RequestDigest != digest {
-		return reused(id, digest, r.Op), true, nil
-	}
-	return r, true, nil
-}
-
-func reused(id, digest, op string) Receipt {
-	return Receipt{RequestID: id, RequestDigest: digest, Op: op, State: "rejected", Code: "access_request_reused"}
+	return nil
 }
 
 // reject answers a refusal made before acceptance with a rejected
-// receipt, written so a resend of the same id answers the same: nothing
-// changed.
+// receipt, written as the last outcome: nothing changed.
 func (e *Engine) reject(id, digest, op string, ref *Refusal) (Receipt, error) {
 	r := Receipt{RequestID: id, RequestDigest: digest, Op: op, State: "rejected", Code: ref.Code, Payload: ref.Payload, At: e.now()}
 	if err := e.writeReceipt(r); err != nil {

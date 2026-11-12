@@ -3511,21 +3511,6 @@
       ]
     },
     {
-      "code": "access_request_reused",
-      "class": "conflict",
-      "variants": [
-        {
-          "fixed": {},
-          "slots": [],
-          "template": "This request names a different change than the one first sent under its id. Nothing was changed. Send it again under a new id.",
-          "example": {
-            "payload": {},
-            "sentence": "This request names a different change than the one first sent under its id. Nothing was changed. Send it again under a new id."
-          }
-        }
-      ]
-    },
-    {
       "code": "tailnet_not_joined",
       "class": "setup_required",
       "variants": [

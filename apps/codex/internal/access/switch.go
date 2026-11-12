@@ -247,22 +247,13 @@ func (e *Engine) machine(ctx context.Context) (*Join, error) {
 	return &Join{Name: rec.Name, NodeID: rec.NodeID}, nil
 }
 
-// contentDigest is a switch's content in the request digest's form.
-func contentDigest(c RequestContent) string {
-	return requestDigest(map[string]any{
-		"op": "switch", "mode": c.Mode, "domain": c.Domain, "acme_email": c.ACMEEmail,
-		"hostname": c.Hostname, "new_node": c.NewNode, "auth_key_fingerprint": c.AuthKeyFingerprint,
-	})
-}
-
-// switchDigest binds a switch's id to the whole request, its content
-// included, so a resend with other content is access_request_reused
-// whatever the first answer was.
+// switchDigest is a switch's canonical request, which its journal and
+// receipt carry, so recovery takes a receipt for the journal's request
+// alone.
 func switchDigest(r SwitchRequest) string {
 	return requestDigest(map[string]any{
 		"op": "switch", "mode": r.Target.Mode, "domain": r.Target.Domain, "acme_email": r.Target.ACMEEmail,
 		"join_id": r.JoinID, "old_digest": r.OldDigest, "new_digest": r.NewDigest,
-		"content_digest": contentDigest(r.Content),
 	})
 }
 
@@ -273,13 +264,10 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 	if _, err := e.readEnv(); err != nil {
 		return Receipt{}, err
 	}
-	digest := switchDigest(r)
-	if rc, ok, err := e.lookup(r.ID, digest); err != nil || ok {
-		if err != nil {
-			return Receipt{}, err
-		}
-		return answer(rc)
+	if err := checkRequestID(r.ID); err != nil {
+		return Receipt{}, err
 	}
+	digest := switchDigest(r)
 	if rc, blocked, err := e.blocked(r.ID, digest, "switch"); blocked || err != nil {
 		return rc, err
 	}

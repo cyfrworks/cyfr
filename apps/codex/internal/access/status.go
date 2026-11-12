@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -142,8 +141,8 @@ func (e *Engine) certificate(ctx context.Context, container, command string) str
 // receiptOf answers request id from the journal or its receipt, without
 // the lock.
 func (e *Engine) receiptOf(id string) (Receipt, bool, error) {
-	if !requestID.MatchString(id) {
-		return Receipt{}, false, fmt.Errorf("access: the request id %q is not 32 lowercase hexadecimal characters", id)
+	if err := checkRequestID(id); err != nil {
+		return Receipt{}, false, err
 	}
 	j, err := e.readJournal()
 	if err != nil {

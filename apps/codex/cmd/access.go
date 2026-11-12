@@ -487,15 +487,6 @@ func askJoin(ctx context.Context, in *bufio.Reader, out io.Writer, o accessOptio
 // the command ends there, as no failure (exit 0).
 var errDeclined = errors.New("declined")
 
-// requestContent is everything a `cyfr access` command was asked, which
-// the engine binds its request id to (access.RequestContent).
-func requestContent(target access.Target, o accessOptions, key []byte) access.RequestContent {
-	return access.RequestContent{
-		Mode: target.Mode, Domain: target.Domain, ACMEEmail: target.ACMEEmail,
-		Hostname: o.hostname, NewNode: o.newNode, AuthKeyFingerprint: access.AuthKeyFingerprint(key),
-	}
-}
-
 // printPreview prints a change before it is made: who will reach CYFR and
 // where (reachedBy), each other setting that changes as before → after
 // (changedRows), and, when the address changes and someone may be set up
@@ -660,7 +651,6 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 	if err != nil {
 		return err
 	}
-	content := requestContent(target, o, key)
 	id, err := newRequestID()
 	if err != nil {
 		return err
@@ -722,7 +712,7 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 	// journal's to recover, never a half-made change this command walks
 	// away from.
 	err = answerFailure(e.Switch(context.WithoutCancel(ctx), access.SwitchRequest{
-		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest, Content: content,
+		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
 	}))
 	if local := (startedLocally{}); err != nil && !errors.As(err, &local) {
 		return err

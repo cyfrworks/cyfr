@@ -278,25 +278,12 @@ type SwitchRequest struct {
 	JoinID    string
 	OldDigest string
 	NewDigest string
-	// Content is everything the command was asked, which a resend of its
-	// id must ask again.
-	Content RequestContent
 }
 
-// RequestContent is the whole of what a `cyfr access` command was asked:
-// the mode, the domain and email, and for tailnet the machine name,
-// --new-node and the auth key's fingerprint (AuthKeyFingerprint, "" with
-// no key). A request id is bound to it whatever the outcome.
-type RequestContent struct {
-	Mode, Domain, ACMEEmail, Hostname string
-	NewNode                           bool
-	AuthKeyFingerprint                string
-}
-
-// AuthKeyFingerprint is an auth key's fingerprint as a request binds it:
+// authKeyFingerprint is an auth key's fingerprint as a join's digest binds it:
 // sha256: and the hex of the key's bytes, surrounding space removed; ""
 // for no key. The key itself is never stored.
-func AuthKeyFingerprint(key []byte) string {
+func authKeyFingerprint(key []byte) string {
 	key = bytes.TrimSpace(key)
 	if len(key) == 0 {
 		return ""
@@ -306,9 +293,7 @@ func AuthKeyFingerprint(key []byte) string {
 
 // Switch moves the home to the request's head: stop and verify, commit
 // .env, start what was running with node validation and health, roll back
-// on a failed start. The receipt is its outcome; resending the same id
-// with the same request, its content included, answers the same receipt,
-// and with any other a rejected access_request_reused that changes nothing.
+// on a failed start. The receipt is its outcome.
 // A reopen (Preview.Reopen) is ok only if, once Serve is open, cyfr runs
 // and Serve's configuration is the head's: a home that stopped before the
 // switch was accepted is access_stale, and one that stopped, or whose

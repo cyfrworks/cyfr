@@ -121,7 +121,7 @@ func TestRedactedErrorsKeepTheirIdentity(t *testing.T) {
 
 // A refusal whose slot holds a value .env gained during the operation is
 // redacted in the journal it writes, the receipt it persists, and every
-// answer, a resend's included: the redactor reads .env before and after.
+// answer: the redactor reads .env before and after.
 func TestReceiptsAndJournalsArePersistedRedacted(t *testing.T) {
 	const secret = "203.0.113.77/33-candidate-secret"
 	h := newHome(t)

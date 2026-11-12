@@ -232,10 +232,6 @@ defmodule Prima.Refusal do
       {:forbidden,
        "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from " <>
          ".env. Remove it from .env."},
-    access_request_reused:
-      {:conflict,
-       "This request names a different change than the one first sent under its id. " <>
-         "Nothing was changed. Send it again under a new id."},
     tailnet_not_joined:
       {:setup_required,
        "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access " <>

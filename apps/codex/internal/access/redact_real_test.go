@@ -251,7 +251,7 @@ func stateTexts(t *testing.T, e *Engine) []string {
 // env file a value names that compose cannot read, a value compose
 // refuses at services[..], a service compose does not have, an image it
 // cannot find, a port another process holds, a daemon it cannot reach or
-// may not use. Errors, refusals, receipts returned, resent and persisted,
+// may not use. Errors, refusals, receipts returned and persisted,
 // journals, status and previews are checked as they leave the engine;
 // payloads and heads before its last pass too.
 func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
@@ -467,7 +467,7 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r := SwitchRequest{ID: id(7), Target: public, OldDigest: p.OldDigest, NewDigest: p.NewDigest, Content: RequestContent{Mode: ModePublic, Domain: public.Domain}}
+		r := SwitchRequest{ID: id(7), Target: public, OldDigest: p.OldDigest, NewDigest: p.NewDigest}
 		rc := operate(e, l, "Switch", func() (Receipt, error) { return e.doSwitch(bg, r) })
 		if rc.Outcome != "rolled_back" || !strings.Contains(rc.Payload["reason"], fmt.Sprintf("port %d is already in use", port)) {
 			t.Errorf("the switch answered %+v", rc)

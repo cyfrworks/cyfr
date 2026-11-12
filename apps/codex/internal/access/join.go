@@ -148,14 +148,11 @@ func (e *Engine) doJoin(ctx context.Context, r JoinRequest) (Receipt, error) {
 		}
 		key = bytes.TrimSpace(raw)
 	}
-	hostname := joinHostname(r.Hostname)
-	digest := joinDigest(hostname, r.NewNode, AuthKeyFingerprint(key))
-	if rc, ok, err := e.lookup(r.ID, digest); err != nil || ok {
-		if err != nil {
-			return Receipt{}, err
-		}
-		return answer(rc)
+	if err := checkRequestID(r.ID); err != nil {
+		return Receipt{}, err
 	}
+	hostname := joinHostname(r.Hostname)
+	digest := joinDigest(hostname, r.NewNode, authKeyFingerprint(key))
 	if rc, blocked, err := e.blocked(r.ID, digest, "join"); blocked || err != nil {
 		return rc, err
 	}

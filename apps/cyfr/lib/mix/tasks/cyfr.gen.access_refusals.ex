@@ -47,7 +47,6 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
        mode <- ~w(local tailnet),
        do: {%{option: option, mode: mode}, []}
      )},
-    {:access_request_reused, [{%{}, []}]},
     {:tailnet_not_joined, [{%{}, []}]},
     {:tailnet_https_off, [{%{}, ~w(name)}]},
     {:tailnet_active, [{%{}, ~w(name)}]},
