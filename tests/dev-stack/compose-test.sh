@@ -76,7 +76,7 @@ fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # The boundary cases, defined below; DEV_STACK_CASES names some of them.
-BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_new_database case_same_stack case_stack_reset case_cyfr_run_absent case_stack_env case_unresolved case_untrusted case_port_443 case_mixed_address case_missing_bind case_volume_replaced case_new_commit"
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_new_database case_same_stack case_stack_reset case_cyfr_run_absent case_stack_env case_unresolved case_untrusted case_port_443 case_mixed_address case_missing_bind case_volume_replaced case_new_commit case_export_symlink case_export_cleanup"
 for c in ${DEV_STACK_CASES:-}; do
   case " $BOUNDARY_CASES " in
     *" $c "*) ;;
@@ -798,9 +798,10 @@ CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$
   [ "$(stack_calls)" = "$(started_stack)" ] || echo "the local cyfr.run's docker calls: $(stack_calls)"
   [ "$(record docker.calls | head -n 5 | cut -d'|' -f1)" = "$(record docker.calls | grep -E -e ' -p cyfr-run-dev ' | cut -d'|' -f1)" ] ||
     echo "the local cyfr.run did not start before the worktree's stack: $(record docker.calls | cut -d'|' -f1)"
-  # The export holds the commit's tracked files, and nothing else.
+  # The export holds the commit's tracked files and the loop's marker,
+  # and nothing else.
   local export="$case_dir/$machine/cyfr-run/$fake_commit"
-  [ "$(cd "$export" 2>/dev/null && find . -type f | sort)" = $'./Caddyfile\n./docker-compose.local.yml\n./docker-compose.prod.yml' ] ||
+  [ "$(cd "$export" 2>/dev/null && find . -type f | LC_ALL=C sort)" = $'./.cyfr-dev-stack-export\n./Caddyfile\n./docker-compose.local.yml\n./docker-compose.prod.yml' ] ||
     echo "the export of $fake_commit holds: $(cd "$export" 2>/dev/null && find . | sort | tr '\n' ' ')"
   grep -qxF "dev-stack: starting the local cyfr.run from $fake_run's commit $fake_commit, its committed HEAD (an uncommitted change there is not in it, and a new commit rebuilds it at the next start), unless it runs already; its first start builds it." "$case_dir/out" ||
     echo "the run did not name the commit it runs: $(cat "$case_dir/out")"
@@ -1378,6 +1379,91 @@ case_new_commit() {
   [ ! -e "$case_dir/$machine/cyfr-run/$second/uncommitted.txt" ] || echo "an uncommitted file reached the export"
   nothing_left
 }
+# link_commit NAME TARGET...: a copy of the fake checkout whose commit
+# holds each NAME as a symbolic link to its TARGET, in place of its file,
+# beside an untracked local-Caddyfile; sets $other and $commit.
+link_commit() {
+  other="$scratch/link-cyfr.run"
+  rm -rf "$other" && cp -r "$fake_run" "$other"
+  while [ "$#" -ge 2 ]; do
+    rm -f "$other/$1" && ln -s "$2" "$other/$1" && git -C "$other" add "$1"
+    shift 2
+  done
+  git -C "$other" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m links
+  commit="$(git -C "$other" rev-parse HEAD)"
+  printf '# untracked-only\n{$DOMAIN} {\n}\n' >"$other/local-Caddyfile"
+}
+# A commit holding a symbolic link whose real path leaves the export (an
+# absolute one, a relative one that climbs out, one to a link that leaves)
+# refuses, naming the link, before Docker starts, and leaves no export;
+# so does a bind the commit's compose files name outside the export. A
+# link that stays inside the export is the commit's own.
+case_export_symlink() {
+  local named want
+  for named in "abs" "climb" "chain"; do
+    case "$named" in
+      abs) link_commit Caddyfile "$scratch/link-cyfr.run/local-Caddyfile" && want="Caddyfile -> $other/local-Caddyfile" ;;
+      climb) link_commit Caddyfile ../local-Caddyfile && want="Caddyfile -> ../local-Caddyfile" ;;
+      chain) link_commit inner "$scratch/link-cyfr.run/local-Caddyfile" Caddyfile inner && want="Caddyfile -> inner" ;;
+    esac
+    stack "$1" export-symlink "$complete" 0600 "" STUB_SERVER_STATUS=0 DEV_STACK_CYFR_RUN="$other"
+    [ "$(cat "$case_dir/status")" != 0 ] || echo "$named: the loop accepted a commit whose link leaves the export"
+    [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: $other's commit $commit holds a symbolic link that leaves it, $want; the local cyfr.run runs the commit's own files alone." ] ||
+      echo "$named: the refusal does not name the link: $(tail -n 1 "$case_dir/err")"
+    [ -z "$(ls -A "$case_dir/$machine/cyfr-run" 2>/dev/null)" ] || echo "$named: the refused export was left: $(ls -A "$case_dir/$machine/cyfr-run")"
+    record docker.calls | grep -q " up " && echo "$named: Docker started with a link out of the export"
+    nothing_left
+  done
+  # A bind the compose files name outside the export.
+  link_commit
+  sed -i "s|- ./Caddyfile:/etc/caddy/Caddyfile:ro|- $other/local-Caddyfile:/etc/caddy/Caddyfile:ro|" "$other/docker-compose.prod.yml"
+  commit="$(commit_run "$other")"
+  stack "$1" export-bind-outside "$complete" 0600 "" STUB_SERVER_STATUS=0 DEV_STACK_CYFR_RUN="$other"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: the local stack of $other's commit $commit is not the one the loop runs: its caddy service binds $other/local-Caddyfile, which is outside the export." ] ||
+    echo "a bind outside the export: $(tail -n 1 "$case_dir/err")"
+  record docker.calls | grep -q " up " && echo "Docker started with a bind outside the export"
+  # A link inside the export is accepted, and its bind reads the commit's file.
+  link_commit
+  mkdir -p "$other/conf" && git -C "$other" mv Caddyfile conf/Caddyfile && ln -s conf/Caddyfile "$other/Caddyfile"
+  commit="$(commit_run "$other")"
+  stack "$1" export-link-inside "$complete" 0600 "" STUB_SERVER_STATUS=0 DEV_STACK_CYFR_RUN="$other"
+  status_is 0
+  [ "$(readlink -f "$case_dir/$machine/cyfr-run/$commit/Caddyfile")" = "$case_dir/$machine/cyfr-run/$commit/conf/Caddyfile" ] ||
+    echo "the inside link does not resolve in the export: $(readlink -f "$case_dir/$machine/cyfr-run/$commit/Caddyfile")"
+  nothing_left
+}
+# The loop removes only the exports it made, by their names: a directory
+# that is not named for a commit, or is named for one but holds no
+# marker, is left alone and named; an earlier export of the loop's goes.
+# A directory at the running commit's name without the marker refuses.
+case_export_cleanup() {
+  local runs other_commit="$(printf 'ab%.0s' {1..20})" made="$(printf 'cd%.0s' {1..20})"
+  prepare "$1" export-cleanup "$complete" 0600
+  command=""
+  runs="$case_dir/$machine/cyfr-run"
+  mkdir -p "$runs/not-an-export" "$runs/$other_commit" "$runs/$made"
+  printf 'keep\n' >"$runs/not-an-export/sentinel"
+  printf 'keep\n' >"$runs/$other_commit/sentinel"
+  : >"$runs/$made/.cyfr-dev-stack-export"
+  launch STUB_SERVER_STATUS=0
+  echo "$?" >"$case_dir/status"
+  status_is 0
+  [ -f "$runs/not-an-export/sentinel" ] || echo "the cleanup deleted a directory not named for a commit"
+  [ -f "$runs/$other_commit/sentinel" ] || echo "the cleanup deleted a commit-named directory with no marker"
+  [ ! -e "$runs/$made" ] || echo "the cleanup kept an earlier export of the loop's"
+  [ -f "$runs/$fake_commit/.cyfr-dev-stack-export" ] || echo "the running export holds no marker"
+  grep -qxF "dev-stack: left alone in $case_dir/$machine/cyfr-run, since the loop did not make them: $other_commit not-an-export." "$case_dir/out" ||
+    echo "the run did not name what it left alone: $(grep 'left alone' "$case_dir/out")"
+  nothing_left
+  prepare "$1" export-unmarked "$complete" 0600
+  mkdir -p "$case_dir/$machine/cyfr-run/$fake_commit" && printf 'keep\n' >"$case_dir/$machine/cyfr-run/$fake_commit/sentinel"
+  launch STUB_SERVER_STATUS=0
+  echo "$?" >"$case_dir/status"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop ran from a directory at its commit's name that it did not make"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: $case_dir/$machine/cyfr-run/$fake_commit is not an export the loop made (it holds no .cyfr-dev-stack-export); move it away, and the next start exports the commit there." ] ||
+    echo "the refusal: $(tail -n 1 "$case_dir/err")"
+  [ -f "$case_dir/$machine/cyfr-run/$fake_commit/sentinel" ] || echo "the refusal touched the directory"
+}
 # A name the hosts table maps to loopback and to another address refuses,
 # naming the other address.
 case_mixed_address() {
@@ -1545,8 +1631,11 @@ break_script stackdown "the local cyfr.run stopped on the way out" "case_provisi
 break_script stackcaller "the caller's environment left to the local cyfr.run's compose" case_stack_env 's/^  for name in \$STACK_NAMES; do unset\+=\(-u "\$name"\); done$/  :/'
 break_script stackfile "the local cyfr.run's env file not handed to its compose" case_provision 's/--env-file "\$env_file" -p "\$STACK"/--env-file \/dev\/null -p "$STACK"/'
 break_script noexport "the local cyfr.run run from the checkout itself" "case_provision case_new_commit" 's|^  STACK_DIR="\$MACHINE/cyfr-run/\$1"$|  STACK_DIR="$CYFR_RUN"|'
-break_script nobind "a bind source the commit lacks left to Docker" case_missing_bind 's/ and not os\.path\.exists\(v\.get\("source", ""\)\):$/ and False:/'
-break_script oldexports "the exports of earlier commits kept" case_new_commit '/^  find "\$MACHINE\/cyfr-run" -mindepth 1 -maxdepth 1/d'
+break_script nobind "a bind source the commit lacks left to Docker" case_missing_bind 's/^        if not os\.path\.exists\(source\):$/        if False:/'
+break_script oldexports "the exports of earlier commits kept" case_new_commit '/^  drop_exports "\$commit"$/d'
+break_script anyexport "everything beside the running export removed" case_export_cleanup 's/^    if \[\[ "\$name" =~ \^\(\[0-9a-f\]\{40\}\|\[0-9a-f\]\{64\}\)\$ \]\] && \[ -d "\$MACHINE\/cyfr-run\/\$name" \] &&$/    if true \&\& [ -d "$MACHINE\/cyfr-run\/$name" ] \&\&/; s/^      \[ ! -L "\$MACHINE\/cyfr-run\/\$name" \] && \[ -f "\$MACHINE\/cyfr-run\/\$name\/\$EXPORTED" \]; then$/      true; then/; s|^      rm -rf "\$\{MACHINE:\?\}/cyfr-run/\$\{BASH_REMATCH\[1\]\}"$|      rm -rf "$MACHINE/cyfr-run/$name"|'
+break_script outlinks "a link out of the export kept" case_export_symlink 's/^            if real != root and not real.startswith\(root \+ os.sep\):$/            if False:/'
+break_script outbinds "a bind outside the export left to Docker" case_export_symlink 's/^        if real != inside and not real.startswith\(inside \+ os.sep\):$/        if False:/'
 break_script createdat "a database bound by its volume's making" "case_volume_replaced case_same_stack" 's/^  \[\[ "\$STACK_ID" =~ \^\[0-9a-f\]\{32\}\$ \]\] \|\| die .*$/  STACK_ID="$(docker volume inspect --format "{{.CreatedAt}}" cyfr-run-dev_postgres-data)"/'
 break_script remint "the ADMIN_TOKEN minted afresh on every start" case_stack_env 's/^  \[ ! -f "\$STACK_ENV" \] \|\| token=.*$/  :/'
 break_script nocheckout "no refusal of an absent cyfr.run checkout" case_cyfr_run_absent 's/^    die "the local cyfr.run is built from a cyfr.run checkout.s committed HEAD.*$/    true/'

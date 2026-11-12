@@ -64,7 +64,13 @@ commit's tracked files into
 `~/.local/state/cyfr-dev-stack/cyfr-run/<commit>` and runs compose there,
 and prints the commit as it starts. An uncommitted change in the
 checkout is not in the stack, and a new commit there rebuilds it at the
-next start. The accounts, names and components a loop makes exist
+next start. Nothing in the export reaches outside it: the loop refuses a
+commit holding a symbolic link, or a compose file binding a path, whose
+real path leaves the export, and it removes only the exports it made
+(named for a commit and holding its marker), naming anything else it
+finds there. A `.env` that is tracked in that repository is exported with
+the rest and can enter the builder's cache; the loop's own env file keeps
+it out of the services. The accounts, names and components a loop makes exist
 there alone, and nothing the loop does reaches the public cyfr.run. A
 `mix` boot outside the loop names the public cyfr.run, as a release does,
 unless `.env` names others: the loop is how a developer stays local.

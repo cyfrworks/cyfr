@@ -123,6 +123,10 @@ STACK_ENV="$MACHINE/cyfr-run.env"
 STACK_ROOT="$MACHINE/cyfr-run-root.crt"
 BOUND=data/dev-stack/cyfr-run.id
 STACK_DIR=""
+# The marker the loop writes last into an export it finished, and the
+# export it is making, which every exit removes.
+EXPORTED=.cyfr-dev-stack-export
+PARTIAL=""
 STACK_ID=""
 STACK_NAMES=""
 LOCK=""
@@ -393,6 +397,7 @@ finish() {
   # the claim go.
   [ -z "$CLAIM_FILE" ] || : >"$CLAIM_FILE"
   [ -z "$PRIVATE" ] || rm -rf "$PRIVATE"
+  [ -z "$PARTIAL" ] || rm -rf "$PARTIAL"
   exit "$status"
 }
 trap finish EXIT
@@ -498,16 +503,58 @@ stack_compose() {
 # once into the machine's dev-stack directory (STACK_DIR), the directory
 # compose builds and runs the local cyfr.run from: nothing Docker creates
 # lands in the checkout, and none of its untracked files, its .env among
-# them, reaches a build context or an image. The export appears whole or
-# not at all.
+# them, reaches a build context or an image. Nothing in the export reaches
+# outside it: a commit holding a symbolic link whose real path leaves the
+# export is refused, naming the link. The export appears whole, with the
+# loop's marker (EXPORTED) written last, or not at all; a directory at the
+# commit's name without the marker is not the loop's, and is refused.
 export_cyfr_run() {
+  [[ "$1" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || die "$CYFR_RUN's HEAD, $1, is not a full commit id."
   STACK_DIR="$MACHINE/cyfr-run/$1"
-  [ ! -d "$STACK_DIR" ] || return 0
-  local partial="$MACHINE/cyfr-run/.partial.$1.$$"
-  rm -rf "$partial" && mkdir -p "$partial" &&
-    git -C "$CYFR_RUN" archive --format=tar "$1" | tar -x -C "$partial" &&
-    mv "$partial" "$STACK_DIR" ||
+  if [ -e "$STACK_DIR" ] || [ -L "$STACK_DIR" ]; then
+    [ -d "$STACK_DIR" ] && [ ! -L "$STACK_DIR" ] && [ -f "$STACK_DIR/$EXPORTED" ] && return 0
+    die "$STACK_DIR is not an export the loop made (it holds no $EXPORTED); move it away, and the next start exports the commit there."
+  fi
+  local leaves
+  PARTIAL="$MACHINE/cyfr-run/.partial.$1.$$"
+  rm -rf "$PARTIAL" && mkdir -p "$PARTIAL" &&
+    git -C "$CYFR_RUN" archive --format=tar "$1" | tar -x -C "$PARTIAL" ||
     die "$CYFR_RUN's commit $1 could not be exported into $MACHINE/cyfr-run."
+  leaves="$(python3 -I -c '
+import os, sys
+root = os.path.realpath(sys.argv[1])
+for parent, dirs, files in sorted(os.walk(root)):
+    for name in sorted(dirs + files):
+        path = os.path.join(parent, name)
+        if os.path.islink(path):
+            real = os.path.realpath(path)
+            if real != root and not real.startswith(root + os.sep):
+                print("%s -> %s" % (os.path.relpath(path, root), os.readlink(path)))
+                sys.exit(1)' "$PARTIAL")" ||
+    die "$CYFR_RUN's commit $1 holds a symbolic link that leaves it, $leaves; the local cyfr.run runs the commit's own files alone."
+  : >"$PARTIAL/$EXPORTED" && mv "$PARTIAL" "$STACK_DIR" ||
+    die "$CYFR_RUN's commit $1 could not be exported into $MACHINE/cyfr-run."
+  PARTIAL=""
+}
+
+# drop_exports COMMIT: the exports the loop made of other commits, which
+# the running stack no longer reads, removed by their validated names;
+# anything else under cyfr-run is left alone, and named.
+drop_exports() {
+  local entry name others=()
+  for entry in "$MACHINE/cyfr-run"/* "$MACHINE/cyfr-run"/.[!.]*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    name="${entry##*/}"
+    [ "$name" != "$1" ] || continue
+    if [[ "$name" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] && [ -d "$MACHINE/cyfr-run/$name" ] &&
+      [ ! -L "$MACHINE/cyfr-run/$name" ] && [ -f "$MACHINE/cyfr-run/$name/$EXPORTED" ]; then
+      rm -rf "${MACHINE:?}/cyfr-run/${BASH_REMATCH[1]}"
+    else
+      others+=("$name")
+    fi
+  done
+  [ "${#others[@]}" = 0 ] ||
+    echo "dev-stack: left alone in $MACHINE/cyfr-run, since the loop did not make them: ${others[*]}."
 }
 
 # stack_env: the local cyfr.run's env file, mode 0600 in the machine's
@@ -562,8 +609,8 @@ start_cyfr_run() {
     die "docker compose could not resolve the local stack of $CYFR_RUN's commit $commit: $(tail -n 1 "$PRIVATE/cyfr-run.err")"
   # What the local cyfr.run declares, as compose resolved it: Caddy on
   # 127.0.0.1:443 alone, the server's apex DOMAIN, PostgreSQL's volume, and
-  # every file it binds held by the export, since Docker would make a
-  # directory for one that is missing.
+  # every file it binds held by the export, by its real path, since Docker
+  # would make a directory for one that is missing.
   local why
   why="$(python3 -I -c '
 import json, os, sys
@@ -577,8 +624,14 @@ for name in ("caddy", "cyfrrun"):
         sys.exit("its %s service is not for %s" % (name, domain))
 for name, service in sorted(s.items()):
     for v in service.get("volumes", []):
-        if v.get("type") == "bind" and not os.path.exists(v.get("source", "")):
-            sys.exit("its %s service binds %s, which the commit does not hold" % (name, os.path.relpath(v.get("source", ""), root)))
+        if v.get("type") != "bind":
+            continue
+        source = v.get("source", "")
+        if not os.path.exists(source):
+            sys.exit("its %s service binds %s, which the commit does not hold" % (name, os.path.relpath(source, root)))
+        real, inside = os.path.realpath(source), os.path.realpath(root)
+        if real != inside and not real.startswith(inside + os.sep):
+            sys.exit("its %s service binds %s, which is outside the export" % (name, source))
 if not any(v.get("type") == "volume" and v.get("source") == "postgres-data" and v.get("target") == "/var/lib/postgresql/data"
            for v in s.get("postgres", {}).get("volumes", [])):
     sys.exit("its postgres service keeps no volume postgres-data at /var/lib/postgresql/data")' "$PRIVATE/cyfr-run.json" "$DOMAIN" "$STACK_DIR" 2>&1)" ||
@@ -589,8 +642,7 @@ if not any(v.get("type") == "volume" and v.get("source") == "postgres-data" and 
   status="${PIPESTATUS[0]}"
   set -e
   [ "$status" = 0 ] || die "$(up_refusal "$(cat "$PRIVATE/cyfr-run.up")")"
-  # The exports of other commits, which the running stack no longer reads.
-  find "$MACHINE/cyfr-run" -mindepth 1 -maxdepth 1 ! -name "$commit" -exec rm -rf {} + 2>/dev/null || true
+  drop_exports "$commit"
   stack_compose cp caddy:/data/caddy/pki/authorities/local/root.crt "$STACK_ROOT" >/dev/null 2>&1 &&
     [ -s "$STACK_ROOT" ] || die "the local cyfr.run's certificate authority could not be copied out of its caddy service."
   # The stack's id: random, written once into its PostgreSQL volume and
