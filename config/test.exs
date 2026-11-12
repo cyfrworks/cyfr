@@ -18,7 +18,10 @@ config :cyfr, CyfrWeb.Endpoint,
 # shortened so a test of a retry or an unanswered request does not wait
 # out a production delay. Every answered read in the suite (a fresh TLS
 # connection to the scripted directory) runs under the same bound, so it
-# stays well above what one takes on a loaded runner.
+# stays well above what one takes on a loaded runner. The values a release
+# compiles, 500 ms and 10 s, are held by
+# `Compendium.Transport.ShippedRetryTest` and
+# `Sanctum.Directory.ShippedBoundTest`.
 config :cyfr, transport_retry_base_ms: 5
 config :sanctum, directory_request_ms: 5_000
 
@@ -338,5 +341,6 @@ config :logger, level: :warning
 
 # The namespace read is cached per person for a minute in production; a
 # sandbox rollback is a write no invalidation ever sees, so tests read the
-# users row every time.
+# users row every time. `Sanctum.NamespaceCacheTest` runs the shipped
+# minute.
 config :sanctum, :namespace_cache_ttl_ms, 0
