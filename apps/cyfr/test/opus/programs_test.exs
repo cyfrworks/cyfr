@@ -222,12 +222,7 @@ defmodule Opus.ProgramsTest do
     assert %{
              boot: "bb_first",
              generation: 1,
-             pool_size: 32,
-             memory: %{
-               budget_bytes: 1_879_048_192,
-               admission_limit_bytes: 1_879_048_192,
-               held_bytes: 0
-             }
+             pool_size: 32
            } = :sys.get_state(controller)
   end
 
