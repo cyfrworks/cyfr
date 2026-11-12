@@ -492,12 +492,11 @@ sys.exit(f"step {sys.argv[2]!r} not found in test.yml")
 PY
 }
 
-# The vocabulary job's script is CI's. macOS git grep -E ignores \b, so
-# there the patterns run as PCRE, which reads them the same way.
+# The vocabulary job's step is CI's, read from test.yml: it runs
+# scripts/ci/vocabulary.sh, which chooses its grep mode on macOS itself.
 leg_vocab() {
   local script="$LOGDIR/vocab.sh"
   ci_step "Retired names stay out and the storage layout is Arca's" > "$script" || return 1
-  if [ "$(uname -s)" = Darwin ]; then sed -i '' 's/git grep -InE/git grep -InP/' "$script"; fi
   step vocab fossils bash "$script"
 }
 
