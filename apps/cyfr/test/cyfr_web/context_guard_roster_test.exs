@@ -65,6 +65,15 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     # An abuse report, answered to the dialog itself.
     "live/components/report_component.ex" =>
       {1, [{"live/components/report_component.ex", :report}]},
+    # A deprecate or a yank, and the page's read of the registry.
+    "live/registry_live.ex" =>
+      {2, [{"live/registry_live.ex", :act}, {"live/registry_live.ex", :load}]},
+    # A program row's call: adding one, or its Test, Refresh, Restart,
+    # hosts or Reset folder.
+    "live/programs_live.ex" => {1, [{"live/programs_live.ex", :call}]},
+    # A thread with people, made in the overlay; a person added in a thread.
+    "live/chat_overlay_live.ex" => {1, [{"live/chat_overlay_live.ex", :create}]},
+    "live/shared_thread_live.ex" => {1, [{"live/shared_thread_live.ex", :add}]},
     "live/shell_live.ex" => {1, [{"live/shell_live.ex", :deliver}]},
     # A model catalyst's install, answered to the page, and each ready
     # brain's options, answered to the agents section itself.
@@ -83,10 +92,13 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   # each answer comes back to in the same file. Each is started by a
   # public page, which holds no session's context (`@public`), so it
   # captures no focus and its answer is not delivered through the guard.
-  # The sign-in page's registry completion acts as the session its request
-  # was bound to, read from the store and revalidated, and answers only the
-  # sentence the page shows (`PrismWeb.LoginLive`).
-  @unfocused %{"live/login_live.ex" => {1, :registry}}
+  # The sign-in page's check of an answer acts as no session: the request
+  # it answers is bound to this browser, and it answers only the outcome
+  # the page acts on. A registry signature it carries is completed in the
+  # same task as the session its request was bound to, read from the store
+  # and revalidated, and answers only the sentence the page shows
+  # (`PrismWeb.LoginLive`).
+  @unfocused %{"live/login_live.ex" => {1, [:answer]}}
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/
 
@@ -190,7 +202,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     # task sends back is taken where it was started.
     public = for {name, path} <- modules_using(sources, "live_view"), name in @public, do: path
 
-    for {path, {_n, answer}} <- @unfocused do
+    for {path, {_n, answers}} <- @unfocused, answer <- answers do
       assert path in public, "#{path} answers to no focus and is not a public page"
 
       assert answer_clauses(sources[path], answer) != [],

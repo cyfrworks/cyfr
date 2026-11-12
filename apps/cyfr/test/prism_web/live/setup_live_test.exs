@@ -76,8 +76,9 @@ defmodule PrismWeb.SetupLiveTest do
       |> Prima.SignIn.fragment()
 
     {:ok, login, _html} = live(conn, ~p"/login")
+    # The answer is checked off the event; the page redirects once it is.
     render_hook(login, "account_answer", %{"answer" => answer})
-    assert {"/auth/passkey/complete/" <> _ticket, _flash} = assert_redirect(login)
+    assert {"/auth/passkey/complete/" <> _ticket, _flash} = assert_redirect(login, 5_000)
 
     assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get_by_identifier(account.identifier)
     assert_received {:registry_request, %{path: "/v1/identities/" <> rest}}

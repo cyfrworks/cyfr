@@ -76,6 +76,66 @@ defmodule PrismWeb.ChatOverlayLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # A name is asked of the registry, which holds it here until the test
+  # releases it, past the browser's 30 s wait on the event (stood in for
+  # by one second), then answers that no one holds it.
+  test "New thread with people, a name held at the registry, answers at once, says so, starts no second thread, and shows who could not be added",
+       %{conn: conn, alice: alice} do
+    test = self()
+
+    Sanctum.Test.RegistryStub.start!(fn %{method: "GET", path: "/v1/handles/" <> _} ->
+      send(test, {:held, self()})
+
+      receive do
+        :release -> :ok
+      end
+
+      Sanctum.Test.RegistryStub.refusal(:handle_not_found)
+    end)
+
+    {view, _feed} = mount_chat(conn)
+    open!(view)
+    view |> element("#new-with-people") |> render_click()
+    form = %{"title" => "Slow", "people" => "slow-name"}
+
+    start = fn ->
+      pushed(fn -> view |> form("#new-shared-thread", form) |> render_submit() end)
+    end
+
+    html = start.()
+    assert_receive {:held, held}, 5_000
+
+    try do
+      assert is_binary(html), "the overlay did not answer while the registry held the name"
+      assert html =~ "Starting the thread…"
+      assert is_binary(start.())
+      Process.sleep(2_000)
+      assert render(view) =~ "Starting the thread…"
+    after
+      send(held, :release)
+    end
+
+    render_async(view, 5_000)
+    refute_receive {:held, _second}, 500
+    assert {:ok, [slow]} = Sanctum.SharedThreads.list(alice.user_id)
+    assert slow.title == "Slow"
+    assert render(view) =~ "Not added: slow-name"
+    refute render(view) =~ "Starting the thread…"
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # An event as the browser pushes it: waited on no longer than the
+  # browser waits, stood in for by one second.
+  defp pushed(fun) do
+    task = Task.async(fun)
+
+    case Task.yield(task, 1_000) do
+      {:ok, html} -> html
+      nil -> :unanswered
+    end
+  end
+
   test "New thread with people makes a thread with its title and the people named, and says who could not be added",
        %{conn: conn, alice: alice} do
     carol = test_user()
@@ -106,6 +166,7 @@ defmodule PrismWeb.ChatOverlayLiveTest do
     })
     |> render_submit()
 
+    render_async(view, 5_000)
     {:ok, [garden]} = Sanctum.SharedThreads.list(alice.user_id)
     assert garden.title == "Garden"
     assert find_live_child(view, "chat-thread-" <> garden.id)

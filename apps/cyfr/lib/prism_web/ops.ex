@@ -29,6 +29,8 @@ defmodule PrismWeb.Ops do
   reads the one shape its producer sends.
   """
 
+  require Logger
+
   @doc """
   Call an MCP tool with the socket's context, or with a context directly.
 
@@ -136,6 +138,31 @@ defmodule PrismWeb.Ops do
       {:ok, %{^key => list}} when is_list(list) -> {:ok, list}
       {:ok, other} -> {:error, error_message({:unexpected_shape, other})}
       {:error, reason} -> {:error, error_message(reason)}
+    end
+  end
+
+  @doc """
+  Run `fun`, a page's call made off its event (a `start_async/4` task),
+  to its end whether or not the page is still there to show it: the task
+  ignores the exit of the page it was started for, and of a component
+  removed meanwhile, since a call stopped in flight may already have done
+  what it asked. Its supervisor stops it with the node. A raise is logged
+  and answered `{:error, :unavailable}`, so the page never stays waiting.
+  """
+  @spec run_to_end((-> result)) :: result | {:error, :unavailable} when result: term()
+  def run_to_end(fun) when is_function(fun, 0) do
+    Process.flag(:trap_exit, true)
+
+    try do
+      fun.()
+    catch
+      kind, reason ->
+        Logger.error(
+          "[PrismWeb.Ops] a page's call crashed: " <>
+            Prima.LogFilter.format_exception(kind, reason, __STACKTRACE__)
+        )
+
+        {:error, :unavailable}
     end
   end
 
