@@ -133,8 +133,6 @@ defmodule Sanctum.Providers.PolicyLog do
     {:error, Prima.Provider.invalid_action("policy_log", action_enum("policy_log"))}
   end
 
-  def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
-
   defp answer(nil, id), do: {:error, {:not_found, "Policy log", id}}
   defp answer({:error, :database_error}, _id), do: {:error, {:unavailable, "Storage"}}
   defp answer(record, _id), do: {:ok, policy_log_to_map(record)}

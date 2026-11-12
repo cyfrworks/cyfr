@@ -20,7 +20,7 @@ defmodule Sanctum.Providers.PolicyLogTest do
   end
 
   describe "tools/0" do
-    test "declares the policy log's tool under sanctum, handed the actor", %{ctx: ctx} do
+    test "declares the policy log's tool under sanctum, handed the actor" do
       assert Enum.map(MCP.tools(), & &1.name) == ["policy_log"]
       assert MCP.service() == "sanctum"
       assert Prima.Provider.context_kind(MCP) == :actor
@@ -30,8 +30,6 @@ defmodule Sanctum.Providers.PolicyLogTest do
       # catalog's boot (`:tool_registered_twice`).
       assert {:ok, {MCP, _meta}} = Sanctum.Catalog.lookup("policy_log")
       refute "policy_log" in Enum.map(Arca.Providers.Records.tools(), & &1.name)
-
-      assert {:error, {:not_found, "tool", "record"}} = MCP.handle("record", actor(ctx), %{})
     end
 
     test "the three reads keep their names, arguments, kinds, planes and permission" do

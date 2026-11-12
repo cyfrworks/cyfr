@@ -19,7 +19,7 @@ defmodule Sanctum.Providers.McpLogTest do
   end
 
   describe "tools/0" do
-    test "declares the request log's tool under sanctum, handed the actor", %{ctx: ctx} do
+    test "declares the request log's tool under sanctum, handed the actor" do
       assert Enum.map(MCP.tools(), & &1.name) == ["mcp_log"]
       assert MCP.service() == "sanctum"
       assert Prima.Provider.context_kind(MCP) == :actor
@@ -27,8 +27,6 @@ defmodule Sanctum.Providers.McpLogTest do
       # The gate resolves the tool to this provider. A second declaration of
       # it on the roster refuses the catalog's boot (`:tool_registered_twice`).
       assert {:ok, {MCP, _meta}} = Sanctum.Catalog.lookup("mcp_log")
-
-      assert {:error, {:not_found, "tool", "record"}} = MCP.handle("record", actor(ctx), %{})
     end
   end
 
