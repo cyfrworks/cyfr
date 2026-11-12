@@ -62,14 +62,4 @@ defmodule CyfrWeb.SignInResponseTest do
       refute Map.has_key?(conn.assigns, :flash)
     end
   end
-
-  describe "the flash helper" do
-    test "put_flash_if_available/3 flashes when flash is fetched and is a no-op otherwise" do
-      conn = SignInResponse.put_flash_if_available(browser_conn(), :info, "hello")
-      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "hello"
-
-      bare = build_conn()
-      assert SignInResponse.put_flash_if_available(bare, :info, "hello") == bare
-    end
-  end
 end

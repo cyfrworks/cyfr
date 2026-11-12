@@ -34,18 +34,6 @@ defmodule CyfrWeb.SignInResponse do
     |> CyfrWeb.SafeRedirect.post_login()
   end
 
-  @doc """
-  Put a flash message when the conn has fetched its flash; a conn without
-  one is answered unchanged.
-  """
-  def put_flash_if_available(conn, kind, msg) do
-    Phoenix.Controller.put_flash(conn, kind, msg)
-  rescue
-    # `put_flash/3` raises ArgumentError when no flash was fetched; nothing
-    # else is caught.
-    ArgumentError -> conn
-  end
-
   # Start the authenticated session on a clean one. Whatever the browser
   # carried while anonymous — most of all Phoenix's `_csrf_token`, which is
   # the value `PasskeyController.same_browser?/2` binds a sign-in ticket to
