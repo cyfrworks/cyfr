@@ -36,7 +36,6 @@ defmodule Sanctum do
       Annotations,
       ApiKey,
       Attach,
-      Auth,
       Auth.OIDC,
       Authority,
       Authority.BudgetCounter,
@@ -382,8 +381,7 @@ defmodule Sanctum do
   serving a tincture's static assets / looking it up without executing anything,
   use `Sanctum.TinctureAccess.public_context/1` instead.
 
-  Uses `:tincture` authentication through the shared authorization path,
-  with or without an auth provider configured.
+  Uses `:tincture` authentication through the shared authorization path.
 
   For an authenticated request, the caller's real `user_id` and `namespace`
   are carried through for the audit trail (namespace is identity-only and may

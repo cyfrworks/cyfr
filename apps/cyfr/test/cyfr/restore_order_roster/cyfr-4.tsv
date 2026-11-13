@@ -48,7 +48,7 @@ apps/cyfr/test/opus/schedules/scheduler_test.exs	3	pending
 apps/cyfr/test/opus/schedules/stale_member_occurrence_end_test.exs	1	pending
 apps/cyfr/test/opus/schedules/streams_test.exs	2	pending
 apps/cyfr/test/opus/start_refusal_test.exs	2	pending
-apps/cyfr/test/opus/tincture_provider_test.exs	2	pending
+apps/cyfr/test/opus/tincture_provider_test.exs	1	pending
 apps/cyfr/test/opus/tincture_test.exs	2	pending
 apps/cyfr/test/opus/turn_root_test.exs	1	pending
 apps/cyfr/test/opus/worker_watch_test.exs	1	pending

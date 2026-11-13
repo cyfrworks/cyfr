@@ -139,9 +139,9 @@ defmodule Emissary.Web.MCPControllerTest do
       response = json_response(conn, 200)
 
       [content] = response["result"]["content"]
-      # With test auth provider, whoami returns user info
+      # whoami answers the signed-in person.
       result = Jason.decode!(content["text"])
-      assert result["user_id"] == "test_user"
+      assert result["user_id"] == Arca.Test.Actor.owner_id()
     end
 
     test "returns protocol error for unknown tool", %{conn: conn} do
@@ -1217,8 +1217,7 @@ defmodule Emissary.Web.MCPControllerTest do
   end
 
   describe "subscriptions/listen gating" do
-    # The test auth provider is configured, but this caller presents no
-    # credential.
+    # This caller presents no credential.
     @describetag auth: :none
 
     setup do
@@ -1279,24 +1278,6 @@ defmodule Emissary.Web.MCPControllerTest do
       assert decision.refusal_class == "unauthenticated"
       assert decision.plane == "external"
       assert is_nil(decision.athanor_id)
-    end
-
-    test "an install with no auth provider still refuses an uncredentialed caller", %{conn: conn} do
-      # The operator authenticates with an API key on these installs too, so
-      # a request carrying nothing is a stranger here as well.
-      Application.delete_env(:sanctum, :bearer_provider)
-
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "subscriptions/listen",
-          "params" => %{"notifications" => %{}}
-        })
-
-      assert conn.status == 401
     end
 
     test "a credentialed caller opens the stream", %{conn: conn, api_key: api_key} do

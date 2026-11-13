@@ -32,12 +32,6 @@ defmodule Opus.Providers.TinctureTest do
   # public address.
   @address "@test"
 
-  defmodule AnonymousAuthProvider do
-    @moduledoc false
-    # Sign-in is configured, and this caller presented no credential.
-    def current_user(_conn), do: nil
-  end
-
   defp operation(action) do
     [%{name: "tincture", operations: operations}] = Tincture.tools()
     Enum.find(operations, &(&1.action == action))
@@ -249,7 +243,6 @@ defmodule Opus.Providers.TinctureTest do
   describe "an anonymous caller over /mcp" do
     setup do
       Arca.Cache.init()
-      Application.put_env(:sanctum, :bearer_provider, AnonymousAuthProvider)
 
       base = Path.join(System.tmp_dir!(), "tincture_mcp_#{System.unique_integer([:positive])}")
       keys = [cyfr: :locus_runtime_workers, arca: :base_path]

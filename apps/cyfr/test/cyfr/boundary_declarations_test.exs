@@ -138,7 +138,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "handler and the overlay port it installs"}
     ],
     Sanctum => [
-      {~w(ApiKey Auth Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller
+      {~w(ApiKey Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller
           Cipher Cipher.Rotation ClientIp CompanyLogin Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify

@@ -1849,9 +1849,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Auth.OIDC" => [issuer: 0],
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
-    # `provider/0`: the identity plug's test bearer provider, which every
-    # release answers nil (`:bearer_provider`, a seam of Sanctum's own).
-    "Sanctum.BearerToken" => [provider: 0, read: 1],
+    "Sanctum.BearerToken" => [read: 1],
     "Sanctum.Caller" => [
       drop_memo: 1,
       establish: 2,
@@ -2411,10 +2409,6 @@ defmodule Cyfr.Boundaries do
 
   @config_key_classes %{
     # Test seams: a hook a test sets and no release does.
-    # The bearer a test signs in with (`Sanctum.Auth`'s `current_user/1`,
-    # read through `Sanctum.BearerToken.provider/0`): `CyfrWeb.ConnCase`
-    # sets it, and only a test build reads it (`Prima.TestSeam.value/2`).
-    bearer_provider: :seam,
     tenancy_resolver_override: :seam,
     # A fill run in the caller's process (`Compendium.Provisioning`); only
     # a test build reads it (`Prima.TestSeam.value/2`).
@@ -2696,12 +2690,6 @@ defmodule Cyfr.Boundaries do
   ]
 
   @internal_strategies [
-    %{
-      behaviour: "Sanctum.Auth",
-      reason:
-        "declared inside Sanctum and implemented by no shipped module: the test " <>
-          "harness's bearer (`:bearer_provider`) alone. Not a port."
-    },
     %{
       behaviour: "Sanctum.CompanyLogin.Issuer",
       reason:

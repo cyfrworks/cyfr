@@ -154,11 +154,53 @@ defmodule Sanctum.TestContext do
             id: @athanor_id,
             name: "Test",
             slug: "test",
-            owner_user_id: local().user_id,
+            owner_user_id: Arca.Test.Actor.owner_id(),
             created_by: "system"
           })
 
         athanor
+    end
+  end
+
+  @doc """
+  The person `athanor!/0`'s athanor belongs to (`Arca.Test.Actor.owner_id/0`):
+  their row, admission `open` with the namespace `local/0` carries, and
+  their account (`account!/1`), written into the caller's sandbox the first
+  time it is asked for. The person a test signs in as when its fixtures
+  live in the test athanor. Answers the row as `Sanctum.Tenancy.Users.get/1`
+  reads it.
+  """
+  def owner! do
+    id = Arca.Test.Actor.owner_id()
+    _athanor = athanor!()
+
+    case Sanctum.Tenancy.Users.get(id) do
+      {:ok, user} ->
+        user
+
+      {:error, :not_found} ->
+        now = DateTime.utc_now()
+
+        {:ok, _person} =
+          Arca.Test.People.mint(
+            Prima.Actor.system(),
+            %{
+              id: id,
+              namespace: local().namespace,
+              prefs: "{}",
+              first_seen_at: now,
+              last_seen_at: now,
+              created_at: now,
+              updated_at: now
+            },
+            also: fn person ->
+              _account = account!(person.id)
+              :ok
+            end
+          )
+
+        {:ok, user} = Sanctum.Tenancy.Users.get(id)
+        user
     end
   end
 

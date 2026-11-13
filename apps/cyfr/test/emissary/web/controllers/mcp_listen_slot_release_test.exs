@@ -13,17 +13,30 @@ defmodule Emissary.Web.McpListenSlotReleaseTest do
   } do
     Cyfr.Test.Settings.put("mcp_subscription_max_concurrent", 1)
     Cyfr.Test.Settings.put("mcp_subscription_max_ms", 50)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
 
-    # The suite's auth provider supplies an authenticated context whose
-    # credential deadline has passed. The stream gate refuses that deadline
-    # after the controller has reserved a slot; no global clock is changed.
-    first =
+    # The lease can be lost after the endpoint's ownership check. Separate
+    # authentication from controller dispatch to put that loss between them.
+    authenticated =
       conn
-      |> authenticate_as(credential_deadline: DateTime.add(DateTime.utc_now(), -60, :second))
-      |> listen()
+      |> CyfrWeb.Plugs.CallIdentity.call([])
+      |> CyfrWeb.Plugs.ControlPlaneOwnership.call([])
+      |> CyfrWeb.Plugs.Authenticate.call(
+        CyfrWeb.Plugs.Authenticate.init(errors: Emissary.Web.MCPError)
+      )
 
-    assert first.status == 401
-    assert first.assigns.context.authenticated
+    refute authenticated.halted
+    assert authenticated.assigns.context.authenticated
+    assert is_binary(authenticated.assigns.context.session_token_hash)
+
+    Arca.ControlPlane.record(:lost)
+    first = Emissary.Web.MCPController.handle(authenticated, message())
+
+    assert first.status == 400
+
+    assert json_response(first, 400)["error"]["code"] ==
+             Prima.MCP.Message.error_code(:not_owner)
+
     assert [request_id] = get_resp_header(first, "x-request-id")
 
     assert [%{tool: "stream:mcp_servers.changes", admission: "refused"}] =
@@ -34,23 +47,22 @@ defmodule Emissary.Web.McpListenSlotReleaseTest do
                )
              )
 
-    # The new context is current, and the earlier refused request opened
-    # no stream. Both dispatches use this same still-live HTTP process.
-    second = first |> recycle() |> authenticate_as() |> listen()
+    Arca.ControlPlane.record(:unclaimed)
+
+    # Keep both the credential and the HTTP process, which own the slot.
+    second = first |> recycle() |> mcp_post(message())
 
     assert second.status == 200,
            "the refused listen kept its slot and blocked the next request: " <>
              inspect(second.resp_body)
   end
 
-  defp listen(conn) do
-    conn
-    |> put_req_header("content-type", "application/json")
-    |> mcp_post(%{
+  defp message do
+    %{
       "jsonrpc" => "2.0",
       "id" => 1,
       "method" => "subscriptions/listen",
       "params" => %{"notifications" => %{"toolsListChanged" => true}}
-    })
+    }
   end
 end
