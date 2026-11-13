@@ -68,8 +68,12 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
     # `execute`. The terminal row makes a controller that skipped the check
     # end its stream at once rather than hang the test.
     test "a key without storage_read in the execution's own athanor is a 404", %{conn: conn} do
+      # A namespace of their own: the test athanor's person holds `testns`.
       {ctx, user} =
-        Sanctum.TestContext.person!(Sanctum.TestContext.local(), %{email: "testns@example.com"})
+        Sanctum.TestContext.person!(
+          %{Sanctum.TestContext.local() | namespace: "eventskey"},
+          %{email: "eventskey@example.com"}
+        )
 
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
       ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}

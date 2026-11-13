@@ -32,9 +32,9 @@ defmodule Cyfr.AsyncEnvGuardTest do
   call, so the injected code of a case is reported at the user's `use`.
 
   A write is admitted when it is guarded on the test's async tag inside a
-  `setup` or `setup_all` callback, as `apps/cyfr/test/support/conn_case.ex`
-  guards its own: `unless tags[:async]` runs its body only in a sync test, and
-  so does `if not tags[:async]`, and the `else` of `if tags[:async]` does too.
+  `setup` or `setup_all` callback: `unless tags[:async]` runs its body only in
+  a sync test, and so does `if not tags[:async]`, and the `else` of
+  `if tags[:async]` does too.
   A guard anywhere else admits nothing, since a helper's `tags` may be any map.
   `async:` given as anything but a literal boolean is read as async.
 
@@ -76,17 +76,14 @@ defmodule Cyfr.AsyncEnvGuardTest do
              Enum.map_join(violations, "\n", & &1.message)
   end
 
-  test "the walk reads test and support files, and conn_case holds exactly its admitted baseline call",
+  test "the walk reads test and support files, and conn_case writes no application environment",
        %{tree_paths: paths, tree_scan: %{writes: writes}} do
     assert Enum.any?(paths, &String.ends_with?(&1, "_test.exs"))
     assert @conn_case in paths
 
     in_file = for w <- writes, w.file == @conn_case, do: {w.line, w.what, w.guarded?}
 
-    assert Enum.sort(in_file) == [
-             {96, "Prima.Test.Env.put_app_env", true}
-           ],
-           "conn_case.ex must hold its admitted baseline call and no other: #{inspect(in_file)}"
+    assert in_file == [], "conn_case.ex writes global environment: #{inspect(in_file)}"
   end
 
   describe "the positive control" do
