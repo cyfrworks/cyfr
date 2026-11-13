@@ -77,7 +77,6 @@ defmodule Compendium.Provisioning do
   """
 
   require Logger
-  require Prima.TestSeam
 
   alias Compendium.{AutoIndexer, Pull}
   alias Sanctum.Context
@@ -140,44 +139,33 @@ defmodule Compendium.Provisioning do
   # Run `fun` off the caller's process, on the member that holds its slot
   # in the cell (`Arca.ControlPlane.held?/0`, a term read and a monotonic
   # comparison — no query, so it is safe on this path). Elsewhere it is
-  # not started, and the next read on a holder asks again. Under test the
-  # sandbox owns the connection, so background work runs inline (the tests
-  # assert on rows right after the call). `not_started` runs when the work
-  # will not: what a caller took for it beforehand is given back.
+  # not started, and the next read on a holder asks again. `not_started`
+  # runs when the work will not: what a caller took for it beforehand is
+  # given back.
   defp background(fun, not_started \\ fn -> :ok end) do
-    cond do
-      not Arca.ControlPlane.held?() ->
-        not_started.()
-        :ok
+    if Arca.ControlPlane.held?() do
+      logger_metadata = Prima.LoggerContext.capture()
 
-      # A test seam only a test build reads (`Prima.TestSeam.value/2`): a release
-      # always fills in the background.
-      Prima.TestSeam.value(false, fn ->
-        Application.get_env(:sanctum, :provisioning_inline, false)
-      end) ->
+      task_fun = fn ->
+        Prima.LoggerContext.restore(logger_metadata)
         fun.()
-        :ok
+      end
 
-      true ->
-        logger_metadata = Prima.LoggerContext.capture()
+      case start_background(task_fun) do
+        {:ok, _pid} ->
+          :ok
 
-        task_fun = fn ->
-          Prima.LoggerContext.restore(logger_metadata)
-          fun.()
-        end
+        {:error, reason} ->
+          # A retry the supervisor could not start is only a deferral: the
+          # next sign-in (or the person's athanor.provision) tries again.
+          Logger.error("[Provisioning] background provisioning not started: #{inspect(reason)}")
 
-        case start_background(task_fun) do
-          {:ok, _pid} ->
-            :ok
-
-          {:error, reason} ->
-            # A retry the supervisor could not start is only a deferral: the
-            # next sign-in (or the person's athanor.provision) tries again.
-            Logger.error("[Provisioning] background provisioning not started: #{inspect(reason)}")
-
-            not_started.()
-            :ok
-        end
+          not_started.()
+          :ok
+      end
+    else
+      not_started.()
+      :ok
     end
   end
 

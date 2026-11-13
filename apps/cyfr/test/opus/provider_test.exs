@@ -69,6 +69,10 @@ defmodule Opus.ProviderTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    # A call may ask for an athanor's fill, which runs in the background
+    # under the base path above: it stops before the path is put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 

@@ -75,8 +75,6 @@ defmodule Cyfr.TestSeamsTest do
       :directory_client,
       :namespace_cache_ttl_ms,
       :oidc_reauth_client,
-      # Read by the host's inline fill (`Compendium.Provisioning`).
-      :provisioning_inline,
       :scripted_oauth_provider,
       :workos_api_url
     ]

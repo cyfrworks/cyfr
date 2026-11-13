@@ -13,6 +13,7 @@ defmodule Sanctum.ProvisioningTest do
 
   alias Arca.ProvisioningClaims, as: Claims
   alias Compendium.Provisioning, as: Filler
+  alias Cyfr.Test.Fill
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.{Athanors, Users}
 
@@ -61,6 +62,10 @@ defmodule Sanctum.ProvisioningTest do
 
       File.rm_rf!(test_dir)
     end)
+
+    # A fill a case starts runs in the background under the paths above: it
+    # stops before they are put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {:ok, bundle_dir: bundle_dir}
   end
@@ -124,7 +129,10 @@ defmodule Sanctum.ProvisioningTest do
     assert athanor.owner_user_id == ctx.user_id
 
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
+
+    assert {:ok, :ready} =
+             Fill.settled!(athanor.id, fn -> Provisioning.start_provisioning(in_athanor) end)
+
     {:ok, athanor} = Athanors.get(athanor.id)
     assert athanor.provisioned_at
 
@@ -205,7 +213,10 @@ defmodule Sanctum.ProvisioningTest do
 
     # The mint fills nothing; the sign-in after it asks for the fill.
     assert {:ok, %{provisioned_at: nil}} = Athanors.get(personal.id)
-    assert :ok = Provisioning.after_sign_in(user.id)
+
+    assert {:ok, :ready} =
+             Fill.settled!(personal.id, fn -> Provisioning.after_sign_in(user.id) end)
+
     assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(personal.id)
 
     # A person holds one: a second mint is refused, and a sign-in mints none.
@@ -258,7 +269,9 @@ defmodule Sanctum.ProvisioningTest do
 
     athanor = unfilled!(ctx.user_id, "Roots #{n}")
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
+
+    assert {:ok, :ready} =
+             Fill.settled!(athanor.id, fn -> Provisioning.start_provisioning(in_athanor) end)
 
     {:ok, entries} = Arca.list_typed(Sanctum.Context.actor(in_athanor), [])
 
@@ -279,7 +292,7 @@ defmodule Sanctum.ProvisioningTest do
 
     athanor = unfilled!(ctx.user_id, "Sync #{n}")
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
+    {:ok, _filled} = Provisioning.provision(athanor, in_athanor)
 
     # The athanor's person edited their copy of foo.
     version_dir = ["components", "catalysts", "local", "foo", "1.0.0"]
@@ -355,7 +368,7 @@ defmodule Sanctum.ProvisioningTest do
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|twice-#{n}"}
     athanor = unfilled!(ctx.user_id, "Twice #{n}")
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
+    {:ok, _filled} = Provisioning.provision(athanor, in_athanor)
 
     assert {:ok, %{component_ref: ref}} =
              Filler.install_shipped(in_athanor, "catalyst:local.foo")
@@ -373,7 +386,7 @@ defmodule Sanctum.ProvisioningTest do
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|busy-#{n}"}
     athanor = unfilled!(ctx.user_id, "Busy #{n}")
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
+    {:ok, _filled} = Provisioning.provision(athanor, in_athanor)
 
     held = held_elsewhere!(athanor.id, "seed_sync")
 
@@ -408,7 +421,9 @@ defmodule Sanctum.ProvisioningTest do
 
     athanor = unfilled!(ctx.user_id, "Unreachable #{n}")
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
+
+    assert {:ok, :ready} =
+             Fill.settled!(athanor.id, fn -> Provisioning.start_provisioning(in_athanor) end)
 
     {:ok, athanor} = Athanors.get(athanor.id)
     assert athanor.provisioned_at
@@ -444,7 +459,9 @@ defmodule Sanctum.ProvisioningTest do
     # The mint answers a bare row; the failure surfaces at first need.
     athanor = unfilled!(ctx.user_id, "Unpullable #{n}")
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
+
+    assert {:ok, :failed} =
+             Fill.settled!(athanor.id, fn -> Provisioning.start_provisioning(in_athanor) end)
 
     assert_receive {:failed, %{step: :closure, athanor_id: id}}
     assert id == athanor.id
@@ -460,18 +477,6 @@ defmodule Sanctum.ProvisioningTest do
              Provisioning.provision(athanor, in_athanor)
   end
 
-  # `Sanctum` compiled again under the permission the environment holds
-  # now, replacing the loaded module.
-  defp compile_provisioning! do
-    Code.compiler_options(ignore_module_conflict: true)
-
-    Code.compile_file(
-      Path.expand("../../../../apps/cyfr/lib/compendium/provisioning.ex", __DIR__)
-    )
-
-    :ok
-  end
-
   # The shipped canvas, copied from the repository's seed into the
   # suite's: answers the reference of its newest version.
   defp shipped_canvas!(bundle_dir) do
@@ -482,8 +487,7 @@ defmodule Sanctum.ProvisioningTest do
   end
 
   test "a sign-in mints the shipped canvas's grant in its own request, while the registry half " <>
-         "still holds the claim and waits on a registry that never answers, in a build " <>
-         "without the test permission even with the inline switch set",
+         "still holds the claim and waits on a registry that never answers",
        %{bundle_dir: bundle_dir} do
     canvas = shipped_canvas!(bundle_dir)
     write_bundle!(bundle_dir, deps: ["catalyst:someone.elsewhere"])
@@ -496,28 +500,10 @@ defmodule Sanctum.ProvisioningTest do
     Prima.Test.Env.put_app_env(:cyfr, :registry_url, "127.0.0.1:#{port}")
     Prima.Test.Env.put_app_env(:cyfr, :oci_registry_url, "127.0.0.1:#{port}")
 
-    # The real path: the whole fill is a task the sign-in does not await,
-    # stopped at the test's end before the paths it fills under are put back.
-    # It is a release's: `Compendium.Provisioning`, whose read the switch is,
-    # compiled as a release compiles it, without the test permission, and
-    # the inline switch set as start-up configuration could set it, which
-    # such a build never reads (`Prima.TestSeam.value/2`). A fill that ran
-    # inline would wait here on the registry, bounded by the pull budget,
-    # and the claim would be failed. Put back in order when the test ends:
-    # the permission, then the module compiled with it, then the compiler's
-    # options.
-    options = Code.compiler_options()
-    on_exit(fn -> Code.compiler_options(options) end)
-    on_exit(fn -> compile_provisioning!() end)
-    Prima.Test.Env.put_app_env(:prima, :test_seams_permitted, false)
-    compile_provisioning!()
-
-    assert Code.eval_string(
-             "require Prima.TestSeam; Prima.TestSeam.value(:shipped, fn -> :read end)"
-           ) ==
-             {:shipped, []}
-
-    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, true)
+    # The whole fill is a task the sign-in does not await, stopped at the
+    # test's end before the paths it fills under are put back. A fill the
+    # sign-in waited on would wait here on the registry, bounded by the pull
+    # budget, and the claim would be failed.
     Prima.Test.Env.put_app_env(:cyfr, :provisioning_required_pull_budget_ms, 10_000)
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
@@ -589,12 +575,65 @@ defmodule Sanctum.ProvisioningTest do
     # once, with no backoff, and the shipped canvas opens under its grant.
     canvas = shipped_canvas!(bundle_dir)
     assert {:error, :ungranted} = Sanctum.Consent.TinctureGrant.fetch(ctx, canvas)
-    assert :ok = Provisioning.after_sign_in(user.id)
+
+    assert {:ok, :ready} =
+             Fill.settled!(athanor_id, fn -> Provisioning.after_sign_in(user.id) end)
+
     assert {:ok, %{revision: 1}} = Sanctum.Consent.TinctureGrant.fetch(ctx, canvas)
 
     {:ok, filled} = Athanors.get(athanor_id)
     assert %DateTime{} = filled.provisioned_at
     refute Athanors.provisioning_failure(filled)
+  end
+
+  test "two sign-ins to a new athanor at the same moment: one local half mints, the other " <>
+         "finds the claim held and goes on, and one background fill makes the athanor ready",
+       %{bundle_dir: bundle_dir} do
+    canvas = shipped_canvas!(bundle_dir)
+    write_bundle!(bundle_dir)
+
+    user = person(System.unique_integer([:positive]))
+    athanor_id = Sanctum.Test.People.athanor!(user).id
+    actor = %Prima.Actor{athanor_id: athanor_id}
+    ctx = Provisioning.person_ctx(user.id, athanor_id)
+    test = self()
+
+    # The first sign-in's local half is parked at its first commit, holding
+    # the claim and having minted nothing, so the second sign-in comes in
+    # beside it.
+    at_first_commit!(athanor_id, fn ->
+      send(test, {:parked, self()})
+
+      receive do
+        :go -> :ok
+      end
+    end)
+
+    assert {:ok, :ready} =
+             Fill.settled!(athanor_id, fn ->
+               first = Task.async(fn -> Provisioning.after_sign_in(user.id) end)
+               assert_receive {:parked, parked}, 30_000
+
+               # The second sign-in finds the claim held: it answers, minting
+               # nothing and starting nothing, while the first still holds it.
+               assert :ok = Fill.started!(fn -> Provisioning.after_sign_in(user.id) end)
+
+               assert {:ok, %{entry_kind: "sign_in", fence: 1, outcome: nil} = held} =
+                        Claims.current(actor)
+
+               assert Claims.live?(held)
+               assert {:error, :ungranted} = Sanctum.Consent.TinctureGrant.fetch(ctx, canvas)
+
+               send(parked, :go)
+               Task.await(first, 30_000)
+             end)
+
+    # The first local half minted the canvas's grant once, and one fill
+    # after it took the claim and made the athanor ready: the local half's
+    # claim and the fill's, and none for the second sign-in.
+    assert {:ok, %{revision: 1}} = Sanctum.Consent.TinctureGrant.fetch(ctx, canvas)
+    assert {:ok, %{entry_kind: "sign_in", fence: 2, outcome: "ready"}} = Claims.current(actor)
+    assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(athanor_id)
   end
 
   # The whole shipped seed, where the other cases use reduced bundles: a
@@ -614,7 +653,6 @@ defmodule Sanctum.ProvisioningTest do
 
     # The fill's supervisor is away for the sign-in, so no background fill
     # starts and what the sign-in answered with is its own local half's.
-    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
     supervisor = Process.whereis(Compendium.ProvisioningSupervisor)
     on_exit(fn -> registered!(Compendium.ProvisioningSupervisor, supervisor) end)
     Process.unregister(Compendium.ProvisioningSupervisor)
@@ -661,12 +699,7 @@ defmodule Sanctum.ProvisioningTest do
   end
 
   test "a first need never waits on the caller already filling the athanor" do
-    # The suite runs provisioning inline so its assertions can read rows
-    # straight after the call; this one is about the real path, where the
-    # fill is a task and the caller does not await it.
-    Application.put_env(:sanctum, :provisioning_inline, false)
-    on_exit(fn -> Application.put_env(:sanctum, :provisioning_inline, true) end)
-
+    # The fill is a task and the caller does not await it.
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
     athanor = unfilled!(ctx.user_id, "Held #{n}")
@@ -696,7 +729,11 @@ defmodule Sanctum.ProvisioningTest do
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
 
     athanor = unfilled!(ctx.user_id, "No bundle #{n}")
-    :ok = Provisioning.start_provisioning(%{ctx | athanor_id: athanor.id})
+
+    assert {:ok, :failed} =
+             Fill.settled!(athanor.id, fn ->
+               Provisioning.start_provisioning(%{ctx | athanor_id: athanor.id})
+             end)
 
     {:ok, athanor} = Athanors.get(athanor.id)
     assert athanor.provisioned_at == nil
@@ -757,15 +794,21 @@ defmodule Sanctum.ProvisioningTest do
       %{entry: entry, share: share} = share!()
       user = person(System.unique_integer([:positive]))
 
+      athanor_id = Sanctum.Test.People.athanor!(user).id
+
       away!("shares")
-      {first, log} = with_log(fn -> Provisioning.after_sign_in(user.id) end)
+
+      {first, log} =
+        with_log(fn ->
+          Fill.settled!(athanor_id, fn -> Provisioning.after_sign_in(user.id) end)
+        end)
+
       back!("shares")
 
       # The athanor the admission minted had its fill stopped at the
       # consent mint, with nothing minted for the catalyst; the row, the
       # claim and the log name the source and the refusal's own sentence.
-      assert :ok = first
-      athanor_id = Sanctum.Test.People.athanor!(user).id
+      assert {:ok, :failed} = first
       {:ok, failed} = Athanors.get(athanor_id)
       refute failed.provisioned_at
 
@@ -783,7 +826,9 @@ defmodule Sanctum.ProvisioningTest do
 
       # The next sign-in tries the fill again at once, and with the store
       # answering the catalyst is minted bound to the share.
-      assert :ok = Provisioning.after_sign_in(user.id)
+      assert {:ok, :ready} =
+               Fill.settled!(athanor_id, fn -> Provisioning.after_sign_in(user.id) end)
+
       {:ok, filled} = Athanors.get(athanor_id)
       assert %DateTime{} = filled.provisioned_at
       refute Athanors.provisioning_failure(filled)
@@ -817,9 +862,12 @@ defmodule Sanctum.ProvisioningTest do
       write_bundle!(bundle_dir, needs: @needs)
       %{share: share} = share!()
       user = person(System.unique_integer([:positive]))
-      assert :ok = Provisioning.after_sign_in(user.id)
-      athanor_id = Sanctum.Test.People.athanor!(user).id
-      {:ok, %{provisioned_at: %DateTime{} = filled_at}} = Athanors.get(athanor_id)
+      athanor = Sanctum.Test.People.athanor!(user)
+      athanor_id = athanor.id
+
+      {:ok, %{provisioned_at: %DateTime{} = filled_at}} =
+        Provisioning.provision(athanor, Provisioning.person_ctx(user.id, athanor_id))
+
       {_head, [%{share_id: bound}]} = held = foo_head(athanor_id)
       assert bound == share.id
 
@@ -1157,8 +1205,7 @@ defmodule Sanctum.ProvisioningTest do
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|syncwait-#{n}"}
     athanor = unfilled!(ctx.user_id, "Sync wait #{n}")
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
-    assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(athanor.id)
+    assert {:ok, %{provisioned_at: %DateTime{}}} = Provisioning.provision(athanor, in_athanor)
 
     # Something for the sync to heal, and another attempt holding the athanor.
     :ok = Arca.delete_tree(Sanctum.Context.actor(in_athanor), ["notes"])
@@ -1204,7 +1251,9 @@ defmodule Sanctum.ProvisioningTest do
     assert Provisioning.status(in_athanor) == :unfilled
 
     # The fill marks it, once.
-    assert {:error, :not_provisioned} = Provisioning.ready(in_athanor)
+    assert {{:error, :not_provisioned}, :ready} =
+             Fill.settled!(athanor.id, fn -> Provisioning.ready(in_athanor) end)
+
     assert {:ok, %{provisioned_at: %DateTime{} = at}} = Athanors.get(athanor.id)
     assert :ok = Provisioning.ready(in_athanor)
     assert Provisioning.status(in_athanor) == :ready
@@ -1630,12 +1679,13 @@ defmodule Sanctum.ProvisioningTest do
 
       # A hook's attempt, in the background, leaves the same record.
       hooked = unfilled!(ctx.user_id <> "-hook", "Raised hook #{n}")
-      {answer, _log} = with_log(fn -> Filler.request(hooked, :no_context, "first_need") end)
-      assert answer == :ok
 
-      Prima.Test.Wait.wait_until(fn ->
-        Provisioning.status(%{ctx | athanor_id: hooked.id}) == :failed
-      end)
+      {answer, _log} =
+        with_log(fn ->
+          Fill.settled!(hooked.id, fn -> Filler.request(hooked, :no_context, "first_need") end)
+        end)
+
+      assert answer == {:ok, :failed}
 
       {:ok, hooked} = Athanors.get(hooked.id)
       refute hooked.provisioned_at
@@ -1651,9 +1701,11 @@ defmodule Sanctum.ProvisioningTest do
 
       # A filled athanor, for the boot's sync.
       synced = person(System.unique_integer([:positive]))
-      :ok = Provisioning.after_sign_in(synced.id)
-      synced_athanor = Sanctum.Test.People.athanor!(synced)
-      assert %DateTime{} = synced_athanor.provisioned_at
+
+      {:ok, %{provisioned_at: %DateTime{}} = synced_athanor} =
+        synced
+        |> Sanctum.Test.People.athanor!()
+        |> Provisioning.provision(nil)
 
       user = person(System.unique_integer([:positive]))
       athanor = Sanctum.Test.People.athanor!(user)
@@ -1669,7 +1721,8 @@ defmodule Sanctum.ProvisioningTest do
             %{
               sign_in: Provisioning.after_sign_in(user.id),
               verb: Provisioning.provision(athanor, ctx),
-              hook: Provisioning.start_provisioning(ctx),
+              # The hook's task runs while the keeper's supervisor is away.
+              hook: Fill.started!(fn -> Provisioning.start_provisioning(ctx) end),
               install: Filler.install_shipped(ctx, "catalyst:local.foo"),
               sync: Filler.sync_seeds()
             }
@@ -1699,7 +1752,9 @@ defmodule Sanctum.ProvisioningTest do
       refute Athanors.provisioning_failure(unfilled)
 
       # The supervisor back, the next sign-in fills the athanor.
-      assert :ok = Provisioning.after_sign_in(user.id)
+      assert {:ok, :ready} =
+               Fill.settled!(athanor.id, fn -> Provisioning.after_sign_in(user.id) end)
+
       assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(athanor.id)
     end
   end

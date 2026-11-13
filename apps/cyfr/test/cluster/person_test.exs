@@ -303,6 +303,10 @@ defmodule Cyfr.Cluster.PersonTest do
       instants = Enum.map(occurrences, & &1["scheduled_for"])
       assert instants == Enum.uniq(instants), inspect(occurrences)
 
+      # The athanor stood filled from the schedule's making, so no fire was
+      # refused on the way in: none of its occurrences ended failed.
+      refute Enum.any?(occurrences, &(&1["state"] == "failed")), inspect(occurrences)
+
       # Every run the schedule made is one occurrence's, and no
       # occurrence has two.
       ran = for %{"execution_id" => id} <- occurrences, id, do: id

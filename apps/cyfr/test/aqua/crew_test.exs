@@ -20,7 +20,6 @@ defmodule Aqua.CrewTest do
   alias Arca.TurnStorage
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
-  alias Sanctum.Consent.Bootstrap
 
   @model "catalyst:local.claude"
 
@@ -29,7 +28,8 @@ defmodule Aqua.CrewTest do
     Cyfr.Test.Sandbox.setup!()
 
     {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
-    ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id, origin: :interactive}
+    athanor = Sanctum.Test.People.athanor!(user)
+    ctx = %{ctx | athanor_id: athanor.id, origin: :interactive}
     segments = Arca.Storage.physical_segments(Sanctum.Context.actor(ctx), [])
     tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
     on_exit(fn -> File.rm_rf!(tree) end)
@@ -39,10 +39,9 @@ defmodule Aqua.CrewTest do
     Cyfr.Test.SeedBundle.lay!(~w(claude claude-code gemini openai-codex files http))
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
-    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    {:ok, _} = Bootstrap.run(ctx)
+    # Filled now, through the explicit verb, as a person's athanor stands
+    # once its fill has run.
+    {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(athanor, ctx)
 
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"},
       origins: [:interactive, :programmatic]

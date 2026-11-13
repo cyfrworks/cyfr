@@ -54,12 +54,32 @@ defmodule Cyfr.Test.SandboxTest.WorkingView do
   def render(assigns), do: ~H"<p>working</p>"
 end
 
+defmodule Cyfr.Test.SandboxTest.OwnershipTap do
+  @moduledoc false
+  # A `:logger` handler that reports each event at error level or above
+  # naming `DBConnection.OwnershipError` to the collector its config names,
+  # as the suite's ownership gate counts them.
+
+  def log(%{msg: msg}, %{config: %{to: collector}}) do
+    text =
+      case msg do
+        {:string, chardata} -> IO.chardata_to_string(chardata)
+        {:report, report} -> inspect(report)
+        {format, args} -> format |> :io_lib.format(args) |> IO.chardata_to_string()
+      end
+
+    if text =~ "OwnershipError", do: send(collector, {:report, make_ref(), text})
+  end
+end
+
 defmodule Cyfr.Test.SandboxTest do
   @moduledoc """
   A sync test's background work is stopped before its sandbox owner is:
   every dynamic supervisor this repository's applications start is swept,
   and each child's last database work lands while the owner still holds
-  the connection. The runtime's runners are swept through their pool
+  the connection, but a fill's: its attempt, keeper and pulls are killed
+  in the same instant as the test's descendants, however the fill was
+  started. The runtime's runners are swept through their pool
   instead: a runner the test left busy is ended and its exit reported,
   and the fresh runners stay pooled for the next test.
 
@@ -177,6 +197,130 @@ defmodule Cyfr.Test.SandboxTest do
       send(watching, {:watch, holding})
       assert_receive {:watching, ^holding}, 5_000
       assert_receive {:watching, ^watching}, 5_000
+      :erlang.system_flag(:schedulers_online, 1)
+    end
+  end
+
+  describe "a fill started outside the test's processes" do
+    setup do
+      collector = spawn(fn -> collect(%{}) end)
+      tap = :cyfr_sandbox_fill_tap
+
+      :ok =
+        :logger.add_handler(tap, Cyfr.Test.SandboxTest.OwnershipTap, %{
+          level: :error,
+          config: %{to: collector}
+        })
+
+      # Registered before the sandbox, so it runs after the owner is gone:
+      # nothing of the fill may have queried after the sweep's first kill.
+      schedulers = :erlang.system_info(:schedulers_online)
+
+      on_exit(fn ->
+        :erlang.system_flag(:schedulers_online, schedulers)
+        :logger.remove_handler(tap)
+        send(collector, {:reports, self()})
+        assert_receive {:reports, reports}, 5_000
+
+        assert reports == %{},
+               "the fill ran on after the sweep cut the connection: #{inspect(Map.values(reports))}"
+      end)
+
+      # A seed of one catalyst, put back after the owner has gone like the
+      # collector above.
+      dir = Path.join(System.tmp_dir!(), "sandbox_fill_#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf!(dir) end)
+      unit = Path.join([dir, "seed", "components", "catalysts", "local", "foo", "1.0.0"])
+      File.mkdir_p!(unit)
+      File.write!(Path.join(unit, "catalyst.wasm"), Cyfr.Test.Guests.wasm(:catalyst))
+
+      File.write!(
+        Path.join(unit, "cyfr-manifest.json"),
+        Jason.encode!(%{
+          "name" => "foo",
+          "version" => "1.0.0",
+          "type" => "catalyst",
+          "caps" => %{"egress" => %{"domains" => []}}
+        })
+      )
+
+      File.cp_r!(Path.expand("../../../../seed/aqua", __DIR__), Path.join([dir, "seed", "aqua"]))
+      Prima.Test.Env.put_app_env(:arca, :base_path, Path.join(dir, "base"))
+      Prima.Test.Env.put_app_env(:arca, :seed_path, Path.join(dir, "seed"))
+
+      Sandbox.setup!()
+      {:ok, collector: collector}
+    end
+
+    # A host call over the worker wire asks for a fill from a process that
+    # leads back to no descendant of the test, as the timer's process does
+    # here. The fill is parked at its first commit, between two of its
+    # queries, until a descendant that holds the shared connection, as a
+    # query in flight does, has ended. The sweep's kill of that descendant
+    # cuts the connection; a fill left to run would make its next query
+    # into no owner, and its attempt would record that it ended abnormally
+    # at error level. On one scheduler, with the fill above the test's
+    # priority, a fill free to run runs before the sweep reaches its
+    # supervisor: the sweep must end it in the same instant as the
+    # descendant.
+    test "is ended with the test's descendants, so it never queries after a kill" do
+      test = self()
+      n = System.unique_integer([:positive])
+      user_id = "github|https://github.com|sandbox-fill-#{n}"
+      {:ok, slugs} = Sanctum.Tenancy.Athanors.person_slugs(nil, "Sandbox fill #{n}")
+
+      {:ok, athanor} =
+        Sanctum.Tenancy.Athanors.create_personal(
+          %{name: "Sandbox fill #{n}", owner_user_id: user_id, created_by: user_id},
+          slugs
+        )
+
+      athanor_id = athanor.id
+      once = :atomics.new(1, [])
+      handler = {__MODULE__, make_ref()}
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          Arca.StorageProjectionChanges.event(),
+          fn _event, _measurements, metadata, _config ->
+            if metadata.athanor_id == athanor_id and metadata.root == "components" and
+                 :atomics.compare_exchange(once, 1, 0, 1) == :ok do
+              Process.flag(:priority, :high)
+              send(test, {:parked, self()})
+
+              receive do
+                {:watch, holder} ->
+                  ref = Process.monitor(holder)
+
+                  receive do
+                    {:DOWN, ^ref, :process, ^holder, _reason} -> :ok
+                  end
+              end
+            end
+          end,
+          nil
+        )
+
+      ctx = %{Sanctum.TestContext.local() | user_id: user_id, athanor_id: athanor_id}
+      {:ok, _timer} = :timer.apply_after(0, Sanctum.Provisioning, :start_provisioning, [ctx])
+      assert_receive {:parked, fill}, 30_000
+      refute test in callers(fill)
+
+      holder =
+        spawn(fn ->
+          Arca.Repo.checkout(fn ->
+            send(test, :holding)
+
+            receive do
+              :never -> :ok
+            end
+          end)
+        end)
+
+      assert_receive :holding, 5_000
+      send(fill, {:watch, holder})
       :erlang.system_flag(:schedulers_online, 1)
     end
   end
@@ -470,7 +614,9 @@ defmodule Cyfr.Test.SandboxTest do
   end
 
   # The dynamic supervisors a sweep stops the children of.
-  defp swept_by_stopping, do: repository_dynamic_supervisors() -- Sandbox.pooled()
+  # A fill's supervisors are swept by the kills (`Sandbox.fill_supervisors/0`).
+  defp swept_by_stopping,
+    do: repository_dynamic_supervisors() -- (Sandbox.pooled() ++ Sandbox.fill_supervisors())
 
   # A child that, told to stop, runs one query and reports how it went.
   defp last_query_child(name, collector) do
@@ -577,6 +723,11 @@ defmodule Cyfr.Test.SandboxTest do
     Ecto.Adapters.SQL.query(Arca.Repo, "SELECT 1", [])
   rescue
     error -> {:error, error}
+  end
+
+  defp callers(pid) do
+    {:dictionary, dictionary} = Process.info(pid, :dictionary)
+    Keyword.get(dictionary, :"$callers", [])
   end
 
   defp collect(reports) do

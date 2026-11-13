@@ -15,6 +15,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
   use ExUnit.Case, async: false
 
   alias Arca.ProvisioningClaims, as: Claims
+  alias Cyfr.Test.Fill
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
@@ -48,10 +49,12 @@ defmodule Sanctum.ProvisioningReadinessTest do
     athanor: athanor
   } do
     refute Provisioning.provisioned?(ctx)
-    assert {:error, :not_provisioned} = Provisioning.ready(ctx)
 
-    # The suite fills inline, so the attempt has already happened and its
-    # outcome — success or a recorded failure — is on the row.
+    # The fill runs in the background; once it has settled, its outcome —
+    # success or a recorded failure — is on the row.
+    assert {{:error, :not_provisioned}, _settled} =
+             Fill.settled!(athanor.id, fn -> Provisioning.ready(ctx) end)
+
     {:ok, athanor} = Athanors.get(athanor.id)
     assert athanor.provisioned_at || Athanors.provisioning_failure(athanor)
   end
@@ -170,10 +173,10 @@ defmodule Sanctum.ProvisioningReadinessTest do
     refute Claims.live?(claim)
   end
 
-  test "a claim is released when its attempt ends, not when its task does" do
-    # One task walks several athanors in turn — a boot's seed sync walks
-    # them all — so a key held for the life of the task would keep the next
-    # caller out of an athanor nobody is filling.
+  test "a claim is released when its attempt ends, not when its process does" do
+    # One process fills several athanors in turn — a boot's seed sync walks
+    # them all — so a key held for the life of the process would keep the
+    # next caller out of an athanor nobody is filling.
     n = System.unique_integer([:positive])
     creator = "github|https://github.com|serial-#{n}"
     {:ok, slugs} = Athanors.person_slugs(nil, "Serial one #{n}")
@@ -198,15 +201,16 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     ctx = fn id -> %{Sanctum.TestContext.local() | user_id: creator, athanor_id: id} end
 
-    # Fill both from one process.
-    assert :ok = Sanctum.Provisioning.start_provisioning(ctx.(first.id))
-    assert :ok = Sanctum.Provisioning.start_provisioning(ctx.(second.id))
+    # Fill both from this process, through the explicit verb, which runs
+    # the attempt where it is asked.
+    for athanor <- [first, second],
+        do: assert({:error, _failed} = Sanctum.Provisioning.provision(athanor, ctx.(athanor.id)))
 
     # Neither claim outlives its own attempt: each is settled, and the next
     # caller takes the athanor at once.
     for id <- [first.id, second.id] do
       actor = %Prima.Actor{athanor_id: id}
-      assert {:ok, %{entry_kind: "first_need", outcome: outcome} = claim} = Claims.current(actor)
+      assert {:ok, %{entry_kind: "provision", outcome: outcome} = claim} = Claims.current(actor)
       assert outcome in ["ready", "failed"]
       refute Claims.live?(claim)
 
@@ -220,7 +224,8 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # Recording a failure writes the row, and writing the row announces it —
     # which is what a console page reloads on. Its reads must not start
     # another attempt, or one failure becomes an endless retry.
-    assert {:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx)
+    assert {{:error, :not_provisioned}, :failed} =
+             Fill.settled!(athanor.id, fn -> Sanctum.Provisioning.ready(ctx) end)
 
     {:ok, failed} = Athanors.get(athanor.id)
     refute failed.provisioned_at
@@ -247,7 +252,9 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
   test "the backoff is the claim's: a failure a minute old no longer holds a reader off",
        %{ctx: ctx, athanor: athanor} do
-    assert {:error, :not_provisioned} = Provisioning.ready(ctx)
+    assert {{:error, :not_provisioned}, :failed} =
+             Fill.settled!(athanor.id, fn -> Provisioning.ready(ctx) end)
+
     assert Provisioning.status(ctx) == :failed
 
     # The same failure, a minute and a second ago, on the claim and the row.
@@ -270,13 +277,17 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert Provisioning.status(ctx) == :unfilled
 
     # And the next reader starts a fill: a new attempt at the next fence.
-    assert {:error, :not_provisioned} = Provisioning.ready(ctx)
+    assert {{:error, :not_provisioned}, :failed} =
+             Fill.settled!(athanor.id, fn -> Provisioning.ready(ctx) end)
+
     assert {:ok, %{fence: 2, entry_kind: "first_need"}} = Claims.current(actor)
   end
 
   test "the failure record is the server's: settings neither forge nor clear it",
        %{ctx: ctx, athanor: athanor} do
-    assert {:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx)
+    assert {{:error, :not_provisioned}, :failed} =
+             Fill.settled!(athanor.id, fn -> Sanctum.Provisioning.ready(ctx) end)
+
     {:ok, failed} = Athanors.get(athanor.id)
     assert %{at: failed_at} = Athanors.provisioning_failure(failed)
 
@@ -302,7 +313,10 @@ defmodule Sanctum.ProvisioningReadinessTest do
     refute untouched.provisioned_at || Athanors.provisioning_failure(untouched)
 
     Arca.ControlPlane.record(:unclaimed)
-    assert {:error, :not_provisioned} = Provisioning.ready(ctx)
+
+    assert {{:error, :not_provisioned}, _settled} =
+             Fill.settled!(athanor.id, fn -> Provisioning.ready(ctx) end)
+
     {:ok, attempted} = Athanors.get(athanor.id)
     assert attempted.provisioned_at || Athanors.provisioning_failure(attempted)
   end

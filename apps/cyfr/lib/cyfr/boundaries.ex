@@ -2410,9 +2410,6 @@ defmodule Cyfr.Boundaries do
   @config_key_classes %{
     # Test seams: a hook a test sets and no release does.
     tenancy_resolver_override: :seam,
-    # A fill run in the caller's process (`Compendium.Provisioning`); only
-    # a test build reads it (`Prima.TestSeam.value/2`).
-    provisioning_inline: :seam,
     record_sink_inline: :seam,
     # The issuer's side of a company sign-in (`Sanctum.Auth.OIDC`): a test
     # stands in its own for the token exchange; only a test build reads it.

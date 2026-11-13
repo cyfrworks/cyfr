@@ -105,6 +105,10 @@ defmodule Sanctum.ConsentAfterInstallTest do
       Process.exit(server, :normal)
     end)
 
+    # A fill a call asks for runs in the background under the paths above:
+    # it stops before they are put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     {:ok, port: port}
   end
 
@@ -138,8 +142,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
       )
 
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
-    {:ok, athanor} = Athanors.get(athanor.id)
+    {:ok, athanor} = Provisioning.provision(athanor, in_athanor)
     assert %DateTime{} = athanor.provisioned_at, inspect(Athanors.settings(athanor))
 
     assert {:ok, %Prima.Authority{}} =

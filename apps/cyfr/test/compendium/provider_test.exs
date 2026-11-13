@@ -102,6 +102,10 @@ defmodule Compendium.ProviderTest do
         else: Application.delete_env(:cyfr, :registry_url)
     end)
 
+    # A call may ask for the shared athanor's fill, which runs in the
+    # background under the paths above: it stops before they are put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     {:ok, ctx: ctx, test_dir: test_dir}
   end
 

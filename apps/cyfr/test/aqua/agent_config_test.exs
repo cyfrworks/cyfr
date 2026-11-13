@@ -25,6 +25,11 @@ defmodule Aqua.AgentConfigTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    # A read of an agent asks for the shared athanor's fill, which runs in
+    # the background under the path above: it stops before the path is put
+    # back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     {:ok, ctx: Sanctum.TestContext.local()}
   end

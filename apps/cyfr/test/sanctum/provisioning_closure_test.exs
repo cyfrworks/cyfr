@@ -42,6 +42,10 @@ defmodule Sanctum.ProvisioningClosureTest do
       File.rm_rf!(test_dir)
     end)
 
+    # The fill runs in the background under the paths above: it stops
+    # before they are put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     :ok
   end
 
@@ -68,7 +72,11 @@ defmodule Sanctum.ProvisioningClosureTest do
       )
 
     in_athanor = %{ctx | athanor_id: athanor.id}
-    :ok = Provisioning.start_provisioning(in_athanor)
+
+    assert {:ok, :ready} =
+             Cyfr.Test.Fill.settled!(athanor.id, fn ->
+               Provisioning.start_provisioning(in_athanor)
+             end)
 
     {:ok, athanor} = Athanors.get(athanor.id)
 
