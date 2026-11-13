@@ -9,10 +9,11 @@ defmodule Cyfr.Cluster.Person do
   door. The cases that use this module ask what a person meets instead: a
   person signed in with a session of their own (`Cyfr.Cluster.Fixtures.person!/0`),
   whose context each member establishes from the session token as the
-  console does (`context/1`), in an athanor filled as a person's first
-  sign-in fills it: the shipped AQUA tree and catalysts copied in,
-  indexed, the soul consented by the consent bootstrap and the model's key
-  entered and bound through the consent walk (`person!/0`). What such a
+  console does (`context/1`), in an athanor filled through the explicit
+  provision verb on the member that makes the person, which answers once
+  the fill has run there: the shipped AQUA tree and catalysts copied in,
+  indexed and the soul consented. The model's key is then entered and
+  bound through the consent walk (`person!/0`). What such a
   person does then goes through the runner (`send/3`), the approvals door
   (`decide/3`), the consent walk (`plan/2`, `commit/3`) and the gate
   (`call/3`), on whichever member a case names.
@@ -35,15 +36,15 @@ defmodule Cyfr.Cluster.Person do
               Compendium.AgentIndex,
               Compendium.AquaPath,
               Prima.AgentRef,
-              Compendium.AutoIndexer,
+              Arca.ConsentStorage,
               Sanctum.Caller,
-              Sanctum.Consent.Bootstrap,
               Sanctum.Consent.Commit,
               Sanctum.Consent.Plan,
               Sanctum.Context,
               Sanctum.Gate,
-              Sanctum.Test.ConsentFixtures,
-              Sanctum.TestContext
+              Sanctum.Provisioning,
+              Sanctum.Tenancy.Athanors,
+              Sanctum.Test.ConsentFixtures
             ]}
 
   @soul "agent:local.aqua"
@@ -108,9 +109,11 @@ defmodule Cyfr.Cluster.Person do
   # ---------------------------------------------------------------------------
 
   @doc """
-  A person signed in with a session, in an athanor of their own filled as
-  their first sign-in fills it, with the model's key entered and bound to
-  the turns of the console and of the API. Answers the person
+  A person signed in with a session, in an athanor of their own filled
+  now, on this member, through the explicit verb, with the model's key
+  entered and bound to the turns of the console and of the API. The verb
+  runs the fill in this process and answers its outcome, so the athanor
+  stands filled on every member before the case acts. Answers the person
   (`Cyfr.Cluster.Fixtures.person!/0`): their id, athanor and session token.
   """
   @spec person!() :: map()
@@ -118,11 +121,9 @@ defmodule Cyfr.Cluster.Person do
     person = Cyfr.Cluster.Fixtures.person!()
     ctx = context!(person.token)
 
-    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
-    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run(ctx)
-    true = @soul in minted
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+    {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(athanor, ctx)
+    {:ok, [_soul]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @soul)
 
     entry =
       Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"},
