@@ -97,14 +97,22 @@ defmodule Arca.FirstBootTest do
   # The repository as the boot starts it to migrate: the suite's settings
   # on a pool of two, outside the sandbox, on the file at `path`.
   defp start_repo(name, path) do
-    Application.fetch_env!(:arca, Arca.Repo)
-    |> Keyword.merge(
-      name: name,
-      database: path,
-      pool: DBConnection.ConnectionPool,
-      pool_size: 2
-    )
-    |> Arca.Repo.start_link()
+    {:ok, repo} =
+      Application.fetch_env!(:arca, Arca.Repo)
+      |> Keyword.merge(
+        name: name,
+        database: path,
+        pool: DBConnection.ConnectionPool,
+        pool_size: 2,
+        connection_listeners: [self()]
+      )
+      |> Arca.Repo.start_link()
+
+    # A stopped connection can still finish a dirty native open. Let both
+    # opens finish before shutdown can race the directory's removal.
+    for _ <- 1..2, do: assert_receive({:connected, _conn}, 10_000)
+
+    {:ok, repo}
   end
 
   defp migrate(name) do
