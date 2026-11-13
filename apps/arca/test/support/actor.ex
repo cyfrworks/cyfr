@@ -164,10 +164,22 @@ defmodule Arca.Test.Actor do
     :ok
   end
 
-  # Each athanor is one person's. `ath_test` is the local test person's
-  # (`Sanctum.TestContext.local/0`); any other row a test seeds is a second
-  # person's, under an owner id no other row holds.
-  defp owner_of("ath_test"), do: "local|local|testns"
+  @owner_id "usr_00000000-0000-7000-8000-00000000a7e5"
+
+  @doc """
+  The person `ath_test` belongs to: the suite's signed-in person, whose
+  row a test that signs in writes into its own sandbox
+  (`Sanctum.TestContext.owner!/0`). No row is seeded, so a suite that
+  counts people or opens the installation's setup sees none it did not
+  make.
+  """
+  @spec owner_id() :: String.t()
+  def owner_id, do: @owner_id
+
+  # Each athanor is one person's. `ath_test` is `owner_id/0`'s; any other
+  # row a test seeds is a second person's, under an owner id no other row
+  # holds.
+  defp owner_of("ath_test"), do: @owner_id
   defp owner_of(_athanor_id), do: Prima.UUID7.generate_id(Prima.PersonId.prefix())
 
   @doc """

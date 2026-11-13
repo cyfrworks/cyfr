@@ -54,10 +54,7 @@ defmodule Sanctum.EstablishBoundaryTest do
     "apps/sanctum/test/support/test_context.ex" => 2,
     # `PrismConnCase`'s signed-in caller: the context a LiveView test's
     # session would have carried had a real OIDC sign-in produced it.
-    "apps/cyfr/test/support/prism_conn_case.ex" => 1,
-    # The test `Sanctum.Auth` implementation's established identity — the
-    # provider seam, standing in for the real OIDC or OAuth strategy.
-    "apps/cyfr/test/support/test_auth_provider.ex" => 1
+    "apps/cyfr/test/support/prism_conn_case.ex" => 1
   }
 
   # The credential recipes, callable from `Sanctum.Caller` only.

@@ -71,7 +71,6 @@ defmodule Cyfr.TestSeamsTest do
       :worker_watch_enabled
     ],
     sanctum: [
-      :bearer_provider,
       :caller_memo_ttl_ms,
       :directory_client,
       :namespace_cache_ttl_ms,
@@ -232,32 +231,32 @@ defmodule Cyfr.TestSeamsTest do
     "def read, do: Elixir.Prima.TestSeam.value(true, :shipped, fn -> :read end)",
     "def read do\n  decision = &Elixir.Prima.TestSeam.value/3\n  decision.(true, :shipped, fn -> :read end)\nend",
     "require Prima.TestSeam, as: Gate\ndef read, do: Gate.value(true, :shipped, fn -> :read end)",
-    "alias Elixir, as: Root\nalias Root.Application, as: Env\ndef read, do: Env.get_env(:sanctum, :bearer_provider)",
-    "require Application, as: Env\ndef read, do: Env.get_env(:sanctum, :bearer_provider)",
-    "alias Application, as: Env\ndef read, do: Env.get_env(:sanctum, :bearer_provider)",
-    "alias :application, as: Env\ndef read, do: Env.get_env(:sanctum, :bearer_provider)",
-    "import Application\ndef read, do: get_env(:sanctum, :bearer_provider)",
+    "alias Elixir, as: Root\nalias Root.Application, as: Env\ndef read, do: Env.get_env(:sanctum, :workos_api_url)",
+    "require Application, as: Env\ndef read, do: Env.get_env(:sanctum, :workos_api_url)",
+    "alias Application, as: Env\ndef read, do: Env.get_env(:sanctum, :workos_api_url)",
+    "alias :application, as: Env\ndef read, do: Env.get_env(:sanctum, :workos_api_url)",
+    "import Application\ndef read, do: get_env(:sanctum, :workos_api_url)",
     "import Prima.TestSeam\ndef read, do: value(true, :shipped, fn -> :read end)",
     "alias Prima.TestSeam\ndef read, do: TestSeam.value(true, :shipped, fn -> :read end)",
     "alias Prima.TestSeam, as: Gate\ndef read, do: Gate.value(true, :shipped, fn -> :read end)",
     "alias Prima\ndef read, do: Prima.TestSeam.value(true, :shipped, fn -> :read end)",
     "alias Prima, as: P\ndef read, do: P.TestSeam.value(true, :shipped, fn -> :read end)",
     "alias Prima.{TestSeam}\ndef read, do: TestSeam.value(true, :shipped, fn -> :read end)",
-    "alias Elixir.{Application}\ndef read, do: Application.get_env(:sanctum, :bearer_provider)",
-    "def read, do: Elixir.Application.get_env(:sanctum, :bearer_provider)",
-    "def read, do: :\"Elixir.Application\".get_env(:sanctum, :bearer_provider)",
+    "alias Elixir.{Application}\ndef read, do: Application.get_env(:sanctum, :workos_api_url)",
+    "def read, do: Elixir.Application.get_env(:sanctum, :workos_api_url)",
+    "def read, do: :\"Elixir.Application\".get_env(:sanctum, :workos_api_url)",
     "def read, do: :\"Elixir.Prima.TestSeam\".value(true, :shipped, fn -> :read end)",
     "alias Sanctum.Fake, as: Prima\nrequire Prima.TestSeam\n" <>
-      "def read, do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)",
-    "alias Sanctum.Fake.Application\ndef read, do: Application.get_env(:sanctum, :bearer_provider)",
+      "def read, do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :workos_api_url) end)",
+    "alias Sanctum.Fake.Application\ndef read, do: Application.get_env(:sanctum, :workos_api_url)",
     "defmodule Prima.TestSeam do\nend\nrequire Prima.TestSeam\n" <>
-      "def read, do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)",
-    "def read, do: Application.get_env(:sanctum, :bearer_provider)",
+      "def read, do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :workos_api_url) end)",
+    "def read, do: Application.get_env(:sanctum, :workos_api_url)",
     injected.("alias unquote(target), as: Env") <>
-      "def read, do: Env.get_env(:sanctum, :bearer_provider)",
+      "def read, do: Env.get_env(:sanctum, :workos_api_url)",
     injected.("require unquote(target), as: Env") <>
-      "def read, do: Env.get_env(:sanctum, :bearer_provider)",
-    injected.("import unquote(target)") <> "def read, do: get_env(:sanctum, :bearer_provider)"
+      "def read, do: Env.get_env(:sanctum, :workos_api_url)",
+    injected.("import unquote(target)") <> "def read, do: get_env(:sanctum, :workos_api_url)"
   ]
 
   @honest_form """
@@ -265,7 +264,7 @@ defmodule Cyfr.TestSeamsTest do
   require Prima.TestSeam
 
   def read(%Context{}),
-    do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :bearer_provider) end)
+    do: Prima.TestSeam.value(nil, fn -> Application.get_env(:sanctum, :workos_api_url) end)
   """
 
   test "every form that renames, respells or reaches past the gate is refused; an honest file passes" do

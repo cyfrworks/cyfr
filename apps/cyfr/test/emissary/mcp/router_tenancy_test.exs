@@ -61,102 +61,67 @@ defmodule Emissary.MCP.RouterTenancyTest do
     end
   end
 
-  defp with_auth_provider(provider, fun) do
-    original = Application.get_env(:sanctum, :bearer_provider)
+  describe "the anonymous surface" do
+    test "session and system.status stay reachable" do
+      ctx = make_context(false)
 
-    if provider,
-      do: Application.put_env(:sanctum, :bearer_provider, provider),
-      else: Application.delete_env(:sanctum, :bearer_provider)
-
-    try do
-      fun.()
-    after
-      if original,
-        do: Application.put_env(:sanctum, :bearer_provider, original),
-        else: Application.delete_env(:sanctum, :bearer_provider)
+      refute refused?(Router.dispatch(ctx, tool_call_msg("session", "whoami")))
+      refute refused?(Router.dispatch(ctx, tool_call_msg("system", "status")))
     end
-  end
 
-  # The operator authenticates with an API key on every install, so the
-  # anonymous surface does not widen when no auth provider is configured.
-  for {label, provider} <- [
-        {"no auth provider", nil},
-        {"auth provider configured", Emissary.TestAuthProvider}
-      ] do
-    describe "the anonymous surface — #{label}" do
-      @provider provider
+    test "component browsing is not reachable" do
+      ctx = make_context(false)
 
-      test "session and system.status stay reachable" do
-        with_auth_provider(@provider, fn ->
-          ctx = make_context(false)
+      for action <- ~w(list search inspect categories setup_plan) do
+        assert refused?(Router.dispatch(ctx, tool_call_msg("component", action))),
+               "component.#{action} answered an anonymous caller"
+      end
+    end
 
-          refute refused?(Router.dispatch(ctx, tool_call_msg("session", "whoami")))
-          refute refused?(Router.dispatch(ctx, tool_call_msg("system", "status")))
-        end)
+    test "aqua and registry are not reachable" do
+      ctx = make_context(false)
+
+      for {tool, action} <- [
+            {"aqua", "list"},
+            {"aqua", "get"},
+            {"aqua", "create"},
+            {"registry", "sync"}
+          ] do
+        assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
+               "#{tool}.#{action} answered an anonymous caller"
+      end
+    end
+
+    test "a session ahead of its claim reaches the registry bootstrap and nothing else" do
+      # What `Session.load` builds for a signed-in person who has not
+      # claimed a namespace: a user_id, no authentication.
+      ctx =
+        Sanctum.Context.build(
+          user_id: "github|https://github.com|unclaimed",
+          athanor_id: nil,
+          permissions: [],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: false
+        )
+
+      for action <- ~w(legal_page legal_version legal_accept) do
+        refute auth_refused?(Router.dispatch(ctx, tool_call_msg("registry", action))),
+               "registry.#{action} refused a signed-in person ahead of the claim"
       end
 
-      test "component browsing is not reachable" do
-        with_auth_provider(@provider, fn ->
-          ctx = make_context(false)
-
-          for action <- ~w(list search inspect categories setup_plan) do
-            assert refused?(Router.dispatch(ctx, tool_call_msg("component", action))),
-                   "component.#{action} answered an anonymous caller"
-          end
-        end)
-      end
-
-      test "aqua and registry are not reachable" do
-        with_auth_provider(@provider, fn ->
-          ctx = make_context(false)
-
-          for {tool, action} <- [
-                {"aqua", "list"},
-                {"aqua", "get"},
-                {"aqua", "create"},
-                {"registry", "sync"}
-              ] do
-            assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
-                   "#{tool}.#{action} answered an anonymous caller"
-          end
-        end)
-      end
-
-      test "a session ahead of its claim reaches the registry bootstrap and nothing else" do
-        with_auth_provider(@provider, fn ->
-          # What `Session.load` builds for a signed-in person who has not
-          # claimed a namespace: a user_id, no authentication.
-          ctx =
-            Sanctum.Context.build(
-              user_id: "github|https://github.com|unclaimed",
-              athanor_id: nil,
-              permissions: [],
-              scope: :athanor,
-              auth_method: :oidc,
-              authenticated: false
-            )
-
-          for action <- ~w(legal_page legal_version legal_accept) do
-            refute auth_refused?(Router.dispatch(ctx, tool_call_msg("registry", action))),
-                   "registry.#{action} refused a signed-in person ahead of the claim"
-          end
-
-          for {tool, action} <- [{"aqua", "list"}, {"component", "list"}, {"registry", "whoami"}] do
-            assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
-                   "#{tool}.#{action} answered a session ahead of its claim"
-          end
-        end)
+      for {tool, action} <- [{"aqua", "list"}, {"component", "list"}, {"registry", "whoami"}] do
+        assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
+               "#{tool}.#{action} answered a session ahead of its claim"
       end
     end
   end
 
   describe "an authenticated caller" do
     test "reaches component browsing" do
-      with_auth_provider(Emissary.TestAuthProvider, fn ->
-        ctx = make_context(true)
+      ctx = make_context(true)
 
-        refute refused?(Router.dispatch(ctx, tool_call_msg("component", "list")))
-      end)
+      refute refused?(Router.dispatch(ctx, tool_call_msg("component", "list")))
     end
   end
 end

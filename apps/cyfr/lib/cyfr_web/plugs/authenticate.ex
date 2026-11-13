@@ -11,14 +11,15 @@ defmodule CyfrWeb.Plugs.Authenticate do
   a revoked credential stops working on the next call.
 
   1. `Authorization: Bearer …` — an API key or a Sanctum session token, told
-     apart by the `cyfr_` prefix.
-  2. A configured auth provider, for browser-borne callers.
-  3. Neither — an unauthenticated context. This is not an error: the surface
+     apart by the `cyfr_` prefix. A bearer that is neither is refused with
+     401, never served as an anonymous caller.
+  2. None — an unauthenticated context. This is not an error: the surface
      behind this plug gates per action and some are deliberately public.
 
-  An auth-provider *error* is distinguished from absent credentials and fails
-  closed with 503; it never degrades to unauthenticated. So does a session
-  of a remote person whose identity could not be confirmed fresh
+  A store that cannot judge the credential is distinguished from a refused
+  one and fails closed with 503; it never degrades to unauthenticated. So
+  does a session of a remote person whose identity could not be confirmed
+  fresh
   (`:identity_stale`): it answers 503 with that refusal's class and
   sentence, and the session stands. A person who stands but for the
   company sign-in this CYFR requires (`:company_login_required`), by a
@@ -40,7 +41,6 @@ defmodule CyfrWeb.Plugs.Authenticate do
   """
 
   import Plug.Conn
-  require Logger
 
   alias Sanctum.Context
 
@@ -58,49 +58,24 @@ defmodule CyfrWeb.Plugs.Authenticate do
         Prima.LoggerContext.set_from_context(context)
         assign(conn, :context, established(conn, context))
 
-      # No credential this plug recognises. Either none was presented — the
-      # public surface is reachable that way and the router gates per action —
-      # or a bearer token was presented that only the auth provider could
-      # claim. The two deserve different answers when nobody ends up
-      # authenticating, which is what the `result` match below distinguishes.
-      result when result in [:no_key, :unclaimed_bearer] ->
-        case get_context(conn) do
-          {:error, :auth_provider_error} ->
-            auth_provider_error_response(conn, errors)
-
-          {:error, :missing_tenant} ->
-            missing_tenant_error_response(conn, errors)
-
-          %Context{authenticated: false, user_id: nil} when result == :unclaimed_bearer ->
-            # A credential was presented, nothing claimed it, and nothing else
-            # will. Serving the public surface here is a fail-open: the caller
-            # gets a 200 for whatever happens to be public and never learns
-            # their token is dead, which is indistinguishable from success.
-            #
-            # `user_id: nil` is the discriminator: a provider bearer that DID
-            # identify someone who is door-denied yields an unauthenticated
-            # context WITH identity fields, and
-            # `context_from_session/1` documents that shape as forwarded, not
-            # halted — the same person's session token already forwards it.
-            error_response(conn, :invalid_bearer, errors)
-
-          context ->
-            context = established(conn, context)
-            Prima.LoggerContext.set_from_context(context)
-            assign(conn, :context, context)
-        end
+      # No credential at all: the public surface is reachable that way, and
+      # the router gates per action.
+      :no_key ->
+        context = established(conn, unauthenticated_context())
+        Prima.LoggerContext.set_from_context(context)
+        assign(conn, :context, context)
 
       {:error, :missing_tenant} ->
-        # API key valid but the owner has no resolved athanor.
+        # A credential that stands, whose person has no athanor to work in.
         missing_tenant_error_response(conn, errors)
 
       {:error, :auth_provider_error} ->
-        # The key store could not answer: a 503, never a 401 — the
+        # The store could not answer: a 503, never a 401 — the
         # credential was not judged.
         auth_provider_error_response(conn, errors)
 
       {:error, reason} ->
-        # API key provided but invalid
+        # A credential presented and refused.
         error_response(conn, reason, errors)
     end
   end
@@ -114,52 +89,6 @@ defmodule CyfrWeb.Plugs.Authenticate do
   # verdict on it.
   defp auth_provider_error_response(conn, errors) do
     errors.halt(conn, 503, :auth_provider_error, "Authentication service unavailable")
-  end
-
-  # A bearer the test harness's provider issues (`Sanctum.BearerToken.provider/0`,
-  # which every release answers nil): a request with no session or key
-  # reaches the public surface as an unauthenticated context (no
-  # permissions, no resolved athanor), its tenant-scoped routes rejected
-  # downstream.
-  defp get_context(conn) do
-    auth_provider = Sanctum.BearerToken.provider()
-
-    if is_nil(auth_provider) do
-      unauthenticated_context()
-    else
-      try do
-        case auth_provider.current_user(conn) do
-          nil ->
-            # No credentials presented — fall through to the public surface.
-            # Tenant-scoped routes are rejected downstream (no resolved athanor).
-            Logger.debug("[Authenticate] No credentials from provider #{inspect(auth_provider)}")
-            unauthenticated_context()
-
-          {:error, reason} ->
-            # An auth-provider *error* (as opposed to absent credentials) must
-            # fail closed — never silently downgrade to unauthenticated.
-            Logger.warning(
-              "[Authenticate] Auth provider #{inspect(auth_provider)} returned error: #{inspect(reason)}"
-            )
-
-            {:error, :auth_provider_error}
-
-          ctx ->
-            # current_user/1 returns a Context; resolve the athanor and gate.
-            context_from_session(ctx)
-        end
-      rescue
-        e ->
-          Logger.error(
-            "[Authenticate] Auth provider #{inspect(auth_provider)} raised: #{Prima.LogFilter.exception_message(e)}"
-          )
-
-          # An auth provider crash is a server error — fail the request rather
-          # than silently downgrading to unauthenticated (which would bypass
-          # all authz).
-          {:error, :auth_provider_error}
-      end
-    end
   end
 
   # The caller's address, carried on the context so an ANONYMOUS action can
@@ -198,35 +127,6 @@ defmodule CyfrWeb.Plugs.Authenticate do
     )
   end
 
-  # `Sanctum.Caller` owns the establish recipe; this surface's mapping: a
-  # door-denied context is forwarded rather than halted — it reaches only
-  # the anonymous surface, which needs its fields to say who was refused.
-  defp context_from_session(%Context{} = ctx) do
-    case Sanctum.Caller.establish_context(ctx) do
-      {:ok, established} ->
-        established
-
-      {:error, {:denied, denied}} ->
-        denied
-
-      {:error, :no_athanor} ->
-        Logger.warning(
-          "[Authenticate] Authenticated user #{ctx.user_id} has no resolved athanor — rejecting"
-        )
-
-        {:error, :missing_tenant}
-
-      # The person's read failed. That is not "you have no athanor" — it is
-      # "we could not find out", and answering 403 tells the person to ask an
-      # operator about a fault an operator cannot see. Same answer the session
-      # path already gives for the same underlying failure.
-      {:error, :unavailable} ->
-        Logger.error("[Authenticate] athanor read failed for #{ctx.user_id} — answering 503")
-
-        {:error, :auth_provider_error}
-    end
-  end
-
   # ============================================================================
   # Bearer credentials
   # ============================================================================
@@ -238,8 +138,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
   # outlives one.
   #
   # Returns {:ok, context}, whose `auth_method` names the credential's kind,
-  # :no_key when no bearer credential is present, :unclaimed_bearer when a
-  # bearer is no session this server issued, or {:error, reason}.
+  # :no_key when no bearer credential is present, or {:error, reason}.
   defp resolve_bearer_credential(conn) do
     case Sanctum.BearerToken.read(conn) do
       nil ->
@@ -293,12 +192,11 @@ defmodule CyfrWeb.Plugs.Authenticate do
         {:error, :company_login_required}
 
       {:error, :unauthenticated} ->
-        # Not a session token this server issued — but not necessarily invalid.
-        # A configured auth provider may accept bearer tokens of its own (an
-        # OIDC access token, say), and it reads the header itself. So this falls
-        # through rather than deciding, and the caller in `call/2` refuses only
-        # once the provider has also declined.
-        :unclaimed_bearer
+        # Not a session this server issued, or one no longer standing.
+        # Serving the public surface here would be a fail-open: the caller
+        # would get a 200 for whatever happens to be public and never learn
+        # their token is dead.
+        {:error, :invalid_bearer}
     end
   end
 
@@ -332,8 +230,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
   # API keys are ATHANOR credentials: the athanor comes from the stored key
   # (Sanctum.ApiKey.context_from_metadata/1) — never from the request or the
   # creating user's *current* standing. Revocation is the control. An athanor-less key is
-  # rejected by the tenant gate (the same gate context_from_session/1
-  # applies).
+  # rejected by the tenant gate (`Sanctum.Caller`'s, as for a session).
   # The one recipe establishes the key; this surface maps its refusals to
   # the wire. An archived athanor or a denied creator answers exactly like
   # a revoked key, so nothing about either leaks.
