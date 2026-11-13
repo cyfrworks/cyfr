@@ -41,11 +41,12 @@ defmodule Aqua.ApprovalsTest do
       end
     end)
 
-    # A fill a call asks for runs in the background under the path above:
-    # it stops before the path is put back.
-    Cyfr.Test.Sandbox.stop_work_on_exit()
-
     Cyfr.Test.SeedBundle.lay!(~w(claude files http), formulas: ~w(list-models))
+
+    # A fill a call asks for runs in the background under the path and the
+    # seed above. Registered last, it stops first: before the seed is
+    # removed and the path put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     ctx = Sanctum.TestContext.local(:prism)
     {thread, pins} = ready!(ctx)
