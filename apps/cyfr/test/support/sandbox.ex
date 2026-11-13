@@ -48,6 +48,16 @@ defmodule Cyfr.Test.Sandbox do
   does this first and again on every pass; an async test's does only this,
   since the supervisors are its neighbours' too.
 
+  A sync test's kills take a fill with them too: the work under
+  `Compendium.ProvisioningSupervisor` and `Sanctum.ProvisioningSupervisor`
+  (an attempt, the keeper that watches it, the pulls it runs beside
+  itself) is killed in the same instant as the test's descendants,
+  whoever started it. A request from outside the test's processes, a host
+  call over the worker wire, starts a fill that leads back to no
+  descendant; left to its supervisor's turn, it would still be running
+  after a kill had cut the shared connection under a query, and its next
+  query, answering its keeper's end, would find no owner.
+
   `on_exit` callbacks run last-registered first. A test that restores
   configuration a background process reads (a base path, a seed path, the
   execution engine) calls `stop_work_on_exit/0` after registering those
@@ -295,7 +305,7 @@ defmodule Cyfr.Test.Sandbox do
 
   defp stop_work(test, spared, passes) do
     sweeping(test)
-    ended = stop_descendants(test, spared)
+    ended = stop_descendants(test, spared, fill_roots())
 
     stopped =
       Enum.flat_map(@supervisors, fn name ->
@@ -428,17 +438,22 @@ defmodule Cyfr.Test.Sandbox do
   # something may then be left. The suspension this replaces had the same
   # limit and said nothing.
   @doc """
-  End every process that leads back to `test` (`descendants/2`), the
-  `spared` apart: the sweep of an async test, and the first step of each
-  pass of a sync test's. Answers the pids it killed, or fails the test
-  when, once those were gone, it found more that it had not known.
+  End every process that leads back to `test` (`descendants/2`), or to
+  one of the `beside` (never ended itself), the `spared` apart: the sweep
+  of an async test, and the first step of each pass of a sync test's,
+  which ends a fill's work beside the descendants (`fill_supervisors/0`).
+  Answers the pids it killed, or fails the test when, once those were
+  gone, it found more that it had not known.
   """
-  @spec stop_descendants(pid(), [pid()]) :: [pid()]
-  def stop_descendants(test, spared) do
+  @spec stop_descendants(pid(), [pid()], [pid()]) :: [pid()]
+  def stop_descendants(test, spared, beside \\ []) do
     sweeping(test)
     listed = Process.list()
 
-    case listed |> origins(spared) |> trace({MapSet.new([test]), []}) do
+    # The `beside` are roots of the kill alone: work a supervisor starts
+    # after it, for whoever asks, is its turn's in the sweep, not a process
+    # the test left unknown.
+    case listed |> origins(spared) |> trace({MapSet.new([test | beside]), []}) do
       {_reached, []} ->
         []
 
@@ -471,6 +486,19 @@ defmodule Cyfr.Test.Sandbox do
         end
     end
   end
+
+  @doc """
+  The supervisors a fill's work runs under, whose children a sync test's
+  sweep kills with its descendants rather than stopping them in their
+  turn: an attempt and its pulls (`Compendium.ProvisioningSupervisor`),
+  and the keeper that watches the attempt and writes when it ends
+  (`Sanctum.ProvisioningSupervisor`).
+  """
+  @spec fill_supervisors() :: [atom()]
+  def fill_supervisors, do: [Compendium.ProvisioningSupervisor, Sanctum.ProvisioningSupervisor]
+
+  # Each child leads back to its supervisor through `$ancestors`.
+  defp fill_roots, do: for(name <- fill_supervisors(), pid = Process.whereis(name), do: pid)
 
   # Kills and awaits what leads back to the test or to anything `killed`,
   # and reads again with those among the killed, until a read finds none
