@@ -6,9 +6,6 @@ defmodule Arca.Supervisor do
 
   use Application
 
-  require Logger
-  require Arca.Repo.Errors
-
   @impl true
   def start(_type, _args) do
     # The control plane's first application start: every log event's
@@ -84,7 +81,6 @@ defmodule Arca.Supervisor do
       # other, and refuses a pool of one.
       {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 2))
       Ecto.Migrator.run(Arca.Repo, Arca.Repo.migrations_path(), :up, all: true)
-      configure_database()
       # Stop the temporary repo so the supervisor can start the real one
       Supervisor.stop(repo_pid)
     end
@@ -119,19 +115,5 @@ defmodule Arca.Supervisor do
           sudo chown -R #{uid} #{dir}
         """
     end
-  end
-
-  defp configure_database do
-    case Arca.Repo.adapter() do
-      Ecto.Adapters.SQLite3 ->
-        Arca.Repo.query!("PRAGMA journal_mode=WAL")
-
-      _ ->
-        :ok
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.warning("[Arca] Database configuration failed: #{Exception.message(e)}")
-      :ok
   end
 end

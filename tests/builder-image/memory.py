@@ -162,11 +162,12 @@ const scenario = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const dir = fs.mkdtempSync(path.join(process.env.RELEASE_TMP, "memory-"));
 const attach = path.join(dir, "attach.sock");
 const spawns = scenario.spawns.map((s, i) => ({
-  ...s, id: String(i + 1), token: crypto.randomBytes(32).toString("hex"), stdout: "", replies: [], done: false,
+  ...s, id: String(i + 1), token: crypto.randomBytes(32).toString("hex"), stdout: "", replies: [], done: false, drained: false,
 }));
 const started = Date.now();
 
 function finish(timedOut) {
+  if (!timedOut && !spawns.every((s) => s.done && (!s.spawn_id || s.drained))) return;
   const report = spawns.map(({ name, uid, replies, stdout, done }) => ({ name, uid, replies, stdout: stdout.slice(-400), done }));
   process.stdout.write("<<<" + JSON.stringify({ timed_out: timedOut, spawns: report }) + ">>>\n", () => {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -178,13 +179,14 @@ function settle(spawn, reply) {
   spawn.replies.push({ ...reply, at_ms: Date.now() - started });
   if (reply.type === "spawned") { spawn.uid = reply.uid; spawn.spawn_id = reply.spawn_id; }
   if (reply.type === "released" || (reply.type === "error" && reply.id)) spawn.done = true;
-  if (spawns.every((s) => s.done)) finish(false);
+  finish(false);
 }
 
 const server = net.createServer((conn) => {
   let buffer = Buffer.alloc(0);
   let spawn = null;
   conn.on("error", () => {});
+  conn.on("end", () => { if (spawn) { spawn.drained = true; finish(false); } });
   conn.on("data", (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
     while (buffer.length >= 5 && buffer.length >= 5 + buffer.readUInt32BE(1)) {
@@ -194,7 +196,6 @@ const server = net.createServer((conn) => {
       if (stream === 3) {
         spawn = spawns.find((s) => s.token === payload.toString("latin1"));
         if (!spawn) return conn.destroy();
-        conn.write(Buffer.from([0, 0, 0, 0, 0]));
       } else if (stream === 1 && spawn) {
         spawn.stdout += payload.toString("utf8");
       }

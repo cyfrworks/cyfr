@@ -11,7 +11,7 @@ defmodule Sanctum.Supervisor do
     Sanctum.Network.private_egress_targets()
 
     # The deployment's pinned enrollment directory, refused here whichever
-    # configuration wrote it.
+    # configuration wrote it, and when none did.
     directory_url!(Application.get_env(:sanctum, :directory_url))
 
     # The setup token, refused here in its own form whichever
@@ -69,8 +69,6 @@ defmodule Sanctum.Supervisor do
             "CYFR_SETUP_TOKEN) must be exactly 64 lowercase hexadecimal characters"
         )
   end
-
-  defp directory_url!(nil), do: :ok
 
   defp directory_url!(url) do
     if Sanctum.enrollment_directory?(url),

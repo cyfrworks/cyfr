@@ -36,7 +36,6 @@ defmodule Sanctum do
       Annotations,
       ApiKey,
       Attach,
-      Auth,
       Auth.OIDC,
       Authority,
       Authority.BudgetCounter,
@@ -179,14 +178,13 @@ defmodule Sanctum do
   @doc """
   The directory this deployment enrolls its local people at
   (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`; unset, it is
-  `https://cyfr.run` in every build), or `nil` when it names none, as the
-  test configuration does: local operation and local pairing need none, and
-  enrollment needs one. No operation takes a
-  directory URL. `Sanctum.Supervisor` refuses the boot on a value
-  `enrollment_directory?/1` refuses.
+  `https://cyfr.run` in every build). Every CYFR names one, cyfr.run or
+  its own. No operation takes a directory URL. `Sanctum.Supervisor`
+  refuses the boot on a value `enrollment_directory?/1` refuses, and on
+  none.
   """
-  @spec directory_url() :: String.t() | nil
-  def directory_url, do: Application.get_env(:sanctum, :directory_url)
+  @spec directory_url() :: String.t()
+  def directory_url, do: Application.fetch_env!(:sanctum, :directory_url)
 
   @doc """
   The registry this deployment speaks to (`:sanctum, :registry_url`, from
@@ -383,8 +381,7 @@ defmodule Sanctum do
   serving a tincture's static assets / looking it up without executing anything,
   use `Sanctum.TinctureAccess.public_context/1` instead.
 
-  Uses `:tincture` authentication through the shared authorization path,
-  with or without an auth provider configured.
+  Uses `:tincture` authentication through the shared authorization path.
 
   For an authenticated request, the caller's real `user_id` and `namespace`
   are carried through for the audit trail (namespace is identity-only and may

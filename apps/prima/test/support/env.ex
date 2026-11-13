@@ -9,9 +9,7 @@ defmodule Prima.Test.Env do
   `without_` forms also restore before returning or raising. Their registered
   callback covers a killed test, which runs no `after` block.
 
-  Application settings normally restore their captured value. The explicit
-  baseline case, `restore: :unset`, deletes the setting instead. ConnCase uses
-  that baseline because a captured bearer provider may belong to another test.
+  Application settings restore their captured value.
 
   Logger configuration supports `:level`, the key the suite changes, and
   restores both its effective level and whether its application setting existed.
@@ -19,20 +17,20 @@ defmodule Prima.Test.Env do
 
   import ExUnit.Callbacks, only: [on_exit: 1]
 
-  def put_app_env(app, key, value, opts \\ []) do
-    change(app_restore(app, key, opts), fn -> Application.put_env(app, key, value) end)
+  def put_app_env(app, key, value) do
+    change(app_restore(app, key), fn -> Application.put_env(app, key, value) end)
   end
 
-  def with_app_env(app, key, value, fun, opts \\ []) do
-    within(app_restore(app, key, opts), fn -> Application.put_env(app, key, value) end, fun)
+  def with_app_env(app, key, value, fun) do
+    within(app_restore(app, key), fn -> Application.put_env(app, key, value) end, fun)
   end
 
-  def delete_app_env(app, key, opts \\ []) do
-    change(app_restore(app, key, opts), fn -> Application.delete_env(app, key) end)
+  def delete_app_env(app, key) do
+    change(app_restore(app, key), fn -> Application.delete_env(app, key) end)
   end
 
-  def without_app_env(app, key, fun, opts \\ []) do
-    within(app_restore(app, key, opts), fn -> Application.delete_env(app, key) end, fun)
+  def without_app_env(app, key, fun) do
+    within(app_restore(app, key), fn -> Application.delete_env(app, key) end, fun)
   end
 
   def put_system_env(key, value) do
@@ -75,12 +73,8 @@ defmodule Prima.Test.Env do
     within(logger_restore(options), fn -> Logger.configure(options) end, fun)
   end
 
-  defp app_restore(app, key, opts) do
-    previous =
-      case Keyword.get(opts, :restore, :previous) do
-        :previous -> Application.fetch_env(app, key)
-        :unset -> :error
-      end
+  defp app_restore(app, key) do
+    previous = Application.fetch_env(app, key)
 
     fn ->
       case previous do

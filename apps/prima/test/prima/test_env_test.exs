@@ -112,28 +112,6 @@ defmodule Prima.Test.EnvTest do
     end
   end
 
-  test "the explicit unset baseline replaces a captured foreign value" do
-    Env.put_app_env(:prima, __MODULE__, :foreign)
-    on_exit(fn -> assert Application.fetch_env(:prima, __MODULE__) == :error end)
-    Env.put_app_env(:prima, __MODULE__, :temporary, restore: :unset)
-  end
-
-  test "the call-scoped unset baseline is restored before return" do
-    Env.put_app_env(:prima, __MODULE__, :foreign)
-
-    Env.with_app_env(
-      :prima,
-      __MODULE__,
-      :temporary,
-      fn ->
-        assert Application.fetch_env(:prima, __MODULE__) == {:ok, :temporary}
-      end,
-      restore: :unset
-    )
-
-    assert Application.fetch_env(:prima, __MODULE__) == :error
-  end
-
   test "logger restoration keeps an absent application setting absent" do
     Env.delete_app_env(:logger, :level)
     level = Logger.level()

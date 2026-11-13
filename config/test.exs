@@ -78,6 +78,12 @@ config :cyfr, :registry_url, "127.0.0.1:19"
 config :sanctum, :registry_url, "127.0.0.1:19"
 config :cyfr, :oci_registry_url, "127.0.0.1:19"
 
+# The account service, at the same closed port: the suite's CYFR names one,
+# as every CYFR does, that refuses every connection, so a test that does not
+# start a scripted directory of its own (`Sanctum.Test.DirectoryServer`)
+# meets an account service that cannot be reached, at once.
+config :sanctum, :directory_url, "http://127.0.0.1:19"
+
 # The runner supplies one private root per checkout/run/partition. Direct
 # Mix invocations also get collision-resistant disposable roots; timestamps
 # alone collide when multiple VMs evaluate config in the same millisecond.

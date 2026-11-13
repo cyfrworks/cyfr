@@ -10,6 +10,11 @@ defmodule Emissary.Web.DirectoryWireTest do
   administrator's `directory.tombstone` through the gate, under their
   fresh confirmation; without the confirmation, or asked by anyone else,
   it leaves the log as it was.
+
+  The fixture's handles section holds the handle registry's name routes
+  beside it to the same answers here as at cyfr.run: a claim, its repeat,
+  each name read by name and by identifier, and no one's name, in what
+  this CYFR's own client reads of them.
   """
   use CyfrWeb.ConnCase, async: false
 
@@ -73,6 +78,15 @@ defmodule Emissary.Web.DirectoryWireTest do
     end
   end
 
+  for scenario <- @vectors["handles"]["scenarios"] do
+    @scenario scenario
+    test "names: " <> scenario["name"] do
+      for {step, index} <- Enum.with_index(@scenario["steps"], 1) do
+        name_step("#{@scenario["name"]}, step #{index}", step)
+      end
+    end
+  end
+
   test "a tombstone without its confirmation, or asked by someone who is not the platform administrator, leaves the log as it was" do
     identifier = registered!()
     admin = administrator!()
@@ -127,6 +141,125 @@ defmodule Emissary.Web.DirectoryWireTest do
       assert String.contains?(response.resp_body, Prima.Identity.Encoding.jcs!(entry)),
              "#{context}: entry bytes are not canonical"
     end
+  end
+
+  defp name_step(_context, %{"tombstone" => _identifier} = step), do: run_step(nil, step, nil)
+
+  defp name_step(context, %{"register" => entry}) do
+    request = %{
+      "method" => "POST",
+      "path" => "/directory/v1/register",
+      "body" => Jason.decode!(@vectors["entries"][entry])
+    }
+
+    response = send_request(Map.put(request, "source", fresh_source()), 200)
+    assert response.status == 200, "#{context}: register #{entry}: #{response.resp_body}"
+  end
+
+  defp name_step(context, %{"claim" => claim, "expect" => expected}) do
+    request = %{
+      "method" => "POST",
+      "path" => "/v1/namespaces/personal/claim",
+      "body" => claim_request(claim)
+    }
+
+    response = send_request(Map.put(request, "source", fresh_source()), expected["status"])
+    assert_named(response, expected, "#{context}: claim #{claim["handle"]}")
+  end
+
+  defp name_step(context, %{"request" => request, "expect" => expected}) do
+    response = send_request(Map.put(request, "source", fresh_source()), expected["status"])
+    assert_named(response, expected, "#{context}: #{request["method"]} #{request["path"]}")
+  end
+
+  # The step's handle.claim, signed now by its key as the recovery signer.
+  defp claim_request(%{"signer" => signer, "identifier" => identifier, "handle" => handle}) do
+    seed = Base.url_decode64!(@vectors["keys"][signer]["seed"], padding: false)
+    {public, private} = :crypto.generate_key(:eddsa, :ed25519, seed)
+
+    {:ok, request} =
+      Prima.RegistryRequest.new(
+        registry: @vectors["handles"]["registry"],
+        operation: "handle.claim",
+        identifier: identifier,
+        signer: Prima.Identity.recovery_signer(public),
+        nonce: :crypto.strong_rand_bytes(Prima.RegistryRequest.nonce_bytes()),
+        expires_at: System.os_time(:millisecond) + Prima.RegistryRequest.lifetime_ms(),
+        body: %{"handle" => handle}
+      )
+
+    {:ok, bytes} = Prima.RegistryRequest.sign(request, private)
+    Jason.decode!(bytes)
+  end
+
+  # An answer is the whole object; a refusal is the envelope in the grammar
+  # every client reads it by, its first error naming the code.
+  defp assert_named(response, expected, context) do
+    assert response.status == expected["status"], "#{context}: #{response.resp_body}"
+
+    case expected do
+      %{"answer" => answer} ->
+        assert Jason.decode(response.resp_body) == {:ok, answer},
+               "#{context}: #{response.resp_body}"
+
+      %{"code" => code} ->
+        assert refusal?(response.resp_body, code),
+               "#{context}: not the refusal #{code} in every client's grammar: #{response.resp_body}"
+    end
+  end
+
+  test "a refusal is read in every client's grammar, on the bytes as sent" do
+    for {raw, read?} <- [
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"}]}), true},
+          {~s({"extra":{"ok":1},"errors":[{"code":"SLUG_TAKEN","message":"refused","x":true},7]}),
+           true},
+          {~S({"errors":[{"code":"SLUG_TAKEN","message":"\\ud800 \ud83d\ude00"}]}), true},
+          {~s({"errors":[]}), false},
+          {~s({"errors":[{"code":4,"message":"refused"}]}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":false}]}), false},
+          {~s({"errors":[{"code":"OTHER","message":"refused"}]}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"extra":null}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"},null]}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"extra":9007199254740992}),
+           false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"extra":0.5}), false},
+          {~S({"errors":[{"code":"SLUG_TAKEN","message":"\ud800"}]}), false},
+          {~S({"errors":[{"code":"SLUG_TAKEN","message":"\udc00"}]}), false},
+          {~S({"errors":[{"code":"SLUG_TAKEN","message":"refused"}],"\ud800":1}), false},
+          {~s({"errors":[{"code":"SLUG_TAKEN","message":") <> <<0xED, 0xA0, 0x80>> <> ~s("}]}),
+           false}
+        ] do
+      assert refusal?(raw, "SLUG_TAKEN") == read?, raw
+    end
+  end
+
+  # Whether `raw`, the bytes as sent, are the refusal `code` in the grammar
+  # the fixture's handles comment states: valid UTF-8 that Jason decodes (it
+  # refuses an unpaired surrogate escape, in a key or a value), an object
+  # whose errors is a non-empty list, its first a map with this code and a
+  # string message, and no null and no number outside the safe integers.
+  defp refusal?(raw, code) do
+    with true <- String.valid?(raw),
+         {:ok, %{"errors" => [%{"code" => ^code, "message" => message} | _]} = body}
+         when is_binary(message) <- Jason.decode(raw) do
+      jcs_value?(body)
+    else
+      _ -> false
+    end
+  end
+
+  # Whether a decoded value is in the domain every client's JCS takes: no
+  # null, and every number an integer of at most 2^53 - 1 in magnitude.
+  defp jcs_value?(value) when is_map(value), do: Enum.all?(value, fn {_k, v} -> jcs_value?(v) end)
+  defp jcs_value?(value) when is_list(value), do: Enum.all?(value, &jcs_value?/1)
+  defp jcs_value?(value) when is_integer(value), do: abs(value) <= 9_007_199_254_740_991
+  defp jcs_value?(value), do: is_binary(value) or is_boolean(value)
+
+  # A source no other request of the run has presented, so no rate window
+  # is reached.
+  defp fresh_source do
+    n = System.unique_integer([:positive])
+    "198.18.#{rem(div(n, 254), 254)}.#{rem(n, 254) + 1}"
   end
 
   defp send_request(request, status) do

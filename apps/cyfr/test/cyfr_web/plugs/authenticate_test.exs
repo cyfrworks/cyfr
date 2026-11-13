@@ -5,7 +5,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   @moduledoc """
   Tests for the credential-resolution plug.
 
-  Verifies bearer handling, auth-provider integration and context propagation.
+  Verifies bearer handling and context propagation.
   The MCP endpoint's own conformance rules are a separate plug and are
   exercised end-to-end through the pipeline in
   `Emissary.Web.MCPControllerTest`.
@@ -18,79 +18,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
 
   # The plug as a pipeline mounts it: its options through `init/1`.
   defp authenticate(conn, opts \\ []), do: Authenticate.call(conn, Authenticate.init(opts))
-
-  # Test auth provider that returns an authenticated person: the one the
-  # test put in its process (the plug runs there).
-  defmodule TestAuthProvider do
-    @behaviour Sanctum.Auth
-
-    @impl true
-    def current_user(_conn) do
-      Sanctum.Context.build(
-        user_id: Process.get({__MODULE__, :user_id}),
-        email: "test@example.com",
-        provider: "test",
-        permissions: [:read, :write],
-        # Athanor-less on purpose: exercises the no-resolved-athanor rejection path.
-        athanor_id: nil,
-        namespace: "testns",
-        authenticated: true
-      )
-    end
-  end
-
-  # Test auth provider with an athanor for tests where an auth provider is configured
-  defmodule StubAuthProvider do
-    @behaviour Sanctum.Auth
-
-    @impl true
-    def current_user(_conn) do
-      Sanctum.Context.build(
-        user_id: "test_user_123",
-        email: "test@example.com",
-        provider: "test",
-        permissions: [:read, :write],
-        athanor_id: "ath_stub",
-        namespace: "testns",
-        authenticated: true
-      )
-    end
-  end
-
-  # Test auth provider that returns nil
-  defmodule NilAuthProvider do
-    @behaviour Sanctum.Auth
-
-    @impl true
-    def current_user(_conn), do: nil
-  end
-
-  # Test auth provider that checks for Bearer token
-  defmodule BearerAuthProvider do
-    @behaviour Sanctum.Auth
-
-    @impl true
-    def current_user(conn) do
-      case Plug.Conn.get_req_header(conn, "authorization") do
-        ["Bearer valid_token"] ->
-          Sanctum.Context.build(
-            user_id: "bearer_user",
-            email: "bearer@example.com",
-            provider: "bearer",
-            permissions: [:admin],
-            athanor_id: "ath_test",
-            namespace: "testns",
-            authenticated: true
-          )
-
-        ["Bearer invalid_token"] ->
-          nil
-
-        _ ->
-          nil
-      end
-    end
-  end
 
   # A person admitted by their account, their head cached here
   # (`Sanctum.TestContext.account!/1`) at the suite's directory, which this
@@ -194,7 +121,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn: conn
     } do
       session = warm_memo!()
-      Application.delete_env(:sanctum, :bearer_provider)
 
       # Revoked with nobody told: the memo still holds the context.
       hash = Sanctum.Session.token_hash(session.token)
@@ -274,12 +200,9 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       assert Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
     end
 
-    # Reject unrecognized credentials after configured providers have had a chance to resolve them.
-    test "an unclaimed bearer is refused once nothing else can claim it", %{conn: conn} do
-      original = Application.get_env(:sanctum, :bearer_provider)
-      Application.delete_env(:sanctum, :bearer_provider)
-      on_exit(fn -> Application.put_env(:sanctum, :bearer_provider, original) end)
-
+    # A bearer no credential matches is refused, never served as an
+    # anonymous caller.
+    test "a bearer that is no session this server issued is refused", %{conn: conn} do
       conn =
         conn
         |> put_req_header("authorization", "Bearer not-a-real-session-token")
@@ -289,59 +212,36 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       assert conn.halted
       assert conn.status == 401
     end
-
-    # The case's conn carries the test person's bearer, which no Sanctum
-    # credential matches and only the provider ConnCase configures claims,
-    # so the request proceeds — the plug does not pre-empt it.
-    @tag auth: :person
-    test "an unclaimed bearer is left to a configured auth provider", %{conn: conn} do
-      conn = authenticate(conn)
-
-      refute conn.halted
-      assert conn.assigns[:context].authenticated
-    end
   end
 
-  describe "call/2 — the ConnCase's test provider" do
-    test "a request with no credential still gets a context", %{conn: conn} do
+  describe "call/2 — the ConnCase's signed-in person" do
+    test "a request with no credential gets an unauthenticated context", %{conn: conn} do
       conn = authenticate(conn)
 
       refute conn.halted
-      assert conn.assigns[:context]
+      ctx = conn.assigns[:context]
+      assert ctx.user_id == nil
+      assert ctx.permissions == MapSet.new()
+      assert ctx.authenticated == false
     end
 
-    test "a bearer the test provider does not claim is refused, not served", %{conn: conn} do
-      for bearer <- ["a-token-nobody-knows", "cyfr-test-actor.not-base64!", "cyfr-test-actor."] do
-        conn =
-          conn
-          |> put_req_header("authorization", "Bearer " <> bearer)
-          |> authenticate()
-
-        assert conn.halted, "#{bearer} was served"
-        assert conn.status == 401
-        assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
-      end
-    end
-
-    test "the test person holds the person permissions, never the wildcard", %{conn: conn} do
-      conn = conn |> authenticate_as() |> authenticate()
+    test "the person is the test athanor's, by a session, with the person permissions" do
+      conn = conn_for(%{async: false}) |> authenticate_as() |> authenticate()
 
       refute conn.halted
-
-      assert Enum.sort(conn.assigns.context.permissions) ==
-               Enum.sort(Sanctum.Context.person_permissions())
+      ctx = conn.assigns.context
+      assert ctx.user_id == Arca.Test.Actor.owner_id()
+      assert ctx.athanor_id == Sanctum.TestContext.athanor_id()
+      assert ctx.auth_method == :oidc
+      assert is_binary(ctx.session_token_hash)
+      assert Enum.sort(ctx.permissions) == Enum.sort(Sanctum.Context.person_permissions())
     end
 
-    test "an override is merged into the test person", %{conn: conn} do
-      conn = conn |> authenticate_as(email: "override@example.com") |> authenticate()
-
-      refute conn.halted
-      assert conn.assigns.context.email == "override@example.com"
-    end
-
-    test "the case's conn carries the bearer only under `auth: :person`" do
-      assert get_req_header(conn_for(%{async: false, auth: :person}), "authorization") ==
-               ["Bearer " <> Emissary.TestAuthProvider.bearer()]
+    @tag auth: :person
+    test "the case's conn carries a session's bearer only under `auth: :person`", %{conn: conn} do
+      assert ["Bearer " <> token] = get_req_header(conn, "authorization")
+      assert {:ok, ctx} = Sanctum.Caller.establish(token, refresh: false)
+      assert ctx.user_id == Arca.Test.Actor.owner_id()
 
       assert get_req_header(conn_for(%{async: false, auth: :none}), "authorization") == []
       assert get_req_header(conn_for(%{async: false}), "authorization") == []
@@ -360,137 +260,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
   end
 
-  describe "call/2 - context creation with no auth provider" do
-    setup do
-      # Store original config
-      original = Application.get_env(:sanctum, :bearer_provider)
-      Application.delete_env(:sanctum, :bearer_provider)
-
-      on_exit(fn ->
-        if original do
-          Application.put_env(:sanctum, :bearer_provider, original)
-        end
-      end)
-
-      :ok
-    end
-
-    test "returns unauthenticated context when no auth provider configured", %{conn: conn} do
-      conn = authenticate(conn)
-
-      ctx = conn.assigns[:context]
-      assert ctx.user_id == nil
-      assert ctx.permissions == MapSet.new()
-      assert ctx.authenticated == false
-    end
-  end
-
-  describe "call/2 - context creation with custom auth provider" do
-    setup do
-      # Store original config
-      original = Application.get_env(:sanctum, :bearer_provider)
-
-      Application.put_env(:sanctum, :bearer_provider, __MODULE__.StubAuthProvider)
-
-      on_exit(fn ->
-        if original do
-          Application.put_env(:sanctum, :bearer_provider, original)
-        else
-          Application.delete_env(:sanctum, :bearer_provider)
-        end
-      end)
-
-      :ok
-    end
-
-    test "creates context from authenticated user", %{conn: conn} do
-      conn = authenticate(conn)
-
-      ctx = conn.assigns[:context]
-      assert ctx.user_id == "test_user_123"
-      assert MapSet.member?(ctx.permissions, :read)
-      assert MapSet.member?(ctx.permissions, :write)
-      assert ctx.scope == :athanor
-    end
-  end
-
-  describe "call/2 - context creation with nil user from auth provider" do
-    setup do
-      # Store original config
-      original = Application.get_env(:sanctum, :bearer_provider)
-
-      Application.put_env(:sanctum, :bearer_provider, __MODULE__.NilAuthProvider)
-
-      on_exit(fn ->
-        if original do
-          Application.put_env(:sanctum, :bearer_provider, original)
-        else
-          Application.delete_env(:sanctum, :bearer_provider)
-        end
-      end)
-
-      :ok
-    end
-
-    test "returns unauthenticated context when auth provider returns nil", %{conn: conn} do
-      conn = authenticate(conn)
-
-      ctx = conn.assigns[:context]
-      assert ctx.user_id == nil
-      assert ctx.permissions == MapSet.new()
-    end
-  end
-
-  describe "Authorization header support" do
-    setup do
-      # Store original config
-      original = Application.get_env(:sanctum, :bearer_provider)
-
-      Application.put_env(:sanctum, :bearer_provider, __MODULE__.BearerAuthProvider)
-
-      on_exit(fn ->
-        if original do
-          Application.put_env(:sanctum, :bearer_provider, original)
-        else
-          Application.delete_env(:sanctum, :bearer_provider)
-        end
-      end)
-
-      :ok
-    end
-
-    test "auth provider receives conn with Authorization header", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer valid_token")
-        |> authenticate()
-
-      ctx = conn.assigns[:context]
-      assert ctx.user_id == "bearer_user"
-      assert MapSet.member?(ctx.permissions, :admin)
-    end
-
-    # Invalid credentials must be rejected rather than continuing as an anonymous caller.
-    test "an invalid Bearer token is refused rather than downgraded", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer invalid_token")
-        |> authenticate()
-
-      assert conn.halted
-      assert conn.status == 401
-    end
-
-    test "missing Authorization header returns unauthenticated context", %{conn: conn} do
-      conn = authenticate(conn)
-
-      ctx = conn.assigns[:context]
-      # No auth returns unauthenticated context
-      assert ctx.user_id == nil
-      assert ctx.permissions == MapSet.new()
-    end
-  end
-
   describe "API key authentication" do
     setup do
       # Use a temp directory for API key tests
@@ -504,11 +273,8 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
 
       # Store original configs
       original_base_path = Application.get_env(:arca, :base_path)
-      original_auth = Application.get_env(:sanctum, :bearer_provider)
 
       Application.put_env(:arca, :base_path, test_dir)
-      # Use an athanor-bearing provider so the session-fallback path resolves a tenant.
-      Application.put_env(:sanctum, :bearer_provider, __MODULE__.StubAuthProvider)
 
       # Create a test API key
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
@@ -526,12 +292,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
           Application.put_env(:arca, :base_path, original_base_path)
         else
           Application.delete_env(:arca, :base_path)
-        end
-
-        if original_auth do
-          Application.put_env(:sanctum, :bearer_provider, original_auth)
-        else
-          Application.delete_env(:sanctum, :bearer_provider)
         end
       end)
 
@@ -594,10 +354,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
             "Bearer cyfr_pk_invalid123456789012345678",
             "Bearer not-a-real-session-token"
           ] do
-        original = Application.get_env(:sanctum, :bearer_provider)
-        Application.delete_env(:sanctum, :bearer_provider)
-        on_exit(fn -> Application.put_env(:sanctum, :bearer_provider, original) end)
-
         conn =
           conn
           |> put_req_header("authorization", authorization)
@@ -606,19 +362,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
         assert conn.status == 401, "expected 401 for #{authorization}"
         assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
       end
-    end
-
-    test "falls back to session auth for non-cyfr Bearer token", %{conn: conn} do
-      # Non-cyfr_ prefixed tokens should fall through to session auth
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer some_other_token")
-        |> authenticate()
-
-      # Should fall back to TestAuthProvider which returns test_user_123
-      refute conn.halted
-      ctx = conn.assigns[:context]
-      assert ctx.user_id == "test_user_123"
     end
 
     test "a Sanctum session token authenticates as a bearer credential", %{conn: conn} do
@@ -677,160 +420,40 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
   end
 
-  # Test auth provider that returns an error
-  defmodule ErrorAuthProvider do
-    @behaviour Sanctum.Auth
-
-    @impl true
-    def current_user(_conn), do: {:error, :connection_refused}
-  end
-
   describe "call/2 - auth enforcement" do
-    setup do
-      original_auth = Application.get_env(:sanctum, :bearer_provider)
-
-      on_exit(fn ->
-        if original_auth do
-          Application.put_env(:sanctum, :bearer_provider, original_auth)
-        else
-          Application.delete_env(:sanctum, :bearer_provider)
-        end
-      end)
-
-      :ok
-    end
-
-    test "no bearer_provider configured — request reaches the public surface unauthenticated",
-         %{conn: conn} do
-      Application.delete_env(:sanctum, :bearer_provider)
-
-      conn = authenticate(conn)
-
-      refute conn.halted
-      refute conn.assigns[:context].authenticated
-    end
-
-    test "auth provider returns nil credentials — unauthenticated context, not rejected",
-         %{conn: conn} do
-      Application.put_env(:sanctum, :bearer_provider, __MODULE__.NilAuthProvider)
-
-      conn = authenticate(conn)
-
-      refute conn.halted
-      refute conn.assigns[:context].authenticated
-    end
-
-    test "auth provider *error* fails closed with 503", %{conn: conn} do
-      Application.put_env(:sanctum, :bearer_provider, __MODULE__.ErrorAuthProvider)
-
-      conn = authenticate(conn, errors: Emissary.Web.MCPError)
-
-      assert conn.halted
-      assert conn.status == 503
-      body = Jason.decode!(conn.resp_body)
-      assert body["error"]["message"] =~ "Authentication service unavailable"
-    end
-
-    test "allows an authenticated user with a resolved athanor through", %{conn: conn} do
-      Application.put_env(:sanctum, :bearer_provider, __MODULE__.StubAuthProvider)
-
-      conn = authenticate(conn)
-
-      refute conn.halted
-      ctx = conn.assigns[:context]
-      assert ctx.user_id == "test_user_123"
-      assert ctx.athanor_id == "ath_stub"
-      assert ctx.authenticated == true
-    end
-
-    test "rejects an authenticated user with no resolved athanor with 403", %{conn: conn} do
-      # A person this server knows, whose own athanor is archived: nowhere
-      # to work.
+    test "rejects a person whose session has no athanor to work in with 403", %{conn: conn} do
+      # A person this server knows, whose own athanor is archived since
+      # their session was minted: nowhere to work.
       {:ok, person} =
         Sanctum.Test.People.linked(%{
           id: "github|https://github.com|no-athanor-#{System.unique_integer([:positive])}",
           provider: "github"
         })
 
-      Sanctum.TestContext.archive!(Sanctum.Test.People.athanor!(person).id)
-      Process.put({__MODULE__.TestAuthProvider, :user_id}, person.id)
-      Application.put_env(:sanctum, :bearer_provider, __MODULE__.TestAuthProvider)
+      athanor = Sanctum.Test.People.athanor!(person)
 
-      conn = authenticate(conn, errors: Emissary.Web.MCPError)
+      {:ok, session} =
+        Sanctum.TestContext.create_session(
+          Sanctum.Context.build(
+            user_id: person.id,
+            provider: "github",
+            athanor_id: athanor.id,
+            permissions: Sanctum.Context.person_permissions(),
+            auth_method: :oidc
+          )
+        )
+
+      Sanctum.TestContext.archive!(athanor.id)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer " <> session.token)
+        |> authenticate(errors: Emissary.Web.MCPError)
 
       assert conn.halted
       assert conn.status == 403
       body = Jason.decode!(conn.resp_body)
       assert body["error"]["message"] =~ "no athanor"
-    end
-  end
-
-  # Auth provider that returns a user with no athanor (triggers tenant resolution)
-  defmodule NoAthanorAuthProvider do
-    @behaviour Sanctum.Auth
-
-    @impl true
-    def current_user(_conn) do
-      Sanctum.Context.build(
-        user_id: "noathanor_user_1",
-        email: "noathanor@example.com",
-        provider: "test",
-        permissions: [:read, :write],
-        athanor_id: nil,
-        namespace: "testns",
-        authenticated: true
-      )
-    end
-  end
-
-  describe "tenant resolution error handling" do
-    setup do
-      original_auth = Application.get_env(:sanctum, :bearer_provider)
-      original_resolver = Application.get_env(:sanctum, :tenancy_resolver_override)
-
-      Application.put_env(:sanctum, :bearer_provider, __MODULE__.NoAthanorAuthProvider)
-      # Inject a resolver that errors so the plug's "no resolved athanor → 403"
-      # branch is exercised.
-      Application.put_env(:sanctum, :tenancy_resolver_override, Sanctum.Test.FailingResolver)
-
-      on_exit(fn ->
-        if original_auth do
-          Application.put_env(:sanctum, :bearer_provider, original_auth)
-        else
-          Application.delete_env(:sanctum, :bearer_provider)
-        end
-
-        if original_resolver do
-          Application.put_env(:sanctum, :tenancy_resolver_override, original_resolver)
-        else
-          Application.delete_env(:sanctum, :tenancy_resolver_override)
-        end
-      end)
-
-      :ok
-    end
-
-    # A tenant read that FAILED is not a person who has no athanor.
-    # Both end with an athanor-less context, but 403 "contact your
-    # administrator" is a permanent-sounding answer to a transient fault,
-    # and sends the person to an operator who cannot see it. The session
-    # path answers 503 for the same failure, and so does this one.
-    test "a failed tenant read is 503, not 403", %{conn: conn} do
-      import ExUnit.CaptureLog
-
-      log =
-        capture_log(fn ->
-          conn = authenticate(conn, errors: Emissary.Web.MCPError)
-
-          assert conn.halted
-          assert conn.status == 503
-          body = Jason.decode!(conn.resp_body)
-          refute body["error"]["message"] =~ "no athanor"
-        end)
-
-      # Sanctum.Tenancy resolves the athanor and logs its failure.
-      assert log =~ "[Sanctum.Tenancy] resolve override failed"
-      assert log =~ "resolve_failed"
     end
   end
 

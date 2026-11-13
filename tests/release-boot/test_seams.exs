@@ -28,8 +28,7 @@
 #
 # Seams with no cheap door are held elsewhere: the namespace cache's
 # lifetime needs a person's row, so the headless case of
-# tests/release-boot/boot.sh holds it; the bearer provider needs a request,
-# so its boots case holds that one; the boot's own reads (the gate, the
+# tests/release-boot/boot.sh holds it; the boot's own reads (the gate, the
 # database checks, the recovery and the status watch) are read before
 # anything can be set here, so its restores case boots a release handed
 # the database-checks switch.

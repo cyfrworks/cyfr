@@ -211,8 +211,7 @@ defmodule Sanctum.SignIn do
     * `:holder_kind`, `:display_name` — what holds that key and the name
       the device shows, as its hello reported them.
 
-  Refusals: `:no_directory` (a browser's request with no directory to
-  send it to), `{:not_found, "confirmation", ref}`, `:not_pending`,
+  Refusals: `{:not_found, "confirmation", ref}`, `:not_pending`,
   `:unauthenticated`, `{:invalid_argument, sentence}`, `:unavailable`.
   """
   @spec request(Prima.SignIn.purpose(), binding(), keyword()) ::
@@ -222,7 +221,7 @@ defmodule Sanctum.SignIn do
          {:ok, home} <- home(),
          {:ok, held} <- held(purpose, opts),
          {:ok, request} <- minted(purpose, home, held),
-         {:ok, url} <- url(binding, request, Keyword.get(opts, :page, :sign)),
+         url = url(binding, request, Keyword.get(opts, :page, :sign)),
          :ok <- hold(request, binding, held) do
       {:ok, %{request: request, url: url}}
     end
@@ -439,36 +438,26 @@ defmodule Sanctum.SignIn do
 
   # A browser goes to the account pages of this deployment's directory;
   # a channel's request travels over the channel.
-  defp url({:channel, _id}, _request, _page), do: {:ok, nil}
+  defp url({:channel, _id}, _request, _page), do: nil
 
   defp url({_browser, _token}, request, page) do
-    with {:ok, directory} <- directory() do
-      fragment = Prima.SignIn.fragment(request)
+    directory = directory()
+    fragment = Prima.SignIn.fragment(request)
 
-      case page do
-        :sign ->
-          {:ok, directory <> "/account/sign#" <> fragment}
+    case page do
+      :sign ->
+        directory <> "/account/sign#" <> fragment
 
-        {:new, name} ->
-          {:ok,
-           directory <>
-             "/account/new#name=" <> URI.encode_www_form(name || "") <> "&request=" <> fragment}
-      end
+      {:new, name} ->
+        directory <>
+          "/account/new#name=" <> URI.encode_www_form(name || "") <> "&request=" <> fragment
     end
   end
 
-  # The directory's origin: its account pages are served at its root.
-  defp directory do
-    case Sanctum.directory_url() do
-      url when is_binary(url) ->
-        if Encoding.directory_url?(url),
-          do: {:ok, url |> Encoding.directory_origin() |> elem(0)},
-          else: {:error, :no_directory}
-
-      _none ->
-        {:error, :no_directory}
-    end
-  end
+  # The directory's origin: its account pages are served at its root. The
+  # boot refused a deployment naming none, or one that is no directory URL
+  # (`Sanctum.Supervisor`).
+  defp directory, do: Sanctum.directory_url() |> Encoding.directory_origin() |> elem(0)
 
   defp hold(request, binding, held) do
     entry = Map.merge(held, %{request: request, binding: binding})

@@ -52,8 +52,8 @@ defmodule Sanctum.Caller do
   Every Context this module establishes from a credential carries
   `validated_at`, the instant its credential and standing were read from
   the store. A memo hit returns that same instant, so reuse never extends
-  it. A context an auth provider synthesized (`establish_context/2`) has
-  no stored credential behind it and carries none. A holder
+  it. A context established from one already loaded (`establish_context/2`)
+  carries none, and its caller revalidates it. A holder
   that keeps a session context — a mounted console, an open stream, a
   pending grant — asks `revalidate_session/1` for a fresh one before
   acting on it once `fresh?/1` says the context is past the bound.
@@ -185,34 +185,31 @@ defmodule Sanctum.Caller do
   def establish({:session, token}, opts) when is_binary(token) do
     ttl = memo_ttl_ms()
 
-    if ttl > 0 do
-      # A cold page load establishes the same caller several times inside
-      # a second (the plug, the dead render, the connected mount, the
-      # nested topbar). The short memo collapses those to one pipeline
-      # run. Only successes are cached, and every session mutation
-      # (`Session.destroy/1`, `destroy_by_hash/1`,
-      # `revoke_all_for_user/1`) calls `invalidate_hash/1`, so a revoked
-      # session misses on its very next establish — the TTL
-      # only bounds reads that race the mutation itself, and, on a peer,
-      # an announcement the bus did not deliver. What is cached is an
-      # AUTHORIZATION decision, so the TTL is a security bound and not a
-      # tuning knob: it is how long a revoked authority may outlive its
-      # revocation anywhere in the cell — the same bound `fresh?/1` holds
-      # a retained context to.
-      key = memo_key(token, opts)
+    # A cold page load establishes the same caller several times inside
+    # a second (the plug, the dead render, the connected mount, the
+    # nested topbar). The short memo collapses those to one pipeline
+    # run. Only successes are cached, and every session mutation
+    # (`Session.destroy/1`, `destroy_by_hash/1`,
+    # `revoke_all_for_user/1`) calls `invalidate_hash/1`, so a revoked
+    # session misses on its very next establish — the TTL
+    # only bounds reads that race the mutation itself, and, on a peer,
+    # an announcement the bus did not deliver. What is cached is an
+    # AUTHORIZATION decision, so the TTL is a security bound and not a
+    # tuning knob: it is how long a revoked authority may outlive its
+    # revocation anywhere in the cell — the same bound `fresh?/1` holds
+    # a retained context to. At a TTL of 0 nothing is memoized
+    # (`memoize/3`), so every establish runs the pipeline.
+    key = memo_key(token, opts)
 
-      case Arca.Cache.get(key) do
-        {:ok, %Context{} = ctx} ->
-          {:ok, ctx}
+    case Arca.Cache.get(key) do
+      {:ok, %Context{} = ctx} ->
+        {:ok, ctx}
 
-        :miss ->
-          result = do_establish(token, opts)
+      :miss ->
+        result = do_establish(token, opts)
 
-          with {:ok, ctx} <- result, do: memoize(key, ctx, ttl)
-          result
-      end
-    else
-      do_establish(token, opts)
+        with {:ok, ctx} <- result, do: memoize(key, ctx, ttl)
+        result
     end
   end
 
@@ -644,9 +641,9 @@ defmodule Sanctum.Caller do
   end
 
   @doc """
-  Establish a Context that already exists — a loaded session's, or one a
-  configured auth provider synthesized (which never went through
-  `Session.load/1`, so nothing about it can be assumed done).
+  Establish a Context that already exists — a loaded session's, read from
+  the store by its row key (`Sanctum.Session.load_by_hash/1`), so nothing
+  about its standing can be assumed done.
 
   An unauthenticated context is `{:denied, ctx}` — the door stopped
   admitting its person after the session was minted — and so is one whose
@@ -756,8 +753,7 @@ defmodule Sanctum.Caller do
   device's certificate, which its next request's check refuses
   (`Sanctum.DeviceCerts.verify_request/2`).
 
-  Any other context — one an auth provider synthesized, a frame's, a
-  webhook, the system's own — keeps its establishment contract and is
+  Any other context — a frame's, a webhook, the system's own — keeps its establishment contract and is
   answered `{:ok, ctx}` unchanged.
   """
   @spec revalidate_session(Context.t()) ::
