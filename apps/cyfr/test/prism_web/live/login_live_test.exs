@@ -55,9 +55,24 @@ defmodule PrismWeb.LoginLiveTest do
       Sanctum.SignIn.request(:sign_in, binding, admission: {:setup, @token})
 
     answer = DirectoryServer.passkey_answer(request, account, hd(account.passkeys))
-    {:ok, %{user: user}} = Sanctum.SignIn.answer(answer, binding)
-    %{account: account, user: user}
+    {:ok, %{user: user, session_token: token}} = Sanctum.SignIn.answer(answer, binding)
+    %{account: account, user: user, session_token: token}
   end
+
+  # A browser holding `token`'s session, as its cookie carries it.
+  defp with_session(conn, token),
+    do:
+      Plug.Test.init_test_session(conn, %{
+        to_string(CyfrWeb.SignInResponse.session_key()) => token
+      })
+
+  # The answer `account`'s passkey gives `request`, as the account pages
+  # hand it to the page.
+  defp answer_of(request, account),
+    do:
+      request
+      |> DirectoryServer.passkey_answer(account, hd(account.passkeys))
+      |> Prima.SignIn.fragment()
 
   defp passkey!(account, dir), do: DirectoryServer.add_passkey!(dir.dir, account)
 
@@ -561,5 +576,122 @@ defmodule PrismWeb.LoginLiveTest do
     html = render_async(view, @answered_ms)
     assert html =~ "nobody was signed in"
     refute_vocabulary(html)
+  end
+
+  test "Create your account sends the browser to the new-account page with a request bound to it",
+       %{conn: conn, dir: dir} do
+    first!(dir)
+    {:ok, view, html} = live(conn, ~p"/login")
+    assert html =~ "Create your account"
+
+    view |> element(~s([data-test="create-account"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    assert String.starts_with?(url, dir.url <> "/account/new#name=&request=")
+    [_page, fragment] = String.split(url, "&request=", parts: 2)
+
+    assert {:ok, %{"purpose" => "sign_in", "return" => return}} =
+             Prima.SignIn.parse_fragment(fragment)
+
+    assert String.ends_with?(return, "/login")
+  end
+
+  test "signing out lands on the sign-in page saying so", %{conn: conn, dir: dir} do
+    first!(dir)
+    {:ok, view, html} = live(conn, ~p"/login?error=signed_out")
+    assert view |> element(~s([data-test="sign-in-notice"])) |> render() =~ "You signed out."
+    refute has_element?(view, ~s([data-test="sign-in-error"]))
+    refute_vocabulary(html)
+  end
+
+  test "a person this CYFR has not let in reads who can, in one sentence whatever the reason",
+       %{conn: conn, dir: dir} do
+    first!(dir)
+    stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+    {:ok, view, _html} = live(conn, ~p"/login")
+
+    view |> element(~s([data-test="sign-in"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    [_page, fragment] = String.split(url, "#", parts: 2)
+    {:ok, request} = fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+
+    render_hook(view, "account_answer", %{"answer" => answer_of(request, stranger)})
+    html = render_async(view, @answered_ms)
+    sentence = "This CYFR has not let you in. Whoever runs it can let you in."
+    assert view |> element(~s([data-test="sign-in-error"])) |> render() =~ sentence
+    assert Prima.Refusal.message({:door, :denied}) == sentence
+    assert Prima.Refusal.message({:door, :not_allowed}) == sentence
+    refute_vocabulary(html)
+  end
+
+  test "a sign-in from a tab whose sign-in another tab replaced says this browser is signed in",
+       %{conn: conn, dir: dir} do
+    %{account: account, session_token: token} = first!(dir)
+    {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, {:browser, "an-earlier-tab"})
+    {:ok, view, _html} = conn |> with_session(token) |> live(~p"/login")
+
+    render_hook(view, "account_answer", %{"answer" => answer_of(request, account)})
+    render_async(view, @answered_ms)
+    error = view |> element(~s([data-test="sign-in-error"])) |> render()
+    assert error =~ "This browser is signed in already, from another tab."
+    assert error =~ ~s(href="/")
+    refute error =~ "nobody was signed in"
+  end
+
+  test "a confirmation that names no page to return to says it is done and closes its tab",
+       %{conn: conn, dir: dir} do
+    %{account: account, user: user, session_token: token} = first!(dir)
+    {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
+    hash = Sanctum.Session.token_hash(token)
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: user.id,
+        athanor_id: athanor_id,
+        provider: "passkey",
+        auth_method: :oidc,
+        authenticated: true,
+        session_token_hash: hash,
+        permissions: Sanctum.Context.person_permissions()
+      )
+
+    {:ok, record} =
+      Prima.Confirmation.new(
+        id: Prima.Confirmation.ref("cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32))),
+        home: PrismWeb.Endpoint.url(),
+        rp_id: URI.parse(PrismWeb.Endpoint.url()).host,
+        athanor: athanor_id,
+        person: user.id,
+        operation: "vault.create",
+        args_digest: Prima.Digest.sha256("args"),
+        action: "credential_entry",
+        preview: %{home: PrismWeb.Endpoint.url(), athanor: "Home", operation: "vault.create"},
+        challenge: :crypto.strong_rand_bytes(32),
+        expires_at: System.system_time(:millisecond) + 300_000
+      )
+
+    {:ok, row} =
+      Arca.PendingConfirmations.open(Sanctum.Context.actor(ctx), %{
+        record: record,
+        opener: "session:test",
+        asker: %{"kind" => "session"}
+      })
+
+    {:ok, %{request: request}} =
+      Sanctum.SignIn.request(:confirm, {:session, hash}, ctx: ctx, ref: row.ref)
+
+    {:ok, view, _html} = conn |> with_session(token) |> live(~p"/login")
+
+    render_hook(view, "account_answer", %{"answer" => answer_of(request, account)})
+    html = render_async(view, @answered_ms)
+    assert_push_event(view, "account:close", %{})
+
+    assert view |> element(~s([data-test="confirmed"])) |> render() =~
+             "This tab closes by itself."
+
+    refute has_element?(view, ~s([data-test="sign-in"]))
+    refute_vocabulary(html)
+
+    assert {:ok, %{state: "confirmed"}} =
+             Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), row.ref)
   end
 end

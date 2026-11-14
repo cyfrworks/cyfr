@@ -33,6 +33,10 @@ defmodule PrismWeb.SetupLiveTest do
 
     assert html =~ "Sign in with your account"
     assert html =~ "Create your account"
+
+    assert view |> element(~s([data-test="account-host"])) |> render() =~
+             "Your account lives at dir.example. These buttons take you there and bring you back here."
+
     refute_vocabulary(html)
 
     view |> element(~s([data-test="setup-sign-in"])) |> render_click()
