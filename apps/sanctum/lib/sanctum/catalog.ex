@@ -610,7 +610,7 @@ defmodule Sanctum.Catalog do
           end
 
         :miss ->
-          {:error, "Unknown tool: #{name}"}
+          {:error, {:unknown_tool, name}}
       end
     end
   end

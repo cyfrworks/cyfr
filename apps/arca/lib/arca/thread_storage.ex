@@ -471,8 +471,7 @@ defmodule Arca.ThreadStorage do
   successor's.
 
   An approval pause keeps the claim — the turn is still this member's
-  work, waiting on a person. `turn.suspend` and every terminal transition
-  release it.
+  work, waiting on a person. Every terminal transition releases it.
   """
   @spec release(Prima.Actor.t(), String.t(), String.t()) ::
           :ok | {:error, :no_athanor | :not_held | :database_error}

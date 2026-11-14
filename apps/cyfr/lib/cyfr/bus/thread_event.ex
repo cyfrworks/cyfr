@@ -13,7 +13,7 @@ defmodule Cyfr.Bus.ThreadEvent do
       member, a reply answering one, and a notice (a reply whose outcome
       is `needs_you`), each told apart so a view can file it under what
       it answers;
-    * `:turn_suspended`, `:turn_started` — the turn's id;
+    * `:turn_started` — the turn's id;
     * `:turn_finished` — nil;
     * `:turn_starting` — the id of the person whose turn is starting;
     * `:turn_paused` — `%{turn_id:, reason:}`;
@@ -43,7 +43,6 @@ defmodule Cyfr.Bus.ThreadEvent do
     :request,
     :reply,
     :notice,
-    :turn_suspended,
     :turn_finished,
     :turn_starting,
     :turn_started,
@@ -70,7 +69,6 @@ defmodule Cyfr.Bus.ThreadEvent do
           | :request
           | :reply
           | :notice
-          | :turn_suspended
           | :turn_finished
           | :turn_starting
           | :turn_started

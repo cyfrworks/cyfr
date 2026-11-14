@@ -821,7 +821,7 @@ defmodule Aqua.CrewTest do
     assert {:ok, []} = Tape.pending_approvals(ctx, turn)
   end
 
-  test "archiving cancels every open turn in its own transaction, the suspended one included, and leaves none to recover",
+  test "archiving cancels every open turn in its own transaction, the running one included, and leaves none open",
        %{ctx: ctx, room: room} do
     script!([{:probe, self()}])
     request = soul_request!(ctx, room, "planner", "take a while")
@@ -830,15 +830,25 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     turn_id = delivered_turn(ctx, child, request.id)
 
-    assert {:ok, %{suspended: true}} = Runner.suspend_turn(ctx, child.id, turn: turn_id)
-    assert {:ok, %{status: "paused", paused_reason: "suspended"}} = Tape.turn(ctx, turn_id)
+    assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn_id)
 
     # The store's write alone, as a crash before the runner's stop leaves it.
-    assert {:ok, %{thread: %{archived_at: %DateTime{}}}} = Tape.archive(ctx, child.id)
+    assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: cancelled}} =
+             Tape.archive(ctx, child.id)
+
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
     assert {:ok, []} = Tape.open_turns(ctx, child.id)
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
-    assert {:error, :not_open} = Runner.recover_turn(ctx, child.id, turn_id)
+
+    # Then the runner's stop, as the archive's caller makes it: no attempt
+    # of what the turn ran outlives the case.
+    executions =
+      Arca.Repo.all(
+        from(e in Arca.Schemas.Execution, where: e.athanor_id == ^ctx.athanor_id, select: e.id)
+      )
+
+    assert :ok = Runner.stop_cancelled(cancelled)
+    wait_until(fn -> Enum.all?(executions, &is_nil(Opus.Attempt.whereis(&1))) end, 30_000)
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     assert %{status: "answered"} = row(ctx, request.id)

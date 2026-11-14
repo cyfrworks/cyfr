@@ -377,9 +377,9 @@ defmodule Arca.CrewStorageTest do
       assert person == actor.user_id
     end
 
-    test "recovery refuses a turn of an archived thread", %{actor: actor, room: room} do
+    test "a takeover refuses a turn of an archived thread", %{actor: actor, room: room} do
       {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
-      turn = delivered!(actor, room, child, request!(actor, room, "planner", "go"))
+      turn = start!(actor, delivered!(actor, room, child, request!(actor, room, "planner", "go")))
 
       # Archived around the turn, as a write that never ran its cancel would
       # leave it.
@@ -390,9 +390,8 @@ defmodule Arca.CrewStorageTest do
         )
 
       assert {:error, :thread_archived} =
-               TurnStorage.recover(actor, turn.id, %{
+               TurnStorage.takeover(actor, turn.id, %{
                  fence: turn.fence,
-                 recovery_limit: 3,
                  grant: :stored,
                  verify: &Arca.Test.Actor.admits/1
                })

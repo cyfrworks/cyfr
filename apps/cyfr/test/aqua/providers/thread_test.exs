@@ -111,91 +111,98 @@ defmodule Aqua.Providers.ThreadTest do
     card
   end
 
-  describe "the turn tool" do
-    test "suspend and recover are declared once, and every derived view follows" do
-      annotations =
-        Tool.turn_definition()
-        |> Sanctum.Annotations.actions_of()
+  describe "turns" do
+    test "no one suspends or recovers a turn: the tool is unknown, alike to every caller, and offered to no one",
+         %{ctx: ctx, thread: thread} do
+      admin = %{ctx | platform_admin: true}
+      key = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
+      guest = guest(ctx)
+      lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx)
 
-      assert Map.keys(annotations) |> Enum.sort() == ["recover", "suspend"]
+      unknown = %Prima.Refusal{
+        stage: :admission,
+        class: :not_found,
+        reason: {:unknown_tool, "turn"},
+        message: "Unknown tool: turn"
+      }
 
-      for {action, annotation} <- annotations do
-        assert annotation.kind == :write, "#{action}: not a write"
+      for action <- ["suspend", "recover"] do
+        args = %{"action" => action, "thread" => thread.id, "turn" => "trn_named"}
 
-        assert annotation.planes == [:external],
-               "#{action}: a running agent must not reach it"
+        for caller <- [ctx, admin, key] do
+          assert Sanctum.Gate.call_external("turn", caller, args) == {:error, unknown}
+        end
 
-        assert annotation.consent == :interactive,
-               "#{action}: a standing credential must not move a person's work"
-
-        assert annotation.standing == false, "#{action}: every call is a click"
+        assert Sanctum.Gate.call_in_chain("turn", guest, args, chain_authority(),
+                 lineage: lineage
+               ) == {:error, unknown}
       end
 
-      # Recovery is never itself replay-safe.
-      assert Sanctum.Annotations.recovery(Tool.turn_definition(), "recover") == nil
-      assert Sanctum.Annotations.recovery(Tool.turn_definition(), "suspend") == nil
+      assert Enum.map(Tool.tools(), & &1.name) == ["thread", "crew"]
+      refute Enum.any?(Sanctum.Catalog.tool_actions(), &String.starts_with?(&1, "turn."))
 
-      # A turn to recover is named; a turn to suspend need not be.
-      schema = Tool.turn_definition().input_schema
-      assert "thread" in schema["required"]
-      refute "turn" in schema["required"]
+      for caller <- [ctx, admin, key] do
+        shown = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), caller)
+        refute Enum.any?(shown, &(&1["name"] == "turn"))
+      end
 
-      # And the catalog serves both, under the provider's one service.
-      served = MapSet.new(Sanctum.Catalog.tool_actions())
-      assert MapSet.member?(served, "turn.suspend")
-      assert MapSet.member?(served, "turn.recover")
-      assert Sanctum.Services.service_name(Tool) == "aqua"
+      in_chain = Sanctum.Catalog.in_chain_view(Sanctum.Catalog.list_tools())
+      refute Enum.any?(in_chain, &(&1["name"] == "turn"))
     end
+  end
 
-    test "an API key cannot set a person's turn down, and is not shown the tool", %{
-      ctx: ctx,
-      thread: thread
-    } do
-      star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
+  # A guest of the person's athanor inside a running chain, holding every
+  # permission, so nothing but the tool's absence can refuse its call.
+  defp guest(ctx) do
+    Sanctum.Context.enter_guest(%Sanctum.Context{
+      origin: :programmatic,
+      user_id: ctx.user_id,
+      athanor_id: ctx.athanor_id,
+      scope: :athanor,
+      permissions: MapSet.new([:*]),
+      authenticated: true
+    })
+  end
 
-      assert {:error,
-              %Prima.Refusal{
-                stage: :admission,
-                reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
-              }} =
-               Sanctum.Gate.call_external("turn", star, %{
-                 "action" => "suspend",
-                 "thread" => thread.id
-               })
+  # A chain's grant whose one edge names an action the guest may reach,
+  # so the authority admits the call up to the tool's lookup.
+  defp chain_authority do
+    node = "formula:local.turns"
 
-      shown = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), star)
-      refute Enum.any?(shown, &(&1["name"] == "turn"))
+    {:ok, blob} =
+      Prima.Authority.Blob.parse(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          node => %{
+            "limits" => %{
+              "timeout" => "1m",
+              "max_memory_bytes" => 67_108_864,
+              "max_request_size" => 1_048_576,
+              "max_response_size" => 5_242_880,
+              "rate_limit" => %{"requests" => 100, "window" => "1m"},
+              "max_concurrent_tasks" => 10,
+              "batch_timeout" => "1m"
+            },
+            "edges" => %{"@ingress" => %{"tools" => ["crew.list"]}}
+          }
+        }
+      })
 
-      assert Enum.any?(
-               Visibility.filter_for_context(Sanctum.Catalog.list_tools(), ctx),
-               &(&1["name"] == "turn")
-             )
-    end
+    {:ok, authority} =
+      Prima.Authority.root(
+        %{
+          profile_id: "prof-turns",
+          consent_id: "consent-turns",
+          source_ref: node,
+          kind: :owner,
+          invoke_mode: :open_inert,
+          activation: %{node => "sha256:turns"}
+        },
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
+      )
 
-    test "the wire says what happened in sentences, not the runner's atoms", %{
-      ctx: ctx,
-      thread: thread
-    } do
-      # Nothing is running here, so there is nothing to set down.
-      assert {:error, {:conflict, message}} =
-               Tool.handle("turn", ctx, %{"action" => "suspend", "thread" => thread.id})
-
-      assert message =~ "No turn is running"
-
-      # A turn nobody minted is absent, never denied.
-      assert {:error, {:not_found, "thread", _}} =
-               Tool.handle("turn", ctx, %{
-                 "action" => "recover",
-                 "thread" => thread.id,
-                 "turn" => "trn_never_minted"
-               })
-
-      assert {:refused, {:invalid_argument, _}} =
-               admission(ctx, "turn", %{"action" => "recover", "thread" => thread.id})
-
-      assert {:refused, {:unknown_action, "turn.stop"}} =
-               admission(ctx, "turn", %{"action" => "stop", "thread" => thread.id})
-    end
+    authority
   end
 
   describe "gates" do

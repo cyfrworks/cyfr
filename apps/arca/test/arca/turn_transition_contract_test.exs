@@ -218,7 +218,7 @@ defmodule Arca.TurnTransitionContractTest do
   # ---------------------------------------------------------------------------
 
   describe "the root's grant is required where the write must stand" do
-    test "a resume, a completion, a recovery, a takeover and a set-down without a check are refused",
+    test "a resume, a completion, a takeover and a set-down without a check are refused",
          %{actor: actor, thread: thread} do
       {turn, _root} = started!(actor, thread)
       {:ok, paused} = TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
@@ -230,9 +230,6 @@ defmodule Arca.TurnTransitionContractTest do
 
       assert {:error, :missing_grant} =
                TurnStorage.finish(actor, turn.id, "completed", %{fence: paused.fence})
-
-      assert {:error, :missing_grant} =
-               TurnStorage.recover(actor, turn.id, %{fence: paused.fence})
 
       assert {:error, :missing_grant} =
                TurnStorage.takeover(actor, turn.id, %{fence: paused.fence})
@@ -299,67 +296,32 @@ defmodule Arca.TurnTransitionContractTest do
   end
 
   # ---------------------------------------------------------------------------
-  # recover and takeover: the stored limit
+  # takeover: the stored limit
   # ---------------------------------------------------------------------------
 
   describe "the recovery limit is the turn's stored one" do
     test "a caller's limit never widens a started turn's", %{actor: actor, thread: thread} do
       {turn, _root} = started!(actor, thread)
       set_turn!(turn.id, recovery_limit: 1)
-      {:ok, suspended} = TurnStorage.suspend(actor, turn.id, %{fence: turn.fence})
 
-      assert {:ok, recovered} =
-               TurnStorage.recover(
+      assert {:ok, taken} =
+               TurnStorage.takeover(
                  actor,
                  turn.id,
-                 Map.merge(@standing, %{fence: suspended.fence, recovery_limit: 100})
+                 Map.merge(@standing, %{fence: turn.fence, recovery_limit: 100})
                )
 
-      assert recovered.recovery_limit == 1
-      assert recovered.recovery_attempts == 1
-
-      assert {:error, :recovery_exhausted} =
-               TurnStorage.recover(
-                 actor,
-                 turn.id,
-                 Map.merge(@standing, %{fence: recovered.fence, recovery_limit: 100})
-               )
+      assert taken.recovery_limit == 1
+      assert taken.recovery_attempts == 1
 
       assert {:error, :recovery_exhausted} =
                TurnStorage.takeover(
                  actor,
                  turn.id,
-                 Map.merge(@standing, %{fence: recovered.fence, recovery_limit: 100})
+                 Map.merge(@standing, %{fence: taken.fence, recovery_limit: 100})
                )
 
       assert %{recovery_attempts: 1, recovery_limit: 1} = row(turn.id)
-    end
-
-    test "an accepted turn's recovery is its first claim: it writes the limit and spends none",
-         %{actor: actor, thread: thread} do
-      turn = accept!(actor, thread)
-
-      assert {:error, :illegal_transition} =
-               TurnStorage.recover(actor, turn.id, Map.put(@standing, :fence, turn.fence))
-
-      assert {:ok, recovered} =
-               TurnStorage.recover(
-                 actor,
-                 turn.id,
-                 Map.merge(@standing, %{fence: turn.fence, recovery_limit: 2})
-               )
-
-      assert %{status: "accepted", recovery_limit: 2, recovery_attempts: 0} = recovered
-
-      # The limit it wrote is the one its start keeps.
-      root = root!(actor, turn.id)
-
-      assert {:ok, %{recovery_limit: 2}} =
-               TurnStorage.start(
-                 actor,
-                 turn.id,
-                 start_attrs(recovered, root, %{recovery_limit: 9})
-               )
     end
   end
 
@@ -383,9 +345,6 @@ defmodule Arca.TurnTransitionContractTest do
 
       assert {:error, {:execution_not_in, ["running", "paused", "failed"]}} =
                TurnStorage.takeover(actor, turn.id, Map.put(@standing, :fence, turn.fence))
-
-      assert {:error, {:execution_not_in, _}} =
-               TurnStorage.recover(actor, turn.id, Map.put(@standing, :fence, turn.fence))
 
       assert {:error, {:execution_not_in, _}} =
                TurnStorage.pause_recovered(
@@ -912,15 +871,15 @@ defmodule Arca.TurnTransitionContractTest do
     # the lock would decide nothing. The rows are committed, in an athanor
     # of this case's own, and erased when it ends.
     @tag :own_connections
-    test "of a recovery and a takeover racing on one fence, one lands and one recovery is spent" do
+    test "of two takeovers racing on one fence, one lands and one recovery is spent" do
       actor = unboxed_athanor!()
       {turn, _root} = unboxed(fn -> started!(actor, elem(Threads.create(actor), 1)) end)
       attrs = Map.put(@standing, :fence, turn.fence)
 
       results =
-        [&TurnStorage.recover/3, &TurnStorage.takeover/3]
-        |> Enum.map(fn transition ->
-          Task.async(fn -> unboxed(fn -> transition.(actor, turn.id, attrs) end) end)
+        1..2
+        |> Enum.map(fn _ ->
+          Task.async(fn -> unboxed(fn -> TurnStorage.takeover(actor, turn.id, attrs) end) end)
         end)
         |> Enum.map(&Task.await(&1, 25_000))
 
