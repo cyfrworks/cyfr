@@ -46,6 +46,10 @@ var (
 	handOver = continueAs
 )
 
+// installScript is the install line's first half, which an exact release
+// follows as `| CYFR_VERSION=<version> sh`.
+const installScript = "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh"
+
 // fetchBinaryTimeout bounds the archive's download and verification.
 const fetchBinaryTimeout = 10 * time.Minute
 
@@ -199,7 +203,7 @@ func updateCask(ctx context.Context, out io.Writer, target string, exact bool) (
 		latest, err := latestRelease(lookup)
 		cancel()
 		if err != nil || latest != target {
-			return "", fmt.Errorf("This cyfr was installed by Homebrew, which installs only the release its tap names, the newest one that is not a pre-release; nothing was changed. To run release %s, install it with the install script: curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=%s sh", target, target)
+			return "", fmt.Errorf("This cyfr was installed by Homebrew, which installs only the release its tap names, the newest one that is not a pre-release; nothing was changed. To run release %s, install it with the install script: %s | CYFR_VERSION=%s sh", target, installScript, target)
 		}
 	}
 	// brew runs to its end: it shares the terminal's process group, so an

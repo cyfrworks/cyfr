@@ -695,8 +695,23 @@ clean_install() {
     check "the setup page shows the account's recovery code (it shows shell-recovery.html)" false
   fi
 
+  # volumes_seen AT: the docker volumes with their labels, and the docker
+  # context, as the test account and as root, with root's view of the
+  # daemon's root directory and every container's mounts, in
+  # GUEST_DIR/volumes-AT.txt and printed: an observation, never a check.
+  volumes_seen() {
+    {
+      echo "volumes $1, as proof:"
+      guest_ssh 'docker context show; docker volume ls --format "{{.Name}} {{.Labels}}"' 2>&1 || echo "(the read failed)"
+      echo "volumes $1, as root:"
+      guest_root_out 'docker context show; docker info --format "root {{.DockerRootDir}} driver {{.Driver}}"; docker volume ls --format "{{.Name}} {{.Labels}}"; echo containers:; docker ps -a --format "{{.Names}} {{.Status}} {{.Mounts}}"' 2>&1 || echo "(the read failed)"
+    } | tee "$GUEST_DIR/volumes-$1.txt" | sed 's/^/observed: /'
+  }
+
   step "cyfr down, then a reboot: CYFR stays down and the screen says why"
+  volumes_seen stack-up
   guest_ssh 'cd ~/cyfr && ~/.local/bin/cyfr down' >"$GUEST_DIR/down.txt" 2>&1 || fail "cyfr down failed ($GUEST_DIR/down.txt)"
+  volumes_seen after-cyfr-down
   guest_reboot
   screen_runs || fail "labwc and Chrome did not come back on tty1 ($GUEST_DIR/screen.txt)"
   sleep 20
@@ -712,6 +727,76 @@ clean_install() {
   check "Ctrl+Alt+F2 reaches a terminal on tty2" sh -c '[ "$(cat "$1")" = "tty2
 active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "screenshot screen-terminal.png" guest_screenshot screen-terminal.png
+
+  step "cyfr uninstall --yes stops CYFR as cyfr down does and removes nothing else from the folder: the folder, the volumes, the settings and the device key as cyfr down left them"
+  # Read as root after cyfr down and again after the uninstall, and
+  # compared whole: the folder, each volume's files and the account's
+  # ~/.cyfr (its settings and device key), each entry's kind, size, mode,
+  # owner and link target and each file's digest. Any read that fails
+  # fails the step; ~/.cyfr is recorded absent only when there is none.
+  left_as_it_was() {
+    guest_root_out '
+      set -eu
+      t=$(mktemp -d)
+      tree() {
+        (cd "$1" && find . -printf "%p %y %s %m %U:%G %l\n" >"$t/entries" && find . -type f -print0 >"$t/files")
+        sort "$t/entries"
+        sort -z "$t/files" | (cd "$1" && xargs -0 -r sha256sum)
+      }
+      echo folder:
+      tree /home/proof/cyfr
+      volumes=$(docker volume ls -q)
+      for v in $(printf "%s\n" $volumes | sort); do
+        echo "volume $v:"
+        m=$(docker volume inspect -f "{{.Mountpoint}}" "$v")
+        tree "$m"
+      done
+      echo settings and device key:
+      if [ -e /home/proof/.cyfr ]; then tree /home/proof/.cyfr; else echo absent; fi
+      rm -r "$t"'
+  }
+  # The volume command names exactly the volumes the first listing found,
+  # and is absent when it found none.
+  volume_command_names_the_volumes() {
+    local want got line
+    want=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort)
+    line=$(grep '^    docker volume rm ' "$GUEST_DIR/transcript-uninstall.txt" || true)
+    # shellcheck disable=SC2086 # the line's quoted names, split into words
+    got=$(printf '%s\n' ${line#    docker volume rm } | tr -d "'" | sed '/^$/d' | sort)
+    [ "$got" = "$want" ]
+  }
+  check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
+  # The screen's browser writes its profile in the folder until the screen
+  # stops, which cyfr down leaves running: it is stopped before the first
+  # listing, so the two listings compare cyfr down's stop with the
+  # uninstall's. Its browser can outlive the service's stop, so the step
+  # waits until no process holds the profile (the bracket keeps the pattern
+  # from matching the shell that carries it).
+  guest_root 'systemctl stop cyfr-screen; p=--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]; pkill -f -- "$p"; for i in $(seq 30); do pgrep -f -- "$p" >/dev/null || exit 0; sleep 1; done; exit 1' ||
+    fail "the screen's browser did not stop ($GUEST_DIR/root.txt)"
+  volumes_seen after-the-reboot-and-cyfr-down
+  left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
+  # The screen holds tty1 since the reboot, which ended tty1's tmux
+  # session: the step types into a detached one, which gives sudo its
+  # terminal all the same.
+  guest_ssh 'tmux has-session -t proof 2>/dev/null || tmux new-session -d -s proof -x 200 -y 50' ||
+    fail "no tmux session for the uninstall"
+  pane_wait '\$ *$' 30 || fail "the uninstall's shell drew no prompt within $PANE_BUDGET s"
+  pane_step uninstall 'cd ~/cyfr && cyfr uninstall --yes' 600 "$SUDO_PROMPT" @password
+  check "cyfr uninstall exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "sudo asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
+  check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
+  check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
+  check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
+  pane_step_end uninstall
+  left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
+  volumes_seen after-the-uninstall
+  check "the folder, the volumes, the settings and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
+  check "no container and no custom network of CYFR is left" guest_ssh '[ -z "$(docker ps -aq)$(docker network ls -q --filter type=custom)" ]'
+  check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
+  check "the program and its link onto PATH are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr 2>/dev/null'
+  check "the screen is given back to tty1's login prompt" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-enabled --quiet cyfr-screen && [ ! -e /etc/systemd/system/cyfr-screen.service ]'
+  check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"
