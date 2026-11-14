@@ -101,7 +101,11 @@ defmodule Sanctum.ApiKey do
 
   def create(%Context{} = ctx, %{name: name} = opts, issuance)
       when is_binary(name) and is_list(issuance) do
+    # What the key may do is checked before a confirmation is asked: a
+    # request that could make no key asks for none.
     with :ok <- tenant(ctx),
+         {:ok, scope_list} <- permissions_of(Map.get(opts, :scope)),
+         {:ok, tools} <- tools_of(Map.get(opts, :tools)),
          :ok <-
            Sanctum.Consent.Authz.confirm(ctx, :credential_issuance, %{
              operation: "key.create",
@@ -109,7 +113,7 @@ defmodule Sanctum.ApiKey do
              resource: name
            }),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, issuance) do
-      create_validated(ctx, name, Map.put(opts, :expectation, expectation))
+      create_validated(ctx, name, scope_list, tools, Map.put(opts, :expectation, expectation))
     end
   end
 
@@ -122,11 +126,9 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  defp create_validated(ctx, name, opts) do
+  defp create_validated(ctx, name, scope_list, tools, opts) do
     with {:ok, capability_json} <-
-           validate_consent_capability(ctx, Map.get(opts, :consent_capability)),
-         {:ok, scope_list} <- permissions_of(Map.get(opts, :scope)),
-         {:ok, tools} <- tools_of(Map.get(opts, :tools)) do
+           validate_consent_capability(ctx, Map.get(opts, :consent_capability)) do
       create_key(ctx, name, scope_list, tools, Map.put(opts, :capability_json, capability_json))
     end
   end

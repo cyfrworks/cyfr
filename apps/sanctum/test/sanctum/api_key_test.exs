@@ -807,6 +807,13 @@ defmodule Sanctum.ApiKeyTest do
       assert is_binary(id)
       assert {:ok, []} = ApiKey.list(ctx)
 
+      # A request that could make no key asks for no confirmation.
+      assert {:error, {:unknown_permission, nil}} =
+               ApiKey.create(ctx, %{name: "unproven", scope: [nil, "*"]})
+
+      assert {:error, {:invalid_tool, "ship"}} =
+               ApiKey.create(ctx, %{name: "unproven", tools: ["ship"]})
+
       {:ok, _} = create_key(ctx, %{name: "proven", scope: []})
 
       assert {:error, {:confirmation_required, %{operation: "key.rotate"}}} =

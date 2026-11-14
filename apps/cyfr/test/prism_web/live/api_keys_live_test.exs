@@ -9,6 +9,7 @@ defmodule PrismWeb.ApiKeysLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
   defp checked(view) do
@@ -92,7 +93,7 @@ defmodule PrismWeb.ApiKeysLiveTest do
     {:ok, %{id: id}} = Sanctum.ApiKey.get(ctx, "damaged")
 
     Arca.Repo.update_all(
-      Ecto.Query.from(k in Arca.Schemas.ApiKey, where: k.id == ^id),
+      from(k in Arca.Schemas.ApiKey, where: k.id == ^id),
       set: [scope: ~s(["execute", "*"])]
     )
 
