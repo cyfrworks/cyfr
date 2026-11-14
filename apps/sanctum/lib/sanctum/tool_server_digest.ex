@@ -6,22 +6,35 @@ defmodule Sanctum.ToolServerDigest do
   External MCP configuration digest pinned by a consent tool_server resource.
 
   `JCS({id, transport, mark, url, enabled, header_templates, backends,
-  tool_patterns, program})` over the server row's id and its stored header
-  and env **templates** (vault references and non-credential literals),
-  never resolved values: rotating a referenced vault entry must not move
-  the digest, while re-pointing the URL, swapping a header or env
-  reference, changing a backend's command, or deleting the row and
-  creating another under the same name must. A program's `program` member
-  is everything else that decides what it is and what it reaches, each
-  setting it holds: its hosts (the set of names, in one order; absent, every
-  public host), its folder's
-  identity (its home and the login entry a kept home is), its memory and
-  disk bounds and its sign-in command, so a definition replaced with
-  wider hosts, another folder or other bounds no longer matches a grant
-  made for the old one. An http row has neither a mark nor a program. A program's `url` is the empty string. Only a
-  tool server has a digest: an `http` row or a program marked `mcp`; a
-  `driven` program offers no tools. There is
-  deliberately no stored digest column — a stored digest is a cache someone
+  program})` over what decides where the server's calls go and which
+  credentials ride along, never resolved values: rotating a referenced
+  vault entry must not move the digest, while each of these must, so a
+  definition that reaches more no longer matches a grant made for the old
+  one and the person is asked again at use:
+
+    * the address whole (scheme, host, port and path);
+    * every header, by its name and its template (`header_templates`): a
+      vault-bound one by the entry it names, a literal by its value, since
+      a peer may route on any header (a literal `Host` sends the call and
+      its credentials elsewhere). A header added, removed, pointed at
+      another entry or given another literal moves the digest; a vault
+      entry rotated in place does not;
+    * a program's backends (each one's name, command and env templates)
+      and its `program` member, everything else that decides what it is
+      and what it reaches, each setting it holds: its hosts (the set of
+      names, in one order; absent, every public host), its folder's
+      identity (its home and the login entry a kept home is), its memory
+      and disk bounds and its sign-in command;
+    * the row's id, so a row deleted and made again under its name does.
+
+  The server's tool patterns and its timeout are left out: a grant
+  carries its own patterns and only ever reaches their intersection with
+  the server's (`tool_patterns/1`). An http row
+  has neither a mark nor a program; a program's `url` is the empty string.
+  Only a tool server has a digest: an `http` row or a program marked
+  `mcp`; a `driven` program offers no tools.
+
+  There is deliberately no stored digest column — a stored digest is a cache someone
   forgets to recompute; deriving at read makes "changed config ⇒ mismatch ⇒
   deny" true by construction.
 
@@ -44,14 +57,13 @@ defmodule Sanctum.ToolServerDigest do
           enabled: enabled,
           headers: headers,
           backends: backends,
-          tool_patterns: patterns,
           program: program
         } = server
       )
       when is_binary(id) and
              ((transport == "http" and is_nil(mark)) or (transport == "program" and mark == "mcp")) and
              (is_binary(url) or is_nil(url)) and is_boolean(enabled) and is_map(headers) and
-             is_list(backends) and is_list(patterns) and
+             is_list(backends) and
              ((transport == "http" and is_nil(program)) or
                 (transport == "program" and is_map(program))) do
     with {:ok, backends} <- backend_templates(backends),
@@ -63,8 +75,7 @@ defmodule Sanctum.ToolServerDigest do
           "url" => url || "",
           "enabled" => enabled,
           "header_templates" => templates(headers),
-          "backends" => backends,
-          "tool_patterns" => Enum.sort(patterns)
+          "backends" => backends
         }
         |> with_program(mark, program)
       )
@@ -151,7 +162,6 @@ defmodule Sanctum.ToolServerDigest do
       enabled: server.enabled == true,
       headers: config["headers"] || %{},
       backends: config["backends"] || [],
-      tool_patterns: tool_patterns(server),
       program: program(server)
     })
   end

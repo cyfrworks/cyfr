@@ -25,7 +25,11 @@ defmodule PrismWeb.ProgramsLive do
   backend named for the program, its mark chosen. **Edit** on an expanded
   program replaces its whole definition (`mcp_servers.update` at the epoch
   it was read at), in the program form, or in the config form when it
-  defines more than one backend; its folder is kept. A kept row offers
+  defines more than one backend; its folder is kept. **Edit** on a tool
+  server elsewhere opens its address and its headers, one `Name: value`
+  per line: a header whose stored value is a literal shows as `[set]`,
+  which `mcp_servers.get` answers in its place, and a line left at `[set]`
+  keeps that value (`keep_headers`), so no stored value reaches the page. A kept row offers
   **Sign in**: the sign-in terminal
   (`PrismWeb.SignInTerminalComponent`) runs the row's login command in a
   login entry's home, for the entry a kept mcp program names, or for one
@@ -78,7 +82,12 @@ defmodule PrismWeb.ProgramsLive do
   @forms ~w(config program)
 
   # The events that call off the page's process, one at a time.
-  @calls ~w(add_server add_program toggle_enabled test refresh restart reset_home set_hosts)
+  @calls ~w(add_server add_program save_server toggle_enabled test refresh restart reset_home set_hosts)
+
+  # What a tool server's Edit shows for a header whose stored value is a
+  # literal: `mcp_servers.get` never answers it, and saving the line as it
+  # stands keeps the stored value (`keep_headers`).
+  @kept "[set]"
 
   @impl true
   def mount(_params, _session, socket) do
@@ -134,18 +143,42 @@ defmodule PrismWeb.ProgramsLive do
   def handle_event("edit", %{"name" => name}, socket) do
     case socket.assigns.detail do
       %{name: ^name, epoch: epoch} = detail ->
-        {form, prefill} = edit_prefill(config(detail))
+        read = definition(detail)
+        {form, prefill} = edit_prefill(read)
 
         {:noreply,
          socket
          |> assign(:show_add, form)
          |> assign(:form_error, nil)
          |> assign(:install, nil)
-         |> assign(:editing, %{name: name, epoch: epoch, config: config(detail)})
+         |> assign(:editing, %{name: name, epoch: epoch, config: read})
          |> assign(:prefill, Map.put(prefill, "name", name))}
 
       _not_read ->
-        {:noreply, put_flash(socket, :error, "Open the program first, then edit it.")}
+        {:noreply, put_flash(socket, :error, "Open the row first, then edit it.")}
+    end
+  end
+
+  # A tool server's whole definition: its address and its headers, one
+  # `Name: value` per line, a line left at [set] keeping its stored value.
+  # Every member the form does not show is kept as it was read.
+  def handle_event("save_server", %{"url" => url, "headers" => text}, socket) do
+    %{name: name, config: read} = socket.assigns.editing
+
+    case parse_headers(text) do
+      {:ok, headers} ->
+        {kept, given} = Enum.split_with(headers, fn {_name, value} -> value == @kept end)
+
+        config =
+          read
+          |> Map.merge(%{"url" => String.trim(url), "headers" => Map.new(given)})
+
+        if Map.put(config, "headers", Map.new(headers)) == read,
+          do: {:noreply, unchanged(socket, name)},
+          else: {:noreply, update_server(socket, name, config, Enum.map(kept, &elem(&1, 0)))}
+
+      {:error, message} ->
+        {:noreply, assign(socket, :form_error, message)}
     end
   end
 
@@ -526,14 +559,8 @@ defmodule PrismWeb.ProgramsLive do
 
   # A new row, or the whole definition of the row the form edits; a
   # definition the form leaves as it was read is not written at all.
-  defp save(%{assigns: %{editing: %{name: name, config: config}}} = socket, name, config) do
-    {:noreply,
-     socket
-     |> assign(:show_add, nil)
-     |> assign(:editing, nil)
-     |> assign(:prefill, %{})
-     |> put_flash(:info, "Nothing changed in '#{name}'.")}
-  end
+  defp save(%{assigns: %{editing: %{name: name, config: config}}} = socket, name, config),
+    do: {:noreply, unchanged(socket, name)}
 
   defp save(%{assigns: %{editing: %{name: name, epoch: epoch}}} = socket, name, config) do
     args = %{"name" => name, "epoch" => epoch, "config" => config}
@@ -543,6 +570,37 @@ defmodule PrismWeb.ProgramsLive do
   defp save(socket, name, config) do
     args = %{"name" => name, "config" => config}
     {:noreply, call(socket, "Adding #{name}…", {:create, name}, "mcp_servers/create", args)}
+  end
+
+  defp unchanged(socket, name) do
+    socket
+    |> assign(:show_add, nil)
+    |> assign(:editing, nil)
+    |> assign(:prefill, %{})
+    |> put_flash(:info, "Nothing changed in '#{name}'.")
+  end
+
+  defp update_server(socket, name, config, kept) do
+    %{epoch: epoch} = socket.assigns.editing
+    args = %{"name" => name, "epoch" => epoch, "config" => config, "keep_headers" => kept}
+    call(socket, "Saving #{name}…", {:update, name}, "mcp_servers/update", args)
+  end
+
+  # One `Name: value` per line; blank lines are skipped.
+  defp parse_headers(text) do
+    text
+    |> String.split(~r/\R/)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.reduce_while({:ok, []}, fn line, {:ok, headers} ->
+      case String.split(line, ":", parts: 2) do
+        [name, value] when name != "" ->
+          {:cont, {:ok, headers ++ [{String.trim(name), String.trim(value)}]}}
+
+        _ ->
+          {:halt, {:error, "Each header line is Name: value — #{inspect(line)} is not."}}
+      end
+    end)
   end
 
   # What an edit keeps of the definition it replaces: every member the
@@ -558,8 +616,25 @@ defmodule PrismWeb.ProgramsLive do
   defp form_name(%{assigns: %{editing: %{name: name}}}, _params), do: name
   defp form_name(_socket, params), do: trimmed(params, "name")
 
-  # The form an edit opens and what it holds: the program form for one
-  # backend, the config form, as JSON, for more.
+  # A row's whole definition as an update takes it: its config, and a tool
+  # server's address, which the row holds beside it.
+  defp definition(%{transport: "http", url: url} = detail),
+    do: Map.put(config(detail), "url", url)
+
+  defp definition(detail), do: config(detail)
+
+  # The form an edit opens and what it holds: a tool server's own
+  # form, the program form for one backend, the config form, as JSON, for
+  # more.
+  defp edit_prefill(%{"transport" => "http"} = config) do
+    {"server",
+     %{
+       "url" => config["url"],
+       "headers" =>
+         Enum.map_join(Enum.sort(config["headers"] || %{}), "\n", fn {k, v} -> "#{k}: #{v}" end)
+     }}
+  end
+
   defp edit_prefill(%{"backends" => [backend]} = config) do
     {"program",
      %{
@@ -988,6 +1063,37 @@ defmodule PrismWeb.ProgramsLive do
         </form>
       </.card>
 
+      <.card :if={@show_add == "server" and @editing}>
+        <form id="edit-server" phx-submit="save_server" class="space-y-4">
+          <p class="text-sm text-gray-300" data-test="editing">
+            Replace the whole definition of <span class="font-mono">{@editing.name}</span>, a
+            tool server elsewhere. A header shown as <code class="text-gray-400">[set]</code>
+            keeps its stored value unless you type a new one.
+          </p>
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-1">Address</label>
+            <.input name="url" required value={@prefill["url"]} class="font-mono" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-1">
+              Headers (Name: value per line)
+            </label>
+            <textarea
+              name="headers"
+              rows="4"
+              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono"
+            >{@prefill["headers"]}</textarea>
+            <p class="text-xs text-gray-600 mt-1">
+              A value may be <code class="text-gray-500">vault:ENTRY</code>
+              or <code class="text-gray-500">Bearer vault:ENTRY</code>, a single-field entry
+              whose destination covers this address.
+            </p>
+          </div>
+          <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>
+          <.button type="submit">Save</.button>
+        </form>
+      </.card>
+
       <.card :if={@show_add == "config"}>
         <form id="add-config" phx-submit="add_server" class="space-y-4">
           <p :if={@editing} class="text-sm text-gray-300" data-test="editing">
@@ -1198,7 +1304,7 @@ defmodule PrismWeb.ProgramsLive do
                           {if server[:enabled] == true, do: "Disable", else: "Enable"}
                         </.button>
                         <.button
-                          :if={server[:transport] == "program" and @detail}
+                          :if={@detail}
                           variant="ghost"
                           phx-click="edit"
                           phx-value-name={server[:name]}
