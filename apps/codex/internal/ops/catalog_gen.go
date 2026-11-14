@@ -2333,6 +2333,8 @@ type McpServersUpdateArgs struct {
 	Config McpServersUpdateArgsConfig `json:"config"`
 	// The epoch the caller read with get (required for update; refused when the server has changed since)
 	Epoch int `json:"epoch"`
+	// Headers of a tool server that keep the value stored at that epoch, which get shows as [set] and never answers; a name kept is not also given in config.headers
+	KeepHeaders Field[[]string] `json:"keep_headers,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
