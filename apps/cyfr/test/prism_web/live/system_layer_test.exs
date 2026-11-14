@@ -5511,7 +5511,7 @@ defmodule PrismWeb.SystemLayerTest do
       {view, _html} = mount_athanor(conn, "/api-keys")
       name = "hook-key-#{System.unique_integer([:positive])}"
 
-      render_submit(view, "create", %{"name" => name, "type" => "application"})
+      render_submit(view, "create", %{"name" => name})
 
       assert {:ok, [%{ref: ref, operation: "key.create"}]} =
                Arca.PendingConfirmations.list_open(Sanctum.Context.actor(local), local.user_id)

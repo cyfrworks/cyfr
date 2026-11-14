@@ -10,8 +10,8 @@ defmodule PrismWeb.Nav do
   athanor's own address) is no page of the list and is shown in every UI
   mode (`shown?/2`).
 
-  `lite` is AQUA, files, the Vault, schedules, webhooks, programs,
-  settings and legal. `dev` adds the ops surfaces, sectioned. Keys are the
+  `lite` is AQUA, files, the Vault, schedules, webhooks, API keys,
+  programs, settings and legal. `dev` adds the ops surfaces, sectioned. Keys are the
   pages' `active_nav` values; the DOM id a surface renders is
   `<prefix>-<key>` with underscores as hyphens. Every page lives under
   `/a/<athanor>`, and `href/2` is the one place a path becomes a link.
@@ -110,7 +110,7 @@ defmodule PrismWeb.Nav do
       path: "/api-keys",
       icon: "lock",
       section: :configuration,
-      modes: @dev
+      modes: @both
     },
     %{
       key: "webhooks",
@@ -154,7 +154,7 @@ defmodule PrismWeb.Nav do
     }
   ]
 
-  @lite_order ~w(aqua files vault schedules webhooks programs settings legal)
+  @lite_order ~w(aqua files vault schedules webhooks api_keys programs settings legal)
 
   @sections [
     {:top, nil},

@@ -1420,7 +1420,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # ==========================================================================
-  # integration-guide's scope, key-type, vault and consent-walk tables
+  # integration-guide's scope, preset, vault and consent-walk tables
   # ==========================================================================
 
   # The rows of the first table under `heading` in `path` (the integration
@@ -1446,32 +1446,22 @@ defmodule Cyfr.DocsDriftTest do
   defp backquoted(cell),
     do: ~r/`([^`]+)`/ |> Regex.scan(cell, capture: :all_but_first) |> List.flatten()
 
-  test "the guide's scope table is Sanctum's permission roster" do
-    documented = for [scope | _] <- guide_table("### Available Scopes"), do: hd(backquoted(scope))
+  test "the guide's scope table is Sanctum.ApiKey's permissions, each by what it lets a key do" do
+    documented =
+      for [scope, what | _] <- guide_table("### Available Scopes"),
+          do: {hd(backquoted(scope)), what}
 
-    assert Enum.sort(documented) == Enum.sort(Sanctum.Atoms.known_permissions()),
-           "integration-guide.md's scopes #{inspect(documented)} are not " <>
-             "Sanctum.Atoms.known_permissions/0"
+    assert documented == Sanctum.ApiKey.permissions(),
+           "integration-guide.md's scopes are not Sanctum.ApiKey.permissions/0"
   end
 
-  test "the guide's key-type table is Sanctum.ApiKey's defaults and ceilings" do
-    rows = guide_table("#### Key Type Defaults and Ceilings")
-
+  test "the guide's preset table is Sanctum.ApiKey's presets" do
     documented =
-      Map.new(rows, fn [type, defaults, ceiling] ->
-        [_, name] = Regex.run(~r/\*\*(\w+)\*\*/, type)
+      for [name, scopes] <- guide_table("#### Presets"),
+          do: {name, Jason.decode!(hd(backquoted(scopes)))}
 
-        {String.to_existing_atom(String.downcase(name)),
-         {Jason.decode!(hd(backquoted(defaults))), Jason.decode!(hd(backquoted(ceiling)))}}
-      end)
-
-    expected =
-      Map.new(Sanctum.ApiKey.type_defaults(), fn {type, defaults} ->
-        {type, {defaults, Map.fetch!(Sanctum.ApiKey.type_ceilings(), type)}}
-      end)
-
-    assert documented == expected,
-           "integration-guide.md's key-type defaults and ceilings are not Sanctum.ApiKey's"
+    assert documented == Sanctum.ApiKey.presets(),
+           "integration-guide.md's key presets are not Sanctum.ApiKey's"
   end
 
   # The operations of the configured tool named `tool`, by action.

@@ -179,11 +179,13 @@ defmodule Opus do
   # Everything `run_root/5` decides before the run is dispatched: the
   # admission of the run in the calling process, its waiter.
   defp admit_root(ctx, profile_selector, reference, input, opts) do
-    # An athanor still being filled refuses as a turn does, with the fill
-    # asked for, and an unavailable executor refuses: both before any
-    # consent is resolved or any row is written. Dispatch checks the worker
-    # again when it runs.
-    with :ok <- Sanctum.Provisioning.ready(ctx),
+    # A key narrowed to named tools starts no other, before anything else
+    # about the run is asked. An athanor still being filled refuses as a
+    # turn does, with the fill asked for, and an unavailable executor
+    # refuses: both before any consent is resolved or any row is written.
+    # Dispatch checks the worker again when it runs.
+    with :ok <- Sanctum.ApiKey.admit_tool(ctx, reference),
+         :ok <- Sanctum.Provisioning.ready(ctx),
          {:ok, _worker} <- Dispatch.worker(reference),
          {:ok, %{authority: authority, stamp: stamp, profile: profile}} <-
            Admission.authority_and_stamp_for(ctx, profile_selector, reference, opts) do
@@ -213,12 +215,18 @@ defmodule Opus do
 
   `:route` is required — `:public` or `:protected` — and is the profile
   selection, public-first: authentication never upgrades a public route.
-  A call without a route raises.
+  A call without a route raises. A key narrowed to named tools that does
+  not name the tincture is `{:error, :key_tool_not_named}`, as at
+  `run_root/5`.
   """
   @spec run_root_edge(Context.t(), String.t(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_root_edge(%Context{} = ctx, source_ref, reference, input, opts) when is_list(opts) do
-    with {:ok, %{root: root, decision: decision}} <-
+    # The tincture is the root a key starts here, so a key narrowed to
+    # named tools opens only a listed tincture's route; what the tincture
+    # runs stands on the person's grant of it, as it does for the person.
+    with :ok <- Sanctum.ApiKey.admit_tool(ctx, source_ref),
+         {:ok, %{root: root, decision: decision}} <-
            Admission.root_edge(ctx, source_ref, reference, opts) do
       dispatch_child(
         decision,

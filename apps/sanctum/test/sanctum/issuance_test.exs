@@ -150,7 +150,6 @@ defmodule Sanctum.IssuanceTest do
       name: "glass-key-#{n}",
       key_hash: :crypto.hash(:sha256, "glass-key-#{n}"),
       key_prefix: "cyfr_sk_gl",
-      type: "service",
       created_by: ctx.user_id,
       athanor_id: ctx.athanor_id
     }
@@ -220,7 +219,7 @@ defmodule Sanctum.IssuanceTest do
 
       confirmed = Sanctum.TestContext.confirmed(ctx, :credential_issuance, key_change(attrs))
 
-      assert {:ok, %{api_key: "cyfr_pk_" <> _, name: "from-the-glass"}} =
+      assert {:ok, %{api_key: "cyfr_sk_" <> _, name: "from-the-glass"}} =
                Sanctum.ApiKey.create(confirmed, attrs)
     end
 
@@ -1141,7 +1140,6 @@ defmodule Sanctum.IssuanceRaceTest do
       name: "raced-#{n}",
       key_hash: :crypto.hash(:sha256, "raced-#{n}"),
       key_prefix: "cyfr_sk_rc",
-      type: "service",
       created_by: ctx.user_id,
       athanor_id: athanor_id
     }

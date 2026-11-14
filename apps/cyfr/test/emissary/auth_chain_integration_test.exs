@@ -35,7 +35,6 @@ defmodule Emissary.AuthChainIntegrationTest do
     {:ok, limited_key} =
       Sanctum.TestContext.create_key(ctx, %{
         name: "test-limited-key",
-        type: :application,
         scope: ["execute"]
       })
 
@@ -43,7 +42,6 @@ defmodule Emissary.AuthChainIntegrationTest do
     {:ok, reader_key} =
       Sanctum.TestContext.create_key(ctx, %{
         name: "test-reader-key",
-        type: :application,
         scope: ["execute", "storage_read"]
       })
 
@@ -152,7 +150,7 @@ defmodule Emissary.AuthChainIntegrationTest do
       resp =
         conn
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("authorization", "Bearer cyfr_pk_invalid000000000000000000")
+        |> put_req_header("authorization", "Bearer cyfr_sk_invalid000000000000000000")
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,

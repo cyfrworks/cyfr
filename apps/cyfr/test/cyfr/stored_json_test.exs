@@ -164,7 +164,6 @@ defmodule Cyfr.StoredJsonTest do
     {:ok, %{api_key: raw}} =
       Sanctum.TestContext.create_key(ctx, %{
         name: name,
-        type: :service,
         ip_allowlist: ["127.0.0.1"]
       })
 

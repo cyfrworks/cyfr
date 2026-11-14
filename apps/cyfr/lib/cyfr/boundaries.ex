@@ -455,7 +455,7 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller
+        Sanctum Sanctum.ApiKey Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.IdentityFreshness
         Sanctum.Mount
@@ -494,6 +494,9 @@ defmodule Cyfr.Boundaries do
           "one read beside an event's metadata: what each person a shared thread's " <>
           "change names now lists of it (`listings/2`), since the thread is no " <>
           "athanor's and its event names only who to tell. " <>
+          "`Sanctum.ApiKey` is the root admission's one question of the key a run is " <>
+          "started with (`admit_tool/2`): a key narrowed to named tools starts no other " <>
+          "root, a run's or a tincture route's. " <>
           "`Sanctum.Provisioning` is the run gate's readiness question: `Opus.run_root/5` " <>
           "asks whether the athanor is filled before it admits a run, as a turn does, " <>
           "and the fill is asked for when it is not. The settings roster reads the " <>
@@ -1844,7 +1847,7 @@ defmodule Cyfr.Boundaries do
       standing: 2,
       standing_to_wire: 1
     ],
-    "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
+    "Sanctum.ApiKey" => [admit_tool: 2, looks_like_key?: 1, permissions: 0, presets: 0],
     "Sanctum.Attach" => [resolve: 5],
     "Sanctum.Auth.OIDC" => [issuer: 0],
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],

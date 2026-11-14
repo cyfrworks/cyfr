@@ -43,9 +43,7 @@ defmodule Sanctum.ProseErrorInventoryTest do
     {"apps/sanctum/lib/sanctum/provider_credentials.ex",
      "Sanctum.ProviderCredentials.validate_provider/1"} => 2,
     {"apps/sanctum/lib/sanctum/providers/athanor.ex", "Sanctum.Providers.Athanor.handle/2"} => 1,
-    {"apps/sanctum/lib/sanctum/providers/key.ex", "Sanctum.Providers.Key.handle/2"} => 10,
-    {"apps/sanctum/lib/sanctum/providers/key.ex", "Sanctum.Providers.Key.parse_key_type_arg/1"} =>
-      1,
+    {"apps/sanctum/lib/sanctum/providers/key.ex", "Sanctum.Providers.Key.handle/2"} => 9,
     {"apps/sanctum/lib/sanctum/providers/oauth.ex", "Sanctum.Providers.OAuth.handle/2"} => 3,
     {"apps/sanctum/lib/sanctum/providers/profile.ex",
      "Sanctum.Providers.Profile.decode_bindings/1"} => 1,

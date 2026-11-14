@@ -516,6 +516,63 @@ defmodule Opus.TinctureTest do
     end
   end
 
+  describe "a key narrowed to named tools" do
+    # A key is minted in its person's own athanor: the fixture athanor's
+    # owner mints it, so the tincture and its dependency are theirs.
+    setup %{ctx: ctx} do
+      _owner = Sanctum.TestContext.owner!()
+
+      issuer =
+        Sanctum.TestContext.issuer!(%{ctx | user_id: Arca.Test.Actor.owner_id()})
+
+      {:ok, issuer: issuer}
+    end
+
+    # A key of `issuer`, narrowed to `tools`, and the context it
+    # authenticates as.
+    defp key_ctx!(issuer, name, tools) do
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(issuer, %{name: name, tools: tools})
+
+      {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      key_ctx
+    end
+
+    test "opens another tincture's route refused in the run's own words, and nothing runs",
+         %{issuer: issuer} do
+      node = tincture!(issuer, "tinc-unlisted")
+      _owner = profile!(issuer, node, :owner)
+      worker!([%{"answer" => 1}])
+      narrowed = key_ctx!(issuer, "listed-elsewhere", ["t:local.tinc-listed"])
+
+      assert {:error,
+              %Prima.Refusal{
+                class: :forbidden,
+                reason: :key_tool_not_named,
+                message:
+                  "This API key may run only the tools named when it was made, and this is not one of them."
+              }} = Opus.Tincture.invoke(narrowed, args("tinc-unlisted", :protected), :protected)
+
+      assert ScriptedWorker.calls() == []
+    end
+
+    test "opens a listed tincture's route, which answers it as it answers the person",
+         %{issuer: issuer} do
+      node = tincture!(issuer, "tinc-listed")
+      _owner = profile!(issuer, node, :owner)
+      worker!()
+      narrowed = key_ctx!(issuer, "listed", ["t:local.tinc-listed"])
+
+      # The key passes; what the route then answers stands on the person's
+      # grant of the tincture, so it is the person's own answer.
+      as_key = Opus.Tincture.invoke(narrowed, args("tinc-listed", :protected), :protected)
+      as_person = Opus.Tincture.invoke(issuer, args("tinc-listed", :protected), :protected)
+
+      refute match?({:error, %Prima.Refusal{reason: :key_tool_not_named}}, as_key)
+      assert as_key == as_person
+    end
+  end
+
   describe "telemetry" do
     setup do
       ref = make_ref()

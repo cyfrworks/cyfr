@@ -434,7 +434,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       name = "mcp-issuer-#{System.unique_integer([:positive])}"
 
       # An admin key, which may mint keys, minting one.
-      opts = %{name: name, type: :admin}
+      opts = %{name: name, scope: ["admin"]}
 
       issuing =
         TestContext.confirmed(session_ctx, :credential_issuance, %{

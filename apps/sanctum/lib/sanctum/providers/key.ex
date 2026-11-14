@@ -34,12 +34,15 @@ defmodule Sanctum.Providers.Key do
               required: true,
               description: "Human-readable name for the key"
             ),
-            Arg.new("type", :string,
-              description: "Key type: application (frontend), service (backend), admin (CI/CD)",
-              enum: ["application", "service", "admin"]
-            ),
             Arg.new("scope", {:array, Arg.new(nil, :string)},
-              description: "Permissions scope for the key"
+              description:
+                "What the key may do, fixed once it is made; omitted, the first preset's: " <>
+                  scope_description()
+            ),
+            Arg.new("tools", {:array, Arg.new(nil, :string)},
+              description:
+                "The only tools the key may run, each named without its version (c:local.my-tool), " <>
+                  "fixed once it is made; omitted, it runs any tool you granted"
             ),
             Arg.new("ip_allowlist", {:array, Arg.new(nil, :string)},
               description: "List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])"
@@ -146,48 +149,60 @@ defmodule Sanctum.Providers.Key do
   end
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
-    with {:ok, key_type} <- parse_key_type_arg(Map.get(args, "type", "application")) do
-      opts = %{
-        name: name,
-        type: key_type,
-        scope: Map.get(args, "scope", []),
-        ip_allowlist: Map.get(args, "ip_allowlist")
-      }
+    opts = %{
+      name: name,
+      scope: Map.get(args, "scope"),
+      tools: Map.get(args, "tools"),
+      ip_allowlist: Map.get(args, "ip_allowlist")
+    }
 
-      case Sanctum.ApiKey.create(ctx, opts) do
-        {:ok, result} ->
-          broadcast_api_keys_changed(ctx)
-          {:ok, result}
+    case Sanctum.ApiKey.create(ctx, opts) do
+      {:ok, result} ->
+        broadcast_api_keys_changed(ctx)
+        {:ok, result}
 
-        {:error, :already_exists} ->
-          {:error, {:conflict, "Key already exists: #{name}"}}
+      {:error, :already_exists} ->
+        {:error, {:conflict, "Key already exists: #{name}"}}
 
-        {:error, {:scope_exceeds_ceiling, scope_list, ceiling}} ->
-          {:error,
-           "Scope #{inspect(scope_list)} exceeds allowed scopes for this key type: #{inspect(ceiling)}"}
+      {:error, {:unknown_permission, _}} ->
+        {:error,
+         %Prima.Refusal{
+           class: :invalid_argument,
+           reason: :unknown_permission,
+           message: "A key's permissions are among these: " <> scope_description()
+         }}
 
-        {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
-          {:error, Sanctum.Issuance.standing_refusal(reason)}
+      {:error, {:invalid_tool, _}} ->
+        {:error,
+         %Prima.Refusal{
+           class: :invalid_argument,
+           reason: :invalid_tool,
+           message:
+             "Name each tool as its type, namespace and name without a version, " <>
+               "such as c:local.my-tool"
+         }}
 
-        {:error, {tag, payload} = signal} when Prima.ConsentSignal.is_signal(tag, payload) ->
-          {:error, signal}
+      {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
+        {:error, Sanctum.Issuance.standing_refusal(reason)}
 
-        {:error, reason} when reason in @confirmation_refusals ->
-          {:error, reason}
+      {:error, {tag, payload} = signal} when Prima.ConsentSignal.is_signal(tag, payload) ->
+        {:error, signal}
 
-        {:error, {:conflict, message} = conflict} when is_binary(message) ->
-          {:error, conflict}
+      {:error, reason} when reason in @confirmation_refusals ->
+        {:error, reason}
 
-        # This server's slot is not live: nothing was written, and the
-        # refusal reads as itself.
-        {:error, :not_owner} = refused ->
-          refused
+      {:error, {:conflict, message} = conflict} when is_binary(message) ->
+        {:error, conflict}
 
-        # No re-log: the storage layer already logged this failure with the
-        # exception detail (Arca.ApiKeyStorage).
-        {:error, _reason} ->
-          {:error, "Failed to create key"}
-      end
+      # This server's slot is not live: nothing was written, and the
+      # refusal reads as itself.
+      {:error, :not_owner} = refused ->
+        refused
+
+      # No re-log: the storage layer already logged this failure with the
+      # exception detail (Arca.ApiKeyStorage).
+      {:error, _reason} ->
+        {:error, "Failed to create key"}
     end
   end
 
@@ -321,12 +336,10 @@ defmodule Sanctum.Providers.Key do
           "re-enable it first, then rotate it"
     }
 
-  defp parse_key_type_arg("application"), do: {:ok, :application}
-  defp parse_key_type_arg("service"), do: {:ok, :service}
-  defp parse_key_type_arg("admin"), do: {:ok, :admin}
-
-  defp parse_key_type_arg(invalid),
-    do: {:error, "Invalid key type: #{invalid}. Use: application, service, or admin"}
+  # Each permission by its name and what it lets a key do.
+  defp scope_description,
+    do:
+      Enum.map_join(Sanctum.ApiKey.permissions(), ", ", fn {name, what} -> "#{name} (#{what})" end)
 
   defp broadcast_api_keys_changed(ctx),
     do: Sanctum.Telemetry.api_keys_changed(Sanctum.Context.athanor!(ctx))

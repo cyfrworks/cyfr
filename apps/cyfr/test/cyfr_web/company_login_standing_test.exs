@@ -202,7 +202,7 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
          %{conn: conn} do
       {ctx, session} = standing_person!()
       name = "company-#{System.unique_integer([:positive])}"
-      {:ok, %{api_key: raw}} = Sanctum.TestContext.create_key(ctx, %{name: name, type: :service})
+      {:ok, %{api_key: raw}} = Sanctum.TestContext.create_key(ctx, %{name: name})
 
       client!("cid-rotated")
 

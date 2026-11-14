@@ -254,6 +254,17 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
   end
 
+  test "the CLI's key form offers Sanctum.ApiKey's permissions, each by what it lets a key do" do
+    form = read!("apps/codex/internal/prompt/form.go")
+
+    offered =
+      ~r/huh\.NewOption\("([^"]+)", "([a-z_]+)"\)/
+      |> Regex.scan(form, capture: :all_but_first)
+      |> Enum.map(fn [what, name] -> {name, what} end)
+
+    assert offered == Sanctum.ApiKey.permissions()
+  end
+
   # Authority error tags must agree across language boundaries.
 
   test "the consent-tag vocabulary agrees across Sanctum, the MCP boundary and the CLI" do

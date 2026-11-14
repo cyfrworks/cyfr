@@ -12,11 +12,11 @@ defmodule Sanctum.ApiKeyRecognitionTest do
 
   alias Sanctum.ApiKey
 
-  test "looks_like_key?/1 recognizes the three cyfr_ prefixes only" do
-    assert ApiKey.looks_like_key?("cyfr_pk_abc")
+  test "looks_like_key?/1 recognizes the one key prefix only" do
     assert ApiKey.looks_like_key?("cyfr_sk_abc")
-    assert ApiKey.looks_like_key?("cyfr_ak_abc")
 
+    refute ApiKey.looks_like_key?("cyfr_pk_abc")
+    refute ApiKey.looks_like_key?("cyfr_ak_abc")
     refute ApiKey.looks_like_key?("cyfr_xx_abc")
     refute ApiKey.looks_like_key?("not-a-key")
     refute ApiKey.looks_like_key?("")
@@ -24,13 +24,15 @@ defmodule Sanctum.ApiKeyRecognitionTest do
     refute ApiKey.looks_like_key?(123)
   end
 
-  test "validate/2 returns :invalid_key_format for a non-cyfr key" do
-    assert ApiKey.validate("definitely-not-a-key") == {:error, :invalid_key_format}
+  test "validate/2 returns :invalid_key_format for a string without the key prefix" do
+    for key <- ["definitely-not-a-key", "cyfr_ak_" <> String.duplicate("a", 32)] do
+      assert ApiKey.validate(key) == {:error, :invalid_key_format}
+    end
   end
 
   test "validate/2 returns :invalid_key for a well-formed but unknown key", tags do
     Arca.Test.Sandbox.setup!(tags)
 
-    assert ApiKey.validate("cyfr_ak_" <> String.duplicate("a", 32)) == {:error, :invalid_key}
+    assert ApiKey.validate("cyfr_sk_" <> String.duplicate("a", 32)) == {:error, :invalid_key}
   end
 end

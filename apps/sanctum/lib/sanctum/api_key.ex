@@ -10,32 +10,28 @@ defmodule Sanctum.ApiKey do
   The actual key value is never stored — only a SHA-256 hash for validation
   lookups and a 12-char prefix for redacted display.
 
+  There is one kind of key, `cyfr_sk_`, acting as the person who made it
+  in the athanor it was made in. What it may do is fixed when it is made
+  and never changed: its permissions, ticked from a preset (`presets/0`),
+  and optionally the named tools it may run (`tools`), each a component
+  named without its version. Left without tools, it runs any tool its
+  person granted. Both live in the stored `scope` list: a tool's name
+  always holds a `:` and a permission never does, and a name outside the
+  permission vocabulary never reaches the key's context
+  (`context_from_metadata/1`), so only `admit_tool/2` reads the tools.
+
   ## Usage
 
       ctx = Sanctum.TestContext.local()
 
-      # Create a new API key
-      {:ok, %{api_key: "cyfr_pk_...", name: "frontend-key"}} =
-        Sanctum.ApiKey.create(ctx, %{name: "frontend-key", type: :application, scope: ["execute"]})
+      {:ok, %{api_key: "cyfr_sk_...", name: "deploy"}} =
+        Sanctum.ApiKey.create(ctx, %{name: "deploy", scope: ["execute"], tools: ["c:local.ship"]})
 
-      # List all keys (keys are redacted)
-      {:ok, [%{name: "frontend-key", scope: [...], created_at: ...}]} = Sanctum.ApiKey.list(ctx)
+      {:ok, [%{name: "deploy", scope: ["execute"], tools: ["catalyst:local.ship"]}]} =
+        Sanctum.ApiKey.list(ctx)
 
-      # Get a specific key by name
-      {:ok, %{name: "frontend-key", ...}} = Sanctum.ApiKey.get(ctx, "frontend-key")
-
-      # Revoke a key
-      :ok = Sanctum.ApiKey.revoke(ctx, "frontend-key")
-
-      # Rotate a key (creates new key, revokes old)
-      {:ok, %{api_key: "cyfr_pk_...", name: "frontend-key"}} = Sanctum.ApiKey.rotate(ctx, "frontend-key")
-
-      # Validate a key
-      {:ok, %{name: "frontend-key", scope: [...]}} = Sanctum.ApiKey.validate("cyfr_pk_...")
-
-      # Validate with IP check (for admin keys)
-      {:ok, %{name: "admin-key", ...}} =
-        Sanctum.ApiKey.validate("cyfr_ak_...", client_ip: "192.168.1.10")
+      {:ok, %{name: "deploy", scope: [...]}} =
+        Sanctum.ApiKey.validate("cyfr_sk_...", client_ip: "192.168.1.10")
 
   ## Storage
 
@@ -46,53 +42,44 @@ defmodule Sanctum.ApiKey do
 
   alias Sanctum.Context
 
-  @valid_key_types [:application, :service, :admin]
+  # Each permission a key may hold, in the order a person reads them, by
+  # what it lets the key do. The wildcard is none of them: no key holds
+  # it. `Sanctum.Atoms` declares the vocabulary; a test holds the two
+  # equal.
+  @permissions [
+    {"execute", "Run tools"},
+    {"component_read", "Read components"},
+    {"storage_read", "Read files, runs and logs"},
+    {"component_manage", "Build and publish components"},
+    {"storage_write", "Write files"},
+    {"admin", "Manage keys, webhooks and programs"},
+    {"vault_read", "List OAuth clients"}
+  ]
+  @permission_names Enum.map(@permissions, &elem(&1, 0))
 
-  # Default scopes applied when none are specified
-  @type_defaults %{
-    application: ["execute", "component_read", "storage_read"],
-    service: [
-      "execute",
-      "vault_read",
-      "component_read",
-      "storage_read",
-      "storage_write"
-    ],
-    admin: ["*"]
-  }
+  @run ["execute", "component_read", "storage_read"]
 
-  # Maximum allowed scopes per key type
-  @type_ceilings %{
-    application: ["execute", "vault_read", "component_read", "storage_read"],
-    service: [
-      "execute",
-      "vault_read",
-      "component_read",
-      "component_manage",
-      "storage_read",
-      "storage_write"
-    ],
-    admin: ["vault_read", "admin", "*"]
-  }
-
-  @doc false
-  def type_defaults, do: @type_defaults
-  @doc false
-  def type_ceilings, do: @type_ceilings
+  # The first is what a key made without permissions holds.
+  @presets [
+    {"Run tools and read their runs", @run},
+    {"Build components", @run ++ ["component_manage", "storage_write"]},
+    {"Manage keys and webhooks", ["admin"]}
+  ]
 
   # ============================================================================
   # Public API
   # ============================================================================
 
-  @doc """
-  Returns the valid (ceiling) scopes for a key type.
-  """
-  def valid_scopes(key_type), do: Map.get(@type_ceilings, key_type, [])
+  @doc "The permissions a key may hold, each with what it lets the key do, in reading order."
+  @spec permissions() :: [{String.t(), String.t()}]
+  def permissions, do: @permissions
 
   @doc """
-  Returns the default scopes for a key type.
+  The presets a person ticks a key's permissions from, each its name and
+  its permissions; the first is what a key made without permissions holds.
   """
-  def default_scopes(key_type), do: Map.get(@type_defaults, key_type, [])
+  @spec presets() :: [{String.t(), [String.t()]}]
+  def presets, do: @presets
 
   @doc """
   Create a new API key: a credential that outlives the session that
@@ -102,27 +89,13 @@ defmodule Sanctum.ApiKey do
   ## Options
 
   - `:name` - Required. Human-readable name for the key.
-  - `:type` - Key type: `:application` (default), `:service`, or `:admin`
-  - `:scope` - List of permissions within the key type's ceiling (e.g., ["execute", "component_read"])
+  - `:scope` - Its permissions (`permissions/0`); absent or empty, the
+    first preset's. A name outside them is `{:error, {:unknown_permission, name}}`.
+  - `:tools` - The tools it may run, each a component reference without
+    its version (`c:local.ship`); absent or empty, any tool its person
+    granted. One that is not such a reference is
+    `{:error, {:invalid_tool, name}}`.
   - `:ip_allowlist` - List of allowed IPs/CIDRs (e.g., ["192.168.1.0/24", "10.0.0.1"])
-
-  ## Key Types
-
-  - `:application` (`cyfr_pk_`) - Frontend apps, client-side use
-  - `:service` (`cyfr_sk_`) - Backend services
-  - `:admin` (`cyfr_ak_`) - CI/CD, automation (recommended with IP allowlist)
-
-  ## Examples
-
-      iex> ctx = Sanctum.TestContext.local()
-      iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "my-key", scope: ["execute"]})
-      iex> String.starts_with?(result.api_key, "cyfr_pk_")
-      true
-
-      iex> ctx = Sanctum.TestContext.local()
-      iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "backend-key", type: :service})
-      iex> String.starts_with?(result.api_key, "cyfr_sk_")
-      true
   """
   def create(ctx, opts, issuance \\ [])
 
@@ -150,20 +123,11 @@ defmodule Sanctum.ApiKey do
   end
 
   defp create_validated(ctx, name, opts) do
-    key_type = Map.get(opts, :type, :application)
-
-    cond do
-      key_type not in @valid_key_types ->
-        {:error, {:invalid_key_type, key_type}}
-
-      true ->
-        case validate_consent_capability(ctx, Map.get(opts, :consent_capability)) do
-          {:ok, capability_json} ->
-            create_scoped(ctx, name, key_type, Map.put(opts, :capability_json, capability_json))
-
-          {:error, _} = err ->
-            err
-        end
+    with {:ok, capability_json} <-
+           validate_consent_capability(ctx, Map.get(opts, :consent_capability)),
+         {:ok, scope_list} <- permissions_of(Map.get(opts, :scope)),
+         {:ok, tools} <- tools_of(Map.get(opts, :tools)) do
+      create_key(ctx, name, scope_list, tools, Map.put(opts, :capability_json, capability_json))
     end
   end
 
@@ -210,31 +174,8 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  defp create_scoped(ctx, name, key_type, opts) do
-    # Reject a malformed :scope (not a string / list-of-strings) instead of
-    # silently coercing it to [] → type defaults, which would mask a caller
-    # error and grant unintended (default) scopes. An absent/empty scope is
-    # legitimately "use the type defaults".
-    case normalize_scope(Map.get(opts, :scope, [])) do
-      {:error, :invalid_scope} = err ->
-        err
-
-      {:ok, normalized} ->
-        scope_list =
-          if normalized == [], do: Map.get(@type_defaults, key_type, []), else: normalized
-
-        ceiling = Map.get(@type_ceilings, key_type, [])
-
-        if not scope_within_ceiling?(scope_list, ceiling) do
-          {:error, {:scope_exceeds_ceiling, scope_list, ceiling}}
-        else
-          create_key(ctx, name, key_type, scope_list, opts)
-        end
-    end
-  end
-
-  defp create_key(ctx, name, key_type, scope_list, opts) do
-    key = generate_key(key_type)
+  defp create_key(ctx, name, scope_list, tools, opts) do
+    key = generate_key()
     now = DateTime.utc_now() |> DateTime.to_iso8601()
     ip_allowlist = Map.get(opts, :ip_allowlist)
     athanor_id = athanor!(ctx)
@@ -249,15 +190,14 @@ defmodule Sanctum.ApiKey do
         name: name,
         key_hash: hash_key(key),
         key_prefix: String.slice(key, 0, 12),
-        type: to_string(key_type),
-        scope: safe_encode(scope_list),
+        scope: safe_encode(scope_list ++ tools),
         ip_allowlist: allowlist_json,
         capability: Map.get(opts, :capability_json),
         created_by: ctx.user_id,
         athanor_id: athanor_id
       }
 
-      store_key(attrs, Map.fetch!(opts, :expectation), key, name, key_type, scope_list, now)
+      store_key(attrs, Map.fetch!(opts, :expectation), key, name, scope_list, tools, now)
     end
   end
 
@@ -285,13 +225,13 @@ defmodule Sanctum.ApiKey do
   # locked and reread at the generations the context read, the athanor
   # still the creator's own and the credential the creator
   # holds still live (`Sanctum.Issuance`).
-  defp store_key(attrs, expectation, key, name, key_type, scope_list, now) do
+  defp store_key(attrs, expectation, key, name, scope_list, tools, now) do
     case Arca.ApiKeyStorage.create_key(attrs,
            lock: Sanctum.Issuance.lock(expectation),
            verify: Sanctum.Issuance.verify(expectation)
          ) do
       :ok ->
-        {:ok, %{api_key: key, name: name, type: key_type, scope: scope_list, created_at: now}}
+        {:ok, %{api_key: key, name: name, scope: scope_list, tools: tools, created_at: now}}
 
       {:error, :already_exists} ->
         # The unique index is partial (WHERE NOT revoked), so a violation
@@ -465,35 +405,23 @@ defmodule Sanctum.ApiKey do
         {:error, :suspended}
 
       {:ok, row} ->
-        case parse_key_type(row.type) do
-          {:ok, key_type} ->
-            new_key = generate_key(key_type)
-            now = DateTime.utc_now() |> DateTime.to_iso8601()
-            scope_list = decode_stored(row.scope, [], "scope")
+        new_key = generate_key()
+        now = DateTime.utc_now() |> DateTime.to_iso8601()
+        {scope_list, tools} = split_stored(row.scope)
 
-            case Arca.ApiKeyStorage.rotate_key(
-                   actor,
-                   name,
-                   hash_key(new_key),
-                   String.slice(new_key, 0, 12),
-                   lock: Sanctum.Issuance.lock(expectation),
-                   verify: Sanctum.Issuance.verify(expectation)
-                 ) do
-              :ok ->
-                {:ok,
-                 %{
-                   api_key: new_key,
-                   name: name,
-                   type: key_type,
-                   scope: scope_list,
-                   rotated_at: now
-                 }}
+        case Arca.ApiKeyStorage.rotate_key(
+               actor,
+               name,
+               hash_key(new_key),
+               String.slice(new_key, 0, 12),
+               lock: Sanctum.Issuance.lock(expectation),
+               verify: Sanctum.Issuance.verify(expectation)
+             ) do
+          :ok ->
+            {:ok,
+             %{api_key: new_key, name: name, scope: scope_list, tools: tools, rotated_at: now}}
 
-              error ->
-                error
-            end
-
-          {:error, _} = error ->
+          error ->
             error
         end
 
@@ -505,17 +433,13 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  defp parse_key_type("application"), do: {:ok, :application}
-  defp parse_key_type("service"), do: {:ok, :service}
-  defp parse_key_type("admin"), do: {:ok, :admin}
-  defp parse_key_type(unknown), do: {:error, {:unknown_key_type, unknown}}
-
   @doc """
   Validate an API key and return its metadata.
 
   This function checks if the key exists and is neither revoked
   (`{:error, :revoked}`) nor suspended by a declared restore
-  (`{:error, :suspended}`). Also detects key type from prefix.
+  (`{:error, :suspended}`). A string without the key prefix is
+  `{:error, :invalid_key_format}`.
 
   ## Options
 
@@ -525,25 +449,20 @@ defmodule Sanctum.ApiKey do
 
   ## Examples
 
-      iex> {:ok, meta} = Sanctum.ApiKey.validate("cyfr_pk_...")
+      iex> {:ok, meta} = Sanctum.ApiKey.validate("cyfr_sk_...", client_ip: "192.168.1.10")
       iex> meta.name
       "my-key"
-
-      iex> {:ok, meta} = Sanctum.ApiKey.validate("cyfr_ak_...", client_ip: "192.168.1.10")
-      iex> meta.name
-      "admin-key"
   """
   def validate(key, opts \\ []) when is_binary(key) do
-    key_type = detect_key_type(key)
     client_ip = Keyword.get(opts, :client_ip)
 
-    if key_type == :unknown do
+    if looks_like_key?(key) do
+      validate_key_against_store(key, client_ip)
+    else
       # Equalize the malformed-key fast path with the store-lookup path so a
       # missing/foreign prefix is not distinguishable by response timing.
       _ = hash_key(key)
       {:error, :invalid_key_format}
-    else
-      validate_key_against_store(key, key_type, client_ip)
     end
   end
 
@@ -556,7 +475,7 @@ defmodule Sanctum.ApiKey do
   #
   # A key is a standing channel of its athanor: it stops when the athanor is
   # archived or its creator is denied on this server.
-  defp validate_key_against_store(key, key_type, client_ip) do
+  defp validate_key_against_store(key, client_ip) do
     case Arca.ApiKeyStorage.get_key_by_hash(hash_key(key)) do
       {:error, :not_found} ->
         {:error, :invalid_key}
@@ -585,7 +504,7 @@ defmodule Sanctum.ApiKey do
             {:error, :ip_not_allowed}
 
           ip_allowlist in [nil, []] ->
-            key_metadata(row, key_type)
+            key_metadata(row)
 
           # An allowlisted key with no caller-supplied IP fails closed:
           # absence of the IP is not proof the restriction is satisfied
@@ -595,7 +514,7 @@ defmodule Sanctum.ApiKey do
             {:error, :ip_not_allowed}
 
           ip_allowed?(client_ip, ip_allowlist) ->
-            key_metadata(row, key_type)
+            key_metadata(row)
 
           true ->
             {:error, :ip_not_allowed}
@@ -603,9 +522,9 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  defp key_metadata(row, key_type) do
+  defp key_metadata(row) do
     with {:ok, binding} <- key_binding(row) do
-      {:ok, row |> build_key_metadata(key_type) |> Map.put(:credential_binding, binding)}
+      {:ok, row |> build_key_metadata() |> Map.put(:credential_binding, binding)}
     end
   end
 
@@ -687,12 +606,13 @@ defmodule Sanctum.ApiKey do
     )
   end
 
-  defp build_key_metadata(row, key_type) do
+  defp build_key_metadata(row) do
+    {scope_list, _tools} = split_stored(row.scope)
+
     %{
       id: row.id,
       name: row.name,
-      type: key_type,
-      scope: decode_stored(row.scope, [], "scope"),
+      scope: scope_list,
       ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
       user_id: row.created_by,
       athanor_id: row.athanor_id
@@ -743,64 +663,138 @@ defmodule Sanctum.ApiKey do
   end
 
   @doc """
-  True when `key` carries a recognized `cyfr_` API-key prefix.
+  True when `key` carries the API-key prefix (`Prima.CredentialShape`).
 
   Single source of truth for "is this string an API key at all", shared by the
   authentication plug and the tincture auth resolver so the prefix check cannot
   drift between entry points.
   """
   @spec looks_like_key?(term()) :: boolean()
-  def looks_like_key?(key) when is_binary(key), do: detect_key_type(key) != :unknown
+  def looks_like_key?(key) when is_binary(key),
+    do: String.starts_with?(key, Prima.CredentialShape.api_key_prefix())
+
   def looks_like_key?(_), do: false
 
-  defp detect_key_type(key) do
-    # The prefixes are the credential shapes' (`Prima.CredentialShape`).
-    Enum.find_value(Prima.CredentialShape.api_key_prefixes(), :unknown, fn {type, prefix} ->
-      if String.starts_with?(key, prefix), do: type
+  @doc """
+  Whether the key a context acts with may start a run of `reference`: a
+  context of no key, and a key with no tools, may; a key with tools may
+  run only those, whatever the version. A key whose row cannot be read
+  now (revoked, suspended, gone) starts nothing.
+  """
+  @spec admit_tool(Context.t(), String.t()) ::
+          :ok | {:error, :key_tool_not_named | :invalid_api_key | :database_error}
+  def admit_tool(%Context{api_key_id: nil}, _reference), do: :ok
+
+  def admit_tool(%Context{api_key_id: api_key_id} = ctx, reference)
+      when is_binary(api_key_id) and is_binary(reference) do
+    case Arca.ApiKeyStorage.get_key_by_id(actor!(ctx), api_key_id) do
+      {:ok, row} ->
+        case split_stored(row.scope) do
+          {_scope_list, []} -> :ok
+          {_scope_list, tools} -> named(tools, reference)
+        end
+
+      {:error, :database_error} ->
+        {:error, :database_error}
+
+      {:error, _gone} ->
+        {:error, :invalid_api_key}
+    end
+  end
+
+  defp named(tools, reference) do
+    case tool_name(reference) do
+      {:ok, name} -> if name in tools, do: :ok, else: {:error, :key_tool_not_named}
+      :error -> {:error, :key_tool_not_named}
+    end
+  end
+
+  # ============================================================================
+  # Permissions and tools
+  # ============================================================================
+
+  # Anything but a list of known permission names is refused, never read
+  # as the default: a caller's mistake must not become permissions it did
+  # not ask for.
+  defp permissions_of(absent) when absent in [nil, []],
+    do: {:ok, @presets |> hd() |> elem(1)}
+
+  defp permissions_of(scope) when is_list(scope) do
+    case Enum.find(scope, &(&1 not in @permission_names)) do
+      nil -> {:ok, Enum.uniq(scope)}
+      unknown -> {:error, {:unknown_permission, unknown}}
+    end
+  end
+
+  defp permissions_of(other), do: {:error, {:unknown_permission, other}}
+
+  defp tools_of(absent) when absent in [nil, []], do: {:ok, []}
+
+  defp tools_of(tools) when is_list(tools) do
+    Enum.reduce_while(tools, {:ok, []}, fn tool, {:ok, acc} ->
+      case versionless(tool) do
+        {:ok, name} -> {:cont, {:ok, [name | acc]}}
+        :error -> {:halt, {:error, {:invalid_tool, tool}}}
+      end
     end)
+    |> case do
+      {:ok, names} -> {:ok, names |> Enum.reverse() |> Enum.uniq()}
+      refused -> refused
+    end
   end
 
-  # ============================================================================
-  # Scope normalization & validation
-  # ============================================================================
+  defp tools_of(other), do: {:error, {:invalid_tool, other}}
 
-  defp normalize_scope(nil), do: {:ok, []}
-
-  defp normalize_scope(scope) when is_list(scope) do
-    if Enum.all?(scope, &is_binary/1), do: {:ok, scope}, else: {:error, :invalid_scope}
+  # A tool is named as a person names a component they run, without its
+  # version, so the key keeps running it across updates.
+  defp versionless(tool) when is_binary(tool) do
+    with {:ok, %Prima.ComponentRef{version: nil} = ref} <- Prima.ComponentRef.parse(tool),
+         :ok <- Prima.ComponentRef.validate_type(ref.type),
+         :ok <- Prima.ComponentRef.validate_namespace(ref.namespace),
+         :ok <- Prima.ComponentRef.validate_name(ref.name) do
+      {:ok, Prima.ComponentRef.to_name_ref(ref)}
+    else
+      _ -> :error
+    end
   end
 
-  defp normalize_scope(_), do: {:error, :invalid_scope}
+  defp versionless(_), do: :error
 
-  defp scope_within_ceiling?(scope_list, _ceiling) when scope_list == [], do: true
-  defp scope_within_ceiling?(_scope_list, ceiling) when ceiling == [], do: false
+  defp tool_name(reference) do
+    case Prima.ComponentRef.to_name_ref(reference) do
+      {:ok, name} -> {:ok, name}
+      {:error, _} -> :error
+    end
+  end
 
-  defp scope_within_ceiling?(scope_list, ceiling) do
-    "*" in ceiling or Enum.all?(scope_list, &(&1 in ceiling))
+  # The stored list split into its permissions and its tools: a tool's
+  # name holds a `:`, which no permission does.
+  defp split_stored(json) do
+    json
+    |> decode_stored([], "scope")
+    |> List.wrap()
+    |> Enum.filter(&is_binary/1)
+    |> Enum.split_with(&(not String.contains?(&1, ":")))
   end
 
   # ============================================================================
   # Internal
   # ============================================================================
 
-  defp generate_key(type), do: Prima.CredentialShape.mint({:api_key, type})
+  defp generate_key, do: Prima.CredentialShape.mint(:api_key)
 
   defp hash_key(key), do: :crypto.hash(:sha256, key)
 
   defp redact_key(row) do
-    key_type =
-      case parse_key_type(row.type) do
-        {:ok, type} -> type
-        {:error, _} -> :unknown
-      end
+    {scope_list, tools} = split_stored(row.scope)
 
     %{
       id: row.id,
       name: row.name,
-      type: key_type,
       key_prefix: (row.key_prefix || "") <> "...",
       suspended: row.suspended == true,
-      scope: decode_stored(row.scope, [], "scope"),
+      scope: scope_list,
+      tools: tools,
       ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
       created_at: Prima.Time.iso8601(row.inserted_at),
       rotated_at: Prima.Time.iso8601(row.rotated_at)
