@@ -124,7 +124,8 @@ defmodule PrismWeb.SystemLayer do
       (`credential_sharing`); the prompt reports `:confirmed` once the
       share is made, and shows a refusal's sentence and stays open
       otherwise;
-    * pairing — `pairing.list` when it opens, and `pairing.revoke`;
+    * pairing — `pairing.list` and `pairing.waiting` when it opens, and
+      `pairing.revoke`;
     * a frame's request — the call the prompt names (`tool` and `args`),
       dispatched as the layer's own change once the person approves it,
       with the preview CYFR built of exactly that call drawn first and
@@ -1339,14 +1340,19 @@ defmodule PrismWeb.SystemLayer do
 
   # The pairing prompt, as it is shown, has its list still to read.
   defp mark_shown(%{assigns: %{current: %{kind: :pairing, id: id}}} = socket),
-    do: assign(socket, pairing: %{prompt_id: id, clients: :unread})
+    do: assign(socket, pairing: %{prompt_id: id, clients: :unread, waiting: :unread})
 
   defp mark_shown(socket), do: assign(socket, pairing: nil)
 
   # What a shown prompt reads: for the pairing prompt, the person's paired
-  # clients.
+  # clients and the passkeys waiting for their account.
   defp load_shown(%{assigns: %{pairing: %{clients: :unread} = pairing}} = socket),
-    do: assign(socket, :pairing, %{pairing | clients: clients(socket)})
+    do:
+      assign(socket, :pairing, %{
+        pairing
+        | clients: clients(socket),
+          waiting: waiting_passkeys(socket)
+      })
 
   defp load_shown(socket), do: socket
 
@@ -2265,6 +2271,13 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  defp waiting_passkeys(socket) do
+    case Ops.call_tool(socket.assigns.context, "pairing/waiting", %{}) do
+      {:ok, %{waiting: waiting}} -> {:ok, waiting}
+      {:error, reason} -> {:error, Ops.error_message(reason)}
+    end
+  end
+
   defp pairing_revoke(socket, prompt, client_id) do
     case layer_call(socket, prompt, {:pairing_revoke, client_id}, "pairing/revoke", %{
            "client_id" => client_id
@@ -2288,7 +2301,7 @@ defmodule PrismWeb.SystemLayer do
         pairing
 
       _other ->
-        %{prompt_id: prompt.id, clients: {:ok, []}}
+        %{prompt_id: prompt.id, clients: {:ok, []}, waiting: {:ok, []}}
     end
   end
 
@@ -2573,6 +2586,7 @@ defmodule PrismWeb.SystemLayer do
             myself={@myself}
             id={@id}
             pairing={@pairing}
+            shell={@shell}
             context={assigns[:context]}
             athanor_route={@athanor_route}
             athanor_name={@athanor_name}
@@ -2711,6 +2725,7 @@ defmodule PrismWeb.SystemLayer do
   attr :myself, :any, required: true
   attr :id, :string, required: true
   attr :pairing, :map, default: nil
+  attr :shell, :boolean, default: false
   attr :context, :any, default: nil
   attr :athanor_route, :any, default: nil
   attr :athanor_name, :any, default: nil
@@ -2884,6 +2899,7 @@ defmodule PrismWeb.SystemLayer do
     <Pairing.devices
       prompt_id={@prompt.id}
       pairing={@pairing}
+      shell={@shell}
       myself={@myself}
       button_class={button_class(false)}
     />

@@ -214,12 +214,14 @@ export default {
     globalThis.document.addEventListener("fullscreenchange", this.onEscalated)
     globalThis.document.addEventListener("pointerlockchange", this.onEscalated)
 
+    localTimes(this.dialog)
     this.sync()
   },
 
   updated() {
     if (this.el.dataset.account) return
     this.dialog = this.el.querySelector("dialog")
+    localTimes(this.dialog)
     this.sync()
   },
 
@@ -405,6 +407,18 @@ export default {
     const next = nextStop(stops.length, current, event.shiftKey)
     event.preventDefault()
     if (next >= 0) stops[next].focus()
+  }
+}
+
+/**
+ * Show each `time[data-local]` under `root` in the browser's own time zone
+ * and locale: the server writes the instant as it answers it, in UTC, and
+ * writes it again on every update, which this rewrites again.
+ */
+export function localTimes(root, locale = undefined) {
+  for (const time of root.querySelectorAll("time[data-local]")) {
+    const at = new Date(time.getAttribute("datetime"))
+    if (!Number.isNaN(at.getTime())) time.textContent = at.toLocaleString(locale)
   }
 }
 

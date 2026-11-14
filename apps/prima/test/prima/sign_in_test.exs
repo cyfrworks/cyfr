@@ -16,7 +16,7 @@ defmodule Prima.SignInTest do
   use ExUnit.Case, async: true
 
   alias Prima.{Identity, RegistryRequest, SignIn}
-  alias Prima.SignIn.{DeviceAnswer, PasskeyAnswer}
+  alias Prima.SignIn.{DeviceAnswer, NewPasskey, PasskeyAnswer}
 
   @vectors Path.expand("../../../../tests/fixtures/sign_in.json", __DIR__)
 
@@ -54,6 +54,7 @@ defmodule Prima.SignInTest do
 
   defp decoder("passkey"), do: &PasskeyAnswer.decode/1
   defp decoder("device"), do: &DeviceAnswer.decode/1
+  defp decoder("new_passkey"), do: &NewPasskey.decode/1
 
   test "the protocol's constants are the fixture's" do
     v = vectors()
@@ -133,6 +134,16 @@ defmodule Prima.SignInTest do
             assert SignIn.digest(request(v, req), answer.signer) == unb64(digest), name
           end
 
+        "new_passkey" ->
+          assert NewPasskey.encode(answer) == map, name
+          fragment = v["fragments"]["answers"][name]
+          assert SignIn.fragment(answer) == fragment, name
+          assert SignIn.parse_fragment(fragment) == {:ok, map}, name
+          assert SignIn.decode_answer(map) == {:ok, answer}, name
+          assert answer.key.kid == Prima.Identity.Key.kid(answer.key.pub), name
+          assert NewPasskey.code(answer) == vector["code"], name
+          assert vector["code"] == binary_part(answer.key.kid, 7, 16), name
+
         "device" ->
           assert DeviceAnswer.encode(answer) == map, name
 
@@ -152,14 +163,32 @@ defmodule Prima.SignInTest do
     state = state(v)
 
     for %{"name" => name, "answer" => answer, "request" => req} = vector <- v["verify"] do
+      opts = [home: vector["home"], now: vector["now_ms"]]
+
       result =
-        SignIn.verify(answer(v, answer), request(v, req), state,
-          home: vector["home"],
-          now: vector["now_ms"]
-        )
+        case answer(v, answer) do
+          %NewPasskey{} = offer -> SignIn.offered(offer, request(v, req), opts)
+          signed -> SignIn.verify(signed, request(v, req), state, opts)
+        end
 
       assert tag(result) == (vector["result"] || vector["error"]), name
     end
+  end
+
+  test "a passkey's answer reads as one, and a new passkey as one" do
+    v = vectors()
+
+    for name <- ["passkey_sign_in", "new_passkey"] do
+      map = v["answers"][name]["answer"]
+      assert SignIn.decode_answer(map) == {:ok, answer(v, name)}, name
+    end
+
+    # The offered key is the one answered, read against no log.
+    request = request(v, "sign_in")
+    offer = answer(v, "new_passkey")
+
+    assert SignIn.offered(offer, request, home: v["home"], now: request.expires_at - 1) ==
+             {:ok, offer.key}
   end
 
   test "a passkey's answer to a registry request is the request the registry accepts" do
