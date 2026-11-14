@@ -19,13 +19,22 @@ import (
 // compositor still running, and when the compositor ends by itself. It
 // asks no password either way, and exits 0, so a stop leaves the service
 // stopped and Restart= starts it again only after the compositor's own end.
+// A refused end is said on standard error and exits 1, so the service
+// shows it failed.
 func TestScreenSessionEndsItsLoginSession(t *testing.T) {
+	const stays = "echo $$ >\"$BIN/compositor\"\nexec sleep 60"
 	for _, c := range []struct {
-		name, compositor string
-		stop             bool
+		name, compositor, loginctl string
+		stop                       bool
+		status                     int
+		said                       string
 	}{
-		{"at the stop", "echo $$ >\"$BIN/compositor\"\nexec sleep 60", true},
-		{"when the compositor ends by itself", "exit 3", false},
+		{"at the stop", stays, "", true, 0, ""},
+		{"when the compositor ends by itself", "exit 3", "", false, 0, ""},
+		{"refused, at the stop", stays, "echo 'Failed to terminate session: Access denied' >&2\nexit 1", true, 1,
+			"Failed to terminate session: Access denied\nloginctl could not end the screen's login session, so its processes, Chrome among them, still run\n"},
+		{"refused, when the compositor ends by itself", "exit 3", "exit 1", false, 1,
+			"loginctl could not end the screen's login session, so its processes, Chrome among them, still run\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			screenProject(t)
@@ -35,7 +44,7 @@ func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 			bin := t.TempDir()
 			for name, body := range map[string]string{
 				"dbus-run-session": "#!/bin/sh\necho \"$*\" >\"$BIN/compositor-args\"\n" + c.compositor + "\n",
-				"loginctl":         "#!/bin/sh\necho \"$*\" >>\"$BIN/loginctl.ran\"\n",
+				"loginctl":         "#!/bin/sh\necho \"$*\" >>\"$BIN/loginctl.ran\"\n" + c.loginctl + "\n",
 			} {
 				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 					t.Fatal(err)
@@ -43,6 +52,14 @@ func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 			}
 			session := exec.Command("/bin/sh", filepath.Join(screenDir, "session.sh"))
 			session.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "BIN=" + bin}
+			// A file, not a pipe: the compositor stand-in that outlives the
+			// session holds its standard error.
+			said, err := os.Create(filepath.Join(bin, "said"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer said.Close()
+			session.Stderr = said
 			if err := session.Start(); err != nil {
 				t.Fatal(err)
 			}
@@ -68,9 +85,9 @@ func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 				}
 			}
 			select {
-			case err := <-ended:
-				if err != nil {
-					t.Fatalf("the session exited %v, want 0", err)
+			case <-ended:
+				if got := session.ProcessState.ExitCode(); got != c.status {
+					t.Errorf("the session exited %d (%v), want %d", got, session.ProcessState, c.status)
 				}
 			case <-time.After(10 * time.Second):
 				_ = session.Process.Kill()
@@ -81,6 +98,9 @@ func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 			}
 			if got, want := read(t, filepath.Join(bin, "loginctl.ran")), "--no-ask-password terminate-session self\n"; got != want {
 				t.Errorf("loginctl ran as %q, want %q", got, want)
+			}
+			if got := read(t, said.Name()); got != c.said {
+				t.Errorf("the session said %q, want %q", got, c.said)
 			}
 		})
 	}

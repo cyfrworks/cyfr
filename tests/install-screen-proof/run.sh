@@ -675,31 +675,63 @@ screen_severed() {
 }
 
 # screen_stays_stopped STOP FILE: STOP run as root on the guest, then a
-# wait until no process has held the screen's Chrome profile for five
-# seconds in a row, within a minute, ending each holder it meets. Every
-# holder met is kept in FILE with its parent: pid, parent pid, start time
-# and command line, so a browser that comes back names what started it
-# (the bracket keeps the pattern from matching the shell that carries it).
+# watch that kills nothing: the screen's processes have 20 seconds to end
+# by themselves, and then for five seconds in a row nothing may hold the
+# screen's Chrome profile and none of the account's labwc, the D-Bus
+# daemon dbus-run-session started, launcher, screen shell, keyboard, idle
+# watch or Chrome, its crash handler among them, may run. Every process
+# it sees is kept in FILE with its parent: pid, parent pid, start time
+# and command line, so a process left over or come back names what
+# started it (the brackets keep each pattern from matching the shells
+# that carry it). 1 when the 20 seconds pass with one still running, or
+# one runs during the five.
 screen_stays_stopped() {
   guest_root_out "$1; "'
-    p=--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]
-    quiet=0
-    for i in $(seq 60); do
-      pids=$(pgrep -f -- "$p" | paste -sd, -)
-      if [ -z "$pids" ]; then
-        quiet=$((quiet + 1))
-        [ "$quiet" -lt 5 ] || exit 0
-      else
-        quiet=0
-        echo "== $(date -u +%FT%T.%NZ)"
-        ps -o pid=,ppid=,lstart=,args= -p "$pids"
-        parents=$(ps -o ppid= -p "$pids" | tr -d " " | sort -u | paste -sd, -)
-        [ -z "$parents" ] || ps -o pid=,ppid=,lstart=,args= -p "$parents" | sed "s/^/parent /"
-        pkill -f -- "$p"
-      fi
+    seen() {
+      { pgrep -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"
+        pgrep -u proof -x labwc
+        pgrep -u proof -f "^dbus-daemon --nofork --print-addres[s]"
+        pgrep -u proof -f "/\.cyfr/screen/launcher\.s[h]"
+        pgrep -u proof -f "cyfr screen shel[l]"
+        pgrep -u proof -x wvkbd-mobintl
+        pgrep -u proof -x swayidle
+        pgrep -u proof -f "/opt/google/chrom[e]/"
+      } | sort -un | paste -sd, -
+    }
+    record() {
+      echo "== $(date -u +%FT%T.%NZ)"
+      ps -o pid=,ppid=,lstart=,args= -p "$1"
+      parents=$(ps -o ppid= -p "$1" | tr -d " " | sort -u | paste -sd, -)
+      [ -z "$parents" ] || ps -o pid=,ppid=,lstart=,args= -p "$parents" | sed "s/^/parent /"
+    }
+    ended=no
+    for i in $(seq 20); do
+      pids=$(seen)
+      if [ -z "$pids" ]; then ended=yes; break; fi
+      record "$pids"
       sleep 1
     done
-    exit 1' >"$GUEST_DIR/$2" 2>&1
+    [ "$ended" = yes ] || { echo "== still running 20 seconds after the stop"; exit 1; }
+    for i in 1 2 3 4 5; do
+      sleep 1
+      pids=$(seen)
+      [ -z "$pids" ] || { record "$pids"; echo "== running again within five seconds"; exit 1; }
+    done
+    exit 0' >"$GUEST_DIR/$2" 2>&1
+}
+
+# screen_stop_watched WHAT STOP FILE: screen_stays_stopped STOP FILE as a
+# check named by WHAT; once a failure is recorded, what the watch saw is
+# killed, the launcher first, so the rest of the run can go on.
+screen_stop_watched() {
+  local status=0
+  screen_stays_stopped "$2" "$3" || status=$?
+  check "$1: the screen's processes end by themselves within 20 s and none runs for five seconds in a row ($GUEST_DIR/$3)" test "$status" = 0
+  [ "$status" = 0 ] || guest_root '
+    pkill -KILL -u proof -f "/\.cyfr/screen/launcher\.s[h]"; pkill -KILL -u proof -f "cyfr screen shel[l]"
+    pkill -KILL -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"; pkill -KILL -u proof -f "/opt/google/chrom[e]/"
+    pkill -KILL -u proof -x labwc; pkill -KILL -u proof -x wvkbd-mobintl; pkill -KILL -u proof -x swayidle
+    pkill -KILL -u proof -f "^dbus-daemon --nofork --print-addres[s]"; true'
 }
 
 # screen_session_record WHEN: the guest's login sessions, whether logind
@@ -717,16 +749,9 @@ screen_session_record() {
   } >>"$GUEST_DIR/screen-session.txt" 2>&1
 }
 
-# Nothing of the screen's login session is left: no session on tty1, and
-# none of the account's labwc, the D-Bus daemon dbus-run-session started,
-# launcher, screen shell, keyboard, idle watch or Chrome, its crash
-# handler among them (the brackets keep each pattern from matching the
-# shells that carry it).
-screen_left_nothing() {
-  guest_root '! loginctl list-sessions --no-legend | grep -qw tty1 &&
-    ! pgrep -u proof -x labwc && ! pgrep -u proof -f "^dbus-daemon --nofork --print-addres[s]" &&
-    ! pgrep -u proof -f "/\.cyfr/screen/launcher\.s[h]" && ! pgrep -u proof -f "cyfr screen shel[l]" &&
-    ! pgrep -u proof -x wvkbd-mobintl && ! pgrep -u proof -x swayidle && ! pgrep -u proof -f "/opt/google/chrom[e]/"'
+# No login session is on tty1, where the screen's was.
+screen_session_gone() {
+  guest_root '! loginctl list-sessions --no-legend | grep -qw tty1'
 }
 
 # Chrome's profile, copied while Prism was open, put back while the screen
@@ -892,10 +917,9 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   # listing, so the two listings compare cyfr down's stop with the
   # uninstall's.
   screen_session_record before-the-stop
-  screen_stays_stopped 'systemctl stop cyfr-screen' screen-holders.txt ||
-    fail "the screen's browser did not stay stopped for five seconds ($GUEST_DIR/screen-holders.txt)"
+  screen_stop_watched "systemctl stop cyfr-screen" 'systemctl stop cyfr-screen' screen-holders.txt
   screen_session_record after-the-stop
-  check "the screen's stop ends its login session and every process in it" screen_left_nothing
+  check "the screen's stop ends its login session" screen_session_gone
   volumes_seen after-the-reboot-and-cyfr-down
   left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
   guest_ssh 'docker volume ls -q --filter label=com.docker.compose.project=cyfr' >"$GUEST_DIR/stack-volumes.txt" 2>&1 ||
@@ -916,9 +940,9 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "it names no volume of another project" volume_command_names_no_other_project
   check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
+  screen_stop_watched "after the uninstall" : screen-holders-uninstall.txt
   screen_session_record after-the-uninstall
-  check "after the uninstall nothing holds the screen's profile for five seconds" screen_stays_stopped : screen-holders-uninstall.txt
-  check "after the uninstall nothing of the screen's login session is left" screen_left_nothing
+  check "after the uninstall no login session is on tty1" screen_session_gone
   left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
   volumes_seen after-the-uninstall
   check "the folder, the volumes, the settings and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"

@@ -10,6 +10,7 @@ User=@ACCOUNT@
 PAMName=login
 TTYPath=/dev/tty1
 StandardInput=tty
+StandardError=journal
 WorkingDirectory=@DIR@
 ExecStart=@DIR@/.cyfr/screen/session.sh
 Restart=always
