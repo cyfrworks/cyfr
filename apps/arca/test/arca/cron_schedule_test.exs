@@ -258,11 +258,15 @@ defmodule Arca.CronScheduleTest do
       # A fire that failed before any run started names no run, never the
       # earlier one: an occurrence that records none, or no occurrence.
       for occurrence <- [occurrence!(actor, schedule, nil), nil] do
-        assert {:ok, %{last_error: "Last run failed: Invalid JSON input", last_execution_id: nil}} =
+        assert {:ok,
+                %{
+                  last_error: "Last run did not start: Invalid JSON input",
+                  last_execution_id: nil
+                }} =
                  CronSchedule.record_error(
                    actor,
                    schedule.id,
-                   "Last run failed: Invalid JSON input",
+                   "Last run did not start: Invalid JSON input",
                    occurrence
                  )
       end

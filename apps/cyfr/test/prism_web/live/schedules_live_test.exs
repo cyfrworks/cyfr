@@ -166,10 +166,17 @@ defmodule PrismWeb.SchedulesLiveTest do
       refute has_element?(page, "p", "Last run failed")
       assert has_element?(page, ~s(a[href="#{run}"]), "Open the run")
 
-      # A failure before any run started names no run.
-      {:ok, _} = Arca.CronSchedule.record_error(actor, id, "Last run failed: Invalid JSON", nil)
+      # A run that never started names no run.
+      {:ok, _} =
+        Arca.CronSchedule.record_error(
+          actor,
+          id,
+          "Last run did not start: Invalid JSON input",
+          nil
+        )
+
       {page, _html} = mount_athanor(conn, "/schedules")
-      assert has_element?(page, "p", "Last run failed: Invalid JSON")
+      assert has_element?(page, "p", "Last run did not start: Invalid JSON input")
       refute has_element?(page, "a", "Open the run")
 
       {:ok, _} = Arca.CronSchedule.record_run(actor, id, "exec_good")

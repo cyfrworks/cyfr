@@ -781,8 +781,13 @@ defmodule Opus.Schedules.SchedulerTest do
 
       assert [%{state: "failed", execution_id: run}] = occurrences(ctx, schedule)
       assert is_binary(run)
-      assert_receive {^failures, %{execution_id: ^run, reason: reason}}, 10_000
-      said = "Last run failed: " <> Sanctum.Refusals.render(reason)
+      assert_receive {^failures, %{execution_id: ^run}}, 10_000
+
+      # Said from the run's own row, as it stores its end.
+      assert %{status: "failed", error_message: message} =
+               Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), run)
+
+      said = "Last run failed: " <> Sanctum.Refusals.render(message)
 
       assert {:ok, %{last_error: ^said, last_execution_id: ^run}} =
                CronSchedule.get_for_daemon(schedule.id)
@@ -828,7 +833,7 @@ defmodule Opus.Schedules.SchedulerTest do
 
       assert [%{state: "failed", execution_id: nil}] = occurrences(ctx, schedule)
       assert_receive {^failures, %{reason: reason}}, 10_000
-      said = "Last run failed: " <> Sanctum.Refusals.render(reason)
+      said = "Last run did not start: " <> Sanctum.Refusals.render(reason)
 
       assert {:ok, %{last_error: ^said, last_execution_id: nil}} =
                CronSchedule.get_for_daemon(schedule.id)
@@ -1057,6 +1062,175 @@ defmodule Opus.Schedules.SchedulerTest do
                 last_execution_id: "exec_gone"
               }} = CronSchedule.get_for_daemon(schedule.id)
     end
+  end
+
+  describe "an occurrence's one ending" do
+    test "a summary that cannot be written leaves the occurrence open, and the next pass ends both",
+         %{ctx: ctx} do
+      script!([])
+      schedule = create_schedule(ctx, %{cron_expression: hourly_away()})
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, before} = CronSchedule.record_run(actor, schedule.id, "exec_earlier")
+      started_and_ended!(ctx, schedule, "exec_recovered", "The upstream closed the connection.")
+      refusals = watch_summary_refusals()
+      refuse_summaries!(schedule.id)
+      pid = scheduler!()
+
+      assert_receive {^refusals, %{schedule_id: refused}}, 10_000
+      assert refused == schedule.id
+
+      # Neither was written: the occurrence is still the gone member's,
+      # open, and the schedule is as it stood.
+      assert {:ok, %{state: "started", claimed_by: "gone"}} =
+               ScheduleOccurrences.get(actor, "occ_recovered")
+
+      assert {:ok, still} = CronSchedule.get_for_daemon(schedule.id)
+
+      assert Map.take(still, [:run_count, :error_count, :last_error, :last_execution_id]) ==
+               Map.take(before, [:run_count, :error_count, :last_error, :last_execution_id])
+
+      allow_summaries!()
+      send(pid, :recover_occurrences)
+
+      wait_until(fn ->
+        match?({:ok, %{state: "uncertain"}}, ScheduleOccurrences.get(actor, "occ_recovered"))
+      end)
+
+      assert {:ok,
+              %{
+                run_count: 1,
+                error_count: 1,
+                last_error: "Last run failed: The upstream closed the connection.",
+                last_execution_id: "exec_recovered"
+              }} = CronSchedule.get_for_daemon(schedule.id)
+    end
+
+    test "a runner's death says the outcome its run's row already stores", %{ctx: ctx} do
+      script!([:hang])
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+      pid = scheduler!()
+      wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
+      wait_until(fn -> match?([_], ScriptedWorker.calls()) end, 5_000)
+      assert [%{state: "started", execution_id: run}] = occurrences(ctx, schedule)
+      actor = Sanctum.Context.actor(ctx)
+      execution = Arca.Execution.get_tenant(actor, run)
+
+      {:ok, _} =
+        Arca.Execution.record_end(
+          actor,
+          run,
+          "failed",
+          %{
+            completed_at: DateTime.utc_now(),
+            duration_ms: 1,
+            error_message: "The upstream closed the connection."
+          },
+          execution.current_attempt,
+          Cyfr.Test.AttemptFixtures.stored()
+        )
+
+      Process.exit(running_task(), :kill)
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert [%{state: "uncertain", execution_id: ^run}] = occurrences(ctx, schedule)
+
+      assert {:ok,
+              %{
+                run_count: 0,
+                error_count: 1,
+                last_error: "Last run failed: The upstream closed the connection.",
+                last_execution_id: ^run
+              }} = CronSchedule.get_for_daemon(schedule.id)
+    end
+
+    test "a recovered claim that cannot read its input says its run did not start",
+         %{ctx: ctx} do
+      script!([])
+      schedule = create_schedule(ctx, %{cron_expression: hourly_away()})
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, _} = CronSchedule.record_run(actor, schedule.id, "exec_earlier")
+      {:ok, _} = CronSchedule.update(actor, schedule.id, %{input: "{"})
+
+      Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+        id: "occ_bad_input",
+        athanor_id: ctx.athanor_id,
+        schedule_id: schedule.id,
+        scheduled_for: DateTime.add(DateTime.utc_now(), -60, :second),
+        state: "claimed",
+        claimed_by: "gone",
+        claimed_at: DateTime.utc_now()
+      })
+
+      scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{state: "failed"}}, ScheduleOccurrences.get(actor, "occ_bad_input"))
+      end)
+
+      assert {:ok,
+              %{
+                run_count: 1,
+                error_count: 1,
+                last_error: "Last run did not start: Invalid JSON input",
+                last_execution_id: nil
+              }} = CronSchedule.get_for_daemon(schedule.id)
+    end
+  end
+
+  # The summary refusals the scheduler raises, as `{ref, metadata}`.
+  defp watch_summary_refusals do
+    ref = make_ref()
+    id = {__MODULE__, ref}
+
+    :telemetry.attach(
+      id,
+      [:cyfr, :schedules, :scheduler, :record_error_failed],
+      fn _event, _measurements, metadata, {test, ref} -> send(test, {ref, metadata}) end,
+      {self(), ref}
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+    ref
+  end
+
+  # The case's own database refuses any write of a reason onto schedule
+  # `id`'s row, until `allow_summaries!/0`, as a store that cannot take
+  # the summary would. Both are statements in the case's sandbox, which
+  # takes them back with it.
+  defp refuse_summaries!(id) do
+    if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      Arca.Repo.query!("""
+      CREATE FUNCTION refuse_summary() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'summary refused'; END $$ LANGUAGE plpgsql
+      """)
+
+      Arca.Repo.query!("""
+      CREATE TRIGGER refuse_summary BEFORE UPDATE ON cron_schedules FOR EACH ROW
+      WHEN (NEW.id = '#{id}' AND NEW.last_error IS NOT NULL) EXECUTE FUNCTION refuse_summary()
+      """)
+    else
+      Arca.Repo.query!("""
+      CREATE TRIGGER refuse_summary BEFORE UPDATE ON cron_schedules
+      WHEN NEW.id = '#{id}' AND NEW.last_error IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'summary refused'); END
+      """)
+    end
+
+    :ok
+  end
+
+  defp allow_summaries! do
+    if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      Arca.Repo.query!("DROP TRIGGER IF EXISTS refuse_summary ON cron_schedules")
+      Arca.Repo.query!("DROP FUNCTION IF EXISTS refuse_summary()")
+    else
+      Arca.Repo.query!("DROP TRIGGER IF EXISTS refuse_summary")
+    end
+
+    :ok
   end
 
   # A run of `schedule` admitted against its claimed occurrence
