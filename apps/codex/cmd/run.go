@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/cyfr/codex/internal/ops"
 	"strings"
@@ -76,7 +77,8 @@ var runCmd = &cobra.Command{
 (catalyst:, c:, reagent:, r:, formula:, f:) or as a separate first argument.
 
 Pass --input to supply a JSON object as execution input. Use --list to see
-running executions, --logs to stream output, and --cancel to abort.
+running executions, --logs to read a run's record, and --cancel to abort.
+Ctrl-C stops waiting; the run goes on until it ends or is cancelled.
 
 Run without arguments for interactive selection.`,
 	Example: `  cyfr run c:local.openai
@@ -93,11 +95,21 @@ Run without arguments for interactive selection.`,
 		client := newClient()
 
 		if listFlag, _ := cmd.Flags().GetBool("list"); listFlag {
-			result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionListArgs{})
+			result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionListArgs{Status: ops.Value("running")})
 			if err != nil {
 				return handleToolError(err)
 			}
-			return renderResult(result)
+			if flagJSON {
+				output.JSON(result)
+				return nil
+			}
+			rows := runRows(result)
+			if len(rows) == 0 {
+				fmt.Println("Nothing is running.")
+				return nil
+			}
+			output.Table(runHeaders, rows)
+			return nil
 		}
 
 		if logsID, _ := cmd.Flags().GetString("logs"); logsID != "" {
@@ -145,8 +157,8 @@ Run without arguments for interactive selection.`,
 		var execInput map[string]any
 		if len(args) >= 1 {
 			if inputStr, _ := cmd.Flags().GetString("input"); inputStr != "" {
-				if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
-					return fmt.Errorf("Invalid JSON input: %w", err)
+				if execInput, err = runInput(inputStr); err != nil {
+					return err
 				}
 			}
 		} else {
@@ -168,8 +180,8 @@ Run without arguments for interactive selection.`,
 					return fmt.Errorf("Prompt failed: %w", err)
 				}
 				if inputStr != "" {
-					if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
-						return fmt.Errorf("Invalid JSON input: %w", err)
+					if execInput, err = runInput(inputStr); err != nil {
+						return err
 					}
 				}
 			}
@@ -187,8 +199,49 @@ Run without arguments for interactive selection.`,
 
 		result, err := client.CallTool(cmd.Context(), ops.Execution, toolArgs)
 		if err != nil {
+			// Ctrl-C ends the wait, not the run: a run the server already
+			// started goes on there.
+			if cmd.Context().Err() != nil {
+				return interruption{errRunGoesOn}
+			}
 			return handleToolError(err)
 		}
 		return renderResult(result)
 	},
+}
+
+var errRunGoesOn = errors.New("Stopped waiting. A run CYFR already started goes on: cyfr run --list shows it, and cyfr run --cancel <id> stops it.")
+
+// runHeaders are the columns of `cyfr run --list`.
+var runHeaders = []string{"execution_id", "reference", "status", "started_at"}
+
+// runRows are the listed executions as table rows.
+func runRows(result map[string]any) []map[string]string {
+	listed, _ := result["executions"].([]any)
+	rows := make([]map[string]string, 0, len(listed))
+	for _, item := range listed {
+		run, _ := item.(map[string]any)
+		row := map[string]string{}
+		for _, h := range runHeaders {
+			if v, ok := run[h].(string); ok {
+				row[h] = v
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// runInput is a run's --input: a JSON object, the one shape a run's input
+// takes.
+func runInput(text string) (map[string]any, error) {
+	var value any
+	if err := json.Unmarshal([]byte(text), &value); err != nil {
+		return nil, fmt.Errorf("Invalid JSON input: %w", err)
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, errors.New(`The input must be a JSON object, such as '{"text":"hello"}'.`)
+	}
+	return object, nil
 }

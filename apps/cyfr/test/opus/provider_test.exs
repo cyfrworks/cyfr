@@ -751,50 +751,45 @@ defmodule Opus.ProviderTest do
       assert_receive {:fill_requested, _athanor_id, "first_need", _in_transaction}
     end
 
-    # `run_stream` answers before its background run is admitted, so a
-    # refusal before any row reaches its caller as every such refusal
-    # does: the run is acknowledged, no execution exists, and its events
-    # route answers not found.
-    test "execution.run_stream acknowledges, asks for the fill, and writes no execution", %{
-      ctx: ctx,
-      ref: ref
-    } do
+    # `run_stream` answers once its run is admitted, so a refusal at
+    # admission answers the stream's caller as it answers a run's, in the
+    # same words and class, and no execution exists to follow.
+    test "execution.run_stream answers the run's refusal, asks for the fill, and writes nothing",
+         %{ctx: ctx, ref: ref} do
       before = {started(ctx), slots(ctx)}
+      args = %{"reference" => ref, "input" => %{"a" => 1, "b" => 2}}
 
-      assert {:ok, %{execution_id: id, stream_url: url}} =
-               Provider.handle("execution", ctx, %{
-                 "action" => "run_stream",
-                 "reference" => ref,
-                 "input" => %{"a" => 1, "b" => 2}
-               })
+      assert Provider.handle("execution", ctx, Map.put(args, "action", "run_stream")) ==
+               {:error, :not_provisioned}
 
       assert_receive {:fill_requested, _athanor_id, "first_need", _in_transaction}, 5_000
 
-      # The background run registered under the id before it asked for the
-      # fill, and its entry goes when it ends.
-      Prima.Test.Wait.wait_until(fn -> Registry.lookup(Opus.Registry, id) == [] end)
+      {answer, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          over_mcp(ctx, Map.put(args, "action", "run_stream"))
+        end)
+
+      refute Map.has_key?(answer, "error")
+
+      assert {answer["result"]["isError"], answer["result"]["content"]} ==
+               {true,
+                [%{"type" => "text", "text" => "This athanor is still being prepared — retry shortly"}]}
+
       assert {started(ctx), slots(ctx)} == before
-
-      conn =
-        Plug.Test.conn(:get, url)
-        |> Plug.Conn.assign(:context, ctx)
-        |> Emissary.Web.ExecutionEventsController.stream(%{"id" => id})
-
-      assert conn.status == 404
     end
   end
 
   # The execution slots the context's athanor holds.
   defp slots(ctx), do: Map.get(Prima.Slots.status(Opus.Slots).keys, ctx.athanor_id, 0)
 
-  # What an MCP client receives for `tools/call` of `execution.run` with
-  # `args`: the JSON-RPC body the transport writes for the router's answer.
+  # What an MCP client receives for `tools/call` of `execution.run`, or the
+  # action `args` names, with `args`: the JSON-RPC body the transport writes for the router's answer.
   defp over_mcp(ctx, args) do
     message = %Prima.MCP.Message{
       type: :request,
       id: 1,
       method: "tools/call",
-      params: %{"name" => "execution", "arguments" => Map.put(args, "action", "run")}
+      params: %{"name" => "execution", "arguments" => Map.put_new(args, "action", "run")}
     }
 
     case Emissary.MCP.Router.dispatch(ctx, message) do
@@ -1312,7 +1307,15 @@ defmodule Opus.ProviderTest do
 
       assert logs_result.execution_id == execution_id
       assert logs_result.status == "failed"
-      assert is_binary(logs_result.logs)
+
+      # The text names the reference and shows the input as JSON, never
+      # as Elixir terms.
+      assert logs_result.logs =~
+               "\nReference: #{logs_result.reference}\n\nInput:\n" <>
+                 Jason.encode!(logs_result.input) <> "\n"
+
+      refute logs_result.logs =~ "%{"
+      refute logs_result.logs =~ "=>"
     end
 
     test "returns error for non-existent execution", %{ctx: ctx} do

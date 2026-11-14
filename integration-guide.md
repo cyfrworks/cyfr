@@ -745,7 +745,7 @@ For long-running formula executions (e.g., agentic loops), CYFR supports real-ti
 
 **Starting a streaming execution:**
 
-Use `execution.run_stream` instead of `execution.run`. It returns immediately with an `execution_id` and `stream_url`:
+Use `execution.run_stream` instead of `execution.run`. It returns as soon as the run is admitted, with an `execution_id` and `stream_url`; a run that admission refuses is answered with that refusal, as `execution.run` answers it, and has no stream:
 
 ```json
 {

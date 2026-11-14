@@ -103,10 +103,10 @@ func ExitStatus(err error) int {
 	return exitFailure
 }
 
-// interruption is a command the person interrupted at a question (Ctrl-C,
-// or the terminal closing), which Execute prints as its sentence alone and
-// which exits 130 (prompt.ErrAborted): the sentence says what was left as
-// it was.
+// interruption is a command the person interrupted at a question or a
+// wait (Ctrl-C, or the terminal closing), which Execute prints as its
+// sentence alone and which exits 130 (prompt.ErrAborted): the sentence
+// says what was left as it was.
 type interruption struct{ err error }
 
 func (i interruption) Error() string   { return i.err.Error() }
