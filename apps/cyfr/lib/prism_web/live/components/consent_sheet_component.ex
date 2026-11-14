@@ -628,12 +628,15 @@ defmodule PrismWeb.ConsentSheetComponent do
   # A host the person names under a wildcard host the ask carries, added
   # to the hosts it may talk to. Whether it lies inside the ask is the
   # home's to say: the preview answers it, or refuses it beside the row.
+  # A node whose ask names no wildcard host offers no such box, and the
+  # event is refused there as the box is absent, the walk left as it was.
   def handle_event("add_host", %{"node" => node, "host" => host}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       host = String.trim(host)
       granted = granted_values(socket, node, "egress", "domains")
+      offered? = wildcard_host?(ask_row(socket.assigns.plan, "egress", node))
 
-      if host == "" or host in granted do
+      if not offered? or host == "" or host in granted do
         {:noreply, socket}
       else
         asked = asked_values(socket.assigns.plan, node, "egress", "domains")
