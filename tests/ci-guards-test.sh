@@ -649,6 +649,7 @@ release_repo() {
   cp "$seed_guard" scripts/ci/seed-guard.sh
   commit "release scripts"
   git tag 0.1.0
+  printf 'A release note.\n' > "$scratch/notes.md"
 }
 
 label="release.sh refuses a file replaced by a symlink in a version the last tag shipped"
@@ -656,14 +657,14 @@ release_repo
 rm "$v1/a.txt"
 ln -s b.txt "$v1/a.txt"
 commit typechange
-run scripts/release.sh 0.1.1
+run scripts/release.sh 0.1.1 --notes "$scratch/notes.md"
 if [ "$code" -eq 1 ] && has_err "$v1/a.txt" && grep -qF "shipped by 0.1.0" "$scratch/out" && ! git rev-parse --verify --quiet 0.1.1 > /dev/null; then pass "$label"; else fail "$label"; fi
 
 label="release.sh refuses a modified file in a version the last tag shipped"
 release_repo
 printf 'changed\n' > "$v1/a.txt"
 commit modify
-run scripts/release.sh 0.1.1
+run scripts/release.sh 0.1.1 --notes "$scratch/notes.md"
 if [ "$code" -eq 1 ] && has_err "$v1/a.txt" && ! git rev-parse --verify --quiet 0.1.1 > /dev/null; then pass "$label"; else fail "$label"; fi
 
 cd "$root" || exit 1
