@@ -906,6 +906,52 @@ defmodule PrismWeb.VaultLiveTest do
       assert render(view) =~ "Client credentials stored for google. Start authorization again."
       Cyfr.Test.Sandbox.end_views()
     end
+
+    test "Re-authorize on an entry whose provider's client was removed says a client is " <>
+           "needed and offers Set client with the return address, and asks nothing",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      ctx = seated_ctx(user)
+      return_address = Sanctum.Vault.OAuthGrant.redirect_uri()
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "My Google",
+          kind: "oauth",
+          provider_hint: "google",
+          oauth_scopes: ["openid"],
+          destination: %{"hosts" => ["www.googleapis.com"]}
+        })
+
+      {view, _html} = mount_athanor(conn, "/vault")
+
+      view
+      |> element(~s(button[phx-click="reauthorize"][phx-value-id="#{entry.id}"]))
+      |> render_click()
+
+      assert texts(view, ~s([data-test="oauth-client-needed"] p)) ==
+               [@client_needed, return_address]
+
+      refute render(view) =~ "unavailable"
+      assert open_records(ctx) == []
+
+      view |> element(~s([data-test="oauth-set-client"])) |> render_click()
+      assert has_element?(view, ~s(#vault-client-form input[name="provider"][value="google"]))
+
+      # Stored under its confirmation, the person is told to re-authorize.
+      typed = %{"provider" => "google", "client_id" => "cid", "client_secret" => @client_secret}
+      view |> form("form[phx-submit=set_client]", typed) |> render_submit()
+      [%{ref: ref, operation: "oauth.set_client"}] = open_records(ctx)
+      Sanctum.TestContext.prove!(ctx, ref)
+      assert_push_event(view, "system_layer:resubmit", %{form: "vault-client-form"}, 2_000)
+      view |> form("form[phx-submit=set_client]", typed) |> render_submit()
+
+      refute has_element?(view, ~s([data-test="oauth-client-needed"]))
+      refute has_element?(view, "form[phx-submit=authorize_new]")
+      assert render(view) =~ "Client credentials stored for google. Re-authorize the entry again."
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 
   test "a request dismissed before its proof is cancelled, and its typed form emptied",

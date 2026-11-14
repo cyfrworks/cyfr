@@ -183,8 +183,15 @@ defmodule PrismWeb.VaultLive do
 
     case SystemLayer.call(socket, :set_client, "oauth/set_client", args, form: client_form()) do
       {:ok, _, socket} ->
-        # A grant that was refused for want of this client is offered again.
-        waited = socket.assigns.client_needed == args["provider"]
+        # A grant that was refused for want of this client is offered again:
+        # a new entry's form opens again, a re-authorization is asked again.
+        stored = args["provider"]
+
+        waited =
+          case socket.assigns.client_needed do
+            %{provider: ^stored, new: new?} -> new?
+            _other -> nil
+          end
 
         {:noreply,
          socket
@@ -510,7 +517,8 @@ defmodule PrismWeb.VaultLive do
         {:noreply, socket}
 
       {:error, {:oauth_client_required, provider}, socket} ->
-        {:noreply, assign(socket, :client_needed, provider)}
+        new? = not Map.has_key?(args, "id")
+        {:noreply, assign(socket, :client_needed, %{provider: provider, new: new?})}
 
       {:error, reason, socket} ->
         {:noreply, put_flash(socket, :error, "Authorization failed: #{fmt(reason)}")}
@@ -542,7 +550,10 @@ defmodule PrismWeb.VaultLive do
   defp client_stored(provider, true),
     do: "Client credentials stored for #{provider}. Start authorization again."
 
-  defp client_stored(provider, false), do: "Client credentials stored for #{provider}."
+  defp client_stored(provider, false),
+    do: "Client credentials stored for #{provider}. Re-authorize the entry again."
+
+  defp client_stored(provider, nil), do: "Client credentials stored for #{provider}."
 
   # The forms that carry typed material, each kept as typed by the browser
   # (`phx-update="ignore"`) so it can be submitted again once its
@@ -978,6 +989,29 @@ defmodule PrismWeb.VaultLive do
         </div>
       </.card>
 
+      <!-- A grant refused for want of an OAuth client, new or re-authorized -->
+      <.card :if={@client_needed}>
+        <div role="alert" class="space-y-2 text-sm" data-test="oauth-client-needed">
+          <p>
+            No OAuth client is set for {@client_needed.provider}. Create one in {@client_needed.provider}'s developer console, register this return address with it,
+            then set its client id and secret here.
+          </p>
+          <p :if={@redirect_uri} class="font-mono text-xs" data-test="oauth-redirect-uri">
+            {@redirect_uri}
+          </p>
+          <.button
+            type="button"
+            variant="ghost"
+            phx-click="show_add"
+            phx-value-mode="client"
+            phx-value-provider={@client_needed.provider}
+            data-test="oauth-set-client"
+          >
+            Set client
+          </.button>
+        </div>
+      </.card>
+
       <!-- Add: sealed fields -->
       <.card :if={@show_add == "fields"}>
         <datalist id="vault-create-labels">
@@ -1078,31 +1112,6 @@ defmodule PrismWeb.VaultLive do
             An OAuth entry is authorized through the provider's OAuth client, set under OAuth
             client credentials below.
           </p>
-          <div
-            :if={@client_needed}
-            role="alert"
-            class="space-y-2 rounded-md border border-amber-500/40 p-3 text-sm"
-            data-test="oauth-client-needed"
-          >
-            <p>
-              No OAuth client is set for {@client_needed}. Create one in {@client_needed}'s
-              developer console, register this return address with it, then set its client id
-              and secret here.
-            </p>
-            <p :if={@redirect_uri} class="font-mono text-xs" data-test="oauth-redirect-uri">
-              {@redirect_uri}
-            </p>
-            <.button
-              type="button"
-              variant="ghost"
-              phx-click="show_add"
-              phx-value-mode="client"
-              phx-value-provider={@client_needed}
-              data-test="oauth-set-client"
-            >
-              Set client
-            </.button>
-          </div>
           <.button type="submit">Start authorization</.button>
         </form>
       </.card>
