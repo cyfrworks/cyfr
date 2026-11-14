@@ -18,7 +18,8 @@ defmodule PrismWeb.FilesLive do
   A new folder is held by the page, listed in its parent and opened,
   until a file is written there: storage keeps no empty folder. Rename
   and Move are both `file/move`, a rename keeping the folder and a move
-  the name.
+  the name, and are offered under `data/`, where a move works; a held
+  folder, with nothing stored, is renamed on the page.
 
   ## Sending a copy
 
@@ -865,7 +866,10 @@ defmodule PrismWeb.FilesLive do
                     Download
                   </a>
                   <button
-                    :if={@path != "" and writable?(@listing)}
+                    :if={
+                      @path != "" and writable?(@listing) and
+                        (in_data?(@path) or Map.get(entry, :held, false))
+                    }
                     type="button"
                     phx-click="relocate"
                     phx-value-path={child(@path, entry.name)}
@@ -875,7 +879,7 @@ defmodule PrismWeb.FilesLive do
                     Rename
                   </button>
                   <button
-                    :if={@path != "" and writable?(@listing) and not Map.get(entry, :held, false)}
+                    :if={in_data?(@path) and not Map.get(entry, :held, false)}
                     type="button"
                     phx-click="relocate"
                     phx-value-path={child(@path, entry.name)}

@@ -6,17 +6,19 @@ defmodule Arca.FilesTest.Store do
   # The Local adapter, with the read of a custody copy a publication
   # starts from answering `{:error, :eio}` while held: an acceptance
   # commits and its publication waits for the next sweep. And, while
-  # refusing, the store of a guest object named `refused.txt` answers
-  # `{:error, :eio}`.
+  # armed, the store of a guest object named `last.txt` answers `{:error,
+  # :eio}` (`:refuse`), kills its caller once its bytes landed (`:kill`),
+  # or runs a function once they landed (`{:run, fun}`): a move's store,
+  # between its read and its publish.
   use Arca.Storage.TestDouble
 
   @held {__MODULE__, :held}
-  @refusing {__MODULE__, :refusing}
+  @armed {__MODULE__, :armed}
 
   def hold, do: :persistent_term.put(@held, true)
   def release, do: :persistent_term.erase(@held)
-  def refuse, do: :persistent_term.put(@refusing, true)
-  def admit, do: :persistent_term.erase(@refusing)
+  def arm(how), do: :persistent_term.put(@armed, how)
+  def disarm, do: :persistent_term.erase(@armed)
 
   def last_modified(actor, path), do: Arca.Adapters.Local.last_modified(actor, path)
 
@@ -27,9 +29,23 @@ defmodule Arca.FilesTest.Store do
   def get(actor, path), do: super(actor, path)
 
   def put(actor, ["objects", _generation, "data" | _] = key, content) do
-    if List.last(key) == "refused.txt" and :persistent_term.get(@refusing, false),
-      do: {:error, :eio},
-      else: super(actor, key, content)
+    case List.last(key) == "last.txt" and :persistent_term.get(@armed, nil) do
+      :refuse ->
+        {:error, :eio}
+
+      :kill ->
+        :ok = super(actor, key, content)
+        Process.exit(self(), :kill)
+
+      {:run, fun} ->
+        :ok = super(actor, key, content)
+        :persistent_term.erase(@armed)
+        fun.()
+        :ok
+
+      _unarmed ->
+        super(actor, key, content)
+    end
   end
 
   def put(actor, path, content), do: super(actor, path, content)
@@ -47,6 +63,8 @@ defmodule Arca.FilesTest do
   """
 
   use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
 
   alias Arca.Files
 
@@ -210,7 +228,7 @@ defmodule Arca.FilesTest do
                Files.list(actor, "data")
     end
 
-    test "is refused onto anything that exists, into itself, or out of what a delete may take, " <>
+    test "is refused onto anything that exists, into itself, or outside data/, " <>
            "with both places as they were",
          %{actor: actor} do
       {:ok, _} = Files.write(actor, "data/a.txt", "a")
@@ -237,22 +255,19 @@ defmodule Arca.FilesTest do
       assert Files.move(actor, "data/none.txt", "data/some.txt") ==
                {:error, {:not_found, "File", "data/none.txt"}}
 
-      assert Files.move(actor, "data/a.txt", "notes/a.txt") ==
-               {:error, {:invalid_argument, "'notes/' is read here and written on its own page"}}
-
-      assert {:error, {:invalid_argument, msg}} =
-               Files.move(actor, "data/a.txt", "components/a.txt")
-
-      assert msg =~ "outside any component"
-
-      assert Files.move(actor, "threads/t/x.bin", "data/x.bin") ==
-               {:error,
-                {:invalid_argument, "'threads/' is read here and written on its own page"}}
-
-      assert {:error, {:invalid_argument, msg}} =
-               Files.move(actor, "components/reagents/local/shelf/1.0.0", "data/shelf")
-
-      assert msg =~ "ships with the server"
+      for {from, to, outside} <- [
+            {"data/a.txt", "notes/a.txt", "notes/a.txt"},
+            {"data/a.txt", "components/reagents/local/shelf/1.0.0/a.txt",
+             "components/reagents/local/shelf/1.0.0/a.txt"},
+            {"threads/t/x.bin", "data/x.bin", "threads/t/x.bin"},
+            {"components/reagents/local/shelf/1.0.0", "data/shelf",
+             "components/reagents/local/shelf/1.0.0"}
+          ] do
+        assert Files.move(actor, from, to) ==
+                 {:error,
+                  {:invalid_argument,
+                   "'#{outside}' is outside data/ — files and folders move and rename only within data/"}}
+      end
 
       assert {:error, {:invalid_argument, _}} = Files.move(actor, "data/a.txt", "data/../a")
 
@@ -280,31 +295,158 @@ defmodule Arca.FilesTest do
       refute Arca.exists?(actor, ["data", "moved.bin"])
     end
 
-    test "that fails partway takes back what it landed and leaves the source whole",
+    test "from outside data/ is refused before anything is stored", %{actor: actor} do
+      assert {:ok, %{content: soul}} = Files.read(actor, "aqua/aqua.md")
+
+      assert Files.move(actor, "aqua/aqua.md", "data/aqua.md") ==
+               {:error,
+                {:invalid_argument,
+                 "'aqua/aqua.md' is outside data/ — files and folders move and rename only within data/"}}
+
+      assert generations(actor, "data/aqua.md") == []
+      assert {:ok, %{content: ^soul}} = Files.read(actor, "aqua/aqua.md")
+    end
+
+    test "says so when the source is replaced between its read and its publish, losing nothing",
          %{actor: actor} do
-      previous_adapter = Application.get_env(:arca, :storage_adapter)
+      armed!()
+      {:ok, _} = Files.write(actor, "data/last.txt", "first")
 
-      on_exit(fn ->
-        Arca.FilesTest.Store.admit()
+      Arca.FilesTest.Store.arm(
+        {:run, fn -> {:ok, _} = Files.write(actor, "data/last.txt", "second") end}
+      )
 
-        if previous_adapter,
-          do: Application.put_env(:arca, :storage_adapter, previous_adapter),
-          else: Application.delete_env(:arca, :storage_adapter)
-      end)
+      assert Files.move(actor, "data/last.txt", "data/moved/last.txt") ==
+               {:error,
+                {:conflict,
+                 "'data/last.txt' changed while it was moving — nothing moved; try again"}}
 
-      Application.put_env(:arca, :storage_adapter, Arca.FilesTest.Store)
+      assert {:ok, %{content: "second"}} = Files.read(actor, "data/last.txt")
+      refute Arca.exists?(actor, ["data", "moved", "last.txt"])
 
+      # A folder: a file added under it meanwhile is not left behind.
       {:ok, _} = Files.write(actor, "data/batch/a.txt", "a")
-      {:ok, _} = Files.write(actor, "data/batch/refused.txt", "r")
-      Arca.FilesTest.Store.refuse()
+      {:ok, _} = Files.write(actor, "data/batch/last.txt", "l")
+
+      Arca.FilesTest.Store.arm(
+        {:run, fn -> {:ok, _} = Files.write(actor, "data/batch/new.txt", "n") end}
+      )
 
       assert Files.move(actor, "data/batch", "data/moved") ==
-               {:error, {:unavailable, "Storage"}}
+               {:error,
+                {:conflict, "'data/batch' changed while it was moving — nothing moved; try again"}}
 
-      refute Arca.exists?(actor, ["data", "moved"])
-      assert {:ok, %{content: "a"}} = Files.read(actor, "data/batch/a.txt")
-      assert {:ok, %{content: "r"}} = Files.read(actor, "data/batch/refused.txt")
+      for {name, content} <- [{"a.txt", "a"}, {"last.txt", "l"}, {"new.txt", "n"}] do
+        assert {:ok, %{content: ^content}} = Files.read(actor, "data/batch/" <> name)
+      end
+
+      refute Arca.exists?(actor, ["data", "moved", "a.txt"])
     end
+
+    test "is refused when its destination appears meanwhile, and that writer's file stays",
+         %{actor: actor} do
+      armed!()
+      {:ok, _} = Files.write(actor, "data/src/last.txt", "mine")
+
+      Arca.FilesTest.Store.arm(
+        {:run, fn -> {:ok, _} = Files.write(actor, "data/dest/last.txt", "theirs") end}
+      )
+
+      assert Files.move(actor, "data/src", "data/dest") ==
+               {:error, {:conflict, "'data/dest/last.txt' already exists — choose another name"}}
+
+      assert {:ok, %{content: "theirs"}} = Files.read(actor, "data/dest/last.txt")
+      assert {:ok, %{content: "mine"}} = Files.read(actor, "data/src/last.txt")
+    end
+
+    test "stopped by a failed store or its process's death leaves the source whole and the " <>
+           "destination absent, and retention collects what it marked",
+         %{actor: actor} do
+      armed!()
+      {:ok, _} = Files.write(actor, "data/batch/a.txt", "a")
+      {:ok, _} = Files.write(actor, "data/batch/last.txt", "l")
+
+      Arca.FilesTest.Store.arm(:refuse)
+      assert Files.move(actor, "data/batch", "data/moved") == {:error, {:unavailable, "Storage"}}
+
+      Arca.FilesTest.Store.arm(:kill)
+      {pid, ref} = spawn_monitor(fn -> Files.move(actor, "data/batch", "data/gone") end)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
+
+      for folder <- ~w(moved gone) do
+        assert Files.list(actor, "data/" <> folder) ==
+                 {:ok, %{path: "data/" <> folder, tier: :open, entries: [], truncated: false}}
+      end
+
+      assert {:ok, %{content: "a"}} = Files.read(actor, "data/batch/a.txt")
+      assert {:ok, %{content: "l"}} = Files.read(actor, "data/batch/last.txt")
+
+      # Their marks never publish; past the settling window of a write with
+      # no attempt, retention collects them as any abandoned mark.
+      marked =
+        for folder <- ~w(moved gone), name <- ~w(a.txt last.txt), do: "data/#{folder}/#{name}"
+
+      assert Enum.all?(marked, &(generations(actor, &1) != []))
+
+      {4, _} =
+        Arca.Repo.update_all(
+          from(g in Arca.Schemas.ObjectGeneration,
+            where: g.athanor_id == ^actor.athanor_id and g.path in ^marked
+          ),
+          set: [marked_at: DateTime.add(DateTime.utc_now(), -40, :day)]
+        )
+
+      assert {:ok, 4} =
+               Arca.ObjectRevisions.collect(
+                 actor,
+                 DateTime.add(DateTime.utc_now(), -30, :day),
+                 false
+               )
+
+      assert Enum.all?(marked, &(generations(actor, &1) == []))
+      assert {:ok, %{content: "a"}} = Files.read(actor, "data/batch/a.txt")
+    end
+
+    test "never reaches another athanor's files", %{actor: actor} do
+      other = person!("o", System.unique_integer([:positive]))
+      {:ok, _} = Files.write(other.actor, "data/x.txt", "theirs")
+      {:ok, _} = Files.write(actor, "data/y.txt", "mine")
+
+      assert Files.move(actor, "data/x.txt", "data/z.txt") ==
+               {:error, {:not_found, "File", "data/x.txt"}}
+
+      assert Files.move(actor, "data/y.txt", "data/x.txt") ==
+               {:ok, %{moved: "data/y.txt", to: "data/x.txt"}}
+
+      assert {:ok, %{content: "mine"}} = Files.read(actor, "data/x.txt")
+      assert {:ok, %{content: "theirs"}} = Files.read(other.actor, "data/x.txt")
+      refute Arca.exists?(other.actor, ["data", "z.txt"])
+      refute Arca.exists?(other.actor, ["data", "y.txt"])
+    end
+  end
+
+  # The store double in place of the configured adapter for one test.
+  defp armed! do
+    previous_adapter = Application.get_env(:arca, :storage_adapter)
+
+    on_exit(fn ->
+      Arca.FilesTest.Store.disarm()
+
+      if previous_adapter,
+        do: Application.put_env(:arca, :storage_adapter, previous_adapter),
+        else: Application.delete_env(:arca, :storage_adapter)
+    end)
+
+    Application.put_env(:arca, :storage_adapter, Arca.FilesTest.Store)
+  end
+
+  defp generations(actor, path) do
+    Arca.Repo.all(
+      from(g in Arca.Schemas.ObjectGeneration,
+        where: g.athanor_id == ^actor.athanor_id and g.path == ^path,
+        select: g.generation
+      )
+    )
   end
 
   test "a path is checked before it is looked at", %{actor: actor} do

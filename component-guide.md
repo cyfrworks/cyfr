@@ -1334,10 +1334,12 @@ The `file` tool (`list`, `read`, `write`, `delete`, `move`, and `offer`,
 `offers`, `accept`, `decline`, `withdraw` to send a person a copy) is the
 same surface on the wire; reads take `storage_read`, changes
 `storage_write`. `move` takes a file or folder from `path` to `to`, a
-place that holds nothing yet, wherever a delete may take it and a write
-may land it; a rename is a move within one folder, and a file under
-`data/` keeps the sources it was written with. A move takes no standing
-approval: each one is approved on its own.
+place that holds nothing yet, both under `data/`; a rename is a move
+within one folder. A move lands each file as a write would and keeps the
+sources it was written with, and it happens at once: the files are at
+`path` or at `to`, never both. A source that changes while it moves, or
+a file that lands at `to` first, refuses the move and loses nothing. A
+move takes no standing approval: each one is approved on its own.
 
 Pick files under `data/` and choose **Send a copy**. The recipient picker
 lists the people who share a shared thread with you. The offer snapshots the

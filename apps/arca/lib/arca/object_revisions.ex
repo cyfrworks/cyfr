@@ -658,6 +658,212 @@ defmodule Arca.ObjectRevisions do
     end
   end
 
+  @doc """
+  Move the settled object at `src`, or every settled object under it, to
+  the same place under `dest`, all at once: a reader sees the source or
+  the destination, never both and never neither.
+
+    1. **Read.** The source's settled rows, each one's generation and
+       sources, and its bytes. `admit` is asked of each destination path
+       with its bytes before anything is marked.
+    2. **Mark.** One transaction marks a create of every destination path,
+       carrying the source's sources. A path already settled, or a file
+       and a folder that would share a name, refuses here and marks
+       nothing.
+    3. **Store.** The bytes go to the marks' keys, outside any
+       transaction.
+    4. **Publish.** One transaction locks the source's rows and the
+       destination's, requires the source to hold exactly the generations
+       step 1 read, no more and no fewer, settles every create, and
+       tombstones every source row, as `delete_tree/2` tombstones one.
+
+  A source that changed after its read is `{:error, :changed}`, a
+  destination settled meanwhile `{:error, :exists}`: either way the publish
+  rolls back and nothing a reader sees has moved. A move stopped before
+  its publish commits, by a failure, a timeout or its process's death,
+  leaves the source as it was and its marks pending, never settled, which
+  retention collects as any abandoned mark once the settling window of a
+  write with no attempt has passed (`collect/3`). Every row read or
+  written is the actor's athanor's.
+  """
+  @spec move(
+          Prima.Actor.t(),
+          Arca.Storage.path(),
+          Arca.Storage.path(),
+          (Arca.Storage.path(), binary() -> :ok | {:error, term()})
+        ) :: :ok | {:error, term()}
+  def move(%Prima.Actor{} = actor, src, dest, admit) when is_function(admit, 2) do
+    with {:ok, athanor_id} <- athanor(actor),
+         {:ok, read} <- read_source(actor, athanor_id, src),
+         placed = Enum.map(read, &place(&1, src, dest)),
+         :ok <- admit_all(placed, admit),
+         {:ok, marks} <- mark_moves(actor, placed),
+         :ok <- store_moves(actor, marks, placed) do
+      publish_move(actor, athanor_id, src, read, marks)
+    end
+  end
+
+  # The source's settled objects as `{path, generation, sources, bytes}`,
+  # each generation's bytes read from its own key: a generation collected
+  # under this read was superseded, so the source changed.
+  defp read_source(actor, athanor_id, src) do
+    case settled_under(athanor_id, src, :with_self) do
+      {:ok, []} ->
+        {:error, :not_found}
+
+      {:ok, rows} ->
+        Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
+          path = String.split(row.path, "/")
+
+          case adapter().get(actor, object_key(row.settled_generation, path)) do
+            {:ok, bytes} ->
+              entry = {path, row.settled_generation, Prima.Source.decode(row.sources), bytes}
+              {:cont, {:ok, [entry | acc]}}
+
+            {:error, :not_found} ->
+              {:halt, {:error, :changed}}
+
+            {:error, _} = error ->
+              {:halt, error}
+          end
+        end)
+        |> case do
+          {:ok, read} -> {:ok, Enum.reverse(read)}
+          error -> error
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp place({path, _generation, sources, bytes}, src, dest),
+    do: {dest ++ Enum.drop(path, length(src)), sources, bytes}
+
+  defp admit_all(placed, admit) do
+    Enum.reduce_while(placed, :ok, fn {path, _sources, bytes}, :ok ->
+      case admit.(path, bytes) do
+        :ok -> {:cont, :ok}
+        refused -> {:halt, refused}
+      end
+    end)
+  end
+
+  defp mark_moves(actor, placed) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ObjectRevisions.move", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        placed
+        |> Enum.sort_by(fn {path, _sources, _bytes} -> key(path) end)
+        |> Enum.map(fn {path, sources, bytes} ->
+          case mark!(actor, path, :create, %{bytes: byte_size(bytes), sources: sources}) do
+            {:ok, mark} -> mark
+            {:refused, reason} -> Arca.Repo.rollback(reason)
+          end
+        end)
+      end)
+    end)
+  end
+
+  defp store_moves(actor, marks, placed) do
+    bytes = Map.new(placed, fn {path, _sources, bytes} -> {path, bytes} end)
+
+    Enum.reduce_while(marks, :ok, fn mark, :ok ->
+      case store(actor, mark, Map.fetch!(bytes, mark.segments)) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp publish_move(actor, athanor_id, src, read, marks) do
+    expected =
+      Map.new(read, fn {path, generation, _sources, _bytes} -> {key(path), generation} end)
+
+    prefix = key(src)
+    now = DateTime.utc_now()
+
+    Arca.Repo.Errors.with_db_rescue("Arca.ObjectRevisions.move", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        lock_move!(athanor_id, src, prefix, marks)
+
+        settled =
+          from(r in ObjectRevision,
+            where: r.athanor_id == ^athanor_id and not is_nil(r.settled_generation),
+            where: r.deleted == false,
+            select: {r.path, r.settled_generation}
+          )
+          |> at_or_under(prefix)
+          |> Arca.Repo.all()
+          |> Map.new()
+
+        if settled != expected, do: Arca.Repo.rollback(:changed)
+
+        for mark <- marks do
+          case settle!(actor, mark, [], fresh: true) do
+            :settled -> :ok
+            :expired -> Arca.Repo.rollback(:changed)
+            refused -> Arca.Repo.rollback(refused)
+          end
+        end
+
+        for paths <- Enum.chunk_every(Map.keys(expected), @tombstone_batch) do
+          from(r in ObjectRevision,
+            where: r.athanor_id == ^athanor_id and r.path in ^paths,
+            update: [
+              set: [
+                generation: fragment("? + 1", r.generation),
+                deleted_at_generation: fragment("? + 1", r.generation),
+                settled_generation: nil,
+                deleted: true,
+                settled_at: ^now
+              ]
+            ]
+          )
+          |> Arca.Repo.update_all([])
+        end
+
+        :ok
+      end)
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  # Every row the publish reads or writes, locked in the one ascending path
+  # order every locker of these rows takes (`lock_ancestors!/2`): the
+  # source's and the destination's ancestors, the source's rows and every
+  # row under it, and the destination's own. `settle!/4` then takes each
+  # create's locks again, already held.
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_move!(athanor_id, src, prefix, marks) do
+    named =
+      Enum.flat_map(marks, &[&1.key | ancestors(&1.segments)]) ++ ancestors(src)
+
+    from(r in ObjectRevision,
+      where: r.athanor_id == ^athanor_id,
+      order_by: [asc: r.path],
+      select: r.path
+    )
+    |> at_or_under_or_named(prefix, Enum.uniq(named))
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.all()
+
+    :ok
+  end
+
+  defp at_or_under_or_named(query, prefix, named) do
+    below = prefix <> "/"
+    n = code_points(below)
+
+    from(r in query,
+      where:
+        r.path == ^prefix or fragment("substr(?, 1, ?)", r.path, ^n) == ^below or
+          r.path in ^named
+    )
+  end
+
   # ---------------------------------------------------------------------------
   # Inside a caller's transaction
   # ---------------------------------------------------------------------------

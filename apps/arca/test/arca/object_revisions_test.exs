@@ -699,6 +699,61 @@ defmodule Arca.ObjectRevisionsTest do
     assert {:ok, "fresh"} = stored(actor, fresh.generation, path)
   end
 
+  test "a move publishes the destination and retires the source at once, keeping their sources",
+       %{actor: actor} do
+    admit = fn _path, _bytes -> :ok end
+    :ok = Arca.put(actor, ["data", "m", "a.txt"], "alpha", sources: [disclosed()])
+    :ok = Arca.put(actor, ["data", "m", "b.txt"], "beta", sources: [])
+
+    assert ObjectRevisions.move(actor, ["data", "m"], ["data", "n"], admit) == :ok
+
+    assert ObjectRevisions.read(actor, ["data", "n", "a.txt"]) ==
+             {:ok, "alpha", [disclosed()]}
+
+    assert ObjectRevisions.read(actor, ["data", "n", "b.txt"]) == {:ok, "beta", []}
+
+    for name <- ~w(a.txt b.txt) do
+      assert %ObjectRevision{deleted: true, settled_generation: nil} =
+               row(actor, ["data", "m", name])
+    end
+
+    assert ObjectRevisions.list_recursive(actor, ["data"]) ==
+             {:ok, [["data", "n", "a.txt"], ["data", "n", "b.txt"]]}
+
+    # A landing file the caller refuses marks nothing.
+    assert ObjectRevisions.move(actor, ["data", "n"], ["data", "o"], fn _path, _bytes ->
+             {:error, :too_big}
+           end) == {:error, :too_big}
+
+    assert generations(actor, ["data", "o", "a.txt"]) == []
+
+    # A source changed after its read moves nothing, whatever was marked.
+    changing = fn _path, _bytes ->
+      :ok = Arca.put(actor, ["data", "n", "a.txt"], "changed")
+      :ok
+    end
+
+    assert ObjectRevisions.move(actor, ["data", "n"], ["data", "p"], changing) ==
+             {:error, :changed}
+
+    assert ObjectRevisions.read(actor, ["data", "n", "a.txt"]) ==
+             {:ok, "changed", [Prima.Source.outside(nil)]}
+
+    assert ObjectRevisions.exists?(actor, ["data", "n", "b.txt"])
+    refute ObjectRevisions.exists?(actor, ["data", "p", "a.txt"])
+    refute ObjectRevisions.exists?(actor, ["data", "p", "b.txt"])
+
+    # Nothing to move, and a path outside data/ through the facade.
+    assert ObjectRevisions.move(actor, ["data", "none"], ["data", "q"], admit) ==
+             {:error, :not_found}
+
+    assert Arca.move(actor, ["threads", "t"], ["data", "t"], admit: admit) ==
+             {:error, :not_movable}
+
+    assert Arca.move(actor, ["data", "n"], ["threads", "t"], admit: admit) ==
+             {:error, :not_movable}
+  end
+
   test "a copy naming no sources joins an unnamed outside source, and sources: [] joins none",
        %{actor: actor} do
     :ok = Arca.put(actor, ["data", "src", "f"], "clean", sources: [])
