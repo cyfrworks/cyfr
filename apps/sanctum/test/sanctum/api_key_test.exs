@@ -83,7 +83,10 @@ defmodule Sanctum.ApiKeyTest do
         )
 
         log = capture_log(fn -> assert {:error, :invalid_key} = ApiKey.validate(raw) end)
-        assert log =~ "stored scope holds an entry no rule admits"
+
+        assert log =~
+                 ~r/stored scope (holds an entry no rule admits|is not valid JSON) \(\d+ bytes\)/
+
         refute log =~ stored
 
         key_ctx = %{ctx | api_key_id: id}

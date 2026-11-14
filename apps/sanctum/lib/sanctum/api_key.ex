@@ -783,19 +783,25 @@ defmodule Sanctum.ApiKey do
   # been the one that narrowed it. The line names the column's size,
   # never its bytes.
   defp stored_scope(json) do
-    with {:ok, list} when is_list(list) <- Prima.Json.decode_stored(json, []),
-         {permissions, tools} = Enum.split_with(list, &(&1 in @permission_names)),
-         true <- Enum.all?(tools, &(versionless(&1) == {:ok, &1})) do
-      {:ok, {permissions, tools}}
-    else
-      _ ->
-        Logger.warning(
-          "[Sanctum.ApiKey] stored scope holds an entry no rule admits " <>
-            "(#{byte_size(json || "")} bytes)"
-        )
+    case Prima.Json.decode_stored(json, []) do
+      {:ok, list} when is_list(list) ->
+        {permissions, tools} = Enum.split_with(list, &(&1 in @permission_names))
 
-        {:error, :invalid_key}
+        if Enum.all?(tools, &(versionless(&1) == {:ok, &1})),
+          do: {:ok, {permissions, tools}},
+          else: unreadable_scope("holds an entry no rule admits", json)
+
+      {:ok, _not_a_list} ->
+        unreadable_scope("holds an entry no rule admits", json)
+
+      {:error, :invalid_json} ->
+        unreadable_scope("is not valid JSON", json)
     end
+  end
+
+  defp unreadable_scope(problem, json) do
+    Logger.warning("[Sanctum.ApiKey] stored scope #{problem} (#{byte_size(json || "")} bytes)")
+    {:error, :invalid_key}
   end
 
   # ============================================================================
