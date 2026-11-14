@@ -30,10 +30,10 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{else if eq .Page "setup"}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 <h1>Set up CYFR</h1>
-{{if .Passphrase}}<p>This box has no chip to keep a short PIN safe, so it uses this passphrase. Write it down now: this screen shows it this once.</p>
+{{if .Passphrase}}<p>This box has no chip it can use to keep a short PIN safe, so it uses this passphrase. Write it down now: this screen shows it this once.</p>
 <p class="code">{{.Passphrase}}</p>
 {{else if not .Digits}}{{if .Drawn}}<p>Type the passphrase this screen showed you. If you did not write it down, show a new one: the one shown before stops working.</p>
-{{else}}<p>This box has no chip to keep a short PIN safe, so it uses a passphrase, which this screen shows once. Have something to write it down on.</p>{{end}}
+{{else}}<p>This box has no chip it can use to keep a short PIN safe, so it uses a passphrase, which this screen shows once. Have something to write it down on.</p>{{end}}
 <form method="post" action="/passphrase">{{template "proof"}}<button{{if not .Drawn}} autofocus{{end}}>Show {{if .Drawn}}a new{{else}}the{{end}} passphrase</button></form>
 {{end}}
 {{if or .Digits .Drawn}}<form method="post" action="/setup">{{template "proof"}}

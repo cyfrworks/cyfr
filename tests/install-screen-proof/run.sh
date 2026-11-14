@@ -647,7 +647,7 @@ clean_install() {
   if [ "$GUEST_TPM" = swtpm ]; then
     check "with a chip it asks for a six-digit PIN" grep -q 'Choose a six-digit PIN' "$GUEST_DIR/shell-setup.html"
   else
-    check "without a chip it asks for the passphrase it shows" grep -q 'no chip to keep a short PIN safe' "$GUEST_DIR/shell-setup.html"
+    check "without a chip it asks for the passphrase it shows" grep -q 'no chip it can use to keep a short PIN safe' "$GUEST_DIR/shell-setup.html"
   fi
   guest_ssh "sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env" >"$WORK/token" 2>&1
   guest_ssh 'ps -eo args' >"$GUEST_DIR/processes.txt" 2>&1
