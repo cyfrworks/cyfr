@@ -144,6 +144,33 @@ defmodule PrismWeb.SchedulesLiveTest do
     refute has_element?(unfocused, marked)
   end
 
+  describe "a failed run" do
+    test "the row says why the last run failed and links its run, until a good run clears it",
+         %{conn: conn, view: view, ctx: ctx, params: params} do
+      render_submit(view, "create", params)
+      assert {:ok, %{id: id}} = schedule(ctx, params)
+      actor = Sanctum.Context.actor(ctx)
+      reason = "The upstream closed the connection."
+      run = athanor_path("/executions?id=exec_failed")
+
+      {:ok, _} = Arca.CronSchedule.record_error(actor, id, reason, "exec_failed")
+      {failed, _html} = mount_athanor(conn, "/schedules")
+      assert has_element?(failed, "p", "Last run failed: " <> reason)
+      assert has_element?(failed, ~s(a[href="#{run}"]), "Open the run")
+
+      # A failure before any run started names no run.
+      {:ok, _} = Arca.CronSchedule.record_error(actor, id, "Invalid JSON input", nil)
+      {unstarted, _html} = mount_athanor(conn, "/schedules")
+      assert has_element?(unstarted, "p", "Last run failed: Invalid JSON input")
+      refute has_element?(unstarted, "a", "Open the run")
+
+      {:ok, _} = Arca.CronSchedule.record_run(actor, id, "exec_good")
+      {cleared, _html} = mount_athanor(conn, "/schedules")
+      refute has_element?(cleared, "p", "Last run failed")
+      refute has_element?(cleared, "a", "Open the run")
+    end
+  end
+
   describe "missed runs" do
     test "a schedule is made with the policy chosen, its row shows it, and the row saves a change",
          %{view: view, ctx: ctx, params: params} do

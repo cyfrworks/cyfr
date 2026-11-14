@@ -823,7 +823,7 @@ defmodule Opus.Schedules.Scheduler do
 
         if ended != nil and not refused?(ended) do
           ctx = context_of(schedule)
-          record_error(ctx, schedule.id, "Athanor or creator no longer active — run skipped")
+          record_error(ctx, schedule.id, "Athanor or creator no longer active — run skipped", nil)
           emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive", occurrence)
         end
 
@@ -899,7 +899,7 @@ defmodule Opus.Schedules.Scheduler do
               "creator #{inspect(schedule.user_id)} no longer active — skipping run"
           )
 
-          record_error(ctx, schedule_id, "Athanor or creator no longer active — run skipped")
+          record_error(ctx, schedule_id, "Athanor or creator no longer active — run skipped", nil)
           emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive")
           recheck_later(schedule_id, state)
         end
@@ -941,7 +941,7 @@ defmodule Opus.Schedules.Scheduler do
         )
 
         emit_schedule_failed(schedule, ctx, :damaged_reference)
-        record_error(ctx, schedule.id, "Damaged schedule: no pinned reference")
+        record_error(ctx, schedule.id, "Damaged schedule: no pinned reference", nil)
         recheck_later(schedule.id, state)
 
       {:error, :invalid_input} ->
@@ -950,7 +950,7 @@ defmodule Opus.Schedules.Scheduler do
         )
 
         emit_schedule_failed(schedule, ctx, :invalid_input)
-        record_error(ctx, schedule.id, "Invalid JSON input")
+        record_error(ctx, schedule.id, "Invalid JSON input", nil)
         recheck_later(schedule.id, state)
 
       {:ok, exec_reference, input} ->
@@ -1098,7 +1098,7 @@ defmodule Opus.Schedules.Scheduler do
 
           unless refused?(ended) do
             emit_schedule_failed(schedule, ctx, {:spawn_failed, reason}, occurrence)
-            record_error(ctx, schedule.id, Sanctum.Refusals.render(:unavailable))
+            record_error(ctx, schedule.id, Sanctum.Refusals.render(:unavailable), nil)
           end
 
           schedule_timer(schedule.id, left_open_unless_ended(state, ended))
@@ -1171,7 +1171,7 @@ defmodule Opus.Schedules.Scheduler do
       )
 
       emit_schedule_failed(schedule, ctx, reason, occurrence)
-      record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
+      record_error(ctx, schedule.id, Sanctum.Refusals.render(reason), nil)
     end
 
     left_to_recovery_unless_ended(ended)
@@ -1341,7 +1341,7 @@ defmodule Opus.Schedules.Scheduler do
             )
 
             emit_schedule_failed(schedule, ctx, reason, occurrence, execution_id)
-            record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
+            record_error(ctx, schedule.id, Sanctum.Refusals.render(reason), run_of(occurrence))
           end
 
           left_to_recovery_unless_ended(ended)
@@ -1400,7 +1400,7 @@ defmodule Opus.Schedules.Scheduler do
           )
 
           emit_schedule_failed(schedule, ctx, reason, occurrence, fired.execution_id)
-          record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
+          record_error(ctx, schedule.id, Sanctum.Refusals.render(reason), run_of(occurrence))
         end
 
         left_to_recovery_unless_ended(ended)
@@ -1414,7 +1414,7 @@ defmodule Opus.Schedules.Scheduler do
           )
 
           emit_schedule_failed(schedule, ctx, reason, occurrence, fired.execution_id)
-          record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
+          record_error(ctx, schedule.id, Sanctum.Refusals.render(reason), run_of(occurrence))
         end
 
         left_to_recovery_unless_ended(ended)
@@ -1659,7 +1659,13 @@ defmodule Opus.Schedules.Scheduler do
       |> logged_stale(%{id: task.occurrence_id, schedule_id: schedule_id})
 
     unless refused?(settled),
-      do: record_error(task.ctx, schedule_id, Sanctum.Refusals.render(reason))
+      do:
+        record_error(
+          task.ctx,
+          schedule_id,
+          Sanctum.Refusals.render(reason),
+          run_of(%{id: task.occurrence_id, athanor_id: task.athanor_id})
+        )
 
     settled
   end
@@ -1732,8 +1738,23 @@ defmodule Opus.Schedules.Scheduler do
     end
   end
 
-  defp record_error(ctx, schedule_id, message) do
-    case CronSchedule.record_error(Sanctum.Context.actor(ctx), schedule_id, message) do
+  # The run a failed fire's occurrence was joined to by its admission,
+  # read from the row once it has ended: none when the fire failed before
+  # a run started, so the failure never names an earlier run.
+  defp run_of(%{id: occurrence_id, athanor_id: athanor_id}) do
+    case ScheduleOccurrences.get(Prima.Actor.in_athanor(athanor_id), occurrence_id) do
+      {:ok, %{execution_id: execution_id}} -> execution_id
+      _unread -> nil
+    end
+  end
+
+  defp record_error(ctx, schedule_id, message, execution_id) do
+    case CronSchedule.record_error(
+           Sanctum.Context.actor(ctx),
+           schedule_id,
+           message,
+           execution_id
+         ) do
       {:ok, row} ->
         announce(row, ctx)
 

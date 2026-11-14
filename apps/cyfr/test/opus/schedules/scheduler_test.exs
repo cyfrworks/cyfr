@@ -767,6 +767,90 @@ defmodule Opus.Schedules.SchedulerTest do
     end
   end
 
+  describe "a failed fire on the schedule" do
+    test "keeps its reason and its run, which the schedule's get answers, until a good run clears it",
+         %{ctx: ctx} do
+      script!([{:error, "the upstream closed the connection"}, %{"ran" => true}])
+      failures = watch_failures()
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+      pid = scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert [%{state: "failed", execution_id: run}] = occurrences(ctx, schedule)
+      assert is_binary(run)
+      assert_receive {^failures, %{execution_id: ^run, reason: reason}}, 10_000
+      said = Sanctum.Refusals.render(reason)
+
+      assert {:ok, %{last_error: ^said, last_execution_id: ^run}} =
+               CronSchedule.get_for_daemon(schedule.id)
+
+      assert {:ok, %{last_error: ^said, last_execution_id: ^run, error_count: 1}} =
+               Opus.Schedules.Provider.handle("schedule", ctx, %{
+                 "action" => "get",
+                 "schedule_id" => schedule.id
+               })
+
+      # The next fire runs well: the reason goes, and its run is the last.
+      due!(schedule)
+      send(pid, {:fire, schedule.id})
+
+      wait_until(fn ->
+        match?({:ok, %{run_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert [_failed, %{state: "completed", execution_id: good}] =
+               Enum.sort_by(occurrences(ctx, schedule), & &1.scheduled_for, DateTime)
+
+      assert {:ok, %{last_error: nil, last_execution_id: ^good, error_count: 1}} =
+               CronSchedule.get_for_daemon(schedule.id)
+    end
+
+    test "that started no run keeps its reason and names no run, never an earlier one",
+         %{ctx: ctx} do
+      script!([%{"ran" => true}])
+      failures = watch_failures()
+
+      schedule =
+        due!(
+          create_schedule(ctx, %{profile_id: "prof_unconsented", cron_expression: hourly_away()})
+        )
+
+      # An earlier good run on record, which the failure must not name.
+      {:ok, _} = CronSchedule.record_run(Sanctum.Context.actor(ctx), schedule.id, "exec_earlier")
+      scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert [%{state: "failed", execution_id: nil}] = occurrences(ctx, schedule)
+      assert_receive {^failures, %{reason: reason}}, 10_000
+      said = Sanctum.Refusals.render(reason)
+
+      assert {:ok, %{last_error: ^said, last_execution_id: nil}} =
+               CronSchedule.get_for_daemon(schedule.id)
+    end
+  end
+
+  # The scheduler's failure events, as `{ref, metadata}` messages to the case.
+  defp watch_failures do
+    ref = make_ref()
+    id = {__MODULE__, ref}
+
+    :telemetry.attach(
+      id,
+      [:cyfr, :schedules, :failed],
+      fn _event, _measurements, metadata, {test, ref} -> send(test, {ref, metadata}) end,
+      {self(), ref}
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+    ref
+  end
+
   test "a boot that does not own the control plane claims no occurrence, and fires once it does",
        %{ctx: ctx} do
     # The row is written while this boot may write it; it then loses the

@@ -270,8 +270,9 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Records a successful run with tenant-scoped lookup. Every row, whatever
-  its kind, is written only under the member's live slot (`:not_owner`
+  Records a successful run with tenant-scoped lookup: its run is the last
+  one, and the last failure's reason is cleared. Every row, whatever its
+  kind, is written only under the member's live slot (`:not_owner`
   otherwise).
   """
   @spec record_run(Prima.Actor.t(), String.t(), String.t()) ::
@@ -287,7 +288,12 @@ defmodule Arca.CronSchedule do
 
         from(s in Row, where: s.id == ^schedule.id)
         |> Arca.Repo.update_all(
-          set: [last_run_at: now, last_execution_id: execution_id, updated_at: now],
+          set: [
+            last_run_at: now,
+            last_execution_id: execution_id,
+            last_error: nil,
+            updated_at: now
+          ],
           inc: [run_count: 1]
         )
 
@@ -298,22 +304,30 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Records an error with tenant-scoped lookup. Every row, whatever its
-  kind, is written only under the member's live slot (`:not_owner`
-  otherwise).
+  Records a failed fire with tenant-scoped lookup: `reason`, the sentence
+  a person reads, is kept as the last failure's, and `execution_id` is
+  the fire's run, or nil when it failed before a run started, so the
+  failure names the run it was and never an earlier one. Every row,
+  whatever its kind, is written only under the member's live slot
+  (`:not_owner` otherwise).
   """
-  @spec record_error(Prima.Actor.t(), String.t(), term()) ::
+  @spec record_error(Prima.Actor.t(), String.t(), String.t(), String.t() | nil) ::
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
   # Atomic increment, for the reason spelled out at `record_run/3`.
-  def record_error(%Prima.Actor{} = actor, id, _reason) do
+  def record_error(%Prima.Actor{} = actor, id, reason, execution_id)
+      when is_binary(reason) and (is_binary(execution_id) or is_nil(execution_id)) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
       guarded(actor, id, fn schedule ->
         from(s in Row, where: s.id == ^schedule.id)
         |> Arca.Repo.update_all(
-          set: [updated_at: DateTime.utc_now()],
+          set: [
+            last_error: reason,
+            last_execution_id: execution_id,
+            updated_at: DateTime.utc_now()
+          ],
           inc: [error_count: 1]
         )
 

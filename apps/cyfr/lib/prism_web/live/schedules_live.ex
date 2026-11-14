@@ -614,6 +614,21 @@ defmodule PrismWeb.SchedulesLive do
                     <span :if={(f(sched, :error_count) || 0) > 0} class="text-red-400 ml-1">
                       ({f(sched, :error_count)} err)
                     </span>
+                    <p :if={f(sched, :last_error)} class="mt-1 text-xs text-red-400 break-words">
+                      Last run failed: {f(sched, :last_error)}
+                      <.link
+                        :if={f(sched, :last_execution_id)}
+                        navigate={
+                          PrismWeb.Focus.path(
+                            @athanor_route,
+                            "/executions?id=" <> f(sched, :last_execution_id)
+                          )
+                        }
+                        class="ml-1 underline text-red-300 hover:text-red-200"
+                      >
+                        Open the run
+                      </.link>
+                    </p>
                   </td>
                   <td class="px-4 py-3 text-sm text-right">
                     <div class="flex items-center justify-end gap-1">
