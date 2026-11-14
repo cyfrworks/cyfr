@@ -163,6 +163,33 @@ func TestScreenOnRefusesAPathTheUnitCouldNotHold(t *testing.T) {
 	}
 }
 
+// cyfr screen on and off take the machine's one root step: the sentence
+// right before sudo's own prompt, and a refused password runs nothing.
+func TestScreenSaysWhosePasswordBeforeSudoAsks(t *testing.T) {
+	for name, run := range map[string]func(out io.Writer) error{
+		"on":  func(out io.Writer) error { return screenOn(context.Background(), true, out) },
+		"off": screenOff,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := screenProject(t)
+			askInput = strings.NewReader("yes\n")
+			var out bytes.Buffer
+			s.prompt = func() { out.WriteString("[sudo's prompt]\n") }
+			if err := run(&out); err != nil {
+				t.Fatalf("%v\n%s", err, out.String())
+			}
+			if !strings.Contains(out.String(), passwordSentence+"[sudo's prompt]\n") || s.authenticated != 1 || len(s.applied) != 1 {
+				t.Fatalf("authenticated %d, applied %d:\n%s", s.authenticated, len(s.applied), out.String())
+			}
+			s.authErr, s.applied = os.ErrPermission, nil
+			askInput = strings.NewReader("yes\n")
+			if err := run(&out); err == nil || err.Error() != "The password was not accepted, so nothing was changed. Run `cyfr screen "+name+"` again to try again" || s.applied != nil {
+				t.Fatalf("err = %v, applied %q", err, s.applied)
+			}
+		})
+	}
+}
+
 // A no changes nothing as root, says so with the next step and is no
 // failure; a failed sudo says to run it again.
 func TestScreenOnDeclinedOrFailed(t *testing.T) {

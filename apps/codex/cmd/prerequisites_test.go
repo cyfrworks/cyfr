@@ -19,16 +19,15 @@ import (
 	"time"
 )
 
-// sgStandIn records the sg cyfr init continues through and answers status.
+// sgStandIn records the sg cyfr init continues through and answers status:
+// this test binary, run as sg (runStandIn).
 func sgStandIn(t *testing.T, status string) string {
 	t.Helper()
+	sgProgram = filepath.Join(t.TempDir(), "sg")
+	standInLink(t, sgProgram)
 	record := filepath.Join(t.TempDir(), "sg")
-	script := filepath.Join(t.TempDir(), "sg.sh")
-	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" >'" + record + "'\nexit " + status + "\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	sgProgram = script
+	t.Setenv(fakeSgRecord, record)
+	t.Setenv(fakeSgStatus, status)
 	return record
 }
 
@@ -285,7 +284,7 @@ func TestInitRefusedPasswordChangesNothing(t *testing.T) {
 	s.authErr = errors.New("exit status 1")
 	t.Chdir(t.TempDir())
 	var out bytes.Buffer
-	err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
+	err := runInit(context.Background(), initOptions{}, &out, &out)
 	if err == nil || err.Error() != "The password was not accepted, so nothing was changed. Run `cyfr init` again to try again" {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
@@ -305,7 +304,7 @@ func TestInitTellsAnAccountThatMayNotAdminister(t *testing.T) {
 	account := currentAccount(t)
 	t.Chdir(t.TempDir())
 	var out bytes.Buffer
-	err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
+	err := runInit(context.Background(), initOptions{}, &out, &out)
 	if err == nil || err.Error() != "Nothing was changed. Run `cyfr init` again once they have" {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
@@ -356,7 +355,6 @@ func desktopStandIn(t *testing.T, system string, installed bool, polls int) (s *
 		}
 		return nil
 	}
-	t.Setenv("PATH", os.Getenv("PATH"))
 	t.Chdir(t.TempDir())
 	return s, opened
 }
@@ -405,7 +403,7 @@ func TestInitDockerDesktopDeclined(t *testing.T) {
 	_, opened := desktopStandIn(t, "darwin", false, 1<<30)
 	askInput = strings.NewReader("no\n")
 	var out bytes.Buffer
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+	if err := runInit(context.Background(), initOptions{}, &out, &out); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	if want := "CYFR needs Docker Desktop on this machine.\nOpen Docker's installer page? (yes/no) [yes]: Nothing was opened or written. Install Docker Desktop, then run cyfr init again.\n"; out.String() != want {
@@ -447,7 +445,7 @@ func TestInitDockerDesktopWaitEnds(t *testing.T) {
 			return false
 		}
 		var out bytes.Buffer
-		err := runInit(ctx, initOptions{noPull: true}, &out, &out)
+		err := runInit(ctx, initOptions{}, &out, &out)
 		if !errors.Is(err, errQuestionInterrupted) {
 			t.Fatalf("err = %v\n%s", err, out.String())
 		}

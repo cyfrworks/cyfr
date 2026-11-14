@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -49,8 +48,8 @@ func TestMain(m *testing.M) {
 	// opens one stands in for both.
 	hasDisplay = func() bool { return false }
 	launchBrowser = func(string) error { return errors.New("a test launched the browser without standing in for it") }
-	if record := os.Getenv(fakeSudoRecord); record != "" && filepath.Base(os.Args[0]) == "sudo" {
-		os.Exit(runFakeSudo(record))
+	if status, ok := runStandIn(); ok {
+		os.Exit(status)
 	}
 	// The program a handover started (TestUpdateHandsOverForReal), which
 	// carries the handover scenario's environment on.

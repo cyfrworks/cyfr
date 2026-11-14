@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -29,8 +30,17 @@ type standIn struct {
 	prompt                             func()
 }
 
+// standInMachine stands s in for the machine until t ends. It fails at
+// once unless no sh, rm, sudo or docker can be found: PATH is one empty
+// folder of the test's, where a test puts its own stand-ins (fakeSudo).
 func standInMachine(t *testing.T) *standIn {
 	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+	for _, program := range []string{"sh", "rm", "sudo", "docker"} {
+		if found, err := exec.LookPath(program); err == nil {
+			t.Fatalf("%s is reachable at %s: no test of the machine may run it", program, found)
+		}
+	}
 	s := &standIn{supported: true, arch: "amd64", system: "linux", administrator: []string{"sudo"}}
 	saved, savedTerminal, savedInput, savedSg := machine, askTerminal, askInput, sgProgram
 	t.Cleanup(func() { machine, askTerminal, askInput, sgProgram = saved, savedTerminal, savedInput, savedSg })
@@ -91,13 +101,45 @@ func initProjectOnScreen(t *testing.T) (*standIn, *fakeStack) {
 }
 
 // fakeSudoRecord marks a run of this test binary as the sudo fakeSudo put
-// first on PATH: it appends its arguments, as one line, to the file the
-// variable names and runs nothing. -k answers 0, -n 1 (a password is
-// needed), -v fakeSudoVerdict's status, and a command 1.
+// on PATH: it appends its arguments, as one line, to the file the variable
+// names and runs nothing. -k answers 0, -n 1 (a password is needed), -v
+// fakeSudoVerdict's status, and a command 1.
 const (
 	fakeSudoRecord  = "CYFR_CMD_TEST_FAKE_SUDO"
 	fakeSudoVerdict = "CYFR_CMD_TEST_FAKE_SUDO_VERDICT"
 )
+
+// fakeSgRecord marks a run of this test binary as the sg sgStandIn names:
+// it writes its arguments, one a line, to the file the variable names,
+// runs nothing, and exits with fakeSgStatus.
+const (
+	fakeSgRecord = "CYFR_CMD_TEST_FAKE_SG"
+	fakeSgStatus = "CYFR_CMD_TEST_FAKE_SG_STATUS"
+)
+
+// runStandIn is this test binary run as the stand-in its name says, sudo
+// or sg, when the test that started it set that stand-in's record; ok is
+// false for any other run.
+func runStandIn() (status int, ok bool) {
+	switch name := filepath.Base(os.Args[0]); {
+	case name == "sudo" && os.Getenv(fakeSudoRecord) != "":
+		return runFakeSudo(os.Getenv(fakeSudoRecord)), true
+	case name == "sg" && os.Getenv(fakeSgRecord) != "":
+		var lines strings.Builder
+		for _, a := range os.Args[1:] {
+			lines.WriteString(a + "\n")
+		}
+		if os.WriteFile(os.Getenv(fakeSgRecord), []byte(lines.String()), 0o600) != nil {
+			return 3, true
+		}
+		status, err := strconv.Atoi(os.Getenv(fakeSgStatus))
+		if err != nil {
+			return 3, true
+		}
+		return status, true
+	}
+	return 0, false
+}
 
 func runFakeSudo(record string) int {
 	f, err := os.OpenFile(record, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
@@ -119,21 +161,27 @@ func runFakeSudo(record string) int {
 	return 1
 }
 
-// fakeSudo puts this test binary first on PATH as sudo (runFakeSudo), -v
-// answering verdict, and answers the file its calls are recorded in. It
-// fails the test unless PATH's sudo is the fake.
-func fakeSudo(t *testing.T, verdict string) string {
+// standInLink makes path a link to this test binary, which runStandIn
+// then runs as the program path names.
+func standInLink(t *testing.T, path string) {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	if err := os.Symlink(self, filepath.Join(dir, "sudo")); err != nil {
+	if err := os.Symlink(self, path); err != nil {
 		t.Fatal(err)
 	}
-	record := filepath.Join(dir, "calls")
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// fakeSudo puts this test binary in standInMachine's PATH folder as sudo
+// (runFakeSudo), -v answering verdict, and answers the file its calls are
+// recorded in. It fails the test unless PATH's sudo is the fake.
+func fakeSudo(t *testing.T, verdict string) string {
+	t.Helper()
+	dir := os.Getenv("PATH")
+	standInLink(t, filepath.Join(dir, "sudo"))
+	record := filepath.Join(t.TempDir(), "calls")
 	t.Setenv(fakeSudoRecord, record)
 	t.Setenv(fakeSudoVerdict, verdict)
 	if found, err := exec.LookPath("sudo"); err != nil || found != filepath.Join(dir, "sudo") {
