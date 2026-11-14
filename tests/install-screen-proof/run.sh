@@ -401,13 +401,17 @@ screen_confirms() {
   printf '\tproof-key\n' | guest_keys || fail "QMP did not type the key's name"
   sleep 6
   check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
+  since=$(guest_ssh 'date +%s')
   screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
-  shell_page_until confirm-drawn 'Confirm on this screen' 20
+  confirm_page_until confirm-drawn "$since" 60
   check "Confirm on this device opened the screen's own page, which draws the key CYFR is asked to make" \
     sh -c 'grep -q "Confirm on this screen" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
   check "screenshot screen-confirm-drawn.png" guest_screenshot screen-confirm-drawn.png
-  ref=$(sed -n 's/.*name="ref" value="\([^"]*\)".*/\1/p' "$GUEST_DIR/shell-confirm-drawn.html" | head -n 1)
+  ref=$CONFIRM_REF
   [ -n "$ref" ] || return 0
+  shell_page confirm-plain
+  check "a local program's plain read of the page is shown neither the change nor its reference" \
+    sh -c '! grep -q key.create "$1" && ! grep -qF "$2" "$1" && grep -q "A confirmation is open" "$1"' sh "$GUEST_DIR/shell-confirm-plain.html" "$ref"
 
   step "Cancel signs nothing"
   # The PIN's field, Confirm, then Cancel.
@@ -423,12 +427,13 @@ screen_confirms() {
   # Back to Prism's tab, which still asks.
   guest_chord ctrl 1 || fail "QMP did not send the keys"
   sleep 2
+  since=$(guest_ssh 'date +%s')
   screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
-  shell_page_until confirm-again 'Confirm on this screen' 20
+  confirm_page_until confirm-again "$since" 60
   check "Confirm on this device draws it again" grep -q key.create "$GUEST_DIR/shell-confirm-again.html"
   printf '\t000000\n' | guest_keys || fail "QMP did not type"
   sleep 6
-  shell_page confirm-wrong
+  confirm_page confirm-wrong
   check "a wrong PIN confirms nothing: the screen says so and still asks" \
     sh -c 'grep -q "That is not this screen" "$1" && grep -q "Confirm on this screen" "$1"' sh "$GUEST_DIR/shell-confirm-wrong.html"
   confirmation_state wrong "$ref"
@@ -445,6 +450,33 @@ screen_confirms() {
   check "the home records it confirmed by this screen's own client ($client) and consumed by the key's making" \
     json_is "$GUEST_DIR/confirmation-confirmed.json" "{\"state\": \"consumed\", \"confirmed_client_id\": \"$client\"}"
 }
+
+# confirm_page_until NAME SINCE SECONDS: the confirmation as the window
+# Prism opened shows it, in GUEST_DIR/shell-NAME.html: the reference that
+# window's address names, read from the screen's Chrome history after
+# SINCE (the guest's Unix seconds) into CONFIRM_REF, asked of the shell's
+# page, which shows a drawn confirmation only to a request naming it; read
+# each 3 s until the page draws it, within SECONDS.
+CONFIRM_REF=""
+confirm_page_until() {
+  local closes
+  budget "$3" || return 1
+  closes=$((SECONDS + BUDGET))
+  while :; do
+    CONFIRM_REF=$(guest_ssh "python3 -I ~/box.py visits $SCREEN_PROFILE $2 '/confirm?ref='" 2>/dev/null |
+      sed -n 's/.*[?&]ref=\([A-Za-z0-9_-]*\).*/\1/p' | tail -n 1)
+    if [ -n "$CONFIRM_REF" ]; then
+      confirm_page "$1"
+      grep -q 'Confirm on this screen' "$GUEST_DIR/shell-$1.html" && return 0
+    fi
+    [ "$SECONDS" -lt "$closes" ] || return 1
+    sleep 3
+  done
+}
+
+# confirm_page NAME: the shell's page asked for the confirmation
+# CONFIRM_REF names, in GUEST_DIR/shell-NAME.html.
+confirm_page() { guest_ssh "curl -s 'http://127.0.0.1:7340/confirm?ref=$CONFIRM_REF'" >"$GUEST_DIR/shell-$1.html" 2>&1; }
 
 # confirmation_state NAME REF: the home's record of the confirmation REF,
 # read from its SQLite database as root, in GUEST_DIR/confirmation-NAME.json.
