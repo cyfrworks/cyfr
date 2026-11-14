@@ -65,7 +65,7 @@ defmodule Compendium.Registry.Client do
   @doc """
   Discover components on the cyfr.run registry.
 
-  Sends GET /v1/components with publisher/namespace filter.
+  Sends GET /v1/components, filtered by `namespace` and `type` when given.
   """
   @spec discover(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t() | corrupt()}
   def discover(%Context{} = ctx, params) when is_map(params) do
@@ -393,7 +393,8 @@ defmodule Compendium.Registry.Client do
   @doc """
   Call `POST /v1/abuse-reports`. Auth: any valid push token (user must hold
   at least one — verified server-side). Body carries category + target +
-  details.
+  details, and `attestations_signed`, whether the person made the
+  statement a copyright claim carries.
 
   At least one of `target_namespace` or `target_component_id` must be set.
   """
@@ -402,15 +403,25 @@ defmodule Compendium.Registry.Client do
           String.t() | nil,
           String.t() | nil,
           String.t(),
+          boolean(),
           String.t()
         ) :: {:ok, map()} | {:error, Errors.t()}
-  def create_abuse_report(category, target_namespace, target_component_id, details, bearer_token) do
+  def create_abuse_report(
+        category,
+        target_namespace,
+        target_component_id,
+        details,
+        attestations_signed,
+        bearer_token
+      )
+      when is_boolean(attestations_signed) do
     body =
       Jason.encode!(%{
         category: category,
         target_namespace: target_namespace,
         target_component_id: target_component_id,
-        details: details
+        details: details,
+        attestations_signed: attestations_signed
       })
 
     headers = json_headers() ++ bearer(bearer_token)
@@ -596,7 +607,7 @@ defmodule Compendium.Registry.Client do
   defp build_discover_query(params) do
     pairs =
       [
-        {"publisher", params[:namespace]},
+        {"namespace", params[:namespace]},
         {"type", params[:type]},
         {"limit", params[:limit]}
       ]

@@ -649,27 +649,12 @@ defmodule Compendium.ProviderTest do
       assert err_msg(msg) =~ "ghcr.io"
     end
 
-    test "rejects discover against a non-configured registry host", %{ctx: ctx} do
-      {:error, msg} =
-        Provider.handle("component", ctx, %{
-          "action" => "discover",
-          "registry" => "ghcr.io"
-        })
-
-      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
-      assert err_msg(msg) =~ "ghcr.io"
-    end
-
-    test "discover with no registry argument uses the configured registry", %{ctx: ctx} do
-      result =
-        Provider.handle("component", ctx, %{
-          "action" => "discover"
-        })
-
-      case result do
-        {:error, msg} -> refute err_msg(msg) =~ "Missing required argument: registry"
-        {:ok, _} -> :ok
-      end
+    test "discover takes no registry: it asks the one this deployment names" do
+      assert {:error, {:invalid_argument, "Unknown field: registry"}} =
+               Prima.Operation.cast(Compendium.Providers.Component.definition(), %{
+                 "action" => "discover",
+                 "registry" => "ghcr.io"
+               })
     end
 
     test "returns a parse error for a malformed OCI reference in pull", %{ctx: ctx} do

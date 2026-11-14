@@ -81,6 +81,29 @@ defmodule PrismWeb.RegistryLiveTest do
     assert "acme.dev" in :sys.get_state(view.pid).socket.assigns.namespaces
   end
 
+  # cyfr.run filters a listing by `namespace`: asked by any other key it
+  # answers the whole registry's newest components.
+  test "the page lists a namespace's components by asking the registry for that namespace",
+       %{conn: conn, user: user} do
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: seated_athanor().id}
+
+    :ok =
+      Compendium.Registry.CredentialStore.put_push_token(
+        ctx,
+        Compendium.RegistryHost.canonical_host(),
+        "acme.dev",
+        "cyfr_pt_fake_acme",
+        "owner"
+      )
+
+    {view, _html} = mount_athanor(conn, "/registry")
+    render_async(view, 5_000)
+
+    assert_receive {:registry_request,
+                    %{method: "GET", path: "/v1/components?namespace=acme.dev"}},
+                   5_000
+  end
+
   test "an appeal is a request the person's passkey signs, with no sign-in method asked",
        %{conn: conn, user: user} do
     {view, _html} = mount_athanor(conn, "/registry")

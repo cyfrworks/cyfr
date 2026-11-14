@@ -55,6 +55,31 @@ defmodule Compendium.OCI.ErrorsTest do
       assert err.detail.required_version == nil
     end
 
+    test "400 carries the registry's own message as the sentence" do
+      body =
+        Jason.encode!(%{
+          "errors" => [%{"code" => "INVALID_CATEGORY", "message" => "unknown category"}]
+        })
+
+      assert Errors.from_response(400, body, "cyfr.run") == %Errors{
+               reason: :invalid_request,
+               message: "unknown category",
+               registry: "cyfr.run",
+               status: 400,
+               detail: [%{"code" => "INVALID_CATEGORY", "message" => "unknown category"}]
+             }
+    end
+
+    test "400 without a message says the registry refused the request" do
+      assert Errors.from_response(400, "<html>bad request</html>", "cyfr.run") == %Errors{
+               reason: :invalid_request,
+               message: "Request refused by cyfr.run",
+               registry: "cyfr.run",
+               status: 400,
+               detail: "<html>bad request</html>"
+             }
+    end
+
     test "404 maps to :not_found, beside 410's :taken_down" do
       err = Errors.from_response(404, "", "registry.cyfr.run")
       assert err.reason == :not_found

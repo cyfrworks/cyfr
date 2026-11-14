@@ -110,3 +110,19 @@ func TestRegistry_HasNoProbeAndNoClaim(t *testing.T) {
 		t.Errorf("cyfr registry claim alice sent %d requests:\n%s", srv.count(), out)
 	}
 }
+
+// `cyfr registry discover <namespace>` asks component.discover for that
+// publisher's namespace alone.
+func TestRegistryDiscover_AsksByNamespace(t *testing.T) {
+	srv := newCLIServer(t, "", `{"components":[],"total":0}`)
+
+	out, err := runCLI(t, srv, "registry", "discover", "alice")
+	if err != nil {
+		t.Fatalf("cyfr registry discover failed: %v\n%s", err, out)
+	}
+
+	want := map[string]any{"action": "discover", "namespace": "alice"}
+	if name, args := srv.call(0); name != "component" || !reflect.DeepEqual(args, want) {
+		t.Errorf("expected component %v, got %s %v", want, name, args)
+	}
+}
