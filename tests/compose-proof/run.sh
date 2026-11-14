@@ -1805,11 +1805,12 @@ interrupt_case() {
 
 # backup_take NAME: `cyfr backup` of the running home, logged as NAME,
 # which must find it running again; SNAPSHOT is the snapshot's directory
-# as the backup names it.
+# and RESTORE the restore command, as the backup names them.
 backup_take() {
   cli_ok "$1" backup
   grep -qxF "The stack runs again." "$WORK/$1.log" || fail "cyfr backup did not start the home again: $(tail -n 20 "$WORK/$1.log")"
-  SNAPSHOT="$(sed -n "s/^The snapshot of release .* is in \(.*\); 'cyfr restore .*' puts it back\.\$/\1/p" "$WORK/$1.log")"
+  SNAPSHOT="$(sed -n "s/^The snapshot of release .* is in \(.*\); '\(sudo \)\{0,1\}cyfr restore .*' puts it back\.\$/\1/p" "$WORK/$1.log")"
+  RESTORE="$(sed -n "s/^The snapshot of release .* is in .*; '\(.*\)' puts it back\.\$/\1/p" "$WORK/$1.log")"
   [ -f "$SNAPSHOT/snapshot.json" ] || fail "cyfr backup named no snapshot with its snapshot.json: $(tail -n 20 "$WORK/$1.log")"
   await_healthy
 }
@@ -2144,6 +2145,9 @@ restore_person_case() {
   cli_ok up-first up
   backup_take backup-person
   snapshot="$SNAPSHOT"
+  # The container owns some of the files the restore puts back, so the
+  # backup names the restore that works: with sudo.
+  [ "$RESTORE" = "sudo cyfr restore $snapshot" ] || fail "cyfr backup names the restore as '$RESTORE', not with sudo"
   expect_head local localhost
   ok "snapshot $snapshot; the running home's entrypoint has handed data/ to the image's user"
   compose_before="$(sha256sum <"$WORK/docker-compose.yml")"

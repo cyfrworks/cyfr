@@ -119,6 +119,28 @@ func TestBackupTakesTheUpdatesSnapshotAndStartsTheStackAgain(t *testing.T) {
 	}
 }
 
+// When the server's container owns a managed file's directory, as it
+// does once the stack has run, the closing line names the restore with
+// sudo, the form that puts the snapshot back.
+func TestBackupNamesTheRestoreWithSudoWhenTheContainerOwnsAFileItPutsBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may write in any directory")
+	}
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.backupScaffold()
+	// aqua/ holds the managed aqua/aqua.md.
+	aqua := filepath.Join(s.project, "aqua")
+	if err := os.Chmod(aqua, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(aqua, 0755) })
+	out, err := s.backup()
+	want := "The snapshot of release 0.8.0 is in " + s.snapshotDir() + "; 'sudo cyfr restore " + s.snapshotDir() + "' puts it back.\n"
+	if err != nil || !strings.Contains(out, want) {
+		t.Fatalf("cyfr backup answered %v, without %q:\n%s", err, want, out)
+	}
+}
+
 // A stopped CYFR is snapshotted and stays stopped: nothing is stopped or
 // started.
 func TestBackupOfAStoppedCYFRLeavesItStopped(t *testing.T) {

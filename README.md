@@ -1051,7 +1051,10 @@ files the directory holds, the keyring, `.env` and `docker-compose.yml`, with
 CYFR is stopped for it as an update stops it and started again afterwards,
 also when the snapshot fails; a stopped one stays stopped. It refuses while
 a server outside this stack still holds a slot of the cluster. A snapshot
-holds the keyring and the database: keep it as you keep the data.
+holds the keyring and the database: keep it as you keep the data. Once the
+stack has run, the server's container owns some of the files a snapshot
+puts back, so a backup taken as yourself is restored with sudo; `cyfr
+backup`'s last line names the restore command in the form that works.
 
 **Restore is declared.** `cyfr restore backups/<timestamp>` puts a snapshot
 `cyfr backup` or `cyfr update` took back: it refuses an incomplete snapshot or one whose
