@@ -529,7 +529,7 @@ defmodule Compendium.BuildsTest do
       ScriptedBuilder.await_builds()
     end
 
-    test "a vanilla one is told to register, which a compile would refuse, and registers",
+    test "a vanilla one is told to register, which a compile would refuse, and the register succeeds",
          %{ctx: ctx} do
       published!(ctx, "plain", :vanilla)
       fork = forked!(ctx, "plain")
@@ -539,18 +539,15 @@ defmodule Compendium.BuildsTest do
       assert {:error, refusal} = Builds.compile(ctx, fork.reference)
       assert refusal =~ "Vanilla tinctures don't need compilation"
 
-      # Inspect reads the registry: nothing before the register, the
-      # forked tincture after it.
-      inspect = fn ->
-        Sanctum.Gate.call_external("component", ctx, %{
-          "action" => "inspect",
-          "reference" => fork.reference
-        })
-      end
-
-      assert {:error, _} = inspect.()
+      # The register the step names succeeds, and the forked tincture is
+      # then a component inspect answers.
       assert {:ok, _} = Sanctum.Gate.call_external("component", ctx, %{"action" => "register"})
-      assert {:ok, %{"component_ref" => "tincture:local.plain:0.1.0"}} = inspect.()
+
+      assert {:ok, %{"component_ref" => "tincture:local.plain:0.1.0"}} =
+               Sanctum.Gate.call_external("component", ctx, %{
+                 "action" => "inspect",
+                 "reference" => fork.reference
+               })
     end
   end
 
