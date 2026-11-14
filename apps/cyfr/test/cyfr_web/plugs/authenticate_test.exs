@@ -135,6 +135,16 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
 
       assert conn.halted
       assert conn.status == 401
+
+      # Nothing is left to say what ended it: the sentence names every
+      # case, never "expired" alone.
+      assert Jason.decode!(conn.resp_body) == %{
+               "code" => "unauthenticated",
+               "message" =>
+                 "This sign-in no longer stands: it expired or was signed out, or this device " <>
+                   "or your access was removed. Sign in again; if you are refused, ask the " <>
+                   "person who runs this CYFR."
+             }
     end
 
     test "a session bearer the store cannot revalidate is a 503, never an admission", %{

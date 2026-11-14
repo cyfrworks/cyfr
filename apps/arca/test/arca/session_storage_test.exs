@@ -69,7 +69,7 @@ defmodule Arca.SessionStorageTest do
       assert session.athanor_id == "ath_home"
     end
 
-    test "delete_by_user/1 drops every session" do
+    test "delete_by_user/1 drops every session and answers the hashes it deleted" do
       hash = make_token_hash("repoint")
 
       :ok =
@@ -79,11 +79,25 @@ defmodule Arca.SessionStorageTest do
           Arca.Test.Actor.issuance()
         )
 
+      other = make_token_hash("another person")
+
+      :ok =
+        SessionStorage.create_session(
+          other,
+          session_attrs(%{athanor_id: "ath_a", user_id: "user_2"}),
+          Arca.Test.Actor.issuance()
+        )
+
       assert {:ok, %{athanor_id: "ath_a"} = session} = SessionStorage.get_session(hash)
 
-      assert {:ok, n} = SessionStorage.delete_by_user(session.user_id)
-      assert n >= 1
+      # The person's own rows alone: another person's session is neither
+      # deleted nor named.
+      assert SessionStorage.delete_by_user(session.user_id) == {:ok, [hash]}
       assert {:error, :not_found} = SessionStorage.get_session(hash)
+      assert {:ok, %{user_id: "user_2"}} = SessionStorage.get_session(other)
+
+      # Nothing left: a second delete removes and names nothing.
+      assert SessionStorage.delete_by_user(session.user_id) == {:ok, []}
     end
   end
 
