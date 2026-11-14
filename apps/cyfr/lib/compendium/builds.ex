@@ -488,7 +488,8 @@ defmodule Compendium.Builds do
       {:error, _} ->
         {:error,
          "No package.json found at #{Enum.join(package, "/")}. " <>
-           "Vanilla tinctures don't need compilation — use component.register instead."}
+           "Vanilla tinctures don't need compilation — register them with " <>
+           Compendium.Scaffold.register_how()}
     end
   end
 
