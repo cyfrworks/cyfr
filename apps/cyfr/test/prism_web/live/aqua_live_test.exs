@@ -113,6 +113,32 @@ defmodule PrismWeb.AquaLiveTest do
     :ok
   end
 
+  # A brain: a catalyst speaking `model/chat@1` at 0.1.0 with `needs`.
+  defp publish_brain!(ctx, name, needs) do
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
+        name: name,
+        version: "0.1.0",
+        type: "catalyst",
+        description: "A model catalyst",
+        manifest: Jason.encode!(%{"contracts" => [Prima.Model.chat_contract()], "needs" => needs})
+      })
+
+    :ok
+  end
+
+  # Each brain the setup lists: its row's id and its text, spaces folded.
+  defp setup_rows(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#aqua-setup-brains > li")
+    |> Enum.map(fn li ->
+      [id] = LazyHTML.attribute(li, "id")
+      {id, li |> LazyHTML.text() |> String.split() |> Enum.join(" ")}
+    end)
+  end
+
   defp soul_names_missing_catalyst!(ctx),
     do: soul_names_catalyst!(ctx, "catalyst:moonmoon69.claude")
 
@@ -740,11 +766,13 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-card-aqua", "the model has no key yet")
       refute has_element?(view, "#aqua-card-aqua button[phx-click=install_catalyst]")
 
-      # And the way on is live: the grant opens on the release that landed,
-      # in the page's system layer and nowhere on the page.
-      view
-      |> element("#aqua-card-aqua button[phx-click=open_consent]", "Connect a model")
-      |> render_click()
+      # And the way on is live: Connect leads to Aqua's setup, which lists
+      # the release that landed, and its step opens the grant in the page's
+      # system layer and nowhere on the page.
+      view |> element(~s(#aqua-card-aqua a[data-test="connect"])) |> render_click()
+      assert has_element?(view, "#aqua-setup[open]")
+      view |> element("#aqua-setup-brain-newmodel input") |> render_click()
+      view |> element("#aqua-setup-step-newmodel button", "Enter the key") |> render_click()
 
       html = render(view)
       assert html =~ "#{ref}:0.1.0"
@@ -812,7 +840,8 @@ defmodule PrismWeb.AquaLiveTest do
              )
 
       refute render(view) =~ "the model has no key yet"
-      refute has_element?(view, "button[phx-click=open_consent]", "Connect a model")
+      refute has_element?(view, ~s(#aqua-card-aqua a[data-test="connect"]))
+      refute has_element?(view, "#aqua-card-aqua button[phx-click=open_consent]")
 
       # The store stops answering: the panel reads the model again.
       :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile, scope: "versionless")
@@ -829,12 +858,14 @@ defmodule PrismWeb.AquaLiveTest do
                "A consent this model runs under cannot be read right now — try again."
              )
 
-      refute has_element?(view, "button[phx-click=open_consent]", "Connect a model")
+      refute has_element?(view, ~s(#aqua-card-aqua a[data-test="connect"]))
+      refute has_element?(view, "#aqua-card-aqua button[phx-click=open_consent]")
 
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "connecting a model binds the key in the system layer, and the page says it is connected",
+    test "connecting a brain in the setup binds the key in the system layer, and the page " <>
+           "shows what the provider answered",
          %{conn: conn, ctx: ctx} do
       ref = "catalyst:local.keyed"
       :ok = soul_names_catalyst!(ctx, ref)
@@ -880,11 +911,10 @@ defmodule PrismWeb.AquaLiveTest do
 
       {:ok, entry} = Sanctum.Vault.create(entering, params)
 
-      {view, _html} = mount_athanor(conn, "/aqua")
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
-      view
-      |> element("button[phx-click=open_consent]", "Connect a model")
-      |> render_click()
+      view |> element("#aqua-setup-brain-keyed input") |> render_click()
+      view |> element("#aqua-setup-step-keyed button", "Enter the key") |> render_click()
 
       # No sheet on the page itself: the grant is the layer's.
       refute has_element?(view, "#consent-sheet-dialog")
@@ -899,13 +929,229 @@ defmodule PrismWeb.AquaLiveTest do
       render(view)
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
 
-      # The layer asks its sheet for the walk, then commits.
-      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Model connected." end, 5_000, "the grant")
+      # The layer asks its sheet for the walk, then commits; the page then
+      # asks the brain for its models once and shows what it answered.
+      Prima.Test.Wait.wait_until(
+        fn -> has_element?(view, ~s(#aqua-setup-brain-keyed [data-test="setup-answer"])) end,
+        5_000,
+        "the brain's answer"
+      )
+
       refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+      assert has_element?(
+               view,
+               ~s(#aqua-setup-brain-keyed [data-test="setup-answer"]),
+               "keyed answered: the catalyst answered no model list"
+             )
 
       {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
       assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
+    end
+
+    test "Aqua's setup lists every installed brain with what it needs, offers one step per " <>
+           "brain ticked, and a brain installed later joins it",
+         %{conn: conn, ctx: ctx} do
+      publish_brain!(ctx, "keyed", %{
+        "api_key" => %{
+          "type" => "api_key:keyed.test",
+          "reason" => "to call Keyed with your key (keyed.test/keys)",
+          "fields" => ["KEYED_API_KEY"],
+          "required" => true,
+          "hosts" => ["api.keyed.example"]
+        }
+      })
+
+      publish_brain!(ctx, "planned", %{
+        "plan" => %{
+          "type" => "login",
+          "program" => "planner",
+          "reason" => "to run Planner on your own plan"
+        }
+      })
+
+      :ok = soul_names_catalyst!(ctx, "catalyst:local.keyed")
+
+      # The soul's brain is not connected, so the setup is the page's
+      # first step, open without being asked for.
+      {view, _html} = mount_athanor(conn, "/aqua")
+      assert has_element?(view, "#aqua-setup[open]")
+
+      assert setup_rows(view) == [
+               {"aqua-setup-brain-keyed",
+                "keyed a key: to call Keyed with your key (keyed.test/keys)"},
+               {"aqua-setup-brain-planned", "planned a plan: to run Planner on your own plan"}
+             ]
+
+      # With nothing ticked, the setup says what Aqua needs.
+      assert has_element?(
+               view,
+               ~s([data-test="setup-needs"]),
+               "Aqua needs a key or a plan to answer: tick one you have."
+             )
+
+      refute has_element?(view, "#aqua-setup-steps")
+
+      view |> element("#aqua-setup-brain-keyed input") |> render_click()
+      view |> element("#aqua-setup-brain-planned input") |> render_click()
+      refute has_element?(view, ~s([data-test="setup-needs"]))
+
+      assert has_element?(
+               view,
+               "#aqua-setup-step-keyed button[phx-click=open_consent]",
+               "Enter the key"
+             )
+
+      [href] =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#aqua-setup-step-planned a")
+        |> LazyHTML.attribute("href")
+
+      assert URI.parse(href).path == athanor_path("/programs")
+
+      assert URI.decode_query(URI.parse(href).query) ==
+               %{"install" => "catalyst:local.planned:0.1.0", "need" => "plan"}
+
+      # A brain installed afterwards is offered with no change to the setup.
+      publish_brain!(ctx, "later", %{
+        "api_key" => %{
+          "type" => "api_key:later.test",
+          "reason" => "to call Later with your key",
+          "fields" => ["LATER_API_KEY"],
+          "required" => true,
+          "hosts" => ["api.later.example"]
+        }
+      })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      assert Enum.map(setup_rows(view), &elem(&1, 0)) == [
+               "aqua-setup-brain-keyed",
+               "aqua-setup-brain-later",
+               "aqua-setup-brain-planned"
+             ]
+    end
+
+    test "a new crew member's card offers Connect, which opens the setup for that member",
+         %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      view
+      |> form("form[phx-submit=editor_create_member]", %{"name" => "proofreader"})
+      |> render_submit()
+
+      settled(fn -> has_element?(view, "#aqua-card-proofreader") end, "the new card")
+      assert has_element?(view, "#aqua-card-proofreader", "No brain yet")
+
+      view |> element(~s(#aqua-card-proofreader a[data-test="connect"])) |> render_click()
+
+      assert_patch(view, athanor_path("/aqua?agent=proofreader&setup=1"))
+      assert has_element?(view, "#aqua-setup[open]")
+      assert has_element?(view, ~s([data-test="setup-unconnected"]), "proofreader")
+    end
+
+    test "Enter in a crew member's Good at saves it, as leaving the field does",
+         %{conn: conn, ctx: ctx} do
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "tidy",
+          "title" => "Tidy",
+          "content" => "# Tidy"
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      view
+      |> form("#aqua-card-tidy-description", %{"value" => "proofreading"})
+      |> render_submit()
+
+      assert {:ok, %{"description" => "proofreading"}} = get_agent(ctx, "tidy")
+    end
+
+    test "a capability that can never run without asking draws no ask/auto toggle",
+         %{conn: conn, ctx: ctx} do
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "aqua",
+          "tool_policy_patch" => %{"notes.keep" => "ask", "files.write" => "ask"}
+        })
+
+      refute Aqua.auto_permitted?("notes", "keep")
+      assert Aqua.auto_permitted?("files", "write")
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert has_element?(view, ~s(#aqua-card-aqua input[phx-value-key="notes.keep"][checked]))
+
+      refute has_element?(
+               view,
+               ~s(#aqua-card-aqua button[phx-click=editor_set_capability_mode][phx-value-key="notes.keep"])
+             )
+
+      assert has_element?(
+               view,
+               ~s(#aqua-card-aqua button[phx-click=editor_set_capability_mode][phx-value-key="files.write"])
+             )
+    end
+
+    test "a soul whose consent no longer covers its shape reads stale and is consented again " <>
+           "from its card, never asked for a key",
+         %{conn: conn, ctx: ctx} do
+      # A brain named after the soul was consented moves its shape.
+      publish_brain!(ctx, "open", %{})
+      :ok = soul_names_catalyst!(ctx, "catalyst:local.open")
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert has_element?(
+               view,
+               "#aqua-card-aqua",
+               "Its consent is out of date: what it runs on changed since it was consented."
+             )
+
+      refute has_element?(view, "#aqua-card-aqua", "the model has no key yet")
+      refute has_element?(view, ~s(#aqua-card-aqua a[data-test="connect"]))
+
+      view
+      |> element("#aqua-card-aqua button[phx-click=open_consent]", "Consent again")
+      |> render_click()
+
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.aqua")
+    end
+
+    test "picking a connected brain for Aqua asks for its consent again at once",
+         %{conn: conn, ctx: ctx} do
+      athanor = seated_athanor()
+      publish_brain!(ctx, "open", %{})
+
+      :ok =
+        PrismWeb.ModelCatalog.remember(athanor.id, %{
+          "models" => %{"open" => ["open-1"]},
+          "refs" => %{"open" => "catalyst:local.open:0.1.0"}
+        })
+
+      on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor.id) end)
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      assert has_element?(view, ~s(#aqua-setup-brain-open[data-state="ready"]))
+      assert has_element?(view, "#aqua-setup-pick", "Which connected brain is Aqua's own?")
+
+      view |> form("#aqua-setup-pick", %{"value" => "open::open-1"}) |> render_change()
+
+      assert {:ok, %{"catalyst_ref" => "catalyst:local.open", "model" => "open-1"}} =
+               get_agent(ctx, "aqua")
+
+      settled(
+        fn ->
+          has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.aqua")
+        end,
+        "the soul's consent asked again"
+      )
     end
 
     test "an unrelated reload does not re-enable Install while its fetch is running",
@@ -956,7 +1202,7 @@ defmodule PrismWeb.AquaLiveTest do
       render_click(view, "open_consent", %{"ref" => "catalyst:local.kept-key:0.1.0"})
       assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
-      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Model connected." end, 5_000, "the grant")
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Asking kept-key" end, 5_000, "the grant")
 
       # The kept entry is gone: a load from here finds no hit to hand back,
       # whatever a fresh run answers.

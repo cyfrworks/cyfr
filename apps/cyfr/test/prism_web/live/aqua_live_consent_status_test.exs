@@ -39,7 +39,12 @@ defmodule PrismWeb.AquaLiveConsentStatusTest do
 
     assert html =~ ~s(id="aqua-consent-drift-formula:local.uses-remote")
     assert html =~ ~s(id="aqua-consent-drift-agent:local.aqua")
-    assert html =~ "uses-remote cannot run until you consent again"
+
+    assert html =~
+             "What uses-remote uses changed since this athanor consented — a capability, a " <>
+               "brain or a component it calls — so it cannot run until you consent again."
+
+    refute html =~ "install"
     assert html =~ "notes.keep"
     assert [_, _] = Regex.scan(~r/Re-consent/, html)
     refute html =~ "Consent status unavailable"
@@ -56,7 +61,7 @@ end
 defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
   @moduledoc """
   The consent the AQUA page asks for (`open_consent`, which its
-  re-consent rows and its "Connect a model" both send) opens on the plan's
+  re-consent rows and its setup's steps both send) opens on the plan's
   suggestion: the model's one key is bound before the person does
   anything, and that is what the grant commits.
   """
@@ -155,11 +160,10 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
         disclose: true
       })
 
-    {view, _html} = mount_athanor(conn, "/aqua")
+    {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
-    view
-    |> element("button[phx-click=open_consent]", "Connect a model")
-    |> render_click()
+    view |> element("#aqua-setup-brain-status-keyed input") |> render_click()
+    view |> element("#aqua-setup-step-status-keyed button", "Enter the key") |> render_click()
 
     # Nothing picked: the plan's suggestion is already the binding.
     assert has_element?(
@@ -169,7 +173,12 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
            )
 
     view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
-    Prima.Test.Wait.wait_until(fn -> render(view) =~ "Model connected." end, 5_000, "the grant")
+
+    Prima.Test.Wait.wait_until(
+      fn -> render(view) =~ "Asking status-keyed" end,
+      5_000,
+      "the grant"
+    )
 
     {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
     {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)

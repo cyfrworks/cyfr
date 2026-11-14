@@ -15,7 +15,11 @@ defmodule Aqua.Models do
       connected asked for its models;
     * `model_status/2` — whether each agent's brain is ready: installed,
       and bound to a key or a login the agent runs it with
-      (`t:status/0`).
+      (`t:status/0`);
+    * `providers/1` — every brain the athanor can connect, with what it
+      needs and how it stands, which Aqua's setup offers;
+    * `models/2` — one brain asked for its models, the answer connecting
+      shows.
 
   The component facts come from `Compendium.model_catalysts/1`; running a
   catalyst goes through the gate like any other call, under the caller's
@@ -34,6 +38,9 @@ defmodule Aqua.Models do
     * `:needs_key` — a key to connect;
     * `:needs_sign_in` — a brain whose every required need mounts a
       program's own sign-in, with no signed-in login entry bound;
+    * `:consent_stale` — the agent's own consent no longer covers its
+      shape (its brain, model, options or capabilities changed since it
+      was consented), so it runs again once the person consents again;
     * `:consent_damaged`, `:consent_unavailable` — a consent it runs
       under is damaged, or the store could not answer it;
     * `:missing` — the athanor's catalysts, read, hold no such model, or
@@ -46,6 +53,7 @@ defmodule Aqua.Models do
           {:ready
            | :needs_key
            | :needs_sign_in
+           | :consent_stale
            | :consent_damaged
            | :consent_unavailable
            | :missing
@@ -364,11 +372,115 @@ defmodule Aqua.Models do
   defp refusal_text(reason), do: Sanctum.Refusals.render(reason)
 
   @doc """
+  The brain `ref` (an installed catalyst release that speaks
+  `model/chat@1`) asked for its models once, through the catalog as the
+  caller, whatever its setup reads: `{:ok, ids}`, or `{:error, sentence}`
+  with the provider's own words when it refused (a key it does not take
+  reads as the provider says so). What connecting a brain shows.
+  """
+  @spec models(Context.t(), String.t()) :: {:ok, [String.t()]} | {:error, String.t()}
+  def models(%Context{} = ctx, ref) when is_binary(ref), do: ask_models(ctx, ref)
+
+  @typedoc """
+  A brain the athanor can connect (`providers/1`): its `provider` (as
+  `catalogue/1` names it), the newest installed release `ref`, the `need`
+  connecting it meets — the first required one, `%{name, kind, qualifier,
+  reason, program}` with `kind` `"login"` for a program's own sign-in and
+  the credential kind otherwise (`qualifier` the provider its key is
+  for), or nil for a brain that needs nothing — its `state` as its own
+  consent reads it, and `shared`, `%{owner, person_daily}` when what
+  binds it is a key someone shared with the person.
+  """
+  @type provider :: %{
+          provider: String.t(),
+          ref: String.t(),
+          need: map() | nil,
+          state:
+            :ready
+            | :needs_key
+            | :needs_sign_in
+            | :consent_damaged
+            | :consent_unavailable
+            | :model_unavailable,
+          shared: %{owner: String.t(), person_daily: non_neg_integer() | nil} | nil
+        }
+
+  @doc """
+  Every brain the athanor can connect: each installed catalyst that
+  declares `model/chat@1`, at its newest version, read through its setup
+  plan (`component.setup_plan`) as `t:provider/0`. A brain bound to a key
+  shared with the person comes first, then the rest by provider. A brain
+  installed later is listed on the next read; nothing here names one.
+  A setup plan that cannot be read is that brain's `:model_unavailable`;
+  the shares offered to the person that cannot be read leave `shared` nil.
+  A caller that may not read the athanor's components is
+  `{:error, :forbidden}`; a component store that cannot answer is
+  `{:error, :unavailable}`.
+  """
+  @spec providers(Context.t()) :: {:ok, [provider()]} | {:error, :forbidden | :unavailable}
+  def providers(%Context{} = ctx) do
+    with {:ok, rows} <- Compendium.model_catalysts(ctx) do
+      shares = offered_shares(ctx)
+
+      {:ok,
+       rows
+       |> newest_speaking()
+       |> Enum.map(fn {provider, ref} -> provider(ctx, provider, ref, shares) end)
+       |> Enum.sort_by(&{is_nil(&1.shared), &1.provider})}
+    end
+  end
+
+  defp provider(ctx, provider, ref, shares) do
+    case Aqua.Ops.call_tool("component", ctx, %{"action" => "setup_plan", "reference" => ref}) do
+      {:ok, plan} ->
+        %{
+          provider: provider,
+          ref: ref,
+          need: need_of(plan),
+          state: plan_state(plan, ref),
+          shared: shared(plan, shares)
+        }
+
+      {:error, _unread} ->
+        %{provider: provider, ref: ref, need: nil, state: :model_unavailable, shared: nil}
+    end
+  end
+
+  defp need_of(plan) do
+    case for(need <- plan[:needs] || [], need[:required] != false, do: need) do
+      [need | _] -> Map.take(need, [:name, :kind, :qualifier, :reason, :program])
+      [] -> nil
+    end
+  end
+
+  defp plan_state(%{ready: true}, _ref), do: :ready
+  defp plan_state(plan, ref), do: plan |> unready(ref) |> elem(0)
+
+  # A bound need whose binding is a share offered to the person: the share
+  # the setup plan names is the one the person's consent holds.
+  defp shared(plan, shares) do
+    Enum.find_value(get_in(plan, [:consent, :needs]) || [], fn
+      %{entry_id: id, satisfied: true} when is_map_key(shares, id) ->
+        Map.take(shares[id], [:owner, :person_daily])
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp offered_shares(ctx) do
+    case Aqua.Ops.call_tool("share", ctx, %{"action" => "offered"}) do
+      {:ok, %{shares: shares}} -> Map.new(shares, &{&1.id, &1})
+      _unread -> %{}
+    end
+  end
+
+  @doc """
   For each agent given (the roster's string-keyed projection: `"name"`
   and `"catalyst_ref"`), its brain: the installed release its catalyst
   resolves to and whether the consent it runs under is complete —
-  `%{name => t:status/0}`: `{:ready | :needs_key | :needs_sign_in | :consent_damaged |
-  :consent_unavailable, resolved_ref}`, or `{:missing |
+  `%{name => t:status/0}`: `{:ready | :needs_key | :needs_sign_in | :consent_stale |
+  :consent_damaged | :consent_unavailable, resolved_ref}`, or `{:missing |
   :model_unavailable, catalyst_ref}`. An agent that names no catalyst
   has no entry. Each agent is read on its own consent, the soul's or the
   crew member's (`Compendium.AgentSource`), so a member whose brain is
@@ -382,7 +494,8 @@ defmodule Aqua.Models do
   `:consent_unavailable`, never a key to connect over a consent that
   exists: the brain's own consent, as its setup plan reads it, and, once
   that reads ready, the agent's own load
-  (`Aqua.ConsentStatus.classify_refusal/1`). A catalyst listing that
+  (`Aqua.ConsentStatus.classify_refusal/1`), whose stale consent is
+  `:consent_stale`, a consent to give again. A catalyst listing that
   cannot be read is not an empty one, and a setup plan refused for any
   reason but the component's absence (`{:not_found, {:component, _}}`,
   `Compendium.Component.resolve_component/2`'s one absence) is not an
@@ -448,9 +561,10 @@ defmodule Aqua.Models do
   # The agent's own load, as a turn would make it, read through
   # `Aqua.ConsentStatus.classify_refusal/1`: a load that refuses for
   # damage (the agent's head, a lender, a stored grant that fails its
-  # checks) or because the store could not answer is said as such, never
-  # as a key to connect; every other refusal, and an edge that binds
-  # nothing, is a key (or a sign-in) to connect.
+  # checks), because the store could not answer, or because the agent's
+  # shape moved since its consent is said as such, never as a key to
+  # connect; every other refusal, and an edge that binds nothing, is a key
+  # (or a sign-in) to connect.
   defp agent_status(ctx, name, catalyst_ref, resolved, plan) do
     source = Prima.AgentRef.ref(name)
 
@@ -462,9 +576,10 @@ defmodule Aqua.Models do
 
       {:error, reason} ->
         case Aqua.ConsentStatus.classify_refusal(reason) do
+          {:ok, :stale} -> {:consent_stale, resolved}
           {:error, :corrupt} -> {:consent_damaged, resolved}
           {:error, :unavailable} -> {:consent_unavailable, resolved}
-          _absent_stale_or_forbidden -> {to_connect(plan), resolved}
+          _absent_or_forbidden -> {to_connect(plan), resolved}
         end
     end
   end

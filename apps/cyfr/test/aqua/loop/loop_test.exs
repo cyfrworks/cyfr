@@ -1263,10 +1263,12 @@ defmodule Aqua.LoopTest do
     assert Enum.sort(covered) == Enum.sort(Enum.map(gets, & &1.id))
   end
 
-  test "a rate limit is retried and an authentication refusal ends the turn asking for setup", %{
-    ctx: ctx,
-    thread: thread
-  } do
+  test "a rate limit is retried; a refused key is a line in the provider's words and asks " <>
+         "for no grant, while a key not bound asks for setup",
+       %{
+         ctx: ctx,
+         thread: thread
+       } do
     turn = accept!(ctx, thread, "@aqua hi")
     # A typed refusal rides the envelope's error, not the engine's.
     script!([
@@ -1282,12 +1284,33 @@ defmodule Aqua.LoopTest do
              %{kind: "model", outcome: "ok"}
            ] = steps
 
-    other = accept!(ctx, thread, "@aqua again")
-    ScriptedWorker.script([{:refuse, %{"type" => "authentication", "message" => "no key"}}])
-    result = Task.await(run(ctx, other), 60_000)
+    _ = drain()
+    refused = accept!(ctx, thread, "@aqua again")
 
-    assert {:failed, :setup_required} = result
-    assert {:ok, %{status: "failed"}} = Tape.turn(ctx, other.id)
+    ScriptedWorker.script([
+      {:refuse, %{"type" => "authentication", "message" => "invalid x-api-key"}}
+    ])
+
+    line = "The model refused its key: invalid x-api-key"
+    assert {:failed, ^line} = Task.await(run(ctx, refused), 60_000)
+    assert {:ok, %{status: "failed"}} = Tape.turn(ctx, refused.id)
+
+    assert [%{kind: "system", content: ^line}] =
+             for(
+               %{turn_id: turn_id, kind: "system"} = row <-
+                 Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               turn_id == refused.id,
+               do: row
+             )
+
+    # The turn's end is announced after anything it asked for.
+    assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
+    refute Enum.any?(thread_events(drain()), &match?({:consent_required, _}, &1))
+
+    unbound = accept!(ctx, thread, "@aqua once more")
+    ScriptedWorker.script([{:refuse, %{"type" => "secret_denied", "message" => "no key"}}])
+    assert {:failed, :setup_required} = Task.await(run(ctx, unbound), 60_000)
+    assert {:ok, %{status: "failed"}} = Tape.turn(ctx, unbound.id)
     assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user}}, 5_000
     assert ref =~ @model and user == ctx.user_id
   end
@@ -1460,6 +1483,33 @@ defmodule Aqua.LoopTest do
     assert {:failed, :setup_required} = Task.await(run(ctx, other), 30_000)
     assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user}}, 5_000
     assert ref =~ @model and user == ctx.user_id
+
+    stop_supervised!(ScriptedWorker)
+
+    # A brain whose provider refused its key while describing the model
+    # says so in the thread, and asks for no grant.
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [],
+       describe: {:refuse, %{"type" => "authentication", "message" => "invalid x-api-key"}}}
+    )
+
+    _ = drain()
+    refused = accept!(ctx, thread, "@aqua and again")
+    assert {:failed, {:model_refused, _, _}} = Task.await(run(ctx, refused), 30_000)
+
+    assert [%{kind: "system", content: "The model refused its key: invalid x-api-key"}] =
+             for(
+               %{turn_id: turn_id, kind: "system"} = row <-
+                 Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               turn_id == refused.id,
+               do: row
+             )
+
+    # The turn's end is announced after anything it asked for.
+    assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
+    refute Enum.any?(thread_events(drain()), &match?({:consent_required, _}, &1))
   end
 
   test "the step cap ends a turn that never stops calling", %{ctx: ctx, thread: thread} do

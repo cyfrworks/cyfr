@@ -21,10 +21,12 @@ defmodule Aqua.FacadeTest do
     describe_note_result: 1,
     model_status: 2,
     models: 1,
+    models: 2,
     note_pinned?: 1,
     parse_approval_scope: 1,
     pin_max_bytes: 0,
     pinned_note_page: 1,
+    providers: 1,
     room_excerpt: 2,
     roster: 1,
     stale_consent_refs: 1,
@@ -59,6 +61,13 @@ defmodule Aqua.FacadeTest do
 
     assert Aqua.brain_signs_in?(%{needs: [login, %{key | required: false}]})
     refute Aqua.brain_signs_in?(%{needs: [login, key]})
+  end
+
+  test "the brains a setup offers are Aqua.Models'" do
+    outside = Sanctum.Context.build(user_id: "usr_outside", scope: :platform)
+
+    assert Aqua.providers(outside) == Aqua.Models.providers(outside)
+    assert {:error, :forbidden} = Aqua.providers(outside)
   end
 
   test "approval scopes parse and print as Aqua.ApprovalScope does" do

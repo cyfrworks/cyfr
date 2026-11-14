@@ -27,12 +27,21 @@ defmodule PrismWeb.AquaLive do
   LiveView's mount (the topbar, the panel) is answered between them
   rather than after them all.
 
-  This is also where a person connects a model: the soul's catalyst
-  needs an API key bound to it before AQUA can answer, and "Connect a
-  model" asks for that catalyst's grant in the page's system layer
-  (`PrismWeb.SystemLayer`), whose sheet binds the key — reachable in
-  `lite`, so a box that never opens `dev` still gets its key in. A
-  formula whose closure moved is consented again the same way.
+  This is also where a person connects a brain, in Aqua's setup, at the
+  top of the page (`/a/<athanor>/aqua?setup=1` opens it, and it is open
+  while the soul has no connected brain): every installed catalyst that
+  speaks `model/chat@1` (`Aqua.providers/1`), a key someone shared with
+  the person first, a checklist of what each needs, then one step for
+  each brain ticked — its grant, asked in the page's system layer
+  (`PrismWeb.SystemLayer`), whose sheet takes the key in CYFR's own
+  credential prompt, or the Programs page for a plan — reachable in
+  `lite`, so a box that never opens `dev` still gets its key in. A grant
+  for a brain ends in one `models` call (`Aqua.models/2`) whose answer the
+  page shows, so a key the provider refuses reads as the provider says.
+  The setup then picks which connected brain is the soul's own (or, with
+  `agent=<name>`, a crew member's), a change of shape whose consent is
+  asked at once. A source whose consent moved is consented again the
+  same way.
   """
 
   use PrismWeb, :live_view
@@ -46,7 +55,7 @@ defmodule PrismWeb.AquaLive do
   # Each section reloads on its own message, so a write refreshes what it
   # changed and nothing else: a note kept here does not re-read the
   # roster, a crew member renamed does not re-index the scrolls.
-  @sections [:agents, :about, :notes, :skills]
+  @sections [:agents, :about, :notes, :skills, :setup]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -64,6 +73,17 @@ defmodule PrismWeb.AquaLive do
       # the component it grants, and the count prompt ids are numbered by.
       |> assign(:grant_prompt, nil)
       |> assign(:prompt_seq, 0)
+      # Aqua's setup: whether the address asked for it and for whom, the
+      # brains it offers, the ones ticked, each connected brain's answer to
+      # its `models` call, how the roster's brains stand, and whether its
+      # last step leads to the administrator's own setup.
+      |> assign(:setup_asked, false)
+      |> assign(:setup_for, nil)
+      |> assign(:providers, nil)
+      |> assign(:ticked, MapSet.new())
+      |> assign(:answers, %{})
+      |> assign(:agents_read, nil)
+      |> assign(:admin_next, admin_next?(socket.assigns[:context]))
 
     # Subscribe before the load asks whether the athanor is ready: a fill
     # that finishes in between must still reach this page.
@@ -80,9 +100,32 @@ defmodule PrismWeb.AquaLive do
     {:ok, socket}
   end
 
+  # `?setup=1` opens Aqua's setup; `agent` names the crew member whose
+  # brain it picks, the soul's otherwise.
+  @impl true
+  def handle_params(params, _uri, socket) do
+    agent = params["agent"]
+
+    {:noreply,
+     socket
+     |> assign(:setup_asked, params["setup"] == "1")
+     |> assign(:setup_for, if(is_binary(agent) and agent != "", do: agent))}
+  end
+
   @impl true
   def handle_event("open_consent", %{"ref" => ref}, socket) when is_binary(ref) and ref != "" do
     {:noreply, ask_grant(socket, ref)}
+  end
+
+  def handle_event("setup_tick", %{"provider" => provider}, socket) when is_binary(provider) do
+    ticked = socket.assigns.ticked
+
+    ticked =
+      if MapSet.member?(ticked, provider),
+        do: MapSet.delete(ticked, provider),
+        else: MapSet.put(ticked, provider)
+
+    {:noreply, assign(socket, :ticked, ticked)}
   end
 
   # The grant for `ref`, asked in the page's system layer, whose sheet
@@ -141,11 +184,26 @@ defmodule PrismWeb.AquaLive do
     load_agents(socket)
     load_notes(socket)
     load_skills(socket)
+    send(self(), {:refresh, :setup})
     send(self(), :loaded)
     {:noreply, load_models(socket)}
   end
 
   def handle_info(:loaded, socket), do: {:noreply, assign(socket, :loading, false)}
+
+  # The roster read how its brains stand: the setup is open while the
+  # soul's is not connected, and names the crew members whose is not.
+  def handle_info({:agents_read, read}, socket),
+    do: {:noreply, assign(socket, :agents_read, read)}
+
+  # A brain or model picked for an agent moved its consent's shape, which
+  # is asked again at once.
+  def handle_info({:ask_grant, ref}, socket), do: {:noreply, ask_grant(socket, ref)}
+
+  # A connected brain's answer to its one `models` call, for the focus it
+  # was asked under.
+  def handle_info({:setup_answer, tag, ref, result}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &answered(&1, ref, result))
 
   # A model catalyst arrived (or did not): the agents section reads its
   # status again either way, and the picker's kept catalogue is dropped so
@@ -180,17 +238,72 @@ defmodule PrismWeb.AquaLive do
   defp granted(socket, ref) do
     PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
 
-    said =
+    socket =
       case ref do
-        "formula:local." <> name -> "#{name} consented again."
-        _ -> "Model connected."
+        "formula:local." <> name -> put_flash(socket, :info, "#{name} consented again.")
+        "agent:local." <> name -> put_flash(socket, :info, "#{name} consented again.")
+        brain -> ask_models(socket, brain)
       end
 
     socket
-    |> put_flash(:info, said)
     |> load_section(:agents)
+    |> load_section(:setup)
     |> load_models()
   end
+
+  # Connecting a brain makes one `models` call, run off the page's process,
+  # and shows what the provider answered: a key that is bound is not yet a
+  # key the provider takes.
+  defp ask_models(socket, ref) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+    lv = self()
+    logger_metadata = Prima.LoggerContext.capture()
+
+    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      Prima.LoggerContext.restore(logger_metadata)
+      send(lv, {:setup_answer, tag, ref, Aqua.models(ctx, ref)})
+    end)
+
+    socket
+    |> put_flash(:info, "Saved. Asking #{brain_name(ref)} whether it takes the key…")
+    |> update(:answers, &Map.put(&1, ref, :asking))
+  end
+
+  defp answered(socket, ref, result) do
+    socket =
+      case result do
+        {:ok, ids} ->
+          put_flash(socket, :info, "#{brain_name(ref)} answered with #{count(ids)}.")
+
+        {:error, sentence} ->
+          put_flash(socket, :error, "#{brain_name(ref)} answered: #{sentence}")
+      end
+
+    {:noreply, update(socket, :answers, &Map.put(&1, ref, result))}
+  end
+
+  defp count([_one]), do: "one model"
+  defp count(ids), do: "#{length(ids)} models"
+
+  defp brain_name(ref) do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %{name: name}} -> name
+      _ -> ref
+    end
+  end
+
+  # The administrator's own setup follows Aqua's until they have seen it
+  # (`users.prefs`' `admin_setup_seen`, which Settings writes).
+  defp admin_next?(%Sanctum.Context{platform_admin: true, user_id: user_id})
+       when is_binary(user_id) do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, user} -> Sanctum.Tenancy.Users.prefs(user)["admin_setup_seen"] != true
+      _unread -> false
+    end
+  end
+
+  defp admin_next?(_ctx), do: false
 
   # Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
   defp models_loaded(socket, {:ok, result}) do
@@ -221,6 +334,7 @@ defmodule PrismWeb.AquaLive do
     # unrelated reload cannot re-enable it mid-download.
     send_update(AgentsComponent, id: "aqua-agents", installed: ref)
     send(self(), {:refresh, :agents})
+    send(self(), {:refresh, :setup})
     {:noreply, load_models(socket)}
   end
 
@@ -230,6 +344,9 @@ defmodule PrismWeb.AquaLive do
   defp load_section(socket, :agents), do: socket |> load_provenance() |> load_agents()
   defp load_section(socket, :skills), do: socket |> load_provenance() |> load_skills()
   defp load_section(socket, section) when section in [:about, :notes], do: load_notes(socket)
+
+  defp load_section(socket, :setup),
+    do: assign(socket, :providers, Aqua.providers(socket.assigns.context))
 
   # Every unit's provenance, keyed by its path in the tree: shipped and
   # unedited, shipped but edited here, or the athanor's own. What a card
@@ -299,8 +416,8 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp consent_warning(ref, :stale) do
-    "This athanor's components changed since it consented — installing one does that — " <>
-      "so #{short_ref(ref)} cannot run until you consent again."
+    "What #{short_ref(ref)} uses changed since this athanor consented — a capability, a " <>
+      "brain or a component it calls — so it cannot run until you consent again."
   end
 
   @doc """
@@ -327,8 +444,8 @@ defmodule PrismWeb.AquaLive do
     assigns = assign(assigns, :stale, stale)
 
     ~H"""
-    <%!-- Installing a component widens the closure every source that
-          names it was consented against, so recovery is per source. --%>
+    <%!-- A capability, a brain or a component a source calls moves the
+          shape it was consented against, so recovery is per source. --%>
     <div
       :for={{ref, state} <- @stale}
       id={"aqua-consent-drift-" <> ref}
@@ -348,9 +465,238 @@ defmodule PrismWeb.AquaLive do
     """
   end
 
+  @doc """
+  Aqua's setup: what the person has, as a checklist of every brain the
+  athanor can connect, a key shared with them first; one step for each
+  brain ticked; each connected brain's answer to its `models` call; which
+  connected brain the agent the setup is for runs on; the crew members
+  whose brain is not connected; and, for an administrator who has not
+  seen it, their own setup next.
+  """
+  attr :open, :boolean, required: true
+  attr :providers, :any, required: true
+  attr :ticked, :any, required: true
+  attr :answers, :map, required: true
+  attr :agents_read, :any, required: true
+  attr :setup_for, :string, default: nil
+  attr :models_by_provider, :map, required: true
+  attr :athanor, :any, required: true
+  attr :admin_next, :boolean, required: true
+
+  def setup(assigns) do
+    providers =
+      case assigns.providers do
+        {:ok, providers} -> providers
+        _unread -> []
+      end
+
+    target = assigns.setup_for || (assigns.agents_read && assigns.agents_read.soul)
+
+    assigns =
+      assigns
+      |> assign(:brains, providers)
+      |> assign(:target, target)
+      |> assign(:steps, Enum.filter(providers, &step?(&1, assigns.ticked)))
+      |> assign(:connected?, Enum.any?(providers, &(&1.state == :ready)))
+      |> assign(:unconnected, (assigns.agents_read && assigns.agents_read.unconnected) || [])
+
+    ~H"""
+    <details
+      id="aqua-setup"
+      open={@open}
+      class="rounded-lg border border-gray-800 bg-gray-900/60 p-4"
+    >
+      <summary class="cursor-pointer text-sm font-medium text-gray-200">Set up Aqua</summary>
+      <div class="mt-3 space-y-4 text-xs text-gray-300">
+        <p>
+          Aqua answers with a model you bring: a key from a model provider, or a plan you
+          already pay for. Tick what you have.
+        </p>
+
+        <p
+          :if={match?({:error, _}, @providers)}
+          data-test="setup-unavailable"
+          class="text-amber-300"
+        >
+          The brains installed here cannot be read right now — try again.
+        </p>
+
+        <p
+          :if={match?({:ok, []}, @providers)}
+          data-test="setup-none"
+          class="text-amber-300"
+        >
+          No brain is installed in this athanor yet. One installed from Components shows here.
+        </p>
+
+        <ul :if={@brains != []} id="aqua-setup-brains" class="space-y-1.5">
+          <li
+            :for={brain <- @brains}
+            id={"aqua-setup-brain-" <> brain.provider}
+            data-state={brain.state}
+            class="flex flex-wrap items-center gap-2"
+          >
+            <%= if brain.shared do %>
+              <span class="font-medium text-gray-100">{brain.provider}</span>
+              <span data-test="setup-shared">
+                {shared_line(brain.shared)}
+              </span>
+            <% else %>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={MapSet.member?(@ticked, brain.provider)}
+                  phx-click="setup_tick"
+                  phx-value-provider={brain.provider}
+                  class="rounded bg-gray-900 border-gray-600"
+                />
+                <span class="font-medium text-gray-100">{brain.provider}</span>
+                <span class="text-gray-400">{need_line(brain.need)}</span>
+              </label>
+            <% end %>
+            <span :if={brain.state == :ready} class="text-emerald-400">connected</span>
+            <span
+              :if={brain.state in [:consent_damaged, :consent_unavailable, :model_unavailable]}
+              class="text-amber-300"
+            >
+              {unready_line(brain.state)}
+            </span>
+            <span
+              :if={@answers[brain.ref]}
+              data-test="setup-answer"
+              class={answer_class(@answers[brain.ref])}
+            >
+              {answer_line(brain.provider, @answers[brain.ref])}
+            </span>
+          </li>
+        </ul>
+
+        <p
+          :if={@brains != [] and MapSet.size(@ticked) == 0 and not @connected?}
+          data-test="setup-needs"
+          class="text-amber-300"
+        >
+          Aqua needs a key or a plan to answer: tick one you have.
+        </p>
+
+        <ol :if={@steps != []} id="aqua-setup-steps" class="space-y-1.5 list-decimal pl-5">
+          <li :for={brain <- @steps} id={"aqua-setup-step-" <> brain.provider}>
+            <%= if brain.need && brain.need.kind == "login" do %>
+              {brain.provider}: sign in to {brain.need.program || "its program"} on the Programs page.
+              <.link
+                navigate={programs_path(@athanor, brain)}
+                class="text-blue-400 hover:underline"
+              >
+                Open Programs
+              </.link>
+            <% else %>
+              {brain.provider}: enter your key.
+              <button
+                type="button"
+                phx-click="open_consent"
+                phx-value-ref={brain.ref}
+                class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
+              >
+                Enter the key
+              </button>
+            <% end %>
+          </li>
+        </ol>
+
+        <form
+          :if={@connected? and @target}
+          id="aqua-setup-pick"
+          phx-change="editor_set_model"
+          phx-target="#aqua-agents"
+          phx-auto-recover="ignore"
+        >
+          <input type="hidden" name="name" value={@target} />
+          <label class="block text-gray-400 mb-1">
+            {pick_label(@target, @agents_read)}
+          </label>
+          <select
+            name="value"
+            aria-label="Brain"
+            class="w-full md:w-1/2 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+          >
+            <option value="-" selected>Choose a connected brain</option>
+            <%= for {provider, models} <- @models_by_provider, models != [] do %>
+              <optgroup label={provider}>
+                <option :for={m <- models} value={"#{provider}::#{m}"}>{m}</option>
+              </optgroup>
+            <% end %>
+          </select>
+        </form>
+
+        <p :if={@unconnected != []} data-test="setup-unconnected" class="text-gray-400">
+          No connected brain yet for {Enum.join(@unconnected, ", ")}. Pick one on its card below.
+        </p>
+
+        <p :if={@admin_next} data-test="setup-admin-next">
+          <.link
+            navigate={PrismWeb.Focus.path(@athanor, "/settings?setup=1")}
+            class="text-blue-400 hover:underline"
+          >
+            Next: set up this CYFR for the people you let in
+          </.link>
+        </p>
+      </div>
+    </details>
+    """
+  end
+
+  # A brain ticked that is not yet connected is a step; a damaged or
+  # unreadable consent is no step the person can take here.
+  defp step?(%{state: state, provider: provider}, ticked),
+    do: state in [:needs_key, :needs_sign_in] and MapSet.member?(ticked, provider)
+
+  defp shared_line(%{owner: owner, person_daily: cap}) when is_integer(cap),
+    do: "#{owner}'s key, shared with you, up to #{cap} requests a day"
+
+  defp shared_line(%{owner: owner}), do: "#{owner}'s key, shared with you"
+
+  defp need_line(nil), do: "needs nothing to connect"
+
+  defp need_line(%{kind: "login", reason: reason}) when is_binary(reason),
+    do: "a plan: " <> reason
+
+  defp need_line(%{kind: "login"}), do: "a plan you sign in to"
+  defp need_line(%{reason: reason}) when is_binary(reason), do: "a key: " <> reason
+  defp need_line(%{qualifier: provider}) when is_binary(provider), do: "a key from " <> provider
+  defp need_line(_need), do: "a key"
+
+  defp unready_line(:consent_damaged),
+    do: "its consent is damaged: revoke it on Components and grant it again"
+
+  defp unready_line(:consent_unavailable), do: "its consent cannot be read right now — try again"
+  defp unready_line(:model_unavailable), do: "it cannot be read right now — try again"
+
+  defp answer_line(provider, :asking), do: "Asking #{provider}…"
+  defp answer_line(provider, {:ok, [_one]}), do: "#{provider} answered with one model."
+  defp answer_line(provider, {:ok, ids}), do: "#{provider} answered with #{length(ids)} models."
+  defp answer_line(provider, {:error, sentence}), do: "#{provider} answered: #{sentence}"
+
+  defp answer_class({:error, _}), do: "text-red-300"
+  defp answer_class(_answer), do: "text-gray-400"
+
+  defp pick_label(target, %{soul: target}), do: "Which connected brain is Aqua's own?"
+  defp pick_label(target, _read), do: "Which connected brain does #{target} run on?"
+
+  defp programs_path(athanor, %{ref: ref, need: %{name: need}}),
+    do:
+      PrismWeb.Focus.path(
+        athanor,
+        "/programs?" <> URI.encode_query(%{"install" => ref, "need" => need})
+      )
+
   defp short_ref("formula:local." <> name), do: name
   defp short_ref("agent:local." <> name), do: name
   defp short_ref(ref), do: ref
+
+  # The soul is read and its brain is not connected: the setup is the
+  # page's first step.
+  defp soul_unconnected?(%{soul: soul, soul_ready: false}) when is_binary(soul), do: true
+  defp soul_unconnected?(_read), do: false
 
   # ============================================================================
   # Render
@@ -370,6 +716,18 @@ defmodule PrismWeb.AquaLive do
       <.live_loading :if={@loading} message="Loading AQUA…" />
 
       <.consent_status stale_consents={@stale_consents} />
+
+      <.setup
+        open={@setup_asked or soul_unconnected?(@agents_read)}
+        providers={@providers}
+        ticked={@ticked}
+        answers={@answers}
+        agents_read={@agents_read}
+        setup_for={@setup_for}
+        models_by_provider={@models_by_provider}
+        athanor={@athanor}
+        admin_next={@admin_next}
+      />
 
       <.live_component
         module={AgentsComponent}
