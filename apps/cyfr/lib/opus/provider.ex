@@ -197,16 +197,12 @@ defmodule Opus.Provider do
 
   # Logs, cancel and retry are `:execute` operations that read the run's
   # record, and reading a record needs `:storage_read` too
-  # (`Opus.Record.get/3`). A caller without it is told so before any row
-  # is read, so the answer is the same whether the id names a run or not;
-  # a caller with it reads a missing run and another athanor's alike, as
-  # not found. A guest-planed caller is refused by the read as before.
-  defp may_read_runs(ctx) do
-    case Context.require_permission(ctx, :storage_read) do
-      {:error, {:missing_permission, :storage_read}} = refused -> refused
-      _admitted_or_read_refuses -> :ok
-    end
-  end
+  # (`Opus.Record.get/3`). A caller who may not use it, for want of the
+  # permission or from inside a running component, is told so before any
+  # row is read, so the answer is the same whether the id names a run or
+  # not; a caller who may reads a missing run and another athanor's alike,
+  # as not found.
+  defp may_read_runs(ctx), do: Context.require_permission(ctx, :storage_read)
 
   # An in-chain cancel reads its row in the chain before anything is
   # cancelled; an external-plane cancel leaves the read to the cancel.
