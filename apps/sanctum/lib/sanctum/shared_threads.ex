@@ -204,15 +204,18 @@ defmodule Sanctum.SharedThreads do
 
   @doc """
   The thread's newest `count` messages, oldest first, for a person seated
-  in it: what their own AQUA reads of the thread they have open
-  (`Aqua.RoomExcerpt`).
+  in it, with their read mark (`read_seq`): what their own AQUA reads of a
+  thread (`Aqua.RoomExcerpt`). The mark is read before the messages, so a
+  message that arrives between the two is past it, and what someone else
+  wrote past it is unread to them.
   """
-  @spec tail(String.t(), String.t(), pos_integer()) :: {:ok, [map()]} | {:error, term()}
+  @spec tail(String.t(), String.t(), pos_integer()) ::
+          {:ok, %{read_seq: non_neg_integer(), messages: [map()]}} | {:error, term()}
   def tail(user_id, thread_id, count)
       when is_binary(user_id) and is_binary(thread_id) and is_integer(count) and count > 0 do
-    with {:ok, _thread} <- seated(user_id, thread_id) do
+    with {:ok, _thread, seat} <- seat(user_id, thread_id) do
       case Arca.SharedMessages.latest(server(), thread_id, count) do
-        {:ok, rows} -> {:ok, Enum.map(rows, &message/1)}
+        {:ok, rows} -> {:ok, %{read_seq: seat.read_seq, messages: Enum.map(rows, &message/1)}}
         {:error, reason} -> unavailable(reason)
       end
     end
@@ -814,9 +817,13 @@ defmodule Sanctum.SharedThreads do
 
   # The thread, for a person seated in it; to anyone else a missing one.
   defp seated(user_id, thread_id) do
+    with {:ok, thread, _seat} <- seat(user_id, thread_id), do: {:ok, thread}
+  end
+
+  defp seat(user_id, thread_id) do
     with {:ok, thread} <- Arca.SharedThreads.get(server(), thread_id),
-         {:ok, _seat} <- Arca.SharedThreadMembers.find(server(), thread_id, user_id) do
-      {:ok, thread}
+         {:ok, seat} <- Arca.SharedThreadMembers.find(server(), thread_id, user_id) do
+      {:ok, thread, seat}
     else
       {:error, :not_found} -> missing(thread_id)
       {:error, reason} -> unavailable(reason)

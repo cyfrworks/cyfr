@@ -393,13 +393,15 @@ defmodule Sanctum.SharedThreadsTest do
   end
 
   describe "tail/3 and people_in_threads_with/1" do
-    test "tail reads the newest messages, oldest first, for a seated person alone",
+    test "tail reads the newest messages, oldest first, with the reader's read mark, for a seated person alone",
          %{alice: alice, bob: bob, carol: carol} do
       thread = thread!(alice) |> seated!(alice, [bob])
       id = thread.id
-      for n <- 1..4, do: {:ok, _} = SharedThreads.post(alice, id, "line #{n}")
+      for n <- 1..2, do: {:ok, _} = SharedThreads.post(alice, id, "line #{n}")
+      :ok = SharedThreads.mark_read(bob, id)
+      for n <- 3..4, do: {:ok, _} = SharedThreads.post(alice, id, "line #{n}")
 
-      assert {:ok, tail} = SharedThreads.tail(bob, id, 2)
+      assert {:ok, %{read_seq: 2, messages: tail}} = SharedThreads.tail(bob, id, 2)
       assert Enum.map(tail, & &1.content) == ["line 3", "line 4"]
       assert [%{seq: 3, author: ^alice}, %{seq: 4}] = tail
 

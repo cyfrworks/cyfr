@@ -13,8 +13,11 @@ defmodule Aqua.Providers.Thread do
   `threads` is the third: `list` and `read`, the person's shared threads
   as their own AQUA reads them when a question needs it, under the
   person's own seat (`Sanctum.SharedThreads.listed/1`,
-  `Aqua.RoomExcerpt`). Both are in a chain only, and neither writes: a
-  line reaches a shared thread only when the person says it aloud. The
+  `Aqua.RoomExcerpt`), and only from an open turn of that person's AQUA
+  (`Aqua.Tape.calling_turn/2`, the rule `crew` keeps too): a component's
+  run that holds the grant reads nothing, refused `:not_in_a_turn`. Both
+  are in a chain only, and neither writes: a line reaches a shared thread
+  only when the person says it aloud. The
   provider's `service/0` is `"aqua"` for all three, so `system.status`
   and the request log's `routed_to` read one label.
 
@@ -627,11 +630,12 @@ defmodule Aqua.Providers.Thread do
   def handle("crew", _ctx, _args),
     do: {:error, {:invalid_argument, "crew takes the action ask or list"}}
 
-  def handle("threads", %Context{} = ctx, %{"action" => "list"}), do: shared_threads(ctx)
+  def handle("threads", %Context{} = ctx, %{"action" => "list"} = args),
+    do: shared_threads(ctx, args)
 
-  def handle("threads", %Context{} = ctx, %{"action" => "read", "thread" => id})
+  def handle("threads", %Context{} = ctx, %{"action" => "read", "thread" => id} = args)
       when is_binary(id),
-      do: shared_thread(ctx, id)
+      do: shared_thread(ctx, id, args)
 
   def handle("threads", _ctx, _args),
     do: {:error, {:invalid_argument, "threads takes the action list, or read with a thread"}}
@@ -1058,10 +1062,13 @@ defmodule Aqua.Providers.Thread do
   # Shared threads, read for the person
   # ---------------------------------------------------------------------------
 
-  # Under the person's own seat: the threads they sit in, and only those.
-  # A call that names no person sits in none.
-  defp shared_threads(%Context{user_id: user_id}) when is_binary(user_id) do
-    with {:ok, listed} <- Sanctum.SharedThreads.listed(user_id) do
+  # From a turn of the person's own AQUA, and under their own seat: the
+  # threads they sit in, and only those. A chain with no open turn behind
+  # it, such as a component's run started by a key, a webhook or a
+  # schedule, reads none; the turn's person is the caller's.
+  defp shared_threads(ctx, args) do
+    with {:ok, user_id} <- reader(ctx, args),
+         {:ok, listed} <- Sanctum.SharedThreads.listed(user_id) do
       threads =
         for entry <- listed do
           %{
@@ -1077,29 +1084,25 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp shared_threads(_ctx), do: {:ok, %{threads: [], count: 0}}
-
-  # A thread the person's list does not name — one they hold no seat in,
-  # archived or gone — answers as a missing one does.
-  defp shared_thread(%Context{user_id: user_id} = ctx, id) when is_binary(user_id) do
-    with {:ok, listed} <- Sanctum.SharedThreads.listed(user_id),
-         {:ok, entry} <- listed_entry(listed, id) do
-      case Aqua.RoomExcerpt.read(ctx, %{shared_thread_id: id}, unread: entry.unread) do
-        {:ok, text} -> {:ok, %{thread: id, unread: entry.unread, text: text}}
-        {:error, :nothing_said} -> {:ok, %{thread: id, unread: 0, text: ""}}
-        {:error, _} = refused -> refused
-      end
+  # A thread the person holds no seat in answers as a missing one does.
+  defp shared_thread(ctx, id, args) do
+    with {:ok, _user_id} <- reader(ctx, args),
+         {:ok, %{text: text, unread: unread}} <-
+           Aqua.RoomExcerpt.read_marked(ctx, %{shared_thread_id: id}) do
+      {:ok, %{thread: id, unread: unread, text: text}}
     end
   end
 
-  defp shared_thread(_ctx, id), do: {:error, {:not_found, "Thread", id}}
-
-  defp listed_entry(listed, id) do
-    case Enum.find(listed, &(&1.id == id)) do
-      nil -> {:error, {:not_found, "Thread", id}}
-      entry -> {:ok, entry}
+  defp reader(%Context{user_id: user_id} = ctx, args) when is_binary(user_id) do
+    case Aqua.Tape.calling_turn(ctx, args) do
+      {:ok, %{requested_by: ^user_id}} -> {:ok, user_id}
+      {:ok, _someone_else} -> {:error, :not_in_a_turn}
+      {:error, :not_addressable} -> {:error, :not_in_a_turn}
+      {:error, _} = refused -> refused
     end
   end
+
+  defp reader(_ctx, _args), do: {:error, :not_in_a_turn}
 
   defp render_thread(thread) do
     %{
