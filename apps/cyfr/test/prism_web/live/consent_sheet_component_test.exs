@@ -774,9 +774,22 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       ]
     }
 
+    @held_program %{
+      "address" => "npx -y @modelcontextprotocol/server-github",
+      "env" => [
+        %{"name" => "GITHUB_TOKEN", "entry" => "github-personal"},
+        %{"name" => "NODE_ENV", "literal" => true}
+      ],
+      "folder" => "kept",
+      "hosts" => ["api.github.com", "github.com"],
+      "memory_bytes" => 268_435_456,
+      "home_max_bytes" => 1_073_741_824,
+      "sign_in_command" => "gh auth login"
+    }
+
     # The row the sheet draws for the server asked for, against the head
     # that granted `held` at "sha256:held".
-    defp server_card(asked, digest \\ "sha256:asked") do
+    defp server_card(asked, digest \\ "sha256:asked", held \\ @held) do
       rows = [server_row(digest, asked)]
 
       sheet(
@@ -786,11 +799,13 @@ defmodule PrismWeb.ConsentSheetComponentTest do
           needs: [],
           dependency_needs: [],
           rows: rows,
-          head_tool_servers: [%{name: "github", digest: "sha256:held", record: @held}]
+          head_tool_servers: [%{name: "github", digest: "sha256:held", record: held}]
         },
         preview: keyed_preview(rows)
       )
     end
+
+    defp program_card(asked), do: server_card(asked, "sha256:asked", @held_program)
 
     defp changes(html), do: texts(html, ~s([data-test="server-changes"] li))
 
@@ -821,13 +836,146 @@ defmodule PrismWeb.ConsentSheetComponentTest do
              ]
     end
 
-    test "names a literal whose value changed by its name alone" do
-      html = server_card(@held)
+    test "says only that a value it does not show changed when the record is the same " <>
+           "under a moved digest, naming no particular thing" do
+      for {held, card} <- [{@held, &server_card/1}, {@held_program, &program_card/1}] do
+        html = card.(held)
 
-      assert changes(html) == ["Header x-tenant: its value changed."]
+        assert changes(html) == ["A value it does not show changed."]
 
-      assert texts(html, ~s([data-test="server-record"]))
-             |> Enum.member?("Header x-tenant: a literal, its value not shown")
+        assert texts(html, ~s([data-test="server-record"]))
+               |> Enum.any?(&(&1 =~ "a literal, its value not shown"))
+      end
+    end
+
+    test "names a program's variable added, removed and now naming another entry" do
+      html =
+        program_card(%{
+          @held_program
+          | "env" => [
+              %{"name" => "GH_HOST", "literal" => true},
+              %{"name" => "GITHUB_TOKEN", "entry" => "github-work"}
+            ]
+        })
+
+      assert changes(html) == [
+               "New variable GH_HOST, a literal.",
+               "Variable GITHUB_TOKEN now names vault entry github-work, instead of " <>
+                 "naming vault entry github-personal.",
+               "Variable NODE_ENV is removed."
+             ]
+    end
+
+    test "names a program's moved command as its address" do
+      html = program_card(%{@held_program | "address" => "npx -y server-github@2"})
+
+      assert changes(html) == [
+               "Its address changed from npx -y @modelcontextprotocol/server-github to " <>
+                 "npx -y server-github@2."
+             ]
+    end
+
+    test "names a program's hosts, every public host and no host spelled so" do
+      assert changes(
+               program_card(%{
+                 @held_program
+                 | "hosts" => ["api.github.com", "evil.example", "github.com"]
+               })
+             ) == [
+               "Its hosts changed from api.github.com, github.com to " <>
+                 "api.github.com, evil.example, github.com."
+             ]
+
+      assert changes(program_card(Map.delete(@held_program, "hosts"))) == [
+               "Its hosts changed from api.github.com, github.com to every public host."
+             ]
+
+      assert changes(program_card(%{@held_program | "hosts" => []})) == [
+               "Its hosts changed from api.github.com, github.com to no host."
+             ]
+    end
+
+    test "names a program's memory bound and folder bound, an unset one as the default" do
+      assert changes(program_card(%{@held_program | "memory_bytes" => 536_870_912})) == [
+               "Its memory bound changed from 256 MiB to 512 MiB."
+             ]
+
+      assert changes(program_card(Map.delete(@held_program, "memory_bytes"))) == [
+               "Its memory bound changed from 256 MiB to the default."
+             ]
+
+      # A bound that is no whole MiB reads exactly, never as its neighbour.
+      assert changes(program_card(%{@held_program | "home_max_bytes" => 1_073_741_825})) == [
+               "Its folder bound changed from 1024 MiB to 1073741825 bytes."
+             ]
+    end
+
+    test "names a program's kind of folder in the person's words" do
+      html = program_card(%{@held_program | "folder" => "scratch"})
+
+      assert changes(html) == [
+               "Its folder changed from a folder kept between runs to a scratch folder."
+             ]
+    end
+
+    test "names a program's sign-in command, one set or unset" do
+      assert changes(program_card(%{@held_program | "sign_in_command" => "gh auth login --web"})) ==
+               ["Its sign-in command changed from gh auth login to gh auth login --web."]
+
+      assert changes(program_card(Map.delete(@held_program, "sign_in_command"))) ==
+               ["Its sign-in command changed from gh auth login to none."]
+    end
+
+    # The digest moved for its hosts and for a literal's value; the record
+    # tells the hosts alone, so the card says that and nothing about the
+    # literal, which it cannot tell moved.
+    test "names only the hosts when its hosts and a literal both moved" do
+      html = program_card(%{@held_program | "hosts" => ["api.github.com"]})
+
+      assert changes(html) == [
+               "Its hosts changed from api.github.com, github.com to api.github.com."
+             ]
+
+      refute html =~ "its value changed"
+      refute html =~ "A value it does not show changed."
+    end
+
+    test "says a server that became a program so, never comparing a program's settings " <>
+           "with an http server's" do
+      html = server_card(@held_program)
+
+      assert changes(html) == [
+               "It is now a program, where it was a server reached at its address.",
+               "Its address changed from https://mcp.github.example/v1 to " <>
+                 "npx -y @modelcontextprotocol/server-github.",
+               "Header authorization is removed.",
+               "Header x-tenant is removed.",
+               "New variable GITHUB_TOKEN, naming vault entry github-personal.",
+               "New variable NODE_ENV, a literal."
+             ]
+    end
+
+    test "draws a program's record with its settings" do
+      assert texts(program_card(@held_program), ~s([data-test="server-record"])) == [
+               "Address: npx -y @modelcontextprotocol/server-github",
+               "Variable GITHUB_TOKEN: vault entry github-personal",
+               "Variable NODE_ENV: a literal, its value not shown",
+               "Folder: a folder kept between runs",
+               "Hosts: api.github.com, github.com",
+               "Memory bound: 256 MiB",
+               "Folder bound: 1024 MiB",
+               "Sign-in command: gh auth login"
+             ]
+
+      bare = Map.take(@held_program, ["address", "env", "folder"])
+
+      assert texts(program_card(%{bare | "folder" => "scratch"}), ~s([data-test="server-record"]))
+             |> Enum.drop(3) == [
+               "Folder: a scratch folder",
+               "Hosts: every public host",
+               "Memory bound: the default",
+               "Folder bound: the default"
+             ]
     end
 
     test "names nothing when the head's grant is the one asked for, or there is none" do

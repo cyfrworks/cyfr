@@ -5,10 +5,10 @@
 
 First driven only by requests signed as CYFR signs them (harness.py): an
 owner whose one program is `cat`, kept, as a `pipe` row of CYFR's runs it,
-in a login entry's kept home:
+in the row's kept home:
 
 - An open in mode `run` starts the row's command with the opener's argv
-  appended (`cat -`), in the entry's kept home as its HOME, under the
+  appended (`cat -`), in the row's kept home as its HOME, under the
   home's own uid (the kept range, never a pool uid), and answers
   `resumed: false`; a second open of the key attaches to the same session
   and answers `resumed: true`.
@@ -24,7 +24,7 @@ in a login entry's kept home:
   past `max_buffer_bytes` the buffer drops lines and a recv from the start
   names how many in `dropped`, its first line numbered just past them and
   its last the newest line the program wrote.
-- Retiring the home (a login entry's revoke or delete, through CYFR) ends
+- Retiring the home (its program row's deletion, through CYFR) ends
   the session's process and removes the home's folder; the session answers
   `running: false`.
 
@@ -32,17 +32,18 @@ Then driven by `cyfr` itself (e2e.py's stack: docker-compose.yml's cyfr
 service from the app image, CYFR_IMAGE, beside the same locus-backends
 service), through its programs controller (`Opus.Programs`, called in the
 running release by `bin/cyfr rpc`): a person signed in on the server
-(tests/release-boot/fixture.exs) defines a `pipe` row with a kept home
-running `cat` over `/mcp`, and makes a login entry for it
-(`Sanctum.Vault.create/2`, kind `login`, confirmed by the person's own device as a
-person confirms entering a credential). A session opened on the row in the
-entry's home round-trips a line, its process running in the entry's kept
-home under the home's uid; the person revokes the entry
-(`Sanctum.Vault.revoke/2`, as the console does), and well inside the
-row's idle period cyfr ends the session: its process is gone from the
+(tests/release-boot/fixture.exs) adds a driven `pipe` row with a kept home
+running `cat`, as the console adds one: adding a program asks the
+confirmation of its whole definition (`program_definition`), which the
+person's own device gives (the fixture's `confirmed`). A session opened on
+the row round-trips a line, its process running in the row's own kept
+home under the home's uid; the person removes the row (`mcp_servers`
+delete, confirmed the same way), and well inside the row's idle period
+cyfr ends the session and retires its home: its process is gone from the
 service, and a read of the session answers `running: false` with no lines.
-(An open after the revoke is refused by CYFR's host before it reaches the
-controller, as apps/cyfr/test/integration/runtime/pipe_test.exs proves.)
+(An open on a row that no longer serves is refused by CYFR's host before
+it reaches the controller, as apps/cyfr/test/integration/runtime/pipe_test.exs
+proves.)
 
 Prerequisites: harness.py's, and the app image. Usage: tests/locus-backends-image/pipe.py IMAGE
 """
@@ -64,7 +65,7 @@ import imagesuite  # noqa: E402
 import e2e  # noqa: E402
 
 OWNER = owner_of("pipe")
-HOME = "vlt_pipe-cat"
+HOME = "mcp_pipe-cat"
 KEY = "chat-1"
 ARGV = ["-"]
 IDLE_MS = 5_000
@@ -81,7 +82,7 @@ DROP_BATCH = 16
 MARKER = "end-of-drop"
 
 # The idle period cyfr asks the service for in the cyfr half: long, so a
-# session ended within it was ended by the revoke and not by idle.
+# session ended within it was ended by the row's removal and not by idle.
 CYFR_PIPE_IDLE_MS = 120_000
 ROW = "e2e-pipe"
 
@@ -147,7 +148,7 @@ def scripted_controller(image):
         cat = one_cat(stack, "the row's command to run with the opener's argv")
         (first,) = read_until(c, session, 0, lambda got: len(got) >= 1)
         expect(first["text"] == home_line(HOME) and kept_uid(cat),
-               "the program runs in the entry's kept home as its HOME, under the home's uid", [first, cat])
+               "the program runs in the row's kept home as its HOME, under the home's uid", [first, cat])
         expect(c.hello()[1]["pool"]["free"] == pool["free"], "a kept session takes no uid of the pool")
         status, again = c.open(OWNER, "cat", key=KEY, argv=ARGV, home_id=HOME)
         expect(status == 200 and again["resumed"] is True and again["session"] == session,
@@ -215,7 +216,7 @@ def scripted_controller(image):
         seqs = [x["seq"] for x in kept["lines"]]
         expect(seqs == list(range(seqs[0], seqs[0] + len(seqs))), "the kept lines are numbered one after another")
 
-        # ————— the home retired with its entry —————
+        # ————— the home retired with its row —————
         status, retired, _ = c.home(OWNER["athanor"], HOME, "retire")
         expect((status, retired) == (200, {"version": VERSION, "home_id": HOME, "state": "absent"}),
                "a retire answers the home absent", retired)
@@ -231,7 +232,7 @@ def scripted_controller(image):
 # ————— cyfr as the controller —————
 
 class PipeStack(e2e.CyfrStack):
-    """e2e.py's cyfr stack, cyfr asking the service for an idle period longer than the revoke case waits."""
+    """e2e.py's cyfr stack, cyfr asking the service for an idle period longer than the removal case waits."""
 
     def __init__(self, image, cyfr_image):
         super().__init__(image, cyfr_image)
@@ -269,39 +270,24 @@ def step(stack, token, body, **names):
     return json.loads(line[-1][len("PIPE="):])
 
 
-# A login entry for the row, as a person makes one: entering a credential
-# is a sensitive change, which the person's own device confirms (the
-# release fixture's `device_confirm`), and the create is made again under
-# it.
-MAKE_ENTRY = """
-params = %{name: name, kind: "login", program: program}
-created =
-  case Sanctum.Vault.create(ctx, params) do
-    {:error, {:confirmation_required, %{id: id}}} ->
-      {fixture, _} = Code.eval_file("/tmp/fixture.exs")
-      "FIXTURE=" <> confirmed = fixture.(["device_confirm", Prima.Confirmation.ref(id)])
-      %{"ok" => %{"state" => "confirmed"}} = Jason.decode!(confirmed)
-      Sanctum.Vault.create(%{ctx | confirmation_id: id}, params)
-
-    other ->
-      other
-  end
-{:ok, view} = created
-reply.(%{entry: view.id, athanor: Sanctum.Context.athanor!(ctx)})
-"""
-
 # Each pipe call carries the deadline the host gives a pipe call that
 # arrives now (`Opus.Host.Pipe.deadline/1`, from the call header's time).
 DEADLINE = "deadline = Opus.Host.Pipe.deadline(%{ts: System.system_time(:millisecond)})\n"
 
 OPEN = DEADLINE + """
 {:ok, row} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), program)
-reply.(shape.(Opus.Programs.pipe_open(row, entry, key, argv, opener, deadline)))
+reply.(shape.(Opus.Programs.pipe_open(row, key, argv, opener, deadline)))
 """
 
 SEND = DEADLINE + "reply.(shape.(Opus.Programs.pipe_send(athanor, opener, session, lines, deadline)))"
 RECV = DEADLINE + "reply.(shape.(Opus.Programs.pipe_recv(athanor, opener, session, 0, 5000, deadline)))"
-REVOKE = "reply.(shape.(Sanctum.Vault.revoke(ctx, entry)))"
+
+
+def confirmed(stack, token, arguments):
+    """An `mcp_servers` change as the console makes it, confirmed by the person's own device: its result."""
+    answer = stack.fixture("confirmed", token, "mcp_servers", json.dumps(arguments))
+    expect("ok" in answer, f"mcp_servers {arguments['action']} is made under the person's confirmation", answer)
+    return answer["ok"]
 
 
 def cyfr_controller(image):
@@ -311,22 +297,21 @@ def cyfr_controller(image):
         run("docker", "cp", e2e.FIXTURE, f"{stack.cyfr}:/tmp/fixture.exs")
         signed_in = stack.fixture("person", "locus-backends-pipe")
         token = signed_in["token"]
-        person = e2e.Person(stack.cyfr_base, token)
-        expect(signed_in["athanor_id"], "a person is signed in on cyfr, in an athanor of their own", signed_in)
+        athanor = signed_in["athanor_id"]
+        expect(athanor, "a person is signed in on cyfr, in an athanor of their own", signed_in)
 
-        created = person.tool("mcp_servers", {"action": "create", "name": ROW, "config": {
+        created = confirmed(stack, token, {"action": "create", "name": ROW, "config": {
             "transport": "program", "mark": "driven", "home": "kept", "backends": [{"name": "cat", "command": COMMAND}],
         }})
         print(f"created: {json.dumps(created)[:400]}", flush=True)
-        made = step(stack, token, MAKE_ENTRY, name=f"pipe-login-{secrets.token_hex(4)}", program=ROW)
-        entry, athanor = made["entry"], made["athanor"]
-        expect(athanor == signed_in["athanor_id"], "the login entry is the person's own athanor's", made)
+        row_id = created.get("id")
+        expect(created.get("home") == "kept" and row_id, "the person's driven row keeps its home", created)
 
         opener = f"att_pipe-{secrets.token_hex(6)}"
-        names = {"program": ROW, "entry": entry, "key": "pipe-e2e", "argv": ARGV, "opener": opener}
+        names = {"program": ROW, "key": "pipe-e2e", "argv": ARGV, "opener": opener}
         opened = step(stack, token, OPEN, **names)
         expect(opened.get("ok", {}).get("resumed") is False and opened["ok"]["session"],
-               "cyfr opens a session on the driven program in the login entry's home", opened)
+               "cyfr opens a session on the driven program in the row's kept home", opened)
         session = opened["ok"]["session"]
         cat = one_cat(stack, "cyfr's session to run the row's command with the opener's argv")
         expect(kept_uid(cat), "it runs under a uid of the kept range", cat)
@@ -336,17 +321,19 @@ def cyfr_controller(image):
         expect(sent == {"ok": True}, "a line is sent over cyfr's session", sent)
         got = eventually(lambda: (lambda r: r if len(r.get("ok", {}).get("lines") or []) >= 2 else None)(
             step(stack, token, RECV, **held)), "the line to come back through cyfr")
-        expect([x["text"] for x in got["ok"]["lines"]] == [home_line(entry), "hello"] and got["ok"]["dropped"] == 0
+        expect([x["text"] for x in got["ok"]["lines"]] == [home_line(row_id), "hello"] and got["ok"]["dropped"] == 0
                and got["ok"]["running"] is True,
-               "cyfr reads the program's line back, from a program in the entry's kept home", got)
+               "cyfr reads the program's line back, from a program in the row's kept home", got)
 
-        # The person revokes the entry; cyfr ends what runs in its home.
-        revoked_at = time.monotonic()
-        revoked = step(stack, token, REVOKE, entry=entry)
-        expect("ok" in revoked, "the person revokes the login entry", revoked)
-        eventually(lambda: not cat_processes(stack), "cyfr to end the revoked entry's session", timeout_s=30)
-        expect(time.monotonic() - revoked_at < CYFR_PIPE_IDLE_MS / 1000,
-               "the session ended with the revoke, well inside its idle period")
+        # The person removes the row; cyfr ends what runs in its home and
+        # retires it.
+        removed_at = time.monotonic()
+        removed = confirmed(stack, token, {"action": "delete", "name": ROW})
+        expect(removed.get("deleted") == ROW, "the person removes the program row", removed)
+        eventually(lambda: not cat_processes(stack), "cyfr to end the removed row's session", timeout_s=30)
+        expect(time.monotonic() - removed_at < CYFR_PIPE_IDLE_MS / 1000,
+               "the session ended with the row's removal, well inside its idle period")
+        eventually(lambda: home_gone(stack, f"{KEPT_ROOT}/{row_id}"), "cyfr to retire the removed row's home")
         after = step(stack, token, RECV, **held)
         expect(after.get("ok", {}).get("running") is False and after["ok"]["lines"] == [],
                "a read of the ended session answers running: false and no lines", after)

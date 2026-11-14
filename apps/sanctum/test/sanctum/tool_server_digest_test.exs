@@ -68,7 +68,7 @@ defmodule Sanctum.ToolServerDigestTest do
             url: nil,
             command: "npx server",
             env: %{},
-            program: %{}
+            program: %{"home" => "scratch"}
         }
       ]
 
@@ -130,8 +130,9 @@ defmodule Sanctum.ToolServerDigestTest do
       assert {:ok, ^base} = ToolServerDigest.compute(%{@program | env: reordered})
     end
 
-    test "everything that decides what a program is and reaches moves its digest" do
+    test "everything that decides what a program is and reaches moves its digest and its record" do
       {:ok, base} = ToolServerDigest.compute(@program)
+      {:ok, record, _} = record_and_digest(@program)
 
       for {key, value} <- [
             {"hosts", nil},
@@ -140,11 +141,70 @@ defmodule Sanctum.ToolServerDigestTest do
             {"hosts", []},
             {"home", "scratch"},
             {"memory_bytes", nil},
+            {"memory_bytes", 536_870_912},
             {"home_max_bytes", 2_147_483_648},
-            {"login_command", "gh auth login --web"}
+            {"login_command", "gh auth login --web"},
+            {"login_command", nil}
           ] do
-        {:ok, digest} = ToolServerDigest.compute(put_in(@program, [:program, key], value))
+        variant = put_in(@program, [:program, key], value)
+        {:ok, digest} = ToolServerDigest.compute(variant)
         refute digest == base, "#{key} -> #{inspect(value)} kept the digest"
+
+        {:ok, moved, ^digest} = record_and_digest(variant)
+        refute moved == record, "#{key} -> #{inspect(value)} kept the record"
+      end
+    end
+
+    # Nothing the digest covers is outside the record but a literal's value
+    # and the row's identity: a program whose record and literals are the
+    # same has the same digest, whatever else its map holds.
+    test "a program's digest is its record and its literals' values" do
+      {:ok, record, digest} = record_and_digest(@program)
+
+      assert record == %{
+               "address" => "npx -y @modelcontextprotocol/server-github",
+               "env" => [
+                 %{"name" => "GITHUB_TOKEN", "entry" => "gh"},
+                 %{"name" => "NODE_ENV", "literal" => true}
+               ],
+               "folder" => "kept",
+               "hosts" => ["api.github.com", "github.com"],
+               "memory_bytes" => 268_435_456,
+               "home_max_bytes" => 1_073_741_824,
+               "sign_in_command" => "gh auth login"
+             }
+
+      assert {:ok, ^digest} =
+               Prima.JCS.hash(%{
+                 "id" => "mcp_row_1",
+                 "transport" => "program",
+                 "enabled" => true,
+                 "mark" => "mcp",
+                 "record" => record,
+                 "literals" => %{"NODE_ENV" => "production"}
+               })
+
+      # Hosts and a literal both moved: the record tells the hosts alone,
+      # and the digest moves for both.
+      hosts_only = put_in(@program, [:program, "hosts"], ["api.github.com"])
+      both = put_in(hosts_only, [:env, "NODE_ENV"], "development")
+      {:ok, hosts_record, hosts_digest} = record_and_digest(hosts_only)
+      assert {:ok, ^hosts_record, both_digest} = record_and_digest(both)
+      refute both_digest == hosts_digest
+    end
+
+    test "a program setting that does not read leaves it without a record or a digest" do
+      for {key, value} <- [
+            {"home", nil},
+            {"home", "shared"},
+            {"hosts", "github.com"},
+            {"hosts", [""]},
+            {"memory_bytes", 0},
+            {"home_max_bytes", "1 GiB"},
+            {"login_command", ""}
+          ] do
+        row = put_in(@program, [:program, key], value)
+        assert {:error, {:invalid_server_config, ^row}} = ToolServerDigest.compute(row)
       end
     end
 
@@ -218,6 +278,30 @@ defmodule Sanctum.ToolServerDigestTest do
     end
   end
 
+  # The record and digest of a server as `compute/1` reads it: the record
+  # through a stored row of the same definition.
+  defp record_and_digest(server) do
+    row = %{
+      id: server.id,
+      transport: server.transport,
+      mark: server.mark,
+      url: server.url,
+      enabled: server.enabled,
+      hosts: server.program["hosts"] && Jason.encode!(server.program["hosts"]),
+      home: server.program["home"],
+      memory_bytes: server.program["memory_bytes"],
+      home_max_bytes: server.program["home_max_bytes"],
+      login_command: server.program["login_command"],
+      config_json: Jason.encode!(%{"command" => server.command, "env" => server.env})
+    }
+
+    with {:ok, record} <- ToolServerDigest.recorded(row),
+         {:ok, digest} <- ToolServerDigest.from_server(row) do
+      {:ok, ^digest} = ToolServerDigest.compute(server)
+      {:ok, record, digest}
+    end
+  end
+
   describe "recorded/1" do
     # A stored row as the row store holds one, its config JSON beside its
     # program columns.
@@ -260,7 +344,8 @@ defmodule Sanctum.ToolServerDigestTest do
                 }}
     end
 
-    test "a program records its command and each environment variable, a literal by name alone" do
+    test "a program records its command, each environment variable, a literal by name " <>
+           "alone, and its settings, each unset one absent" do
       row =
         stored(%{
           transport: "program",
@@ -276,8 +361,18 @@ defmodule Sanctum.ToolServerDigestTest do
                   "env" => [
                     %{"name" => "GITHUB_TOKEN", "entry" => "gh"},
                     %{"name" => "NODE_ENV", "literal" => true}
-                  ]
+                  ],
+                  "folder" => "scratch"
                 }}
+
+      # A stored host list is a set; an empty one is a list of its own.
+      assert {:ok, %{"hosts" => ["api.github.com", "github.com"]}} =
+               ToolServerDigest.recorded(%{
+                 row
+                 | hosts: ~s(["github.com","api.github.com","github.com"])
+               })
+
+      assert {:ok, %{"hosts" => []}} = ToolServerDigest.recorded(%{row | hosts: "[]"})
 
       # A driven program offers no tools and has no digest, but is recorded
       # as a program of either mark is: its install confirmation shows it.

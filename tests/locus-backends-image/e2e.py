@@ -27,8 +27,9 @@ same locus-backends service, both with every setting compose gives them.
 A person signed in on the server (tests/release-boot/fixture.exs) has a
 canary credential, a random token, in the vault under a name this suite
 owns, seeded by the release's fixture (`vault`), defines an mcp program
-whose probe program reads it from the vault over `/mcp` with the person's
-session, and calls the program's tools as the console calls them (`/mcp`
+whose probe program reads it from the vault, under the confirmation of its
+whole definition the person's own device gives (the fixture's `confirmed`),
+and calls the program's tools as the console calls them (`/mcp`
 dispatches declared tools only); cyfr's MCP client drives the program over
 the session routes:
 
@@ -378,13 +379,17 @@ def cyfr_controller(image):
                f"{status} {json.dumps(refused)[:600]}")
         seeded = stack.fixture("vault", signed_in["token"], entry, "api_key", canary)
         expect(seeded.get("name") == entry, "the release's fixture seeds the canary's entry", seeded)
-        created = person.tool("mcp_servers", {"action": "create", "name": "e2e-probe", "config": {
-            "transport": "program", "mark": "mcp",
-            "console": True,
-            "backends": [{"name": "probe", "command": "node /probe/probe-backend.mjs",
-                          "env": {"PROBE_SECRET": f"vault:{entry}", "LOG_LEVEL": LITERAL}}],
-        }})
+        # Adding a program asks the confirmation of its whole definition
+        # (`program_definition`), which the person's own device gives.
+        created = stack.fixture("confirmed", signed_in["token"], "mcp_servers", json.dumps({
+            "action": "create", "name": "e2e-probe", "config": {
+                "transport": "program", "mark": "mcp",
+                "console": True,
+                "backends": [{"name": "probe", "command": "node /probe/probe-backend.mjs",
+                              "env": {"PROBE_SECRET": f"vault:{entry}", "LOG_LEVEL": LITERAL}}],
+            }}))
         print(f"created: {json.dumps(created)[:400]}", flush=True)
+        expect("ok" in created, "the person adds the program under their device's confirmation", created)
 
         # A proxied tool is `<server>:<tool>`, which the console calls for
         # the person through the gate (/mcp dispatches declared tools only);

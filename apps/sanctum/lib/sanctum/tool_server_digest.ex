@@ -8,10 +8,16 @@ defmodule Sanctum.ToolServerDigest do
   grant and a preview show and the digest a use is checked against cannot
   drift.
 
-  `recorded/1` is what is recorded of a row, nothing a person may not
-  read: its address (an http row's url, a program's command) and each
-  header (http) or environment variable (program) by its name with the
-  vault entry it names, a literal by its name alone, marked literal:
+  `recorded/1` is what is recorded of a row, everything that decides what
+  it is and reaches but a literal's value, nothing a person may not read:
+  its address (an http row's url, a program's command) and each header
+  (http) or environment variable (program) by its name with the vault
+  entry it names, a literal by its name alone, marked literal; and a
+  program's settings: its `folder` (`"kept"`, the row's own folder kept
+  between runs, or `"scratch"`), its `hosts` (the set of names it
+  reaches, sorted, each once; absent, every public host, which `[]`
+  never reads as), its `memory_bytes` and `home_max_bytes` bounds and its
+  `sign_in_command`, each absent when the row leaves it unset:
 
       %{"address" => "https://mcp.example/v1",
         "headers" => [%{"name" => "authorization", "entry" => "github", "scheme" => "Bearer"},
@@ -19,39 +25,40 @@ defmodule Sanctum.ToolServerDigest do
 
       %{"address" => "npx -y @modelcontextprotocol/server-github",
         "env" => [%{"name" => "GITHUB_TOKEN", "entry" => "gh"},
-                  %{"name" => "NODE_ENV", "literal" => true}]}
+                  %{"name" => "NODE_ENV", "literal" => true}],
+        "folder" => "kept",
+        "hosts" => ["api.github.com", "github.com"],
+        "memory_bytes" => 268435456,
+        "home_max_bytes" => 1073741824,
+        "sign_in_command" => "gh auth login"}
 
   A literal's value is never recorded: it is a secret the page never sees.
 
-  The digest is `JCS({id, transport, enabled, record, literals, mark,
-  program})`: the record, and what it must cover beyond it, never
-  resolved values. Rotating a referenced vault entry must not move the
-  digest, while each of these must, so a definition that reaches more no
-  longer matches a grant made for the old one and the person is asked
-  again at use:
+  The digest is `JCS({id, transport, enabled, mark, record, literals})`:
+  the record, each literal's value by its name beside it (`literals`),
+  and the row's identity, never resolved values. Rotating a referenced
+  vault entry must not move the digest, while each of these must, so a
+  definition that reaches more no longer matches a grant made for the
+  old one and the person is asked again at use:
 
-    * the address whole (scheme, host, port and path; a program's command);
-    * every header and env name with its template, through the record: a
-      vault-bound one by the entry it names and its scheme, and a literal,
-      beside the record, by its value (`literals`), since a peer may route
-      on any header (a literal `Host` sends the call and its credentials
-      elsewhere). A name added, removed, pointed at another entry or given
-      another literal moves the digest; a vault entry rotated in place
-      does not;
-    * a program's mark and its `program` member, everything else that
-      decides what it is and reaches, each setting it holds: its hosts
-      (the set of names, in one order; absent, every public host), its
-      home (a kept home is the row's own folder, named by the row's id),
-      its memory and disk bounds and its sign-in command;
-    * the row's id, so a row deleted and made again under its name does.
+    * everything the record holds: the address whole (scheme, host, port
+      and path; a program's command), every header and env name with the
+      entry it names and its scheme, and a program's settings. A name
+      added, removed or pointed at another entry moves the digest; a
+      vault entry rotated in place does not;
+    * a literal's value, since a peer may route on any header (a literal
+      `Host` sends the call and its credentials elsewhere);
+    * the row's id, so a row deleted and made again under its name does,
+      and whether it is enabled.
 
-  So a record that is the same under a moved digest is a literal's value,
-  or a setting beyond the record, that moved.
+  So a record that is the same under a moved digest is a value the record
+  does not show that moved: a literal's, the row's id or whether it is
+  enabled.
 
   The server's tool patterns and its timeout are left out: a grant
   carries its own patterns and only ever reaches their intersection with
   the server's (`tool_patterns/1`). An http row has no mark, command, env
-  or program; a program has no url.
+  or program settings; a program has no url.
   Only a tool server has a digest: an `http` row or a program marked
   `mcp`; a `driven` program offers no tools. A program of either mark is
   recorded: its install confirmation shows and binds the record
@@ -71,7 +78,9 @@ defmodule Sanctum.ToolServerDigest do
   alias Prima.VaultRef
 
   @typedoc "What is recorded of a tool server (`recorded/1`)."
-  @type server_record :: %{required(String.t()) => String.t() | [map()]}
+  @type server_record :: %{
+          required(String.t()) => String.t() | pos_integer() | [map() | String.t()]
+        }
 
   @doc "Compute the digest for a server's stored configuration."
   @spec compute(map()) :: {:ok, String.t()} | {:error, term()}
@@ -79,16 +88,15 @@ defmodule Sanctum.ToolServerDigest do
 
   def compute(server) do
     with {:ok, record, literals} <- record_of(server) do
-      JCS.hash(
-        %{
-          "id" => server.id,
-          "transport" => server.transport,
-          "enabled" => server.enabled,
-          "record" => record,
-          "literals" => literals
-        }
-        |> with_program(server.mark, server.program)
-      )
+      %{
+        "id" => server.id,
+        "transport" => server.transport,
+        "enabled" => server.enabled,
+        "record" => record,
+        "literals" => literals
+      }
+      |> put_present("mark", server.mark)
+      |> JCS.hash()
     end
   end
 
@@ -123,15 +131,16 @@ defmodule Sanctum.ToolServerDigest do
                  (transport == "program" and is_nil(url) and mark in ["mcp", "driven"] and
                     is_binary(command) and is_map(env) and is_map(program))) and
               is_boolean(enabled) and is_map(headers) do
-    {address, member, values} =
-      if transport == "http", do: {url, "headers", headers}, else: {command, "env", env}
+    if transport == "http" do
+      {:ok, %{"address" => url, "headers" => named(headers)}, literals(headers)}
+    else
+      case settings(program) do
+        {:ok, settings} ->
+          {:ok, Map.merge(settings, %{"address" => command, "env" => named(env)}), literals(env)}
 
-    case readable_hosts(program) do
-      :ok ->
-        {:ok, %{"address" => address, member => named(values)}, literals(values)}
-
-      :error ->
-        {:error, {:invalid_server_config, server}}
+        :error ->
+          {:error, {:invalid_server_config, server}}
+      end
     end
   end
 
@@ -161,29 +170,44 @@ defmodule Sanctum.ToolServerDigest do
     end
   end
 
-  defp readable_hosts(%{"hosts" => hosts}) when not is_nil(hosts) do
-    if is_list(hosts) and Enum.all?(hosts, &is_binary/1), do: :ok, else: :error
+  # A program's settings as the record holds them, each one it leaves
+  # unset absent: JCS takes no null, and absent hosts (every public host)
+  # must never read as a list. A setting that does not read leaves the row
+  # without a record, never with one that reads it as wider.
+  defp settings(%{"home" => folder} = program) when folder in ["kept", "scratch"] do
+    with {:ok, hosts} <- host_set(program["hosts"]),
+         true <- Enum.all?(["memory_bytes", "home_max_bytes"], &bound?(program[&1])),
+         true <- is_nil(program["login_command"]) or nonempty?(program["login_command"]) do
+      {:ok,
+       %{"folder" => folder}
+       |> put_present("hosts", hosts)
+       |> put_present("memory_bytes", program["memory_bytes"])
+       |> put_present("home_max_bytes", program["home_max_bytes"])
+       |> put_present("sign_in_command", program["login_command"])}
+    else
+      _unreadable -> :error
+    end
   end
 
-  defp readable_hosts(_program), do: :ok
-
-  # JCS takes no null, so an absent member is left out: a program's mark
-  # and program members are present, each setting it has not left absent.
-  defp with_program(document, nil, nil), do: document
-
-  defp with_program(document, mark, program) do
-    program =
-      program
-      |> Map.update("hosts", nil, &host_set/1)
-      |> Map.reject(fn {_key, value} -> is_nil(value) end)
-
-    Map.merge(document, %{"mark" => mark, "program" => program})
-  end
+  defp settings(_program), do: :error
 
   # What a program may reach is a set: its hosts in one order, each once.
-  # Absent is no restriction, which a list, even an empty one, never reads as.
-  defp host_set(hosts) when is_list(hosts), do: hosts |> Enum.uniq() |> Enum.sort()
-  defp host_set(nil), do: nil
+  defp host_set(nil), do: {:ok, nil}
+
+  defp host_set(hosts) when is_list(hosts) do
+    if Enum.all?(hosts, &nonempty?/1),
+      do: {:ok, hosts |> Enum.uniq() |> Enum.sort()},
+      else: :error
+  end
+
+  defp host_set(_hosts), do: :error
+
+  defp bound?(bytes), do: is_nil(bytes) or (is_integer(bytes) and bytes > 0)
+
+  defp nonempty?(value), do: is_binary(value) and value != ""
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   @doc """
   The ONE place a peer's schema spelling is normalized on the way in.
@@ -218,9 +242,9 @@ defmodule Sanctum.ToolServerDigest do
     }
   end
 
-  # What else decides what a program is and reaches, as its row stores it.
-  # A stored host list that does not read leaves the row without a digest,
-  # never with one that reads it as no restriction.
+  # A program's settings as its row stores them (`settings/1` records
+  # them). A stored host list that does not read leaves the row without a
+  # record, never with one that reads it as no restriction.
   defp program(%{transport: "program"} = server) do
     %{
       "hosts" => stored_hosts(Map.get(server, :hosts)),

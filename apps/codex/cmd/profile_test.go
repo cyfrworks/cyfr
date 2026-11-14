@@ -6,6 +6,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -378,17 +379,24 @@ func TestRenderPreview_EveryRowNamesItsNode(t *testing.T) {
 	}
 }
 
-// A program's record draws its command as its address and each environment
-// variable with the vault entry it names, a literal by its name alone.
+// A program's record draws its command as its address, each environment
+// variable with the vault entry it names, a literal by its name alone, and
+// its settings: absent hosts as every public host, an empty list as none,
+// an absent bound as the default and a bound of odd bytes exactly.
 func TestRenderPreview_DrawsAProgramsRecord(t *testing.T) {
-	row := map[string]any{"kind": "tool_servers", "node": "catalyst:local.coder", "values": map[string]any{
-		"name": "github", "digest": "sha256:ab", "tool_patterns": []any{"*"},
-		"record": map[string]any{"address": "npx -y server-github", "env": []any{
+	record := func(settings map[string]any) map[string]any {
+		row := map[string]any{"address": "npx -y server-github", "env": []any{
 			map[string]any{"name": "GITHUB_TOKEN", "entry": "personal"},
 			map[string]any{"name": "NODE_ENV", "literal": true},
-		}},
-	}}
-	want := []string{
+		}}
+		for key, value := range settings {
+			row[key] = value
+		}
+		return map[string]any{"kind": "tool_servers", "node": "catalyst:local.coder", "values": map[string]any{
+			"name": "github", "digest": "sha256:ab", "tool_patterns": []any{"*"}, "record": row,
+		}}
+	}
+	head := []string{
 		"catalyst:local.coder",
 		"github sha256:ab",
 		"its tools matching: *",
@@ -396,8 +404,22 @@ func TestRenderPreview_DrawsAProgramsRecord(t *testing.T) {
 		"variable GITHUB_TOKEN: vault entry personal",
 		"variable NODE_ENV: a literal, its value not shown",
 	}
-	if got := describeRow(row); !reflect.DeepEqual(got, want) {
-		t.Errorf("the program's row draws\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	for _, c := range []struct {
+		settings map[string]any
+		want     []string
+	}{
+		{map[string]any{"folder": "scratch"}, []string{
+			"folder: a scratch folder", "hosts: every public host",
+			"memory bound: the default", "folder bound: the default"}},
+		{map[string]any{"folder": "kept", "hosts": []any{}, "memory_bytes": float64(268435456),
+			"home_max_bytes": float64(1048577), "sign_in_command": "gh auth login"}, []string{
+			"folder: a folder kept between runs", "hosts: no host",
+			"memory bound: 256 MiB", "folder bound: 1048577 bytes", "sign-in command: gh auth login"}},
+	} {
+		want := append(append([]string{}, head...), c.want...)
+		if got := describeRow(record(c.settings)); !reflect.DeepEqual(got, want) {
+			t.Errorf("the program's row draws\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
 	}
 }
 
@@ -1595,17 +1617,28 @@ func expected(row map[string]any, field string, value any) []string {
 	case field == "record":
 		record := value.(map[string]any)
 		wants := []string{"address: " + str(record["address"])}
-		for _, item := range asList(record["headers"]) {
-			header := item.(map[string]any)
-			switch {
-			case header["literal"] == true:
-				wants = append(wants, "header "+str(header["name"])+": a literal, its value not shown")
-			case str(header["scheme"]) != "":
-				wants = append(wants, "header "+str(header["name"])+": vault entry "+
-					str(header["entry"])+" ("+str(header["scheme"])+")")
-			default:
-				wants = append(wants, "header "+str(header["name"])+": vault entry "+str(header["entry"]))
+		for _, member := range [][2]string{{"headers", "header"}, {"env", "variable"}} {
+			for _, item := range asList(record[member[0]]) {
+				named := item.(map[string]any)
+				switch {
+				case named["literal"] == true:
+					wants = append(wants, member[1]+" "+str(named["name"])+": a literal, its value not shown")
+				case str(named["scheme"]) != "":
+					wants = append(wants, member[1]+" "+str(named["name"])+": vault entry "+
+						str(named["entry"])+" ("+str(named["scheme"])+")")
+				default:
+					wants = append(wants, member[1]+" "+str(named["name"])+": vault entry "+str(named["entry"]))
+				}
 			}
+		}
+		// A program's settings, each in the person's words: the vectors'
+		// program keeps its folder and has whole-MiB bounds.
+		if record["folder"] == "kept" {
+			wants = append(wants, "folder: a folder kept between runs",
+				"hosts: "+joinStrings(record["hosts"]),
+				fmt.Sprintf("memory bound: %d MiB", int64(record["memory_bytes"].(float64))>>20),
+				fmt.Sprintf("folder bound: %d MiB", int64(record["home_max_bytes"].(float64))>>20),
+				"sign-in command: "+str(record["sign_in_command"]))
 		}
 		return wants
 	case field == "exit":

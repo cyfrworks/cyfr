@@ -152,11 +152,17 @@ defmodule Opus.Host.ToolFlowTest do
   # with exactly `flows`.
   defp edge(server, flows) do
     {:ok, digest} = Sanctum.ToolServerDigest.from_server(server)
+    {:ok, record} = Sanctum.ToolServerDigest.recorded(server)
 
     %{
       "tools" => ["execution.logs", "notes.read", "component.categories", "component.search"],
       "tool_servers" => [
-        %{"server_digest" => digest, "server_name" => @server, "tool_patterns" => ["echo"]}
+        %{
+          "server_digest" => digest,
+          "server_name" => @server,
+          "tool_patterns" => ["echo"],
+          "record" => record
+        }
       ],
       "storage" => %{"paths" => ["data/"], "actions" => ["read"]},
       "egress" => %{

@@ -941,10 +941,10 @@ defmodule Emissary.External.Provider do
   `id` the stored row's, `"new"` for an add). What is shown is its record
   (`Sanctum.ToolServerDigest.recorded/1`): the command, and each
   environment variable by its name with the vault entry it names
-  (`TOKEN=vault:personal`), a literal by its name alone; and its settings:
-  the mark, the folder (a kept program's is the row's own, `"new"` until
+  (`TOKEN=vault:personal`), a literal by its name alone, and its
+  settings: the folder (a kept program's is the row's own, `"new"` until
   it is made; a scratch program's is `"scratch"`), the hosts, the memory
-  and disk bounds and the sign-in command. A removal also names
+  and disk bounds and the sign-in command; and beside it the mark. A removal also names
   `grants`, the components whose grant binds the row and asks again
   (`Sanctum.Mount.granted_to/2`). The arguments are the same definition
   with the row's stored config beside it, so a literal's value is bound
@@ -955,23 +955,23 @@ defmodule Emissary.External.Provider do
           {:ok, map()} | {:error, term()}
   def definition_change(operation, name, row, grants) do
     with {:ok, record} <- Sanctum.ToolServerDigest.recorded(row) do
-      settings = Definition.settings(row)
+      kept? = record["folder"] == "kept"
 
       shown =
         %{
           "command" => record["address"],
           "environment" => environment(record["env"]),
           "mark" => row.mark,
-          "folder" => if(row.home == "kept", do: row.id, else: "scratch"),
-          "hosts" => settings["hosts"] || "every public host",
-          "memory_bytes" => bound(row.memory_bytes, "the backends service's bound"),
+          "folder" => if(kept?, do: row.id, else: "scratch"),
+          "hosts" => record["hosts"] || "every public host",
+          "memory_bytes" => bound(record["memory_bytes"], "the backends service's bound"),
           "home_max_bytes" =>
-            if(row.home == "kept",
-              do: bound(row.home_max_bytes, "the folders' volume"),
+            if(kept?,
+              do: bound(record["home_max_bytes"], "the folders' volume"),
               else: "scratch folder"
             )
         }
-        |> put_present("sign_in_command", Map.get(row, :login_command))
+        |> put_present("sign_in_command", record["sign_in_command"])
         |> put_present("grants_asking_again", if(grants == [], do: "none", else: grants))
 
       {:ok,

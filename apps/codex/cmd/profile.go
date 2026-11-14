@@ -1493,7 +1493,7 @@ func renderPreview(w io.Writer, preview map[string]any) {
 // serverRecordLines is what a grant records of a tool server, a line each:
 // its address, then each header (an http server's) or environment variable
 // (a program's) with the vault entry it names, or marked a literal, whose
-// value the record never holds.
+// value the record never holds, then a program's settings.
 func serverRecordLines(raw any) []string {
 	record, _ := raw.(map[string]any)
 	lines := []string{"address: " + str(record["address"])}
@@ -1511,7 +1511,54 @@ func serverRecordLines(raw any) []string {
 			}
 		}
 	}
+	return append(lines, programSettingLines(record)...)
+}
+
+// programSettingLines is a program's settings as its record holds them,
+// each in the person's words; an http server's record holds none.
+func programSettingLines(record map[string]any) []string {
+	folder, ok := record["folder"]
+	if !ok {
+		return nil
+	}
+	lines := []string{"folder: " + folderWords(str(folder)),
+		"hosts: " + hostsWords(record["hosts"]),
+		"memory bound: " + boundWords(record["memory_bytes"]),
+		"folder bound: " + boundWords(record["home_max_bytes"])}
+	if command, ok := record["sign_in_command"]; ok {
+		lines = append(lines, "sign-in command: "+str(command))
+	}
 	return lines
+}
+
+func folderWords(folder string) string {
+	if folder == "kept" {
+		return "a folder kept between runs"
+	}
+	return "a scratch folder"
+}
+
+// hostsWords is absent hosts as every public host, which an empty list,
+// reaching none, never reads as.
+func hostsWords(hosts any) string {
+	if hosts == nil {
+		return "every public host"
+	}
+	return listOr(hosts, "no host")
+}
+
+// boundWords is a bound in whole MiB, or its exact bytes, so two bounds
+// never read alike; absent, the service's own.
+func boundWords(raw any) string {
+	bytes, ok := raw.(float64)
+	if !ok {
+		return "the default"
+	}
+	const mib = 1 << 20
+	if int64(bytes)%mib == 0 {
+		return fmt.Sprintf("%d MiB", int64(bytes)/mib)
+	}
+	return fmt.Sprintf("%d bytes", int64(bytes))
 }
 
 // describeRow is one row in the CLI's words, its first line naming it.

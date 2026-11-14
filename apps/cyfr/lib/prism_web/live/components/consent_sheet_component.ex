@@ -198,6 +198,8 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   @read_methods ~w(GET HEAD)
 
+  @mib 1_048_576
+
   @impl true
   def mount(socket) do
     {:ok,
@@ -2420,26 +2422,38 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp head_binding(_plan, _row), do: nil
 
-  # What a grant records of a tool server, a line each: its address, and
-  # each header or environment variable with the vault entry it names, a
-  # literal by its name alone. The record holds no literal's value.
+  # What a grant records of a tool server, a line each: its address, each
+  # header or environment variable with the vault entry it names, a
+  # literal by its name alone, and a program's settings. The record holds
+  # no literal's value.
   defp record_lines(%{"address" => address} = record) do
     ["Address: #{address}"] ++
-      for {word, value} <- record_values(record) do
-        case value do
-          %{"literal" => true} ->
-            "#{word} #{value["name"]}: a literal, its value not shown"
-
-          %{"entry" => entry, "scheme" => scheme} ->
-            "#{word} #{value["name"]}: vault entry #{entry} (#{scheme})"
-
-          %{"entry" => entry} ->
-            "#{word} #{value["name"]}: vault entry #{entry}"
-        end
-      end
+      for(
+        {word, value} <- record_values(record),
+        do: "#{word} #{value["name"]}: #{entry_words(value)}"
+      ) ++
+      setting_lines(record)
   end
 
   defp record_lines(_none), do: []
+
+  defp entry_words(%{"literal" => true}), do: "a literal, its value not shown"
+
+  defp entry_words(%{"entry" => entry, "scheme" => scheme}),
+    do: "vault entry #{entry} (#{scheme})"
+
+  defp entry_words(%{"entry" => entry}), do: "vault entry #{entry}"
+
+  # A program's settings, each as the person reads it; an http server has
+  # none.
+  defp setting_lines(%{"folder" => _folder} = record) do
+    ["Folder: #{folder_words(record["folder"])}", "Hosts: #{hosts_words(record["hosts"])}"] ++
+      ["Memory bound: #{bound_words(record["memory_bytes"])}"] ++
+      ["Folder bound: #{bound_words(record["home_max_bytes"])}"] ++
+      for(command <- List.wrap(record["sign_in_command"]), do: "Sign-in command: #{command}")
+  end
+
+  defp setting_lines(_http), do: []
 
   defp record_values(record) do
     for {key, word} <- [{"headers", "Header"}, {"env", "Variable"}],
@@ -2448,10 +2462,13 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   # What moved in a tool server the head grants, as the person reads it:
-  # the record the head holds against the one asked for, by name. A
-  # literal's value is in neither record, so a literal whose record is the
-  # same under a moved digest is named alone: its value changed. Nothing
-  # for a first grant or an unmoved digest.
+  # the record the head holds against the one asked for. The record holds
+  # everything the digest covers but a literal's value, the row's id and
+  # whether it is enabled, so when the records differ each difference is
+  # named for what it is; when they are the same under a moved digest,
+  # only that a value the card does not show changed, which is all that
+  # can be told without the values. Nothing for a first grant or an
+  # unmoved digest.
   defp server_changes(%{} = head, %{"digest" => digest, "record" => %{} = asked}) do
     held = field(head, :record)
 
@@ -2460,23 +2477,56 @@ defmodule PrismWeb.ConsentSheetComponent do
         []
 
       held == asked ->
-        case for({word, %{"literal" => true} = value} <- record_values(asked), do: {word, value}) do
-          [] ->
-            ["Its other settings changed."]
-
-          literals ->
-            for {word, value} <- literals, do: "#{word} #{value["name"]}: its value changed."
-        end
+        ["A value it does not show changed."]
 
       true ->
-        address_change(held["address"], asked["address"]) ++ value_changes(held, asked)
+        kind_change(held, asked) ++
+          address_change(held["address"], asked["address"]) ++
+          value_changes(held, asked) ++ setting_changes(held, asked)
     end
   end
 
   defp server_changes(_head, _values), do: []
 
+  defp kind_change(%{"env" => _}, %{"headers" => _}),
+    do: ["It is now a server reached at its address, where it was a program."]
+
+  defp kind_change(%{"headers" => _}, %{"env" => _}),
+    do: ["It is now a program, where it was a server reached at its address."]
+
+  defp kind_change(_held, _asked), do: []
+
   defp address_change(same, same), do: []
   defp address_change(held, asked), do: ["Its address changed from #{held} to #{asked}."]
+
+  # A program's settings, compared only between two programs: a server
+  # that became a program, or the other way, says so (`kind_change/2`).
+  defp setting_changes(%{"folder" => _} = held, %{"folder" => _} = asked) do
+    for {key, what, words} <- [
+          {"folder", "folder", &folder_words/1},
+          {"hosts", "hosts", &hosts_words/1},
+          {"memory_bytes", "memory bound", &bound_words/1},
+          {"home_max_bytes", "folder bound", &bound_words/1},
+          {"sign_in_command", "sign-in command", &(&1 || "none")}
+        ],
+        held[key] != asked[key],
+        do: "Its #{what} changed from #{words.(held[key])} to #{words.(asked[key])}."
+  end
+
+  defp setting_changes(_held, _asked), do: []
+
+  defp folder_words("kept"), do: "a folder kept between runs"
+  defp folder_words("scratch"), do: "a scratch folder"
+
+  defp hosts_words(nil), do: "every public host"
+  defp hosts_words([]), do: "no host"
+  defp hosts_words(hosts), do: Enum.join(hosts, ", ")
+
+  # A bound in whole MiB, or its exact bytes, so two bounds never read
+  # alike; absent, the service's own.
+  defp bound_words(nil), do: "the default"
+  defp bound_words(bytes) when rem(bytes, @mib) == 0, do: "#{div(bytes, @mib)} MiB"
+  defp bound_words(bytes), do: "#{bytes} bytes"
 
   defp value_changes(held, asked) do
     was = Map.new(record_values(held), fn {word, value} -> {{word, value["name"]}, value} end)

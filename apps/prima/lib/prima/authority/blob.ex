@@ -1004,18 +1004,34 @@ defmodule Prima.Authority.Blob do
   program's), each a list sorted by name, each name once, of
   `%{"name", "entry"}` with an optional `"scheme"` for a value naming a
   vault entry, or `%{"name", "literal" => true}` for a literal, whose
-  value is never recorded.
+  value is never recorded. A program's record also holds its `folder`,
+  `"kept"` or `"scratch"`, and, each absent (never null) when unset, its
+  `hosts` (non-empty names, sorted, each once; `[]` reaches none, absent
+  every public host), its `memory_bytes` and `home_max_bytes` (positive
+  integers) and its `sign_in_command` (a non-empty string); an http
+  server's holds none of them.
   """
   @spec server_record?(term()) :: boolean()
-  def server_record?(%{"address" => address} = record)
-      when is_binary(address) and address != "" do
-    case Map.keys(record) -- ["address"] do
-      [member] when member in ["headers", "env"] -> record_values?(record[member])
-      _other -> false
-    end
+  def server_record?(%{"address" => address, "headers" => headers} = record)
+      when is_binary(address) and address != "" and map_size(record) == 2,
+      do: record_values?(headers)
+
+  def server_record?(%{"address" => address, "env" => env, "folder" => folder} = record)
+      when is_binary(address) and address != "" and folder in ["kept", "scratch"] do
+    record_values?(env) and
+      Enum.all?(Map.drop(record, ["address", "env", "folder"]), &program_setting?/1)
   end
 
   def server_record?(_record), do: false
+
+  defp program_setting?({"hosts", hosts}) when is_list(hosts),
+    do: Enum.all?(hosts, &nonempty?/1) and hosts == Enum.sort(Enum.uniq(hosts))
+
+  defp program_setting?({key, bytes}) when key in ["memory_bytes", "home_max_bytes"],
+    do: is_integer(bytes) and bytes > 0
+
+  defp program_setting?({"sign_in_command", command}), do: nonempty?(command)
+  defp program_setting?(_other), do: false
 
   defp record_values?(values) when is_list(values) do
     names = Enum.map(values, &(is_map(&1) && Map.get(&1, "name")))

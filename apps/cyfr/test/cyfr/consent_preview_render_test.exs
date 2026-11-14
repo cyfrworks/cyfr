@@ -282,17 +282,21 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   # What a grant records of a tool server: its address, and each header
   # with the vault entry it names, a literal by its name alone.
   defp expected(_row, "record", %{"address" => address, "headers" => headers}) do
-    ["Address: #{address}"] ++
-      Enum.map(headers, fn
-        %{"literal" => true, "name" => name} ->
-          "Header #{name}: a literal, its value not shown"
+    ["Address: #{address}" | named_lines("Header", headers)]
+  end
 
-        %{"entry" => entry, "scheme" => scheme, "name" => name} ->
-          "Header #{name}: vault entry #{entry} (#{scheme})"
-
-        %{"entry" => entry, "name" => name} ->
-          "Header #{name}: vault entry #{entry}"
-      end)
+  # A program's record: its command as its address, each variable as a
+  # header is, and its settings in the person's words (the vectors'
+  # program keeps its folder and has whole-MiB bounds).
+  defp expected(_row, "record", %{"address" => address, "env" => env} = record) do
+    ["Address: #{address}" | named_lines("Variable", env)] ++
+      [
+        "Folder: a folder kept between runs",
+        "Hosts: #{Enum.join(record["hosts"], ", ")}",
+        "Memory bound: #{div(record["memory_bytes"], 1_048_576)} MiB",
+        "Folder bound: #{div(record["home_max_bytes"], 1_048_576)} MiB",
+        "Sign-in command: #{record["sign_in_command"]}"
+      ]
   end
 
   # A credential's field map: each field the component reads, from the
@@ -390,5 +394,18 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     dialog = html |> LazyHTML.from_fragment() |> LazyHTML.query("#system-layer-dialog")
     assert Enum.count(dialog) == 1
     assert_every_row(LazyHTML.to_html(dialog), preview)
+  end
+
+  defp named_lines(word, values) do
+    Enum.map(values, fn
+      %{"literal" => true, "name" => name} ->
+        "#{word} #{name}: a literal, its value not shown"
+
+      %{"entry" => entry, "scheme" => scheme, "name" => name} ->
+        "#{word} #{name}: vault entry #{entry} (#{scheme})"
+
+      %{"entry" => entry, "name" => name} ->
+        "#{word} #{name}: vault entry #{entry}"
+    end)
   end
 end
