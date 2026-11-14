@@ -1011,22 +1011,18 @@ defmodule PrismWeb.AquaLiveTest do
     test "reconnecting a third-party brain by its versioned reference fills its own picker " <>
            "entry, never a local brain's of the same name",
          %{conn: conn, ctx: ctx} do
-      # acme's brain answers its models with the fixture's one model.
-      manifest = %{
-        "name" => "brain",
-        "type" => "catalyst",
-        "version" => "1.0.0",
-        "publisher" => "acme",
-        "contracts" => [Prima.Model.chat_contract()]
-      }
+      # acme's brain, as a pull installs it, answers its models with the
+      # chat fixture's one model.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, File.read!(Cyfr.Test.ChatFixture.wasm_path()), %{
+          name: "brain",
+          version: "1.0.0",
+          type: "catalyst",
+          publisher: "acme",
+          description: "acme's model catalyst",
+          manifest: Jason.encode!(%{"contracts" => [Prima.Model.chat_contract()]})
+        })
 
-      unit =
-        Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "acme", "brain", "1.0.0",
-          manifest: manifest,
-          wasm: File.read!(Cyfr.Test.ChatFixture.wasm_path())
-        )
-
-      {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
       publish_brain!(ctx, "brain", %{})
 
       refs = %{"acme.brain" => "catalyst:acme.brain", "brain" => "catalyst:local.brain"}
