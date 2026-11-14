@@ -111,8 +111,10 @@ const (
 	DecisionListGlobal      = "list_global"
 	DirectoryTombstone      = "tombstone"
 	DoorAllow               = "allow"
+	DoorClearAdmin          = "clear_admin"
 	DoorDeny                = "deny"
 	DoorList                = "list"
+	DoorMarkAdmin           = "mark_admin"
 	DoorRemove              = "remove"
 	DoorRequests            = "requests"
 	DoorResolve             = "resolve"
@@ -306,7 +308,7 @@ var Actions = map[string][]string{
 	"confirmation":        {"cancel", "confirm", "pending", "request"},
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"directory":           {"tombstone"},
-	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
+	"door":                {"allow", "clear_admin", "deny", "list", "mark_admin", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
 	"file":                {"accept", "decline", "delete", "list", "move", "offer", "offers", "read", "withdraw", "write"},
@@ -1357,6 +1359,21 @@ func (args DoorAllowArgs) MarshalJSON() ([]byte, error) {
 	}{Action: DoorAllow, fields: fields(args)})
 }
 
+// DoorClearAdminArgs carries arguments for door.clear_admin.
+type DoorClearAdminArgs struct {
+	// A person of this CYFR: their id (usr_…), their account's identifier (per_…) or the name they hold here (@name) (mark_admin, clear_admin)
+	Person string `json:"person"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DoorClearAdminArgs) MarshalJSON() ([]byte, error) {
+	type fields DoorClearAdminArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DoorClearAdmin, fields: fields(args)})
+}
+
 // DoorDenyArgs carries arguments for door.deny.
 type DoorDenyArgs struct {
 	// A person identifier (per_…), a handle (@name) or * to allow; a person's id (usr_…), a person identifier or a handle to deny. A handle is resolved at the registry and its identifier written, labelled with the handle (allow, deny)
@@ -1385,6 +1402,21 @@ func (args DoorListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: DoorList, fields: fields(args)})
+}
+
+// DoorMarkAdminArgs carries arguments for door.mark_admin.
+type DoorMarkAdminArgs struct {
+	// A person of this CYFR: their id (usr_…), their account's identifier (per_…) or the name they hold here (@name) (mark_admin, clear_admin)
+	Person string `json:"person"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DoorMarkAdminArgs) MarshalJSON() ([]byte, error) {
+	type fields DoorMarkAdminArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DoorMarkAdmin, fields: fields(args)})
 }
 
 // DoorRemoveArgs carries arguments for door.remove.

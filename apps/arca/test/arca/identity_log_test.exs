@@ -684,7 +684,8 @@ defmodule Arca.IdentityLogRaceTest do
 
     assert {{:error, :gone}, {:ok, %{seq: 0}}} =
              unboxed(fn ->
-               {IdentityLog.head(server(), a.identifier), IdentityLog.head(server(), b.identifier)}
+               {IdentityLog.head(server(), a.identifier),
+                IdentityLog.head(server(), b.identifier)}
              end)
   end
 
@@ -717,7 +718,9 @@ defmodule Arca.IdentityLogRaceTest do
     test = self()
     hold = holding(test)
 
-    first = Task.async(fn -> unboxed(fn -> clear(b.user_id, also: fn _b -> hold.(:ok) end) end) end)
+    first =
+      Task.async(fn -> unboxed(fn -> clear(b.user_id, also: fn _b -> hold.(:ok) end) end) end)
+
     assert_receive :first_decided, 5_000
 
     second = second(test, fn -> close(a.identifier) end)
