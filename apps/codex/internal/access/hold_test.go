@@ -226,26 +226,47 @@ func TestHoldRefusesOverAnotherOperationAndWithoutTheLock(t *testing.T) {
 }
 
 // A hold whose recovery cannot read .env stays for the next command, and
-// recovery answers the error with no receipt.
+// recovery answers the error with no receipt and starts nothing; once .env
+// reads again, the next recovery starts the stack. .env is made unreadable
+// by a directory in its place, which every system's read refuses, where a
+// mode bit holds back neither root nor Windows.
 func TestAHoldStaysWhileEnvCannotBeRead(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root reads any file")
-	}
 	h := newHome(t)
 	heldAndStopped(t, h, "backup")
 	j := holdJournal(t, h)
 	env := filepath.Join(h.dir, ".env")
-	if err := os.Chmod(env, 0); err != nil {
+	if err := os.Rename(env, env+".aside"); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(env, 0o600) })
+	if err := os.Mkdir(env, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(env); err == nil {
+		t.Fatal("a directory in .env's place reads")
+	}
+	before := len(h.fake.calls())
 	receipts, err := h.e.Resume(bg)
 	if err == nil || len(receipts) != 0 {
 		t.Errorf("recovery over an unreadable .env answered %+v, %v", receipts, err)
 	}
+	if calls := h.fake.calls()[before:]; slices.ContainsFunc(calls, func(c fakeCall) bool { return strings.Contains(" "+c.String()+" ", " up ") }) {
+		t.Errorf("recovery over an unreadable .env started the stack: %v", calls)
+	}
 	if after := holdJournal(t, h); after.RequestID != j.RequestID {
 		t.Errorf("the hold became %+v", after)
 	}
+
+	if err := os.Remove(env); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(env+".aside", env); err != nil {
+		t.Fatal(err)
+	}
+	receipts, err = h.e.Resume(bg)
+	if err != nil || len(receipts) != 1 || receipts[0].RequestID != j.RequestID || receipts[0].Outcome != "ok" {
+		t.Errorf("recovery once .env reads answered %+v, %v", receipts, err)
+	}
+	h.assertConverged(baseStack...)
 }
 
 // A release that fails leaves the hold: the next command's recovery starts
