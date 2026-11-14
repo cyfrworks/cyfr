@@ -597,7 +597,7 @@ async function proveOwn(page) {
     .then((el) => el.innerText()).catch(() => "");
   const tab = await confirmInTab(page, adminKeys, HOME,
     () => page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 }));
-  return { panel: words(confirmation).slice(0, 300), what: tab.what, confirmed: tab.confirmed, error: tab.error || null };
+  return { panel: words(confirmation).slice(0, 300), what: tab.what, confirmed: tab.confirmed, by: tab.by, error: tab.error || null };
 }
 
 const provenHere = (confirmation) =>

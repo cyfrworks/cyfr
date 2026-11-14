@@ -352,7 +352,9 @@ export async function sessionCookie(page, home) {
 // return page, which confirms the record and only then says so and closes
 // its tab, the page that asked going on by itself. Answers what the sign
 // page asked and whether the return page `confirmed` it, or the error it
-// shows; a tab left open is closed.
+// shows, and `by` which sign it was: `closed` (the tab closed itself),
+// `said` ("Confirmed", the tab left open) or `went` (to the page the
+// request named); a tab left open is closed.
 export async function confirmInTab(page, keys, home, click, { timeoutMs = STEP_MS } = {}) {
   const [tab] = await Promise.all([page.context().waitForEvent("page", { timeout: timeoutMs }), click()]);
   // Whether the tab came back to `home`, seen as it navigates: the return
@@ -381,16 +383,16 @@ async function confirmed(tab, home, cameBack, { timeoutMs = STEP_MS } = {}) {
   return waitFor(async () => {
     if (tab.isClosed()) {
       return cameBack()
-        ? { confirmed: true, closed: true, error: null }
-        : { confirmed: false, closed: true, error: `the tab closed before it came back to ${home.host}` };
+        ? { confirmed: true, by: "closed", error: null }
+        : { confirmed: false, by: null, error: `the tab closed before it came back to ${home.host}` };
     }
     const url = new URL(tab.url());
     if (url.origin !== home.origin || url.pathname.startsWith("/auth/")) return null;
-    if (url.pathname !== "/login") return { confirmed: true, closed: false, at: url.pathname, error: null };
+    if (url.pathname !== "/login") return { confirmed: true, by: "went", at: url.pathname, error: null };
     if (await tab.locator('[data-test="confirmed"]').count().catch(() => 0))
-      return { confirmed: true, closed: false, error: null };
+      return { confirmed: true, by: "said", error: null };
     const said = (await error.first().innerText().catch(() => "")).trim();
-    return said ? { confirmed: false, closed: false, error: said } : null;
+    return said ? { confirmed: false, by: null, error: said } : null;
   }, { timeoutMs, stepMs: 100, what: `the return page at ${home.host} to confirm` });
 }
 
