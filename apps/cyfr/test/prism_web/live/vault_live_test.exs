@@ -1763,6 +1763,87 @@ defmodule PrismWeb.VaultLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "a rename to a name with a control character is refused in the vault's words, and " <>
+           "the entry still rotates" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+      {view, _} = vault!(terry)
+      form = ~s(form[data-test="rename-form"])
+
+      view
+      |> element(~s([data-test="entry-rename"][phx-value-id="#{market.id}"]))
+      |> render_click()
+
+      view |> element(form) |> render_submit(%{"entry_id" => market.id, "name" => "Work\nkey"})
+
+      assert render(view) =~
+               "Not renamed: A name is text of at most 1024 bytes with no line break, tab or " <>
+                 "other control character."
+
+      assert names_of(terry) == ["market key"]
+
+      # The rotation the stored name would have blocked asks its confirmation
+      # and rotates.
+      assert {:ok, %{status: "rotated"}} =
+               Sanctum.TestContext.confirming(
+                 terry.ctx,
+                 &Sanctum.Gate.call_external("vault", &1, %{
+                   "action" => "rotate",
+                   "id" => market.id,
+                   "fields" => %{"MARKET_KEY" => "mk-rotated"},
+                   "expected_payload_rev" => market.payload_rev
+                 })
+               )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "while who reads an entry cannot be read, the rename form says so and saves nothing; " <>
+           "once it can, the form names the reader" do
+      %{terry: terry} = traders!()
+      token = key!(terry, "bridge-token", %{"hosts" => ["example.com"]})
+      tool_server!(terry, "bridge", "bridge-token")
+      {view, _} = vault!(terry)
+      form = ~s(form[data-test="rename-form"])
+
+      unread =
+        "Who reads this entry by its name could not be read, so nothing is renamed until it " <>
+          "can be. Try again shortly."
+
+      {_html, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          hide_table!("mcp_servers")
+
+          view
+          |> element(~s([data-test="entry-rename"][phx-value-id="#{token.id}"]))
+          |> render_click()
+
+          assert texts(view, ~s([data-test="rename-readers-unread"])) == [unread]
+          assert readers_line(view) == []
+
+          view |> element(form) |> render_submit(%{"entry_id" => token.id, "name" => "renamed"})
+          restore_table!("mcp_servers")
+        end)
+
+      assert render(view) =~
+               "Not renamed: who reads this entry by its name could not be read. Try again shortly."
+
+      assert names_of(terry) == ["bridge-token"]
+
+      # The listing answers again: the save shows the reader it now names,
+      # and renames nothing until saved over it.
+      view |> element(form) |> render_submit(%{"entry_id" => token.id, "name" => "renamed"})
+
+      assert readers_line(view) ==
+               [
+                 "The tool server bridge reads this entry by its name; renamed, it no longer finds it."
+               ]
+
+      refute has_element?(view, ~s([data-test="rename-readers-unread"]))
+      assert names_of(terry) == ["bridge-token"]
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "Rename is not offered on a revoked entry" do
       %{terry: terry} = traders!()
       market = key!(terry, "market key", @market)

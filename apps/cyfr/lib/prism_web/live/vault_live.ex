@@ -51,7 +51,9 @@ defmodule PrismWeb.VaultLive do
   it by that name, so the rename form names each, read when the form
   opens and again at save: a list that changed meanwhile is shown in the
   form again, and nothing is renamed until the person saves over the
-  list they saw. Each
+  list they saw. A list that cannot be read is no empty list: the form
+  says it cannot tell who reads the entry, and nothing is renamed until a
+  read succeeds. Each
   row names the grants that use it, `Used by <component>` for each active
   grant whose head binds it (`vault.list`'s `used_by`), with the grant's
   label when it is not `default`, or `Nothing uses it yet.`; when those
@@ -105,6 +107,11 @@ defmodule PrismWeb.VaultLive do
   alias PrismWeb.SystemLayer
   alias PrismWeb.SystemLayer.Share
   require Logger
+
+  # Said in the rename form, and when a save is refused, while who reads
+  # the entry cannot be read.
+  @readers_unread "Who reads this entry by its name could not be read, so nothing is " <>
+                    "renamed until it can be. Try again shortly."
 
   @share_kinds Prima.ShareKinds.all()
 
@@ -379,6 +386,15 @@ defmodule PrismWeb.VaultLive do
     readers = readers_of(socket, id)
 
     case socket.assigns.renaming do
+      _any when readers == :unread ->
+        {:noreply,
+         socket
+         |> assign(:renaming, %{id: id, readers: :unread})
+         |> put_flash(
+           :error,
+           "Not renamed: who reads this entry by its name could not be read. Try again shortly."
+         )}
+
       %{id: ^id, readers: ^readers} ->
         rename(socket, id, name)
 
@@ -895,21 +911,40 @@ defmodule PrismWeb.VaultLive do
             end)
           end)
 
-        _ ->
-          %{}
+        {:ok, other} ->
+          Logger.warning(
+            "[VaultLive] mcp_servers/list failed: #{fmt({:unexpected_shape, other})}"
+          )
+
+          :unread
+
+        {:error, reason} ->
+          Logger.warning("[VaultLive] mcp_servers/list failed: #{fmt(reason)}")
+          :unread
       end
 
-    assign(
-      socket,
-      :used_by,
-      Map.new(used_by, fn {ref, readers} -> {ref, Enum.sort_by(readers, &{&1.name, &1.kind})} end)
-    )
+    assign(socket, :used_by, sorted_readers(used_by))
   end
+
+  # A listing that failed stays `:unread`: it is never no readers.
+  defp sorted_readers(:unread), do: :unread
+
+  defp sorted_readers(used_by),
+    do:
+      Map.new(used_by, fn {ref, readers} -> {ref, Enum.sort_by(readers, &{&1.name, &1.kind})} end)
+
+  # The readers of `name` where knowing none is harmless (the row, Revoke's
+  # warning): an unread list names none there.
+  defp readers_named(:unread, _name), do: []
+  defp readers_named(used_by, name), do: Map.get(used_by, name, [])
 
   defp reader_kind("program"), do: :program
   defp reader_kind(_http), do: :tool_server
 
-  # The readers of the entry `id` names, by the name it holds now.
+  # The readers of the entry `id` names, by the name it holds now, or
+  # `:unread` when the listing failed.
+  defp readers_of(%{assigns: %{used_by: :unread}}, _id), do: :unread
+
   defp readers_of(socket, id) do
     case Enum.find(socket.assigns.entries, &(&1.id == id)) do
       %{name: name} -> Map.get(socket.assigns.used_by, name, [])
@@ -1244,11 +1279,19 @@ defmodule PrismWeb.VaultLive do
                 </.button>
               </form>
               <div
-                :if={renaming?(@renaming, entry) and @renaming.readers != []}
+                :if={renaming?(@renaming, entry) and @renaming.readers not in [[], :unread]}
                 class="text-xs text-amber-400/90"
                 data-test="rename-readers"
               >
                 {rename_readers(@renaming.readers)}
+              </div>
+              <div
+                :if={renaming?(@renaming, entry) and @renaming.readers == :unread}
+                role="alert"
+                class="text-xs text-amber-400/90"
+                data-test="rename-readers-unread"
+              >
+                {readers_unread()}
               </div>
               <div class="text-xs text-gray-500 font-mono">{entry.id}</div>
               <div
@@ -1261,8 +1304,11 @@ defmodule PrismWeb.VaultLive do
               <div :if={entry.used_by == []} class="text-xs text-gray-500" data-test="entry-unused">
                 Nothing uses it yet.
               </div>
-              <div :if={Map.get(@used_by, entry.name, []) != []} class="text-xs text-amber-400/90">
-                {used_by_line(@used_by[entry.name])}
+              <div
+                :if={readers_named(@used_by, entry.name) != []}
+                class="text-xs text-amber-400/90"
+              >
+                {used_by_line(readers_named(@used_by, entry.name))}
               </div>
             </div>
           </:col>
@@ -1795,6 +1841,8 @@ defmodule PrismWeb.VaultLive do
   # Grants that could not be read leave every entry's `used_by` nil.
   defp uses_unread?(entries), do: Enum.any?(entries, &is_nil(&1.used_by))
 
+  defp readers_unread, do: @readers_unread
+
   defp renaming?(%{id: id}, %{id: id}), do: true
   defp renaming?(_renaming, _entry), do: false
 
@@ -1824,7 +1872,7 @@ defmodule PrismWeb.VaultLive do
   defp revoke_confirm(entry, used_by) do
     base = "Profiles bound to this entry stop receiving it at their next run."
 
-    case Map.get(used_by, entry.name, []) do
+    case readers_named(used_by, entry.name) do
       [] ->
         base <> " Revoke?"
 
