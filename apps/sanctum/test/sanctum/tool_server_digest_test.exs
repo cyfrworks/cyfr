@@ -14,7 +14,6 @@ defmodule Sanctum.ToolServerDigestTest do
     enabled: true,
     headers: %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr"},
     backends: [],
-    tool_patterns: ["*"],
     program: nil
   }
 
@@ -54,22 +53,52 @@ defmodule Sanctum.ToolServerDigestTest do
       assert a == b
     end
 
-    test "every config axis moves the digest" do
+    test "what decides where a tool server's calls go and which entries ride along moves the digest" do
       {:ok, base} = ToolServerDigest.compute(@base)
 
       variants = [
         %{@base | id: "mcp_row_2"},
+        %{@base | url: "http://mcp.example/sse"},
         %{@base | url: "https://evil.example/sse"},
+        %{@base | url: "https://mcp.example:8443/sse"},
+        %{@base | url: "https://mcp.example/other"},
         %{@base | enabled: false},
-        %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN"}},
-        %{@base | tool_patterns: ["issues.*"]},
+        %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN", "user-agent" => "cyfr"}},
+        %{@base | headers: %{"user-agent" => "cyfr"}},
+        %{@base | headers: Map.put(@base.headers, "x-extra", "Bearer vault:EXTRA")},
         %{@base | transport: "program", mark: "mcp", url: nil, program: %{}}
       ]
 
       for variant <- variants do
         {:ok, digest} = ToolServerDigest.compute(variant)
-        refute digest == base
+        refute digest == base, inspect(variant)
       end
+    end
+
+    test "a literal header's value and the server's tool patterns keep the digest" do
+      {:ok, base} = ToolServerDigest.compute(@base)
+
+      for headers <- [
+            %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr/2"},
+            %{"authorization" => "vault:GH_TOKEN"},
+            %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr", "x-team" => "blue"}
+          ] do
+        assert {:ok, ^base} = ToolServerDigest.compute(%{@base | headers: headers}),
+               inspect(headers)
+      end
+
+      row = fn patterns ->
+        %{
+          id: "mcp_row_1",
+          transport: "http",
+          url: "https://mcp.example/sse",
+          enabled: true,
+          config_json: Jason.encode!(%{"headers" => @base.headers, "tool_patterns" => patterns})
+        }
+      end
+
+      assert {:ok, ^base} = ToolServerDigest.from_server(row.(["*"]))
+      assert {:ok, ^base} = ToolServerDigest.from_server(row.(["issues.*"]))
     end
 
     test "every backend axis of an mcp program moves the digest, and its env order does not" do

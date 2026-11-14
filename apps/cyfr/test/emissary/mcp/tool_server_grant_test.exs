@@ -282,6 +282,94 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     assert message =~ "Denied by chain authority"
   end
 
+  # The call under `auth` passes the authority (it fails later, at the
+  # upstream nothing serves here) or is refused by it.
+  defp authorized?(ctx, auth) do
+    case Sanctum.Gate.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+           lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+         ) do
+      {:error, %Prima.Refusal{stage: :admission, message: message}} ->
+        assert message =~ "Denied by chain authority"
+        false
+
+      {:error, _upstream} ->
+        true
+    end
+  end
+
+  # The server's whole definition replaced through `mcp_servers.update`, the
+  # edit's own path, at the epoch it stands at now.
+  defp edit(ctx, config, extra \\ %{}) do
+    {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "ghserver")
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("ghserver", ctx.athanor_id) end)
+
+    assert {:ok, _} =
+             Emissary.External.Provider.handle(
+               "mcp_servers",
+               ctx,
+               Map.merge(
+                 %{
+                   "action" => "update",
+                   "name" => "ghserver",
+                   "epoch" => epoch,
+                   "config" => config
+                 },
+                 extra
+               )
+             )
+
+    Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+  end
+
+  @granted %{
+    "url" => "https://127.0.0.1:1/mcp",
+    "headers" => %{},
+    "timeout_ms" => 1_000,
+    "tool_patterns" => ["issues.*", "repo_get"]
+  }
+
+  test "an edit that changes neither the address nor a vault-bound header keeps the grant",
+       %{ctx: ctx, digest: digest} do
+    auth = authority_with_server(digest)
+    assert authorized?(ctx, auth)
+
+    # The same definition saved again, another timeout, other tool patterns
+    # and a literal header added, then its value changed: none reaches more.
+    for config <- [
+          @granted,
+          %{@granted | "timeout_ms" => 5_000},
+          %{@granted | "tool_patterns" => ["issues.*"]},
+          %{@granted | "headers" => %{"X-Team" => "blue"}},
+          %{@granted | "headers" => %{"X-Team" => "green"}}
+        ] do
+      edit(ctx, config)
+      assert authorized?(ctx, auth), inspect(config)
+    end
+  end
+
+  test "an edit to another host, or one giving a header a vault entry, no longer matches the grant",
+       %{ctx: ctx, digest: digest} do
+    {:ok, _} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "gh-key",
+        kind: "api_key",
+        fields: %{"token" => "ghp_grant_test_0123456789"},
+        destination: %{"hosts" => ["127.0.0.1", "127.0.0.2"], "port" => 1}
+      })
+
+    auth = authority_with_server(digest)
+    assert authorized?(ctx, auth)
+
+    edit(ctx, %{@granted | "url" => "https://127.0.0.2:1/mcp"})
+    refute authorized?(ctx, auth)
+
+    edit(ctx, @granted)
+    assert authorized?(ctx, auth)
+
+    edit(ctx, %{@granted | "headers" => %{"Authorization" => "Bearer vault:gh-key"}})
+    refute authorized?(ctx, auth)
+  end
+
   test "an unknown server resolves to the sentinel and denies", %{ctx: ctx, digest: digest} do
     auth = authority_with_server(digest)
 
