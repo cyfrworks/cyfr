@@ -21,6 +21,8 @@ defmodule PrismWeb.AquaSetupTest do
 
   @moduletag timeout: 180_000
 
+  @key "sk-shared-7f3a"
+
   setup do
     Arca.Cache.init()
 
@@ -49,16 +51,16 @@ defmodule PrismWeb.AquaSetupTest do
     # which binds it to the brain it fits.
     port = Fixture.upstream!(~s({"id":"msg_upstream","content":"answered upstream"}))
     admin = Fixture.administrator!()
-    _share = Fixture.share_key!(admin, port, "sk-shared-7f3a", %{person_daily: 25})
+    _share = Fixture.share_key!(admin, port, @key, %{person_daily: 25})
     ctx = Fixture.athanor!()
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
-    {:ok, ctx: ctx}
+    {:ok, ctx: ctx, port: port}
   end
 
   test "a newcomer picks the brain their administrator's shared key binds, and Aqua answers " <>
          "after one confirmation",
-       %{conn: conn, ctx: ctx} do
+       %{conn: conn, ctx: ctx, port: port} do
     # The soul's model moved since its first fill consented it, so its
     # consent no longer covers it.
     {:ok, _} =
@@ -136,7 +138,6 @@ defmodule PrismWeb.AquaSetupTest do
              ~s(#system-layer-dialog [data-test="grant-pick"][aria-pressed="true"])
            )
 
-    tracer = trace_consent!(ctx)
     view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
     wait_until(fn -> render(view) =~ "aqua consented again." end, 10_000, "the soul's consent")
     refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
@@ -144,14 +145,27 @@ defmodule PrismWeb.AquaSetupTest do
     # The soul's brain is connected through the key it was shared, read as
     # the person reads it on the screen, whose origin the grant admits.
     person = %{ctx | origin: :interactive}
-    status = Aqua.model_status(person, [%{"name" => "aqua", "catalyst_ref" => Fixture.ref()}])
-    assert match?(%{"aqua" => {:ready, _}}, status), consent_state(person, status)
 
-    # Aqua answers.
+    assert %{"aqua" => {:ready, _}} =
+             Aqua.model_status(person, [%{"name" => "aqua", "catalyst_ref" => Fixture.ref()}])
+
+    # Aqua answers. The share is attach-only, so the brain never holds the
+    # key: its request goes to the upstream with the key CYFR attaches.
+    said = "Hello from your brain."
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    trace_setup_refusals!()
+
+    script = [
+      %{
+        "attached_request" =>
+          Fixture.attached_request(port, "/v1/messages", ~s({"said":"#{said}"})),
+        "emit" => [Fixture.text(said), Fixture.stop("end_turn")],
+        "answer" => Fixture.answer([Fixture.text_block(said)], "end_turn", Fixture.tokens(1, 1))
+      }
+    ]
 
     assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
-             Aqua.Runner.send_message(%{ctx | origin: :interactive}, thread.id, "@aqua hello")
+             Aqua.Runner.send_message(person, thread.id, Fixture.message(script, "@aqua hello"))
 
     wait_until(
       fn ->
@@ -164,248 +178,61 @@ defmodule PrismWeb.AquaSetupTest do
       "the turn"
     )
 
-    {:ok, turn} = Tape.turn(ctx, turn_id)
-    print_trace!(tracer)
-    assert turn.status == "completed", edges_state(person, turn)
+    print_setup_refusals!()
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn_id)
 
-    assert [%{kind: "text", content: "The fixture answers."}] =
+    assert [%{kind: "text", content: ^said}] =
              for(
                %{turn_id: ^turn_id, author: "aqua"} = row <-
                  Threads.messages(Sanctum.Context.actor(ctx), thread.id),
                do: row
              )
 
+    sent = Fixture.upstream_request!()
+    assert %{method: "POST", path: "/v1/messages"} = sent
+    assert for({"x-api-key", value} <- sent.headers, do: value) == [@key]
+
     Cyfr.Test.Sandbox.end_views()
   end
 
-  # Diagnostic: every consent write from the person's confirmation through
-  # the turn, and every `Opus.Attempt.fetch_secrets/1` and
-  # `Sanctum.Consent.Loader.pinned_intact?/2` call with its return, each
-  # beside the live heads of the soul's profile and of every lender the
-  # call names, read the moment the tracer hears it.
-  @traced [
-    {Opus.Attempt, :fetch_secrets, 1},
-    {Sanctum.Consent.Loader, :pinned_intact?, 2},
-    {Arca.ConsentStorage, :insert_revision, 4},
-    {Arca.ConsentStorage, :mint_profile_with_revision, 4}
-  ]
+  # Diagnostic for one run: where the loop turns a brain's refusal into
+  # setup (`needs_setup/1` for a refusal before the turn ran, `refused/3`
+  # for one a step answered), printed with the refusal it was given.
+  @refusal_traces [{Aqua.Loop, :needs_setup, 1}, {Aqua.Loop, :refused, 3}]
 
-  defp trace_consent!(ctx) do
-    actor = Sanctum.Context.actor(ctx)
+  defp trace_setup_refusals! do
+    :erlang.trace(:all, true, [:call, {:tracer, self()}])
 
-    profiles =
-      for {name, ref} <- [soul: "agent:local.aqua", brain: Fixture.ref()],
-          {:ok, [profile | _]} <- [Arca.ConsentStorage.profiles(actor, ref)],
-          into: %{},
-          do: {name, profile.id}
-
-    tracer = spawn(fn -> trace_loop(actor, profiles, []) end)
-    :erlang.trace(:all, true, [:call, {:tracer, tracer}])
-
-    for mfa <- @traced,
-        do:
-          :erlang.trace_pattern(mfa, [{:_, [], [{:return_trace}, {:exception_trace}]}], [:local])
-
-    tracer
+    for mfa <- @refusal_traces,
+        do: :erlang.trace_pattern(mfa, [{:_, [], [{:return_trace}]}], [:local])
   end
 
-  defp print_trace!(tracer) do
+  defp print_setup_refusals! do
     :erlang.trace(:all, false, [:call])
-    for mfa <- @traced, do: :erlang.trace_pattern(mfa, false, [:local])
-    send(tracer, {:done, self()})
-
-    receive do
-      {:trace_lines, lines} -> Enum.each(lines, &IO.puts("TRACE| " <> &1))
-    after
-      10_000 -> IO.puts("TRACE| the tracer did not answer")
-    end
+    for mfa <- @refusal_traces, do: :erlang.trace_pattern(mfa, false, [:local])
+    drain_refusal_traces()
   end
 
-  defp trace_loop(actor, profiles, lines) do
+  defp drain_refusal_traces do
     receive do
-      {:done, from} ->
-        send(from, {:trace_lines, Enum.reverse(lines)})
-
       {:trace, pid, :call, {m, f, args}} ->
-        line = "#{inspect(pid)} CALL #{inspect(m)}.#{f} #{described_args(f, args)}"
-        trace_loop(actor, profiles, [heads_line(actor, profiles, args), line | lines])
+        IO.puts("TRACE| #{inspect(pid)} CALL #{inspect(m)}.#{f} #{refusal_args(f, args)}")
+        drain_refusal_traces()
 
       {:trace, pid, :return_from, {m, f, a}, value} ->
-        line = "#{inspect(pid)} RETURN #{inspect(m)}.#{f}/#{a} #{whole(redacted(f, value))}"
-        trace_loop(actor, profiles, [heads_line(actor, profiles, []), line | lines])
+        IO.puts(
+          "TRACE| #{inspect(pid)} RETURN #{inspect(m)}.#{f}/#{a} #{inspect(value, limit: :infinity)}"
+        )
 
-      {:trace, pid, :exception_from, {m, f, a}, value} ->
-        line = "#{inspect(pid)} EXCEPTION #{inspect(m)}.#{f}/#{a} #{whole(value)}"
-        trace_loop(actor, profiles, [line | lines])
-
-      other ->
-        trace_loop(actor, profiles, ["OTHER #{whole(other)}" | lines])
+        drain_refusal_traces()
+    after
+      0 -> :ok
     end
   end
 
-  # What a run was handed is named, never shown.
-  defp redacted(:fetch_secrets, {:ok, secrets}) when is_map(secrets),
-    do: {:ok, {:fields, Map.keys(secrets)}}
+  # The refusal itself, never the turn's state.
+  defp refusal_args(:refused, [_state, error, message]),
+    do: inspect({error, message}, limit: :infinity)
 
-  defp redacted(_f, value), do: value
-
-  defp described_args(:fetch_secrets, [state]) do
-    whole(%{
-      authority: authority_pins(Map.get(state, :authority)),
-      ctx: context_coords(Map.get(state, :ctx)),
-      close_ctx: context_coords(state |> Map.get(:close) |> then(&(&1 && Map.get(&1, :ctx))))
-    })
-  end
-
-  defp described_args(:pinned_intact?, [ctx, authority]),
-    do: whole(%{ctx: context_coords(ctx), authority: authority_pins(authority)})
-
-  defp described_args(_commit, args), do: whole(args)
-
-  defp context_coords(%Sanctum.Context{} = ctx),
-    do: Map.take(ctx, [:user_id, :athanor_id, :plane, :origin, :auth_method, :anonymous])
-
-  defp context_coords(other), do: other
-
-  defp authority_pins(%Prima.Authority{} = auth) do
-    %{
-      profile_id: auth.profile_id,
-      consent_id: auth.consent_id,
-      source_ref: auth.source_ref,
-      cursor: auth.cursor,
-      vault: auth.resources |> then(&(is_map(&1) && Map.get(&1, :vault))),
-      policy_lenders: policy_lenders(auth.policy)
-    }
-  end
-
-  defp authority_pins(other), do: other
-
-  defp policy_lenders(%Prima.Authority.Blob{nodes: nodes}) do
-    for {node, %{edges: edges}} <- nodes,
-        {key, %{vault: %{lender: lender} = vault}} <- edges,
-        do: %{node: node, edge: key, lender: lender, binding_digest: vault[:binding_digest]}
-  end
-
-  defp policy_lenders(other), do: other
-
-  # The live heads of the soul's and the brain's profiles, and of every
-  # profile the call names as a lender.
-  defp heads_line(actor, profiles, args) do
-    named =
-      for %{profile_id: id} <- List.flatten([lenders_in(args)]), is_binary(id), do: {id, id}
-
-    heads =
-      for {name, id} <- Map.to_list(profiles) ++ named, into: %{} do
-        profile =
-          case Arca.ProfileStorage.get(actor, id) do
-            {:ok, row} -> Map.take(row, [:status, :head_consent_id])
-            other -> other
-          end
-
-        head =
-          case Arca.ConsentStorage.get_head(actor, id) do
-            {:ok, row, _refs} -> Map.take(row, [:id, :revision, :shape_digest, :granted_via])
-            other -> other
-          end
-
-        {name, %{profile_id: id, profile: profile, head: head}}
-      end
-
-    "  HEADS #{whole(heads)}"
-  end
-
-  defp lenders_in([state]) when is_map(state), do: lenders_of(Map.get(state, :authority))
-  defp lenders_in([_ctx, authority]), do: lenders_of(authority)
-  defp lenders_in(_args), do: []
-
-  defp lenders_of(%Prima.Authority{} = auth) do
-    from_resources =
-      case auth.resources do
-        %{vault: %{lender: lender}} -> [lender]
-        _ -> []
-      end
-
-    from_policy =
-      case policy_lenders(auth.policy) do
-        list when is_list(list) -> Enum.map(list, & &1.lender)
-        _ -> []
-      end
-
-    from_resources ++ from_policy
-  end
-
-  defp lenders_of(_other), do: []
-
-  defp whole(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
-
-  # The soul's edge into its brain as its head stores it and as the loader
-  # resolves it, for a failure's message.
-  defp edges_state(ctx, turn) do
-    soul = "agent:local.aqua"
-    {:ok, [profile | _]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), soul)
-    {:ok, row} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile.id)
-    {:ok, head, refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
-
-    stored =
-      with {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
-           {:ok, edge} <- Prima.Authority.Blob.lookup_edge(blob, soul, Fixture.ref(), "") do
-        edge.vault
-      end
-
-    loaded =
-      case Opus.authority_for(ctx, :default, soul) do
-        {:ok, authority} -> authority.consent_id
-        refused -> refused
-      end
-
-    inspect(
-      %{
-        turn: Map.take(turn, [:consent_id, :error, :origin, :agent_capability_digest]),
-        profile: Map.take(row, [:status, :head_consent_id]),
-        loaded_consent: loaded,
-        granted_via: head.granted_via,
-        stored: stored,
-        refs: refs,
-        resolved: Opus.authority_for(ctx, :default, soul) |> brain_edge(soul)
-      },
-      limit: :infinity,
-      printable_limit: 4000
-    )
-  end
-
-  # The soul's edge into its brain as the loader resolved it, or why it
-  # refused.
-  defp brain_edge({:ok, authority}, soul) do
-    case Prima.Authority.Blob.lookup_edge(authority.policy, soul, Fixture.ref(), "") do
-      {:ok, edge} -> edge.vault
-      other -> other
-    end
-  end
-
-  defp brain_edge(refused, _soul), do: refused
-
-  # What the soul's consent holds against what it is now, for a failure's
-  # message.
-  defp consent_state(ctx, status) do
-    soul = "agent:local.aqua"
-    {:ok, [profile | _]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), soul)
-    {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
-
-    fresh =
-      with {:ok, input} <- Sanctum.Consent.ShapeDerivation.shape_input(ctx, soul),
-           do: Sanctum.Consent.ShapeDigest.compute(input)
-
-    inspect(
-      %{
-        status: status,
-        head: Map.take(head, [:revision, :scope, :shape_digest, :granted_via, :activation]),
-        live: Sanctum.Consent.ShapeDerivation.live_digest(ctx, soul),
-        fresh: fresh,
-        loaded: Opus.authority_for(ctx, :default, soul) |> elem(0),
-        refused: Opus.authority_for(ctx, :default, soul) |> brain_edge(soul)
-      },
-      limit: :infinity,
-      printable_limit: 4000
-    )
-  end
+  defp refusal_args(_f, args), do: inspect(args, limit: :infinity)
 end
