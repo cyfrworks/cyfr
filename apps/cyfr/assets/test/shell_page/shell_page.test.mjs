@@ -4,7 +4,7 @@
 import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import ShellPage, {desktopKey, focusOf} from "../../js/hooks/shell_page.js"
+import ShellPage, {desktopKey, focusOf, shellKeyOf} from "../../js/hooks/shell_page.js"
 
 const ORIGIN = "https://cyfr.example"
 let windowListeners
@@ -78,6 +78,37 @@ describe("a desktop address naming a tincture", () => {
   })
 })
 
+describe("a desktop address naming the chooser of desktops", () => {
+  test("is handed to the shell as its key when the hook mounts on it", () => {
+    at("/a/@alice/?shell=desktops")
+    const {pushed} = mount()
+    assert.deepEqual(pushed, [{event: "shell_key", payload: {key: "desktops"}}])
+  })
+
+  test("is handed to the shell when the page moves to it", () => {
+    const {pushed} = mount()
+    windowListeners["phx:page-loading-stop"]({detail: {kind: "patch", to: ORIGIN + "/a/@alice/?shell=desktops"}})
+    assert.deepEqual(pushed, [{event: "shell_key", payload: {key: "desktops"}}])
+  })
+})
+
+describe("shellKeyOf", () => {
+  test("reads the chooser's key on the desktop's addresses alone", () => {
+    for (const path of ["/", "/a", "/a/@alice", "/a/@alice/"]) {
+      assert.equal(shellKeyOf(path + "?shell=desktops", ORIGIN), "desktops", path)
+    }
+    assert.equal(shellKeyOf("/a/@alice/components?shell=desktops", ORIGIN), null)
+    assert.equal(shellKeyOf("https://other.example/?shell=desktops", ORIGIN), null)
+  })
+
+  test("names no other key", () => {
+    for (const key of ["aqua", "chat", "schedules", ""]) {
+      assert.equal(shellKeyOf("/?shell=" + key, ORIGIN), null, key)
+    }
+    assert.equal(shellKeyOf("/", ORIGIN), null)
+  })
+})
+
 describe("focusOf", () => {
   test("reads the desktop's addresses alone", () => {
     for (const path of ["/", "/a", "/a/@alice", "/a/@alice/"]) {
@@ -112,7 +143,7 @@ describe("the desktop's keys", () => {
   })
 
   test("a key typed in a field or over the desktop stays there", () => {
-    for (const inside of [["input"], ["textarea"], ["#page-layer"], ["#chat-sheet"], ["#aqua-panel-sheet"], ["dialog[open]"]]) {
+    for (const inside of [["input"], ["textarea"], ["#page-layer"], ["#chat-sheet"], ["#aqua-panel-sheet"], ["#desktop-chooser"], ["dialog[open]"]]) {
       assert.equal(desktopKey({key: "Enter", target: el(inside)}), false, inside[0])
     }
     assert.equal(desktopKey({key: "Enter", target: el([], {isContentEditable: true})}), false)

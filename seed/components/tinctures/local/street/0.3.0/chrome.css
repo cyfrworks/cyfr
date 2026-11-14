@@ -1,0 +1,24 @@
+@font-face {
+  font-family: "Pixelify Sans";
+  src: url("assets/pixelify.woff2") format("woff2");
+}
+:root {
+  --chrome-ground: #f6f2e8;
+  --chrome-surface: #e9e2cf;
+  --chrome-ink: #1c1d26;
+  --chrome-accent: #1f4593;
+  --chrome-ground-dark: #13254f;
+  --chrome-surface-dark: #1b3266;
+  --chrome-ink-dark: #f3efe4;
+  --chrome-accent-dark: #f4c22e;
+  --chrome-radius: 0px;
+  --chrome-border: 3px;
+  --chrome-edge: 8px;
+  --chrome-title-height: 34px;
+  --chrome-controls: right;
+  --chrome-title-align: left;
+  --chrome-glyphs: pixel;
+  --chrome-font: "Pixelify Sans";
+  --chrome-texture-title: url("chrome/title.svg");
+  --chrome-texture-shelf: url("chrome/shelf.svg");
+}

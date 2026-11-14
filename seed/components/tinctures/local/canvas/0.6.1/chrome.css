@@ -1,0 +1,10 @@
+:root {
+  --chrome-radius: 12px;
+  --chrome-border: 1px;
+  --chrome-edge: 8px;
+  --chrome-title-height: 34px;
+  --chrome-controls: right;
+  --chrome-title-align: left;
+  --chrome-glyphs: plain;
+  --chrome-font: system;
+}
