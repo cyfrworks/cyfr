@@ -7,22 +7,25 @@ VERSION=""
 PUSH=""
 COMMIT_MSG=""
 GATE=""
+NOTES=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --push) PUSH="--push"; shift ;;
     --message) COMMIT_MSG="$2"; shift 2 ;;
     --gate) GATE="--gate"; shift ;;
+    --notes) NOTES="$2"; shift 2 ;;
     -*) echo "Unknown flag: $1"; exit 1 ;;
     *) VERSION="$1"; shift ;;
   esac
 done
 
-if [ -z "$VERSION" ]; then
-  echo "Usage: $0 <version> [--push] [--message <msg>] [--gate]"
-  echo "Example: $0 0.9.0 --push"
-  echo "         $0 0.9.0-rc.1 --push"
-  echo "         $0 0.9.0 --push --gate   # proves HEAD green here, offline, instead of by its run on GitHub"
+if [ -z "$VERSION" ] || [ -z "$NOTES" ]; then
+  echo "Usage: $0 <version> --notes <file> [--push] [--message <msg>] [--gate]"
+  echo "Example: $0 0.9.0 --notes notes.md --push"
+  echo "         $0 0.9.0-rc.1 --notes notes.md --push"
+  echo "         $0 0.9.0 --notes notes.md --push --gate   # proves HEAD green here, offline, instead of by its run on GitHub"
+  echo "The notes file holds the release's written note: what the release changes for a running CYFR, and what a person must do before they update."
   exit 1
 fi
 
@@ -36,6 +39,15 @@ if ! (LC_ALL=C; [[ "$VERSION" =~ $RELEASE ]]); then
   echo "Error: '$VERSION' is not a release version (MAJOR.MINOR.PATCH, or with a pre-release such as 0.9.0-rc.1)"
   exit 1
 fi
+
+# The release's written note goes into the annotated tag's message beneath
+# its subject, which the tag's workflow publishes as the release's notes
+# (scripts/ci/release-note.sh); it is read now, before anything is made.
+if ! NOTE="$(cat -- "$NOTES" 2>/dev/null)" || ! grep -q '[^[:space:]]' <<<"$NOTE"; then
+  echo "Error: the notes file '$NOTES' cannot be read or holds no note; it is the release's written note, published with the release"
+  exit 1
+fi
+TAG_MESSAGE="$(printf 'Release %s\n\n%s\n' "$VERSION" "$NOTE")"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -277,7 +289,7 @@ if all_declare "$HEAD_SHA"; then
   # no commit is made.
   echo "Every mix.exs declares $VERSION already:"
   grep -nF "version: \"$VERSION\"" "${MIXFILES[@]}"
-  git tag -a "$VERSION" "$HEAD_SHA" -m "Release $VERSION"
+  git tag -a --cleanup=verbatim "$VERSION" "$HEAD_SHA" -m "$TAG_MESSAGE"
   TAGGED="$HEAD_SHA"
   echo ""
   echo "Done! Version $VERSION tagged at $(git rev-parse --short "$HEAD_SHA")."
@@ -332,7 +344,7 @@ else
     fi
     exit 1
   fi
-  git tag -a "$VERSION" "$BUMP" -m "Release $VERSION"
+  git tag -a --cleanup=verbatim "$VERSION" "$BUMP" -m "$TAG_MESSAGE"
   TAGGED="$BUMP"
 
   echo ""

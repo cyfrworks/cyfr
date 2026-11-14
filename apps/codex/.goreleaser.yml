@@ -73,6 +73,11 @@ homebrew_casks:
     # pushes it in a separate, non-fatal step.
     skip_upload: true
 
+# The release's notes are the tag's written note, which the release
+# workflow hands GoReleaser (--release-notes), never a list of commits.
+changelog:
+  disable: true
+
 release:
   github:
     owner: cyfrworks
