@@ -1766,16 +1766,23 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       end)
     end
 
+    # Memory is shown and typed in MiB: the ask, 8 MiB, is granted in bytes.
     test "is capped at the ask: above it is refused and sends nothing", %{view: view} do
-      assert has_element?(view, ~s([data-row="limits"]), "at most #{@ask}")
+      assert has_element?(
+               view,
+               ~s([data-row="limits"] li[data-limit="max_memory_bytes"]),
+               "Memory (MiB): 8"
+             )
 
-      for above <- ["#{@ask + 1}", "#{@ask * 2}"] do
+      assert has_element?(view, ~s([data-row="limits"]), "Memory (MiB) (at most 8)")
+
+      for above <- ["9", "16"] do
         lower(view, above)
 
         assert has_element?(
                  view,
                  ~s([data-row="limits"] [data-test="grant-refusal"]),
-                 "can be at most #{@ask}"
+                 "Memory (MiB) can be at most 8."
                )
 
         refute Map.has_key?(decisions(view), "subset")
@@ -1783,7 +1790,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     end
 
     test "below the ask is sent exactly; at the ask nothing is sent", %{view: view, node: node} do
-      lower(view, "4194304")
+      lower(view, "4")
       refute has_element?(view, ~s([data-test="grant-refusal"]))
 
       assert decisions(view)["subset"] == %{
@@ -1792,7 +1799,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
       # Back at the ask, the limit names nothing: the same decision as one
       # that never lowered it.
-      lower(view, "#{@ask}")
+      lower(view, "8")
       refute Map.has_key?(decisions(view), "subset")
     end
 
@@ -1853,7 +1860,8 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
     test "every exit is drawn, an exit with no flow among them, each class a box", %{view: view} do
       assert has_element?(view, ~s([data-row="exits"][data-exit="api.flow.example"]), "pinned")
-      assert has_element?(view, ~s([data-row="exits"][data-exit="api.flow.example"]), "filed")
+      assert has_element?(view, ~s([data-row="exits"][data-exit="api.flow.example"]), "filed notes")
+      refute has_element?(view, ~s([data-row="exits"] span.font-mono), "filed")
 
       assert has_element?(
                view,

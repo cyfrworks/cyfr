@@ -25,6 +25,7 @@ defmodule Prism.ConsentChoices do
   """
 
   @integer_limits ~w(max_memory_bytes max_request_size max_response_size max_concurrent_tasks)
+  @mib 1_048_576
   @duration_limits ~w(timeout batch_timeout)
 
   # The needs an entry meets; any other names a component.
@@ -1035,6 +1036,22 @@ defmodule Prism.ConsentChoices do
 
   defp lower(_field, "", _asked, _current), do: :unchanged
 
+  # Memory is read and typed in MiB, and granted in bytes.
+  defp lower("max_memory_bytes" = field, raw, asked, _current) do
+    with {mib, ""} <- Integer.parse(raw),
+         ask when is_integer(ask) <- asked[field] do
+      value = mib * @mib
+
+      cond do
+        value == ask -> {:ask, field}
+        value > ask or value < 0 -> {:error, "#{limit_label(field)} can be at most #{mib(ask)}."}
+        true -> {:ok, {field, value}}
+      end
+    else
+      _ -> {:error, "#{limit_label(field)} must be a whole number."}
+    end
+  end
+
   defp lower(field, raw, asked, _current) when field in @integer_limits do
     with {value, ""} <- Integer.parse(raw),
          ask when is_integer(ask) <- asked[field] do
@@ -1172,11 +1189,19 @@ defmodule Prism.ConsentChoices do
 
   def limit_label("timeout"), do: "Timeout"
   def limit_label("batch_timeout"), do: "Batch timeout"
-  def limit_label("max_memory_bytes"), do: "Memory (bytes)"
+  def limit_label("max_memory_bytes"), do: "Memory (MiB)"
   def limit_label("max_request_size"), do: "Request size (bytes)"
   def limit_label("max_response_size"), do: "Response size (bytes)"
   def limit_label("max_concurrent_tasks"), do: "Concurrent tasks"
   def limit_label("rate_limit"), do: "Rate"
   def limit_label("rate_requests"), do: "Requests per window"
   def limit_label(field), do: field
+
+  @doc "A number of bytes in MiB, whole where it divides evenly, else to one place."
+  @spec mib(integer()) :: String.t()
+  def mib(bytes) when is_integer(bytes) and rem(bytes, @mib) == 0,
+    do: Integer.to_string(div(bytes, @mib))
+
+  def mib(bytes) when is_integer(bytes),
+    do: :erlang.float_to_binary(bytes / @mib, decimals: 1)
 end

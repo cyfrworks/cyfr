@@ -812,7 +812,19 @@ defmodule Prism.ConsentChoicesTest do
              {:error, "Timeout must be a duration, like 30s or 5m."}
 
     assert ConsentChoices.lowered(%{"max_memory_bytes" => "1.5"}, asked, %{}) ==
-             {:error, "Memory (bytes) must be a whole number."}
+             {:error, "Memory (MiB) must be a whole number."}
+
+    # Memory is typed in MiB and granted in bytes; an ask that is no whole
+    # number of MiB is named to one place.
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "1"}, asked, %{}) ==
+             {:error, "Memory (MiB) can be at most 0.0."}
+
+    assert ConsentChoices.lowered(
+             %{"max_memory_bytes" => "2"},
+             %{"max_memory_bytes" => 4_194_304},
+             %{}
+           ) ==
+             {:ok, %{"max_memory_bytes" => 2_097_152}}
 
     assert ConsentChoices.lowered(%{"rate_requests" => "11"}, asked, %{}) ==
              {:error, "The rate can be at most 10 requests."}

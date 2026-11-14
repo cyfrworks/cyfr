@@ -3588,9 +3588,13 @@ defmodule PrismWeb.SystemLayerTest do
     setup [:signed_in, :asking_more]
 
     test "narrowing and lowered limits are submitted exactly, and are what is granted",
-         %{view: view, ref: ref, name_ref: node, local: local} do
+         %{view: view, ref: ref, name: name, name_ref: node, local: local} do
       {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-choose", ref)
       prompt(view, grant)
+
+      # A first grant is titled by the component's name.
+      assert has_element?(view, "#system-layer-title", "Grant #{name}")
+      assert has_element?(view, ".consent-sheet__header h3", "Grant this app")
 
       # The wildcard ask is one row, every tool, whole or none.
       assert has_element?(view, ~s([data-row="tools"]), "Every tool of the catalog (*)")
@@ -3785,6 +3789,11 @@ defmodule PrismWeb.SystemLayerTest do
       assert added == ["b.layer.example", "c.layer.example"]
 
       html = prompt(view, grant)
+
+      # A grant the athanor holds is reviewed, named by no revision.
+      assert has_element?(view, "#system-layer-title", "Grant #{name}")
+      assert has_element?(view, ".consent-sheet__header h3", "Review this app's grant")
+      refute html =~ "consent rev"
       assert has_element?(view, ~s([data-test="grant-delta"]), "which your grant does not give")
       assert has_element?(view, ~s([data-test="grant-delta"]), "c.layer.example")
       refute html =~ "now wants"
@@ -4830,6 +4839,9 @@ defmodule PrismWeb.SystemLayerTest do
       html = render(view)
       assert html =~ ~s(data-kind="confirmation")
       assert html =~ ~s(data-own="false")
+      # Titled in the words its operation is declared with.
+      assert has_element?(view, "#system-layer-title", "Create vault")
+      refute html =~ "Confirm vault.create"
       assert has_element?(view, ~s([data-test="confirmation-preview"]), "vault.create")
       assert has_element?(view, ~s([data-test="confirmation-preview"]), name)
       assert has_element?(view, ~s([data-test="confirmation-asker"]), "a browser signed in")

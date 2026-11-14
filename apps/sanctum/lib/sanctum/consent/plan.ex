@@ -585,23 +585,29 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp need_warning(%{disclose_only: true} = need) do
-    "need '#{need.need}' wants a disclosed #{kind_words(need)}: the component reads the value " <>
-      "itself, and no disclosed entry can yet — create one first" <> newer_words(need)
+    "The #{need.need} credential needs a disclosed #{kind_words(need)}: the component reads " <>
+      "the value itself, and the vault has no disclosed one yet" <> newer_words(need) <> "."
   end
 
   defp need_warning(need) do
-    "need '#{need.need}' wants #{kind_words(need)}, and none can yet. Create one first."
+    "The #{need.need} credential needs #{article(kind_words(need))}, and the vault has none yet."
   end
 
   defp kind_words(%{kind: "oauth"} = need) do
-    "oauth entry for #{Enum.join(need.hosts, ", ")} granting " <>
+    "OAuth sign-in to #{Enum.join(need.hosts, ", ")} granting " <>
       Enum.join(scope_set(need.scopes), ", ")
   end
 
   defp kind_words(%{kind: "login"} = need),
-    do: "login entry for the program #{Map.get(need, :program)}"
+    do: "login for the program #{Map.get(need, :program)}"
+
+  defp kind_words(%{kind: "api_key"} = need),
+    do: "API key for #{Enum.join(need.hosts || [], ", ")}"
 
   defp kind_words(need), do: "#{need.kind} entry for #{Enum.join(need.hosts || [], ", ")}"
+
+  defp article(<<first, _::binary>> = words) when first in ~c"AEIOU", do: "an " <> words
+  defp article(words), do: "a " <> words
 
   defp newer_words(%{newer_shipped: version}) when is_binary(version),
     do: ", or update to version #{version}, which the release ships"

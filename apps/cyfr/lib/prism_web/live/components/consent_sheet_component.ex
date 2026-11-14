@@ -180,6 +180,7 @@ defmodule PrismWeb.ConsentSheetComponent do
       lowerable: 1,
       lowered: 3,
       map_pending?: 1,
+      mib: 1,
       mapped: 2,
       new_choice: 3,
       row_needs: 1,
@@ -2303,7 +2304,7 @@ defmodule PrismWeb.ConsentSheetComponent do
             phx-value-choice={class}
             checked={on?}
           />
-          <span class="font-mono">{class}</span>
+          <span>{class_words(class)}</span>
         </label>
       </div>
       <.refusal refusal={@refusal} at={{"exits", @row["node"]}} />
@@ -2473,6 +2474,14 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp asked_methods(_ask), do: []
 
   defp folders(ask), do: Enum.filter(ask["values"]["paths"] || [], &String.ends_with?(&1, "/"))
+
+  # A class of what a run read (`Prima.Source`), in the person's words.
+  defp class_words("pinned"), do: "the pinned page"
+  defp class_words("filed"), do: "filed notes"
+  defp class_words("files_by_grant"), do: "files its grant reads"
+  defp class_words("vault_disclosed"), do: "values the vault disclosed"
+  defp class_words("outside"), do: "anything from outside this athanor"
+  defp class_words(class), do: class
 
   # What kind of place an exit is, in the person's words.
   defp exit_label("need:" <> need), do: "where its #{need} credential goes"
@@ -2701,6 +2710,10 @@ defmodule PrismWeb.ConsentSheetComponent do
     do: "#{r} per #{w}"
 
   defp limit_value("rate_requests", values), do: get_in(values, ["rate_limit", "requests"])
+
+  defp limit_value("max_memory_bytes", %{"max_memory_bytes" => bytes}) when is_integer(bytes),
+    do: mib(bytes)
+
   defp limit_value(field, values), do: values[field] || "none"
 
   # What changed since the head, by node: the app's own first, unheaded,
@@ -2751,7 +2764,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp title(nil), do: "Loading…"
   defp title(%{expected_consent_revision: 0}), do: "Grant this app"
-  defp title(%{expected_consent_revision: n}), do: "Update this grant (consent rev #{n})"
+  defp title(%{expected_consent_revision: _granted}), do: "Review this app's grant"
   defp title(_plan), do: "Grant this app"
 
   defp choice_class(true), do: "consent-sheet__choice consent-sheet__choice--selected"
