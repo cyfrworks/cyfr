@@ -1,5 +1,5 @@
 {
-  "comment": "The release manifest's vectors (release.json: version, the cyfr, cyfr_locus, caddy and tailscale image digests and the scaffold tarball's digest). valid and valid_prerelease are manifests every reader accepts, a release's and a pre-release's, and each refused manifest one every reader refuses: apps/codex/internal/release/manifest_test.go holds ParseManifest to them, and tests/ci-release-graph.py holds the release workflow's manifest check to them. versions is the one rule for a release version, as a tag names it: every accepted one is a version and every refused one is not, to apps/codex/internal/release (IsVersion), Cyfr.ReleaseChannel (version?/1, apps/cyfr/test/cyfr/release_channel_test.exs), tests/ci-release-graph.py's SEMVER, the release workflow's version step, scripts/scaffold-tarball.sh and scripts/release.sh alike; ascending lists versions in increasing SemVer precedence, which release.Compare and Cyfr.ReleaseChannel's newer?/2 hold. signature is a test Sigstore instance's trusted root, the valid manifest's exact bytes with a v0.3 bundle signed under the release workflow's identity for signature.version, the valid pre-release manifest's signed for its own tag, refused signed pairs each naming the step that refuses it (refused_by: signature, manifest or version), and a signed checksums.txt with the scaffold tarball it names, which the scaffold package's tests serve. manifest_test.go verifies them with VerifyManifest and VerifyBlob; `go test ./internal/release -run TestRegenerateFixture -regenerate` (from apps/codex) rewrites the signature section under a new instance and keeps the rest. Verification reads the signed timestamps, never the clock, so the section stays valid. A real bundle of the public-good instance is recorded beside these after the first tagged release that signs release.json. selection is the one rule for the release an install or an update takes when no version is named, as the GitHub releases API lists them (draft, prerelease, tag_name), read page by page (per_page=100, from page 1 until a page holds fewer than 100 releases, at most 10 pages; each row's pages are those answers, any later page empty): the newest release that is not a pre-release (not marked one by GitHub and without a pre-release in its tag) and, while none is listed, the newest pre-release, by SemVer precedence; drafts and tags outside the release-version grammar are skipped, and picks null is a listing with none to take. scripts/install.sh (tests/install-verify-test.sh), release.Latest (apps/codex/internal/release/release_test.go) and Cyfr.ReleaseChannel's newest/1 (apps/cyfr/test/cyfr/release_channel_test.exs) hold it.",
+  "comment": "The release manifest's vectors (release.json: version, the cyfr, cyfr_locus, caddy and tailscale image digests and the scaffold tarball's digest). valid and valid_prerelease are manifests every reader accepts, a release's and a pre-release's, and each refused manifest one every reader refuses: apps/codex/internal/release/manifest_test.go holds ParseManifest to them, and tests/ci-release-graph.py holds the release workflow's manifest check to them. versions is the one rule for a release version, as a tag names it: every accepted one is a version and every refused one is not, to apps/codex/internal/release (IsVersion), Cyfr.ReleaseChannel (version?/1, apps/cyfr/test/cyfr/release_channel_test.exs), tests/ci-release-graph.py's SEMVER, the release workflow's version step, scripts/scaffold-tarball.sh and scripts/release.sh alike; ascending lists versions in increasing SemVer precedence, which release.Compare and Cyfr.ReleaseChannel's newer?/2 hold. signature is a test Sigstore instance's trusted root, the valid manifest's exact bytes with a v0.3 bundle signed under the release workflow's identity for signature.version, the valid pre-release manifest's signed for its own tag, refused signed pairs each naming the step that refuses it (refused_by: signature, manifest or version), and a signed checksums.txt with the scaffold tarball it names, which the scaffold package's tests serve. manifest_test.go verifies them with VerifyManifest and VerifyBlob; `go test ./internal/release -run TestRegenerateFixture -regenerate` (from apps/codex) rewrites the signature section under a new instance and keeps the rest. Verification reads the signed timestamps, never the clock, so the section stays valid. A real bundle of the public-good instance is recorded beside these after the first tagged release that signs release.json. selection is the one rule for the release an install or an update takes when no version is named, as the GitHub releases API lists them (draft, prerelease, tag_name), read page by page (per_page=100, from page 1 until a page holds fewer than 100 releases, at most 10 pages; each row's pages are those answers, any later page empty; a tenth page that is full means the listing cannot be read whole, which refuses, a row marked incomplete): the newest release that is not a pre-release (not marked one by GitHub and without a pre-release in its tag) and, while none is listed, the newest pre-release, by SemVer precedence; drafts and tags outside the release-version grammar are skipped, and picks null is a listing with none to take. scripts/install.sh (tests/install-verify-test.sh), release.Latest (apps/codex/internal/release/release_test.go) and Cyfr.ReleaseChannel's newest/1 (apps/cyfr/test/cyfr/release_channel_test.exs) hold it.",
   "valid": {
     "version": "1.2.3",
     "images": {
@@ -1662,51 +1662,15 @@
               }
             ]
           },
-          {
-            "tag_name": "0.10.0",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "porta-v1.2.0",
-            "draft": false,
-            "prerelease": false
-          },
-          {
-            "tag_name": "v0.20.0",
-            "draft": false,
-            "prerelease": false
-          },
-          {
-            "tag_name": "0.9.1-rc1",
-            "draft": false,
-            "prerelease": false
-          },
-          {
-            "tag_name": "1.0.0-rc.1",
-            "draft": false,
-            "prerelease": false
-          },
-          {
-            "tag_name": "1.1.0-alpha.1",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "01.0.0",
-            "draft": false,
-            "prerelease": false
-          },
-          {
-            "tag_name": "0.9.1",
-            "draft": false,
-            "prerelease": false
-          },
-          {
-            "tag_name": "0.6.3",
-            "draft": false,
-            "prerelease": false
-          }
+          {"tag_name": "0.10.0", "draft": false, "prerelease": true},
+          {"tag_name": "porta-v1.2.0", "draft": false, "prerelease": false},
+          {"tag_name": "v0.20.0", "draft": false, "prerelease": false},
+          {"tag_name": "0.9.1-rc1", "draft": false, "prerelease": false},
+          {"tag_name": "1.0.0-rc.1", "draft": false, "prerelease": false},
+          {"tag_name": "1.1.0-alpha.1", "draft": false, "prerelease": true},
+          {"tag_name": "01.0.0", "draft": false, "prerelease": false},
+          {"tag_name": "0.9.1", "draft": false, "prerelease": false},
+          {"tag_name": "0.6.3", "draft": false, "prerelease": false}
         ]
       ],
       "picks": "0.9.1"
@@ -1715,26 +1679,10 @@
       "name": "with only pre-releases, the newest pre-release, numeric identifiers by number",
       "pages": [
         [
-          {
-            "tag_name": "0.6.0-alpha.9",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.15",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.2",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.7.0-alpha.1",
-            "draft": true,
-            "prerelease": true
-          }
+          {"tag_name": "0.6.0-alpha.9", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.15", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.2", "draft": false, "prerelease": true},
+          {"tag_name": "0.7.0-alpha.1", "draft": true, "prerelease": true}
         ]
       ],
       "picks": "0.6.0-alpha.15"
@@ -1743,16 +1691,8 @@
       "name": "a bare tag GitHub marks as a pre-release is a pre-release",
       "pages": [
         [
-          {
-            "tag_name": "0.6.0",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.1",
-            "draft": false,
-            "prerelease": true
-          }
+          {"tag_name": "0.6.0", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.1", "draft": false, "prerelease": true}
         ]
       ],
       "picks": "0.6.0"
@@ -1761,16 +1701,8 @@
       "name": "a tag with a pre-release is one, flagged or not",
       "pages": [
         [
-          {
-            "tag_name": "0.6.0-alpha.1",
-            "draft": false,
-            "prerelease": false
-          },
-          {
-            "tag_name": "1.0.0-rc.2",
-            "draft": false,
-            "prerelease": false
-          }
+          {"tag_name": "0.6.0-alpha.1", "draft": false, "prerelease": false},
+          {"tag_name": "1.0.0-rc.2", "draft": false, "prerelease": false}
         ]
       ],
       "picks": "1.0.0-rc.2"
@@ -1779,21 +1711,9 @@
       "name": "a numeric identifier is lower than an alphanumeric one",
       "pages": [
         [
-          {
-            "tag_name": "1.0.0-alpha.1",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "1.0.0-alpha.beta",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "1.0.0-alpha",
-            "draft": false,
-            "prerelease": true
-          }
+          {"tag_name": "1.0.0-alpha.1", "draft": false, "prerelease": true},
+          {"tag_name": "1.0.0-alpha.beta", "draft": false, "prerelease": true},
+          {"tag_name": "1.0.0-alpha", "draft": false, "prerelease": true}
         ]
       ],
       "picks": "1.0.0-alpha.beta"
@@ -1802,21 +1722,9 @@
       "name": "alphanumeric identifiers in ASCII order, then by number",
       "pages": [
         [
-          {
-            "tag_name": "1.0.0-beta.11",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "1.0.0-beta.2",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "1.0.0-alpha.12",
-            "draft": false,
-            "prerelease": true
-          }
+          {"tag_name": "1.0.0-beta.11", "draft": false, "prerelease": true},
+          {"tag_name": "1.0.0-beta.2", "draft": false, "prerelease": true},
+          {"tag_name": "1.0.0-alpha.12", "draft": false, "prerelease": true}
         ]
       ],
       "picks": "1.0.0-beta.11"
@@ -1825,16 +1733,8 @@
       "name": "a pre-release's longer run of equal identifiers is higher",
       "pages": [
         [
-          {
-            "tag_name": "1.0.0-rc",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "1.0.0-rc.1",
-            "draft": false,
-            "prerelease": true
-          }
+          {"tag_name": "1.0.0-rc", "draft": false, "prerelease": true},
+          {"tag_name": "1.0.0-rc.1", "draft": false, "prerelease": true}
         ]
       ],
       "picks": "1.0.0-rc.1"
@@ -1843,16 +1743,8 @@
       "name": "a later line's pre-release over an earlier line's",
       "pages": [
         [
-          {
-            "tag_name": "0.10.0-alpha.1",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.9.0-rc.3",
-            "draft": false,
-            "prerelease": true
-          }
+          {"tag_name": "0.10.0-alpha.1", "draft": false, "prerelease": true},
+          {"tag_name": "0.9.0-rc.3", "draft": false, "prerelease": true}
         ]
       ],
       "picks": "0.10.0-alpha.1"
@@ -1868,26 +1760,10 @@
       "name": "drafts and tags outside the grammar pick none",
       "pages": [
         [
-          {
-            "tag_name": "1.0.0",
-            "draft": true,
-            "prerelease": false
-          },
-          {
-            "tag_name": "porta-v2.0.0",
-            "draft": false,
-            "prerelease": false
-          },
-          {
-            "tag_name": "v1.0.0",
-            "draft": false,
-            "prerelease": false
-          },
-          {
-            "tag_name": "1.0.0-01",
-            "draft": false,
-            "prerelease": true
-          }
+          {"tag_name": "1.0.0", "draft": true, "prerelease": false},
+          {"tag_name": "porta-v2.0.0", "draft": false, "prerelease": false},
+          {"tag_name": "v1.0.0", "draft": false, "prerelease": false},
+          {"tag_name": "1.0.0-01", "draft": false, "prerelease": true}
         ]
       ],
       "picks": null
@@ -1896,513 +1772,109 @@
       "name": "a release on the second page outranks a full first page of pre-releases",
       "pages": [
         [
-          {
-            "tag_name": "2.0.0-alpha.100",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.99",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.98",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.97",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.96",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.95",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.94",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.93",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.92",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.91",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.90",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.89",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.88",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.87",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.86",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.85",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.84",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.83",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.82",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.81",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.80",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.79",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.78",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.77",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.76",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.75",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.74",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.73",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.72",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.71",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.70",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.69",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.68",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.67",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.66",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.65",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.64",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.63",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.62",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.61",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.60",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.59",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.58",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.57",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.56",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.55",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.54",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.53",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.52",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.51",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.50",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.49",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.48",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.47",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.46",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.45",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.44",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.43",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.42",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.41",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.40",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.39",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.38",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.37",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.36",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.35",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.34",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.33",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.32",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.31",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.30",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.29",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.28",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.27",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.26",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.25",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.24",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.23",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.22",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.21",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.20",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.19",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.18",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.17",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.16",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.15",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.14",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.13",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.12",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.11",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.10",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.9",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.8",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.7",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.6",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.5",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.4",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.3",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.2",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "2.0.0-alpha.1",
-            "draft": false,
-            "prerelease": true
-          }
+          {"tag_name": "2.0.0-alpha.100", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.99", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.98", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.97", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.96", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.95", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.94", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.93", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.92", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.91", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.90", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.89", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.88", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.87", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.86", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.85", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.84", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.83", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.82", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.81", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.80", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.79", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.78", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.77", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.76", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.75", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.74", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.73", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.72", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.71", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.70", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.69", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.68", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.67", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.66", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.65", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.64", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.63", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.62", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.61", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.60", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.59", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.58", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.57", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.56", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.55", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.54", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.53", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.52", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.51", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.50", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.49", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.48", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.47", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.46", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.45", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.44", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.43", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.42", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.41", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.40", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.39", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.38", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.37", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.36", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.35", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.34", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.33", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.32", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.31", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.30", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.29", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.28", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.27", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.26", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.25", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.24", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.23", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.22", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.21", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.20", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.19", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.18", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.17", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.16", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.15", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.14", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.13", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.12", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.11", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.10", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.9", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.8", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.7", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.6", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.5", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.4", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.3", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.2", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.1", "draft": false, "prerelease": true}
         ],
         [
-          {
-            "tag_name": "1.0.0",
-            "draft": false,
-            "prerelease": false
-          }
+          {"tag_name": "1.0.0", "draft": false, "prerelease": false}
         ]
       ],
       "picks": "1.0.0"
@@ -2411,521 +1883,1143 @@
       "name": "the newest pre-release wherever its page is",
       "pages": [
         [
-          {
-            "tag_name": "0.6.0-alpha.1",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.2",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.3",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.4",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.5",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.6",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.7",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.8",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.9",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.10",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.11",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.12",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.13",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.14",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.15",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.16",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.17",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.18",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.19",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.20",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.21",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.22",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.23",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.24",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.25",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.26",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.27",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.28",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.29",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.30",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.31",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.32",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.33",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.34",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.35",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.36",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.37",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.38",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.39",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.40",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.41",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.42",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.43",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.44",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.45",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.46",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.47",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.48",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.49",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.50",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.51",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.52",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.53",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.54",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.55",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.56",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.57",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.58",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.59",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.60",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.61",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.62",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.63",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.64",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.65",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.66",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.67",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.68",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.69",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.70",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.71",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.72",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.73",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.74",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.75",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.76",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.77",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.78",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.79",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.80",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.81",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.82",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.83",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.84",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.85",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.86",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.87",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.88",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.89",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.90",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.91",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.92",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.93",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.94",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.95",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.96",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.97",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.98",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.99",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.6.0-alpha.100",
-            "draft": false,
-            "prerelease": true
-          }
+          {"tag_name": "0.6.0-alpha.1", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.2", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.3", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.4", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.5", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.6", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.7", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.8", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.9", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.10", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.11", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.12", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.13", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.14", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.15", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.16", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.17", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.18", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.19", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.20", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.21", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.22", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.23", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.24", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.25", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.26", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.27", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.28", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.29", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.30", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.31", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.32", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.33", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.34", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.35", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.36", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.37", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.38", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.39", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.40", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.41", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.42", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.43", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.44", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.45", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.46", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.47", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.48", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.49", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.50", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.51", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.52", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.53", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.54", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.55", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.56", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.57", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.58", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.59", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.60", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.61", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.62", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.63", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.64", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.65", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.66", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.67", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.68", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.69", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.70", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.71", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.72", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.73", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.74", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.75", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.76", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.77", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.78", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.79", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.80", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.81", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.82", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.83", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.84", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.85", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.86", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.87", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.88", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.89", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.90", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.91", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.92", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.93", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.94", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.95", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.96", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.97", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.98", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.99", "draft": false, "prerelease": true},
+          {"tag_name": "0.6.0-alpha.100", "draft": false, "prerelease": true}
         ],
         [
-          {
-            "tag_name": "0.6.0-alpha.101",
-            "draft": false,
-            "prerelease": true
-          },
-          {
-            "tag_name": "0.5.0-rc.1",
-            "draft": false,
-            "prerelease": true
-          }
+          {"tag_name": "0.6.0-alpha.101", "draft": false, "prerelease": true},
+          {"tag_name": "0.5.0-rc.1", "draft": false, "prerelease": true}
         ]
       ],
       "picks": "0.6.0-alpha.101"
+    },
+    {
+      "name": "ten full pages cannot be read whole, so the listing is refused rather than a release on page eleven missed",
+      "pages": [
+        [
+          {"tag_name": "2.0.0-alpha.0", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.1", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.2", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.3", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.4", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.5", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.6", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.7", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.8", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.9", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.10", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.11", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.12", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.13", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.14", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.15", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.16", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.17", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.18", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.19", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.20", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.21", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.22", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.23", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.24", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.25", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.26", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.27", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.28", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.29", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.30", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.31", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.32", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.33", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.34", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.35", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.36", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.37", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.38", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.39", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.40", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.41", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.42", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.43", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.44", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.45", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.46", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.47", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.48", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.49", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.50", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.51", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.52", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.53", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.54", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.55", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.56", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.57", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.58", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.59", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.60", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.61", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.62", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.63", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.64", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.65", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.66", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.67", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.68", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.69", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.70", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.71", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.72", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.73", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.74", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.75", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.76", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.77", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.78", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.79", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.80", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.81", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.82", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.83", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.84", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.85", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.86", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.87", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.88", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.89", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.90", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.91", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.92", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.93", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.94", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.95", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.96", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.97", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.98", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.99", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "2.0.0-alpha.100", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.101", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.102", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.103", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.104", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.105", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.106", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.107", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.108", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.109", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.110", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.111", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.112", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.113", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.114", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.115", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.116", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.117", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.118", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.119", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.120", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.121", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.122", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.123", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.124", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.125", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.126", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.127", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.128", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.129", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.130", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.131", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.132", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.133", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.134", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.135", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.136", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.137", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.138", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.139", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.140", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.141", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.142", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.143", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.144", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.145", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.146", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.147", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.148", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.149", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.150", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.151", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.152", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.153", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.154", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.155", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.156", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.157", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.158", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.159", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.160", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.161", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.162", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.163", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.164", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.165", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.166", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.167", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.168", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.169", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.170", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.171", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.172", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.173", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.174", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.175", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.176", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.177", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.178", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.179", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.180", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.181", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.182", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.183", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.184", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.185", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.186", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.187", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.188", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.189", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.190", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.191", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.192", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.193", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.194", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.195", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.196", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.197", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.198", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.199", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "2.0.0-alpha.200", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.201", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.202", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.203", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.204", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.205", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.206", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.207", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.208", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.209", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.210", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.211", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.212", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.213", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.214", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.215", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.216", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.217", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.218", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.219", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.220", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.221", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.222", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.223", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.224", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.225", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.226", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.227", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.228", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.229", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.230", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.231", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.232", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.233", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.234", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.235", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.236", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.237", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.238", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.239", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.240", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.241", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.242", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.243", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.244", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.245", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.246", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.247", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.248", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.249", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.250", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.251", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.252", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.253", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.254", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.255", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.256", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.257", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.258", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.259", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.260", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.261", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.262", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.263", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.264", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.265", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.266", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.267", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.268", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.269", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.270", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.271", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.272", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.273", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.274", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.275", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.276", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.277", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.278", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.279", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.280", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.281", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.282", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.283", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.284", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.285", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.286", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.287", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.288", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.289", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.290", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.291", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.292", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.293", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.294", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.295", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.296", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.297", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.298", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.299", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "2.0.0-alpha.300", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.301", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.302", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.303", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.304", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.305", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.306", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.307", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.308", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.309", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.310", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.311", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.312", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.313", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.314", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.315", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.316", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.317", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.318", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.319", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.320", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.321", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.322", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.323", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.324", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.325", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.326", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.327", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.328", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.329", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.330", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.331", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.332", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.333", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.334", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.335", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.336", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.337", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.338", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.339", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.340", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.341", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.342", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.343", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.344", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.345", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.346", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.347", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.348", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.349", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.350", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.351", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.352", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.353", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.354", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.355", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.356", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.357", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.358", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.359", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.360", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.361", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.362", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.363", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.364", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.365", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.366", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.367", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.368", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.369", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.370", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.371", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.372", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.373", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.374", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.375", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.376", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.377", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.378", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.379", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.380", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.381", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.382", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.383", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.384", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.385", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.386", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.387", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.388", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.389", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.390", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.391", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.392", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.393", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.394", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.395", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.396", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.397", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.398", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.399", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "2.0.0-alpha.400", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.401", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.402", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.403", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.404", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.405", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.406", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.407", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.408", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.409", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.410", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.411", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.412", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.413", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.414", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.415", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.416", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.417", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.418", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.419", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.420", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.421", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.422", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.423", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.424", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.425", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.426", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.427", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.428", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.429", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.430", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.431", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.432", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.433", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.434", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.435", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.436", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.437", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.438", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.439", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.440", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.441", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.442", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.443", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.444", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.445", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.446", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.447", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.448", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.449", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.450", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.451", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.452", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.453", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.454", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.455", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.456", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.457", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.458", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.459", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.460", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.461", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.462", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.463", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.464", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.465", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.466", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.467", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.468", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.469", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.470", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.471", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.472", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.473", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.474", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.475", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.476", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.477", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.478", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.479", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.480", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.481", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.482", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.483", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.484", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.485", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.486", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.487", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.488", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.489", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.490", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.491", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.492", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.493", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.494", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.495", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.496", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.497", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.498", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.499", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "2.0.0-alpha.500", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.501", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.502", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.503", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.504", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.505", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.506", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.507", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.508", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.509", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.510", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.511", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.512", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.513", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.514", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.515", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.516", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.517", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.518", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.519", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.520", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.521", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.522", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.523", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.524", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.525", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.526", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.527", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.528", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.529", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.530", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.531", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.532", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.533", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.534", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.535", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.536", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.537", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.538", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.539", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.540", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.541", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.542", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.543", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.544", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.545", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.546", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.547", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.548", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.549", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.550", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.551", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.552", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.553", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.554", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.555", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.556", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.557", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.558", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.559", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.560", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.561", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.562", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.563", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.564", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.565", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.566", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.567", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.568", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.569", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.570", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.571", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.572", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.573", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.574", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.575", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.576", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.577", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.578", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.579", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.580", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.581", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.582", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.583", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.584", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.585", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.586", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.587", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.588", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.589", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.590", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.591", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.592", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.593", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.594", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.595", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.596", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.597", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.598", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.599", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "2.0.0-alpha.600", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.601", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.602", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.603", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.604", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.605", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.606", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.607", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.608", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.609", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.610", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.611", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.612", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.613", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.614", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.615", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.616", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.617", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.618", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.619", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.620", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.621", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.622", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.623", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.624", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.625", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.626", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.627", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.628", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.629", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.630", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.631", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.632", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.633", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.634", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.635", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.636", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.637", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.638", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.639", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.640", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.641", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.642", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.643", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.644", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.645", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.646", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.647", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.648", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.649", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.650", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.651", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.652", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.653", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.654", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.655", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.656", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.657", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.658", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.659", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.660", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.661", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.662", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.663", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.664", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.665", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.666", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.667", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.668", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.669", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.670", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.671", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.672", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.673", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.674", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.675", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.676", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.677", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.678", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.679", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.680", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.681", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.682", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.683", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.684", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.685", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.686", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.687", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.688", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.689", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.690", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.691", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.692", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.693", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.694", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.695", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.696", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.697", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.698", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.699", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "2.0.0-alpha.700", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.701", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.702", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.703", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.704", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.705", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.706", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.707", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.708", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.709", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.710", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.711", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.712", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.713", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.714", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.715", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.716", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.717", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.718", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.719", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.720", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.721", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.722", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.723", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.724", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.725", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.726", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.727", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.728", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.729", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.730", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.731", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.732", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.733", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.734", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.735", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.736", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.737", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.738", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.739", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.740", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.741", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.742", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.743", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.744", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.745", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.746", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.747", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.748", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.749", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.750", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.751", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.752", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.753", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.754", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.755", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.756", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.757", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.758", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.759", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.760", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.761", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.762", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.763", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.764", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.765", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.766", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.767", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.768", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.769", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.770", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.771", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.772", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.773", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.774", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.775", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.776", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.777", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.778", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.779", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.780", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.781", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.782", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.783", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.784", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.785", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.786", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.787", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.788", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.789", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.790", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.791", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.792", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.793", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.794", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.795", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.796", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.797", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.798", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.799", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "2.0.0-alpha.800", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.801", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.802", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.803", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.804", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.805", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.806", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.807", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.808", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.809", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.810", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.811", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.812", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.813", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.814", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.815", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.816", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.817", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.818", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.819", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.820", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.821", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.822", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.823", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.824", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.825", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.826", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.827", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.828", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.829", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.830", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.831", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.832", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.833", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.834", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.835", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.836", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.837", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.838", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.839", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.840", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.841", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.842", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.843", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.844", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.845", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.846", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.847", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.848", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.849", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.850", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.851", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.852", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.853", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.854", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.855", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.856", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.857", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.858", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.859", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.860", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.861", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.862", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.863", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.864", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.865", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.866", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.867", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.868", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.869", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.870", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.871", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.872", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.873", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.874", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.875", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.876", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.877", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.878", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.879", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.880", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.881", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.882", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.883", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.884", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.885", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.886", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.887", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.888", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.889", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.890", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.891", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.892", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.893", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.894", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.895", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.896", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.897", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.898", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.899", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "2.0.0-alpha.900", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.901", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.902", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.903", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.904", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.905", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.906", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.907", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.908", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.909", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.910", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.911", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.912", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.913", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.914", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.915", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.916", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.917", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.918", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.919", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.920", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.921", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.922", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.923", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.924", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.925", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.926", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.927", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.928", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.929", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.930", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.931", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.932", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.933", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.934", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.935", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.936", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.937", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.938", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.939", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.940", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.941", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.942", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.943", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.944", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.945", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.946", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.947", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.948", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.949", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.950", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.951", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.952", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.953", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.954", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.955", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.956", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.957", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.958", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.959", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.960", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.961", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.962", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.963", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.964", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.965", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.966", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.967", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.968", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.969", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.970", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.971", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.972", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.973", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.974", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.975", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.976", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.977", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.978", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.979", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.980", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.981", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.982", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.983", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.984", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.985", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.986", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.987", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.988", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.989", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.990", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.991", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.992", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.993", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.994", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.995", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.996", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.997", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.998", "draft": false, "prerelease": true},
+          {"tag_name": "2.0.0-alpha.999", "draft": false, "prerelease": true}
+        ],
+        [
+          {"tag_name": "1.0.0", "draft": false, "prerelease": false}
+        ]
+      ],
+      "picks": null,
+      "incomplete": true
     }
   ]
 }

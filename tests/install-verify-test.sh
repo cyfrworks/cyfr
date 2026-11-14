@@ -251,6 +251,8 @@ for i, row in enumerate(rows):
         f.write(row["name"])
     with open(base + ".picks", "w") as f:
         f.write(row["picks"] or "")
+    with open(base + ".incomplete", "w") as f:
+        f.write("yes" if row.get("incomplete") else "")
 PY
 
 no_release="Error: no CYFR release is published yet (https://github.com/cyfrworks/cyfr/releases lists them)"
@@ -258,6 +260,7 @@ for name_file in "$fixture"/selection/*.name; do
     row="${name_file%.name}"
     name="$(cat "$name_file")"
     picks="$(cat "$row.picks")"
+    incomplete="$(cat "$row.incomplete")"
     for listing in "$row.json" "$row.min.json"; do
         rm -f "$fixture/asked"
         cat > "$api_bin/curl" <<CURL
@@ -268,7 +271,13 @@ page=\${url##*page=}
 if [ -f "$listing.\$page" ]; then cat "$listing.\$page"; else echo '[]'; fi
 CURL
         chmod +x "$api_bin/curl"
-        if [ -n "$picks" ]; then
+        if [ -n "$incomplete" ]; then
+            run_case "selection: $name ($(basename "$listing")) refuses" fail \
+                "PATH='$api_bin:$PATH'
+                 unset CYFR_VERSION
+                 resolve_version" \
+                "Error: the release listing could not be read whole: it holds more than 1000 releases"
+        elif [ -n "$picks" ]; then
             run_case "selection: $name ($(basename "$listing"))" ok \
                 "PATH='$api_bin:$PATH'
                  unset CYFR_VERSION
@@ -285,6 +294,24 @@ CURL
         fi
     done
 done
+
+# A later page that answered with something other than a list refuses,
+# as release.Latest and Cyfr.ReleaseChannel refuse it: the first page's
+# releases are never taken alone.
+python3 -I -c 'import json; print(json.dumps([{"tag_name": "2.0.0-alpha.%d" % i, "draft": False, "prerelease": True} for i in range(100)]))' > "$fixture/full-page.json"
+cat > "$api_bin/curl" <<CURL
+#!/bin/sh
+case "\$*" in
+  *page=1) cat "$fixture/full-page.json" ;;
+  *) printf '{' ;;
+esac
+CURL
+chmod +x "$api_bin/curl"
+run_case "a malformed later page refuses" fail \
+    "PATH='$api_bin:$PATH'
+     unset CYFR_VERSION
+     resolve_version" \
+    "Error: page 2 of the release listing is not a list of releases"
 
 # The install says which release it took.
 run_case "a release taken from the listing is the newest release" ok \

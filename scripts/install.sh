@@ -158,11 +158,12 @@ resolve_version() {
     # is skipped. awk runs under LC_ALL=C, so its ranges and its string
     # order are ASCII's.
     # The listing is read from page 1, 100 releases a page, until a page
-    # holds fewer, at most 10 pages, so a release past the first page
-    # still counts (as release.Latest reads it).
+    # holds fewer, so a release past the first page still counts; a full
+    # tenth page refuses rather than miss a release past it, and so does a
+    # page that is not a JSON list (as release.Latest reads it).
     response=""
     page=1
-    while [ "$page" -le 10 ]; do
+    while :; do
         api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100&page=${page}"
         if command -v curl >/dev/null 2>&1; then
             listed="$(curl -fsSL "$api_url")"
@@ -172,9 +173,20 @@ resolve_version() {
             printf "Error: curl or wget is required\n" >&2
             exit 1
         fi
+        case "$(printf '%s' "$listed" | tr -d ' \t\r\n' | cut -c1)$(printf '%s' "$listed" | tr -d ' \t\r\n' | tail -c 1)" in
+            "[]") ;;
+            *)
+                printf "Error: page %s of the release listing is not a list of releases, so the newest release cannot be known; nothing was installed. Try again, or set CYFR_VERSION to the version to install (https://github.com/%s/releases lists them)\n" "$page" "$GITHUB_REPO" >&2
+                exit 1
+                ;;
+        esac
         response="$response
 $listed"
         [ "$(printf '%s\n' "$listed" | grep -oE '"tag_name":' | wc -l)" -ge 100 ] || break
+        if [ "$page" -eq 10 ]; then
+            printf "Error: the release listing could not be read whole: it holds more than 1000 releases, so the newest release cannot be known; nothing was installed. Set CYFR_VERSION to the version to install (https://github.com/%s/releases lists them)\n" "$GITHUB_REPO" >&2
+            exit 1
+        fi
         page=$((page + 1))
     done
 

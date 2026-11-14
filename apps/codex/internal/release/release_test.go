@@ -109,9 +109,10 @@ func TestLatestRejectsShellMetacharacters(t *testing.T) {
 // rows: a listing as the GitHub releases API answers it, page by page, and
 // the release taken from it, null for none.
 type selectionCase struct {
-	Name  string            `json:"name"`
-	Pages []json.RawMessage `json:"pages"`
-	Picks *string           `json:"picks"`
+	Name       string            `json:"name"`
+	Pages      []json.RawMessage `json:"pages"`
+	Picks      *string           `json:"picks"`
+	Incomplete bool              `json:"incomplete"`
 }
 
 // Latest takes from each listing the release the shared selection rows
@@ -136,10 +137,12 @@ func TestLatestFollowsTheSelectionRows(t *testing.T) {
 		var want []string
 		for i, page := range c.Pages {
 			pages = append(pages, string(page))
-			want = append(want, fmt.Sprintf("per_page=%d&page=%d", perPage, i+1))
+			if i < maxPages {
+				want = append(want, fmt.Sprintf("per_page=%d&page=%d", perPage, i+1))
+			}
 		}
 		var last []json.RawMessage
-		if json.Unmarshal(c.Pages[len(c.Pages)-1], &last) == nil && len(last) == perPage {
+		if json.Unmarshal(c.Pages[len(c.Pages)-1], &last) == nil && len(last) == perPage && len(c.Pages) < maxPages {
 			want = append(want, fmt.Sprintf("per_page=%d&page=%d", perPage, len(c.Pages)+1))
 		}
 		asked := withAPIPages(t, pages, http.StatusOK)
@@ -148,6 +151,9 @@ func TestLatestFollowsTheSelectionRows(t *testing.T) {
 			t.Errorf("%s: Latest asked %q, want %q", c.Name, *asked, want)
 		}
 		switch {
+		case c.Incomplete && !errors.Is(err, ErrIncomplete):
+			t.Errorf("%s: Latest = %q, %v; want ErrIncomplete", c.Name, got, err)
+		case c.Incomplete:
 		case c.Picks == nil && !errors.Is(err, ErrNoRelease):
 			t.Errorf("%s: Latest = %q, %v; want ErrNoRelease", c.Name, got, err)
 		case c.Picks != nil && (err != nil || got != *c.Picks):

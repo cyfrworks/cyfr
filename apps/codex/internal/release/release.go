@@ -38,14 +38,18 @@ func IsPrerelease(v string) bool { return IsVersion(v) && strings.Contains(v, "-
 // to take.
 var ErrNoRelease = errors.New("no CYFR release is published yet")
 
+// ErrIncomplete is Latest's answer when the listing's last page it may read
+// is full: a release past it could be the one to take, so none is taken.
+var ErrIncomplete = errors.New("the release listing could not be read whole: it holds more than 1000 releases")
+
 // apiURL is the GitHub releases endpoint for the CYFR repo, read a page
 // at a time. It is a package variable so tests can point it at an
 // httptest server.
 var apiURL = "https://api.github.com/repos/cyfrworks/cyfr/releases"
 
 // The listing is read from page 1, perPage releases a page, until a page
-// holds fewer, at most maxPages pages: a release past the first page
-// still counts. tests/fixtures/release_manifest.json's selection rows are
+// holds fewer: a release past the first page still counts. A full page
+// maxPages refuses (ErrIncomplete) rather than miss a release past it. tests/fixtures/release_manifest.json's selection rows are
 // pages of this size.
 const (
 	perPage  = 100
@@ -69,7 +73,7 @@ type listedRelease struct {
 // rule, which scripts/install.sh and Cyfr.ReleaseChannel keep too.
 func Latest(ctx context.Context) (string, error) {
 	var releases []listedRelease
-	for page := 1; page <= maxPages; page++ {
+	for page := 1; ; page++ {
 		listed, err := listPage(ctx, page)
 		if err != nil {
 			return "", err
@@ -77,6 +81,9 @@ func Latest(ctx context.Context) (string, error) {
 		releases = append(releases, listed...)
 		if len(listed) < perPage {
 			break
+		}
+		if page == maxPages {
+			return "", ErrIncomplete
 		}
 	}
 	if latest := pick(releases); latest != "" {

@@ -72,7 +72,7 @@ defmodule Cyfr.ReleaseChannelTest do
     test "takes from each listing the release the shared selection rows name, reading every page up to the first that is not full" do
       assert @selection != []
 
-      for %{"name" => name, "pages" => pages, "picks" => picks} <- @selection do
+      for %{"name" => name, "pages" => pages, "picks" => picks} = row <- @selection do
         {:ok, asked} = Agent.start_link(fn -> [] end)
 
         fetch = fn page ->
@@ -80,19 +80,31 @@ defmodule Cyfr.ReleaseChannelTest do
           {:ok, 200, [], Jason.encode!(Enum.at(pages, page - 1, []))}
         end
 
-        assert {:ok, releases} = ReleaseChannel.listing(fetch)
-        assert ReleaseChannel.newest(releases) == picks, name
+        if row["incomplete"] do
+          assert ReleaseChannel.listing(fetch) == {:error, :incomplete}, name
+          assert Agent.get(asked, & &1) == Enum.to_list(1..10), name
+        else
+          assert {:ok, releases} = ReleaseChannel.listing(fetch)
+          assert ReleaseChannel.newest(releases) == picks, name
 
-        full = length(List.last(pages)) == 100
-        assert Agent.get(asked, & &1) == Enum.to_list(1..(length(pages) + if(full, do: 1, else: 0))), name
+          full = length(List.last(pages)) == 100
+
+          assert Agent.get(asked, & &1) ==
+                   Enum.to_list(1..(length(pages) + if(full, do: 1, else: 0))),
+                 name
+        end
+
         Agent.stop(asked)
       end
     end
 
     test "a page that fails fails the listing" do
       fetch = fn
-        1 -> {:ok, 200, [], Jason.encode!(for n <- 1..100, do: %{"tag_name" => "0.6.0-alpha.#{n}"})}
-        2 -> {:ok, 403, [], "rate limited"}
+        1 ->
+          {:ok, 200, [], Jason.encode!(for n <- 1..100, do: %{"tag_name" => "0.6.0-alpha.#{n}"})}
+
+        2 ->
+          {:ok, 403, [], "rate limited"}
       end
 
       assert ReleaseChannel.listing(fetch) == {:error, {:status, 403}}

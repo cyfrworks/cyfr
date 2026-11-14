@@ -27,8 +27,9 @@ defmodule Cyfr.ReleaseChannel do
   answer only asks for a read.
 
   The listing is read a page at a time, from page 1, 100 releases a page,
-  until a page holds fewer, at most 10 pages, as the CLI reads it, so a
-  release past the first page still counts.
+  until a page holds fewer, as the CLI reads it, so a release past the
+  first page still counts; a full tenth page is a failed read
+  (`:incomplete`), never a choice that might miss a release past it.
 
   Options: `:name`; `:fetch`, the read of one page, a function of the page
   number answering as `Sanctum.Egress.pinned_request/5` does, or `false` for an instance that
@@ -199,16 +200,20 @@ defmodule Cyfr.ReleaseChannel do
 
   @doc """
   The listing as `fetch` reads it page by page, from page 1 until a page
-  holds fewer than #{@per_page} releases or #{@max_pages} pages are read:
-  `{:ok, releases}`, or the first failure of a page, its reason a class.
+  holds fewer than #{@per_page} releases: `{:ok, releases}`, the first
+  failure of a page, its reason a class, or `{:error, :incomplete}` when
+  page #{@max_pages} is full.
   """
   @spec listing((pos_integer() -> term())) :: {:ok, list()} | {:error, term()}
   def listing(fetch), do: read(fetch, 1, [])
 
   defp read(fetch, page, releases) do
     case listed(fetch.(page)) do
-      {:ok, listed} when length(listed) < @per_page or page >= @max_pages ->
+      {:ok, listed} when length(listed) < @per_page ->
         {:ok, releases ++ listed}
+
+      {:ok, _listed} when page >= @max_pages ->
+        {:error, :incomplete}
 
       {:ok, listed} ->
         read(fetch, page + 1, releases ++ listed)
