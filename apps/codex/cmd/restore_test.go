@@ -436,7 +436,13 @@ func TestRestoreRefusesAStorageRootItCannotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(blobs, 0o755) })
-	r.refusedAtTheStart(filepath.Join("data", "blobs"))
+	// The refusal names the host path the project's compose file binds,
+	// which on macOS is under /private, /var being a link there.
+	resolved, err := filepath.EvalSymlinks(blobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.refusedAtTheStart(resolved)
 	if got := read(t, filepath.Join(blobs, "x")); got != "rewritten" {
 		t.Errorf("a part was put back before the refusal: blobs/x holds %q", got)
 	}
@@ -484,6 +490,64 @@ func TestRestoreAsksOnlyThePlacesItWrites(t *testing.T) {
 	if out, err := r.restore(true); err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
+}
+
+// The check at the start reads where the storage root is from this
+// project's own docker-compose.yml: a PostgreSQL restore whose local
+// storage is bound to another directory asks nothing of an unused ./data
+// this person cannot write.
+func TestRestoreDoesNotInspectAnUnusedDefaultMount(t *testing.T) {
+	store := t.TempDir()
+	if err := os.WriteFile(filepath.Join(store, "kept"), []byte("snapshot data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shipped := string(shippedCompose(t))
+	compose := strings.Replace(shipped, "      - ./data:/app/data\n", "      - "+store+":/app/data\n", 1)
+	if compose == shipped {
+		t.Fatal("default bind not replaced")
+	}
+	r := newRestoreScenario(t, []byte(compose), map[string]string{"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL}, func(s *updateScenario) {
+		raw := read(t, filepath.Join(s.fake, "config.out"))
+		old := filepath.Join(s.project, "data")
+		if !strings.Contains(raw, old) {
+			t.Fatal("default mount missing")
+		}
+		s.answer("config.out", strings.Replace(raw, old, store, 1))
+	})
+	if err := os.Chmod("data", 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod("data", 0o755)
+	if out, err := r.restore(true); err != nil {
+		t.Fatalf("restore with external local-storage bind rejected by unused ./data: %v\n%s", err, out)
+	}
+}
+
+// Where this project's docker-compose.yml cannot be read for certain, an
+// interpolated storage mount here, the check at the start asks nothing of
+// the storage root: the check after the live read refuses the root this
+// person cannot write, once the stack is stopped.
+func TestRestoreLeavesWhatItCannotReadToTheLaterCheck(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("every directory is writable to root, and Windows has no such mode")
+	}
+	shipped := string(shippedCompose(t))
+	compose := strings.Replace(shipped, "      - ./data:/app/data\n", "      - ${CYFR_DATA_DIR:-./data}:/app/data\n", 1)
+	if compose == shipped {
+		t.Fatal("default bind not replaced")
+	}
+	r := newRestoreScenario(t, []byte(compose), nil, nil)
+	r.edit("data/blobs/x", "rewritten")
+	blobs := filepath.Join(r.project, "data", "blobs")
+	if err := os.Chmod(blobs, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(blobs, 0o755) })
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "run the same cyfr restore as root, with sudo") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	r.stoppedUndeclared()
 }
 
 // A scaffold file whose path crosses a link is refused at the start,

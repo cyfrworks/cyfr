@@ -25,6 +25,7 @@ import (
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var restoreNoStart bool
@@ -748,33 +749,9 @@ func (r *restorer) readRestoredConfig() error {
 		return refuse("its storage is %s, but the snapshot was taken of %s storage", c.storage, r.snap.manifest.StorageAdapter)
 	}
 	if c.storage == "local" {
-		host, ok := mountedHost(mounts, dataPath)
-		if !ok {
-			return refuse("the storage root %s is on no bind mount of the cyfr service", dataPath)
+		if c.storageMounts, err = storageMountsAt(mounts, dataPath, r.snap); err != nil {
+			return refuse("%v", err)
 		}
-		root, err := hostPath(host, true)
-		if err != nil {
-			return refuse("the storage root %s (on the host %s): %v", dataPath, host, err)
-		}
-		c.storageMounts = []storageMount{{host: root, dir: true}}
-		var nested []storageMount
-		for _, n := range mountsUnder(mounts, dataPath) {
-			v, target := n.mount, path.Clean(n.mount.Target)
-			if v.Type != "bind" || v.Source == "" {
-				return refuse("the storage root %s has a %s mount at %s, whose bytes no host path holds", dataPath, v.Type, target)
-			}
-			placed, err := os.Lstat(filepath.Join(r.snap.path("storage"), filepath.FromSlash(n.rel)))
-			if err != nil || !placed.IsDir() && !placed.Mode().IsRegular() {
-				return refuse("the mount at %s has no place storage/%s in the snapshot, which was taken under another layout of mounts and cannot be inverted", target, n.rel)
-			}
-			host, err := hostPath(v.Source, placed.IsDir())
-			if err != nil {
-				return refuse("the mount at %s (on the host %s): %v", target, v.Source, err)
-			}
-			nested = append(nested, storageMount{rel: n.rel, host: host, dir: placed.IsDir()})
-		}
-		sortByDepth(nested)
-		c.storageMounts = append(c.storageMounts, nested...)
 		// A mount's bytes are replaced whole, so none may hold the project
 		// or the snapshot, nor lie inside the snapshot.
 		project, err := os.Getwd()
@@ -868,10 +845,10 @@ func (r *restorer) probeRestoredPostgres() error {
 }
 
 // refuseUnwritableProject refuses, before anything stops, a restore this
-// process could not write the places of: putBackPlaces for the layout the
-// shipped docker-compose.yml gives the snapshot (shippedLayout), whose
-// storage root the image's entrypoint hands to the image's user at every
-// start. On native Linux a person who is not root learns there that the
+// process could not write the places of: putBackPlaces for the layout this
+// project's own files give the snapshot as far as they can be read for
+// certain (projectLayout), whose storage root the image's entrypoint hands
+// to the image's user at every start. On native Linux a person who is not root learns there that the
 // restore needs sudo. refuseUnwritableParts asks again, of the same list
 // for the layout the restored configuration gives.
 func refuseUnwritableProject(snap *snapshotFiles) error {
@@ -880,7 +857,7 @@ func refuseUnwritableProject(snap *snapshotFiles) error {
 			return fmt.Errorf("%s cannot be restored: the path of its scaffold file %s %v; nothing was changed", snap.dir, name, err)
 		}
 	}
-	dirs, err := putBackPlaces(snap, shippedLayout(snap))
+	dirs, err := putBackPlaces(snap, projectLayout(snap))
 	if err == nil {
 		err = firstUnwritable(dirs)
 	}
@@ -898,22 +875,171 @@ type putBackLayout struct {
 	sqliteFile string
 }
 
-// storageRoot is the storage root the shipped docker-compose.yml binds,
-// and the SQLite file's directory there.
-const storageRoot = "data"
+// storageMountsAt are the storage root's mounts, shallower first, for the
+// cyfr service's mounts and its storage root dataPath, a container path:
+// the bind the root is on, then each mount under it at the place the
+// snapshot holds for it. A layout the snapshot cannot be put back into is
+// refused.
+func storageMountsAt(mounts []composeMount, dataPath string, snap *snapshotFiles) ([]storageMount, error) {
+	host, ok := mountedHost(mounts, dataPath)
+	if !ok {
+		return nil, fmt.Errorf("the storage root %s is on no bind mount of the cyfr service", dataPath)
+	}
+	root, err := hostPath(host, true)
+	if err != nil {
+		return nil, fmt.Errorf("the storage root %s (on the host %s): %v", dataPath, host, err)
+	}
+	var nested []storageMount
+	for _, n := range mountsUnder(mounts, dataPath) {
+		v, target := n.mount, path.Clean(n.mount.Target)
+		if v.Type != "bind" || v.Source == "" {
+			return nil, fmt.Errorf("the storage root %s has a %s mount at %s, whose bytes no host path holds", dataPath, v.Type, target)
+		}
+		placed, err := os.Lstat(filepath.Join(snap.path("storage"), filepath.FromSlash(n.rel)))
+		if err != nil || !placed.IsDir() && !placed.Mode().IsRegular() {
+			return nil, fmt.Errorf("the mount at %s has no place storage/%s in the snapshot, which was taken under another layout of mounts and cannot be inverted", target, n.rel)
+		}
+		host, err := hostPath(v.Source, placed.IsDir())
+		if err != nil {
+			return nil, fmt.Errorf("the mount at %s (on the host %s): %v", target, v.Source, err)
+		}
+		nested = append(nested, storageMount{rel: n.rel, host: host, dir: placed.IsDir()})
+	}
+	sortByDepth(nested)
+	return append([]storageMount{{host: root, dir: true}}, nested...), nil
+}
 
-// shippedLayout is the layout the shipped docker-compose.yml gives the
-// snapshot: ./data the one storage mount for local storage, and
-// data/cyfr.db the SQLite file.
-func shippedLayout(snap *snapshotFiles) putBackLayout {
+// projectLayout is the layout this project's own docker-compose.yml and
+// .env give the snapshot as they stand, read from disk without docker,
+// for the check at the start: the storage root's mounts for a snapshot
+// with local storage, and the SQLite file for a SQLite one. A part it
+// cannot read for certain is left out, and the check after the live read
+// asks it: another compose file or an override beside docker-compose.yml,
+// a cyfr service whose mounts are interpolated, extended, merged or of a
+// kind it does not read, and storage or database paths the service sets
+// for itself.
+func projectLayout(snap *snapshotFiles) putBackLayout {
 	var l putBackLayout
+	mounts, env, ok := projectMounts()
+	if !ok {
+		return l
+	}
+	setting := func(name, fallback string) (string, bool) { return settingPathIn(env, name, fallback) }
+	dataPath, ok := setting("CYFR_DATA_PATH", "data")
+	if !ok {
+		return l
+	}
 	if snap.manifest.StorageAdapter == "local" {
-		l.mounts = []storageMount{{host: storageRoot, dir: true}}
+		if m, err := storageMountsAt(mounts, dataPath, snap); err == nil {
+			l.mounts = m
+		}
 	}
 	if snap.database == "sqlite" {
-		l.sqliteFile = filepath.Join(storageRoot, "cyfr.db")
+		if dbPath, ok := setting("CYFR_DATABASE_PATH", path.Join(dataPath, "cyfr.db")); ok {
+			if host, ok := mountedHost(mounts, dbPath); ok {
+				l.sqliteFile = host
+			}
+		}
 	}
 	return l
+}
+
+// projectMounts are the cyfr service's mounts as this project's
+// docker-compose.yml writes them, with the storage and database paths .env
+// gives it; ok is false where they cannot be read for certain
+// (projectLayout).
+func projectMounts() (mounts []composeMount, env map[string]*string, ok bool) {
+	for _, name := range append(slices.Clone(access.ComposeMainFiles), "compose.override.yml", "compose.override.yaml", "docker-compose.override.yml", "docker-compose.override.yaml") {
+		if _, err := os.Lstat(name); err == nil && name != "docker-compose.yml" {
+			return nil, nil, false
+		}
+	}
+	project, err := os.Getwd()
+	if err != nil {
+		return nil, nil, false
+	}
+	data, err := os.ReadFile("docker-compose.yml")
+	if err != nil {
+		return nil, nil, false
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return nil, nil, false
+	}
+	services := mapValue(root.Content[0], "services")
+	if services == nil || services.Kind != yaml.MappingNode {
+		return nil, nil, false
+	}
+	cyfr := mapValue(services, "cyfr")
+	if cyfr == nil || cyfr.Kind != yaml.MappingNode {
+		return nil, nil, false
+	}
+	for _, key := range []string{"<<", "extends", "volumes_from", "tmpfs", "secrets", "configs"} {
+		if mapValue(cyfr, key) != nil {
+			return nil, nil, false
+		}
+	}
+	paths := []string{"CYFR_DATA_PATH", "CYFR_DATABASE_PATH"}
+	if environment := mapValue(cyfr, "environment"); environment != nil {
+		for _, n := range environment.Content {
+			for _, name := range paths {
+				if n.Value == name || strings.HasPrefix(n.Value, name+"=") {
+					return nil, nil, false
+				}
+			}
+		}
+	}
+	volumes := mapValue(cyfr, "volumes")
+	if volumes != nil && volumes.Kind != yaml.SequenceNode {
+		return nil, nil, false
+	}
+	var entries []*yaml.Node
+	if volumes != nil {
+		entries = volumes.Content
+	}
+	for _, v := range entries {
+		var m composeMount
+		switch v.Kind {
+		case yaml.ScalarNode:
+			parts := strings.Split(v.Value, ":")
+			if len(parts) < 2 || len(parts) > 3 {
+				return nil, nil, false
+			}
+			m = composeMount{Type: "volume", Source: parts[0], Target: parts[1]}
+			if strings.HasPrefix(parts[0], "/") || strings.HasPrefix(parts[0], ".") {
+				m.Type = "bind"
+			}
+		case yaml.MappingNode:
+			for key, field := range map[string]*string{"type": &m.Type, "source": &m.Source, "target": &m.Target} {
+				if n := mapValue(v, key); n != nil {
+					if n.Kind != yaml.ScalarNode {
+						return nil, nil, false
+					}
+					*field = n.Value
+				}
+			}
+		default:
+			return nil, nil, false
+		}
+		if strings.Contains(m.Source+m.Target, "$") || strings.HasPrefix(m.Source, "~") || m.Target == "" {
+			return nil, nil, false
+		}
+		if m.Type == "bind" && !filepath.IsAbs(m.Source) {
+			m.Source = filepath.Join(project, m.Source)
+		}
+		mounts = append(mounts, m)
+	}
+	values, err := access.ReadEnvValues(".env")
+	if err != nil {
+		return nil, nil, false
+	}
+	env = map[string]*string{}
+	for _, name := range paths {
+		if value, set := values[name]; set {
+			env[name] = &value
+		}
+	}
+	return mounts, env, true
 }
 
 // putBackPlaces are the directories putParts writes or removes in for the
