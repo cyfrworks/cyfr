@@ -183,13 +183,16 @@ defmodule Sanctum.DoorTest do
       assert {:error, :denied} = Door.admit_person(dave)
     end
 
-    test "an unadmitted one leaves one request naming the identifier, which resolve admits" do
+    test "an unadmitted one leaves one request naming the identifier and their name, which resolve admits" do
       carol = remote!(14)
+      {:ok, carol} = Sanctum.Tenancy.Users.set_namespace(carol, "carol")
 
       assert {:error, {:door, :not_allowed}} = Door.sign_in(carol)
       assert {:error, {:door, :not_allowed}} = Door.sign_in(carol)
 
-      assert [%{kind: "identifier", status: "requested"} = request] = Store.requests()
+      assert [%{kind: "identifier", status: "requested", label: "carol"} = request] =
+               Store.requests()
+
       assert request.value == identifier(14)
       assert {:error, :not_allowed} = Door.admit_person(carol)
 
@@ -252,21 +255,73 @@ defmodule Sanctum.DoorTest do
     end
   end
 
+  describe "a request's label" do
+    test "a pending request with none takes the name a later ask knows, and keeps it" do
+      assert {:ok, :created, %{label: nil}} =
+               Store.request("identifier", identifier(23), identifier(23))
+
+      assert {:ok, :existing, %{label: "wren"}} =
+               Store.request("identifier", identifier(23), identifier(23), label: "wren")
+
+      assert {:ok, :existing, %{label: "wren"}} =
+               Store.request("identifier", identifier(23), identifier(23), label: "other")
+
+      assert [%{label: "wren", status: "requested"}] = Store.requests()
+
+      # An answered entry is never relabelled by an ask.
+      {:ok, _} = Store.allow("identifier", identifier(24), "ops")
+
+      assert {:ok, :existing, %{label: nil, status: "allowed"}} =
+               Store.request("identifier", identifier(24), identifier(24), label: "wren")
+    end
+  end
+
+  test "an administrator's answer that lands between a late ask's read and its write keeps its label" do
+    {:ok, :created, _} = Store.request("identifier", identifier(25), identifier(25))
+
+    # Once the late ask has read the pending row, the administrator allows
+    # the identifier under a label of their own, before the ask writes.
+    handler = "door-label-race-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, metadata, asker ->
+          if self() == asker and metadata[:source] == "server_allowlist" and
+               Process.get(:answered) != true do
+            Process.put(:answered, true)
+            {:ok, _} = Store.allow("identifier", identifier(25), "ops", label: "chosen")
+          end
+        end,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:ok, :existing, %{status: "allowed", label: "chosen"}} =
+             Store.request("identifier", identifier(25), identifier(25), label: "wren")
+
+    :telemetry.detach(handler)
+    assert Process.get(:answered)
+    assert [%{status: "allowed", label: "chosen"}] = Store.list()
+  end
+
   describe "a remote newcomer" do
-    test "is admitted by * or an allow of their identifier, and a refusal leaves one request" do
-      assert {:error, {:door, :not_allowed}} = Door.sign_in_identifier(identifier(20))
-      assert [%{kind: "identifier"} = request] = Store.requests()
+    test "is admitted by * or an allow of their identifier, and a refusal leaves one request with their name" do
+      assert {:error, {:door, :not_allowed}} = Door.sign_in_identifier(identifier(20), "wren")
+      assert [%{kind: "identifier", label: "wren"} = request] = Store.requests()
       assert request.value == identifier(20)
       refute Door.identifier_admitted?(identifier(20))
 
       {:ok, _} = Store.allow("identifier", identifier(21), "ops")
-      assert {:ok, :allowed} = Door.sign_in_identifier(identifier(21))
+      assert {:ok, :allowed} = Door.sign_in_identifier(identifier(21), nil)
       assert Door.identifier_admitted?(identifier(21))
 
       {:ok, _} = Store.deny("identifier", identifier(22), "ops")
       {:ok, _} = Store.allow("wildcard", "*", "ops")
       assert {:ok, :allowed} = Door.admit_identifier(identifier(20))
-      assert {:error, {:door, :denied}} = Door.sign_in_identifier(identifier(22))
+      assert {:error, {:door, :denied}} = Door.sign_in_identifier(identifier(22), nil)
     end
   end
 

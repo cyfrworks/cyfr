@@ -242,12 +242,20 @@ defmodule Prima.Refusal do
          "reached was not changed. Run `cyfr access tailnet` for a new link."},
     tailnet_join_cancelled:
       {:cancelled, "Joining your tailnet was cancelled. How CYFR is reached was not changed."},
+    # A join that ended before its machine joined: given an auth key,
+    # Tailscale refused the key; given none, the join stopped waiting for
+    # the machine's approval.
     tailnet_join_ended:
       {:unauthenticated,
-       "Tailscale did not accept this machine's join: the auth key may be wrong, already " <>
-         "used or expired, or the join ended before the machine was approved. How CYFR " <>
-         "is reached was not changed. Check the key if you gave one, then run `cyfr access " <>
-         "tailnet` again."},
+       "Tailscale did not accept the auth key this machine's join was given: it may be " <>
+         "wrong, already used or expired. How CYFR is reached was not changed. Check the " <>
+         "key, then run `cyfr access tailnet` again."},
+    tailnet_join_unapproved:
+      {:setup_required,
+       "The join ended before this machine was approved on your tailnet; no auth key was " <>
+         "given, so only its approval link could have joined it. How CYFR is reached was " <>
+         "not changed. Run `cyfr access tailnet` again and approve the machine with the " <>
+         "link it prints."},
     tailnet_join_not_current:
       {:conflict, "That join attempt is no longer the one in progress. Nothing was changed."}
   }

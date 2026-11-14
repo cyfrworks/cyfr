@@ -262,26 +262,31 @@ defmodule Arca.SchemaBaselineTest do
     assert "turn_seq" in Enum.map(columns("threads"), & &1.name)
   end
 
-  test "an MCP server row has a transport, an epoch and a creator, and a url exactly when it is http" do
+  test "an MCP server row is a tool server with a url or a marked program without one" do
     columns = Map.new(columns("mcp_servers"), &{&1.name, &1})
 
     assert columns["transport"].not_null?
     assert columns["epoch"].not_null?
     assert columns["created_by"].not_null?
     refute columns["url"].not_null?
+    refute columns["mark"].not_null?
 
-    assert :ok = insert_server("stdio", nil)
-    assert :ok = insert_server("pipe", nil)
-    assert :ok = insert_server("http", "https://example.test/mcp")
+    assert :ok = insert_server("program", "mcp", nil)
+    assert :ok = insert_server("program", "driven", nil)
+    assert :ok = insert_server("http", nil, "https://example.test/mcp")
 
-    for {transport, url} <- [
-          {"http", nil},
-          {"stdio", "https://example.test/mcp"},
-          {"pipe", "https://example.test/mcp"},
-          {"sse", nil}
+    for {transport, mark, url} <- [
+          {"http", nil, nil},
+          {"http", "mcp", "https://example.test/mcp"},
+          {"program", "mcp", "https://example.test/mcp"},
+          {"program", nil, nil},
+          {"program", "pipe", nil},
+          {"stdio", nil, nil},
+          {"pipe", nil, nil},
+          {"sse", nil, nil}
         ] do
-      assert :refused = insert_server(transport, url),
-             "#{transport} with url #{inspect(url)} was accepted"
+      assert :refused = insert_server(transport, mark, url),
+             "#{transport} marked #{inspect(mark)} with url #{inspect(url)} was accepted"
     end
   end
 
@@ -659,13 +664,14 @@ defmodule Arca.SchemaBaselineTest do
     end
   end
 
-  defp insert_server(transport, url) do
+  defp insert_server(transport, mark, url) do
     now = NaiveDateTime.utc_now()
 
     insert_row("mcp_servers", %{
       id: "mcp_#{System.unique_integer([:positive])}",
       name: "server-#{System.unique_integer([:positive])}",
       transport: transport,
+      mark: mark,
       url: url,
       config_json: "{}",
       epoch: 1,

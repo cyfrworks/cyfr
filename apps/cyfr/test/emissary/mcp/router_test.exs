@@ -330,6 +330,192 @@ defmodule Emissary.MCP.RouterTest do
     end
   end
 
+  # An outside server's tools are called by the names `tools list` gives
+  # them, `server:tool`, which the catalogue does not hold: the gate
+  # resolves the name, and the server's `console` setting decides whether
+  # a call from outside a chain reaches it.
+  describe "dispatch/2 with tools/call by an outside server's name" do
+    setup do
+      stub = Cyfr.Test.HTTPStub.open()
+      test = self()
+
+      Cyfr.Test.HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        body = Jason.decode!(raw)
+
+        result =
+          case body["method"] do
+            # An upstream schema with an `action` enum of its own, which
+            # is not a CYFR action.
+            "tools/list" ->
+              %{
+                "tools" => [
+                  %{
+                    "name" => "hello",
+                    "inputSchema" => %{
+                      "type" => "object",
+                      "properties" => %{"action" => %{"type" => "string", "enum" => ["read"]}}
+                    }
+                  }
+                ]
+              }
+
+            "tools/call" ->
+              send(test, {:tools_call, body["params"]})
+              %{"content" => [%{"type" => "text", "text" => "hello back"}]}
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end)
+
+      {:ok, url: "http://127.0.0.1:#{stub.port}/mcp"}
+    end
+
+    defp outside_server(ctx, name, url, config) do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: name,
+          url: url,
+          config_json: Jason.encode!(config)
+        })
+
+      # The athanor's outside tools are cached: a server made here drops
+      # the entry as one made through its operation does, so no earlier
+      # test's list is read, and the entry goes with the server, so no
+      # later test reads this one.
+      Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+
+      on_exit(fn ->
+        Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id)
+        Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+      end)
+    end
+
+    # Every tools/list page, as a client reads it, following each cursor.
+    defp listed(ctx, cursor \\ nil) do
+      params = if cursor, do: %{"cursor" => cursor}, else: %{}
+
+      {:ok, page} =
+        Router.dispatch(ctx, %Message{type: :request, id: 3, method: "tools/list", params: params})
+
+      names = Enum.map(page["tools"], & &1["name"])
+      if page["nextCursor"], do: names ++ listed(ctx, page["nextCursor"]), else: names
+    end
+
+    defp outside_names(ctx), do: Enum.filter(listed(ctx), &String.contains?(&1, ":"))
+
+    # The outside tools the tools tool lists, called as a client calls it.
+    defp tools_tool_outside_names(ctx) do
+      {:ok, %{"content" => [%{"text" => text}], "isError" => false}} =
+        call(ctx, "tools", %{"action" => "list"})
+
+      text
+      |> Jason.decode!()
+      |> Map.fetch!("tools")
+      |> Enum.map(& &1["name"])
+      |> Enum.filter(&String.contains?(&1, ":"))
+    end
+
+    @hello_back {:ok,
+                 %{
+                   "content" => [
+                     %{
+                       "type" => "text",
+                       "text" =>
+                         Jason.encode!(%{
+                           "content" => [%{"type" => "text", "text" => "hello back"}]
+                         })
+                     }
+                   ],
+                   "isError" => false
+                 }}
+
+    test "a listed name of a server with console on is called", %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+
+      # Listed and called through the MCP method, as a client does.
+      assert outside_names(ctx) == ["greeter:hello"]
+      assert call(ctx, "greeter:hello", %{"who" => "Oren"}) == @hello_back
+      assert_received {:tools_call, %{"name" => "hello", "arguments" => %{"who" => "Oren"}}}
+    end
+
+    # An outside tool's call is a run like any other: it takes the
+    # permission a run needs, decided at the gate's admission.
+    test "a key without execute is neither shown nor let call an outside tool, and the server hears nothing",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+      key = %{ctx | auth_method: :api_key, permissions: MapSet.new([:storage_read])}
+
+      assert outside_names(key) == []
+
+      assert call(key, "greeter:hello", %{}) ==
+               {:error, :insufficient_permissions,
+                Sanctum.Unauthorized.message({:missing_permission, :execute}, :api_key)}
+
+      refute_received {:tools_call, _}
+    end
+
+    test "a key with execute, a browser session and a paired box are each shown and admitted",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+
+      callers = [
+        key: %{ctx | auth_method: :api_key, permissions: MapSet.new([:execute])},
+        session: Sanctum.TestContext.local(:prism),
+        box: %{Sanctum.TestContext.local(:device) | auth_method: :device}
+      ]
+
+      for {who, caller} <- callers do
+        assert {who, outside_names(caller)} == {who, ["greeter:hello"]}
+        assert {who, call(caller, "greeter:hello", %{})} == {who, @hello_back}
+        assert_received {:tools_call, %{"name" => "hello"}}
+      end
+    end
+
+    # One admission decides both lists; an upstream schema's `action` enum
+    # is not read as CYFR's actions by either.
+    test "the tools tool's list and tools/list name the same outside tools, with or without execute",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+
+      for {caller, expected} <- [
+            {%{ctx | auth_method: :api_key, permissions: MapSet.new([:execute])},
+             ["greeter:hello"]},
+            {%{ctx | auth_method: :api_key, permissions: MapSet.new([:storage_read])}, []}
+          ] do
+        assert {tools_tool_outside_names(caller), outside_names(caller)} == {expected, expected}
+      end
+    end
+
+    test "a server without console is refused with the setting to turn on", %{
+      context: ctx,
+      url: url
+    } do
+      outside_server(ctx, "inside-only", url, %{})
+
+      # Nothing a call is refused is listed.
+      assert outside_names(ctx) == []
+
+      assert call(ctx, "inside-only:hello", %{}) ==
+               {:error, :invalid_params,
+                "Tool 'hello' on server 'inside-only' is reachable only from inside a " <>
+                  "chain — set \"console\": true in the server's config to call it from the console"}
+
+      refute_received {:tools_call, _}
+    end
+
+    test "a name no server answers is an unknown tool", %{context: ctx} do
+      assert call(ctx, "nobody:hello", %{}) ==
+               {:error, :invalid_params, "Unknown tool: nobody:hello"}
+    end
+  end
+
   describe "dispatch/2 with resources/list" do
     test "delegates to Sanctum.Resources and returns resources list", %{context: ctx} do
       msg = %Message{

@@ -15,6 +15,12 @@ defmodule PrismWeb.ReportComponent do
   On success the parent receives `{:report_component, :submitted}` and
   flashes — a LiveComponent has no flash of its own.
 
+  A copyright claim (`dmca`) is the one category the registry asks a
+  signed statement of. The sheet shows its acknowledgements for that
+  category alone and sends `attestations_signed` true once all are
+  ticked; `registry.report` refuses a copyright claim without it. These
+  are the statement's only words: the registry takes the one boolean.
+
   The report is sent off the event (`send_report/2`): a registry request
   has no total deadline, and the browser gives up on an event it waits on
   for 30 seconds. While it is sent the dialog stays open and says so, and
@@ -42,15 +48,31 @@ defmodule PrismWeb.ReportComponent do
 
   @details_max 4096
 
+  @copyright "dmca"
+
+  # The statement a copyright claim carries, ticked one sentence at a time.
+  @acknowledgements [
+    {"good_faith",
+     "I believe in good faith that the use I report is not authorised by the copyright owner, its agent or the law."},
+    {"accuracy",
+     "The information in this report is accurate, and under penalty of perjury I am the copyright owner or authorised to act for the owner of an exclusive right that is allegedly infringed."},
+    {"identified", "I have identified the copyrighted work and the material that infringes it."}
+  ]
+
   @doc "Open the report modal for `target_ref` (a full component ref string)."
   def open(id, target_ref) when is_binary(target_ref) do
-    Phoenix.LiveView.send_update(__MODULE__, id: id, open: true, target_ref: target_ref)
+    Phoenix.LiveView.send_update(
+      __MODULE__,
+      [id: id, open: true, target_ref: target_ref] ++ blank()
+    )
   end
 
   @impl true
   def mount(socket) do
-    {:ok, assign(socket, open: false, target_ref: nil, submitting: false, error: nil)}
+    {:ok, assign(socket, [open: false, target_ref: nil, submitting: false] ++ blank())}
   end
+
+  defp blank, do: [category: "", details: "", acknowledged: MapSet.new(), error: nil]
 
   @impl true
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}
@@ -62,6 +84,17 @@ defmodule PrismWeb.ReportComponent do
 
   def handle_event("close_report", _params, socket) do
     {:noreply, assign(socket, open: false, error: nil)}
+  end
+
+  # The form as typed, held so a change of category shows or hides the
+  # acknowledgements without losing what was written or ticked.
+  def handle_event("edit_report", params, socket) do
+    {:noreply,
+     assign(socket,
+       category: Map.get(params, "category", ""),
+       details: Map.get(params, "details", ""),
+       acknowledged: acknowledged(params)
+     )}
   end
 
   def handle_event("submit_report", params, socket) do
@@ -82,17 +115,30 @@ defmodule PrismWeb.ReportComponent do
           {:noreply, assign(socket, :error, "Details too long (max #{@details_max} chars).")}
 
         true ->
-          args = %{
-            "action" => "report",
-            "category" => category,
-            "target_component_ref" => socket.assigns.target_ref,
-            "details" => details
-          }
+          args =
+            %{
+              "action" => "report",
+              "category" => category,
+              "target_component_ref" => socket.assigns.target_ref,
+              "details" => details
+            }
+            |> statement(category, acknowledged(params))
 
           {:noreply, socket |> assign(submitting: true, error: nil) |> send_report(args)}
       end
     end)
   end
+
+  defp acknowledged(params) do
+    ticked = Map.get(params, "acknowledgements", %{})
+    for {key, _sentence} <- @acknowledgements, ticked[key] == "true", into: MapSet.new(), do: key
+  end
+
+  defp statement(args, @copyright, acknowledged),
+    do:
+      Map.put(args, "attestations_signed", MapSet.size(acknowledged) == length(@acknowledgements))
+
+  defp statement(args, _category, _acknowledged), do: args
 
   @impl true
   def handle_async(:report, {:ok, {tag, result}}, socket),
@@ -127,7 +173,12 @@ defmodule PrismWeb.ReportComponent do
 
   @impl true
   def render(assigns) do
-    assigns = assigns |> assign(:categories, @categories) |> assign(:details_max, @details_max)
+    assigns =
+      assign(assigns,
+        categories: @categories,
+        details_max: @details_max,
+        acknowledgements: if(assigns.category == @copyright, do: @acknowledgements, else: [])
+      )
 
     ~H"""
     <div>
@@ -150,7 +201,13 @@ defmodule PrismWeb.ReportComponent do
             </p>
           </div>
 
-          <form phx-submit="submit_report" phx-target={@myself} class="space-y-3">
+          <form
+            id={"#{@id}-form"}
+            phx-change="edit_report"
+            phx-submit="submit_report"
+            phx-target={@myself}
+            class="space-y-3"
+          >
             <div>
               <label class="text-xs text-gray-500 uppercase">Category</label>
               <select
@@ -159,7 +216,13 @@ defmodule PrismWeb.ReportComponent do
                 class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-red-600 focus:ring-1 focus:ring-red-600"
               >
                 <option value="">Select…</option>
-                <option :for={{value, label} <- @categories} value={value}>{label}</option>
+                <option
+                  :for={{value, label} <- @categories}
+                  value={value}
+                  selected={value == @category}
+                >
+                  {label}
+                </option>
               </select>
             </div>
 
@@ -173,8 +236,25 @@ defmodule PrismWeb.ReportComponent do
                 placeholder="What's wrong? Include URLs, commit hashes, screenshots…"
                 class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-red-600 focus:ring-1 focus:ring-red-600"
                 autofocus
-              ></textarea>
+              >{@details}</textarea>
             </div>
+
+            <fieldset :if={@acknowledgements != []} class="space-y-2">
+              <legend class="text-xs text-gray-500 uppercase">A copyright claim states</legend>
+              <label
+                :for={{key, sentence} <- @acknowledgements}
+                class="flex gap-2 text-xs text-gray-300"
+              >
+                <input
+                  type="checkbox"
+                  name={"acknowledgements[#{key}]"}
+                  value="true"
+                  checked={key in @acknowledged}
+                  class="mt-0.5 rounded border-gray-700 bg-gray-800"
+                />
+                <span>{sentence}</span>
+              </label>
+            </fieldset>
 
             <div
               :if={@error}

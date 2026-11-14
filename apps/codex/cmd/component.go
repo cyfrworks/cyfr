@@ -523,15 +523,14 @@ var registryCmd = &cobra.Command{
 }
 
 var registryDiscoverCmd = &cobra.Command{
-	Use:   "discover <registry>",
-	Short: "List components on a registry",
-	Long:  "Discover CYFR components available on an OCI-compatible registry.",
-	Example: `  cyfr registry discover ghcr.io/youruser
-  cyfr registry discover docker.io/library`,
-	Args: cobra.ExactArgs(1),
+	Use:     "discover <namespace>",
+	Short:   "List a publisher's components on the registry",
+	Long:    "List the components a publisher's namespace holds on the registry, newest first.",
+	Example: `  cyfr registry discover alice`,
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentDiscoverArgs{Registry: ops.Value(args[0])})
+		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentDiscoverArgs{Namespace: ops.Value(args[0])})
 		if err != nil {
 			return handleToolError(err, "Discover failed")
 		}

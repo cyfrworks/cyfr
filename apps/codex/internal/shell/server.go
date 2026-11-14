@@ -42,10 +42,33 @@ const Origin = "http://" + Listen
 // body. A top-level navigation only opens a page: GET /confirm?ref= reads
 // that confirmation from the home over the channel and draws it, which
 // authorizes nothing; no GET changes anything. Every page is no-store under
-// a policy that runs no script but the two fixed ones below, loads nothing,
-// submits forms only here and to the home, is framed by nothing and sends
-// no referrer to another origin. The shell signs nothing a page sends: it
-// signs only the challenges it fetched itself, after the PIN.
+// a policy that runs no script but the three fixed ones below, loads
+// nothing, submits forms only here and to the home, is framed by nothing
+// and sends no referrer to another origin. The shell signs nothing a page
+// sends: it signs only the challenges it fetched itself, after the PIN.
+//
+// Host and Origin stop only web pages: any program on this machine can
+// send both. What acts as the person, a ticket and the recovery code, goes
+// only to the page that typed the PIN: the answer to a POST whose PIN
+// opens the key (/setup, /create, /unlock) is a page carrying the proof
+// that opening issued, which keepScript keeps in sessionStorage, private
+// to this origin, port included, and puts in every form's proof field.
+// So does what acts with what the shell holds for that page, the held key
+// and an account's recovery key, its claim, its acceptance and its name:
+// /saved and /name pass through Shell.asPage, and /enroll opens a first
+// connection with a held key only for the proof, each checked under the
+// shell's one lock where it acts. A typed recovery code is the account's
+// own authority only when it derives the recovery key the pending
+// attempt's genesis was made with: /resume checks that before it sends
+// anything, and only then issues the proof. A drawn confirmation's
+// preview goes only to the request naming its reference (GET /confirm,
+// /confirm/decide), never to a plain read.
+// Never a cookie: 127.0.0.1's cookies go to every port on it, so another
+// local listener would collect and replay one. A setup's passphrase, the
+// secret-to-be on a machine without a chip, is shown only in the answer to
+// the request that drew it (/passphrase, or a setup whose chip could not
+// keep the PIN): a page read later shows none, so another local program
+// learns none it could unlock with.
 type Server struct {
 	Shell *Shell
 	// Reachable is whether the home answers now; the pages wait while it
@@ -53,11 +76,15 @@ type Server struct {
 	Reachable func() bool
 }
 
-// The two scripts the pages run, each allowed by its hash alone: printing
-// the recovery code, and closing a confirmation's window once answered.
+// The three scripts the pages run, each allowed by its hash alone:
+// printing the recovery code, closing a confirmation's window once
+// answered, and keeping the proof: kept from the answer that hands it
+// over, put in every form, then on to the ticket that answer carries, or
+// the recovery page's code fetched by a POST with it.
 const (
 	printScript = `document.getElementById("print").addEventListener("click",()=>print())`
 	closeScript = `setTimeout(()=>window.close(),4000)`
+	keepScript  = `const m=document.querySelector("main").dataset,s=sessionStorage;if(m.proof)s.setItem("proof",m.proof);const p=s.getItem("proof")||"";for(const e of document.getElementsByName("proof"))e.value=p;const r=document.getElementById("reveal");if(m.to)location.replace(m.to);else if(p&&r)r.submit()`
 )
 
 func hash(s string) string {
@@ -66,7 +93,7 @@ func hash(s string) string {
 }
 
 func (srv *Server) policy() string {
-	return "default-src 'none'; script-src " + hash(printScript) + " " + hash(closeScript) +
+	return "default-src 'none'; script-src " + hash(printScript) + " " + hash(closeScript) + " " + hash(keepScript) +
 		"; style-src " + hash(style) + "; img-src data:; form-action 'self' " + srv.homeOrigin() +
 		"; frame-ancestors 'none'; base-uri 'none'"
 }
@@ -97,16 +124,15 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" {
-		v := srv.Shell.View()
+		v := srv.Shell.pageView(nil)
 		if v.Page == PageSetup || v.Page == PageEnroll {
 			// Reading the account service's configuration changes nothing:
 			// it names the terms the page asks to be accepted.
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 			srv.Shell.readTerms(ctx)
 			cancel()
-			v = srv.Shell.View()
 		}
-		srv.page(w, v, "")
+		srv.page(w, pageData{View: srv.Shell.pageView(nil), Reveal: true})
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/lock" {
@@ -123,8 +149,9 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == "/confirm" {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		srv.Shell.Draw(ctx, r.URL.Query().Get("ref"))
-		srv.page(w, srv.Shell.View(), "")
+		ref := r.URL.Query().Get("ref")
+		srv.Shell.Draw(ctx, ref)
+		srv.page(w, pageData{View: srv.Shell.confirmView(ref)})
 		return
 	}
 	action, ok := actions[r.URL.Path]
@@ -161,46 +188,63 @@ type action struct {
 }
 
 var actions = map[string]action{
+	"/passphrase": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		srv.drawn(w, r, srv.Shell.drawPassphrase())
+	}},
 	"/setup": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Setup(ctx, string(f.get("name")), srv.accepted(f), f.get("secret"), f.get("again"))
-		srv.onward(ctx, w, r)
+		proof, drawn := srv.Shell.setup(ctx, string(f.get("name")), srv.accepted(f), f.get("secret"), f.get("again"))
+		if drawn != "" {
+			srv.drawn(w, r, drawn)
+			return
+		}
+		srv.onward(ctx, w, r, f, proof)
 	}},
 	"/make": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Make(f.get("secret"), f.get("again"))
-		srv.onward(ctx, w, r)
+		if drawn := srv.Shell.makeKey(f.get("secret"), f.get("again")); drawn != "" {
+			srv.drawn(w, r, drawn)
+			return
+		}
+		srv.onward(ctx, w, r, f, "")
 	}},
 	"/create": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Create(ctx, string(f.get("name")), srv.accepted(f))
-		srv.onward(ctx, w, r)
+		proof := srv.Shell.createOpened(ctx, string(f.get("name")), srv.accepted(f), f.get("secret"))
+		srv.onward(ctx, w, r, f, proof)
 	}},
 	"/enroll": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Enroll(ctx, string(f.get("name")), enrollWait)
-		srv.onward(ctx, w, r)
+		srv.Shell.enrollByPage(ctx, string(f.get("name")), enrollWait, f.get("proof"))
+		srv.onward(ctx, w, r, f, "")
 	}},
 	"/saved": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Saved(ctx, srv.accepted(f))
-		srv.onward(ctx, w, r)
+		accepted := srv.accepted(f)
+		srv.Shell.asPage(f.get("proof"), func() { srv.Shell.saved(ctx, accepted) })
+		srv.onward(ctx, w, r, f, "")
 	}},
 	"/resume": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Resume(ctx, string(f.get("code")))
-		srv.onward(ctx, w, r)
+		srv.onward(ctx, w, r, f, srv.Shell.resumeByPage(ctx, string(f.get("code"))))
 	}},
 	// The account's log is read before the key is opened, as cyfr login
 	// reads it: a key the log no longer lists shows its code again, and
 	// the PIN typed is erased unused.
 	"/unlock": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.CheckListed(ctx)
-		if v := srv.Shell.View(); v.Page == PageLocked && v.Notice == "" {
-			srv.Shell.Unlock(ctx, f.get("secret"))
+		proof := ""
+		if v := srv.Shell.pageView(nil); v.Page == PageLocked && v.Notice == "" {
+			proof = srv.Shell.unlock(ctx, f.get("secret"))
 		}
-		srv.onward(ctx, w, r)
+		srv.onward(ctx, w, r, f, proof)
 	}},
 	"/name": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Rename(ctx, string(f.get("name")))
-		srv.onward(ctx, w, r)
+		srv.Shell.asPage(f.get("proof"), func() { srv.Shell.rename(ctx, string(f.get("name"))) })
+		srv.onward(ctx, w, r, f, "")
 	}},
 	"/open": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.onward(ctx, w, r)
+		srv.onward(ctx, w, r, f, "")
+	}},
+	// The recovery page's code, for the page holding the proof; any other
+	// request is shown the page without it, and with no form that would
+	// ask again.
+	"/recovery": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		srv.page(w, pageData{View: srv.Shell.pageView(f.get("proof"))})
 	}},
 	"/lock": {prism: true, run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.Lock("Locked.")
@@ -208,12 +252,12 @@ var actions = map[string]action{
 	}},
 	"/confirm/decide": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.Decide(ctx, string(f.get("ref")), string(f.get("decision")) == "confirm", f.get("secret"))
-		v := srv.Shell.View()
+		v := srv.Shell.confirmView(string(f.get("ref")))
 		if v.Page == PageConfirm {
-			srv.page(w, v, "")
+			srv.page(w, pageData{View: v})
 			return
 		}
-		srv.page(w, v, "answered")
+		srv.page(w, pageData{View: v, Answer: "answered"})
 	}},
 }
 
@@ -235,23 +279,59 @@ func (srv *Server) accepted(f form) string {
 	return srv.Shell.terms.Version
 }
 
-// onward is where a page goes after its action: into Prism through the
-// home's ticket once the box is unlocked and set up, else back to the
-// shell's page, which says what happened.
-func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	if srv.Shell.View().Page == PageUnlocked {
-		to, err := srv.Shell.Ticket(ctx)
-		if err == nil {
+// drawn answers the setup page showing the passphrase this request drew,
+// the one answer that carries it, or the page, when it drew none.
+func (srv *Server) drawn(w http.ResponseWriter, r *http.Request, passphrase string) {
+	if passphrase == "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	v := srv.Shell.pageView(nil)
+	if v.Page != PageSetup {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	v.Passphrase = passphrase
+	srv.page(w, pageData{View: v})
+}
+
+// onward is where a page goes after its action. Once the box is unlocked
+// and set up, a request carrying the current proof goes into Prism through
+// the home's ticket. An action whose PIN just opened the key (fresh, its
+// proof) answers a page that hands the proof over, with the ticket when
+// one was issued and the recovery code when one is shown. Anything else
+// goes back to the shell's page, which says what happened.
+func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Request, f form, fresh string) {
+	proof := f.get("proof")
+	if fresh != "" {
+		proof = []byte(fresh)
+	}
+	to := ""
+	if srv.Shell.pageView(nil).Page == PageUnlocked {
+		ticket, err := srv.Shell.Ticket(ctx, proof)
+		switch {
+		case err == nil && fresh == "":
 			// The ticket travels in the fragment of a redirect: no request
 			// carries it, and the same-origin policy keeps this page's
 			// address out of the home's.
-			w.Header().Set("Location", to)
+			w.Header().Set("Location", ticket)
 			w.WriteHeader(http.StatusSeeOther)
 			return
+		case err == nil:
+			to = ticket
+		case errors.Is(err, errNoProof):
+			srv.Shell.mu.Lock()
+			srv.Shell.say("Only the page this %s was unlocked on opens CYFR: lock it, then unlock it here.", srv.Shell.cfg.Noun)
+			srv.Shell.mu.Unlock()
+		default:
+			srv.Shell.mu.Lock()
+			srv.Shell.say("%s", srv.Shell.sentence(err))
+			srv.Shell.mu.Unlock()
 		}
-		srv.Shell.mu.Lock()
-		srv.Shell.say("%s", srv.Shell.sentence(err))
-		srv.Shell.mu.Unlock()
+	}
+	if fresh != "" {
+		srv.page(w, pageData{View: srv.Shell.pageView(proof), Proof: fresh, To: to})
+		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -265,12 +345,20 @@ type pageData struct {
 	Digits  bool
 	Print   template.JS
 	Close   template.JS
+	Keep    template.JS
 	Fields  [][2]string
+	// Proof is the proof this answer hands its page, To the ticket's
+	// address it goes on to, and Reveal whether a recovery page without its
+	// code asks for it with the proof the page keeps.
+	Proof  string
+	To     string
+	Reveal bool
 }
 
-func (srv *Server) page(w http.ResponseWriter, v View, answer string) {
-	d := pageData{View: v, Answer: answer, Print: template.JS(printScript), Close: template.JS(closeScript)}
-	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && v.Passphrase == "")
+func (srv *Server) page(w http.ResponseWriter, d pageData) {
+	v := d.View
+	d.Print, d.Close, d.Keep = template.JS(printScript), template.JS(closeScript), template.JS(keepScript)
+	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && !v.Drawn)
 	if (v.Page == PageSetup || v.Page == PageLocked) && srv.Reachable != nil && !srv.Reachable() {
 		d.Waiting = true
 	}

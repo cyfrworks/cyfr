@@ -20,16 +20,16 @@ defmodule Emissary.External.ServerSupervisor do
   header template, backend, epoch or timeout replaces the process before the
   next call.
 
-  Returns `{:ok, pid}` if started, already running, or restarted. A `pipe`
-  row is a program a catalyst drives and has no MCP server process: it is
-  refused with a sentence that says so.
+  Returns `{:ok, pid}` if started, already running, or restarted. A
+  `driven` program is run by a person or a brain and has no MCP server
+  process: it is refused with a sentence that says so.
   """
   def ensure_started(config) do
-    if config[:transport] == :pipe,
+    if config[:mark] == :driven,
       do:
         {:error,
          {:invalid_argument,
-          "Server '#{config[:name]}' is a pipe program: a catalyst drives it, not MCP"}},
+          "'#{config[:name]}' is a driven program: a person or a brain runs it, not MCP"}},
       else: ensure_mcp_started(config)
   end
 
@@ -75,7 +75,7 @@ defmodule Emissary.External.ServerSupervisor do
   transport and epoch, the raw header TEMPLATE and backend definitions
   (names and vault references, never resolved values), url and timeout.
   Every write to a row raises its epoch, so any change to the row, a row
-  deleted and recreated under the same name, or a stdio server restarted
+  deleted and recreated under the same name, or a program restarted
   changes the digest.
   """
   def config_digest(config) do

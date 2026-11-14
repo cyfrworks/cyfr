@@ -17,16 +17,20 @@ defmodule PrismWeb.CoreComponents do
   # Flash Messages
   # ============================================================================
 
+  # A flash is dismissed by naming the message it shows (`flash_token/1`),
+  # by a click or by its fade (the FlashAutoHide hook), and the server
+  # clears it only while that message is still the one shown
+  # (`on_mount(:flash, ...)`): a dismissal of a message that was replaced
+  # meanwhile leaves the newer one standing.
   attr :kind, :atom, required: true
-  slot :inner_block, required: true
+  attr :message, :string, required: true
 
   def flash(assigns) do
     ~H"""
     <div
-      :if={msg = render_slot(@inner_block)}
       id={"flash-#{@kind}"}
       phx-hook="FlashAutoHide"
-      phx-click={JS.push("lv:clear-flash", value: %{key: @kind})}
+      phx-click={JS.push("flash:dismiss", value: %{key: @kind, shown: flash_token(@message)})}
       class={[
         "rounded-lg px-4 py-3 text-sm flex items-center justify-between cursor-pointer transition-opacity duration-500 shadow-lg",
         @kind == :info && "bg-blue-900/80 text-blue-300 border border-blue-800",
@@ -35,7 +39,7 @@ defmodule PrismWeb.CoreComponents do
       ]}
       role="alert"
     >
-      <span>{msg}</span>
+      <span>{@message}</span>
       <span class="text-xs opacity-60 ml-3">&times;</span>
     </div>
     """
@@ -50,18 +54,59 @@ defmodule PrismWeb.CoreComponents do
   def flash_group(assigns) do
     ~H"""
     <div class="fixed top-4 left-1/2 -translate-x-1/2 z-[99999] w-auto max-w-md space-y-2 pointer-events-auto">
-      <.flash :if={Phoenix.Flash.get(@flash, :info)} kind={:info}>
-        {Phoenix.Flash.get(@flash, :info)}
-      </.flash>
-      <.flash :if={Phoenix.Flash.get(@flash, :warning)} kind={:warning}>
-        {Phoenix.Flash.get(@flash, :warning)}
-      </.flash>
-      <.flash :if={Phoenix.Flash.get(@flash, :error)} kind={:error}>
-        {Phoenix.Flash.get(@flash, :error)}
-      </.flash>
+      <.flash
+        :if={Phoenix.Flash.get(@flash, :info)}
+        kind={:info}
+        message={Phoenix.Flash.get(@flash, :info)}
+      />
+      <.flash
+        :if={Phoenix.Flash.get(@flash, :warning)}
+        kind={:warning}
+        message={Phoenix.Flash.get(@flash, :warning)}
+      />
+      <.flash
+        :if={Phoenix.Flash.get(@flash, :error)}
+        kind={:error}
+        message={Phoenix.Flash.get(@flash, :error)}
+      />
     </div>
     """
   end
+
+  @doc """
+  What names a flash message in its dismissal: a digest, so the message
+  itself does not travel back.
+  """
+  @spec flash_token(String.t()) :: String.t()
+  def flash_token(message) when is_binary(message),
+    do:
+      :sha256 |> :crypto.hash(message) |> binary_part(0, 12) |> Base.url_encode64(padding: false)
+
+  @flash_kinds ~w(info warning error)
+
+  @doc """
+  Every console LiveView's dismissal of a flash (`flash/1`): the flash of
+  `key` is cleared only while the message the dismissal names is still
+  the one it holds.
+  """
+  def on_mount(:flash, _params, _session, socket),
+    do: {:cont, Phoenix.LiveView.attach_hook(socket, :flash_dismiss, :handle_event, &dismiss/3)}
+
+  defp dismiss("flash:dismiss", %{"key" => key, "shown" => shown}, socket)
+       when key in @flash_kinds do
+    case Phoenix.Flash.get(socket.assigns.flash, key) do
+      message when is_binary(message) ->
+        if flash_token(message) == shown,
+          do: {:halt, Phoenix.LiveView.clear_flash(socket, key)},
+          else: {:halt, socket}
+
+      _none ->
+        {:halt, socket}
+    end
+  end
+
+  defp dismiss("flash:dismiss", _params, socket), do: {:halt, socket}
+  defp dismiss(_event, _params, socket), do: {:cont, socket}
 
   # ============================================================================
   # Navigation

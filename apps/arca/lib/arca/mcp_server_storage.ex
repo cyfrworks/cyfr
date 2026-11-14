@@ -15,7 +15,8 @@ defmodule Arca.McpServerStorage do
   The `mcp_servers` table stores:
   - id: Unique server ID (UUID7)
   - name: Server name (e.g., "notion", "github")
-  - transport: `"http"`, `"stdio"` or `"pipe"`
+  - transport: `"http"` or `"program"`
+  - mark: a program's `"mcp"` or `"driven"`; nil for http
   - url: MCP server endpoint URL (http); nil for a program
   - home, memory_bytes, home_max_bytes, login_command, login_entry_id,
     hosts: a program's settings (`Arca.Schemas.McpServer`)
@@ -47,6 +48,7 @@ defmodule Arca.McpServerStorage do
 
   # A program's settings, which `update/4` writes as named (nil clears one).
   @program_columns [
+    :mark,
     :home,
     :memory_bytes,
     :home_max_bytes,
@@ -142,8 +144,8 @@ defmodule Arca.McpServerStorage do
   answer the stored row. A name the athanor already uses is
   `{:error, :exists}` — a config changes through `update/4`.
 
-  Attrs must include `:name`, and `:url` unless `:transport` is `"stdio"`
-  (`"http"` when absent). `:config_json` is the raw JSON string (the caller
+  Attrs must include `:name`, and `:url` unless `:transport` is
+  `"program"` (`"http"` when absent), which names its `:mark`. `:config_json` is the raw JSON string (the caller
   serializes; Arca stores it verbatim). Optional: `:enabled`. The row's
   `created_by` is the context's user.
 

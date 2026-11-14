@@ -1015,7 +1015,7 @@ A vault entry holds credential material — sealed at rest, never returned by an
 | `revoke` | `id` | Kill the material; dependent profiles report not-ready |
 | `delete` | `id` | Remove the entry |
 
-**Every entry names its destination.** `destination` is required at `create` and at a new entry's `authorize`, and there is no default: `hosts` (exact names, or `*.` and a name), and optionally `scheme` (`https` unless `http` is stated), `port`, `methods` and `paths` (prefixes beginning with `/`). An entry is attach-only unless `disclose` is `true`: its value is never handed to a component. CYFR attaches it, by the need's attach rule, to a request the component makes naming the need as its `connection` and bound for the entry's destination, and a component asking for the value itself (`cyfr:vault/read`, `cyfr:oauth/token`) is refused `disclosure_refused`. Set `disclose: true` only for a component that must read the values itself. Both are binding fields, so moving either is a `rebind`. An external MCP server definition is refused, at create, at update and again when it connects, when a header names an entry whose destination does not cover its URL, or when a stdio backend's environment names an attach-only entry; nothing is unsealed first.
+**Every entry names its destination.** `destination` is required at `create` and at a new entry's `authorize`, and there is no default: `hosts` (exact names, or `*.` and a name), and optionally `scheme` (`https` unless `http` is stated), `port`, `methods` and `paths` (prefixes beginning with `/`). An entry is attach-only unless `disclose` is `true`: its value is never handed to a component. CYFR attaches it, by the need's attach rule, to a request the component makes naming the need as its `connection` and bound for the entry's destination, and a component asking for the value itself (`cyfr:vault/read`, `cyfr:oauth/token`) is refused `disclosure_refused`. Set `disclose: true` only for a component that must read the values itself. Both are binding fields, so moving either is a `rebind`. An external MCP server definition is refused, at create, at update and again when it connects, when a header names an entry whose destination does not cover its URL, or when a program's backend environment names an attach-only entry; nothing is unsealed first.
 
 ```json
 {
@@ -1341,7 +1341,7 @@ What a cluster changes for a client and an operator:
   servers and a misrouted call is lost loudly rather than answered for
   work the server does not hold. Each server still lists the workers it
   dispatches to in its own `CYFR_LOCUS_RUNTIME_WORKERS`.
-- **Stdio MCP servers are not available** in a cluster.
+- **Programs are not available** in a cluster.
 - **Per-server ceilings multiply.** `CYFR_OPUS_MAX_CONCURRENT`,
   `CYFR_OPUS_MAX_CONCURRENT_PER_TENANT` and the per-credential
   stream cap on the execution event stream and on `subscriptions/listen` are each
@@ -1391,17 +1391,19 @@ CYFR builds nothing and refuses every build; with one, or a malformed
 value, it refuses to boot. `.env.locus.example` documents the builder's own
 `LOCUS_BUILDS_*` side.
 
-### Stdio MCP servers
+### Programs
 
-Stdio MCP servers run as programs on the Locus backends service (the
-`locus-backends` compose service), which CYFR reaches over a signed wire;
-every compose deploy starts it. CYFR's MCP client speaks to each backend
-over the lines of a session the service runs for it. Each backend's process
+Programs run on the Locus backends service (the `locus-backends` compose
+service), which CYFR reaches over a signed wire; every compose deploy
+starts it. A program row (`"transport": "program"`) is marked by how it is
+spoken to: `mcp`, CYFR's MCP client speaking to each backend over the
+lines of a session the service runs for it, or `driven`, one backend a
+person or a brain runs. A tool server elsewhere is an `http` row. Each backend's process
 runs under a pooled uid of its own, started by `cyfr-locus`, with a private
 home directory, an environment built only from its server's definition and
 a memory bound of its own; the service keeps nothing of CYFR's, and CYFR
-sends each server's definition again when the service restarts. With the URL or the key unset CYFR refuses stdio servers; with a
-malformed value it refuses to boot. Stdio servers are not available in a
+sends each program's definition again when the service restarts. With the URL or the key unset CYFR refuses programs; with a
+malformed value it refuses to boot. Programs are not available in a
 cluster. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
 side.
 

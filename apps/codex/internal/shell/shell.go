@@ -28,6 +28,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -214,6 +217,11 @@ type Shell struct {
 	terms      *account.Policy
 	configured bool
 	confirm    *PendingConfirm
+	// proof is what the page that typed the PIN holds: 32 random bytes,
+	// drawn when a typed PIN opens the key (issueProof) and replaced by the
+	// next one or a lock. The ticket and the recovery code go only to a
+	// request that carries it (holds).
+	proof []byte
 }
 
 // New is a shell over cfg's key record, locked.
@@ -424,12 +432,16 @@ const (
 
 // View is what a page draws.
 type View struct {
-	Page       Page
-	Kind       holder.Kind
-	Chip       bool
-	Notice     string
-	Storage    disk.Report
+	Page    Page
+	Kind    holder.Kind
+	Chip    bool
+	Notice  string
+	Storage disk.Report
+	// Passphrase is the passphrase a setup without a chip takes, and
+	// Drawn whether one is drawn. A page shows it only in the answer to
+	// the request that drew it (pageView).
 	Passphrase string
+	Drawn      bool
 	// RecoveryCode is the code shown on PageRecovery, and Name the name of
 	// the account being made.
 	RecoveryCode string
@@ -449,11 +461,82 @@ type View struct {
 }
 
 // View is the page the device shows now, and the notice of the last
-// action or lock, which stays until the next action: reading a page
-// changes nothing.
+// action or lock, which stays until the next action. A setup without a
+// chip draws its passphrase at the first View, which cyfr login prints in
+// its own terminal; the pages read pageView, which draws nothing.
 func (s *Shell) View() View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.rec == nil && !s.cfg.Chip() {
+		s.newPassphrase()
+	}
+	return s.view()
+}
+
+// pageView is View as the pages draw it for a request carrying proof: the
+// recovery code only when proof is the current one, compared under the
+// same lock that reads the code.
+func (s *Shell) pageView(proof []byte) View {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.view()
+	if !s.holds(proof) {
+		v.RecoveryCode = ""
+	}
+	v.Passphrase, v.Confirm = "", nil
+	return v
+}
+
+// confirmView is pageView for the request that names ref: a drawn
+// confirmation's preview goes only to a request naming its reference, the
+// one the CYFR handed the page that asked, never to a plain read.
+func (s *Shell) confirmView(ref string) View {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.view()
+	v.RecoveryCode, v.Passphrase, v.Confirm = "", "", nil
+	if s.confirm != nil && ref != "" && s.confirm.Ref == ref {
+		v.Confirm = s.confirm
+	}
+	return v
+}
+
+// drawPassphrase draws a new passphrase for a page's setup on a machine
+// without a usable chip, replacing the one drawn before, and answers it
+// for that request's answer alone; "" where the setup takes a PIN, or
+// there is no setup.
+func (s *Shell) drawPassphrase() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refresh()
+	if s.rec != nil || (s.cfg.Chip() && s.passphrase == "") {
+		return ""
+	}
+	s.passphrase = ""
+	return s.newPassphrase()
+}
+
+// issueProof draws a fresh proof, replacing any earlier one, and answers
+// it as the page keeps it. The caller holds the shell.
+func (s *Shell) issueProof() string {
+	clear(s.proof)
+	s.proof = make([]byte, 32)
+	_, _ = rand.Read(s.proof) // crypto/rand.Read never fails, by its contract.
+	return base64.RawURLEncoding.EncodeToString(s.proof)
+}
+
+// holds is whether proof, as a page sends it, is the current proof,
+// compared in constant time. The caller holds the shell.
+func (s *Shell) holds(proof []byte) bool {
+	if len(s.proof) == 0 {
+		return false
+	}
+	got := make([]byte, base64.RawURLEncoding.DecodedLen(len(proof)))
+	n, err := base64.RawURLEncoding.Decode(got, proof)
+	return err == nil && subtle.ConstantTimeCompare(got[:n], s.proof) == 1
+}
+
+func (s *Shell) view() View {
 	v := View{Notice: s.notice, Storage: s.cfg.Detect(s.cfg.DataDir), Chip: s.cfg.Chip()}
 	if s.terms != nil {
 		v.Terms = s.terms.URL
@@ -464,9 +547,7 @@ func (s *Shell) View() View {
 	switch m := s.making; {
 	case s.rec == nil:
 		v.Page = PageSetup
-		if !v.Chip || s.passphrase != "" {
-			v.Passphrase = s.newPassphrase()
-		}
+		v.Passphrase, v.Drawn = s.passphrase, s.passphrase != ""
 	case m != nil && !m.saved:
 		v.Page, v.RecoveryCode, v.Name = PageRecovery, m.code, m.attempt.Name
 	case m != nil && m.taken:
@@ -491,8 +572,8 @@ func (s *Shell) View() View {
 	return v
 }
 
-// newPassphrase is the passphrase a software setup shows, drawn once per
-// shown setup page and kept in memory until the setup takes it.
+// newPassphrase is the passphrase a software setup takes, drawn when none
+// is and kept in memory until the setup takes it.
 func (s *Shell) newPassphrase() string {
 	if s.passphrase == "" {
 		p, err := holder.GeneratePassphrase()
@@ -577,7 +658,7 @@ func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 		return false, err
 	}
 	if string(secret) != s.passphrase {
-		s.say("Enter the passphrase shown above, exactly.")
+		s.say("That is not the passphrase shown last. Enter it exactly as shown.")
 		return false, errors.New("not the shown passphrase")
 	}
 	return false, nil
@@ -587,16 +668,31 @@ func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 // when the machine has no usable chip, given twice, and writes it before
 // anything is shown or sent, so its code, a retry and a lost answer all
 // name the same key.
-func (s *Shell) Make(secret, again []byte) {
+func (s *Shell) Make(secret, again []byte) { s.makeKey(secret, again) }
+
+// makeKey is Make, answering the passphrase it drew when the chip could
+// not keep the PIN, or "".
+func (s *Shell) makeKey(secret, again []byte) (drawn string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret, again)
+	defer s.drawnSince(s.passphrase, &drawn)
 	s.refresh()
 	if s.rec != nil {
 		s.madeElsewhere()
 		return
 	}
 	_, _ = s.newRecord(secret, again)
+	return
+}
+
+// drawnSince sets *drawn to the passphrase drawn since it was before,
+// when one was: a chip that cannot keep the PIN draws one mid-request.
+// The caller holds the shell.
+func (s *Shell) drawnSince(before string, drawn *string) {
+	if s.passphrase != before {
+		*drawn = s.passphrase
+	}
 }
 
 func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
@@ -640,9 +736,17 @@ func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
 // anything is sent (Saved sends it). The held key opens this device's
 // first connection once the account is made.
 func (s *Shell) Setup(ctx context.Context, name, accepted string, secret, again []byte) {
+	s.setup(ctx, name, accepted, secret, again)
+}
+
+// setup is Setup, answering the proof the opened key issues, or "" when
+// the key was not opened, and the passphrase it drew when the chip could
+// not keep the PIN, or "".
+func (s *Shell) setup(ctx context.Context, name, accepted string, secret, again []byte) (proof, drawn string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret, again)
+	defer s.drawnSince(s.passphrase, &drawn)
 	s.refresh()
 	if s.rec != nil {
 		s.madeElsewhere()
@@ -667,7 +771,9 @@ func (s *Shell) Setup(ctx context.Context, name, accepted string, secret, again 
 		return
 	}
 	s.key = key
+	proof = s.issueProof()
 	s.begin(c, name, accepted)
+	return
 }
 
 // Create makes an account whose first key is this device's, as Setup does,
@@ -676,9 +782,40 @@ func (s *Shell) Create(ctx context.Context, name, accepted string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refresh()
-	if s.rec == nil || s.rec.Identifier != "" || s.making != nil || s.unfinished != nil {
-		return
+	if s.creatable() {
+		s.create(ctx, name, accepted)
 	}
+}
+
+// createOpened is Create for a page, whose form carries the PIN: the PIN
+// opens the key first, which issues the proof the recovery code is shown
+// to, and the key is erased again. It answers that proof, or "" when the
+// key was not opened, and then nothing is made.
+func (s *Shell) createOpened(ctx context.Context, name, accepted string, secret []byte) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(secret)
+	s.refresh()
+	if !s.creatable() {
+		return ""
+	}
+	key, err := s.rec.Open(secret)
+	if err != nil {
+		s.say("%s", s.sentence(err))
+		return ""
+	}
+	key.Erase()
+	proof := s.issueProof()
+	s.create(ctx, name, accepted)
+	return proof
+}
+
+// creatable is whether a key made before waits for an account of its own.
+func (s *Shell) creatable() bool {
+	return s.rec != nil && s.rec.Identifier == "" && s.making == nil && s.unfinished == nil
+}
+
+func (s *Shell) create(ctx context.Context, name, accepted string) {
 	if c, ok := s.checkNew(ctx, name, accepted); ok {
 		s.begin(c, name, accepted)
 	}
@@ -761,6 +898,26 @@ func (s *Shell) begin(c account.Config, name, accepted string) {
 func (s *Shell) Saved(ctx context.Context, accepted string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.saved(ctx, accepted)
+}
+
+// asPage runs act for a page's request only when it carries the current
+// proof, compared under the shell's one lock, which act then runs under:
+// every page action that acts with what the shell holds for the page that
+// typed the PIN (the held key, an account's recovery key, its claim, its
+// acceptance, its name) passes through here. Without the proof nothing is
+// done, and the page says so.
+func (s *Shell) asPage(proof []byte, act func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.holds(proof) {
+		s.say("Only the page this %s's PIN or passphrase was typed on can do that. Nothing was sent.", s.cfg.Noun)
+		return
+	}
+	act()
+}
+
+func (s *Shell) saved(ctx context.Context, accepted string) {
 	s.refresh()
 	m := s.making
 	if m == nil || m.taken || s.listedElsewhere(m) {
@@ -792,26 +949,71 @@ func (s *Shell) Saved(ctx context.Context, accepted string) {
 func (s *Shell) Resume(ctx context.Context, code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.resume(ctx, code)
+}
+
+// resumeByPage is Resume for a page: the recovery code typed is the
+// account's own authority, so a code that re-derives the account's key
+// issues the proof, which the account's later steps (a name, the terms)
+// take. It answers that proof, or "".
+func (s *Shell) resumeByPage(ctx context.Context, code string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.resume(ctx, code) {
+		return ""
+	}
+	return s.issueProof()
+}
+
+// resume answers whether code re-derived the account's recovery key.
+func (s *Shell) resume(ctx context.Context, code string) bool {
 	s.refresh()
 	if s.unfinished == nil || s.making != nil || s.rec == nil || s.rec.Identifier != "" {
-		return
+		return false
 	}
 	identifier, secret, err := account.DecodeRecoveryCode(code)
 	switch {
 	case errors.Is(err, account.ErrTypo):
 		s.say("That recovery code has a typo. Check it and type it again.")
-		return
+		return false
 	case err != nil:
 		s.say("That is not a recovery code.")
-		return
+		return false
 	case identifier != s.unfinished.Identifier:
 		clear(secret)
 		s.say("That is another account's recovery code.")
-		return
+		return false
 	}
-	s.making = &making{attempt: *s.unfinished, key: account.RecoveryKey(secret), saved: true}
+	key := account.RecoveryKey(secret)
 	clear(secret)
+	// The code is the account's authority only when its key is the
+	// recovery key the attempt's genesis was made with: a code's checksum
+	// anyone can compute, and its identifier is no secret. Checked before
+	// anything is sent, and before the proof is issued.
+	if !madeWith(s.unfinished.Genesis, s.unfinished.Identifier, key) {
+		clear(key)
+		s.say("That recovery code is not this account's.")
+		return false
+	}
+	s.making = &making{attempt: *s.unfinished, key: key, saved: true}
 	s.submit(ctx)
+	return true
+}
+
+// madeWith is whether genesis, signed and naming identifier, lists key's
+// public half among its recovery keys.
+func madeWith(genesis map[string]any, identifier string, key ed25519.PrivateKey) bool {
+	state, err := account.Walk([]any{genesis})
+	if err != nil || state.Identifier != identifier {
+		return false
+	}
+	pub := key.Public().(ed25519.PublicKey)
+	for _, listed := range state.Recovery {
+		if bytes.Equal(listed, pub) {
+			return true
+		}
+	}
+	return false
 }
 
 // Rename takes another name for the account being made, whose name
@@ -819,6 +1021,10 @@ func (s *Shell) Resume(ctx context.Context, code string) {
 func (s *Shell) Rename(ctx context.Context, name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.rename(ctx, name)
+}
+
+func (s *Shell) rename(ctx context.Context, name string) {
 	s.refresh()
 	m := s.making
 	if m == nil || !m.taken || s.listedElsewhere(m) {
@@ -907,6 +1113,23 @@ var pollEvery = 2 * time.Second
 func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.enroll(ctx, name, wait, true)
+}
+
+// enrollByPage is Enroll for a page. Reading the account's public log and
+// keeping which account lists this key needs no authority; opening the
+// first connection with a key held since a setup does, so only a request
+// carrying the current proof, compared under this lock, opens it, and any
+// other leaves the device locked for its PIN.
+func (s *Shell) enrollByPage(ctx context.Context, name string, wait time.Duration, proof []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enroll(ctx, name, wait, s.holds(proof))
+}
+
+// enroll is Enroll; useHeld is whether the first connection may open with
+// a key held since a setup.
+func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, useHeld bool) {
 	s.refresh()
 	if s.rec == nil || s.rec.Identifier != "" || s.making != nil || s.unfinished != nil {
 		return
@@ -960,7 +1183,9 @@ func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 	case s.rec == nil || !bytes.Equal(s.rec.PublicKey, pub):
 		return
 	case s.rec.Identifier == found.Identifier:
-		s.firstConnection(ctx)
+		if useHeld {
+			s.firstConnection(ctx)
+		}
 		return
 	case s.rec.Identifier != "":
 		s.say("This machine's key is on another account already, added by another %s here.", s.cfg.Noun)
@@ -971,7 +1196,9 @@ func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 		s.say("This %s could not save its account (%v). Try again.", s.cfg.Noun, err)
 		return
 	}
-	s.firstConnection(ctx)
+	if useHeld {
+		s.firstConnection(ctx)
+	}
 }
 
 // CheckListed reads the log of the account the key's record names, before
@@ -1015,13 +1242,17 @@ func (s *Shell) CheckListed(ctx context.Context) {
 
 // Unlock opens the key with the PIN (or passphrase) and opens the channel.
 // A wrong PIN is said and never retried.
-func (s *Shell) Unlock(ctx context.Context, secret []byte) {
+func (s *Shell) Unlock(ctx context.Context, secret []byte) { s.unlock(ctx, secret) }
+
+// unlock is Unlock, answering the proof the opened key issues, or "" when
+// the key was not opened.
+func (s *Shell) unlock(ctx context.Context, secret []byte) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret)
 	s.refresh()
 	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil {
-		return
+		return ""
 	}
 	if s.key != nil {
 		s.key.Erase()
@@ -1030,12 +1261,14 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 	key, err := s.rec.Open(secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
-		return
+		return ""
 	}
+	proof := s.issueProof()
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
 		s.say("%s", s.sentence(err))
 	}
+	return proof
 }
 
 // connect opens the channel under key and holds both: the device is
@@ -1151,12 +1384,19 @@ func (s *Shell) watch(ch *Channel) {
 	s.lock(s.sentence(ch.Err()))
 }
 
-// Ticket reserves one session at the CYFR (reserve) and answers where the
+// errNoProof is a request for a ticket without the current proof.
+var errNoProof = errors.New("not the page that unlocked")
+
+// Ticket reserves one session at the CYFR (reserve) for a request carrying
+// the current proof, checked under the same lock, and answers where the
 // browser goes: the CYFR's completion page with the ticket in its
 // fragment, which no request carries.
-func (s *Shell) Ticket(ctx context.Context) (string, error) {
+func (s *Shell) Ticket(ctx context.Context, proof []byte) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.holds(proof) {
+		return "", errNoProof
+	}
 	ticket, err := s.reserve(ctx)
 	if err != nil {
 		return "", err
@@ -1267,8 +1507,9 @@ func (s *Shell) lock(why string) {
 	if s.making != nil {
 		clear(s.making.key)
 	}
+	clear(s.proof)
 	wasOpen := s.ch != nil
-	s.ch, s.key, s.locks, s.making, s.confirm, s.passphrase = nil, nil, nil, nil, nil, ""
+	s.ch, s.key, s.locks, s.making, s.confirm, s.passphrase, s.proof = nil, nil, nil, nil, nil, "", nil
 	if wasOpen {
 		if why != "" {
 			s.notice = why

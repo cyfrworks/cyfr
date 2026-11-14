@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -421,10 +422,9 @@ func TestRestoreRefusesALiveMemberOfAnyRelease(t *testing.T) {
 }
 
 // A storage root this person cannot write, as the image's entrypoint
-// leaves it handed to the image's user on native Linux, refuses once the
-// stack is stopped and before any part is put back, naming the restore as
-// root; docker-compose.yml and .env are as they were and nothing is
-// barred.
+// leaves it handed to the image's user on native Linux once the stack has
+// run, refuses at the restore's start, naming the restore as root, before
+// the lock, a docker call or a write: the running stack keeps running.
 func TestRestoreRefusesAStorageRootItCannotWrite(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("every directory is writable to root, and Windows has no such mode")
@@ -436,29 +436,20 @@ func TestRestoreRefusesAStorageRootItCannotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(blobs, 0o755) })
-	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
-	out, err := r.restore(true)
-	// The refusal names the host path the configuration resolves, which on
-	// macOS is under /private, /var being a link there.
-	resolved, rerr := filepath.EvalSymlinks(blobs)
-	if rerr != nil {
-		t.Fatal(rerr)
+	// The refusal names the host path the project's compose file binds,
+	// which on macOS is under /private, /var being a link there.
+	resolved, err := filepath.EvalSymlinks(blobs)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err == nil || !strings.Contains(err.Error(), "write "+resolved+":") || !strings.Contains(err.Error(), "run the same cyfr restore as root, with sudo") ||
-		!strings.Contains(err.Error(), "nothing of the snapshot was put back") {
-		t.Fatalf("restore answered %v\n%s", err, out)
-	}
-	r.stoppedUndeclared()
-	r.configAsBefore(before, string(r.env))
+	r.refusedAtTheStart(resolved)
 	if got := read(t, filepath.Join(blobs, "x")); got != "rewritten" {
 		t.Errorf("a part was put back before the refusal: blobs/x holds %q", got)
 	}
 }
 
 // A scaffold directory this person cannot write refuses the same way, on
-// either database, before the first scaffold file is put back: the put-back
-// writes the scaffold first, and a refusal after it would leave the stack
-// partly restored, stopped and barred.
+// either database, at the start.
 func TestRestoreRefusesAScaffoldDirectoryItCannotWrite(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("every directory is writable to root, and Windows has no such mode")
@@ -469,25 +460,166 @@ func TestRestoreRefusesAScaffoldDirectoryItCannotWrite(t *testing.T) {
 	} {
 		t.Run(adapter, func(t *testing.T) {
 			r := newRestoreScenario(t, shippedCompose(t), env, nil)
-			before := read(t, filepath.Join(r.project, "docker-compose.yml"))
 			keeper := read(t, filepath.Join(r.project, "keeper.seccomp.json"))
 			wit := filepath.Join(r.project, "wit", "cyfr")
 			if err := os.Chmod(wit, 0o555); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { os.Chmod(wit, 0o755) })
-			out, err := r.restore(true)
-			if err == nil || !strings.Contains(err.Error(), "write "+filepath.Join("wit", "cyfr")+":") || !strings.Contains(err.Error(), "run the same cyfr restore as root, with sudo") ||
-				!strings.Contains(err.Error(), "nothing of the snapshot was put back") {
-				t.Fatalf("restore answered %v\n%s", err, out)
-			}
-			r.stoppedUndeclared()
-			r.configAsBefore(before, string(r.env))
+			r.refusedAtTheStart(filepath.Join("wit", "cyfr"))
 			if got := read(t, filepath.Join(r.project, "keeper.seccomp.json")); got != keeper {
 				t.Error("a scaffold file was put back before the refusal")
 			}
 		})
 	}
+}
+
+// A PostgreSQL restore with S3 storage writes nothing under ./data, so a
+// ./data this person cannot write refuses nothing: the check at the start
+// asks only the places this restore writes.
+func TestRestoreAsksOnlyThePlacesItWrites(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("every directory is writable to root, and Windows has no such mode")
+	}
+	r := newRestoreScenario(t, shippedCompose(t), map[string]string{"CYFR_STORAGE": "s3", "CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL}, nil)
+	data := filepath.Join(r.project, "data")
+	if err := os.Chmod(data, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(data, 0o755) })
+	if out, err := r.restore(true); err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+}
+
+// The check at the start reads where the storage root is from this
+// project's own docker-compose.yml: a PostgreSQL restore whose local
+// storage is bound to another directory asks nothing of an unused ./data
+// this person cannot write.
+func TestRestoreDoesNotInspectAnUnusedDefaultMount(t *testing.T) {
+	store := t.TempDir()
+	if err := os.WriteFile(filepath.Join(store, "kept"), []byte("snapshot data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shipped := string(shippedCompose(t))
+	compose := strings.Replace(shipped, "      - ./data:/app/data\n", "      - "+store+":/app/data\n", 1)
+	if compose == shipped {
+		t.Fatal("default bind not replaced")
+	}
+	r := newRestoreScenario(t, []byte(compose), map[string]string{"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL}, func(s *updateScenario) {
+		raw := read(t, filepath.Join(s.fake, "config.out"))
+		old := filepath.Join(s.project, "data")
+		if !strings.Contains(raw, old) {
+			t.Fatal("default mount missing")
+		}
+		s.answer("config.out", strings.Replace(raw, old, store, 1))
+	})
+	if err := os.Chmod("data", 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod("data", 0o755)
+	if out, err := r.restore(true); err != nil {
+		t.Fatalf("restore with external local-storage bind rejected by unused ./data: %v\n%s", err, out)
+	}
+}
+
+// Where this project's docker-compose.yml cannot be read for certain, an
+// interpolated storage mount here, the check at the start asks nothing of
+// the storage root: the check after the live read refuses the root this
+// person cannot write, once the stack is stopped.
+func TestRestoreLeavesWhatItCannotReadToTheLaterCheck(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("every directory is writable to root, and Windows has no such mode")
+	}
+	shipped := string(shippedCompose(t))
+	compose := strings.Replace(shipped, "      - ./data:/app/data\n", "      - ${CYFR_DATA_DIR:-./data}:/app/data\n", 1)
+	if compose == shipped {
+		t.Fatal("default bind not replaced")
+	}
+	r := newRestoreScenario(t, []byte(compose), nil, nil)
+	r.edit("data/blobs/x", "rewritten")
+	blobs := filepath.Join(r.project, "data", "blobs")
+	if err := os.Chmod(blobs, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(blobs, 0o755) })
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "run the same cyfr restore as root, with sudo") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	r.stoppedUndeclared()
+}
+
+// A scaffold file whose path crosses a link is refused at the start,
+// naming it, before anything stops, and nothing behind the link changes.
+func TestRestoreRefusesAScaffoldPathThroughALink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no restore runs as another account on Windows")
+	}
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	outside := t.TempDir()
+	wit := filepath.Join(r.project, "wit")
+	if err := os.Rename(wit, filepath.Join(outside, "wit")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "wit"), wit); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]string{}
+	filepath.WalkDir(outside, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			before[p] = read(t, p)
+		}
+		return nil
+	})
+	snap, err := readSnapshot(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := ""
+	for _, name := range snap.manifest.Scaffold {
+		if strings.HasPrefix(name, "wit/") {
+			first = name
+			break
+		}
+	}
+	compose := read(t, filepath.Join(r.project, "docker-compose.yml"))
+	out, err := r.restore(true)
+	want := r.dir + " cannot be restored: the path of its scaffold file " + first + " crosses a link, which nothing is written or given back through; nothing was changed"
+	if first == "" || err == nil || err.Error() != want || out != "" {
+		t.Fatalf("restore answered %v and printed %q, want %q", err, out, want)
+	}
+	if log := r.log(); log != nil {
+		t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
+	}
+	r.configAsBefore(compose, string(r.env))
+	after := map[string]string{}
+	filepath.WalkDir(outside, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			after[p] = read(t, p)
+		}
+		return nil
+	})
+	if !maps.Equal(before, after) {
+		t.Errorf("behind the link %v became %v", before, after)
+	}
+}
+
+// refusedAtTheStart fails unless the restore refuses as this person, for
+// the place dir, with nothing changed: no docker call or engine step, and
+// docker-compose.yml and .env as they were.
+func (r *restoreScenario) refusedAtTheStart(dir string) {
+	r.t.Helper()
+	before := read(r.t, filepath.Join(r.project, "docker-compose.yml"))
+	out, err := r.restore(true)
+	want := "cyfr restore cannot put the snapshot back as you (write " + dir + ": permission denied): the server's container owns its storage once the stack has run, so run the same cyfr restore as root, with sudo; nothing was changed"
+	if err == nil || err.Error() != want || out != "" {
+		r.t.Fatalf("restore answered %v and printed %q, want %q and nothing printed", err, out, want)
+	}
+	if log := r.log(); log != nil {
+		r.t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
+	}
+	r.configAsBefore(before, string(r.env))
 }
 
 // The live read runs the image's entrypoint, which hands the storage root
@@ -665,7 +797,7 @@ func TestRestoreStopsNothingAfterAFailedStartWhileServeDoesNotClose(t *testing.T
 	}
 	out, err := r.restore(true)
 	log := r.log()
-	want := "The restored stack did not start (cyfr did not become healthy (docker compose up: exit status 1)), and Tailscale Serve could not be closed (no space left on device), so nothing was stopped and the stack may still be running with Serve open; stop it with 'cyfr down'.\nThe restore " + testRestored + " is declared and the next start takes it; read 'cyfr logs', fix the cause and run 'cyfr up'"
+	want := "The restored stack did not start (cyfr did not become healthy (docker compose up: exit status 1)), and Tailscale Serve could not be closed (no space left on device), so nothing was stopped and the stack may still be running with Serve open; stop it with 'cyfr down'.\nThe restore " + testRestored + " is declared and the next start takes it; read its log with 'docker compose logs cyfr', fix the cause and run 'cyfr up'"
 	if err == nil || err.Error() != want {
 		t.Fatalf("restore answered %v, want %q\n%s\n%s", err, want, out, strings.Join(log, "\n"))
 	}

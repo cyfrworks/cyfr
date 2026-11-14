@@ -32,6 +32,7 @@ defmodule PrismWeb.MyReportsLive do
      |> assign(:reports, [])
      |> assign(:loading, true)
      |> assign(:error, nil)
+     |> assign(:no_push_token, false)
      |> assign(:offset, 0)
      |> assign(:has_more, false)}
   end
@@ -63,6 +64,7 @@ defmodule PrismWeb.MyReportsLive do
          |> assign(:offset, offset + length(reports))
          |> assign(:has_more, length(reports) >= @page_size)
          |> assign(:loading, false)
+         |> assign(:no_push_token, false)
          |> assign(:error, nil)}
 
       {:ok, %{reports: reports}} when is_list(reports) ->
@@ -75,6 +77,7 @@ defmodule PrismWeb.MyReportsLive do
          |> assign(:offset, offset + length(reports))
          |> assign(:has_more, length(reports) >= @page_size)
          |> assign(:loading, false)
+         |> assign(:no_push_token, false)
          |> assign(:error, nil)}
 
       {:ok, _unknown} ->
@@ -83,6 +86,16 @@ defmodule PrismWeb.MyReportsLive do
          |> assign(:reports, [])
          |> assign(:has_more, false)
          |> assign(:loading, false)
+         |> assign(:no_push_token, false)
+         |> assign(:error, nil)}
+
+      # No push token yet: the Registry page's sync mints one, so the page
+      # offers it in place of the refusal's sentence.
+      {:error, %Prima.Refusal{reason: :no_push_token}} ->
+        {:noreply,
+         socket
+         |> assign(:loading, false)
+         |> assign(:no_push_token, true)
          |> assign(:error, nil)}
 
       {:error, err} ->
@@ -91,6 +104,7 @@ defmodule PrismWeb.MyReportsLive do
         {:noreply,
          socket
          |> assign(:loading, false)
+         |> assign(:no_push_token, false)
          |> assign(:error, error_message(err))}
     end
   end
@@ -130,7 +144,23 @@ defmodule PrismWeb.MyReportsLive do
         Couldn't load reports: {@error}
       </div>
 
-      <div :if={!@loading && @reports == [] && !@error} class="text-sm text-gray-500">
+      <div
+        :if={@no_push_token}
+        class="rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-sm text-gray-300"
+      >
+        Your reports are read with a push token, and you hold none yet.
+        <.link
+          navigate={PrismWeb.Focus.path(@athanor_route, "/registry")}
+          class="ml-1 underline hover:text-white"
+        >
+          Sync push tokens
+        </.link>
+      </div>
+
+      <div
+        :if={!@loading && @reports == [] && !@error && !@no_push_token}
+        class="text-sm text-gray-500"
+      >
         You haven't filed any reports yet.
       </div>
 
