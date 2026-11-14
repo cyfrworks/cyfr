@@ -144,7 +144,7 @@ defmodule Sanctum.Gate.VisibilityTest do
       assert visible_actions("door", member) == []
 
       assert Enum.sort(visible_actions("door", admin)) ==
-               ~w(allow deny list remove requests resolve)
+               ~w(allow clear_admin deny list mark_admin remove requests resolve)
     end
   end
 

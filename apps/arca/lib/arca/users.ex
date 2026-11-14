@@ -30,6 +30,7 @@ defmodule Arca.Users do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Arca.QueryHelpers
   alias Arca.Schemas.User
 
   @type refusal :: {:error, :cross_tenant | :database_error}
@@ -137,6 +138,78 @@ defmodule Arca.Users do
 
   def set_namespace(%Prima.Actor{}, _user_id, _namespace), do: {:error, :cross_tenant}
 
+  @doc "The active people carrying the platform administrator's mark, oldest mark first."
+  @spec platform_admins(Prima.Actor.t()) :: {:ok, [map()]} | refusal()
+  # arca:unscoped-ok the platform administrators are the instance's, held by no athanor.
+  def platform_admins(%Prima.Actor{scope: :platform}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Users.platform_admins", fn ->
+      {:ok, Arca.Repo.all(from(u in admins(), order_by: [asc: u.platform_admin_at, asc: u.id]))}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def platform_admins(%Prima.Actor{}), do: {:error, :cross_tenant}
+
+  @doc """
+  Write the platform administrator's mark on the person `user_id` names
+  (`mark?` true) or clear it (false), as one transaction only the control
+  plane's holder runs (`Arca.Repo.owned/2`). The marked people's rows are
+  locked before they are counted, by every marking and clearing alike, so
+  two clears never each count the other's mark and leave none: clearing
+  the last one is refused `:last_admin`. Only an active person is marked
+  (`:not_active`); marking a marked person, or clearing an unmarked one,
+  changes nothing. `also:`, a function of the person's row run last in the
+  transaction, answers `:ok` or `{:error, reason}`, which rolls the change
+  back: marking writes the person's allow beside the mark.
+  """
+  @spec set_platform_admin(Prima.Actor.t(), String.t(), boolean(), keyword()) ::
+          {:ok, map()}
+          | {:error, :not_found | :not_active | :last_admin | :not_owner | term()}
+          | refusal()
+  def set_platform_admin(actor, user_id, mark?, opts \\ [])
+
+  def set_platform_admin(%Prima.Actor{scope: :platform}, user_id, mark?, opts)
+      when is_binary(user_id) and is_boolean(mark?) and is_list(opts) do
+    also = Keyword.get(opts, :also, fn _user -> :ok end)
+
+    Arca.Repo.owned("Arca.Users.set_platform_admin", fn ->
+      marked = Arca.Repo.all(from(u in admins(), select: u.id) |> QueryHelpers.for_update())
+
+      with {:ok, user} <- found(Arca.Repo.get(User, user_id)),
+           :ok <- markable(user, mark?, marked),
+           {:ok, user} <- marked(user, mark?),
+           :ok <- also_ran(also.(Arca.Data.project(user))) do
+        {:ok, user}
+      end
+    end)
+  end
+
+  def set_platform_admin(%Prima.Actor{}, _user_id, _mark?, _opts), do: {:error, :cross_tenant}
+
+  defp admins,
+    do: from(u in User, where: not is_nil(u.platform_admin_at) and u.status == "active")
+
+  defp markable(%User{status: "active"}, true, _marked), do: :ok
+  defp markable(%User{}, true, _marked), do: {:error, :not_active}
+
+  defp markable(%User{id: id}, false, marked) do
+    if id in marked and length(marked) == 1, do: {:error, :last_admin}, else: :ok
+  end
+
+  defp marked(%User{platform_admin_at: %DateTime{}} = user, true), do: {:ok, user}
+  defp marked(%User{platform_admin_at: nil} = user, false), do: {:ok, user}
+
+  # The mark is written past the changeset, which keeps it read-only for
+  # every other write, as the installation's first person is born with it.
+  defp marked(%User{} = user, mark?) do
+    now = DateTime.utc_now()
+
+    user
+    |> Ecto.Changeset.change(platform_admin_at: if(mark?, do: now), updated_at: now)
+    |> Arca.Repo.update()
+    |> settled()
+  end
+
   @doc """
   Write `attrs` over the person `user_id` names, as the row reads now.
   `updated_at` is stamped here. The standing columns (`status`,
@@ -194,7 +267,7 @@ defmodule Arca.Users do
   (`Arca.InstallationClaims.guard!/1`): the installation's first person is
   made only by `setup`, and is written with the platform administrator's
   mark (`users.platform_admin_at`) in this transaction; no other mint
-  writes it. Every other admission onto an empty node is `:not_set_up`,
+  writes it, and only `set_platform_admin/4` writes it afterwards. Every other admission onto an empty node is `:not_set_up`,
   and a `setup` on a node that holds a person is `:setup_closed`.
   """
   @spec mint(Prima.Actor.t(), map(), keyword()) ::

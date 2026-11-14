@@ -127,6 +127,59 @@ defmodule Sanctum.Tenancy.Users do
     do: Arca.Users.get_by_namespace(server(), namespace)
 
   @doc """
+  The people carrying the platform administrator's mark, oldest mark
+  first. A display read: an outage reads as none.
+  """
+  @spec platform_admins() :: [user()]
+  def platform_admins, do: rows_or_empty(Arca.Users.platform_admins(server()))
+
+  @doc """
+  Mark the person `user` as a platform administrator, by the administrator
+  `by` (`Arca.Users.set_platform_admin/4`), writing their identifier's
+  allow in the same transaction, since a person admitted through `*` has
+  none and every administrator's allow stays (`Sanctum.Door.Store.remove/1`).
+  A deny of the identifier refuses it (`{:door, :denied}`), as one of a
+  person with no account does (`:no_account`).
+  """
+  @spec mark_platform_admin(user(), String.t()) :: {:ok, user()} | {:error, term()}
+  def mark_platform_admin(%{id: user_id}, by) when is_binary(by) do
+    with {:ok, identifier} <- account_identifier(user_id),
+         do:
+           Arca.Users.set_platform_admin(server(), user_id, true,
+             also: &admin_allowed(&1, identifier, by)
+           )
+  end
+
+  @doc """
+  Clear the platform administrator's mark of `user`, by the administrator
+  `by` (`Arca.Users.set_platform_admin/4`): the last mark is refused
+  `:last_admin`. Their open sessions lose the capability once the context
+  is next established (`Sanctum.Caller`'s memo).
+  """
+  @spec clear_platform_admin(user()) :: {:ok, user()} | {:error, term()}
+  def clear_platform_admin(%{id: user_id}),
+    do: Arca.Users.set_platform_admin(server(), user_id, false)
+
+  defp account_identifier(user_id) do
+    case identifier(user_id) do
+      {:ok, identifier} -> {:ok, identifier}
+      {:error, :not_found} -> {:error, :no_account}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp admin_allowed(user, identifier, by) do
+    case Sanctum.Door.Store.allow_unless_denied("identifier", identifier, by,
+           note: "administrator",
+           label: user[:namespace]
+         ) do
+      {:ok, _entry} -> :ok
+      {:error, :denied} -> {:error, {:door, :denied}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Everyone the server knows, newest first. A platform view, paged with
   `limit:` (default and ceiling `Arca.Users.max_page/0`) and `offset:`.
   """
