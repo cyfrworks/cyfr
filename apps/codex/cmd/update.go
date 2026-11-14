@@ -1483,6 +1483,13 @@ func (u *updater) revertScaffold(reason error) error {
 // release's: the release runs only on a database its own schema built, and
 // there is no upgrade path between schemas. An answer that cannot be read
 // refuses too, never reads as a match.
+//
+// The fingerprint read is the code's, not the one the database records:
+// the two are one because a cyfr boots only on a database its own schema
+// built (Arca.SchemaFingerprint.verify!/0 at every boot). They differ only
+// for a CYFR whose image already does not boot on its database, which an
+// update cannot make worse: its start fails, and stopAfterSwitch prints
+// the boot's FATAL line.
 func (u *updater) readSchema() error {
 	ctx, cancel := context.WithTimeout(u.ctx, composeRunTimeout)
 	defer cancel()
