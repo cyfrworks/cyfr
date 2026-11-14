@@ -927,7 +927,10 @@ defmodule Sanctum.SignIn do
     with {:ok, :allowed} <- Sanctum.Door.sign_in(user), do: unlocked(user.id)
   end
 
-  defp admitted(_user, _admission), do: {:error, :not_standing}
+  # A person this CYFR held and no longer admits reads what a stranger
+  # reads: the door's one refusal, so no sentence tells a denied person
+  # from one nobody listed.
+  defp admitted(_user, _admission), do: {:error, {:door, :denied}}
 
   # A new person: admitted under the request's admission, or as the door
   # admits their identifier. One another answer made meanwhile is the

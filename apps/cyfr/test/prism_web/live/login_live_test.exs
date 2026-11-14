@@ -623,6 +623,43 @@ defmodule PrismWeb.LoginLiveTest do
     refute_vocabulary(html)
   end
 
+  # What `/login` says to `account` signing in with its passkey there.
+  defp refusal_at_login(conn, account) do
+    {:ok, view, _html} = live(conn, ~p"/login")
+    view |> element(~s([data-test="sign-in"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    [_page, fragment] = String.split(url, "#", parts: 2)
+    {:ok, request} = fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+    render_hook(view, "account_answer", %{"answer" => answer_of(request, account)})
+    render_async(view, @answered_ms)
+
+    view
+    |> element(~s([data-test="sign-in-error"]))
+    |> render()
+    |> String.replace(~r/<[^>]*>/, "")
+    |> String.trim()
+  end
+
+  test "a person let in and later denied reads the refusal a newcomer nobody listed reads",
+       %{conn: conn, dir: dir} do
+    %{user: first} = first!(dir)
+    {:ok, wildcard} = Sanctum.Door.Store.allow("wildcard", "*", first.id)
+    denied = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+    {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, {:browser, "denied-browser"})
+
+    {:ok, %{user: person}} =
+      Sanctum.SignIn.answer(answer_of(request, denied), {:browser, "denied-browser"})
+
+    {:ok, _denied} = Sanctum.Tenancy.Users.deny(person)
+    {:ok, _removed} = Sanctum.Door.Store.remove(wildcard.id)
+    newcomer = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+
+    said_to_denied = refusal_at_login(conn, denied)
+    said_to_newcomer = refusal_at_login(build_conn(), newcomer)
+    assert said_to_newcomer == "This CYFR has not let you in. Whoever runs it can let you in."
+    assert said_to_denied == said_to_newcomer
+  end
+
   test "a sign-in from a tab whose sign-in another tab replaced says this browser is signed in",
        %{conn: conn, dir: dir} do
     %{account: account, session_token: token} = first!(dir)
