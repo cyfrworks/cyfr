@@ -353,7 +353,7 @@ defmodule Arca.FilesTest do
       )
 
       assert Files.move(actor, "data/src", "data/dest") ==
-               {:error, {:conflict, "'data/dest/last.txt' already exists — choose another name"}}
+               {:error, {:conflict, "'data/dest' already exists — choose another name"}}
 
       assert {:ok, %{content: "theirs"}} = Files.read(actor, "data/dest/last.txt")
       assert {:ok, %{content: "mine"}} = Files.read(actor, "data/src/last.txt")
