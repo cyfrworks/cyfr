@@ -254,7 +254,7 @@ defmodule Sanctum.Shares do
                  Authz.confirm(ctx, :credential_sharing, %{
                    operation: "share.set_audience",
                    arguments: %{share_id: id, audience: audience, expected: expected},
-                   resource: id,
+                   resource: entry_name(ctx, share.vault_entry_id),
                    details: sharing_details(audience, %{})
                  }),
                do: write_audience(ctx, id, expected, audience)
@@ -740,6 +740,16 @@ defmodule Sanctum.Shares do
 
   # The entry of the person's own athanor a creation names, read for the
   # confirmation's preview; the store reads it again under its lock.
+  # The shared entry by the name its person sees it under, for a
+  # confirmation's preview: an entry that cannot be read names nothing,
+  # never the share's id, and changes nothing else about the change.
+  defp entry_name(ctx, entry_id) do
+    case own_entry(ctx, entry_id) do
+      {:ok, %{name: name}} -> name
+      {:error, _unread} -> nil
+    end
+  end
+
   defp own_entry(ctx, entry_id) do
     case Arca.VaultStorage.get(Context.actor(ctx), entry_id) do
       {:ok, entry} -> {:ok, entry}

@@ -236,6 +236,21 @@ defmodule Sanctum.SharesTest do
     :ok
   end
 
+  # A store that cannot answer the entry: dropped inside the test's own
+  # sandbox transaction, so it rolls back with the test.
+  @drop_vault_entries (case Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3) do
+                         Ecto.Adapters.Postgres -> "DROP TABLE vault_entries CASCADE"
+                         _sqlite -> "DROP TABLE vault_entries"
+                       end)
+
+  # What every preview of `ctx`'s change names besides its resource and
+  # details: this home, the athanor by name and the operation.
+  defp preview_frame(ctx, operation) do
+    {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+    %{"home" => home, "athanor" => athanor.name, "operation" => operation}
+  end
+
   defp confirmation!(ctx, id) do
     {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id))
     row
@@ -1012,7 +1027,8 @@ defmodule Sanctum.SharesTest do
       assert {:error, {:confirmation_required, %{id: created}}} =
                Shares.create(terry, Map.merge(%{entry_id: entry.id, person_daily: 5}, to_traders))
 
-      share = share!(terry, key!(terry), to_traders)
+      shared = key!(terry)
+      share = share!(terry, shared, to_traders)
 
       assert {:error, {:confirmation_required, %{id: widened}}} =
                Shares.set_audience(terry, %{
@@ -1022,8 +1038,8 @@ defmodule Sanctum.SharesTest do
                  expected: to_traders
                })
 
-      for {secret, resource, details} <- [
-            {created, entry.name,
+      for {secret, operation, resource, details} <- [
+            {created, "share.create", entry.name,
              %{
                "audience" => "thread",
                "person_daily" => "5",
@@ -1034,17 +1050,43 @@ defmodule Sanctum.SharesTest do
                  "Recipients use your provider limits up to the caps you set and never see the credential. You can revoke the share at any time."
                ]
              }},
-            {widened, share.id, %{"audience" => "everyone"}}
+            # A widening names the shared entry as its person sees it.
+            {widened, "share.set_audience", shared.name, %{"audience" => "everyone"}}
           ] do
         record = confirmation!(terry, secret)
         assert record.action == "credential_sharing"
-        preview = Jason.decode!(record.preview)
-        assert {preview["resource"], preview["details"]} == {resource, details}
+
+        assert Jason.decode!(record.preview) ==
+                 Map.merge(preview_frame(terry, operation), %{
+                   "resource" => resource,
+                   "details" => details
+                 })
+
         refute record.preview =~ @secret
         refute record.preview =~ alice.user_id
       end
 
       refute_received {:share, _, _}
+    end
+
+    test "a widening whose entry cannot be read names nothing, never the share's id",
+         %{terry: terry, alice: alice} do
+      to_traders = %{audience: "thread", thread_id: thread!(terry, [alice]).id}
+      share = share!(terry, key!(terry), to_traders)
+      Arca.Repo.query!(@drop_vault_entries)
+
+      assert {:error, {:confirmation_required, %{id: widened}}} =
+               Shares.set_audience(terry, %{
+                 share_id: share.id,
+                 audience: "everyone",
+                 thread_id: nil,
+                 expected: to_traders
+               })
+
+      assert Jason.decode!(confirmation!(terry, widened).preview) ==
+               Map.put(preview_frame(terry, "share.set_audience"), "details", %{
+                 "audience" => "everyone"
+               })
     end
 
     test "a widening proven over one audience is a conflict at its repeat once the audience " <>
