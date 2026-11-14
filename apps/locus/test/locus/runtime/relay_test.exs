@@ -904,6 +904,45 @@ defmodule Locus.Runtime.RelayTest do
     end
   end
 
+  # A peer that completes TCP and never speaks: an HTTPS fetch's TLS
+  # handshake never finishes, so its connect times out; a plain fetch's
+  # request goes out and no answer comes, so its wait for the answer does.
+  # Both under a one-second request limit, where the connect's limit and
+  # the request's are the same and only the connect's own report tells
+  # them apart.
+  describe "a fetch to a peer that never speaks" do
+    setup do
+      # Listening is enough: the kernel completes the handshake from the
+      # backlog, and nothing ever reads or writes.
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+      {:ok, port} = :inet.port(listen)
+      {:ok, port: port}
+    end
+
+    for {scheme, code} <- [{"https", "connect_timeout"}, {"http", "timeout"}] do
+      test "over #{scheme} ends #{code}", %{host: host, port: port} do
+        attempt =
+          attempt!(host, limits: EdgeFixtures.limits(timeout: "1s")) |> ScriptedKeeper.relayed!()
+
+        assert {:ok, pinned} =
+                 Egress.pin(attempt.client, "#{unquote(scheme)}://api.test:#{port}/")
+
+        assert {:ok, ref} =
+                 Endpoint.fetch(
+                   attempt.endpoint,
+                   attempt.attempt,
+                   pinned.target.id,
+                   "GET",
+                   "/",
+                   [],
+                   ""
+                 )
+
+        assert {[], unquote(code)} = events(attempt.endpoint, ref)
+      end
+    end
+  end
+
   describe "attached fetches" do
     # A guest's request naming a connection, as the runner's handler builds it.
     defp attached(url \\ "http://api.test/v1/x", opts \\ []) do

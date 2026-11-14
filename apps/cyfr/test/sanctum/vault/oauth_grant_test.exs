@@ -512,20 +512,55 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert query["client_id"] == "cid"
     end
 
-    test "an unconfigured provider names oauth.set_client", %{ctx: ctx} do
-      assert {:error, message} =
-               Sanctum.TestContext.authorize_vault(ctx, %{
-                 destination: @destination,
-                 name: "Slack",
-                 provider: "slack",
-                 scopes: [],
-                 endpoints: %{
-                   "authorize_url" => "https://slack.example/auth",
-                   "token_url" => "https://slack.example/token"
-                 }
-               })
+    test "a provider with no OAuth client is refused for it before anything is confirmed, " <>
+           "through the vault tool, in the setup words",
+         %{ctx: ctx} do
+      ctx = %{ctx | confirmation_id: nil}
 
-      assert message =~ "oauth.set_client"
+      args = %{
+        "action" => "authorize",
+        "name" => "Slack",
+        "provider_hint" => "slack",
+        "oauth_scopes" => [],
+        "oauth_endpoints" => %{
+          "authorize_url" => "https://slack.example/auth",
+          "token_url" => "https://slack.example/token"
+        },
+        "destination" => @destination
+      }
+
+      assert Sanctum.Providers.Vault.handle(ctx, args) ==
+               {:error, {:oauth_client_required, "slack"}}
+
+      assert {:ok, []} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      assert %Prima.Refusal{
+               class: :setup_required,
+               message:
+                 "No OAuth client is set for slack. Set one with Set client on the Vault page, " <>
+                   "which shows the return address to register with slack."
+             } = Sanctum.Refusals.classify({:oauth_client_required, "slack"})
+
+      # A re-authorization whose provider's client was removed since is
+      # refused the same way, before anything is confirmed.
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          destination: @destination,
+          disclose: true,
+          name: "Mail",
+          kind: "oauth",
+          provider_hint: @provider,
+          oauth_scopes: @scopes
+        })
+
+      :ok = Sanctum.ProviderCredentials.delete(ctx, @provider)
+
+      assert Sanctum.Providers.Vault.handle(ctx, %{"action" => "authorize", "id" => view.id}) ==
+               {:error, {:oauth_client_required, @provider}}
+
+      assert {:ok, []} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
     end
 
     test "re-auth target comes from the entry's own binding fields", %{ctx: ctx} do

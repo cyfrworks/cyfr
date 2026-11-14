@@ -11,7 +11,9 @@
 // the desktop, the desktop and its frames untouched. And the desktop's own
 // address with `?publisher=&tincture_name=` (the palette's and AQUA's focus
 // on a tincture, PrismWeb.DesktopLive) is handed to the shell as
-// `focus_named`, read when the hook mounts and after each move of the page.
+// `focus_named`, and with `?shell=desktops` (the palette's desktops) as the
+// shell's key `shell_key`, each read when the hook mounts and after each
+// move of the page.
 //
 // After each move of the page it tells the shell whether a Dashboard page is
 // now drawn over the desktop (`page_shown`, `desktop` true on the desktop's
@@ -24,11 +26,11 @@
 // the button's, never also the picker's launch), with a modifier held, or
 // anywhere inside what stands over the
 // desktop (the page's layer: a Dashboard page, the top bar, the palette;
-// the chat's and AQUA's panels; an open dialog) stays there, so no key
-// typed in a form launches or closes an app.
+// the chat's and AQUA's panels; the chooser of desktops; an open dialog)
+// stays there, so no key typed in a form launches or closes an app.
 
 const KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Enter", "Escape"])
-const OVER = "#page-layer, #chat-sheet, #aqua-panel-sheet, dialog[open]"
+const OVER = "#page-layer, #chat-sheet, #aqua-panel-sheet, #desktop-chooser, dialog[open]"
 
 // Whether a key event is the desktop's to hear.
 export function desktopKey(event) {
@@ -44,15 +46,28 @@ export function desktopKey(event) {
 // The desktop's own addresses: `/`, `/a` and `/a/<athanor>`.
 const DESKTOP = /^\/(?:a(?:\/[^/]+)?)?\/?$/
 
-// The tincture a desktop address asks the picker to show, or null.
-export function focusOf(href, origin) {
+// A desktop address of this origin as a URL, or null.
+function desktopUrl(href, origin) {
   let url
   try {
     url = new URL(href, origin)
   } catch {
     return null
   }
-  if (url.origin !== origin || !DESKTOP.test(url.pathname)) return null
+  return url.origin === origin && DESKTOP.test(url.pathname) ? url : null
+}
+
+// The shell's key a desktop address names, or null: only the chooser of
+// desktops is opened from an address.
+export function shellKeyOf(href, origin) {
+  const url = desktopUrl(href, origin)
+  return url && url.searchParams.get("shell") === "desktops" ? "desktops" : null
+}
+
+// The tincture a desktop address asks the picker to show, or null.
+export function focusOf(href, origin) {
+  const url = desktopUrl(href, origin)
+  if (!url) return null
   const publisher = url.searchParams.get("publisher")
   const name = url.searchParams.get("tincture_name")
   return publisher && name ? {publisher, name} : null
@@ -67,6 +82,8 @@ const ShellPage = {
     const focus = (href) => {
       const asked = focusOf(href, window.location.origin)
       if (asked) this.pushEvent("focus_named", asked)
+      const key = shellKeyOf(href, window.location.origin)
+      if (key) this.pushEvent("shell_key", {key})
     }
 
     const shown = (href) => {

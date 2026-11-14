@@ -69,7 +69,10 @@ defmodule Sanctum.HolderIdentityTest do
 
   @unauthenticated %{
     "code" => "unauthenticated",
-    "message" => "The presented credential is not valid. If it expired, sign in again."
+    "message" =>
+      "This sign-in no longer stands: it expired or was signed out, or this device or " <>
+        "your access was removed. Sign in again; if you are refused, ask the person who " <>
+        "runs this CYFR."
   }
   @no_athanor %{
     "code" => "forbidden",

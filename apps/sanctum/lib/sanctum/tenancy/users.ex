@@ -219,7 +219,7 @@ defmodule Sanctum.Tenancy.Users do
              slot: slot,
              verify: fn _rows -> :ok end
            ) do
-      Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
+      Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes, :denied)
       Athanors.announce_archived(change.archived_athanor_ids, change)
       Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
       Sanctum.SharedThreads.announce_denied(user_id, change)

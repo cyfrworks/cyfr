@@ -460,6 +460,18 @@ defmodule Sanctum.SignIn do
     end
   end
 
+  @doc """
+  The host of the account pages a browser is sent to (`request/3`'s url),
+  which the setup and invitation pages name before they send it there.
+  """
+  @spec directory_host() :: String.t()
+  def directory_host do
+    # The boot refused a directory URL with no host (`directory/0`).
+    case URI.parse(directory()) do
+      %URI{host: host} when is_binary(host) -> host
+    end
+  end
+
   # The directory's origin: its account pages are served at its root. The
   # boot refused a deployment naming none, or one that is no directory URL
   # (`Sanctum.Supervisor`).
@@ -939,7 +951,10 @@ defmodule Sanctum.SignIn do
     with {:ok, :allowed} <- Sanctum.Door.sign_in(user), do: unlocked(user.id)
   end
 
-  defp admitted(_user, _admission), do: {:error, :not_standing}
+  # A person this CYFR held and no longer admits reads what a stranger
+  # reads: the door's one refusal, so no sentence tells a denied person
+  # from one nobody listed.
+  defp admitted(_user, _admission), do: {:error, {:door, :denied}}
 
   # A new person: admitted under the request's admission, or as the door
   # admits their identifier. One another answer made meanwhile is the

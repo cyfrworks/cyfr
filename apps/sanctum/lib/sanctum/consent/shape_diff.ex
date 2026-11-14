@@ -63,7 +63,9 @@ defmodule Sanctum.Consent.ShapeDiff do
   One capability of one node that changed since the head: `node` the
   node's ref; `capability` `"tools"`, `"egress.<field>"`,
   `"storage.<field>"`, `"flows"` (each a source class and the exit it may
-  reach, `"<class> to <exit>"`), `"policy.<mode>"` or `"provided.<dep>"`; `change`
+  reach, `"<class> to <exit>"`), `"native_search"` (an agent's provider
+  search, switched on or off: `native_search` added or removed, apart
+  from its other tools) or `"provided.<dep>"`; `change`
   `:widened`, `:narrowed` or `:changed`; `added` and `removed` the values;
   `new` a dependency the head never held, `dropped` one the ask no longer
   names; and, on a `provided.<dep>` entry, `need`.
@@ -173,8 +175,7 @@ defmodule Sanctum.Consent.ShapeDiff do
          "egress" => Map.take(resources["egress"] || %{}, @egress),
          "storage" => Map.take(resources["storage"] || %{}, @storage),
          "flows" => flow_tokens(resources["flows"])
-       }
-       |> Map.merge(policy_caps(manifest))}
+       }}
     end
   end
 
@@ -284,7 +285,10 @@ defmodule Sanctum.Consent.ShapeDiff do
   defp flow_tokens(_none), do: []
 
   defp diff_caps(granted, live) do
-    tools = entry("tools", granted["tools"], live["tools"])
+    {granted_search, granted_tools} = split_search(granted["tools"])
+    {live_search, live_tools} = split_search(live["tools"])
+    tools = entry("tools", granted_tools, live_tools)
+    search = entry(Sanctum.Consent.ShapeDerivation.provider_search(), granted_search, live_search)
 
     egress =
       Enum.map(@egress, fn key ->
@@ -298,22 +302,15 @@ defmodule Sanctum.Consent.ShapeDiff do
 
     flows = entry("flows", granted["flows"], live["flows"])
 
-    policy =
-      Enum.map(~w(policy.auto policy.ask), fn key ->
-        entry(key, granted[key], live[key])
-      end)
-
-    ([tools] ++ egress ++ storage ++ [flows] ++ policy) |> Enum.reject(&is_nil/1)
+    ([tools, search] ++ egress ++ storage ++ [flows]) |> Enum.reject(&is_nil/1)
   end
 
-  defp policy_caps(%{"agent" => %{"policy" => policy}}) when is_map(policy) do
-    %{
-      "policy.auto" => policy["auto"] || [],
-      "policy.ask" => policy["ask"] || []
-    }
+  # An agent's provider search is its own row, switched on or off, never
+  # one tool among its catalog actions.
+  defp split_search(tools) do
+    search = Sanctum.Consent.ShapeDerivation.provider_search()
+    tools |> normalize() |> Enum.split_with(&(&1 == search))
   end
-
-  defp policy_caps(_), do: %{}
 
   defp entry(capability, granted, live) do
     granted = normalize(granted)

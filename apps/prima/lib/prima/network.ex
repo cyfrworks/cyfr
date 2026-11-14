@@ -74,13 +74,27 @@ defmodule Prima.Network do
   @spec dns_failure(String.t()) :: String.t()
   def dns_failure(host), do: "DNS resolution failed for #{host}"
 
+  # How long opening a connection to a pinned address may take, at most:
+  # a request's own timeout bounds the wait for its answer once connected.
+  @connect_timeout_ms 5_000
+
+  @doc """
+  How long opening a connection to a pinned address may take, in
+  milliseconds, unless the request's own timeout is shorter: the limit a
+  connect that times out is reported against, apart from the request's.
+  """
+  @spec connect_timeout_ms() :: pos_integer()
+  def connect_timeout_ms, do: @connect_timeout_ms
+
   @doc """
   Validate a resolved address and construct its pinned connection options.
 
   `:private_policy` is `:deny` (default), `:allow_all` or
   `{:allowlist, targets}`. `:receive_timeout`, `:protocols` and `:transport_opts`
-  are copied into the connection options. Redirects, retries, decompression
-  and body decoding stay disabled so the caller controls every next request.
+  are copied into the connection options. The connect timeout is
+  `connect_timeout_ms/0`, or the receive timeout when that is shorter.
+  Redirects, retries, decompression and body decoding stay disabled so
+  the caller controls every next request.
 
   An engine connecting to an address CYFR pinned for it
   (`Prima.PinnedTarget.address/1`) passes `private_policy: :allow_all`: the
@@ -95,6 +109,7 @@ defmodule Prima.Network do
 
     with :ok <- check_ip(ip_tuple, uri.host, policy) do
       ip = format_ip(ip_tuple)
+      receive_timeout = Keyword.get(opts, :receive_timeout, 30_000)
 
       req_opts =
         [
@@ -104,10 +119,10 @@ defmodule Prima.Network do
           redirect: false,
           retry: false,
           connect_options:
-            [hostname: uri.host]
+            [hostname: uri.host, timeout: min(@connect_timeout_ms, receive_timeout)]
             |> put_unless_nil(:protocols, Keyword.get(opts, :protocols))
             |> put_unless_nil(:transport_opts, Keyword.get(opts, :transport_opts)),
-          receive_timeout: Keyword.get(opts, :receive_timeout, 30_000)
+          receive_timeout: receive_timeout
         ]
 
       {:ok, %{ip: ip, ip_tuple: ip_tuple, uri: uri, req_opts: req_opts}}

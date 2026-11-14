@@ -644,7 +644,7 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 	for b.shell.Unlocked() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "it was removed, or CYFR does not admit your account") {
+	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "it was removed, CYFR does not admit your account") {
 		t.Fatal("an ended standing did not lock the box")
 	}
 	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
@@ -654,7 +654,7 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 	home.members = map[string]bool{}
 	home.mu.Unlock()
 	b.post("/unlock", url.Values{"secret": {p}})
-	if !strings.Contains(b.page(), "it was removed, or CYFR does not admit your account") || b.shell.Unlocked() {
+	if !strings.Contains(b.page(), "it was removed, CYFR does not admit your account") || b.shell.Unlocked() {
 		t.Fatal("a box the door refuses unlocked")
 	}
 	home.mu.Lock()
@@ -666,6 +666,31 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 		t.Fatalf("hellos %v", hellos)
 	}
 	_ = websocket.StatusNormalClosure
+}
+
+// A restore suspends every device, so the box's certificate is refused at
+// its first unlock after one: the screen says a restore may be why, drops
+// the certificate, and the next unlock says hello again and is admitted.
+func TestChannel_ACertificateARestoreSuspendedIsToldAndHelloedAgain(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := setUpAndOpen(t, home, b)
+	b.post("/lock", nil)
+	home.revoke()
+
+	b.post("/unlock", url.Values{"secret": {p}})
+	const told = "CYFR does not take this screen now: it was removed, CYFR does not admit your account, " +
+		"or CYFR was restored from a backup, which suspends every device. Unlocking it again asks CYFR again."
+	if page := b.page(); !strings.Contains(page, told) || b.shell.Unlocked() {
+		t.Fatalf("the refused certificate was not told as a restore may be why:\n%s", page)
+	}
+	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
+		t.Fatalf("the client kept %+v", c)
+	}
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	if hellos := home.hellosSeen(); len(hellos) != 2 {
+		t.Fatalf("hellos %v", hellos)
+	}
 }
 
 // A standing that ends with no announcement to the open channel is heard
@@ -683,7 +708,7 @@ func TestChannel_AStandingEndedUnannouncedEndsAtTheNextReport(t *testing.T) {
 	for b.shell.Unlocked() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if b.shell.Unlocked() || !strings.Contains(b.page(), "it was removed, or CYFR does not admit your account") {
+	if b.shell.Unlocked() || !strings.Contains(b.page(), "it was removed, CYFR does not admit your account") {
 		t.Fatal("a standing ended unannounced did not lock the box at its next report")
 	}
 	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
