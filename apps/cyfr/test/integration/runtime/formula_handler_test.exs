@@ -544,8 +544,8 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
       # No profile roots the reference: the consent signal, as a run naming
       # no account meets it.
-      assert {:error, {:consent_required, %{"ref" => ^ref}}} =
-               Sanctum.Gate.call_external("execution", ctx, Map.put(named, "action", "run"))
+      assert Sanctum.Gate.call_external("execution", ctx, Map.put(named, "action", "run")) ==
+               {:error, {:consent_required, %{cause: :no_grant, ref: "reagent:local.test-math"}}}
 
       # Granted, for runs over the API, with no account on its own calls:
       # the name is a grant to make, never run under the default.
