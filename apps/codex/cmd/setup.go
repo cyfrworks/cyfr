@@ -311,6 +311,11 @@ var errNoDocker = errors.New("Docker is not ready for CYFR on this machine, so n
 // Start begins the run, refusing a project whose .env exists by now, and
 // one whose Docker does not answer, before anything is written.
 func (s *setupSession) Start() error {
+	// Docker answered when the pages were served, and may have stopped
+	// since: it is asked again here, before the run's first write, outside
+	// the lock, since docker info takes its time and the pages read the
+	// state meanwhile.
+	docker := s.docker && !s.begun() && machine.reachable()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.started || s.ctx.Err() != nil {
@@ -319,7 +324,7 @@ func (s *setupSession) Start() error {
 	if fileExists(".env") {
 		return errSetUpMeanwhile
 	}
-	if !s.docker {
+	if !docker {
 		return errNoDocker
 	}
 	s.started = true

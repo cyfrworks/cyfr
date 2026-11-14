@@ -276,6 +276,23 @@ func TestSetupWithoutDockerWritesNothing(t *testing.T) {
 	nothingWritten(t, ".env.example")
 }
 
+// Docker that answered when the pages were served and stopped since is
+// asked again at the start: the same refusal, and nothing written.
+func TestSetupAsksDockerAgainAtTheStart(t *testing.T) {
+	s, sess, out := newSetupRun(t)
+	machine.reachable = func() bool { return false }
+	if err := sess.Start(); !errors.Is(err, errNoDocker) {
+		t.Fatalf("a start once Docker stopped answered %v", err)
+	}
+	if st := sess.State(); !reflect.DeepEqual(st, setup.State{Phase: setup.PhaseReady}) || s.locks != 0 || s.starts != 0 {
+		t.Errorf("the refused start began %+v, with %d locks and %d starts", st, s.locks, s.starts)
+	}
+	if out.Len() != 0 {
+		t.Errorf("the refused start printed %q", out.String())
+	}
+	nothingWritten(t, ".env.example")
+}
+
 // Without a Docker this account can use, cyfr setup serves the pages
 // writing nothing, not its lock nor its address file, so they are found
 // at the address it prints; their start shows the refusal and they stay
