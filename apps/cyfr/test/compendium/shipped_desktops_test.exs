@@ -3,26 +3,26 @@
 
 defmodule Compendium.ShippedDesktopsTest do
   @moduledoc """
-  The shipped desktops each ship a new version beside the one they shipped
-  with: the five at 0.2.0 beside 0.1.0, and the shipped canvas at 0.6.0
-  beside 0.5.0. An athanor filled while only the earlier version shipped
-  sees an update once the seed carries the new one, and one filled from
-  the seed holds both versions as the components list reads them, the
-  earlier marked so.
+  The shipped desktops each ship a new version beside the one before it:
+  the five at 0.3.0 beside 0.2.0, and the shipped canvas at 0.6.1 beside
+  0.6.0. An athanor filled while only the earlier version shipped sees an
+  update once the seed carries the new one, and one filled from the seed
+  holds both versions as the components list reads them, the earlier
+  marked so.
   """
   use ExUnit.Case, async: false
 
   alias Compendium.Providers.Component
 
   @repo_desktops Path.expand("../../../../seed/components/tinctures/local", __DIR__)
-  # Each desktop, the version it shipped with and the version beside it.
+  # Each desktop, the version before its newest and its newest.
   @shipped [
-    {"canvas", "0.5.0", "0.6.0"},
-    {"line", "0.1.0", "0.2.0"},
-    {"night", "0.1.0", "0.2.0"},
-    {"road", "0.1.0", "0.2.0"},
-    {"street", "0.1.0", "0.2.0"},
-    {"switchboard", "0.1.0", "0.2.0"}
+    {"canvas", "0.6.0", "0.6.1"},
+    {"line", "0.2.0", "0.3.0"},
+    {"night", "0.2.0", "0.3.0"},
+    {"road", "0.2.0", "0.3.0"},
+    {"street", "0.2.0", "0.3.0"},
+    {"switchboard", "0.2.0", "0.3.0"}
   ]
   @names Enum.map(@shipped, &elem(&1, 0))
 
@@ -71,10 +71,12 @@ defmodule Compendium.ShippedDesktopsTest do
     |> Enum.sort()
   end
 
-  test "the seed ships each desktop's new version beside the one it shipped with" do
+  test "the seed ships each desktop's new version, with its preview picture, beside the one before it" do
     for {name, before, now} <- @shipped do
       versions = File.ls!(Path.join(@repo_desktops, name))
       assert before in versions and now in versions, name
+      preview = Path.join([@repo_desktops, name, now, "public/media/preview-1.svg"])
+      assert File.regular?(preview), name
     end
   end
 

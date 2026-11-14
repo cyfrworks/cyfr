@@ -1138,6 +1138,23 @@ defmodule PrismWeb.ShellDesktopTest do
       assert %{id: ^main, state: :live} = canvas(view)
     end
 
+    test "settings of aqua_setup opens Aqua's setup over the desktop, the canvas still held",
+         %{conn: conn, athanor: athanor} do
+      view = shell!(conn)
+      main = canvas(view).id
+
+      verb!(view, main, :settings, %{"page" => "aqua_setup"})
+      to = "/a/#{Sanctum.Tenancy.Athanors.route_slug(athanor)}/aqua?setup=1"
+      assert_push_event(view, "navigate", %{to: ^to})
+      assert %{id: ^main, state: :live} = canvas(view)
+      assert dropped(view) == 0
+    end
+
+    test "the Devices control says what it opens", %{conn: conn} do
+      view = shell!(conn)
+      assert has_element?(view, ~s(#shell-devices[title="Your devices"]))
+    end
+
     test "settings of aqua, an approval's destination, opens AQUA's panel in place",
          %{conn: conn} do
       view = shell!(conn)

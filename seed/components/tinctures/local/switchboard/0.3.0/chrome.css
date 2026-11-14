@@ -1,0 +1,22 @@
+@font-face {
+  font-family: "Saira Semi Condensed";
+  src: url("fonts/saira-semi-condensed-600.woff2") format("woff2");
+}
+:root {
+  --chrome-ground: #b9c8ad;
+  --chrome-surface: #c6d3ba;
+  --chrome-ink: #1a1e18;
+  --chrome-accent: #8a2a1e;
+  --chrome-ground-dark: #252924;
+  --chrome-surface-dark: #343932;
+  --chrome-ink-dark: #ddd8c4;
+  --chrome-accent-dark: #ffb12e;
+  --chrome-radius: 4px;
+  --chrome-border: 2px;
+  --chrome-edge: 6px;
+  --chrome-title-height: 32px;
+  --chrome-controls: right;
+  --chrome-title-align: left;
+  --chrome-glyphs: square;
+  --chrome-font: "Saira Semi Condensed";
+}

@@ -624,3 +624,33 @@ describe("the street desktop 0.2.0", () => {
     assert.match(p.board().textContent, /storage 38 GB of 100 GB · model connected · crew 2 of 2 ready · update available/)
   })
 })
+
+describe("the street desktop 0.3.0", () => {
+  const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`
+
+  test("the sky and the ferry with no reading name their feed and say to ask AQUA for one, until a reading comes", async () => {
+    const p = await street({version: "0.3.0"})
+    assert.ok(labelled(p, sentence("weather")), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
+    assert.ok(labelled(p, sentence("vpn")))
+    // Their plates say it where the sun and the ferry stand, and their board when tapped.
+    const plates = p.hits().map((h) => h.textContent).join(" | ")
+    assert.match(plates, /No reading from the weather feed yet ?To bind one, ask AQUA for a feed named weather/)
+    assert.match(plates, /No reading from the vpn feed yet ?To bind one, ask AQUA for a feed named vpn/)
+    tap(p, sentence("vpn"))
+    assert.match(p.board().textContent, /No reading from the vpn feed yet/)
+    assert.match(p.board().textContent, /To bind one, ask AQUA for a feed named vpn/)
+
+    picture(p.stream("feed:weather"), [weather])
+    p.pump()
+    assert.ok(labelled(p, "Weather in Lisbon"))
+    assert.ok(!labelled(p, sentence("weather")))
+    assert.ok(labelled(p, sentence("vpn")))
+  })
+
+  test("on a phone the board's cards say the same of a feed with no reading", async () => {
+    const p = await street({version: "0.3.0", width: 390, height: 844})
+    assert.equal(p.plain(), false)
+    assert.match(p.board().textContent, /No reading from the weather feed yet ?To bind one, ask AQUA for a feed named weather/)
+    assert.match(p.board().textContent, /No reading from the vpn feed yet ?To bind one, ask AQUA for a feed named vpn/)
+  })
+})

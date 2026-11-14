@@ -191,6 +191,29 @@ defmodule Prism.ArrangementTest do
     end
   end
 
+  describe "the desktop a canvas runs" do
+    test "is replaced, its apps in every posture kept and the other canvas left as it is" do
+      layout = layout([window(@a, 0), tile(@b, 1)], [window(@c, 0)])
+
+      assert {:ok, set} =
+               Arrangement.apply(layout, "main", "hand", {:desktop, "tincture:local.garden"})
+
+      assert [%{tincture: "tincture:local.garden"} = main, work] = set.canvases
+      assert main.postures == hd(layout.canvases).postures
+      assert work == List.last(layout.canvases)
+
+      assert Arrangement.apply(set, "main", "desk", {:desktop, "tincture:local.garden"}) ==
+               {:ok, set}
+    end
+
+    test "on a canvas the layout does not have is refused" do
+      layout = layout([])
+
+      assert Arrangement.apply(layout, "elsewhere", "desk", {:desktop, @a}) ==
+               {:error, :no_canvas}
+    end
+  end
+
   describe "a refusal changes nothing" do
     setup do
       {:ok, layout: layout([window(@a, 0), tile(@b, 1)], [window(@a, 0)])}

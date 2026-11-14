@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Line</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 21 19.5H3z"/><path d="M12 10v4.2M12 16.8v.01"/></symbol>
+  <symbol id="i-approve" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15.5" r="3.8"/><path d="m10.8 12.8 8.2-8.3M15.8 7.6l2.2 2.2M13.6 9.8l2 2"/></symbol>
+  <symbol id="i-offer" viewBox="0 0 24 24"><path d="M14 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z"/><path d="M14 3.5V8h4.5M12 11v6M9.2 14.3 12 17l2.8-2.7"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 3.5c3.6 4.2 6 7.5 6 10.4a6 6 0 0 1-12 0c0-2.9 2.4-6.2 6-10.4z"/><path d="M9.2 14.6a2.9 2.9 0 0 0 2.6 2.6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 11A7.6 7.6 0 0 0 6 6.6M4.5 4v3.4h3.4M4.5 13A7.6 7.6 0 0 0 18 17.4M19.5 20v-3.4h-3.4"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24"><g fill="currentColor" stroke="none"><circle cx="9" cy="6.5" r="1.4"/><circle cx="15" cy="6.5" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="17.5" r="1.4"/><circle cx="15" cy="17.5" r="1.4"/></g></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="m6.5 14.5 5.5-5.5 5.5 5.5"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6.5 9.5 5.5 5.5 5.5-5.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></symbol>
+</svg>
+<main class="frame" id="frame" aria-label="Desktop">
+  <section class="near" id="near" aria-label="Waiting on you">
+    <noscript>
+      <h1 class="q-title">What waits on you</h1>
+      <p class="q-sub">This desktop reads what waits on you and what runs on its own as it happens, which needs scripts. Your runs, schedules and threads are on CYFR's own pages meanwhile.</p>
+    </noscript>
+  </section>
+  <div class="line" aria-hidden="true"></div>
+  <section class="far" id="far" aria-labelledby="far-title"></section>
+</main>
+</body>
+</html>

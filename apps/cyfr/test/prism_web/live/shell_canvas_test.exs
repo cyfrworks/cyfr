@@ -1440,6 +1440,40 @@ defmodule PrismWeb.ShellCanvasTest do
   end
 
   describe "switching" do
+    test "back to a held canvas whose newer version was written meanwhile validates that version",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      assert %{reference: %{version: "1.0.0"}, state: :live} = held = canvas(view)
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :frozen} = canvas(view)
+
+      # A new version written while the canvas is hidden, as `canvas.write`
+      # writes one: installed, its versions document unchanged.
+      canvas!(ctx, "markets", "1.0.1")
+
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
+
+      assert %{reference: %{version: "1.0.1"}} = validation(view)
+      assert canvas(view) == nil
+      assert row(held.id).state == "revoked"
+    end
+
+    test "back to a held canvas whose versions are unchanged thaws the same frame",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      held = canvas(view)
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      render_hook(view, "switch_canvas", %{"canvas" => "main"})
+
+      held_id = held.id
+      assert %{id: ^held_id, state: :live, visible: true} = canvas(view)
+      assert validation(view) == nil
+    end
+
     test "freezes the canvas it leaves whatever it declares, and its apps, and shows the next; nothing wraps",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       tincture!(ctx, "app-dash")
@@ -1818,6 +1852,85 @@ defmodule PrismWeb.ShellCanvasTest do
       assert validation(view) == nil
       assert row(again.id).state == "revoked"
       assert %{working: nil, kept: nil, failed: nil} = versions(ctx, "markets")
+    end
+  end
+
+  describe "the chooser of desktops" do
+    setup %{ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      canvas!(ctx, "garden")
+      versions!(ctx, "garden", %{working: "1.0.0"})
+      :ok
+    end
+
+    defp layout_tinctures(user, athanor) do
+      {:ok, %{document: document}} = Compendium.Providers.Layout.read(person(user, athanor))
+      for %{id: id, tincture: tincture} <- document.canvases, do: {id, tincture}
+    end
+
+    test "opened by its key, it lists every installed desktop; one chosen is set on the visible canvas and written to the layout",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      refute has_element?(view, "#desktop-chooser")
+
+      render_hook(view, "shell_key", %{"key" => "desktops"})
+
+      for name <- ["markets", "notes-canvas", "garden"],
+          do: assert(has_element?(view, "#chooser-iframe_#{name}"), name)
+
+      assert has_element?(view, ~s(#chooser-iframe_markets [aria-current="true"]))
+
+      view |> element(~s(#chooser-iframe_garden button)) |> render_click()
+      refute has_element?(view, "#desktop-chooser")
+
+      settle!(view, fn -> match?(%{reference: %{name: "garden"}}, canvas(view)) end)
+      assert Frames.visible_canvas(frames(view)) == "main"
+
+      wait_until(
+        fn ->
+          layout_tinctures(user, athanor) == [
+            {"main", "tincture:local.garden"},
+            {"work", "tincture:local.notes-canvas"}
+          ]
+        end,
+        2_000,
+        "the layout to be written"
+      )
+    end
+
+    test "a desktop another canvas already runs is switched to, and nothing is written",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      before = layout_tinctures(user, athanor)
+
+      render_hook(view, "shell_key", %{"key" => "desktops"})
+      view |> element(~s(#chooser-iframe_notes-canvas button)) |> render_click()
+
+      assert Frames.visible_canvas(frames(view)) == "work"
+      assert assigns(view).pending == []
+      assert layout_tinctures(user, athanor) == before
+    end
+
+    test "a desktop's settings opens it, an unknown key opens nothing, and Escape closes it",
+         %{conn: conn} do
+      view = shell!(conn)
+      main = canvas(view)
+
+      render_hook(view, "shell_key", %{"key" => "schedules"})
+      refute has_element?(view, "#desktop-chooser")
+
+      canvas_verb!(view, main.id, :settings, %{"page" => "desktops"})
+      assert has_element?(view, "#desktop-chooser")
+
+      render_keydown(view, "close_chooser", %{"key" => "Escape"})
+      refute has_element?(view, "#desktop-chooser")
+      assert %{state: :live} = canvas(view)
+    end
+
+    test "the shelf opens it", %{conn: conn} do
+      view = shell!(conn)
+      view |> element("#shelf-desktops") |> render_click()
+      assert has_element?(view, "#desktop-chooser")
     end
   end
 

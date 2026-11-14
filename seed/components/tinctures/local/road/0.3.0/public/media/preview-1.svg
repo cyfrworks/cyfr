@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" shape-rendering="crispEdges">
+  <g transform="scale(4)">
+    <!-- the sky, in bands -->
+    <rect width="400" height="20" fill="#5aaee8"/>
+    <rect y="20" width="400" height="20" fill="#6fb8eb"/>
+    <rect y="40" width="400" height="20" fill="#84c3ef"/>
+    <rect y="60" width="400" height="20" fill="#99cff3"/>
+    <rect y="80" width="400" height="20" fill="#aedaf6"/>
+    <rect y="100" width="400" height="30" fill="#bfe6fb"/>
+    <!-- the sun and two gulls -->
+    <rect x="296" y="18" width="14" height="14" fill="#ffc94a"/><rect x="298" y="16" width="10" height="18" fill="#ffc94a"/><rect x="298" y="20" width="10" height="10" fill="#ffe27a"/>
+    <g fill="#f7f7f2"><rect x="200" y="50" width="2" height="1"/><rect x="203" y="50" width="2" height="1"/><rect x="202" y="51" width="1" height="1"/><rect x="230" y="60" width="2" height="1"/><rect x="233" y="60" width="2" height="1"/><rect x="232" y="61" width="1" height="1"/></g>
+
+    <!-- far hills and the river -->
+    <rect y="112" width="400" height="10" fill="#8fa7b8"/><rect x="40" y="108" width="80" height="4" fill="#8fa7b8"/><rect x="200" y="106" width="110" height="6" fill="#8fa7b8"/>
+    <rect y="122" width="400" height="6" fill="#3f84b5"/><rect x="30" y="124" width="20" height="1" fill="#86bfe0"/><rect x="180" y="125" width="26" height="1" fill="#86bfe0"/>
+
+    <!-- the left hill with the windmill and its weather board -->
+    <rect x="0" y="96" width="70" height="40" fill="#9ab35e"/><rect x="10" y="90" width="50" height="6" fill="#9ab35e"/><rect x="22" y="86" width="26" height="4" fill="#9ab35e"/><rect x="0" y="134" width="120" height="4" fill="#6c8a43"/><rect x="70" y="110" width="40" height="26" fill="#9ab35e"/>
+    <rect x="30" y="64" width="12" height="24" fill="#f4f1e8"/><rect x="29" y="60" width="14" height="5" fill="#45301e"/><rect x="34" y="80" width="4" height="8" fill="#45301e"/>
+    <g fill="#e5d6b2"><rect x="35" y="44" width="2" height="18"/><rect x="18" y="61" width="36" height="2"/></g>
+    <g fill="#f4f1e8"><rect x="37" y="44" width="5" height="14"/><rect x="18" y="63" width="14" height="5"/><rect x="30" y="66" width="5" height="1"/></g>
+    <rect x="58" y="54" width="78" height="36" fill="#45301e"/><rect x="59" y="55" width="76" height="34" fill="#2c3a33"/>
+    <rect x="66" y="90" width="2" height="12" fill="#45301e"/><rect x="126" y="90" width="2" height="12" fill="#45301e"/>
+    <text x="63" y="74" font-family="monospace" font-size="15" font-weight="700" fill="#f4f1e8">21°</text>
+    <text x="96" y="66" font-family="monospace" font-size="7" fill="#f4f1e8">Lisbon</text>
+    <text x="96" y="75" font-family="monospace" font-size="7" fill="#bfd6c8">clear</text>
+    <text x="63" y="85" font-family="monospace" font-size="6" fill="#9fc0ae">wind 14 km/h</text>
+
+    <!-- the title -->
+    <text x="8" y="22" font-family="monospace" font-size="18" font-weight="700" fill="#10233d">noor</text>
+    <text x="8" y="34" font-family="monospace" font-size="7" font-weight="700" fill="#10233d">Fri 14 Nov  14:20</text>
+
+    <!-- the village row: houses, the bell tower, the market, the post boxes -->
+    <g>
+      <rect x="128" y="96" width="34" height="40" fill="#f4f1e8"/><rect x="126" y="90" width="38" height="7" fill="#c4553a"/><rect x="126" y="96" width="38" height="1" fill="#8a3424"/>
+      <g fill="#2c64ad"><rect x="128" y="124" width="34" height="1"/><rect x="128" y="127" width="34" height="1"/><rect x="128" y="130" width="34" height="1"/></g>
+      <rect x="133" y="102" width="6" height="8" fill="#33425a"/><rect x="151" y="102" width="6" height="8" fill="#ffcf6b"/><rect x="142" y="118" width="6" height="18" fill="#6b4a2f"/>
+
+      <rect x="166" y="70" width="18" height="66" fill="#e3b04b"/><rect x="164" y="64" width="22" height="7" fill="#c4553a"/><rect x="172" y="58" width="6" height="6" fill="#c4553a"/>
+      <rect x="171" y="76" width="8" height="10" fill="#1d1a17"/><rect x="173" y="78" width="4" height="4" fill="#ffd75e"/>
+      <rect x="171" y="96" width="8" height="12" fill="#33425a"/><rect x="171" y="120" width="8" height="16" fill="#45301e"/>
+
+      <rect x="188" y="100" width="40" height="36" fill="#e7a198"/><rect x="186" y="94" width="44" height="7" fill="#c4553a"/>
+      <g fill="#f4ecd6"><rect x="190" y="110" width="8" height="5"/><rect x="200" y="110" width="8" height="5"/><rect x="210" y="110" width="8" height="5"/><rect x="220" y="110" width="6" height="5"/></g>
+      <g fill="#d9443c"><rect x="190" y="110" width="4" height="5"/><rect x="200" y="110" width="4" height="5"/><rect x="210" y="110" width="4" height="5"/></g>
+      <rect x="194" y="120" width="10" height="16" fill="#6b4a2f"/><rect x="212" y="120" width="10" height="10" fill="#33425a"/>
+
+      <rect x="232" y="98" width="30" height="38" fill="#a9d8bd"/><rect x="230" y="92" width="34" height="7" fill="#c4553a"/>
+      <g fill="#2c64ad"><rect x="236" y="104" width="6" height="6"/><rect x="246" y="104" width="6" height="6"/><rect x="236" y="114" width="6" height="6"/><rect x="246" y="114" width="6" height="6"/></g>
+      <rect x="255" y="104" width="4" height="4" fill="#d9443c"/><rect x="242" y="124" width="8" height="12" fill="#45301e"/>
+
+      <rect x="266" y="104" width="26" height="32" fill="#f4f1e8"/><rect x="264" y="98" width="30" height="7" fill="#c4553a"/>
+      <rect x="270" y="110" width="6" height="8" fill="#ffcf6b"/><rect x="282" y="110" width="6" height="8" fill="#33425a"/><rect x="275" y="124" width="8" height="12" fill="#2c64ad"/>
+    </g>
+
+    <!-- the right hill with the tram line and its tunnel -->
+    <rect x="296" y="100" width="104" height="36" fill="#9ab35e"/><rect x="330" y="92" width="70" height="8" fill="#9ab35e"/><rect x="368" y="84" width="32" height="8" fill="#9ab35e"/>
+    <rect x="296" y="128" width="104" height="2" fill="#7a7161"/><rect x="296" y="127" width="104" height="1" fill="#2c2a2b"/><rect x="296" y="96" width="104" height="1" fill="#2c2a2b"/>
+    <rect x="360" y="104" width="34" height="24" fill="#7a7161"/><rect x="364" y="108" width="26" height="20" fill="#1d1a17"/>
+    <rect x="302" y="98" width="1" height="30" fill="#2c2a2b"/><rect x="300" y="90" width="24" height="10" fill="#357a37"/>
+    <text x="303" y="98" font-family="monospace" font-size="6" fill="#f4f1e8">84Mb</text>
+    <rect x="318" y="108" width="32" height="18" fill="#f2c230"/><rect x="319" y="104" width="30" height="4" fill="#f4f1e8"/><rect x="318" y="108" width="32" height="1" fill="#ffe58a"/><rect x="318" y="123" width="32" height="3" fill="#b88d14"/>
+    <g fill="#33425a"><rect x="321" y="111" width="5" height="5"/><rect x="328" y="111" width="5" height="5"/><rect x="335" y="111" width="5" height="5"/><rect x="342" y="111" width="5" height="5"/></g>
+    <rect x="320" y="100" width="22" height="4" fill="#1d1a17"/><text x="322" y="103.5" font-family="monospace" font-size="4" fill="#f4f1e8">lis-2</text>
+
+    <!-- the street with what waits on you queued outside your house -->
+    <rect y="136" width="400" height="18" fill="#c8c1b1"/>
+    <g fill="#ebe6d8"><rect x="4" y="140" width="2" height="1"/><rect x="24" y="146" width="2" height="1"/><rect x="60" y="142" width="2" height="1"/><rect x="96" y="148" width="2" height="1"/><rect x="150" y="141" width="2" height="1"/><rect x="230" y="147" width="2" height="1"/><rect x="300" y="143" width="2" height="1"/><rect x="360" y="149" width="2" height="1"/></g>
+    <!-- visitors -->
+    <rect x="118" y="140" width="6" height="10" fill="#2c64ad"/><rect x="119" y="136" width="4" height="4" fill="#c99a6c"/>
+    <rect x="108" y="140" width="6" height="10" fill="#d9443c"/><rect x="109" y="136" width="4" height="4" fill="#c99a6c"/>
+    <rect x="98" y="140" width="6" height="10" fill="#e3b04b"/><rect x="99" y="136" width="4" height="4" fill="#a8774c"/>
+    <rect x="96" y="124" width="40" height="10" fill="#9b2b25"/><rect x="97" y="125" width="38" height="8" fill="#d9443c"/>
+    <text x="100" y="131.5" font-family="monospace" font-size="6" fill="#fff8ec">3 waiting</text>
+
+    <!-- the road: calcada, the capybara at now, the schedules ahead -->
+    <rect y="154" width="400" height="71" fill="#ebe6d8"/>
+    <path d="M0 170 q10 -6 20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0" fill="none" stroke="#3b3a3c" stroke-width="2"/>
+    <path d="M0 196 q10 6 20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0" fill="none" stroke="#3b3a3c" stroke-width="2"/>
+    <rect x="0" y="154" width="400" height="2" fill="#a49d8d"/>
+    <!-- now -->
+    <rect x="120" y="156" width="1" height="69" fill="#36c9c0"/>
+    <text x="123" y="222" font-family="monospace" font-size="6" fill="#1f8f8a">now</text>
+    <!-- the capybara with its hat -->
+    <rect x="108" y="178" width="18" height="10" fill="#a8774c"/><rect x="122" y="174" width="8" height="8" fill="#a8774c"/><rect x="108" y="186" width="18" height="2" fill="#7a5333"/>
+    <rect x="127" y="176" width="2" height="2" fill="#47301d"/><rect x="110" y="188" width="3" height="3" fill="#7a5333"/><rect x="121" y="188" width="3" height="3" fill="#7a5333"/>
+    <rect x="121" y="170" width="10" height="2" fill="#7b4bb8"/><rect x="123" y="164" width="6" height="6" fill="#7b4bb8"/><rect x="125" y="166" width="2" height="2" fill="#ffd75e"/>
+    <!-- the schedules ahead on the road -->
+    <rect x="186" y="176" width="2" height="16" fill="#45301e"/><rect x="180" y="166" width="22" height="10" fill="#f4ecd6"/><rect x="180" y="166" width="22" height="1" fill="#c9b68d"/>
+    <text x="182" y="174" font-family="monospace" font-size="6" fill="#1d1a17">14:30</text>
+    <rect x="256" y="176" width="2" height="16" fill="#45301e"/><rect x="250" y="166" width="22" height="10" fill="#f4ecd6"/>
+    <text x="252" y="174" font-family="monospace" font-size="6" fill="#1d1a17">19:00</text>
+    <rect x="340" y="176" width="2" height="16" fill="#45301e"/><rect x="334" y="166" width="22" height="10" fill="#f4ecd6"/>
+    <text x="336" y="174" font-family="monospace" font-size="6" fill="#1d1a17">07:00</text>
+    <!-- behind: what ran, one red for a failed run -->
+    <rect x="40" y="180" width="6" height="6" fill="#5ab45b"/><rect x="62" y="180" width="6" height="6" fill="#d9443c"/><rect x="84" y="180" width="6" height="6" fill="#5ab45b"/>
+    <text x="8" y="215" font-family="monospace" font-size="6" fill="#7a7161">yesterday</text>
+    <text x="360" y="215" font-family="monospace" font-size="6" fill="#7a7161">tomorrow</text>
+  </g>
+</svg>

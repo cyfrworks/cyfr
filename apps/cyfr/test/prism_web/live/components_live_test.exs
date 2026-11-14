@@ -770,4 +770,30 @@ defmodule PrismWeb.ComponentsLiveTest do
     assert html =~ "A distinctive description"
     assert html =~ "distinctive-tag"
   end
+
+  describe "the expanded row" do
+    test "links the component's run page", %{conn: conn} do
+      {view, _html} = expanded_html(conn)
+
+      assert has_element?(
+               view,
+               ~s(a[data-test="run-page"][href$="/components/reagent:local.shelf-tool:1.0.0"])
+             )
+    end
+
+    test "lists each grant with Revoke, and a revoke leaves the component with none",
+         %{conn: conn, ctx: ctx} do
+      profile = ConsentFixtures.grant_tincture!(ctx, @ref)
+      {view, _html} = expanded_html(conn)
+      grant = ~s([id="grants-#{@ref}-#{profile}"])
+
+      assert has_element?(view, grant, "Your grant")
+
+      view |> element(grant <> " button", "Revoke") |> render_click()
+
+      assert {:ok, []} = Sanctum.Consent.profiles(ctx, @ref)
+      refute has_element?(view, grant)
+      assert has_element?(view, ~s([id="grants-#{@ref}"]), "No grants.")
+    end
+  end
 end

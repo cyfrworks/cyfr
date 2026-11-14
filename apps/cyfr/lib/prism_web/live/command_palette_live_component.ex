@@ -196,7 +196,9 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   end
 
   defp component_items(ctx) do
-    case call_tool(ctx, "component/list", %{"limit" => @max_recent}) do
+    # Every installed component, as the list's own bound reads them: a
+    # search that saw only the newest few could not find one by its name.
+    case call_tool(ctx, "component/list", %{}) do
       {:ok, %{components: list}} when is_list(list) ->
         Enum.map(list, fn comp ->
           ref = comp[:component_ref] || ""
@@ -216,22 +218,25 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     end
   end
 
-  # The desktop, the tincture focused in its picker (`PrismWeb.DesktopLive`).
-  defp desktop_path(t),
-    do:
-      "/?publisher=#{URI.encode_www_form(t.publisher)}" <>
-        "&tincture_name=#{URI.encode_www_form(t.name)}"
+  # A desktop opens the shell's chooser of desktops by its key; an app,
+  # the tincture focused in the picker (`PrismWeb.DesktopLive`).
+  defp tincture_path(t) do
+    if Prism.Frames.canvas?(t),
+      do: "/?shell=desktops",
+      else:
+        "/?publisher=#{URI.encode_www_form(t.publisher)}" <>
+          "&tincture_name=#{URI.encode_www_form(t.name)}"
+  end
 
   defp tincture_items(ctx) do
     try do
       Prism.TinctureRegistry.list_tinctures(ctx)
-      |> Enum.take(@max_recent)
       |> Enum.map(fn t ->
         %{
           kind: :tincture,
           label: t.title || "#{t.publisher}.#{t.name}",
-          hint: "tincture",
-          to: desktop_path(t),
+          hint: if(Prism.Frames.canvas?(t), do: "desktop", else: "tincture"),
+          to: tincture_path(t),
           icon: "palette",
           keywords:
             ["tincture", t.publisher, t.name, t.title]
@@ -301,7 +306,6 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
               type="text"
               placeholder="Search pages, components, requests…  (Esc to close)"
               value={@query}
-              autofocus
               phx-keyup="search"
               phx-target={@myself}
               phx-debounce="120"

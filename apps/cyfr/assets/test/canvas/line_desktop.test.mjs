@@ -607,3 +607,25 @@ describe("the line desktop 0.2.0", () => {
     assert.match(p.seen(), /14:00 Weather every 10 min Scheduled ok 1\.2 s/)
   })
 })
+
+// 0.3.0: a feed's widget with no reading names its feed and how to bind one.
+const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.0/", import.meta.url)
+
+describe("the line desktop 0.3.0", () => {
+  test("a feed widget with no reading names its feed and says to ask AQUA for one, until a reading comes", async () => {
+    const p = desk({version: V3})
+    await flush()
+    for (const name of ["weather", "vpn"]) {
+      assert.ok(
+        p.seen().includes(`No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`),
+        `${name}: ${p.seen()}`
+      )
+    }
+
+    p.picture("feed:weather", [{binding: "bnd_w", feed: "weather", label: "Lisbon", result: {temp_c: 21, sky: "clear"}, at: today(12, 0)}])
+    await flush()
+    assert.doesNotMatch(p.seen(), /No reading from the weather feed/)
+    assert.match(p.seen(), /Weather Lisbon .*21 Temp c/)
+    assert.match(p.seen(), /No reading from the vpn feed yet/)
+  })
+})

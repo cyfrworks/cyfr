@@ -86,4 +86,70 @@ defmodule PrismWeb.CommandPaletteTest do
 
     refute has_element?(view, ~s(#command-palette [phx-value-to*="/tinctures"]))
   end
+
+  test "every installed component is offered, not the newest few: one is found by its name",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    # `http` first, so nine newer components stand before it.
+    for name <- ["http" | Enum.map(1..9, &"newer-#{&1}")] do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
+          name: name,
+          version: "0.1.0",
+          type: "catalyst",
+          description: name
+        })
+    end
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "http"})
+
+    assert has_element?(
+             view,
+             ~s(#command-palette [phx-value-to="/components/catalyst:local.http:0.1.0"])
+           )
+
+    refute has_element?(view, ~s(#command-palette [phx-value-to*="newer-"]))
+  end
+
+  test "a desktop is offered as the chooser of desktops, by the shell's key", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    manifest = %{
+      "name" => "palette-desk",
+      "type" => "tincture",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "tincture" => %{"entry" => "index.html", "desktop" => %{}}
+    }
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "palette-desk", "1.0.0",
+      manifest: manifest,
+      files: [{"index.html", "<!doctype html><title>palette-desk</title>"}]
+    )
+
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+
+    route = Sanctum.Tenancy.Athanors.route_slug(athanor)
+
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view
+             |> element(~s(#command-palette button[phx-value-to="/?shell=desktops"]), "desktop")
+             |> render_click()
+
+    assert to == "/a/#{route}/?shell=desktops"
+  end
 end

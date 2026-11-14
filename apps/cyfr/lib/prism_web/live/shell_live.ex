@@ -8,11 +8,11 @@ defmodule PrismWeb.ShellLive do
   # renders it beside the page, so it establishes the session and its
   # athanor itself, the person's own (`PrismWeb.Focus` with no athanor
   # named), as the session's pages do.
-  on_mount {CyfrWeb.ContextGuard, :protected}
-  on_mount {PrismWeb.Focus, :assign}
+  on_mount({CyfrWeb.ContextGuard, :protected})
+  on_mount({PrismWeb.Focus, :assign})
 
   @behaviour PrismWeb.SystemLayer.Hook
-  on_mount PrismWeb.SystemLayer.Hook
+  on_mount(PrismWeb.SystemLayer.Hook)
 
   @gesture_events ~w(frame_move frame_resize frame_tile frame_full frame_minimise frame_raise
                      frame_close app_restore)
@@ -42,7 +42,8 @@ defmodule PrismWeb.ShellLive do
   establishes the session itself (`CyfrWeb.ContextGuard`) and focuses on
   the person's own athanor (`PrismWeb.Focus` with no athanor named).
 
-  The shelf's right end is the shell's (`#shelf-end`): the gear, a link to
+  The shelf's right end is the shell's (`#shelf-end`): Desktops, which
+  opens the chooser of desktops (below); the gear, a link to
   the Dashboard's Settings page, which opens as an overlay over the desktop
   (`PrismWeb.Layouts`); the chat (`PrismWeb.ChatOverlayLive`), CYFR's own
   overlay of the person's shared threads and pairs, with its unread count;
@@ -91,7 +92,23 @@ defmodule PrismWeb.ShellLive do
   switches itself. A switch freezes the canvas it leaves, whatever it
   declares, and its apps unless they hold a background grant; a canvas
   once opened stays held until the shell ends, the layout drops it or it
-  falls back, and showing it again thaws it.
+  falls back, and showing it again thaws it, unless its versions now name
+  a newer version to validate or another working version: then the held
+  frame is let go and the canvas is decided again, as one with no frame
+  held is.
+
+  ## The chooser of desktops
+
+  The shell's key `desktops` opens the chooser over the canvas: from the
+  shelf's Desktops button, from a desktop's `settings`, and from a desktop
+  address with `?shell=desktops` (the palette's desktops), which the
+  shell's hook hands here as `shell_key`. It lists every installed desktop
+  as the registry lists it when it opens, with its tagline and its first
+  preview. A desktop chosen that another canvas of the layout runs is
+  switched to; any other becomes the visible canvas's tincture, its apps
+  kept, a change of the layout made and written as a gesture is (below),
+  and the canvas is decided anew. The page key `aqua_setup` opens Aqua's
+  setup, the AQUA page at `?setup=1`, as the overlay over the desktop.
 
   A canvas frame is a page like any tincture's: its messages over the
   port its bridge hands it are the shell verbs of `Prima.TinctureWire`,
@@ -169,6 +186,11 @@ defmodule PrismWeb.ShellLive do
   | `frame_raise` | `frame` | goes above every other |
   | `frame_close` | `frame` | leaves the canvas |
   | `app_restore` | `ref` | a minimised app comes back, raised |
+
+  The chooser's choice of a desktop is a gesture too, on the visible canvas
+  rather than an app (`Prism.Arrangement`'s `:desktop`), written as these
+  are; it ends a fallback of that canvas, as a published layout naming
+  another tincture does.
 
   `geometry` is `{x, y, w, h}` and `share` a whole number, in hundredths
   of a percent of the canvas, `side` is `left` or `right`, each within the
@@ -393,6 +415,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:grant_decisions, %{})
       |> assign(:requests, %{})
       |> assign(:pairing_prompt, nil)
+      |> assign(:chooser, false)
       |> assign(:prompt_seq, 0)
       |> assign(:tinctures, [])
       |> assign(:canvases, [])
@@ -487,7 +510,7 @@ defmodule PrismWeb.ShellLive do
   # A key typed into a prompt the shell opened is the prompt's: it moves
   # no picker and closes no frame.
   def handle_event("keynav", %{"key" => key}, socket) do
-    if prompting?(socket.assigns),
+    if prompting?(socket.assigns) or socket.assigns.chooser,
       do: {:noreply, socket},
       else: {:noreply, handle_keynav(socket, key)}
   end
@@ -708,6 +731,18 @@ defmodule PrismWeb.ShellLive do
   # by the chord or the edge strip, which name a direction. Nothing wraps.
   def handle_event("switch_canvas", params, socket) when is_map(params),
     do: {:noreply, switch_canvas(socket, switch_target(socket.assigns, params))}
+
+  # The chooser of desktops, opened by its key from the shelf or from a
+  # desktop address (`?shell=desktops`, the palette's), as a desktop's
+  # `settings` opens it.
+  def handle_event("shell_key", %{"key" => "desktops"}, socket),
+    do: {:noreply, open_chooser(socket)}
+
+  def handle_event("choose_desktop", %{"tincture" => tincture_id}, socket)
+      when is_binary(tincture_id),
+      do: {:noreply, choose_desktop(socket, tincture_id)}
+
+  def handle_event("close_chooser", _params, socket), do: {:noreply, close_chooser(socket)}
 
   # The person's devices: the system layer's pairing prompt, one at a time.
   def handle_event("devices", _params, socket) do
@@ -1498,6 +1533,17 @@ defmodule PrismWeb.ShellLive do
     socket
   end
 
+  # The shell's chooser of desktops, over the canvas.
+  defp settings(socket, "desktops", _ref), do: open_chooser(socket)
+
+  # Aqua's setup, a section of the AQUA page at its own address, opened as
+  # the overlay over the desktop like any of Prism's pages.
+  defp settings(socket, "aqua_setup", _ref) do
+    push_event(socket, "navigate", %{
+      to: PrismWeb.Nav.href("/aqua?setup=1", socket.assigns.athanor_route)
+    })
+  end
+
   # One of Prism's own pages, by its key in the Dashboard's list for the
   # person's UI mode: it opens as the overlay over the desktop, the page's
   # LiveView moved there by this view's hook, so the canvas keeps running.
@@ -1912,6 +1958,7 @@ defmodule PrismWeb.ShellLive do
       {:ok, document} ->
         {:ok,
          socket
+         |> drop_fallbacks(document)
          |> assign(document: document, pending: pending ++ [{canvas_id, posture, gesture}])
          |> rearranged()
          |> schedule_write()}
@@ -2467,8 +2514,9 @@ defmodule PrismWeb.ShellLive do
     if canvas_id == leaving do
       socket
     else
+      socket = socket |> forget_refusal(leaving, :ungranted) |> drop_outdated(canvas_id)
+
       socket
-      |> forget_refusal(leaving, :ungranted)
       |> frames(fn frames ->
         frames
         |> then(&CanvasValidation.cancel(ctx, &1, leaving))
@@ -2476,6 +2524,87 @@ defmodule PrismWeb.ShellLive do
       end)
       |> show_canvas()
     end
+  end
+
+  # A canvas held from an earlier showing runs the version it opened with.
+  # Showing it again compares that with its versions now: a newer version
+  # to validate, or another working version, lets the held frame go with
+  # its credential, so the canvas is decided again (`decide/2`) as a canvas
+  # with no frame held is. A canvas fallen back keeps the shipped canvas.
+  defp drop_outdated(socket, canvas_id) do
+    %{context: ctx, frames: frames, arrangement: arrangement} = socket.assigns
+
+    with false <- Map.has_key?(socket.assigns.fallbacks, canvas_id),
+         %{tincture: tincture} <- Enum.find(arrangement || [], &(&1.id == canvas_id)),
+         %{reference: %{version: held}} <- Frames.get(frames, {:canvas, canvas_id}) do
+      socket = reread_listing(socket)
+      card = Frames.resolve(tincture, socket.assigns.canvases)
+
+      if card && outdated?(ctx, card, held),
+        do: frames(socket, &Frames.discard(ctx, &1, {:canvas, canvas_id})),
+        else: socket
+    else
+      _not_held -> socket
+    end
+  end
+
+  defp outdated?(ctx, card, held) do
+    card.publisher == Prima.ComponentPath.default_publisher() and
+      case Compendium.canvas_versions(ctx, card.name) do
+        {:ok, %{document: document}} ->
+          CanvasValidation.needed?(document, card.version) or document.working != held
+
+        {:error, _unreadable} ->
+          false
+      end
+  end
+
+  # ---- the chooser of desktops ----------------------------------------------
+
+  # The chooser lists the installed desktops as the registry lists them
+  # now, so one written or installed since the shell opened is among them.
+  defp open_chooser(socket), do: socket |> reread_listing() |> assign(:chooser, true)
+
+  defp close_chooser(socket), do: assign(socket, :chooser, false)
+
+  # The desktop the person chose: a canvas the layout already runs it on is
+  # switched to; otherwise the visible canvas runs it, a change of the
+  # layout made and written as a gesture is (`gesture/3`), its apps kept.
+  # The frames follow at once: the canvas's frame for the tincture it ran
+  # is let go, and the chosen one is decided as any canvas is.
+  defp choose_desktop(socket, tincture_id) do
+    socket = close_chooser(socket)
+
+    with %{} = card <- Enum.find(socket.assigns.canvases, &(&1.id == tincture_id)),
+         canvas_id when is_binary(canvas_id) <- chosen_canvas(socket.assigns) do
+      ref = Frames.ref_of(card)
+
+      case Enum.find(socket.assigns.arrangement || [], &(&1.tincture == ref)) do
+        %{id: ^canvas_id} ->
+          socket
+
+        %{id: other} ->
+          switch_canvas(socket, other)
+
+        nil ->
+          case gesture(socket, canvas_id, {:desktop, ref}) do
+            {:ok, socket} -> socket
+            {:error, _refused} -> put_flash(socket, :error, "That desktop could not be set.")
+          end
+      end
+    else
+      _unlisted_or_no_layout ->
+        put_flash(socket, :error, "That desktop could not be set.")
+    end
+  end
+
+  # The canvas a chosen desktop goes on: the visible one, while the layout
+  # is held and places it.
+  defp chosen_canvas(%{document: nil}), do: nil
+
+  defp chosen_canvas(%{frames: frames, arrangement: arrangement}) do
+    canvas_id = Frames.visible_canvas(frames)
+    if Enum.any?(arrangement || [], &(&1.id == canvas_id)), do: canvas_id
   end
 
   # ---- the fallback ----------------------------------------------------------
@@ -3371,13 +3500,13 @@ defmodule PrismWeb.ShellLive do
         type="button"
         phx-click="devices"
         data-test="shell-devices"
-        title="Pair or revoke a device"
+        title="Your devices"
         class="absolute bottom-2 left-2 z-[67] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
       >
         Devices
       </button>
 
-      <%!-- The shelf's right end: the gear, the chat and AQUA, the shell's
+      <%!-- The shelf's right end: Desktops, the gear, the chat and AQUA, the shell's
            own, drawn above the shelf and outside it (whose backdrop filter
            would make it the containing block of the overlays' fixed
            panels). The gear opens the Dashboard's Settings page as the
@@ -3386,6 +3515,17 @@ defmodule PrismWeb.ShellLive do
            leaves them as they are; their containers add no box, so their
            buttons stand in this row. --%>
       <div id="shelf-end" class="shelf-end">
+        <button
+          id="shelf-desktops"
+          type="button"
+          phx-click="shell_key"
+          phx-value-key="desktops"
+          class="shelf-end-button"
+          aria-label="Desktops"
+          title="Desktops"
+        >
+          <.icon name="palette" class="h-4 w-4" />
+        </button>
         <.link
           id="shelf-gear"
           navigate={PrismWeb.Nav.href("/settings", @athanor_route)}
@@ -3492,6 +3632,93 @@ defmodule PrismWeb.ShellLive do
           />
         <% end %>
       </div>
+
+      <%!-- The chooser of desktops, after the picker, so drawing or hiding
+           it moves no other element. --%>
+      <.chooser
+        :if={@chooser}
+        canvases={@canvases}
+        in_use={visible_tincture(assigns)}
+      />
+    </div>
+    """
+  end
+
+  defp visible_tincture(assigns) do
+    case visible_entry(assigns) do
+      %{tincture: tincture} -> tincture
+      nil -> nil
+    end
+  end
+
+  attr(:canvases, :list, required: true)
+  attr(:in_use, :string, default: nil)
+
+  defp chooser(assigns) do
+    ~H"""
+    <div
+      id="desktop-chooser"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="desktop-chooser-title"
+      phx-window-keydown="close_chooser"
+      phx-key="Escape"
+      phx-mounted={Phoenix.LiveView.JS.focus_first(to: "#desktop-chooser")}
+      class="absolute inset-0 z-[75] flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-10"
+    >
+      <div class="w-full max-w-4xl rounded-lg border border-gray-700 bg-gray-900 p-5 shadow-2xl">
+        <div class="mb-4 flex items-center justify-between gap-4">
+          <h2 id="desktop-chooser-title" class="text-base font-semibold text-white">
+            Choose your desktop
+          </h2>
+          <button
+            type="button"
+            phx-click="close_chooser"
+            class="rounded px-2 py-1 text-sm text-gray-400 hover:text-white"
+            aria-label="Close"
+          >
+            &times;
+          </button>
+        </div>
+        <p :if={@canvases == []} class="py-8 text-center text-sm text-gray-400">
+          No desktop is installed.
+        </p>
+        <ul class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <li :for={card <- @canvases} id={"chooser-" <> card.id}>
+            <button
+              type="button"
+              phx-click="choose_desktop"
+              phx-value-tincture={card.id}
+              aria-current={if Frames.ref_of(card) == @in_use, do: "true"}
+              class="group flex w-full flex-col overflow-hidden rounded-md border border-gray-700 bg-gray-950 text-left hover:border-blue-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+            >
+              <div class="flex aspect-video w-full items-center justify-center bg-black">
+                <img
+                  :if={card.preview_urls != []}
+                  src={hd(card.preview_urls)}
+                  alt=""
+                  class="h-full w-full object-contain"
+                />
+                <span :if={card.preview_urls == []} class="text-3xl text-gray-500">
+                  {card.icon_emoji || "◻"}
+                </span>
+              </div>
+              <div class="space-y-1 p-3">
+                <p class="flex items-center gap-2 text-sm font-medium text-white">
+                  {card.name}
+                  <span
+                    :if={Frames.ref_of(card) == @in_use}
+                    class="rounded bg-blue-900/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-blue-200"
+                  >
+                    In use
+                  </span>
+                </p>
+                <p :if={card.tagline} class="text-xs text-gray-400">{card.tagline}</p>
+              </div>
+            </button>
+          </li>
+        </ul>
+      </div>
     </div>
     """
   end
@@ -3500,10 +3727,10 @@ defmodule PrismWeb.ShellLive do
   # Function components — local to this LiveView, no separate module needed
   # ============================================================================
 
-  attr :tincture, :map, required: true
-  attr :preview_url, :string, default: nil
-  attr :preview_index, :integer, required: true
-  attr :preview_count, :integer, required: true
+  attr(:tincture, :map, required: true)
+  attr(:preview_url, :string, default: nil)
+  attr(:preview_index, :integer, required: true)
+  attr(:preview_count, :integer, required: true)
 
   defp preview_stage(assigns) do
     ~H"""
@@ -3578,7 +3805,7 @@ defmodule PrismWeb.ShellLive do
     """
   end
 
-  attr :tincture, :map, required: true
+  attr(:tincture, :map, required: true)
 
   defp preview_fallback(assigns) do
     assigns =
@@ -3609,7 +3836,7 @@ defmodule PrismWeb.ShellLive do
     """
   end
 
-  attr :tincture, :map, required: true
+  attr(:tincture, :map, required: true)
 
   defp info_bar(assigns) do
     assigns = assign(assigns, :initial, first_letter(assigns.tincture))
@@ -3694,8 +3921,8 @@ defmodule PrismWeb.ShellLive do
     """
   end
 
-  attr :tinctures, :list, required: true
-  attr :focused_index, :integer, required: true
+  attr(:tinctures, :list, required: true)
+  attr(:focused_index, :integer, required: true)
 
   defp tincture_dots(assigns) do
     ~H"""
@@ -3722,8 +3949,8 @@ defmodule PrismWeb.ShellLive do
     """
   end
 
-  attr :focused_index, :integer, required: true
-  attr :count, :integer, required: true
+  attr(:focused_index, :integer, required: true)
+  attr(:count, :integer, required: true)
 
   defp side_arrows(assigns) do
     ~H"""

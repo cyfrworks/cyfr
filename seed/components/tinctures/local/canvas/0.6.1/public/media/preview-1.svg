@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <radialGradient id="glow-a" cx="240" cy="90" r="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366f1" stop-opacity=".22"/><stop offset=".6" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-b" cx="1440" cy="860" r="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b82f6" stop-opacity=".12"/><stop offset=".6" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="900" fill="#0f0f1a"/>
+  <rect width="1600" height="900" fill="url(#glow-a)"/>
+  <rect width="1600" height="900" fill="url(#glow-b)"/>
+
+  <!-- the day in one sentence -->
+  <text x="48" y="74" font-size="32" font-weight="600" fill="#e2e8f0">Friday 14 November</text>
+  <text x="390" y="74" font-size="21" fill="#94a3b8">2 of your last 12 runs failed. One grant fixes all of them.</text>
+
+  <!-- left column: what needs your attention, then recent runs -->
+  <rect x="48" y="108" width="740" height="300" rx="14" fill="#1a1a2e" stroke="#2d2d4a" stroke-width="2"/>
+  <text x="76" y="152" font-size="20" font-weight="600" fill="#e2e8f0">Needs attention</text>
+  <rect x="244" y="134" width="30" height="24" rx="12" fill="#252540"/><text x="259" y="152" font-size="15" fill="#818cf8" text-anchor="middle">2</text>
+  <g>
+    <circle cx="92" cy="200" r="13" fill="#ef4444" fill-opacity=".18"/><rect x="90" y="191" width="4" height="11" rx="2" fill="#ef4444"/><circle cx="92" cy="207" r="2.2" fill="#ef4444"/>
+    <text x="120" y="207" font-size="18" font-weight="600" fill="#e2e8f0">Failed <tspan font-weight="400" fill="#64748b">· not granted</tspan></text>
+    <text x="120" y="236" font-size="16" fill="#94a3b8">digest asked for gmail.com, which its grant does not cover.</text>
+    <rect x="120" y="254" width="138" height="30" rx="15" fill="#252540"/><text x="136" y="275" font-size="15" fill="#e2e8f0">digest <tspan fill="#64748b">×2</tspan></text>
+    <rect x="620" y="186" width="140" height="40" rx="9" fill="#6366f1"/><text x="690" y="212" font-size="16" font-weight="600" fill="#ffffff" text-anchor="middle">Grant</text>
+    <line x1="76" y1="312" x2="760" y2="312" stroke="#2d2d4a" stroke-width="2"/>
+    <circle cx="92" cy="352" r="13" fill="#f59e0b" fill-opacity=".18"/><rect x="90" y="343" width="4" height="11" rx="2" fill="#f59e0b"/><circle cx="92" cy="359" r="2.2" fill="#f59e0b"/>
+    <text x="120" y="358" font-size="18" font-weight="600" fill="#e2e8f0">Paused <tspan font-weight="400" fill="#64748b">· weekly review</tspan></text>
+    <text x="120" y="384" font-size="16" fill="#94a3b8">It has not run since Monday.</text>
+  </g>
+
+  <rect x="48" y="428" width="740" height="432" rx="14" fill="#1a1a2e" stroke="#2d2d4a" stroke-width="2"/>
+  <text x="76" y="472" font-size="20" font-weight="600" fill="#e2e8f0">Recent runs</text>
+  <rect x="210" y="454" width="38" height="24" rx="12" fill="#252540"/><text x="229" y="472" font-size="15" fill="#818cf8" text-anchor="middle">12</text>
+  <g>
+    <rect x="76" y="498" width="44" height="34" rx="5" fill="#22c55e"/><rect x="128" y="498" width="44" height="34" rx="5" fill="#22c55e"/><rect x="180" y="498" width="44" height="34" rx="5" fill="#ef4444"/><rect x="232" y="498" width="44" height="34" rx="5" fill="#22c55e"/>
+    <rect x="284" y="498" width="44" height="34" rx="5" fill="#22c55e"/><rect x="336" y="498" width="44" height="34" rx="5" fill="#22c55e"/><rect x="388" y="498" width="44" height="34" rx="5" fill="#ef4444"/><rect x="440" y="498" width="44" height="34" rx="5" fill="#22c55e"/>
+    <rect x="492" y="498" width="44" height="34" rx="5" fill="#22c55e"/><rect x="544" y="498" width="44" height="34" rx="5" fill="#22c55e"/><rect x="596" y="498" width="44" height="34" rx="5" fill="#22c55e"/><rect x="648" y="498" width="44" height="34" rx="5" fill="#3b82f6"/>
+  </g>
+  <text x="76" y="556" font-size="14" fill="#64748b">newest</text><text x="692" y="556" font-size="14" fill="#64748b" text-anchor="end">12 runs ago</text>
+  <g font-size="17">
+    <circle cx="84" cy="596" r="6" fill="#3b82f6"/><text x="104" y="602" font-weight="600" fill="#e2e8f0">sync notes</text><text x="210" y="602" fill="#64748b">running · 14:18</text>
+    <line x1="76" y1="624" x2="760" y2="624" stroke="#2d2d4a" stroke-width="2"/>
+    <circle cx="84" cy="656" r="6" fill="#22c55e"/><text x="104" y="662" font-weight="600" fill="#e2e8f0">weather</text><text x="186" y="662" fill="#64748b">1.2 s · 14:10</text>
+    <line x1="76" y1="684" x2="760" y2="684" stroke="#2d2d4a" stroke-width="2"/>
+    <circle cx="84" cy="716" r="6" fill="#ef4444"/><text x="104" y="722" font-weight="600" fill="#e2e8f0">digest</text><text x="172" y="722" fill="#64748b">not granted · 10:40</text>
+    <rect x="660" y="698" width="100" height="36" rx="8" fill="#252540" stroke="#2d2d4a" stroke-width="2"/><text x="710" y="722" font-size="16" fill="#e2e8f0" text-anchor="middle">Retry</text>
+    <line x1="76" y1="746" x2="760" y2="746" stroke="#2d2d4a" stroke-width="2"/>
+    <circle cx="84" cy="778" r="6" fill="#22c55e"/><text x="104" y="784" font-weight="600" fill="#e2e8f0">morning digest</text><text x="246" y="784" fill="#64748b">2.4 s · 07:00</text>
+    <text x="76" y="836" font-size="15" fill="#64748b">8 more</text>
+  </g>
+
+  <!-- right column: apps, then schedules with the week ahead -->
+  <rect x="812" y="108" width="740" height="256" rx="14" fill="#1a1a2e" stroke="#2d2d4a" stroke-width="2"/>
+  <text x="840" y="152" font-size="20" font-weight="600" fill="#e2e8f0">Apps</text>
+  <rect x="898" y="134" width="30" height="24" rx="12" fill="#252540"/><text x="913" y="152" font-size="15" fill="#818cf8" text-anchor="middle">5</text>
+  <g font-size="15" fill="#94a3b8" text-anchor="middle">
+    <rect x="840" y="180" width="120" height="150" rx="12" fill="#252540"/><circle cx="900" cy="236" r="30" fill="#6366f1" fill-opacity=".35"/><text x="900" y="246" font-size="28" fill="#e2e8f0">M</text><text x="900" y="306">Maps</text>
+    <rect x="976" y="180" width="120" height="150" rx="12" fill="#252540"/><circle cx="1036" cy="236" r="30" fill="#22c55e" fill-opacity=".3"/><text x="1036" y="246" font-size="28" fill="#e2e8f0">F</text><text x="1036" y="306">Flights</text>
+    <rect x="1112" y="180" width="120" height="150" rx="12" fill="#252540"/><circle cx="1172" cy="236" r="30" fill="#f59e0b" fill-opacity=".3"/><text x="1172" y="246" font-size="28" fill="#e2e8f0">V</text><text x="1172" y="306">Voxels</text>
+    <rect x="1248" y="180" width="120" height="150" rx="12" fill="#252540"/><circle cx="1308" cy="236" r="30" fill="#3b82f6" fill-opacity=".3"/><text x="1308" y="246" font-size="28" fill="#e2e8f0">W</text><text x="1308" y="306">Weather</text>
+    <rect x="1384" y="180" width="120" height="150" rx="12" fill="#252540"/><circle cx="1444" cy="236" r="30" fill="#ef4444" fill-opacity=".3"/><text x="1444" y="246" font-size="28" fill="#e2e8f0">B</text><text x="1444" y="306">Birds</text>
+  </g>
+
+  <rect x="812" y="384" width="740" height="476" rx="14" fill="#1a1a2e" stroke="#2d2d4a" stroke-width="2"/>
+  <text x="840" y="428" font-size="20" font-weight="600" fill="#e2e8f0">Schedules</text>
+  <rect x="948" y="410" width="30" height="24" rx="12" fill="#252540"/><text x="963" y="428" font-size="15" fill="#818cf8" text-anchor="middle">3</text>
+  <g font-size="14" fill="#64748b" text-anchor="middle">
+    <text x="880" y="470">Fri</text><text x="976" y="470">Sat</text><text x="1072" y="470">Sun</text><text x="1168" y="470">Mon</text><text x="1264" y="470">Tue</text><text x="1360" y="470">Wed</text><text x="1456" y="470">Thu</text>
+    <rect x="840" y="482" width="80" height="62" rx="8" fill="#252540" stroke="#6366f1" stroke-width="2"/><rect x="936" y="482" width="80" height="62" rx="8" fill="#252540"/><rect x="1032" y="482" width="80" height="62" rx="8" fill="#252540"/><rect x="1128" y="482" width="80" height="62" rx="8" fill="#252540"/><rect x="1224" y="482" width="80" height="62" rx="8" fill="#252540"/><rect x="1320" y="482" width="80" height="62" rx="8" fill="#252540"/><rect x="1416" y="482" width="80" height="62" rx="8" fill="#252540"/>
+  </g>
+  <g fill="#818cf8">
+    <circle cx="866" cy="506" r="4"/><circle cx="880" cy="506" r="4"/><circle cx="894" cy="506" r="4"/><circle cx="866" cy="522" r="4"/><circle cx="880" cy="522" r="4"/>
+    <circle cx="968" cy="512" r="4"/><circle cx="982" cy="512" r="4"/><circle cx="1064" cy="512" r="4"/><circle cx="1078" cy="512" r="4"/><circle cx="1160" cy="512" r="4"/><circle cx="1174" cy="512" r="4"/>
+    <circle cx="1256" cy="512" r="4"/><circle cx="1270" cy="512" r="4"/><circle cx="1352" cy="512" r="4"/><circle cx="1366" cy="512" r="4"/><circle cx="1448" cy="512" r="4"/><circle cx="1462" cy="512" r="4"/>
+  </g>
+  <g font-size="17">
+    <circle cx="848" cy="590" r="6" fill="#22c55e"/><text x="868" y="590" font-weight="600" fill="#e2e8f0">Weather every 10 min</text><text x="868" y="614" font-size="15" fill="#64748b">next 14:30 · every 10 minutes</text>
+    <rect x="1422" y="574" width="102" height="38" rx="8" fill="#252540" stroke="#2d2d4a" stroke-width="2"/><text x="1473" y="599" font-size="16" fill="#e2e8f0" text-anchor="middle">Pause</text>
+    <line x1="840" y1="638" x2="1524" y2="638" stroke="#2d2d4a" stroke-width="2"/>
+    <circle cx="848" cy="676" r="6" fill="#22c55e"/><text x="868" y="676" font-weight="600" fill="#e2e8f0">Morning digest</text><text x="868" y="700" font-size="15" fill="#64748b">next tomorrow 07:00 · daily</text>
+    <rect x="1422" y="660" width="102" height="38" rx="8" fill="#252540" stroke="#2d2d4a" stroke-width="2"/><text x="1473" y="685" font-size="16" fill="#e2e8f0" text-anchor="middle">Pause</text>
+    <line x1="840" y1="724" x2="1524" y2="724" stroke="#2d2d4a" stroke-width="2"/>
+    <circle cx="848" cy="762" r="6" fill="#f59e0b"/><text x="868" y="762" font-weight="600" fill="#e2e8f0">Weekly review</text><text x="868" y="786" font-size="15" fill="#64748b">paused · Mondays at 09:00</text>
+    <rect x="1422" y="746" width="102" height="38" rx="8" fill="#6366f1"/><text x="1473" y="771" font-size="16" font-weight="600" fill="#ffffff" text-anchor="middle">Resume</text>
+  </g>
+</svg>
