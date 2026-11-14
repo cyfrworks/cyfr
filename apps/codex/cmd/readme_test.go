@@ -4,13 +4,16 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 // The README's CLI Reference tables are a derived view of the command
@@ -120,4 +123,67 @@ func subcommand(parent *cobra.Command, name string) *cobra.Command {
 		}
 	}
 	return nil
+}
+
+// composeDefault is a compose limit's default: the value itself, or the
+// default of the one ${NAME:-default} it reads.
+var composeDefault = regexp.MustCompile(`^(?:\$\{[A-Z_]+:-([^}]+)\}|(.+))$`)
+
+// The README's sizing names the shipped compose file's default limits, so
+// a change to a default changes the sentence.
+func TestReadmeSizingIsTheComposeLimits(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(packageDir, "..", "..", "..", "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compose struct {
+		Services map[string]struct {
+			Deploy struct {
+				Resources struct {
+					Limits struct {
+						Memory string `yaml:"memory"`
+						CPUs   string `yaml:"cpus"`
+					} `yaml:"limits"`
+				} `yaml:"resources"`
+			} `yaml:"deploy"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &compose); err != nil {
+		t.Fatal(err)
+	}
+	limit := func(service, value string) int {
+		t.Helper()
+		m := composeDefault.FindStringSubmatch(value)
+		number := strings.TrimSuffix(m[1]+m[2], "G")
+		n, err := strconv.Atoi(number)
+		if err != nil {
+			t.Fatalf("%s's limit %q is not whole gigabytes or cores", service, value)
+		}
+		return n
+	}
+	memory := map[string]int{}
+	cpus := map[string]int{}
+	total := 0
+	for _, service := range []string{"cyfr", "locus-runtime", "locus-builds", "locus-backends"} {
+		limits := compose.Services[service].Deploy.Resources.Limits
+		memory[service] = limit(service, limits.Memory)
+		total += memory[service]
+		if service != "locus-backends" {
+			cpus[service] = limit(service, limits.CPUs)
+		}
+	}
+	readme, err := os.ReadFile(filepath.Join(packageDir, "..", "..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("which add up to about %d GB (cyfr %d GB, `locus-runtime` %d GB, `locus-builds` %d GB, `locus-backends` %d GB)",
+			total, memory["cyfr"], memory["locus-runtime"], memory["locus-builds"], memory["locus-backends"]),
+		fmt.Sprintf("Their processor limits are %d cores for cyfr, %d for `locus-runtime` and %d for `locus-builds`",
+			cpus["cyfr"], cpus["locus-runtime"], cpus["locus-builds"]),
+	} {
+		if !strings.Contains(string(readme), want) {
+			t.Errorf("README.md's sizing does not say %q", want)
+		}
+	}
 }

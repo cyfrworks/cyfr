@@ -133,9 +133,27 @@ defmodule Prima.ConsentSignalTest do
     assert ConsentSignal.message(
              {:setup_required, %{"need" => "API_KEY", "node_ref" => "c:local.x:1.0.0"}}
            ) =~ ~s(needs a vault entry for "API_KEY")
+  end
 
-    assert ConsentSignal.message({:consent_required, %{"detail" => "scope widened"}}) ==
-             "Consent required: scope widened"
+  test "the consent sentence names its cause and the component, read from either key form" do
+    ref = "reagent:local.city-greeting"
+
+    for {cause, sentence} <- [
+          {:no_grant, "Consent required: #{ref} has not been granted — grant it to run it"},
+          {:revoked,
+           "Consent required: the grant for #{ref} was revoked — grant it again to run it"},
+          {:shape_moved,
+           "Consent required: #{ref} asks for more than its grant holds — review and grant again"}
+        ] do
+      assert ConsentSignal.message({:consent_required, %{cause: cause, ref: ref}}) == sentence
+
+      assert ConsentSignal.message(
+               {:consent_required, %{"cause" => Atom.to_string(cause), "ref" => ref}}
+             ) == sentence
+    end
+
+    assert ConsentSignal.message({:consent_required, %{}}) ==
+             "Consent required: this component has no grant to run under — grant it to run it"
   end
 
   test "the confirmation sentence names the change, never its secret id, and sends the person to Prism" do

@@ -214,17 +214,21 @@ func screenCommands(dir, account string) []string {
 		"systemctl enable cyfr-screen")
 }
 
+// screenOffCommands give this machine's screen back to its login prompt,
+// as root: `cyfr screen off` and `cyfr uninstall` run them.
+var screenOffCommands = []string{
+	"{ systemctl disable --now cyfr-screen || true; }",
+	"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
+	"systemctl daemon-reload",
+	"systemctl enable --now getty@tty1",
+}
+
 // screenOff leaves the packages, Chrome's profile and the project.
 func screenOff(out io.Writer) error {
 	if !askTerminal() || !machine.supported() {
 		return errors.New("`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS, as your own account")
 	}
-	commands := []string{
-		"{ systemctl disable --now cyfr-screen || true; }",
-		"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
-		"systemctl daemon-reload",
-		"systemctl enable --now getty@tty1",
-	}
+	commands := screenOffCommands
 	fmt.Fprintln(out, "These commands give this machine's screen back to its login prompt, as root:")
 	for _, c := range commands {
 		fmt.Fprintf(out, "  %s\n", c)

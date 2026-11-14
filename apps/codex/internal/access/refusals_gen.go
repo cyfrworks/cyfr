@@ -98,7 +98,13 @@ var refusalRows = map[string]refusalRow{
 	"tailnet_join_ended": {
 		Class: "unauthenticated",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{}, Template: "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How CYFR is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again."},
+			{Fixed: map[string]string{}, Slots: []string{}, Template: "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access tailnet` again."},
+		},
+	},
+	"tailnet_join_unapproved": {
+		Class: "setup_required",
+		Variants: []refusalVariant{
+			{Fixed: map[string]string{}, Slots: []string{}, Template: "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access tailnet` again and approve the machine with the link it prints."},
 		},
 	},
 	"tailnet_join_not_current": {

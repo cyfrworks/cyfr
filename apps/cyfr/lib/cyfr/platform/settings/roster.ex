@@ -371,7 +371,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "locus_runtime_watch_misses" =>
       "Status polls a worker service may miss in a row before cyfr ends the runs of the boot it last heard from.",
     "locus_backends_lease_ms" =>
-      "How long the backends service runs a stdio server's backends without a renewal from cyfr, in milliseconds; cyfr renews every third of it.",
+      "How long the backends service runs a program's backends without a renewal from cyfr, in milliseconds; cyfr renews every third of it.",
     "athanor_program_memory_bytes" =>
       "Bytes the program sessions of one athanor may hold on one backends box together, each session counted at its memory bound from its start until its process is gone; an open past it is refused until one ends. Unset, the box's own budget (`LOCUS_BACKENDS_MEMORY_BUDGET`); 0 is refused.",
     "locus_backends_idle_ms" =>

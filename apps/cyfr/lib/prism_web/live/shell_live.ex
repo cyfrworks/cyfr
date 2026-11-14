@@ -640,9 +640,9 @@ defmodule PrismWeb.ShellLive do
   # once, and written with the next write (`schedule_write/1`); one that
   # cannot be made changes nothing.
   def handle_event(event, params, socket) when event in @gesture_events and is_map(params) do
-    case gestured(socket, event, params) do
+    case launch_minimised(socket, event, params) do
       {:ok, socket} -> {:noreply, socket}
-      {:error, _refused} -> {:noreply, socket}
+      :not_a_launch -> {:noreply, made_gesture(socket, event, params)}
     end
   end
 
@@ -719,6 +719,29 @@ defmodule PrismWeb.ShellLive do
       {:noreply, assign(socket, :pairing_prompt, prompt_id)}
     end
   end
+
+  defp made_gesture(socket, event, params) do
+    case gestured(socket, event, params) do
+      {:ok, socket} -> socket
+      {:error, _refused} -> socket
+    end
+  end
+
+  # A launch from the picker stands in no layout, so its minimise is no
+  # gesture: it leaves the screen with its frame kept, and the launch
+  # before it, or the picker, shows (`Prism.Frames.minimise_launch/3`).
+  defp launch_minimised(socket, "frame_minimise", %{"frame" => frame_id})
+       when is_binary(frame_id) do
+    case Enum.find(Frames.list(socket.assigns.frames), &(&1.id == frame_id)) do
+      %{key: {:full, _} = key} ->
+        {:ok, frames(socket, &Frames.minimise_launch(socket.assigns.context, &1, key))}
+
+      _app_or_none ->
+        :not_a_launch
+    end
+  end
+
+  defp launch_minimised(_socket, _event, _params), do: :not_a_launch
 
   # ============================================================================
   # Tracking + loading

@@ -84,8 +84,8 @@ The type can be given as a prefix (c:, r:, f:, t:) or as a separate first argume
 		if s, ok := size.(float64); ok {
 			fmt.Printf("Size: %.0f bytes\n", s)
 		}
-		if registration := strVal(result, "registration"); registration != "" && registration != "done" {
-			fmt.Printf("Registration: %s (the server registers the artifact in the background; check 'cyfr component list')\n", registration)
+		if note := registrationNote(strVal(result, "registration"), normalized); note != "" {
+			fmt.Println(note)
 		}
 		return nil
 	},
@@ -145,4 +145,14 @@ var buildValidateCmd = &cobra.Command{
 		}
 		return renderResult(result)
 	},
+}
+
+// registrationNote is the line a compile prints while the server still
+// registers what it built, naming the command that shows the component
+// once it is registered; none once registration is done.
+func registrationNote(registration, ref string) string {
+	if registration == "" || registration == "done" {
+		return ""
+	}
+	return fmt.Sprintf("Registration: %s (the server registers the artifact in the background; check 'cyfr inspect %s')", registration, ref)
 }

@@ -324,8 +324,8 @@ defmodule PrismWeb.SystemLayerTest do
     )
   end
 
-  # A preview as `profile.preview` answers one: the typed rows, the
-  # origins and the digest, beside the proof. It carries no sentence.
+  # A preview as `profile.preview` answers one: the typed rows and the
+  # digest, beside the proof. It carries no sentence.
   defp typed_preview(ref, rows \\ nil) do
     %{
       v: Prima.ConsentPreview.version(),
@@ -350,7 +350,6 @@ defmodule PrismWeb.SystemLayerTest do
               "values" => %{"paths" => ["data/probe/"], "actions" => ["read"]}
             }
           ],
-      origins: ["interactive"],
       removed: [],
       proof: "not-a-proof",
       commit_digest: "sha256:" <> String.duplicate("0", 64)
@@ -3231,7 +3230,7 @@ defmodule PrismWeb.SystemLayerTest do
   describe "a re-grant planned again over a grant that moved" do
     # Another client committed while the sheet was open, over the same ask:
     # the sheet opens again on the grant as it stands, never carrying the
-    # old head's narrowing, origins, accounts or lifetimes over it.
+    # old head's narrowing, accounts or lifetimes over it.
     setup :signed_in
 
     defp held_methods(local, app, node),
@@ -3451,26 +3450,6 @@ defmodule PrismWeb.SystemLayerTest do
       assert after_limits["rate_limit"] == %{"requests" => 10, "window" => "1m"}
     end
 
-    test "origins narrowed elsewhere, same ask, after a refused commit",
-         %{view: view, ctx: ctx} do
-      local = local_of(ctx)
-      app = asking_methods!(local, "h6-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET))
-      key = regrant_key!(local)
-      binding = [%{need: "api_key", entry_id: key.id}]
-
-      {:ok, _} =
-        commit_with!(local, app, %{bindings: binding, origins: [:interactive, :schedule]})
-
-      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h6", app)
-      prompt(view, grant)
-      {:ok, _} = commit_with!(local, app, %{bindings: binding, origins: [:interactive]})
-      assert {:refused, _} = confirm_now(view, "g-h6")
-      second = confirm_now(view, "g-h6")
-      {_p, head} = head_rows(local, app)
-      assert second == :confirmed
-      assert head.admitted_origins == [:interactive]
-    end
-
     test "a named account removed elsewhere, same ask, after a refused commit",
          %{view: view, ctx: ctx} do
       local = local_of(ctx)
@@ -3608,20 +3587,10 @@ defmodule PrismWeb.SystemLayerTest do
   describe "the person's exact choices" do
     setup [:signed_in, :asking_more]
 
-    test "origins, narrowing and lowered limits are submitted exactly, and are what is granted",
+    test "narrowing and lowered limits are submitted exactly, and are what is granted",
          %{view: view, ref: ref, name_ref: node, local: local} do
       {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-choose", ref)
-      assert grant.subject.decisions["origins"] == ["interactive"]
       prompt(view, grant)
-
-      # Interactive is always named; on a first grant the others are each
-      # a visible choice, unticked.
-      assert has_element?(view, ~s(input[data-origin="interactive"][checked][disabled]))
-
-      for origin <- ~w(programmatic schedule webhook) do
-        assert has_element?(view, ~s(input[data-origin="#{origin}"]))
-        refute has_element?(view, ~s(input[data-origin="#{origin}"][checked]))
-      end
 
       # The wildcard ask is one row, every tool, whole or none.
       assert has_element?(view, ~s([data-row="tools"]), "Every tool of the catalog (*)")
@@ -3631,8 +3600,6 @@ defmodule PrismWeb.SystemLayerTest do
       # sends `phx-value-value` as written, and would hide that loss.
       assert has_element?(view, ~s(input[type="checkbox"][phx-value-choice]))
       refute has_element?(view, ~s(input[type="checkbox"][phx-value-value]))
-
-      click(view, ~s(input[phx-click="toggle_origin"][phx-value-origin="programmatic"]))
 
       click(
         view,
@@ -3653,8 +3620,7 @@ defmodule PrismWeb.SystemLayerTest do
       render(view)
 
       # The layer holds exactly the choices, never a category.
-      %{current: %{subject: %{decisions: decisions, preview: preview}}} = layer_assigns(view)
-      assert decisions["origins"] == ["interactive", "programmatic"]
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
 
       assert decisions["subset"] == %{
                node => %{
@@ -3665,15 +3631,12 @@ defmodule PrismWeb.SystemLayerTest do
                }
              }
 
-      assert preview.origins == ["interactive", "programmatic"]
       assert has_element?(view, ~s([data-row="egress"]), "narrowed by you")
-      assert has_element?(view, ~s([data-test="grant-admits"]), "programmatic")
 
       view |> element(~s(button[phx-click="confirm"])) |> render_click()
       assert outcome("g-choose") == :confirmed
 
-      {head, ingress, limits} = head!(local, node)
-      assert head.admitted_origins == [:interactive, :programmatic]
+      {_head, ingress, limits} = head!(local, node)
       assert ingress.egress.domains == ["a.layer.example"]
       assert ingress.storage.actions == ["read"]
       assert ingress.tools == []
@@ -3755,8 +3718,7 @@ defmodule PrismWeb.SystemLayerTest do
       {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-forged", ref)
       prompt(view, grant)
 
-      # A forged event naming a domain outside the ask, and an origin
-      # outside the three the sheet offers.
+      # A forged event naming a domain outside the ask.
       sheet = with_target(view, "#consent-sheet-system-layer-grant-g-forged")
 
       render_click(sheet, "toggle_value", %{
@@ -3766,25 +3728,39 @@ defmodule PrismWeb.SystemLayerTest do
         "choice" => "evil.example"
       })
 
-      render_click(sheet, "toggle_origin", %{"origin" => "interactive"})
       render(view)
 
       %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
       refute Map.has_key?(decisions, "subset")
-      assert decisions["origins"] == ["interactive"]
     end
 
-    test "a re-grant starts from the origins its head admits",
-         %{view: view, ref: ref, name_ref: node, local: local} do
-      {:ok, _} = commit_with!(local, node, %{origins: [:interactive, :schedule]})
-
-      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-regrant", ref)
-      assert grant.subject.decisions["origins"] == ["interactive", "schedule"]
-      assert grant.subject.preview.origins == ["interactive", "schedule"]
-
+    test "the sheet never asks who may start the component, and commits only what it may reach",
+         %{view: view, ref: ref, name_ref: node} do
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-starts", ref)
+      assert grant.subject.decisions == %{"ref" => node, "bindings" => []}
       prompt(view, grant)
-      assert has_element?(view, ~s(input[data-origin="schedule"][checked]))
-      refute has_element?(view, ~s(input[data-origin="programmatic"][checked]))
+
+      refute has_element?(view, ~s(input[data-origin]))
+      refute has_element?(view, ~s([data-test="grant-origins"]))
+      refute has_element?(view, ~s([data-test="grant-admits"]))
+
+      click(
+        view,
+        ~s(input[phx-click="toggle_value"][phx-value-field="actions"][phx-value-choice="write"])
+      )
+
+      # What the confirm commits: the ref, the bindings and the narrowing,
+      # nothing about who starts a run.
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+
+      assert decisions == %{
+               "ref" => node,
+               "bindings" => [],
+               "subset" => %{node => %{"storage" => %{"actions" => ["read"]}}}
+             }
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-starts") == :confirmed
     end
 
     test "what changed is read against the head as the person narrowed it",
@@ -3931,8 +3907,8 @@ defmodule PrismWeb.SystemLayerTest do
          %{view: view, ctx: ctx} do
       ref = "tincture:local.system-layer-probe"
 
-      # No sentence at all: the typed rows, the origins, the digest and the
-      # proof are the whole preview, and the prompt opens on them.
+      # No sentence at all: the typed rows, the digest and the proof are
+      # the whole preview, and the prompt opens on them.
       refute Map.has_key?(grant(ctx, "typed").subject.preview, :summary)
       html = prompt(view, grant(ctx, "typed"))
       assert html =~ ~s(data-prompt-id="typed")
@@ -3979,13 +3955,10 @@ defmodule PrismWeb.SystemLayerTest do
            [:subject, :preview],
            typed_preview(ref, [Map.put(egress, "summary", "Talks to api.example.com")])
          )},
-        # No proof to commit with, or no origins.
+        # No proof to commit with.
         {"p5", update_in(grant(ctx, "p5"), [:subject, :preview], &Map.delete(&1, :proof))},
-        {"p6", put_in(grant(ctx, "p6"), [:subject, :preview, :origins], [])},
         # No preview for a plan that is not unresolved.
-        {"p7", put_in(grant(ctx, "p7"), [:subject, :preview], nil)},
-        # Decisions naming an origin outside the enum.
-        {"p8", put_in(grant(ctx, "p8"), [:subject, :decisions, "origins"], ["cli"])}
+        {"p6", put_in(grant(ctx, "p6"), [:subject, :preview], nil)}
       ]
 
       for {id, bad} <- malformed do
@@ -5539,7 +5512,8 @@ defmodule PrismWeb.SystemLayerTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "a webhook waits on its origin grant, granted with webhooks, before its own confirmation",
+    test "a webhook the page asked for is made once its confirmation is proven, with no grant " <>
+           "prompt",
          %{conn: conn, local: local} do
       wasm = Cyfr.Test.Guests.wasm(:reagent)
 
@@ -5567,38 +5541,14 @@ defmodule PrismWeb.SystemLayerTest do
       })
 
       render(view)
-      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
-      assert {"grant-webhook-" <> _, _args} = :sys.get_state(view.pid).socket.assigns.origin_grant
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
-      view
-      |> element(~s(input[phx-click="toggle_origin"][phx-value-origin="webhook"]))
-      |> render_click()
+      # The create asks straight for the webhook's own confirmation, and,
+      # proven, the hook hands the page its repeat, which makes the webhook.
+      assert {:ok, [%{ref: confirmation, operation: "webhook.create"}]} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(local), local.user_id)
 
-      render(view)
-      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
-
-      # The page's own prompt ended granted: the create goes on to the
-      # webhook's own confirmation, and, proven, the webhook is made.
-      wait_until(
-        fn ->
-          render(view)
-
-          match?(
-            {:ok, [%{operation: "webhook.create"}]},
-            Arca.PendingConfirmations.list_open(Sanctum.Context.actor(local), local.user_id)
-          )
-        end,
-        2_000,
-        "the create's confirmation"
-      )
-
-      assert :sys.get_state(view.pid).socket.assigns.origin_grant == nil
-      {:ok, head} = Sanctum.Consent.head_consent(local, profile_id)
-      assert :webhook in head.admitted_origins
-
-      {:ok, [%{ref: confirmation}]} =
-        Arca.PendingConfirmations.list_open(Sanctum.Context.actor(local), local.user_id)
-
+      assert {:error, :not_found} = Sanctum.Webhook.get(local, name)
       Sanctum.TestContext.prove!(local, confirmation)
 
       wait_until(

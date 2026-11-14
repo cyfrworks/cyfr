@@ -198,7 +198,7 @@ defmodule Compendium.Registry.ClientSyncTest do
                Client.yank_component("alice", "catalyst", "widget", "1.0.0", "", "cyfr_pt_x")
     end
 
-    test "create_abuse_report/5 reaches the registry with its bearer and report", %{
+    test "create_abuse_report/6 reaches the registry with its bearer, report and statement", %{
       stub: stub
     } do
       HTTPStub.expect_once(stub, "POST", "/v1/abuse-reports", fn conn ->
@@ -209,14 +209,15 @@ defmodule Compendium.Registry.ClientSyncTest do
                  "category" => "malware",
                  "target_namespace" => "alice",
                  "target_component_id" => nil,
-                 "details" => "d"
+                 "details" => "d",
+                 "attestations_signed" => false
                }
 
         json_resp(conn, 201, %{"id" => "rep_1"})
       end)
 
       assert {:ok, %{"id" => "rep_1"}} =
-               Client.create_abuse_report("malware", "alice", nil, "d", "cyfr_pt_x")
+               Client.create_abuse_report("malware", "alice", nil, "d", false, "cyfr_pt_x")
     end
   end
 
@@ -309,7 +310,7 @@ defmodule Compendium.Registry.ClientSyncTest do
          %{ctx: ctx, stub: stub} do
       HTTPStub.expect(stub, "GET", "/v1/components", fn conn ->
         case conn.query_string do
-          "publisher=a" -> json_resp(conn, 200, %{"components" => []})
+          "namespace=a" -> json_resp(conn, 200, %{"components" => []})
           _ -> json_resp(conn, 200, %{"components" => ["entry"], "total" => 1})
         end
       end)
@@ -319,40 +320,18 @@ defmodule Compendium.Registry.ClientSyncTest do
       end
     end
 
-    test "discover refuses a registry other than the canonical one before any request", %{
-      ctx: ctx,
-      stub: stub
-    } do
-      # No expectation is set: the stub fails the test on any request that
-      # reaches it.
-      _ = stub
-
-      {:error, refusal} =
-        Provider.handle("component", ctx, %{
-          "action" => "discover",
-          "registry" => "ghcr.io"
-        })
-
-      assert %Prima.Refusal{class: :unavailable, reason: {:registry, :registry_host_mismatch}} =
-               refusal
-
-      assert err_msg(refusal) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
-      assert err_msg(refusal) =~ "ghcr.io"
-    end
-
-    test "discover naming the canonical registry sends its namespace and type to cyfr.run", %{
-      ctx: ctx,
-      stub: stub
-    } do
+    # cyfr.run filters a listing by `namespace`; a key it does not read
+    # leaves the whole registry's newest components in the answer.
+    test "discover asks cyfr.run by namespace, with its type", %{ctx: ctx, stub: stub} do
       HTTPStub.expect_once(stub, "GET", "/v1/components", fn conn ->
-        assert query_pairs(conn) == [{"publisher", "cyfr"}, {"type", "reagent"}]
+        assert query_pairs(conn) == [{"namespace", "cyfr"}, {"type", "reagent"}]
         json_resp(conn, 200, %{"components" => [], "total" => 0})
       end)
 
-      assert {:ok, %{components: [], total: 0}} =
+      assert {:ok,
+              %{registry: Compendium.RegistryHost.canonical_host(), components: [], total: 0}} ==
                Provider.handle("component", ctx, %{
                  "action" => "discover",
-                 "registry" => Compendium.RegistryHost.canonical_host(),
                  "namespace" => "cyfr",
                  "type" => "reagent"
                })
@@ -921,13 +900,5 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert log =~ "[REDACTED]"
       refute log =~ "cyfr_pt_SIGNED_SECRET"
     end
-  end
-
-  # Providers answer typed reasons where the class is clear; the shared
-  # renderer is the one spelling of every sentence, so assert through it.
-  # Plain strings pass through unchanged.
-  defp err_msg(reason) do
-    Sanctum.Refusals.render(reason) ||
-      flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

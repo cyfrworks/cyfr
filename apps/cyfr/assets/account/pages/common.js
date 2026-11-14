@@ -73,5 +73,5 @@ const KINDS = {passkey: "Passkey", device: "Device"}
 /** How the pages list one key: its kind, short code and the date it was added. */
 export function keyLabel({kind, code, added, current}) {
   const date = added === undefined ? "" : `, added ${new Date(added).toLocaleDateString()}`
-  return `${KINDS[kind]} ${code}${current ? " (this passkey)" : ""}${date}`
+  return `${KINDS[kind]} ${code}${current ? " (the passkey in use)" : ""}${date}`
 }

@@ -25,6 +25,19 @@ defmodule Sanctum.Newcomer do
   first person; any other admission onto an empty installation is refused
   `:not_set_up`.
 
+  ## The name
+
+  Once the account reads, the admission asks the registry which name the
+  account holds (`Sanctum.Handle.name_of/1`). The name labels the
+  identifier allow that setup or an invitation writes and the request a
+  refusal at the open door leaves. It is also the person's namespace from
+  their first row, so their athanor's slug and name, when no person here
+  holds it, which the mint decides under the order every mint serializes
+  on (`Arca.Users.mint/3`'s `namespace:`): a person whose name another
+  holds, or loses it to an admission at the same moment, is admitted
+  without a namespace and keeps the name as their labels. A lookup that
+  fails admits the person unnamed.
+
   ## The setup token
 
   The setup token binds the installation to the first account and then
@@ -102,8 +115,9 @@ defmodule Sanctum.Newcomer do
           {:ok, admitted()} | {:error, term()}
   def admit(admission, account, opts \\ []) when is_list(opts) do
     with :ok <- taken(admission, account),
-         :ok <- admissible(admission, account),
-         {:ok, person} <- mint(admission, account, Keyword.get(opts, :also)) do
+         name = account_name(account),
+         :ok <- admissible(admission, account, name),
+         {:ok, person} <- mint(admission, account, name, Keyword.get(opts, :also)) do
       committed(admission, person)
     end
   end
@@ -133,7 +147,7 @@ defmodule Sanctum.Newcomer do
   """
   @spec setup_open(term()) :: :ok | {:error, :setup_closed | :unavailable}
   def setup_open(token) when is_binary(token) do
-    with :ok <- admissible({:setup, token}, :none) do
+    with :ok <- admissible({:setup, token}, :none, nil) do
       case Arca.InstallationClaims.setup(Prima.Actor.system()) do
         {:ok, :first} -> :ok
         {:ok, :closed} -> {:error, :setup_closed}
@@ -151,7 +165,7 @@ defmodule Sanctum.Newcomer do
   """
   @spec setup_token?(term()) :: boolean()
   def setup_token?(token),
-    do: Prima.Device.setup_token?(token) and admissible({:setup, token}, :none) == :ok
+    do: Prima.Device.setup_token?(token) and admissible({:setup, token}, :none, nil) == :ok
 
   # ---- before the transaction ----------------------------------------------
 
@@ -176,7 +190,19 @@ defmodule Sanctum.Newcomer do
   defp account(_account),
     do: {:error, {:invalid_argument, "An account is its identifier, directory and head"}}
 
-  defp admissible({:setup, token}, _account) do
+  # The name the account holds at the registry, asked by its identifier
+  # once its signature is verified: the label of the person's allow and of
+  # the request a refusal leaves, and their namespace where it is free (the
+  # mint decides). A lookup that fails admits them unnamed, and the sign-in
+  # asks again later (`Sanctum.SignIn`).
+  defp account_name(%{identifier: identifier}) do
+    case Sanctum.Handle.name_of(identifier) do
+      {:ok, %Prima.HandleAnswer{handle: name}} -> name
+      {:error, _unnamed} -> nil
+    end
+  end
+
+  defp admissible({:setup, token}, _account, _name) do
     case Application.get_env(:sanctum, :setup_token) do
       configured when is_binary(configured) and byte_size(configured) == byte_size(token) ->
         if Plug.Crypto.secure_compare(configured, token), do: :ok, else: {:error, :setup_closed}
@@ -188,7 +214,7 @@ defmodule Sanctum.Newcomer do
 
   # A deny outranks the invitation, as it outranks every allow; the
   # invitation that admits no one starts nothing.
-  defp admissible({:invitation, hash}, %{identifier: identifier}) do
+  defp admissible({:invitation, hash}, %{identifier: identifier}, _name) do
     case Sanctum.Door.Store.denied(nil, identifier) do
       {:ok, false} -> Sanctum.Invitations.redeemable_hash(hash)
       {:ok, true} -> {:error, {:door, :denied}}
@@ -196,13 +222,13 @@ defmodule Sanctum.Newcomer do
     end
   end
 
-  defp admissible(:open, %{identifier: identifier}) do
-    with {:ok, :allowed} <- Sanctum.Door.sign_in_identifier(identifier), do: :ok
+  defp admissible(:open, %{identifier: identifier}, name) do
+    with {:ok, :allowed} <- Sanctum.Door.sign_in_identifier(identifier, name), do: :ok
   end
 
   # ---- the transaction ------------------------------------------------------
 
-  defp mint(admission, account, also) do
+  defp mint(admission, account, name, also) do
     now = DateTime.utc_now()
 
     user_attrs = %{
@@ -217,7 +243,11 @@ defmodule Sanctum.Newcomer do
     Arca.Users.mint(
       Prima.Actor.system(),
       user_attrs,
-      [admission: kind(admission), also: &also(admission, account, also, &1)] ++
+      [
+        admission: kind(admission),
+        namespace: name,
+        also: &also(admission, account, name, also, &1)
+      ] ++
         verify(admission)
     )
     |> case do
@@ -249,7 +279,7 @@ defmodule Sanctum.Newcomer do
   # Inside the mint's transaction, after the person's row and the first
   # person's grant: the account's identity row and the athanor, then what
   # the admission writes.
-  defp also(admission, account, also, %{id: user_id} = person) do
+  defp also(admission, account, name, also, %{id: user_id} = person) do
     case Arca.PersonIdentities.create(Prima.Actor.system(), %{
            user_id: user_id,
            identifier: account.identifier,
@@ -258,7 +288,7 @@ defmodule Sanctum.Newcomer do
          }) do
       {:ok, _row} ->
         with :ok <- athanor(person),
-             :ok <- admitted(admission, account, user_id),
+             :ok <- admitted(admission, account, name, user_id),
              do: last(also, person)
 
       {:error, reason} ->
@@ -270,25 +300,28 @@ defmodule Sanctum.Newcomer do
   defp last(also, person) when is_function(also, 1), do: also.(person)
 
   # Setup's account and an invitation's are allowed by identifier from
-  # here on, where no deny stands; the open door admits by the entry that
-  # already admitted them.
-  defp admitted({:setup, _token}, %{identifier: identifier}, user_id) do
-    case Sanctum.Door.Store.allow_unless_denied("identifier", identifier, user_id, note: "setup") do
+  # here on, where no deny stands, labelled with the account's name; the
+  # open door admits by the entry that already admitted them.
+  defp admitted({:setup, _token}, %{identifier: identifier}, name, user_id) do
+    case Sanctum.Door.Store.allow_unless_denied("identifier", identifier, user_id,
+           note: "setup",
+           label: name
+         ) do
       {:ok, _entry} -> :ok
       {:error, :denied} -> {:error, {:door, :denied}}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp admitted({:invitation, hash}, %{identifier: identifier}, user_id),
+  defp admitted({:invitation, hash}, %{identifier: identifier}, name, user_id),
     do:
       Sanctum.Invitations.redeem_hash(hash, %{
         user_id: user_id,
         identifier: identifier,
-        label: nil
+        label: name
       })
 
-  defp admitted(:open, _account, _user_id), do: :ok
+  defp admitted(:open, _account, _name, _user_id), do: :ok
 
   defp athanor(person) do
     case Sanctum.Provisioning.mint_personal(person) do

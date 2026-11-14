@@ -22,11 +22,14 @@
 <p>Use your passkey to see the passkeys and devices on your account.</p>
 <div class="actions"><button type="button" class="primary" id="open">Use your passkey</button></div>
 <p class="error" id="ask-error" role="alert" hidden></p>
+<div id="ways" hidden>
+<p>No passkey for this account in this browser? <a href="recover">Add a passkey with your recovery code</a>.</p>
+</div>
 </section>
 <section id="list" hidden>
 <h1>Your devices</h1>
 <ul class="keys" id="keys"></ul>
-<p class="hint">To remove the passkey you are using, use another passkey, a device or your recovery code.</p>
+<p class="hint">To remove the passkey you are using, use another passkey, a device or <a href="recover">your recovery code</a>.</p>
 <p class="error" id="list-error" role="alert" hidden></p>
 </section>
 </main>

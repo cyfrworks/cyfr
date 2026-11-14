@@ -146,11 +146,9 @@ defmodule Sanctum.ProviderCredentialsTest do
       assert {:error, _} = ProviderCredentials.fetch_for_oauth("ath_other", "google")
     end
 
-    test "missing credentials produce an actionable error", %{ctx: _ctx} do
-      assert {:error, message} =
-               ProviderCredentials.fetch_for_oauth("ath_test", "unconfigured")
-
-      assert message =~ "oauth.set_client"
+    test "missing credentials are refused as a client to set", %{ctx: _ctx} do
+      assert ProviderCredentials.fetch_for_oauth("ath_test", "unconfigured") ==
+               {:error, {:oauth_client_required, "unconfigured"}}
     end
   end
 

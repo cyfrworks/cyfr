@@ -194,6 +194,29 @@ export async function usePasskey(page, keys, { timeoutMs = STEP_MS } = {}) {
   return { what, ...outcome };
 }
 
+// A sign-in at `home` from a browser whose passkey the browser refuses, as
+// one holding none for the account does: the sentence the sign page says,
+// whether it shows its ways on, whether "Add a passkey with your recovery
+// code" carries the sign page's request, and the recovery page it opens.
+export async function refusedPasskey(page, keys, home, { timeoutMs = STEP_MS } = {}) {
+  await page.goto(`${home.origin}/login`);
+  await page.waitForSelector(".phx-connected", { timeout: timeoutMs });
+  await page.locator('[data-test="sign-in"]').click();
+  await page.waitForURL((url) => url.pathname === "/account/sign", { timeout: timeoutMs });
+  await keys.attach(page);
+  const asked = await settle(page, ["ask"], { timeoutMs });
+  if (asked.section !== "ask") return { error: asked.error, ways: false, carries: false, recover: null };
+  const request = new URL(page.url()).hash.slice(1);
+  await page.locator("#use-passkey").click();
+  const said = await settle(page, [], { timeoutMs });
+  const ways = await page.locator("#ways").isVisible();
+  const carries = (await page.locator("#recover-link").getAttribute("href")) === `recover#request=${request}`;
+  await page.locator("#recover-link").click();
+  await page.waitForURL((url) => url.pathname === "/account/recover", { timeout: timeoutMs });
+  const opened = await settle(page, ["enter"], { timeoutMs });
+  return { error: said.error, ways, carries: carries && new URL(page.url()).hash === `#request=${request}`, recover: opened.section };
+}
+
 // A device added to the account of the passkey the person picks, at
 // `directory`'s `/account/add` with the device's key and short code in the
 // fragment, as the device's QR code names it: the code the page shows, and
@@ -217,7 +240,10 @@ const listed = (page) => page.$$eval("#keys li > span", (els) => els.map((e) => 
 async function removeRow(page, kid) {
   const row = page.locator("#keys li", { hasText: shortCode(kid) });
   if ((await row.count()) !== 1) throw new Error(`the page lists ${await row.count()} rows for the key ${shortCode(kid)}`);
-  await row.locator("button").click();
+  // Remove asks first: the row then holds the question, its own Remove
+  // (the one that acts) and Keep.
+  await row.locator("button", { hasText: "Remove" }).click();
+  await row.locator("button.danger", { hasText: "Remove" }).click();
 }
 
 // The recovery code's page at `directory`, opened with `code`: `opened`

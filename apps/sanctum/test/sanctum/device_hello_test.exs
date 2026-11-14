@@ -13,7 +13,9 @@ defmodule Sanctum.DeviceHelloTest do
   nothing; a hello asked again pairs nothing twice. The certificate then
   connects, a renewal issues under the head this CYFR holds, and a
   refresh whose walk removes the key or recovers the account retires the
-  device.
+  device. A hello is answered by the log read now, so a key removed and
+  added again retires what it paired before and pairs afresh, and a key
+  just removed pairs nothing.
   """
 
   # The directory seam, the setup token, the public URL, the directory
@@ -58,6 +60,17 @@ defmodule Sanctum.DeviceHelloTest do
 
   defp clients(user_id),
     do: Arca.Repo.all(from(c in PairedClient, where: c.user_id == ^user_id))
+
+  # Whole rows, oldest first: which client, its standing and the head it
+  # was paired under.
+  defp standings(user_id) do
+    from(c in PairedClient,
+      where: c.user_id == ^user_id,
+      order_by: [asc: c.inserted_at, asc: c.id],
+      select: {c.id, c.standing, c.head}
+    )
+    |> Arca.Repo.all()
+  end
 
   defp aged!(identifier) do
     {1, _} =
@@ -297,6 +310,61 @@ defmodule Sanctum.DeviceHelloTest do
       aged!(account.identifier)
 
       assert {:error, :revoked} = DeviceCerts.verify_request(admitted.certificate, ctx)
+    end
+  end
+
+  describe "a key removed and added again" do
+    test "retires the client it paired before, and a hello after it was added again stands", %{
+      dir: dir,
+      account: account
+    } do
+      first = Devices.admitted!(account, device(account), {:setup, @token})
+      paired_at = DirectoryServer.head(account)
+      {pub, _priv} = first.key
+      {:ok, key} = Key.new(alg: :ed25519, kind: :device, pub: pub)
+
+      # Both entries land while this CYFR's cached head is fresh and still
+      # lists the key from before its removal.
+      account = DirectoryServer.remove_key!(dir.dir, account, Key.kid(pub))
+      account = DirectoryServer.extend!(account, kind: :add_key, key: key)
+      DirectoryServer.publish(dir.dir, account.identifier, account.log)
+
+      again = Devices.admitted!(account, first.key)
+
+      assert standings(first.user.id) == [
+               {first.client_id, "revoked", paired_at},
+               {again.client_id, "active", DirectoryServer.head(account)}
+             ]
+
+      assert again.certificate.head == DirectoryServer.head(account)
+
+      # The next refresh past the bound reads nothing after that head, and
+      # the new client's requests stand on it.
+      aged!(account.identifier)
+      ctx = Devices.connected!(again)
+      assert {:ok, _ctx} = DeviceCerts.verify_request(again.certificate, ctx)
+
+      assert standings(first.user.id) == [
+               {first.client_id, "revoked", paired_at},
+               {again.client_id, "active", DirectoryServer.head(account)}
+             ]
+    end
+
+    test "removed and not added again, it answers no hello, though the cached head lists it", %{
+      dir: dir,
+      account: account
+    } do
+      first = Devices.admitted!(account, device(account), {:setup, @token})
+      paired_at = DirectoryServer.head(account)
+      {pub, _priv} = first.key
+
+      account = DirectoryServer.remove_key!(dir.dir, account, Key.kid(pub))
+      {client_id, request} = Devices.hello!(account, first.key)
+
+      assert {:error, :answer_refused} =
+               DeviceUnlock.admit(client_id, Devices.answer(request, first.key))
+
+      assert standings(first.user.id) == [{first.client_id, "revoked", paired_at}]
     end
   end
 end

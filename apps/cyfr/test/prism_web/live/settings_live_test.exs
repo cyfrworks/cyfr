@@ -182,12 +182,12 @@ defmodule PrismWeb.SettingsLiveTest do
 
     door_entry(view, "door_allow", "@alice")
     assert has_element?(view, "td", alice)
-    assert has_element?(view, ~s(td [data-test="door-entry-label"]), "@alice")
+    assert has_element?(view, ~s(td [data-test="door-entry-name"]), "@alice")
     assert {:ok, :allowed} = Sanctum.Door.admit_identifier(alice)
 
     door_entry(view, "door_deny", "@bob")
     assert has_element?(view, "td", bob)
-    assert has_element?(view, ~s(td [data-test="door-entry-label"]), "@bob")
+    assert has_element?(view, ~s(td [data-test="door-entry-name"]), "@bob")
     assert {:error, :denied} = Sanctum.Door.admit_identifier(bob)
 
     door_entry(view, "door_allow", "@nobody")
@@ -201,7 +201,7 @@ defmodule PrismWeb.SettingsLiveTest do
     assert [_, _] = Sanctum.Door.Store.list()
 
     # An entry made by no name: a person here shows their name, `*`
-    # everyone, and an identifier nothing here names where it came from.
+    # everyone, and an identifier nothing here names the identifier.
     held = test_user()
     record_namespace!(held)
     typed = "per_" <> Prima.Digest.sha256_hex("typed-#{n}")
@@ -214,7 +214,7 @@ defmodule PrismWeb.SettingsLiveTest do
 
     for {value, name} <- [
           {held.user_id, "@" <> held.namespace},
-          {typed, "added from the command line"},
+          {typed, typed},
           {"*", "everyone"}
         ] do
       assert has_element?(
@@ -223,6 +223,83 @@ defmodule PrismWeb.SettingsLiveTest do
                ~r/#{Regex.escape(value)}\s+#{Regex.escape(name)}/
              ),
              value
+    end
+  end
+
+  test "people are admitted under their account's name, which the allowlist, the requests and their public address show",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+
+    tls = Sanctum.Test.DirectoryServer.tls()
+    Sanctum.Test.DirectoryServer.listen!()
+    Sanctum.Test.DirectoryServer.seam!(tls)
+    directory = Sanctum.Test.DirectoryServer.start!(tls)
+
+    [invited, allowed, refused] =
+      for _ <- 1..3 do
+        account = Sanctum.Test.DirectoryServer.account!(directory.dir, directory.url)
+        head = Sanctum.Test.DirectoryServer.cached!(account)
+
+        %{
+          identifier: account.identifier,
+          directory_url: directory.url,
+          head_hash: head.head_hash
+        }
+      end
+
+    n = System.unique_integer([:positive])
+    [mira, oren, wren] = for name <- ["mira", "oren", "wren"], do: "#{name}-#{n}"
+
+    RegistryStub.handles!(
+      %{mira => invited.identifier, oren => allowed.identifier, wren => refused.identifier},
+      directory.url
+    )
+
+    # One comes in by an invitation, one by an allow typed as an
+    # identifier, and the third is refused at the door.
+    admin = Sanctum.TestContext.session!(ops.user_id) |> Map.put(:platform_admin, true)
+    {:ok, %{code: code}} = Sanctum.Invitations.create(admin, nil)
+    {:ok, hash} = Sanctum.Invitations.code_hash(code)
+    {:ok, _} = Sanctum.Door.Store.allow("identifier", allowed.identifier, ops.user_id)
+
+    {:ok, %{person: first}} = Sanctum.Newcomer.admit({:invitation, hash}, invited)
+    {:ok, %{person: second}} = Sanctum.Newcomer.admit(:open, allowed)
+    assert {:error, {:door, :not_allowed}} = Sanctum.Newcomer.admit(:open, refused)
+
+    # A request a member asked for names them.
+    asked = "per_" <> Prima.Digest.sha256_hex("asked-#{n}")
+    {:ok, :created, _} = Sanctum.Door.Store.request("identifier", asked, ops.user_id)
+
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+
+    assert has_element?(
+             view,
+             "#allowlist tr",
+             ~r/#{Regex.escape(asked)}\s*#{Regex.escape(asked)}\s*@#{Regex.escape(ops.namespace)}/
+           )
+
+    for {identifier, name} <- [{invited.identifier, mira}, {allowed.identifier, oren}] do
+      assert has_element?(
+               view,
+               "#allowlist tr",
+               ~r/#{Regex.escape(identifier)}\s*@#{Regex.escape(name)}\s*identifier/
+             ),
+             name
+    end
+
+    assert has_element?(
+             view,
+             "#allowlist tr",
+             ~r/@#{Regex.escape(wren)}\s*#{Regex.escape(refused.identifier)}\s*themselves, at sign-in/
+           )
+
+    # Each one's athanor is at their name, as a public address reads it.
+    for {person, name} <- [{first, mira}, {second, oren}] do
+      {:ok, %{id: athanor_id, slug: ^name}} = Sanctum.Tenancy.Athanors.get_by_owner(person.id)
+
+      assert {:ok, %{athanor_id: ^athanor_id}} =
+               Sanctum.TinctureAccess.public_context("@" <> name)
     end
   end
 

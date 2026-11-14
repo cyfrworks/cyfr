@@ -685,4 +685,156 @@ defmodule Compendium.Providers.RegistryTest do
       end
     end
   end
+
+  # A report as a person sends it from the screen, through the gate, to a
+  # registry that tells the test every request (`RegistryStub`) and
+  # answers each report with what `answer` holds; the person holds a push
+  # token for it.
+  describe "a report through the gate" do
+    setup %{ctx: ctx} do
+      ctx = %{ctx | origin: :interactive}
+      answer = start_supervised!({Agent, fn -> {201, Jason.encode!(%{"id" => "rep_1"})} end})
+
+      RegistryStub.start!(fn %{method: "POST", path: "/v1/abuse-reports"} ->
+        Agent.get(answer, & &1)
+      end)
+
+      :ok =
+        CredentialStore.put_push_token(
+          ctx,
+          Compendium.RegistryHost.canonical_host(),
+          "reporter",
+          "cyfr_pt_reporter",
+          "personal"
+        )
+
+      {:ok, ctx: ctx, answer: answer}
+    end
+
+    defp report(ctx, extra) do
+      Sanctum.Gate.call_external(
+        "registry",
+        ctx,
+        Map.merge(
+          %{
+            "action" => "report",
+            "target_namespace" => "alice",
+            "details" => "It copies my published work."
+          },
+          extra
+        )
+      )
+    end
+
+    # The body of each report the registry was sent, in order.
+    defp bodies_sent do
+      receive do
+        {:registry_request, %{method: "POST", path: "/v1/abuse-reports", body: body}} ->
+          [Jason.decode!(body) | bodies_sent()]
+      after
+        0 -> []
+      end
+    end
+
+    @unacknowledged "A copyright claim needs the report sheet's three acknowledgements ticked before it is sent."
+
+    test "a copyright claim without the acknowledgements is refused before the registry",
+         %{ctx: ctx} do
+      for extra <- [%{}, %{"attestations_signed" => false}] do
+        assert {:error, reason} = report(ctx, Map.put(extra, "category", "dmca"))
+
+        assert Refusals.classify(reason) == %Prima.Refusal{
+                 class: :invalid_argument,
+                 reason: {:invalid_argument, @unacknowledged},
+                 message: @unacknowledged,
+                 stage: :execution
+               }
+      end
+
+      assert bodies_sent() == []
+    end
+
+    test "a copyright claim with them carries the statement", %{ctx: ctx} do
+      assert {:ok, %{"id" => "rep_1"}} =
+               report(ctx, %{"category" => "dmca", "attestations_signed" => true})
+
+      assert bodies_sent() == [
+               %{
+                 "category" => "dmca",
+                 "target_namespace" => "alice",
+                 "target_component_id" => nil,
+                 "details" => "It copies my published work.",
+                 "attestations_signed" => true
+               }
+             ]
+    end
+
+    # The statement is a copyright claim's; another category's reporter
+    # never saw it, so it is never sent for them.
+    test "any other category is sent without the statement, whatever the call says",
+         %{ctx: ctx} do
+      for extra <- [%{}, %{"attestations_signed" => true}] do
+        assert {:ok, %{"id" => "rep_1"}} = report(ctx, Map.put(extra, "category", "malware"))
+      end
+
+      sent = %{
+        "category" => "malware",
+        "target_namespace" => "alice",
+        "target_component_id" => nil,
+        "details" => "It copies my published work.",
+        "attestations_signed" => false
+      }
+
+      assert bodies_sent() == [sent, sent]
+    end
+
+    test "the registry's refusal of a report is shown in its own words",
+         %{ctx: ctx, answer: answer} do
+      message = "target_namespace not found"
+
+      Agent.update(answer, fn _ ->
+        {400, Jason.encode!(%{"errors" => [%{"code" => "EMPTY_TARGET", "message" => message}]})}
+      end)
+
+      assert {:error, reason} = report(ctx, %{"category" => "spam"})
+
+      assert Refusals.classify(reason) == %Prima.Refusal{
+               class: :invalid_argument,
+               reason: {:registry, :invalid_request},
+               message: "#{message} (HTTP 400, invalid_request)",
+               stage: :execution
+             }
+    end
+  end
+
+  # A person who holds no push token yet is sent to the Registry page,
+  # where the sync mints one, and nothing reaches the registry.
+  test "a report or a report listing with no push token offers the Registry page's sync",
+       %{ctx: ctx} do
+    RegistryStub.start!(fn _request -> {500, ""} end)
+    ctx = %{ctx | origin: :interactive}
+
+    calls = [
+      %{"action" => "list_my_reports"},
+      %{
+        "action" => "report",
+        "category" => "spam",
+        "target_namespace" => "alice",
+        "details" => "Floods the search."
+      }
+    ]
+
+    for args <- calls do
+      assert {:error, reason} = Sanctum.Gate.call_external("registry", ctx, args)
+
+      assert Refusals.classify(reason) == %Prima.Refusal{
+               class: :setup_required,
+               reason: :no_push_token,
+               message: "You hold no push token yet: sync your push tokens on the Registry page.",
+               stage: :execution
+             }
+    end
+
+    refute_received {:registry_request, _}
+  end
 end

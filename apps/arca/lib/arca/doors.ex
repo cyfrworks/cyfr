@@ -278,6 +278,32 @@ defmodule Arca.Doors do
   def update(%Prima.Actor{}, id, attrs) when is_binary(id) and is_map(attrs),
     do: {:error, :not_platform}
 
+  @doc """
+  Write `label` on the entry `id` names only while it is a pending request
+  with none, in one conditional statement: an entry an administrator
+  answered or labelled since it was read is left as they wrote it.
+  Answers the row as it stands after the write, or `{:error,
+  :not_found}` when it is gone.
+  """
+  @spec label_request(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, entry()} | {:error, :not_found} | refusal()
+  def label_request(%Prima.Actor{scope: :platform}, id, label)
+      when is_binary(id) and is_binary(label) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Doors.label_request", fn ->
+      from(e in Entry, where: e.id == ^id and e.status == "requested" and is_nil(e.label))
+      |> Arca.Repo.update_all(set: [label: label, updated_at: DateTime.utc_now()])
+
+      case Arca.Repo.get(Entry, id) do
+        nil -> {:error, :not_found}
+        entry -> {:ok, row(entry)}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def label_request(%Prima.Actor{}, id, label) when is_binary(id) and is_binary(label),
+    do: {:error, :not_platform}
+
   @doc "Delete the entry `id` names."
   @spec delete(Prima.Actor.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
   def delete(%Prima.Actor{scope: :platform}, id) when is_binary(id) do

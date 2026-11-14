@@ -182,6 +182,13 @@ defmodule Arca.Users do
       `{:error, reason}`, which rolls the whole mint back with that reason.
       It writes only its owner's rows through Arca and makes no network
       call.
+    * `namespace:` — the name the person takes as their namespace when no
+      person here holds it, decided after the installation guard, so under
+      the order every mint serializes on: of two admissions taking one
+      name at once, the later is made without it, never refused. A writer
+      outside that order (a namespace recorded at a sign-in) may still take
+      the name before the insert: the insert that meets the name's unique
+      index then makes the person without it.
 
   The installation guard runs first, inside the same transaction
   (`Arca.InstallationClaims.guard!/1`): the installation's first person is
@@ -227,11 +234,7 @@ defmodule Arca.Users do
         admitted when admitted in [:first, :ok] ->
           with :ok <- also_ran(verify.()),
                {:ok, user} <-
-                 admitted
-                 |> born()
-                 |> User.changeset(user_attrs)
-                 |> Arca.Repo.insert()
-                 |> settled(),
+                 person_row(admitted, free_namespace(user_attrs, opts[:namespace])),
                :ok <- also_ran(also.(Arca.Data.project(user))) do
             {:ok, {admitted, user}}
           end
@@ -250,6 +253,57 @@ defmodule Arca.Users do
         refusal
     end
   end
+
+  # The namespace a mint takes, read under the mints' order (`mint/3`): a
+  # name another person holds is left out.
+  defp free_namespace(user_attrs, name) when is_binary(name) do
+    if Arca.Repo.exists?(from(u in User, where: u.namespace == ^name)),
+      do: user_attrs,
+      else: Map.put(user_attrs, :namespace, name)
+  end
+
+  defp free_namespace(user_attrs, nil), do: user_attrs
+
+  # The person's row. One that meets the namespace's unique index, a name
+  # taken since it was read free, is written without it: the named insert
+  # does nothing on that index alone (`namespace_taken/0`), which neither
+  # raises nor aborts the mint's transaction on either adapter, and answers
+  # how many rows it wrote, so a row it did not write is written again
+  # unnamed. An id already held, read under the mints' order, goes to the
+  # plain insert, whose unique index answers the conflict it always was.
+  defp person_row(admitted, %{namespace: name} = user_attrs) when is_binary(name) do
+    changeset = admitted |> born() |> User.changeset(user_attrs)
+    unnamed = Map.delete(user_attrs, :namespace)
+
+    with {:ok, person} <- Ecto.Changeset.apply_action(changeset, :insert) do
+      if Arca.Repo.exists?(from(u in User, where: u.id == ^person.id)) do
+        person_row(admitted, unnamed)
+      else
+        fields = person |> Map.from_struct() |> Map.take(User.__schema__(:fields))
+
+        case Arca.Repo.insert_all(User, [fields],
+               on_conflict: :nothing,
+               conflict_target: namespace_taken(),
+               returning: true
+             ) do
+          {1, [user]} -> {:ok, user}
+          {0, _none} -> person_row(admitted, unnamed)
+        end
+      end
+    else
+      {:error, changeset} -> {:error, refusal(changeset)}
+    end
+  end
+
+  defp person_row(admitted, user_attrs), do: admitted |> insert(user_attrs) |> settled()
+
+  defp insert(admitted, user_attrs),
+    do: admitted |> born() |> User.changeset(user_attrs) |> Arca.Repo.insert()
+
+  # The namespace's unique index, partial over the named rows
+  # (`users_namespace_index` in the baseline), as a conflict target both
+  # adapters read.
+  defp namespace_taken, do: {:unsafe_fragment, "(namespace) WHERE namespace IS NOT NULL"}
 
   # The installation's first person is born with the platform
   # administrator's mark, on the row itself and past every changeset.

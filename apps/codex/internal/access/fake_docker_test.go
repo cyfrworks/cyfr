@@ -253,7 +253,7 @@ func (f *fakeDocker) handle(c *fakeCall) fakeAnswer {
 		}
 		ct.Key = strings.TrimSuffix(c.Stdin, "\n")
 		ct.WantsKey = false
-		if node := f.st.Volumes[ct.Volume]; node != nil && !node.LoggedIn && ct.Key != "" {
+		if node := f.st.Volumes[ct.Volume]; node != nil && !node.LoggedIn && ct.Key != "" && ct.Key != refusedKey {
 			f.login(node, ct.Hostname, ct.Key)
 		}
 		return fakeAnswer{}
@@ -262,6 +262,10 @@ func (f *fakeDocker) handle(c *fakeCall) fakeAnswer {
 	}
 	return fail(1, "fake docker: unknown command %q", args[0])
 }
+
+// refusedKey is an auth key the fake's Tailscale never accepts: the join
+// stays logged out until its container ends.
+const refusedKey = "tskey-auth-refused"
 
 // expireJoins ends the join containers whose own deadline passed, as
 // `timeout` and `--rm` end them.

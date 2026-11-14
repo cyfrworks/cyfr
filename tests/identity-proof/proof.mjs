@@ -21,7 +21,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  createAccount, devicesPage, landing, passkeys, readLog, recoveryPage, signIn, usePasskey,
+  createAccount, devicesPage, landing, passkeys, readLog, recoveryPage, refusedPasskey, signIn, usePasskey,
 } from "../browser/account.mjs";
 import {
   ask as askRunSh, askHome, launchBrowser, readHomes, redact as redactKnown, sleep, startProxy,
@@ -154,6 +154,16 @@ async function main(browser, proxy) {
     "the person sets A up by signing in with their account: the sign page names A, A admits the account under its setup token and " +
       "binds the session to the passkey's key, and caches the account's head",
     record.sign_in)) return;
+
+  // refused_passkey
+  const stranger = await (await browser.newContext()).newPage();
+  record.refused_passkey = await refusedPasskey(stranger, passkeys(), A);
+  if (!row("refused_passkey",
+    record.refused_passkey.error === "The passkey was not used. Try again when you are ready." && record.refused_passkey.ways &&
+      record.refused_passkey.carries && record.refused_passkey.recover === "enter",
+    "a browser holding no passkey for the account signs in at A: the sign page says the passkey was not used and offers adding one " +
+      "with the recovery code, whose link carries A's request to the recovery page",
+    record.refused_passkey)) return;
 
   // second_code
   const first = await recoveryPage(laptop, laptopKeys, { directory: DIR, code: made.code.code, identifier });
@@ -292,7 +302,7 @@ try {
   proxy.close();
 }
 
-const STEPS = ["account", "sign_in", "second_code", "remove_key", "recover", "directory_down", "gone"];
+const STEPS = ["account", "sign_in", "refused_passkey", "second_code", "remove_key", "recover", "directory_down", "gone"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);
   return found ? (found.held ? "held" : "FAILED") : "not reached";

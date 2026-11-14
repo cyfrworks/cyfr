@@ -138,6 +138,13 @@ defmodule Locus.Runtime.Relay do
   @purposes %{"fetch" => :fetch, "stream" => :stream}
 
   # The engine's method atom for each method a destination may name.
+  # The HTTP client opens a connection in the process that makes the
+  # request and reports the connect's end there, with an `:error` when it
+  # failed (`[:finch, :connect, :stop]`). One handler, attached once for
+  # every relay, marks a failed connect in a fetch worker that is watching
+  # for it (`connect/4`); any other process's connects are left alone.
+  @connect_watch {__MODULE__, :connect}
+
   @methods Map.new(
              Prima.Destination.methods(),
              &{&1, &1 |> String.downcase() |> String.to_atom()}
@@ -194,6 +201,7 @@ defmodule Locus.Runtime.Relay do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    :ok = attach_connect_watch()
 
     {:ok,
      %{
@@ -913,13 +921,18 @@ defmodule Locus.Runtime.Relay do
         |> Keyword.put(:into, into)
         |> then(&if(request.body != "", do: Keyword.put(&1, :body, request.body), else: &1))
 
+      # This worker is the fetch's own process: told if its connect fails.
+      Process.put(@connect_watch, :watching)
+
       case Req.request(opts) do
         {:ok, resp} ->
           head_once(relay, re, resp)
           Process.get({__MODULE__, :error})
 
+        # The connect and the wait for the answer time out alike; the
+        # connect's own report says which.
         {:error, %Req.TransportError{reason: :timeout}} ->
-          "timeout"
+          if Process.get(@connect_watch) == :failed, do: "connect_timeout", else: "timeout"
 
         {:error, %Req.TransportError{reason: reason}} when is_atom(reason) ->
           code(reason)
@@ -933,6 +946,29 @@ defmodule Locus.Runtime.Relay do
   end
 
   defp fetch_timeout(bound), do: HttpRequestValidation.timeout_ms(bound.limits)
+
+  # The handler marking a fetch worker's failed connect
+  # (`attach_connect_watch/0`).
+
+  defp attach_connect_watch do
+    case :telemetry.attach(
+           @connect_watch,
+           [:finch, :connect, :stop],
+           &__MODULE__.connect_stopped/4,
+           nil
+         ) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
+  end
+
+  @doc false
+  def connect_stopped(_event, _measurements, %{error: _}, _config) do
+    if Process.get(@connect_watch) == :watching, do: Process.put(@connect_watch, :failed)
+    :ok
+  end
+
+  def connect_stopped(_event, _measurements, _metadata, _config), do: :ok
 
   defp head_once(relay, re, resp) do
     unless Process.get({__MODULE__, :headed}) do

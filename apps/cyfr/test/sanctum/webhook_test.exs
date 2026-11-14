@@ -457,6 +457,28 @@ defmodule Sanctum.WebhookTest do
       assert {:error, :signature_mismatch} = verify_grace_with_slug(slug, old_secret, "body")
     end
 
+    test "the answer carries when the old secret stops verifying, as it is stored",
+         %{ctx: ctx} do
+      {:ok, _} = create(ctx, %{name: "until", target_ref: "f:local.handler"})
+      assert {:ok, rotated} = rotate(ctx, "until")
+
+      assert rotated |> Map.keys() |> Enum.sort() ==
+               [:name, :previous_expires_at, :rotated_at, :secret, :slug, :url]
+
+      import Ecto.Query
+      slug = rotated.slug
+
+      stored =
+        Arca.Repo.one!(
+          from(w in Arca.Schemas.Webhook,
+            where: w.slug == ^slug,
+            select: w.previous_secret_expires_at
+          )
+        )
+
+      assert rotated.previous_expires_at == DateTime.to_iso8601(stored)
+    end
+
     test "returns not_found for missing webhook", %{ctx: ctx} do
       assert {:error, :not_found} = Webhook.rotate(ctx, "ghost")
     end

@@ -165,15 +165,26 @@ defmodule Sanctum.Door.Store do
   deny) is left untouched and answers `:existing`, so the caller does not tell
   the operator someone is waiting at a door that already has its answer. That
   also bounds it — one row per identifier, ever, however many times it is
-  asked.
+  asked. A request still pending that carries no label takes the one a later
+  ask knows, so a name the first refusal could not learn reaches the
+  operator once it is known.
 
   A request is not an allow: `allowed/2` needs `status: "allowed"`, which
-  only `resolve/3` writes.
+  only `resolve/3` writes. `opts` as `allow/4` takes them: `label:` is the
+  name the identifier holds, so the operator sees who is asking.
   """
-  @spec request(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+  @spec request(String.t(), String.t(), String.t() | nil, write_opts()) ::
           {:ok, :created | :existing, entry()} | {:error, term()}
-  def request("identifier" = kind, value, requested_by, note \\ nil) when is_binary(value) do
+  def request("identifier" = kind, value, requested_by, opts \\ []) when is_binary(value) do
+    opts = Keyword.validate!(opts, [:note, :label])
+
+    label = opts[:label]
+
     case find(kind, value) do
+      {:ok, %{status: "requested", label: nil} = entry} when is_binary(label) ->
+        with {:ok, labelled} <- Doors.label_request(actor(), entry.id, label),
+             do: {:ok, :existing, labelled}
+
       {:ok, entry} ->
         {:ok, :existing, entry}
 
@@ -184,7 +195,8 @@ defmodule Sanctum.Door.Store do
           effect: "allow",
           status: "requested",
           requested_by: requested_by,
-          note: note
+          note: opts[:note],
+          label: label
         })
 
       {:error, _} = err ->
