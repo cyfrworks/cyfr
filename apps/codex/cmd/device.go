@@ -427,7 +427,7 @@ func approveDevice(ctx context.Context, c *console, text string) error {
 	}
 	defer key.Erase()
 	d := account.Directory{URL: rec.Directory, Client: &http.Client{}}
-	err = account.Approve(ctx, d, rec.Identifier, rec.PublicKey, key.Sign, pub, time.Now().UnixMilli())
+	err = account.Approve(ctx, d, rec.Identifier, rec.PublicKey, key.Sign, account.DeviceKey(pub), time.Now().UnixMilli())
 	switch {
 	case errors.Is(err, account.ErrListed):
 		fmt.Fprintln(c.out, "Your account lists that device already.")

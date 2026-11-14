@@ -5,9 +5,13 @@ package shell
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"html"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -188,7 +192,8 @@ func TestSetup_MakesTheAccountAndOpensPrism(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
 
-	if !strings.Contains(b.page(), "This box keeps its data unencrypted, whoever takes it reads everything: its CYFR data volume is not encrypted.") {
+	if !strings.Contains(b.page(), "This box keeps its data unencrypted, whoever takes it reads everything: its CYFR data volume is not encrypted. "+
+		"Keep the box where only people you trust can reach it, or install Ubuntu again with disk encryption turned on.") {
 		t.Fatal("setup does not warn about the unencrypted data volume")
 	}
 	home.accounts.Down = true
@@ -857,5 +862,414 @@ func TestConfirm_ALockedBoxFetchesNothing(t *testing.T) {
 	w := b.do(http.MethodGet, "/confirm?ref=cnr_1", "", nil)
 	if len(home.opsSeen()) != ops || !strings.Contains(body(w), "Unlock this screen first") {
 		t.Fatal("a locked box fetched a confirmation")
+	}
+}
+
+// newPasskey is a passkey as a browser makes one: a P-256 point,
+// uncompressed, and a random credential id.
+func newPasskey(t *testing.T) account.Key {
+	t.Helper()
+	priv, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := priv.PublicKey().Bytes()
+	cid := make([]byte, 16)
+	_, _ = rand.Read(cid)
+	return account.Key{Kid: account.Kid(pub), Alg: "es256", Kind: "passkey", Pub: pub, CredentialID: cid}
+}
+
+// waitingPasskey is the record pairing.waiting lists for key under ref.
+func waitingPasskey(ref string, key account.Key) map[string]any {
+	return map[string]any{"ref": ref, "code": account.ShortCode(key.Kid), "key": key.Map(), "asked_at": "2026-11-14T12:00:00Z"}
+}
+
+// passkeyAsked sets a box up through to Prism, its account's only key the
+// box's own, and has the CYFR hold one passkey a browser asks to add under
+// pkw_1. It answers the box's passphrase, its key record and the passkey.
+func passkeyAsked(t *testing.T) (*fakeHome, *box, string, *holder.Record, account.Key) {
+	t.Helper()
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := setUpAndOpen(t, home, b)
+	rec, err := holder.Load(b.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := home.accounts.State(t, rec.Identifier); len(st.Keys) != 1 || st.Keys[0].Kid != account.Kid(rec.PublicKey) {
+		t.Fatalf("the account's keys are not the box's alone: %+v", st.Keys)
+	}
+	key := newPasskey(t)
+	home.mu.Lock()
+	home.waiting["pkw_1"] = waitingPasskey("pkw_1", key)
+	home.mu.Unlock()
+	return home, b, p, rec, key
+}
+
+func keysOf(keys []account.Key) string {
+	maps := make([]any, len(keys))
+	for i, k := range keys {
+		maps[i] = k.Map()
+	}
+	return jcsString(maps)
+}
+
+// A browser asks to add a passkey to an account whose only key is the
+// box's: the box draws the request from CYFR and shows the code it derives
+// from the key, and its passphrase, typed again, adds the passkey to the
+// account's log by an add_key the box's key signs. The window says so and
+// closes, and CYFR never hears the passphrase.
+func TestPasskey_TheBoxAddsTheWaitingPasskeyToItsAccount(t *testing.T) {
+	home, b, p, rec, key := passkeyAsked(t)
+	before := home.accounts.State(t, rec.Identifier)
+
+	page := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil))
+	if !strings.Contains(page, "<h1>Add a passkey to your account</h1>") ||
+		!strings.Contains(page, "A browser asks to add a passkey to your account. Approve it only if that browser shows this same code:") ||
+		!strings.Contains(page, `<p class="code">`+account.ShortCode(key.Kid)+`</p>`) || !strings.Contains(page, `name="ref" value="pkw_1"`) {
+		t.Fatalf("the passkey page:\n%s", page)
+	}
+	if !strings.Contains(page, `name="key" value="`+keyDigest(key)+`"`) {
+		t.Fatalf("the form does not carry the key it shows:\n%s", page)
+	}
+	page = body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(key)}, "decision": {"approve"}, "secret": {p}}))
+	if !strings.Contains(page, "Added to your account. The browser that asked signs in with its passkey now.") || !strings.Contains(page, "<h1>Done</h1>") {
+		t.Fatalf("the answer:\n%s", page)
+	}
+	after := home.accounts.State(t, rec.Identifier)
+	if got, want := keysOf(after.Keys), keysOf([]account.Key{before.Keys[0], key}); got != want {
+		t.Fatalf("the account lists\n %s\nwant %s", got, want)
+	}
+	log := home.accounts.Log(rec.Identifier)
+	last := log[len(log)-1].(map[string]any)
+	if last["kind"] != "add_key" || last["signer"] != account.Kid(rec.PublicKey) || after.Seq != before.Seq+1 {
+		t.Fatalf("the last entry %v", last)
+	}
+	if home.heard(p) || home.heard(strings.ReplaceAll(p, " ", "+")) {
+		t.Fatal("CYFR heard the passphrase")
+	}
+}
+
+// A request the person did not approve adds nothing: a decision with no
+// request drawn, a cancel, a request that waited past its minute, one CYFR
+// no longer holds or holds with another key under the same ref, and a
+// wrong passphrase, which leaves the request drawn: the right one then
+// adds it, once.
+func TestPasskey_AnUnapprovedRequestAddsNothing(t *testing.T) {
+	home, b, p, rec, key := passkeyAsked(t)
+	entries := len(home.accounts.Log(rec.Identifier))
+	decide := func(decision, secret string) string {
+		t.Helper()
+		page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(key)}, "decision": {decision}, "secret": {secret}}))
+		if n := len(home.accounts.Log(rec.Identifier)); n != entries {
+			t.Fatalf("the log holds %d entries, %d before:\n%s", n, entries, page)
+		}
+		return page
+	}
+	draw := func() {
+		t.Helper()
+		if page := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)); !strings.Contains(page, account.ShortCode(key.Kid)) {
+			t.Fatalf("not drawn:\n%s", page)
+		}
+	}
+	hold := func(k account.Key) {
+		home.mu.Lock()
+		home.waiting["pkw_1"] = waitingPasskey("pkw_1", k)
+		home.mu.Unlock()
+	}
+
+	if page := decide("approve", p); strings.Contains(page, "Added") || strings.Contains(page, account.ShortCode(key.Kid)) {
+		t.Fatalf("a decision with nothing drawn:\n%s", page)
+	}
+
+	draw()
+	if page := decide("cancel", p); !strings.Contains(page, "Nothing was added.") || !strings.Contains(page, "<h1>Done</h1>") {
+		t.Fatalf("a cancel:\n%s", page)
+	}
+
+	draw()
+	b.now.Add(int64(61 * time.Second))
+	if page := decide("approve", p); !strings.Contains(page, "That request waited too long, so nothing was added. Approve it again from Your devices.") {
+		t.Fatalf("a request past its minute:\n%s", page)
+	}
+
+	draw()
+	home.mu.Lock()
+	delete(home.waiting, "pkw_1")
+	home.mu.Unlock()
+	if page := decide("approve", p); !strings.Contains(page, "CYFR no longer holds that request, so nothing was added.") {
+		t.Fatalf("a request CYFR no longer holds:\n%s", page)
+	}
+
+	hold(key)
+	draw()
+	hold(newPasskey(t))
+	if page := decide("approve", p); !strings.Contains(page, "CYFR no longer holds that request, so nothing was added.") {
+		t.Fatalf("a request whose key changed at CYFR:\n%s", page)
+	}
+
+	hold(key)
+	draw()
+	if page := decide("approve", otherPassphrase(t, p)); !strings.Contains(page, "That is not this screen's PIN or passphrase.") ||
+		!strings.Contains(page, `<p class="code">`+account.ShortCode(key.Kid)+`</p>`) {
+		t.Fatalf("a wrong passphrase:\n%s", page)
+	}
+	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(key)}, "decision": {"approve"}, "secret": {p}}))
+	if _, listed := home.accounts.State(t, rec.Identifier).Key(key.Kid); !listed || len(home.accounts.Log(rec.Identifier)) != entries+1 ||
+		!strings.Contains(page, "<h1>Done</h1>") {
+		t.Fatalf("the right passphrase after a wrong one:\n%s", page)
+	}
+}
+
+// A box locked since the draw asks CYFR for nothing and adds nothing: it
+// says to unlock first.
+func TestPasskey_ALockedBoxAddsNothing(t *testing.T) {
+	home, b, p, rec, _ := passkeyAsked(t)
+	b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
+	b.post("/lock", nil)
+	entries, ops := len(home.accounts.Log(rec.Identifier)), len(home.opsSeen())
+	says := "Unlock this screen first, then approve the passkey again from Your devices."
+	drawn := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil))
+	decided := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "decision": {"approve"}, "secret": {p}}))
+	if !strings.Contains(drawn, says) || !strings.Contains(decided, says) || len(home.opsSeen()) != ops ||
+		len(home.accounts.Log(rec.Identifier)) != entries {
+		t.Fatalf("a locked box: the draw\n%s\nthe decision\n%s", drawn, decided)
+	}
+}
+
+// A page approves only the key it showed. Drawn again under the same ref
+// with another key, as a second window opened from Your devices does, the
+// first window's approval adds nothing, says the request changed, and
+// opens no key: even a wrong passphrase there is not tried. The window
+// showing the new key then adds that one.
+func TestPasskey_AnEarlierPageApprovesOnlyTheKeyItShowed(t *testing.T) {
+	home, b, p, rec, first := passkeyAsked(t)
+	shown := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil))
+	if !strings.Contains(shown, account.ShortCode(first.Kid)) {
+		t.Fatalf("the first key is not drawn:\n%s", shown)
+	}
+	entries := len(home.accounts.Log(rec.Identifier))
+	second := newPasskey(t)
+	home.mu.Lock()
+	home.waiting["pkw_1"] = waitingPasskey("pkw_1", second)
+	home.mu.Unlock()
+	if again := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)); !strings.Contains(again, account.ShortCode(second.Kid)) {
+		t.Fatalf("the second key is not drawn:\n%s", again)
+	}
+
+	changed := "That request changed since this window showed its code, so nothing was added. Approve it again from Your devices."
+	for _, secret := range []string{otherPassphrase(t, p), p} {
+		page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(first)}, "decision": {"approve"}, "secret": {secret}}))
+		if !strings.Contains(page, changed) || strings.Contains(page, "That is not this screen's PIN or passphrase.") ||
+			len(home.accounts.Log(rec.Identifier)) != entries {
+			t.Fatalf("the earlier page's approval:\n%s", page)
+		}
+	}
+
+	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(second)}, "decision": {"approve"}, "secret": {p}}))
+	st := home.accounts.State(t, rec.Identifier)
+	_, firstListed := st.Key(first.Kid)
+	_, secondListed := st.Key(second.Kid)
+	if firstListed || !secondListed || len(home.accounts.Log(rec.Identifier)) != entries+1 || !strings.Contains(page, "<h1>Done</h1>") {
+		t.Fatalf("the second page's approval lists the first %v, the second %v:\n%s", firstListed, secondListed, page)
+	}
+}
+
+// From the decision's last read of the request to its signature the shell
+// holds its one lock: a draw of another key under the same ref that
+// arrives meanwhile waits, and the key signed is the one the page showed.
+func TestPasskey_ARedrawDuringTheDecisionWaitsForIt(t *testing.T) {
+	home, b, p, rec, first := passkeyAsked(t)
+	b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
+	second := newPasskey(t)
+	redrawn := make(chan string, 1)
+	home.onWaiting = func(ref string) {
+		home.onWaiting = nil
+		home.waiting[ref] = waitingPasskey(ref, second)
+		go func() { redrawn <- body(b.do(http.MethodGet, "/passkey?ref="+ref, "", nil)) }()
+	}
+	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(first)}, "decision": {"approve"}, "secret": {p}}))
+	st := home.accounts.State(t, rec.Identifier)
+	_, firstListed := st.Key(first.Kid)
+	_, secondListed := st.Key(second.Kid)
+	if !firstListed || secondListed || !strings.Contains(page, "Added to your account.") {
+		t.Fatalf("the decision lists the shown key %v, the redrawn %v:\n%s", firstListed, secondListed, page)
+	}
+	if again := <-redrawn; !strings.Contains(again, account.ShortCode(second.Kid)) {
+		t.Fatalf("the redraw, once the decision ended:\n%s", again)
+	}
+}
+
+// dropAppendAnswers keeps every request's effect and loses the answer to
+// each append, as a link that fails on the way back does.
+type dropAppendAnswers struct{ base http.RoundTripper }
+
+func (d dropAppendAnswers) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := d.base.RoundTrip(r)
+	if err == nil && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/append") {
+		resp.Body.Close()
+		return nil, errors.New("the answer was lost")
+	}
+	return resp, err
+}
+
+// An approval whose answers were lost does not know whether the passkey
+// was added, and says so with where to look; one whose account could not
+// be read sent nothing, and says nothing was added.
+func TestPasskey_ALostAnswerIsNotSaidToAddNothing(t *testing.T) {
+	home, b, p, rec, key := passkeyAsked(t)
+	b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
+	client := http.Client{Transport: dropAppendAnswers{base: http.DefaultTransport}}
+	if b.shell.cfg.Client != nil && b.shell.cfg.Client.Transport != nil {
+		client.Transport = dropAppendAnswers{base: b.shell.cfg.Client.Transport}
+	}
+	b.shell.cfg.Client = &client
+	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(key)}, "decision": {"approve"}, "secret": {p}}))
+	_, listed := home.accounts.State(t, rec.Identifier).Key(key.Kid)
+	if !listed || strings.Contains(page, "Nothing was added") || strings.Contains(page, "was not added") ||
+		!strings.Contains(page, "Your account's answer did not arrive, so this screen does not know whether the passkey was added. "+
+			"Sign in with it in the browser that asked, or look at your account's devices page, which lists every key.") {
+		t.Fatalf("listed %v:\n%s", listed, page)
+	}
+
+	second := newPasskey(t)
+	home.mu.Lock()
+	home.waiting["pkw_2"] = waitingPasskey("pkw_2", second)
+	home.mu.Unlock()
+	b.do(http.MethodGet, "/passkey?ref=pkw_2", "", nil)
+	entries := len(home.accounts.Log(rec.Identifier))
+	home.accounts.Down = true
+	page = body(b.post("/passkey/decide", url.Values{"ref": {"pkw_2"}, "key": {keyDigest(second)}, "decision": {"approve"}, "secret": {p}}))
+	home.accounts.Down = false
+	if !strings.Contains(page, "Your account could not be reached just now. Nothing was added; approve it again from Your devices.") ||
+		len(home.accounts.Log(rec.Identifier)) != entries {
+		t.Fatalf("an account that could not be read:\n%s", page)
+	}
+}
+
+// The page's approval is bound to the whole key it drew, every field its
+// add_key holds: drawn again under the same ref with any field changed,
+// the earlier window's approval adds nothing, says the request changed and
+// opens no key. A changed credential id or point is another valid key; a
+// changed kid, alg or kind is no passkey at all, and the redraw drops the
+// request.
+func TestPasskey_AnApprovalIsBoundToEveryFieldOfTheKeyShown(t *testing.T) {
+	changed := "That request changed since this window showed its code, so nothing was added. Approve it again from Your devices."
+	for _, c := range []struct {
+		field  string
+		change func(k account.Key) map[string]any
+	}{
+		{"credential_id", func(k account.Key) map[string]any {
+			k.CredentialID = []byte("another credential of the same key")
+			return k.Map()
+		}},
+		{"pub", func(account.Key) map[string]any { return newPasskey(t).Map() }},
+		{"kid", func(k account.Key) map[string]any {
+			m := k.Map()
+			m["kid"] = newPasskey(t).Kid
+			return m
+		}},
+		{"alg", func(k account.Key) map[string]any {
+			m := k.Map()
+			m["alg"] = "ed25519"
+			return m
+		}},
+		{"kind", func(k account.Key) map[string]any {
+			m := k.Map()
+			m["kind"] = "device"
+			return m
+		}},
+	} {
+		t.Run(c.field, func(t *testing.T) {
+			home, b, p, rec, key := passkeyAsked(t)
+			if page := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)); !strings.Contains(page, `name="key" value="`+keyDigest(key)+`"`) {
+				t.Fatalf("not drawn:\n%s", page)
+			}
+			entries := len(home.accounts.Log(rec.Identifier))
+			home.mu.Lock()
+			record := waitingPasskey("pkw_1", key)
+			record["key"] = c.change(key)
+			home.waiting["pkw_1"] = record
+			home.mu.Unlock()
+			b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
+			for _, secret := range []string{otherPassphrase(t, p), p} {
+				page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(key)}, "decision": {"approve"}, "secret": {secret}}))
+				if !strings.Contains(page, changed) || strings.Contains(page, "That is not this screen's PIN or passphrase.") ||
+					len(home.accounts.Log(rec.Identifier)) != entries {
+					t.Fatalf("the earlier window's approval:\n%s", page)
+				}
+			}
+		})
+	}
+}
+
+// lostThenAnswered keeps the first append's effect and loses its answer,
+// then answers the same bytes sent again with second, or, when second is
+// nil, as the directory does.
+type lostThenAnswered struct {
+	base   http.RoundTripper
+	second *http.Response
+	sends  int
+}
+
+func (d *lostThenAnswered) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/append") {
+		return d.base.RoundTrip(r)
+	}
+	d.sends++
+	if d.sends == 1 {
+		resp, err := d.base.RoundTrip(r)
+		if err == nil {
+			resp.Body.Close()
+		}
+		return nil, errors.New("the answer was lost")
+	}
+	if d.second == nil {
+		return d.base.RoundTrip(r)
+	}
+	resp := *d.second
+	resp.Request = r
+	return &resp, nil
+}
+
+func answered(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(body))}
+}
+
+// A first send whose answer was lost is settled only by an answer to the
+// same bytes sent again that shows the entry's state: the directory's
+// exists, duplicate_key, or stale_head, after which the log is read again.
+// A rate limit or a server error says nothing of the first send, so the
+// page says it does not know. In each case the first send landed.
+func TestPasskey_ALostSendIsSettledOnlyByAnAnswerThatShowsTheLog(t *testing.T) {
+	unknown := "Your account's answer did not arrive, so this screen does not know whether the passkey was added."
+	for _, c := range []struct {
+		name   string
+		second *http.Response
+		says   string
+	}{
+		{"rate limited", answered(http.StatusTooManyRequests, `{"error":"rate_limited","retry_after":60}`), unknown},
+		{"server error", answered(http.StatusBadGateway, `{"error":"unavailable"}`), unknown},
+		{"exists", nil, "Added to your account. The browser that asked signs in with its passkey now."},
+		{"duplicate key", answered(http.StatusConflict, `{"error":"duplicate_key"}`), "Your account lists that passkey already."},
+		{"stale head", answered(http.StatusConflict, `{"error":"stale_head"}`), "Your account lists that passkey already."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, b, p, rec, key := passkeyAsked(t)
+			b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
+			base := http.DefaultTransport
+			if b.shell.cfg.Client != nil && b.shell.cfg.Client.Transport != nil {
+				base = b.shell.cfg.Client.Transport
+			}
+			transport := &lostThenAnswered{base: base, second: c.second}
+			b.shell.cfg.Client = &http.Client{Transport: transport}
+			page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(key)}, "decision": {"approve"}, "secret": {p}}))
+			_, listed := home.accounts.State(t, rec.Identifier).Key(key.Kid)
+			if transport.sends != 2 || !listed || !strings.Contains(page, c.says) || strings.Contains(page, "not added") ||
+				strings.Contains(page, "Nothing was added") {
+				t.Fatalf("sent %d, listed %v:\n%s", transport.sends, listed, page)
+			}
+		})
 	}
 }

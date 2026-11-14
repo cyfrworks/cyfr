@@ -50,7 +50,7 @@ A CYFR box with its own screen (`cyfr screen on`) sets itself up and signs you i
 3. **Locking.** The **Lock** control, five minutes without local input, suspend, and the browser or the shell exiting lock the screen: the session ends at once and the screen asks for the PIN or passphrase again. A lock is final for that session; unlocking makes a new one.
 4. **Confirming on this device.** A change that needs a fresh confirmation offers **Confirm on this device**. The screen's own page shows the change as CYFR stored it, not as the asking page described it, and asks for your PIN or passphrase again before it signs; cancelling signs nothing.
 
-**Devices** in Prism's shell lists the box with what holds its key and, from what it reported within the last minute, whether its disks are encrypted. A box that keeps its data unencrypted is named as one: whoever takes it reads everything. The box changes no disk or boot setting; an encrypted Ubuntu installation still asks for its passphrase at boot.
+**Devices** in Prism's shell lists the box with what holds its key and, from what it reported within the last minute, whether its disks are encrypted. A box that keeps its data unencrypted is named as one: whoever takes it reads everything, so keep it where only people you trust can reach it, or install Ubuntu again with disk encryption turned on. The box changes no disk or boot setting; an encrypted Ubuntu installation still asks for its passphrase at boot. **Devices** also lists each passkey a browser asks to add to your account, with its code, which the box's screen approves ([identity-guide.md](identity-guide.md#signing-in-at-a-cyfr)).
 
 ---
 

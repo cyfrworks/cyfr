@@ -94,4 +94,36 @@ defmodule PrismWeb.DeviceUnlockControllerTest do
     assert get_session(conn, "sanctum_session_token") == nil
     assert Arca.Repo.get(Arca.Schemas.Session, answer.session_id) == nil
   end
+
+  # The box's shell is the fixture's exchange.shell on the Go side too
+  # (apps/codex/internal/shell/server_test.go): its origin, the Lock it
+  # takes, and the two pages Prism opens with a public ref alone.
+  test "the shell's entries are the fixture's exchange.shell" do
+    shell =
+      "../../../../../tests/fixtures/device_unlock.json"
+      |> Path.expand(__DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.fetch!("exchange")
+      |> Map.fetch!("shell")
+
+    origin = shell["origin"]
+    assert PrismWeb.DeviceUnlockController.lock_url() == origin <> shell["lock"]["path"]
+
+    for {entry, url} <- [
+          {"confirm", &PrismWeb.DeviceUnlockController.confirm_url/1},
+          {"passkey", &PrismWeb.DeviceUnlockController.passkey_url/1}
+        ] do
+      assert %{"method" => "GET", "query" => ["ref"], "target" => "_blank", "path" => path} =
+               shell[entry]
+
+      assert url.("a ref&more") == origin <> path <> "?ref=a+ref%26more", entry
+    end
+
+    assert shell["session_provider"] == "unlock"
+
+    assert PrismWeb.DeviceUnlockController.shell?(
+             Sanctum.Context.build(user_id: "usr_1", authenticated: true, provider: "unlock")
+           )
+  end
 end

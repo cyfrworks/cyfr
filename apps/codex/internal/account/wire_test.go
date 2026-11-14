@@ -85,6 +85,50 @@ func TestSignIn_RequestsDigestsAndDeviceAnswers(t *testing.T) {
 	}
 }
 
+// A new passkey an answer carries reads as the log reads a key: a passkey
+// whose kid is its point's and whose short code is the one its answer
+// names. Each refused one is not read as a passkey: ReadKey refuses a kid
+// that is not its point's and a passkey without its credential id, and a
+// device key reads as no passkey.
+func TestSignIn_ANewPasskeyReadsAsTheLogReadsAKey(t *testing.T) {
+	var v struct {
+		Answers map[string]struct {
+			Answer map[string]any `json:"answer"`
+			Kind   string         `json:"kind"`
+			Code   string         `json:"code"`
+		} `json:"answers"`
+		Refusals []struct {
+			Name, Kind, Field string
+			Answer            map[string]any
+		} `json:"answer_refusals"`
+	}
+	fixture(t, "sign_in.json", &v)
+	read := 0
+	for name, c := range v.Answers {
+		if c.Kind != "new_passkey" {
+			continue
+		}
+		k, ok := ReadKey(c.Answer["key"])
+		if !ok || k.Kind != "passkey" || k.Kid != Kid(k.Pub) || ShortCode(k.Kid) != c.Code {
+			t.Errorf("%s: read %v as %+v, code %s", name, ok, k, ShortCode(k.Kid))
+		}
+		read++
+	}
+	refused := 0
+	for _, c := range v.Refusals {
+		if c.Kind != "new_passkey" || c.Field != "key" {
+			continue
+		}
+		if k, ok := ReadKey(c.Answer["key"]); ok && k.Kind == "passkey" {
+			t.Errorf("%s: read as a passkey %+v", c.Name, k)
+		}
+		refused++
+	}
+	if read < 2 || refused < 3 {
+		t.Fatalf("the vectors held %d new passkeys, %d refused keys", read, refused)
+	}
+}
+
 // Every request an Ed25519 key signed is re-signed to its bytes, but one
 // whose bytes pass the bound, which its signer refuses; every handle
 // answer reaches its result or refusal, every envelope its refusal, and
