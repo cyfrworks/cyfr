@@ -298,7 +298,12 @@ defmodule PrismWeb.ApiKeysLive do
         </div>
         <.table :if={!@loading && @keys != []} id="api-keys" rows={@keys}>
           <:col :let={key} label="Name">{key[:name] || "-"}</:col>
-          <:col :let={key} label="What it may do">{format_scope(key[:scope], @permissions)}</:col>
+          <:col :let={key} label="What it may do">
+            <span :if={key[:scope_unreadable]} class="text-red-400">
+              Cannot be used: what this key may do could not be read. Revoke it and make a new key.
+            </span>
+            <span :if={!key[:scope_unreadable]}>{format_scope(key[:scope], @permissions)}</span>
+          </:col>
           <:col :let={key} label="Tools">{format_tools(key[:tools])}</:col>
           <:col :let={key} label="Created">{key[:created_at] || "-"}</:col>
           <:col :let={key} label="Actions">

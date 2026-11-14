@@ -805,13 +805,13 @@ defmodule Sanctum.ApiKey do
   defp hash_key(key), do: :crypto.hash(:sha256, key)
 
   # A key whose stored scope no rule admits authenticates nothing
-  # (`key_metadata/1`); it is still listed, so its person can revoke it,
-  # holding nothing.
+  # (`key_metadata/1`); it is still listed, holding nothing and marked
+  # `scope_unreadable`, so its person can find it and revoke it.
   defp redact_key(row) do
-    {scope_list, tools} =
+    {scope_list, tools, unreadable} =
       case stored_scope(row.scope) do
-        {:ok, split} -> split
-        {:error, :invalid_key} -> {[], []}
+        {:ok, {scope_list, tools}} -> {scope_list, tools, false}
+        {:error, :invalid_key} -> {[], [], true}
       end
 
     %{
@@ -821,6 +821,7 @@ defmodule Sanctum.ApiKey do
       suspended: row.suspended == true,
       scope: scope_list,
       tools: tools,
+      scope_unreadable: unreadable,
       ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
       created_at: Prima.Time.iso8601(row.inserted_at),
       rotated_at: Prima.Time.iso8601(row.rotated_at)

@@ -94,7 +94,7 @@ defmodule Sanctum.ApiKeyTest do
         end)
 
         capture_log(fn ->
-          assert {:ok, %{scope: [], tools: []}} = ApiKey.get(ctx, name)
+          assert {:ok, %{scope: [], tools: [], scope_unreadable: true}} = ApiKey.get(ctx, name)
           assert {:error, :invalid_key} = rotate_key(ctx, name)
         end)
       end

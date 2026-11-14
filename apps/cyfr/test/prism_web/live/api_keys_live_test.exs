@@ -76,6 +76,34 @@ defmodule PrismWeb.ApiKeysLiveTest do
     )
 
     assert render(view) =~ "Run tools, Manage keys, webhooks and programs"
+    refute render(view) =~ "Cannot be used"
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a key whose stored permissions no rule admits stays listed, saying it cannot be used",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    ctx = %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user.user_id}
+
+    {:ok, _} =
+      Sanctum.TestContext.create_key(Sanctum.TestContext.issuer!(ctx), %{name: "damaged"})
+
+    {:ok, %{id: id}} = Sanctum.ApiKey.get(ctx, "damaged")
+
+    Arca.Repo.update_all(
+      Ecto.Query.from(k in Arca.Schemas.ApiKey, where: k.id == ^id),
+      set: [scope: ~s(["execute", "*"])]
+    )
+
+    {view, _html} = mount_athanor(conn, "/api-keys")
+
+    wait_until(fn -> render(view) =~ "damaged" end, 2_000, "the key's row")
+
+    assert render(view) =~
+             "Cannot be used: what this key may do could not be read. Revoke it and make a new key."
+
+    assert has_element?(view, ~s(button[phx-click="revoke"][phx-value-id="damaged"]))
     Cyfr.Test.Sandbox.end_views()
   end
 end
