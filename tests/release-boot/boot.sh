@@ -18,7 +18,10 @@
 #            makes before it snapshots a cell, run as the update runs it
 #            (`bin/cyfr eval`, which starts no application), answers the
 #            running cell's one slot under this release, and none once the
-#            cell has stopped.
+#            cell has stopped. The schema fingerprint `cyfr update` reads
+#            before it stops anything, by the expression it runs, answers the
+#            fingerprint the database records, over `bin/cyfr rpc` while the
+#            cell runs and offline through `bin/cyfr eval` once it stopped.
 #            The running release reads none of Arca's, Sanctum's or the
 #            host's test seams, with each seam's key the probe reads and
 #            the test permission set at runtime: it still holds its slot,
@@ -458,6 +461,27 @@ sys.exit(0 if ok else 1)' "$(cell_node "$CELL")" "$VERSION" ||
   fail "live slots of the running cell were not its one slot under $VERSION: $running"
 echo "the running cell: $running"
 
+# The schema fingerprint as `cyfr update` reads it, by the expression it
+# runs: through the running cell's node (rpc) or offline (eval). A run that
+# prints no `CYFR_SCHEMA=` line, or two, fails the case.
+schema_read() {
+  local out
+  out="$(cell_cyfr "$1" "$2" 'IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())' |
+    grep '^CYFR_SCHEMA=')" || fail "the schema read ($2) printed no answer"
+  [ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] || fail "the schema read ($2) answered twice: $out"
+  printf '%s\n' "${out#CYFR_SCHEMA=}"
+}
+
+step "schema: the running cell's fingerprint over RPC is the one its database records"
+recorded="$(cell_cyfr "$CELL" rpc \
+  '{:ok, value} = Arca.ServerMetaStorage.get(Arca.SchemaFingerprint.key()); IO.puts("CYFR_RECORDED=" <> value)' |
+  sed -n 's/^CYFR_RECORDED=//p')"
+[[ "$recorded" =~ ^[0-9a-f]{64}$ ]] || fail "the database records no schema fingerprint: $recorded"
+running_schema="$(schema_read "$CELL" rpc)"
+[ "$running_schema" = "$recorded" ] ||
+  fail "the running cell's schema over RPC is $running_schema, the database records $recorded"
+echo "the running cell's schema: $running_schema"
+
 # Every application's test seams, held to this release's compiled
 # permission (tests/release-boot/test_seams.exs): the permission and every
 # seam's key the probe reads set at runtime, and the release answers as it
@@ -479,6 +503,12 @@ import json, sys
 sys.exit(0 if json.load(sys.stdin)["slots"] == [] else 1)' ||
   fail "live slots of the stopped cell were not empty: $stopped"
 echo "the stopped cell: $stopped"
+
+step "schema: the stopped cell's fingerprint offline is the one its database records"
+stopped_schema="$(schema_read "$CELL" eval)"
+[ "$stopped_schema" = "$recorded" ] ||
+  fail "the stopped cell's schema offline is $stopped_schema, the database records $recorded"
+echo "the stopped cell's schema: $stopped_schema"
 
 after="$(cell_pending "$CELL")"
 if [ "${after:-1}" -ne 0 ]; then

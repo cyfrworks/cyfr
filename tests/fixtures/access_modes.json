@@ -3661,10 +3661,25 @@
         {
           "fixed": {},
           "slots": [],
-          "template": "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How CYFR is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again.",
+          "template": "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access tailnet` again.",
           "example": {
             "payload": {},
-            "sentence": "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How CYFR is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again."
+            "sentence": "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access tailnet` again."
+          }
+        }
+      ]
+    },
+    {
+      "code": "tailnet_join_unapproved",
+      "class": "setup_required",
+      "variants": [
+        {
+          "fixed": {},
+          "slots": [],
+          "template": "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access tailnet` again and approve the machine with the link it prints.",
+          "example": {
+            "payload": {},
+            "sentence": "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access tailnet` again and approve the machine with the link it prints."
           }
         }
       ]

@@ -420,15 +420,19 @@ defmodule Sanctum.Webhook do
   Not a hard cutover: the outgoing secret stays valid for
   `#{@previous_secret_grace_seconds}` seconds (`verify_with_grace/4` accepts
   it until then), so in-flight requests signed with the old secret keep
-  working while the sender is updated. The new plaintext is returned only
-  after the storage write commits.
+  working while the sender is updated. The answer carries the moment the
+  outgoing secret stops verifying, `previous_expires_at`, as stored, so
+  every surface says that time rather than a span of its own. The new
+  plaintext is returned only after the storage write commits.
   """
   @spec rotate(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def rotate(%Context{} = ctx, name) when is_binary(name) do
     athanor_id = athanor!(ctx)
 
     previous_expires_at =
-      DateTime.add(DateTime.utc_now(), @previous_secret_grace_seconds, :second)
+      DateTime.utc_now()
+      |> DateTime.add(@previous_secret_grace_seconds, :second)
+      |> DateTime.truncate(:microsecond)
 
     with {:ok, existing} <- get(ctx, name),
          {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
@@ -457,7 +461,8 @@ defmodule Sanctum.Webhook do
          slug: existing.slug,
          secret: new_secret,
          url: existing.url,
-         rotated_at: now
+         rotated_at: now,
+         previous_expires_at: Prima.Time.iso8601(previous_expires_at)
        }}
     end
   end

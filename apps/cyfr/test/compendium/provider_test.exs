@@ -649,27 +649,12 @@ defmodule Compendium.ProviderTest do
       assert err_msg(msg) =~ "ghcr.io"
     end
 
-    test "rejects discover against a non-configured registry host", %{ctx: ctx} do
-      {:error, msg} =
-        Provider.handle("component", ctx, %{
-          "action" => "discover",
-          "registry" => "ghcr.io"
-        })
-
-      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
-      assert err_msg(msg) =~ "ghcr.io"
-    end
-
-    test "discover with no registry argument uses the configured registry", %{ctx: ctx} do
-      result =
-        Provider.handle("component", ctx, %{
-          "action" => "discover"
-        })
-
-      case result do
-        {:error, msg} -> refute err_msg(msg) =~ "Missing required argument: registry"
-        {:ok, _} -> :ok
-      end
+    test "discover takes no registry: it asks the one this deployment names" do
+      assert {:error, {:invalid_argument, "Unknown field: registry"}} =
+               Prima.Operation.cast(Compendium.Providers.Component.definition(), %{
+                 "action" => "discover",
+                 "registry" => "ghcr.io"
+               })
     end
 
     test "returns a parse error for a malformed OCI reference in pull", %{ctx: ctx} do
@@ -2467,6 +2452,58 @@ defmodule Compendium.ProviderTest do
       # Discovery agrees with dispatch: the key is not shown the push.
       refute "push" in visible_component_actions(key_ctx)
       assert "search" in visible_component_actions(key_ctx)
+    end
+
+    # Deprecating and yanking speak for a publisher, as a push does: an API
+    # key with every permission is refused at the gate, and discovery hides
+    # both from it.
+    test "component.deprecate and component.yank are a person's acts — an API key is refused at the gate" do
+      key_ctx = %Context{
+        user_id: "github|https://github.com|keyholder",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:*]),
+        scope: :athanor,
+        auth_method: :api_key,
+        authenticated: true
+      }
+
+      for action <- ~w(deprecate yank) do
+        assert {:error,
+                %Prima.Refusal{
+                  stage: :admission,
+                  class: :forbidden,
+                  reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+                }} =
+                 Sanctum.Gate.call_external("component", key_ctx, %{
+                   "action" => action,
+                   "reference" => "reagent:alice.widget:1.0.0",
+                   "reason" => "superseded"
+                 }),
+               "component.#{action} admitted an API key"
+
+        refute action in visible_component_actions(key_ctx)
+      end
+    end
+
+    # A signed-in person passes the gate and reaches the handler, which
+    # asks for the namespace's push token.
+    test "component.deprecate and component.yank admit a signed-in person to the handler",
+         %{ctx: ctx} do
+      ctx = %{ctx | origin: :interactive}
+      assert ctx.auth_method == :oidc
+
+      for action <- ~w(deprecate yank) do
+        assert action in visible_component_actions(ctx)
+
+        assert {:error, reason} =
+                 Sanctum.Gate.call_external("component", ctx, %{
+                   "action" => action,
+                   "reference" => "reagent:alice.widget:1.0.0",
+                   "reason" => "superseded"
+                 })
+
+        assert Sanctum.Refusals.render(reason) =~ "no push token for namespace 'alice'"
+      end
     end
 
     test "registry's person-only actions refuse an API key at the gate, and discovery hides them" do

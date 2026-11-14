@@ -6,6 +6,7 @@ package access
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -94,3 +95,8 @@ func defaultFileSet(dir string) ([]string, error) {
 	}
 	return append(mains, overrides...), nil
 }
+
+// OwnProcessGroup starts cmd as the leader of a process group of its own,
+// as the engine starts docker, so an interrupt at the terminal reaches
+// cyfr alone and cyfr ends the call.
+func OwnProcessGroup(cmd *exec.Cmd) { ownGroup(cmd) }
