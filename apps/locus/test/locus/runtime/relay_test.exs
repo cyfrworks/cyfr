@@ -904,18 +904,42 @@ defmodule Locus.Runtime.RelayTest do
     end
   end
 
-  # The connect and the wait for the answer time out alike; only a wait
-  # that ran the whole receive timeout can be the answer's.
-  describe "timeout_code/2" do
-    test "a timeout sooner than the receive timeout was the connect" do
-      connect = Prima.Network.connect_timeout_ms()
+  # A peer that completes TCP and never speaks: an HTTPS fetch's TLS
+  # handshake never finishes, so its connect times out; a plain fetch's
+  # request goes out and no answer comes, so its wait for the answer does.
+  # Both under a one-second request limit, where the connect's limit and
+  # the request's are the same and only the connect's own report tells
+  # them apart.
+  describe "a fetch to a peer that never speaks" do
+    setup do
+      # Listening is enough: the kernel completes the handshake from the
+      # backlog, and nothing ever reads or writes.
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+      {:ok, port} = :inet.port(listen)
+      {:ok, port: port}
+    end
 
-      assert Locus.Runtime.Relay.timeout_code(connect + 110, 30_000) == "connect_timeout"
-      assert Locus.Runtime.Relay.timeout_code(30_000, 30_000) == "timeout"
-      assert Locus.Runtime.Relay.timeout_code(45_000, 30_000) == "timeout"
+    for {scheme, code} <- [{"https", "connect_timeout"}, {"http", "timeout"}] do
+      test "over #{scheme} ends #{code}", %{host: host, port: port} do
+        attempt =
+          attempt!(host, limits: EdgeFixtures.limits(timeout: "1s")) |> ScriptedKeeper.relayed!()
 
-      # Limits that are equal name the request's own.
-      assert Locus.Runtime.Relay.timeout_code(connect - 1, connect) == "timeout"
+        assert {:ok, pinned} =
+                 Egress.pin(attempt.client, "#{unquote(scheme)}://api.test:#{port}/")
+
+        assert {:ok, ref} =
+                 Endpoint.fetch(
+                   attempt.endpoint,
+                   attempt.attempt,
+                   pinned.target.id,
+                   "GET",
+                   "/",
+                   [],
+                   ""
+                 )
+
+        assert {[], unquote(code)} = events(attempt.endpoint, ref)
+      end
     end
   end
 
