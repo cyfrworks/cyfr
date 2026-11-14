@@ -522,7 +522,7 @@ defmodule PrismWeb.LoginLiveTest do
 
     test "a registry's refusal is the flash the browser returns with, in a person's words",
          %{conn: conn, dir: dir} do
-      asked = asked!(conn, dir, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+      asked = asked!(conn, dir, %{"action" => "sync"})
 
       registry(asked.account, fn _request ->
         Sanctum.Test.RegistryStub.refusal(:unknown_identity)
@@ -541,7 +541,7 @@ defmodule PrismWeb.LoginLiveTest do
 
     test "returned in a browser without the session that asked, it is sent nowhere",
          %{conn: conn, dir: dir} do
-      asked = asked!(conn, dir, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+      asked = asked!(conn, dir, %{"action" => "sync"})
       registry(asked.account, fn _request -> flunk("nothing is sent") end)
 
       {:ok, view, _html} = live(conn, ~p"/login")

@@ -62,7 +62,13 @@ defmodule Compendium.Providers.Shared do
         {:error, {:corrupt, :registry_credential}}
 
       _ ->
-        {:error, "no push token for namespace '#{slug}' — run `cyfr registry sync`"}
+        {:error,
+         %Prima.Refusal{
+           class: :setup_required,
+           reason: :no_push_token,
+           message:
+             "This CYFR holds no push token for #{slug}: sync your push tokens on the Registry page."
+         }}
     end
   end
 

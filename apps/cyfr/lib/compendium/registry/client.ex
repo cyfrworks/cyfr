@@ -470,9 +470,10 @@ defmodule Compendium.Registry.Client do
   end
 
   @doc """
-  Call `GET /v1/legal/version`. Returns `{policy_version, policies}` where
-  `policies` is a list of `{name, title, sha256}` for the current bundled
-  set. Drives the clickwrap UI in prism / codex.
+  Call `GET /v1/legal/version`. Answers the registry's body: `policy_version`,
+  the version of its terms in force; `updated_at`, when that version was
+  published (RFC 3339, absent from a registry that does not say); and
+  `policies`, each `{name, title, sha256}` of the current set.
   """
   @spec get_legal_version() :: {:ok, map()} | {:error, Errors.t()}
   def get_legal_version do

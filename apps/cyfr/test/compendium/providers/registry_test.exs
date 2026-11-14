@@ -30,6 +30,14 @@ defmodule Compendium.Providers.RegistryTest do
   end
 
   # Valid mutation arguments reach the credential check.
+  # A signed act with no effect of its own beside the registry's answer.
+  @appeal %{
+    "action" => "appeal",
+    "action_type" => "takedown",
+    "action_ref" => "cmp_1",
+    "argument" => "it was not mine"
+  }
+
   describe "gated identity mutations reach their handlers with valid args" do
     test "tokens_revoke", %{ctx: ctx} do
       assert {:error, reason} =
@@ -287,8 +295,6 @@ defmodule Compendium.Providers.RegistryTest do
       registry(device, fn _request -> flunk("nothing is sent before it is signed") end)
 
       for {args, operation, body} <- [
-            {%{"action" => "legal_accept", "policy_version" => "2026-09"}, "policy.accept",
-             %{"policy_version" => "2026-09"}},
             {%{
                "action" => "appeal",
                "action_type" => "ban",
@@ -320,14 +326,10 @@ defmodule Compendium.Providers.RegistryTest do
       refute_received {:registry_request, _}
     end
 
-    test "the device's signed request is sent, and a policy acceptance, an appeal and a publisher claim answer the registry",
+    test "the device's signed request is sent, and an appeal and a publisher claim answer the registry",
          %{ctx: ctx, device: device} do
       registry(device, fn %{path: path, signed: signed} ->
         case path do
-          "/v1/legal/accept" ->
-            assert signed.body == %{"policy_version" => "2026-09"}
-            {201, RegistryStub.answer(%{"accepted" => true})}
-
           "/v1/appeals" ->
             {201, RegistryStub.answer(%{"id" => "apl_1"})}
 
@@ -336,9 +338,6 @@ defmodule Compendium.Providers.RegistryTest do
             {201, RegistryStub.answer(%{"slug" => "acme.com", "txt_value" => "cyfr-verify=x"})}
         end
       end)
-
-      assert {:ok, %{"accepted" => true}} =
-               signed(ctx, device, %{"action" => "legal_accept", "policy_version" => "2026-09"})
 
       assert {:ok, %{"id" => "apl_1"}} =
                signed(ctx, device, %{
@@ -352,7 +351,7 @@ defmodule Compendium.Providers.RegistryTest do
                signed(ctx, device, %{"action" => "claim_publisher", "slug" => "acme.com"})
 
       # One request each, and no bearer on any.
-      for _ <- 1..3 do
+      for _ <- 1..2 do
         assert_received {:registry_request, %{method: "POST", headers: headers}}
         refute Enum.any?(headers, &String.starts_with?(String.downcase(&1), "authorization"))
       end
@@ -443,7 +442,7 @@ defmodule Compendium.Providers.RegistryTest do
 
       capture_log(fn ->
         assert {:error, :unknown_identity = reason} =
-                 signed(ctx, device, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+                 signed(ctx, device, @appeal)
 
         assert Refusals.render(reason) == "This account is not registered."
       end)
@@ -451,12 +450,12 @@ defmodule Compendium.Providers.RegistryTest do
 
     test "an answer is taken once: a replay, another request, another identifier or another channel sends nothing",
          %{ctx: ctx, device: device, user: user} do
-      registry(device, fn _request -> {201, RegistryStub.answer(%{"accepted" => true})} end)
-      args = %{"action" => "legal_accept", "policy_version" => "2026-09"}
+      registry(device, fn _request -> {201, RegistryStub.answer(%{"id" => "apl_1"})} end)
+      args = @appeal
 
       # Replayed, it meets a spent request.
       answer = signs(device, RegistryProvider.handle(ctx, args))
-      assert {:ok, _accepted} = RegistryProvider.handle(ctx, Map.put(args, "answer", answer))
+      assert {:ok, _filed} = RegistryProvider.handle(ctx, Map.put(args, "answer", answer))
       assert_received {:registry_request, _}
 
       assert {:error, %Prima.Refusal{reason: :answer_refused}} =
@@ -465,7 +464,7 @@ defmodule Compendium.Providers.RegistryTest do
       # A signed request that is not the one held: another body, or another
       # identifier.
       for change <- [
-            &%{&1 | body: %{"policy_version" => "2026-10"}},
+            &%{&1 | body: %{&1.body | "argument" => "another"}},
             &%{&1 | identifier: "per_" <> String.duplicate("ab", 32)}
           ] do
         answer = signs(device, RegistryProvider.handle(ctx, args), change)
@@ -478,11 +477,10 @@ defmodule Compendium.Providers.RegistryTest do
       answer = signs(device, RegistryProvider.handle(ctx, args))
 
       assert {:error, %Prima.Refusal{reason: :answer_refused}} =
-               RegistryProvider.handle(ctx, %{
-                 "action" => "legal_accept",
-                 "policy_version" => "2026-10",
-                 "answer" => answer
-               })
+               RegistryProvider.handle(
+                 ctx,
+                 %{@appeal | "argument" => "another"} |> Map.put("answer", answer)
+               )
 
       # Another device of the same person: its channel holds no such request.
       other = Sanctum.Test.Devices.paired!(user.id)
@@ -499,14 +497,7 @@ defmodule Compendium.Providers.RegistryTest do
       refute_received {:registry_request, _}
     end
 
-    test "a caller that is no client of a person's, an API key among them, asks for nothing" do
-      key = %{Sanctum.TestContext.local() | auth_method: :api_key}
-
-      assert {:error, {:invalid_argument, message}} =
-               RegistryProvider.handle(key, %{"action" => "legal_accept", "policy_version" => "v"})
-
-      assert message =~ "API key"
-
+    test "a caller that is no client of a person's asks for nothing" do
       # A context with neither a session nor a device's channel.
       for args <- [%{"action" => "sync"}, %{"action" => "claim_publisher", "slug" => "acme.com"}] do
         assert {:error, %Prima.Refusal{reason: :unauthenticated}} =
@@ -550,7 +541,7 @@ defmodule Compendium.Providers.RegistryTest do
          %{ctx: ctx, account: account, dir: dir} do
       {:ok, state} = Prima.Identity.verify_chain(account.log)
 
-      RegistryStub.start!(fn %{path: "/v1/legal/accept", body: body} ->
+      RegistryStub.start!(fn %{path: "/v1/appeals", body: body} ->
         {:ok, _signed} =
           Prima.RegistryRequest.verify(
             body,
@@ -559,10 +550,10 @@ defmodule Compendium.Providers.RegistryTest do
             System.system_time(:millisecond)
           )
 
-        {201, RegistryStub.answer(%{"accepted" => true})}
+        {201, RegistryStub.answer(%{"id" => "apl_1"})}
       end)
 
-      args = %{"action" => "legal_accept", "policy_version" => "2026-09"}
+      args = @appeal
       assert {:ok, %{request: map, url: url}} = RegistryProvider.handle(ctx, args)
       assert url =~ dir.url <> "/account/sign#"
       {:ok, request} = Prima.SignIn.decode(map)
@@ -572,7 +563,7 @@ defmodule Compendium.Providers.RegistryTest do
         |> DirectoryServer.passkey_answer(account, hd(account.passkeys))
         |> Prima.SignIn.fragment()
 
-      assert {:ok, %{"accepted" => true}} =
+      assert {:ok, %{"id" => "apl_1"}} =
                RegistryProvider.handle(ctx, Map.put(args, "answer", fragment))
 
       # A passkey of another account signs nothing for this one.
@@ -630,7 +621,7 @@ defmodule Compendium.Providers.RegistryTest do
   # (`Compendium.Registry.Client`): a POST or PATCH changes something
   # there, a DELETE deletes it, a GET reads.
   @remote_changes ~w(sync claim_publisher verify_publisher tokens_issue
-                     members_add members_update report legal_accept appeal)
+                     members_add members_update report appeal)
   @remote_deletes ~w(tokens_revoke members_remove)
   @reads ~w(tokens_list members_list whoami get_namespace list_my_reports legal_page
             legal_version)

@@ -197,7 +197,6 @@ const (
 	RegistryAppeal          = "appeal"
 	RegistryClaimPublisher  = "claim_publisher"
 	RegistryGetNamespace    = "get_namespace"
-	RegistryLegalAccept     = "legal_accept"
 	RegistryLegalPage       = "legal_page"
 	RegistryLegalVersion    = "legal_version"
 	RegistryListMyReports   = "list_my_reports"
@@ -325,7 +324,7 @@ var Actions = map[string][]string{
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
@@ -3503,23 +3502,6 @@ func (args RegistryGetNamespaceArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: RegistryGetNamespace, fields: fields(args)})
-}
-
-// RegistryLegalAcceptArgs carries arguments for registry.legal_accept.
-type RegistryLegalAcceptArgs struct {
-	// Policy version string (for legal_accept; obtained via legal_version)
-	PolicyVersion string `json:"policy_version"`
-	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
-	Answer Field[any] `json:"answer,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryLegalAcceptArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryLegalAcceptArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: RegistryLegalAccept, fields: fields(args)})
 }
 
 // RegistryLegalPageArgs carries arguments for registry.legal_page.

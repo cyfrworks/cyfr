@@ -10,8 +10,9 @@ defmodule PrismWeb.ReportComponent do
   `ComponentDetailLive`) and had already drifted: one copy hardcoded the
   4096 cap the other named, and one ended its error path in `inspect/1`.
 
-  A parent's own "Report" button resolves the target ref (it owns what is
-  on screen) and calls `open/2`; everything after that is this component's.
+  A parent's own "Report" button resolves the target (it owns what is on
+  screen) and calls `open/2` for a component or `open_namespace/2` for a
+  whole namespace; everything after that is this component's.
   On success the parent receives `{:report_component, :submitted}` and
   flashes — a LiveComponent has no flash of its own.
 
@@ -60,16 +61,18 @@ defmodule PrismWeb.ReportComponent do
   ]
 
   @doc "Open the report modal for `target_ref` (a full component ref string)."
-  def open(id, target_ref) when is_binary(target_ref) do
-    Phoenix.LiveView.send_update(
-      __MODULE__,
-      [id: id, open: true, target_ref: target_ref] ++ blank()
-    )
-  end
+  def open(id, target_ref) when is_binary(target_ref),
+    do: open_on(id, {:component, target_ref})
+
+  @doc "Open the report modal for the namespace `slug`."
+  def open_namespace(id, slug) when is_binary(slug), do: open_on(id, {:namespace, slug})
+
+  defp open_on(id, target),
+    do: Phoenix.LiveView.send_update(__MODULE__, [id: id, open: true, target: target] ++ blank())
 
   @impl true
   def mount(socket) do
-    {:ok, assign(socket, [open: false, target_ref: nil, submitting: false] ++ blank())}
+    {:ok, assign(socket, [open: false, target: nil, submitting: false] ++ blank())}
   end
 
   defp blank, do: [category: "", details: "", acknowledged: MapSet.new(), error: nil]
@@ -119,9 +122,9 @@ defmodule PrismWeb.ReportComponent do
             %{
               "action" => "report",
               "category" => category,
-              "target_component_ref" => socket.assigns.target_ref,
               "details" => details
             }
+            |> target(socket.assigns.target)
             |> statement(category, acknowledged(params))
 
           {:noreply, socket |> assign(submitting: true, error: nil) |> send_report(args)}
@@ -133,6 +136,9 @@ defmodule PrismWeb.ReportComponent do
     ticked = Map.get(params, "acknowledgements", %{})
     for {key, _sentence} <- @acknowledgements, ticked[key] == "true", into: MapSet.new(), do: key
   end
+
+  defp target(args, {:component, ref}), do: Map.put(args, "target_component_ref", ref)
+  defp target(args, {:namespace, slug}), do: Map.put(args, "target_namespace", slug)
 
   defp statement(args, @copyright, acknowledged),
     do:
@@ -189,9 +195,13 @@ defmodule PrismWeb.ReportComponent do
       >
         <div :if={@open} class="space-y-4">
           <div>
-            <h3 class="text-base font-semibold text-white">Report this component</h3>
+            <h3 class="text-base font-semibold text-white">
+              {if elem(@target, 0) == :namespace,
+                do: "Report this namespace",
+                else: "Report this component"}
+            </h3>
             <p class="text-sm text-gray-400 mt-1">
-              <span class="font-mono text-gray-300">{@target_ref}</span>
+              <span class="font-mono text-gray-300">{elem(@target, 1)}</span>
             </p>
             <p class="text-xs text-gray-500 mt-2">
               Your report goes to the registry's moderators. Track status under <a
