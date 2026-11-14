@@ -104,7 +104,7 @@ defmodule Sanctum.Gate.VisibilityTest do
   # ============================================================================
 
   describe "execute-only context" do
-    test "sees execution actions minus the admin-gated force_release" do
+    test "sees execution actions, and none that releases every athanor's slots" do
       actions = visible_actions("execution", ctx_with([:execute]))
       assert "run" in actions
       assert "status" in actions

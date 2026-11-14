@@ -245,10 +245,6 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :opus, :execute, :start] => %{consumers: [:audit, :bridge]},
     [:cyfr, :opus, :execute, :stop] => %{consumers: [:audit, :bridge]},
     [:cyfr, :opus, :execute, :exception] => %{consumers: [:audit, :bridge]},
-    [:cyfr, :opus, :force_release] => %{
-      consumers: [:audit],
-      note: "a platform admin forcibly released an execution lease — a platform-scope verb"
-    },
     [:cyfr, :opus, :fetch] => %{
       consumers: [:operator],
       note:

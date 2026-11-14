@@ -1268,7 +1268,7 @@ A consent covers every release of the component line unless the operator pins a 
 > `session.*`, `key.*`, `vault.*`, `profile.*`,
 > `mcp_log.*`, `policy_log.*`, `retention.*`, `record.*` except `record.payload`, `component.push/delete`,
 > registry identity mutation, webhook/schedule mutation, `profile.publish`,
-> `execution.force_release`, `system.notify`, and MCP-server management.
+> `system.notify`, and MCP-server management.
 > Formulas cannot touch auth, credentials, or the consent plane.
 
 ---

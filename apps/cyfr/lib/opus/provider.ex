@@ -13,7 +13,6 @@ defmodule Opus.Provider do
   - `cancel` - Cancel a running execution
   - `retry` - Run a schedule's or a feed's failed run again, as it ran
   - `status` - Execution slot diagnostics
-  - `force_release` - Release every athanor's execution slots (operator only)
   - `read_resource` - Read an `opus://executions/…` resource
   - `usage` - The runs one profile admitted, each with its origin, root
     and time
@@ -446,15 +445,6 @@ defmodule Opus.Provider do
             planes: [:external],
             permission: :execute
           ),
-          # Releasing every athanor's slots is the operator's lever
-          # alone. Until the in-flight executions it released drain, the
-          # node runs OVER-admitted by that many slots — the recovery
-          # trades wedged slots for a temporary over-cap.
-          Operation.new("execution", "force_release", "Force release execution", [],
-            scope: :platform,
-            kind: :destructive,
-            planes: [:external]
-          ),
           # The admission of an MCP `resources/read` of an opus:// URI
           # (`resource_templates/0`).
           Operation.new(
@@ -707,27 +697,6 @@ defmodule Opus.Provider do
   # Status action - execution slot diagnostics
   def handle("execution", %Context{} = ctx, %{"action" => "status"}) do
     {:ok, scoped_slot_status(ctx, slot_status())}
-  end
-
-  # Force release action - emergency slot recovery. Releasing EVERY
-  # athanor's slots is a server-wide side effect; the `scope: :platform`
-  # annotation admits operators alone before this arm is reached.
-  def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
-    Logger.warning("[Opus.Provider] Force release triggered by user=#{ctx.user_id}")
-
-    :telemetry.execute(
-      [:cyfr, :opus, :force_release],
-      %{system_time: System.system_time()},
-      %{user_id: ctx.user_id, auth_method: ctx.auth_method}
-    )
-
-    case Prima.Slots.force_release_all(@slots) do
-      {:error, :unavailable} ->
-        {:error, "Execution slots are not running — nothing was released"}
-
-      {:ok, _released} ->
-        {:ok, Map.put(scoped_slot_status(ctx, slot_status()), :force_released, true)}
-    end
   end
 
   def handle("execution", %Context{} = ctx, %{"action" => "read_resource", "uri" => uri})

@@ -175,7 +175,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
   test "call_in_chain refuses an action not reachable in-chain" do
     pairs = in_chain_pairs()
-    auth = granting_authority(pairs ++ [{"execution", "force_release"}])
+    auth = granting_authority(pairs ++ [{"execution", "status"}])
 
     ctx =
       Context.enter_guest(%Context{
@@ -191,7 +191,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
              Sanctum.Gate.call_in_chain(
                "execution",
                ctx,
-               %{"action" => "force_release"},
+               %{"action" => "status"},
                auth,
                lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
              )

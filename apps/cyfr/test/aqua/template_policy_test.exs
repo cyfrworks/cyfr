@@ -39,7 +39,7 @@ defmodule Prism.AquaTemplatePolicyTest do
     assert {"list", :read} in catalog["execution"]
 
     # ...and nothing the chain would refuse at the call.
-    refute Enum.any?(catalog["execution"] || [], &(elem(&1, 0) == "force_release"))
+    refute Enum.any?(catalog["execution"] || [], &(elem(&1, 0) == "status"))
     refute Map.has_key?(catalog, "door")
     refute Map.has_key?(catalog, "member")
   end
