@@ -81,10 +81,10 @@ func TestUpSurfacesTheBootRefusal(t *testing.T) {
 	s.answer("up.exit", "1")
 	s.answer("logs.out", "ERROR! Config provider Config.Reader failed with:\n** (RuntimeError) "+fatal+"\n    (elixir 1.19.0) lib/config/provider.ex:137\n")
 	err := runUp(context.Background(), &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "cyfr refused to boot, and its log says why:\n  "+fatal) {
+	if err == nil || !strings.Contains(err.Error(), "A service refused to boot, and its log says why:\n  "+fatal) {
 		t.Fatalf("cyfr up answered %v, want the boot's FATAL line", err)
 	}
-	want := []string{"ENGINE lock up", "ENGINE resume", "ENGINE check-stack", "ENGINE start up", profiles + "up -d", profiles + "logs --no-color --no-log-prefix --tail 200 cyfr"}
+	want := []string{"ENGINE lock up", "ENGINE resume", "ENGINE check-stack", "ENGINE start up", profiles + "up -d", profiles + "logs --no-color --no-log-prefix --tail 200"}
 	if log := s.log(); !slices.Equal(log, want) {
 		t.Errorf("cyfr up ran\n%s\nwant\n%s", strings.Join(log, "\n"), strings.Join(want, "\n"))
 	}
@@ -94,8 +94,16 @@ func TestUpSurfacesTheBootRefusal(t *testing.T) {
 	const arcaFatal = "[Arca] FATAL: /app/data/cyfr.db was built from a different schema (dabfbe9e); this release's schema is 208aba2f. There is no upgrade path."
 	s.answer("logs.out", "12:00:00.000 [error] "+arcaFatal+"\n")
 	err = runUp(context.Background(), &bytes.Buffer{})
-	if err == nil || !strings.HasSuffix(err.Error(), "\ncyfr refused to boot, and its log says why:\n  "+arcaFatal) {
+	if err == nil || !strings.HasSuffix(err.Error(), "\nA service refused to boot, and its log says why:\n  "+arcaFatal) {
 		t.Fatalf("cyfr up answered %v, want Arca's FATAL line", err)
+	}
+
+	// A Locus service's refusal, in its own container's log, is read too.
+	const locusFatal = "[Locus] FATAL: a server holding LOCUS_RUNTIME_KEY serves the runtime alone."
+	s.answer("logs.out", "locus-runtime starting\n"+locusFatal+"\n")
+	err = runUp(context.Background(), &bytes.Buffer{})
+	if err == nil || !strings.HasSuffix(err.Error(), "\nA service refused to boot, and its log says why:\n  "+locusFatal) {
+		t.Fatalf("cyfr up answered %v, want Locus's FATAL line", err)
 	}
 
 	// A log that holds no refusal leaves the start's own failure.

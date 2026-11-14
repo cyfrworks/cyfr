@@ -306,8 +306,8 @@ func TestEnsureComposeFieldsKeepsTheLocusRoleBlock(t *testing.T) {
 // complete snapshots at the call to state. It answers each call from the
 // scenario's files: <key>.out on stdout and <key>.exit as its status;
 // <key>.edit is appended to docker-compose.yml, as an edit made while the
-// update runs; the schema read, through the running cyfr or offline,
-// answers from schema.*; <key>.signal sends SIGTERM to the updating process first and <key>.block
+// update runs; the schema read finds the running cyfr from cyfrps.* and
+// answers from schema.*, through it or offline; <key>.signal sends SIGTERM to the updating process first and <key>.block
 // waits for <key>.release. eval.live answers that many live reads first.
 const fakeDocker = `#!/bin/bash
 d="$FAKE_DOCKER_DIR"
@@ -345,14 +345,9 @@ if [ "$1" = compose ]; then
   sub="$1"
   shift
   case "$sub" in
-    exec)
-      case "$*" in
-        *CYFR_SCHEMA*) answer schema ;;
-        *) answer rpc ;;
-      esac ;;
+    exec) answer rpc ;;
     stop) answer "stop-${1:-all}" ;;
     run)
-      case "$*" in *CYFR_SCHEMA*) answer schema ;; esac
       n="$(cat "$d/eval.live" 2>/dev/null || echo 0)"
       if [ "$n" -gt 0 ]; then
         echo $((n - 1)) > "$d/eval.live"
@@ -365,11 +360,14 @@ if [ "$1" = compose ]; then
 fi
 case "$1" in
   inspect) answer inspect ;;
+  ps) answer cyfrps ;;
+  exec) answer schema ;;
   pull)
     if [ -f "$d/pull.fail" ] && [[ "$2" == *"$(cat "$d/pull.fail")"* ]]; then exit 1; fi
     answer pull ;;
   run)
     case "$*" in
+      *CYFR_SCHEMA*) answer schema ;;
       *psql*) cat > "$d/probe.stdin"; answer probe ;;
       *pg_dump*) cat > "$d/dump.stdin"; answer dump ;;
     esac ;;
@@ -554,6 +552,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 	s.answer("rpc.out", "warming up\nCYFR_ROSTER="+`{"self":"cyfr@abc","release":"0.8.0","slots":[{"node":"cyfr@abc","owner":"o1","release":"0.8.0","lease_until":"2026-10-16T12:00:10Z"}]}`+"\n")
 	s.answer("eval.out", "booting\nCYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[]}`+"\n")
 	s.answer("eval-live.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[{"node":"cyfr@abc","owner":"o1","release":"0.8.0","lease_until":"2026-10-16T12:00:10Z"}]}`+"\n")
+	s.answer("cyfrps.out", "c0ffee\n")
 	s.answer("schema.out", "booting\nCYFR_SCHEMA="+schemaRelease+"\n")
 	s.answer("probe.out", "180006\n")
 	s.answer("dump.out", "PGDMP custom-format dump")
@@ -746,6 +745,24 @@ func switched(compose []byte) []byte {
 	return []byte(strings.Join(lines, ""))
 }
 
+// schemaRead is the docker log of the schema read, which runs before the
+// lock: the running cyfr found by its compose labels and asked, or, with
+// none running, a one-off container of its image that mounts nothing,
+// skips the entrypoint, has no network and never pulls.
+func (s *updateScenario) schemaRead(running bool) []string {
+	reads := []string{"ps -q --filter label=com.docker.compose.project=" + access.ProjectName(s.project) + " --filter label=com.docker.compose.service=cyfr --filter status=running"}
+	if running {
+		return append(reads, "exec c0ffee bin/cyfr rpc "+testSchema)
+	}
+	// The image the compose file named when the update read it.
+	original := filepath.Join(s.t.TempDir(), "docker-compose.yml")
+	if err := os.WriteFile(original, s.compose, 0600); err != nil {
+		s.t.Fatal(err)
+	}
+	image := imagesFromCompose(original, nil)[0]
+	return append(reads, "run --rm --pull never --network none --read-only --user app --entrypoint /app/bin/cyfr -e CYFR_ACCESS=local -e CYFR_SECRET_KEY_BASE "+image+" eval "+testSchema+" {env CYFR_SECRET_KEY_BASE set}")
+}
+
 // scenarioHead is the access head scenarioEnv holds.
 var scenarioHead = access.Head{Mode: access.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, BuildsURL: "http://locus-builds:4100", Profiles: []string{"locus-builds", "public"}}
 
@@ -772,37 +789,35 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
-	want := []string{
+	want := append(s.schemaRead(true),
 		"ENGINE lock update",
 		"ENGINE resume",
-		profiles + "config --format json",
-		profiles + "ps --services --status running",
-		profiles + "exec -T cyfr bin/cyfr rpc " + testSchema,
-		"pull ghcr.io/cyfrworks/cyfr@" + digestCyfr,
-		"pull ghcr.io/cyfrworks/cyfr-locus@" + digestLocus,
-		"pull caddy@" + digestCaddy,
-		"pull tailscale/tailscale@" + digestTailscale,
-		profiles + "ps --services --status running",
-		profiles + "exec -T cyfr bin/cyfr rpc " + testRoster,
-		"SCAFFOLD FETCH " + testVersion,
+		profiles+"config --format json",
+		"pull ghcr.io/cyfrworks/cyfr@"+digestCyfr,
+		"pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus,
+		"pull caddy@"+digestCaddy,
+		"pull tailscale/tailscale@"+digestTailscale,
+		profiles+"ps --services --status running",
+		profiles+"exec -T cyfr bin/cyfr rpc "+testRoster,
+		"SCAFFOLD FETCH "+testVersion,
 		"ENGINE cancel-waiting-join",
 		"ENGINE close-serve",
-		profiles + "stop caddy",
-		profiles + "stop tailscale",
-		profiles + "stop cyfr",
-		profiles + "stop locus-runtime",
-		profiles + "stop locus-builds",
-		profiles + "stop locus-backends",
-		profiles + "stop locus-builds-guard",
-		profiles + "stop locus-backends-guard",
-		profiles + "stop",
-		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive,
-		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive,
+		profiles+"stop caddy",
+		profiles+"stop tailscale",
+		profiles+"stop cyfr",
+		profiles+"stop locus-runtime",
+		profiles+"stop locus-builds",
+		profiles+"stop locus-backends",
+		profiles+"stop locus-builds-guard",
+		profiles+"stop locus-backends-guard",
+		profiles+"stop",
+		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
+		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
 		"SCAFFOLD FETCH 0.8.0",
 		"SCAFFOLD WRITE",
 		"ENGINE start update",
-		profiles + "up -d",
-	}
+		profiles+"up -d",
+	)
 	if got := s.log(); !slices.Equal(got, want) {
 		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
@@ -965,7 +980,7 @@ func TestUpdateDumpsPostgresWithoutTheURLOnArgv(t *testing.T) {
 	log := s.log()
 	at := func(line string) int { return slices.Index(log, line) }
 	config := at(profiles + "config --format json")
-	if config < 0 || at(probe) != config+3 || at("pull "+pg18) < config+2 || at("pull "+pg18) > at("SCAFFOLD FETCH 0.9.0") {
+	if config < 0 || at(probe) != config+1 || at("pull "+pg18) < config+2 || at("pull "+pg18) > at("SCAFFOLD FETCH 0.9.0") {
 		t.Errorf("the probe does not run before the pulls, the dump image among them:\n%s", strings.Join(log, "\n"))
 	}
 	eval := at(profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive)
@@ -1256,13 +1271,13 @@ func TestUpdateLeavesTheStackStoppedWhenTheNewReleaseFails(t *testing.T) {
 		t.Fatalf("update succeeded\n%s", out)
 	}
 	want := "Release 0.9.0 did not start (cyfr did not become healthy (docker compose up: exit status 1)); the stack is left stopped.\n" +
-		"cyfr refused to boot, and its log says why:\n  " + fatal + "\n" +
+		"A service refused to boot, and its log says why:\n  " + fatal + "\n" +
 		"The snapshot of release 0.8.0 is " + s.snapshotDir() + "; restore it with:\n  cyfr restore " + s.snapshotDir()
 	if err.Error() != want {
 		t.Errorf("the refusal is\n%v\nwant\n%s", err, want)
 	}
 	log := s.log()
-	if n := len(log); n < 4 || !slices.Equal(log[n-4:], []string{profiles + "up -d", "ENGINE close-serve", profiles + "stop", profiles + "logs --no-color --no-log-prefix --tail 200 cyfr"}) {
+	if n := len(log); n < 4 || !slices.Equal(log[n-4:], []string{profiles + "up -d", "ENGINE close-serve", profiles + "stop", profiles + "logs --no-color --no-log-prefix --tail 200"}) {
 		t.Errorf("the update did not stop the stack after the failed start:\n%s", strings.Join(log, "\n"))
 	}
 	if n := strings.Count(strings.Join(log, "\n"), "ENGINE start update"); n != 1 {
@@ -1361,7 +1376,7 @@ func TestUpdateRefusesAFailedPull(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "docker pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus+" failed") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
-	want := []string{"ENGINE lock update", "ENGINE resume", profiles + "config --format json", profiles + "ps --services --status running", profiles + "exec -T cyfr bin/cyfr rpc " + testSchema, "pull ghcr.io/cyfrworks/cyfr@" + digestCyfr, "pull ghcr.io/cyfrworks/cyfr-locus@" + digestLocus}
+	want := append(s.schemaRead(true), "ENGINE lock update", "ENGINE resume", profiles+"config --format json", "pull ghcr.io/cyfrworks/cyfr@"+digestCyfr, "pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus)
 	if got := s.log(); !slices.Equal(got, want) {
 		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
 	}
@@ -1512,8 +1527,9 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds CYFR's lock (`update`)") || !strings.Contains(err.Error(), "Nothing was changed") {
 		t.Errorf("the second update answered %v", err)
 	}
-	if got := s.log(); len(got) != calls {
-		t.Errorf("the refused update ran %s", strings.Join(got[calls:], "\n"))
+	// The refused update ran the schema read alone, which writes nothing.
+	if got := s.log()[calls:]; !slices.Equal(got, s.schemaRead(true)) {
+		t.Errorf("the refused update ran %s", strings.Join(got, "\n"))
 	}
 	if holder := s.engine.held(); holder != "update" {
 		t.Errorf("the refused update took the first one's lock from it (held by %q)", holder)
@@ -1538,8 +1554,9 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "(`access tailnet`)") {
 		t.Errorf("an update beside a held lock answered %v", err)
 	}
-	if got := s.log(); len(got) != calls {
-		t.Errorf("the refused update ran %s", strings.Join(got[calls:], "\n"))
+	// The refused update ran the schema read alone, which writes nothing.
+	if got := s.log()[calls:]; !slices.Equal(got, s.schemaRead(true)) {
+		t.Errorf("the refused update ran %s", strings.Join(got, "\n"))
 	}
 	s.engine.holder = ""
 }
@@ -2669,6 +2686,18 @@ func askWith(t *testing.T, terminal bool, answer io.Reader) {
 	askInput = answer
 }
 
+// onlyReadTheSchema fails unless the update's one docker call was the
+// schema read through the running cyfr, with no engine call, the lock
+// among them, and changed no file.
+func (s *updateScenario) onlyReadTheSchema() {
+	s.t.Helper()
+	if log := s.log(); !slices.Equal(log, s.schemaRead(true)) {
+		s.t.Errorf("the update ran:\n%s", strings.Join(log, "\n"))
+	}
+	s.composeUnchanged()
+	s.noBackups()
+}
+
 // nothingRan fails unless the update made no docker call and no engine
 // call, the lock among them, and changed no file.
 func (s *updateScenario) nothingRan() {
@@ -2721,7 +2750,7 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 			if asked := strings.Contains(out.String(), "Update this CYFR? (yes/no) [no]: "); asked != c.terminal {
 				t.Errorf("asked = %v on a terminal = %v:\n%s", asked, c.terminal, out.String())
 			}
-			s.nothingRan()
+			s.onlyReadTheSchema()
 		})
 	}
 
@@ -2897,7 +2926,7 @@ func TestUpdateQuestionEndsOnAnInterrupt(t *testing.T) {
 	if !strings.Contains(out.String(), "Update this CYFR? (yes/no) [no]: ") {
 		t.Errorf("the update did not ask:\n%s", out.String())
 	}
-	s.nothingRan()
+	s.onlyReadTheSchema()
 }
 
 // The schema the running CYFR's database was built from is read before
@@ -2924,14 +2953,9 @@ func TestUpdateRefusesAnotherSchemaBeforeAnythingStops(t *testing.T) {
 			if err == nil || err.Error() != c.want {
 				t.Fatalf("the update answered %v, want\n%s\n%s", err, c.want, out)
 			}
-			want := []string{
-				"ENGINE lock update",
-				"ENGINE resume",
-				profiles + "config --format json",
-				profiles + "ps --services --status running",
-				profiles + "exec -T cyfr bin/cyfr rpc " + testSchema,
-			}
-			if got := s.log(); !slices.Equal(got, want) {
+			// Nothing before the refusal but the read: no lock, no
+			// recovery, no configuration.
+			if got, want := s.log(), s.schemaRead(true); !slices.Equal(got, want) {
 				t.Errorf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 			}
 			s.nothingStopped()
@@ -2961,11 +2985,10 @@ func TestUpdateRefusesAnotherSchemaBeforeAnythingStops(t *testing.T) {
 func TestUpdateReadsTheSchemaOfAStoppedCyfrOffline(t *testing.T) {
 	stopped := func(t *testing.T) *updateScenario {
 		s := newUpdateScenario(t, shippedCompose(t), nil)
+		s.answer("cyfrps.out", "")
 		s.answer("ps.out", "locus-runtime\nlocus-backends\n")
 		return s
 	}
-	// profiles is the scenario's, so it is read once a scenario is made.
-	offline := func() string { return profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testSchema }
 
 	s := stopped(t)
 	s.answer("schema.out", "CYFR_SCHEMA="+schemaOther+"\n")
@@ -2973,26 +2996,130 @@ func TestUpdateReadsTheSchemaOfAStoppedCyfrOffline(t *testing.T) {
 	if err == nil || !strings.HasPrefix(err.Error(), "This CYFR's database was built from schema a0a0a0a0a0a0…, and release 0.9.0 runs only on a database built from schema 5e5e5e5e5e5e…") {
 		t.Fatalf("a stopped cyfr of another schema answered %v\n%s", err, out)
 	}
-	want := []string{
-		"ENGINE lock update",
-		"ENGINE resume",
-		profiles + "config --format json",
-		profiles + "ps --services --status running",
-		offline(),
-	}
-	if got := s.log(); !slices.Equal(got, want) {
+	if got, want := s.log(), s.schemaRead(false); !slices.Equal(got, want) {
 		t.Errorf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	s.nothingStopped()
 	s.composeUnchanged()
 	s.noBackups()
 
+	// An image that is not on the machine is not pulled: the read fails,
+	// and the update refuses.
+	s = stopped(t)
+	s.answer("schema.err", "Unable to find image 'ghcr.io/cyfrworks/cyfr:0.8.0' locally\n")
+	s.answer("schema.exit", "125")
+	if _, err := s.run(context.Background()); err == nil || !strings.HasPrefix(err.Error(), "cyfr update could not read which schema this CYFR's database was built from (docker run failed: exit status 125: Unable to find image") {
+		t.Fatalf("a stopped cyfr whose image is missing answered %v", err)
+	}
+	if got, want := s.log(), s.schemaRead(false); !slices.Equal(got, want) {
+		t.Errorf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
 	s = stopped(t)
 	out, err = s.run(context.Background())
 	if err != nil || !strings.Contains(out, "Updated to release 0.9.0.") {
 		t.Fatalf("a stopped cyfr of the release's schema answered %v\n%s", err, out)
 	}
-	if !s.hasCall(offline()) || s.hasCall(profiles+"exec -T cyfr bin/cyfr rpc "+testSchema) {
-		t.Errorf("the schema was not read offline alone:\n%s", strings.Join(s.log(), "\n"))
+	if got := s.log(); len(got) < 2 || !slices.Equal(got[:2], s.schemaRead(false)) {
+		t.Errorf("the schema was not read offline first:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// treeOf is every path under dir with its bytes, mode and owner, so a test
+// sees any write, chmod or chown beneath it.
+func treeOf(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	tree := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		entry := fmt.Sprintf("%v %v", info.Mode(), fileOwner(info))
+		if info.Mode().IsRegular() {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			entry += " " + md5Hex(data)
+		}
+		tree[path] = entry
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+// A refused update changes nothing before its refusal: an access switch an
+// interrupted command left is not recovered (no docker call, the stack not
+// stopped or started, the journal as it was), and the lock writes no
+// state, since the schema read and its refusal come before the lock.
+func TestUpdateRefusesBeforeTheLockAndAnyRecovery(t *testing.T) {
+	requireCompose(t)
+	d, dir, _ := interruptedSwitch(t)
+	useRealEngine(t, d)
+	savedVersion, savedFetch, savedRead := version.Version, fetchManifest, schemaDocker
+	t.Cleanup(func() { version.Version, fetchManifest, schemaDocker = savedVersion, savedFetch, savedRead })
+	version.Version = testVersion
+	fetchManifest = func(context.Context, string) (*release.Manifest, error) {
+		return &release.Manifest{Version: testVersion, Images: testImages, SchemaFingerprint: schemaRelease}, nil
+	}
+	var reads [][]string
+	schemaDocker = func(ctx context.Context, env []string, args ...string) (string, error) {
+		reads = append(reads, args)
+		if args[0] == "ps" {
+			return "c0ffee\n", nil
+		}
+		return "CYFR_SCHEMA=" + schemaOther + "\n", nil
+	}
+	before := treeOf(t, dir)
+
+	var out bytes.Buffer
+	err := runHomeUpdate(context.Background(), &out, &out, true)
+	if err == nil || !strings.HasPrefix(err.Error(), "This CYFR's database was built from schema a0a0a0a0a0a0…") {
+		t.Fatalf("the update answered %v\n%s", err, out.String())
+	}
+	if len(reads) != 2 || reads[0][0] != "ps" || !slices.Equal(reads[1], []string{"exec", "c0ffee", "bin/cyfr", "rpc", testSchema}) {
+		t.Errorf("the schema read ran %q", reads)
+	}
+	if calls := d.calls(); !slices.Equal(calls, []string{""}) {
+		t.Errorf("the update ran docker through the engine before its refusal:\n%s", strings.Join(calls, "\n"))
+	}
+	if running := d.running(); !slices.Equal(running, []string{"cyfr"}) {
+		t.Errorf("the stack runs %q, want cyfr as it ran", running)
+	}
+	if after := treeOf(t, dir); !maps.Equal(after, before) {
+		t.Errorf("the project changed before the refusal:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+// The offline read of a stopped CYFR changes none of its files: the data's
+// owner and mode and the AQUA files stay as they were, since the one-off
+// container mounts nothing and skips the entrypoint that seeds and chowns.
+func TestUpdateOfflineReadLeavesTheDataAndAquaAlone(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.answer("cyfrps.out", "")
+	s.answer("schema.out", "CYFR_SCHEMA="+schemaOther+"\n")
+	s.edit("aqua/aqua.md", "# the person's own AQUA\n")
+	before := treeOf(t, s.project)
+	if _, err := s.run(context.Background()); err == nil {
+		t.Fatal("the update of another schema went ahead")
+	}
+	if after := treeOf(t, s.project); !maps.Equal(after, before) {
+		t.Errorf("the project changed:\nbefore %v\nafter  %v", before, after)
+	}
+	read := s.schemaRead(false)[1]
+	for _, flag := range []string{" -v ", " --volume", " --mount", " --volumes-from"} {
+		if strings.Contains(read, flag) {
+			t.Errorf("the offline read mounts something (%s): %s", flag, read)
+		}
+	}
+	if got := s.log(); !slices.Equal(got, s.schemaRead(false)) {
+		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
 	}
 }

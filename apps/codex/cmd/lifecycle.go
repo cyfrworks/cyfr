@@ -1029,12 +1029,13 @@ func setupNext(out io.Writer, head access.Head) {
 }
 
 // bootFatalMarker matches the start of the line a refused boot prints,
-// whichever part of cyfr refused (`[Cyfr] FATAL:`, `[Arca] FATAL:` for a
-// database another schema built), its sentence after it.
+// whichever service and part refused (`[Cyfr] FATAL:`, `[Arca] FATAL:` for
+// a database another schema built, `[Locus] FATAL:`), its sentence after
+// it.
 var bootFatalMarker = regexp.MustCompile(`\[[A-Z][A-Za-z.]*\] FATAL:`)
 
-// withBootFatal is a failed start with the refusal cyfr's boot last logged
-// (bootFatal).
+// withBootFatal is a failed start with the refusal a boot of the stack
+// last logged (bootFatal).
 func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startErr error) error {
 	if fatal := bootFatal(ctx, e, head); fatal != "" {
 		return fmt.Errorf("%w\n%s", startErr, fatal)
@@ -1042,13 +1043,13 @@ func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startEr
 	return startErr
 }
 
-// bootFatal is the refusal cyfr's boot last logged, said for a failed
-// start, read from the cyfr service's log: a setting only the release
+// bootFatal is the refusal a boot of the stack last logged, said for a
+// failed start, read from its services' logs: a setting only the release
 // reads, such as a retired name, or a database another schema built is
 // refused there, and the start alone sees no more than an unhealthy
 // container. It is "" when the log holds none or cannot be read.
 func bootFatal(ctx context.Context, e stackEngine, head access.Head) string {
-	res, err := cyfrLog(ctx, e, head)
+	res, err := stackLog(ctx, e, head)
 	if err != nil {
 		return ""
 	}
@@ -1061,7 +1062,7 @@ func bootFatal(ctx context.Context, e stackEngine, head access.Head) string {
 	if fatal == "" {
 		return ""
 	}
-	return "cyfr refused to boot, and its log says why:\n  " + e.Redactor().Text(fatal)
+	return "A service refused to boot, and its log says why:\n  " + e.Redactor().Text(fatal)
 }
 
 // notSetUpMarker begins the line the boot of a CYFR with no person yet
@@ -1174,12 +1175,14 @@ func cyfrLogSinceStart(ctx context.Context, e stackEngine, head access.Head) (ac
 	return e.Docker().Run(ctx, access.Call{Args: args, Deadline: composeRunTimeout})
 }
 
-// cyfrLog is the cyfr service's last 200 log lines, read through the
-// engine's compose selection and Docker runner.
-func cyfrLog(ctx context.Context, e stackEngine, head access.Head) (access.Result, error) {
+// stackLog is every service's last 200 log lines, read through the
+// engine's compose selection and Docker runner: cyfr refuses a boot with
+// `[Cyfr]` or `[Arca] FATAL:`, a Locus service with `[Locus] FATAL:`, each
+// in its own container's log.
+func stackLog(ctx context.Context, e stackEngine, head access.Head) (access.Result, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), composeRunTimeout)
 	defer cancel()
-	args, err := e.ComposeArgs(ctx, head, "logs", "--no-color", "--no-log-prefix", "--tail", "200", "cyfr")
+	args, err := e.ComposeArgs(ctx, head, "logs", "--no-color", "--no-log-prefix", "--tail", "200")
 	if err != nil {
 		return access.Result{}, err
 	}
