@@ -41,12 +41,19 @@ defmodule PrismWeb.LoginLive do
   (`registry/legal_version`: `policy_version`, `updated_at`) is held to
   the version this person was last shown, their own preference
   `registry_terms_seen` (`Sanctum.Tenancy.Users.put_prefs/2`). A version
-  they were not shown is said once in this tab, beside what the act did,
-  with the date it changed and the way to read it, and is then recorded;
-  with no version recorded yet, the current one is recorded and nothing
-  is said, since the person accepted it when they made their account. A
-  registry that does not answer its version says nothing and records
-  nothing.
+  they were not shown is said in this tab, beside what the act did, with
+  the date it changed and the way to read it, and is recorded only when
+  the person goes on from it (Continue): a tab closed before that records
+  nothing, and the next act says it again. With no version recorded yet,
+  the current one is recorded and nothing is said, since the person
+  accepted it when they made their account.
+
+  The answer is the account service's word, read as untrusted data after
+  the act is done: `policy_version` is 1 to 64 characters of letters,
+  digits, `.`, `_` and `-`, starting with a letter or digit, and
+  `updated_at` an RFC 3339 time in UTC. Any other answer, or none, is
+  unreadable: nothing is said or recorded, and nothing in the read can
+  change what the act did.
 
   A CYFR with no person yet offers nothing but the way to set up.
   """
@@ -68,6 +75,8 @@ defmodule PrismWeb.LoginLive do
           "it, so nobody was signed in. Begin again below."
   @unavailable "The server could not sign you in just now. Try again."
   @rate_limited "Too many sign-ins from here. Try again in a minute."
+  # A terms version the account service names: the module doc's rule.
+  @terms_version ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/
 
   @impl true
   def mount(params, session, socket) do
@@ -109,6 +118,13 @@ defmodule PrismWeb.LoginLive do
   end
 
   @impl true
+  def handle_event("terms_seen", _params, %{assigns: %{terms_changed: %{} = notice}} = socket) do
+    record_seen(notice.user_id, notice.version)
+    {:noreply, redirect(socket, to: notice.back)}
+  end
+
+  def handle_event("terms_seen", _params, socket), do: {:noreply, socket}
+
   def handle_event("sign_in", _params, socket) do
     case minted(socket) do
       {:ok, url} -> {:noreply, push_event(socket, "account:hop", %{url: url})}
@@ -224,48 +240,77 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  # The registry's current terms held to the version this person was last
-  # shown (the module doc): `%{version, changed_on, read}` when it is one
-  # they were not shown, recorded as shown; nil otherwise. The read of the
-  # registry, of the person and the write of their preference are each
-  # best-effort: the act is done by now, and a failure shows nothing more.
+  # The account service's current terms held to the version this person
+  # was last shown (the module doc): `%{user_id, version, changed_on,
+  # read}` when it is one they were not shown, or nil. The act is done by
+  # now, so this answers only "show this" or "show nothing": an answer it
+  # cannot read, a store that does not answer, or anything raised in the
+  # read shows nothing.
   defp terms_notice(ctx) do
-    with {:ok, %{"policy_version" => version, "updated_at" => at}} when is_binary(version) <-
-           Ops.call_tool(ctx, "registry/legal_version", %{}),
-         {:ok, changed, 0} <- DateTime.from_iso8601(to_string(at)),
+    with {:ok, answer} <- Ops.call_tool(ctx, "registry/legal_version", %{}),
+         {:ok, version, changed} <- terms(answer),
          {:ok, user} <- Sanctum.Tenancy.Users.get(ctx.user_id) do
       case Sanctum.Tenancy.Users.prefs(user)["registry_terms_seen"] do
         ^version ->
           nil
 
-        seen ->
-          shown(user, version)
-          if is_binary(seen), do: notice(ctx, version, changed)
+        nil ->
+          record_seen(user.id, version)
+          nil
+
+        _older ->
+          notice(ctx, version, changed)
       end
     else
       _unread -> nil
     end
+  rescue
+    exception ->
+      Logger.warning(
+        "[LoginLive] the account service's terms could not be read: " <>
+          Prima.LoggerContext.shape(exception)
+      )
+
+      nil
+  catch
+    :exit, _reason -> nil
   end
 
-  defp shown(user, version) do
-    case Sanctum.Tenancy.Users.put_prefs(user, %{"registry_terms_seen" => version}) do
-      {:ok, _user} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "[LoginLive] the registry's terms version shown was not recorded: " <>
-            Prima.LoggerContext.shape(reason)
-        )
+  defp terms(%{"policy_version" => version, "updated_at" => at})
+       when is_binary(version) and is_binary(at) do
+    with true <- Regex.match?(@terms_version, version),
+         {:ok, changed, 0} <- DateTime.from_iso8601(at) do
+      {:ok, version, changed}
+    else
+      _unreadable -> :unreadable
     end
   end
 
+  defp terms(_answer), do: :unreadable
+
   defp notice(ctx, version, changed) do
     %{
+      user_id: ctx.user_id,
       version: version,
       changed_on: Calendar.strftime(changed, "%-d %B %Y"),
       read: if(route = PrismWeb.Focus.route_of(ctx), do: PrismWeb.Focus.path(route, "/legal"))
     }
+  end
+
+  # The person's own record of the version they were shown; one not
+  # written is said again at their next act.
+  defp record_seen(user_id, version) do
+    with {:ok, user} <- Sanctum.Tenancy.Users.get(user_id),
+         {:ok, _user} <-
+           Sanctum.Tenancy.Users.put_prefs(user, %{"registry_terms_seen" => version}) do
+      :ok
+    else
+      {:error, reason} ->
+        Logger.warning(
+          "[LoginLive] the account service's terms version shown was not recorded: " <>
+            Prima.LoggerContext.shape(reason)
+        )
+    end
   end
 
   # The caller a registry signature completes under: the session its
@@ -442,13 +487,14 @@ defmodule PrismWeb.LoginLive do
                 Read the terms
               </a>
             </p>
-            <a
-              href={@terms_changed.back}
+            <button
+              type="button"
+              phx-click="terms_seen"
               data-test="terms-continue"
-              class="block w-full text-center px-4 py-3 bg-indigo-900/60 hover:bg-indigo-900 text-white rounded-lg border border-indigo-700 transition-colors"
+              class="block w-full text-center px-4 py-3 bg-indigo-900/60 hover:bg-indigo-900 text-white rounded-lg border border-indigo-700 transition-colors cursor-pointer"
             >
               Continue
-            </a>
+            </button>
           </div>
 
           <div :if={@set_up and !@checking and !@terms_changed} class="space-y-4">
