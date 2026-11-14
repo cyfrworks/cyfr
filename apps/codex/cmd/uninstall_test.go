@@ -303,14 +303,16 @@ func (s *uninstallScenario) ownCalls() []string {
 // uninstall in the other, list the same afterwards, entry for entry, and
 // the uninstall's docker calls are cyfr down's followed by its own. Away
 // from the user folder, at it, at it through a link, with ~/.cyfr a link
-// into the folder's data, and with the program inside the folder; what
-// resolves into the folder stays and is named.
+// into the folder's data, with the program inside the folder, and with the
+// program a link in the folder to one outside it. The program or its link
+// stays when the folder holds it or its target, and is named; the settings
+// files always stay, and are named.
 func TestUninstallStopsAsDownDoesAndRemovesNothingElseFromTheFolder(t *testing.T) {
-	for _, place := range []string{"away from the user folder", "at the user folder", "at the user folder through a link", "with ~/.cyfr a link into the folder's data", "with the program inside the folder"} {
+	for _, place := range []string{"away from the user folder", "at the user folder", "at the user folder through a link", "with ~/.cyfr a link into the folder's data", "with the program inside the folder", "with the program a link in the folder to one outside it"} {
 		t.Run(place, func(t *testing.T) {
 			s := newUninstallScenario(t)
-			awayHome := listing(t, s.home)
-			gone := []string{filepath.Join(s.home, ".cyfr", "config.json"), filepath.Join(s.home, ".cyfr", "version-check.json"), s.self, s.link}
+			home := s.home
+			gone := []string{s.self, s.link}
 			var stays []string
 			root := []string{shellQuote([]string{"rm", "-f", "--", s.link})}
 			switch place {
@@ -318,26 +320,20 @@ func TestUninstallStopsAsDownDoesAndRemovesNothingElseFromTheFolder(t *testing.T
 				s.both(".cyfr/config.json", "{}")
 				s.both(".cyfr/version-check.json", "{}")
 				s.both(".cyfr/device/key.json", "device key")
-				home := s.dir
+				home = s.dir
 				if place == "at the user folder through a link" {
 					home = filepath.Join(t.TempDir(), "home-link")
 					if err := os.Symlink(s.dir, home); err != nil {
 						t.Fatal(err)
 					}
 				}
-				t.Setenv("HOME", home)
-				stays = []string{filepath.Join(home, ".cyfr", "config.json"), filepath.Join(home, ".cyfr", "version-check.json")}
-				gone = []string{s.self, s.link}
 			case "with ~/.cyfr a link into the folder's data":
 				s.both("data/config.json", "{}")
 				s.both("data/version-check.json", "{}")
-				home := t.TempDir()
+				home = t.TempDir()
 				if err := os.Symlink(filepath.Join(s.dir, "data"), filepath.Join(home, ".cyfr")); err != nil {
 					t.Fatal(err)
 				}
-				t.Setenv("HOME", home)
-				stays = []string{filepath.Join(home, ".cyfr", "config.json"), filepath.Join(home, ".cyfr", "version-check.json")}
-				gone = []string{s.self, s.link}
 			case "with the program inside the folder":
 				s.both("bin/cyfr", "program")
 				s.self = filepath.Join(s.dir, "bin", "cyfr")
@@ -347,10 +343,21 @@ func TestUninstallStopsAsDownDoesAndRemovesNothingElseFromTheFolder(t *testing.T
 				if err := os.Symlink(s.self, s.link); err != nil {
 					t.Fatal(err)
 				}
-				stays = []string{s.self, s.link}
-				gone = gone[:2]
-				root = nil
+				stays, gone, root = []string{s.self, s.link}, nil, nil
+			case "with the program a link in the folder to one outside it":
+				for _, dir := range []string{s.dir, s.down} {
+					if err := os.MkdirAll(filepath.Join(dir, "bin"), 0755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(s.self, filepath.Join(dir, "bin", "cyfr")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				stays, gone = []string{filepath.Join(s.dir, "bin", "cyfr"), s.self}, []string{s.link}
+				selfExecutable = func() (string, error) { return stays[0], nil }
 			}
+			t.Setenv("HOME", home)
+			homeBefore := listing(t, s.home)
 			s.runDown()
 			out, err := s.run(true)
 			if err != nil {
@@ -358,6 +365,9 @@ func TestUninstallStopsAsDownDoesAndRemovesNothingElseFromTheFolder(t *testing.T
 			}
 			if got, want := listing(t, s.dir), listing(t, s.down); !maps.Equal(got, want) {
 				t.Errorf("the folder after cyfr uninstall differs from the one after cyfr down:\nuninstall %v\ndown      %v", got, want)
+			}
+			if got := listing(t, s.home); !maps.Equal(got, homeBefore) {
+				t.Errorf("the scenario's home changed:\nbefore %v\nafter  %v", homeBefore, got)
 			}
 			if want := append(slices.Clone(s.downDocker.calls), s.ownCalls()...); !slices.Equal(s.docker.calls, want) {
 				t.Errorf("docker ran\n%s\nwant cyfr down's calls, then the uninstall's own\n%s", strings.Join(s.docker.calls, "\n"), strings.Join(want, "\n"))
@@ -372,25 +382,25 @@ func TestUninstallStopsAsDownDoesAndRemovesNothingElseFromTheFolder(t *testing.T
 			}
 			for _, path := range stays {
 				if !exists(path) {
-					t.Errorf("%s is gone, though it resolves into the folder", path)
-				}
-			}
-			if place == "away from the user folder" {
-				delete(awayHome, filepath.Join(".cyfr", "config.json"))
-				delete(awayHome, filepath.Join(".cyfr", "version-check.json"))
-				// .cyfr's own size counts its entries, two of which went.
-				delete(awayHome, ".cyfr")
-				got := listing(t, s.home)
-				delete(got, ".cyfr")
-				if !maps.Equal(got, awayHome) {
-					t.Errorf("the home changed beyond its two settings files:\nwant %v\ngot  %v", awayHome, got)
+					t.Errorf("%s is gone, though the folder holds it or its target", path)
 				}
 			}
 			want := "CYFR is uninstalled. Left as they were:\n  every file in " + s.dir + ", CYFR's data among them\n"
-			if len(stays) > 0 {
-				want += "  " + strings.Join(stays, ", ") + ", which resolve into that folder\n"
+			if place == "with the program inside the folder" {
+				want += "  " + s.self + ", " + s.link + ", which resolve into that folder\n"
+			} else if place == "with the program a link in the folder to one outside it" {
+				want += "  " + stays[0] + ", which resolve into that folder\n"
 			}
-			if key := filepath.Join(os.Getenv("HOME"), ".cyfr", "device", "key.json"); exists(key) {
+			var settings []string
+			for _, name := range []string{"config.json", "version-check.json"} {
+				path := filepath.Join(home, ".cyfr", name)
+				if !exists(path) {
+					t.Errorf("the settings file %s is gone", path)
+				}
+				settings = append(settings, path)
+			}
+			want += "  this program's settings, " + strings.Join(settings, ", ") + "\n"
+			if key := filepath.Join(home, ".cyfr", "device", "key.json"); exists(key) {
 				want += "  this machine's device key, " + key + "\n"
 			}
 			want += "  the stack's volumes, which this command removes:\n    docker volume rm 'cyfr_homes' 'cyfr_tailscale'\n"

@@ -33,11 +33,10 @@ var uninstallCmd = &cobra.Command{
 cyfr uninstall shows what it removes and what it leaves, then asks once (--yes answers; with no terminal and no --yes it removes nothing; answered no, it removes nothing and exits 0). It stops the stack as cyfr down does, then removes:
 - the stack's networks and the images its compose file names (one another container still uses stays, and is said);
 - this machine's screen service, when 'cyfr screen on' installed it, giving the screen back to its login prompt, and the link to this program in /usr/local/bin, both as root through sudo;
-- this program's own settings files, ~/.cyfr/config.json and ~/.cyfr/version-check.json, by those names;
-- this program. A Homebrew install is left to 'brew uninstall --cask cyfr'.
-Of these, whatever lies in this directory or resolves into it through a link stays.
+- this program, by the path it runs from. A Homebrew install is left to 'brew uninstall --cask cyfr'.
+The program or its link stays when this directory holds it, or holds what it resolves to.
 
-It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes and this machine's device key. It ends by naming each by its path, and the command that removes the volumes.
+It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes, this program's settings files in ~/.cyfr and this machine's device key. It ends by naming each by its path, and the command that removes the volumes.
 
 Each step is said as it is done; when one fails, the command says what is already gone and what is still here.`,
 	Example: "  cyfr uninstall\n  cyfr uninstall --yes",
@@ -78,13 +77,14 @@ type uninstallPlan struct {
 	images  []string
 	screen  bool
 	cask    bool
-	// self, link and settings are the program, its link onto PATH and its
-	// settings files that the uninstall removes; inFolder are those of them
-	// that resolve into the project folder, which stay.
+	// self and link are the program and its link onto PATH, which the
+	// uninstall removes; inFolder are those of them the project folder
+	// holds, or holds what they resolve to, which stay.
 	self     string
 	link     bool
-	settings []string
 	inFolder []string
+	// settings are this program's settings files, which stay.
+	settings []string
 	// deviceKey is this machine's device key, which stays.
 	deviceKey string
 }
@@ -101,8 +101,8 @@ func readUninstallPlan() (*uninstallPlan, error) {
 		return nil, err
 	}
 	p := &uninstallPlan{dir: dir, project: access.ProjectName(dir), screen: screenInstalled(), cask: caskInstalled()}
-	// removable is the one rule every removal passes: what resolves into
-	// the project folder stays, and is named.
+	// removable is the one rule every removal passes: what the project
+	// folder holds, or holds the target of, stays, and is named.
 	removable := func(path string) bool {
 		if resolvesInto(realDir, path) {
 			p.inFolder = append(p.inFolder, path)
@@ -118,19 +118,18 @@ func readUninstallPlan() (*uninstallPlan, error) {
 	}
 	if !p.cask {
 		if self, err := selfExecutable(); err == nil {
-			if self, err = filepath.EvalSymlinks(self); err == nil {
-				if removable(self) {
-					p.self = self
-				}
-				if target, err := filepath.EvalSymlinks(usrLocalLink); err == nil && target == self && usrLocalLink != self {
-					p.link = removable(usrLocalLink)
-				}
+			if removable(self) {
+				p.self = self
+			}
+			real, err := filepath.EvalSymlinks(self)
+			if target, lerr := filepath.EvalSymlinks(usrLocalLink); err == nil && lerr == nil && target == real && usrLocalLink != self {
+				p.link = removable(usrLocalLink)
 			}
 		}
 	}
 	for _, path := range []func() (string, error){config.DefaultConfigPath, versionCheckPath} {
 		if path, err := path(); err == nil {
-			if _, err := os.Stat(path); err == nil && removable(path) {
+			if _, err := os.Lstat(path); err == nil {
 				p.settings = append(p.settings, path)
 			}
 		}
@@ -141,16 +140,17 @@ func readUninstallPlan() (*uninstallPlan, error) {
 	return p, nil
 }
 
-// resolvesInto reports whether path, resolved through every link, lies in
-// realDir, itself resolved. A path that does not resolve counts as in it,
-// so a doubt never removes.
+// resolvesInto reports whether realDir, itself resolved, holds path (its
+// parent resolved, then its name) or what path resolves to through every
+// link. A path that does not resolve counts as held, so a doubt never
+// removes.
 func resolvesInto(realDir, path string) bool {
-	real, err := filepath.EvalSymlinks(path)
-	if err != nil {
+	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil || within(filepath.Join(parent, filepath.Base(path)), realDir) {
 		return true
 	}
-	rel, err := filepath.Rel(realDir, real)
-	return err != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+	real, err := filepath.EvalSymlinks(path)
+	return err != nil || within(real, realDir)
 }
 
 // show says what the uninstall removes and what it leaves.
@@ -171,15 +171,15 @@ func (p *uninstallPlan) show(out io.Writer) {
 		}
 		fmt.Fprintln(out, program)
 	}
-	if len(p.settings) > 0 {
-		fmt.Fprintf(out, "  its settings, %s\n", strings.Join(p.settings, ", "))
-	}
 	fmt.Fprintln(out, "It leaves, as they are:")
 	fmt.Fprintf(out, "  every file in %s, CYFR's data among them, as cyfr down leaves it\n", p.dir)
 	if len(p.inFolder) > 0 {
 		fmt.Fprintf(out, "  %s, which resolve into that folder\n", strings.Join(p.inFolder, ", "))
 	}
 	fmt.Fprintln(out, "  the stack's volumes")
+	if len(p.settings) > 0 {
+		fmt.Fprintf(out, "  this program's settings, %s\n", strings.Join(p.settings, ", "))
+	}
 	if p.deviceKey != "" {
 		fmt.Fprintf(out, "  this machine's device key, %s\n", p.deviceKey)
 	}
@@ -232,6 +232,9 @@ func (p *uninstallPlan) left(volumes []string) string {
 	if len(p.inFolder) > 0 {
 		fmt.Fprintf(&b, "  %s, which resolve into that folder\n", strings.Join(p.inFolder, ", "))
 	}
+	if len(p.settings) > 0 {
+		fmt.Fprintf(&b, "  this program's settings, %s\n", strings.Join(p.settings, ", "))
+	}
 	if p.deviceKey != "" {
 		fmt.Fprintf(&b, "  this machine's device key, %s\n", p.deviceKey)
 	}
@@ -275,9 +278,8 @@ func (r *uninstallRun) failed(step string, err error) error {
 
 // run removes, in order: the stack's containers, stopped as cyfr down
 // stops them, under the lock it keeps; the screen service and the link
-// onto PATH as root; the networks and images; the settings files by name;
-// and the program. The plan holds nothing that resolves into the project
-// folder.
+// onto PATH as root; the networks and images; and the program. The plan
+// holds nothing the project folder holds or holds the target of.
 func (r *uninstallRun) run(ctx context.Context) error {
 	p := r.p
 	e, unlock, err := stopStack(ctx, "uninstall", r.out)
@@ -337,14 +339,6 @@ func (r *uninstallRun) run(ctx context.Context) error {
 	// The volumes stay; they are listed to be named at the end.
 	if r.volumes, err = listed("volume"); err != nil {
 		return r.failed("listing the stack's volumes", err)
-	}
-	for _, path := range p.settings {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return r.failed("removing "+path, err)
-		}
-	}
-	if len(p.settings) > 0 {
-		r.done("its settings")
 	}
 	if p.self != "" {
 		if err := os.Remove(p.self); err != nil {

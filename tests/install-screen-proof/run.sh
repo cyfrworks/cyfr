@@ -604,13 +604,32 @@ clean_install() {
 active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "screenshot screen-terminal.png" guest_screenshot screen-terminal.png
 
-  step "cyfr uninstall --yes stops CYFR as cyfr down does and removes nothing else from the folder: the folder, the volumes and the device key as cyfr down left them"
-  # The folder is listed after cyfr down and again after the uninstall,
-  # and compared whole: each entry's kind, size, mode, owner and link
-  # target, and each readable file's digest (an unreadable entry's error
-  # line is part of the listing too).
+  step "cyfr uninstall --yes stops CYFR as cyfr down does and removes nothing else from the folder: the folder, the volumes, the settings and the device key as cyfr down left them"
+  # Read as root after cyfr down and again after the uninstall, and
+  # compared whole: the folder, each volume's files and the account's
+  # ~/.cyfr (its settings and device key), each entry's kind, size, mode,
+  # owner and link target and each file's digest. Any read that fails
+  # fails the step; ~/.cyfr is recorded absent only when there is none.
   left_as_it_was() {
-    guest_ssh 'cd ~/cyfr && { find . -printf "%p %y %s %m %U:%G %l\n" 2>&1; find . -type f -readable -print0 2>/dev/null | xargs -0 -r sha256sum; } | sort; echo volumes:; docker volume ls -q | sort; echo device:; sha256sum ~/.cyfr/device/key.json 2>/dev/null || echo none'
+    guest_root_out '
+      set -eu
+      t=$(mktemp -d)
+      tree() {
+        (cd "$1" && find . -printf "%p %y %s %m %U:%G %l\n" >"$t/entries" && find . -type f -print0 >"$t/files")
+        sort "$t/entries"
+        sort -z "$t/files" | (cd "$1" && xargs -0 -r sha256sum)
+      }
+      echo folder:
+      tree /home/proof/cyfr
+      volumes=$(docker volume ls -q)
+      for v in $(printf "%s\n" $volumes | sort); do
+        echo "volume $v:"
+        m=$(docker volume inspect -f "{{.Mountpoint}}" "$v")
+        tree "$m"
+      done
+      echo settings and device key:
+      if [ -e /home/proof/.cyfr ]; then tree /home/proof/.cyfr; else echo absent; fi
+      rm -r "$t"'
   }
   check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
   left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
@@ -628,10 +647,10 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
   left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
-  check "the folder's listing, the volumes and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
+  check "the folder, the volumes, the settings and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
   check "no container and no custom network of CYFR is left" guest_ssh '[ -z "$(docker ps -aq)$(docker network ls -q --filter type=custom)" ]'
   check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
-  check "the program, its link onto PATH and its settings are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr ~/.cyfr/config.json ~/.cyfr/version-check.json 2>/dev/null'
+  check "the program and its link onto PATH are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr 2>/dev/null'
   check "the screen is given back to tty1's login prompt" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-enabled --quiet cyfr-screen && [ ! -e /etc/systemd/system/cyfr-screen.service ]'
   check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
