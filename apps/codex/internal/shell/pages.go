@@ -112,7 +112,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <p class="code">{{.Passkey.Code}}</p>
 <form method="post" action="/passkey/decide">{{template "proof"}}
 <input type="hidden" name="ref" value="{{.Passkey.Ref}}">
-<input type="hidden" name="key" value="{{.Passkey.Key.Kid}}">
+<input type="hidden" name="key" value="{{.Passkey.Digest}}">
 {{template "again" .}}
 <button name="decision" value="approve">Approve</button>
 <button name="decision" value="cancel" class="quiet" formnovalidate>Cancel</button>

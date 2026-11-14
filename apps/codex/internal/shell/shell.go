@@ -30,6 +30,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -183,12 +184,26 @@ type PendingConfirm struct {
 
 // PendingPasskey is a passkey a browser asks to add to the account, as the
 // shell drew it from the CYFR: its ref, the key read as the log reads one,
-// the short code derived here from its kid, and when it was drawn.
+// the short code derived here from its kid, the digest of the whole key
+// (every field its add_key holds) that the page's form carries back, and
+// when it was drawn.
 type PendingPasskey struct {
-	Ref   string
-	Key   account.Key
-	Code  string
-	drawn time.Time
+	Ref    string
+	Key    account.Key
+	Code   string
+	Digest string
+	drawn  time.Time
+}
+
+// keyDigest is the digest a passkey page binds its approval to: SHA-256 of
+// the JCS bytes of the key's whole map, unpadded base64url.
+func keyDigest(k account.Key) string {
+	raw, err := account.JCS(k.Map())
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return account.B64(sum[:])
 }
 
 // making is an account being made from this device: the attempt, the
@@ -1773,7 +1788,11 @@ func (s *Shell) waiting(ctx context.Context, ref string) (*PendingPasskey, error
 	if !ok || key.Kind != "passkey" {
 		return nil, errNotWaiting
 	}
-	return &PendingPasskey{Ref: ref, Key: key, Code: account.ShortCode(key.Kid), drawn: s.cfg.Now()}, nil
+	digest := keyDigest(key)
+	if digest == "" {
+		return nil, errNotWaiting
+	}
+	return &PendingPasskey{Ref: ref, Key: key, Code: account.ShortCode(key.Kid), Digest: digest, drawn: s.cfg.Now()}, nil
 }
 
 // waitingSentence is what the person reads when a passkey request could
@@ -1786,17 +1805,19 @@ func (s *Shell) waitingSentence(err error) string {
 }
 
 // DecidePasskey answers the drawn passkey request from the page that
-// showed the key kid names: a page whose key is no longer the one drawn
-// under ref (drawn again since, with another key), cancelled, timed out
+// showed the key whose whole digest is digest (keyDigest): a page whose
+// key is no longer the one drawn under ref (drawn again since, with a key
+// that differs in any field, or not drawn any more), cancelled, timed out
 // or changed at the CYFR since it was drawn (read again by its ref, the
-// same key), signs nothing, and each is decided before the PIN is opened.
+// same whole key), signs nothing, and each is decided before the PIN is
+// opened.
 // Otherwise the PIN opens the key afresh, never the key this unlock holds,
 // and that key signs the add_key entry adding the key the page showed to
 // the account's log at its directory. The shell's one lock is held from
 // the check to the signature, so no draw lands between them. The page
 // says what happened. It answers whether the request is settled: the
 // account lists the passkey now, or the person cancelled it.
-func (s *Shell) DecidePasskey(ctx context.Context, ref, kid string, approve bool, secret []byte) bool {
+func (s *Shell) DecidePasskey(ctx context.Context, ref, digest string, approve bool, secret []byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret)
@@ -1805,11 +1826,9 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref, kid string, approve bool
 		return false
 	}
 	drawn := s.passkey
-	if drawn == nil || drawn.Ref != ref {
-		return false
-	}
 	switch {
-	case drawn.Key.Kid != kid:
+	case drawn == nil || drawn.Ref != ref || digest == "" ||
+		subtle.ConstantTimeCompare([]byte(drawn.Digest), []byte(digest)) != 1:
 		s.say("That request changed since this window showed its code, so nothing was added. Approve it again from Your devices.")
 		return false
 	case !approve:
@@ -1822,7 +1841,7 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref, kid string, approve bool
 		return false
 	}
 	now, err := s.waiting(ctx, ref)
-	if err == nil && now.Key.Kid != drawn.Key.Kid {
+	if err == nil && now.Digest != drawn.Digest {
 		err = errNotWaiting
 	}
 	if err != nil {

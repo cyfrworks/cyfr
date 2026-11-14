@@ -545,9 +545,10 @@ defmodule Sanctum.SignInTest do
 
       assert length(DirectoryServer.log(dir.dir, account.identifier)) == length(account.log)
 
-      # The device adds it; the browser signs in with it, and it waits no
-      # longer.
+      # The device adds it: the owner's list, which reads the log, no
+      # longer shows it, and the browser signs in with it.
       account = added_by_device!(dir, %{account | passkeys: [passkey]}, key)
+      assert {:ok, []} = SignIn.waiting(ctx, nil)
       {again, _url} = minted(:sign_in, other)
 
       assert {:ok, %{purpose: :sign_in, user: %{id: user_id}, session_token: token}} =
@@ -612,6 +613,49 @@ defmodule Sanctum.SignInTest do
 
       assert {:ok, waiting} = SignIn.waiting(ctx, nil)
       assert length(waiting) == SignIn.max_waiting()
+    end
+
+    # What an outsider sees of the bound depends on time alone: copying a
+    # passkey the account already lists, from its public log, into every
+    # place the bound allows tells nothing when its owner signs in here.
+    test "a sign-in clears no waiting passkey: the bound stays full, and the owner's list leaves out what the log lists",
+         %{dir: dir, account: account, ctx: ctx, other: other} do
+      # A passkey of the account's, its key public in the account's log.
+      {pub, priv} = :crypto.generate_key(:ecdh, :secp256r1)
+
+      {:ok, listed} =
+        Prima.Identity.Key.new(alg: :es256, kind: :passkey, pub: pub, credential_id: "listed")
+
+      account = added_by_device!(dir, account, listed)
+      account = %{account | passkeys: [%{pub: pub, priv: priv, credential_id: "listed"}]}
+
+      offer_listed = fn n ->
+        browser = {:browser, "csrf-outsider-#{n}"}
+        {request, _url} = minted(:sign_in, browser)
+
+        SignIn.answer(
+          %Prima.SignIn.NewPasskey{
+            challenge: request.challenge,
+            identifier: account.identifier,
+            key: listed
+          },
+          browser
+        )
+      end
+
+      for n <- 1..SignIn.max_waiting(), do: assert({:ok, %{waiting: _}} = offer_listed.(n))
+      assert offer_listed.(:fourth) == {:error, :too_many_waiting}
+      assert {:ok, []} = SignIn.waiting(ctx, nil)
+
+      # The owner signs in with that passkey: the bound is as full as before.
+      {request, _url} = minted(:sign_in, other)
+
+      assert {:ok, %{purpose: :sign_in, user: %{id: user_id}}} =
+               SignIn.answer(answer(request, account), other)
+
+      assert user_id == ctx.user_id
+      assert offer_listed.(:after_the_sign_in) == {:error, :too_many_waiting}
+      assert {:ok, []} = SignIn.waiting(ctx, nil)
     end
 
     test "is waited for only by the account it names, and the same code shows for any account", %{

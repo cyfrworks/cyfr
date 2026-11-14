@@ -153,8 +153,10 @@ defmodule Sanctum.SignIn do
   passkeys, which their devices list (`pairing.waiting`): a device of the
   account adds one to the account's log with its own key, after the
   person compares its code, and the browser then signs in with it like
-  any passkey. That sign-in drops the waiting passkey; one never added
-  expires with its request and adds nothing.
+  any passkey. A waiting passkey leaves only when its time ends, added or
+  not, so nothing an outsider can see of the bound says whether anyone
+  signed in here: the owner's own list leaves out one the account's log
+  already lists, read for the owner now. One never added adds nothing.
 
   ## Registry answers
 
@@ -667,32 +669,43 @@ defmodule Sanctum.SignIn do
   @doc """
   The passkeys browsers offered for the caller's own account and that wait
   for a device of it to add them (the module doc), oldest first; with a
-  `ref`, that one alone, or none. Only a person here with an account has
-  any: `:unauthenticated` for any other caller, `:unavailable` when the
-  store cannot answer. A passkey offered on another member of the cell is
-  not listed here.
+  `ref`, that one alone, or none. A passkey the account's log lists now,
+  read for the caller from its directory, is left out: it was added. A log
+  that cannot be read leaves out none, and the device that adds one says
+  when the account lists it already. Only a person here with an account
+  has any: `:unauthenticated` for any other caller, `:unavailable` when
+  the store cannot answer. A passkey offered on another member of the cell
+  is not listed here.
   """
   @spec waiting(Context.t(), String.t() | nil) ::
           {:ok, [waiting()]} | {:error, :unauthenticated | :unavailable}
   def waiting(%Context{user_id: user_id}, ref) when is_binary(user_id) do
     with {:ok, identifier} <- account_of(user_id) do
+      offered =
+        identifier
+        |> waiting_key(ref || :_)
+        |> Arca.Cache.match()
+        |> Enum.map(&elem(&1, 1))
+
+      listed = if offered == [], do: [], else: listed(identifier)
+
       {:ok,
-       identifier
-       |> waiting_key(ref || :_)
-       |> Arca.Cache.match()
-       |> Enum.map(&elem(&1, 1))
+       offered
+       |> Enum.reject(&(&1.key.kid in listed))
        |> Enum.sort_by(&{&1.asked_at, &1.ref})}
     end
   end
 
   def waiting(%Context{}, _ref), do: {:error, :unauthenticated}
 
-  # A waiting passkey that signed in was added: it waits no longer.
-  defp added(identifier, %Prima.Identity.Key{kind: :passkey, kid: kid}) do
-    for {key, %{key: %{kid: ^kid}}} <- Arca.Cache.match(waiting_key(identifier, :_)),
-        do: Arca.Cache.invalidate(key)
-
-    :ok
+  # The kids the account's log lists now, read from its directory.
+  defp listed(identifier) do
+    with {:ok, head} <- Sanctum.IdentityFreshness.fresh!(identifier),
+         {:ok, state} <- state(head) do
+      Enum.map(state.keys, & &1.kid)
+    else
+      _unread -> []
+    end
   end
 
   # Taken, so spent on this answer whatever the rest says.
@@ -910,8 +923,7 @@ defmodule Sanctum.SignIn do
 
   defp done(%{request: %{purpose: :sign_in}} = held, _answer, identifier, key, head, opts) do
     with {:ok, user} <- signed_in(identifier, held.admission, head, nil),
-         {:ok, token} <- session(user, key, head, opts[:user_agent]),
-         :ok <- added(identifier, key) do
+         {:ok, token} <- session(user, key, head, opts[:user_agent]) do
       {:ok, %{purpose: :sign_in, user: named(user, held[:name]), session_token: token}}
     end
   end
