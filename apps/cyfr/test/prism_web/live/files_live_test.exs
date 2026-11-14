@@ -109,13 +109,17 @@ defmodule PrismWeb.FilesLiveTest do
     refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "hello.txt"])
   end
 
-  @png <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, "IHDR", 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
-         0, 0, 0>>
+  # A whole 1x1 PNG: its header, one pixel's compressed data and its end.
+  @png Base.decode16!(
+         "89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C489" <>
+           "0000000D49444154789C636068F8FF1F000482027FE7D85A6C0000000049454E44AE426082"
+       )
 
-  test "a picture opens in the panel; other bytes, whatever their name, are downloaded", %{
-    conn: conn,
-    ctx: ctx
-  } do
+  test "a picture opens in the panel; other bytes and markup, whatever their name, are not drawn",
+       %{
+         conn: conn,
+         ctx: ctx
+       } do
     actor = Sanctum.Context.actor(ctx)
     :ok = Arca.put(actor, ["data", "dot.png"], @png)
     :ok = Arca.put(actor, ["data", "fake.png"], <<0, 1, 2, 3, 255>>)
@@ -132,6 +136,22 @@ defmodule PrismWeb.FilesLiveTest do
     view |> element("#files-entries button", "fake.png") |> render_click()
     refute has_element?(view, "#files-picture")
     assert render(view) =~ "Binary content — download it to open."
+
+    # Markup named as a picture is text, shown as text and never drawn.
+    svg = ~s[<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>]
+    html = ~s[<html><body><script>alert(2)</script></body></html>]
+    :ok = Arca.put(actor, ["data", "vector.png"], svg)
+    :ok = Arca.put(actor, ["data", "page.gif"], html)
+    {view, _html} = mount_athanor(conn, "/files?p=data")
+
+    for {name, markup} <- [{"vector.png", svg}, {"page.gif", html}] do
+      view |> element("#files-entries button", name) |> render_click()
+      refute has_element?(view, "#files-picture")
+      refute render(view) =~ "data:image"
+
+      assert view |> element("#files-open pre") |> render() =~
+               Phoenix.HTML.html_escape(markup) |> Phoenix.HTML.safe_to_string()
+    end
   end
 
   test "a new folder is held until a file lands there, and Rename and Move relocate a file", %{
@@ -187,14 +207,45 @@ defmodule PrismWeb.FilesLiveTest do
     assert render(view) =~ "already exists"
     assert {:ok, "t"} = Arca.get(actor, ["data", "taken.csv"])
 
-    # A held folder, with nothing stored, is let go by Delete.
+    # Once a file lands in it, the folder is a stored one: renamed and
+    # deleted through storage, leaving nothing of its old name behind.
+    view
+    |> element("#files-entries button[phx-value-path='data/reports']", "Rename")
+    |> render_click()
+
+    view |> form("#files-move", %{"name" => "archive"}) |> render_submit()
+    assert render(view) =~ "Moved data/reports to data/archive"
+    refute has_element?(view, "#files-entries button[phx-value-path='data/reports']")
+    assert {:ok, "r"} = Arca.get(actor, ["data", "archive", "taken.csv"])
+
+    view
+    |> element("#files-entries button[phx-value-path='data/archive']", "Delete")
+    |> render_click()
+
+    assert render(view) =~ "Deleted data/archive"
+    refute has_element?(view, "#files-entries button[phx-value-path='data/archive']")
+    refute Arca.exists?(actor, ["data", "archive", "taken.csv"])
+    refute Arca.exists?(actor, ["data", "archive", "q4.csv"])
+
+    # A held folder, still empty, offers Rename and Delete, both the page's
+    # own, and no Move.
     view |> element("#files-new-folder") |> render_click()
     view |> form("#files-folder-form", %{"name" => "empty"}) |> render_submit()
     view |> element("#files-crumbs button", "data") |> render_click()
     held = "#files-entries button[phx-value-path='data/empty']"
-    assert has_element?(view, held)
-    view |> element(held, "Delete") |> render_click()
+    assert has_element?(view, held, "Rename")
+    refute has_element?(view, held, "Move")
+
+    view |> element(held, "Rename") |> render_click()
+    view |> form("#files-move", %{"name" => "blank"}) |> render_submit()
+    assert render(view) =~ "Renamed data/empty to data/blank"
     refute has_element?(view, held)
+    blank = "#files-entries button[phx-value-path='data/blank']"
+    assert has_element?(view, blank)
+
+    view |> element(blank, "Delete") |> render_click()
+    assert render(view) =~ "Removed the empty folder data/blank"
+    refute has_element?(view, blank)
   end
 
   test "the download route knows no folder the page does not show", %{conn: conn, route: route} do

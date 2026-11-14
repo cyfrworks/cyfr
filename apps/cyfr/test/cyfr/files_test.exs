@@ -265,6 +265,21 @@ defmodule Arca.FilesTest do
       assert Files.move(tenantless, "data/a.txt", "data/z.txt") == {:error, :missing_tenant}
     end
 
+    test "lands only what Write would accept: a file past Write's limit stays where it is",
+         %{actor: actor} do
+      big = :binary.copy(<<0>>, Files.max_write() + 1)
+      :ok = Arca.put(actor, ["data", "big.bin"], big)
+
+      assert Files.write(actor, "data/again.bin", Base.encode64(big), "base64") ==
+               {:error, {:invalid_argument, "A write is at most #{Files.max_write()} bytes"}}
+
+      assert Files.move(actor, "data/big.bin", "data/moved.bin") ==
+               {:error, {:invalid_argument, "A write is at most #{Files.max_write()} bytes"}}
+
+      assert Arca.exists?(actor, ["data", "big.bin"])
+      refute Arca.exists?(actor, ["data", "moved.bin"])
+    end
+
     test "that fails partway takes back what it landed and leaves the source whole",
          %{actor: actor} do
       previous_adapter = Application.get_env(:arca, :storage_adapter)

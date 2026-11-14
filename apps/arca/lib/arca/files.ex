@@ -213,10 +213,8 @@ defmodule Arca.Files do
       when is_binary(path) and is_binary(content) do
     with :ok <- tenant(actor),
          {:ok, bytes} <- decode(content, encoding),
-         :ok <- check_write_size(bytes),
          {:ok, segments, physical, tier} <- resolve_file(path),
-         :ok <- writable(tier, physical, segments),
-         :ok <- valid_content(physical, bytes),
+         :ok <- accepted(tier, physical, segments, bytes),
          :ok <- put(actor, physical, path, bytes) do
       {:ok, %{written: join(segments), size: byte_size(bytes)}}
     end
@@ -294,7 +292,7 @@ defmodule Arca.Files do
          moves = Enum.map(leaves, &landing(&1, physical, to_physical, to_segments)),
          :ok <- all_writable(to_tier, moves),
          :ok <- vacant(actor, to_physical, to),
-         :ok <- copy_all(actor, moves, path),
+         :ok <- copy_all(actor, to_tier, moves, path),
          :ok <- remove(actor, physical, path) do
       {:ok, %{moved: join(segments), to: join(to_segments)}}
     end
@@ -361,10 +359,10 @@ defmodule Arca.Files do
     end
   end
 
-  defp copy_all(actor, moves, path) do
+  defp copy_all(actor, tier, moves, path) do
     moves
     |> Enum.reduce_while({:ok, []}, fn {leaf, dest, dest_segments} = move, {:ok, landed} ->
-      case copy_one(actor, leaf, dest, join(dest_segments)) do
+      case copy_one(actor, tier, leaf, dest, dest_segments) do
         :ok -> {:cont, {:ok, [move | landed]}}
         {:error, _} = refused -> {:halt, {refused, landed}}
       end
@@ -379,9 +377,11 @@ defmodule Arca.Files do
     end
   end
 
-  defp copy_one(actor, leaf, dest, dest_path) do
+  defp copy_one(actor, tier, leaf, dest, dest_segments) do
+    dest_path = join(dest_segments)
+
     with {:ok, bytes, opts} <- moved_bytes(actor, leaf, dest_path),
-         :ok <- valid_content(dest, bytes) do
+         :ok <- accepted(tier, dest, dest_segments, bytes) do
       case Arca.put_if_none_match(actor, dest, bytes, opts) do
         :ok ->
           :ok
@@ -484,6 +484,14 @@ defmodule Arca.Files do
   end
 
   # ---- tiers -----------------------------------------------------------------
+
+  # Whether `bytes` may land at a file: the one rule every write of a whole
+  # file meets, a move's landing files among them.
+  defp accepted(tier, physical, segments, bytes) do
+    with :ok <- writable(tier, physical, segments),
+         :ok <- check_write_size(bytes),
+         do: valid_content(physical, bytes)
+  end
 
   defp writable(:open, _physical, _segments), do: :ok
 
