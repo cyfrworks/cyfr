@@ -527,15 +527,22 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
-  Delete every session of one user. Returns `{:ok, count}`.
+  Delete every session of one user. Answers the token hashes of the rows
+  this delete removed, from the delete itself, so a caller names exactly
+  the sessions it ended: not one swept before it, and every one inserted
+  before it ran.
   """
-  @spec delete_by_user(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
+  @spec delete_by_user(String.t()) :: {:ok, [binary()]} | {:error, :database_error}
   # arca:unscoped-ok crossing athanors is the point: a person denied at the
   # door loses every session, wherever it was established.
   def delete_by_user(user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_by_user", fn ->
-      {count, _} = Arca.Repo.delete_all(from(s in Session, where: s.user_id == ^user_id))
-      {:ok, count}
+      {_count, hashes} =
+        Arca.Repo.delete_all(
+          from(s in Session, where: s.user_id == ^user_id, select: s.token_hash)
+        )
+
+      {:ok, hashes}
     end)
   end
 

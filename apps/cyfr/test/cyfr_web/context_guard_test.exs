@@ -162,7 +162,31 @@ defmodule CyfrWeb.ContextGuardTest do
       {:ok, _} = Arca.SessionStorage.delete_by_user(user.user_id)
       :ok = Sanctum.Session.announce_revoked(user.user_id, collected, :signed_out)
 
-      assert_redirect(view, "/login", 2_000)
+      # The announcement does not name the late session: its page is
+      # refused and told only that its sign-in ended.
+      assert assert_redirect(view, "/login", 2_000) ==
+               %{"error" => "Your sign-in ended. Sign in again to go on."}
+    end
+
+    # A revocation names exactly the sessions its delete removed: one that
+    # was swept before the delete ran is not named, so its page does not
+    # take the denial, and a session the delete did remove is told it.
+    test "a session swept before a denial is not named by it; one the denial removed is",
+         %{conn: conn} do
+      user = test_user()
+      {swept_conn, _token, swept} = signed_in(conn, user)
+      {denied_conn, _token, _denied} = signed_in(build_conn(), user)
+      {swept_view, _html} = mount_athanor(swept_conn, "/settings")
+      {denied_view, _html} = mount_athanor(denied_conn, "/settings")
+
+      delete_session!(swept)
+      assert {:ok, 1} = Sanctum.Session.revoke_all_for_user(user.user_id)
+
+      assert assert_redirect(denied_view, "/login", 2_000) ==
+               %{"error" => "Your access to this CYFR was removed, so you were signed out."}
+
+      assert assert_redirect(swept_view, "/login", 2_000) ==
+               %{"error" => "Your sign-in ended. Sign in again to go on."}
     end
   end
 

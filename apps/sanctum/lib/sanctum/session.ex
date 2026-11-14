@@ -547,16 +547,13 @@ defmodule Sanctum.Session do
   """
   @spec revoke_all_for_user(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def revoke_all_for_user(user_id) when is_binary(user_id) do
-    # The memo is keyed by token hash, so a user-wide revocation collects
-    # the hashes first, deletes the rows, then drops each memo — a session
-    # racing in between misses the row and cannot re-cache. The revocation
-    # is announced before the memos go (`announce_revoked/3`).
-    hashes = Arca.SessionStorage.hashes_by_user(user_id)
-
-    with {:ok, count} <- Arca.SessionStorage.delete_by_user(user_id) do
+    # The delete answers the hashes of exactly the rows it removed, which
+    # are what is announced and whose memos go: the revocation is
+    # announced before the memos (`announce_revoked/3`).
+    with {:ok, hashes} <- Arca.SessionStorage.delete_by_user(user_id) do
       broadcast_sessions_revoked(user_id, :denied, hashes)
       Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
-      {:ok, count}
+      {:ok, length(hashes)}
     end
   end
 
