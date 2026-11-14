@@ -240,7 +240,6 @@ defmodule Cyfr.AdmissionOriginTest do
     {:ok, key} =
       Sanctum.TestContext.create_key(ctx, %{
         name: "origin-#{n}",
-        type: :application,
         scope: ["execute"]
       })
 

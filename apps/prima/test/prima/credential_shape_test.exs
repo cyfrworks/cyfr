@@ -16,11 +16,15 @@ defmodule Prima.CredentialShapeTest do
   end
 
   describe "the declared shapes" do
-    test "every API-key type has a prefixed shape, and every prefix is distinct" do
-      api_keys =
-        for {{:api_key, type}, prefix, _} <- CredentialShape.prefixed(), do: {type, prefix}
+    test "an API key has one prefixed shape, and every prefix is distinct" do
+      assert [{:api_key, "cyfr_sk_"}] ==
+               for(
+                 {kind, prefix, _} <- CredentialShape.prefixed(),
+                 kind == :api_key,
+                 do: {kind, prefix}
+               )
 
-      assert Map.new(api_keys) == CredentialShape.api_key_prefixes()
+      assert CredentialShape.api_key_prefix() == "cyfr_sk_"
 
       prefixes = Enum.map(CredentialShape.prefixed(), &elem(&1, 1))
       assert Enum.uniq(prefixes) == prefixes
@@ -49,7 +53,7 @@ defmodule Prima.CredentialShapeTest do
     end
 
     test "a kind with no prefix is not minted here" do
-      for kind <- [:signed_token, {:api_key, :other}] do
+      for kind <- [:signed_token, {:api_key, :service}] do
         assert_raise FunctionClauseError, fn -> apply(CredentialShape, :mint, [kind]) end
       end
     end
@@ -79,7 +83,7 @@ defmodule Prima.CredentialShapeTest do
 
   describe "redact/2" do
     test "replaces every run, keeps every other byte, and is a no-op on plain text" do
-      a = CredentialShape.mint({:api_key, :admin})
+      a = CredentialShape.mint(:api_key)
       b = CredentialShape.mint(:confirmation_secret)
 
       assert CredentialShape.redact("a=#{a}&b=#{b}; done", "*") == "a=*&b=*; done"
@@ -88,7 +92,7 @@ defmodule Prima.CredentialShapeTest do
     end
 
     test "a prefix inside a taken run is part of it, and a failed candidate hides no later one" do
-      key = CredentialShape.mint({:api_key, :service})
+      key = CredentialShape.mint(:api_key)
       [{_, prefix, _} | _] = CredentialShape.prefixed()
 
       assert CredentialShape.redact(prefix <> key, "*") == prefix <> "*"
@@ -97,7 +101,7 @@ defmodule Prima.CredentialShapeTest do
 
     test "a run ends where another credential begins, so credentials run together are all " <>
            "redacted" do
-      key = CredentialShape.mint({:api_key, :service})
+      key = CredentialShape.mint(:api_key)
       other = CredentialShape.mint(:webhook_secret)
       token = signed_token()
 
@@ -109,7 +113,7 @@ defmodule Prima.CredentialShapeTest do
     end
 
     test "a short run before a credential hides nothing of it" do
-      key = CredentialShape.mint({:api_key, :service})
+      key = CredentialShape.mint(:api_key)
       [{_, prefix, _} | _] = CredentialShape.prefixed()
       short = prefix <> String.duplicate("A", 20)
 
@@ -117,14 +121,14 @@ defmodule Prima.CredentialShapeTest do
     end
 
     test "a longer malformed run stays readable" do
-      key = CredentialShape.mint({:api_key, :service})
+      key = CredentialShape.mint(:api_key)
 
       assert CredentialShape.redact(key <> "A", "*") == key <> "A"
       assert CredentialShape.redact("A" <> key, "*") == "A*"
     end
 
     test "one redaction is a fixpoint" do
-      key = CredentialShape.mint({:api_key, :service})
+      key = CredentialShape.mint(:api_key)
       other = CredentialShape.mint(:confirmation_secret)
       token = signed_token()
       [{_, prefix, _} | _] = CredentialShape.prefixed()

@@ -12,8 +12,7 @@ defmodule Prima.CredentialShape do
   Every shape is a prefix followed by base64url without padding (the
   alphabet `A-Za-z0-9_-`):
 
-    * `{:api_key, type}` — an API key, `cyfr_pk_` (`:application`),
-      `cyfr_sk_` (`:service`) or `cyfr_ak_` (`:admin`) and 24 random bytes
+    * `:api_key` — an API key, `cyfr_sk_` and 24 random bytes
       (`Sanctum.ApiKey`);
     * `:webhook_secret` — a webhook's signing secret, `whsec_` and 24
       random bytes (`Sanctum.Webhook`);
@@ -47,9 +46,7 @@ defmodule Prima.CredentialShape do
   sanitizer's key names alone.
   """
 
-  @api_key_prefixes %{application: "cyfr_pk_", service: "cyfr_sk_", admin: "cyfr_ak_"}
-
-  # Random bytes drawn after each prefix.
+  @api_key_prefix "cyfr_sk_"
   @api_key_bytes 24
   @webhook_secret_prefix "whsec_"
   @webhook_secret_bytes 24
@@ -70,28 +67,24 @@ defmodule Prima.CredentialShape do
 
   @typedoc "A shape a value alone identifies."
   @type kind ::
-          {:api_key, :application | :service | :admin}
+          :api_key
           | :webhook_secret
           | :confirmation_secret
           | :signed_token
 
-  @doc "The API-key prefix of each key type."
-  @spec api_key_prefixes() :: %{atom() => String.t()}
-  def api_key_prefixes, do: @api_key_prefixes
+  @doc "The API-key prefix."
+  @spec api_key_prefix() :: String.t()
+  def api_key_prefix, do: @api_key_prefix
 
   @doc "The prefixed shapes: each kind with its prefix and its random part's length."
   @spec prefixed() :: [{kind(), String.t(), pos_integer()}]
   def prefixed do
-    api_keys =
-      for {type, prefix} <- Enum.sort(@api_key_prefixes),
-          do: {{:api_key, type}, prefix, encoded_length(@api_key_bytes)}
-
-    api_keys ++
-      [
-        {:webhook_secret, @webhook_secret_prefix, encoded_length(@webhook_secret_bytes)},
-        {:confirmation_secret, @confirmation_secret_prefix,
-         encoded_length(@confirmation_secret_bytes)}
-      ]
+    [
+      {:api_key, @api_key_prefix, encoded_length(@api_key_bytes)},
+      {:webhook_secret, @webhook_secret_prefix, encoded_length(@webhook_secret_bytes)},
+      {:confirmation_secret, @confirmation_secret_prefix,
+       encoded_length(@confirmation_secret_bytes)}
+    ]
   end
 
   @doc "A signed token's header, the segment before its first dot."
@@ -111,8 +104,7 @@ defmodule Prima.CredentialShape do
   base64url without padding.
   """
   @spec mint(kind()) :: String.t()
-  def mint({:api_key, type}) when is_map_key(@api_key_prefixes, type),
-    do: drawn(Map.fetch!(@api_key_prefixes, type), @api_key_bytes)
+  def mint(:api_key), do: drawn(@api_key_prefix, @api_key_bytes)
 
   def mint(:webhook_secret), do: drawn(@webhook_secret_prefix, @webhook_secret_bytes)
 
