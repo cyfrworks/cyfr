@@ -133,6 +133,16 @@ Run without arguments for interactive selection.`,
 			return nil
 		}
 
+		// The input is read before anything is asked of the server, so a
+		// malformed one sends nothing.
+		var execInput map[string]any
+		if inputStr, _ := cmd.Flags().GetString("input"); len(args) >= 1 && inputStr != "" {
+			var err error
+			if execInput, err = runInput(inputStr); err != nil {
+				return err
+			}
+		}
+
 		// CLI shorthand: "cyfr run c local.claude:0.1.0" → join as "c:local.claude:0.1.0"
 		args = joinTypeShorthand(args)
 		compType, _ := cmd.Flags().GetString("type")
@@ -151,17 +161,10 @@ Run without arguments for interactive selection.`,
 			},
 		})
 		if err != nil {
-			return err
+			return beforeTheRun(cmd.Context(), err)
 		}
 
-		var execInput map[string]any
-		if len(args) >= 1 {
-			if inputStr, _ := cmd.Flags().GetString("input"); inputStr != "" {
-				if execInput, err = runInput(inputStr); err != nil {
-					return err
-				}
-			}
-		} else {
+		if len(args) == 0 {
 			// The ref came from the picker — offer to collect input the
 			// same way.
 			supplyInput, err := prompt.Confirm(cmd.Context(), "Supply JSON input?")
@@ -169,7 +172,7 @@ Run without arguments for interactive selection.`,
 				if prompt.IsAborted(err) {
 					return prompt.ErrAborted
 				}
-				return fmt.Errorf("Prompt failed: %w", err)
+				return beforeTheRun(cmd.Context(), fmt.Errorf("Prompt failed: %w", err))
 			}
 			if supplyInput {
 				inputStr, err := prompt.InputText(cmd.Context(), "JSON input", `{"key":"value"}`)
@@ -177,7 +180,7 @@ Run without arguments for interactive selection.`,
 					if prompt.IsAborted(err) {
 						return prompt.ErrAborted
 					}
-					return fmt.Errorf("Prompt failed: %w", err)
+					return beforeTheRun(cmd.Context(), fmt.Errorf("Prompt failed: %w", err))
 				}
 				if inputStr != "" {
 					if execInput, err = runInput(inputStr); err != nil {
@@ -211,6 +214,18 @@ Run without arguments for interactive selection.`,
 }
 
 var errRunGoesOn = errors.New("Stopped waiting. A run CYFR already started goes on: cyfr run --list shows it, and cyfr run --cancel <id> stops it.")
+
+var errNothingStarted = errors.New("Interrupted; nothing was started.")
+
+// beforeTheRun is a failure before the run was asked for: Ctrl-C there
+// (or the terminal closing) is the person's interruption, exit 130, and
+// nothing was started; any other failure is itself.
+func beforeTheRun(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return interruption{errNothingStarted}
+	}
+	return err
+}
 
 // runHeaders are the columns of `cyfr run --list`.
 var runHeaders = []string{"execution_id", "reference", "status", "started_at"}
