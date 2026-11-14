@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -327,10 +328,16 @@ func TestServer_MakingTheAccountOfAKeyMadeBeforeAsksThePIN(t *testing.T) {
 	if b.proof != "" || !strings.Contains(b.page(), "Add this box to your account") {
 		t.Fatalf("making the key handed over %q, or shows:\n%s", b.proof, b.page())
 	}
-	wrong := b.post("/create", url.Values{"name": {"alice"}, "secret": {otherPassphrase(t, p)}})
-	if wrong.Code != http.StatusSeeOther || wrong.Header().Get("Location") != "/" || b.proof != "" ||
-		b.shell.View().Page != PageEnroll || !strings.Contains(b.page(), "not this screen") {
-		t.Fatalf("a wrong passphrase answered %d, the box shows %s", wrong.Code, b.shell.View().Page)
+	for name, fields := range map[string]url.Values{
+		"no passphrase":   {"name": {"alice"}},
+		"a wrong one":     {"name": {"alice"}, "secret": {otherPassphrase(t, p)}},
+		"a local program": {"name": {"alice"}, "proof": {""}},
+	} {
+		w := b.post("/create", fields)
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" || w.Body.Len() != 0 || b.proof != "" ||
+			b.shell.View().Page != PageEnroll || b.shell.View().RecoveryCode != "" || !strings.Contains(b.page(), "not this screen") {
+			t.Fatalf("%s answered %d %q, the box shows %s", name, w.Code, w.Header().Get("Location"), b.shell.View().Page)
+		}
 	}
 	made := b.post("/create", url.Values{"name": {"alice"}, "secret": {p}})
 	code := b.shell.View().RecoveryCode
@@ -396,5 +403,59 @@ func TestServer_AProofFromBeforeALockGetsNothing(t *testing.T) {
 	}
 	if ticket := ticketOf(t, b.do(http.MethodPost, "/open", Origin, url.Values{"proof": {after}}), home); ticket == "" {
 		t.Fatal("the current proof opened nothing")
+	}
+}
+
+var passphraseShape = regexp.MustCompile(`<p class="code">[a-z]+( [a-z]+){5}</p>`)
+
+// A setup without a chip shows its passphrase only in the answer to the
+// request that drew it: a plain local read shows none, before or after;
+// another draw, by anyone, replaces it, and the setup takes only the last.
+func TestServer_APlainReadShowsNoPassphrase(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	plain := b.do(http.MethodGet, "/", "", nil).Body.String()
+	if m := passphraseShape.FindString(plain); m != "" || strings.Contains(plain, `action="/setup"`) ||
+		!strings.Contains(plain, `<form method="post" action="/passphrase"><input type="hidden" name="proof"><button autofocus>Show the passphrase</button></form>`) {
+		t.Fatalf("a plain read of the setup page shows the passphrase %q, or no way to show it:\n%s", m, plain)
+	}
+	drew := b.post("/passphrase", nil)
+	p := codeShape.FindStringSubmatch(body(drew))[1]
+	if drew.Code != http.StatusOK || !passphraseShape.MatchString(drew.Body.String()) || !strings.Contains(drew.Body.String(), `action="/setup"`) {
+		t.Fatalf("Show the passphrase answered %d:\n%s", drew.Code, body(drew))
+	}
+	after := b.do(http.MethodGet, "/", "", nil).Body.String()
+	if strings.Contains(after, p) || passphraseShape.MatchString(after) || !strings.Contains(after, `action="/setup"`) ||
+		!strings.Contains(after, "If you did not write it down, show a new one") || !strings.Contains(after, ">Show a new passphrase</button>") {
+		t.Fatalf("a plain read after the draw:\n%s", after)
+	}
+	other := b.do(http.MethodPost, "/passphrase", Origin, url.Values{"x": {"y"}})
+	q := codeShape.FindStringSubmatch(body(other))[1]
+	if q == p {
+		t.Fatal("another draw answered the same passphrase")
+	}
+	refused := b.post("/setup", url.Values{"name": {"alice"}, "secret": {p}, "again": {p}})
+	if refused.Code != http.StatusSeeOther || refused.Header().Get("Location") != "/" || strings.Contains(refused.Body.String(), q) {
+		t.Fatalf("a setup with the replaced passphrase answered %d %q", refused.Code, refused.Header().Get("Location"))
+	}
+	if _, err := os.Stat(b.record); !os.IsNotExist(err) || !strings.Contains(b.page(), "not the passphrase shown last") || strings.Contains(b.page(), q) {
+		t.Fatal("the replaced passphrase made a key, or the page says nothing, or shows the new one")
+	}
+	if w := b.post("/setup", url.Values{"name": {"alice"}, "secret": {q}, "again": {q}}); w.Code != http.StatusOK || proofIn(w) == "" {
+		t.Fatalf("the last passphrase drawn did not set up: %d", w.Code)
+	}
+}
+
+// A box whose chip keeps the PIN draws no passphrase for anyone: a draw
+// answers the page, which still asks the six-digit PIN.
+func TestServer_AChipBoxDrawsNoPassphrase(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	b.shell.cfg.Chip = func() bool { return true }
+	w := b.do(http.MethodPost, "/passphrase", Origin, url.Values{"x": {"y"}})
+	page := b.page()
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" || w.Body.Len() != 0 || b.shell.passphrase != "" ||
+		!strings.Contains(page, "Choose a six-digit PIN") || strings.Contains(page, `action="/passphrase"`) {
+		t.Fatalf("a draw on a chip box answered %d %q:\n%s", w.Code, w.Header().Get("Location"), page)
 	}
 }

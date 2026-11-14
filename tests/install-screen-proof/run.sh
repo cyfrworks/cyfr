@@ -11,7 +11,8 @@
 # port. After a reboot labwc and Chrome run on tty1 and show the screen's
 # own setup page (screen-setup.png): with the guest's isolated swtpm it asks
 # for a six-digit PIN and seals the key in the chip; with --no-tpm it
-# refuses six digits and takes the six-word passphrase it shows.
+# shows its six-word passphrase on the screen alone, never to a local
+# read, refuses six digits and takes the passphrase drawn last.
 #
 # The setup page makes the person's account, the box its first device:
 # typed on the guest's keyboard through QMP, a name and the PIN (or
@@ -563,13 +564,26 @@ clean_install() {
 
   step "setup on the screen, typed: a name and the PIN (or passphrase) twice"
   if [ "$GUEST_TPM" = none ]; then
+    shell_page no-chip
+    check "a local program reading the setup page is shown no passphrase, only Show the passphrase" \
+      sh -c '! grep -q "<p class=\"code\">" "$1" && grep -qF ">Show the passphrase</button>" "$1"' sh "$GUEST_DIR/shell-no-chip.html"
+    printf '\n' | guest_keys || fail "QMP did not press Show the passphrase"
+    sleep 5
+    check "screenshot screen-passphrase.png" guest_screenshot screen-passphrase.png
+    shell_page shown
+    check "once the screen shows it, a local read still shows no passphrase" \
+      sh -c '! grep -q "<p class=\"code\">" "$1" && grep -qF ">Show a new passphrase</button>" "$1"' sh "$GUEST_DIR/shell-shown.html"
+    # The screen's passphrase reaches no local reader, this proof
+    # included: the proof draws one of its own as a local program, which
+    # replaces the screen's, and types that one.
+    guest_ssh "curl -s --max-time 10 -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/passphrase" >"$GUEST_DIR/shell-drawn.html" 2>&1
+    SECRET=$(sed -n 's/.*<p class="code">\([a-z ]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-drawn.html" | head -n 1)
+    check "a draw answers its own request a six-word passphrase" sh -c '[ "$(printf %s "$1" | wc -w)" = 6 ]' sh "$SECRET"
     printf 'alice\t123456\t123456\n' | guest_keys || fail "QMP did not type"
     sleep 5
     shell_page six-digits
     check "without a chip six digits are refused" grep -q 'needs the six-word passphrase' "$GUEST_DIR/shell-six-digits.html"
     check "a refused PIN made no key" guest_ssh '! test -e ~/cyfr/.cyfr/screen/holder.json'
-    SECRET=$(sed -n 's/.*<p class="code">\([a-z ]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-six-digits.html" | head -n 1)
-    check "the page shows a six-word passphrase" sh -c '[ "$(printf %s "$1" | wc -w)" = 6 ]' sh "$SECRET"
     KIND=software
   else
     SECRET=$(printf '%06d' $((RANDOM % 1000000)))

@@ -432,12 +432,16 @@ const (
 
 // View is what a page draws.
 type View struct {
-	Page       Page
-	Kind       holder.Kind
-	Chip       bool
-	Notice     string
-	Storage    disk.Report
+	Page    Page
+	Kind    holder.Kind
+	Chip    bool
+	Notice  string
+	Storage disk.Report
+	// Passphrase is the passphrase a setup without a chip takes, and
+	// Drawn whether one is drawn. A page shows it only in the answer to
+	// the request that drew it (pageView).
 	Passphrase string
+	Drawn      bool
 	// RecoveryCode is the code shown on PageRecovery, and Name the name of
 	// the account being made.
 	RecoveryCode string
@@ -457,11 +461,15 @@ type View struct {
 }
 
 // View is the page the device shows now, and the notice of the last
-// action or lock, which stays until the next action: reading a page
-// changes nothing.
+// action or lock, which stays until the next action. A setup without a
+// chip draws its passphrase at the first View, which cyfr login prints in
+// its own terminal; the pages read pageView, which draws nothing.
 func (s *Shell) View() View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.rec == nil && !s.cfg.Chip() {
+		s.newPassphrase()
+	}
 	return s.view()
 }
 
@@ -475,7 +483,23 @@ func (s *Shell) pageView(proof []byte) View {
 	if !s.holds(proof) {
 		v.RecoveryCode = ""
 	}
+	v.Passphrase = ""
 	return v
+}
+
+// drawPassphrase draws a new passphrase for a page's setup on a machine
+// without a usable chip, replacing the one drawn before, and answers it
+// for that request's answer alone; "" where the setup takes a PIN, or
+// there is no setup.
+func (s *Shell) drawPassphrase() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refresh()
+	if s.rec != nil || (s.cfg.Chip() && s.passphrase == "") {
+		return ""
+	}
+	s.passphrase = ""
+	return s.newPassphrase()
 }
 
 // issueProof draws a fresh proof, replacing any earlier one, and answers
@@ -509,9 +533,7 @@ func (s *Shell) view() View {
 	switch m := s.making; {
 	case s.rec == nil:
 		v.Page = PageSetup
-		if !v.Chip || s.passphrase != "" {
-			v.Passphrase = s.newPassphrase()
-		}
+		v.Passphrase, v.Drawn = s.passphrase, s.passphrase != ""
 	case m != nil && !m.saved:
 		v.Page, v.RecoveryCode, v.Name = PageRecovery, m.code, m.attempt.Name
 	case m != nil && m.taken:
@@ -536,8 +558,8 @@ func (s *Shell) view() View {
 	return v
 }
 
-// newPassphrase is the passphrase a software setup shows, drawn once per
-// shown setup page and kept in memory until the setup takes it.
+// newPassphrase is the passphrase a software setup takes, drawn when none
+// is and kept in memory until the setup takes it.
 func (s *Shell) newPassphrase() string {
 	if s.passphrase == "" {
 		p, err := holder.GeneratePassphrase()
@@ -622,7 +644,7 @@ func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 		return false, err
 	}
 	if string(secret) != s.passphrase {
-		s.say("Enter the passphrase shown above, exactly.")
+		s.say("That is not the passphrase shown last. Enter it exactly as shown.")
 		return false, errors.New("not the shown passphrase")
 	}
 	return false, nil
@@ -632,16 +654,31 @@ func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 // when the machine has no usable chip, given twice, and writes it before
 // anything is shown or sent, so its code, a retry and a lost answer all
 // name the same key.
-func (s *Shell) Make(secret, again []byte) {
+func (s *Shell) Make(secret, again []byte) { s.makeKey(secret, again) }
+
+// makeKey is Make, answering the passphrase it drew when the chip could
+// not keep the PIN, or "".
+func (s *Shell) makeKey(secret, again []byte) (drawn string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret, again)
+	defer s.drawnSince(s.passphrase, &drawn)
 	s.refresh()
 	if s.rec != nil {
 		s.madeElsewhere()
 		return
 	}
 	_, _ = s.newRecord(secret, again)
+	return
+}
+
+// drawnSince sets *drawn to the passphrase drawn since it was before,
+// when one was: a chip that cannot keep the PIN draws one mid-request.
+// The caller holds the shell.
+func (s *Shell) drawnSince(before string, drawn *string) {
+	if s.passphrase != before {
+		*drawn = s.passphrase
+	}
 }
 
 func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
@@ -689,38 +726,40 @@ func (s *Shell) Setup(ctx context.Context, name, accepted string, secret, again 
 }
 
 // setup is Setup, answering the proof the opened key issues, or "" when
-// the key was not opened.
-func (s *Shell) setup(ctx context.Context, name, accepted string, secret, again []byte) string {
+// the key was not opened, and the passphrase it drew when the chip could
+// not keep the PIN, or "".
+func (s *Shell) setup(ctx context.Context, name, accepted string, secret, again []byte) (proof, drawn string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret, again)
+	defer s.drawnSince(s.passphrase, &drawn)
 	s.refresh()
 	if s.rec != nil {
 		s.madeElsewhere()
-		return ""
+		return
 	}
 	// The PIN or passphrase is checked before the account service is
 	// asked anything, so a refused one is said even with it out of reach.
 	if _, err := s.checkSecret(secret, again); err != nil {
-		return ""
+		return
 	}
 	c, ok := s.checkNew(ctx, name, accepted)
 	if !ok {
-		return ""
+		return
 	}
 	rec, err := s.newRecord(secret, again)
 	if err != nil {
-		return ""
+		return
 	}
 	key, err := rec.Open(secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
-		return ""
+		return
 	}
 	s.key = key
-	proof := s.issueProof()
+	proof = s.issueProof()
 	s.begin(c, name, accepted)
-	return proof
+	return
 }
 
 // Create makes an account whose first key is this device's, as Setup does,

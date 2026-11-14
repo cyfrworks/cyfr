@@ -117,13 +117,14 @@ func otherPassphrase(t *testing.T, p string) string {
 
 var codeShape = regexp.MustCompile(`<p class="code">([^<]+)</p>`)
 
-// shown is the first code-styled text the page shows: the passphrase on
-// the setup page, the recovery code on its own.
+// shown is the passphrase a setup without a chip shows once, in the
+// answer to Show the passphrase.
 func (b *box) shown() string {
 	b.t.Helper()
-	m := codeShape.FindStringSubmatch(b.page())
+	w := b.post("/passphrase", nil)
+	m := codeShape.FindStringSubmatch(body(w))
 	if m == nil {
-		b.t.Fatalf("the page shows no code:\n%s", b.page())
+		b.t.Fatalf("Show the passphrase answered %d:\n%s", w.Code, body(w))
 	}
 	return m[1]
 }
@@ -351,10 +352,12 @@ func TestSetup_TheTermsAreAcceptedFirst(t *testing.T) {
 	home := newFakeHome(t)
 	home.accounts.Policy = &account.Policy{Version: "2026-10", URL: "https://cyfr.example/terms"}
 	b := newBox(t, home, t.TempDir())
-	if page := b.page(); !strings.Contains(page, "I accept the terms at https://cyfr.example/terms") {
-		t.Fatalf("the setup page shows no terms:\n%s", page)
+	b.page()
+	shown := body(b.post("/passphrase", nil))
+	if !strings.Contains(shown, "I accept the terms at https://cyfr.example/terms") {
+		t.Fatalf("the setup page shows no terms:\n%s", shown)
 	}
-	p := b.shown()
+	p := codeShape.FindStringSubmatch(shown)[1]
 	b.post("/setup", url.Values{"name": {"alice"}, "secret": {p}, "again": {p}})
 	if _, err := os.Stat(b.record); !os.IsNotExist(err) || !strings.Contains(b.page(), "accept the terms") {
 		t.Fatal("setting up without the terms made a key, or said nothing")

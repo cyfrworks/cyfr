@@ -54,7 +54,11 @@ const Origin = "http://" + Listen
 // that opening issued, which keepScript keeps in sessionStorage, private
 // to this origin, port included, and puts in every form's proof field.
 // Never a cookie: 127.0.0.1's cookies go to every port on it, so another
-// local listener would collect and replay one.
+// local listener would collect and replay one. A setup's passphrase, the
+// secret-to-be on a machine without a chip, is shown only in the answer to
+// the request that drew it (/passphrase, or a setup whose chip could not
+// keep the PIN): a page read later shows none, so another local program
+// learns none it could unlock with.
 type Server struct {
 	Shell *Shell
 	// Reachable is whether the home answers now; the pages wait while it
@@ -110,7 +114,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" {
-		v := srv.Shell.View()
+		v := srv.Shell.pageView(nil)
 		if v.Page == PageSetup || v.Page == PageEnroll {
 			// Reading the account service's configuration changes nothing:
 			// it names the terms the page asks to be accepted.
@@ -173,12 +177,22 @@ type action struct {
 }
 
 var actions = map[string]action{
+	"/passphrase": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		srv.drawn(w, r, srv.Shell.drawPassphrase())
+	}},
 	"/setup": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		proof := srv.Shell.setup(ctx, string(f.get("name")), srv.accepted(f), f.get("secret"), f.get("again"))
+		proof, drawn := srv.Shell.setup(ctx, string(f.get("name")), srv.accepted(f), f.get("secret"), f.get("again"))
+		if drawn != "" {
+			srv.drawn(w, r, drawn)
+			return
+		}
 		srv.onward(ctx, w, r, f, proof)
 	}},
 	"/make": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Make(f.get("secret"), f.get("again"))
+		if drawn := srv.Shell.makeKey(f.get("secret"), f.get("again")); drawn != "" {
+			srv.drawn(w, r, drawn)
+			return
+		}
 		srv.onward(ctx, w, r, f, "")
 	}},
 	"/create": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
@@ -203,7 +217,7 @@ var actions = map[string]action{
 	"/unlock": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.CheckListed(ctx)
 		proof := ""
-		if v := srv.Shell.View(); v.Page == PageLocked && v.Notice == "" {
+		if v := srv.Shell.pageView(nil); v.Page == PageLocked && v.Notice == "" {
 			proof = srv.Shell.unlock(ctx, f.get("secret"))
 		}
 		srv.onward(ctx, w, r, f, proof)
@@ -254,6 +268,22 @@ func (srv *Server) accepted(f form) string {
 	return srv.Shell.terms.Version
 }
 
+// drawn answers the setup page showing the passphrase this request drew,
+// the one answer that carries it, or the page, when it drew none.
+func (srv *Server) drawn(w http.ResponseWriter, r *http.Request, passphrase string) {
+	if passphrase == "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	v := srv.Shell.pageView(nil)
+	if v.Page != PageSetup {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	v.Passphrase = passphrase
+	srv.page(w, pageData{View: v})
+}
+
 // onward is where a page goes after its action. Once the box is unlocked
 // and set up, a request carrying the current proof goes into Prism through
 // the home's ticket. An action whose PIN just opened the key (fresh, its
@@ -266,7 +296,7 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 		proof = []byte(fresh)
 	}
 	to := ""
-	if srv.Shell.View().Page == PageUnlocked {
+	if srv.Shell.pageView(nil).Page == PageUnlocked {
 		ticket, err := srv.Shell.Ticket(ctx, proof)
 		switch {
 		case err == nil && fresh == "":
@@ -317,7 +347,7 @@ type pageData struct {
 func (srv *Server) page(w http.ResponseWriter, d pageData) {
 	v := d.View
 	d.Print, d.Close, d.Keep = template.JS(printScript), template.JS(closeScript), template.JS(keepScript)
-	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && v.Passphrase == "")
+	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && !v.Drawn)
 	if (v.Page == PageSetup || v.Page == PageLocked) && srv.Reachable != nil && !srv.Reachable() {
 		d.Waiting = true
 	}
