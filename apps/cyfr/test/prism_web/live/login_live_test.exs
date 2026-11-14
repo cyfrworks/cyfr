@@ -651,7 +651,7 @@ defmodule PrismWeb.LoginLiveTest do
       Sanctum.SignIn.answer(answer_of(request, denied), {:browser, "denied-browser"})
 
     {:ok, _denied} = Sanctum.Tenancy.Users.deny(person)
-    {:ok, _removed} = Sanctum.Door.Store.remove(wildcard.id)
+    :ok = Sanctum.Door.Store.remove(wildcard.id)
     newcomer = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
 
     said_to_denied = refusal_at_login(conn, denied)
