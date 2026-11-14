@@ -155,6 +155,8 @@ func TestRenderWebhookCreated_FallsBackToSlug_WhenNoURL(t *testing.T) {
 	}
 }
 
+// A rotation says the old secret keeps working for the server's grace and
+// how to end it now.
 func TestRenderWebhookRotated(t *testing.T) {
 	result := map[string]any{
 		"name":   "github-push",
@@ -164,15 +166,26 @@ func TestRenderWebhookRotated(t *testing.T) {
 
 	out := captureStdout(t, func() { renderWebhookRotated(result) })
 
-	expected := []string{
-		"Webhook 'github-push' rotated.",
-		"URL:    https://cyfr.example.com/hooks/wh_abc",
-		"New secret: whsec_newvalue",
-		"old secret is now invalid",
+	want := "Webhook 'github-push' rotated.\n\n" +
+		"  URL:    https://cyfr.example.com/hooks/wh_abc\n" +
+		"\n  New secret: whsec_newvalue\n\n" +
+		"  Copy this secret now. It will not be shown again.\n" +
+		"  The old secret keeps working for 24 hours. To end it now, revoke the webhook: cyfr webhook revoke github-push\n"
+	if out != want {
+		t.Errorf("rotate printed:\n%s\nwant:\n%s", out, want)
 	}
-	for _, line := range expected {
-		if !strings.Contains(out, line) {
-			t.Errorf("expected %q in output, got:\n%s", line, out)
+}
+
+// The help says what a rotation and a revocation do to the old secret, and
+// that a webhook answers before its run ends.
+func TestWebhookHelpSaysWhenTheOldSecretEnds(t *testing.T) {
+	for _, c := range []struct{ got, want string }{
+		{webhookRotateCmd.Long, "Generate a new HMAC secret. The old secret keeps working for 24 hours, while the sender's configuration moves to the new one; 'cyfr webhook revoke' ends the webhook now. Run without arguments for interactive selection."},
+		{webhookRevokeCmd.Long, "Disable a webhook: its URL stops accepting POSTs now, whichever secret signs them, so revoking ends an old secret before the 24 hours a rotation leaves it. The audit trail is preserved. Run without arguments for interactive selection."},
+		{webhookCmd.Long, "Manage inbound webhook receivers.\n\nEach webhook is a stable URL at /hooks/<slug> that verifies an HMAC-SHA256\nsignature against a stored secret, answers as soon as it accepts the\ndelivery, and then runs a target component: the answer does not say how\nthe run ends. The webhook can carry a static \"input_template\" (JSON object)\nthat gets merged into the invocation payload alongside the request envelope\n(headers, body, metadata) under the reserved key '_webhook'."},
+	} {
+		if c.got != c.want {
+			t.Errorf("the help says:\n%s\nwant:\n%s", c.got, c.want)
 		}
 	}
 }
@@ -217,14 +230,18 @@ func TestRenderWebhookList_TableFormat(t *testing.T) {
 	}
 }
 
+// get prints every header the webhook reads: the signature's, and the
+// timestamp and idempotency headers when set.
 func TestRenderWebhookDetail(t *testing.T) {
 	result := map[string]any{
-		"name":             "with-template",
-		"url":              "https://cyfr.example.com/hooks/wh_x",
-		"target_ref":       "f:local.h",
-		"signature_header": "x-cyfr-signature",
-		"rate_limit":       "100/1m",
-		"created_at":       "2026-05-04T10:00:00Z",
+		"name":                   "with-template",
+		"url":                    "https://cyfr.example.com/hooks/wh_x",
+		"target_ref":             "f:local.h",
+		"signature_header":       "x-cyfr-signature",
+		"timestamp_header":       "x-cyfr-timestamp",
+		"idempotency_key_header": "x-github-delivery",
+		"rate_limit":             "100/1m",
+		"created_at":             "2026-05-04T10:00:00Z",
 		"input_template": map[string]any{
 			"channel": "alerts",
 		},
@@ -232,18 +249,23 @@ func TestRenderWebhookDetail(t *testing.T) {
 
 	out := captureStdout(t, func() { renderWebhookDetail(result) })
 
-	for _, want := range []string{
-		"Webhook: with-template",
-		"URL:    https://cyfr.example.com/hooks/wh_x",
-		"Target:           f:local.h",
-		"Signature header: x-cyfr-signature",
-		"Rate limit:       100/1m",
-		"Input template:",
-		"channel",
-		"alerts",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("expected %q in detail output, got:\n%s", want, out)
-		}
+	want := "Webhook: with-template\n\n" +
+		"  URL:    https://cyfr.example.com/hooks/wh_x\n" +
+		"  Target:           f:local.h\n" +
+		"  Signature header: x-cyfr-signature\n" +
+		"  Timestamp header: x-cyfr-timestamp\n" +
+		"  Idempotency key:  x-github-delivery\n" +
+		"  Rate limit:       100/1m\n" +
+		"  Created:          2026-05-04T10:00:00Z\n" +
+		"  Input template:\n    {\n      \"channel\": \"alerts\"\n    }\n"
+	if out != want {
+		t.Errorf("get printed:\n%s\nwant:\n%s", out, want)
+	}
+
+	delete(result, "timestamp_header")
+	delete(result, "idempotency_key_header")
+	out = captureStdout(t, func() { renderWebhookDetail(result) })
+	if strings.Contains(out, "Timestamp header") || strings.Contains(out, "Idempotency key") {
+		t.Errorf("get printed headers the webhook does not read:\n%s", out)
 	}
 }
