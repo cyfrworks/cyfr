@@ -605,6 +605,8 @@ func TestSetupOpensItsPagesOnADisplay(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			newInitProject(t)
 			useFakeEngine(t)
+			// Docker answers, as the stand-in says on every system.
+			standInMachine(t).reachable = true
 			l := stubLauncher(t, c.display, c.launchErr)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
