@@ -598,6 +598,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/registry-stand-in/standin_test.py", ~w(answers requests)}
     ],
     "release_manifest.json" => [
+      {"apps/codex/cmd/backup_test.go", ~w(versions)},
       {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},
       {"apps/codex/internal/release/manifest_test.go",
        ~w(valid valid_prerelease refused versions signature)},
