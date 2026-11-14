@@ -133,7 +133,10 @@ identity_directory "$REGISTRY_HOST"
 REGISTRY_FRONT="${IDENTITY_FRONTS[$REGISTRY_HOST]}"
 identity_reaches_directory "$A" registry.test
 identity_reaches_directory "$B" registry.test
-for cell in "$A" "$B"; do identity_env "$cell" CYFR_REGISTRY_URL "$REGISTRY_HOST"; done
+for cell in "$A" "$B"; do
+  identity_env "$cell" CYFR_REGISTRY_URL "$REGISTRY_HOST"
+  identity_env "$cell" CYFR_OCI_REGISTRY_URL
+done
 identity_env "$A" CYFR_SETUP_TOKEN "$(cat "$SECRETS/setup-a")"
 identity_env "$B" CYFR_SETUP_TOKEN "$(cat "$SECRETS/setup-b")"
 

@@ -1150,8 +1150,11 @@ The committed consent is the runtime capability — `ask ∩ operator choices �
 A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:slug` a sender signs with HMAC-SHA256 under the webhook's secret. The signature header, `x-cyfr-signature` unless the webhook names another `signature_header`, carries `sha256=` and the lowercase hex HMAC of the exact body. A webhook that names a `timestamp_header` signs the time as well: that header carries the time the delivery is sent in Unix seconds, the HMAC is over `<time>.<body>` (the time, a dot, the body), and a time further from now than `webhook_max_skew_seconds` (300 by default) is refused as a replay.
 
 ```bash
+# SECRET is exported, so the signer reads it from its environment: a key
+# passed as an argument is readable by any local user from the command line.
 body='{"event":"ping"}'
-sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+sig=$(printf '%s' "$body" | python3 -c 'import hashlib, hmac, os, sys
+print(hmac.new(os.environ["SECRET"].encode(), sys.stdin.buffer.read(), hashlib.sha256).hexdigest())')
 curl -X POST "https://<your CYFR>/hooks/<slug>" -H 'content-type: application/json' \
   -H "x-cyfr-signature: sha256=$sig" -d "$body"
 ```
