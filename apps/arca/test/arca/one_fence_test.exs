@@ -65,7 +65,7 @@ defmodule Arca.OneFenceTest do
     {"arca/schedule_occurrences.ex", "claim/3"} =>
       "an occurrence claim: the schedule row locked first, then the slot checked (`Arca.CronSchedule.slot_fence/0`)",
     {"arca/schedule_occurrences.ex", "ending/3"} =>
-      "an occurrence's end (`finish/6`, `settle_dead/4`): the occurrence row locked first, then the slot checked (`Arca.CronSchedule.slot_fence/0`), then the compare-and-set on its claimant and execution",
+      "an occurrence's end (`finish/6`, `settle_dead/5`): the occurrence row locked first, then the slot checked (`Arca.CronSchedule.slot_fence/0`), then the compare-and-set on its claimant and execution",
     {"arca/security_transitions.ex", "run/3"} =>
       "a denial or an allow under the slot its caller names, within the transitions' one-minute deadline, which `owned/3`'s default checkout does not carry",
     {"arca/security_transitions.ex", "restore/1"} =>

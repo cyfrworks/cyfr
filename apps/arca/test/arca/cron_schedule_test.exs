@@ -242,15 +242,65 @@ defmodule Arca.CronScheduleTest do
     end
   end
 
-  describe "record_error/3" do
-    test "increments error_count", %{actor: actor} do
+  describe "record_error/4" do
+    test "a failure keeps what it says and the run its occurrence records, and the next good run clears it",
+         %{actor: actor} do
       {:ok, schedule} = CronSchedule.create(actor, valid_attrs())
+      {:ok, ran} = CronSchedule.record_run(actor, schedule.id, "exec_ok")
+      bad = occurrence!(actor, schedule, "exec_bad")
+      said = "Last run failed: The upstream closed."
 
-      assert {:ok, updated} =
-               CronSchedule.record_error(actor, schedule.id, "boom")
+      assert {:ok, failed} = CronSchedule.record_error(actor, schedule.id, said, bad)
 
-      assert updated.error_count == 1
+      assert %{failed | updated_at: ran.updated_at} ==
+               %{ran | error_count: 1, last_error: said, last_execution_id: "exec_bad"}
+
+      # A fire that failed before any run started names no run, never the
+      # earlier one: an occurrence that records none, or no occurrence.
+      for occurrence <- [occurrence!(actor, schedule, nil), nil] do
+        assert {:ok,
+                %{
+                  last_error: "Last run did not start: Invalid JSON input",
+                  last_execution_id: nil
+                }} =
+                 CronSchedule.record_error(
+                   actor,
+                   schedule.id,
+                   "Last run did not start: Invalid JSON input",
+                   occurrence
+                 )
+      end
+
+      # The run is read under this schedule and athanor only: another
+      # schedule's occurrence names none.
+      {:ok, other} = CronSchedule.create(actor, valid_attrs(%{name: "other"}))
+      foreign = occurrence!(actor, other, "exec_other")
+
+      assert {:ok, %{error_count: 4, last_execution_id: nil}} =
+               CronSchedule.record_error(actor, schedule.id, said, foreign)
+
+      assert {:ok, %{run_count: 2, error_count: 4, last_error: nil, last_execution_id: "exec_2"}} =
+               CronSchedule.record_run(actor, schedule.id, "exec_2")
     end
+  end
+
+  # An ended occurrence of `schedule` recording `execution_id` as its run,
+  # each due at a time of its own (one occurrence per schedule and time).
+  defp occurrence!(actor, schedule, execution_id) do
+    n = System.unique_integer([:positive, :monotonic])
+    id = "occ_" <> Integer.to_string(n)
+
+    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+      id: id,
+      athanor_id: actor.athanor_id,
+      schedule_id: schedule.id,
+      scheduled_for: DateTime.add(DateTime.utc_now(), -n, :second),
+      state: "failed",
+      execution_id: execution_id,
+      claimed_at: DateTime.utc_now()
+    })
+
+    id
   end
 
   describe "count_active/2" do
@@ -584,7 +634,7 @@ defmodule Arca.CronScheduleTest do
         assert {:ok, %{run_count: 1, last_execution_id: "exec_1"}} =
                  CronSchedule.record_run(actor, id, "exec_1")
 
-        assert {:ok, %{error_count: 1}} = CronSchedule.record_error(actor, id, "boom")
+        assert {:ok, %{error_count: 1}} = CronSchedule.record_error(actor, id, "boom", nil)
         assert {:ok, %{status: "paused"}} = CronSchedule.update(actor, id, %{status: "paused"})
         assert {:ok, %{status: "paused"}} = CronSchedule.soft_delete(actor, id)
         assert {:ok, %{status: "deleted"}} = CronSchedule.get_for_daemon(id)
@@ -641,7 +691,7 @@ defmodule Arca.CronScheduleTest do
   # One write of each generic writer.
   defp write(:update, actor, id), do: CronSchedule.update(actor, id, %{status: "paused"})
   defp write(:record_run, actor, id), do: CronSchedule.record_run(actor, id, "exec_1")
-  defp write(:record_error, actor, id), do: CronSchedule.record_error(actor, id, "boom")
+  defp write(:record_error, actor, id), do: CronSchedule.record_error(actor, id, "boom", nil)
   defp write(:soft_delete, actor, id), do: CronSchedule.soft_delete(actor, id)
 
   defp feed_binding(name) do
@@ -702,7 +752,7 @@ defmodule Arca.CronScheduleTakeoverTest do
   lease row: the member's cached standing passes, its write waits on the
   row, its lease runs out on the cell's clock, a successor takes the slot
   through `Arca.ControlPlane.take/3`, and only then does the write go on.
-  `record_run/3` and `record_error/3` check the member's slot in their own
+  `record_run/3` and `record_error/4` check the member's slot in their own
   transaction, after the row lock, so the row's counters, `last_run_at`
   and `last_execution_id` do not move.
 
@@ -785,8 +835,13 @@ defmodule Arca.CronScheduleTakeoverTest do
 
       assert answer == {:error, :not_owner}
 
-      assert {:ok, %{run_count: 1, error_count: 1, last_execution_id: "exec_before"} = row} =
-               before
+      assert {:ok,
+              %{
+                run_count: 1,
+                error_count: 1,
+                last_error: "before",
+                last_execution_id: nil
+              } = row} = before
 
       assert {:ok, after_write} = unboxed(fn -> CronSchedule.get_for_daemon(schedule.id) end)
       assert after_write == row
@@ -794,7 +849,9 @@ defmodule Arca.CronScheduleTakeoverTest do
   end
 
   defp write(:record_run, actor, id), do: CronSchedule.record_run(actor, id, "exec_stale")
-  defp write(:record_error, actor, id), do: CronSchedule.record_error(actor, id, "stale")
+
+  defp write(:record_error, actor, id), do: CronSchedule.record_error(actor, id, "stale", nil)
+
   defp write(:update, actor, id), do: CronSchedule.update(actor, id, %{status: "paused"})
   defp write(:soft_delete, actor, id), do: CronSchedule.soft_delete(actor, id)
 
@@ -814,7 +871,7 @@ defmodule Arca.CronScheduleTakeoverTest do
       })
 
     {:ok, _} = CronSchedule.record_run(actor, schedule.id, "exec_before")
-    {:ok, _} = CronSchedule.record_error(actor, schedule.id, "before")
+    {:ok, _} = CronSchedule.record_error(actor, schedule.id, "before", nil)
     schedule
   end
 
