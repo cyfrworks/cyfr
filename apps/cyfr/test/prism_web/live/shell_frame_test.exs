@@ -416,7 +416,7 @@ defmodule PrismWeb.ShellFrameTest do
       assert html =~ ~s(data-tincture-state="ungranted")
       refute html =~ "<iframe"
       assert rows() == []
-      assert render(view) =~ "Grant tincture:local.plain-dash"
+      assert render(view) =~ "Grant plain-dash"
     end
 
     test "closing a frame revokes it, and reopening mints a new frame and credential",
