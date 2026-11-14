@@ -387,3 +387,50 @@ func TestSharedRefusalsNameTheirCommand(t *testing.T) {
 		})
 	}
 }
+
+// A backup's snapshot.json carries the release the stack's image answers
+// whole, a pre-release suffix included, for every version a release may
+// carry (release_manifest.json's accepted versions); its closing line names
+// it, and cyfr restore reads the snapshot.
+func TestBackupKeepsTheReleaseVersionWhole(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "release_manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Versions struct {
+			Accepted []string `json:"accepted"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil || len(fixture.Versions.Accepted) == 0 {
+		t.Fatalf("release_manifest.json's accepted versions: %v", err)
+	}
+	for _, version := range fixture.Versions.Accepted {
+		t.Run(version, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.backupScaffold()
+			s.answer("eval.out", "booting\nCYFR_LIVE_SLOTS="+`{"release":"`+version+`","slots":[]}`+"\n")
+			out, err := s.backup()
+			if err != nil {
+				t.Fatalf("cyfr backup answered %v\n%s", err, out)
+			}
+			var manifest struct {
+				Version string `json:"version"`
+			}
+			data, err := os.ReadFile(filepath.Join(s.snapshotDir(), "snapshot.json"))
+			if err != nil || json.Unmarshal(data, &manifest) != nil || manifest.Version != version {
+				t.Errorf("snapshot.json holds version %q (%s, %v), want %q", manifest.Version, data, err, version)
+			}
+			if want := "The snapshot of release " + version + " is in " + s.snapshotDir() + ";"; !strings.Contains(out, want) {
+				t.Errorf("cyfr backup's output lacks %q:\n%s", want, out)
+			}
+			snap, err := readSnapshot(s.snapshotDir())
+			if err != nil {
+				t.Fatalf("cyfr restore refuses the backup: %v", err)
+			}
+			if snap.manifest.Version != version {
+				t.Errorf("cyfr restore read version %q, want %q", snap.manifest.Version, version)
+			}
+		})
+	}
+}
