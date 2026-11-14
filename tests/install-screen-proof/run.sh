@@ -8,7 +8,9 @@
 # on the guest's own screen runs the install script as `curl ... | sh` pipes
 # it, with production trust, then `cyfr init`, whose screen question's first
 # answer shows CYFR on the screen, and `cyfr up`, and CYFR answers on its
-# port. After a reboot labwc and Chrome run on tty1 and show the screen's
+# port. Before that `cyfr up`, the same terminal, older than the docker
+# group init joined, runs `cyfr setup`, whose pages set up and start a
+# second CYFR beside it, taken down again. After a reboot labwc and Chrome run on tty1 and show the screen's
 # own setup page (screen-setup.png): with the guest's isolated swtpm it asks
 # for a six-digit PIN and seals the key in the chip; with --no-tpm it
 # refuses six digits and takes the six-word passphrase it shows.
@@ -219,6 +221,59 @@ guest_reboot() {
   done
 }
 
+# The setup pages' driver, on the guest: once cyfr setup in ~/setup-pages
+# publishes its address, it presses Set up CYFR as the pages do and reads
+# their state each second until the run ends; a start that fails waits for
+# the person's choice, so there it interrupts the pane's cyfr setup. It
+# prints the last state the pages read.
+SETUP_PAGES_DRIVER='f=~/setup-pages/.cyfr/setup.url
+for n in $(seq 1 120); do [ -s "$f" ] && break; sleep 1; done
+url=$(cat "$f") || exit 1
+base=${url%/#*} token=${url#*#} st=""
+curl -s --max-time 10 -X POST -H "X-Cyfr-Setup: $token" -H "Origin: $base" -H "Content-Type: application/json" -d "{}" "$base/api/start" >&2
+for n in $(seq 1 900); do
+  st=$(curl -s --max-time 5 -H "X-Cyfr-Setup: $token" "$base/api/state")
+  case $st in
+    *"\"phase\":\"done\""* | *"\"phase\":\"failed\""*) break ;;
+    *"\"phase\":\"problem\""*) tmux send-keys -t proof C-c; break ;;
+  esac
+  sleep 1
+done
+printf "%s\n" "$st"'
+
+# setup_pages_before_the_group: the setup pages started from tty1's
+# terminal, which predates the account's docker group, set up and start a
+# second CYFR in ~/setup-pages. Its docker-compose.yml and .env.example are
+# ~/cyfr's, this tree's server and the box its own account service, which
+# the scaffold download keeps, so nothing reaches cyfr.run. It is taken
+# down, its networks with it, before ~/cyfr starts: both claim the compose
+# file's fixed subnets and container names.
+setup_pages_before_the_group() {
+  local driver
+  step "the setup pages, started from the terminal that started before the group"
+  guest_ssh 'mkdir ~/setup-pages && cd ~/setup-pages && cp ~/cyfr/docker-compose.yml . &&
+    grep -vE "^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS|CYFR_GITHUB_CLIENT_ID|CYFR_GOOGLE_CLIENT_ID)=" ~/cyfr/.env.example >.env.example &&
+    grep -E "^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=" ~/cyfr/.env >>.env.example' \
+    >"$GUEST_DIR/setup-pages-project.txt" 2>&1 || fail "the setup pages' project was not made ($GUEST_DIR/setup-pages-project.txt)"
+  GUEST_SSH_TIMEOUT=1000 guest_ssh "$SETUP_PAGES_DRIVER" >"$GUEST_DIR/setup-pages-state.json" 2>"$GUEST_DIR/setup-pages-driver.txt" &
+  driver=$!
+  pane_step setup 'cd ~/setup-pages && cyfr setup --no-open --no-pull' 960
+  wait "$driver"
+  check "cyfr setup exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "the pages read CYFR up at http://localhost:4000, with its setup link" python3 -I -c '
+import json, sys
+st = json.load(open(sys.argv[1]))
+sys.exit(0 if st["phase"] == "done" and st["address"] == "http://localhost:4000" and st["setup_url"].startswith("http://localhost:4000/setup#") else 1)' \
+    "$GUEST_DIR/setup-pages-state.json"
+  check "no step met a Docker this account may not use" sh -c '! grep -q "may not use the Docker daemon" "$1" "$2"' sh "$GUEST_DIR/transcript-setup.txt" "$GUEST_DIR/setup-pages-state.json"
+  pane_step_end setup
+  # The harness's SSH connection, kept open since before init, predates
+  # the group too.
+  guest_ssh "sg docker -c 'cd ~/setup-pages && ~/.local/bin/cyfr down'" >"$GUEST_DIR/setup-pages-down.txt" 2>&1 ||
+    fail "cyfr down in ~/setup-pages failed ($GUEST_DIR/setup-pages-down.txt)"
+  guest_root 'docker network prune -f' || fail "the setup pages' networks were not removed ($GUEST_DIR/root.txt)"
+}
+
 # box_install: on the guest under way, the install script typed into
 # tty1's terminal, cyfr init with its screen, this tree's server in the
 # release's place and the box made its own account service in .env, cyfr
@@ -266,6 +321,8 @@ box_install() {
   step "this tree's server in the release's place, and the box its own account service in .env"
   candidate_server_load
   account_settings
+
+  setup_pages_before_the_group
 
   step "cyfr up in the terminal that started before the group"
   pane_step up 'cd ~/cyfr && cyfr up' 900
