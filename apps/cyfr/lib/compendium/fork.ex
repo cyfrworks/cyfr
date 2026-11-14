@@ -68,7 +68,7 @@ defmodule Compendium.Fork do
              reference: target_ref_str,
              forked_from: source_ref_str,
              files: files,
-             next_steps: next_steps(source_ref.type, target_base, target_ref_str)
+             next_steps: next_steps(source_ref.type, target_base, target_ref_str, files)
            }}
 
         {:error, :not_owner} = refused ->
@@ -203,15 +203,23 @@ defmodule Compendium.Fork do
   # Next Steps
   # ============================================================================
 
-  defp next_steps("tincture", base, reference) do
+  # A tincture's last step is the one Builds takes for its files: compile
+  # one with a package manifest, register a vanilla one
+  # (`Compendium.Builds.package_manifest/1`).
+  defp next_steps("tincture", base, reference, files) do
+    last =
+      if Path.join(Compendium.Builds.package_manifest(base)) in files,
+        do: Compendium.Scaffold.compile_step(reference),
+        else: Compendium.Scaffold.register_step()
+
     [
       Compendium.Scaffold.where_to_edit(base),
       "Edit the files under src/ to customize the tincture",
-      Compendium.Scaffold.compile_step(reference)
+      last
     ]
   end
 
-  defp next_steps(type, base, reference) do
+  defp next_steps(type, base, reference, _files) do
     [
       Compendium.Scaffold.where_to_edit(base),
       "Edit src/src/lib.rs to modify the #{type} logic",

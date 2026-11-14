@@ -472,9 +472,19 @@ defmodule Compendium.Builds do
   # and directory registration accepts.
   defp publisher, do: ComponentPath.default_publisher()
 
+  @doc """
+  The file whose presence makes the tincture at `base`, a version's
+  folder, one a build compiles: its package manifest at the folder's root.
+  A tincture without it is vanilla: nothing to compile, and it is
+  registered as it stands. The one rule for which a tincture is, read by
+  compile and by a fork's next step (`Compendium.Fork`).
+  """
+  @spec package_manifest([String.t()]) :: [String.t()]
+  def package_manifest(base) when is_list(base), do: base ++ ["package.json"]
+
   defp read_sources(ctx, "tincture", name, version) do
     base = ComponentPath.version_dir("tincture", publisher(), name, version)
-    package = base ++ ["package.json"]
+    package = package_manifest(base)
 
     case Arca.get(Sanctum.Context.actor(ctx), package) do
       # Refused here as well as by the builder, so a unit without its
