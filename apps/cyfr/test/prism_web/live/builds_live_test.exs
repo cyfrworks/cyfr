@@ -21,9 +21,8 @@ defmodule PrismWeb.BuildsLiveTest do
     assert has_element?(view, ~s(select[name="reference"] option[value=""]))
     refute has_element?(view, ~s(select[name="reference"] option[value=""][disabled]))
 
-    view |> form(~s(form[phx-submit="compile"])) |> render_submit()
-
-    assert :sys.get_state(view.pid).socket.assigns.flash ==
-             %{"error" => "Please select a component first."}
+    refute render(view) =~ "Please select a component first."
+    html = view |> form(~s(form[phx-submit="compile"])) |> render_submit()
+    assert html =~ "Please select a component first."
   end
 end
