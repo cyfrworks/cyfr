@@ -975,7 +975,7 @@ Your application data stays in the external database. Tinctures invoke backend c
 
 ### Sending a copy of a file (`file` tool)
 
-Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a copy of files under `data/`. The copy is taken when the offer is made, so later edits do not follow it. It lands only in the recipient's own tree, and only once they accept it; neither person sees the other's tree. `offer`, `offers`, `accept` and `decline` need an interactive session — no API key reaches them; a key with `storage_write` may `withdraw` an offer sent from its athanor.
+Beside `list`, `read`, `write`, `delete` and `move`, the `file` tool sends a person a copy of files under `data/`. The copy is taken when the offer is made, so later edits do not follow it. It lands only in the recipient's own tree, and only once they accept it; neither person sees the other's tree. `offer`, `offers`, `accept` and `decline` need an interactive session — no API key reaches them; a key with `storage_write` may `withdraw` an offer sent from its athanor.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|

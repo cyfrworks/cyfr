@@ -693,6 +693,40 @@ defmodule Arca do
   end
 
   @doc """
+  Move the file at `src`, or every file under it, to the same place under
+  `dest`, both under `data/`, at once (`Arca.ObjectRevisions.move/4`): a
+  reader sees the source or the destination, never both and never
+  neither. `admit:` (required), `fn dest_path, bytes -> :ok | {:error,
+  reason} end`, is asked of every landing file before anything is
+  marked; its refusal is the move's.
+
+  Both paths pass the gate every write passes, the destination's around
+  the source's: authorization, the storage reserve and the cap, which a
+  move that adds no visible bytes meets at zero; the counters drop and the
+  files feed hears both paths once the move publishes. `{:error,
+  :not_movable}` for a path outside `data/`; `{:error, :changed}` when the
+  source moved under the read; `{:error, :exists}`, `:enotdir` or
+  `:eisdir` when something settled at the destination first.
+  """
+  @spec move(Prima.Actor.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
+          :ok | {:error, term()}
+  def move(%Prima.Actor{} = actor, src, dest, opts) do
+    admit = Keyword.fetch!(opts, :admit)
+    src = normalize(src)
+    dest = normalize(dest)
+
+    if Arca.ObjectRevisions.object_path?(src) and Arca.ObjectRevisions.object_path?(dest) do
+      mutating(actor, dest, {:create, 0}, [], fn d ->
+        mutating(actor, src, {:create, 0}, [], fn s ->
+          Arca.ObjectRevisions.move(actor, s, d, admit)
+        end)
+      end)
+    else
+      {:error, :not_movable}
+    end
+  end
+
+  @doc """
   Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).
 
   Lists `src` via `list_recursive/2`, then streams each file with `get/2` +

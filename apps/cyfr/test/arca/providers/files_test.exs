@@ -158,6 +158,19 @@ defmodule Arca.Providers.FilesTest do
              permission: :storage_write
            }
 
+    # A move takes no standing approval and names no resource: one
+    # constrained to paths could not cover its destination.
+    assert actions["move"] == %{
+             kind: :write,
+             planes: [:external],
+             permission: :storage_write,
+             standing: false,
+             auth: :required
+           }
+
+    resources = Map.new(Tool.definition().operations, &{&1.action, &1.resource})
+    assert resources["move"] == nil
+
     assert :ok = Catalog.audit_action_kinds([Tool])
     assert "file" in Enum.map(Catalog.list_tools(), & &1["name"])
   end
@@ -211,6 +224,26 @@ defmodule Arca.Providers.FilesTest do
     assert {:ok, %{entries: [%{name: "hello.txt", kind: :file, size: 5}]}} =
              Sanctum.Gate.call_external("file", ctx, %{"action" => "list", "path" => "data"})
 
+    assert {:ok, %{moved: "data/hello.txt", to: "data/greetings/hello.txt"}} =
+             Sanctum.Gate.call_external("file", ctx, %{
+               "action" => "move",
+               "path" => "data/hello.txt",
+               "to" => "data/greetings/hello.txt"
+             })
+
+    assert {:error, {:not_found, "File", "data/hello.txt"}} =
+             Sanctum.Gate.call_external("file", ctx, %{
+               "action" => "read",
+               "path" => "data/hello.txt"
+             })
+
+    assert {:ok, %{moved: "data/greetings/hello.txt", to: "data/hello.txt"}} =
+             Sanctum.Gate.call_external("file", ctx, %{
+               "action" => "move",
+               "path" => "data/greetings/hello.txt",
+               "to" => "data/hello.txt"
+             })
+
     assert {:ok, %{deleted: "data/hello.txt"}} =
              Sanctum.Gate.call_external("file", ctx, %{
                "action" => "delete",
@@ -244,8 +277,11 @@ defmodule Arca.Providers.FilesTest do
                Tool.handle("file", actor, %{"action" => action})
     end
 
-    assert {:error, {:unknown_action, "file.move"}} =
-             Tool.handle("file", actor, %{"action" => "move"})
+    assert {:error, {:invalid_argument, "move needs path and to"}} =
+             Tool.handle("file", actor, %{"action" => "move", "path" => "data/x"})
+
+    assert {:error, {:unknown_action, "file.rename"}} =
+             Tool.handle("file", actor, %{"action" => "rename"})
 
     assert {:error, :action_missing} = Tool.handle("file", actor, %{})
   end
@@ -296,6 +332,18 @@ defmodule Arca.Providers.FilesTest do
              })
 
     refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "x.txt"])
+
+    :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "kept.txt"], "k")
+
+    assert {:error, _refused} =
+             Sanctum.Gate.call_external("file", reader, %{
+               "action" => "move",
+               "path" => "data/kept.txt",
+               "to" => "data/gone.txt"
+             })
+
+    assert Arca.exists?(Sanctum.Context.actor(ctx), ["data", "kept.txt"])
+    refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "gone.txt"])
   end
 
   # ---------------------------------------------------------------------------

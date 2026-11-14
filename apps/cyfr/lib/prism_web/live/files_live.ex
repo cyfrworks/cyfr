@@ -11,7 +11,17 @@ defmodule PrismWeb.FilesLive do
 
   Every read and change goes through the `file` tool; the bytes of a
   file are downloaded from `PrismWeb.FileController`. The folder in view
-  rides the URL (`?p=data/reports`), so a location is a link.
+  rides the URL (`?p=data/reports`), so a location is a link. A picture
+  shows in the open panel only when its bytes begin as one of the raster
+  types a browser draws and never runs; anything else is downloaded.
+
+  A new folder is held by the page, listed in its parent and opened,
+  until a file is written there: storage keeps no empty folder. A held
+  folder offers one action, Remove, which lets it go with every held
+  folder under it; once a file lands in it, it is a stored folder. Rename
+  and Move are both `file/move`, a rename keeping the folder and a move
+  the name, offered on stored files and folders under `data/`, where a
+  move works.
 
   ## Sending a copy
 
@@ -58,6 +68,9 @@ defmodule PrismWeb.FilesLive do
      |> assign(:picker, nil)
      |> assign(:offers, nil)
      |> assign(:people, %{})
+     |> assign(:new_folders, MapSet.new())
+     |> assign(:naming, nil)
+     |> assign(:relocating, nil)
      |> allow_upload(:files,
        accept: :any,
        max_entries: 10,
@@ -103,7 +116,14 @@ defmodule PrismWeb.FilesLive do
   @impl true
   def handle_params(params, _uri, socket) do
     path = params |> Map.get("p", "") |> String.trim("/")
-    socket = socket |> assign(:path, path) |> assign(:open, nil) |> assign(:editing, false)
+
+    socket =
+      socket
+      |> assign(:path, path)
+      |> assign(:open, nil)
+      |> assign(:editing, false)
+      |> assign(:naming, nil)
+      |> assign(:relocating, nil)
 
     if connected?(socket) do
       send(self(), :load)
@@ -141,7 +161,10 @@ defmodule PrismWeb.FilesLive do
   def handle_event("open", %{"path" => path}, socket) do
     case Ops.call_tool(socket, "file/read", %{"path" => path}) do
       {:ok, file} ->
-        {:noreply, socket |> assign(:open, file) |> assign(:editing, false)}
+        {:noreply,
+         socket
+         |> assign(:open, Map.put(file, :picture, picture(file)))
+         |> assign(:editing, false)}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, Ops.error_message(reason))}
@@ -176,23 +199,55 @@ defmodule PrismWeb.FilesLive do
 
   def handle_event("save", _params, socket), do: {:noreply, socket}
 
-  def handle_event("delete", %{"path" => path}, socket) do
-    case Ops.call_tool(socket, "file/delete", %{"path" => path}) do
-      {:ok, _} ->
-        open = if match?(%{path: ^path}, socket.assigns.open), do: nil, else: socket.assigns.open
+  def handle_event("delete", %{"path" => path}, socket), do: {:noreply, delete(socket, path)}
+
+  # A held folder has nothing stored: Remove lets it go, with every held
+  # folder under it.
+  def handle_event("remove", %{"path" => path}, socket) do
+    {:noreply,
+     socket
+     |> update(:new_folders, &forget(&1, path))
+     |> put_flash(:info, "Removed the empty folder #{path}")}
+  end
+
+  # ---- folders, rename and move -------------------------------------------
+
+  def handle_event("new_folder", _params, socket),
+    do: {:noreply, socket |> assign(:naming, :folder) |> assign(:relocating, nil)}
+
+  def handle_event("cancel_new_folder", _params, socket),
+    do: {:noreply, assign(socket, :naming, nil)}
+
+  def handle_event("create_folder", %{"name" => name}, socket) do
+    name = String.trim(name)
+
+    case folder_name(name, socket.assigns) do
+      :ok ->
+        folder = child(socket.assigns.path, name)
 
         {:noreply,
          socket
-         |> assign(:open, open)
-         |> assign(:editing, false)
-         |> update(:selected, &MapSet.delete(&1, path))
-         |> put_flash(:info, "Deleted #{path}")
-         |> load()}
+         |> update(:new_folders, &MapSet.put(&1, folder))
+         |> assign(:naming, nil)
+         |> push_patch(to: folder_href(socket.assigns.athanor_route, folder))}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, Ops.error_message(reason))}
+      {:error, message} ->
+        {:noreply, put_flash(socket, :error, message)}
     end
   end
+
+  def handle_event("relocate", %{"path" => path, "mode" => mode}, socket)
+      when mode in ~w(rename move) do
+    {:noreply, socket |> assign(:relocating, %{path: path, mode: mode}) |> assign(:naming, nil)}
+  end
+
+  def handle_event("cancel_relocate", _params, socket),
+    do: {:noreply, assign(socket, :relocating, nil)}
+
+  def handle_event("move", params, %{assigns: %{relocating: %{path: path, mode: mode}}} = socket),
+    do: {:noreply, move(socket, path, destination(path, mode, params))}
+
+  def handle_event("move", _params, socket), do: {:noreply, socket}
 
   # ---- uploads --------------------------------------------------------------
 
@@ -338,12 +393,80 @@ defmodule PrismWeb.FilesLive do
     end
   end
 
+  defp move(socket, path, to) do
+    case Ops.call_tool(socket, "file/move", %{"path" => path, "to" => to}) do
+      {:ok, %{moved: moved, to: to}} ->
+        open = if match?(%{path: ^moved}, socket.assigns.open), do: nil, else: socket.assigns.open
+
+        socket
+        |> assign(:relocating, nil)
+        |> assign(:open, open)
+        |> assign(:editing, false)
+        |> update(:selected, &MapSet.delete(&1, moved))
+        |> update(:new_folders, &forget(&1, moved))
+        |> put_flash(:info, "Moved #{moved} to #{to}")
+        |> load()
+
+      {:error, reason} ->
+        put_flash(socket, :error, Ops.error_message(reason))
+    end
+  end
+
+  # The held folders at or under `path`.
+  defp forget(held, path),
+    do: MapSet.reject(held, &(&1 == path or String.starts_with?(&1, path <> "/")))
+
+  defp delete(socket, path) do
+    case Ops.call_tool(socket, "file/delete", %{"path" => path}) do
+      {:ok, _} ->
+        open = if match?(%{path: ^path}, socket.assigns.open), do: nil, else: socket.assigns.open
+
+        socket
+        |> assign(:open, open)
+        |> assign(:editing, false)
+        |> update(:selected, &MapSet.delete(&1, path))
+        |> put_flash(:info, "Deleted #{path}")
+        |> load()
+
+      {:error, reason} ->
+        put_flash(socket, :error, Ops.error_message(reason))
+    end
+  end
+
+  # A rename keeps the folder and takes the typed name; a move keeps the
+  # name and takes the typed folder.
+  defp destination(path, "rename", %{"name" => name}),
+    do: child(parent(path), String.trim(name))
+
+  defp destination(path, "move", %{"folder" => folder}),
+    do: child(String.trim(folder, "/") |> String.trim(), Path.basename(path))
+
+  defp destination(path, _mode, _params), do: path
+
+  defp folder_name("", _assigns), do: {:error, "Name the folder."}
+
+  defp folder_name(name, %{listing: listing, path: path, new_folders: held}) do
+    cond do
+      String.contains?(name, "/") or Prima.PathSafety.validate_segments([name]) != :ok ->
+        {:error, "'#{name}' cannot name a folder: use one name without / or .."}
+
+      listing && Enum.any?(entries(listing, path, held), &(&1.name == name)) ->
+        {:error, "'#{name}' already exists here — choose another name"}
+
+      true ->
+        :ok
+    end
+  end
+
   # ---- data -----------------------------------------------------------------
 
   defp load(socket) do
     case Ops.call_tool(socket, "file/list", %{"path" => socket.assigns.path}) do
       {:ok, listing} ->
-        socket |> assign(:listing, listing) |> assign(:loading, false)
+        socket
+        |> assign(:listing, listing)
+        |> assign(:loading, false)
+        |> update(:new_folders, &unheld(&1, socket.assigns.path, listing))
 
       {:error, reason} ->
         socket
@@ -398,6 +521,49 @@ defmodule PrismWeb.FilesLive do
   end
 
   defp child(path, name), do: Enum.join(Enum.reject([path, name], &(&1 == "")), "/")
+
+  defp parent(path), do: path |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
+
+  # What the listing shows stored is held no more, nor is any folder above
+  # it: a child listed under the folder in view, and that folder itself
+  # once anything is in it.
+  defp unheld(held, path, %{entries: entries}) do
+    stored = Enum.map(entries, &child(path, &1.name)) ++ if(entries != [], do: [path], else: [])
+
+    MapSet.reject(held, fn folder ->
+      Enum.any?(stored, &(&1 == folder or String.starts_with?(&1, folder <> "/")))
+    end)
+  end
+
+  # The folder's entries with the new folders the page holds under it,
+  # directories first, each by name, as the listing orders them.
+  defp entries(%{entries: entries}, path, new_folders) do
+    listed = MapSet.new(entries, & &1.name)
+
+    held =
+      for folder <- new_folders,
+          parent(folder) == path,
+          name = Path.basename(folder),
+          not MapSet.member?(listed, name),
+          do: %{name: name, kind: :dir, size: nil, held: true}
+
+    Enum.sort_by(entries ++ held, &{&1.kind != :dir, &1.name})
+  end
+
+  # The raster types a browser draws and never runs, told by their first
+  # bytes rather than the file's name; SVG, which can carry script, is
+  # downloaded like any other file.
+  defp picture(%{encoding: "base64", content: content}) do
+    case Base.decode64(binary_part(content, 0, min(byte_size(content), 16))) do
+      {:ok, <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, _::binary>>} -> "image/png"
+      {:ok, <<0xFF, 0xD8, 0xFF, _::binary>>} -> "image/jpeg"
+      {:ok, <<"GIF8", v, "a", _::binary>>} when v in [?7, ?9] -> "image/gif"
+      {:ok, <<"RIFF", _size::binary-size(4), "WEBP", _::binary>>} -> "image/webp"
+      _other -> nil
+    end
+  end
+
+  defp picture(_file), do: nil
 
   # The breadcrumb: each folder on the way, with the path it opens.
   defp crumbs(""), do: []
@@ -548,21 +714,89 @@ defmodule PrismWeb.FilesLive do
         </div>
       </.card>
 
+      <.card :if={@relocating}>
+        <form id="files-move" phx-submit="move" class="space-y-2">
+          <label :if={@relocating.mode == "rename"} class="block text-sm text-gray-300">
+            Rename <span class="font-mono">{@relocating.path}</span>
+            to
+            <input
+              type="text"
+              name="name"
+              value={Path.basename(@relocating.path)}
+              class="mt-1 block w-full rounded bg-gray-800 border border-gray-700 px-2 py-1 font-mono text-xs text-white"
+            />
+          </label>
+          <label :if={@relocating.mode == "move"} class="block text-sm text-gray-300">
+            Move <span class="font-mono">{@relocating.path}</span>
+            into the folder
+            <input
+              type="text"
+              name="folder"
+              value={parent(@relocating.path)}
+              class="mt-1 block w-full rounded bg-gray-800 border border-gray-700 px-2 py-1 font-mono text-xs text-white"
+            />
+          </label>
+          <div class="flex gap-2">
+            <.button type="submit" size="sm">
+              {if @relocating.mode == "rename", do: "Rename", else: "Move"}
+            </.button>
+            <.button type="button" variant="ghost" size="sm" phx-click="cancel_relocate">
+              Cancel
+            </.button>
+          </div>
+        </form>
+      </.card>
+
       <div class="grid gap-6 lg:grid-cols-5">
         <.card class={if @open, do: "lg:col-span-2", else: "lg:col-span-5"}>
+          <div :if={@path != "" and writable?(@listing)} class="mb-3 space-y-2">
+            <.button
+              :if={is_nil(@naming)}
+              id="files-new-folder"
+              variant="ghost"
+              size="sm"
+              phx-click="new_folder"
+            >
+              New folder
+            </.button>
+            <form
+              :if={@naming == :folder}
+              id="files-folder-form"
+              phx-submit="create_folder"
+              class="flex flex-wrap items-center gap-2"
+            >
+              <input
+                type="text"
+                name="name"
+                aria-label="The new folder's name"
+                class="min-w-0 flex-1 rounded bg-gray-800 border border-gray-700 px-2 py-1 font-mono text-xs text-white"
+              />
+              <.button type="submit" size="sm">Create</.button>
+              <.button type="button" variant="ghost" size="sm" phx-click="cancel_new_folder">
+                Cancel
+              </.button>
+            </form>
+          </div>
+
           <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
 
-          <div :if={!@loading && @listing && @listing.entries == []} class="py-8">
+          <div
+            :if={!@loading && @listing && entries(@listing, @path, @new_folders) == []}
+            class="py-8"
+          >
             <.empty_state message="Nothing here yet" />
           </div>
 
           <table
-            :if={!@loading && @listing && @listing.entries != []}
+            :if={!@loading && @listing && entries(@listing, @path, @new_folders) != []}
             id="files-entries"
             class="min-w-full"
           >
             <tbody class="divide-y divide-gray-800/50">
-              <tr :for={entry <- @listing.entries} class="hover:bg-gray-800/30">
+              <tr
+                :for={entry <- entries(@listing, @path, @new_folders)}
+                class="hover:bg-gray-800/30"
+              >
                 <td :if={in_data?(@path)} class="w-6 pl-3 py-2">
                   <input
                     :if={entry.kind == :file}
@@ -608,7 +842,27 @@ defmodule PrismWeb.FilesLive do
                     Download
                   </a>
                   <button
-                    :if={@path != "" and writable?(@listing)}
+                    :if={in_data?(@path) and not Map.get(entry, :held, false)}
+                    type="button"
+                    phx-click="relocate"
+                    phx-value-path={child(@path, entry.name)}
+                    phx-value-mode="rename"
+                    class="text-xs text-gray-500 hover:text-white mr-2"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    :if={in_data?(@path) and not Map.get(entry, :held, false)}
+                    type="button"
+                    phx-click="relocate"
+                    phx-value-path={child(@path, entry.name)}
+                    phx-value-mode="move"
+                    class="text-xs text-gray-500 hover:text-white mr-2"
+                  >
+                    Move
+                  </button>
+                  <button
+                    :if={@path != "" and writable?(@listing) and not Map.get(entry, :held, false)}
                     type="button"
                     phx-click="delete"
                     phx-value-path={child(@path, entry.name)}
@@ -616,6 +870,15 @@ defmodule PrismWeb.FilesLive do
                     class="text-xs text-gray-500 hover:text-red-300"
                   >
                     Delete
+                  </button>
+                  <button
+                    :if={Map.get(entry, :held, false)}
+                    type="button"
+                    phx-click="remove"
+                    phx-value-path={child(@path, entry.name)}
+                    class="text-xs text-gray-500 hover:text-red-300"
+                  >
+                    Remove
                   </button>
                 </td>
               </tr>
@@ -708,7 +971,18 @@ defmodule PrismWeb.FilesLive do
               class="whitespace-pre-wrap break-words font-mono text-xs text-gray-300 bg-gray-950/60 rounded p-3 max-h-[70vh] overflow-auto"
             >{@open.content}</pre>
 
-            <p :if={@open.encoding == "base64"} class="text-xs text-gray-500">
+            <img
+              :if={@open.picture}
+              id="files-picture"
+              src={"data:#{@open.picture};base64,#{@open.content}"}
+              alt={@open.path}
+              class="max-h-[70vh] max-w-full rounded"
+            />
+
+            <p
+              :if={@open.encoding == "base64" and is_nil(@open.picture)}
+              class="text-xs text-gray-500"
+            >
               Binary content — download it to open.
             </p>
           </div>
