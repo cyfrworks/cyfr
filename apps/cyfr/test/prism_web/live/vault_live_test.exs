@@ -1619,13 +1619,8 @@ defmodule PrismWeb.VaultLiveTest do
           config_json:
             Jason.encode!(%{
               "home" => "scratch",
-              "backends" => [
-                %{
-                  "name" => name,
-                  "command" => "npx -y some-harness",
-                  "env" => %{"TOKEN" => "vault:" <> entry_name}
-                }
-              ]
+              "command" => "npx -y some-harness",
+              "env" => %{"TOKEN" => "vault:" <> entry_name}
             })
         })
     end
