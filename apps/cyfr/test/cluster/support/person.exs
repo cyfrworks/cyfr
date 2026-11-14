@@ -15,8 +15,9 @@ defmodule Cyfr.Cluster.Person do
   indexed and the soul consented. The model's key is then entered and
   bound through the consent walk (`person!/0`). What such a
   person does then goes through the runner (`send/3`), the approvals door
-  (`decide/3`), the consent walk (`plan/2`, `commit/3`) and the gate
-  (`call/3`), on whichever member a case names.
+  (`decide/3`), the console's opening of a thread (`open/2`), the consent
+  walk (`plan/2`, `commit/3`) and the gate (`call/3`), on whichever member
+  a case names.
 
   The model the turns run on is the shipped Claude catalyst, served by
   each member's scripted worker service (`Cyfr.Cluster.Boot.start_worker!/1`),
@@ -202,6 +203,14 @@ defmodule Cyfr.Cluster.Person do
   @doc "Send `text` on `thread_id` as the person, through this member's runner."
   @spec send(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def send(token, thread_id, text), do: Aqua.Runner.send_message(context!(token), thread_id, text)
+
+  @doc """
+  Open `thread_id` as the person's console does, through this member's
+  runner: the live part of the thread a viewer joining reads, which starts
+  the thread's runner here when no live member runs it.
+  """
+  @spec open(String.t(), String.t()) :: map() | {:error, term()}
+  def open(token, thread_id), do: Aqua.Runner.state(thread_id, context!(token).athanor_id)
 
   @doc "Call the tool `name` as the person, through the gate's external entry."
   @spec call(String.t(), String.t(), map()) :: {:ok, term()} | {:error, term()}

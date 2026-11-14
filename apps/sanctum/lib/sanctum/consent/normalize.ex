@@ -384,32 +384,6 @@ defmodule Sanctum.Consent.Normalize do
   defp normalize_cap(key, _value, tag),
     do: {:error, {tag, :caps, "key must be a string, got: #{inspect(key)}"}}
 
-  @doc false
-  # An agent's policy modes: two disjoint string sets. A key in both
-  # would be two answers to one question.
-  def tool_policy(map, key, tag) do
-    case Map.get(map, key) do
-      nil ->
-        {:ok, nil}
-
-      policy when is_map(policy) ->
-        with :ok <- only_keys(policy, ~w(auto ask)a, tag),
-             {:ok, auto} <- string_set(policy, :auto, tag),
-             {:ok, ask} <- string_set(policy, :ask, tag) do
-          overlap = auto -- (auto -- ask)
-
-          if overlap == [] do
-            {:ok, %{"auto" => auto, "ask" => ask}}
-          else
-            {:error, {tag, key, "auto and ask must be disjoint"}}
-          end
-        end
-
-      _other ->
-        {:error, {tag, key, "must be a map"}}
-    end
-  end
-
   # The kinds a subset may name, each with the fields it narrows; `tools`,
   # the limits and the exits are their own shapes below.
   @subset_sets %{
