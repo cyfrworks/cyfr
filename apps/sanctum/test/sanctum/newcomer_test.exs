@@ -22,7 +22,7 @@ defmodule Sanctum.NewcomerTest do
   alias Arca.Schemas.{Invitation, PersonIdentity, User}
   alias Sanctum.Door.Store
   alias Sanctum.Newcomer
-  alias Sanctum.Test.DirectoryServer
+  alias Sanctum.Test.{DirectoryServer, RegistryStub}
 
   @token String.duplicate("5e", 32)
 
@@ -169,6 +169,106 @@ defmodule Sanctum.NewcomerTest do
                Newcomer.admit({:invitation, String.duplicate("0", 64)}, account!(dir))
 
       assert {:error, :invitation_invalid} = Newcomer.admit({:invitation, nil}, account!(dir))
+    end
+  end
+
+  describe "the account's name" do
+    # The registry names each account; `:close` drops the lookup unanswered.
+    defp named!(names, dir), do: RegistryStub.handles!(names, dir.url)
+
+    defp slug(user_id) do
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
+      {athanor.slug, athanor.name}
+    end
+
+    defp entry(identifier) do
+      Enum.find(Store.list(), &(&1.value == identifier))
+    end
+
+    test "is the person's namespace, their athanor's slug and name, and labels setup's allow",
+         %{dir: dir} do
+      account = account!(dir)
+      named!(%{"mira" => account.identifier}, dir)
+
+      {:ok, %{person: person}} = Newcomer.admit({:setup, @token}, account)
+
+      assert %{namespace: "mira"} = person
+      assert slug(person.id) == {"mira", "mira"}
+
+      assert %{effect: "allow", status: "allowed", label: "mira", note: "setup"} =
+               entry(account.identifier)
+
+      assert_received {:registry_request, %{path: "/v1/identities/" <> rest}}
+      assert rest == account.identifier <> "/handle"
+    end
+
+    test "labels an invitation's allow, and the request a refusal at the open door leaves",
+         %{dir: dir} do
+      {first, _account} = first!(dir)
+      invited = account!(dir)
+      refused = account!(dir)
+      named!(%{"oren" => invited.identifier, "wren" => refused.identifier}, dir)
+
+      ctx = Sanctum.TestContext.session!(first.id) |> Map.put(:platform_admin, true)
+      {:ok, %{code: code}} = Sanctum.Invitations.create(ctx, nil)
+      {:ok, hash} = Sanctum.Invitations.code_hash(code)
+
+      {:ok, %{person: oren}} = Newcomer.admit({:invitation, hash}, invited)
+      assert %{namespace: "oren"} = oren
+      assert slug(oren.id) == {"oren", "oren"}
+      assert %{effect: "allow", status: "allowed", label: "oren"} = entry(invited.identifier)
+
+      assert {:error, {:door, :not_allowed}} = Newcomer.admit(:open, refused)
+
+      assert [
+               %{
+                 value: value,
+                 status: "requested",
+                 requested_by: value,
+                 note: "refused at sign-in",
+                 label: "wren"
+               }
+             ] = Store.requests()
+
+      assert value == refused.identifier
+    end
+
+    test "a lookup that fails, a name the account lacks, or a name a person here holds admits the person unnamed",
+         %{dir: dir} do
+      {first, _account} = first!(dir)
+      {:ok, _} = Store.allow("wildcard", "*", first.id)
+      {:ok, holder} = Sanctum.Tenancy.Users.get(first.id)
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(holder, "held")
+
+      lost = account!(dir)
+      unheld = account!(dir)
+      twice = account!(dir)
+
+      # The registry drops `lost`'s lookup unanswered, names `twice` by the
+      # name the first person holds here, and names `unheld` by none.
+      RegistryStub.start!(fn %{path: "/v1/identities/" <> rest} ->
+        case String.replace_suffix(rest, "/handle", "") do
+          id when id == lost.identifier -> :close
+          id when id == twice.identifier -> {200, name_answer("held", id)}
+          _other -> RegistryStub.refusal(:handle_not_found)
+        end
+      end)
+
+      for account <- [lost, unheld, twice] do
+        {:ok, %{person: person}} = Newcomer.admit(:open, account)
+        assert %{namespace: nil} = person
+        assert {"me" <> _, "Me"} = slug(person.id)
+      end
+    end
+
+    defp name_answer(name, identifier) do
+      RegistryStub.answer(%{
+        "protocol" => Prima.HandleAnswer.protocol(),
+        "registry" => RegistryStub.host(),
+        "handle" => name,
+        "identifier" => identifier,
+        "directory" => RegistryStub.directory()
+      })
     end
   end
 

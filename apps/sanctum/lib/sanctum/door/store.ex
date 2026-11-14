@@ -168,11 +168,14 @@ defmodule Sanctum.Door.Store do
   asked.
 
   A request is not an allow: `allowed/2` needs `status: "allowed"`, which
-  only `resolve/3` writes.
+  only `resolve/3` writes. `opts` as `allow/4` takes them: `label:` is the
+  name the identifier holds, so the operator sees who is asking.
   """
-  @spec request(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+  @spec request(String.t(), String.t(), String.t() | nil, write_opts()) ::
           {:ok, :created | :existing, entry()} | {:error, term()}
-  def request("identifier" = kind, value, requested_by, note \\ nil) when is_binary(value) do
+  def request("identifier" = kind, value, requested_by, opts \\ []) when is_binary(value) do
+    opts = Keyword.validate!(opts, [:note, :label])
+
     case find(kind, value) do
       {:ok, entry} ->
         {:ok, :existing, entry}
@@ -184,7 +187,8 @@ defmodule Sanctum.Door.Store do
           effect: "allow",
           status: "requested",
           requested_by: requested_by,
-          note: note
+          note: opts[:note],
+          label: opts[:label]
         })
 
       {:error, _} = err ->

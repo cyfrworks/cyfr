@@ -295,7 +295,7 @@ defmodule PrismWeb.SettingsLive do
 
     socket
     |> assign(:door_entries, entries)
-    |> assign(:door_names, names(entries))
+    |> assign(:door_names, names(entries ++ requests))
     |> assign(:door_requests, requests)
   end
 
@@ -327,24 +327,39 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # The name each person an entry names holds here, by their id; an entry
-  # made from a name shows its label instead.
+  # The name each person an entry or request names holds here, by their
+  # person id or their identifier, and the name of each member who asked;
+  # an entry made from a name shows its label instead.
   defp names(entries) do
-    for %{kind: "person", value: user_id} = entry <- entries,
-        is_nil(entry[:label]),
-        {:ok, %{namespace: name}} when is_binary(name) <- [Sanctum.Tenancy.Users.get(user_id)],
+    unlabelled = for entry <- entries, is_nil(entry[:label]), do: {entry.kind, entry.value}
+    askers = for %{requested_by: "usr_" <> _ = user_id} <- entries, do: {"person", user_id}
+
+    for {kind, value} <- Enum.uniq(unlabelled ++ askers),
+        {:ok, %{namespace: name}} when is_binary(name) <- [person(kind, value)],
         into: %{},
-        do: {user_id, name}
+        do: {value, name}
   end
 
-  # An allowlist entry's name: the person's name here, everyone for `*`,
-  # or, for an entry nothing here names, where it came from.
-  defp entry_name(%{kind: "wildcard"}, _names), do: "everyone"
+  defp person("person", user_id), do: Sanctum.Tenancy.Users.get(user_id)
+  defp person("identifier", identifier), do: Sanctum.Tenancy.Users.get_by_identifier(identifier)
+  defp person(_kind, _value), do: {:error, :not_found}
 
-  defp entry_name(%{value: value}, names) do
+  # An entry's name: its label, the person's name here, everyone for `*`,
+  # or, while no name is known, the identifier itself.
+  defp entry_name(%{kind: "wildcard"}, _names), do: "everyone"
+  defp entry_name(%{label: label}, _names) when is_binary(label), do: "@" <> label
+  defp entry_name(%{value: value}, names), do: known_name(value, names)
+
+  # Who asked for a request: the person refused at sign-in themselves, or
+  # the member who invited them.
+  defp asked_by(%{requested_by: by, value: by}, _names), do: "themselves, at sign-in"
+  defp asked_by(%{requested_by: nil}, _names), do: "-"
+  defp asked_by(%{requested_by: by}, names), do: known_name(by, names)
+
+  defp known_name(value, names) do
     case Map.fetch(names, value) do
       {:ok, name} -> "@" <> name
-      :error -> "added from the command line"
+      :error -> value
     end
   end
 
@@ -610,8 +625,11 @@ defmodule PrismWeb.SettingsLive do
             <div :if={@door_requests != []} class="mb-4">
               <h4 class="text-xs text-gray-500 uppercase mb-2">Requests</h4>
               <.table id="door-requests" rows={@door_requests}>
+                <:col :let={r} label="Name">
+                  <span data-test="door-request-name">{entry_name(r, @door_names)}</span>
+                </:col>
                 <:col :let={r} label="Identifier">{r.value}</:col>
-                <:col :let={r} label="Asked by">{r.requested_by || "-"}</:col>
+                <:col :let={r} label="Asked by">{asked_by(r, @door_names)}</:col>
                 <:col :let={r} label="Actions">
                   <div class="flex gap-2">
                     <.button
@@ -641,10 +659,7 @@ defmodule PrismWeb.SettingsLive do
             <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
               <:col :let={e} label="Entry">{e.value}</:col>
               <:col :let={e} label="Name">
-                <span :if={e[:label]} data-test="door-entry-label">@{e[:label]}</span>
-                <span :if={is_nil(e[:label])} class="text-gray-400" data-test="door-entry-name">
-                  {entry_name(e, @door_names)}
-                </span>
+                <span data-test="door-entry-name">{entry_name(e, @door_names)}</span>
               </:col>
               <:col :let={e} label="Kind">{e.kind}</:col>
               <:col :let={e} label="Effect">
