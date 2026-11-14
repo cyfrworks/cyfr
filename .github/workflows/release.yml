@@ -96,6 +96,11 @@ jobs:
           fi
           echo "The tag $GITHUB_REF_NAME is the version apps/prima/mix.exs declares."
 
+      # The release's written note, which GoReleaser publishes as its notes:
+      # a tag that carries none publishes nothing.
+      - name: The tag carries its release note
+        run: scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release-note.md"
+
   # The app image and the Locus image, which serves the runtime, the builds
   # and the backends service: every deploy pulls both, and a project
   # `cyfr init` writes carries no sources to build them from.
@@ -385,12 +390,17 @@ jobs:
       - name: Sign the release manifest
         run: scripts/ci/retry.sh cosign sign-blob --yes --new-bundle-format --bundle "$RUNNER_TEMP/release/release.json.sigstore.json" "$RUNNER_TEMP/release/release.json"
 
+      # The tag's written note, published as the release's notes in place of
+      # a list of commits: GoReleaser's changelog step reads --release-notes.
+      - name: Write the release note
+        run: scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release/notes.md"
+
       - name: Run GoReleaser
         id: goreleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: 'v2.18.3'
-          args: release --clean
+          args: release --clean --release-notes ${{ runner.temp }}/release/notes.md
           workdir: apps/codex
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

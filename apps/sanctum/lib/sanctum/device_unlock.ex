@@ -528,7 +528,7 @@ defmodule Sanctum.DeviceUnlock do
         :ok
 
       {:ok, hashes} ->
-        Sanctum.Session.announce_revoked(user_id, hashes)
+        Sanctum.Session.announce_revoked(user_id, hashes, :signed_out)
 
       {:error, _unanswered} ->
         {:error, :unavailable}

@@ -2947,7 +2947,7 @@ func TestUpdateRefusesAnotherSchemaBeforeAnythingStops(t *testing.T) {
 	for name, c := range map[string]struct{ out, exit, want string }{
 		"another schema": {"booting\nCYFR_SCHEMA=" + schemaOther + "\n", "0",
 			"This CYFR's database was built from schema a0a0a0a0a0a0…, and release 0.9.0 runs only on a database built from schema 5e5e5e5e5e5e…: there is no upgrade path between them, so nothing was stopped or changed.\n" +
-				"To start over on release 0.9.0, keeping nothing of this CYFR: run 'cyfr down' here, remove this directory (with sudo: CYFR's container owns data/), then run 'cyfr init' and 'cyfr up' in a new directory"},
+				"To start over on release 0.9.0, keeping nothing of this CYFR: run 'cyfr uninstall' here, then delete this directory by hand (with sudo: CYFR's container owns data/) and remove the volumes it names, then install release 0.9.0 with: curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.9.0 sh"},
 		"no answer":         {"booting\n", "0", unreadable("0 lines starting CYFR_SCHEMA=, want one")},
 		"two answers":       {"CYFR_SCHEMA=" + schemaRelease + "\nCYFR_SCHEMA=" + schemaRelease + "\n", "0", unreadable("2 lines starting CYFR_SCHEMA=, want one")},
 		"not a fingerprint": {"CYFR_SCHEMA=sha256:" + schemaRelease + "\n", "0", unreadable(`the answer "sha256:` + schemaRelease + `" is not a schema fingerprint`)},

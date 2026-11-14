@@ -485,9 +485,17 @@ defmodule Sanctum.Consent.Normalize do
   defp subset_kind(node, kind, value, tag) when is_map_key(@subset_sets, kind),
     do: subset_sets(node, kind, value, Map.fetch!(@subset_sets, kind), tag)
 
+  # An agent's provider search is a tool kept by its name, beside the
+  # catalog actions a narrowing names
+  # (`Sanctum.Consent.ShapeDerivation.granted_tools/1`).
   defp subset_kind(node, "tools", value, tag) do
-    case tool_actions(%{tools: value}, :tools, tag) do
-      {:ok, tools} -> {:ok, tools}
+    search = Sanctum.Consent.ShapeDerivation.provider_search()
+
+    {kept, actions} =
+      if is_list(value), do: Enum.split_with(value, &(&1 == search)), else: {[], value}
+
+    case tool_actions(%{tools: actions}, :tools, tag) do
+      {:ok, tools} -> {:ok, Enum.sort(Enum.uniq(kept) ++ tools)}
       {:error, {^tag, :tools, why}} -> {:error, {tag, :subset, "#{node} tools #{why}"}}
     end
   end

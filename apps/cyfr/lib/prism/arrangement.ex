@@ -6,9 +6,11 @@ defmodule Prism.Arrangement do
   The person's gestures on their screen, as data, and what each makes of
   their layout (`Prima.Layout`): one canvas's apps in one posture moved,
   resized, tiled, made full, minimised, restored, raised, closed or
-  opened. A plain function of a document; it reads and writes no store.
+  opened, or the desktop a canvas runs replaced. A plain function of a
+  document; it reads and writes no store.
 
-  A gesture names an app by its versionless tincture reference:
+  A gesture names a tincture by its versionless reference, an app but for
+  `:desktop`:
 
     * `{:move, ref, geometry}` — the app stands as a window at `geometry`,
       raised above every other, so a window dragged lands on top;
@@ -24,7 +26,10 @@ defmodule Prism.Arrangement do
     * `{:close, ref}` — the app leaves the canvas;
     * `{:open, ref, app}` — an app not placed is placed as `app` (`open/2`
       names a default), above every other; one placed and minimised is
-      restored, and one shown is raised.
+      restored, and one shown is raised;
+    * `{:desktop, ref}` — the canvas runs the desktop `ref`, its apps in
+      every posture kept as they stand; it places no app, so the hand
+      allows it.
 
   `apply/4` answers the document with the gesture made, or a refusal: an
   app the canvas does not place (`:not_placed`), a placement gesture in
@@ -57,11 +62,12 @@ defmodule Prism.Arrangement do
           | {:raise, Layout.ref()}
           | {:close, Layout.ref()}
           | {:open, Layout.ref(), Layout.app()}
+          | {:desktop, Layout.ref()}
 
   @typedoc "Why a gesture was refused."
   @type refusal :: :not_placed | :hand | :no_canvas | {:invalid, String.t()}
 
-  @doc "The app a gesture names."
+  @doc "The tincture a gesture names: an app, or for `:desktop` the canvas's."
   @spec ref(t()) :: Layout.ref()
   def ref(gesture), do: elem(gesture, 1)
 
@@ -71,6 +77,19 @@ defmodule Prism.Arrangement do
   """
   @spec apply(Layout.t(), String.t(), Layout.posture_name(), t()) ::
           {:ok, Layout.t()} | {:error, refusal()}
+  def apply(%Layout{} = layout, canvas_id, _posture, {:desktop, ref}) do
+    with {:ok, canvas} <- canvas(layout, canvas_id) do
+      checked(%{
+        layout
+        | canvases:
+            Enum.map(
+              layout.canvases,
+              &if(&1.id == canvas_id, do: %{canvas | tincture: ref}, else: &1)
+            )
+      })
+    end
+  end
+
   def apply(%Layout{} = layout, canvas_id, posture, gesture) do
     with {:ok, canvas} <- canvas(layout, canvas_id),
          :ok <- posture_allows(posture, gesture),

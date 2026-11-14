@@ -360,6 +360,14 @@ defmodule Emissary.Web.DeviceChannelTest do
         "forbidden",
         :established
       )
+
+      # The decision names what the channel was doing and why it refused,
+      # so the person's Activities row has something to act on.
+      assert [decision] =
+               Enum.filter(decisions_of(state.ctx.request_id), &(&1.admission == "refused"))
+
+      assert {decision.tool, decision.action, decision.reason} ==
+               {"device", "keepalive", "This device's pairing was revoked"}
     end
 
     test "a person denied at the door is refused before new work", %{
@@ -1447,8 +1455,14 @@ defmodule Emissary.Web.DeviceChannelTest do
         Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
 
       # The ping is 30 s away; a standing change reaches an open stream
-      # within 2 s (the caller bound, `Sanctum.Caller.fresh?/1`).
-      assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: ^user_id} = announcement, 2_000
+      # within 2 s (the caller bound, `Sanctum.Caller.fresh?/1`). The
+      # announcement says a device was removed.
+      assert_receive %Cyfr.Bus.Session{
+                       kind: :revoked,
+                       user_id: ^user_id,
+                       reason: :device_removed
+                     } = announcement,
+                     2_000
 
       assert {:stop, :normal, {4403, "forbidden"}, frames, state} =
                DeviceChannel.handle_info(announcement, state)

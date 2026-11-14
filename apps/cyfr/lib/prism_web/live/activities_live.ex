@@ -518,10 +518,16 @@ defmodule PrismWeb.ActivitiesLive do
                 <td class="px-4 py-2 text-xs text-gray-400 whitespace-nowrap">
                   {plane_label(decision.plane)}
                 </td>
-                <td class="px-4 py-2 text-sm whitespace-nowrap" title={decision.reason}>
+                <td class="px-4 py-2 text-sm max-w-0" title={decision.reason}>
                   <.decision_state status={admission_status(decision)}>
                     {admission_label(decision)}
                   </.decision_state>
+                  <span
+                    :if={decision.admission == :refused and decision.reason not in [nil, ""]}
+                    class="block truncate text-xs text-gray-400"
+                  >
+                    {decision.reason}
+                  </span>
                 </td>
                 <td class="px-4 py-2 text-sm whitespace-nowrap">
                   <span :if={decision.admission == :refused} class="text-gray-600">—</span>

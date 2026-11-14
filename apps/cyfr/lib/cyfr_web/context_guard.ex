@@ -35,7 +35,10 @@ defmodule CyfrWeb.ContextGuard do
     * `watch/2`, `standing/2` and `unwatch/1` — a long-lived stream.
 
   Refusals: a session that no longer stands (`:unauthenticated`,
-  `:not_standing`) sends the person to sign in, a focus that no longer
+  `:not_standing`) sends the person to sign in, told why when a
+  retirement's announcement named this page's session
+  (`Cyfr.Bus.Session.reasons/0`: denied, a device removed, signed out), and
+  told only that the sign-in ended when it was another of the person's, a focus that no longer
   stands (`:not_member`) sends them to the root, and a store that cannot
   answer (`:unavailable`) halts the action with "try again shortly" —
   never a success and never a sign-out. A remote person whose identity
@@ -189,10 +192,11 @@ defmodule CyfrWeb.ContextGuard do
 
   # Announcements about this caller revalidate now; announcements about
   # anyone else are consumed here, as the gate's own traffic.
-  defp on_info(%Session{kind: :revoked, user_id: user_id}, socket) do
-    if caller?(socket, &(&1.user_id == user_id)),
-      do: settle(socket, :halt),
-      else: {:halt, socket}
+  defp on_info(%Session{kind: :revoked, user_id: user_id} = notice, socket) do
+    case socket.assigns[:context] do
+      %Context{user_id: ^user_id} = ctx -> settle(socket, :halt, why(notice, ctx))
+      _ -> {:halt, socket}
+    end
   end
 
   defp on_info(%CallerInvalidated{session_key: key}, socket) do
@@ -215,6 +219,12 @@ defmodule CyfrWeb.ContextGuard do
 
   defp on_info(_message, socket), do: proceed(socket)
 
+  # A retirement's reason belongs to the sessions it names: a page whose
+  # own session is among them is told it; any other that finds its session
+  # gone, which expired or ended unannounced, says only that it ended.
+  defp why(%Session{reason: reason, session_keys: keys}, %Context{session_token_hash: key}),
+    do: if(is_binary(key) and key in keys, do: reason, else: :ended)
+
   defp caller?(socket, fun) do
     case socket.assigns[:context] do
       %Context{} = ctx -> fun.(ctx)
@@ -230,19 +240,33 @@ defmodule CyfrWeb.ContextGuard do
     end
   end
 
-  # Revalidate now. `continue` is what a success does with the message.
-  defp settle(socket, continue) do
+  # Revalidate now. `continue` is what a success does with the message;
+  # `why` is what a retirement's announcement said ended sessions, nil
+  # when none did.
+  defp settle(socket, continue, why \\ nil) do
     case socket.assigns[:context] do
       %Context{} = ctx ->
         case Caller.revalidate_session(ctx) do
           {:ok, fresh} -> {continue, put_context(socket, fresh)}
-          {:error, reason} -> {:halt, refuse(socket, reason)}
+          {:error, reason} -> {:halt, refuse(socket, reason, why)}
         end
 
       _ ->
         {continue, socket}
     end
   end
+
+  # The session itself went, by a retirement the announcement named: the
+  # person is told which on the sign-in page. Only a page whose own
+  # session went says it, so no one is told anything of another's.
+  defp refuse(socket, reason, why)
+       when reason in [:unauthenticated, :not_standing] and not is_nil(why) do
+    socket
+    |> LiveView.put_flash(:error, Prima.Refusal.message({:session_ended, why}))
+    |> LiveView.redirect(to: refusal_path(reason))
+  end
+
+  defp refuse(socket, reason, _why), do: refuse(socket, reason)
 
   defp refuse(socket, :unavailable), do: LiveView.put_flash(socket, :error, @unavailable)
 

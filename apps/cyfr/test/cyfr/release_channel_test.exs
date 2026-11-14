@@ -6,8 +6,8 @@ defmodule Cyfr.ReleaseChannelTest do
   The release channel `cyfr update` reads, as the status a canvas reads
   asks it: the CLI's version grammar and precedence, held to
   tests/fixtures/release_manifest.json's `versions`; the CLI's choice of
-  the newest release over listings with drafts, pre-releases and
-  malformed tags; and the process, on a read and a clock of the test's
+  the newest release, held to its `selection`, and over malformed
+  entries; and the process, on a read and a clock of the test's
   own, which serves its answer without waiting, reads a stale one once in
   the background, keeps the last answer through a failure and tries again
   no sooner than an hour later, and ends its read when it stops or dies.
@@ -20,10 +20,11 @@ defmodule Cyfr.ReleaseChannelTest do
 
   alias Cyfr.ReleaseChannel
 
-  @versions Path.expand("../../../../tests/fixtures/release_manifest.json", __DIR__)
-            |> File.read!()
-            |> Jason.decode!()
-            |> Map.fetch!("versions")
+  @vectors Path.expand("../../../../tests/fixtures/release_manifest.json", __DIR__)
+           |> File.read!()
+           |> Jason.decode!()
+  @versions Map.fetch!(@vectors, "versions")
+  @selection Map.fetch!(@vectors, "selection")
 
   @day :timer.hours(24)
   @hour :timer.hours(1)
@@ -68,7 +69,46 @@ defmodule Cyfr.ReleaseChannelTest do
       assert ReleaseChannel.newest(releases) == "99999999999999.0.0"
     end
 
-    test "skips drafts, GitHub pre-releases, tags outside the grammar and tags with a pre-release" do
+    test "takes from each listing the release the shared selection rows name, reading every page up to the first that is not full" do
+      for %{"name" => name, "pages" => pages, "picks" => picks} = row <- @selection do
+        {:ok, asked} = Agent.start_link(fn -> [] end)
+
+        fetch = fn page ->
+          Agent.update(asked, &(&1 ++ [page]))
+          {:ok, 200, [], Jason.encode!(Enum.at(pages, page - 1, []))}
+        end
+
+        if row["incomplete"] do
+          assert ReleaseChannel.listing(fetch) == {:error, :incomplete}, name
+          assert Agent.get(asked, & &1) == Enum.to_list(1..10), name
+        else
+          assert {:ok, releases} = ReleaseChannel.listing(fetch)
+          assert ReleaseChannel.newest(releases) == picks, name
+
+          full = length(List.last(pages)) == 100
+
+          assert Agent.get(asked, & &1) ==
+                   Enum.to_list(1..(length(pages) + if(full, do: 1, else: 0))),
+                 name
+        end
+
+        Agent.stop(asked)
+      end
+    end
+
+    test "a page that fails fails the listing" do
+      fetch = fn
+        1 ->
+          {:ok, 200, [], Jason.encode!(for n <- 1..100, do: %{"tag_name" => "0.6.0-alpha.#{n}"})}
+
+        2 ->
+          {:ok, 403, [], "rate limited"}
+      end
+
+      assert ReleaseChannel.listing(fetch) == {:error, {:status, 403}}
+    end
+
+    test "skips drafts and entries that are no release, and newer pre-releases beside a release" do
       releases = [
         %{"tag_name" => "9.0.0", "draft" => true, "prerelease" => false},
         %{"tag_name" => "8.0.0", "draft" => false, "prerelease" => true},
@@ -84,14 +124,6 @@ defmodule Cyfr.ReleaseChannelTest do
 
       assert ReleaseChannel.newest(releases) == "1.10.0"
     end
-
-    test "is none when nothing is left" do
-      assert ReleaseChannel.newest([]) == nil
-
-      assert ReleaseChannel.newest([
-               %{"tag_name" => "0.6.0-alpha.13", "draft" => false, "prerelease" => true}
-             ]) == nil
-    end
   end
 
   describe "the process" do
@@ -100,7 +132,7 @@ defmodule Cyfr.ReleaseChannelTest do
       test = self()
 
       # A read that tells the test it began and answers what the test hands it.
-      fetch = fn ->
+      fetch = fn _page ->
         send(test, {:fetched, self()})
 
         receive do
@@ -204,7 +236,7 @@ defmodule Cyfr.ReleaseChannelTest do
     test "the release read ends when its channel ends by #{ending}" do
       caller = self()
 
-      fetch = fn ->
+      fetch = fn _page ->
         send(caller, {:read_started, self()})
 
         receive do

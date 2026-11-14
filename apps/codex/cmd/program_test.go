@@ -260,7 +260,7 @@ func TestUpdateRefusesBeforeAnyRequest(t *testing.T) {
 	s = newProgramScenario(t, "0.6.0-alpha.1", "")
 	s.latestErr = release.ErrNoRelease
 	out, err := s.run(updateOptions{})
-	if err != nil || !strings.Contains(out, "No release of CYFR is published yet apart from pre-releases, so this cyfr (0.6.0-alpha.1) stays; name one with 'cyfr update --version <version>'") || !strings.Contains(out, "There is no CYFR in this directory") {
+	if err != nil || !strings.Contains(out, "No release of CYFR is published yet, so this cyfr (0.6.0-alpha.1) stays.\n") || !strings.Contains(out, "There is no CYFR in this directory") {
 		t.Errorf("no published release answered %v:\n%s", err, out)
 	}
 	s.unchanged()
