@@ -604,12 +604,16 @@ clean_install() {
 active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "screenshot screen-terminal.png" guest_screenshot screen-terminal.png
 
-  step "cyfr uninstall --yes: the stack, the screen, the link, the settings and the program go; the folder, the volumes and the device key stay as they were"
-  # What stays is read before and after and compared whole.
+  step "cyfr uninstall --yes stops CYFR as cyfr down does and removes nothing else from the folder: the folder, the volumes and the device key as cyfr down left them"
+  # The folder is listed after cyfr down and again after the uninstall,
+  # and compared whole: each entry's kind, size, mode, owner and link
+  # target, and each readable file's digest (an unreadable entry's error
+  # line is part of the listing too).
   left_as_it_was() {
-    guest_ssh 'cd ~/cyfr && find . -printf "%p %y %s %m %l\n" | sort; echo volumes:; docker volume ls -q | sort; echo device:; sha256sum ~/.cyfr/device/key.json 2>/dev/null || echo none'
+    guest_ssh 'cd ~/cyfr && { find . -printf "%p %y %s %m %U:%G %l\n" 2>&1; find . -type f -readable -print0 2>/dev/null | xargs -0 -r sha256sum; } | sort; echo volumes:; docker volume ls -q | sort; echo device:; sha256sum ~/.cyfr/device/key.json 2>/dev/null || echo none'
   }
-  left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read before it ($GUEST_DIR/left-before.txt)"
+  check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
+  left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
   # The screen holds tty1 since the reboot, which ended tty1's tmux
   # session: the step types into a detached one, which gives sudo its
   # terminal all the same.
@@ -619,10 +623,12 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   pane_step uninstall 'cd ~/cyfr && cyfr uninstall --yes' 600 "$SUDO_PROMPT" @password
   check "cyfr uninstall exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "sudo asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
-  check "it names the folder and how to remove it by hand" transcript_has uninstall "^    sudo rm -rf -- '/home/proof/cyfr'\$"
+  check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
+  check "the one command it prints removes the stack's volumes" transcript_has uninstall "^    docker volume rm '"
+  check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
   left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
-  check "the folder's listing, the volumes and the device key are as they were" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
+  check "the folder's listing, the volumes and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
   check "no container and no custom network of CYFR is left" guest_ssh '[ -z "$(docker ps -aq)$(docker network ls -q --filter type=custom)" ]'
   check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
   check "the program, its link onto PATH and its settings are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr ~/.cyfr/config.json ~/.cyfr/version-check.json 2>/dev/null'

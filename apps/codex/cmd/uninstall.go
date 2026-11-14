@@ -10,15 +10,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/user"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/config"
-	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
 )
 
@@ -29,17 +26,18 @@ func init() {
 
 var uninstallCmd = &cobra.Command{
 	Use:     "uninstall",
-	Short:   "Take CYFR's stack and this program off this machine, deleting no file in your folder",
+	Short:   "Take CYFR's stack and this program off this machine: it stops CYFR as cyfr down does and removes nothing else from your folder",
 	GroupID: "server",
-	Long: `Take the CYFR in this directory off this machine, with this program. It deletes no file in your folder.
+	Long: `Take the CYFR in this directory off this machine, with this program. It stops CYFR as cyfr down does and removes nothing else from your folder.
 
-cyfr uninstall shows what it removes and what it leaves, then asks once (--yes answers; with no terminal and no --yes it removes nothing; answered no, it removes nothing and exits 0). It removes:
-- the stack's containers, under its lock, and its networks and the images its compose file names (one another container still uses stays, and is said);
+cyfr uninstall shows what it removes and what it leaves, then asks once (--yes answers; with no terminal and no --yes it removes nothing; answered no, it removes nothing and exits 0). It stops the stack as cyfr down does, then removes:
+- the stack's networks and the images its compose file names (one another container still uses stays, and is said);
 - this machine's screen service, when 'cyfr screen on' installed it, giving the screen back to its login prompt, and the link to this program in /usr/local/bin, both as root through sudo;
 - this program's own settings files, ~/.cyfr/config.json and ~/.cyfr/version-check.json, by those names;
 - this program. A Homebrew install is left to 'brew uninstall --cask cyfr'.
+Of these, whatever lies in this directory or resolves into it through a link stays.
 
-It leaves every file in this directory as it is (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes and this machine's device key. It ends by naming each and the commands that remove them by hand. When this directory is your user folder, ~, it names the entries CYFR's install makes there, never the folder.
+It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes and this machine's device key. It ends by naming each by its path, and the command that removes the volumes.
 
 Each step is said as it is done; when one fails, the command says what is already gone and what is still here.`,
 	Example: "  cyfr uninstall\n  cyfr uninstall --yes",
@@ -72,14 +70,6 @@ func isCYFRProject() bool {
 	return err == nil && values["CYFR_ACCESS"] != "" && access.HasComposeFile(".") && fileExists(stateMarker)
 }
 
-// installEntries are the entries CYFR's install makes in a project
-// folder: the scaffold's, .env, the .gitignore init writes, the stack's
-// state and the data. When the folder is the home folder, the closing
-// sentence names these, never the folder.
-var installEntries = append(slices.Clone(scaffold.Guides),
-	scaffold.SeccompProfile, "docker-compose.yml", "Caddyfile", ".env", ".env.example", ".env.locus.example",
-	".gitignore", "LICENSE", "LICENSES", "FAIR_SOURCE.md", "wit", "aqua", stateMarker, "data", "backups")
-
 // uninstallPlan is what cyfr uninstall removes and leaves, read before
 // anything is removed.
 type uninstallPlan struct {
@@ -87,16 +77,16 @@ type uninstallPlan struct {
 	project string
 	images  []string
 	screen  bool
-	self    string
 	cask    bool
-	link    bool
-	// settings are this program's settings files, by their exact names.
+	// self, link and settings are the program, its link onto PATH and its
+	// settings files that the uninstall removes; inFolder are those of them
+	// that resolve into the project folder, which stay.
+	self     string
+	link     bool
 	settings []string
+	inFolder []string
 	// deviceKey is this machine's device key, which stays.
 	deviceKey string
-	// holdsHome is the project folder being the home folder, or holding
-	// it: no command the uninstall names removes the folder.
-	holdsHome bool
 }
 
 // readUninstallPlan reads what an uninstall of the CYFR in the working
@@ -106,7 +96,20 @@ func readUninstallPlan() (*uninstallPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &uninstallPlan{dir: dir, project: access.ProjectName(dir), screen: screenInstalled(), cask: caskInstalled(), holdsHome: holdsHome(dir)}
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, err
+	}
+	p := &uninstallPlan{dir: dir, project: access.ProjectName(dir), screen: screenInstalled(), cask: caskInstalled()}
+	// removable is the one rule every removal passes: what resolves into
+	// the project folder stays, and is named.
+	removable := func(path string) bool {
+		if resolvesInto(realDir, path) {
+			p.inFolder = append(p.inFolder, path)
+			return false
+		}
+		return true
+	}
 	for _, name := range access.ComposeMainFiles {
 		if fileExists(name) {
 			p.images = imagesFromCompose(name, []string{buildsProfile, access.ModePublic, access.ModeTailnet})
@@ -115,18 +118,19 @@ func readUninstallPlan() (*uninstallPlan, error) {
 	}
 	if !p.cask {
 		if self, err := selfExecutable(); err == nil {
-			if resolved, err := filepath.EvalSymlinks(self); err == nil {
-				self = resolved
-			}
-			p.self = self
-			if target, err := filepath.EvalSymlinks(usrLocalLink); err == nil && target == self && usrLocalLink != self {
-				p.link = true
+			if self, err = filepath.EvalSymlinks(self); err == nil {
+				if removable(self) {
+					p.self = self
+				}
+				if target, err := filepath.EvalSymlinks(usrLocalLink); err == nil && target == self && usrLocalLink != self {
+					p.link = removable(usrLocalLink)
+				}
 			}
 		}
 	}
 	for _, path := range []func() (string, error){config.DefaultConfigPath, versionCheckPath} {
 		if path, err := path(); err == nil {
-			if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+			if _, err := os.Stat(path); err == nil && removable(path) {
 				p.settings = append(p.settings, path)
 			}
 		}
@@ -137,35 +141,16 @@ func readUninstallPlan() (*uninstallPlan, error) {
 	return p, nil
 }
 
-// holdsHome reports whether dir is a home folder, or holds one, however it
-// is reached: HOME through a link, the account's own home when HOME says
-// otherwise, and the invoking account's under sudo.
-func holdsHome(dir string) bool {
-	homes := []string{os.Getenv("HOME")}
-	if u, err := user.Current(); err == nil {
-		homes = append(homes, u.HomeDir)
-	}
-	if name := os.Getenv("SUDO_USER"); name != "" {
-		if u, err := user.Lookup(name); err == nil {
-			homes = append(homes, u.HomeDir)
-		}
-	}
-	real, err := filepath.EvalSymlinks(dir)
+// resolvesInto reports whether path, resolved through every link, lies in
+// realDir, itself resolved. A path that does not resolve counts as in it,
+// so a doubt never removes.
+func resolvesInto(realDir, path string) bool {
+	real, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		real = dir
+		return true
 	}
-	for _, home := range homes {
-		if home == "" {
-			continue
-		}
-		if resolved, err := filepath.EvalSymlinks(home); err == nil {
-			home = resolved
-		}
-		if home == real || strings.HasPrefix(home, real+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
+	rel, err := filepath.Rel(realDir, real)
+	return err != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 // show says what the uninstall removes and what it leaves.
@@ -190,7 +175,10 @@ func (p *uninstallPlan) show(out io.Writer) {
 		fmt.Fprintf(out, "  its settings, %s\n", strings.Join(p.settings, ", "))
 	}
 	fmt.Fprintln(out, "It leaves, as they are:")
-	fmt.Fprintf(out, "  every file in %s, CYFR's data among them\n", p.dir)
+	fmt.Fprintf(out, "  every file in %s, CYFR's data among them, as cyfr down leaves it\n", p.dir)
+	if len(p.inFolder) > 0 {
+		fmt.Fprintf(out, "  %s, which resolve into that folder\n", strings.Join(p.inFolder, ", "))
+	}
 	fmt.Fprintln(out, "  the stack's volumes")
 	if p.deviceKey != "" {
 		fmt.Fprintf(out, "  this machine's device key, %s\n", p.deviceKey)
@@ -202,8 +190,7 @@ func (p *uninstallPlan) show(out io.Writer) {
 }
 
 // runUninstall is `cyfr uninstall` in the working directory: the plan
-// shown, one question, then each removal in turn, and what is left named
-// with the commands that remove it.
+// shown, one question, then each removal in turn, and what is left named.
 func runUninstall(ctx context.Context, out io.Writer, yes bool) error {
 	if !isCYFRProject() {
 		return errors.New("This directory is not a CYFR that cyfr init made, so nothing was removed: it lacks a compose file, .cyfr/ or a .env that names CYFR_ACCESS. Run 'cyfr uninstall' in CYFR's directory")
@@ -235,30 +222,21 @@ func runUninstall(ctx context.Context, out io.Writer, yes bool) error {
 	return nil
 }
 
-// left names what the uninstall left and the commands that remove it by
-// hand: the folder, or, when the folder is or holds a home folder, the
-// entries CYFR's install made in it, never the folder; the volumes by
-// name; the device key.
+// left names what the uninstall left, each by its path, and the one
+// command it gives, the volumes' removal: it never prints a command that
+// removes a file or a folder.
 func (p *uninstallPlan) left(volumes []string) string {
 	var b strings.Builder
-	b.WriteString("CYFR is uninstalled. Left as they were, with the commands that remove them by hand:\n")
-	if p.holdsHome {
-		var entries []string
-		for _, name := range installEntries {
-			if _, err := os.Lstat(filepath.Join(p.dir, name)); err == nil {
-				entries = append(entries, name)
-			}
-		}
-		fmt.Fprintf(&b, "  the entries CYFR's install made in %s, CYFR's data among them:\n    cd %s && sudo rm -rf -- %s\n",
-			p.dir, shellQuote([]string{p.dir}), shellQuote(entries))
-	} else {
-		fmt.Fprintf(&b, "  the folder %s, CYFR's data in it:\n    sudo rm -rf -- %s\n", p.dir, shellQuote([]string{p.dir}))
-	}
-	if len(volumes) > 0 {
-		fmt.Fprintf(&b, "  the stack's volumes:\n    docker volume rm %s\n", shellQuote(volumes))
+	b.WriteString("CYFR is uninstalled. Left as they were:\n")
+	fmt.Fprintf(&b, "  every file in %s, CYFR's data among them\n", p.dir)
+	if len(p.inFolder) > 0 {
+		fmt.Fprintf(&b, "  %s, which resolve into that folder\n", strings.Join(p.inFolder, ", "))
 	}
 	if p.deviceKey != "" {
-		fmt.Fprintf(&b, "  this machine's device key:\n    rm -- %s\n", shellQuote([]string{p.deviceKey}))
+		fmt.Fprintf(&b, "  this machine's device key, %s\n", p.deviceKey)
+	}
+	if len(volumes) > 0 {
+		fmt.Fprintf(&b, "  the stack's volumes, which this command removes:\n    docker volume rm %s\n", shellQuote(volumes))
 	}
 	return b.String()
 }
@@ -295,20 +273,18 @@ func (r *uninstallRun) failed(step string, err error) error {
 	return errors.New(b.String())
 }
 
-// run removes, in order: the stack's containers under its lock, the
-// screen service and the link onto PATH as root, the networks and images,
-// the settings files by name, and the program. It deletes no file in the
-// project folder.
+// run removes, in order: the stack's containers, stopped as cyfr down
+// stops them, under the lock it keeps; the screen service and the link
+// onto PATH as root; the networks and images; the settings files by name;
+// and the program. The plan holds nothing that resolves into the project
+// folder.
 func (r *uninstallRun) run(ctx context.Context) error {
 	p := r.p
-	e, unlock, _, err := openLocked(ctx, "uninstall", r.out)
+	e, unlock, err := stopStack(ctx, "uninstall", r.out)
 	if err != nil {
-		return r.failed("taking the stack's lock", err)
+		return r.failed("stopping the stack as cyfr down does", err)
 	}
 	defer unlock()
-	if err := answerFailure(e.Stop(context.WithoutCancel(ctx), "uninstall", true)); err != nil {
-		return r.failed("stopping the stack", err)
-	}
 	r.done("the stack's containers")
 	if p.screen {
 		for _, c := range screenOffCommands {
