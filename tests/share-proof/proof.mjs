@@ -588,18 +588,19 @@ async function signUpAdmin(page) {
 
 // The page's own request waiting on its record, proven with the passkey at
 // the account pages in the tab the system layer opens: the panel's words,
-// what the sign page asked, and whether the tab came back to home.test.
+// what the sign page asked, and whether home.test's return page confirmed
+// it.
 async function proveOwn(page) {
   const panel = `${layer} [data-test="confirmation"][data-own="true"]`;
   const confirmation = await page.waitForSelector(panel, { timeout: 30_000 })
     .then((el) => el.innerText()).catch(() => "");
   const tab = await confirmInTab(page, adminKeys, HOME,
     () => page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 }));
-  return { panel: words(confirmation).slice(0, 300), what: tab.what, landed: tab.landed, error: tab.error || null };
+  return { panel: words(confirmation).slice(0, 300), what: tab.what, confirmed: tab.confirmed, by: tab.by, error: tab.error || null };
 }
 
 const provenHere = (confirmation) =>
-  confirmation.landed && confirmation.what === `Confirm a change at ${base}`;
+  confirmation.confirmed && confirmation.what === `Confirm a change at ${base}`;
 
 // A key made on the Vault page: its name, kind, label and destination and
 // its one field typed in the create form, which the browser keeps and

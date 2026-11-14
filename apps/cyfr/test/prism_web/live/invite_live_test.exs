@@ -40,6 +40,10 @@ defmodule PrismWeb.InviteLiveTest do
 
     assert has_element?(view, ~s([data-test="invite-from"]))
     assert has_element?(view, ~s([data-test="invite-expires"]))
+
+    assert view |> element(~s([data-test="account-host"])) |> render() =~
+             "Your account lives at dir.example. These buttons take you there and bring you back here."
+
     refute_vocabulary(html)
 
     view |> element(~s([data-test="invite-create"])) |> render_click()

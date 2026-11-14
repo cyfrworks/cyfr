@@ -772,6 +772,20 @@ describe("the account pages' hop and return", () => {
     ])
   })
 
+  test("the return closes its tab once its page says the confirmation is done", () => {
+    address("")
+    const {listeners} = account("return")
+    const original = globalThis.close
+    let closed = 0
+    globalThis.close = () => closed++
+    try {
+      listeners["account:close"]({})
+    } finally {
+      globalThis.close = original
+    }
+    assert.equal(closed, 1)
+  })
+
   test("hop, openTab and takeFragment ask nothing of what is not there", () => {
     assert.doesNotThrow(() => hop(null, "https://cyfr.run/account/sign#x"))
     assert.doesNotThrow(() => openTab({}, "https://cyfr.run/account/sign#x"))
