@@ -55,6 +55,7 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   @egress ~w(domains methods schemes private_ips)
   @storage ~w(paths actions)
+  @provider_search "native_search"
 
   # The side of a node the head never held, or the ask no longer names.
   @none %{"tools" => [], "egress" => %{}, "storage" => %{}, "flows" => []}
@@ -63,7 +64,9 @@ defmodule Sanctum.Consent.ShapeDiff do
   One capability of one node that changed since the head: `node` the
   node's ref; `capability` `"tools"`, `"egress.<field>"`,
   `"storage.<field>"`, `"flows"` (each a source class and the exit it may
-  reach, `"<class> to <exit>"`) or `"provided.<dep>"`; `change`
+  reach, `"<class> to <exit>"`), `"native_search"` (an agent's provider
+  search, switched on or off: `native_search` added or removed, apart
+  from its other tools) or `"provided.<dep>"`; `change`
   `:widened`, `:narrowed` or `:changed`; `added` and `removed` the values;
   `new` a dependency the head never held, `dropped` one the ask no longer
   names; and, on a `provided.<dep>` entry, `need`.
@@ -283,7 +286,10 @@ defmodule Sanctum.Consent.ShapeDiff do
   defp flow_tokens(_none), do: []
 
   defp diff_caps(granted, live) do
-    tools = entry("tools", granted["tools"], live["tools"])
+    {granted_search, granted_tools} = split_search(granted["tools"])
+    {live_search, live_tools} = split_search(live["tools"])
+    tools = entry("tools", granted_tools, live_tools)
+    search = entry(@provider_search, granted_search, live_search)
 
     egress =
       Enum.map(@egress, fn key ->
@@ -297,8 +303,12 @@ defmodule Sanctum.Consent.ShapeDiff do
 
     flows = entry("flows", granted["flows"], live["flows"])
 
-    ([tools] ++ egress ++ storage ++ [flows]) |> Enum.reject(&is_nil/1)
+    ([tools, search] ++ egress ++ storage ++ [flows]) |> Enum.reject(&is_nil/1)
   end
+
+  # An agent's provider search is its own row, switched on or off, never
+  # one tool among its catalog actions.
+  defp split_search(tools), do: tools |> normalize() |> Enum.split_with(&(&1 == @provider_search))
 
   defp entry(capability, granted, live) do
     granted = normalize(granted)

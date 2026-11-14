@@ -25,21 +25,20 @@ defmodule Compendium.AgentSource do
     * `caps.tools` are the policy keys that name tool actions
       (`tool.action`, `tool.*`), which consent expands against the live
       catalog: a key no catalogued action matches expands to nothing
-      (`Prima.ToolPattern.expand/2`). `native_search` is a provider tool,
-      not a catalog action.
+      (`Prima.ToolPattern.expand/2`); and `native_search` when it is
+      `auto`, the provider's own search, which no catalog action is and
+      the consent carries by its name.
     * `dependencies.static` are the model catalyst the agent runs on and
       the catalysts behind the tool families it names — its hands. An
       agent has no edge into another agent: a crew member consents and
       runs as its own source, so a member whose brain is not installed
       leaves the soul's consent whole.
-    * `agent` is the model target and, under `policy`, the part of the
-      tool policy that admits what the tools do not — `native_search`
-      when it is `auto`, which turns on the provider's own search — both
-      of which the shape digest reads. Every other key the policy names
-      is in `caps.tools` whether it is `auto` or `ask`, and whether the
-      person is asked first grants nothing the consent does not
-      (`ARCHITECTURE.md` §5.4), so marking a tool `auto` or `ask` moves no
-      consent. The flat `"model"` key is not written.
+    * `agent` is the model target, which the shape digest reads. The
+      policy's modes are not in the manifest: a tool is in `caps.tools`
+      whether it is `auto` or `ask`, and whether the person is asked first
+      grants nothing the consent does not (`ARCHITECTURE.md` §5.4), so
+      marking a tool `auto` or `ask` moves no consent. The flat `"model"`
+      key is not written.
 
   A disabled agent has no row: it is out of the roster.
   """
@@ -79,9 +78,9 @@ defmodule Compendium.AgentSource do
   @spec manifest(AquaAgent.t()) :: map()
   def manifest(%{name: name} = agent) do
     tools =
-      (agent.tool_policy || %{})
-      |> Map.keys()
-      |> Enum.reject(&(&1 == "native_search"))
+      for {key, mode} <- agent.tool_policy || %{},
+          key != "native_search" or mode == "auto",
+          do: key
 
     hands =
       tools
@@ -97,7 +96,6 @@ defmodule Compendium.AgentSource do
 
     agent_block =
       %{}
-      |> Prima.MapUtil.put_present("policy", beyond_tools(agent.tool_policy))
       |> Prima.MapUtil.put_present("catalyst", agent.catalyst_ref)
       |> Prima.MapUtil.put_present("model", agent.model)
 
@@ -112,13 +110,6 @@ defmodule Compendium.AgentSource do
       "agent" => agent_block
     }
   end
-
-  # The provider's own search is the one policy key that admits what no
-  # tool grants, and only `auto` turns it on.
-  defp beyond_tools(%{"native_search" => "auto"}),
-    do: %{"auto" => ["native_search"], "ask" => []}
-
-  defp beyond_tools(_policy), do: nil
 
   @doc "The consent row of an agent file — the soul or a crew member."
   @spec row(AquaAgent.t()) :: map()

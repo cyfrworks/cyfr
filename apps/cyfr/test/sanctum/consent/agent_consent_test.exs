@@ -185,8 +185,8 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
   end
 
-  test "marking a tool auto or ask moves no shape; native search and a tool gained move the " <>
-         "crew's with the soul's, and one tool gained compares as one row",
+  test "marking a tool auto or ask asks no consent; native search switched, or a tool gained, " <>
+         "is one edit and one row of the comparison",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, head, _} = head!(ctx, @soul)
@@ -200,13 +200,40 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, explorer}
     assert {:ok, []} = ShapeDiff.compute(ctx, @soul, head.resolved_policy)
 
-    # The provider's own search is what no tool grants: turning it off
-    # moves both, and turning it back on restores them.
-    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.delete(&1.tool_policy, "native_search")})
+    # The provider's own search is what no tool grants: the head carries
+    # it on the soul's ingress, so switching it off moves both shapes and
+    # compares as the one row that says so.
+    assert "native_search" in edge!(head.resolved_policy, @soul, "@ingress").tools
+
+    write_agent!(
+      ctx,
+      "aqua",
+      &%{&1 | tool_policy: Map.put(&1.tool_policy, "native_search", "ask")}
+    )
+
     refute ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
     refute ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, explorer}
 
-    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "native_search", "auto")})
+    assert ShapeDiff.compute(ctx, @soul, head.resolved_policy) ==
+             {:ok,
+              [
+                %{
+                  node: @soul,
+                  capability: "native_search",
+                  change: :narrowed,
+                  added: [],
+                  removed: ["native_search"],
+                  new: false,
+                  dropped: false
+                }
+              ]}
+
+    write_agent!(
+      ctx,
+      "aqua",
+      &%{&1 | tool_policy: Map.put(&1.tool_policy, "native_search", "auto")}
+    )
+
     assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
 
     # One tool gained is one edit and one row of the comparison.
@@ -231,14 +258,14 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
     {:ok, input} = ShapeDerivation.shape_input(ctx, "agent:local.explorer")
     assert input.model_target == "catalyst:local.gemini#gemini-pro-latest"
-    assert input.tool_policy == %{auto: ["native_search"], ask: []}
+    refute Map.has_key?(input, :tool_policy)
   end
 
   # A catalog action the soul's policy does not reach, of a tool no
   # bundled catalyst serves, so granting it adds no dependency.
   defp ungranted_action(ctx) do
     {:ok, soul} = AquaAgent.get(ctx, "aqua")
-    held = ShapeDerivation.expand_tools(Map.keys(soul.tool_policy) -- ["native_search"])
+    held = ShapeDerivation.expand_tools(Map.keys(soul.tool_policy))
 
     Enum.find(Sanctum.Catalog.tool_actions(), fn key ->
       [tool, _action] = String.split(key, ".", parts: 2)
