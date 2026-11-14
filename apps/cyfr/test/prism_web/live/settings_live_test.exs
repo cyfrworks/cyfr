@@ -234,7 +234,7 @@ defmodule PrismWeb.SettingsLiveTest do
     assert has_element?(activities, "tr", ~r/invitation\.revoke.*failed/s)
   end
 
-  test "the administrator reads the host's decisions, opens one, and closing an account asks a confirmation",
+  test "the administrator reads the host's decisions and opens one",
        %{conn: conn} do
     ops = test_user()
     {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
@@ -259,15 +259,7 @@ defmodule PrismWeb.SettingsLiveTest do
 
     assert has_element?(view, "#host-decision dd", refused.call_id)
 
-    identifier = "per_" <> Prima.Digest.sha256_hex("closed-#{ops.user_id}")
-    view |> form("#tombstone-form", %{"identifier" => identifier}) |> render_submit()
-
-    assert [%{operation: "directory.tombstone"}] =
-             Arca.Repo.all(
-               from(c in Arca.Schemas.PendingConfirmation, where: c.user_id == ^ops.user_id)
-             )
-
-    # Someone who is not the administrator sees neither.
+    # Someone who is not the administrator does not see them.
     person = test_user()
     {view, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
     refute has_element?(view, "#host-decisions")

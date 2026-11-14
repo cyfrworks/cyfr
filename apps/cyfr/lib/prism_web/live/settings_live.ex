@@ -29,9 +29,7 @@ defmodule PrismWeb.SettingsLive do
       athanor's `approvals.expiry_hours`), and a link to API Keys.
     * **Decisions about the host** — for the platform administrator, the
       gate's decisions no athanor holds (`decision.list_global`), each
-      opened whole (`decision.get_global`), and closing an account at the
-      directory this CYFR serves (`directory.tombstone`), which asks a
-      fresh confirmation through the system layer.
+      opened whole (`decision.get_global`).
     * **Invitation links** — the invitations `invitation.list` answers
       the person (every one to the platform administrator, a person's own
       to anyone else), a thread's among them, each by the name it offers,
@@ -212,9 +210,6 @@ defmodule PrismWeb.SettingsLive do
   def handle_event("host_decision_close", _params, socket),
     do: {:noreply, assign(socket, :host_decision, nil)}
 
-  def handle_event("tombstone", %{"identifier" => identifier}, socket),
-    do: tombstone(socket, String.trim(identifier))
-
   # A change is made against the store revision the card was listed at,
   # so an operator who saved on another member since is not overwritten:
   # the write is refused and the card lists again.
@@ -275,28 +270,6 @@ defmodule PrismWeb.SettingsLive do
         {:noreply, put_flash(socket, :error, "Not saved: #{error_message(reason)}")}
     end
   end
-
-  # Closing an account needs the administrator's fresh confirmation: asked
-  # for through the system layer, and repeated from `system_layer_repeat/4`
-  # once confirmed.
-  defp tombstone(socket, identifier) do
-    case SystemLayer.call(socket, {:tombstone, identifier}, "directory/tombstone", %{
-           "identifier" => identifier
-         }) do
-      {:ok, _gone, socket} ->
-        {:noreply, put_flash(socket, :info, "The account #{identifier} is closed.")}
-
-      {:asked, socket} ->
-        {:noreply, socket}
-
-      {:error, reason, socket} ->
-        {:noreply, put_flash(socket, :error, "Not closed: #{error_message(reason)}")}
-    end
-  end
-
-  @impl PrismWeb.SystemLayer.Hook
-  def system_layer_repeat({:tombstone, identifier}, _tool, _args, socket),
-    do: tombstone(socket, identifier)
 
   @impl true
   def handle_info(:load, socket) do
@@ -1032,7 +1005,7 @@ defmodule PrismWeb.SettingsLive do
           </section>
         </.card>
 
-        <%!-- The host's own decisions, and closing an account (platform admins) --%>
+        <%!-- The host's own decisions (platform admins) --%>
         <.card :if={@context.platform_admin}>
           <section id="host-decisions">
             <h3 class="text-sm font-medium text-gray-400 mb-1">Decisions about the host</h3>
@@ -1063,25 +1036,6 @@ defmodule PrismWeb.SettingsLive do
               </dl>
               <.button variant="ghost" phx-click="host_decision_close">Close</.button>
             </div>
-
-            <h4 class="text-xs text-gray-500 uppercase mt-6 mb-2">Close an account</h4>
-            <p class="text-xs text-gray-500 mb-2">
-              Where this CYFR keeps people's accounts itself, in place of cyfr.run, an account
-              can be closed for good: nobody signs in with it again anywhere, its name stays
-              taken, and it cannot be undone. It asks you to confirm.
-            </p>
-            <form id="tombstone-form" phx-submit="tombstone" class="flex gap-2 items-end">
-              <div class="flex-1">
-                <.input
-                  name="identifier"
-                  value=""
-                  required
-                  placeholder="per_…"
-                  id="tombstone-identifier"
-                />
-              </div>
-              <.button type="submit" variant="ghost">Close the account</.button>
-            </form>
           </section>
         </.card>
 
