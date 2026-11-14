@@ -831,6 +831,8 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   pane_step uninstall 'cd ~/cyfr && cyfr uninstall --yes' 600 "$SUDO_PROMPT" @password
   check "cyfr uninstall exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "sudo asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
+  check "cyfr says whose password on the line before sudo's prompt" sh -c 'grep -A1 -xF -- "$1" "$2" | sed -n 2p | grep -qE -- "$3"' sh \
+    "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-uninstall.txt" "$SUDO_PROMPT"
   check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
   check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
   check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"

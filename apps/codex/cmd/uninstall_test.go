@@ -72,7 +72,13 @@ type uninstallScenario struct {
 	docker, downDocker       *uninstallDocker
 	root                     []string
 	refuseRoot               string
-	compose                  []byte
+	// notAdministrator is the account outside the sudo and admin groups;
+	// asks is sudo asking a password, whose prompt authErr refuses;
+	// authenticated counts the prompts.
+	notAdministrator, asks bool
+	authErr                error
+	authenticated          int
+	compose                []byte
 }
 
 // newUninstallScenario builds the scenario. It fails at once unless no sh,
@@ -108,13 +114,24 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 	s.downDocker = &uninstallDocker{dir: s.down}
 
 	savedSelf, savedCask, savedLink, savedScreen := selfExecutable, caskInstalled, usrLocalLink, screenInstalled
-	savedApply, savedForget := machine.apply, machine.forget
+	savedMachine := machine
 	savedOpen, savedTerminal, savedInput := openEngine, askTerminal, askInput
 	t.Cleanup(func() {
 		selfExecutable, caskInstalled, usrLocalLink, screenInstalled = savedSelf, savedCask, savedLink, savedScreen
-		machine.apply, machine.forget = savedApply, savedForget
+		machine = savedMachine
 		openEngine, askTerminal, askInput = savedOpen, savedTerminal, savedInput
 	})
+	machine.groups = func(string) []string {
+		if s.notAdministrator {
+			return []string{"users"}
+		}
+		return []string{"users", "sudo"}
+	}
+	machine.passwordless = func() bool { return !s.asks }
+	machine.authenticate = func() error {
+		s.authenticated++
+		return s.authErr
+	}
 	selfExecutable = func() (string, error) { return s.self, nil }
 	caskInstalled = func() bool { return false }
 	usrLocalLink = s.link
@@ -460,6 +477,61 @@ func TestUninstallSaysWhatIsGoneWhenAStepFails(t *testing.T) {
 	if !exists(s.self) || !exists(filepath.Join(s.home, ".cyfr", "config.json")) {
 		t.Error("the program or its settings went after the failure")
 	}
+}
+
+// Its root steps take the machine's one order. An account outside the sudo
+// and admin groups is refused before anything is shown or asked, with the
+// screen's and the link's commands as one sudo line for whoever
+// administers the machine; a refused password, asked after the question
+// and before the stack stops, changes nothing; an accepted one comes after
+// the sentence, once, before every root command.
+func TestUninstallChecksTheAccountAndThePasswordFirst(t *testing.T) {
+	t.Run("outside the groups", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		screenInstalled = func() bool { return true }
+		s.notAdministrator = true
+		before := listing(t, s.dir)
+		out, err := s.run(true)
+		if err == nil || err.Error() != "Nothing was changed. Run `cyfr uninstall` again once they have" {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		want := "Your account, " + currentAccount(t) + ", is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:\n" +
+			"  sudo sh -c " + shellQuote([]string{strings.Join(append(slices.Clone(screenOffCommands), linkRemoval()), " &&\n    ")}) + "\n"
+		if out != want {
+			t.Errorf("cyfr uninstall printed:\n%s\nwant:\n%s", out, want)
+		}
+		s.nothingRemoved(before)
+		if s.authenticated != 0 {
+			t.Errorf("sudo asked %d times", s.authenticated)
+		}
+	})
+	t.Run("the password refused", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		s.asks, s.authErr = true, errors.New("exit status 1")
+		before := listing(t, s.dir)
+		out, err := s.run(true)
+		if err == nil || err.Error() != "The password was not accepted, so nothing was changed. Run `cyfr uninstall` again to try again" {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		if !strings.HasSuffix(out, passwordSentence) || s.authenticated != 1 {
+			t.Errorf("sudo asked %d times:\n%s", s.authenticated, out)
+		}
+		s.nothingRemoved(before)
+	})
+	t.Run("the password accepted", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		s.asks = true
+		out, err := s.run(true)
+		if err != nil {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		if strings.Count(out, passwordSentence) != 1 || !strings.Contains(out, passwordSentence+"Removed the stack's containers.\n") || s.authenticated != 1 {
+			t.Errorf("sudo asked %d times:\n%s", s.authenticated, out)
+		}
+		if !slices.Equal(s.root, []string{linkRemoval()}) {
+			t.Errorf("sudo ran %q", s.root)
+		}
+	})
 }
 
 // Only a CYFR cyfr init made is uninstalled: a directory with an unrelated

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -128,11 +129,32 @@ const (
 // nothing.
 const fakeDockerAnswers = "CYFR_CMD_TEST_FAKE_DOCKER"
 
+// fakeRecord marks a run of this test binary as a curl or an sh a test put
+// on PATH only to see that nothing runs it: it appends its name and
+// arguments, as one line, to the file the variable names, and runs nothing.
+const fakeRecord = "CYFR_CMD_TEST_FAKE_RECORD"
+
+// fakeBrewDir marks a run of this test binary as the brew fakeBrew put on
+// PATH, its state in the folder the variable names (runFakeBrew).
+const fakeBrewDir = "CYFR_CMD_TEST_FAKE_BREW"
+
 // runStandIn is this test binary run as the stand-in its name says, sudo,
-// sg or docker, when the test that started it set that stand-in's record;
-// ok is false for any other run.
+// sg, docker, brew, curl or sh, when the test that started it set that
+// stand-in's record; ok is false for any other run.
 func runStandIn() (status int, ok bool) {
 	switch name := filepath.Base(os.Args[0]); {
+	case (name == "curl" || name == "sh") && os.Getenv(fakeRecord) != "":
+		f, err := os.OpenFile(os.Getenv(fakeRecord), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return 3, true
+		}
+		_, err = f.WriteString(strings.Join(os.Args, " ") + "\n")
+		if f.Close() != nil || err != nil {
+			return 3, true
+		}
+		return 0, true
+	case name == "brew" && os.Getenv(fakeBrewDir) != "":
+		return runFakeBrew(os.Getenv(fakeBrewDir), strings.Join(os.Args[1:], " ")), true
 	case name == "docker" && os.Getenv(fakeDockerAnswers) != "":
 		return runFakeDocker(os.Getenv("FAKE_DOCKER_DIR"), os.Args[1:]), true
 	case name == "sudo" && os.Getenv(fakeSudoRecord) != "":
@@ -152,6 +174,40 @@ func runStandIn() (status int, ok bool) {
 		return status, true
 	}
 	return 0, false
+}
+
+// runFakeBrew records each run in dir's log, answers --prefix with dir,
+// `list --cask cyfr` as installed and `list --cask --versions cyfr` with
+// dir's version file, which `upgrade --cask cyfr` sets to dir's upgrade-to
+// file; `update` succeeds and anything else fails.
+func runFakeBrew(dir, args string) int {
+	f, err := os.OpenFile(filepath.Join(dir, "log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return 3
+	}
+	_, err = f.WriteString(args + "\n")
+	if f.Close() != nil || err != nil {
+		return 3
+	}
+	switch args {
+	case "--prefix":
+		fmt.Println(dir)
+	case "list --cask --versions cyfr":
+		v, err := os.ReadFile(filepath.Join(dir, "version"))
+		if err != nil {
+			return 3
+		}
+		fmt.Println("cyfr " + strings.TrimSpace(string(v)))
+	case "list --cask cyfr", "update":
+	case "upgrade --cask cyfr":
+		to, err := os.ReadFile(filepath.Join(dir, "upgrade-to"))
+		if err != nil || os.WriteFile(filepath.Join(dir, "version"), to, 0o644) != nil {
+			return 3
+		}
+	default:
+		return 1
+	}
+	return 0
 }
 
 // runFakeDocker answers args from dir: a compose call by its subcommand
@@ -300,4 +356,16 @@ func fakeSudo(t *testing.T, verdict string) string {
 		t.Fatalf("PATH's sudo is %q (%v), not the fake", found, err)
 	}
 	return record
+}
+
+// passwordSentence is the one line before sudo's own prompt.
+const passwordSentence = "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.\n"
+
+func currentAccount(t *testing.T) string {
+	t.Helper()
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Username
 }
