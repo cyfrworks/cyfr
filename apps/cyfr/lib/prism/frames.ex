@@ -606,6 +606,20 @@ defmodule Prism.Frames do
   def activate(%__MODULE__{} = t, _key), do: t
 
   @doc """
+  Put the active launch under `key` out of sight with its frame kept: the
+  latest other launch held becomes active, or none, and visibility
+  settles, which freezes it. Launched again (`launch/3`), it shows as it
+  was. Any other key, or a launch that is not active, changes nothing.
+  """
+  @spec minimise_launch(Context.t(), t(), key()) :: t()
+  def minimise_launch(%Context{} = ctx, %__MODULE__{active: key} = t, {:full, _} = key) do
+    others = t.order |> Enum.filter(&match?({:full, _}, &1)) |> List.delete(key)
+    settle(ctx, %{t | active: List.last(others)})
+  end
+
+  def minimise_launch(%Context{}, %__MODULE__{} = t, _key), do: t
+
+  @doc """
   Each frame's visibility: with a frame active (`active/1`), it alone is
   visible; with none, the visible canvas's frame and its windows and tiles
   that are not minimised are. A validation frame is never visible.
