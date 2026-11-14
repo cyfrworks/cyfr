@@ -511,64 +511,65 @@ defmodule Compendium.Providers.Component do
     end
   end
 
-  # Pull action - pull component from registry (local or OCI)
+  # Pull action - pull component from registry (local or OCI). A ref with
+  # no version takes the newest the source offers (the registry's newest
+  # release tag, the seed's newest shipped version), never the version
+  # already installed.
   def handle(%Context{} = ctx, %{"action" => "pull", "reference" => reference} = args) do
     progress_id = args["progress_id"]
 
-    with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
-      oci_reference =
-        cond do
-          Compendium.OCI.Reference.oci_ref?(reference) -> {:ok, reference}
-          shipped_ref?(reference) -> :shipped
-          true -> convert_to_oci_ref(reference)
+    oci_reference =
+      cond do
+        Compendium.OCI.Reference.oci_ref?(reference) -> {:ok, reference}
+        shipped_ref?(reference) -> :shipped
+        true -> Compendium.Pull.oci_reference_for(ctx, reference)
+      end
+
+    case oci_reference do
+      # A `local` ref names what the server ships: the pull copies the
+      # shipped version from the seed rather than dialling a registry.
+      :shipped ->
+        broadcast_progress(ctx, progress_id, :pulling, "Copying shipped #{reference}...")
+
+        case Compendium.Provisioning.install_shipped(ctx, reference) do
+          {:ok, res} ->
+            broadcast_progress(ctx, progress_id, :complete, "Pulled #{res.component_ref}")
+            broadcast_components_changed(ctx)
+            {:ok, res}
+
+          {:error, :not_owner} = refused ->
+            broadcast_progress(ctx, progress_id, :error, "Pull failed")
+            refused
+
+          {:error, reason} ->
+            broadcast_progress(ctx, progress_id, :error, "Pull failed")
+            {:error, shipped_pull_error(reference, reason)}
         end
 
-      case oci_reference do
-        # A `local` ref names what the server ships: the pull copies the
-        # shipped version from the seed rather than dialling a registry.
-        :shipped ->
-          broadcast_progress(ctx, progress_id, :pulling, "Copying shipped #{reference}...")
+      {:ok, ref} ->
+        broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
+        result = do_oci_pull(ctx, ref)
 
-          case Compendium.Provisioning.install_shipped(ctx, reference) do
-            {:ok, res} ->
-              broadcast_progress(ctx, progress_id, :complete, "Pulled #{res.component_ref}")
-              broadcast_components_changed(ctx)
-              {:ok, res}
+        case result do
+          {:ok, res} ->
+            broadcast_progress(
+              ctx,
+              progress_id,
+              :complete,
+              "Pulled #{res[:component_ref] || ref}"
+            )
 
-            {:error, :not_owner} = refused ->
-              broadcast_progress(ctx, progress_id, :error, "Pull failed")
-              refused
+            broadcast_components_changed(ctx)
 
-            {:error, reason} ->
-              broadcast_progress(ctx, progress_id, :error, "Pull failed")
-              {:error, shipped_pull_error(reference, reason)}
-          end
+          {:error, reason} ->
+            Logger.error("[Compendium.Providers.Component] Pull failed: #{inspect(reason)}")
+            broadcast_progress(ctx, progress_id, :error, "Pull failed")
+        end
 
-        {:ok, ref} ->
-          broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
-          result = do_oci_pull(ctx, ref)
+        result
 
-          case result do
-            {:ok, res} ->
-              broadcast_progress(
-                ctx,
-                progress_id,
-                :complete,
-                "Pulled #{res[:component_ref] || ref}"
-              )
-
-              broadcast_components_changed(ctx)
-
-            {:error, reason} ->
-              Logger.error("[Compendium.Providers.Component] Pull failed: #{inspect(reason)}")
-              broadcast_progress(ctx, progress_id, :error, "Pull failed")
-          end
-
-          result
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1478,8 +1479,6 @@ defmodule Compendium.Providers.Component do
   # Convert a component-ref style reference to an OCI reference for pulling.
   # A ref carrying a registry host skips this branch entirely, so the
   # binding refusal lives in `OCI.Client.pull/2`.
-  defp convert_to_oci_ref(reference), do: Compendium.Pull.oci_reference_for(reference)
-
   defp shipped_pull_error(reference, :not_shipped),
     do:
       "#{reference} is not a version the server ships — a local component is " <>

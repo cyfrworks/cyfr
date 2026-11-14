@@ -106,9 +106,37 @@ defmodule Compendium.Registry.Client do
   @spec get_component(Context.t(), String.t(), String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, Errors.t() | corrupt()}
   def get_component(%Context{} = ctx, type, publisher, name, version) do
-    path = "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
+    component_at(
+      ctx,
+      publisher,
+      "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
+    )
+  end
 
-    case request(:get, path, [], nil, ctx) do
+  @doc """
+  The newest release the registry holds eligible for a pull that names no
+  version: GET /v1/components/:type/:publisher/:name. The registry decides
+  eligibility (active or deprecated, never yanked or taken down) and
+  answers 404 when no release is eligible.
+  """
+  @spec get_latest_component(Context.t(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Errors.t() | corrupt()}
+  def get_latest_component(%Context{} = ctx, type, publisher, name) do
+    component_at(ctx, publisher, "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}")
+  end
+
+  # A component read carries the push token of the namespace that owns it,
+  # chosen as an OCI pull of it chooses (`Compendium.OCI.Auth`), so a
+  # private component's read and its pull speak as the same credential.
+  defp component_at(ctx, publisher, path) do
+    registry = Compendium.RegistryHost.canonical_host()
+
+    answer =
+      with {:ok, auth} <- Compendium.OCI.Auth.auth_headers(registry, "", publisher, ctx) do
+        Transport.request(:get, url(path), auth, nil)
+      end
+
+    case answer do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, component} when is_map(component) ->
@@ -470,9 +498,10 @@ defmodule Compendium.Registry.Client do
   end
 
   @doc """
-  Call `GET /v1/legal/version`. Returns `{policy_version, policies}` where
-  `policies` is a list of `{name, title, sha256}` for the current bundled
-  set. Drives the clickwrap UI in prism / codex.
+  Call `GET /v1/legal/version`. Answers the registry's body: `policy_version`,
+  the version of its terms in force; `updated_at`, when that version was
+  published (RFC 3339, absent from a registry that does not say); and
+  `policies`, each `{name, title, sha256}` of the current set.
   """
   @spec get_legal_version() :: {:ok, map()} | {:error, Errors.t()}
   def get_legal_version do

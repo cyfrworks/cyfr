@@ -431,7 +431,7 @@ defmodule Emissary.Web.DeviceChannel do
         {:push, {:ping, ""}, keepalive(state)}
 
       {:error, reason} ->
-        refuse(assign_call(state), reason)
+        refuse(assign_call(state), reason, operation: "device.keepalive")
     end
   end
 
@@ -542,7 +542,7 @@ defmodule Emissary.Web.DeviceChannel do
     else
       {:error, :contradictory} -> refuse(state, :malformed_frame)
       {:error, :unavailable} -> {:ok, state}
-      {:error, reason} -> refuse(assign_call(state), reason)
+      {:error, reason} -> refuse(assign_call(state), reason, operation: "device.capabilities")
     end
   end
 
@@ -666,7 +666,7 @@ defmodule Emissary.Web.DeviceChannel do
         else
           # The gate decided the renewal under its call id; the refusal of
           # its replacement is a decision of its own.
-          {:error, reason} -> refuse(assign_call(state), reason)
+          {:error, reason} -> refuse(assign_call(state), reason, operation: "device.renew")
         end
 
       {:error, reason} ->
@@ -947,7 +947,7 @@ defmodule Emissary.Web.DeviceChannel do
             {:push, revoke_frames(state, [grant.grant_id]), drop_grants(state, [grant.grant_id])}
 
           {:error, reason} ->
-            refuse(assign_call(state), reason)
+            refuse(assign_call(state), reason, operation: "device.event")
         end
     end
   end
@@ -985,7 +985,7 @@ defmodule Emissary.Web.DeviceChannel do
     case Sanctum.DeviceCerts.verify_request(state.cert, state.client) do
       {:ok, client} -> {:ok, %{state | client: carried(client, state)}}
       {:error, :unavailable} -> {:ok, state}
-      {:error, reason} -> refuse(assign_call(state), reason)
+      {:error, reason} -> refuse(assign_call(state), reason, operation: "device.standing")
     end
   end
 
@@ -1027,7 +1027,10 @@ defmodule Emissary.Web.DeviceChannel do
 
   # One decision under the call id assigned the refused message, under
   # the client's identity once one is established and none before, naming
-  # the operation an intent gave; then the close, after `:frames`. The
+  # the operation an intent gave, or `device.<what>` for a check of the
+  # client's standing made on a frame or a timer of the channel's own
+  # (its capabilities report, keepalive, renewal, an event's delivery, a
+  # standing announcement); then the close, after `:frames`. The
   # state is closed for good first, every timer cancelled, so a frame or
   # a timer the transport still delivers before the peer's close records
   # nothing. `record: false` closes a refusal the gate already recorded.

@@ -213,10 +213,8 @@ defmodule Arca.Files do
       when is_binary(path) and is_binary(content) do
     with :ok <- tenant(actor),
          {:ok, bytes} <- decode(content, encoding),
-         :ok <- check_write_size(bytes),
          {:ok, segments, physical, tier} <- resolve_file(path),
-         :ok <- writable(tier, physical, segments),
-         :ok <- valid_content(physical, bytes),
+         :ok <- accepted(tier, physical, segments, bytes),
          :ok <- put(actor, physical, path, bytes) do
       {:ok, %{written: join(segments), size: byte_size(bytes)}}
     end
@@ -267,6 +265,100 @@ defmodule Arca.Files do
     end
   end
 
+  @doc """
+  Move a file, or a folder with everything in it, to `to`, a path no file
+  or folder holds yet, both under `data/`; a rename is a move within one
+  folder. Every file landing at `to` must be one `write/4` would accept,
+  by the one check a write meets. A file keeps the sources its settled
+  generation carries.
+
+  The move is one publication (`Arca.move/4`): a reader sees the files at
+  `path` or at `to`, never both and never neither. A source that changed
+  while it was read refuses as a conflict, as does anything that lands at
+  `to` first, and neither loses a byte.
+  """
+  @spec move(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, %{moved: String.t(), to: String.t()}} | {:error, term()}
+  def move(%Prima.Actor{} = actor, path, to) when is_binary(path) and is_binary(to) do
+    with :ok <- tenant(actor),
+         {:ok, segments, physical, tier} <- resolve_file(path),
+         {:ok, to_segments, to_physical, to_tier} <- resolve_file(to),
+         :ok <- movable(tier, segments),
+         :ok <- movable(to_tier, to_segments),
+         :ok <- elsewhere(segments, to_segments),
+         :ok <- vacant(actor, to_physical, to),
+         :ok <- moved(actor, {physical, path}, {to_physical, to_segments, to_tier}) do
+      {:ok, %{moved: join(segments), to: join(to_segments)}}
+    end
+  end
+
+  # Only `data/` keeps each file by generation, which is what lets a move
+  # publish the destination and retire the source at once.
+  defp movable(:open, _segments), do: :ok
+
+  defp movable(_tier, segments),
+    do:
+      {:error,
+       {:invalid_argument,
+        "'#{join(segments)}' is outside data/ — files and folders move and rename only " <>
+          "within data/"}}
+
+  defp elsewhere(same, same),
+    do: {:error, {:invalid_argument, "'#{join(same)}' is already there"}}
+
+  defp elsewhere(segments, to_segments) do
+    if List.starts_with?(to_segments, segments),
+      do: {:error, {:invalid_argument, "'#{join(segments)}' cannot move inside itself"}},
+      else: :ok
+  end
+
+  # Nothing at `to`, neither a file nor a folder holding one.
+  defp vacant(actor, to_physical, to) do
+    case Arca.list_typed(actor, to_physical) do
+      {:ok, []} -> :ok
+      {:ok, [_ | _]} -> {:error, {:conflict, taken(to)}}
+      {:error, :enotdir} -> {:error, {:conflict, taken(to)}}
+      {:error, :not_found} -> :ok
+      {:error, reason} -> storage_error("move", to, reason)
+    end
+  end
+
+  defp moved(actor, {physical, path}, {to_physical, to_segments, to_tier}) do
+    # Each landing file in the console's words, for the write's own check.
+    admit = fn dest, bytes ->
+      accepted(to_tier, dest, to_segments ++ Enum.drop(dest, length(to_physical)), bytes)
+    end
+
+    case Arca.move(actor, physical, to_physical, admit: admit) do
+      :ok ->
+        :ok
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "File", path}}
+
+      {:error, :changed} ->
+        {:error,
+         {:conflict,
+          "'#{String.trim(path, "/")}' changed while it was moving — nothing moved; try again"}}
+
+      {:error, :exists} ->
+        {:error, {:conflict, taken(join(to_segments))}}
+
+      {:error, reason} when reason in [:enotdir, :eisdir] ->
+        {:error,
+         {:conflict,
+          "'#{join(to_segments)}' cannot go there: a file and a folder would share a name"}}
+
+      {:error, {:invalid_argument, _}} = refused ->
+        refused
+
+      {:error, reason} ->
+        write_error(join(to_segments), reason)
+    end
+  end
+
+  defp taken(to), do: "'#{String.trim(to, "/")}' already exists — choose another name"
+
   # The tree is the actor's athanor's; with none resolved there is no tree
   # to name, and nothing is read or written.
   defp tenant(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
@@ -313,6 +405,14 @@ defmodule Arca.Files do
   end
 
   # ---- tiers -----------------------------------------------------------------
+
+  # Whether `bytes` may land at a file: the one rule every write of a whole
+  # file meets, a move's landing files among them.
+  defp accepted(tier, physical, segments, bytes) do
+    with :ok <- writable(tier, physical, segments),
+         :ok <- check_write_size(bytes),
+         do: valid_content(physical, bytes)
+  end
 
   defp writable(:open, _physical, _segments), do: :ok
 

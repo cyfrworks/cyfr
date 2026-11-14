@@ -118,7 +118,6 @@ const (
 	DoorRequests            = "requests"
 	DoorResolve             = "resolve"
 	ExecutionCancel         = "cancel"
-	ExecutionForceRelease   = "force_release"
 	ExecutionList           = "list"
 	ExecutionLogs           = "logs"
 	ExecutionReadResource   = "read_resource"
@@ -135,6 +134,7 @@ const (
 	FileDecline             = "decline"
 	FileDelete              = "delete"
 	FileList                = "list"
+	FileMove                = "move"
 	FileOffer               = "offer"
 	FileOffers              = "offers"
 	FileRead                = "read"
@@ -197,7 +197,6 @@ const (
 	RegistryAppeal          = "appeal"
 	RegistryClaimPublisher  = "claim_publisher"
 	RegistryGetNamespace    = "get_namespace"
-	RegistryLegalAccept     = "legal_accept"
 	RegistryLegalPage       = "legal_page"
 	RegistryLegalVersion    = "legal_version"
 	RegistryListMyReports   = "list_my_reports"
@@ -311,9 +310,9 @@ var Actions = map[string][]string{
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"directory":           {"tombstone"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
-	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
+	"execution":           {"cancel", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
-	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
+	"file":                {"accept", "decline", "delete", "list", "move", "offer", "offers", "read", "withdraw", "write"},
 	"invitation":          {"create", "list", "revoke"},
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
@@ -325,7 +324,7 @@ var Actions = map[string][]string{
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
@@ -1452,19 +1451,6 @@ func (args ExecutionCancelArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ExecutionCancel, fields: fields(args)})
 }
 
-// ExecutionForceReleaseArgs carries arguments for execution.force_release.
-type ExecutionForceReleaseArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ExecutionForceReleaseArgs) MarshalJSON() ([]byte, error) {
-	type fields ExecutionForceReleaseArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ExecutionForceRelease, fields: fields(args)})
-}
-
 // ExecutionListArgs carries arguments for execution.list.
 type ExecutionListArgs struct {
 	// Maximum results to return (list action)
@@ -1777,6 +1763,23 @@ func (args FileListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: FileList, fields: fields(args)})
+}
+
+// FileMoveArgs carries arguments for file.move.
+type FileMoveArgs struct {
+	// A folder-relative path, like data/reports/q3.csv
+	Path string `json:"path"`
+	// Its new folder-relative path, like data/archive/q3.csv
+	To string `json:"to"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FileMoveArgs) MarshalJSON() ([]byte, error) {
+	type fields FileMoveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FileMove, fields: fields(args)})
 }
 
 // FileOfferArgs carries arguments for file.offer.
@@ -3503,23 +3506,6 @@ func (args RegistryGetNamespaceArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: RegistryGetNamespace, fields: fields(args)})
-}
-
-// RegistryLegalAcceptArgs carries arguments for registry.legal_accept.
-type RegistryLegalAcceptArgs struct {
-	// Policy version string (for legal_accept; obtained via legal_version)
-	PolicyVersion string `json:"policy_version"`
-	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
-	Answer Field[any] `json:"answer,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryLegalAcceptArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryLegalAcceptArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: RegistryLegalAccept, fields: fields(args)})
 }
 
 // RegistryLegalPageArgs carries arguments for registry.legal_page.

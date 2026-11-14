@@ -27,6 +27,12 @@ defmodule Arca.Providers.Files do
   `list`, `read`, `write` and `delete` name their file or folder by
   `path`, relative to the athanor root, and declare it as their resource
   (`resource:`), so a standing approval may be constrained to paths.
+  `move` names its file or folder by `path` and its new place by `to`,
+  both under `data/`; a rename is a move within one folder. It takes no
+  standing approval
+  (`standing: false`) and declares no resource: an approval constrained
+  to paths could not cover its destination, so each move is approved on
+  its own.
 
   ## Sending a copy
 
@@ -132,6 +138,22 @@ defmodule Arca.Providers.Files do
           planes: [:external],
           permission: :storage_write,
           resource: {"path", :storage_path}
+        ),
+        Operation.new(
+          "file",
+          "move",
+          "Move or rename a file or folder within data/ to a path that holds nothing yet",
+          [
+            Arg.required(path),
+            Arg.new("to", :string,
+              required: true,
+              description: "Its new folder-relative path, like data/archive/q3.csv"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :storage_write,
+          standing: false
         ),
         Operation.new(
           "file",
@@ -249,6 +271,10 @@ defmodule Arca.Providers.Files do
   defp dispatch(actor, %{"action" => "delete", "path" => path}) when is_binary(path),
     do: Files.delete(actor, path)
 
+  defp dispatch(actor, %{"action" => "move", "path" => path, "to" => to})
+       when is_binary(path) and is_binary(to),
+       do: Files.move(actor, path, to)
+
   defp dispatch(actor, %{"action" => "offer", "paths" => paths, "to" => to})
        when is_list(paths) and is_binary(to),
        do: offer(actor, paths, to)
@@ -272,6 +298,9 @@ defmodule Arca.Providers.Files do
 
   defp dispatch(_actor, %{"action" => "write"}),
     do: {:error, {:invalid_argument, "write needs path and content"}}
+
+  defp dispatch(_actor, %{"action" => "move"}),
+    do: {:error, {:invalid_argument, "move needs path and to"}}
 
   defp dispatch(_actor, %{"action" => "offer"}),
     do: {:error, {:invalid_argument, "offer needs paths and to"}}

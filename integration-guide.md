@@ -44,7 +44,7 @@ CYFR supports two authentication methods. Choose the one that fits your use case
 
 An API key is how a script, a backend or CI/CD acts as you in your athanor. There is one kind, `cyfr_sk_`: what it may do is fixed when you make it, its permissions ticked from a preset and, if you like, the only tools it may run. Left without tools, it runs any tool you granted. Keep it out of browser code and out of source: anyone holding it acts as you within what it may do, until you revoke it.
 
-A key carries out what you approved and never approves anything itself. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. Of the registry's, claiming a name or a publisher namespace, verifying a publisher namespace, minting push tokens, accepting the registry's policies and filing an appeal are requests a key of the person's account signs; the registry's other requests, for a namespace's tokens, members and components and for reports, go under the person's stored push token.
+A key carries out what you approved and never approves anything itself. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, filing a report or an appeal — take a signed-in session instead. Of the registry's, claiming a name or a publisher namespace, verifying a publisher namespace, minting push tokens and filing an appeal are requests a key of the person's account signs; the registry's other requests, for a namespace's tokens, members and components and for reports, go under the person's stored push token.
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -469,10 +469,9 @@ params); and any other refusal the code of its class in the table above.
 
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that
-has not yet claimed a namespace: the registry's policy reads and
-acceptance (`registry.legal_version`, `registry.legal_page`,
-`registry.legal_accept`). Those are not public — they need the session —
-but they do not need a claimed identity.
+has not yet claimed a namespace: the registry's policy reads
+(`registry.legal_version`, `registry.legal_page`). Those are not public —
+they need the session — but they do not need a claimed identity.
 
 Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `decision.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
@@ -790,6 +789,8 @@ data: {"status":"completed","duration_ms":15234}
 
 The endpoint supports `Last-Event-ID` for reconnection — either form of id — and sends keep-alive comments every 15 seconds. Durable events are delivered in the order they were numbered, whatever order they were published in. The connection closes on the terminal lifecycle event.
 
+Reading a run needs `storage_read` beside `execute`: the stream, `execution.logs`, `execution.cancel` and `execution.retry` refuse a credential without it as `forbidden`, naming the permission, whatever id it asks for. With it, an unknown run and another athanor's are both `not_found`.
+
 **Setup required events (during streaming):**
 
 When a formula invokes a sub-component whose consent isn't satisfiable — a need with no live vault entry bound, or a shape that drifted past its approved consent — the system automatically emits a `setup_required` event with machine-readable fix instructions:
@@ -978,7 +979,7 @@ Your application data stays in the external database. Tinctures invoke backend c
 
 ### Sending a copy of a file (`file` tool)
 
-Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a copy of files under `data/`. The copy is taken when the offer is made, so later edits do not follow it. It lands only in the recipient's own tree, and only once they accept it; neither person sees the other's tree. `offer`, `offers`, `accept` and `decline` need an interactive session — no API key reaches them; a key with `storage_write` may `withdraw` an offer sent from its athanor.
+Beside `list`, `read`, `write`, `delete` and `move`, the `file` tool sends a person a copy of files under `data/`. The copy is taken when the offer is made, so later edits do not follow it. It lands only in the recipient's own tree, and only once they accept it; neither person sees the other's tree. `offer`, `offers`, `accept` and `decline` need an interactive session — no API key reaches them; a key with `storage_write` may `withdraw` an offer sent from its athanor.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
@@ -1046,7 +1047,7 @@ A rebind that narrows the binding, a grant that binds an existing entry
 and a provider default change need only the session; none enters
 material or grants an unbound component access.
 
-**OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The component declares a need of type `oauth:<provider>` with the scopes it requires. With `attach`, it names the connection on its request and CYFR attaches the token; a need that reads `get_access_token("<provider>")` requires an explicitly disclosed entry and receives short-lived, auto-refreshed tokens. The endpoints are immutable after creation. A projection narrower than the entry's scopes is refused.
+**OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The app lists `<origin>/auth/oauth/callback` as its redirect URI; the Vault page shows it, and `oauth.list` answers it beside the stored clients and the preset providers. A grant for a provider with no client set is refused for it before anything is confirmed. The component declares a need of type `oauth:<provider>` with the scopes it requires. With `attach`, it names the connection on its request and CYFR attaches the token; a need that reads `get_access_token("<provider>")` requires an explicitly disclosed entry and receives short-lived, auto-refreshed tokens. The endpoints are immutable after creation. A projection narrower than the entry's scopes is refused.
 
 ### Shares (`share` tool)
 
@@ -1150,7 +1151,19 @@ The committed consent is the runtime capability — `ask ∩ operator choices �
 
 ## Inbound Webhooks
 
-A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:slug` a sender signs with HMAC-SHA256. The signature is verified before anything else: an unknown or disabled slug answers 404, a missing or wrong signature 401, and a webhook store that cannot answer 503. A webhook configured with an idempotency key header (GitHub's `X-GitHub-Delivery`, a Stripe event id) runs each delivery once: a request without the header answers 400, a key already seen answers 200 `{"status": "duplicate", "first_seen_at": "..."}` without running the target again, and when the replay store cannot answer the claim the delivery answers 503 `unavailable` and runs nothing, since without the claim nothing proves the delivery has not already run. A delivery that ends non-2xx gives its claim back, so the sender's retry runs as a fresh delivery. An accepted delivery whose run fails gives its claim back the same way, but one whose run ends with its outcome unknown (its runner was lost after it may have acted, or its result was not kept) keeps it: the sender's retry answers `duplicate` and runs nothing, since the first run may already have taken effect.
+A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:slug` a sender signs with HMAC-SHA256 under the webhook's secret. The signature header, `x-cyfr-signature` unless the webhook names another `signature_header`, carries `sha256=` and the lowercase hex HMAC of the exact body. A webhook that names a `timestamp_header` signs the time as well: that header carries the time the delivery is sent in Unix seconds, the HMAC is over `<time>.<body>` (the time, a dot, the body), and a time further from now than `webhook_max_skew_seconds` (300 by default) is refused as a replay.
+
+```bash
+# SECRET is exported, so the signer reads it from its environment: a key
+# passed as an argument is readable by any local user from the command line.
+body='{"event":"ping"}'
+sig=$(printf '%s' "$body" | python3 -c 'import hashlib, hmac, os, sys
+print(hmac.new(os.environ["SECRET"].encode(), sys.stdin.buffer.read(), hashlib.sha256).hexdigest())')
+curl -X POST "https://<your CYFR>/hooks/<slug>" -H 'content-type: application/json' \
+  -H "x-cyfr-signature: sha256=$sig" -d "$body"
+```
+
+The signature is verified before anything else: an unknown or disabled slug answers 404; a signature or timestamp that is missing, malformed, wrong or out of the window answers 401 with a sentence naming which, the header and the form to sign in; and a webhook store that cannot answer 503. A webhook configured with an idempotency key header (GitHub's `X-GitHub-Delivery`, a Stripe event id) runs each delivery once: a request without the header answers 400, a key already seen answers 200 `{"status": "duplicate", "first_seen_at": "..."}` without running the target again, and when the replay store cannot answer the claim the delivery answers 503 `unavailable` and runs nothing, since without the claim nothing proves the delivery has not already run. A delivery that ends non-2xx gives its claim back, so the sender's retry runs as a fresh delivery. An accepted delivery whose run fails gives its claim back the same way, but one whose run ends with its outcome unknown (its runner was lost after it may have acted, or its result was not kept) keeps it: the sender's retry answers `duplicate` and runs nothing, since the first run may already have taken effect.
 
 ---
 
@@ -1260,7 +1273,7 @@ The installation's first person, made by its setup, is its platform
 administrator, a mark on their person that no other
 path writes: minted
 their own athanor past the server caps, never denied by the allowlist, and able
-to run the operator verbs (`door.*`, `execution.force_release`).
+to run the operator verbs (`door.*`).
 The capability is over the instance: an operator works inside their
 own athanor like everyone else and enters no other — opening another person's is
 refused like anyone's — and there is no cross-athanor reach. They hold no seat in
