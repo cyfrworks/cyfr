@@ -541,7 +541,7 @@ defmodule PrismWeb.CanvasLive do
         id={@menu}
         role="menu"
         aria-label="More options"
-        class="hidden absolute right-0 top-10 min-w-[12rem] overflow-hidden rounded-lg border border-white/10 bg-black/85 py-1 text-sm text-text-secondary shadow-xl backdrop-blur-md"
+        class="hidden absolute right-0 top-10 min-w-[12rem] overflow-hidden rounded-lg border border-white/10 bg-gray-950 py-1 text-sm text-text-secondary shadow-xl"
       >
         <button
           type="button"
