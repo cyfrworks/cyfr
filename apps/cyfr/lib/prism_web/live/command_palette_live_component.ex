@@ -65,7 +65,9 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   # to match (`component.search` over the installed ones), so a search
   # finds one by its name however many are installed.
   def handle_event("search", %{"value" => query}, socket) when is_binary(query) do
-    {:noreply, socket |> assign(:query, query) |> find_components() |> refilter()}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      {:noreply, socket |> assign(:query, query) |> find_components() |> refilter()}
+    end)
   end
 
   # Every target is a page path; `Nav.href/2` decides whether the focus

@@ -29,25 +29,42 @@ defmodule PrismWeb.GrantsComponent do
   end
 
   # The list is read when the component first mounts and whenever the
-  # parent hands it another component.
+  # parent hands it another component, on a current context
+  # (`CyfrWeb.ContextGuard.guard/2`), as every read and revoke here is.
   @impl true
   def update(assigns, socket) do
     reread? = socket.assigns[:ref] != assigns.ref
     socket = assign(socket, assigns)
-    {:ok, if(reread?, do: load(socket), else: socket)}
+
+    if reread? do
+      {:noreply, socket} =
+        CyfrWeb.ContextGuard.guard(socket, fn socket -> {:noreply, load(socket)} end)
+
+      {:ok, socket}
+    else
+      {:ok, socket}
+    end
   end
 
   @impl true
-  def handle_event("reload", _params, socket), do: {:noreply, load(socket)}
+  def handle_event("reload", _params, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket -> {:noreply, load(socket)} end)
+  end
 
   def handle_event("revoke", %{"profile" => profile_id}, socket) when is_binary(profile_id) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket -> {:noreply, revoke(socket, profile_id)} end)
+  end
+
+  # Only a grant this list holds is revoked: an id it never listed, another
+  # athanor's among them, reaches no operation.
+  defp revoke(socket, profile_id) do
     if Enum.any?(socket.assigns.grants || [], &(&1.id == profile_id)) do
       case call_tool(socket.assigns.context, "profile/revoke", %{"profile_id" => profile_id}) do
-        {:ok, _revoked} -> {:noreply, socket |> assign(:error, nil) |> load()}
-        {:error, reason} -> {:noreply, assign(socket, :error, error_message(reason))}
+        {:ok, _revoked} -> socket |> assign(:error, nil) |> load()
+        {:error, reason} -> assign(socket, :error, error_message(reason))
       end
     else
-      {:noreply, socket}
+      socket
     end
   end
 
