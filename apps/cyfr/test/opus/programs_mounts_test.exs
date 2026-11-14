@@ -81,7 +81,7 @@ defmodule Opus.ProgramsMountsTest do
         url: nil,
         home: "kept",
         login_entry_id: entry,
-        login_command: "gh auth login",
+        login_command: "gh mcp auth login",
         config_json:
           Jason.encode!(%{
             "backends" => [
@@ -102,7 +102,7 @@ defmodule Opus.ProgramsMountsTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        login_command: "claude auth login",
+        login_command: "npx -y @anthropic-ai/claude-code auth login",
         config_json:
           Jason.encode!(%{
             "backends" => [

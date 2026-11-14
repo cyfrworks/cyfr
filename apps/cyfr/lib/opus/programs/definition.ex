@@ -374,7 +374,6 @@ defmodule Opus.Programs.Definition do
     %{
       name: program.name,
       command: program.command,
-      login_command: program.login_command,
       env_names: program.env |> Map.keys() |> Enum.sort(),
       home: program.home,
       memory_bytes: program.memory_bytes,

@@ -567,7 +567,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        login_command: "#{name} auth login",
+        login_command: "npx -y @anthropic-ai/#{name} auth login",
         config_json:
           Jason.encode!(%{
             "backends" => [
@@ -613,7 +613,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> form(~s([data-test="home-actions"] form[phx-submit="sign_in"]), %{"entry" => entry})
     |> render_submit()
 
-    assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^entry}, _}, 2_000
+    assert_receive {:session, "open", %{"mode" => "terminal", "home_id" => ^entry}, _}, 2_000
     assert has_element?(view, ~s([data-test="sign-in-terminal"]))
 
     # The program's line, with the colour a terminal draws it in, shows as text.
@@ -629,7 +629,8 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-1234"})
     |> render_submit()
 
-    assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
+    bytes = Base.encode64("code-1234\r")
+    assert_receive {:session, "input", %{"bytes" => ^bytes}, _fields}, 2_000
 
     Scripted.end_sessions(fake, row.id, 0)
 
@@ -655,7 +656,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
     Scripted.write(fake, claude.id, "first")
     assert eventually(fn -> has_element?(view, ~s([data-test="terminal-lines"]), "first") end)
-    assert_receive {:session, "recv", %{"session" => session_a}, _fields}, 2_000
+    assert_receive {:session, "output", %{"session" => session_a}, _fields}, 2_000
 
     sign_in(view, "codex", b)
     assert_receive {:session, "close", %{"session" => ^session_a}, _fields}, 2_000
@@ -670,7 +671,8 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-b"})
     |> render_submit()
 
-    assert_receive {:session, "send", %{"session" => session_b, "lines" => ["code-b"]}, _}, 2_000
+    bytes_b = Base.encode64("code-b\r")
+    assert_receive {:session, "input", %{"session" => session_b, "bytes" => ^bytes_b}, _}, 2_000
     assert session_b != session_a
 
     # After its session ended, selecting the same sign-in again starts afresh.
@@ -785,7 +787,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
     assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
-    assert_receive {:session, "recv", %{"session" => _}, _fields}, 2_000
+    assert_receive {:session, "output", %{"session" => _}, _fields}, 2_000
 
     session_a =
       receive do
@@ -801,7 +803,8 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-b"})
     |> render_submit()
 
-    assert_receive {:session, "send", %{"session" => session_b, "lines" => ["code-b"]}, _}, 2_000
+    bytes_b = Base.encode64("code-b\r")
+    assert_receive {:session, "input", %{"session" => session_b, "bytes" => ^bytes_b}, _}, 2_000
     assert session_b != session_a
   end
 
@@ -850,7 +853,7 @@ defmodule PrismWeb.ProgramsLiveTest do
       "name" => "claude",
       "command" => "npx -y @anthropic-ai/claude-code",
       "mark" => "driven",
-      "login_command" => "claude auth login",
+      "login_command" => "npx -y @anthropic-ai/claude-code auth login",
       "home" => "kept",
       "memory_mib" => "1024",
       "disk_mib" => "2048"
@@ -864,7 +867,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert row.home == "kept"
     assert row.memory_bytes == 1024 * 1_048_576
     assert row.home_max_bytes == 2048 * 1_048_576
-    assert row.login_command == "claude auth login"
+    assert row.login_command == "npx -y @anthropic-ai/claude-code auth login"
 
     # The login entry is a sensitive change: it is made once the person
     # confirms it, and the sign-in opens on it.
@@ -881,7 +884,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert {:ok, [entry]} = Sanctum.Mount.login_entries(athanor.id)
     assert {:ok, %{name: "claude-login"}} = Arca.VaultStorage.get(ctx(athanor), entry)
 
-    assert_receive {:session, "open", %{"mode" => "sign_in"}, _fields}, 2_000
+    assert_receive {:session, "open", %{"mode" => "terminal"}, _fields}, 2_000
   end
 
   test "a kept mcp program names its login entry", %{conn: conn, athanor: athanor, user: user} do
@@ -1019,7 +1022,7 @@ defmodule PrismWeb.ProgramsLiveTest do
       "command" => "npx -y @anthropic-ai/claude-code@2.1.400",
       "mark" => "driven",
       "home" => "kept",
-      "login_command" => "claude auth login",
+      "login_command" => "npx -y @anthropic-ai/claude-code auth login",
       "memory_mib" => "1024"
     })
     |> render_submit()

@@ -59,9 +59,11 @@ defmodule Locus.Backends.Service do
   7. **The message**, read strictly (`read_session/1`), naming the owner
      and epoch its header names (`bad_request`).
   8. **The session**: `open` through the owners (`Locus.Backends.Owners.open/3`);
-     `send`, `recv` and `close` to the session the owners name
-     (`unknown_session` for one they do not hold), so a `recv` that waits
-     holds its session and nothing else.
+     every other message to the session the owners name
+     (`unknown_session` for one they do not hold) when it is of that
+     session's mode (`bad_request` otherwise:
+     `Prima.LocusBackends.mode_types/1`), so a `recv` or an `output` that
+     waits holds its session and nothing else.
 
   Every refusal made before the body is read closes the connection, so
   the body is never read. What a session answers is masked with its
@@ -311,22 +313,43 @@ defmodule Locus.Backends.Service do
   end
 
   defp served(conn, invoke, message) do
-    case Owners.session(owners(conn), invoke, message.session) do
-      {:ok, pid, _secrets} -> reach(conn, pid, message)
+    with {:ok, pid, mode} <- Owners.session(owners(conn), invoke, message.session),
+         :ok <- of_mode(message, mode) do
+      reach(conn, pid, message)
+    else
       {:error, code} -> {:refused, conn, code}
     end
   end
 
-  # A session whose process record is gone has ended and holds no line.
-  defp reach(_conn, nil, %{type: :send}), do: {:ok, %{status: :ended}}
+  defp of_mode(%{type: :close}, _mode), do: :ok
+
+  defp of_mode(%{type: type}, mode),
+    do: if(type in LocusBackends.mode_types(mode), do: :ok, else: {:error, :bad_request})
+
+  # A session whose process record is gone has ended and holds nothing.
+  defp reach(_conn, nil, %{type: type}) when type in [:send, :input, :resize],
+    do: {:ok, %{status: :ended}}
+
   defp reach(_conn, nil, %{type: :close}), do: {:ok, %{status: :closed}}
   defp reach(_conn, nil, %{type: :recv}), do: {:ok, %{lines: [], dropped: 0, running: false}}
+  defp reach(_conn, nil, %{type: :output}), do: {:ok, %{chunks: [], dropped: 0, running: false}}
 
   defp reach(conn, pid, message) do
     case message.type do
-      :send -> {:ok, %{status: Backend.send_lines(pid, message.lines)}}
-      :recv -> {:ok, Backend.recv(pid, message.after, message.max_wait_ms)}
-      :close -> with :ok <- Backend.close(pid), do: {:ok, %{status: :closed}}
+      :send ->
+        {:ok, %{status: Backend.send_lines(pid, message.lines)}}
+
+      :input ->
+        {:ok, %{status: Backend.input(pid, message.bytes)}}
+
+      :resize ->
+        {:ok, %{status: Backend.resize(pid, message.rows, message.cols)}}
+
+      type when type in [:recv, :output] ->
+        {:ok, Backend.recv(pid, message.after, message.max_wait_ms)}
+
+      :close ->
+        with :ok <- Backend.close(pid), do: {:ok, %{status: :closed}}
     end
   catch
     :exit, _reason -> reach(conn, nil, message)

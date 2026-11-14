@@ -12,16 +12,19 @@ defmodule Prima.LocusBackends do
   `tests/fixtures/locus_backends.json` holds the vectors every end
   reproduces.
 
-  The wire carries processes and lines, never what the lines mean: a
-  program is a process whose lines go to and from one owner, and the owner
-  speaks whatever protocol it speaks over them (Emissary MCP to a `stdio`
-  server, a catalyst a harness's protocol to a `pipe` program).
+  The wire carries processes and their bytes, never what they mean. A
+  session is opened in one of two modes. In mode `run` a program is a
+  process whose lines go to and from one owner, which speaks whatever
+  protocol it speaks over them (Emissary MCP to an `mcp` program, a
+  catalyst a harness's protocol to a `driven` one). In mode `terminal` it
+  is a process on a pseudo-terminal of a size the owner sets, whose raw
+  bytes go both ways, for a person at a terminal.
 
   ## Routes
 
   | Operation | Route | Body | Answer |
   |---|---|---|---|
-  | `:health` | `/locus/v1/backends/health` | `{"version": 2}` | unauthenticated |
+  | `:health` | `/locus/v1/backends/health` | `{"version": 3}` | unauthenticated |
   | `:control` | `/locus/v1/backends/control` | a control message | its answer, or a refusal |
   | `:session` | `/locus/v1/backends/session` | a session message | its answer, or a refusal |
 
@@ -48,10 +51,9 @@ defmodule Prima.LocusBackends do
   | `home` | `op`, `athanor`, `home_id` | `home_id`, `state` |
   | `homes` | none | `homes[]` |
 
-  A sync's program is `{name, command, login_command?, env_names, home,
-  memory_bytes?, home_max_bytes?, hosts?}`: a `name` of lowercase letters, digits
-  and hyphens, a `command` and an optional `login_command` each meeting
-  `check_command/1`, the `env_names` its sealed
+  A sync's program is `{name, command, env_names, home, memory_bytes?,
+  home_max_bytes?, hosts?}`: a `name` of lowercase letters, digits and
+  hyphens, a `command` meeting `check_command/1`, the `env_names` its sealed
   environment carries (each an uppercase variable name, none reserved:
   `reserved_env_names/0`, `reserved_env_prefixes/0`), its `home`
   (`"scratch"`, scrubbed at retirement, or `"kept"`, one folder per login
@@ -116,51 +118,66 @@ defmodule Prima.LocusBackends do
   ## Session messages (`encode_session/1`, `read_session/1`)
 
   A session is one running process of one program, for one
-  `(program, home_id, key)`, with a sequence-numbered buffer of the lines
-  its stdout writes. Each message names its owner and epoch, which must be
-  the ones its signature names:
+  `(program, home_id, key, mode)`, with a sequence-numbered buffer of what
+  its stdout writes: lines in mode `run`, chunks of bytes in mode
+  `terminal`. Each message names its owner and epoch, which must be the
+  ones its signature names:
 
   | Type | Members | Answer (`encode_session_answer/2`, `read_session_answer/2`) |
   |---|---|---|
-  | `open` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `argv[]` | `status`, `session`, `resumed`, `pty` |
+  | `open` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `argv[]`, `rows?`, `cols?` | `status`, `session`, `resumed` |
   | `send` | `owner`, `e`, `session`, `lines[]` | `status` |
   | `recv` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `lines[{seq, text}]`, `dropped`, `running`, `exit_code?` |
+  | `input` | `owner`, `e`, `session`, `bytes` | `status` |
+  | `output` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `chunks[{seq, bytes}]`, `dropped`, `running`, `exit_code?` |
+  | `resize` | `owner`, `e`, `session`, `rows`, `cols` | `status` |
   | `close` | `owner`, `e`, `session` | `status` |
 
-  An `open` in mode `run` attaches to the session running for its key
+  An `open` attaches to the session running for its key and mode
   (`resumed: true`) or starts the program's `command` with `argv` appended
   as its arguments (`resumed: false`): the administrator allowed the
-  program, and its arguments shape only what runs inside its box. An open
-  in mode `sign_in` runs the program's `login_command` on a
-  pseudo-terminal (`pty: true`), takes no `argv`, and is one session per
-  key. `home_id` names the kept home the process runs in (the login
-  entry's id: `home_id_pattern/0`), present for a program whose home is
-  kept and absent for any other. A `sign_in` open needs a kept home.
+  program, and its arguments shape only what runs inside its box.
+  `home_id` names the kept home the process runs in (`home_id_pattern/0`),
+  present for a program whose home is kept and absent for any other. An
+  open in mode `terminal` names the terminal's `rows` and `cols`, each 1
+  to `max_pty_size/0`, and starts the process on a pseudo-terminal of that
+  size; one in mode `run` names neither. A resumed open leaves the size as
+  it is.
 
-  A line is at most `max_line_bytes/0` bytes; a process that writes a
-  longer one is killed. The buffer keeps every line until a later `recv`
+  `send` and `recv` speak to a `run` session; `input`, `output` and
+  `resize` to a `terminal` one; a message naming a session of the other
+  mode is refused `bad_request`. In mode `run` a line is at most
+  `max_line_bytes/0` bytes, and a process that writes a longer one is
+  killed. In mode `terminal`, `bytes` is standard base64 (RFC 4648 with
+  padding) of 1 to `max_chunk_bytes/0` bytes, written to the terminal as
+  they are; what the process writes is buffered in chunks of at most
+  `max_chunk_bytes/0` bytes, answered in the same base64, and `resize`
+  sets the terminal's size, which the process is signalled
+  (`SIGWINCH`).
+
+  The buffer keeps every line or chunk until a later `recv` or `output`
   names an `after` at or above its sequence number, and at most
-  `max_buffer_bytes/0` bytes, each line charged its text and
-  `line_charge_bytes/0` of framing, and at most `max_buffer_lines/0`
-  lines: past either the oldest lines are dropped and
-  counted, and a `recv` answers in `dropped` how many lines between its
-  `after` and its first line were dropped. A `recv` waits up to
-  `max_wait_ms` (at most `max_recv_wait_ms/0`) for a line past `after` or
-  the process's end, and is idempotent: a lost answer is replayed by the
-  same `after`. A session whose process ended answers `running: false` on
-  every later `recv`, with `exit_code` when its process exited of its own
-  accord with a status (absent for one ended by a signal, by `close`, by
-  idle or by its owners), and the next `open` with its key answers `resumed:
+  `max_buffer_bytes/0` bytes, each charged its bytes and
+  `line_charge_bytes/0` of framing, and at most `max_buffer_lines/0` of
+  them: past either the oldest are dropped and counted, and an answer
+  says in `dropped` how many between its `after` and its first were
+  dropped. A `recv` or `output` waits up to `max_wait_ms` (at most
+  `max_recv_wait_ms/0`) for one past `after` or the process's end, and is
+  idempotent: a lost answer is replayed by the same `after`. A session
+  whose process ended answers `running: false` on every later `recv` or
+  `output`, with `exit_code` when its process exited of its own accord
+  with a status (absent for one ended by a signal, by `close`, by idle or
+  by its owners), and the next `open` with its key answers `resumed:
   false`; an owner that speaks a protocol over a session starts it again
-  then. A `send` to an ended session answers `status` `ended`, and one to
-  a running session `running`. `close` ends the session's process and
-  answers `closed`. A session's idle period is the owner's `idle_ms`: a
-  session with no `send` and no `recv` within it is ended.
+  then. A `send`, `input` or `resize` to an ended session answers `status`
+  `ended`, and one to a running session `running`. `close` ends the
+  session's process and answers `closed`. A session's idle period is the
+  owner's `idle_ms`: a session that no message reached within it is ended.
 
   ## Refusals
 
   A refusal is answered at its code's HTTP status (`status/1`) as
-  `{"version": 2, "error": <code>}` (`encode_refusal/1`).
+  `{"version": 3, "error": <code>}` (`encode_refusal/1`).
 
   ## Authentication
 
@@ -188,16 +205,24 @@ defmodule Prima.LocusBackends do
 
   ## Masking
 
-  Everything an owner's programs produce that leaves the service passes
-  through `mask/2`, which replaces each of the owner's credential values
-  of at least eight bytes, whole and after a scheme prefix (`Bearer
-  <token>`), with `[REDACTED]`. Only the variables `literal_env_names/0`
-  names hold a literal value rather than a credential.
+  Everything an owner's programs produce that leaves the service is
+  masked: each of the owner's credential values of at least eight bytes,
+  whole and after a scheme prefix (`Bearer <token>`), is replaced with
+  `[REDACTED]`. A `run` session's lines and a status's stderr tail pass
+  through `mask/2`, line by line. A `terminal` session's bytes pass
+  through one `masker/1` for the session's life (`mask_chunk/2`, then
+  `mask_end/1`), which holds back the end of a chunk that begins a
+  credential value until the bytes after it settle whether the value
+  follows, so a value split across chunks is masked as one; what is held
+  when the process ends is replaced whole. A prompt whose last bytes
+  begin a credential value is therefore shown only once more bytes come.
+  Only the variables `literal_env_names/0` names hold a literal value
+  rather than a credential.
   """
 
   alias Prima.{KeeperProtocol, MacEnvelope, VaultRef}
 
-  @version 2
+  @version 3
   @domain MacEnvelope.domain()
   @service MacEnvelope.service(:backends)
   @label MacEnvelope.label(:backends)
@@ -213,9 +238,11 @@ defmodule Prima.LocusBackends do
   # A control message is at most a sync of sixteen programs and its sealed
   # environment. A session body or answer is at most a buffer's worth of
   # lines escaped as JSON escapes them, which a line of control bytes can
-  # grow up to six times; a `recv` answers as many whole lines as fit.
+  # grow up to six times, or of chunks in base64; a `recv` or an `output`
+  # answers as many whole lines or chunks as fit.
   @max_control_bytes 1_048_576
   @max_line_bytes 1_048_576
+  @max_chunk_bytes 65_536
   @max_buffer_bytes 8_388_608
   @max_buffer_lines 65_536
   @line_charge_bytes 32
@@ -242,6 +269,8 @@ defmodule Prima.LocusBackends do
   @bounds %{
     max_control_bytes: @max_control_bytes,
     max_line_bytes: @max_line_bytes,
+    max_chunk_bytes: @max_chunk_bytes,
+    max_pty_size: KeeperProtocol.max_pty_size(),
     max_buffer_bytes: @max_buffer_bytes,
     max_buffer_lines: @max_buffer_lines,
     line_charge_bytes: @line_charge_bytes,
@@ -295,11 +324,13 @@ defmodule Prima.LocusBackends do
   @classes Map.keys(@statuses) |> Enum.sort()
 
   @control_types [:hello, :reconcile, :sync, :renew, :release, :status, :home, :homes]
-  @session_types [:open, :send, :recv, :close]
+  @session_types [:open, :send, :recv, :input, :output, :resize, :close]
+  @run_types [:send, :recv]
+  @terminal_types [:input, :output, :resize]
   @owner_states [:running, :draining]
   @program_statuses [:idle, :running, :failed]
   @homes [:scratch, :kept]
-  @modes [:run, :sign_in]
+  @modes [:run, :terminal]
   @home_ops [:reset, :retire]
   @home_states [:empty, :absent]
 
@@ -328,18 +359,24 @@ defmodule Prima.LocusBackends do
     open: ~w(version type owner e program key mode argv),
     send: ~w(version type owner e session lines),
     recv: ~w(version type owner e session after max_wait_ms),
+    input: ~w(version type owner e session bytes),
+    output: ~w(version type owner e session after max_wait_ms),
+    resize: ~w(version type owner e session rows cols),
     close: ~w(version type owner e session)
   }
   @session_answer_fields %{
-    open: ~w(version status session resumed pty),
+    open: ~w(version status session resumed),
     send: ~w(version status),
     recv: ~w(version lines dropped running),
+    input: ~w(version status),
+    output: ~w(version chunks dropped running),
+    resize: ~w(version status),
     close: ~w(version status)
   }
-  @session_optional %{open: ~w(home_id)}
-  @session_answer_optional %{recv: ~w(exit_code)}
+  @session_optional %{open: ~w(home_id rows cols)}
+  @session_answer_optional %{recv: ~w(exit_code), output: ~w(exit_code)}
   @program_fields ~w(name command env_names home)
-  @program_optional ~w(login_command memory_bytes home_max_bytes hosts)
+  @program_optional ~w(memory_bytes home_max_bytes hosts)
   @program_report_fields ~w(name status restarts home over_cap sessions)
   @program_report_optional ~w(error stderr_tail stderr_bytes home_bytes)
   @program_name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
@@ -380,11 +417,11 @@ defmodule Prima.LocusBackends do
   @type kind :: :invoke | :control
   @type control_type ::
           :hello | :reconcile | :sync | :renew | :release | :status | :home | :homes
-  @type session_type :: :open | :send | :recv | :close
+  @type session_type :: :open | :send | :recv | :input | :output | :resize | :close
   @type owner_state :: :running | :draining
   @type program_status :: :idle | :running | :failed
   @type home :: :scratch | :kept
-  @type mode :: :run | :sign_in
+  @type mode :: :run | :terminal
   @type home_op :: :reset | :retire
   @type session_status :: :running | :ended | :closed
   @type home_state :: :empty | :absent
@@ -435,7 +472,6 @@ defmodule Prima.LocusBackends do
   @type program :: %{
           name: String.t(),
           command: String.t(),
-          login_command: String.t() | nil,
           env_names: [String.t()],
           home: home(),
           memory_bytes: pos_integer() | nil,
@@ -524,7 +560,9 @@ defmodule Prima.LocusBackends do
             home_id: String.t() | nil,
             key: String.t(),
             mode: mode(),
-            argv: [String.t()]
+            argv: [String.t()],
+            rows: pos_integer() | nil,
+            cols: pos_integer() | nil
           }
           | %{
               type: :send,
@@ -541,17 +579,49 @@ defmodule Prima.LocusBackends do
               after: non_neg_integer(),
               max_wait_ms: non_neg_integer()
             }
+          | %{
+              type: :input,
+              owner: owner_ref(),
+              e: pos_integer(),
+              session: String.t(),
+              bytes: binary()
+            }
+          | %{
+              type: :output,
+              owner: owner_ref(),
+              e: pos_integer(),
+              session: String.t(),
+              after: non_neg_integer(),
+              max_wait_ms: non_neg_integer()
+            }
+          | %{
+              type: :resize,
+              owner: owner_ref(),
+              e: pos_integer(),
+              session: String.t(),
+              rows: pos_integer(),
+              cols: pos_integer()
+            }
           | %{type: :close, owner: owner_ref(), e: pos_integer(), session: String.t()}
 
   @typedoc "One buffered line, by its sequence number."
   @type line :: %{seq: pos_integer(), text: String.t()}
 
+  @typedoc "One buffered chunk of a terminal's bytes, by its sequence number."
+  @type chunk :: %{seq: pos_integer(), bytes: binary()}
+
   @typedoc "A session answer, by the type of the message it answers."
   @type session_answer ::
-          %{status: :running, session: String.t(), resumed: boolean(), pty: boolean()}
+          %{status: :running, session: String.t(), resumed: boolean()}
           | %{status: session_status()}
           | %{
               lines: [line()],
+              dropped: non_neg_integer(),
+              running: boolean(),
+              exit_code: 0..255 | nil
+            }
+          | %{
+              chunks: [chunk()],
               dropped: non_neg_integer(),
               running: boolean(),
               exit_code: 0..255 | nil
@@ -605,7 +675,8 @@ defmodule Prima.LocusBackends do
           | {:unknown_field, String.t()}
           | {:missing_field, String.t()}
           | {:invalid_field, String.t()}
-          | {:too_large, :control | :answer | :status_answer | :session | :command | :line,
+          | {:too_large,
+             :control | :answer | :status_answer | :session | :command | :line | :chunk,
              non_neg_integer(), pos_integer()}
           | {:too_many, :owners | :programs | :argv, non_neg_integer(), pos_integer()}
           | {:out_of_range, String.t(), integer(), pos_integer()}
@@ -694,7 +765,7 @@ defmodule Prima.LocusBackends do
   @spec homes() :: [home()]
   def homes, do: @homes
 
-  @doc "An open's modes: `run` and `sign_in`."
+  @doc "An open's modes: `run`, in lines, and `terminal`, in bytes on a pseudo-terminal."
   @spec modes() :: [mode()]
   def modes, do: @modes
 
@@ -717,6 +788,19 @@ defmodule Prima.LocusBackends do
   @doc "The bytes one line of a session may be, its newline excluded."
   @spec max_line_bytes() :: pos_integer()
   def max_line_bytes, do: @max_line_bytes
+
+  @doc "The most bytes one `input` writes or one buffered chunk of a terminal holds."
+  @spec max_chunk_bytes() :: pos_integer()
+  def max_chunk_bytes, do: @max_chunk_bytes
+
+  @doc "The most rows or columns a terminal has (`Prima.KeeperProtocol`'s bound)."
+  @spec max_pty_size() :: pos_integer()
+  def max_pty_size, do: KeeperProtocol.max_pty_size()
+
+  @doc "The session message types each mode takes beside `open` and `close`."
+  @spec mode_types(mode()) :: [session_type()]
+  def mode_types(:run), do: @run_types
+  def mode_types(:terminal), do: @terminal_types
 
   @doc "The bytes of lines a session's buffer holds before it drops the oldest."
   @spec max_buffer_bytes() :: pos_integer()
@@ -1162,8 +1246,6 @@ defmodule Prima.LocusBackends do
     with :ok <- exact(wire, @program_fields, @program_optional, at <> "."),
          {:ok, name} <- program_name(wire["name"], at <> ".name"),
          {:ok, command} <- command(wire["command"], at <> ".command"),
-         {:ok, login_command} <-
-           optional(wire, "login_command", &command(&1, at <> ".login_command")),
          {:ok, env_names} <- env_names(wire["env_names"], at <> ".env_names"),
          {:ok, home} <- roster(wire, "home", @homes, at <> "."),
          {:ok, memory_bytes} <-
@@ -1175,7 +1257,6 @@ defmodule Prima.LocusBackends do
        %{
          name: name,
          command: command,
-         login_command: login_command,
          env_names: env_names,
          home: home,
          memory_bytes: memory_bytes,
@@ -1498,7 +1579,7 @@ defmodule Prima.LocusBackends do
   @doc "The body of a session message, checked as `read_session/1` will check it."
   @spec encode_session(session_message()) :: {:ok, binary()} | {:error, read_error()}
   def encode_session(%{type: type} = message) when type in @session_types do
-    wire = message |> wire() |> Map.put("version", @version)
+    wire = message |> base64(:bytes) |> wire() |> Map.put("version", @version)
 
     with {:ok, _message} <- read_session_wire(wire),
          body = Jason.encode!(wire),
@@ -1537,9 +1618,18 @@ defmodule Prima.LocusBackends do
          {:ok, home_id} <- optional(wire, "home_id", &home_id_value/1),
          {:ok, key} <- key(wire["key"]),
          {:ok, mode} <- roster(wire, "mode", @modes, ""),
-         {:ok, argv} <- argv(wire["argv"], mode) do
+         {:ok, argv} <- argv(wire["argv"]),
+         {:ok, rows, cols} <- open_size(wire, mode) do
       {:ok,
-       Map.merge(message, %{program: program, home_id: home_id, key: key, mode: mode, argv: argv})}
+       Map.merge(message, %{
+         program: program,
+         home_id: home_id,
+         key: key,
+         mode: mode,
+         argv: argv,
+         rows: rows,
+         cols: cols
+       })}
     end
   end
 
@@ -1555,6 +1645,29 @@ defmodule Prima.LocusBackends do
          {:ok, after_seq} <- count(wire, "after", ""),
          {:ok, max_wait_ms} <- wait(wire["max_wait_ms"]) do
       {:ok, Map.merge(message, %{session: session, after: after_seq, max_wait_ms: max_wait_ms})}
+    end
+  end
+
+  defp read_session_typed(:input, wire, message) do
+    with {:ok, session} <- session_id(wire["session"]),
+         {:ok, bytes} <- input_bytes(wire["bytes"]) do
+      {:ok, Map.merge(message, %{session: session, bytes: bytes})}
+    end
+  end
+
+  defp read_session_typed(:output, wire, message) do
+    with {:ok, session} <- session_id(wire["session"]),
+         {:ok, after_seq} <- count(wire, "after", ""),
+         {:ok, max_wait_ms} <- wait(wire["max_wait_ms"]) do
+      {:ok, Map.merge(message, %{session: session, after: after_seq, max_wait_ms: max_wait_ms})}
+    end
+  end
+
+  defp read_session_typed(:resize, wire, message) do
+    with {:ok, session} <- session_id(wire["session"]),
+         {:ok, rows} <- size(wire, "rows"),
+         {:ok, cols} <- size(wire, "cols") do
+      {:ok, Map.merge(message, %{session: session, rows: rows, cols: cols})}
     end
   end
 
@@ -1575,12 +1688,49 @@ defmodule Prima.LocusBackends do
       else: {:error, {:invalid_field, "session"}}
   end
 
-  # A sign-in runs its program's login command with no arguments of the
-  # opener's.
-  defp argv([], :sign_in), do: {:ok, []}
-  defp argv(_argv, :sign_in), do: {:error, {:invalid_field, "argv"}}
+  # A terminal's size, named by a terminal open and by no run open.
+  defp open_size(wire, :run) do
+    case Enum.find(~w(rows cols), &is_map_key(wire, &1)) do
+      nil -> {:ok, nil, nil}
+      name -> {:error, {:unknown_field, name}}
+    end
+  end
 
-  defp argv(argv, :run) when is_list(argv) do
+  defp open_size(wire, :terminal) do
+    with :ok <- exact(Map.take(wire, ~w(rows cols)), ~w(rows cols), ""),
+         {:ok, rows} <- size(wire, "rows"),
+         {:ok, cols} <- size(wire, "cols"),
+         do: {:ok, rows, cols}
+  end
+
+  defp size(wire, name) do
+    value = wire[name]
+
+    if is_integer(value) and value >= 1 and value <= max_pty_size(),
+      do: {:ok, value},
+      else: {:error, {:invalid_field, name}}
+  end
+
+  # A terminal's input: standard base64 of 1 to `max_chunk_bytes` bytes.
+  defp input_bytes(text) when is_binary(text) do
+    case Base.decode64(text) do
+      {:ok, ""} ->
+        {:error, {:invalid_field, "bytes"}}
+
+      {:ok, bytes} when byte_size(bytes) > @max_chunk_bytes ->
+        {:error, {:too_large, :chunk, byte_size(bytes), @max_chunk_bytes}}
+
+      {:ok, bytes} ->
+        {:ok, bytes}
+
+      :error ->
+        {:error, {:invalid_field, "bytes"}}
+    end
+  end
+
+  defp input_bytes(_text), do: {:error, {:invalid_field, "bytes"}}
+
+  defp argv(argv) when is_list(argv) do
     if length(argv) > @max_argv do
       {:error, {:too_many, :argv, length(argv), @max_argv}}
     else
@@ -1595,7 +1745,7 @@ defmodule Prima.LocusBackends do
     end
   end
 
-  defp argv(_argv, _mode), do: {:error, {:invalid_field, "argv"}}
+  defp argv(_argv), do: {:error, {:invalid_field, "argv"}}
 
   defp lines(lines) when is_list(lines) do
     lines
@@ -1628,6 +1778,11 @@ defmodule Prima.LocusBackends do
   @spec encode_session_answer(session_type(), session_answer()) ::
           {:ok, binary()} | {:error, read_error()}
   def encode_session_answer(type, answer) when type in @session_types and is_map(answer) do
+    answer =
+      if is_list(answer[:chunks]),
+        do: %{answer | chunks: Enum.map(answer.chunks, &base64(&1, :bytes))},
+        else: answer
+
     wire = answer |> wire() |> Map.put("version", @version)
 
     with :ok <-
@@ -1665,13 +1820,12 @@ defmodule Prima.LocusBackends do
   defp read_session_answer_typed(:open, wire) do
     with {:ok, status} <- roster(wire, "status", [:running], ""),
          {:ok, session} <- session_id(wire["session"]),
-         {:ok, resumed} <- boolean(wire, "resumed", ""),
-         {:ok, pty} <- boolean(wire, "pty", "") do
-      {:ok, %{status: status, session: session, resumed: resumed, pty: pty}}
+         {:ok, resumed} <- boolean(wire, "resumed", "") do
+      {:ok, %{status: status, session: session, resumed: resumed}}
     end
   end
 
-  defp read_session_answer_typed(:send, wire) do
+  defp read_session_answer_typed(type, wire) when type in [:send, :input, :resize] do
     with {:ok, status} <- roster(wire, "status", [:running, :ended], ""),
          do: {:ok, %{status: status}}
   end
@@ -1687,6 +1841,15 @@ defmodule Prima.LocusBackends do
          {:ok, running} <- boolean(wire, "running", ""),
          {:ok, exit_code} <- optional(wire, "exit_code", &exit_code(&1, running)) do
       {:ok, %{lines: lines, dropped: dropped, running: running, exit_code: exit_code}}
+    end
+  end
+
+  defp read_session_answer_typed(:output, wire) do
+    with {:ok, chunks} <- seq_chunks(wire["chunks"]),
+         {:ok, dropped} <- count(wire, "dropped", ""),
+         {:ok, running} <- boolean(wire, "running", ""),
+         {:ok, exit_code} <- optional(wire, "exit_code", &exit_code(&1, running)) do
+      {:ok, %{chunks: chunks, dropped: dropped, running: running, exit_code: exit_code}}
     end
   end
 
@@ -1716,6 +1879,37 @@ defmodule Prima.LocusBackends do
   end
 
   defp seq_lines(_list), do: {:error, {:invalid_field, "lines"}}
+
+  # Chunks in rising sequence, each standard base64 of 1 to a chunk's bound.
+  defp seq_chunks(list) when is_list(list) do
+    list
+    |> Enum.with_index()
+    |> reduce_ok(0, fn {entry, index}, last ->
+      at = "chunks[#{index}]"
+
+      with %{} <- entry,
+           :ok <- exact(entry, ~w(seq bytes), at <> "."),
+           {:ok, seq} <- positive(entry, "seq", at <> "."),
+           true <- seq > last || {:error, {:invalid_field, at <> ".seq"}},
+           {:ok, bytes} <- chunk_bytes(entry["bytes"], at <> ".bytes") do
+        {:ok, %{seq: seq, bytes: bytes}, seq}
+      else
+        {:error, _} = error -> error
+        _ -> {:error, {:invalid_field, at}}
+      end
+    end)
+  end
+
+  defp seq_chunks(_list), do: {:error, {:invalid_field, "chunks"}}
+
+  defp chunk_bytes(text, at) when is_binary(text) do
+    case Base.decode64(text) do
+      {:ok, bytes} when bytes != "" and byte_size(bytes) <= @max_chunk_bytes -> {:ok, bytes}
+      _ -> {:error, {:invalid_field, at}}
+    end
+  end
+
+  defp chunk_bytes(_text, at), do: {:error, {:invalid_field, at}}
 
   # ————— refusals —————
 
@@ -1773,6 +1967,9 @@ defmodule Prima.LocusBackends do
   def describe({:too_large, :line, bytes, max}),
     do: "a line is #{bytes} bytes; at most #{max} are accepted"
 
+  def describe({:too_large, :chunk, bytes, max}),
+    do: "an input is #{bytes} bytes; at most #{max} are accepted"
+
   def describe({:too_large, what, bytes, max}),
     do: "the #{what} body is #{bytes} bytes; at most #{max} are read"
 
@@ -1821,6 +2018,90 @@ defmodule Prima.LocusBackends do
     do: Map.new(map, fn {key, value} -> {replace(key, secrets), replace(value, secrets)} end)
 
   defp replace(value, _secrets), do: value
+
+  @typedoc """
+  A terminal session's masker: its owner's credential values and the bytes
+  of the output it holds back. It holds credentials: nothing shows it.
+  """
+  @opaque masker :: %{
+            values: [binary()],
+            pattern: term(),
+            longest: non_neg_integer(),
+            firsts: MapSet.t(),
+            held: binary()
+          }
+
+  @doc "A masker of `secrets` with nothing held: one per terminal session, for its life."
+  @spec masker([String.t()]) :: masker()
+  def masker(secrets) when is_list(secrets) do
+    values = masked_values(secrets)
+
+    %{
+      values: values,
+      pattern: if(values != [], do: :binary.compile_pattern(values)),
+      longest: values |> Enum.map(&byte_size/1) |> Enum.max(fn -> 0 end),
+      firsts: MapSet.new(values, &:binary.first/1),
+      held: ""
+    }
+  end
+
+  @doc """
+  The next bytes of a terminal's output, masked: every credential value
+  they complete replaced with `[REDACTED]`, as `mask/2` replaces it, and
+  the end of them that begins one held back until later bytes settle it.
+  Answers the bytes to release, possibly none, and the masker.
+  """
+  @spec mask_chunk(masker(), binary()) :: {binary(), masker()}
+  def mask_chunk(%{values: []} = masker, bytes) when is_binary(bytes), do: {bytes, masker}
+
+  def mask_chunk(masker, bytes) when is_binary(bytes) do
+    {released, held} = release(masker.held <> bytes, masker, [])
+    {IO.iodata_to_binary(released), %{masker | held: held}}
+  end
+
+  @doc """
+  What a masker still holds when its terminal's output ends: nothing, or
+  `[REDACTED]` in place of a credential value's beginning, which is never
+  released.
+  """
+  @spec mask_end(masker()) :: binary()
+  def mask_end(%{held: ""}), do: ""
+  def mask_end(_masker), do: @mask_marker
+
+  # Leftmost, and longest at one position, every value whose occurrence
+  # starts before the held end is replaced; the held end is the longest
+  # suffix that is a proper prefix of a value, so no value it begins can be
+  # released in part.
+  defp release(buffer, masker, acc) do
+    hold = hold_from(buffer, masker)
+
+    case :binary.match(buffer, masker.pattern) do
+      {at, length} when at < hold ->
+        rest = binary_part(buffer, at + length, byte_size(buffer) - at - length)
+        release(rest, masker, [acc, binary_part(buffer, 0, at), @mask_marker])
+
+      _ ->
+        {[acc, binary_part(buffer, 0, hold)], binary_part(buffer, hold, byte_size(buffer) - hold)}
+    end
+  end
+
+  defp hold_from(buffer, masker) do
+    size = byte_size(buffer)
+    from = max(size - masker.longest + 1, 0)
+
+    Enum.find(from..(size - 1)//1, size, fn at ->
+      MapSet.member?(masker.firsts, :binary.at(buffer, at)) and
+        begins_value?(binary_part(buffer, at, size - at), masker.values)
+    end)
+  end
+
+  defp begins_value?(tail, values) do
+    length = byte_size(tail)
+
+    Enum.any?(values, fn value ->
+      byte_size(value) > length and binary_part(value, 0, length) == tail
+    end)
+  end
 
   # ————— reading —————
 
@@ -1956,6 +2237,14 @@ defmodule Prima.LocusBackends do
     |> case do
       {:ok, items, _acc} -> {:ok, Enum.reverse(items)}
       {:error, _} = error -> error
+    end
+  end
+
+  # A terminal's bytes travel as standard base64.
+  defp base64(map, key) do
+    case map do
+      %{^key => bytes} when is_binary(bytes) -> %{map | key => Base.encode64(bytes)}
+      _other -> map
     end
   end
 

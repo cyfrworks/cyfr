@@ -356,6 +356,11 @@ type spawn struct {
 	relay   *child
 	// group is the spawn's memory-bounded cgroup, nil until it is created.
 	group *cgroup.Group
+	// pty is the keeper's own descriptor of the master of the spawn's
+	// pseudo-terminal, which a `resize` sets the size through; nil for a
+	// spawn without one. s.mu guards it once the spawn is in spawns, and
+	// the retirement that removes the spawn from spawns closes it.
+	pty *os.File
 
 	// exitReported closes once `exited` has been sent for the leader.
 	exitReported chan struct{}
@@ -610,6 +615,8 @@ func (s *server) handle(req *protocol.Request) {
 		s.handleSpawn(req)
 	case protocol.TypeSignal:
 		s.handleSignal(req)
+	case protocol.TypeResize:
+		s.handleResize(req)
 	case protocol.TypeRelease:
 		s.handleRelease(req)
 	case protocol.TypePool:
@@ -648,6 +655,37 @@ func (s *server) handleSignal(req *protocol.Request) {
 		s.send(protocol.NewError("", req.SpawnID, protocol.CodeUnknownSpawn))
 	case !running:
 		s.send(protocol.NewError("", req.SpawnID, protocol.CodeNotRunning))
+	}
+}
+
+// handleResize sets the size of a spawn's pseudo-terminal; the kernel
+// signals SIGWINCH to the terminal's foreground process group.
+func (s *server) handleResize(req *protocol.Request) {
+	s.mu.Lock()
+	sp := s.spawns[req.SpawnID]
+	hasPty := sp != nil && sp.pty != nil
+	var err error
+	if hasPty {
+		err = unix.IoctlSetWinsize(int(sp.pty.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Row: uint16(*req.Rows), Col: uint16(*req.Cols)})
+	}
+	s.mu.Unlock()
+	switch {
+	case sp == nil:
+		s.send(protocol.NewError("", req.SpawnID, protocol.CodeUnknownSpawn))
+	case !hasPty:
+		s.send(protocol.NewError("", req.SpawnID, protocol.CodeBadRequest))
+	case err != nil:
+		s.log.Error("spawn %s: resizing its terminal: %v", sp.id, err)
+		s.send(protocol.NewError("", req.SpawnID, protocol.CodeInternal))
+	}
+}
+
+// closePty closes the keeper's descriptor of the spawn's terminal; s.mu is
+// held.
+func (sp *spawn) closePty() {
+	if sp.pty != nil {
+		_ = sp.pty.Close()
+		sp.pty = nil
 	}
 }
 
@@ -700,7 +738,7 @@ func (s *server) handleSpawn(req *protocol.Request) {
 	}
 	// A kept home and a pseudo-terminal are a program's, whose pool shares
 	// the keeper's namespaces.
-	if req.Isolation != "" && (req.HomeMode == protocol.HomeKept || (req.Pty != nil && *req.Pty)) {
+	if req.Isolation != "" && (req.HomeMode == protocol.HomeKept || req.Pty != nil) {
 		s.log.Warn("spawn %s refused: an isolated spawn takes no kept home and no pty", req.ID)
 		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
@@ -887,10 +925,12 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	stageOwned := []*os.File{stdinR, stdoutW, stderrW, specR, statusW}
 	// A pty spawn's stdin, stdout and stderr are the terminal's other end;
 	// the relay holds the master as its stdin and its stdout, and its
-	// stderr is a pipe no one writes, which ends at once.
-	pty := req.Pty != nil && *req.Pty
+	// stderr is a pipe no one writes, which ends at once. The keeper keeps
+	// a descriptor of the master as sp.pty, which a `resize` sets the size
+	// through; the spawn's retirement closes it, after a failure here too.
+	pty := req.Pty != nil
 	if pty {
-		master, slave, err := openPty()
+		master, slave, err := openPty(uint16(*req.Pty.Rows), uint16(*req.Pty.Cols))
 		if err != nil {
 			return protocol.CodeInternal, err
 		}
@@ -900,6 +940,9 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 			return protocol.CodeInternal, err
 		}
 		opened = append(opened, masterIn)
+		if sp.pty, err = dupFile(master, "pty-master"); err != nil {
+			return protocol.CodeInternal, err
+		}
 		stageFiles = []uintptr{slave.Fd(), slave.Fd(), slave.Fd(), specR.Fd(), statusW.Fd()}
 		stageOwned = []*os.File{slave, specR, statusW}
 		stdinW, stdoutR = masterIn, master
@@ -1090,6 +1133,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				_ = sp.pool.Quarantine(uid)
 			}
 			delete(s.spawns, sp.id)
+			sp.closePty()
 			s.mu.Unlock()
 
 			if clean {

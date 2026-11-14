@@ -1192,7 +1192,7 @@ defmodule Opus.ProgramsTest do
             home: "kept",
             memory_bytes: 1_073_741_824,
             home_max_bytes: 2_147_483_648,
-            login_command: "claude auth login",
+            login_command: "npx -y @anthropic-ai/claude-code auth login",
             config_json:
               Jason.encode!(%{
                 "backends" => [
@@ -1307,14 +1307,13 @@ defmodule Opus.ProgramsTest do
     end
 
     defp opened(grant, home_id, mode) do
+      size = if mode == :terminal, do: %{rows: 24, cols: 80}, else: %{}
+
       {:ok, answer} =
-        Opus.Programs.Session.open(grant, %{
-          program: "github",
-          home_id: home_id,
-          key: "k",
-          mode: mode,
-          argv: []
-        })
+        Opus.Programs.Session.open(
+          grant,
+          Map.merge(size, %{program: "github", home_id: home_id, key: "k", mode: mode, argv: []})
+        )
 
       answer
     end
@@ -1325,9 +1324,9 @@ defmodule Opus.ProgramsTest do
       assert %{resumed: true, session: same} = opened(grant, "vlt_keyed", :run)
       assert same == run.session
 
-      assert %{resumed: false, session: sign_in} = opened(grant, "vlt_keyed", :sign_in)
+      assert %{resumed: false, session: terminal} = opened(grant, "vlt_keyed", :terminal)
       assert %{resumed: false, session: other_home} = opened(grant, "vlt_other", :run)
-      assert Enum.uniq([run.session, sign_in, other_home]) == [run.session, sign_in, other_home]
+      assert Enum.uniq([run.session, terminal, other_home]) == [run.session, terminal, other_home]
     end
 
     test "a reset of a home ends every session of that home", %{ctx: ctx, fake: fake} do
@@ -1416,7 +1415,6 @@ defmodule Opus.ProgramsTest do
                             "home" => "kept",
                             "memory_bytes" => 1_073_741_824,
                             "home_max_bytes" => 2_147_483_648,
-                            "login_command" => "claude auth login",
                             "env_names" => []
                           }
                         ]
@@ -1653,7 +1651,7 @@ defmodule Opus.ProgramsTest do
       assert {:ok, ^before} = Arca.McpServerStorage.get(actor, "editable")
     end
 
-    test "a sign-in runs the login command in the entry's home and relays its lines both ways",
+    test "a sign-in runs the login command on a terminal in the entry's home and relays its lines both ways",
          %{ctx: ctx, fake: fake, row: row, admin: admin, entry: entry} do
       assert {:ok, %{session: token, program: "claude", entry: ^entry}} =
                Provider.handle("mcp_servers", admin, %{
@@ -1662,8 +1660,14 @@ defmodule Opus.ProgramsTest do
                  "entry" => "claude-login"
                })
 
-      assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^entry, "argv" => []},
-                      _},
+      assert_receive {:session, "open",
+                      %{
+                        "mode" => "terminal",
+                        "home_id" => ^entry,
+                        "argv" => ["auth", "login"],
+                        "rows" => 40,
+                        "cols" => 120
+                      }, _},
                      2_000
 
       # A line the program wrote before anyone attached is kept for them.
@@ -1678,8 +1682,10 @@ defmodule Opus.ProgramsTest do
       assert_receive {Opus.Programs, ^token, {:lines, ["Open https://claude.ai/oauth" <> _]}},
                      2_000
 
+      # What the person types is typed into the terminal, ended by Enter.
       assert :ok = Programs.sign_in_send(admin, token, "code-1234")
-      assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
+      bytes = Base.encode64("code-1234\r")
+      assert_receive {:session, "input", %{"bytes" => ^bytes}, _fields}, 2_000
 
       # The command ends by a signal: the subscriber is told, and the owner
       # released.
@@ -1703,7 +1709,7 @@ defmodule Opus.ProgramsTest do
                  "entry" => "claude-login"
                })
 
-      assert_receive {:session, "open", %{"mode" => "sign_in"}, %{boot: "bb_second"}}, 3_000
+      assert_receive {:session, "open", %{"mode" => "terminal"}, %{boot: "bb_second"}}, 3_000
     end
 
     test "a needs_reauth entry signed in with an exit 0 is active again, and with exit 1 stays as it is",

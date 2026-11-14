@@ -125,7 +125,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Locus: where untrusted things run
 
 - The runtime's OS runners, with no network of their own, and the build and backend services, each signed with its own key.
-- The backends service runs programs, each a process whose lines go to and from one owner; a program's home is scratch, scrubbed at retirement, or kept, one folder per login entry under a uid of its own that no other owner is ever given and no backup carries. *Not built yet:* the VM level and the computer per athanor.
+- The backends service runs programs, each a process of one owner: in lines over pipes, which the owner speaks its protocol over, each line masked of the owner's credentials, or in bytes on a pseudo-terminal whose size the owner sets, for a person at a terminal, masked as a stream so that no credential split between two writes leaves whole or in part; a program's home is scratch, scrubbed at retirement, or kept, one folder per login entry under a uid of its own that no other owner is ever given and no backup carries. *Not built yet:* the VM level and the computer per athanor.
 - The keeper, `cyfr-locus`, which runs every child under a uid and bounds of its own and scrubs it on release.
 - Perception bodies on a device. *Not built yet:* perception bodies.
 - Opus, Compendium and Emissary decide what runs; Locus only runs it.

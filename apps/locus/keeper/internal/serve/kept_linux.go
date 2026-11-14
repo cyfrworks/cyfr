@@ -33,9 +33,6 @@ const (
 	// keptRetireWait bounds how long a kept spawn of a home waits for its
 	// uid's retirement to finish before it is refused as CodeUIDBusy.
 	keptRetireWait = 30 * time.Second
-	// ptyRows and ptyCols are a pseudo-terminal's size.
-	ptyRows = 40
-	ptyCols = 120
 )
 
 // keptLock is the lock of a kept home's uid.
@@ -300,6 +297,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			}
 			s.mu.Lock()
 			delete(s.spawns, sp.id)
+			sp.closePty()
 			s.mu.Unlock()
 			s.log.Info("spawn %s: kept uid %d retired", sp.id, uid)
 			if notify {
@@ -436,10 +434,10 @@ func (s *server) runHomeHelper(acct Account, spec home.HelperSpec) (string, erro
 	return string(out), nil
 }
 
-// openPty opens a pseudo-terminal of ptyRows by ptyCols: its master, which
-// the relay holds, and its slave, which becomes the spawn's stdin, stdout
-// and stderr and its controlling terminal.
-func openPty() (master, slave *os.File, err error) {
+// openPty opens a pseudo-terminal of rows by cols: its master, which the
+// relay holds, and its slave, which becomes the spawn's stdin, stdout and
+// stderr and its controlling terminal.
+func openPty(rows, cols uint16) (master, slave *os.File, err error) {
 	mfd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ptmx: %w", err)
@@ -461,7 +459,7 @@ func openPty() (master, slave *os.File, err error) {
 	if err != nil {
 		return fail(fmt.Errorf("the pty's slave: %w", err))
 	}
-	if err := unix.IoctlSetWinsize(sfd, unix.TIOCSWINSZ, &unix.Winsize{Row: ptyRows, Col: ptyCols}); err != nil {
+	if err := unix.IoctlSetWinsize(sfd, unix.TIOCSWINSZ, &unix.Winsize{Row: rows, Col: cols}); err != nil {
 		_ = unix.Close(sfd)
 		return fail(fmt.Errorf("the pty's size: %w", err))
 	}

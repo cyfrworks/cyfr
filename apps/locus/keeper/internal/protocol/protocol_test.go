@@ -135,6 +135,7 @@ func TestSharedRequestBounds(t *testing.T) {
 		"max_uid":               MaxUID,
 		"max_home_bytes":        MaxHomeBytes,
 		"max_hosts":             MaxHosts,
+		"max_pty_size":          MaxPtySize,
 	}
 	if !reflect.DeepEqual(v.RequestBounds, want) {
 		t.Fatalf("the request bounds are %v, the vectors pin %v", want, v.RequestBounds)
@@ -205,8 +206,8 @@ func TestSharedHomeRequestsParse(t *testing.T) {
 	}
 }
 
-// A kept spawn's home fields and a spawn's pty are decoded; a spawn that
-// names scratch and no pty is today's spawn.
+// A kept spawn's home fields and a spawn's pty size are decoded; a spawn
+// that names scratch and no pty is today's spawn.
 func TestHomeFieldsAreDecoded(t *testing.T) {
 	v := loadVectors(t)
 	kept, err := ParseRequest(v.HomeRequests[0])
@@ -221,7 +222,7 @@ func TestHomeFieldsAreDecoded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pty.Pty == nil || !*pty.Pty || pty.HomeMode != "" {
+	if pty.Pty == nil || pty.Pty.Rows == nil || *pty.Pty.Rows != 40 || pty.Pty.Cols == nil || *pty.Pty.Cols != 120 || pty.HomeMode != "" {
 		t.Fatalf("pty spawn decoded to %+v", pty)
 	}
 	home, err := ParseRequest(v.HomeRequests[2])
@@ -237,12 +238,12 @@ func TestHomeFieldsAreDecoded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if req.HomeMode == HomeScratch && req.Pty != nil && !*req.Pty {
+		if req.HomeMode == HomeScratch && req.Pty == nil {
 			scratch++
 		}
 	}
 	if scratch == 0 {
-		t.Fatal("no valid spawn names home_mode scratch and pty false")
+		t.Fatal("no valid spawn names home_mode scratch and no pty")
 	}
 }
 
@@ -266,7 +267,7 @@ func TestHomeRequestBounds(t *testing.T) {
 		{`{"v":1,"type":"home_retire","id":"1","path":"/` + strings.Repeat("a", MaxHomePathBytes-1) + `","uid":1}`, true},
 		{`{"v":1,"type":"home_make",` + home + `,"uid":1}`, false},
 		{`{"v":1,"type":"pool","id":"1","pool":"backends",` + home + `}`, false},
-		{`{"v":1,"type":"pool","id":"1","pool":"backends","pty":false}`, false},
+		{`{"v":1,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
 	} {
 		req, err := ParseRequest([]byte(c.line))
 		if c.ok != (err == nil) {
@@ -279,7 +280,11 @@ func TestHomeRequestBounds(t *testing.T) {
 		ok     bool
 	}{
 		{``, true},
-		{`,"home_mode":"scratch","pty":false`, true},
+		{`,"home_mode":"scratch"`, true},
+		{`,"pty":{"rows":1,"cols":1000}`, true},
+		{`,"pty":{"rows":1000,"cols":1}`, true},
+		{`,"pty":{}`, false},
+		{`,"pty":{"rows":-1,"cols":80}`, false},
 		{`,"home_mode":"kept",` + strings.Replace(home, "path", "home_path", 1) + `,"home_uid":1,"home_max_bytes":1125899906842624`, true},
 		{`,"home_mode":"kept",` + strings.Replace(home, "path", "home_path", 1) + `,"home_uid":1,"home_max_bytes":1125899906842625`, false},
 		{`,"home_mode":"kept",` + strings.Replace(home, "path", "home_path", 1) + `,"home_uid":4294967295`, false},
@@ -379,6 +384,27 @@ func TestSpawnRequestFieldsAreDecoded(t *testing.T) {
 	}
 	if got := req.Rlimits.Resolve(); got != (Limits{Nofile: 256, Nproc: 32, Core: 0, Fsize: 1 << 20}) {
 		t.Fatalf("limits %+v", got)
+	}
+}
+
+// A resize names its spawn and the terminal's new size.
+func TestResizeIsDecoded(t *testing.T) {
+	var resizes int
+	for _, raw := range loadVectors(t).ValidRequests {
+		req, err := ParseRequest(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.Type != TypeResize {
+			continue
+		}
+		resizes++
+		if req.SpawnID != "00112233445566778899aabbccddeeff" || req.Rows == nil || *req.Rows != 50 || req.Cols == nil || *req.Cols != 132 {
+			t.Fatalf("resize decoded to %+v", req)
+		}
+	}
+	if resizes != 1 {
+		t.Fatalf("%d valid resizes in the vectors, want 1", resizes)
 	}
 }
 

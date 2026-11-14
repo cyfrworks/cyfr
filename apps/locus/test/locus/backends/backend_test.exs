@@ -10,8 +10,9 @@ defmodule Locus.Backends.BackendTest do
   `:ended`; an exit of its own with a status other than 0 is a crash and
   one with 0 is not; a line past its bound kills the process as a crash;
   an idle session ends; the owner's secrets are masked in lines and in
-  the stderr tail; a session on a pseudo-terminal shows a prompt that
-  waits for its answer. Against `Locus.Test.FakeKeeper` through
+  the stderr tail; on a pseudo-terminal, bytes going in and coming out
+  as they are, and an owner's secret masked though the process writes it
+  in two parts, or stops part way through it. Against `Locus.Test.FakeKeeper` through
   `Locus.Keeper`: the spawn a session asks for is in the pool `backends`,
   with its argv, its environment and its memory bound.
   """
@@ -74,6 +75,27 @@ defmodule Locus.Backends.BackendTest do
       read(session, List.last(lines).seq, n, seen ++ Enum.map(lines, & &1.text))
     end
   end
+
+  # A terminal's chunks past `after`, read until `done?` holds of all of
+  # them together: those bytes and the last chunk's number.
+  defp output(session, after_seq, done?, seen \\ "") do
+    if done?.(seen) do
+      {seen, after_seq}
+    else
+      %{chunks: chunks} = Backend.recv(session, after_seq, 5_000)
+      assert chunks != [], "no output came after #{inspect(seen)}"
+      output(session, List.last(chunks).seq, done?, seen <> Enum.map_join(chunks, & &1.bytes))
+    end
+  end
+
+  # Every byte a terminal session wrote past `after` once it has ended.
+  defp rest(session, after_seq) do
+    assert %{chunks: chunks, running: false} = Backend.recv(session, after_seq, 0)
+    Enum.map_join(chunks, & &1.bytes)
+  end
+
+  defp terminal(supervisor, command, size \\ %{rows: 24, cols: 80}),
+    do: start_session(supervisor, command, mode: :terminal, spec: [pty: size])
 
   test "lines sent come back, and a recv is replayed by the same after", %{
     supervisor: supervisor
@@ -157,6 +179,8 @@ defmodule Locus.Backends.BackendTest do
     :counters.add(now, 1, 1_000)
     Backend.retire_if_idle(session, 1_000)
     assert_receive {Backend, ^session, {:ended, %{crash: false}}}, 5_000
+    # Its process gone before the test ends, so nothing of it outlives the run.
+    assert_receive {Backend, ^session, :vacated}, 5_000
   end
 
   test "the owner's secrets are masked in its lines and its stderr tail", %{
@@ -176,19 +200,42 @@ defmodule Locus.Backends.BackendTest do
     refute inspect(:sys.get_status(session), limit: :infinity) =~ @token
   end
 
-  test "on a pseudo-terminal a prompt that waits is read, and its answer goes in", %{
+  test "a terminal's input reaches its process as it is, and its output comes as it is", %{
     supervisor: supervisor
   } do
+    # Raw, the terminal neither echoes nor reads an interrupt in the input.
     session =
-      start_session(
+      terminal(
         supervisor,
-        ~s(printf 'Paste the code: '; read code; echo "got $code"),
-        spec: [pty: true]
+        ~s(stty raw -echo; printf 'ready\\n'; head -c 4 | od -An -tx1; printf '\\377\\376\\n')
       )
 
-    assert read(session, 0, 1) == ["Paste the code: "]
-    :running = Backend.send_lines(session, ["abc"])
-    wait_until(fn -> "got abc" in texts(Backend.recv(session, 1, 1_000)) end, 10_000)
+    {"ready\n", seq} = output(session, 0, &String.ends_with?(&1, "\n"))
+    assert :running = Backend.input(session, <<0x03, 0xFF, 0x80, ?a>>)
+    assert_receive {Backend, ^session, {:ended, %{crash: false}}}, 10_000
+    assert rest(session, seq) == " 03 ff 80 61\n" <> <<0xFF, 0xFE, ?\n>>
+  end
+
+  test "an owner's secret is masked though the terminal's process writes it in two parts, or stops in it",
+       %{supervisor: supervisor} do
+    {first, second} = String.split_at(@token, 10)
+
+    session =
+      terminal(
+        supervisor,
+        ~s(head="${PROBE_TOKEN%#{second}}"; tail="${PROBE_TOKEN#$head}"; ) <>
+          ~s(printf 'one %s' "$head"; sleep 0.3; printf '%s two\\n' "$tail"; ) <>
+          ~s(sleep 0.3; printf 'three %s' "$head")
+      )
+
+    # What the masker holds back of the first part is released with the
+    # second, masked; the part it holds at the end is masked whole.
+    {seen, seq} = output(session, 0, &String.contains?(&1, "two"))
+    assert_receive {Backend, ^session, {:ended, %{crash: false}}}, 10_000
+    whole = seen <> rest(session, seq)
+
+    assert whole == "one [REDACTED] two\r\nthree [REDACTED]"
+    refute whole =~ binary_part(first, 0, 4)
   end
 
   test "a session stopped before its delayed spawn starts nothing", %{supervisor: supervisor} do

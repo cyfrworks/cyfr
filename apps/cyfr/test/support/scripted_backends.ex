@@ -38,7 +38,11 @@ defmodule Cyfr.Test.ScriptedBackends do
   does not list and any other method are answered with a JSON-RPC error.
   Each answer is a line in its buffer that `recv` reads past `after`,
   waiting up to its `max_wait_ms`; a method the test sets `:silent` is
-  never answered. A session the script ends
+  never answered. A `terminal` session runs no script: it takes `input`
+  and `resize` (the test told of each, as of every message), and `output`
+  reads the chunks `write/3` puts in its buffer, each line with a carriage
+  return and a newline as a terminal ends it. A message of the other mode
+  is refused `bad_request`. A session the script ends
   (`end_sessions/2`, a reset or retire of its home, or an idle period set
   with `set(fake, :idle_ms, ms)`: no `send` and no `recv` arriving within
   it, a waiting recv counting at its arrival alone) answers `running:
@@ -337,8 +341,11 @@ defmodule Cyfr.Test.ScriptedBackends do
         held(agent, message["type"])
 
         case pop_refusal(agent, message["type"]) do
-          nil -> handle(conn, agent, message, fields)
-          {code, status} -> answer(conn, st, status, %{"version" => 2, "error" => code})
+          nil ->
+            handle(conn, agent, message, fields)
+
+          {code, status} ->
+            answer(conn, st, status, %{"version" => LocusBackends.version(), "error" => code})
         end
     end
   end
@@ -619,7 +626,10 @@ defmodule Cyfr.Test.ScriptedBackends do
             handle_session(conn, agent, fields, message)
 
           {code, status} ->
-            answer(conn, Agent.get(agent, & &1), status, %{"version" => 2, "error" => code})
+            answer(conn, Agent.get(agent, & &1), status, %{
+              "version" => LocusBackends.version(),
+              "error" => code
+            })
         end
     end
   end
@@ -666,12 +676,7 @@ defmodule Cyfr.Test.ScriptedBackends do
           %{running: true} ->
             id = st.keys[key]
 
-            {%{
-               "status" => "running",
-               "session" => id,
-               "resumed" => true,
-               "pty" => message.mode == :sign_in
-             }, touch(st, id)}
+            {%{"status" => "running", "session" => id, "resumed" => true}, touch(st, id)}
 
           _none_or_ended ->
             id = "ss_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
@@ -682,6 +687,7 @@ defmodule Cyfr.Test.ScriptedBackends do
               key: message.key,
               home_id: message.home_id,
               mode: message.mode,
+              size: message.rows && {message.rows, message.cols},
               lines: [],
               seq: 0,
               running: true,
@@ -696,12 +702,7 @@ defmodule Cyfr.Test.ScriptedBackends do
                 do: %{st | homes: MapSet.put(st.homes, message.home_id)},
                 else: st
 
-            {%{
-               "status" => "running",
-               "session" => id,
-               "resumed" => false,
-               "pty" => message.mode == :sign_in
-             }, st}
+            {%{"status" => "running", "session" => id, "resumed" => false}, st}
         end
       end)
 
@@ -710,41 +711,19 @@ defmodule Cyfr.Test.ScriptedBackends do
     session_answer(conn, Agent.get(agent, & &1), answer)
   end
 
-  defp handle_session(conn, agent, fields, %{type: :send, session: id, lines: lines}) do
-    status =
-      Agent.get_and_update(agent, fn st ->
-        case st.sessions[id] do
-          nil ->
-            {:unknown_session, st}
-
-          %{running: false} ->
-            {:ended, st}
-
-          s ->
-            for line <- lines,
-                {:ok, %{"method" => method, "id" => _}} <- [Jason.decode(line)],
-                do: send(st.test, {:invoke, method, fields})
-
-            s = Enum.reduce(lines, s, &program_line(st, elem(s.owner, 1), &2, &1))
-            {:running, %{st | sessions: Map.put(st.sessions, id, %{s | active: now()})}}
-        end
-      end)
-
+  defp handle_session(conn, agent, fields, %{session: id} = message)
+       when message.type != :close do
     st = Agent.get(agent, & &1)
 
-    case status do
-      :unknown_session -> refuse(conn, st, :unknown_session)
-      status -> session_answer(conn, st, %{"status" => Atom.to_string(status)})
-    end
-  end
+    case st.sessions[id] do
+      nil ->
+        refuse(conn, st, :unknown_session)
 
-  # A recv counts as the session's use when it arrives, as Locus counts it,
-  # not while it waits: a session no line reaches is ended by its idle
-  # period even with a recv waiting on it.
-  defp handle_session(conn, agent, _fields, %{type: :recv} = message) do
-    Agent.update(agent, &touch(&1, message.session))
-    deadline = now() + message.max_wait_ms
-    recv(conn, agent, message.session, message.after, deadline)
+      s ->
+        if message.type in LocusBackends.mode_types(s.mode),
+          do: handle_mode(conn, agent, fields, message),
+          else: refuse(conn, st, :bad_request)
+    end
   end
 
   defp handle_session(conn, agent, _fields, %{type: :close, session: id}) do
@@ -758,6 +737,53 @@ defmodule Cyfr.Test.ScriptedBackends do
     session_answer(conn, Agent.get(agent, & &1), %{"status" => "closed"})
   end
 
+  defp handle_mode(conn, agent, fields, %{type: :send, session: id, lines: lines}) do
+    status =
+      Agent.get_and_update(agent, fn st ->
+        case st.sessions[id] do
+          %{running: false} ->
+            {:ended, st}
+
+          s ->
+            for line <- lines,
+                {:ok, %{"method" => method, "id" => _}} <- [Jason.decode(line)],
+                do: send(st.test, {:invoke, method, fields})
+
+            s = Enum.reduce(lines, s, &program_line(st, elem(s.owner, 1), &2, &1))
+            {:running, %{st | sessions: Map.put(st.sessions, id, %{s | active: now()})}}
+        end
+      end)
+
+    session_answer(conn, Agent.get(agent, & &1), %{"status" => Atom.to_string(status)})
+  end
+
+  defp handle_mode(conn, agent, _fields, %{type: type, session: id} = message)
+       when type in [:input, :resize] do
+    status =
+      Agent.get_and_update(agent, fn st ->
+        case st.sessions[id] do
+          %{running: false} ->
+            {:ended, st}
+
+          s ->
+            s = if type == :resize, do: %{s | size: {message.rows, message.cols}}, else: s
+            {:running, %{st | sessions: Map.put(st.sessions, id, %{s | active: now()})}}
+        end
+      end)
+
+    session_answer(conn, Agent.get(agent, & &1), %{"status" => Atom.to_string(status)})
+  end
+
+  # A recv counts as the session's use when it arrives, as Locus counts it,
+  # not while it waits: a session no line reaches is ended by its idle
+  # period even with a recv waiting on it.
+  defp handle_mode(conn, agent, _fields, %{type: type} = message)
+       when type in [:recv, :output] do
+    Agent.update(agent, &touch(&1, message.session))
+    deadline = now() + message.max_wait_ms
+    recv(conn, agent, message.session, message.after, deadline)
+  end
+
   defp recv(conn, agent, id, after_seq, deadline) do
     st = Agent.get(agent, & &1)
 
@@ -767,12 +793,15 @@ defmodule Cyfr.Test.ScriptedBackends do
 
       s ->
         lines =
-          for {seq, text} <- Enum.reverse(s.lines),
-              seq > after_seq,
-              do: %{"seq" => seq, "text" => text}
+          for {seq, text} <- Enum.reverse(s.lines), seq > after_seq do
+            if s.mode == :terminal,
+              do: %{"seq" => seq, "bytes" => Base.encode64(text <> "\r\n")},
+              else: %{"seq" => seq, "text" => text}
+          end
 
         if lines != [] or not s.running or now() >= deadline do
-          answer = %{"lines" => lines, "dropped" => 0, "running" => s.running}
+          member = if s.mode == :terminal, do: "chunks", else: "lines"
+          answer = %{member => lines, "dropped" => 0, "running" => s.running}
 
           answer =
             if s.exit_code != nil and not s.running,

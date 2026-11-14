@@ -3,9 +3,13 @@
 
 defmodule Opus.Programs.SignIn do
   @moduledoc """
-  One sign-in: a `sign_in` session of a program row's login command, on a
-  pseudo-terminal in a login entry's kept home, relayed to the one process
-  that attaches to it (`Opus.Programs.sign_in/3`).
+  One sign-in: a `terminal` session running a program row's login command
+  (the row's command with the words its login command adds as arguments),
+  on a pseudo-terminal of 40 rows by 120 columns in a login entry's
+  kept home, relayed to the one process that attaches to it
+  (`Opus.Programs.sign_in/3`) as lines: what the terminal writes is split
+  at its newlines, a part with none yet sent as a line of its own, and a
+  line the subscriber sends is typed with a carriage return.
 
   The relay holds the row's owner (`Opus.Programs.hold/1`), opens the
   session under a key derived from its caller's binding (so one caller has
@@ -37,6 +41,8 @@ defmodule Opus.Programs.SignIn do
   alias Opus.Programs.Session
 
   @kept_lines 500
+  @rows 40
+  @cols 120
   @attach_ms 30_000
   @recv_wait_ms 25_000
 
@@ -53,7 +59,10 @@ defmodule Opus.Programs.SignIn do
       program: Keyword.fetch!(args, :program),
       home_id: Keyword.fetch!(args, :home_id),
       key: Keyword.fetch!(args, :key),
-      mode: :sign_in
+      mode: :terminal,
+      argv: Keyword.fetch!(args, :argv),
+      rows: @rows,
+      cols: @cols
     }
 
     with {:ok, grant} <- Opus.Programs.hold(Map.put(owner, :sign_in, true)),
@@ -116,7 +125,7 @@ defmodule Opus.Programs.SignIn do
     do: {:reply, {:error, :attached}, state}
 
   def handle_call({:send, binding, line}, _from, %{binding: binding} = state) do
-    case Session.send(state.grant, state.session, [line]) do
+    case Session.input(state.grant, state.session, line <> "\r") do
       {:ok, :running} -> {:reply, :ok, state}
       {:ok, :ended} -> {:reply, {:error, :ended}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -239,18 +248,26 @@ defmodule Opus.Programs.SignIn do
     state
   end
 
-  # The reader: one recv at a time, each naming the last line it was
+  # The reader: one output at a time, each naming the last chunk it was
   # answered, so a lost answer is replayed.
   defp read(relay, grant, session, after_seq) do
-    case Session.recv(grant, session, after_seq, @recv_wait_ms) do
-      {:ok, %{lines: lines, running: running} = answer} ->
-        texts = Enum.map(lines, & &1.text)
-        last = if lines == [], do: after_seq, else: List.last(lines).seq
+    case Session.output(grant, session, after_seq, @recv_wait_ms) do
+      {:ok, %{chunks: chunks, running: running} = answer} ->
+        texts = Enum.flat_map(chunks, &lines(&1.bytes))
+        last = if chunks == [], do: after_seq, else: List.last(chunks).seq
         send(relay, {:read, texts, running, answer.exit_code})
         if running, do: read(relay, grant, session, last)
 
       {:error, reason} ->
         send(relay, {:read_failed, reason})
     end
+  end
+
+  defp lines(bytes) do
+    bytes
+    |> String.replace_invalid()
+    |> String.split("\n")
+    |> Enum.map(&String.trim_trailing(&1, "\r"))
+    |> Enum.reject(&(&1 == ""))
   end
 end

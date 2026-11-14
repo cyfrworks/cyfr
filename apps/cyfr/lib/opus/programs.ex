@@ -252,13 +252,21 @@ defmodule Opus.Programs do
   Start a sign-in on `row` (a stored `mcp_servers` row with a kept home and
   a login command) in the kept home `home_id`, for the caller `ctx`: its
   owner held, its login command running on a pseudo-terminal. Answers a
-  token the same caller attaches to within 30 s.
+  token the same caller attaches to within 30 s; a row whose login command
+  is not its command with words after it has none to run
+  (`:no_login_command`).
   """
   @spec sign_in(Sanctum.Context.t(), map(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def sign_in(%Sanctum.Context{} = ctx, row, home_id) when is_binary(home_id) do
     token = "si_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
     binding = caller(ctx)
 
+    with {:ok, argv} <- login_argv(row) do
+      start_sign_in(token, binding, ctx, row, home_id, argv)
+    end
+  end
+
+  defp start_sign_in(token, binding, ctx, row, home_id, argv) do
     args = [
       name: relay_name(token),
       token: token,
@@ -267,7 +275,8 @@ defmodule Opus.Programs do
       owner: %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
       program: program_name(row),
       home_id: home_id,
-      key: key(binding)
+      key: key(binding),
+      argv: argv
     ]
 
     case DynamicSupervisor.start_child(@relays, {SignIn, args}) do
@@ -574,6 +583,22 @@ defmodule Opus.Programs do
   end
 
   # A sign-in runs the row's login command for its first program.
+  # A session runs its program's command with arguments of its opener's: a
+  # login command is that command and the words it adds.
+  defp login_argv(row) do
+    login = Map.get(row, :login_command)
+
+    case Arca.McpServerStorage.config(row)["backends"] do
+      [%{"command" => command} | _] when is_binary(login) ->
+        if String.starts_with?(login, command <> " "),
+          do: {:ok, login |> String.replace_prefix(command <> " ", "") |> String.split()},
+          else: {:error, :no_login_command}
+
+      _ ->
+        {:error, :no_login_command}
+    end
+  end
+
   defp program_name(row) do
     case Arca.McpServerStorage.config(row)["backends"] do
       [%{"name" => name} | _] -> name

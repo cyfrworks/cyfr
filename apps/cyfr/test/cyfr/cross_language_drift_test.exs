@@ -531,9 +531,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version routes key_hex owner hello sync release status open invalid_messages fence_rejected refusals)},
       {"apps/locus/test/locus/listener_test.exs", ~w(version service key_hex owner hello sync)},
       {"apps/prima/test/prima/locus_backends_test.exs",
-       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status open recv seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking)},
+       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status open recv open_terminal input output resize seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking masking_stream)},
       {"tests/locus-backends-image/harness.py",
-       ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status home seal refusals)}
+       ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status home seal refusals open_terminal input output resize)}
     ],
     "locus_builds.json" => [
       {"apps/cyfr/test/support/scripted_builder.ex", ~w(key_hex request_key_hex lines)},

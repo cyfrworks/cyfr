@@ -80,8 +80,9 @@ defmodule Locus.Keeper do
   `home_reset/2` (a retirement, then a make under the same uid) and
   `home_retire/2` ask cyfr-locus, which acts as the home's uid. A spec
   naming a made kept `home` spawns there under the home's uid, with its
-  `home_max_bytes` and `pty`; one naming a home not made is refused
-  `home_absent` before cyfr-locus is asked. A spec's `hosts` goes with its
+  `home_max_bytes`; one naming a home not made is refused `home_absent`
+  before cyfr-locus is asked. A spec's `pty` size goes with its spawn, and
+  `resize/3` asks cyfr-locus to set it again. A spec's `hosts` goes with its
   spawn (`Prima.KeeperProtocol`): cyfr-locus resolves them and has the
   island's guard hold the spawn's uid to their addresses, refusing the
   spawn `hosts_unresolved` or `guard_unavailable`. Without a kept-homes root,
@@ -368,7 +369,7 @@ defmodule Locus.Keeper do
       isolation: Map.get(spec, :isolation),
       home: Map.get(spec, :home),
       home_max_bytes: Map.get(spec, :home_max_bytes),
-      pty: Map.get(spec, :pty, false) == true,
+      pty: Map.get(spec, :pty),
       hosts: Map.get(spec, :hosts),
       heir: Map.get(spec, :heir)
     }
@@ -420,6 +421,14 @@ defmodule Locus.Keeper do
   @impl Locus.Launcher
   def signal(%{ref: ref, server: server}, sig) when is_binary(sig) do
     GenServer.call(server, {:signal, ref, sig}, @channel_send_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
+
+  @impl Locus.Launcher
+  def resize(%{ref: ref, server: server}, rows, cols)
+      when is_integer(rows) and is_integer(cols) do
+    GenServer.call(server, {:resize, ref, rows, cols}, @channel_send_timeout_ms)
   catch
     :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
   end
@@ -976,23 +985,11 @@ defmodule Locus.Keeper do
     end
   end
 
-  def handle_call({:signal, ref, sig}, _from, state) do
-    with %{kind: :handle, released: false, spawn_id: spawn_id} when spawn_id != nil <-
-           state.requests[ref],
-         {:ok, line} <- encode(%{type: :signal, spawn_id: spawn_id, sig: sig}) do
-      case send_line(state, line) do
-        :ok ->
-          {:reply, :ok, state}
+  def handle_call({:signal, ref, sig}, from, state),
+    do: spawn_request(ref, &%{type: :signal, spawn_id: &1, sig: sig}, from, state)
 
-        {:error, reason} ->
-          {:stop, {:shutdown, {:channel_lost, reason}},
-           {:error, {:launcher_unavailable, :channel_lost}}, state}
-      end
-    else
-      {:error, :unencodable} -> {:reply, {:error, :unencodable}, state}
-      _ -> {:reply, {:error, :unknown_spawn}, state}
-    end
-  end
+  def handle_call({:resize, ref, rows, cols}, from, state),
+    do: spawn_request(ref, &%{type: :resize, spawn_id: &1, rows: rows, cols: cols}, from, state)
 
   def handle_call({:fence, tag}, _from, state) do
     if Enum.any?(state.requests, fn {_ref, entry} -> match?({_pid, ^tag}, entry.heir) end),
@@ -1253,6 +1250,26 @@ defmodule Locus.Keeper do
 
   defp redact_message(message), do: message
 
+  # A request naming a spawn the keeper has reported and not released,
+  # answered once its line is written: the keeper answers only a refusal.
+  defp spawn_request(ref, request, _from, state) do
+    with %{kind: :handle, released: false, spawn_id: spawn_id} when spawn_id != nil <-
+           state.requests[ref],
+         {:ok, line} <- encode(request.(spawn_id)) do
+      case send_line(state, line) do
+        :ok ->
+          {:reply, :ok, state}
+
+        {:error, reason} ->
+          {:stop, {:shutdown, {:channel_lost, reason}},
+           {:error, {:launcher_unavailable, :channel_lost}}, state}
+      end
+    else
+      {:error, :unencodable} -> {:reply, {:error, :unencodable}, state}
+      _ -> {:reply, {:error, :unknown_spawn}, state}
+    end
+  end
+
   defp redacted(data) when is_binary(data), do: {:redacted, byte_size(data)}
   defp redacted(_data), do: :redacted
 
@@ -1268,7 +1285,7 @@ defmodule Locus.Keeper do
       |> put_given(:isolation, opts.isolation)
       |> put_given(:control, opts.control || nil)
       |> Map.merge(home)
-      |> put_given(:pty, opts.pty || nil)
+      |> put_given(:pty, opts.pty)
       |> put_given(:hosts, opts.hosts)
 
     # A spawn with a control channel is answered once its request is
@@ -1644,7 +1661,8 @@ defmodule Locus.Keeper do
   defp on_reply({:home_measured, id, bytes}, state), do: home_reply(state, id, {:measured, bytes})
   defp on_reply({:home_retired, id}, state), do: home_reply(state, id, :retired)
 
-  # An `error` for a spawn this client does not follow is ignored.
+  # An `error` for a spawn this client does not follow is ignored, as is a
+  # refused resize: a spawn's size changes nothing of whom it belongs to.
   defp on_reply(_reply, state), do: state
 
   # A run's caller hears the spawn's uid and pid; a long-lived spawn's
