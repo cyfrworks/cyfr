@@ -190,7 +190,7 @@ func TestInitDoesNotRepeatSgWithTheSameGroup(t *testing.T) {
 // and its own prompt, then the commands, then sudo -k; a refused password
 // runs no command and still forgets the login.
 func TestInitRunsTheRealSudo(t *testing.T) {
-	production := machine
+	production := realMachine
 	for name, c := range map[string]struct {
 		verdict, err string
 		ran          bool
