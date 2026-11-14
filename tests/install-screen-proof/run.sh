@@ -835,11 +835,34 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   # The screen's browser writes its profile in the folder until the screen
   # stops, which cyfr down leaves running: it is stopped before the first
   # listing, so the two listings compare cyfr down's stop with the
-  # uninstall's. Its browser can outlive the service's stop, so the step
-  # waits until no process holds the profile (the bracket keeps the pattern
-  # from matching the shell that carries it).
-  guest_root 'systemctl stop cyfr-screen; p=--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]; pkill -f -- "$p"; for i in $(seq 30); do pgrep -f -- "$p" >/dev/null || exit 0; sleep 1; done; exit 1' ||
-    fail "the screen's browser did not stop ($GUEST_DIR/root.txt)"
+  # uninstall's. Its browser can outlive the service's stop, and a process
+  # still unwinding can start it again, so the step waits until no process
+  # has held the profile for five seconds in a row, ending each holder it
+  # meets. Every holder met after the stop is kept in screen-holders.txt
+  # with its parent: pid, parent pid, start time and command line, so a
+  # browser that comes back names what started it (the bracket keeps the
+  # pattern from matching the shell that carries it).
+  guest_root_out '
+    p=--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]
+    systemctl stop cyfr-screen
+    quiet=0
+    for i in $(seq 60); do
+      pids=$(pgrep -f -- "$p" | paste -sd, -)
+      if [ -z "$pids" ]; then
+        quiet=$((quiet + 1))
+        [ "$quiet" -lt 5 ] || exit 0
+      else
+        quiet=0
+        echo "== $(date -u +%FT%T.%NZ)"
+        ps -o pid=,ppid=,lstart=,args= -p "$pids"
+        parents=$(ps -o ppid= -p "$pids" | tr -d " " | sort -u | paste -sd, -)
+        [ -z "$parents" ] || ps -o pid=,ppid=,lstart=,args= -p "$parents" | sed "s/^/parent /"
+        pkill -f -- "$p"
+      fi
+      sleep 1
+    done
+    exit 1' >"$GUEST_DIR/screen-holders.txt" 2>&1 ||
+    fail "the screen's browser did not stay stopped for five seconds ($GUEST_DIR/screen-holders.txt)"
   volumes_seen after-the-reboot-and-cyfr-down
   left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
   guest_ssh 'docker volume ls -q --filter label=com.docker.compose.project=cyfr' >"$GUEST_DIR/stack-volumes.txt" 2>&1 ||
