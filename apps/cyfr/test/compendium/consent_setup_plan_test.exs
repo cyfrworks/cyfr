@@ -351,6 +351,78 @@ defmodule Compendium.ConsentSetupPlanTest do
     assert plan.ready == false
   end
 
+  # A run stands on the one active owner profile its default selection
+  # picks, so the plan describes that profile and no other: a public twin
+  # left after the owner is revoked is no grant of the person's runs.
+  test "a revoked owner beside a public twin is not ready, as its run has no grant",
+       %{ctx: ctx} do
+    publish!(ctx, "plan-twin")
+    ref = "reagent:local.plan-twin"
+    %{profile_id: owner} = grant!(ctx, ref, [])
+
+    {:ok, staged} = Commit.stage_publish(ctx, %{profile_id: owner})
+    {:ok, preview} = Commit.preview(ctx, staged.decisions)
+
+    {:ok, %{profile_id: twin}} =
+      Commit.commit(ctx, %{
+        decisions: staged.decisions,
+        plan_token: staged.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: staged.expected_consent_revision
+      })
+
+    revoke!(ctx, owner)
+
+    assert {:ok, [%{id: ^twin, kind: :public, status: :active}]} =
+             Sanctum.Consent.profiles(ctx, ref)
+
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert plan.consent == %{
+             profile_id: nil,
+             profile_kind: nil,
+             profile_status: nil,
+             head_state: "revoked",
+             reason: "this component's grant was revoked — grant it again to run it",
+             revision: nil,
+             scope: nil,
+             needs: [],
+             ready: false
+           }
+
+    assert plan.ready == false
+    assert Opus.Admission.authority_for(ctx, :default, ref) == {:error, :no_profile}
+  end
+
+  test "two active owner grants under different labels are not ready, as a run refuses the ambiguity",
+       %{ctx: ctx} do
+    publish!(ctx, "plan-two")
+    ref = "reagent:local.plan-two"
+    %{profile_id: first} = walk!(ctx, %{ref: ref})
+    %{profile_id: second} = walk!(ctx, %{ref: ref, label: "second"})
+    ids = Enum.sort([first, second])
+
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert plan.consent == %{
+             profile_id: nil,
+             profile_kind: nil,
+             profile_status: nil,
+             head_state: "ambiguous",
+             reason:
+               "this component has several active grants (#{Enum.join(ids, ", ")}) — " <>
+                 "name one to run it, or revoke the others",
+             revision: nil,
+             scope: nil,
+             needs: [],
+             ready: false
+           }
+
+    assert plan.ready == false
+    assert Opus.Admission.authority_for(ctx, :default, ref) == {:error, {:ambiguous, ids}}
+  end
+
   # A release asking for more than the grant holds is refused at its run,
   # so its plan is not ready either, whatever its bindings.
   test "a release whose shape moved since the grant is not ready, as its run is refused",

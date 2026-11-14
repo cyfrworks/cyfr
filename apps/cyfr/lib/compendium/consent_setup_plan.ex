@@ -50,13 +50,16 @@ defmodule Compendium.ConsentSetupPlan do
 
   A source with no profile a run could stand on is a section that is not
   ready, with `head_state` `"missing"` when it was never granted or
-  `"revoked"` when its grant was revoked, and its `reason`.
+  `"revoked"` when its grant was revoked, and its `reason`; so is one
+  with several active owner profiles, which a run refuses as ambiguous
+  (`head_state` `"ambiguous"`). The profile described is the one a run
+  would stand on, picked by the run's own selection.
 
-  A store that cannot be read, or a profile row that cannot be decoded
-  where the one asked about would be, is a section that is not ready
-  (`profile_status: :unavailable` or `:corrupt`, with `head_state`
-  `"unavailable"` or `"damaged"` and its `reason`) — never `nil`, which
-  would read as a grant still to make.
+  A store that cannot be read, or any profile row of the source that
+  cannot be decoded, which refuses a run's selection, is a section that
+  is not ready (`profile_status: :unavailable` or `:corrupt`, with
+  `head_state` `"unavailable"` or `"damaged"` and its `reason`), never
+  one that reads as a grant still to make.
 
   A profile's section carries its head's `head_state`, as `profile.list`
   names it: `"present"` when the head was read, and otherwise
@@ -67,15 +70,9 @@ defmodule Compendium.ConsentSetupPlan do
   def section(%Context{} = ctx, source_ref, component) when is_map(component) do
     with {:ok, name_ref} <- name_ref(source_ref),
          {:ok, entries} <- read_profiles(ctx, name_ref) do
-      case entries do
-        [] ->
-          ungranted(ctx, name_ref)
-
-        entries ->
-          case pick_profile(entries) do
-            %{status: :corrupt} = corrupt -> not_ready(corrupt.id, :corrupt)
-            profile -> describe(ctx, profile, component)
-          end
+      case Enum.filter(entries, &(&1.status == :corrupt)) do
+        [damaged | _] -> not_ready(damaged.id, :corrupt)
+        [] -> selected(ctx, name_ref, entries, component)
       end
     else
       {:error, :unavailable} -> not_ready(nil, :unavailable)
@@ -156,13 +153,31 @@ defmodule Compendium.ConsentSetupPlan do
     end
   end
 
-  # The owner profile is what "is this set up" asks about; a public twin
-  # is a separate, deliberately narrower grant. A row that cannot be
-  # decoded may be the owner, so it is what the section reports whenever
-  # no decoded owner answers.
-  defp pick_profile(entries) do
-    Enum.find(entries, &(Map.get(&1, :kind) == :owner)) ||
-      Enum.find(entries, &(&1.status == :corrupt)) || hd(entries)
+  # The profile a run of the source would stand on, picked by the run's own
+  # default selection (`Prima.Authority.RootSelect.select/2`) after the run's
+  # admission has refused any damaged row, as the section above does: the
+  # one active owner profile. None is a run with no grant, as the run says
+  # it (a public twin is no grant of the person's runs); one owner waiting
+  # for consent is described not ready; several active owners are the
+  # ambiguity a run refuses.
+  defp selected(ctx, name_ref, entries, component) do
+    case Prima.Authority.RootSelect.select(entries, :default) do
+      {:ok, profile} ->
+        describe(ctx, profile, component)
+
+      {:error, :no_profile} ->
+        ungranted(ctx, name_ref)
+
+      {:error, {:profile_unavailable, _status}} ->
+        describe(ctx, Enum.find(entries, &(&1.kind == :owner)), component)
+
+      {:error, {:ambiguous, ids}} ->
+        unset(
+          "ambiguous",
+          "this component has several active grants (#{Enum.join(ids, ", ")}) — " <>
+            "name one to run it, or revoke the others"
+        )
+    end
   end
 
   defp describe(ctx, profile, component) do

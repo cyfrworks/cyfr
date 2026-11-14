@@ -119,9 +119,11 @@ defmodule Aqua.Runner.RecoveryTable do
   # nothing to have moved.
   defp consent_holds(_ctx, %{profile_id: nil}), do: :ok
 
-  # The consent is loaded under the origin the turn's row records, not the
-  # recoverer's: the turn resumes under that origin, so that is the grant
-  # that has to stand. Whether this caller may recover is checked before.
+  # The consent is loaded in a context carrying the origin the turn's row
+  # records, not the recoverer's, since the turn resumes as the run it was;
+  # the origin decides nothing in the load, which asks only whether the
+  # turn's grant still stands. Whether this caller may recover is checked
+  # before.
   defp consent_holds(ctx, turn) do
     with {:ok, origin} <- Prima.Origin.from_wire(Map.get(turn, :origin)),
          {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id <-
