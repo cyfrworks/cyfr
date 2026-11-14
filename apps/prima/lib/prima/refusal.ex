@@ -394,6 +394,15 @@ defmodule Prima.Refusal do
 
   defp row(:not_mountable), do: {:invalid_argument, "This entry is not a login entry."}
 
+  # An OAuth grant or refresh for a provider this athanor holds no OAuth
+  # client for (`Sanctum.ProviderCredentials`): the client is set on the
+  # Vault page, which shows the return address to register with it.
+  defp row({:oauth_client_required, provider}) when is_binary(provider),
+    do:
+      {:setup_required,
+       "No OAuth client is set for #{provider}. Set one with Set client on the Vault page, " <>
+         "which shows the return address to register with #{provider}."}
+
   defp row({:conflict, message}) when is_binary(message), do: {:conflict, message}
 
   defp row({:unavailable, what}) when is_binary(what),

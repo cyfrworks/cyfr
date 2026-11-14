@@ -4,14 +4,20 @@
 defmodule PrismWeb.VaultLive do
   @moduledoc """
   The operator's vault entries: list, create, rotate, re-authorize,
-  revoke, delete — all through the vault MCP verbs (rename exists as a
-  vault verb but has no control here yet), so this
-  surface holds no rules of its own. Material flows one way: forms
+  change where an entry may go, revoke, delete — all through the vault
+  MCP verbs (rename exists as a vault verb but has no control here yet),
+  so this surface holds no rules of its own. Material flows one way: forms
   accept field values; nothing here ever displays them.
 
   OAuth entries start a browser grant via `vault.authorize`; the
   callback completes it server-side and the vault PubSub topic refreshes
-  this view when the entry lands.
+  this view when the entry lands. A grant for a provider with no OAuth
+  client set is refused for it before anything is confirmed, and the page
+  says a client is needed, offers Set client for that provider and shows
+  the return address to register with it. The return address and the
+  providers whose endpoints are preset are what `oauth.list` answers
+  beside the stored clients; an entry for any other provider names its
+  endpoints.
 
   The create form makes an entry of whatever the person names, whether
   or not a component is installed: a name, its kind (`API key` or `Bundle
@@ -32,7 +38,9 @@ defmodule PrismWeb.VaultLive do
   a component may read it. Neither is prefilled: the person types the
   destination, and disclosure is off until they turn it on
   (`PrismWeb.SystemLayer.destination_params/1`). Each entry's row shows
-  where it goes and whether components may read it: an attach-only
+  where it goes and whether components may read it, and Change
+  destination moves both through `vault.rebind`, which asks a fresh
+  confirmation when it widens what the entry admits: an attach-only
   entry's value is never handed to a component, and CYFR attaches it to
   requests bound for the entry's destination. Each entry the athanor uses
   by default for its provider (`vault.list`'s `defaults`) says so. Each
@@ -46,7 +54,8 @@ defmodule PrismWeb.VaultLive do
   Share, on an entry the store would share (`Arca.Shares.eligible/1`'s
   rule: active, attach-only, of a kind in
   `Prima.CredentialKinds.shareable/0`, with a destination naming its
-  methods and paths), opens the system layer's sharing sheet
+  methods and paths, which the create form asks for as what sharing
+  needs), opens the system layer's sharing sheet
   (`PrismWeb.SystemLayer.Share`) for it, offering everyone and the
   shared threads the person sits in (`shared_thread.list`, each named by
   its title, a pair as the other person), which makes the
@@ -117,6 +126,11 @@ defmodule PrismWeb.VaultLive do
       |> assign(:own, own_vault?(socket.assigns[:context]))
       |> assign(:used_by, %{})
       |> assign(:clients, [])
+      |> assign(:redirect_uri, nil)
+      |> assign(:presets, [])
+      |> assign(:client_needed, nil)
+      |> assign(:client_provider, nil)
+      |> assign(:rebinding, nil)
       |> assign(:show_add, nil)
       |> assign(:labels, [])
       |> assign(:pending_grant, nil)
@@ -140,9 +154,16 @@ defmodule PrismWeb.VaultLive do
   # The create form reads the labels it suggests each time it opens, so a
   # component installed since is suggested and one removed is not.
   @impl true
-  def handle_event("show_add", %{"mode" => mode}, socket) do
+  def handle_event("show_add", %{"mode" => mode} = params, socket) do
     shown = if socket.assigns.show_add == mode, do: nil, else: mode
-    socket = assign(socket, :show_add, shown)
+
+    socket =
+      assign(socket,
+        show_add: shown,
+        client_provider: if(shown == "client", do: params["provider"]),
+        client_needed: if(shown == "client", do: socket.assigns.client_needed)
+      )
+
     {:noreply, if(shown == "fields", do: fetch_labels(socket), else: assign(socket, :labels, []))}
   end
 
@@ -162,11 +183,18 @@ defmodule PrismWeb.VaultLive do
 
     case SystemLayer.call(socket, :set_client, "oauth/set_client", args, form: client_form()) do
       {:ok, _, socket} ->
+        # A grant that was refused for want of this client is offered again.
+        waited = socket.assigns.client_needed == args["provider"]
+
         {:noreply,
          socket
          |> fetch_clients()
-         |> assign(:show_add, nil)
-         |> put_flash(:info, "Client credentials stored for #{args["provider"]}.")}
+         |> assign(
+           show_add: if(waited, do: "oauth"),
+           client_needed: nil,
+           client_provider: nil
+         )
+         |> put_flash(:info, client_stored(args["provider"], waited))}
 
       {:asked, socket} ->
         {:noreply, socket}
@@ -250,6 +278,23 @@ defmodule PrismWeb.VaultLive do
 
   def handle_event("dismiss_grant", _params, socket) do
     {:noreply, assign(socket, :pending_grant, nil)}
+  end
+
+  # Where an entry's material may go and whether components may read it,
+  # moved by `vault.rebind`. It carries no typed secret, so a rebind that
+  # asks a fresh confirmation is started again here once it is given.
+  def handle_event("show_rebind", %{"id" => id}, socket) do
+    {:noreply, assign(socket, :rebinding, if(socket.assigns.rebinding == id, do: nil, else: id))}
+  end
+
+  def handle_event("rebind", %{"entry_id" => id} = params, socket) do
+    args = %{
+      "id" => id,
+      "destination" => SystemLayer.destination_params(params),
+      "disclose" => SystemLayer.disclose_param(params)
+    }
+
+    rebind(socket, args)
   end
 
   # ---------------------------------------------------------------------------
@@ -396,6 +441,7 @@ defmodule PrismWeb.VaultLive do
   # here, once; a typed form is submitted again by the browser.
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_repeat(:authorize, _tool, args, socket), do: start_grant(socket, args)
+  def system_layer_repeat({:rebind, _id}, _tool, args, socket), do: rebind(socket, args)
 
   def system_layer_repeat({kind, _id} = tag, tool, args, socket)
       when kind in [:share_revoke, :share_audience, :share_caps],
@@ -458,16 +504,45 @@ defmodule PrismWeb.VaultLive do
 
         {:noreply,
          socket
-         |> assign(:pending_grant, url)
-         |> assign(:show_add, nil)}
+         |> assign(pending_grant: url, show_add: nil, client_needed: nil)}
 
       {:asked, socket} ->
         {:noreply, socket}
+
+      {:error, {:oauth_client_required, provider}, socket} ->
+        {:noreply, assign(socket, :client_needed, provider)}
 
       {:error, reason, socket} ->
         {:noreply, put_flash(socket, :error, "Authorization failed: #{fmt(reason)}")}
     end
   end
+
+  defp rebind(socket, %{"id" => id} = args) do
+    case SystemLayer.call(socket, {:rebind, id}, "vault/rebind", args) do
+      {:ok, result, socket} ->
+        {:noreply,
+         socket
+         |> fetch_entries()
+         |> assign(:rebinding, nil)
+         |> put_flash(:info, rebound(result[:affected] || []))}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply, put_flash(socket, :error, "Not changed: #{fmt(reason)}")}
+    end
+  end
+
+  defp rebound([]), do: "Destination changed."
+
+  defp rebound(affected),
+    do: "Destination changed — #{length(affected)} grant(s) must be given again."
+
+  defp client_stored(provider, true),
+    do: "Client credentials stored for #{provider}. Start authorization again."
+
+  defp client_stored(provider, false), do: "Client credentials stored for #{provider}."
 
   # The forms that carry typed material, each kept as typed by the browser
   # (`phx-update="ignore"`) so it can be submitted again once its
@@ -756,14 +831,20 @@ defmodule PrismWeb.VaultLive do
     assign(socket, :used_by, used_by)
   end
 
+  # The stored clients, the return address a client registers and the
+  # providers whose endpoints are preset, read together.
   defp fetch_clients(socket) do
-    clients =
-      case call_tool(socket, "oauth/list", %{}) do
-        {:ok, %{providers: rows}} when is_list(rows) -> rows
-        _ -> []
-      end
+    case call_tool(socket, "oauth/list", %{}) do
+      {:ok, %{providers: rows} = listing} when is_list(rows) ->
+        assign(socket,
+          clients: rows,
+          redirect_uri: listing[:redirect_uri],
+          presets: listing[:presets] || []
+        )
 
-    assign(socket, :clients, clients)
+      _ ->
+        assign(socket, clients: [], redirect_uri: nil, presets: [])
+    end
   end
 
   defp blank_to_nil(nil), do: nil
@@ -804,6 +885,12 @@ defmodule PrismWeb.VaultLive do
   end
 
   defp maybe_endpoints(args, _params), do: args
+
+  # The custom endpoints are for a provider with no preset.
+  defp endpoints_words([]), do: "Endpoints"
+
+  defp endpoints_words(presets),
+    do: "Endpoints — preset for #{Enum.join(presets, ", ")}; any other provider names its own"
 
   # Renders through the console's one refusal seam — never `inspect/1`,
   # which put internal terms on the page.
@@ -940,7 +1027,7 @@ defmodule PrismWeb.VaultLive do
               class="w-full rounded-md border-gray-600 bg-transparent font-mono text-sm"
             ></textarea>
           </div>
-          <.destination_inputs prefix="create" />
+          <.destination_inputs prefix="create" share />
           <.button type="submit">Create entry</.button>
         </form>
       </.card>
@@ -955,7 +1042,10 @@ defmodule PrismWeb.VaultLive do
             </div>
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
-              <.input name="provider" required placeholder="google" />
+              <.input name="provider" required list="vault-oauth-presets" placeholder="google" />
+              <datalist id="vault-oauth-presets">
+                <option :for={preset <- @presets} value={preset}></option>
+              </datalist>
             </div>
           </div>
           <div>
@@ -969,8 +1059,8 @@ defmodule PrismWeb.VaultLive do
             ></textarea>
           </div>
           <details>
-            <summary class="text-xs text-gray-500 cursor-pointer">
-              Custom endpoints (unknown providers)
+            <summary class="text-xs text-gray-500 cursor-pointer" data-test="oauth-endpoints">
+              {endpoints_words(@presets)}
             </summary>
             <div class="grid grid-cols-2 gap-4 mt-2">
               <div>
@@ -985,8 +1075,34 @@ defmodule PrismWeb.VaultLive do
           </details>
           <.destination_inputs prefix="oauth" />
           <p class="text-xs text-gray-500">
-            The provider's client credentials must be configured first (oauth.set_client).
+            An OAuth entry is authorized through the provider's OAuth client, set under OAuth
+            client credentials below.
           </p>
+          <div
+            :if={@client_needed}
+            role="alert"
+            class="space-y-2 rounded-md border border-amber-500/40 p-3 text-sm"
+            data-test="oauth-client-needed"
+          >
+            <p>
+              No OAuth client is set for {@client_needed}. Create one in {@client_needed}'s
+              developer console, register this return address with it, then set its client id
+              and secret here.
+            </p>
+            <p :if={@redirect_uri} class="font-mono text-xs" data-test="oauth-redirect-uri">
+              {@redirect_uri}
+            </p>
+            <.button
+              type="button"
+              variant="ghost"
+              phx-click="show_add"
+              phx-value-mode="client"
+              phx-value-provider={@client_needed}
+              data-test="oauth-set-client"
+            >
+              Set client
+            </.button>
+          </div>
           <.button type="submit">Start authorization</.button>
         </form>
       </.card>
@@ -1006,7 +1122,7 @@ defmodule PrismWeb.VaultLive do
           Which grants use these entries could not be read right now.
         </p>
         <.table :if={!@loading && @entries != []} id="vault-entries" rows={@entries}>
-          <:col :let={entry} label="Name">
+          <:col :let={entry} label="Name" sticky>
             <div class="space-y-1" data-test="entry-name" data-id={entry.id}>
               <span class="font-medium">{entry.name}</span>
               <div class="text-xs text-gray-500 font-mono">{entry.id}</div>
@@ -1104,6 +1220,15 @@ defmodule PrismWeb.VaultLive do
                 phx-value-id={entry.id}
               >
                 Re-authorize
+              </.button>
+              <.button
+                :if={entry.kind != "login"}
+                variant="ghost"
+                phx-click="show_rebind"
+                phx-value-id={entry.id}
+                data-test="entry-rebind"
+              >
+                Change destination
               </.button>
               <.button
                 variant="ghost"
@@ -1321,6 +1446,31 @@ defmodule PrismWeb.VaultLive do
         </form>
       </.card>
 
+      <!-- Rebind form: where an entry may go, and whether components read it -->
+      <.card :if={@rebinding}>
+        <% entry = Enum.find(@entries, &(&1.id == @rebinding)) %>
+        <form
+          :if={entry}
+          id={"vault-rebind-form-" <> entry.id}
+          phx-submit="rebind"
+          class="space-y-4"
+          data-test="rebind-form"
+        >
+          <input type="hidden" name="entry_id" value={entry.id} />
+          <p class="text-sm">
+            Where {entry.name} may go. Every grant that uses it must be given again after the
+            change.
+          </p>
+          <.destination_inputs
+            prefix="rebind"
+            share={entry.kind in Prima.CredentialKinds.shareable()}
+            destination={entry.destination}
+            disclosed={entry.attach_only == false}
+          />
+          <.button type="submit">Change destination</.button>
+        </form>
+      </.card>
+
       <!-- OAuth client credentials: the operator's app per provider -->
       <.card>
         <div class="flex items-center justify-between mb-2">
@@ -1333,6 +1483,10 @@ defmodule PrismWeb.VaultLive do
           The OAuth app (client id and secret) an OAuth vault entry is authorized through, one
           per provider. Stored sealed in this athanor; only the provider name is ever shown.
         </p>
+        <p :if={@redirect_uri} class="text-xs text-gray-500 mb-3" data-test="client-redirect-uri">
+          Register this return address with the provider's OAuth app:
+          <span class="font-mono text-gray-300">{@redirect_uri}</span>
+        </p>
 
         <form
           :if={@show_add == "client"}
@@ -1344,7 +1498,13 @@ defmodule PrismWeb.VaultLive do
           <div class="grid grid-cols-3 gap-3">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
-              <.input name="provider" required placeholder="google" />
+              <.input
+                name="provider"
+                required
+                placeholder="google"
+                value={@client_provider}
+                list="vault-oauth-presets"
+              />
             </div>
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Client id</label>
@@ -1387,11 +1547,23 @@ defmodule PrismWeb.VaultLive do
     """
   end
 
-  # The destination and disclosure a new entry names, asked of the person:
-  # nothing is prefilled, and disclosure is off until it is turned on.
+  # The destination and disclosure an entry names, asked of the person: a
+  # new entry's prefilled with nothing and disclosure off until it is
+  # turned on; a rebind's with what the entry holds. Methods and paths are
+  # what sharing needs (`shareable?/1`), so a kind that can be shared asks
+  # them as that.
   attr :prefix, :string, required: true
+  attr :share, :boolean, default: false
+  attr :destination, :map, default: %{}
+  attr :disclosed, :boolean, default: false
 
   defp destination_inputs(assigns) do
+    assigns =
+      assign(assigns,
+        to: if(is_map(assigns.destination), do: assigns.destination, else: %{}),
+        extra: if(assigns.share, do: " — needed to share it", else: " (optional)")
+      )
+
     ~H"""
     <fieldset class="space-y-2" data-test={"#{@prefix}-destination"}>
       <legend class="text-xs text-gray-500 uppercase">Where its material may go</legend>
@@ -1399,7 +1571,12 @@ defmodule PrismWeb.VaultLive do
         <label class="block text-xs text-gray-500 mb-1">
           Hosts — for example api.example.com, or *.example.com
         </label>
-        <.input name="destination_hosts" required placeholder="api.example.com" />
+        <.input
+          name="destination_hosts"
+          required
+          placeholder="api.example.com"
+          value={Enum.join(Map.get(@to, "hosts", []), " ")}
+        />
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div>
@@ -1409,26 +1586,40 @@ defmodule PrismWeb.VaultLive do
             class="w-full rounded-md border-gray-600 bg-transparent text-sm"
           >
             <option value="https">https</option>
-            <option value="http">http</option>
+            <option value="http" selected={Map.get(@to, "scheme") == "http"}>http</option>
           </select>
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">Port (optional)</label>
-          <.input name="destination_port" placeholder="443" />
+          <.input name="destination_port" placeholder="443" value={Map.get(@to, "port")} />
         </div>
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Methods (optional)</label>
-          <.input name="destination_methods" placeholder="GET POST" />
+          <label class="block text-xs text-gray-500 mb-1">Methods{@extra}</label>
+          <.input
+            name="destination_methods"
+            placeholder="GET POST"
+            value={Enum.join(Map.get(@to, "methods", []), " ")}
+          />
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Path prefixes (optional)</label>
-          <.input name="destination_paths" placeholder="/v1/" />
+          <label class="block text-xs text-gray-500 mb-1">Path prefixes{@extra}</label>
+          <.input
+            name="destination_paths"
+            placeholder="/v1/"
+            value={Enum.join(Map.get(@to, "paths", []), " ")}
+          />
         </div>
       </div>
       <label class="flex items-start gap-2 text-sm">
-        <input type="checkbox" name="disclose" value="true" data-test={"#{@prefix}-disclose"} />
+        <input
+          type="checkbox"
+          name="disclose"
+          value="true"
+          checked={@disclosed}
+          data-test={"#{@prefix}-disclose"}
+        />
         <span>
           Let components read the value itself. Left off, the value is never handed to a
           component: CYFR attaches it to requests bound for the entry's destination, and a

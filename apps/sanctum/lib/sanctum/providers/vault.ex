@@ -656,6 +656,11 @@ defmodule Sanctum.Providers.Vault do
   defp fmt({:entry_unavailable, status}),
     do: "entry_unavailable: the entry is #{status}"
 
+  # An OAuth grant for a provider with no OAuth client set travels as data:
+  # each surface says it in its own words, the Vault page offering Set
+  # client with the return address to register.
+  defp fmt({:oauth_client_required, provider} = refusal) when is_binary(provider), do: refusal
+
   # An OAuth entry's endpoints, fixed when it is created
   # (`Sanctum.Vault.OAuth`): refusals of the request's own shape, each in
   # its own sentence, never an unavailable vault.
