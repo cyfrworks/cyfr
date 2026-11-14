@@ -440,7 +440,11 @@ defmodule PrismWeb.CanvasChromeTest do
 
       other = ~s(#capsule-menu-#{full.id} [data-canvas-menu-app="tincture:local.tile-dash"])
       assert has_element?(view, other, "tile-dash")
-      refute has_element?(view, ~s(#capsule-menu-#{full.id} [data-canvas-menu-app="tincture:local.slot-dash"]))
+
+      refute has_element?(
+               view,
+               ~s(#capsule-menu-#{full.id} [data-canvas-menu-app="tincture:local.slot-dash"])
+             )
 
       view |> element(other) |> render_click()
 
@@ -480,7 +484,7 @@ defmodule PrismWeb.CanvasChromeTest do
 
     assert has_element?(
              view,
-             ~s(#canvas-frame-#{window.id} [data-canvas-action="minimise"][title="Minimise (Ctrl+Alt+M while the page has the focus)"])
+             ~s|#canvas-frame-#{window.id} [data-canvas-action="minimise"][title="Minimise (Ctrl+Alt+M while the page has the focus)"]|
            )
   end
 end
