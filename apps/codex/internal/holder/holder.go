@@ -267,16 +267,22 @@ func syncDir(dir string) error {
 var chip *chipOps
 
 type chipOps struct {
-	present func() bool
+	// usable reads, changing nothing, whether a key can be sealed in the
+	// chip now: ErrNoChip, a *ChipRefusedError, or nil.
+	usable func() error
 	// seal seals seed under pin and returns the blob; it keeps neither.
 	seal func(seed, pin []byte) (*ChipBlob, error)
 	// unseal returns the seed sealed in blob; the caller erases it.
 	unseal func(blob *ChipBlob, pin []byte) ([]byte, error)
 }
 
-// ChipPresent reports whether the device has a TPM device node the chip
-// holder could use.
-func ChipPresent() bool { return chip != nil && chip.present() }
+// ChipPresent reports whether the device has a TPM the chip holder can
+// seal a key in now, read before any PIN is asked and changing nothing: the
+// chip opens for this user, its owner hierarchy has no password, it is not
+// locked out after wrong PINs, and its lockout authorization is either
+// unset or set with the holder's wrong-PIN policy. A chip that fails any of
+// these is offered no PIN, so the person makes a passphrase instead.
+func ChipPresent() bool { return chip != nil && chip.usable() == nil }
 
 // NewChip creates a fresh key and seals its seed in the TPM under pin. A
 // device without a usable chip reports ErrNoChip or a *ChipRefusedError.
