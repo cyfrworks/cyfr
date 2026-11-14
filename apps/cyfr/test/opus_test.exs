@@ -81,7 +81,7 @@ defmodule OpusTest do
 
   test "a key narrowed to named tools starts no other, before anything else about the run is asked",
        %{ctx: ctx} do
-    Application.put_env(:cyfr, :locus_runtime_workers, [])
+    Prima.Test.Env.put_app_env(:cyfr, :locus_runtime_workers, [])
     issuer = Sanctum.TestContext.issuer!(ctx)
     Sanctum.TestContext.ready!(issuer.athanor_id)
 
@@ -123,7 +123,7 @@ defmodule OpusTest do
   end
 
   test "a key revoked after its context was made starts nothing", %{ctx: ctx} do
-    Application.put_env(:cyfr, :locus_runtime_workers, [])
+    Prima.Test.Env.put_app_env(:cyfr, :locus_runtime_workers, [])
     issuer = Sanctum.TestContext.issuer!(ctx)
 
     {:ok, %{api_key: raw}} =
