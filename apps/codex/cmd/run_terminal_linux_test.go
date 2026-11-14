@@ -6,16 +6,19 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
 
+	"github.com/cyfr/codex/internal/prompt"
 	"golang.org/x/sys/unix"
 )
 
@@ -149,5 +152,74 @@ func TestRun_ANonObjectInputSendsNothing(t *testing.T) {
 	}
 	if got := srv.requests(); len(got) != 0 {
 		t.Fatalf("the server was asked %d times: %v", len(got), got)
+	}
+}
+
+// --input is read before anything is sent whatever else the line names:
+// with no reference, the picker is never fetched.
+func TestRun_ANonObjectInputWithNoReferenceSendsNothing(t *testing.T) {
+	forgetRunFlags(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CYFR_TOKEN", "cyfr-test-session")
+	srv := newLookupServer(t, `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{}"}]}}`)
+	onATerminal(t)
+
+	err := runAtTerminal(context.Background(), "run", "--input", "[1,2]", "--url", srv.URL)
+
+	if err == nil || err.Error() != `The input must be a JSON object, such as '{"text":"hello"}'.` {
+		t.Fatalf("the array input answered %v", err)
+	}
+	if got := srv.requests(); len(got) != 0 {
+		t.Fatalf("the server was asked %d times: %v", len(got), got)
+	}
+}
+
+// Ctrl-C at --list, --logs or --cancel is the person's interruption too,
+// said as it stands: listing and reading logs started nothing; a cancel
+// may or may not have stopped the run, and the logs show which.
+func TestRun_CtrlCAtListLogsAndCancel(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		args     []string
+		sentence string
+	}{
+		{"list", []string{"--list"}, "Interrupted; nothing was started."},
+		{"logs", []string{"--logs", "exec_held"}, "Interrupted; nothing was started."},
+		{"cancel", []string{"--cancel", "exec_held"},
+			"Interrupted; whether run exec_held was stopped is not known: cyfr run --logs exec_held shows it."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			forgetRunFlags(t)
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("CYFR_TOKEN", "cyfr-test-session")
+			srv := newLookupServer(t, "")
+			args := append([]string{"run", "--url", srv.URL}, c.args...)
+
+			err := interruptAt(t, srv.asked, func(ctx context.Context) error {
+				return runAtTerminal(ctx, args...)
+			})
+
+			wantInterrupted(t, err, c.sentence)
+		})
+	}
+}
+
+// Ctrl-C typed in the component picker is the person's interruption,
+// with its sentence: nothing was started.
+func TestRun_CtrlCInThePickerStartsNothing(t *testing.T) {
+	forgetRunFlags(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CYFR_TOKEN", "cyfr-test-session")
+	t.Setenv("TERM", "xterm-256color")
+	srv := newLookupServer(t, `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":`+
+		`"{\"components\":[{\"component_ref\":\"reagent:local.math:0.1.0\",\"name\":\"math\",\"version\":\"0.1.0\"}]}"}]}}`)
+	onATerminal(t)
+	t.Cleanup(prompt.UseTerminal(strings.NewReader("\x03"), &bytes.Buffer{}))
+
+	err := runAtTerminal(context.Background(), "run", "--url", srv.URL)
+
+	wantInterrupted(t, err, "Interrupted; nothing was started.")
+	if got := srv.requests(); len(got) != 1 {
+		t.Fatalf("the server was asked %d times, want only the picker's list: %v", len(got), got)
 	}
 }
