@@ -394,6 +394,32 @@ defmodule PrismWeb.CanvasChromeTest do
     defp menu(view, frame, item),
       do: element(view, ~s(#capsule-menu-#{frame.id} [data-canvas-menu="#{item}"]))
 
+    # More options pressed: the page shows the menu, which no push does, so
+    # the press is read as the browser runs it. The menu starts hidden by
+    # its class, which the toggle's inline display overrides (a `hidden`
+    # attribute it could not), and the button toggles exactly that menu.
+    defp open_menu!(view, frame) do
+      menu = "capsule-menu-#{frame.id}"
+      html = view |> render() |> LazyHTML.from_fragment()
+
+      [button] =
+        html
+        |> LazyHTML.query(~s(#canvas-frame-#{frame.id} button[data-canvas-action="more"]))
+        |> Enum.to_list()
+
+      assert LazyHTML.attribute(button, "aria-controls") == [menu]
+      assert LazyHTML.attribute(button, "aria-expanded") == ["false"]
+      [click] = LazyHTML.attribute(button, "phx-click")
+
+      assert ["toggle", %{"to" => "#" <> ^menu}] =
+               click |> Jason.decode!() |> Enum.find(&match?(["toggle", _], &1))
+
+      [list] = html |> LazyHTML.query("#" <> menu) |> Enum.to_list()
+      assert LazyHTML.attribute(list, "hidden") == []
+      assert "hidden" in (list |> LazyHTML.attribute("class") |> hd() |> String.split())
+      :ok
+    end
+
     defp settled!(view, check),
       do: Prima.Test.Wait.wait_until(fn -> render(view) && check.() end, 2_000, "the shell")
 
@@ -413,6 +439,7 @@ defmodule PrismWeb.CanvasChromeTest do
 
       assert has_element?(menu(view, app, "close"))
 
+      :ok = open_menu!(view, app)
       menu(view, app, "minimise") |> render_click()
 
       assert %{minimised: true, visible: false} = app_frame(view, "slot-dash")
@@ -446,6 +473,7 @@ defmodule PrismWeb.CanvasChromeTest do
                ~s(#capsule-menu-#{full.id} [data-canvas-menu-app="tincture:local.slot-dash"])
              )
 
+      :ok = open_menu!(view, full)
       view |> element(other) |> render_click()
 
       window = app_frame(view, "tile-dash")
@@ -464,6 +492,7 @@ defmodule PrismWeb.CanvasChromeTest do
       assert %{visible: true} = launch
       refute has_element?(view, "#shell-picker")
 
+      :ok = open_menu!(view, launch)
       menu(view, launch, "minimise") |> render_click()
 
       assert %{id: id, visible: false, state: :frozen} =

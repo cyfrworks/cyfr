@@ -493,8 +493,10 @@ defmodule PrismWeb.CanvasLive do
 
   # A full app's capsule: More options, which opens a menu of minimise,
   # close and the other open apps, each a push to the shell, and close. The
-  # menu is shown and hidden in the page alone (`JS.toggle`), which a patch
-  # keeps.
+  # menu is shown and hidden in the page alone, as the drawer is: its
+  # `hidden` class, never the attribute (which the stylesheet hides with
+  # `!important`), is what `JS.toggle`'s inline display overrides, and a
+  # patch keeps what the toggle set.
   defp iframe_capsule(assigns) do
     assigns = assign(assigns, :menu, "capsule-menu-#{assigns.frame.id}")
 
@@ -511,8 +513,12 @@ defmodule PrismWeb.CanvasLive do
         aria-label="More options"
         aria-haspopup="menu"
         aria-controls={@menu}
+        aria-expanded="false"
         data-canvas-action="more"
-        phx-click={JS.toggle(to: "##{@menu}")}
+        phx-click={
+          JS.toggle(to: "##{@menu}")
+          |> JS.toggle_attribute({"aria-expanded", "true", "false"})
+        }
       >
         <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <circle cx="5" cy="12" r="1" fill="currentColor" />
@@ -535,8 +541,7 @@ defmodule PrismWeb.CanvasLive do
         id={@menu}
         role="menu"
         aria-label="More options"
-        hidden
-        class="absolute right-0 top-10 min-w-[12rem] overflow-hidden rounded-lg border border-white/10 bg-black/85 py-1 text-sm text-text-secondary shadow-xl backdrop-blur-md"
+        class="hidden absolute right-0 top-10 min-w-[12rem] overflow-hidden rounded-lg border border-white/10 bg-black/85 py-1 text-sm text-text-secondary shadow-xl backdrop-blur-md"
       >
         <button
           type="button"
