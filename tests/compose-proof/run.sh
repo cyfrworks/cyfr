@@ -2153,9 +2153,11 @@ restore_person_case() {
   status=0
   cli_run restore-person restore "$snapshot" || status=$?
   [ "$status" -ne 0 ] || fail "cyfr restore as the person exited 0: $(tail -n 20 "$WORK/restore-person.log")"
-  for said in "run the same cyfr restore as root, with sudo" \
-    "nothing of the snapshot was put back" \
-    "docker-compose.yml and .env are as they were. Start the stack again with 'cyfr up'"; do
+  # The backup lists the managed AQUA files, which the server's container
+  # owns once the stack has run, so the restore refuses at its start,
+  # before it stops anything.
+  for said in "cyfr restore cannot put the snapshot back as you" \
+    "run the same cyfr restore as root, with sudo; nothing was changed"; do
     grep -qF -- "$said" "$WORK/restore-person.log" ||
       fail "the refusal does not say \"$said\": $(tail -n 20 "$WORK/restore-person.log")"
   done
