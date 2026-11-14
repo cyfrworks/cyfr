@@ -380,10 +380,12 @@ const (
 	testRoster  = `{:ok, rows} = Arca.ControlPlane.roster(); IO.puts("CYFR_ROSTER=" <> JSON.encode!(%{self: Atom.to_string(node()), release: Prima.Version.current(), slots: Enum.map(rows, fn r -> %{node: r.node, owner: r.owner, release: r.release, lease_until: DateTime.to_iso8601(r.lease_until)} end)}))`
 	testLive    = `IO.puts("CYFR_LIVE_SLOTS=" <> JSON.encode!(%{release: Prima.Version.current(), slots: Cyfr.Release.live_slots()}))`
 	testSchema  = `IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())`
-	keyBase     = "kb-secret-0123456789abcdef"
-	keyring     = `{"keys":[{"id":"k1","key":"keyring-secret-value"}]}`
-	pgPassword  = "pg-secret-pw-77"
-	pgURL       = "postgres://cyfr:" + pgPassword + "@127.0.0.1:5432/cyfr"
+	// testSchemaContainer names the scenarios' offline read's container.
+	testSchemaContainer = "cyfr-schema-read-test"
+	keyBase             = "kb-secret-0123456789abcdef"
+	keyring             = `{"keys":[{"id":"k1","key":"keyring-secret-value"}]}`
+	pgPassword          = "pg-secret-pw-77"
+	pgURL               = "postgres://cyfr:" + pgPassword + "@127.0.0.1:5432/cyfr"
 )
 
 var (
@@ -559,7 +561,10 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 
 	savedVersion, savedFetch, savedScaffold, savedNow := version.Version, fetchManifest, fetchScaffold, updateNow
 	savedWindow, savedPoll := liveSlotsWindow, liveSlotsPoll
+	savedName := schemaContainerName
+	schemaContainerName = func() string { return testSchemaContainer }
 	t.Cleanup(func() {
+		schemaContainerName = savedName
 		version.Version, fetchManifest, fetchScaffold, updateNow = savedVersion, savedFetch, savedScaffold, savedNow
 		liveSlotsWindow, liveSlotsPoll = savedWindow, savedPoll
 	})
@@ -760,7 +765,9 @@ func (s *updateScenario) schemaRead(running bool) []string {
 		s.t.Fatal(err)
 	}
 	image := imagesFromCompose(original, nil)[0]
-	return append(reads, "run --rm --pull never --network none --read-only --user app --entrypoint /app/bin/cyfr -e CYFR_ACCESS=local -e CYFR_SECRET_KEY_BASE "+image+" eval "+testSchema+" {env CYFR_SECRET_KEY_BASE set}")
+	return append(reads,
+		"run --rm --name "+testSchemaContainer+" --pull never --network none --read-only --user app --entrypoint /usr/bin/timeout -e CYFR_ACCESS=local -e CYFR_SECRET_KEY_BASE "+image+" 90 /app/bin/cyfr eval "+testSchema+" {env CYFR_SECRET_KEY_BASE set}",
+		"rm -f "+testSchemaContainer)
 }
 
 // scenarioHead is the access head scenarioEnv holds.
@@ -3020,7 +3027,7 @@ func TestUpdateReadsTheSchemaOfAStoppedCyfrOffline(t *testing.T) {
 	if err != nil || !strings.Contains(out, "Updated to release 0.9.0.") {
 		t.Fatalf("a stopped cyfr of the release's schema answered %v\n%s", err, out)
 	}
-	if got := s.log(); len(got) < 2 || !slices.Equal(got[:2], s.schemaRead(false)) {
+	if got := s.log(); len(got) < 3 || !slices.Equal(got[:3], s.schemaRead(false)) {
 		t.Errorf("the schema was not read offline first:\n%s", strings.Join(got, "\n"))
 	}
 }
@@ -3122,4 +3129,36 @@ func TestUpdateOfflineReadLeavesTheDataAndAquaAlone(t *testing.T) {
 	if got := s.log(); !slices.Equal(got, s.schemaRead(false)) {
 		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
 	}
+}
+
+// A read cancelled while the offline container runs removes that
+// container by its name, as every end of the read does: the docker client
+// a cancellation stops leaves the container running.
+func TestUpdateRemovesTheOfflineReadsContainerWhenCancelled(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.answer("cyfrps.out", "")
+	s.answer("schema.block", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.run(ctx)
+		done <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for !s.hasCall("run --rm --name " + testSchemaContainer) {
+		if time.Now().After(deadline) {
+			t.Fatal("the offline read never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("a cancelled update went ahead")
+	}
+	s.answer("schema.release", "")
+	if got := s.log(); !slices.Equal(got, s.schemaRead(false)) {
+		t.Errorf("docker ran\n%s\nwant the read and the removal of its container by name\n%s", strings.Join(got, "\n"), strings.Join(s.schemaRead(false), "\n"))
+	}
+	s.nothingStopped()
+	s.noBackups()
 }

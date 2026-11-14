@@ -1563,15 +1563,42 @@ func readRunningSchema(ctx context.Context, image string) (string, error) {
 		if _, err := rand.Read(key); err != nil {
 			return "", err
 		}
+		// The container is named, so it is removed by its name however the
+		// read ends: a cancelled or timed-out docker client leaves the
+		// container running. Its own timeout bounds it when cyfr dies
+		// before it can remove it.
+		name := schemaContainerName()
+		defer removeSchemaContainer(name)
 		output, err = schemaDocker(ctx, []string{"CYFR_SECRET_KEY_BASE=" + hex.EncodeToString(key)},
-			"run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--user", "app",
-			"--entrypoint", "/app/bin/cyfr", "-e", "CYFR_ACCESS=local", "-e", "CYFR_SECRET_KEY_BASE",
-			image, "eval", schemaExpr)
+			"run", "--rm", "--name", name, "--pull", "never", "--network", "none", "--read-only", "--user", "app",
+			"--entrypoint", "/usr/bin/timeout", "-e", "CYFR_ACCESS=local", "-e", "CYFR_SECRET_KEY_BASE",
+			image, schemaReadLife, "/app/bin/cyfr", "eval", schemaExpr)
 	}
 	if err != nil {
 		return "", err
 	}
 	return markedLine(output, "CYFR_SCHEMA=")
+}
+
+// schemaReadLife bounds the offline read's container from inside, in
+// seconds, within composeRunTimeout, the read's own bound.
+const schemaReadLife = "90"
+
+// schemaContainerName names one offline read's container; a variable so
+// a test names it.
+var schemaContainerName = func() string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	return "cyfr-schema-read-" + hex.EncodeToString(b)
+}
+
+// removeSchemaContainer removes the offline read's container by name, on
+// a context of its own so a cancelled read still removes it. One already
+// gone, as --rm leaves a read that ended, is no failure.
+func removeSchemaContainer(name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, _ = schemaDocker(ctx, nil, "rm", "-f", name)
 }
 
 // schemaDocker runs one docker call of the schema read with env added to
