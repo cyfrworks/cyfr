@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -43,10 +42,10 @@ Before anything is removed it shows what it removes and what it keeps, then asks
 It removes:
 - the stack: its containers and networks, and the images its compose file names (one another container still uses stays, and is said);
 - this machine's screen service, when 'cyfr screen on' installed it, giving the screen back to its login prompt;
-- each file CYFR shipped or wrote in the directory, by name: the files cyfr init and cyfr update recorded in .cyfr/files.json as they laid them down (the release's scaffold, .env and the .gitignore init wrote), or, for a CYFR that keeps no record, the files of the scaffold of the release it runs, read from that release; and the stack's own state in .cyfr/; then each of their directories, and the directory itself, once nothing is left in it. Nothing is read or removed through a symbolic link, and a link stays as it was;
+- each file CYFR shipped or wrote in the directory, by name: the files cyfr init and cyfr update recorded in .cyfr/files as they wrote them (never a file that was there before, which they kept), or, for a CYFR that keeps no record, the files of the scaffold of the release it runs, read from that release; and the stack's own state in .cyfr/; then each of their directories, and the directory itself, once nothing is left in it. Nothing is read or removed through a symbolic link, and a link stays as it was;
 - this program and its link in /usr/local/bin, and its settings and update check in ~/.cyfr. A Homebrew install is left to 'brew uninstall --cask cyfr'.
 
-It keeps every other file in the directory, a file of your own beside CYFR's included, and CYFR's data unless the second question says yes: data/ and backups/, the stack's volumes (the programs' kept files among them) and this machine's device key in ~/.cyfr/device. data/ and backups/ belong to CYFR's container, so they are removed as root, through sudo. Docker and every package other software uses stay.
+It keeps every other file in the directory, a file of your own beside CYFR's included, a .gitignore that was changed, and, whatever any list names, CYFR's data unless the second question says yes: data/ and backups/, the stack's volumes (the programs' kept files among them) and this machine's device key in ~/.cyfr/device. data/ and backups/ belong to CYFR's container, so they are removed as root, through sudo. Docker and every package other software uses stay.
 
 Each step is said as it is done, the data's last; when one fails, the command says what is already gone and what is still here.`,
 	Example: "  cyfr uninstall\n  cyfr uninstall --yes",
@@ -84,34 +83,38 @@ func isCYFRProject() bool {
 }
 
 // installRecord is where cyfr init and cyfr update record the files they
-// lay down in a project: the scaffold's, .env, and the .gitignore init
-// wrote. Each records the whole list, replacing the one before.
-const installRecord = ".cyfr/files.json"
+// wrote in a project (scaffold.InstallRecord): one project-relative name
+// a line, each a file the command wrote, never one it found and left.
+const installRecord = scaffold.InstallRecord
 
-// writeInstallRecord records scaffold, the names of the scaffold's files
-// the command laid down, with the project's own files beside them, in the
-// working directory's installRecord, whole and durably.
-func writeInstallRecord(scaffold []string) error {
-	names := append(slices.Clone(scaffold), ".env")
-	if gitignore, err := os.ReadFile(".gitignore"); err == nil && bytes.Equal(gitignore, []byte(projectGitignore)) {
-		names = append(names, ".gitignore")
-	}
-	slices.Sort(names)
-	names = slices.Compact(names)
-	data, err := json.MarshalIndent(struct {
-		Files []string `json:"files"`
-	}{names}, "", "  ")
+// recordInstall adds written, the files a command just wrote, to the
+// working directory's record, and writes the record whole, atomically.
+// A file that was there before and was not written is never added.
+func recordInstall(written []string) error {
+	names, _, err := readInstallRecord()
 	if err != nil {
 		return err
 	}
+	for _, name := range written {
+		if err := recordName(name); err != nil {
+			return err
+		}
+	}
+	names = append(names, written...)
+	slices.Sort(names)
+	names = slices.Compact(names)
 	if err := os.MkdirAll(filepath.Dir(installRecord), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(installRecord), ".files.json.*")
+	tmp, err := os.CreateTemp(filepath.Dir(installRecord), ".files.*")
 	if err != nil {
 		return err
 	}
-	_, err = tmp.Write(append(data, '\n'))
+	var data []byte
+	for _, name := range names {
+		data = append(data, name+"\n"...)
+	}
+	_, err = tmp.Write(data)
 	err = errors.Join(err, tmp.Sync(), tmp.Close())
 	if err == nil {
 		err = os.Rename(tmp.Name(), installRecord)
@@ -122,9 +125,25 @@ func writeInstallRecord(scaffold []string) error {
 	return err
 }
 
-// readInstallRecord answers the working directory's install record, false
-// when it keeps none. A record that does not read, or that names a path
-// outside the project, refuses: it is never followed.
+// recordName refuses a name the record cannot hold: empty, absolute,
+// holding .., not clean, or holding a control character.
+func recordName(name string) error {
+	ok := name != "" && !filepath.IsAbs(name) && !strings.Contains(name, "..") &&
+		filepath.Clean(name) == name && filepath.IsLocal(name) && !strings.Contains(name, `\`)
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			ok = false
+		}
+	}
+	if !ok {
+		return fmt.Errorf("%s names %q, which is not a path inside this directory", installRecord, name)
+	}
+	return nil
+}
+
+// readInstallRecord answers the working directory's install record, one
+// name a line, false when it keeps none. One line it cannot hold refuses
+// the whole record: it is never followed in part.
 func readInstallRecord() ([]string, bool, error) {
 	if info, err := os.Lstat(installRecord); err != nil || !info.Mode().IsRegular() {
 		return nil, false, nil
@@ -133,50 +152,44 @@ func readInstallRecord() ([]string, bool, error) {
 	if err != nil {
 		return nil, true, err
 	}
-	var record struct {
-		Files *[]string `json:"files"`
-	}
-	if err := json.Unmarshal(data, &record); err != nil || record.Files == nil {
-		return nil, true, fmt.Errorf("%s does not read as a list of files", installRecord)
-	}
-	for _, name := range *record.Files {
-		if !insideProject(name) {
-			return nil, true, fmt.Errorf("%s names %q, which is not a path inside this directory", installRecord, name)
+	var names []string
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		if line == "" {
+			continue
 		}
+		name, complete := strings.CutSuffix(line, "\n")
+		if !complete {
+			return nil, true, fmt.Errorf("%s does not end its last line", installRecord)
+		}
+		if err := recordName(name); err != nil {
+			return nil, true, err
+		}
+		names = append(names, name)
 	}
-	return *record.Files, true, nil
-}
-
-// insideProject reports whether name is a clean relative path that stays
-// inside the directory it is read in.
-func insideProject(name string) bool {
-	return name != "" && filepath.IsLocal(name) && filepath.Clean(name) == name && !strings.Contains(name, `\`)
+	return names, true, nil
 }
 
 // installedFiles answers which files CYFR put in the working directory:
 // the record init and update keep, else, for a project that keeps none,
-// the names of the scaffold of the release it runs; and with either, the
-// stack's own state under .cyfr/. source names where the list came from.
-func installedFiles() (names []string, source string, err error) {
-	recorded, kept, err := readInstallRecord()
+// the names of the scaffold of the release it runs with .env and
+// .gitignore; and with either, the stack's own state under .cyfr/. What
+// is the person's data is decided apart, whatever the names say
+// (uninstallPlan.personData).
+func installedFiles() ([]string, error) {
+	names, kept, err := readInstallRecord()
 	switch {
 	case err != nil:
-		return nil, "", fmt.Errorf("its record of the files CYFR put here cannot be used (%v)", err)
-	case kept:
-		names, source = recorded, installRecord
-	default:
+		return nil, fmt.Errorf("its record of the files CYFR put here cannot be used (%v)", err)
+	case !kept:
 		installed := installedRelease()
 		shipped, err := uninstallScaffold(installed)
 		if err != nil {
-			return nil, "", fmt.Errorf("this CYFR keeps no record of the files it put here (%s), and release %s's list of them could not be read (%v)", installRecord, installed, err)
+			return nil, fmt.Errorf("this CYFR keeps no record of the files it put here (%s), and release %s's list of them could not be read (%v)", installRecord, installed, err)
 		}
-		names, source = append(shipped, ".env"), "release "+installed
-		if gitignore, err := os.ReadFile(".gitignore"); err == nil && bytes.Equal(gitignore, []byte(projectGitignore)) {
-			names = append(names, ".gitignore")
-		}
+		names = append(shipped, ".env", ".gitignore")
 	}
-	// The stack's own state: every file under .cyfr/ is the engine's, the
-	// record among them. WalkDir descends into no symbolic link.
+	// The stack's own state: every file under .cyfr/. WalkDir descends
+	// into no symbolic link.
 	if info, err := os.Lstat(stateMarker); err == nil && info.IsDir() {
 		_ = filepath.WalkDir(stateMarker, func(path string, d fs.DirEntry, err error) error {
 			if err == nil && d.Type().IsRegular() {
@@ -185,7 +198,7 @@ func installedFiles() (names []string, source string, err error) {
 			return nil
 		})
 	}
-	return names, source, nil
+	return names, nil
 }
 
 // uninstallScaffold names the files the scaffold of release version lays
@@ -237,8 +250,39 @@ type uninstallPlan struct {
 	// device key there, which goes with the data.
 	settings  []string
 	deviceKey string
+	// deviceDir holds this machine's device key, which is data.
+	deviceDir string
 	// deleteData is the data's own question answered yes.
 	deleteData bool
+}
+
+// personData reports whether path is the person's data, which the
+// ordinary removal never touches whatever names it: the project's data/
+// and backups/ and everything in them, and the device key's folder, under
+// ~/.cyfr or, when the project is the home folder, its own .cyfr. Only the
+// data's own question removes it.
+func (p *uninstallPlan) personData(path string) bool {
+	roots := []string{p.deviceDir}
+	for _, name := range projectData {
+		roots = append(roots, filepath.Join(p.dir, name))
+	}
+	for _, root := range roots {
+		if root != "" && (path == root || strings.HasPrefix(path, root+string(filepath.Separator))) {
+			return true
+		}
+	}
+	return false
+}
+
+// changedGitignore reports whether name is a .gitignore that is not the
+// one cyfr init writes, byte for byte: a person's change makes it theirs,
+// whichever source named it.
+func changedGitignore(name string) bool {
+	if name != ".gitignore" {
+		return false
+	}
+	data, err := os.ReadFile(name)
+	return err != nil || !bytes.Equal(data, []byte(projectGitignore))
 }
 
 // regularFile reports whether rel, under dir, is a regular file reached
@@ -278,8 +322,11 @@ func readUninstallPlan(named []string) (*uninstallPlan, error) {
 			break
 		}
 	}
+	if path, err := deviceKey(); err == nil {
+		p.deviceDir = filepath.Dir(path)
+	}
 	for _, name := range named {
-		if regularFile(dir, name) && !slices.Contains(p.files, name) {
+		if regularFile(dir, name) && !p.personData(filepath.Join(dir, name)) && !changedGitignore(name) && !slices.Contains(p.files, name) {
 			p.files = append(p.files, name)
 		}
 	}
@@ -373,7 +420,7 @@ func runUninstall(ctx context.Context, out io.Writer, yes, deleteData bool) erro
 	if !isCYFRProject() {
 		return errors.New("This directory is not a CYFR that cyfr init made, so nothing was removed: it lacks a compose file, .cyfr/ or a .env that names CYFR_ACCESS. Run 'cyfr uninstall' in CYFR's directory")
 	}
-	named, _, err := installedFiles()
+	named, err := installedFiles()
 	if err != nil {
 		self, _ := selfExecutable()
 		return fmt.Errorf("cyfr uninstall cannot name the files CYFR put here: %v. Nothing was removed. To remove CYFR by hand: run 'cyfr down' here, then remove this directory (with sudo: CYFR's container owns data/), the program %s and ~/.cyfr", err, self)

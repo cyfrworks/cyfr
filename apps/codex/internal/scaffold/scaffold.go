@@ -44,7 +44,8 @@ func Download(version string) error {
 	if err != nil {
 		return err
 	}
-	return r.Write(false)
+	_, err = r.Write(false)
+	return err
 }
 
 // Release is a release's scaffold tarball, verified and read whole, with
@@ -103,12 +104,14 @@ func (r *Release) File(name string) ([]byte, bool) {
 // overwriteManaged is true, managed files are replaced with the tarball
 // contents, each through a temporary file renamed over it, so a managed
 // file is its old bytes or its new ones; other files retain the
-// skip-if-exists behavior.
-func (r *Release) Write(overwriteManaged bool) error {
+// skip-if-exists behavior. It answers the files it wrote, and never one it
+// left as it found it: those are the files a project's record names.
+func (r *Release) Write(overwriteManaged bool) ([]string, error) {
+	var written []string
 	for _, e := range r.entries {
 		if e.dir {
 			if err := MakeDir(e.name); err != nil {
-				return fmt.Errorf("mkdir %s: %w", e.name, err)
+				return written, fmt.Errorf("mkdir %s: %w", e.name, err)
 			}
 			continue
 		}
@@ -120,12 +123,13 @@ func (r *Release) Write(overwriteManaged bool) error {
 			}
 		}
 		if err := MakeDir(filepath.Dir(e.name)); err != nil {
-			return fmt.Errorf("mkdir parent %s: %w", e.name, err)
+			return written, fmt.Errorf("mkdir parent %s: %w", e.name, err)
 		}
 		if managed {
 			if err := ReplaceFile(e.name, e.data, e.mode); err != nil {
-				return fmt.Errorf("write %s: %w", e.name, err)
+				return written, fmt.Errorf("write %s: %w", e.name, err)
 			}
+			written = append(written, e.name)
 			continue
 		}
 		f, err := os.OpenFile(e.name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, e.mode)
@@ -133,7 +137,7 @@ func (r *Release) Write(overwriteManaged bool) error {
 			if os.IsExist(err) {
 				continue // race: created between Stat and OpenFile
 			}
-			return fmt.Errorf("create %s: %w", e.name, err)
+			return written, fmt.Errorf("create %s: %w", e.name, err)
 		}
 		// The tarball's mode, not the umask's narrowing of it: the
 		// stack's containers read these files (caddy its Caddyfile) as a
@@ -143,10 +147,11 @@ func (r *Release) Write(overwriteManaged bool) error {
 			_, err = f.Write(e.data)
 		}
 		if err = errors.Join(err, f.Close()); err != nil {
-			return fmt.Errorf("write %s: %w", e.name, err)
+			return written, fmt.Errorf("write %s: %w", e.name, err)
 		}
+		written = append(written, e.name)
 	}
-	return nil
+	return written, nil
 }
 
 // MakeDir makes the directory name and any missing parent with the mode
@@ -233,6 +238,12 @@ func isManagedAqua(path string) bool {
 	return false
 }
 
+// InstallRecord is where cyfr init and cyfr update record the files they
+// wrote in a project, one name a line: deployment state, so it is managed,
+// and an update's snapshot holds it and its rollback and `cyfr restore`
+// put it back with the files it names.
+const InstallRecord = ".cyfr/files"
+
 // SeccompProfile is the keeper's seccomp profile, which the locus-runtime service of
 // docker-compose.yml names beside it. It follows the image it lets start,
 // so `cyfr update`, which pulls the image, refreshes it too.
@@ -258,7 +269,7 @@ var Guides = []string{
 // It is the one policy for what `cyfr update` overwrites, snapshots and
 // `cyfr restore` puts back.
 func IsManaged(path string) bool {
-	if path == SeccompProfile || slices.Contains(Guides, path) {
+	if path == SeccompProfile || path == InstallRecord || slices.Contains(Guides, path) {
 		return true
 	}
 	// Everything under wit/ is managed.

@@ -394,31 +394,41 @@ func recordedFiles(t *testing.T) []string {
 	return names
 }
 
-// init records, whole, the files it laid down: the scaffold's, .env and
-// the .gitignore it wrote.
-func TestInitRecordsTheFilesItLaysDown(t *testing.T) {
+// init records the files it wrote: the scaffold's it laid down, .env and
+// the .gitignore it wrote; a file that was there before, which it kept,
+// is never recorded as CYFR's.
+func TestInitRecordsTheFilesItWrote(t *testing.T) {
 	saved, savedDownload := machine.supported, downloadScaffold
 	t.Cleanup(func() { machine.supported, downloadScaffold = saved, savedDownload })
 	machine.supported = func() bool { return false }
 	newInitProject(t)
 	useFakeEngine(t)
-	scaffoldNames := []string{"Caddyfile", "wit/cyfr/a.wit"}
+	if err := os.WriteFile("Caddyfile", []byte("the person's own\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// As scaffold.Release.Write(false): an existing file is kept and not
+	// answered as written.
 	downloadScaffold = func(string) ([]string, error) {
-		for _, name := range scaffoldNames {
+		var written []string
+		for _, name := range []string{"Caddyfile", "wit/cyfr/a.wit"} {
+			if _, err := os.Stat(name); err == nil {
+				continue
+			}
 			if err := os.MkdirAll(filepath.Dir(name), 0755); err != nil {
-				return nil, err
+				return written, err
 			}
 			if err := os.WriteFile(name, []byte("shipped\n"), 0644); err != nil {
-				return nil, err
+				return written, err
 			}
+			written = append(written, name)
 		}
-		return scaffoldNames, nil
+		return written, nil
 	}
 	var out bytes.Buffer
 	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
 		t.Fatalf("init: %v\n%s", err, out.String())
 	}
-	if got, want := recordedFiles(t), []string{".env", ".gitignore", "Caddyfile", "wit/cyfr/a.wit"}; !slices.Equal(got, want) {
+	if got, want := recordedFiles(t), []string{".env", ".gitignore", "wit/cyfr/a.wit"}; !slices.Equal(got, want) {
 		t.Errorf("init recorded %q, want %q", got, want)
 	}
 }

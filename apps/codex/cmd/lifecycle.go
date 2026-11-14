@@ -333,15 +333,14 @@ func forceRefetched(releaseBuild bool) []string {
 }
 
 // downloadScaffold lays the release's scaffold files down, keeping every
-// file that exists, and answers the scaffold's file names, which init
-// records (writeInstallRecord); a variable so a test substitutes the
-// download.
+// file that exists, and answers the files it wrote, which init records
+// (recordInstall); a variable so a test substitutes the download.
 var downloadScaffold = func(version string) ([]string, error) {
 	r, err := scaffold.Fetch(version)
 	if err != nil {
 		return nil, err
 	}
-	return r.Names(), r.Write(false)
+	return r.Write(false)
 }
 
 // forceRemovalRefusal is init --force's refusal when files it re-fetches
@@ -595,7 +594,7 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	// warns and init goes on; a release that fails verification stops
 	// it (scaffoldDownloadFailure).
 	begin(initStepFiles)
-	scaffoldFiles, err := downloadScaffold(version.Version)
+	written, err := downloadScaffold(version.Version)
 	if err != nil {
 		if stop := scaffoldDownloadFailure(version.Version, err, errOut); stop != nil {
 			// What --force removed is named here too: the refusal
@@ -626,6 +625,7 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		if err := writeFileAtomic(".env", text, 0600); err != nil {
 			return fmt.Errorf("Failed to write .env: %w", err)
 		}
+		written = append(written, ".env")
 		sel = selection{profiles: d.Head.Profiles, port: d.Head.Port}
 	}
 
@@ -635,6 +635,7 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		if err := os.WriteFile(".gitignore", []byte(projectGitignore), 0644); err != nil {
 			return fmt.Errorf("Failed to write .gitignore: %w", err)
 		}
+		written = append(written, ".gitignore")
 	}
 
 	// Create directories. These are the bind-mount sources in
@@ -644,9 +645,10 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	_ = os.MkdirAll("data", 0755)
 	_ = scaffold.MakeDir("aqua")
 
-	// The files init laid down, recorded whole, so `cyfr uninstall`
-	// removes exactly them without asking the release again.
-	if err := writeInstallRecord(scaffoldFiles); err != nil {
+	// The files init wrote, added to the record, so `cyfr uninstall`
+	// removes exactly them without asking the release; a file that was
+	// there before and was kept is never recorded.
+	if err := recordInstall(written); err != nil {
 		return fmt.Errorf("cyfr init could not record the files it wrote in %s (%v). Fix the cause and run 'cyfr init' again", installRecord, err)
 	}
 

@@ -302,7 +302,7 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 type scaffoldRelease interface {
 	Managed() []string
 	Names() []string
-	Write(overwriteManaged bool) error
+	Write(overwriteManaged bool) ([]string, error)
 	File(name string) ([]byte, bool)
 }
 
@@ -412,11 +412,6 @@ func (u *updater) run() error {
 	// files back, so the old stack starts again under its own.
 	if err := u.writeScaffold(); err != nil {
 		return u.revertScaffold(err)
-	}
-	// The release's files, recorded whole in place of the record the
-	// project kept, so `cyfr uninstall` names this release's files.
-	if err := writeInstallRecord(u.scaffold.Names()); err != nil {
-		return u.revertScaffold(fmt.Errorf("the record of CYFR's files (%s) could not be written (%v)", installRecord, err))
 	}
 	if err := u.switchImages(); err != nil {
 		if errors.Is(err, errComposeLeftSwitched) {
@@ -1395,8 +1390,14 @@ func (u *updater) fetchScaffold() error {
 // writeScaffold writes the release's scaffold files over the project's,
 // then removes from .env the settings the release retired (planEnv).
 func (u *updater) writeScaffold() error {
-	if err := u.scaffold.Write(true); err != nil {
+	written, err := u.scaffold.Write(true)
+	if err != nil {
 		return fmt.Errorf("Writing the scaffold files failed (%v)", err)
+	}
+	// The files the release wrote join the record; a revert puts the
+	// record back from the snapshot with the files.
+	if err := recordInstall(written); err != nil {
+		return fmt.Errorf("Recording the files the release wrote in %s failed (%v)", installRecord, err)
 	}
 	fmt.Fprintf(u.out, "Scaffold files updated (%s, wit/, aqua/).\n", strings.Join(scaffold.Guides, ", "))
 	if len(u.retired) == 0 {
@@ -1472,10 +1473,17 @@ func (u *updater) revertScaffold(reason error) error {
 			return fmt.Errorf("%v.\n.env could not be put back from the snapshot (%v), so the stack is left stopped; restore the snapshot with:\n  cyfr restore %s", u.redactor().Text(reason.Error()), err, u.snapshot)
 		}
 	}
-	if err := putScaffoldBack(u.snapshot, u.scaffold.Managed()); err != nil {
+	if err := putScaffoldBack(u.snapshot, u.snapshotScaffold()); err != nil {
 		return fmt.Errorf("%v.\nThe scaffold files could not be put back from the snapshot (%v), so the stack is left stopped; restore the snapshot with:\n  cyfr restore %s", u.redactor().Text(reason.Error()), err, u.snapshot)
 	}
 	return u.restartOld(fmt.Errorf("%v; the scaffold files were put back from the snapshot %s", reason, u.snapshot))
+}
+
+// snapshotScaffold names the files the snapshot holds as they stood and a
+// revert or a restore puts back: the release's managed files and the
+// install record, which names them.
+func (u *updater) snapshotScaffold() []string {
+	return append(slices.Clone(u.scaffold.Managed()), installRecord)
 }
 
 // rosterSlot is one live slot as the roster and the offline read answer it.
@@ -1780,7 +1788,7 @@ func (u *updater) takeSnapshot() error {
 		fmt.Fprintln(u.out, s3OutsideSnapshot)
 	}
 
-	managed := u.scaffold.Managed()
+	managed := u.snapshotScaffold()
 	if err := copyScaffold(managed, filepath.Join(dir, "scaffold")); err != nil {
 		return err
 	}

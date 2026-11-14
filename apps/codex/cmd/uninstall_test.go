@@ -496,7 +496,7 @@ func TestUninstallRemovesNothingWithoutTheReleasesFileNames(t *testing.T) {
 	uninstallScaffold = func(string) ([]string, error) { return nil, errors.New("download: no network") }
 	before := left(t, s.dir)
 	_, err := s.run(true, true)
-	if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall cannot name the files CYFR put here: this CYFR keeps no record of the files it put here (.cyfr/files.json), and release ") || !strings.Contains(err.Error(), "'s list of them could not be read (download: no network). Nothing was removed. To remove CYFR by hand: run 'cyfr down' here, then remove this directory (with sudo: CYFR's container owns data/), the program "+s.self+" and ~/.cyfr") {
+	if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall cannot name the files CYFR put here: this CYFR keeps no record of the files it put here (.cyfr/files), and release ") || !strings.Contains(err.Error(), "'s list of them could not be read (download: no network). Nothing was removed. To remove CYFR by hand: run 'cyfr down' here, then remove this directory (with sudo: CYFR's container owns data/), the program "+s.self+" and ~/.cyfr") {
 		t.Fatalf("cyfr uninstall answered %v", err)
 	}
 	s.nothingRemoved(before)
@@ -538,13 +538,13 @@ func entriesOf(t *testing.T, dir string) map[string]string {
 func TestUninstallRemovesExactlyTheRecordedFilesWithoutTheNetwork(t *testing.T) {
 	s := newUninstallScenario(t)
 	uninstallScaffold = func(string) ([]string, error) { return nil, errors.New("download: no network") }
-	if err := writeInstallRecord([]string{"docker-compose.yml", "wit/cyfr/a.wit", "aqua/aqua.md"}); err != nil {
+	if err := recordInstall([]string{"docker-compose.yml", "wit/cyfr/a.wit", "aqua/aqua.md"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.run(true, false); err != nil {
 		t.Fatal(err)
 	}
-	want := append(slices.Clone(kept), ".env.example", ".env.locus.example", "Caddyfile", "FAIR_SOURCE.md", "LICENSE",
+	want := append(slices.Clone(kept), ".env", ".env.example", ".env.locus.example", ".gitignore", "Caddyfile", "FAIR_SOURCE.md", "LICENSE",
 		"LICENSES/Apache-2.0.txt", "aqua/crew/explorer.md", "aqua/skills/web/SKILL.md", "configuration-guide.md", "keeper.seccomp.json")
 	slices.Sort(want)
 	if got := left(t, s.dir); !slices.Equal(got, want) {
@@ -552,20 +552,24 @@ func TestUninstallRemovesExactlyTheRecordedFilesWithoutTheNetwork(t *testing.T) 
 	}
 }
 
-// A record that names a path outside the project is refused, never
-// followed: nothing is removed, and the file outside is as it was.
-func TestUninstallRefusesARecordNamingAPathOutside(t *testing.T) {
-	for _, name := range []string{"../outside.txt", "/etc/hostname", "wit/../../outside.txt"} {
+// A record holding a line it cannot hold is refused whole, never
+// followed in part: nothing is removed, and a file outside is as it was.
+func TestUninstallRefusesARecordWithALineItCannotHold(t *testing.T) {
+	for name, line := range map[string]string{
+		"a path above":        "../outside.txt",
+		"an absolute path":    "/etc/hostname",
+		"a path climbing":     "wit/../../outside.txt",
+		"an empty line":       "",
+		"a control character": "wit/a\x1bb.wit",
+	} {
 		t.Run(name, func(t *testing.T) {
 			s := newUninstallScenario(t)
 			outside := filepath.Join(filepath.Dir(s.dir), "outside.txt")
 			s.write(outside, "the person's own")
-			if err := writeInstallRecord([]string{"docker-compose.yml", name}); err != nil {
-				t.Fatal(err)
-			}
+			s.write(filepath.Join(s.dir, installRecord), "docker-compose.yml\n"+line+"\n")
 			before := left(t, s.dir)
 			_, err := s.run(true, true)
-			if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall cannot name the files CYFR put here: its record of the files CYFR put here cannot be used (.cyfr/files.json names \""+name+"\", which is not a path inside this directory). Nothing was removed. To remove CYFR by hand: run 'cyfr down' here,") {
+			if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall cannot name the files CYFR put here: its record of the files CYFR put here cannot be used (.cyfr/files names ") || !strings.Contains(err.Error(), "which is not a path inside this directory). Nothing was removed. To remove CYFR by hand: run 'cyfr down' here,") {
 				t.Fatalf("cyfr uninstall answered %v", err)
 			}
 			s.nothingRemoved(before)
@@ -588,7 +592,7 @@ func TestUninstallFollowsNoRecordedPathThroughALink(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(s.dir, "aqua")); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeInstallRecord([]string{"docker-compose.yml", "aqua/aqua.md"}); err != nil {
+	if err := recordInstall([]string{"docker-compose.yml", "aqua/aqua.md"}); err != nil {
 		t.Fatal(err)
 	}
 	before := entriesOf(t, outside)
@@ -600,5 +604,56 @@ func TestUninstallFollowsNoRecordedPathThroughALink(t *testing.T) {
 	}
 	if target, err := os.Readlink(filepath.Join(s.dir, "aqua")); err != nil || target != outside {
 		t.Errorf("the aqua link is %q (%v)", target, err)
+	}
+}
+
+// The person's data is kept by an ordinary uninstall whatever names it:
+// for every protected path (data/, backups/, and the device key when the
+// project is the home folder), named by the record or by the release, an
+// uninstall that keeps the data leaves it.
+func TestUninstallKeepsTheDataWhateverNamesIt(t *testing.T) {
+	protected := []string{"data/cyfr.db", "backups/x/db", ".cyfr/device/key.json"}
+	for _, source := range []string{"record", "release"} {
+		for _, path := range protected {
+			t.Run(source+" names "+path, func(t *testing.T) {
+				s := newUninstallScenario(t)
+				t.Setenv("HOME", s.dir)
+				s.write(filepath.Join(s.dir, ".cyfr", "device", "key.json"), "the device key")
+				if source == "record" {
+					if err := recordInstall([]string{".env", "docker-compose.yml", path}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					uninstallScaffold = func(string) ([]string, error) { return append(slices.Clone(shippedNames), path), nil }
+				}
+				if _, err := s.run(true, false); err != nil {
+					t.Fatal(err)
+				}
+				if !exists(filepath.Join(s.dir, path)) {
+					t.Errorf("an uninstall that keeps the data removed %s, which the %s named", path, source)
+				}
+			})
+		}
+	}
+}
+
+// A .gitignore the person changed is theirs, whichever source names it.
+func TestUninstallKeepsAChangedGitignore(t *testing.T) {
+	for _, source := range []string{"record", "release"} {
+		t.Run(source, func(t *testing.T) {
+			s := newUninstallScenario(t)
+			if source == "record" {
+				if err := recordInstall(append(slices.Clone(shippedNames), ".env", ".gitignore")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.write(filepath.Join(s.dir, ".gitignore"), projectGitignore+"\n# the person's own line\n")
+			if _, err := s.run(true, false); err != nil {
+				t.Fatal(err)
+			}
+			if !exists(filepath.Join(s.dir, ".gitignore")) {
+				t.Error("the changed .gitignore was removed")
+			}
+		})
 	}
 }

@@ -517,8 +517,14 @@ func TestFetchWritesNothingUntilWrite(t *testing.T) {
 	if _, ok := r.File("absent.txt"); ok {
 		t.Error("File answers a file the release does not ship")
 	}
-	if err := r.Write(true); err != nil {
+	// Write answers the files it wrote: the managed guide it replaced,
+	// never the member's docker-compose.yml it left as it was.
+	written, err := r.Write(true)
+	if err != nil {
 		t.Fatalf("Write: %v", err)
+	}
+	if !slices.Contains(written, "configuration-guide.md") || slices.Contains(written, "docker-compose.yml") {
+		t.Errorf("Write answered %v", written)
 	}
 	if got, _ := os.ReadFile("configuration-guide.md"); string(got) != "# Configuration\n" {
 		t.Errorf("Write(true) left the guide %q", got)
