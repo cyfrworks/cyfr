@@ -8,7 +8,8 @@
 # on the guest's own screen runs the install script as `curl ... | sh` pipes
 # it, with production trust, then `cyfr init`, whose screen question's first
 # answer shows CYFR on the screen, and `cyfr up`, and CYFR answers on its
-# port. Before that `cyfr up`, the same terminal, older than the docker
+# port. Before that init, two of its refusals change nothing: a wrong
+# password at sudo's own prompt, and an account outside the sudo group. Before that `cyfr up`, the same terminal, older than the docker
 # group init joined, runs `cyfr setup`, whose pages set up and start a
 # second CYFR beside it, taken down again. After a reboot labwc and Chrome run on tty1 and show the screen's
 # own setup page (screen-setup.png): with the guest's isolated swtpm it asks
@@ -283,6 +284,47 @@ sys.exit(0 if st["phase"] == "done" and st["address"] == "http://localhost:4000"
   guest_root 'docker network prune -f' || fail "the setup pages' networks were not removed ($GUEST_DIR/root.txt)"
 }
 
+# The one line cyfr says just before sudo's own prompt.
+PASSWORD_SENTENCE='Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.'
+
+# requirements_refused: on the machine without Docker, before the init that
+# installs it, cyfr init's two refusals. In tty1's terminal sudo's own
+# prompt, after cyfr's line saying whose password it asks, is answered
+# three times with a wrong one. Then an account outside the sudo group, at
+# a terminal of its own (script), is told it is not in the sudo or admin
+# group, with the commands for whoever administers the machine, before
+# anything is asked.
+# Neither installs, joins a group or writes into its folder; the second
+# account and its copy of cyfr are removed after.
+requirements_refused() {
+  local status
+  step "cyfr init with a refused password: nothing changes"
+  pane_step refused 'sudo -k; mkdir -p ~/refused && cd ~/refused && cyfr init' 300 \
+    'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" not-the-password
+  check "cyfr init exits 1 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 1
+  check "sudo's own prompt asked three times (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" = 3
+  check "cyfr says whose password on the line before sudo's first prompt" sh -c 'grep -A1 -xF -- "$1" "$2" | sed -n 2p | grep -qE -- "$3"' sh \
+    "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-refused.txt" "$SUDO_PROMPT"
+  check "it says the refused password changed nothing" transcript_has refused '^Error: The password was not accepted, so nothing was changed\. Run `cyfr init` again to try again$'
+  check "nothing was installed, no group joined, nothing written" guest_ssh '! dpkg -s docker.io >/dev/null 2>&1 && ! id -nG proof | grep -qw docker && [ -z "$(ls -A ~/refused)" ] && rmdir ~/refused'
+  pane_step_end refused
+
+  step "cyfr init by an account outside the sudo and admin groups"
+  guest_root 'useradd -m -s /bin/bash visitor && install -m 0755 /home/proof/.local/bin/cyfr /tmp/cyfr-visitor' ||
+    fail "the second account was not made ($GUEST_DIR/root.txt)"
+  status=0
+  guest_root_out "runuser -l visitor -c 'mkdir try && cd try && printf \"yes\\n\" | script -qec \"/tmp/cyfr-visitor init\" /dev/null'" \
+    >"$GUEST_DIR/visitor.txt" || status=$?
+  tr -d '\r' <"$GUEST_DIR/visitor.txt" >"$GUEST_DIR/transcript-visitor.txt"
+  check "cyfr init exits 1 (it exited $status)" test "$status" = 1
+  check "it says the account is not in the sudo or admin group" grep -qxF 'Your account, visitor, is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:' "$GUEST_DIR/transcript-visitor.txt"
+  check "it gives the commands as one sudo line, joining visitor to the docker group" sh -c 'grep -qx "  sudo sh -c '\''apt-get update &&" "$1" && grep -qx "    usermod -aG docker visitor'\''" "$1"' sh "$GUEST_DIR/transcript-visitor.txt"
+  check "it says nothing was changed, and when to run init again" grep -qxF 'Error: Nothing was changed. Run `cyfr init` again once they have' "$GUEST_DIR/transcript-visitor.txt"
+  check "it asks nothing and sudo never runs" sh -c '! grep -qE -- "Install these requirements|$2" "$1"' sh "$GUEST_DIR/transcript-visitor.txt" "$SUDO_PROMPT"
+  check "nothing was installed, no group joined, and its folder is as it was: empty" guest_root '! dpkg -s docker.io >/dev/null 2>&1 && ! id -nG visitor | grep -qw docker && [ -z "$(ls -A /home/visitor/try)" ]'
+  guest_root 'userdel -r visitor 2>/dev/null; rm -f /tmp/cyfr-visitor; ! id visitor' || fail "the second account was not removed ($GUEST_DIR/root.txt)"
+}
+
 # box_install: on the guest under way, the install script typed into
 # tty1's terminal, cyfr init with its screen, this tree's server in the
 # release's place and the box made its own account service in .env, cyfr
@@ -309,8 +351,10 @@ box_install() {
   check "it says it linked cyfr" transcript_has script '^Linked /usr/local/bin/cyfr to /home/proof/\.local/bin/cyfr, so cyfr is on your PATH\.'
   pane_step_end script
 
-  step "cyfr init on a machine without Docker, its screen question answered 1"
   guest_copy_in "$CANDIDATE_BIN" .local/bin/cyfr || fail "the candidate was not copied into the guest"
+  requirements_refused
+
+  step "cyfr init on a machine without Docker, its screen question answered 1"
   # The guest's virtio display has no 3D; the product sets no renderer.
   guest_root 'mkdir -p /etc/systemd/system/cyfr-screen.service.d && printf "[Service]\nEnvironment=WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1\n" >/etc/systemd/system/cyfr-screen.service.d/proof.conf' ||
     fail "the guest's renderer was not set ($GUEST_DIR/root.txt)"
@@ -319,6 +363,8 @@ box_install() {
   check "cyfr init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "it asks \"Install these requirements?\" once" test "${PANE_ANSWERED[0]}" = 1
   check "sudo asks at most two passwords, the requirements' and the screen's (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" -le 2
+  check "cyfr says whose password on the line before sudo's first prompt" sh -c 'grep -A1 -xF -- "$1" "$2" | sed -n 2p | grep -qE -- "$3"' sh \
+    "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-init.txt" "$SUDO_PROMPT"
   check "init goes on through the docker group and asks the screen question once (asked ${PANE_ANSWERED[2]})" sh -c '[ "$1" = 1 ] && grep -qx "This machine has no desktop. Show CYFR on its screen?" "$2"' sh "${PANE_ANSWERED[2]}" "$GUEST_DIR/transcript-init.txt"
   check "it never asks how CYFR is reached" sh -c '! grep -q "How will you reach CYFR" "$1"' sh "$GUEST_DIR/transcript-init.txt"
   check "it shows the screen's commands" transcript_has init '^  systemctl enable cyfr-screen$'
