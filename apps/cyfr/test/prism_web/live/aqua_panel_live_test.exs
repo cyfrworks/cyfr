@@ -590,7 +590,23 @@ defmodule PrismWeb.AquaPanelLiveTest do
     render(pane)
     render(panel)
     assert has_element?(panel, ~s(#system-layer-panel-dialog [data-kind="grant"]))
-    assert has_element?(panel, "#system-layer-panel-dialog .consent-sheet", "in #{mine.name}")
+    # The sheet names where the grant lands: the person's own athanor, the
+    # one they hold, reads as theirs rather than by its name. That it is
+    # this athanor, the panel's, is what the grant writes: it is read back
+    # below under `me`, whose athanor is `mine`.
+    assert has_element?(
+             panel,
+             "#system-layer-panel-dialog .consent-sheet__subtitle",
+             "in your athanor"
+           )
+
+    refute has_element?(
+             panel,
+             "#system-layer-panel-dialog .consent-sheet__subtitle",
+             "in #{mine.name}"
+           )
+
+    assert PrismWeb.Athanors.own?(mine, me)
     desktop_dialog = "#" <> PrismWeb.SystemLayer.desktop_layer_id() <> "-dialog"
     refute has_element?(view, ~s(#{desktop_dialog} [data-kind="grant"]))
 

@@ -125,6 +125,16 @@ async function openGrant(page) {
   await page.waitForSelector(`${layer}[open] [data-test="grant-rows"]`, { timeout: 30_000 });
 }
 
+// Each class of what a run read (`Prima.Source`), in the words the grant
+// sheet shows a person for it.
+const CLASS_WORDS = {
+  pinned: "the pinned page",
+  filed: "filed notes",
+  files_by_grant: "files its grant reads",
+  vault_disclosed: "values the vault disclosed",
+  outside: "anything from outside this athanor",
+};
+
 // What the open sheet shows: each row's kind and text, and the sheet's whole
 // text.
 function sheet(page) {
@@ -133,6 +143,12 @@ function sheet(page) {
     const rowsShown = [...root.querySelectorAll("[data-row]")].map((el) => ({
       kind: el.getAttribute("data-row"),
       text: el.textContent.replace(/\s+/g, " ").trim(),
+      // An exit's classes: each by its checkbox's own value, beside the
+      // words a person reads for it.
+      flows: [...el.querySelectorAll('[data-field="flows"] label')].map((label) => ({
+        choice: label.querySelector("input")?.getAttribute("phx-value-choice") ?? null,
+        words: label.textContent.replace(/\s+/g, " ").trim(),
+      })),
     }));
     return {
       rows: rowsShown,
@@ -259,9 +275,11 @@ async function main() {
     const egress = narrowed.rows.find((r) => r.kind === "egress");
     const storage = narrowed.rows.find((r) => r.kind === "storage");
     // Every exit is shown with the classes that may reach it: the kept
-    // host the folder's files, the dropped host the notes.
+    // host the folder's files, the dropped host the notes. A class is its
+    // checkbox's value, read in the sheet's words for it.
     const exitShown = (shown, host, cls) =>
-      shown.rows.some((r) => r.kind === "exits" && r.text.includes(host) && r.text.includes(cls));
+      shown.rows.some((r) => r.kind === "exits" && r.text.includes(host) &&
+        r.flows.some((f) => f.choice === cls && f.words === CLASS_WORDS[cls]));
     const exitsShown = exitShown(first, KEPT, "files_by_grant") && exitShown(first, DROPPED, "filed");
     // Exactly what the sheet decided, the host left ticked and the picked
     // folder, previewed from the command line: its digest is the one the head
