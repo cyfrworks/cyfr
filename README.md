@@ -1030,9 +1030,9 @@ What to back up depends on the backends you configured:
 
 | Backend | What holds state | Backup |
 |---|---|---|
-| SQLite (default) | `./data` (database, encrypted secrets, every athanor's components and files, caches) | Stop the stack (`cyfr down`), copy `./data`, restart. Copying while running risks a torn SQLite snapshot. |
-| Postgres | your database + `./data` for files | `pg_dump` on your schedule + the `./data` copy above |
-| S3 | the bucket + the database | enable bucket versioning/replication; back the database up as above |
+| SQLite (default) | `./data` (database, encrypted secrets, every athanor's components and files, caches) | `cyfr backup`, which stops a running stack for the snapshot and starts it again. Copying `./data` while the stack runs risks a torn SQLite snapshot. |
+| Postgres | your database + `./data` for files | `cyfr backup`, which dumps the database with `pg_dump` beside the `./data` copy |
+| S3 | the bucket + the database | enable bucket versioning/replication; `cyfr backup` holds the database but not the bucket |
 
 A restore needs the **same `CYFR_SECRET_KEY_BASE`** — secrets are encrypted
 with a key derived from it, so a restored data directory is unreadable under
@@ -1043,15 +1043,25 @@ separately from the data backup if you can, and exclude `erl_crash.dump` and
 `tmp/` from backup jobs — a crash dump can contain decrypted key material
 from process memory.
 
+**`cyfr backup`** takes the snapshot `cyfr update` takes before it changes
+anything, into `backups/<UTC timestamp>/`: the database (the SQLite file, or
+a `pg_dump` of PostgreSQL), the local storage root, the managed scaffold
+files the directory holds, the keyring, `.env` and `docker-compose.yml`, with
+`snapshot.json` written last. It takes the stack's lock first. A running
+CYFR is stopped for it as an update stops it and started again afterwards,
+also when the snapshot fails; a stopped one stays stopped. It refuses while
+a server outside this stack still holds a slot of the cluster. A snapshot
+holds the keyring and the database: keep it as you keep the data.
+
 **Restore is declared.** `cyfr restore backups/<timestamp>` puts a snapshot
-`cyfr update` took back: it refuses an incomplete snapshot or one whose
+`cyfr backup` or `cyfr update` took back: it refuses an incomplete snapshot or one whose
 layout it cannot put back, stops the stack and bars the cluster from starting
 before anything lands: it sets `CYFR_RESTORE_INCOMPLETE` in `.env`, which
 the image's entrypoint, `cyfr up` and `cyfr update` refuse, and removes the
 stopped `cyfr` container. It refuses while any server of the cluster still
 runs, on any host and of any release, or while the PostgreSQL server is of
 a major the CLI pins no client image for, and otherwise puts back the managed
-scaffold files as they stood before the update, the database, the storage
+scaffold files as they stood when the snapshot was taken, the database, the storage
 root (each nested mount's bytes at its own source), the keyring, `.env`
 and `docker-compose.yml`, and declares the restore before anything starts,
 in a one-off container that sets the bar empty for itself alone:
@@ -1133,6 +1143,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr access status` | Show how CYFR is reached, what runs and the last change, without the lock and changing nothing |
 | `cyfr up` / `cyfr down` | Start / stop the stack under its lock: cyfr, locus-runtime and locus-backends, plus locus-builds when `CYFR_LOCUS_BUILDS_URL` in `.env` names it (as `cyfr init` writes it) and the proxy `CYFR_ACCESS` selects (tailscale for tailnet, caddy for public); `up` refuses a `.env` that contradicts its access settings with the server's own sentence, and on a first start, with no one set up yet, ends on how the first person is set up: the setup link (from a phone or laptop with Tailscale on for tailnet access, through the ssh command for local access on a machine with no display) or `cyfr login --setup` at this terminal, this machine's screen (a reboot away until it runs), or on a headless install `cyfr login --setup` alone; `down` stops and removes every container of the project and keeps its networks, and refuses a directory that holds no compose file, since the stack it stops is the directory's own |
 | `cyfr update` | Update this program to the newest release (through brew for a Homebrew install), then the CYFR in this directory to it: shows what changes and asks (`--yes`), verifies the release's signed manifest, pulls every image by digest, stops the stack, snapshots it into `backups/`, rewrites `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy and tailscale) to the release's digests and starts it (see **Upgrading**); `--version <version>` installs exactly that release, a pre-release or an older one included; removes from `.env` each setting the release this CYFR ran shipped in its `.env.example` that the new release's `.env.example` does not declare, naming them (a setting the old `.env.example` never shipped is yours and stays), and leaves the rest of `.env`, `Caddyfile` and every other image line alone, a CYFR already on the release untouched, refuses a CYFR on a newer release and a `docker-compose.yml` that lacks a service of the bundled stack |
+| `cyfr backup` | Take a snapshot of the CYFR in this directory into `backups/`, the one `cyfr update` takes, which `cyfr restore` puts back; a running stack is stopped for it and started again; see **Backup and restore** |
 | `cyfr restore <snapshot>` | Put a snapshot from `backups/` back with the whole cluster stopped (refused while any server of the cluster runs), declare the restore and start the stack (`--no-start` leaves it stopped); see **Backup and restore** |
 
 > `cyfr --version` and `cyfr status` print a one-line hint when a newer release is available. The check only runs in an interactive terminal and is cached for a day; set `CYFR_NO_UPDATE_CHECK=1` (e.g. in your shell profile) to turn it off.

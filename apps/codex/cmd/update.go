@@ -262,7 +262,7 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 	if !release.IsVersion(v) {
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
 	}
-	u := &updater{ctx: ctx, version: v, out: out, errOut: errOut}
+	u := &updater{ctx: ctx, command: "update", version: v, out: out, errOut: errOut}
 	if err := u.fetchManifest(); err != nil {
 		return err
 	}
@@ -314,7 +314,10 @@ type scaffoldRelease interface {
 
 // updater carries one update's state from step to step.
 type updater struct {
-	ctx         context.Context
+	ctx context.Context
+	// command is the command the reads and the snapshot run for, update or
+	// backup, as their refusals name it.
+	command     string
 	version     string
 	out, errOut io.Writer
 	// engine holds the stack's lock and runs every docker call of the
@@ -403,7 +406,7 @@ func (u *updater) run() error {
 	if err := u.planEnv(); err != nil {
 		return u.restartOld(err)
 	}
-	if err := u.takeSnapshot(); err != nil {
+	if err := u.takeSnapshot(u.oldRelease, u.scaffold.Managed()); err != nil {
 		where := "no snapshot directory was made"
 		if u.snapshot != "" {
 			where = "the partial snapshot is " + u.snapshot
@@ -1126,12 +1129,12 @@ func (u *updater) readConfig() error {
 		for _, n := range mountsUnder(mounts, root) {
 			v, target := n.mount, path.Clean(n.mount.Target)
 			if v.Type != "bind" || v.Source == "" {
-				return nil, fmt.Errorf("The storage root %s has a %s mount at %s, which cyfr update cannot snapshot; nothing was changed", root, v.Type, target)
+				return nil, fmt.Errorf("The storage root %s has a %s mount at %s, which cyfr %s cannot snapshot; nothing was changed", root, v.Type, target, u.command)
 			}
 			resolved, err := filepath.EvalSymlinks(v.Source)
 			info, statErr := os.Stat(resolved)
 			if err != nil || statErr != nil || !(info.IsDir() || info.Mode().IsRegular()) {
-				return nil, fmt.Errorf("The mount %s under the storage root (on the host %s) is not a readable directory or file, so cyfr update cannot snapshot it; nothing was changed", target, v.Source)
+				return nil, fmt.Errorf("The mount %s under the storage root (on the host %s) is not a readable directory or file, so cyfr %s cannot snapshot it; nothing was changed", target, v.Source, u.command)
 			}
 			nested = append(nested, storageMount{rel: n.rel, host: resolved, dir: info.IsDir()})
 		}
@@ -1160,17 +1163,17 @@ func (u *updater) readConfig() error {
 		}
 		host, ok := containerToHost(dbPath)
 		if !ok {
-			return fmt.Errorf("The SQLite database %s is on no bind mount of the cyfr service, so cyfr update cannot snapshot it; nothing was changed", dbPath)
+			return fmt.Errorf("The SQLite database %s is on no bind mount of the cyfr service, so cyfr %s cannot snapshot it; nothing was changed", dbPath, u.command)
 		}
 		resolved, err := filepath.EvalSymlinks(host)
 		if info, statErr := os.Stat(resolved); err != nil || statErr != nil || !info.Mode().IsRegular() {
-			return fmt.Errorf("The SQLite database %s (on the host %s) is not a readable file, so cyfr update cannot snapshot it; nothing was changed", dbPath, host)
+			return fmt.Errorf("The SQLite database %s (on the host %s) is not a readable file, so cyfr %s cannot snapshot it; nothing was changed", dbPath, host, u.command)
 		}
 		c.sqliteFile = resolved
 	case "postgres":
 		c.adapter = "postgres"
 		if c.pgURL = env("CYFR_DATABASE_URL"); c.pgURL == "" {
-			return errors.New("CYFR_DATABASE=postgres without CYFR_DATABASE_URL: cyfr update has no database to snapshot; nothing was changed")
+			return fmt.Errorf("CYFR_DATABASE=postgres without CYFR_DATABASE_URL: cyfr %s has no database to snapshot; nothing was changed", u.command)
 		}
 		if strings.ContainsAny(c.pgURL, "\r\n") {
 			return errors.New("CYFR_DATABASE_URL holds a line break, which no database URL holds; nothing was changed")
@@ -1189,13 +1192,13 @@ func (u *updater) readConfig() error {
 		c.storage = "local"
 		host, ok := containerToHost(dataPath)
 		if !ok {
-			return fmt.Errorf("The storage root %s is on no bind mount of the cyfr service, so cyfr update cannot snapshot it; nothing was changed", dataPath)
+			return fmt.Errorf("The storage root %s is on no bind mount of the cyfr service, so cyfr %s cannot snapshot it; nothing was changed", dataPath, u.command)
 		}
 		// Resolved, so a root reached through a link is copied, not linked,
 		// and the SQLite file under it is recognized.
 		resolved, err := filepath.EvalSymlinks(host)
 		if info, statErr := os.Stat(resolved); err != nil || statErr != nil || !info.IsDir() {
-			return fmt.Errorf("The storage root %s (on the host %s) is not a readable directory, so cyfr update cannot snapshot it; nothing was changed", dataPath, host)
+			return fmt.Errorf("The storage root %s (on the host %s) is not a readable directory, so cyfr %s cannot snapshot it; nothing was changed", dataPath, host, u.command)
 		}
 		nested, err := nestedMounts(dataPath)
 		if err != nil {
@@ -1235,7 +1238,7 @@ func (u *updater) readConfig() error {
 	}
 	c.keyring = string(keyringText)
 	if f, err := os.Open(".env"); err != nil {
-		return fmt.Errorf("cyfr update cannot read .env (%v), which the snapshot copies; nothing was changed", err)
+		return fmt.Errorf("cyfr %s cannot read .env (%v), which the snapshot copies; nothing was changed", u.command, err)
 	} else {
 		f.Close()
 	}
@@ -1341,10 +1344,10 @@ func (u *updater) probePostgres() error {
 		return errors.New("the PostgreSQL server's version did not read as a number; nothing was changed")
 	}
 	if err != nil {
-		return fmt.Errorf("cyfr update could not reach the PostgreSQL server at CYFR_DATABASE_URL to read its version (%v); nothing was changed", err)
+		return fmt.Errorf("cyfr %s could not reach the PostgreSQL server at CYFR_DATABASE_URL to read its version (%v); nothing was changed", u.command, err)
 	}
 	if _, err := pgClientImage(major); err != nil {
-		return fmt.Errorf("cyfr update refuses: %w; nothing was changed", err)
+		return fmt.Errorf("cyfr %s refuses: %w; nothing was changed", u.command, err)
 	}
 	u.config.pgMajor = major
 	return nil
@@ -1846,168 +1849,6 @@ func slotNames(slots []rosterSlot) string {
 		nodes = append(nodes, fmt.Sprintf("%s (release %s)", slot.Node, slot.Release))
 	}
 	return strings.Join(nodes, ", ")
-}
-
-// snapshotManifest is snapshot.json, written last: its presence marks a
-// complete snapshot.
-type snapshotManifest struct {
-	Version        string   `json:"version"`
-	TakenAt        string   `json:"taken_at"`
-	Parts          []string `json:"parts"`
-	StorageAdapter string   `json:"storage_adapter"`
-	// Scaffold names every scaffold file the update replaces
-	// (scaffold.IsManaged), each held under scaffold/ when it was there
-	// before the update and absent from it when the update created it.
-	Scaffold []string `json:"scaffold"`
-	Complete bool     `json:"complete"`
-}
-
-// takeSnapshot copies the stopped cell into backups/<UTC timestamp>/: the
-// database, the local storage root, the scaffold files the release
-// replaces, the keyring, .env and the compose file as it stood before the
-// switch, then snapshot.json. Directories are 0700 and files 0600.
-// backups/ holds a .gitignore ignoring all of it, since a snapshot holds
-// the keyring.
-func (u *updater) takeSnapshot() error {
-	now := updateNow().UTC()
-	if err := os.Mkdir("backups", 0700); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	if err := writeNewFile(filepath.Join("backups", ".gitignore"), []byte(backupsIgnore)); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	dir := filepath.Join("backups", now.Format("20060102T150405Z"))
-	if err := os.Mkdir(dir, 0700); err != nil {
-		return err
-	}
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
-	u.snapshot = dir
-	fmt.Fprintf(u.out, "Taking a snapshot into %s...\n", dir)
-	c := u.config
-	var parts []string
-
-	switch c.adapter {
-	case "sqlite":
-		if err := copyFile(c.sqliteFile, filepath.Join(dir, "database")); err != nil {
-			return err
-		}
-		parts = append(parts, "database")
-		if info, err := os.Stat(c.sqliteFile + "-wal"); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			if err := copyFile(c.sqliteFile+"-wal", filepath.Join(dir, "database-wal")); err != nil {
-				return err
-			}
-			parts = append(parts, "database-wal")
-		}
-	case "postgres":
-		if err := u.dumpPostgres(filepath.Join(dir, "database")); err != nil {
-			return err
-		}
-		parts = append(parts, "database")
-	}
-
-	if c.storage == "local" {
-		exclude := map[string]bool{}
-		if c.sqliteFile != "" {
-			for _, suffix := range []string{"", "-wal", "-shm"} {
-				exclude[filepath.Clean(c.sqliteFile+suffix)] = true
-			}
-		}
-		// The access engine's state is no part of any snapshot, whatever
-		// mount reaches it: a restored home's lock, journal and receipts
-		// are the machine's own, never the backup's.
-		if state, err := filepath.Abs(".cyfr"); err == nil {
-			if resolved, err := filepath.EvalSymlinks(state); err == nil {
-				state = resolved
-			}
-			exclude[state] = true
-		}
-		if err := copyStorage(c.storageMounts, filepath.Join(dir, "storage"), exclude, u.out); err != nil {
-			return err
-		}
-		parts = append(parts, "storage")
-	} else {
-		fmt.Fprintln(u.out, s3OutsideSnapshot)
-	}
-
-	managed := u.scaffold.Managed()
-	if err := copyScaffold(managed, filepath.Join(dir, "scaffold")); err != nil {
-		return err
-	}
-	parts = append(parts, "scaffold")
-
-	if err := writeNewFile(filepath.Join(dir, "keyring"), []byte(c.keyring)); err != nil {
-		return err
-	}
-	parts = append(parts, "keyring")
-	if err := copyFile(".env", filepath.Join(dir, ".env")); err != nil {
-		return err
-	}
-	parts = append(parts, ".env")
-	// The compose file as it stood before the switch, so a restore puts the
-	// old release's image lines back with the rest.
-	if err := writeNewFile(filepath.Join(dir, "compose"), u.compose.original); err != nil {
-		return err
-	}
-	parts = append(parts, "compose")
-
-	data, err := json.MarshalIndent(snapshotManifest{
-		Version:        u.oldRelease,
-		TakenAt:        now.Format(time.RFC3339),
-		Parts:          parts,
-		StorageAdapter: c.storage,
-		Scaffold:       managed,
-		Complete:       true,
-	}, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Written to a temporary name, synced and renamed, so snapshot.json
-	// exists only whole and only after every part is.
-	tmp := filepath.Join(dir, ".snapshot.json.tmp")
-	if err := writeNewFile(tmp, append(data, '\n')); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, filepath.Join(dir, "snapshot.json")); err != nil {
-		return err
-	}
-	if d, err := os.Open(dir); err == nil {
-		d.Sync()
-		d.Close()
-	}
-	return nil
-}
-
-// backupsIgnore is backups/.gitignore: nothing under backups/ is tracked.
-const backupsIgnore = "# Snapshots hold the keyring and the database; never commit them.\n*\n"
-
-// copyScaffold copies each of the scaffold files names that is there into
-// dst at its own relative path, the absent ones left out.
-func copyScaffold(names []string, dst string) error {
-	if err := os.Mkdir(dst, 0700); err != nil {
-		return err
-	}
-	for _, name := range names {
-		info, err := os.Lstat(name)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("%s is not a regular file", name)
-		}
-		target := filepath.Join(dst, name)
-		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
-			return err
-		}
-		if err := copyFile(name, target); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // dumpPostgres streams pg_dump's custom-format dump of the configured
