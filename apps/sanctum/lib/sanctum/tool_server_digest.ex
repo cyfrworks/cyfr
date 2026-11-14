@@ -5,13 +5,19 @@ defmodule Sanctum.ToolServerDigest do
   @moduledoc """
   External MCP configuration digest pinned by a consent tool_server resource.
 
-  `JCS({id, transport, url, enabled, header_templates, backends,
-  tool_patterns})` over the server row's id and its stored header and env
-  **templates** (vault references and non-credential literals), never
-  resolved values: rotating a referenced vault entry must not move the
-  digest, while re-pointing the URL, swapping a header or env reference,
-  changing a backend's command, or deleting the row and creating another
-  under the same name must. A program's `url` is the empty string. Only a
+  `JCS({id, transport, mark, url, enabled, header_templates, backends,
+  tool_patterns, program})` over the server row's id and its stored header
+  and env **templates** (vault references and non-credential literals),
+  never resolved values: rotating a referenced vault entry must not move
+  the digest, while re-pointing the URL, swapping a header or env
+  reference, changing a backend's command, or deleting the row and
+  creating another under the same name must. A program's `program` member
+  is everything else that decides what it is and what it reaches: its
+  hosts (the stored list's text; none is every public host), its folder's
+  identity (its home and the login entry a kept home is), its memory and
+  disk bounds and its sign-in command, so a definition replaced with
+  wider hosts, another folder or other bounds no longer matches a grant
+  made for the old one. An http row's is null. A program's `url` is the empty string. Only a
   tool server has a digest: an `http` row or a program marked `mcp`; a
   `driven` program offers no tools. There is
   deliberately no stored digest column — a stored digest is a cache someone
@@ -37,22 +43,27 @@ defmodule Sanctum.ToolServerDigest do
           enabled: enabled,
           headers: headers,
           backends: backends,
-          tool_patterns: patterns
+          tool_patterns: patterns,
+          program: program
         } = server
       )
       when is_binary(id) and
              ((transport == "http" and is_nil(mark)) or (transport == "program" and mark == "mcp")) and
              (is_binary(url) or is_nil(url)) and is_boolean(enabled) and is_map(headers) and
-             is_list(backends) and is_list(patterns) do
+             is_list(backends) and is_list(patterns) and
+             ((transport == "http" and is_nil(program)) or
+                (transport == "program" and is_map(program))) do
     with {:ok, backends} <- backend_templates(backends) do
       JCS.hash(%{
         "id" => id,
         "transport" => transport,
+        "mark" => mark,
         "url" => url || "",
         "enabled" => enabled,
         "header_templates" => templates(headers),
         "backends" => backends,
-        "tool_patterns" => Enum.sort(patterns)
+        "tool_patterns" => Enum.sort(patterns),
+        "program" => program
       })
     else
       :error -> {:error, {:invalid_server_config, server}}
@@ -113,9 +124,24 @@ defmodule Sanctum.ToolServerDigest do
       enabled: server.enabled == true,
       headers: config["headers"] || %{},
       backends: config["backends"] || [],
-      tool_patterns: tool_patterns(server)
+      tool_patterns: tool_patterns(server),
+      program: program(server)
     })
   end
+
+  # What else decides what a program is and reaches, as its row stores it.
+  defp program(%{transport: "program"} = server) do
+    %{
+      "hosts" => Map.get(server, :hosts),
+      "home" => Map.get(server, :home),
+      "login_entry" => Map.get(server, :login_entry_id),
+      "memory_bytes" => Map.get(server, :memory_bytes),
+      "home_max_bytes" => Map.get(server, :home_max_bytes),
+      "login_command" => Map.get(server, :login_command)
+    }
+  end
+
+  defp program(_server), do: nil
 
   @doc """
   A server's exposure patterns: what the operator allowed this server to

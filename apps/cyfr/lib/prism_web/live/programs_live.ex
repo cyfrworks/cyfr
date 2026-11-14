@@ -101,7 +101,8 @@ defmodule PrismWeb.ProgramsLive do
       |> assign(:form_error, nil)
       |> assign(:prefill, %{})
       |> assign(:install, nil)
-      # The row whose definition an open form replaces: %{name, epoch}.
+      # The row whose definition an open form replaces: %{name, epoch,
+      # config}, its config as `mcp_servers.get` answered it.
       |> assign(:editing, nil)
       |> assign(:logins, [])
       |> assign(:terminal, nil)
@@ -140,7 +141,7 @@ defmodule PrismWeb.ProgramsLive do
          |> assign(:show_add, form)
          |> assign(:form_error, nil)
          |> assign(:install, nil)
-         |> assign(:editing, %{name: name, epoch: epoch})
+         |> assign(:editing, %{name: name, epoch: epoch, config: config(detail)})
          |> assign(:prefill, Map.put(prefill, "name", name))}
 
       _not_read ->
@@ -175,7 +176,10 @@ defmodule PrismWeb.ProgramsLive do
     with {:filled, true} <- {:filled, name != "" and trimmed(params, "command") != ""},
          {:ok, program} <- program_config(params) do
       config =
-        Map.merge(program, %{
+        socket.assigns.editing
+        |> edited_base()
+        |> Map.merge(program)
+        |> Map.merge(%{
           "transport" => "program",
           "backends" => [
             %{"name" => backend, "command" => trimmed(params, "command"), "env" => program["env"]}
@@ -520,7 +524,17 @@ defmodule PrismWeb.ProgramsLive do
 
   # ————— defining a row —————
 
-  # A new row, or the whole definition of the row the form edits.
+  # A new row, or the whole definition of the row the form edits; a
+  # definition the form leaves as it was read is not written at all.
+  defp save(%{assigns: %{editing: %{name: name, config: config}}} = socket, name, config) do
+    {:noreply,
+     socket
+     |> assign(:show_add, nil)
+     |> assign(:editing, nil)
+     |> assign(:prefill, %{})
+     |> put_flash(:info, "Nothing changed in '#{name}'.")}
+  end
+
   defp save(%{assigns: %{editing: %{name: name, epoch: epoch}}} = socket, name, config) do
     args = %{"name" => name, "epoch" => epoch, "config" => config}
     {:noreply, call(socket, "Saving #{name}…", {:update, name}, "mcp_servers/update", args)}
@@ -530,6 +544,15 @@ defmodule PrismWeb.ProgramsLive do
     args = %{"name" => name, "config" => config}
     {:noreply, call(socket, "Adding #{name}…", {:create, name}, "mcp_servers/create", args)}
   end
+
+  # What an edit keeps of the definition it replaces: every member the
+  # program form does not show (the timeout, the tool patterns, console
+  # reach), exactly as read. The members it shows are its own, a blank one
+  # clearing its member.
+  @shown ~w(backends mark home memory_bytes home_max_bytes login_command login_entry_id hosts)
+
+  defp edited_base(%{config: config}), do: Map.drop(config, @shown)
+  defp edited_base(nil), do: %{}
 
   # An edit keeps the row's name: an update names the row it replaces.
   defp form_name(%{assigns: %{editing: %{name: name}}}, _params), do: name
@@ -555,9 +578,12 @@ defmodule PrismWeb.ProgramsLive do
 
   defp edit_prefill(config), do: {"config", %{"config" => Jason.encode!(config, pretty: true)}}
 
+  # A bound as its field shows it: whole MiB, or its exact bytes, so a
+  # save leaves it as it was.
   defp mib_text(bytes) when is_integer(bytes) and rem(bytes, @mib) == 0,
     do: Integer.to_string(div(bytes, @mib))
 
+  defp mib_text(bytes) when is_integer(bytes), do: "#{bytes} bytes"
   defp mib_text(_bytes), do: nil
 
   defp install(socket, name, config) do
@@ -607,8 +633,14 @@ defmodule PrismWeb.ProgramsLive do
 
       text ->
         case Integer.parse(text) do
-          {n, ""} when n > 0 -> {:ok, n * @mib}
-          _ -> {:error, "#{what} bound is a whole number of MiB."}
+          {n, ""} when n > 0 ->
+            {:ok, n * @mib}
+
+          {n, " bytes"} when n > 0 ->
+            {:ok, n}
+
+          _ ->
+            {:error, "#{what} bound is a whole number of MiB, or of bytes followed by \"bytes\"."}
         end
     end
   end

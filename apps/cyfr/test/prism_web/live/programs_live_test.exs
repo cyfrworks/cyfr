@@ -1178,4 +1178,112 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert has_element?(view, ~s(tr[data-name="github"] span), "stopped")
     assert has_element?(view, "button", "Enable")
   end
+
+  # A kept mcp program carrying every field a definition holds, among them
+  # what the program form does not show and a bound of no whole MiB.
+  defp full_program!(user, athanor) do
+    entry!(user, athanor, "gh", %{"hosts" => ["api.github.com"]}, true)
+    login = login!(user, athanor, "gh-login", "gh")
+
+    {:ok, row} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "gh",
+        transport: "program",
+        mark: "mcp",
+        url: nil,
+        enabled: false,
+        home: "kept",
+        login_entry_id: login,
+        memory_bytes: 16_777_217,
+        home_max_bytes: 2_147_483_648,
+        login_command: "gh auth login",
+        hosts: Jason.encode!(["api.github.com", "github.com"]),
+        config_json:
+          Jason.encode!(%{
+            "backends" => [
+              %{
+                "name" => "github",
+                "command" => "gh mcp",
+                "env" => %{"GH_TOKEN" => "vault:gh", "NODE_ENV" => "production"}
+              }
+            ],
+            "timeout_ms" => 60_000,
+            "tool_patterns" => ["search"],
+            "console" => true
+          })
+      })
+
+    row
+  end
+
+  test "an Edit saved with nothing changed writes nothing, for a definition carrying every field",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    before = full_program!(user, athanor)
+    {:ok, before} = Arca.McpServerStorage.get(ctx(athanor), before.name)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+    view |> element("tr[phx-value-name=gh]") |> render_click()
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+
+    # The bound of no whole MiB is shown exactly.
+    assert has_element?(
+             view,
+             ~s(form#add-program input[name="memory_mib"][value="16777217 bytes"])
+           )
+
+    view |> form("form#add-program", %{}) |> render_submit()
+
+    assert flash(view, "info") == "Nothing changed in 'gh'."
+    refute has_element?(view, "form#add-program")
+    assert {:ok, ^before} = Arca.McpServerStorage.get(ctx(athanor), "gh")
+  end
+
+  test "an Edit keeps every field the form does not show, exactly",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    before = full_program!(user, athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+    view |> element("tr[phx-value-name=gh]") |> render_click()
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+    view |> form("form#add-program", %{"command" => "gh mcp --read-only"}) |> render_submit()
+    answered(view)
+
+    assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "gh")
+    assert saved.epoch == before.epoch + 1
+
+    assert Map.take(saved, [
+             :mark,
+             :home,
+             :login_entry_id,
+             :memory_bytes,
+             :home_max_bytes,
+             :login_command,
+             :hosts
+           ]) ==
+             Map.take(before, [
+               :mark,
+               :home,
+               :login_entry_id,
+               :memory_bytes,
+               :home_max_bytes,
+               :login_command,
+               :hosts
+             ])
+
+    assert Arca.McpServerStorage.config(saved) == %{
+             "backends" => [
+               %{
+                 "name" => "github",
+                 "command" => "gh mcp --read-only",
+                 "env" => %{"GH_TOKEN" => "vault:gh", "NODE_ENV" => "production"}
+               }
+             ],
+             "timeout_ms" => 60_000,
+             "tool_patterns" => ["search"],
+             "console" => true
+           }
+  end
 end

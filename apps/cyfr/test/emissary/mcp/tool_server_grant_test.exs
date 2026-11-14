@@ -39,7 +39,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     {:ok, ctx: ctx, digest: digest}
   end
 
-  defp authority_with_server(digest) do
+  defp authority_with_server(digest, server \\ "ghserver") do
     node = "formula:local.mcp-consumer"
 
     graph = %{
@@ -61,7 +61,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
               "tool_servers" => [
                 %{
                   "server_digest" => digest,
-                  "server_name" => "ghserver",
+                  "server_name" => server,
                   "tool_patterns" => ["issues.*"]
                 }
               ]
@@ -231,6 +231,51 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     {:error, %Prima.Refusal{stage: :admission, message: message}} =
       Sanctum.Gate.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+      )
+
+    assert message =~ "Denied by chain authority"
+  end
+
+  test "a program's definition replaced with wider hosts no longer matches its grant",
+       %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+
+    {:ok, program} =
+      Arca.McpServerStorage.insert(actor, %{
+        cap: 0,
+        name: "fetcher",
+        transport: "program",
+        mark: "mcp",
+        url: nil,
+        hosts: Jason.encode!(["api.example.com"]),
+        config_json:
+          Jason.encode!(%{
+            "backends" => [%{"name" => "fetch", "command" => "npx -y fetch", "env" => %{}}],
+            "timeout_ms" => 1_000
+          })
+      })
+
+    {:ok, digest} = Sanctum.ToolServerDigest.from_server(program)
+    auth = authority_with_server(digest, "fetcher")
+
+    # The grant matches the restricted definition: the call passes the
+    # authority and fails only at the program, which nothing runs here.
+    {:error, reason} =
+      Sanctum.Gate.call_in_chain("fetcher:issues.list", guest(ctx), %{}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+      )
+
+    refute match?(%Prima.Refusal{stage: :admission}, reason)
+
+    # The whole definition replaced, the same command, every public host.
+    {:ok, _} =
+      Arca.McpServerStorage.update(actor, "fetcher", %{hosts: nil}, program.epoch)
+
+    Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+
+    {:error, %Prima.Refusal{stage: :admission, message: message}} =
+      Sanctum.Gate.call_in_chain("fetcher:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 

@@ -1578,6 +1578,81 @@ defmodule Opus.ProgramsTest do
       {:ok, controller: controller, row: row, admin: admin, entry: entry}
     end
 
+    test "replacing a definition is refused whatever adding the same definition is refused",
+         %{ctx: ctx, admin: admin, entry: entry} do
+      vault_entry(ctx, %{name: "attached", disclose: false})
+      vault_entry(ctx)
+      actor = Sanctum.Context.actor(ctx)
+
+      program = fn over ->
+        Map.merge(
+          %{
+            "transport" => "program",
+            "mark" => "mcp",
+            "backends" => [
+              %{"name" => "editable", "command" => "npx -y editable", "env" => %{}}
+            ]
+          },
+          over
+        )
+      end
+
+      with_env = fn env ->
+        program.(%{
+          "backends" => [
+            %{"name" => "editable", "command" => "npx -y editable", "env" => env}
+          ]
+        })
+      end
+
+      assert {:ok, _} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "create",
+                 "name" => "editable",
+                 "config" => program.(%{})
+               })
+
+      {:ok, before} = Arca.McpServerStorage.get(actor, "editable")
+
+      for config <- [
+            with_env.(%{"GITHUB_TOKEN" => "vault:absent"}),
+            with_env.(%{"GITHUB_TOKEN" => "vault:attached"}),
+            with_env.(%{"MODE" => "a literal where a credential belongs"}),
+            program.(%{"home" => "kept"}),
+            program.(%{"home" => "kept", "login_entry_id" => entry}),
+            program.(%{
+              "mark" => "driven",
+              "backends" => [
+                %{"name" => "a", "command" => "a", "env" => %{}},
+                %{"name" => "b", "command" => "b", "env" => %{}}
+              ]
+            }),
+            program.(%{"mark" => "driven", "home" => "kept", "login_entry_id" => entry}),
+            program.(%{"hosts" => ["*.example.com"]}),
+            program.(%{"backends" => [%{"name" => "x", "command" => "run vault:gh-token"}]})
+          ] do
+        # A create of the same name validates the definition before it
+        # meets the row that exists, so the two refusals are comparable.
+        assert {:error, {:invalid_argument, added}} =
+                 Provider.handle("mcp_servers", admin, %{
+                   "action" => "create",
+                   "name" => "editable",
+                   "config" => config
+                 })
+
+        assert {:error, {:invalid_argument, ^added}} =
+                 Provider.handle("mcp_servers", admin, %{
+                   "action" => "update",
+                   "name" => "editable",
+                   "epoch" => before.epoch,
+                   "config" => config
+                 }),
+               "an update took what a create refuses: #{added}"
+      end
+
+      assert {:ok, ^before} = Arca.McpServerStorage.get(actor, "editable")
+    end
+
     test "a sign-in runs the login command in the entry's home and relays its lines both ways",
          %{ctx: ctx, fake: fake, row: row, admin: admin, entry: entry} do
       assert {:ok, %{session: token, program: "claude", entry: ^entry}} =

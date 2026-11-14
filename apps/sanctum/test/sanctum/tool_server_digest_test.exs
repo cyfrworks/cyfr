@@ -14,7 +14,8 @@ defmodule Sanctum.ToolServerDigestTest do
     enabled: true,
     headers: %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr"},
     backends: [],
-    tool_patterns: ["*"]
+    tool_patterns: ["*"],
+    program: nil
   }
 
   @program %{
@@ -54,7 +55,7 @@ defmodule Sanctum.ToolServerDigestTest do
         %{@base | enabled: false},
         %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN"}},
         %{@base | tool_patterns: ["issues.*"]},
-        %{@base | transport: "program", mark: "mcp", url: nil}
+        %{@base | transport: "program", mark: "mcp", url: nil, program: %{}}
       ]
 
       for variant <- variants do
@@ -87,13 +88,32 @@ defmodule Sanctum.ToolServerDigestTest do
       assert {:ok, ^base} = ToolServerDigest.compute(%{@program | backends: [reordered]})
     end
 
+    test "everything that decides what a program is and reaches moves its digest" do
+      {:ok, base} = ToolServerDigest.compute(@program)
+
+      for {key, value} <- [
+            {"hosts", nil},
+            {"hosts", ~s(["api.github.com","evil.example"])},
+            {"home", "scratch"},
+            {"login_entry", "ent_2"},
+            {"memory_bytes", nil},
+            {"home_max_bytes", 2_147_483_648},
+            {"login_command", "gh auth login --web"}
+          ] do
+        {:ok, digest} = ToolServerDigest.compute(put_in(@program, [:program, key], value))
+        refute digest == base, "#{key} -> #{inspect(value)} kept the digest"
+      end
+    end
+
     test "only a tool server has a digest: a driven program and an old kind have none" do
       for row <- [
             %{@program | mark: "driven"},
             %{@program | mark: nil},
             %{@base | mark: "mcp"},
             %{@program | transport: "stdio", mark: nil},
-            %{@program | transport: "pipe", mark: nil}
+            %{@program | transport: "pipe", mark: nil},
+            %{@program | program: nil},
+            %{@base | program: %{}}
           ] do
         assert {:error, {:invalid_server_config, ^row}} = ToolServerDigest.compute(row)
       end
