@@ -144,25 +144,185 @@ defmodule CyfrWeb.ContextGuardTest do
       assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/settings"))
     end
 
-    test "a session inserted while another revocation was being collected is refused when it is announced",
+    # A test of the guard: a page whose session the notice does not name
+    # is refused when it finds its session gone, and told only that its
+    # sign-in ended.
+    test "a page whose session the notice does not name reads only that its sign-in ended",
          %{conn: conn} do
       user = test_user()
-      {_conn, _token, _hash} = signed_in(conn, user)
+      {_conn, _token, named} = signed_in(conn, user)
+      {other_conn, _token, other} = signed_in(build_conn(), user)
+      {view, _html} = mount_athanor(other_conn, "/settings")
 
-      # The revocation collects the hashes it will announce…
-      collected = Arca.SessionStorage.hashes_by_user(user.user_id)
+      delete_session!(named)
+      delete_session!(other)
+      :ok = Sanctum.Session.announce_revoked(user.user_id, [named], :signed_out)
 
-      # …a new session lands and mounts a page…
-      {late_conn, _token, late_hash} = signed_in(build_conn(), user)
-      refute late_hash in collected
-      {view, _html} = mount_athanor(late_conn, "/settings")
+      assert assert_redirect(view, "/login", 2_000) ==
+               %{"error" => "Your sign-in ended. Sign in again to go on."}
+    end
 
-      # …and the delete takes every row while the announcement names only
-      # the hashes it collected.
-      {:ok, _} = Arca.SessionStorage.delete_by_user(user.user_id)
-      :ok = Sanctum.Session.announce_revoked(user.user_id, collected)
+    # A test of the guard: of two pages of one person whose sessions are
+    # both gone, the one the notice names reads its reason, the other
+    # only that its sign-in ended.
+    test "a page the notice names reads its reason; one it does not reads only that it ended",
+         %{conn: conn} do
+      user = test_user()
+      {gone_conn, _token, gone} = signed_in(conn, user)
+      {denied_conn, _token, _denied} = signed_in(build_conn(), user)
+      {gone_view, _html} = mount_athanor(gone_conn, "/settings")
+      {denied_view, _html} = mount_athanor(denied_conn, "/settings")
 
-      assert_redirect(view, "/login", 2_000)
+      delete_session!(gone)
+      assert {:ok, 1} = Sanctum.Session.revoke_all_for_user(user.user_id)
+
+      assert assert_redirect(denied_view, "/login", 2_000) ==
+               %{"error" => "Your access to this CYFR was removed, so you were signed out."}
+
+      assert assert_redirect(gone_view, "/login", 2_000) ==
+               %{"error" => "Your sign-in ended. Sign in again to go on."}
+    end
+  end
+
+  # A person-wide revocation names exactly the sessions its delete
+  # removed: the deleting statement answers their keys, and nothing reads
+  # the person's sessions before it, so nothing can come between a read
+  # and the delete. The revoking process's calls of the store's delete and
+  # read are traced around the production revoke.
+  describe "revoke_all_for_user/1" do
+    test "announces exactly the keys its delete returned, reading none before it",
+         %{conn: conn} do
+      user = test_user()
+      {a_conn, _token, a} = signed_in(conn, user)
+      {b_conn, _token, b} = signed_in(build_conn(), user)
+      {a_view, _html} = mount_athanor(a_conn, "/settings")
+      {b_view, _html} = mount_athanor(b_conn, "/settings")
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
+
+      {result, calls} = storage_calls(fn -> Sanctum.Session.revoke_all_for_user(user.user_id) end)
+
+      assert result == {:ok, 2}
+
+      # The delete is the first of the two, and nothing read the person's
+      # sessions before it.
+      assert [{:call, :delete_by_user} | _] = calls
+      refute {:call, :hashes_by_user} in calls
+      [{:ok, deleted}] = for {:return, :delete_by_user, answer} <- calls, do: answer
+      assert Enum.sort(deleted) == Enum.sort([a, b])
+
+      assert_receive %Cyfr.Bus.Session{kind: :revoked, reason: :denied, session_keys: announced}
+      assert announced == deleted
+
+      for view <- [a_view, b_view] do
+        assert assert_redirect(view, "/login", 2_000) ==
+                 %{"error" => "Your access to this CYFR was removed, so you were signed out."}
+      end
+    end
+
+    # This process's calls of the session store's delete and read while
+    # `fun` runs, in order: `{:call, name}` and `{:return, name, answer}`,
+    # collected by a tracer of their own.
+    defp storage_calls(fun) do
+      test = self()
+
+      mfas = [
+        {Arca.SessionStorage, :delete_by_user, 1},
+        {Arca.SessionStorage, :hashes_by_user, 1}
+      ]
+
+      collector = spawn_link(fn -> collect(test, []) end)
+
+      on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:global]) end)
+
+      # A pattern applies only to a loaded module, so it is loaded first,
+      # and one that matched nothing fails here rather than tracing nothing.
+      Code.ensure_loaded!(Arca.SessionStorage)
+
+      for mfa <- mfas do
+        assert :erlang.trace_pattern(mfa, [{:_, [], [{:return_trace}]}], [:global]) == 1
+      end
+
+      :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+      answer =
+        try do
+          fun.()
+        after
+          :erlang.trace(test, false, [:call])
+        end
+
+      delivered = :erlang.trace_delivered(test)
+      assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+      send(collector, {:done, delivered})
+      assert_receive {:collected, ^delivered, calls}, 5_000
+      {answer, calls}
+    end
+
+    defp collect(test, calls) do
+      receive do
+        {:trace, ^test, :call, {Arca.SessionStorage, name, _args}} ->
+          collect(test, [{:call, name} | calls])
+
+        {:trace, ^test, :return_from, {Arca.SessionStorage, name, _arity}, answer} ->
+          collect(test, [{:return, name, answer} | calls])
+
+        {:done, ref} ->
+          send(test, {:collected, ref, Enum.reverse(calls)})
+      end
+    end
+  end
+
+  # A retirement's announcement says why; a page whose own session it
+  # ended sends its person to sign in and says so there, and a page whose
+  # session stands says nothing.
+  describe "a page whose session a retirement ended" do
+    for {why, sentence} <- [
+          denied: "Your access to this CYFR was removed, so you were signed out.",
+          device_removed: "This device was removed from your account, so its sign-in ended.",
+          signed_out: "This sign-in was ended. Sign in again to go on."
+        ] do
+      test "is sent to sign in and told why: #{why}", %{conn: conn} do
+        user = test_user()
+        {conn, _token, hash} = signed_in(conn, user)
+        {view, _html} = mount_athanor(conn, "/settings")
+
+        delete_session!(hash)
+        :ok = Sanctum.Session.announce_revoked(user.user_id, [hash], unquote(why))
+
+        assert assert_redirect(view, "/login", 2_000) == %{"error" => unquote(sentence)}
+      end
+    end
+
+    # The notice names the sessions it retired: a page whose session went
+    # another way, here expired unannounced, does not take that reason.
+    test "a page whose session expired unannounced, when another is removed, is told only that it ended",
+         %{conn: conn} do
+      user = test_user()
+      {a_conn, _token, a} = signed_in(conn, user)
+      {_b_conn, _token, b} = signed_in(build_conn(), user)
+      {view, _html} = mount_athanor(a_conn, "/settings")
+
+      expire_session!(a)
+      delete_session!(b)
+      :ok = Sanctum.Session.announce_revoked(user.user_id, [b], :device_removed)
+
+      assert assert_redirect(view, "/login", 2_000) ==
+               %{"error" => "Your sign-in ended. Sign in again to go on."}
+    end
+
+    test "a page whose own session stands is told nothing", %{conn: conn} do
+      user = test_user()
+      {gone_conn, _token, gone} = signed_in(conn, user)
+      {stays_conn, _token, _stays} = signed_in(build_conn(), user)
+      {gone_view, _html} = mount_athanor(gone_conn, "/settings")
+      {stays_view, _html} = mount_athanor(stays_conn, "/settings")
+
+      delete_session!(gone)
+      :ok = Sanctum.Session.announce_revoked(user.user_id, [gone], :device_removed)
+
+      assert_redirect(gone_view, "/login", 2_000)
+      assert render(stays_view) =~ "Settings"
+      assert :sys.get_state(stays_view.pid).socket.assigns.flash == %{}
     end
   end
 
