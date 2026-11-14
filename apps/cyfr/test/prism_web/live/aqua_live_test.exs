@@ -297,14 +297,9 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-card-harness", "Model connected")
       refute has_element?(view, "#aqua-card-harness", "set up its program")
 
-      # A program row holds no key: its action changes the program.
-      assert has_element?(
-               view,
-               "#aqua-card-harness button[phx-click=open_consent]",
-               "Change the program"
-             )
-
-      refute has_element?(view, "#aqua-card-harness", "Change the key")
+      # Its binding is the one row named as its program: no key, and no
+      # other binding, to change to.
+      refute has_element?(view, "#aqua-card-harness button[phx-click=open_consent]")
     end
 
     test "the soul offers no Delete; a shipped crew member is disabled and enabled from its card",
@@ -1166,7 +1161,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(
                view,
                "#aqua-setup-step-planned",
-               "planned: set up planner on the Programs page."
+               "planned: set up planner on the Programs page, then grant it here."
              )
 
       row = program_row!(ctx, "planner")
@@ -1197,6 +1192,39 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
       assert [%{mcp_server_id: bound}] = head.vault_refs
       assert bound == row.id
+    end
+
+    # The step follows the brain's state: one that needs a key beside its
+    # program's sign-in reads as needing a key, whatever need comes first.
+    test "a brain that needs a key beside its program's sign-in steps to its key",
+         %{conn: conn, ctx: ctx} do
+      publish_brain!(ctx, "mixed", %{
+        "a_plan" => %{
+          "type" => "login",
+          "program" => "mixer",
+          "reason" => "to run Mixer on your own plan",
+          "required" => true
+        },
+        "b_key" => %{
+          "type" => "api_key:mixed.test",
+          "reason" => "to call Mixed with your key",
+          "fields" => ["MIXED_API_KEY"],
+          "required" => true,
+          "hosts" => ["api.mixed.example"]
+        }
+      })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      assert has_element?(view, ~s(#aqua-setup-brain-mixed[data-state="needs_key"]))
+      view |> element("#aqua-setup-brain-mixed input") |> render_click()
+
+      assert has_element?(
+               view,
+               "#aqua-setup-step-mixed button[phx-click=open_consent]",
+               "Enter the key"
+             )
+
+      refute has_element?(view, "#aqua-setup-step-mixed", "Programs page")
     end
 
     test "a new crew member's card offers Connect, which opens the setup for that member",

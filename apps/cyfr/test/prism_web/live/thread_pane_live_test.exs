@@ -1273,11 +1273,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute has_element?(panel, "#aqua-card-aqua", "Model connected")
     refute has_element?(panel, "#aqua-card-aqua", "the model has no key yet")
 
-    refute has_element?(
-             panel,
-             "#aqua-card-aqua button[phx-click=open_consent]",
-             "Connect a model"
-           )
+    refute has_element?(panel, ~s(#aqua-card-aqua a[data-test="connect"]))
 
     refute has_element?(panel, "#aqua-card-aqua button[phx-click=open_consent]", "Change the key")
 

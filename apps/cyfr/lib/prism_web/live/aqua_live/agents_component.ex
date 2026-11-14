@@ -515,8 +515,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # Each agent's catalyst, read once through its setup plan: the programs
   # its login needs offer to install, and whether it runs on a program's
-  # own sign-in (`Aqua.brain_signs_in?/1`), so its card offers to change
-  # the program, not a key. A plan that cannot be read offers nothing.
+  # own sign-in (`Aqua.brain_signs_in?/1`), whose binding is the one row
+  # named as its program, so its card offers no other to change to. A
+  # plan that cannot be read offers nothing.
   defp assign_plans(socket, ctx, agents) do
     plans =
       for ref <- agents |> Enum.map(& &1["catalyst_ref"]) |> Enum.uniq(),
@@ -576,12 +577,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         athanor,
         "/aqua?" <> URI.encode_query(%{"setup" => "1", "agent" => agent["name"]})
       )
-
-  # A ready brain's action changes what it is bound to: a key, or the
-  # program row it runs its program in, which holds no key.
-  defp change_label({:ready, _}, true), do: "Change the program"
-  defp change_label({:ready, _}, false), do: "Change the key"
-  defp change_label(_unready, _signs_in?), do: "Connect a model"
 
   defp installable(plan) do
     for need <- plan[:needs] || [],
@@ -1135,14 +1130,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         >
           Connect
         </.link>
+        <%!-- A ready brain changes its key here; one that runs a program is
+             bound to the one row named as its program, changed on the
+             Programs page. --%>
         <button
-          :if={match?({:ready, _}, @model_status)}
+          :if={match?({:ready, _}, @model_status) and not @signs_in?}
           type="button"
           phx-click="open_consent"
           phx-value-ref={elem(@model_status, 1)}
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
         >
-          {change_label(@model_status, @signs_in?)}
+          Change the key
         </button>
       </div>
 

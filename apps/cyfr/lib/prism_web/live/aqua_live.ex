@@ -35,7 +35,8 @@ defmodule PrismWeb.AquaLive do
   each brain ticked — its grant, asked in the page's system layer
   (`PrismWeb.SystemLayer`), whose sheet takes the key in CYFR's own
   credential prompt, the grant alone for a brain that needs nothing else
-  of the person, or the Programs page for a plan — reachable in
+  of the person, or, for a plan whose program is not set up yet, the
+  Programs page's form for that program first — reachable in
   `lite`, so a box that never opens `dev` still gets its key in. A grant
   for a brain ends in one `models` call (`Aqua.models/2`) whose answer the
   page shows, so a key the provider refuses reads as the provider says.
@@ -646,8 +647,8 @@ defmodule PrismWeb.AquaLive do
                 >
                   Grant
                 </button>
-              <% brain.need && brain.need.kind == "login" -> %>
-                {brain.provider}: set up {brain.need.program || "its program"} on the Programs page.
+              <% brain.state == :needs_program -> %>
+                {brain.provider}: set up {brain.need.program} on the Programs page, then grant it here.
                 <.link
                   navigate={programs_path(@athanor, brain)}
                   class="text-blue-400 hover:underline"
