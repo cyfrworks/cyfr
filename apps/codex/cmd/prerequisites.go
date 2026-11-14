@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -44,6 +46,14 @@ var machine = struct {
 	// screenService is whether the cyfr-screen service is enabled, and
 	// whether it runs.
 	screenService func() (enabled, active bool)
+	// system is the operating system this program runs on.
+	system func() string
+	// passwordless is whether sudo runs a command now without asking for
+	// a password: a rule that asks none, or a login it still keeps.
+	passwordless func() bool
+	// authenticate is sudo's own password prompt on this terminal; it
+	// runs no command.
+	authenticate func() error
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
 	// forget invalidates sudo's cached login.
@@ -76,6 +86,13 @@ var machine = struct {
 		out, _ := exec.Command("id", args...).Output()
 		return strings.Fields(string(out))
 	},
+	system:       func() string { return runtime.GOOS },
+	passwordless: func() bool { return exec.Command("sudo", "-n", "true").Run() == nil },
+	authenticate: func() error {
+		cmd := exec.Command("sudo", "-v")
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		return cmd.Run()
+	},
 	apply: func(commands []string) error {
 		cmd := exec.Command("sudo", "sh", "-c", strings.Join(commands, " && "))
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -86,6 +103,49 @@ var machine = struct {
 
 // dockerGroup is the group that reaches Docker.
 const dockerGroup = "docker"
+
+// administrators are the groups whose members Ubuntu lets administer the
+// machine through sudo.
+var administrators = []string{"sudo", "admin"}
+
+// mayAdminister refuses, before anything asks or runs, an account outside
+// Ubuntu's administrators: it says so and shows the commands as one sudo
+// line for whoever administers the machine, again being the command to run
+// once they have.
+func mayAdminister(commands []string, out io.Writer, again string) error {
+	account, err := user.Current()
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(machine.groups(account.Username), func(g string) bool { return slices.Contains(administrators, g) }) {
+		return nil
+	}
+	fmt.Fprintf(out, "Your account, %s, may not administer this machine, so CYFR cannot run these commands as root. Whoever administers it can run them for you:\n", account.Username)
+	fmt.Fprintf(out, "  sudo sh -c %s\n", shellQuote([]string{strings.Join(commands, " &&\n    ")}))
+	return fmt.Errorf("Nothing was changed. Run `%s` again once they have", again)
+}
+
+// asRoot runs commands as root through one sudo; again is the command a
+// person runs to try once more, failed the refusal when the commands
+// themselves fail. CYFR never asks for, reads or keeps a password: when
+// sudo will ask, the one sentence before its prompt says whose, and sudo
+// asks on this terminal before any command runs, so a refused password
+// has run nothing. The caller forgets sudo's login (machine.forget).
+func asRoot(commands []string, out io.Writer, again, failed string) error {
+	if err := mayAdminister(commands, out, again); err != nil {
+		return err
+	}
+	if !machine.passwordless() {
+		fmt.Fprintln(out, "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.")
+		if machine.authenticate() != nil {
+			return fmt.Errorf("The password was not accepted, so nothing was changed. Run `%s` again to try again", again)
+		}
+	}
+	if machine.apply(commands) != nil {
+		return errors.New(failed)
+	}
+	return nil
+}
 
 // dockerAnswers asks Docker for its info. It runs before a project or an
 // engine exists.
@@ -108,14 +168,24 @@ func requirementCommands(account string) []string {
 	return commands
 }
 
-// prepareMachine is cyfr init's first step, on Ubuntu 26.04 at a terminal
-// when this account cannot reach Docker: it shows what is missing, asks,
-// and installs it through one sudo. It answers true when init ends here,
-// the rest of it run in a process carrying the docker group or the
-// installation declined, false when this process goes on to prepare the
-// project. Running init again is the retry.
+// prepareMachine is cyfr init's first step at a terminal when this
+// account cannot reach Docker. On Ubuntu 26.04 it shows what is missing,
+// asks, and installs it through one sudo (asRoot); on macOS and Windows it
+// waits for Docker Desktop (awaitDockerDesktop). It answers true when init
+// ends here, the rest of it run in a process carrying the docker group or
+// the installation declined, false when this process goes on to prepare
+// the project. Running init again is the retry.
 func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (bool, error) {
-	if !askTerminal() || !machine.supported() || machine.reachable() {
+	if !askTerminal() {
+		return false, nil
+	}
+	if system := machine.system(); system == "darwin" || system == "windows" {
+		if machine.reachable() {
+			return false, nil
+		}
+		return awaitDockerDesktop(ctx, system, out)
+	}
+	if !machine.supported() || machine.reachable() {
 		return false, nil
 	}
 	account, err := user.Current()
@@ -124,7 +194,11 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 	}
 	commands := requirementCommands(account.Username)
 	if len(commands) > 0 {
-		fmt.Fprintln(out, "CYFR needs Docker on this machine. These commands install it, as root:")
+		fmt.Fprintln(out, "CYFR needs Docker on this machine.")
+		if err := mayAdminister(commands, out, "cyfr init"); err != nil {
+			return false, err
+		}
+		fmt.Fprintln(out, "These commands install it, as root:")
 		for _, c := range commands {
 			fmt.Fprintf(out, "  %s\n", c)
 		}
@@ -136,16 +210,83 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 			fmt.Fprintln(out, "Nothing was installed. Run cyfr init again when you want to continue.")
 			return true, nil
 		}
-		err = machine.apply(commands)
+		err = asRoot(commands, out, "cyfr init", "Installing the requirements failed. Fix what is shown above, then run `cyfr init` again")
 		machine.forget()
 		if err != nil {
-			return false, errors.New("Installing the requirements failed. Fix what is shown above, then run `cyfr init` again")
+			return false, err
 		}
 		if machine.reachable() {
 			return false, nil
 		}
 	}
 	return continueWithGroup("init", args, account.Username, out, errOut)
+}
+
+// dockerDesktopPage is where Docker offers Docker Desktop's installer for
+// macOS and Windows.
+const dockerDesktopPage = "https://www.docker.com/products/docker-desktop/"
+
+// dockerDesktop is where Docker Desktop is installed on system, and the
+// folder of the docker program it carries. A test stands in for it.
+var dockerDesktop = func(system string) (app, bin string) {
+	if system == "darwin" {
+		return "/Applications/Docker.app", "/Applications/Docker.app/Contents/Resources/bin"
+	}
+	app = filepath.Join(os.Getenv("ProgramFiles"), "Docker", "Docker")
+	return app, filepath.Join(app, "resources", "bin")
+}
+
+// dockerDesktopPrompts are what the system asks while Docker Desktop
+// installs: its prompt, not CYFR's.
+var dockerDesktopPrompts = map[string]string{
+	"darwin":  "While Docker Desktop installs, macOS asks for this Mac's login password or Touch ID.",
+	"windows": `While Docker Desktop installs, Windows asks "Do you want to allow this app to make changes to your device?": answer Yes.`,
+}
+
+// dockerPoll is how often init asks whether Docker answers yet.
+var dockerPoll = 2 * time.Second
+
+// awaitDockerDesktop is init's first step on macOS and Windows while Docker
+// does not answer. Without Docker Desktop it offers to open Docker's own
+// installer page and says what the installer's prompt will be; declined,
+// init ends having written nothing. Then it waits, writing nothing, until
+// Docker answers, with Docker Desktop's own docker program on this
+// process's PATH, since a terminal opened before the install lacks it; an
+// interrupt ends init there.
+func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool, error) {
+	app, bin := dockerDesktop(system)
+	if _, err := os.Stat(app); err != nil {
+		fmt.Fprintln(out, "CYFR needs Docker Desktop on this machine.")
+		answer, err := ask(ctx, bufio.NewReader(askInput), out, "Open Docker's installer page? (yes/no)", "yes")
+		if err != nil {
+			return false, interruption{errQuestionInterrupted}
+		}
+		if !strings.EqualFold(answer, "yes") && !strings.EqualFold(answer, "y") {
+			fmt.Fprintln(out, "Nothing was opened or written. Install Docker Desktop, then run cyfr init again.")
+			return true, nil
+		}
+		if err := launchBrowser(dockerDesktopPage); err != nil {
+			fmt.Fprintf(out, "Could not open a browser here (%v). Open %s yourself.\n", err, dockerDesktopPage)
+		}
+		fmt.Fprintln(out, dockerDesktopPrompts[system])
+	} else {
+		fmt.Fprintln(out, "Docker Desktop is installed and does not answer yet: start it.")
+	}
+	fmt.Fprintln(out, "CYFR goes on when Docker answers. Nothing is written until then; Ctrl+C stops here.")
+	if err := os.Setenv("PATH", os.Getenv("PATH")+string(os.PathListSeparator)+bin); err != nil {
+		return false, err
+	}
+	tick := time.NewTicker(dockerPoll)
+	defer tick.Stop()
+	for !machine.reachable() {
+		select {
+		case <-ctx.Done():
+			return false, interruption{errQuestionInterrupted}
+		case <-tick.C:
+		}
+	}
+	fmt.Fprintln(out, "Docker answers. Going on.")
+	return false, nil
 }
 
 // upWithGroup is cyfr up's first step, in a terminal older than the

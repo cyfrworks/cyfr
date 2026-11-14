@@ -142,6 +142,9 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 		return fmt.Errorf("cyfr screen could not write %s (%v)", screenDir, err)
 	}
 	commands := screenCommands(dir, account)
+	if err := mayAdminister(commands, out, "cyfr screen on"); err != nil {
+		return err
+	}
 	fmt.Fprintln(out, "These commands show CYFR on this machine's own screen, as root:")
 	for _, c := range commands {
 		fmt.Fprintf(out, "  %s\n", c)
@@ -156,12 +159,9 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 			return errDeclined
 		}
 	}
-	err = machine.apply(commands)
+	err = asRoot(commands, out, "cyfr screen on", "Showing CYFR on this screen failed. Fix what is shown above, then run `cyfr screen on` again")
 	machine.forget()
-	if err != nil {
-		return errors.New("Showing CYFR on this screen failed. Fix what is shown above, then run `cyfr screen on` again")
-	}
-	return nil
+	return err
 }
 
 // screenSite is the project directory and the account the screen's files
@@ -229,12 +229,9 @@ func screenOff(out io.Writer) error {
 	for _, c := range commands {
 		fmt.Fprintf(out, "  %s\n", c)
 	}
-	err := machine.apply(commands)
+	err := asRoot(commands, out, "cyfr screen off", "Giving the screen back failed. Fix what is shown above, then run `cyfr screen off` again")
 	machine.forget()
-	if err != nil {
-		return errors.New("Giving the screen back failed. Fix what is shown above, then run `cyfr screen off` again")
-	}
-	return nil
+	return err
 }
 
 // followScreen rewrites the screen's files of the project in the working
