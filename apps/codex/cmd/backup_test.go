@@ -281,7 +281,12 @@ func TestAHoldsReceiptNamesTheCommandThatStoppedCYFR(t *testing.T) {
 		{access.Receipt{RequestID: "r1", Op: "hold", Cause: "backup", State: "completed", Outcome: "failed", Payload: map[string]string{"reason": "cyfr's health check failed"}},
 			"CYFR was stopped by an interrupted cyfr backup and did not start again (request r1). cyfr's health check failed. 'cyfr up' starts it once that is fixed."},
 		{access.Receipt{RequestID: "r1", Op: "hold", Cause: "backup", State: "accepted", Phase: "held"},
-			"cyfr backup stopped CYFR and has not started it again (request r1)."},
+			"cyfr backup stopped CYFR, and whether it runs again is not recorded (request r1); `cyfr access status` shows whether it runs."},
+		// A recovery whose start worked and whose receipt could not be
+		// written, as TestAHoldWhoseRecoveryReceiptFailsStaysUnfinished
+		// answers it: no claim that CYFR was not started again.
+		{access.Receipt{RequestID: "r1", Op: "hold", Cause: "backup", State: "accepted", Phase: "held", Code: "access_outcome_unknown", Payload: map[string]string{"reason": "access: write receipts/r1.json: input/output error"}},
+			"cyfr backup stopped CYFR, and whether it runs again is not recorded (request r1); `cyfr access status` shows whether it runs. " + access.Refuse("access_outcome_unknown", map[string]string{"reason": "access: write receipts/r1.json: input/output error"}).Message()},
 	} {
 		if got := describeReceipt(c.receipt); got != c.want {
 			t.Errorf("%+v reads\n%q, want\n%q", c.receipt, got, c.want)
@@ -289,10 +294,11 @@ func TestAHoldsReceiptNamesTheCommandThatStoppedCYFR(t *testing.T) {
 	}
 }
 
-// A managed scaffold file that is there as a link, or a wit/ that is a
-// link, refuses the backup before anything stops, in the words cyfr
-// update's scaffold check uses: a backup holds every managed file present
-// or is not made.
+// A managed scaffold file that is there as a link refuses the backup
+// before anything stops, in the words cyfr update's scaffold check uses,
+// and so does a directory managed files lie under (wit/, the crew
+// directory, a shipped scroll's) that is a link or a file, its link not
+// followed: a backup holds every managed file present or is not made.
 func TestBackupRefusesALinkWhereAManagedFileIs(t *testing.T) {
 	for _, c := range []struct {
 		name, want string
@@ -304,6 +310,25 @@ func TestBackupRefusesALinkWhereAManagedFileIs(t *testing.T) {
 			func(s *updateScenario) { s.relink("aqua/aqua.md") }},
 		{"wit/", "wit, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
 			func(s *updateScenario) { s.relink("wit") }},
+		{"a directory inside wit/", "wit/cyfr, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed",
+			func(s *updateScenario) { s.relink("wit/cyfr") }},
+		{"the crew directory", "aqua/crew, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
+			func(s *updateScenario) {
+				s.edit("aqua/crew/explorer.md", "# the shipped explorer\n")
+				s.relink("aqua/crew")
+			}},
+		{"a shipped scroll's directory", "aqua/skills/builder, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
+			func(s *updateScenario) {
+				s.edit("aqua/skills/builder/SKILL.md", "# the shipped builder\n")
+				s.relink("aqua/skills/builder")
+			}},
+		{"the crew directory as a file", "aqua/crew, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
+			func(s *updateScenario) {
+				if err := os.RemoveAll(filepath.Join(s.project, "aqua", "crew")); err != nil {
+					s.t.Fatal(err)
+				}
+				s.edit("aqua/crew", "a file where the crew directory goes")
+			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)

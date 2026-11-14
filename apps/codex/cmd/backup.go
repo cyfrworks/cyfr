@@ -183,8 +183,10 @@ func needsRoot(managed []string) bool {
 // the working directory holds, sorted: the guides, the keeper's seccomp
 // profile and what is managed under wit/ and aqua/. A backup holds every
 // one or is not made, so a managed name that is there as something other
-// than a regular file, or a wit/ or aqua/ that is no directory, refuses as
-// update's fetchScaffold refuses one, before anything is stopped.
+// than a regular file refuses as update's fetchScaffold refuses one, and a
+// directory managed files may lie under (scaffold.HoldsManaged) that is
+// there as a link or a file refuses too, its link not followed; both
+// before anything is stopped.
 func managedPresent() ([]string, error) {
 	notRegular := func(name string) error {
 		return fmt.Errorf("%s, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed", name)
@@ -212,9 +214,10 @@ func managedPresent() ([]string, error) {
 			}
 			name := filepath.ToSlash(p)
 			switch {
-			case p == root && !d.IsDir():
+			case d.IsDir():
+			case scaffold.HoldsManaged(name):
 				return fmt.Errorf("%s, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed", name)
-			case d.IsDir() || !scaffold.IsManaged(name):
+			case !scaffold.IsManaged(name):
 			case !d.Type().IsRegular():
 				return notRegular(name)
 			default:

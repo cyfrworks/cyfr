@@ -221,7 +221,13 @@ func describeReceipt(r access.Receipt) string {
 // been paid.
 func describeHold(r access.Receipt) string {
 	if r.State != "completed" {
-		return fmt.Sprintf("cyfr %s stopped CYFR and has not started it again (request %s).", r.Cause, r.RequestID)
+		// Unfinished, the receipt records no start: one may have run, as
+		// when recovery's start worked and its receipt was not written.
+		line := fmt.Sprintf("cyfr %s stopped CYFR, and whether it runs again is not recorded (request %s); `cyfr access status` shows whether it runs.", r.Cause, r.RequestID)
+		if ref := r.Refusal(); ref != nil {
+			line += " " + ref.Message()
+		}
+		return line
 	}
 	line := fmt.Sprintf("CYFR was stopped by an interrupted cyfr %s and has been started again", r.Cause)
 	switch r.Outcome {

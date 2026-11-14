@@ -3209,6 +3209,40 @@ func TestUpdateHoldsTheStackUntilItsSwitch(t *testing.T) {
 			t.Errorf("the update started the old stack under an edited compose file:\n%s", strings.Join(s.log(), "\n"))
 		}
 	})
+	// A release that fails where the update leaves the stack stopped on
+	// purpose promises no stopped stack: its answer says the next cyfr
+	// command will start CYFR (the engine's recovery, which
+	// TestAHoldWhoseReleaseFailsIsStartedByTheNextCommand shows doing so).
+	unreleased := "The record of the stop could not be removed (access: remove journal.json: input/output error), so the next cyfr command will start CYFR as .env and docker-compose.yml then hold it"
+	t.Run("a failed snapshot whose release fails", func(t *testing.T) {
+		s := newUpdateScenario(t, shippedCompose(t), nil)
+		if err := os.MkdirAll(s.snapshotDir(), 0700); err != nil {
+			t.Fatal(err)
+		}
+		s.engine.releaseErr = errors.New("access: remove journal.json: input/output error")
+		_, err := s.run(context.Background())
+		want := "The snapshot failed: mkdir backups/20261016T120000Z: file exists.\n" + unreleased + "; docker-compose.yml is unchanged; no snapshot directory was made. Fix the cause and run 'cyfr update' again"
+		if err == nil || err.Error() != want {
+			t.Fatalf("update answered %v, want %q", err, want)
+		}
+		if s.hasCall("ENGINE start") {
+			t.Errorf("the update started a stack after a failed snapshot:\n%s", strings.Join(s.log(), "\n"))
+		}
+	})
+	t.Run("an edited compose file whose release fails", func(t *testing.T) {
+		s := newUpdateScenario(t, shippedCompose(t), nil)
+		s.answer("stop-cyfr.edit", "# edited while the update ran\n")
+		s.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[{"node":"cyfr@other","owner":"o2","release":"0.8.0","lease_until":"2026-10-16T12:00:10Z"}]}`+"\n")
+		s.engine.releaseErr = errors.New("access: remove journal.json: input/output error")
+		_, err := s.run(context.Background())
+		want := "A slot is still live 400ms after the stop: cyfr@other (release 0.8.0). A server outside this stack holds it; stop that server first.\nThe old stack is stopped: docker-compose.yml changed while cyfr update ran and is kept as it is. " + unreleased
+		if err == nil || err.Error() != want {
+			t.Fatalf("update answered %v, want %q", err, want)
+		}
+		if s.hasCall("ENGINE start") {
+			t.Errorf("the update started the old stack under an edited compose file:\n%s", strings.Join(s.log(), "\n"))
+		}
+	})
 	t.Run("a release that fails", func(t *testing.T) {
 		s := newUpdateScenario(t, shippedCompose(t), nil)
 		s.engine.releaseErr = errors.New("access: remove journal.json: input/output error")

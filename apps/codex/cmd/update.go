@@ -416,10 +416,12 @@ func (u *updater) run() error {
 		return u.restartOld(err)
 	}
 	if err := u.takeSnapshot(u.oldRelease, u.scaffold.Managed()); err != nil {
-		u.engine.Release()
 		where := "no snapshot directory was made"
 		if u.snapshot != "" {
 			where = "the partial snapshot is " + u.snapshot
+		}
+		if unreleased := u.leaveStopped(); unreleased != "" {
+			return fmt.Errorf("The snapshot failed: %v.\n%s; %s; %s. Fix the cause and run 'cyfr update' again", u.redactor().Text(err.Error()), unreleased, u.composeAsRead(), where)
 		}
 		return fmt.Errorf("The snapshot failed: %v.\nThe stack is left stopped and %s; %s. Fix the cause and run 'cyfr update' again, or start the old stack with 'cyfr up'", u.redactor().Text(err.Error()), u.composeAsRead(), where)
 	}
@@ -2060,7 +2062,9 @@ func (u *updater) restartOld(reason error) error {
 	// read: one that changed since is the person's, kept as it is, and the
 	// stack stays stopped rather than start under a file nothing checked.
 	if current, err := os.ReadFile(u.compose.path); err != nil || !bytes.Equal(current, u.compose.original) {
-		u.engine.Release()
+		if unreleased := u.leaveStopped(); unreleased != "" {
+			return fmt.Errorf("%v.\nThe old stack is stopped: %s. %s", u.redactor().Text(reason.Error()), u.composeAsRead(), unreleased)
+		}
 		return fmt.Errorf("%v.\nThe old stack is left stopped: %s, so it is not started under it. Start the stack with 'cyfr up' once docker-compose.yml is the configuration you mean to run", u.redactor().Text(reason.Error()), u.composeAsRead())
 	}
 	fmt.Fprintln(u.out, "Starting the old stack again...")
@@ -2072,6 +2076,17 @@ func (u *updater) restartOld(reason error) error {
 		return fmt.Errorf("%v.\nThe old stack did not start again (%v); docker-compose.yml is unchanged, so 'cyfr up' starts it", u.redactor().Text(reason.Error()), err)
 	}
 	return fmt.Errorf("%v.\nThe old stack was started again; docker-compose.yml is unchanged", u.redactor().Text(reason.Error()))
+}
+
+// leaveStopped releases the update's hold at an exit that leaves the stack
+// stopped on purpose. A release that fails leaves the hold, so the next
+// cyfr command starts the stack: it answers the sentence that says so, in
+// place of the promise that the stack stays stopped, "" once released.
+func (u *updater) leaveStopped() string {
+	if err := u.engine.Release(); err != nil {
+		return fmt.Sprintf("The record of the stop could not be removed (%v), so the next cyfr command will start CYFR as .env and docker-compose.yml then hold it", engineFailure(err))
+	}
+	return ""
 }
 
 // composeAsRead says whether the compose file is still the bytes the

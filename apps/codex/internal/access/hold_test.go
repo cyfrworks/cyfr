@@ -4,9 +4,11 @@
 package access
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -242,5 +244,103 @@ func TestAHoldStaysWhileEnvCannotBeRead(t *testing.T) {
 	}
 	if after := holdJournal(t, h); after.RequestID != j.RequestID {
 		t.Errorf("the hold became %+v", after)
+	}
+}
+
+// A release that fails leaves the hold: the next command's recovery starts
+// CYFR as .env then holds it, as the update says when it cannot release.
+func TestAHoldWhoseReleaseFailsIsStartedByTheNextCommand(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	if err := h.e.Hold("update"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.e.Stop(bg, "update", true); err != nil {
+		t.Fatal(err)
+	}
+	h.e.failWrite = func(name, step string) error {
+		if filepath.Base(name) == journalFile && step == "remove" {
+			return errors.New("injected removal failure")
+		}
+		return nil
+	}
+	if err := h.e.Release(); err == nil || !strings.Contains(err.Error(), "injected removal failure") {
+		t.Fatalf("the release answered %v", err)
+	}
+	j := holdJournal(t, h)
+	h.crash()
+	h.open()
+	receipts, err := h.e.Resume(bg)
+	if err != nil || len(receipts) != 1 || receipts[0].RequestID != j.RequestID || receipts[0].Outcome != "ok" || receipts[0].Cause != "update" {
+		t.Fatalf("recovery answered %+v, %v", receipts, err)
+	}
+	if final := receipts[0].FinalHead; final == nil || final.Digest() != h.head().Digest() {
+		t.Errorf("recovery started %+v, want .env's head", final)
+	}
+	h.assertConverged(baseStack...)
+}
+
+// A start of the holder that .env refuses before any docker call closes
+// the hold all the same: the command answered, and the next command
+// recovers nothing.
+func TestAHoldersStartRefusedByEnvClosesTheHold(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	if err := h.e.Hold("backup"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.e.Stop(bg, "backup", true); err != nil {
+		t.Fatal(err)
+	}
+	env := filepath.Join(h.dir, ".env")
+	original, err := os.ReadFile(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, env, append(append([]byte{}, original...), "COMPOSE_FILE=other.yml\n"...))
+	if _, err := h.e.StartWithin(bg, "backup", HealthDeadline); refusalCode(err) != "compose_env_refused" {
+		t.Fatalf("the holder's start answered %v", err)
+	}
+	if j, err := h.e.readJournal(); j != nil || err != nil {
+		t.Errorf("the journal holds %+v (%v) after the refused start", j, err)
+	}
+	writeFile(t, env, original)
+	h.crash()
+	h.open()
+	before := len(h.fake.calls())
+	if receipts, err := h.e.Resume(bg); err != nil || len(receipts) != 0 {
+		t.Errorf("recovery after the refused start answered %+v, %v", receipts, err)
+	}
+	if calls := h.fake.calls()[before:]; slices.ContainsFunc(calls, func(c fakeCall) bool { return strings.Contains(" "+c.String()+" ", " up ") }) {
+		t.Errorf("recovery after the refused start started the stack: %v", calls)
+	}
+	h.assertConverged()
+}
+
+// A recovery whose start worked and whose receipt could not be written
+// leaves the hold unfinished, its answer the receipt the hold gives with
+// why the outcome was lost; CYFR runs.
+func TestAHoldWhoseRecoveryReceiptFailsStaysUnfinished(t *testing.T) {
+	h := newHome(t)
+	heldAndStopped(t, h, "backup")
+	j := holdJournal(t, h)
+	h.e.failWrite = func(name, step string) error {
+		if filepath.Base(filepath.Dir(name)) == receiptsDir && step == "write" {
+			return errors.New("injected receipt failure")
+		}
+		return nil
+	}
+	receipts, _ := h.e.Resume(bg)
+	if len(receipts) != 1 {
+		t.Fatalf("recovery answered %+v", receipts)
+	}
+	got := receipts[0]
+	want := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: "hold", Cause: "backup", State: "accepted", Phase: "held", At: got.At,
+		Code: "access_outcome_unknown", Payload: map[string]string{"reason": got.Payload["reason"]}}
+	if !reflect.DeepEqual(got, want) || !strings.Contains(got.Payload["reason"], "injected receipt failure") {
+		t.Errorf("recovery answered %+v, want %+v", got, want)
+	}
+	if running := h.fake.runningServices(); !slices.Equal(running, baseStack) {
+		t.Errorf("%v run, want the started stack", running)
 	}
 }

@@ -14,6 +14,10 @@ func (e *Engine) doStart(ctx context.Context, cause string, health time.Duration
 	if err := e.requireLock(); err != nil {
 		return Receipt{}, err
 	}
+	// The start a hold owes is this one: the hold closes once it has
+	// answered, whatever it answered, and stays for recovery only if the
+	// process dies inside it.
+	defer e.closeHold()
 	r := Receipt{Op: "start", State: "completed"}
 	if _, err := e.readEnv(); err != nil {
 		return Receipt{}, err
@@ -21,9 +25,6 @@ func (e *Engine) doStart(ctx context.Context, cause string, health time.Duration
 	if rc, blocked, err := e.unfinished(); blocked {
 		return rc, err
 	}
-	// The start a hold owes is this one: the hold closes once it has
-	// answered, and stays for recovery if the process dies inside it.
-	defer e.closeHold()
 	h, err := e.envHead()
 	if err != nil {
 		var ref *Refusal
