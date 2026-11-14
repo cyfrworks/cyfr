@@ -13,7 +13,8 @@ defmodule PrismWeb.ShellPromptsTest do
   `Devices` control opens the system layer's pairing prompt. A frame
   refused for want of a grant is offered the grant prompt, and opens once
   it is confirmed. While a Dashboard page covers the desktop, its layer
-  draws none of these prompts and keeps each as it stands.
+  draws none of the frames' prompts and keeps each as it stands; the
+  devices' prompt it draws over the page, which stays as it is.
 
   The frames open as the layout places them: each tincture is a `full` app
   over one of two canvases, opened by its canvas's `open`, so a frame
@@ -547,6 +548,51 @@ defmodule PrismWeb.ShellPromptsTest do
       assert assigns(view).pairing_prompt == nil
       refute render(view) =~ ~s(data-kind="pairing")
     end
+
+    # Vault's Add entry holds what the person typed in the browser alone, so
+    # it survives only while the page's LiveView does: the press must
+    # neither move nor remount the page.
+    test "pressed over a Dashboard page, draws the prompt over it and leaves the page as it stands",
+         %{conn: conn} do
+      view = shell!(conn)
+      {:ok, page, _html} = live(conn, athanor_path("/vault"))
+      page |> element(~s(button[phx-click="show_add"][phx-value-mode="fields"])) |> render_click()
+      assert has_element?(page, "#vault-create-form")
+
+      render_hook(view, "page_shown", %{"desktop" => false})
+      assert assigns(view).covered
+
+      view |> element("#shell-devices") |> render_click()
+      layer = view |> element("#system-layer-desktop") |> render()
+      assert layer =~ ~s(data-open="true")
+      assert layer =~ ~s(data-kind="pairing")
+
+      [prompt_id] =
+        Regex.run(~r/data-prompt-id="(pairing-[^"]+)"/, layer, capture: :all_but_first)
+
+      refute_push_event(view, "navigate", _payload, 50)
+      refute has_element?(view, ~s([data-test="held-back"]))
+
+      # Pressed again: the prompt already shown, no second one.
+      view |> element("#shell-devices") |> render_click()
+      assert assigns(view).pairing_prompt == prompt_id
+
+      assert view |> element("#system-layer-desktop") |> render() =~
+               ~s(data-prompt-id="#{prompt_id}")
+
+      refute_push_event(view, "navigate", _payload, 50)
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
+      _ = render(view)
+      assert assigns(view).pairing_prompt == nil
+      assert assigns(view).covered
+      assert Process.alive?(page.pid)
+      assert has_element?(page, "#vault-create-form")
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 
   describe "the grant prompt" do
@@ -679,9 +725,9 @@ defmodule PrismWeb.ShellPromptsTest do
   end
 
   # A Dashboard page drawn over the desktop (`page_shown`, from the
-  # desktop's hook) covers it: the desktop's layer draws none of its
-  # prompts, whatever raised them, and keeps each as it stands, drawn again
-  # once the desktop is shown. An app keeps running under the page, and its
+  # desktop's hook) covers it: the desktop's layer draws none of the
+  # prompts a frame can raise and keeps each as it stands, drawn again once
+  # the desktop is shown. An app keeps running under the page, and its
   # bridge forwards a verb without the person's input.
   describe "a page over the desktop" do
     setup %{ctx: ctx} do
@@ -718,6 +764,43 @@ defmodule PrismWeb.ShellPromptsTest do
              "a still-running app raised its own modal above Settings without input"
 
       refute layer(view) =~ ~s(data-open="true")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "devices pressed behind an app's prompt hidden under the page says where it waits, and shows next on the desktop",
+         %{conn: conn} do
+      view = shell!(conn)
+      open!(view, "keeper-dash")
+      keeper = full(view, "keeper-dash").id
+      covered!(view)
+
+      verb!(view, keeper, :credential, %{"name" => "under-page"})
+      refute has_element?(view, ~s([data-test="held-back"]))
+
+      view |> element("#shell-devices") |> render_click()
+      refute layer(view) =~ ~s(data-open="true")
+      refute layer(view) =~ ~s(data-kind="pairing")
+
+      assert view |> element(~s([data-test="held-back"])) |> render() =~
+               "Something on your desktop is waiting for your answer. Go back to the desktop to see it."
+
+      # Pressed again: the same prompt waits, no second one.
+      prompt_id = assigns(view).pairing_prompt
+      view |> element("#shell-devices") |> render_click()
+      assert assigns(view).pairing_prompt == prompt_id
+      refute_push_event(view, "navigate", _payload, 50)
+
+      # On the desktop the app's prompt is drawn first, the devices' behind it.
+      render_hook(view, "page_shown", %{"desktop" => true})
+      refute has_element?(view, ~s([data-test="held-back"]))
+      assert layer(view) =~ ~s(data-kind="credential_entry")
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
+      assert layer(view) =~ ~s(data-prompt-id="#{prompt_id}")
+      assert layer(view) =~ ~s(data-kind="pairing")
       Cyfr.Test.Sandbox.end_views()
     end
 
