@@ -33,7 +33,6 @@ defmodule Compendium.Resolver do
 
   """
 
-  require Logger
 
   alias Sanctum.Context
   alias Prima.ComponentRef
@@ -93,34 +92,6 @@ defmodule Compendium.Resolver do
 
       {:error, _} = error ->
         error
-    end
-  end
-
-  @doc """
-  Resolve a component reference, passing through already-pinned or unrecognized refs.
-
-  This is the convenience wrapper for handlers (inspect, pull) that should:
-  - Resolve typed version-less refs (e.g., `c:local.claude` → `catalyst:local.claude:0.1.0`)
-  - Pass through already-pinned refs unchanged
-  - Pass through everything else — unrecognized refs (OCI, untyped) AND
-    typed refs that did not resolve — for downstream handling; the caller
-    is the one that knows whether an unknown ref is an error
-
-  Never fails: the error arm of the spec exists for callers that match on
-  it structurally, not because this function produces one today.
-
-  Returns `{:ok, ref_string}`.
-  """
-  @spec resolve_or_passthrough(Context.t(), String.t()) ::
-          {:ok, String.t()} | {:error, String.t()}
-  def resolve_or_passthrough(%Context{} = ctx, ref) when is_binary(ref) do
-    case resolve(ctx, ref) do
-      {:ok, pinned, _metadata} ->
-        {:ok, pinned}
-
-      {:error, _reason} ->
-        Logger.debug("[Resolver] Passing through unresolvable ref: #{ref}")
-        {:ok, ref}
     end
   end
 end

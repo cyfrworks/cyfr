@@ -198,14 +198,21 @@ defmodule Compendium.OCI.ClientTest do
 
     defp serve(conn, state) do
       case conn.path_info do
-        ["v2", "alice", "reagents", "pinned", "manifests", _ref]
-        when state.manifest_status == 200 ->
+        ["v2", "alice", "reagents", "pinned", "tags", "list"] when is_list(state.tags) ->
           conn
-          |> Plug.Conn.put_resp_header(
-            "docker-content-digest",
-            Prima.Digest.sha256(state.manifest)
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(%{"name" => "alice/reagents/pinned", "tags" => state.tags})
           )
-          |> Plug.Conn.send_resp(200, state.manifest)
+
+        ["v2", "alice", "reagents", "pinned", "manifests", ref]
+        when state.manifest_status == 200 ->
+          manifest = Map.get(state.manifests, ref, state.manifest)
+
+          conn
+          |> Plug.Conn.put_resp_header("docker-content-digest", Prima.Digest.sha256(manifest))
+          |> Plug.Conn.send_resp(200, manifest)
 
         ["v2", "alice", "reagents", "pinned", "manifests", _ref] ->
           Plug.Conn.send_resp(conn, state.manifest_status, "")
@@ -449,6 +456,39 @@ defmodule Compendium.OCI.ClientTest do
       assert message =~ Sanctum.Refusals.render({:limit_reached, :athanor_storage_bytes, 1})
       assert message =~ "No credentials configured for"
       assert message =~ "cyfr registry sync"
+    end
+  end
+
+  # A reference with no version takes the newest release the registry
+  # offers, whatever version is already installed.
+  describe "a pull that names no version" do
+    @repo "alice/reagents/pinned"
+
+    setup :start_registry
+
+    test "takes the registry's newest release, not the version installed", ctx do
+      allow(ctx.agent, [:anonymous])
+      anonymous = caller("oci_newest")
+
+      pull = fn reference ->
+        Compendium.Provider.handle("component", anonymous, %{
+          "action" => "pull",
+          "reference" => reference
+        })
+      end
+
+      assert {:ok, %{component_ref: "reagent:alice.pinned:1.0.0"}} =
+               pull.("reagent:alice.pinned:1.0.0")
+
+      publish(ctx.agent, "1.1.0")
+      _ = requests(ctx.agent)
+
+      assert {:ok, %{component_ref: "reagent:alice.pinned:1.1.0"}} = pull.("reagent:alice.pinned")
+
+      assert [
+               {"GET", "/v2/alice/reagents/pinned/tags/list", nil},
+               {"GET", "/v2/alice/reagents/pinned/manifests/1.1.0", nil} | _
+             ] = requests(ctx.agent)
     end
   end
 
@@ -954,6 +994,10 @@ defmodule Compendium.OCI.ClientTest do
     %{
       allowed: [],
       manifest: manifest_json,
+      # A tag's own manifest, where one is published under it, and the tag
+      # list the registry answers (none: no tag list).
+      manifests: %{},
+      tags: nil,
       manifest_status: 200,
       blobs: blobs,
       requests: []
@@ -1020,8 +1064,33 @@ defmodule Compendium.OCI.ClientTest do
     end)
   end
 
-  defp config_fixture,
-    do: Jason.encode!(%{"name" => "pinned", "version" => "1.0.0", "type" => "reagent"})
+  defp config_fixture(version \\ "1.0.0"),
+    do: Jason.encode!(%{"name" => "pinned", "version" => version, "type" => "reagent"})
+
+  # Publishes `version` beside 1.0.0: its own manifest under its tag, the
+  # same WASM layer under its own config, and both tags in the tag list.
+  defp publish(agent, version) do
+    config = config_fixture(version)
+
+    Agent.update(agent, fn state ->
+      manifest =
+        state.manifest
+        |> Jason.decode!()
+        |> put_in(["config"], %{
+          "mediaType" => "application/vnd.cyfr.manifest.v1+json",
+          "size" => byte_size(config),
+          "digest" => Prima.Digest.sha256(config)
+        })
+        |> Jason.encode!()
+
+      %{
+        state
+        | manifests: Map.put(state.manifests, version, manifest),
+          blobs: Map.put(state.blobs, Prima.Digest.sha256(config), config),
+          tags: ["1.0.0", version]
+      }
+    end)
+  end
 
   # The reagent guest, told apart from another by a custom section named
   # `tag` after its last section.
