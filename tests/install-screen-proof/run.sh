@@ -586,8 +586,22 @@ clean_install() {
     check "the setup page shows the account's recovery code (it shows shell-recovery.html)" false
   fi
 
+  # volumes_seen AT: the docker volumes with their labels, and the docker
+  # context, as the test account and as root, in GUEST_DIR/volumes-AT.txt
+  # and printed: an observation, never a check.
+  volumes_seen() {
+    {
+      echo "volumes $1, as proof:"
+      guest_ssh 'docker context show; docker volume ls --format "{{.Name}} {{.Labels}}"' 2>&1 || echo "(the read failed)"
+      echo "volumes $1, as root:"
+      guest_root_out 'docker context show; docker volume ls --format "{{.Name}} {{.Labels}}"' 2>&1 || echo "(the read failed)"
+    } | tee "$GUEST_DIR/volumes-$1.txt" | sed 's/^/observed: /'
+  }
+
   step "cyfr down, then a reboot: CYFR stays down and the screen says why"
+  volumes_seen stack-up
   guest_ssh 'cd ~/cyfr && ~/.local/bin/cyfr down' >"$GUEST_DIR/down.txt" 2>&1 || fail "cyfr down failed ($GUEST_DIR/down.txt)"
+  volumes_seen after-cyfr-down
   guest_reboot
   screen_runs || fail "labwc and Chrome did not come back on tty1 ($GUEST_DIR/screen.txt)"
   sleep 20
@@ -647,6 +661,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   # listing, so the two listings compare cyfr down's stop with the
   # uninstall's.
   guest_root 'systemctl stop cyfr-screen' || fail "the screen was not stopped ($GUEST_DIR/root.txt)"
+  volumes_seen after-the-reboot-and-cyfr-down
   left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
   # The screen holds tty1 since the reboot, which ended tty1's tmux
   # session: the step types into a detached one, which gives sudo its
@@ -662,6 +677,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
   left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
+  volumes_seen after-the-uninstall
   check "the folder, the volumes, the settings and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
   check "no container and no custom network of CYFR is left" guest_ssh '[ -z "$(docker ps -aq)$(docker network ls -q --filter type=custom)" ]'
   check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
