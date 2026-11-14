@@ -877,6 +877,7 @@
     name_invalid: "A name is 1 to 39 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.",
     policy_changed: "The terms changed. Accept the new terms to finish.",
     name_elsewhere: "That name is not this account's. Type the name of the account this code recovers.",
+    name_unknown: "No account has that name. Check what you typed.",
     not_a_code: "That is not a recovery code. Check what you typed.",
     typo: "That recovery code has a typo. Check each group and try again.",
     code_replaced: "That recovery code no longer works for its account.",
@@ -1220,6 +1221,7 @@
   var sign_exports = {};
   __export(sign_exports, {
     describe: () => describe,
+    offer: () => offer,
     readSigned: () => readSigned,
     run: () => run3,
     sign: () => sign
@@ -1266,6 +1268,9 @@
       signature: b64(signature2),
       ...request.purpose === "registry" ? { signer } : {}
     };
+  }
+  function newPasskey(request, identifier2, key) {
+    return { challenge: request.challenge, identifier: identifier2, key };
   }
   function fragment(object) {
     return b64(utf8(jcs(object)));
@@ -1325,6 +1330,14 @@
     const identifier2 = assertion.identifier ?? request.registry_request.identifier;
     return `${request.return}#${fragment(answer(request, { ...assertion, identifier: identifier2 }, chosen.kid))}`;
   }
+  async function offer(request, name, env2) {
+    if (!isHandle(name)) refuse("name_invalid");
+    const place = await here(env2);
+    const identifier2 = (await place.registry.handle(name)).answer?.identifier;
+    if (!identifier2) refuse("name_unknown");
+    const { credentialId, pub } = await env2.passkeys.create({ userId: userId(identifier2), name: `@${name}`, challenge: env2.random(32) });
+    return `${request.return}#${fragment(newPasskey(request, identifier2, await keyOf({ pub, credentialId })))}`;
+  }
   function run3(doc, env2) {
     let request;
     try {
@@ -1336,6 +1349,16 @@
     }
     $(doc, "what").textContent = describe(request);
     $(doc, "recover-link").setAttribute("href", `recover#request=${env2.location.hash.slice(1)}`);
+    $(doc, "offer-way").hidden = request.purpose !== "sign_in";
+    $(doc, "offer-start").addEventListener("click", () => only(doc, "offer"));
+    const make = $(doc, "offer-make");
+    make.addEventListener(
+      "click",
+      () => attempt(doc, make, "offer-error", async () => {
+        if (env2.now() >= request.expires_at) refuse("expired");
+        env2.navigate(await offer(request, $(doc, "offer-name").value.trim().toLowerCase(), env2));
+      })
+    );
     only(doc, "ask");
     const button = $(doc, "use-passkey");
     button.addEventListener(

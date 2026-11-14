@@ -223,11 +223,11 @@ defmodule Sanctum.Consent.AuthzTest do
       client_id = device_ctx.client_id
 
       confirmed =
-        Sanctum.TestContext.confirmed(session_ctx, :pairing_revocation, %{
-          operation: "pairing.revoke",
-          arguments: %{"client_id" => client_id},
-          resource: client_id
-        })
+        Sanctum.TestContext.confirmed(
+          session_ctx,
+          :pairing_revocation,
+          Sanctum.TestContext.pairing_revocation(session_ctx, client_id)
+        )
 
       {:ok, _row} = Sanctum.Pairing.revoke(confirmed, client_id)
 

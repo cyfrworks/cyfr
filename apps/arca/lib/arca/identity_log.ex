@@ -19,7 +19,7 @@ defmodule Arca.IdentityLog do
     * **Appending** (`append/4`) names the head it extends. An entry that
       is already the one after its `prev` answers that entry as `:exists`;
       a `prev` that is not the head is `:stale` and writes nothing.
-    * **A tombstone** (`tombstone/2`) marks an identifier gone: every later
+    * **A tombstone** (`tombstone/3`) marks an identifier gone: every later
       read and write answers `:gone`.
 
   Order is the position and the `prev` link alone: the times a row
@@ -114,17 +114,27 @@ defmodule Arca.IdentityLog do
   Mark `identifier` gone, the operator's tombstone: every later read and
   write of it answers `:gone`, and its entries stay. Answers `:ok`, also
   for an identifier already gone, or `{:error, :not_found}`.
+
+  `verify:` is the higher owner's check (`ARCHITECTURE.md` §4.4), a
+  zero-arity function answering `:ok` or `{:error, reason}`, run inside
+  the transaction under the usage row's lock before a live identifier is
+  marked: every closure is decided after the one before it committed, and
+  a refusal writes nothing and answers its reason.
   """
-  @spec tombstone(Prima.Actor.t(), String.t()) :: :ok | {:error, term()}
-  def tombstone(%Prima.Actor{scope: :platform, system: true}, identifier)
-      when is_binary(identifier) do
-    case Arca.Repo.owned("Arca.IdentityLog.tombstone", fn -> tombstone_in(identifier) end) do
+  @spec tombstone(Prima.Actor.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def tombstone(actor, identifier, opts \\ [])
+
+  def tombstone(%Prima.Actor{scope: :platform, system: true}, identifier, opts)
+      when is_binary(identifier) and is_list(opts) do
+    verify = Keyword.get(opts, :verify, fn -> :ok end)
+
+    case Arca.Repo.owned("Arca.IdentityLog.tombstone", fn -> tombstone_in(identifier, verify) end) do
       {:ok, :gone} -> :ok
       {:error, _reason} = error -> error
     end
   end
 
-  def tombstone(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
+  def tombstone(%Prima.Actor{}, _identifier, _opts), do: {:error, :cross_tenant}
 
   @doc """
   One page of `identifier`'s log in order: entries after position
@@ -289,7 +299,7 @@ defmodule Arca.IdentityLog do
 
   defp append_at(_identifier, _head, _fields, _policy, _usage), do: {:error, :stale}
 
-  defp tombstone_in(identifier) do
+  defp tombstone_in(identifier, verify) do
     _usage = lock_usage!()
 
     case genesis_of(identifier) do
@@ -300,11 +310,13 @@ defmodule Arca.IdentityLog do
         {:ok, :gone}
 
       %IdentityLogEntry{id: id} ->
-        {1, _} =
-          from(e in IdentityLogEntry, where: e.id == ^id)
-          |> Arca.Repo.update_all(set: [gone_at: DateTime.utc_now()])
+        with :ok <- verify.() do
+          {1, _} =
+            from(e in IdentityLogEntry, where: e.id == ^id)
+            |> Arca.Repo.update_all(set: [gone_at: DateTime.utc_now()])
 
-        {:ok, :gone}
+          {:ok, :gone}
+        end
     end
   end
 

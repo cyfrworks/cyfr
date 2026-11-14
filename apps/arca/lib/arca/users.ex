@@ -30,7 +30,8 @@ defmodule Arca.Users do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.User
+  alias Arca.QueryHelpers
+  alias Arca.Schemas.{IdentityLogEntry, PersonIdentity, User}
 
   @type refusal :: {:error, :cross_tenant | :database_error}
   @type write_refusal ::
@@ -136,6 +137,63 @@ defmodule Arca.Users do
     do: {:error, :not_found}
 
   def set_namespace(%Prima.Actor{}, _user_id, _namespace), do: {:error, :cross_tenant}
+
+  @doc """
+  Whether the account `identifier` may be closed without leaving this CYFR
+  with no platform administrator who can still act. `{:error, :only_admin}`
+  when the person it names carries the mark and no other administrator can
+  still act; `:ok` otherwise, also for an account no person here holds.
+
+  An administrator who can still act is active, marked, and holds no
+  account this CYFR's directory has closed (a genesis here with `gone_at`);
+  an account another directory keeps has no log here and stands.
+
+  Asked inside the closing transaction (`Arca.IdentityLog.tombstone/3`'s
+  `verify:`), it decides under the directory's lock, after every earlier
+  closure committed; the marked people's rows are locked before they are
+  counted (`FOR UPDATE` on PostgreSQL, the write lock on SQLite), so a
+  change of the mark that locks them too is decided before or after it,
+  never beside it. A read that fails answers `{:error, :database_error}`,
+  which refuses.
+  """
+  @spec closable(Prima.Actor.t(), String.t()) :: :ok | {:error, :only_admin} | refusal()
+  # arca:unscoped-ok the platform administrators are the instance's, held by no athanor.
+  def closable(%Prima.Actor{scope: :platform}, identifier) when is_binary(identifier) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Users.closable", fn ->
+      marked = Arca.Repo.all(from(u in admins(), select: u.id) |> QueryHelpers.for_update())
+
+      holder =
+        Arca.Repo.one(
+          from(p in PersonIdentity, where: p.identifier == ^identifier, select: p.user_id)
+        )
+
+      if holder in marked and standing(marked -- [holder]) == [],
+        do: {:error, :only_admin},
+        else: :ok
+    end)
+  end
+
+  def closable(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
+
+  defp admins,
+    do: from(u in User, where: not is_nil(u.platform_admin_at) and u.status == "active")
+
+  # Of `user_ids`, those whose account this CYFR's directory has not closed.
+  defp standing([]), do: []
+
+  defp standing(user_ids) do
+    closed =
+      Arca.Repo.all(
+        from(p in PersonIdentity,
+          join: e in IdentityLogEntry,
+          on: e.identifier == p.identifier and e.seq == 0,
+          where: p.user_id in ^user_ids and not is_nil(e.gone_at),
+          select: p.user_id
+        )
+      )
+
+    user_ids -- closed
+  end
 
   @doc """
   Write `attrs` over the person `user_id` names, as the row reads now.

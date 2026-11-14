@@ -147,6 +147,89 @@
       "field": "signer",
       "kind": "passkey",
       "name": "a passkey answer naming a recovery signer"
+    },
+    {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "key": {
+          "alg": "es256",
+          "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+          "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+          "kind": "passkey",
+          "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        },
+        "signer": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141"
+      },
+      "error": "unknown_field",
+      "field": "signer",
+      "kind": "new_passkey",
+      "name": "a new passkey naming a signer"
+    },
+    {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "key": {
+          "alg": "es256",
+          "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+          "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+          "kind": "passkey",
+          "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        }
+      },
+      "error": "missing_field",
+      "field": "identifier",
+      "kind": "new_passkey",
+      "name": "a new passkey without its identifier"
+    },
+    {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "key": {
+          "alg": "es256",
+          "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+          "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+          "kind": "passkey",
+          "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        }
+      },
+      "error": "invalid_field",
+      "field": "key",
+      "kind": "new_passkey",
+      "name": "a new passkey whose kid is not its point's"
+    },
+    {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+          "kind": "device",
+          "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+        }
+      },
+      "error": "invalid_field",
+      "field": "key",
+      "kind": "new_passkey",
+      "name": "a device key offered as a new passkey"
+    },
+    {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "key": {
+          "alg": "es256",
+          "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+          "kind": "passkey",
+          "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        }
+      },
+      "error": "invalid_field",
+      "field": "key",
+      "kind": "new_passkey",
+      "name": "a new passkey without its credential id"
     }
   ],
   "answers": {
@@ -209,6 +292,38 @@
       "kind": "device",
       "request": "sign_in",
       "signer": "stranger"
+    },
+    "new_passkey": {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "key": {
+          "alg": "es256",
+          "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+          "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+          "kind": "passkey",
+          "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        }
+      },
+      "code": "90536cacfa867215",
+      "kind": "new_passkey",
+      "request": "sign_in"
+    },
+    "new_passkey_to_a_confirmation": {
+      "answer": {
+        "challenge": "syfqipkZcMUKFVYSbg1h99BQe3EwQBLEYw2RPDD0zlo",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "key": {
+          "alg": "es256",
+          "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+          "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+          "kind": "passkey",
+          "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        }
+      },
+      "code": "90536cacfa867215",
+      "kind": "new_passkey",
+      "request": "confirm"
     },
     "passkey_altered": {
       "answer": {
@@ -467,10 +582,12 @@
     }
   },
   "challenge_bytes": 32,
-  "comment": "The vectors pinning Prima.SignIn (cyfr-sign-in/v1), read by CYFR and by the account pages. Every side derives each key as identity.json does and walks the identity entries to the account's state; reads every request and writes it back to the same map; reproduces each sign_in and confirm request's digest (SHA-256 of the request's JCS bytes) and each passkey registry answer's (SHA-256 of the registry request's JCS bytes with signer set to the answer's signer: a registry request reaches the page without signer and sig, and the passkey chosen sets its kid) and each fragment (unpadded base64url of the JCS bytes of a request or of a passkey's answer), and parses each fragment back, refusing one past max_fragment_bytes before decoding it and one whose bytes are not the JCS form of the object they decode to; re-signs every device answer with Ed25519 over the 32 digest bytes; checks each verify case's answer against the named request, held for its challenge, at home and now_ms, under the account's state, reaching the result or the refusal of the first check that fails, in the order: the answer's challenge is the request's, the request is unexpired, its audience is home; for a passkey, the state is the answer's identifier's, a passkey it lists has the answer's credential id, the assertion verifies over the digest at the directory (type, challenge, origin, crossOrigin, rpIdHash, user presence, user verification, signature), a registry answer's identifier is its registry request's, and a registry answer's signer is the kid of the passkey that made the assertion while any other answer names none (wrong_signer, also for a registry answer naming no signer, checked before the assertion); for a device, the purpose is sign_in or confirm, a device key the state lists has the answer's kid, and its signature verifies. A malformed request's or answer's refusal that names a field carries it as field, as each side's typed result does. registry_output is a passkey's answer to a registry request made into the registry request's bytes with the answer's signer and the assertion as its sig: the registry verifies it under the account's state as registry_wire.json's verifier does. Each malformed request and answer is refused.",
+  "comment": "The vectors pinning Prima.SignIn (cyfr-sign-in/v1), read by CYFR and by the account pages. Every side derives each key as identity.json does and walks the identity entries to the account's state; reads every request and writes it back to the same map; reproduces each sign_in and confirm request's digest (SHA-256 of the request's JCS bytes) and each passkey registry answer's (SHA-256 of the registry request's JCS bytes with signer set to the answer's signer: a registry request reaches the page without signer and sig, and the passkey chosen sets its kid) and each fragment (unpadded base64url of the JCS bytes of a request, of a passkey's answer or of a new passkey), and parses each fragment back, refusing one past max_fragment_bytes before decoding it and one whose bytes are not the JCS form of the object they decode to; re-signs every device answer with Ed25519 over the 32 digest bytes; checks each verify case's answer against the named request, held for its challenge, at home and now_ms, under the account's state, reaching the result or the refusal of the first check that fails, in the order: the answer's challenge is the request's, the request is unexpired, its audience is home; for a passkey, the state is the answer's identifier's, a passkey it lists has the answer's credential id, the assertion verifies over the digest at the directory (type, challenge, origin, crossOrigin, rpIdHash, user presence, user verification, signature), a registry answer's identifier is its registry request's, and a registry answer's signer is the kid of the passkey that made the assertion while any other answer names none (wrong_signer, also for a registry answer naming no signer, checked before the assertion); for a device, the purpose is sign_in or confirm, a device key the state lists has the answer's kid, and its signature verifies. A new passkey is the account pages' answer to a sign_in request from a browser holding no passkey of the account: the request's challenge, the account's identifier and the passkey made for it as its log would list it (kid, alg es256, kind passkey, the uncompressed point, credential_id); it signs nothing, its code is the first 16 hex digits of its kid, which every side derives and the person compares on a device of the account that adds it, and a verify case checks it against the named request in the same first three steps, then that the request is a sign_in (wrong_purpose), reading no state. A malformed request's or answer's refusal that names a field carries it as field, as each side's typed result does. registry_output is a passkey's answer to a registry request made into the registry request's bytes with the answer's signer and the assertion as its sig: the registry verifies it under the account's state as registry_wire.json's verifier does. Each malformed request and answer is refused.",
   "directory": "https://cyfr.run",
   "fragments": {
     "answers": {
+      "new_passkey": "eyJjaGFsbGVuZ2UiOiI0MFRuemR3VnhSRlpPMG9oN1lGbVJ4cXFNNVVWaThMVFNzU1JPSVZUSjJrIiwiaWRlbnRpZmllciI6InBlcl82MDZkYWVjNjY4ZWU0YzI5ZGVhMTQ4OGYwMDg4MDc1N2I0NzI0NzUzZTdiOTBmYTE1MDVlNWQ5YTcwNTQ4NjkwIiwia2V5Ijp7ImFsZyI6ImVzMjU2IiwiY3JlZGVudGlhbF9pZCI6Ii1Ed1p1eUtEdWhvVWFuUVh1VU5pSHciLCJraWQiOiJzaGEyNTY6OTA1MzZjYWNmYTg2NzIxNTc1OTlmNmRkMzZjMmMzZGNlMTkzODQzYWRjZTJkODk1ZTZhZTBhNmI1OWRkZTE0MSIsImtpbmQiOiJwYXNza2V5IiwicHViIjoiQk5GVE9wanVGRlo4amx1cDUzQmJJSGNJcElfVjNIS3AyUURQWUdUNjh5eFVoUTlhUXoxYUhOeDhDeUVhRy10bFE1clRsWVVDd3RLRmJKM25lMGJDaUFVIn19",
+      "new_passkey_to_a_confirmation": "eyJjaGFsbGVuZ2UiOiJzeWZxaXBrWmNNVUtGVllTYmcxaDk5QlFlM0V3UUJMRVl3MlJQREQwemxvIiwiaWRlbnRpZmllciI6InBlcl82MDZkYWVjNjY4ZWU0YzI5ZGVhMTQ4OGYwMDg4MDc1N2I0NzI0NzUzZTdiOTBmYTE1MDVlNWQ5YTcwNTQ4NjkwIiwia2V5Ijp7ImFsZyI6ImVzMjU2IiwiY3JlZGVudGlhbF9pZCI6Ii1Ed1p1eUtEdWhvVWFuUVh1VU5pSHciLCJraWQiOiJzaGEyNTY6OTA1MzZjYWNmYTg2NzIxNTc1OTlmNmRkMzZjMmMzZGNlMTkzODQzYWRjZTJkODk1ZTZhZTBhNmI1OWRkZTE0MSIsImtpbmQiOiJwYXNza2V5IiwicHViIjoiQk5GVE9wanVGRlo4amx1cDUzQmJJSGNJcElfVjNIS3AyUURQWUdUNjh5eFVoUTlhUXoxYUhOeDhDeUVhRy10bFE1clRsWVVDd3RLRmJKM25lMGJDaUFVIn19",
       "passkey_altered": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCZyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FVUNJUURGWEMzNFdwOXZ2c1ptSzBvd051QmlBQ010TGxLb0lrdlg4R2l4T3JmbFZnSWdBdFI1YS0tejFXc2V2QUZwZ3k4dTVyQ01vaWdmb0xhc1o3Snc4VUhsc0NRIn0",
       "passkey_at_another_origin": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlpYWnBiQzVsZUdGdGNHeGxJaXdpWTNKdmMzTlBjbWxuYVc0aU9tWmhiSE5sZlEiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FVUNJSDM1U1NQVEU4d0FCVmowYlA3UHl3Rk5PQk1OWXR3LXZ1MzVqTUVFLTdzUkFpRUF5V2RNZ0FJQjB6WEJnX0FyajZydUZPVktyOGloNFJTVnRyLTl5NWhTYTY4In0",
       "passkey_confirm": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6InN5ZnFpcGtaY01VS0ZWWVNiZzFoOTlCUWUzRXdRQkxFWXcyUlBERDB6bG8iLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWQxVmpOM0ZHV25ORldISldXbVpUTkVOMWFFWlZiR3BPTkhWR1VGUnhjR1F0U2xsakxYSk5XV3QzV1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FWUNJUURpeklsV0I3SlFOcGxwZjk1dlQtaEtwNE5pZVA0X0g0RWhWa2R6LW0zZm13SWhBTERITVV1QU9DX0NFUXYzdnFEcjZ6Y1ZWaEZCeHNmT3RiTmtMck1BMjVQUCJ9",
@@ -1285,6 +1402,46 @@
       "name": "a device answer naming a passkey's kid",
       "now_ms": 1790000001000,
       "request": "sign_in"
+    },
+    {
+      "answer": "new_passkey",
+      "home": "https://alice.example",
+      "name": "a browser offers a new passkey",
+      "now_ms": 1790000001000,
+      "request": "sign_in",
+      "result": "ok"
+    },
+    {
+      "answer": "new_passkey",
+      "error": "unknown_challenge",
+      "home": "https://alice.example",
+      "name": "a new passkey offered to another request",
+      "now_ms": 1790000001000,
+      "request": "another_sign_in"
+    },
+    {
+      "answer": "new_passkey",
+      "error": "expired",
+      "home": "https://alice.example",
+      "name": "a new passkey offered once the request expired",
+      "now_ms": 1790000300000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "new_passkey",
+      "error": "wrong_audience",
+      "home": "https://hub.example",
+      "name": "a new passkey offered at a CYFR the request was not minted for",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "new_passkey_to_a_confirmation",
+      "error": "wrong_purpose",
+      "home": "https://alice.example",
+      "name": "a new passkey offered to a confirmation",
+      "now_ms": 1790000001000,
+      "request": "confirm"
     }
   ]
 }

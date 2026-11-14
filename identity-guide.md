@@ -89,6 +89,8 @@ Anyone holding a copy of your recovery code can do everything above, at once and
 
 **Sign in with your account** on a CYFR's sign-in page sends your browser to `/account/sign`, which says "Sign in to" that CYFR's address. Your passkey signs that CYFR's request, and the browser returns there; the CYFR checks the signature against your account's keys, asks its own allowlist, and signs you in. The request is that CYFR's own, bound to the browser that asked, used once, and gone after five minutes. Your devices sign in the same way on their own, after their local unlock ([devices-guide.md](devices-guide.md)).
 
+A browser that holds no passkey of yours, as one does when you made your account on a CYFR box or with `cyfr login`, has two ways on once it is refused: **Add a passkey with your recovery code**, or **No passkey in this browser?**, which asks your name, makes a passkey for that account in this browser and returns it to the CYFR, which shows its code. On your box's screen, **Your devices** shows "A browser asks to add a passkey" with that code: check it is the same, press **Approve**, and type the box's PIN; the box's key adds the passkey to your account. Then sign in again in the browser with the new passkey. A passkey nobody approves adds nothing and is forgotten after five minutes.
+
 Each CYFR decides who it admits:
 
 - **Its setup** admits its first person, who administers it, through the setup link, `cyfr login --setup` or the box's own screen, and then opens nothing.
