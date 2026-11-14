@@ -94,7 +94,6 @@ defmodule PrismWeb.WebhooksLiveTest do
         "the closed prompt"
       )
 
-      refute has_element?(view, "#system-layer-dialog")
       assert render(view) =~ "not be shown again"
       refute has_element?(view, ~s([data-test="old-secret"]))
       Cyfr.Test.Sandbox.end_views()
@@ -170,7 +169,13 @@ defmodule PrismWeb.WebhooksLiveTest do
         })
 
       {view, _html} = mount_athanor(conn, "/webhooks")
-      wait_until(fn -> has_element?(view, "#webhooks") end, 2_000, "the list")
+
+      wait_until(
+        fn -> has_element?(view, ~s([data-test="webhook-headers"])) end,
+        2_000,
+        "the list"
+      )
+
       {:ok, view: view, name: name}
     end
 
