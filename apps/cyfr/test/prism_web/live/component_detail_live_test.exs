@@ -23,21 +23,17 @@ defmodule PrismWeb.ComponentDetailLiveTest do
     %{conn: conn, ctx: ctx, user: user}
   end
 
-  # `fun` run while the store cannot read `table`: the table renamed inside
-  # a savepoint, and the savepoint rolled back on every exit, which puts the
-  # table back and clears the transaction postgres aborts at the failed
-  # read. This file is synchronous (`async: false`) because of it: the
-  # rename is seen by every process on the test's connection.
-  defp while_unreadable(table, fun) do
-    Arca.Repo.query!("SAVEPOINT store_unreadable")
-
-    try do
-      Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unreadable")
-      fun.()
-    after
-      Arca.Repo.query!("ROLLBACK TO SAVEPOINT store_unreadable")
-      Arca.Repo.query!("RELEASE SAVEPOINT store_unreadable")
-    end
+  # The store made unable to read `table` for the rest of the test: the
+  # table renamed inside the test's sandbox transaction, which the sandbox
+  # rolls back on every exit of the test, the table's name with it. No
+  # restore is made inside the transaction: on postgres the first failed
+  # read aborts it, and nothing the test runs after that reaches the
+  # database, so the outage is the test's last step that does. This file
+  # is synchronous (`async: false`) because the rename is seen by every
+  # process on the test's connection.
+  defp unreadable!(table) do
+    Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unreadable")
+    :ok
   end
 
   defp publish_reportable!(ctx) do
@@ -366,16 +362,17 @@ defmodule PrismWeb.ComponentDetailLiveTest do
          %{conn: conn} do
       path = "/components/reagent:local.run-probe:0.1.0"
 
-      while_unreadable("consents", fn ->
-        {view, _html} = mount_athanor(conn, path)
-        assert has_element?(view, "#grants li", "Could not be read just now.")
-        assert has_element?(view, "#grants li button", "Try again")
-        refute has_element?(view, "#grants li", "Granted")
-        Cyfr.Test.Sandbox.end_views()
-      end)
-
       {view, _html} = mount_athanor(conn, path)
       assert has_element?(view, "#grants li", "Granted · revision")
+
+      # One read of the grants once the heads cannot be read, the list's own.
+      :ok = unreadable!("consents")
+      view |> with_target("#grants") |> render_click("reload", %{})
+
+      assert has_element?(view, "#grants li", "Could not be read just now.")
+      assert has_element?(view, "#grants li button", "Try again")
+      refute has_element?(view, "#grants li", "Granted")
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "lists the component's grants, each with Revoke", %{conn: conn} do

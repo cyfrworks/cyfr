@@ -67,21 +67,17 @@ defmodule PrismWeb.ComponentsLiveTest do
     {:ok, conn: conn, ctx: ctx, seed: seed}
   end
 
-  # `fun` run while the store cannot read `table`: the table renamed inside
-  # a savepoint, and the savepoint rolled back on every exit, which puts the
-  # table back and clears the transaction postgres aborts at the failed
-  # read. This file is synchronous (`async: false`) because of it: the
-  # rename is seen by every process on the test's connection.
-  defp while_unreadable(table, fun) do
-    Arca.Repo.query!("SAVEPOINT store_unreadable")
-
-    try do
-      Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unreadable")
-      fun.()
-    after
-      Arca.Repo.query!("ROLLBACK TO SAVEPOINT store_unreadable")
-      Arca.Repo.query!("RELEASE SAVEPOINT store_unreadable")
-    end
+  # The store made unable to read `table` for the rest of the test: the
+  # table renamed inside the test's sandbox transaction, which the sandbox
+  # rolls back on every exit of the test, the table's name with it. No
+  # restore is made inside the transaction: on postgres the first failed
+  # read aborts it, and nothing the test runs after that reaches the
+  # database, so the outage is the test's last step that does. This file
+  # is synchronous (`async: false`) because the rename is seen by every
+  # process on the test's connection.
+  defp unreadable!(table) do
+    Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unreadable")
+    :ok
   end
 
   defp expanded_html(conn) do
@@ -917,15 +913,17 @@ defmodule PrismWeb.ComponentsLiveTest do
       {view, _html} = expanded_html(conn)
       grant = ~s([id="grants-#{@ref}-#{profile}"])
 
+      assert {:ok, [%{id: ^profile, status: :active}]} = Sanctum.Consent.profiles(ctx, @ref)
+
       # The profiles cannot be read when the revoke comes: the operation
-      # refuses it, and nothing is revoked.
-      while_unreadable("profiles", fn ->
-        view |> element(grant <> " button", "Revoke") |> render_click()
-      end)
+      # refuses it before it writes, and the page says so, the grant still
+      # listed as it was.
+      :ok = unreadable!("profiles")
+      view |> element(grant <> " button", "Revoke") |> render_click()
 
       assert has_element?(view, ~s([id="grants-#{@ref}"]), "The grant was not revoked:")
       assert has_element?(view, grant, "Granted · revision 1")
-      assert {:ok, [%{id: ^profile, status: :active}]} = Sanctum.Consent.profiles(ctx, @ref)
+      Cyfr.Test.Sandbox.end_views()
     end
   end
 end
