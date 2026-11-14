@@ -220,6 +220,10 @@ type journal struct {
 
 	// A join's attempt; a cancel's journal carries the join it cancels.
 	Join *joinAttempt `json:"join,omitempty"`
+
+	// A hold: the command that stopped the running stack itself and owes
+	// it a start (Hold).
+	Cause string `json:"cause,omitempty"`
 }
 
 func (e *Engine) readJournal() (*journal, error) {
@@ -261,7 +265,7 @@ func (e *Engine) reached(point string) {
 
 // receiptOf is the answer journal j gives while it is unfinished.
 func (j *journal) receipt() Receipt {
-	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "accepted", Phase: j.Phase, At: j.At}
+	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, Cause: j.Cause, State: "accepted", Phase: j.Phase, At: j.At}
 	if j.Phase == "uncertain" {
 		r.Code = "access_uncertain"
 		r.Payload = map[string]string{"observed": observedText(j.Observed)}

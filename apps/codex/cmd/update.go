@@ -62,7 +62,7 @@ The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what cha
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
 6. Write the release's scaffold files, remove from .env each setting the release this CYFR ran shipped in its .env.example that this release's .env.example no longer declares (read from both releases' verified scaffolds, the names said; a setting the old .env.example never shipped is yours and stays), and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the refusal a service's boot logged, its '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data.
 
-The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
+The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would; an update killed in that time leaves the start of the old stack to the next cyfr command that takes the lock, which says so. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
 	Example: "  cyfr update\n  cyfr update --yes\n  cyfr update --version 0.6.0-alpha.1",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -388,6 +388,15 @@ func (u *updater) run() error {
 	if err := u.engine.CancelWaitingJoin(u.ctx); err != nil {
 		return fmt.Errorf("cyfr update could not cancel the tailnet join waiting for approval (%v); the running stack was not touched, and %s", engineFailure(err), u.composeAsRead())
 	}
+	// A running stack's stop is recorded first, so an update killed before
+	// the switch leaves the next cyfr command the start it owes. Every exit
+	// of the update itself closes the hold: a start of the old stack does,
+	// and an exit that leaves the stack stopped on purpose releases it.
+	if len(u.running) > 0 {
+		if err := u.engine.Hold("update"); err != nil {
+			return fmt.Errorf("cyfr update could not record that it stops the running stack (%v); the running stack was not touched, and %s", engineFailure(err), u.composeAsRead())
+		}
+	}
 
 	// From here on every child runs detached from ctx: the running step
 	// finishes, and an interrupt ends the update at the next boundary.
@@ -407,6 +416,7 @@ func (u *updater) run() error {
 		return u.restartOld(err)
 	}
 	if err := u.takeSnapshot(u.oldRelease, u.scaffold.Managed()); err != nil {
+		u.engine.Release()
 		where := "no snapshot directory was made"
 		if u.snapshot != "" {
 			where = "the partial snapshot is " + u.snapshot
@@ -415,6 +425,12 @@ func (u *updater) run() error {
 	}
 	if u.ctx.Err() != nil {
 		return u.restartOld(fmt.Errorf("cyfr update was interrupted during the snapshot (complete at %s)", u.snapshot))
+	}
+	// From the switch on the old stack never starts over a database the
+	// new release may have migrated, so no recovery may start it: the hold
+	// is released first.
+	if err := u.engine.Release(); err != nil {
+		return u.restartOld(fmt.Errorf("cyfr update could not release its record of the stop (%v)", engineFailure(err)))
 	}
 	// The scaffold files and the compose file are written only now, with
 	// the snapshot holding both as they stood; a failure puts the scaffold
@@ -1053,13 +1069,11 @@ type composeFile struct {
 }
 
 // mounts answers every mount compose makes into svc: its volumes of every
-// type, its tmpfs paths, and its secrets and configs at their targets. A
-// service mounting another's volumes (volumes_from) is refused, since what
-// those put where is not in the configuration.
+// type, its tmpfs paths, and its secrets and configs at their targets.
+// Another service's volumes (volumes_from) are not among them, since what
+// those put where is not in the configuration: each caller refuses them
+// first.
 func (svc composeService) mounts() ([]composeMount, error) {
-	if len(svc.VolumesFrom) > 0 {
-		return nil, fmt.Errorf("the cyfr service mounts the volumes of %s (volumes_from), which cyfr update cannot place, so it cannot snapshot the storage root; nothing was changed", strings.Join(svc.VolumesFrom, ", "))
-	}
 	mounts := slices.Clone(svc.Volumes)
 	var tmpfs []string
 	if len(svc.Tmpfs) > 0 && string(svc.Tmpfs) != "null" {
@@ -1108,6 +1122,9 @@ func (u *updater) readConfig() error {
 	if !ok {
 		return errors.New("the stack's configuration has no cyfr service; nothing was changed")
 	}
+	if len(cyfr.VolumesFrom) > 0 {
+		return fmt.Errorf("the cyfr service mounts the volumes of %s (volumes_from), which cyfr %s cannot place, so it cannot snapshot the storage root; nothing was changed", strings.Join(cyfr.VolumesFrom, ", "), u.command)
+	}
 	mounts, err := cyfr.mounts()
 	if err != nil {
 		return err
@@ -1118,7 +1135,7 @@ func (u *updater) readConfig() error {
 	}
 	env := func(name string) string { return serviceSetting(cyfr.Environment, name) }
 	if snapshot := env(restoreBarrier); snapshot != "" {
-		return fmt.Errorf("A cyfr restore of %s has not finished (%s is set in .env), so CYFR may hold the snapshot's data undeclared; run 'cyfr restore %s' again before updating; nothing was changed", snapshot, restoreBarrier, snapshot)
+		return fmt.Errorf("A cyfr restore of %s has not finished (%s is set in .env), so CYFR may hold the snapshot's data undeclared; run 'cyfr restore %s' again before cyfr %s; nothing was changed", snapshot, restoreBarrier, snapshot, u.command)
 	}
 	containerToHost := func(p string) (string, bool) { return mountedHost(mounts, p) }
 	// nestedMounts answers every mount whose target lies strictly under the
@@ -2043,6 +2060,7 @@ func (u *updater) restartOld(reason error) error {
 	// read: one that changed since is the person's, kept as it is, and the
 	// stack stays stopped rather than start under a file nothing checked.
 	if current, err := os.ReadFile(u.compose.path); err != nil || !bytes.Equal(current, u.compose.original) {
+		u.engine.Release()
 		return fmt.Errorf("%v.\nThe old stack is left stopped: %s, so it is not started under it. Start the stack with 'cyfr up' once docker-compose.yml is the configuration you mean to run", u.redactor().Text(reason.Error()), u.composeAsRead())
 	}
 	fmt.Fprintln(u.out, "Starting the old stack again...")

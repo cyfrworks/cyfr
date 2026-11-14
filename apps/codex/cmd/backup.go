@@ -32,7 +32,7 @@ var backupCmd = &cobra.Command{
 
 The snapshot holds the database, the local storage root, the managed scaffold files this directory holds (the guides, the WIT definitions, the keeper's seccomp profile and the shipped AQUA files), the keyring, .env and docker-compose.yml, then snapshot.json, written last. A snapshot holds the keyring and the database: keep it as you keep the data. Storage on S3 is not in it.
 
-It takes the stack's lock first. A running CYFR is stopped for the snapshot, as cyfr update stops it, and started again afterwards, also when the snapshot fails; a stopped one stays stopped.`,
+It takes the stack's lock first. A running CYFR is stopped for the snapshot, as cyfr update stops it, and started again afterwards, also when the snapshot fails; a stopped one stays stopped. A backup killed while it holds CYFR stopped leaves the start to the next cyfr command that takes the lock, which says so.`,
 	Example: "  cyfr backup",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -94,13 +94,18 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 	}
 	managed, err := managedPresent()
 	if err != nil {
-		return fmt.Errorf("cyfr backup could not list the scaffold files this directory holds (%v); nothing was changed", err)
+		return err
 	}
 	if len(u.running) > 0 {
 		// A join waiting for approval would enrol the machine while the
 		// stack is down for the snapshot, as in an update.
 		if err := u.engine.CancelWaitingJoin(ctx); err != nil {
 			return fmt.Errorf("cyfr backup could not cancel the tailnet join waiting for approval (%v); the running stack was not touched", engineFailure(err))
+		}
+		// Recorded first, so a backup killed from here on leaves the next
+		// cyfr command the start it owes; its own start closes the hold.
+		if err := u.engine.Hold("backup"); err != nil {
+			return fmt.Errorf("cyfr backup could not record that it stops the running stack (%v); the running stack was not touched", engineFailure(err))
 		}
 		if err := u.stop(); err != nil {
 			return u.startAgain(err)
@@ -175,13 +180,25 @@ func needsRoot(managed []string) bool {
 }
 
 // managedPresent answers the managed scaffold files (scaffold.IsManaged)
-// the working directory holds as regular files, sorted: the guides, the
-// keeper's seccomp profile and what is managed under wit/ and aqua/. A
-// link is no managed file and is left out.
+// the working directory holds, sorted: the guides, the keeper's seccomp
+// profile and what is managed under wit/ and aqua/. A backup holds every
+// one or is not made, so a managed name that is there as something other
+// than a regular file, or a wit/ or aqua/ that is no directory, refuses as
+// update's fetchScaffold refuses one, before anything is stopped.
 func managedPresent() ([]string, error) {
+	notRegular := func(name string) error {
+		return fmt.Errorf("%s, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed", name)
+	}
 	var names []string
 	for _, name := range append(slices.Clone(scaffold.Guides), scaffold.SeccompProfile) {
-		if info, err := os.Lstat(name); err == nil && info.Mode().IsRegular() {
+		info, err := os.Lstat(name)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil:
+			return nil, fmt.Errorf("cyfr backup could not read %s (%v); nothing was changed", name, err)
+		case !info.Mode().IsRegular():
+			return nil, notRegular(name)
+		default:
 			names = append(names, name)
 		}
 	}
@@ -191,9 +208,16 @@ func managedPresent() ([]string, error) {
 				if p == root && errors.Is(err, fs.ErrNotExist) {
 					return nil
 				}
-				return err
+				return fmt.Errorf("cyfr backup could not read %s (%v); nothing was changed", p, err)
 			}
-			if name := filepath.ToSlash(p); d.Type().IsRegular() && scaffold.IsManaged(name) {
+			name := filepath.ToSlash(p)
+			switch {
+			case p == root && !d.IsDir():
+				return fmt.Errorf("%s, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed", name)
+			case d.IsDir() || !scaffold.IsManaged(name):
+			case !d.Type().IsRegular():
+				return notRegular(name)
+			default:
 				names = append(names, name)
 			}
 			return nil

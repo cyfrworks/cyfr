@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/codex/internal/access"
 )
 
 // backup runs `cyfr backup` in the scenario's project, and fails if the
@@ -203,4 +205,160 @@ func TestBackupRefusesADirectoryWithoutCYFR(t *testing.T) {
 		t.Errorf("cyfr backup ran:\n%s", strings.Join(log, "\n"))
 	}
 	s.noBackups()
+}
+
+// A running CYFR's stop is recorded first (the engine's Hold, before the
+// stop's first call) and the backup's own start after the snapshot closes
+// it; a stopped CYFR is held by nothing.
+func TestBackupHoldsARunningStackBeforeItsStop(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.backupScaffold()
+	if out, err := s.backup(); err != nil {
+		t.Fatalf("cyfr backup answered %v\n%s", err, out)
+	}
+	log := s.log()
+	held, closed, stopped, started := at(log, "ENGINE hold backup"), at(log, "ENGINE close-serve"), at(log, profiles+"stop caddy"), at(log, "ENGINE start backup")
+	if held < 0 || closed < held || stopped < closed || started < stopped {
+		t.Errorf("cyfr backup did not hold the stack before it stopped it:\n%s", strings.Join(log, "\n"))
+	}
+	if s.hasCall("ENGINE release") {
+		t.Errorf("cyfr backup released its hold instead of starting the stack:\n%s", strings.Join(log, "\n"))
+	}
+
+	stopped2 := newUpdateScenario(t, shippedCompose(t), nil)
+	stopped2.backupScaffold()
+	stopped2.answer("ps.out", "")
+	if out, err := stopped2.backup(); err != nil {
+		t.Fatalf("cyfr backup of a stopped CYFR answered %v\n%s", err, out)
+	}
+	if stopped2.hasCall("ENGINE hold") {
+		t.Errorf("cyfr backup held a stopped CYFR:\n%s", strings.Join(stopped2.log(), "\n"))
+	}
+}
+
+// A hold that cannot be recorded refuses the backup with the running
+// stack untouched.
+func TestBackupRefusesWhenItsHoldCannotBeRecorded(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.engine.holdErr = errors.New("access: write journal.json: no space left on device")
+	out, err := s.backup()
+	want := "cyfr backup could not record that it stops the running stack (access: write journal.json: no space left on device); the running stack was not touched"
+	if err == nil || err.Error() != want {
+		t.Fatalf("cyfr backup answered %v, want %q\n%s", err, want, out)
+	}
+	s.nothingStopped()
+	s.noBackups()
+}
+
+// The next locked command after a backup that died holding the stack
+// prints what the recovery did: CYFR was stopped by the interrupted backup
+// and has been started again.
+func TestTheNextCommandSaysAnInterruptedBackupsStackWasStartedAgain(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.backupScaffold()
+	s.engine.resume = []access.Receipt{{RequestID: "0123abcd", Op: "hold", Cause: "backup", State: "completed", Outcome: "ok"}}
+	out, err := s.backup()
+	if err != nil {
+		t.Fatalf("cyfr backup answered %v\n%s", err, out)
+	}
+	want := "Recovered: CYFR was stopped by an interrupted cyfr backup and has been started again (request 0123abcd).\n"
+	if !strings.HasPrefix(out, want) {
+		t.Errorf("cyfr backup began\n%s\nwant %q", out, want)
+	}
+}
+
+// A hold's receipt reads, for each way the start it owed went, as the
+// command that stopped CYFR and what became of it.
+func TestAHoldsReceiptNamesTheCommandThatStoppedCYFR(t *testing.T) {
+	for _, c := range []struct {
+		receipt access.Receipt
+		want    string
+	}{
+		{access.Receipt{RequestID: "r1", Op: "hold", Cause: "update", State: "completed", Outcome: "ok"},
+			"CYFR was stopped by an interrupted cyfr update and has been started again (request r1)."},
+		{access.Receipt{RequestID: "r1", Op: "hold", Cause: "backup", State: "completed", Outcome: outcomeStartedLocal, Code: "tailnet_https_off", Payload: httpsOff()},
+			"CYFR was stopped by an interrupted cyfr backup and has been started again, on this machine alone (request r1). " + access.Refuse("tailnet_https_off", httpsOff()).Message()},
+		{access.Receipt{RequestID: "r1", Op: "hold", Cause: "backup", State: "completed", Outcome: "failed", Payload: map[string]string{"reason": "cyfr's health check failed"}},
+			"CYFR was stopped by an interrupted cyfr backup and did not start again (request r1). cyfr's health check failed. 'cyfr up' starts it once that is fixed."},
+		{access.Receipt{RequestID: "r1", Op: "hold", Cause: "backup", State: "accepted", Phase: "held"},
+			"cyfr backup stopped CYFR and has not started it again (request r1)."},
+	} {
+		if got := describeReceipt(c.receipt); got != c.want {
+			t.Errorf("%+v reads\n%q, want\n%q", c.receipt, got, c.want)
+		}
+	}
+}
+
+// A managed scaffold file that is there as a link, or a wit/ that is a
+// link, refuses the backup before anything stops, in the words cyfr
+// update's scaffold check uses: a backup holds every managed file present
+// or is not made.
+func TestBackupRefusesALinkWhereAManagedFileIs(t *testing.T) {
+	for _, c := range []struct {
+		name, want string
+		link       func(s *updateScenario)
+	}{
+		{"the seccomp profile", "keeper.seccomp.json, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed",
+			func(s *updateScenario) { s.relink("keeper.seccomp.json") }},
+		{"a managed AQUA file", "aqua/aqua.md, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed",
+			func(s *updateScenario) { s.relink("aqua/aqua.md") }},
+		{"wit/", "wit, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
+			func(s *updateScenario) { s.relink("wit") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.backupScaffold()
+			c.link(s)
+			out, err := s.backup()
+			if err == nil || err.Error() != c.want {
+				t.Fatalf("cyfr backup answered %v, want %q\n%s", err, c.want, out)
+			}
+			s.nothingStopped()
+			s.noBackups()
+			if s.hasCall("ENGINE hold") {
+				t.Errorf("cyfr backup held the stack before its refusal:\n%s", strings.Join(s.log(), "\n"))
+			}
+		})
+	}
+}
+
+// relink moves the project's rel aside and puts a link to it in its place.
+func (s *updateScenario) relink(rel string) {
+	s.t.Helper()
+	p := filepath.Join(s.project, rel)
+	if err := os.Rename(p, p+".real"); err != nil {
+		s.t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(p)+".real", p); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+// The refusals the backup shares with cyfr update name the command that
+// meets them.
+func TestSharedRefusalsNameTheirCommand(t *testing.T) {
+	for _, command := range []string{"update", "backup"} {
+		run := func(s *updateScenario) (string, error) {
+			if command == "backup" {
+				return s.backup()
+			}
+			return s.run(context.Background())
+		}
+		t.Run(command, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.setService("volumes_from", []string{"service:other"})
+			want := "the cyfr service mounts the volumes of service:other (volumes_from), which cyfr " + command + " cannot place, so it cannot snapshot the storage root; nothing was changed"
+			if out, err := run(s); err == nil || err.Error() != want {
+				t.Errorf("volumes_from answered %v, want %q\n%s", err, want, out)
+			}
+			s.nothingStopped()
+
+			s = newUpdateScenario(t, shippedCompose(t), map[string]string{restoreBarrier: "/p/backups/20261016T120000Z"})
+			want = "A cyfr restore of /p/backups/20261016T120000Z has not finished (" + restoreBarrier + " is set in .env), so CYFR may hold the snapshot's data undeclared; run 'cyfr restore /p/backups/20261016T120000Z' again before cyfr " + command + "; nothing was changed"
+			if out, err := run(s); err == nil || err.Error() != want {
+				t.Errorf("an undeclared restore answered %v, want %q\n%s", err, want, out)
+			}
+			s.nothingStopped()
+		})
+	}
 }

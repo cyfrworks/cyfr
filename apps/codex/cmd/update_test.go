@@ -808,6 +808,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles+"exec -T cyfr bin/cyfr rpc "+testRoster,
 		"SCAFFOLD FETCH "+testVersion,
 		"ENGINE cancel-waiting-join",
+		"ENGINE hold update",
 		"ENGINE close-serve",
 		profiles+"stop caddy",
 		profiles+"stop tailscale",
@@ -821,6 +822,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
 		"SCAFFOLD FETCH 0.8.0",
+		"ENGINE release",
 		"SCAFFOLD WRITE",
 		"ENGINE start update",
 		profiles+"up -d",
@@ -3161,4 +3163,75 @@ func TestUpdateRemovesTheOfflineReadsContainerWhenCancelled(t *testing.T) {
 	}
 	s.nothingStopped()
 	s.noBackups()
+}
+
+// A running stack's stop is held (the engine's Hold) until the switch: an
+// update that leaves the old stack stopped on purpose before it, after a
+// failed snapshot or under a compose file edited meanwhile, releases the
+// hold and starts nothing; one that starts the old stack again closes it by
+// that start; a release that fails before the switch starts the old stack
+// again; a hold that cannot be recorded stops nothing.
+func TestUpdateHoldsTheStackUntilItsSwitch(t *testing.T) {
+	order := func(t *testing.T, s *updateScenario, lines ...string) {
+		t.Helper()
+		log, last := s.log(), -1
+		for _, line := range lines {
+			i := slices.Index(log, line)
+			if i <= last {
+				t.Fatalf("%q is not after %v in\n%s", line, lines, strings.Join(log, "\n"))
+			}
+			last = i
+		}
+	}
+	t.Run("a failed snapshot", func(t *testing.T) {
+		s := newUpdateScenario(t, shippedCompose(t), nil)
+		if err := os.MkdirAll(s.snapshotDir(), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.run(context.Background()); err == nil || !strings.HasPrefix(err.Error(), "The snapshot failed") {
+			t.Fatalf("update answered %v", err)
+		}
+		order(t, s, "ENGINE hold update", "ENGINE close-serve", profiles+"stop caddy", "ENGINE release")
+		if s.hasCall("ENGINE start") {
+			t.Errorf("the update started a stack after a failed snapshot:\n%s", strings.Join(s.log(), "\n"))
+		}
+	})
+	t.Run("a compose file edited during the stop", func(t *testing.T) {
+		s := newUpdateScenario(t, shippedCompose(t), nil)
+		s.answer("stop-cyfr.edit", "# edited while the update ran\n")
+		s.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[{"node":"cyfr@other","owner":"o2","release":"0.8.0","lease_until":"2026-10-16T12:00:10Z"}]}`+"\n")
+		_, err := s.run(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "The old stack is left stopped: docker-compose.yml changed while cyfr update ran") {
+			t.Fatalf("update answered %v", err)
+		}
+		order(t, s, "ENGINE hold update", profiles+"stop caddy", "ENGINE release")
+		if s.hasCall("ENGINE start") {
+			t.Errorf("the update started the old stack under an edited compose file:\n%s", strings.Join(s.log(), "\n"))
+		}
+	})
+	t.Run("a release that fails", func(t *testing.T) {
+		s := newUpdateScenario(t, shippedCompose(t), nil)
+		s.engine.releaseErr = errors.New("access: remove journal.json: input/output error")
+		_, err := s.run(context.Background())
+		want := "cyfr update could not release its record of the stop (access: remove journal.json: input/output error).\nThe old stack was started again; docker-compose.yml is unchanged"
+		if err == nil || err.Error() != want {
+			t.Fatalf("update answered %v, want %q", err, want)
+		}
+		order(t, s, "ENGINE hold update", "ENGINE release", "ENGINE start update")
+		if s.hasCall("SCAFFOLD WRITE") {
+			t.Errorf("the update switched after its release failed:\n%s", strings.Join(s.log(), "\n"))
+		}
+		s.composeUnchanged()
+	})
+	t.Run("a hold that cannot be recorded", func(t *testing.T) {
+		s := newUpdateScenario(t, shippedCompose(t), nil)
+		s.engine.holdErr = errors.New("access: write journal.json: no space left on device")
+		_, err := s.run(context.Background())
+		want := "cyfr update could not record that it stops the running stack (access: write journal.json: no space left on device); the running stack was not touched, and docker-compose.yml is unchanged"
+		if err == nil || err.Error() != want {
+			t.Fatalf("update answered %v, want %q", err, want)
+		}
+		s.nothingStopped()
+		s.noBackups()
+	})
 }
