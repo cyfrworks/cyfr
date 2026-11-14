@@ -631,7 +631,22 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
       if [ -e /home/proof/.cyfr ]; then tree /home/proof/.cyfr; else echo absent; fi
       rm -r "$t"'
   }
+  # The volume command names exactly the volumes the first listing found,
+  # and is absent when it found none.
+  volume_command_names_the_volumes() {
+    local want got line
+    want=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort)
+    line=$(grep '^    docker volume rm ' "$GUEST_DIR/transcript-uninstall.txt" || true)
+    # shellcheck disable=SC2086 # the line's quoted names, split into words
+    got=$(printf '%s\n' ${line#    docker volume rm } | tr -d "'" | sed '/^$/d' | sort)
+    [ "$got" = "$want" ]
+  }
   check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
+  # The screen's browser writes its profile in the folder until the screen
+  # stops, which cyfr down leaves running: it is stopped before the first
+  # listing, so the two listings compare cyfr down's stop with the
+  # uninstall's.
+  guest_root 'systemctl stop cyfr-screen' || fail "the screen was not stopped ($GUEST_DIR/root.txt)"
   left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
   # The screen holds tty1 since the reboot, which ended tty1's tmux
   # session: the step types into a detached one, which gives sudo its
@@ -643,7 +658,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "cyfr uninstall exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "sudo asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
   check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
-  check "the one command it prints removes the stack's volumes" transcript_has uninstall "^    docker volume rm '"
+  check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
   check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
   left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
