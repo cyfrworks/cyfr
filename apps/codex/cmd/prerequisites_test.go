@@ -529,18 +529,18 @@ func TestContinuesInATerminalOlderThanTheGroup(t *testing.T) {
 // among them, and when sg has nothing to give them or there is no sg.
 func TestNeedsNoContinuation(t *testing.T) {
 	for _, subcommand := range []string{"up", "setup"} {
-		for name, set := range map[string]func(*standIn){
-			"Docker answers":     func(s *standIn) { s.reachable = true },
-			"another system":     func(s *standIn) { s.supported = false },
-			"not in the group":   func(s *standIn) { s.member = nil },
-			"the process has it": func(s *standIn) { s.process = []string{"docker"} },
-			"no sg":              func(*standIn) { sgProgram = filepath.Join(os.TempDir(), "no-such-sg") },
+		for name, set := range map[string]func(*testing.T, *standIn){
+			"Docker answers":     func(_ *testing.T, s *standIn) { s.reachable = true },
+			"another system":     func(_ *testing.T, s *standIn) { s.supported = false },
+			"not in the group":   func(_ *testing.T, s *standIn) { s.member = nil },
+			"the process has it": func(_ *testing.T, s *standIn) { s.process = []string{"docker"} },
+			"no sg":              func(t *testing.T, _ *standIn) { sgProgram = filepath.Join(t.TempDir(), "sg") },
 		} {
 			t.Run(subcommand+" "+name, func(t *testing.T) {
 				s := standInMachine(t)
 				s.member = []string{"docker"}
 				record := sgStandIn(t, "0")
-				set(s)
+				set(t, s)
 				if continued, err := withDockerGroup(subcommand, nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
 					t.Fatalf("continued %t, err %v", continued, err)
 				}
