@@ -666,7 +666,7 @@ defmodule Aqua.Loop do
       messages: messages,
       tools: spec.tools,
       capabilities: spec.capabilities,
-      native_search?: Map.get(spec.policy, "native_search") == "auto",
+      offers_search?: offers_search?(spec),
       session: state.session,
       options: spec.brain_options
     )
@@ -713,17 +713,16 @@ defmodule Aqua.Loop do
     webhook = if turn.origin == "webhook", do: [Prima.Source.outside("webhook")], else: []
 
     search =
-      if native_search?(spec), do: [Prima.Source.outside("web_search")], else: []
+      if offers_search?(spec), do: [Prima.Source.outside("web_search")], else: []
 
     spec.sources ++ webhook ++ search
   end
 
-  # The request offers web search exactly when `Request.build/1` adds the
-  # provider tool: the policy grants `native_search` and the model has it.
-  defp native_search?(spec),
-    do:
-      Map.get(spec.policy, "native_search") == "auto" and
-        "web_search" in (Map.get(spec.capabilities || %{}, :provider_tools) || [])
+  # The request offers web search, and the turn records the open web as a
+  # source, on one answer: the policy turns it on, the grant carries it and
+  # the model has the tool.
+  defp offers_search?(spec),
+    do: Request.offers_search?(spec.policy, spec.authority, spec.capabilities)
 
   # The earlier turns whose rows a request sends: every row's turn but
   # this one's, and the turn a crew row came from — a delivered request's

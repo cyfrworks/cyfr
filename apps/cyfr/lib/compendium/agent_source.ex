@@ -17,24 +17,28 @@ defmodule Compendium.AgentSource do
     * The artifact digest is the agent's **capability** digest
       (`Compendium.AquaAgent.capability_digest/1`): type, catalyst, model,
       options, tool policy, disabled. A crew member's tool policy is the
-      soul's (`Compendium.AquaAgent.under_soul/2`), so an edit of the
-      soul's policy moves every member's consent with the soul's. The
+      soul's (`Compendium.AquaAgent.under_soul/2`), so a tool the soul
+      gains or loses moves every member's consent with the soul's. The
       prompt is not in it, so editing what an agent says never moves a
       consent; the file's bytes are its **revision**, kept by
       `Arca.AgentRevisions` for a turn to pin.
     * `caps.tools` are the policy keys that name tool actions
       (`tool.action`, `tool.*`), which consent expands against the live
       catalog: a key no catalogued action matches expands to nothing
-      (`Prima.ToolPattern.expand/2`). `native_search` is a provider tool,
-      not a catalog action.
+      (`Prima.ToolPattern.expand/2`); and `native_search` when it is
+      `auto`, the provider's own search, which no catalog action is and
+      the consent carries by its name.
     * `dependencies.static` are the model catalyst the agent runs on and
       the catalysts behind the tool families it names — its hands. An
       agent has no edge into another agent: a crew member consents and
       runs as its own source, so a member whose brain is not installed
       leaves the soul's consent whole.
-    * `agent` is the model target and the policy modes (`auto` / `ask`
-      sets), which the shape digest reads. The flat `"model"` key is not
-      written.
+    * `agent` is the model target, which the shape digest reads. The
+      policy's modes are not in the manifest: a tool is in `caps.tools`
+      whether it is `auto` or `ask`, and whether the person is asked first
+      grants nothing the consent does not (`ARCHITECTURE.md` §5.4), so
+      marking a tool `auto` or `ask` moves no consent. The flat `"model"`
+      key is not written.
 
   A disabled agent has no row: it is out of the roster.
   """
@@ -74,9 +78,9 @@ defmodule Compendium.AgentSource do
   @spec manifest(AquaAgent.t()) :: map()
   def manifest(%{name: name} = agent) do
     tools =
-      (agent.tool_policy || %{})
-      |> Map.keys()
-      |> Enum.reject(&(&1 == "native_search"))
+      for {key, mode} <- agent.tool_policy || %{},
+          key != "native_search" or mode == "auto",
+          do: key
 
     hands =
       tools
@@ -90,17 +94,8 @@ defmodule Compendium.AgentSource do
       |> Enum.sort()
       |> Enum.map(&%{"ref" => &1})
 
-    {auto, ask} =
-      (agent.tool_policy || %{})
-      |> Enum.split_with(fn {_key, mode} -> mode == "auto" end)
-
     agent_block =
-      %{
-        "policy" => %{
-          "auto" => auto |> Enum.map(&elem(&1, 0)) |> Enum.sort(),
-          "ask" => ask |> Enum.map(&elem(&1, 0)) |> Enum.sort()
-        }
-      }
+      %{}
       |> Prima.MapUtil.put_present("catalyst", agent.catalyst_ref)
       |> Prima.MapUtil.put_present("model", agent.model)
 

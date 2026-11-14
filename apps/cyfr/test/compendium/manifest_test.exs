@@ -43,8 +43,7 @@ defmodule Compendium.ManifestTest do
       "type" => "agent",
       "agent" => %{
         "catalyst" => "catalyst:local.claude",
-        "model" => "claude-sonnet-4-6",
-        "policy" => %{"auto" => ["http.get"], "ask" => ["files.read"]}
+        "model" => "claude-sonnet-4-6"
       }
     }
 
@@ -56,9 +55,11 @@ defmodule Compendium.ManifestTest do
                validate(%{"type" => "reagent", "agent" => @valid_agent["agent"]})
     end
 
-    test "auto and ask must be disjoint, and catalyst must be a name-level ref" do
-      overlap = put_in(@valid_agent, ["agent", "policy", "ask"], ["http.get"])
-      assert {:error, {:invalid_manifest, [{:invalid_agent, _}]}} = validate(overlap)
+    test "an agent block holds no policy, and its catalyst is a name-level ref" do
+      # Whether a tool asks first is no part of what an agent is consented
+      # for: its tools are its caps.
+      policy = put_in(@valid_agent, ["agent", "policy"], %{"auto" => ["http.get"]})
+      assert {:error, {:invalid_manifest, [{:invalid_agent, _}]}} = validate(policy)
 
       pinned = put_in(@valid_agent, ["agent", "catalyst"], "catalyst:local.claude:1.2.0")
       assert {:error, {:invalid_manifest, [{:invalid_agent, _}]}} = validate(pinned)
