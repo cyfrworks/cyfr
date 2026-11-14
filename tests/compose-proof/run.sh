@@ -81,18 +81,18 @@
 #          runs every other.
 #
 #   restore-identity
-#          a home serving node A snapshotted with the stack stopped, as
-#          `cyfr update` lays a snapshot out (an update needs a signed
-#          release manifest, which a build of this tree has not); then
-#          switched to local and joined as node B; then `cyfr restore` of
+#          a home serving node A snapshotted by `cyfr backup`, which stops
+#          the running home, takes cyfr update's snapshot and starts it
+#          again; then switched to local and joined as node B; then
+#          `cyfr restore` of
 #          A: .env names A while the state volume holds B, so Serve stays
 #          off (the node refuses 443 while it answers its PeerAPI), the
 #          start answers tailnet_node_mismatch, the home answers on this
 #          machine alone, and `cyfr access tailnet` previews exactly A's
 #          head to B's. The restore keeps the state volume (B) and the
-#          project's .cyfr/, and removes join.json. The snapshot is the
-#          proof's own, so that a snapshot holds neither the tailnet state
-#          nor the access state is apps/codex/cmd/update_test.go's
+#          project's .cyfr/, and removes join.json. That a snapshot holds
+#          neither the tailnet state nor the access state is
+#          apps/codex/cmd/update_test.go's
 #          TestSnapshotsHoldNeitherTheTailnetStateNorTheAccessState. The
 #          restore alone runs as root, in a container of a pinned docker
 #          CLI image with the host's docker and the project directory at
@@ -1803,43 +1803,16 @@ interrupt_case() {
 # restore-identity
 # ---------------------------------------------------------------------------
 
-# A snapshot of the stopped stack into backups/<UTC timestamp>/, laid out
-# as `cyfr update` lays one out for a SQLite cell on local storage
-# (apps/codex/cmd/update.go takeSnapshot): the database file, the storage
-# root without it, an empty scaffold part, the keyring, .env and the
-# compose file, snapshot.json last. The data directory is the image's
-# user's, so its parts are copied by a container of the image. Answers
-# the snapshot's directory.
-snapshot_take() {
-  local stamp dir version
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  dir="$WORK/backups/$stamp"
-  mkdir -p "$WORK/backups"
-  mkdir -m 700 "$dir"
-  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-files-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --user 0 --entrypoint sh -v "$WORK:/work" "$IMAGE" -c '
-    set -e
-    d="/work/backups/$1"
-    cp /work/data/cyfr.db "$d/database"
-    if [ -s /work/data/cyfr.db-wal ]; then cp /work/data/cyfr.db-wal "$d/database-wal"; fi
-    mkdir "$d/storage"
-    (cd /work/data && tar -cf - --exclude=./cyfr.db --exclude=./cyfr.db-wal --exclude=./cyfr.db-shm .) | (cd "$d/storage" && tar -xf -)
-    chown -R "$2" "$d"' sh "$stamp" "$(id -u):$(id -g)" || fail "the snapshot's parts could not be copied"
-  mkdir -m 700 "$dir/scaffold"
-  (umask 077 && printf "CYFR_SECRET_KEY_BASE='%s'\n" "$(env_value CYFR_SECRET_KEY_BASE)" >"$dir/keyring")
-  cp "$WORK/.env" "$dir/.env"
-  cp "$WORK/docker-compose.yml" "$dir/compose"
-  version="$(sed -n 's/^ *version: "\([^"]*\)",$/\1/p' "$ROOT/apps/prima/mix.exs")"
-  python3 -I - "$dir" "$version" <<'PY'
-import datetime, json, os, sys
-d, version = sys.argv[1], sys.argv[2]
-parts = [p for p in ["database", "database-wal", "storage", "scaffold", "keyring", ".env", "compose"] if os.path.exists(os.path.join(d, p))]
-manifest = {"version": version, "taken_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "parts": parts, "storage_adapter": "local", "scaffold": [], "complete": True}
-with open(os.path.join(d, "snapshot.json"), "w") as f:
-    json.dump(manifest, f, indent=2)
-    f.write("\n")
-PY
-  printf '%s\n' "$dir"
+# backup_take NAME: `cyfr backup` of the running home, logged as NAME,
+# which must find it running again; SNAPSHOT is the snapshot's directory
+# and RESTORE the restore command, as the backup names them.
+backup_take() {
+  cli_ok "$1" backup
+  grep -qxF "The stack runs again." "$WORK/$1.log" || fail "cyfr backup did not start the home again: $(tail -n 20 "$WORK/$1.log")"
+  SNAPSHOT="$(sed -n "s/^The snapshot of release .* is in \(.*\); '\(sudo \)\{0,1\}cyfr restore .*' puts it back\.\$/\1/p" "$WORK/$1.log")"
+  RESTORE="$(sed -n "s/^The snapshot of release .* is in .*; '\(.*\)' puts it back\.\$/\1/p" "$WORK/$1.log")"
+  [ -f "$SNAPSHOT/snapshot.json" ] || fail "cyfr backup named no snapshot with its snapshot.json: $(tail -n 20 "$WORK/$1.log")"
+  await_healthy
 }
 
 restore_identity_case() {
@@ -1852,9 +1825,11 @@ restore_identity_case() {
   expect_serve_open cyfr.proof.ts.net
   a_id="$(env_value CYFR_TAILNET_NODE_ID)"
 
-  step "restore-identity: the snapshot of A, taken with the stack stopped"
-  cli_ok down-a down
-  snapshot="$(snapshot_take)"
+  step "restore-identity: cyfr backup of A, which runs again after it"
+  backup_take backup-a
+  snapshot="$SNAPSHOT"
+  expect_head tailnet cyfr.proof.ts.net
+  expect_serve_open cyfr.proof.ts.net
   ok "snapshot $snapshot: $(python3 -I -c 'import json, sys; print(",".join(json.load(open(sys.argv[1]))["parts"]))' "$snapshot/snapshot.json")"
 
   step "restore-identity: switched to local, then joined as node B"
@@ -2166,10 +2141,13 @@ restore_person_case() {
   local snapshot status compose_before env_before
   [ "$(id -u)" != 0 ] || fail "the restore-person case is a person's who is not root; this run is root's"
 
-  step "restore-person: a snapshot taken with the stack stopped, then the stack started again"
-  cli_ok down-first down
-  snapshot="$(snapshot_take)"
-  cli_ok up-again up
+  step "restore-person: cyfr backup of the running home, which runs again after it"
+  cli_ok up-first up
+  backup_take backup-person
+  snapshot="$SNAPSHOT"
+  # The container owns some of the files the restore puts back, so the
+  # backup names the restore that works: with sudo.
+  [ "$RESTORE" = "sudo cyfr restore $snapshot" ] || fail "cyfr backup names the restore as '$RESTORE', not with sudo"
   expect_head local localhost
   ok "snapshot $snapshot; the running home's entrypoint has handed data/ to the image's user"
   compose_before="$(sha256sum <"$WORK/docker-compose.yml")"
@@ -2179,9 +2157,11 @@ restore_person_case() {
   status=0
   cli_run restore-person restore "$snapshot" || status=$?
   [ "$status" -ne 0 ] || fail "cyfr restore as the person exited 0: $(tail -n 20 "$WORK/restore-person.log")"
-  for said in "run the same cyfr restore as root, with sudo" \
-    "nothing of the snapshot was put back" \
-    "docker-compose.yml and .env are as they were. Start the stack again with 'cyfr up'"; do
+  # The backup lists the managed AQUA files, which the server's container
+  # owns once the stack has run, so the restore refuses at its start,
+  # before it stops anything.
+  for said in "cyfr restore cannot put the snapshot back as you" \
+    "run the same cyfr restore as root, with sudo; nothing was changed"; do
     grep -qF -- "$said" "$WORK/restore-person.log" ||
       fail "the refusal does not say \"$said\": $(tail -n 20 "$WORK/restore-person.log")"
   done

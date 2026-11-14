@@ -63,8 +63,39 @@ func (e *Engine) recoverOp(ctx context.Context, j *journal) (Receipt, bool, erro
 		return rc, rc.State == "completed", err
 	case "join", "cancel":
 		return e.recoverJoin(ctx, j)
+	case holdOp:
+		rc, err := e.recoverHold(ctx, j)
+		return rc, rc.State == "completed", err
 	}
 	return Receipt{}, false, nil
+}
+
+// recoverHold pays the start a command that died holding the stack owed:
+// .env's head starts as Start starts it, and the hold's receipt says how
+// that went, a failed start's reason redacted in its payload.
+func (e *Engine) recoverHold(ctx context.Context, j *journal) (Receipt, error) {
+	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, Cause: j.Cause, State: "completed", Outcome: "failed"}
+	h, err := e.envHead()
+	var ref *Refusal
+	switch {
+	case errors.As(err, &ref):
+		r.Code, r.Payload = ref.Code, ref.Payload
+		return e.finishAnswer(j, r)
+	case err != nil:
+		return Receipt{}, err
+	}
+	defer e.dropFiles(nil, false)
+	switch s := e.startHead(ctx, h, nil, true, HealthDeadline); {
+	case s.ok:
+		r.Outcome, r.FinalHead = "ok", &h
+	case s.local != nil:
+		r.Outcome, r.FinalHead, r.Code, r.Payload = "started_local", &h, s.local.Code, s.local.Payload
+	case s.refused != nil:
+		r.Code, r.Payload = s.refused.Code, s.refused.Payload
+	default:
+		r.Payload = map[string]string{"reason": e.redactor().text(s.why)}
+	}
+	return e.finishAnswer(j, r)
 }
 
 // recoverSwitch converges an unfinished switch through stopped: every

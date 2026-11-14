@@ -6,6 +6,7 @@ package access
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -13,6 +14,10 @@ func (e *Engine) doStart(ctx context.Context, cause string, health time.Duration
 	if err := e.requireLock(); err != nil {
 		return Receipt{}, err
 	}
+	// The start a hold owes is this one: the hold closes once it has
+	// answered, whatever it answered, and stays for recovery only if the
+	// process dies inside it.
+	defer e.closeHold()
 	r := Receipt{Op: "start", State: "completed"}
 	if _, err := e.readEnv(); err != nil {
 		return Receipt{}, err
@@ -62,6 +67,9 @@ func (e *Engine) unfinished() (Receipt, bool, error) {
 	if j == nil {
 		return Receipt{}, false, nil
 	}
+	if j.Op == holdOp {
+		return Receipt{}, false, nil
+	}
 	if j.Op == "join" && j.Join != nil && j.Join.State == "waiting" {
 		ref := joinBusy(j.Join.JoinID, j.Join.Deadline)
 		return Receipt{Op: "start", State: "rejected", Code: ref.Code, Payload: ref.Payload, At: e.now()}, true, ref
@@ -72,6 +80,40 @@ func (e *Engine) unfinished() (Receipt, bool, error) {
 	}
 	r, err := answer(rc)
 	return r, true, err
+}
+
+// holdOp is the journal's kind for a stop that owes a start (Hold): its
+// Cause names the command, so a new command holds the stack with no change
+// here.
+const holdOp = "hold"
+
+func (e *Engine) hold(cause string) error {
+	if err := e.requireLock(); err != nil {
+		return err
+	}
+	j, err := e.readJournal()
+	if err != nil {
+		return err
+	}
+	if j != nil {
+		return fmt.Errorf("access: the %s %s is unfinished", j.Op, j.RequestID)
+	}
+	h := &journal{Op: holdOp, RequestID: newRequestID(), RequestDigest: requestDigest(map[string]any{"op": holdOp, "cause": cause}), Cause: cause}
+	return e.setPhase(h, "held")
+}
+
+// closeHold removes a hold from the journal, no receipt written: the
+// command that held the stack reports its own start, and a removal that
+// fails leaves recovery a start that is safe to run again.
+func (e *Engine) closeHold() error {
+	if err := e.requireLock(); err != nil {
+		return err
+	}
+	j, err := e.readJournal()
+	if err != nil || j == nil || j.Op != holdOp {
+		return err
+	}
+	return e.removeDurable(e.path(journalFile))
 }
 
 func (e *Engine) doStop(ctx context.Context, cause string, all bool) (Receipt, error) {

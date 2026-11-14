@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -203,19 +204,42 @@ var shippedScrolls = map[string]bool{
 	"web":                    true,
 }
 
+// crewDir and scrollsDir hold the shipped crew members and scrolls.
+const (
+	crewDir    = "aqua/crew"
+	scrollsDir = "aqua/skills"
+)
+
 // isManagedAqua reports whether path is one of the AQUA files the scaffold
 // ships: the soul, a shipped crew member, or a file inside a shipped scroll.
 func isManagedAqua(path string) bool {
 	if path == aquaSoul {
 		return true
 	}
-	if rest, ok := strings.CutPrefix(path, "aqua/crew/"); ok {
+	if rest, ok := strings.CutPrefix(path, crewDir+"/"); ok {
 		name, isMarkdown := strings.CutSuffix(rest, ".md")
 		return isMarkdown && shippedCrew[name]
 	}
-	if rest, ok := strings.CutPrefix(path, "aqua/skills/"); ok {
+	if rest, ok := strings.CutPrefix(path, scrollsDir+"/"); ok {
 		name, _, inside := strings.Cut(rest, "/")
 		return inside && shippedScrolls[name]
+	}
+	return false
+}
+
+// HoldsManaged reports whether dir is a directory above managed files
+// (IsManaged) that is no managed name itself: wit/, aqua/, its crew and
+// scrolls directories, and each shipped scroll's directory. Under wit/ and
+// inside a shipped scroll every name is managed. One that is there as a
+// link or a file holds managed files a walk that follows no link does not
+// reach.
+func HoldsManaged(dir string) bool {
+	switch dir {
+	case "wit", path.Dir(aquaSoul), crewDir, scrollsDir:
+		return true
+	}
+	if name, ok := strings.CutPrefix(dir, scrollsDir+"/"); ok {
+		return shippedScrolls[name]
 	}
 	return false
 }
