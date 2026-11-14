@@ -41,11 +41,32 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     def init(opts), do: opts
 
     @impl true
-    def call(%Plug.Conn{request_path: path} = conn, %{fixtures: fixtures, stall: stall} = opts) do
-      case Regex.run(~r{^/v2/(.+)/(tags/list|manifests/[^/]+|blobs/[^/]+)$}, path) do
-        [_, repo, "tags/list"] when is_map_key(fixtures, repo) ->
-          json(conn, 200, %{"name" => repo, "tags" => ["1.0.0"]})
+    def call(%Plug.Conn{request_path: path} = conn, opts) do
+      case Regex.run(~r{^/v1/components/([a-z]+)/([^/]+)/([^/]+)$}, path) do
+        [_, type, namespace, name] -> latest(conn, opts.fixtures, type, namespace, name)
+        _ -> oci(conn, path, opts)
+      end
+    end
 
+    # The registry's answer for a ref with no version: the one release each
+    # fixture holds is its newest eligible, and a ref with no fixture has
+    # none.
+    defp latest(conn, fixtures, type, namespace, name) do
+      if Map.has_key?(fixtures, "#{namespace}/#{type}s/#{name}") do
+        json(conn, 200, %{
+          "component_type" => type,
+          "namespace_slug" => namespace,
+          "name" => name,
+          "version" => "1.0.0",
+          "status" => "active"
+        })
+      else
+        json(conn, 404, %{"errors" => [%{"code" => "COMPONENT_NOT_FOUND"}]})
+      end
+    end
+
+    defp oci(conn, path, %{fixtures: fixtures, stall: stall} = opts) do
+      case Regex.run(~r{^/v2/(.+)/(manifests/[^/]+|blobs/[^/]+)$}, path) do
         [_, repo, "manifests/" <> _tag] when is_map_key(fixtures, repo) ->
           send(opts.observer, {:manifest, repo})
 
@@ -147,7 +168,8 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     Application.put_env(:arca, :seed_path, seed_dir)
     # `localhost:` is the one host the OCI reference layer maps to http.
     Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
-    Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
+    # The same stub answers the REST API, which names each ref's release.
+    Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{port}")
     # A cosign on PATH would try to verify; point it at nothing so it fails fast.
     Application.put_env(:cyfr, :sigstore, verification: :keyed, key_path: "/nonexistent")
     Application.put_env(:cyfr, :provisioning_required_pull_budget_ms, @budget_ms)

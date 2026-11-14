@@ -1760,11 +1760,12 @@ defmodule Sanctum.ProvisioningTest do
   end
 
   test "Compendium.Pull.oci_reference_for refuses local refs and resolves published ones" do
-    assert {:error, msg} = Compendium.Pull.oci_reference_for("catalyst:local.foo")
+    ctx = Sanctum.TestContext.local()
+    assert {:error, msg} = Compendium.Pull.oci_reference_for(ctx, "catalyst:local.foo")
     assert msg =~ "local"
 
-    assert {:ok, ref} = Compendium.Pull.oci_reference_for("catalyst:someone.thing:1.2.3")
+    assert {:ok, ref} = Compendium.Pull.oci_reference_for(ctx, "catalyst:someone.thing:1.2.3")
     assert ref =~ "someone/catalysts/thing:1.2.3"
-    assert {:error, _} = Compendium.Pull.oci_reference_for("nonsense")
+    assert {:error, _} = Compendium.Pull.oci_reference_for(ctx, "nonsense")
   end
 end

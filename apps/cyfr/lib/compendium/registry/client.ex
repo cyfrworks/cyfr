@@ -106,9 +106,37 @@ defmodule Compendium.Registry.Client do
   @spec get_component(Context.t(), String.t(), String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, Errors.t() | corrupt()}
   def get_component(%Context{} = ctx, type, publisher, name, version) do
-    path = "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
+    component_at(
+      ctx,
+      publisher,
+      "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
+    )
+  end
 
-    case request(:get, path, [], nil, ctx) do
+  @doc """
+  The newest release the registry holds eligible for a pull that names no
+  version: GET /v1/components/:type/:publisher/:name. The registry decides
+  eligibility (active or deprecated, never yanked or taken down) and
+  answers 404 when no release is eligible.
+  """
+  @spec get_latest_component(Context.t(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Errors.t() | corrupt()}
+  def get_latest_component(%Context{} = ctx, type, publisher, name) do
+    component_at(ctx, publisher, "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}")
+  end
+
+  # A component read carries the push token of the namespace that owns it,
+  # chosen as an OCI pull of it chooses (`Compendium.OCI.Auth`), so a
+  # private component's read and its pull speak as the same credential.
+  defp component_at(ctx, publisher, path) do
+    registry = Compendium.RegistryHost.canonical_host()
+
+    answer =
+      with {:ok, auth} <- Compendium.OCI.Auth.auth_headers(registry, "", publisher, ctx) do
+        Transport.request(:get, url(path), auth, nil)
+      end
+
+    case answer do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, component} when is_map(component) ->
