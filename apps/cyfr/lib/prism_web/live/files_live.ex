@@ -144,10 +144,15 @@ defmodule PrismWeb.FilesLive do
 
   # An offer of several files is announced once per file: the messages
   # already queued behind this one ask for the same read, so one serves
-  # them all.
-  def handle_info(%Bus.FileOffer{}, socket) do
-    drain_offer_messages()
-    {:noreply, load_offers(socket)}
+  # them all. Each is applied to the accepted cards first, so a landing or
+  # a failure the page heard settles its card whatever the read answers.
+  def handle_info(%Bus.FileOffer{} = message, socket) do
+    messages = [message | drain_offer_messages([])]
+
+    {:noreply,
+     socket
+     |> update(:accepted, &Enum.reduce(messages, &1, fn m, cards -> heard(cards, m) end))
+     |> load_offers()}
   end
 
   def handle_info(msg, socket) do
@@ -404,6 +409,7 @@ defmodule PrismWeb.FilesLive do
       into: folder |> String.trim_trailing("/") |> Path.dirname(),
       from: person(people, offer && offer.sender),
       files: if(offer, do: offer.files, else: []),
+      landed: MapSet.new(),
       delivery: delivery(Enum.map(receipts, & &1.status), folder)
     }
   end
@@ -422,9 +428,42 @@ defmodule PrismWeb.FilesLive do
   defp accepted_flash(%{delivery: :failed}), do: "Accepted, but it could not be delivered"
   defp accepted_flash(%{delivery: :landing}), do: "Accepted; it is still landing"
 
+  # What the page heard of a card's offer: a failed file fails it; a
+  # landed file counts, and the card has landed once every file it lists
+  # has, in a folder under the one it was accepted into, since the message
+  # names no path. Only a card not yet settled moves.
+  defp heard(cards, %Bus.FileOffer{kind: kind, offer_id: id, filename: filename})
+       when kind in [:failed, :landed] do
+    Enum.map(cards, fn
+      %{offer_id: ^id, delivery: :landing} = card ->
+        heard_file(card, kind, filename)
+
+      %{offer_id: ^id, delivery: {:unlisted, _into}} = card ->
+        heard_file(card, kind, filename)
+
+      card ->
+        card
+    end)
+  end
+
+  defp heard(cards, _message), do: cards
+
+  defp heard_file(card, :failed, _filename), do: %{card | delivery: :failed}
+
+  defp heard_file(card, :landed, filename) do
+    landed = MapSet.put(card.landed, filename)
+    names = MapSet.new(card.files, & &1.filename)
+
+    if MapSet.subset?(names, landed),
+      do: %{card | landed: landed, delivery: {:landed_under, card.into}},
+      else: %{card | landed: landed}
+  end
+
   # A card still landing takes what `file/offers` now lists of its
-  # receipts: a failed one fails it, one still received keeps it landing,
-  # and none listed means every file has landed.
+  # receipts: a failed one fails it and one still received keeps it
+  # landing. None listed proves nothing, since retention removes a failed
+  # receipt too: the card says it no longer knows, and only a landing it
+  # heard says it landed.
   defp redelivered(cards, receipts) do
     Enum.map(cards, fn
       %{delivery: :landing, offer_id: id} = card ->
@@ -433,7 +472,7 @@ defmodule PrismWeb.FilesLive do
         cond do
           "failed" in statuses -> %{card | delivery: :failed}
           statuses != [] -> card
-          true -> %{card | delivery: {:landed_under, card.into}}
+          true -> %{card | delivery: {:unlisted, card.into}}
         end
 
       card ->
@@ -446,11 +485,11 @@ defmodule PrismWeb.FilesLive do
 
   defp in_data?(folder), do: folder == "data" or offerable?(folder)
 
-  defp drain_offer_messages do
+  defp drain_offer_messages(acc) do
     receive do
-      %Bus.FileOffer{} -> drain_offer_messages()
+      %Bus.FileOffer{} = message -> drain_offer_messages([message | acc])
     after
-      0 -> :ok
+      0 -> Enum.reverse(acc)
     end
   end
 
@@ -1139,6 +1178,11 @@ defmodule PrismWeb.FilesLive do
                 <span :if={match?({:landed_under, _}, offer.delivery)} class="text-gray-200">
                   From {offer.from}, landed in a folder under
                   <span class="font-mono">{elem(offer.delivery, 1)}/</span>
+                </span>
+                <span :if={match?({:unlisted, _}, offer.delivery)} class="text-gray-200">
+                  From {offer.from}, accepted. Its delivery is no longer listed; look in
+                  <span class="font-mono">{elem(offer.delivery, 1)}/</span>
+                  for it.
                 </span>
                 <.button
                   :if={is_tuple(offer.delivery)}

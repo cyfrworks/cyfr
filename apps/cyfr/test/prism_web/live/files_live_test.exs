@@ -572,6 +572,119 @@ defmodule PrismWeb.FilesLiveTest do
       refute has_element?(view, "#{card} button", "Open")
     end
 
+    test "a failure the page heard settles the card though its read errors, and a receipt " <>
+           "retention removed later does not turn it into a landing",
+         %{conn: conn, ctx: ctx} do
+      sender = sharing_person!(ctx, name: "Sam Sender")
+      put!(sender, "lost.csv", "never landed")
+
+      {:ok, %{offer_id: offer_id}} =
+        call(sender.ctx, "offer", %{"paths" => ["data/lost.csv"], "to" => ctx.user_id})
+
+      {view, _html} = mount_athanor(conn, "/files")
+      stall_publication!()
+      settled(view)
+      card = "#accepted-#{offer_id}"
+
+      # 1. Accepted; the delivery waits.
+      view |> form("#accept-#{offer_id}") |> render_submit()
+      assert has_element?(view, card, "still landing")
+
+      # 2. The failure is heard, and the read it asks for cannot answer.
+      offers_unreadable(fn ->
+        send(view.pid, Cyfr.Bus.FileOffer.new(:failed, offer_id, sender.ctx.user_id, "lost.csv"))
+        settled(view)
+      end)
+
+      assert has_element?(view, card, "could not be delivered")
+      refute has_element?(view, "#{card} button", "Open")
+
+      # 3. Retention removes the failed receipt.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.FileReceipt, where: r.offer_id == ^offer_id),
+          set: [
+            status: "failed",
+            updated_at: DateTime.add(DateTime.utc_now(), -30 * 86_400, :second)
+          ]
+        )
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, _} = Arca.Retention.FileReceipts.prune(sweeper(ctx), 7, false)
+      end)
+
+      refute Arca.Repo.exists?(
+               from(r in Arca.Schemas.FileReceipt, where: r.offer_id == ^offer_id)
+             )
+
+      # 4. A later read lists nothing of it; the card stays failed.
+      send(view.pid, :load_offers)
+      settled(view)
+      assert has_element?(view, card, "could not be delivered")
+      refute has_element?(view, card, "landed")
+      refute has_element?(view, "#{card} button", "Open")
+    end
+
+    test "receipts gone with no sign say the delivery is no longer listed; a landing heard " <>
+           "then says it landed",
+         %{conn: conn, ctx: ctx} do
+      sender = sharing_person!(ctx, name: "Sam Sender")
+      put!(sender, "late.csv", "landed")
+
+      {:ok, %{offer_id: offer_id}} =
+        call(sender.ctx, "offer", %{"paths" => ["data/late.csv"], "to" => ctx.user_id})
+
+      assert {:ok, %{inbox: [%{folder: into}]}} = call(ctx, "offers")
+
+      {view, _html} = mount_athanor(conn, "/files")
+      stall_publication!()
+      settled(view)
+      card = "#accepted-#{offer_id}"
+
+      view |> form("#accept-#{offer_id}") |> render_submit()
+      assert has_element?(view, card, "still landing")
+
+      {1, _} =
+        Arca.Repo.delete_all(from(r in Arca.Schemas.FileReceipt, where: r.offer_id == ^offer_id))
+
+      send(view.pid, :load_offers)
+      settled(view)
+      assert has_element?(view, card, "no longer listed")
+      assert has_element?(view, card, into <> "/")
+      refute has_element?(view, card, "landed")
+
+      send(view.pid, Cyfr.Bus.FileOffer.new(:landed, offer_id, sender.ctx.user_id, "late.csv"))
+      settled(view)
+      assert has_element?(view, card, "landed in a folder under")
+      assert has_element?(view, card, into <> "/")
+      assert has_element?(view, "#{card} button", "Open")
+    end
+
+    test "a read that errors leaves an accepted card as it was", %{conn: conn, ctx: ctx} do
+      sender = sharing_person!(ctx, name: "Sam Sender")
+      put!(sender, "late.csv", "landed")
+
+      {:ok, %{offer_id: offer_id}} =
+        call(sender.ctx, "offer", %{"paths" => ["data/late.csv"], "to" => ctx.user_id})
+
+      {view, _html} = mount_athanor(conn, "/files")
+      stall_publication!()
+      settled(view)
+      card = "#accepted-#{offer_id}"
+
+      view |> form("#accept-#{offer_id}") |> render_submit()
+      before = view |> element(card) |> render()
+      assert before =~ "still landing"
+
+      offers_unreadable(fn ->
+        send(view.pid, :load_offers)
+        settled(view)
+      end)
+
+      assert view |> element(card) |> render() == before
+      assert render(view) =~ "Your offers could not be read."
+    end
+
     test "a transfer the sweep lands later leaves the Inbox as it lands", %{conn: conn, ctx: ctx} do
       sender = sharing_person!(ctx, name: "Sam Sender")
       put!(sender, "late.csv", "landed on the sweep")
@@ -714,6 +827,20 @@ defmodule PrismWeb.FilesLiveTest do
   end
 
   # The page once every message already sent to it has been handled.
+  # The page's reads of `file/offers` fail while `fun` runs: the receipts
+  # table is out of reach, and is back before this returns or raises.
+  defp offers_unreadable(fun) do
+    ExUnit.CaptureLog.capture_log(fn ->
+      Arca.Repo.query!("ALTER TABLE file_receipts RENAME TO file_receipts_gone")
+
+      try do
+        fun.()
+      after
+        Arca.Repo.query!("ALTER TABLE file_receipts_gone RENAME TO file_receipts")
+      end
+    end)
+  end
+
   defp settled(view) do
     :sys.get_state(view.pid)
     render(view)
