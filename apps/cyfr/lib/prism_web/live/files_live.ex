@@ -838,7 +838,7 @@ defmodule PrismWeb.FilesLive do
                     phx-value-path={child(@path, entry.name)}
                     class="flex items-center gap-2 text-gray-200 hover:text-white"
                   >
-                    <.icon name="folder" class="h-4 w-4 text-gray-500" />
+                    <.icon name="folder" class="h-4 w-4 shrink-0 text-gray-500" />
                     <span class="font-mono break-all text-left">{entry.name}/</span>
                   </button>
                   <button
@@ -848,7 +848,7 @@ defmodule PrismWeb.FilesLive do
                     phx-value-path={child(@path, entry.name)}
                     class="flex items-center gap-2 text-gray-300 hover:text-white"
                   >
-                    <.icon name="document" class="h-4 w-4 text-gray-600" />
+                    <.icon name="document" class="h-4 w-4 shrink-0 text-gray-600" />
                     <span class="font-mono break-all text-left">{entry.name}</span>
                   </button>
                 </td>
