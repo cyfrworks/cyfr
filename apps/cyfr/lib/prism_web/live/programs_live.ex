@@ -143,14 +143,15 @@ defmodule PrismWeb.ProgramsLive do
   def handle_event("edit", %{"name" => name}, socket) do
     case socket.assigns.detail do
       %{name: ^name, epoch: epoch} = detail ->
-        {form, prefill} = edit_prefill(config(detail))
+        read = definition(detail)
+        {form, prefill} = edit_prefill(read)
 
         {:noreply,
          socket
          |> assign(:show_add, form)
          |> assign(:form_error, nil)
          |> assign(:install, nil)
-         |> assign(:editing, %{name: name, epoch: epoch, config: config(detail)})
+         |> assign(:editing, %{name: name, epoch: epoch, config: read})
          |> assign(:prefill, Map.put(prefill, "name", name))}
 
       _not_read ->
@@ -632,6 +633,13 @@ defmodule PrismWeb.ProgramsLive do
        "hosts" => config["hosts"]
      }}
   end
+
+  # A row's whole definition as an update takes it: its config, and a tool
+  # server's address, which the row holds beside it.
+  defp definition(%{transport: "http", url: url} = detail),
+    do: Map.put(config(detail), "url", url)
+
+  defp definition(detail), do: config(detail)
 
   defp edit_prefill(%{"transport" => "http"} = config) do
     {"server",
