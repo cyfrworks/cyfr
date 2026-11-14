@@ -780,10 +780,11 @@ defmodule Sanctum.ApiKey do
   # is exactly a known permission or a tool's name as `tools_of/1` stores
   # it; any other entry, or a column that is no list, makes the key
   # invalid rather than being dropped, since a dropped entry could have
-  # been the one that narrowed it. The line names the column's size,
-  # never its bytes.
+  # been the one that narrowed it. The parse is strict: an empty or absent
+  # column is no list either, never read as an empty one. The line names
+  # the column's size, never its bytes.
   defp stored_scope(json) do
-    case Prima.Json.decode_stored(json, []) do
+    case Prima.Json.decode(json) do
       {:ok, list} when is_list(list) ->
         {permissions, tools} = Enum.split_with(list, &(&1 in @permission_names))
 
@@ -800,7 +801,8 @@ defmodule Sanctum.ApiKey do
   end
 
   defp unreadable_scope(problem, json) do
-    Logger.warning("[Sanctum.ApiKey] stored scope #{problem} (#{byte_size(json || "")} bytes)")
+    size = if is_binary(json), do: byte_size(json), else: 0
+    Logger.warning("[Sanctum.ApiKey] stored scope #{problem} (#{size} bytes)")
     {:error, :invalid_key}
   end
 

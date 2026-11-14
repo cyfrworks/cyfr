@@ -62,7 +62,10 @@ defmodule Sanctum.ApiKeyTest do
       assert {:ok, []} = ApiKey.list(ctx)
     end
 
-    test "a stored entry no rule admits makes the key invalid, never a narrower or wider one",
+    # Every value the column can hold that is not a JSON list of permission
+    # and tool names. The column is NOT NULL, so an absent value cannot be
+    # stored.
+    test "a stored scope no rule admits makes the key invalid, never a narrower or wider one",
          %{ctx: ctx} do
       for {stored, n} <-
             Enum.with_index([
@@ -72,6 +75,10 @@ defmodule Sanctum.ApiKeyTest do
               ~s(["execute", "c:local.ship"]),
               ~s(["execute", "catalyst:local.ship:1.0.0"]),
               ~s({"execute": true}),
+              ~s("execute"),
+              "null",
+              "",
+              "   ",
               "not json"
             ]) do
         name = "stored-#{n}"
@@ -87,13 +94,16 @@ defmodule Sanctum.ApiKeyTest do
         assert log =~
                  ~r/stored scope (holds an entry no rule admits|is not valid JSON) \(\d+ bytes\)/
 
-        refute log =~ stored
+        # The line names the column's size, never its bytes (a blank value
+        # has no bytes to look for).
+        if String.trim(stored) != "", do: refute(log =~ stored)
 
         key_ctx = %{ctx | api_key_id: id}
 
         capture_log(fn ->
-          assert {:error, :invalid_api_key} =
-                   ApiKey.admit_tool(key_ctx, "catalyst:local.ship:1.0.0")
+          for tool <- ["catalyst:local.ship:1.0.0", "catalyst:local.other:1.0.0"] do
+            assert {:error, :invalid_api_key} = ApiKey.admit_tool(key_ctx, tool)
+          end
         end)
 
         capture_log(fn ->
