@@ -35,12 +35,12 @@ defmodule Arca.ConsentStorage do
   shared lock (`Arca.QueryHelpers.for_share/1`) on every vault entry they
   reach, the athanor's own and the source entry of every share they bind,
   in one query over those `{athanor_id, id}` pairs in that order; then on
+  every program row of the athanor's they bind, in id order; then on
   every share they bind, in id order. They refuse with nothing written
-  when an entry is not `active`, nor a login entry whose program is not
-  signed in yet (`needs_reauth`, bound before its program signs in)
-  (`{:error, {:entry_unavailable, status}}`)
+  when an entry is not `active` (`{:error, {:entry_unavailable, status}}`)
   or has no row (`{:error, :not_found}`; an athanor's own entry is read in
-  the revision's athanor alone), when a share has no row
+  the revision's athanor alone), when a program row has no row in the
+  revision's athanor (`{:error, :not_found}`), when a share has no row
   (`{:error, :not_found}`) or is not `active`
   (`{:error, {:share_unavailable, status}}`), when a share's audience is
   no longer the one its binding was admitted under, read under its lock
@@ -62,8 +62,12 @@ defmodule Arca.ConsentStorage do
   it directly. A selection names no entry on the borrower's row and takes
   no lock.
 
-  The one order is vault entries by athanor and id; then shares by id;
-  then the profiles, deduplicated and ordered by athanor and id before any
+  A program row's delete (`Arca.McpServerStorage.delete/2`) takes its row
+  and then blocks the profiles whose heads bind it (`block_dependents/4`),
+  so it meets a revision binding the row in the same order.
+
+  The one order is vault entries by athanor and id; then program rows by
+  id; then shares by id; then the profiles, deduplicated and ordered by athanor and id before any
   is locked. Every writer that holds more than one of these rows in a
   transaction takes them in it: this revision, `block_dependents/4`,
   `Arca.RecordSink`'s batch of last-used touches (`{athanor_id, id}`
@@ -117,7 +121,8 @@ defmodule Arca.ConsentStorage do
   One binding of a revision as it is read back: its key, its scope
   (`"share"` or `"athanor"`, derived from what it names by
   `Arca.Schemas.ConsentVaultRef.scope/1`), the one thing it names (an
-  athanor's entry, a share or a selection's label; the others nil), the
+  athanor's entry, an athanor's program row, a share or a selection's
+  label; the others nil), the
   digest it was approved at (nil for a selection that pinned none) and
   its lifetime.
   """
@@ -125,6 +130,7 @@ defmodule Arca.ConsentStorage do
           binding_key: String.t(),
           scope: String.t(),
           vault_entry_id: String.t() | nil,
+          mcp_server_id: String.t() | nil,
           share_id: String.t() | nil,
           via_label: String.t() | nil,
           binding_digest: String.t() | nil,
@@ -135,9 +141,10 @@ defmodule Arca.ConsentStorage do
 
   @typedoc """
   One binding as a revision's writer names it: `binding_key`, exactly one
-  of `vault_entry_id` (the athanor's own entry), `share_id` (a share) and
-  `via_label` (a selection), `binding_digest` (required of an entry or a
-  share, the pinned one or nil for a selection), the lifetime
+  of `vault_entry_id` (the athanor's own entry), `mcp_server_id` (the
+  athanor's own program row, a login need's), `share_id` (a share) and
+  `via_label` (a selection), `binding_digest` (required of an entry, a
+  program row or a share, the pinned one or nil for a selection), the lifetime
   (`lifetime_kind`, `standing` when absent, and `expires_at`, required of
   `until` and refused of the others) and `renew`, whether the decision
   renews a consumed `once` binding.
@@ -145,6 +152,7 @@ defmodule Arca.ConsentStorage do
   @type ref_input :: %{
           required(:binding_key) => String.t(),
           optional(:vault_entry_id) => String.t() | nil,
+          optional(:mcp_server_id) => String.t() | nil,
           optional(:share_id) => String.t() | nil,
           optional(:via_label) => String.t() | nil,
           optional(:binding_digest) => String.t() | nil,
@@ -276,6 +284,7 @@ defmodule Arca.ConsentStorage do
       |> Map.take([
         :binding_key,
         :vault_entry_id,
+        :mcp_server_id,
         :share_id,
         :via_label,
         :binding_digest,
@@ -305,6 +314,7 @@ defmodule Arca.ConsentStorage do
          %{
            binding_key: row.binding_key,
            vault_entry_id: row.vault_entry_id,
+           mcp_server_id: row.mcp_server_id,
            share_id: row.share_id,
            via_label: row.via_label,
            binding_digest: row.binding_digest,
@@ -344,13 +354,14 @@ defmodule Arca.ConsentStorage do
   end
 
   # The rows a revision's bindings reach, locked in the one order before
-  # the profile: vault entries, then shares.
+  # the profile: vault entries, then program rows, then shares.
   defp lock_bindings(multi, refs, athanor_id, person) do
     multi
     |> Ecto.Multi.run(:sources, fn _repo, _done -> share_sources(refs, athanor_id, person) end)
     |> Ecto.Multi.run(:entries, fn _repo, %{sources: sources} ->
       lock_vault_entries(refs, athanor_id, sources)
     end)
+    |> Ecto.Multi.run(:programs, fn _repo, _done -> lock_programs(refs, athanor_id) end)
     |> Ecto.Multi.run(:shares, fn _repo, %{sources: sources, entries: entries} ->
       lock_shares(refs, sources, entries)
     end)
@@ -400,9 +411,8 @@ defmodule Arca.ConsentStorage do
   # writes the entry row by compare-and-set before it reads the heads that
   # depend on it, waits for this revision or is seen by the digest read
   # again under the lock, and a revoke, which writes the row first, is
-  # refused here by the status. Each must be active, or a login entry
-  # whose program is not signed in yet, and an own entry that is gone, or
-  # another athanor's, names nothing to bind. Answers each entry's status
+  # refused here by the status. Each must be active, and an own entry that
+  # is gone, or another athanor's, names nothing to bind. Answers each entry's status
   # and digest by its pair.
   # arca:unscoped-ok a revision's entries are its own athanor's and the
   # sources of the shares it binds, each read by its `{athanor_id, id}` pair.
@@ -427,6 +437,28 @@ defmodule Arca.ConsentStorage do
         statuses = Map.new(rows, fn {pair, status, kind, _digest} -> {pair, {status, kind}} end)
 
         with {:ok, _} <- all_bindable(statuses, pairs), do: {:ok, held}
+    end
+  end
+
+  # Every program row a login need's binding names, held shared in id order
+  # after the entries and before the shares: its delete, which takes the
+  # row before it blocks the heads that bind it, waits for this revision or
+  # is seen here as gone. A row of another athanor names nothing to bind.
+  defp lock_programs(refs, athanor_id) do
+    case refs |> Enum.map(&Map.get(&1, :mcp_server_id)) |> Enum.reject(&is_nil/1) do
+      [] ->
+        {:ok, []}
+
+      ids ->
+        ids = ids |> Enum.uniq() |> Enum.sort()
+
+        held =
+          from(s in Arca.Schemas.McpServer, where: s.id in ^ids, order_by: s.id, select: s.id)
+          |> Arca.QueryHelpers.where_athanor(athanor_id)
+          |> Arca.QueryHelpers.for_share()
+          |> Arca.Repo.all()
+
+        if held == ids, do: {:ok, held}, else: {:error, :not_found}
     end
   end
 
@@ -513,7 +545,6 @@ defmodule Arca.ConsentStorage do
     Enum.reduce_while(Enum.sort(ids), {:ok, held}, fn id, acc ->
       case Map.fetch(held, id) do
         {:ok, {"active", _kind}} -> {:cont, acc}
-        {:ok, {"needs_reauth", "login"}} -> {:cont, acc}
         {:ok, {status, _kind}} -> {:halt, {:error, {:entry_unavailable, status}}}
         :error -> {:halt, {:error, :not_found}}
       end
@@ -571,15 +602,20 @@ defmodule Arca.ConsentStorage do
   end
 
   @doc false
-  # A binding row's identity, tagged by what it names: an athanor's entry,
-  # a share or a selection, each with its key and the digest it was
-  # approved at; the tag says the scope. `Sanctum.Consent.Loader` holds a
-  # blob to its rows by the same identity.
+  # A binding row's identity, tagged by what it names: an athanor's entry
+  # or program row, a share or a selection, each with its key and the
+  # digest it was approved at; the tag says the scope. A program row is
+  # the athanor's own, bound as an entry is, by its id, so the blob's
+  # binding reads it alike. `Sanctum.Consent.Loader` holds a blob to its
+  # rows by the same identity.
   @spec row_identity(map()) ::
           {:entry | :share, String.t(), String.t(), String.t()}
           | {:via, String.t(), String.t(), String.t() | nil}
           | :none
   def row_identity(%{vault_entry_id: id} = row) when is_binary(id),
+    do: {:entry, row.binding_key, id, row.binding_digest}
+
+  def row_identity(%{mcp_server_id: id} = row) when is_binary(id),
     do: {:entry, row.binding_key, id, row.binding_digest}
 
   def row_identity(%{share_id: id} = row) when is_binary(id),
@@ -637,6 +673,7 @@ defmodule Arca.ConsentStorage do
             athanor_id: athanor_id,
             binding_key: ref.binding_key,
             vault_entry_id: ref.vault_entry_id,
+            mcp_server_id: ref.mcp_server_id,
             share_id: ref.share_id,
             via_label: ref.via_label,
             binding_digest: ref.binding_digest,
@@ -751,7 +788,8 @@ defmodule Arca.ConsentStorage do
   def get_head(%Prima.Actor{}, _profile_id), do: {:error, :no_athanor}
 
   @doc """
-  Profiles whose **head** revision references a vault entry.
+  Profiles whose **head** revision references a vault entry, or the
+  program row a login need binds, by its id.
 
   Deliberately head-only: counting every historical revision would
   over-report — a profile that dropped the entry two revisions ago is not
@@ -768,7 +806,7 @@ defmodule Arca.ConsentStorage do
           on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
           join: p in Arca.Schemas.Profile,
           on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
-          where: r.vault_entry_id == ^vault_entry_id,
+          where: r.vault_entry_id == ^vault_entry_id or r.mcp_server_id == ^vault_entry_id,
           distinct: true,
           select: p.id
         )
@@ -784,7 +822,8 @@ defmodule Arca.ConsentStorage do
 
   @doc """
   The edges by which the **head** revisions of the actor's athanor reach
-  the vault entry `vault_entry_id`, each once, as `{source, node, target}`
+  the vault entry or the program row `vault_entry_id`, each once, as
+  `{source, node, target}`
   name-level refs: the profile's source, the node whose edge it is and the
   edge's target. An edge reaches the entry when it binds it, or when it
   selects the labelled profile of its target whose head binds it on the
@@ -810,7 +849,7 @@ defmodule Arca.ConsentStorage do
 
       bound =
         from([r, _c, p] in heads,
-          where: r.vault_entry_id == ^vault_entry_id,
+          where: r.vault_entry_id == ^vault_entry_id or r.mcp_server_id == ^vault_entry_id,
           select: {p.source_ref, p.label, r.binding_key}
         )
         |> Arca.Repo.all()
@@ -849,7 +888,7 @@ defmodule Arca.ConsentStorage do
 
   # The node a binding key's edge leaves and the target it names
   # (`:ingress` for the node's own), name-level, for the edge's unnamed
-  # binding, the one a mount reads (`Sanctum.Mount.resolve/4`); nil for a
+  # binding, the one a mount reads (`Sanctum.Mount.resolve/5`); nil for a
   # named account's and for a key outside the grammar.
   defp edge(binding_key) do
     with {:ok, {node, edge_key, nil}} <- Prima.Authority.Blob.parse_binding_key(binding_key) do
@@ -1355,6 +1394,7 @@ defmodule Arca.ConsentStorage do
       binding_key: r.binding_key,
       scope: ConsentVaultRef.scope(r),
       vault_entry_id: r.vault_entry_id,
+      mcp_server_id: r.mcp_server_id,
       share_id: r.share_id,
       via_label: r.via_label,
       binding_digest: r.binding_digest,

@@ -27,8 +27,9 @@ defmodule Prism.ConsentChoices do
   @integer_limits ~w(max_memory_bytes max_request_size max_response_size max_concurrent_tasks)
   @duration_limits ~w(timeout batch_timeout)
 
-  # The needs an entry meets; any other names a component.
-  @credential_kinds Prima.CredentialKinds.all()
+  # The needs a binding meets, an entry's or a login need's program row's;
+  # any other names a component.
+  @credential_kinds Prima.Manifest.Needs.binding_kinds()
   # What a choice of an entry binds: the athanor's own or a key shared
   # with the person, each sent by its own id key.
   @entry_sources ["own", "share"]

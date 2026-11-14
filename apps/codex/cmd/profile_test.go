@@ -249,7 +249,7 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 		"reagent:local.maps uses maps public key, provided by local, the app's public configuration, " +
 			"from reagent:local.weather for its geocode need: sent only to https://geo.maps.example, " +
 			"paths /geocode. The component reads the value itself.",
-		"catalyst:local.coder uses claude-login, an entry of this athanor, from reagent:local.weather " +
+		"catalyst:local.coder uses claude, a program of this athanor, from reagent:local.weather " +
 			"for its claude need: mounted into claude's kept folder. " +
 			"Nothing is attached and the component never holds it.",
 		"lifetime: until revoked",
@@ -375,6 +375,29 @@ func TestRenderPreview_EveryRowNamesItsNode(t *testing.T) {
 		if !seen[kind] {
 			t.Errorf("the vectors hold no %s row", kind)
 		}
+	}
+}
+
+// A program's record draws its command as its address and each environment
+// variable with the vault entry it names, a literal by its name alone.
+func TestRenderPreview_DrawsAProgramsRecord(t *testing.T) {
+	row := map[string]any{"kind": "tool_servers", "node": "catalyst:local.coder", "values": map[string]any{
+		"name": "github", "digest": "sha256:ab", "tool_patterns": []any{"*"},
+		"record": map[string]any{"address": "npx -y server-github", "env": []any{
+			map[string]any{"name": "GITHUB_TOKEN", "entry": "personal"},
+			map[string]any{"name": "NODE_ENV", "literal": true},
+		}},
+	}}
+	want := []string{
+		"catalyst:local.coder",
+		"github sha256:ab",
+		"its tools matching: *",
+		"address: npx -y server-github",
+		"variable GITHUB_TOKEN: vault entry personal",
+		"variable NODE_ENV: a literal, its value not shown",
+	}
+	if got := describeRow(row); !reflect.DeepEqual(got, want) {
+		t.Errorf("the program's row draws\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -723,23 +746,23 @@ func TestCollectDecisions_AsksOnlyWhereAChoiceIsRequired(t *testing.T) {
 	}
 }
 
-// A login entry offered for a login need is mounted into its program's
-// kept folder, never sent to a host.
-func TestAskEntry_ALoginEntryIsMountedIntoItsProgramsKeptFolder(t *testing.T) {
+// A program row offered for a login need is mounted into its kept folder,
+// never sent to a host.
+func TestAskEntry_AProgramIsMountedIntoItsKeptFolder(t *testing.T) {
 	need := needRow{name: "claude", kind: "login", program: "claude", required: true,
-		candidates: []map[string]any{{"entry_id": "vlt_login", "name": "claude-login", "source": "own",
-			"destination": map[string]any{"program": "claude"}}}}
+		candidates: []map[string]any{{"entry_id": "mcp_claude", "name": "claude", "source": "own",
+			"kind": "program", "destination": map[string]any{"program": "claude"}}}}
 	var labels []string
 	chooser := grantChooser{interactive: true, ask: func(_ string, options []prompt.Option) (string, error) {
 		for _, o := range options {
 			labels = append(labels, o.Label)
 		}
-		return "vlt:vlt_login", nil
+		return "vlt:mcp_claude", nil
 	}}
 	if _, err := askEntry(need, nil, chooser); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"No entry", "claude-login, an entry of this athanor, mounted into claude's kept folder"}
+	want := []string{"No entry", "claude, a program of this athanor, mounted into claude's kept folder"}
 	if !reflect.DeepEqual(labels, want) {
 		t.Errorf("offered %q, want %q", labels, want)
 	}
@@ -859,8 +882,8 @@ func TestRenderPlanNeeds(t *testing.T) {
 	provided := `{"need":"geo","kind":"api_key","provider":"maps.example","required":true,"source":"provided",` +
 		`"destination":{"hosts":["geo.maps.example"],"scheme":"https"},"candidates":[],"suggested":null,"choice_required":false}`
 	login := `{"need":"claude","kind":"login","program":"claude","required":true,"source":"own",` +
-		`"candidates":[{"entry_id":"vlt_login","name":"claude-login","source":"own","destination":{"program":"claude"}}],` +
-		`"suggested":{"entry_id":"vlt_login"},"choice_required":false}`
+		`"candidates":[{"entry_id":"mcp_claude","name":"claude","source":"own","kind":"program","destination":{"program":"claude"}}],` +
+		`"suggested":{"entry_id":"mcp_claude"},"choice_required":false}`
 	raw := planWith(list(need("api_key", "api_key", true, "vlt_a", false, "vlt_a"), newer, login),
 		list(`{"from":"f:local.daily-report","dep":"reagent:local.maps","candidates":[],"needs":`+list(provided)+`}`), `[]`)
 	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
@@ -878,7 +901,7 @@ func TestRenderPlanNeeds(t *testing.T) {
 		"reagent:local.maps: geo (api_key for maps.example)",
 		"provided by local, the app's public configuration, sent only to https://geo.maps.example",
 		"f:local.daily-report: claude (login for claude)",
-		"suggested: claude-login, an entry of this athanor",
+		"suggested: claude, a program of this athanor",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in\n%s", want, text)
@@ -1543,6 +1566,8 @@ func expected(row map[string]any, field string, value any) []string {
 		default:
 			return []string{"one run"}
 		}
+	case field == "source" && value == "own" && str(row["values"].(map[string]any)["destination"].(map[string]any)["program"]) != "":
+		return []string{"a program of this athanor"}
 	case field == "source" && value == "own":
 		return []string{"an entry of this athanor"}
 	case field == "source" && value == "share":
@@ -1567,6 +1592,22 @@ func expected(row map[string]any, field string, value any) []string {
 		return nil
 	case field == "binding_key":
 		return []string{"binding: " + str(value)}
+	case field == "record":
+		record := value.(map[string]any)
+		wants := []string{"address: " + str(record["address"])}
+		for _, item := range asList(record["headers"]) {
+			header := item.(map[string]any)
+			switch {
+			case header["literal"] == true:
+				wants = append(wants, "header "+str(header["name"])+": a literal, its value not shown")
+			case str(header["scheme"]) != "":
+				wants = append(wants, "header "+str(header["name"])+": vault entry "+
+					str(header["entry"])+" ("+str(header["scheme"])+")")
+			default:
+				wants = append(wants, "header "+str(header["name"])+": vault entry "+str(header["entry"]))
+			}
+		}
+		return wants
 	case field == "exit":
 		return []string{"exit: " + str(value) + " ("}
 	case field == "flows" && joinStrings(value) == "":
@@ -1698,21 +1739,21 @@ func TestProfileList_SaysWhatStandsInPlaceOfAHead(t *testing.T) {
 	}
 }
 
-// The CLI classifies a need by the credential kinds the server's owner
+// The CLI classifies a need by the binding kinds the server's owner
 // declares, as `mix ops.gen.cli` renders them.
 func TestGeneratedRosters_ClassifyNeeds(t *testing.T) {
-	if len(ops.CredentialKinds) == 0 {
-		t.Fatalf("the generated credential kinds are empty")
+	if len(ops.BindingKinds) == 0 {
+		t.Fatalf("the generated binding kinds are empty")
 	}
-	for _, kind := range ops.CredentialKinds {
+	for _, kind := range ops.BindingKinds {
 		need, ok := readNeed(map[string]any{"need": "n", "kind": kind})
 		if !ok || !need.declared() {
-			t.Errorf("a %q need is not read as a declared credential", kind)
+			t.Errorf("a %q need is not read as a declared binding", kind)
 		}
 	}
 	for _, kind := range []string{"catalyst", "reagent", "formula", ""} {
 		if need, _ := readNeed(map[string]any{"need": "n", "kind": kind}); need.declared() {
-			t.Errorf("a %q need is read as a declared credential", kind)
+			t.Errorf("a %q need is read as a declared binding", kind)
 		}
 	}
 }

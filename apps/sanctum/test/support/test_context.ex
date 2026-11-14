@@ -486,30 +486,6 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  A login entry whose program has signed in: `create_vault/2` with
-  `kind: "login"`, which makes it waiting on its sign-in, then made active
-  (`activate_login/2`).
-  """
-  def create_signed_in_login(%Context{} = ctx, params) do
-    with {:ok, view} <- create_vault(ctx, Map.put(params, :kind, "login")),
-         :ok <- activate_login(ctx, view.id),
-         do: {:ok, %{view | status: "active"}}
-  end
-
-  @doc """
-  The login entry `id`, waiting on its sign-in, made active in the store:
-  nothing in the product makes a login entry active any more, since a
-  program's folder is its row's and a program says itself whether it is
-  signed in.
-  """
-  def activate_login(%Context{} = ctx, id) do
-    case Arca.VaultStorage.set_status(Context.actor(ctx), id, "active") do
-      {:ok, _} -> :ok
-      {:error, _} = error -> error
-    end
-  end
-
-  @doc """
   `Sanctum.Vault.rotate/2` under the confirmation it needs
   (`confirmed_change/4`), naming the entry as the vault names it.
   """

@@ -133,6 +133,12 @@ defmodule Emissary.External.Proxy do
         _ -> nil
       end
 
+    record =
+      case Sanctum.ToolServerDigest.recorded(server) do
+        {:ok, record} -> record
+        _ -> nil
+      end
+
     {tool_names, descriptions_digest} =
       case server.enabled && Servers.ensure_started(server, ctx) do
         {:ok, tools} ->
@@ -158,6 +164,7 @@ defmodule Emissary.External.Proxy do
       url: server.url,
       enabled: server.enabled,
       server_digest: digest,
+      record: record,
       tool_patterns: patterns,
       tool_names: tool_names,
       descriptions_digest: descriptions_digest

@@ -330,6 +330,7 @@ defmodule Sanctum.Consent.BootstrapTest do
                  athanor_id: ctx.athanor_id,
                  binding_key: "#{@model}|@ingress|default",
                  vault_entry_id: nil,
+                 mcp_server_id: nil,
                  share_id: share_id,
                  via_label: nil,
                  binding_digest: digest,

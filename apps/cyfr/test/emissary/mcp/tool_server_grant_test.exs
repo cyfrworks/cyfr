@@ -62,7 +62,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
                 %{
                   "server_digest" => digest,
                   "server_name" => server,
-                  "tool_patterns" => ["issues.*"]
+                  "tool_patterns" => ["issues.*"],
+                  "record" => %{"address" => "https://127.0.0.1:1/mcp", "headers" => []}
                 }
               ]
             }

@@ -105,11 +105,17 @@ defmodule Prima.Authority.Blob do
             private_ips: [String.t()]
           }
     @type storage :: %{paths: [String.t()], actions: [String.t()]}
+    @typedoc """
+    A tool server a grant names: the digest it is pinned to, its name,
+    the patterns granted, an advisory description baseline and the
+    `record` of what it reaches (`Prima.Authority.Blob.server_record?/1`).
+    """
     @type tool_server :: %{
             server_digest: String.t(),
             server_name: String.t(),
             tool_patterns: [String.t()],
-            descriptions_digest: String.t() | nil
+            descriptions_digest: String.t() | nil,
+            record: map()
           }
 
     @type t :: %__MODULE__{
@@ -359,7 +365,8 @@ defmodule Prima.Authority.Blob do
     %{
       "server_digest" => server.server_digest,
       "server_name" => server.server_name,
-      "tool_patterns" => server.tool_patterns
+      "tool_patterns" => server.tool_patterns,
+      "record" => server.record
     }
     |> put_resource("descriptions_digest", server.descriptions_digest)
   end
@@ -960,31 +967,79 @@ defmodule Prima.Authority.Blob do
 
   # Match grants by server digest. server_name identifies configuration
   # drift; descriptions_digest records an advisory description baseline
-  # when the catalog is reachable at commit.
+  # when the catalog is reachable at commit; record is what the server
+  # reaches as the grant recorded it.
   defp validate_tool_server(raw) when is_map(raw) do
     with :ok <-
            keys_or_reason(raw, [
              "server_digest",
              "server_name",
              "tool_patterns",
-             "descriptions_digest"
+             "descriptions_digest",
+             "record"
            ]),
          {:ok, digest} <- required_string(raw, "server_digest"),
          {:ok, name} <- required_string(raw, "server_name"),
          {:ok, patterns} <- required_string_list(raw, "tool_patterns"),
          :ok <- validate_tool_patterns(patterns),
-         {:ok, descriptions} <- optional_string(raw, "descriptions_digest") do
+         {:ok, descriptions} <- optional_string(raw, "descriptions_digest"),
+         true <- server_record?(raw["record"]) || {:error, "record is not a server record"} do
       {:ok,
        %{
          server_digest: digest,
          server_name: name,
          tool_patterns: patterns,
-         descriptions_digest: descriptions
+         descriptions_digest: descriptions,
+         record: raw["record"]
        }}
     end
   end
 
   defp validate_tool_server(_raw), do: {:error, "tool server must be an object"}
+
+  @doc """
+  Whether `record` is what a grant records of a tool server
+  (`Sanctum.ToolServerDigest.recorded/1`): its `address`, a non-empty
+  string, and exactly one of `headers` (an http server's) and `env` (a
+  program's), each a list sorted by name, each name once, of
+  `%{"name", "entry"}` with an optional `"scheme"` for a value naming a
+  vault entry, or `%{"name", "literal" => true}` for a literal, whose
+  value is never recorded.
+  """
+  @spec server_record?(term()) :: boolean()
+  def server_record?(%{"address" => address} = record)
+      when is_binary(address) and address != "" do
+    case Map.keys(record) -- ["address"] do
+      [member] when member in ["headers", "env"] -> record_values?(record[member])
+      _other -> false
+    end
+  end
+
+  def server_record?(_record), do: false
+
+  defp record_values?(values) when is_list(values) do
+    names = Enum.map(values, &(is_map(&1) && Map.get(&1, "name")))
+
+    Enum.all?(values, &record_value?/1) and names == Enum.sort(Enum.uniq(names))
+  end
+
+  defp record_values?(_values), do: false
+
+  defp record_value?(%{"name" => name, "literal" => true} = value) when map_size(value) == 2,
+    do: nonempty?(name)
+
+  defp record_value?(%{"name" => name, "entry" => entry} = value) do
+    nonempty?(name) and nonempty?(entry) and
+      case Map.keys(value) -- ["name", "entry"] do
+        [] -> true
+        ["scheme"] -> nonempty?(value["scheme"])
+        _other -> false
+      end
+  end
+
+  defp record_value?(_value), do: false
+
+  defp nonempty?(value), do: is_binary(value) and value != ""
 
   defp validate_tool_patterns(patterns) do
     case Enum.reject(patterns, &Prima.ToolPattern.valid?/1) do

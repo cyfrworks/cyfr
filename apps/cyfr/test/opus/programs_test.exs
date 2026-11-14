@@ -21,7 +21,7 @@ defmodule Opus.ProgramsTest do
   without the control plane; refusals are answered as their kind requires;
   a status names no more owners than the service answers for and is read
   no further than the answer bound; a driven program syncs with its program
-  settings; a kept mcp program runs in its login entry's home; a sign-in is
+  settings; a kept mcp program runs in its row's own home; a sign-in is
   relayed both ways and ends with its command; a kept home is reset, and a
   retire is sent again until it lands; no key reaches a status or a crash
   report.
@@ -1185,16 +1185,8 @@ defmodule Opus.ProgramsTest do
     row
   end
 
-  # A login entry of the athanor naming `program`; its id is its home's.
-  defp login_entry(ctx, name, program) do
-    {:ok, entry} =
-      Sanctum.TestContext.create_signed_in_login(ctx, %{name: name, program: program})
-
-    entry.id
-  end
-
   # A crew member `harness` whose brain, a catalyst with one login need of
-  # the program `claude`, mounts the login entry `entry`: bound on the
+  # the program `claude`, mounts the program row `entry`: bound on the
   # catalyst's own consent and selected on the member's edge into it, as a
   # person's walk binds it. Answers the context, under a storage root of
   # the test's own.
@@ -1693,13 +1685,12 @@ defmodule Opus.ProgramsTest do
 
     # The session a member's brain kept lived in the home: after a reset its
     # next request resumes nothing that is gone. A thread whose agent's
-    # brain runs elsewhere keeps its own. The home is named by the id the
-    # head binds for the need (`Sanctum.Mount.agents_mounting/2`); the
-    # consent store's rows reference a vault entry, so the head binds one
-    # here.
+    # brain runs elsewhere keeps its own. The home is the program row's,
+    # named by the id the head binds for the need
+    # (`Sanctum.Mount.agents_mounting/2`).
     test "a reset forgets the brain session of every thread whose agent's brain mounts the home",
-         %{ctx: ctx} do
-      entry = login_entry(ctx, "claude-login", "claude")
+         %{ctx: ctx, row: row} do
+      entry = row.id
       ctx = harness_member!(ctx, entry)
       actor = Sanctum.Context.actor(ctx)
       {:ok, room} = Arca.ThreadStorage.create(actor)
@@ -1722,44 +1713,6 @@ defmodule Opus.ProgramsTest do
       assert :ok = Programs.home(ctx.athanor_id, entry, :retire)
       assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
       assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
-    end
-
-    # A mount reads the brain edge's unnamed binding alone: a named account
-    # bound beside it is not where the brain runs, so its reset leaves the
-    # session the default home keeps.
-    test "a reset of a named account's home keeps the session of the default's",
-         %{ctx: ctx} do
-      named_home = login_entry(ctx, "claude-login", "claude")
-      default_home = login_entry(ctx, "default-login", "claude")
-      ctx = harness_member!(ctx, default_home)
-      brain = "catalyst:local.harnessbrain"
-
-      commit!(ctx, brain, %{
-        bindings: [
-          %{need: "claude", entry_id: default_home},
-          %{need: "claude", entry_id: named_home, name: "spare"}
-        ]
-      })
-
-      commit!(ctx, Prima.AgentRef.ref("harness"), %{
-        selections: [
-          %{dep: brain, need: "claude", entry_id: default_home},
-          %{dep: brain, need: "claude", entry_id: named_home, name: "spare"}
-        ]
-      })
-
-      actor = Sanctum.Context.actor(ctx)
-      {:ok, room} = Arca.ThreadStorage.create(actor)
-      {:ok, member} = Arca.ThreadStorage.crew_thread(actor, room.id, "harness")
-      keep_session!(member, "default-home-session")
-
-      assert :ok = Programs.home(ctx.athanor_id, named_home, :reset)
-
-      assert {:ok, %{brain_session: "default-home-session"}} =
-               Arca.ThreadStorage.get(actor, member.id)
-
-      assert :ok = Programs.home(ctx.athanor_id, default_home, :reset)
-      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
     end
 
     test "a retire that does not land is sent again on every tick until it does",

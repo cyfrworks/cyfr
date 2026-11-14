@@ -4,7 +4,8 @@
 defmodule Prima.Manifest.Needs do
   @moduledoc """
   The manifest `needs` block: named roles a component asks the operator
-  to satisfy with vault entries.
+  to satisfy with vault entries, or, for a `login` need, with a program
+  row.
 
   Two vocabularies meet only at consent — the developer names *roles*
   (`source`, `dest`, `api_key`); the operator names *credentials*;
@@ -72,7 +73,7 @@ defmodule Prima.Manifest.Needs do
   ## Mounting
 
   A need of `"type": "login"` is satisfied by mounting: the program it
-  names runs with a login entry's kept home, so its own sign-in is there.
+  names runs in its row's own kept folder, where its own sign-in is.
 
       "needs": {
         "claude": { "type": "login", "program": "claude",
@@ -83,8 +84,9 @@ defmodule Prima.Manifest.Needs do
       }
 
   `program` names the `mcp_servers` row the need runs, in
-  `Prima.Destination.valid_program?/1`'s grammar; it binds to a login
-  entry whose destination names that program (`fit/2`). `install`, when
+  `Prima.Destination.valid_program?/1`'s grammar; it binds to the
+  athanor's own program row of that name (`fit/2`), never to a vault
+  entry. `install`, when
   present, is what the component suggests the row to be: `command` and
   `login_command`, each optional and each held to
   `Prima.LocusBackends.check_command/1` as a backend command is. A setup
@@ -92,6 +94,10 @@ defmodule Prima.Manifest.Needs do
   `paths`, `attach`, `disclose`, `fields` or `scopes`: each is refused
   `{:not_for_login, name, keys}`. Nothing is attached to its requests or
   disclosed to it (`mount_only?/1`).
+
+  A consent binds a credential need to an entry and a login need to a
+  program row; `binding_kinds/0` are the kinds of both, and every other
+  kind names a component.
   """
 
   @name_re ~r/^[a-z][a-z0-9_-]{0,31}$/
@@ -102,7 +108,7 @@ defmodule Prima.Manifest.Needs do
   # A login need's type is `login` alone; every other type is
   # `kind:qualifier`.
   @login "login"
-  @kinds (@credential_kinds -- [@login]) ++ Prima.ComponentRef.executable_types()
+  @kinds @credential_kinds ++ Prima.ComponentRef.executable_types()
   @credential_only_keys ~w(attach hosts paths disclose)
   @entry_keys ~w(type reason fields scopes required) ++ @credential_only_keys
   @login_keys ~w(type reason required program install)
@@ -196,6 +202,14 @@ defmodule Prima.Manifest.Needs do
   def from_manifest(_manifest), do: nil
 
   @doc """
+  The kinds of need a consent binds: the credential kinds, each met by
+  an entry, and `login`, met by a program row. Every other kind names a
+  component.
+  """
+  @spec binding_kinds() :: [String.t()]
+  def binding_kinds, do: @credential_kinds ++ [@login]
+
+  @doc """
   How an entry whose destination is `outer` can serve the normalized
   credential need `need` (`from_manifest/1`'s) by where it may go:
   `:exact` when every need host is one of the entry's hosts as written,
@@ -209,12 +223,22 @@ defmodule Prima.Manifest.Needs do
   so `api.x.ai` fits `*.x.ai` and `x.ai` does not), and every path the
   need declares has an entry path that is a segment prefix of it
   (`Prima.Destination.within?/2`). The entry's own scheme, port, methods
-  and paths still bound every request it is attached to. A login need
-  fits `:exact` the destination that names its program and nothing else,
-  and no other need fits a program's destination.
+  and paths still bound every request it is attached to. No credential
+  need fits a program's destination.
+
+  A login need is met by a program row (`Arca.McpServerStorage`'s) alone:
+  it fits `:exact` a `program` row marked `driven` with a `kept` home
+  whose `name` is the need's `program`, and nothing else, no destination
+  and no entry. Which athanor's rows are offered is the caller's to
+  scope: the athanor's own alone.
   """
-  @spec fit(map(), Prima.Destination.t()) :: :exact | :wildcard | :none
-  def fit(%{kind: @login, program: program}, %Prima.Destination{program: program})
+  @spec fit(map(), Prima.Destination.t() | map()) :: :exact | :wildcard | :none
+  def fit(%{kind: @login, program: program}, %{
+        transport: "program",
+        mark: "driven",
+        home: "kept",
+        name: program
+      })
       when is_binary(program),
       do: :exact
 
@@ -250,8 +274,8 @@ defmodule Prima.Manifest.Needs do
 
   @doc """
   Whether a normalized need (`from_manifest/1`'s) is satisfied by
-  mounting alone: a login need, whose entry is neither attached nor
-  disclosed.
+  mounting alone: a login need, bound to a program row whose kept folder
+  its program runs in, with nothing attached or disclosed.
   """
   @spec mount_only?(map()) :: boolean()
   def mount_only?(%{kind: @login}), do: true

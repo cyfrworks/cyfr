@@ -208,6 +208,35 @@ defmodule Prima.ConsentPreviewTest do
     end
   end
 
+  test "a tool server row carries what its grant records of it, never a literal's value" do
+    {:ok, %ConsentPreview{rows: rows} = preview} = ConsentPreview.decode(vectors()["preview"])
+
+    assert [
+             %Row{
+               values: %{
+                 "record" => %{
+                   "address" => "https://forecasts.example/mcp",
+                   "headers" => [
+                     %{"name" => "authorization", "entry" => "forecasts-token"},
+                     %{"name" => "x-region", "literal" => true} = literal
+                   ]
+                 }
+               }
+             }
+           ] = Enum.filter(rows, &(&1.kind == :tool_servers))
+
+    assert map_size(literal) == 2
+    assert ConsentPreview.decode(ConsentPreview.encode(preview)) == {:ok, preview}
+
+    refusals = Map.new(vectors()["refusals"], &{&1["name"], &1["preview"]})
+
+    assert ConsentPreview.decode(refusals["a tool server record carrying a literal's value"]) ==
+             {:error, {:invalid_field, "record"}}
+
+    assert ConsentPreview.decode(refusals["a tool server naming no record"]) ==
+             {:error, {:missing_field, "record"}}
+  end
+
   test "every refusal is refused with its reason" do
     for %{"name" => name, "preview" => preview, "error" => error} <- vectors()["refusals"] do
       assert tag(ConsentPreview.decode(preview)) == error, name
@@ -257,8 +286,9 @@ defmodule Prima.ConsentPreviewTest do
     assert Enum.map(credentials, & &1["source"]) |> Enum.sort() ==
              Enum.sort(ConsentPreview.Row.sources() ++ ["own", "own", "own"])
 
-    # One own entry is a login entry: its destination names its program.
-    assert [%{"name" => "claude-login", "disclosed" => false}] =
+    # One own binding is a login need's program row: its destination names
+    # the program, and the row is named as the program is.
+    assert [%{"name" => "claude", "disclosed" => false}] =
              Enum.filter(credentials, &Map.has_key?(&1["destination"], "program"))
 
     assert Enum.map(credentials, & &1["lifetime"]["kind"]) |> Enum.uniq() |> Enum.sort() ==

@@ -696,8 +696,7 @@ defmodule PrismWeb.ComponentsLiveTest do
       )
   end
 
-  test "a login need names its program, and offers its install until the program has a row",
-       %{conn: conn, ctx: ctx} do
+  test "a login need names its program", %{conn: conn, ctx: ctx} do
     manifest = %{
       "name" => "harness",
       "type" => "catalyst",
@@ -722,39 +721,11 @@ defmodule PrismWeb.ComponentsLiveTest do
         wasm: Cyfr.Test.Guests.wasm(:catalyst)
       )
 
-    expand = fn ->
-      {view, _html} = mount_athanor(conn, "/components")
-      render_click(view, "toggle_expand", %{"ref" => "catalyst:local.harness"})
-      {view, render(view)}
-    end
-
-    {view, html} = expand.()
+    {view, _html} = mount_athanor(conn, "/components")
+    render_click(view, "toggle_expand", %{"ref" => "catalyst:local.harness"})
+    html = render(view)
     assert html =~ "program claude"
     refute html =~ "login:"
-
-    [href] =
-      html
-      |> LazyHTML.from_fragment()
-      |> LazyHTML.query(~s(a[data-test="install-program"]))
-      |> LazyHTML.attribute("href")
-
-    assert has_element?(view, ~s(a[data-test="install-program"]), "install claude")
-    assert href =~ "/programs?"
-
-    assert %{"need" => "claude", "install" => "catalyst:local.harness" <> _} =
-             URI.decode_query(URI.parse(href).query)
-
-    # With a row of that name the offer goes.
-    {:ok, _} =
-      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
-        cap: 0,
-        name: "claude",
-        url: "https://127.0.0.1:9/mcp",
-        enabled: false
-      })
-
-    {view, _html} = expand.()
-    refute has_element?(view, ~s(a[data-test="install-program"]))
   end
 
   test "an expanded component shows its description and tags", %{conn: conn} do

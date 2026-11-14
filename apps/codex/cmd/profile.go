@@ -560,10 +560,11 @@ func (n needRow) needFor() string {
 	return n.provider
 }
 
-// declared is a need the manifest declares as a credential, unlike the
-// undeclared slot of a manifest that declares no needs.
+// declared is a need the manifest declares for a binding (a credential, or a
+// login need's program), unlike the undeclared slot of a manifest that
+// declares no needs.
 func (n needRow) declared() bool {
-	return slices.Contains(ops.CredentialKinds, n.kind)
+	return slices.Contains(ops.BindingKinds, n.kind)
 }
 
 func readNeed(raw any) (needRow, bool) {
@@ -1042,7 +1043,7 @@ func chooseFor(need needRow, lenders []map[string]any, chooser grantChooser, fla
 func askEntry(need needRow, lenders []map[string]any, chooser grantChooser) (*idChoice, error) {
 	options := []prompt.Option{{Label: "No entry", Value: ""}}
 	for _, c := range need.candidates {
-		label := str(c["name"]) + ", " + sourceWords(str(c["source"]), "")
+		label := str(c["name"]) + ", " + bindingWords(str(c["source"]), c["destination"], "")
 		if destination, ok := c["destination"].(map[string]any); ok {
 			label += ", " + whereWords(destination)
 		}
@@ -1349,7 +1350,8 @@ func needLines(component, from string, need needRow, lenders []map[string]any) [
 	case need.suggested != nil:
 		for _, c := range need.candidates {
 			if candidateID(c) == need.suggested.value {
-				lines = append(lines, "    suggested: "+str(c["name"])+", "+sourceWords(str(c["source"]), ""))
+				lines = append(lines, "    suggested: "+str(c["name"])+", "+
+					bindingWords(str(c["source"]), c["destination"], ""))
 			}
 		}
 	case need.choiceRequired:
@@ -1488,6 +1490,30 @@ func renderPreview(w io.Writer, preview map[string]any) {
 		"  unless its row says the value is disclosed to it.\n\n")
 }
 
+// serverRecordLines is what a grant records of a tool server, a line each:
+// its address, then each header (an http server's) or environment variable
+// (a program's) with the vault entry it names, or marked a literal, whose
+// value the record never holds.
+func serverRecordLines(raw any) []string {
+	record, _ := raw.(map[string]any)
+	lines := []string{"address: " + str(record["address"])}
+	for _, member := range []struct{ key, word string }{{"headers", "header"}, {"env", "variable"}} {
+		for _, item := range asList(record[member.key]) {
+			value, _ := item.(map[string]any)
+			switch {
+			case value["literal"] == true:
+				lines = append(lines, member.word+" "+str(value["name"])+": a literal, its value not shown")
+			case str(value["scheme"]) != "":
+				lines = append(lines, member.word+" "+str(value["name"])+": vault entry "+
+					str(value["entry"])+" ("+str(value["scheme"])+")")
+			default:
+				lines = append(lines, member.word+" "+str(value["name"])+": vault entry "+str(value["entry"]))
+			}
+		}
+	}
+	return lines
+}
+
 // describeRow is one row in the CLI's words, its first line naming it.
 func describeRow(row map[string]any) []string {
 	values, _ := row["values"].(map[string]any)
@@ -1530,9 +1556,10 @@ func describeRow(row map[string]any) []string {
 		return []string{node + narrowed, "tools: " + listOr(values["tools"], "none")}
 
 	case "tool_servers":
-		return []string{node,
+		return append([]string{node,
 			str(values["name"]) + " " + str(values["digest"]),
-			"its tools matching: " + listOr(values["tool_patterns"], "none")}
+			"its tools matching: " + listOr(values["tool_patterns"], "none")},
+			serverRecordLines(values["record"])...)
 
 	case "limits":
 		lines := []string{node + narrowed}
@@ -1644,7 +1671,7 @@ func removalLine(item map[string]any) string {
 // where it may go and whether the component holds the value.
 func credentialSentence(node string, values map[string]any) string {
 	name := str(values["name"])
-	source := sourceWords(str(values["source"]), node)
+	source := bindingWords(str(values["source"]), values["destination"], node)
 
 	var sentence string
 	if edge := str(values["edge"]); edge == "@ingress" {
@@ -1670,6 +1697,16 @@ func credentialSentence(node string, values map[string]any) string {
 	}
 	sentence += whereWords(values["destination"]) + ". " + disclosureLabel(values)
 	return sentence
+}
+
+// bindingWords says what a binding or a candidate is: a program of the
+// athanor's, which a login need binds and whose destination names it, or
+// whose credential it is (sourceWords).
+func bindingWords(source string, destination any, node string) string {
+	if d, _ := destination.(map[string]any); str(d["program"]) != "" {
+		return "a program of this athanor"
+	}
+	return sourceWords(source, node)
 }
 
 // sourceWords says whose credential a binding is: the athanor's own entry,

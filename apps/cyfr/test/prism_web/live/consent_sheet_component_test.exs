@@ -701,8 +701,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
            ]
   end
 
-  test "a login need names its program, and its entry is mounted into the program's kept " <>
-         "folder, never sent to a host" do
+  test "a login need names its program, and its program row is mounted, never sent to a host" do
     login = fn name, candidates, opts ->
       name
       |> key_need(
@@ -714,10 +713,11 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     end
 
     entry =
-      own("vlt_login", "claude-login", %{
-        kind: "login",
-        provider: nil,
+      own("mcp_claude", "claude", %{
+        kind: "program",
+        provider: "",
         destination: %{"program" => "claude"},
+        label_match: false,
         field_names: [],
         fields: %{}
       })
@@ -727,7 +727,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       candidates: [],
       dependency_needs: [],
       needs: [
-        login.("claude", [entry], suggested: %{entry_id: "vlt_login"}),
+        login.("claude", [entry], suggested: %{entry_id: "mcp_claude"}),
         login.("other", [], required: false)
       ]
     }
@@ -738,15 +738,112 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     assert texts(claude, ".consent-sheet__need-what") == ["login for claude, required"]
 
     assert texts(claude, ~s([data-test="grant-pick"] .consent-sheet__fields)) == [
-             "an entry of this athanor, mounted into claude's kept folder"
+             "a program of this athanor, mounted into claude's kept folder"
            ]
 
     assert texts(need_html(html, "other"), ".consent-sheet__empty") == [
-             "Add a vault entry for claude first."
+             "Set up the program claude with a kept folder first."
            ]
 
     refute html =~ "://"
     refute html =~ "CYFR attaches"
+  end
+
+  describe "a tool server asked for again" do
+    @server_ref "catalyst:local.sheet-server"
+
+    defp server_row(digest, record) do
+      %{
+        "kind" => "tool_servers",
+        "node" => @server_ref,
+        "narrowed" => false,
+        "values" => %{
+          "name" => "github",
+          "digest" => digest,
+          "tool_patterns" => ["issues.*"],
+          "record" => record
+        }
+      }
+    end
+
+    @held %{
+      "address" => "https://mcp.github.example/v1",
+      "headers" => [
+        %{"name" => "authorization", "entry" => "github-personal", "scheme" => "Bearer"},
+        %{"name" => "x-tenant", "literal" => true}
+      ]
+    }
+
+    # The row the sheet draws for the server asked for, against the head
+    # that granted `held` at "sha256:held".
+    defp server_card(asked, digest \\ "sha256:asked") do
+      rows = [server_row(digest, asked)]
+
+      sheet(
+        %{
+          source_ref: @server_ref,
+          candidates: [],
+          needs: [],
+          dependency_needs: [],
+          rows: rows,
+          head_tool_servers: [%{name: "github", digest: "sha256:held", record: @held}]
+        },
+        preview: keyed_preview(rows)
+      )
+    end
+
+    defp changes(html), do: texts(html, ~s([data-test="server-changes"] li))
+
+    test "names a moved address" do
+      html = server_card(%{@held | "address" => "https://mcp.elsewhere.example/v1"})
+
+      assert changes(html) == [
+               "Its address changed from https://mcp.github.example/v1 to " <>
+                 "https://mcp.elsewhere.example/v1."
+             ]
+    end
+
+    test "names a header now naming another vault entry, one added and one removed" do
+      html =
+        server_card(%{
+          @held
+          | "headers" => [
+              %{"name" => "authorization", "entry" => "github-work", "scheme" => "Bearer"},
+              %{"name" => "x-org", "entry" => "github-org"}
+            ]
+        })
+
+      assert changes(html) == [
+               "Header authorization now names vault entry github-work, instead of " <>
+                 "naming vault entry github-personal.",
+               "New header x-org, naming vault entry github-org.",
+               "Header x-tenant is removed."
+             ]
+    end
+
+    test "names a literal whose value changed by its name alone" do
+      html = server_card(@held)
+
+      assert changes(html) == ["Header x-tenant: its value changed."]
+
+      assert texts(html, ~s([data-test="server-record"]))
+             |> Enum.member?("Header x-tenant: a literal, its value not shown")
+    end
+
+    test "names nothing when the head's grant is the one asked for, or there is none" do
+      assert changes(server_card(@held, "sha256:held")) == []
+
+      rows = [server_row("sha256:asked", @held)]
+
+      first =
+        sheet(
+          %{source_ref: @server_ref, candidates: [], needs: [], dependency_needs: [], rows: rows},
+          preview: keyed_preview(rows)
+        )
+
+      assert changes(first) == []
+      assert texts(first, ~s([data-test="server-record"])) |> length() == 3
+    end
   end
 
   describe "a candidate with no automatic map" do

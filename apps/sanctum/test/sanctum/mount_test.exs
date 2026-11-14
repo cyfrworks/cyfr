@@ -261,11 +261,11 @@ defmodule Sanctum.MountTest do
     # whose edge to a hand binds it, or whose brain's profile binds it only
     # on an edge of the brain's own, does not.
     test "agents_mounting/2 names the agents whose brain edge reaches the binding", %{ctx: ctx} do
-      entry = binding_target!(ctx)
-      elsewhere = binding_target!(ctx)
+      entry = row!(ctx, %{name: "claude"})
+      elsewhere = row!(ctx, %{name: "codex"})
 
       bound = fn key, id ->
-        %{binding_key: key, vault_entry_id: id, binding_digest: "sha256:b"}
+        %{binding_key: key, mcp_server_id: id, binding_digest: "sha256:b"}
       end
 
       lent = fn key -> %{binding_key: key, via_label: "work", binding_digest: nil} end
@@ -301,19 +301,6 @@ defmodule Sanctum.MountTest do
       assert Enum.sort(names) == ["bare", "borrower", "member"]
       assert {:ok, ["lent"]} = Mount.agents_mounting(ctx.athanor_id, elsewhere.id)
     end
-  end
-
-  # What a head's row names as its bound value: the consent store's rows
-  # reference a vault entry, so the read of the edges binding one is shown
-  # on an entry's id; `agents_mounting/2` passes the id through whole.
-  defp binding_target!(ctx) do
-    {:ok, view} =
-      TestContext.create_signed_in_login(ctx, %{
-        name: "login-#{System.unique_integer([:positive])}",
-        program: "claude"
-      })
-
-    view
   end
 
   # The agent `name`'s index row, its brain `catalyst_ref`.

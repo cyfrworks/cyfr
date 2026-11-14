@@ -30,6 +30,11 @@ defmodule Sanctum.Mount do
        consumes a `once` binding for this root, so a mount refused by any
        check above consumes nothing.
 
+  A consent offers a login need the athanor's own program rows that fit
+  it (`programs/1`, `Prima.Manifest.Needs.fit/2`) and binds one by its id
+  at `binding_digest/1`, read again at the commit (`program/2`); a share
+  is never offered for it.
+
   `agents_mounting/2` and `orphaned_homes/1` are the reads the programs
   controller makes of the same rows: the agents whose brain runs in a
   home it resets or retires, and the homes a box holds that no kept row
@@ -82,6 +87,41 @@ defmodule Sanctum.Mount do
          :ok <- Attach.lifetime(ctx, binding, use) do
       {:ok, row}
     end
+  end
+
+  @doc """
+  The program rows of the context's athanor, the ones a login need's
+  candidates are chosen from: `{:error, {:unavailable, "Programs"}}` when
+  the store cannot answer, so an outage never reads as none; a context
+  with no athanor has none.
+  """
+  @spec programs(Context.t()) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
+  def programs(%Context{} = ctx) do
+    case Arca.McpServerStorage.list(Context.actor(ctx)) do
+      {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.transport == "program"))}
+      {:error, :no_athanor} -> {:ok, []}
+      {:error, _unanswered} -> {:error, {:unavailable, "Programs"}}
+    end
+  end
+
+  @doc """
+  The program row `row_id` of the context's athanor, as a binding names
+  it; another athanor's row is not found.
+  """
+  @spec program(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def program(%Context{} = ctx, row_id) when is_binary(row_id),
+    do: Arca.McpServerStorage.get_by_id(Context.actor(ctx), row_id)
+
+  @doc """
+  The digest a login need's binding of the program row `row` is approved
+  at: the row and the program it is, so a binding of a row made again
+  under its name, or of another program, does not pass a commit's
+  re-read.
+  """
+  @spec binding_digest(map()) :: String.t()
+  def binding_digest(%{id: id, name: name}) when is_binary(id) and is_binary(name) do
+    {:ok, digest} = Prima.JCS.hash(%{"row" => id, "program" => name})
+    digest
   end
 
   # The edge's binding of the need: a row id under a key whose edge names

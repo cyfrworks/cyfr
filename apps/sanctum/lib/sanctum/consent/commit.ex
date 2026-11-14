@@ -728,7 +728,8 @@ defmodule Sanctum.Consent.Commit do
       name = Map.get(raw, :server_name)
 
       case tool_server_candidate(ctx, name || "") do
-        {:ok, %{server_digest: digest} = candidate} when is_binary(digest) ->
+        {:ok, %{server_digest: digest, record: %{} = record} = candidate}
+        when is_binary(digest) ->
           # Intersect granted patterns with the server’s configured patterns.
           # Dispatch also rechecks the live configuration.
           case narrow_tool_patterns(Map.get(raw, :tool_patterns), candidate.tool_patterns) do
@@ -736,6 +737,7 @@ defmodule Sanctum.Consent.Commit do
               grant = %{
                 server_name: candidate.name,
                 server_digest: digest,
+                record: record,
                 tool_patterns: patterns,
                 descriptions_digest: candidate.descriptions_digest
               }
@@ -1139,7 +1141,7 @@ defmodule Sanctum.Consent.Commit do
   defp single_credential_need(rows, dep) do
     with {:ok, _row, manifest} <- node_row_manifest(rows, dep),
          declared when is_list(declared) <- Prima.Manifest.Needs.from_manifest(manifest),
-         [need] <- Enum.filter(declared, &(&1.kind in Prima.CredentialKinds.all())) do
+         [need] <- Enum.filter(declared, &(&1.kind in Prima.Manifest.Needs.binding_kinds())) do
       need
     else
       _ -> :unknown
@@ -1155,7 +1157,7 @@ defmodule Sanctum.Consent.Commit do
          {:ok, need, declared_need} <- selected_need(raw, dep, dep_manifest),
          :ok <- not_provided(decided.provided, dep, need, "#{need}"),
          {:ok, scopes} <- binding_list(%{}, :scopes, declared_need, need),
-         {:ok, bound} <- fetch_bound(ctx, target, need),
+         {:ok, bound} <- fetch_bound(ctx, target, declared_need, need),
          {:ok, destination} <- bound_destination(bound),
          :ok <- check_fit(bound, destination, declared_need, need),
          :ok <- check_disclosure(bound, declared_need, need),
@@ -1192,7 +1194,7 @@ defmodule Sanctum.Consent.Commit do
     declared = Prima.Manifest.Needs.from_manifest(dep_manifest)
 
     credential =
-      for need <- declared || [], need.kind in Prima.CredentialKinds.all(), do: need
+      for need <- declared || [], need.kind in Prima.Manifest.Needs.binding_kinds(), do: need
 
     case {Map.get(raw, :need), declared, credential} do
       {nil, nil, _} ->
@@ -1643,7 +1645,7 @@ defmodule Sanctum.Consent.Commit do
          {:ok, scopes} <- binding_list(raw, :scopes, declared_need, need),
          :ok <- check_token_grant(declared_need, scopes, need),
          {:ok, target} <- binding_target(raw, need),
-         {:ok, bound} <- fetch_bound(ctx, target, need),
+         {:ok, bound} <- fetch_bound(ctx, target, declared_need, need),
          {:ok, destination} <- bound_destination(bound),
          :ok <- check_fit(bound, destination, declared_need, need),
          :ok <- check_disclosure(bound, declared_need, need),
@@ -1852,11 +1854,47 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # The entry a binding names, live: the athanor's own, active, at the
-  # digest its row derives; or a share offered to the person
-  # (`Sanctum.Shares.binding/2`), at the digest its source derives.
+  # What a binding names, live: for a login need, the athanor's own
+  # program row that fits it (`Sanctum.Mount`), at its binding digest, and
+  # never an entry or a share; for any other, the athanor's own entry,
+  # active, at the digest its row derives, or a share offered to the
+  # person (`Sanctum.Shares.binding/2`), at the digest its source derives.
   # Nothing is unsealed.
-  defp fetch_bound(ctx, {:own, id}, _need) do
+  defp fetch_bound(ctx, {:own, id}, %{kind: "login"} = declared_need, need) do
+    with {:ok, row} <- fetch_program(ctx, id),
+         :exact <- Prima.Manifest.Needs.fit(declared_need, row) do
+      {:ok, destination} = Prima.Destination.from_map(%{"program" => row.name})
+
+      {:ok,
+       %{
+         source: "own",
+         id: row.id,
+         entry: %{
+           id: row.id,
+           name: row.name,
+           provider_hint: "",
+           attach_only: true,
+           destination: Prima.Destination.canonical(destination)
+         },
+         digest: Sanctum.Mount.binding_digest(row),
+         scope: "athanor",
+         kind: "program",
+         provider: "",
+         disclosed: false,
+         field_names: [],
+         oauth_scopes: [],
+         destination: Prima.Destination.to_map(destination)
+       }}
+    else
+      :none -> {:error, {:entry_mismatch, need}}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  defp fetch_bound(_ctx, {:share, _id}, %{kind: "login"}, need),
+    do: {:error, {:entry_mismatch, need}}
+
+  defp fetch_bound(ctx, {:own, id}, _declared_need, _need) do
     with {:ok, entry} <- fetch_bindable_entry(ctx, id),
          {:ok, digest} <- VaultReader.binding_digest(entry) do
       {:ok,
@@ -1878,7 +1916,7 @@ defmodule Sanctum.Consent.Commit do
 
   # A share is its source entry's facts, attach-only, named for its owner:
   # the binding names the share, never the entry behind it.
-  defp fetch_bound(ctx, {:share, id}, need) do
+  defp fetch_bound(ctx, {:share, id}, _declared_need, need) do
     case Sanctum.Shares.binding(ctx, id) do
       {:ok, view} ->
         name = Plan.shared_name(view.owner)
@@ -1912,6 +1950,9 @@ defmodule Sanctum.Consent.Commit do
   # declares neither.
   defp check_fit(_bound, _destination, nil, _need), do: :ok
 
+  # A login need's program row was fit when it was read (`fetch_bound/4`).
+  defp check_fit(%{kind: "program"}, _destination, %{kind: "login"}, _need), do: :ok
+
   defp check_fit(bound, destination, declared_need, need) do
     if Plan.entry_fit(declared_need, %{kind: bound.kind, destination: destination}) == :none,
       do: {:error, {:entry_mismatch, need}},
@@ -1920,12 +1961,7 @@ defmodule Sanctum.Consent.Commit do
 
   # A need the component reads itself takes a disclosed entry of the
   # athanor; a share is never disclosed. A need met by mounting is neither
-  # disclosed nor attached: its own login entry is admitted as it is, and a
-  # share of one is refused, since a recipient's use of a shared login
-  # entry is not built.
-  defp check_disclosure(%{source: "share"}, %{kind: "login"}, _need),
-    do: {:error, {:not_built, :shared_login}}
-
+  # disclosed nor attached: its program row is admitted as it is.
   defp check_disclosure(_bound, %{kind: "login"}, _need), do: :ok
 
   defp check_disclosure(bound, declared_need, need) do
@@ -1954,8 +1990,9 @@ defmodule Sanctum.Consent.Commit do
   defp attach_rule(%{attach: %{} = rule}), do: Prima.Manifest.Needs.attach_to_map(rule)
   defp attach_rule(_declared_need), do: nil
 
-  # The needs an entry meets; the others name a component.
-  @credential_kinds Prima.CredentialKinds.all()
+  # The needs a binding meets, an entry's or a program row's; the others
+  # name a component.
+  @credential_kinds Prima.Manifest.Needs.binding_kinds()
 
   defp check_known_need(@ingress, nil), do: {:ok, nil}
   defp check_known_need(need, nil), do: {:error, {:unknown_need, need}}
@@ -1991,9 +2028,9 @@ defmodule Sanctum.Consent.Commit do
   defp declared_list(nil, _key), do: []
   defp declared_list(declared_need, key), do: Map.fetch!(declared_need, key)
 
-  # A token is dispensed only under scopes an OAuth need grants: a key or
-  # bundle need's edge names no scopes, so it never dispenses one.
-  defp check_token_grant(%{kind: kind}, [_ | _], need) when kind in ~w(api_key bundle) do
+  # A token is dispensed only under scopes an OAuth need grants: any other
+  # need's edge names no scopes, so it never dispenses one.
+  defp check_token_grant(%{kind: kind}, [_ | _], need) when kind != "oauth" do
     {:error,
      {:invalid_argument,
       "The binding for #{need} names scopes, but #{need} is a #{kind} need; " <>
@@ -2085,8 +2122,16 @@ defmodule Sanctum.Consent.Commit do
      "The binding for #{name} names no #{key}; a projection names the #{key} it reads"}
   end
 
+  # A program row of the athanor's own, as a login need's binding names it.
+  defp fetch_program(ctx, id) do
+    case Sanctum.Mount.program(ctx, id) do
+      {:ok, row} -> {:ok, row}
+      {:error, reason} -> {:error, {:entry_unavailable, id, reason}}
+    end
+  end
+
   # An entry the plan offers (`Sanctum.Consent.Plan.bindable?/1`): an
-  # active one, or a login entry whose program is not signed in yet.
+  # active one.
   defp fetch_bindable_entry(ctx, entry_id) do
     case Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry_id) do
       {:ok, entry} = found when is_map(entry) ->
@@ -2298,6 +2343,7 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp head_identity(%{vault_entry_id: id}) when is_binary(id), do: {:ok, {:own, id}}
+  defp head_identity(%{mcp_server_id: id}) when is_binary(id), do: {:ok, {:own, id}}
   defp head_identity(%{share_id: id}) when is_binary(id), do: {:ok, {:share, id}}
   defp head_identity(%{via_label: label}) when is_binary(label), do: {:ok, {:label, label}}
   defp head_identity(_ref), do: {:error, {:preview_unrepresentable, :removed}}
@@ -2358,7 +2404,7 @@ defmodule Sanctum.Consent.Commit do
 
   defp credential_needs(manifest) do
     for need <- Prima.Manifest.Needs.from_manifest(manifest) || [],
-        need.kind in Prima.CredentialKinds.all(),
+        need.kind in Prima.Manifest.Needs.binding_kinds(),
         do: need
   end
 
@@ -2667,7 +2713,8 @@ defmodule Sanctum.Consent.Commit do
     base = %{
       "server_digest" => grant.server_digest,
       "server_name" => grant.server_name,
-      "tool_patterns" => Enum.sort(grant.tool_patterns)
+      "tool_patterns" => Enum.sort(grant.tool_patterns),
+      "record" => grant.record
     }
 
     case grant.descriptions_digest do
@@ -2824,6 +2871,10 @@ defmodule Sanctum.Consent.Commit do
       {:ok, view} -> {:ok, view.binding_digest}
       {:error, refused} -> {:error, share_refusal(refused, id, Map.get(binding, :need))}
     end
+  end
+
+  defp live_digest(ctx, %{destination: %{"program" => _program}, entry_id: id}) do
+    with {:ok, row} <- fetch_program(ctx, id), do: {:ok, Sanctum.Mount.binding_digest(row)}
   end
 
   defp live_digest(ctx, %{entry_id: id}) do
@@ -3119,7 +3170,8 @@ defmodule Sanctum.Consent.Commit do
         %{
           "name" => server["server_name"],
           "digest" => server["server_digest"],
-          "tool_patterns" => server["tool_patterns"] |> List.wrap() |> Enum.uniq() |> Enum.sort()
+          "tool_patterns" => server["tool_patterns"] |> List.wrap() |> Enum.uniq() |> Enum.sort(),
+          "record" => server["record"]
         },
         false
       )

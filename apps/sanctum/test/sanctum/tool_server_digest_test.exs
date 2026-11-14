@@ -218,6 +218,92 @@ defmodule Sanctum.ToolServerDigestTest do
     end
   end
 
+  describe "recorded/1" do
+    # A stored row as the row store holds one, its config JSON beside its
+    # program columns.
+    defp stored(over) do
+      Map.merge(
+        %{
+          id: "mcp_row_1",
+          transport: "http",
+          mark: nil,
+          url: "https://mcp.example/sse",
+          enabled: true,
+          hosts: nil,
+          home: "scratch",
+          memory_bytes: nil,
+          home_max_bytes: nil,
+          login_command: nil,
+          config_json:
+            Jason.encode!(%{
+              "headers" => %{
+                "authorization" => "Bearer vault:GH_TOKEN",
+                "x-api-key" => "vault:other",
+                "user-agent" => "cyfr-literal-secret"
+              }
+            })
+        },
+        over
+      )
+    end
+
+    test "an http row records its url and each header by name with the entry it names" do
+      assert ToolServerDigest.recorded(stored(%{})) ==
+               {:ok,
+                %{
+                  "address" => "https://mcp.example/sse",
+                  "headers" => [
+                    %{"name" => "authorization", "entry" => "GH_TOKEN", "scheme" => "Bearer"},
+                    %{"name" => "user-agent", "literal" => true},
+                    %{"name" => "x-api-key", "entry" => "other"}
+                  ]
+                }}
+    end
+
+    test "a program records its command and each environment variable, a literal by name alone" do
+      row =
+        stored(%{
+          transport: "program",
+          mark: "mcp",
+          url: nil,
+          config_json: Jason.encode!(%{"command" => @program.command, "env" => @program.env})
+        })
+
+      assert ToolServerDigest.recorded(row) ==
+               {:ok,
+                %{
+                  "address" => "npx -y @modelcontextprotocol/server-github",
+                  "env" => [
+                    %{"name" => "GITHUB_TOKEN", "entry" => "gh"},
+                    %{"name" => "NODE_ENV", "literal" => true}
+                  ]
+                }}
+
+      assert {:error, {:invalid_server_config, _}} =
+               ToolServerDigest.recorded(%{row | mark: "driven"})
+    end
+
+    test "never carries a literal's value, which the digest still covers" do
+      {:ok, record} = ToolServerDigest.recorded(stored(%{}))
+      refute inspect(record) =~ "cyfr-literal-secret"
+
+      moved =
+        stored(%{
+          config_json:
+            Jason.encode!(%{
+              "headers" => %{
+                "authorization" => "Bearer vault:GH_TOKEN",
+                "x-api-key" => "vault:other",
+                "user-agent" => "another-literal"
+              }
+            })
+        })
+
+      assert ToolServerDigest.recorded(moved) == {:ok, record}
+      refute ToolServerDigest.from_server(moved) == ToolServerDigest.from_server(stored(%{}))
+    end
+  end
+
   describe "from_server/1 + tool_patterns/1" do
     test "derives from a stored row shape" do
       server = %{

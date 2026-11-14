@@ -510,15 +510,35 @@ defmodule Prima.Manifest.NeedsTest do
       end
     end
 
-    test "fits the destination naming its program, and nothing else does" do
+    test "fits a driven program row of its program with a kept home, and nothing else" do
+      row = %{transport: "program", mark: "driven", home: "kept", name: "claude"}
       {:ok, claude} = Prima.Destination.from_map(%{"program" => "claude"})
-      {:ok, codex} = Prima.Destination.from_map(%{"program" => "codex"})
       {:ok, hosts} = Prima.Destination.from_map(%{"hosts" => ["api.anthropic.com"]})
 
-      assert Needs.fit(normalized(login()), claude) == :exact
-      assert Needs.fit(normalized(login()), codex) == :none
+      assert Needs.fit(normalized(login()), row) == :exact
+
+      for unfit <- [
+            %{row | name: "codex"},
+            %{row | mark: "mcp"},
+            %{row | home: "scratch"},
+            %{row | transport: "http"}
+          ] do
+        assert Needs.fit(normalized(login()), unfit) == :none, inspect(unfit)
+      end
+
+      # No destination meets it, a program's included, and no vault entry
+      # carries one.
+      assert Needs.fit(normalized(login()), claude) == :none
       assert Needs.fit(normalized(login()), hosts) == :none
       assert Needs.fit(normalized(need(%{"hosts" => ["api.anthropic.com"]})), claude) == :none
+      assert Needs.fit(normalized(need(%{"hosts" => ["api.anthropic.com"]})), row) == :none
+    end
+
+    test "is bound as a credential need is, and mounted, never attached or disclosed" do
+      assert "login" in Needs.binding_kinds()
+      refute "login" in Prima.CredentialKinds.all()
+      assert Needs.mount_only?(normalized(login()))
+      refute Needs.disclose_only?(normalized(login()))
     end
   end
 end

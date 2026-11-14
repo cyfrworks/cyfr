@@ -262,23 +262,51 @@ defmodule Sanctum.Consent.PlanTest do
       "install" => %{"command" => "claude", "login_command" => "claude auth login"}
     }
 
-    defp login_entry!(ctx, program) do
+    # A program row of `athanor_id`, written as the row store writes one:
+    # by default the athanor's own driven program with a kept home.
+    defp program!(ctx, name, over \\ %{}) do
+      attrs =
+        Map.merge(
+          %{
+            id: Prima.UUID7.generate_id("mcp"),
+            name: name,
+            transport: "program",
+            mark: "driven",
+            home: "kept",
+            enabled: true,
+            epoch: 1,
+            revision: 0,
+            config_json: ~s({"command":"#{name}"}),
+            athanor_id: ctx.athanor_id,
+            created_by: ctx.user_id || "usr_test"
+          },
+          over
+        )
+
+      Arca.Repo.insert!(struct(Arca.Schemas.McpServer, attrs))
+    end
+
+    defp api_key!(ctx) do
       {:ok, view} =
         Sanctum.TestContext.create_vault(ctx, %{
-          name: "login-#{program}-#{System.unique_integer([:positive])}",
-          kind: "login",
-          program: program
+          name: "claude-key-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          fields: %{"api_key" => "sk-test"},
+          destination: %{"hosts" => ["api.anthropic.com"]}
         })
 
       view
     end
 
-    test "is covered by the program its destination names: the login entry naming it is offered",
+    test "is met by the athanor's own program row that fits it, named by its id, and never " <>
+           "by a vault entry",
          %{ctx: ctx} do
       publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
       ref = "reagent:local.plan-mount"
-      claude = login_entry!(ctx, "claude")
-      _codex = login_entry!(ctx, "codex")
+      claude = program!(ctx, "claude")
+      _codex = program!(ctx, "codex")
+      _elsewhere = program!(ctx, "claude", %{athanor_id: "ath_elsewhere"})
+      _key = api_key!(ctx)
 
       assert {:ok, plan} = Plan.plan(ctx, %{ref: ref})
       [row] = plan.needs
@@ -286,45 +314,85 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.need == "claude"
       assert row.program == "claude"
       assert row.hosts == nil
-      assert [%{entry_id: id, source: "own", kind: "login", disclosed: false}] = row.candidates
+
+      assert [
+               %{
+                 entry_id: id,
+                 source: "own",
+                 kind: "program",
+                 name: "claude",
+                 destination: %{"program" => "claude"},
+                 disclosed: false
+               }
+             ] = row.candidates
+
       assert id == claude.id
-      assert row.suggested.entry_id == claude.id
+      assert row.suggested == %{entry_id: claude.id}
     end
 
-    test "a required login need no entry meets says to create one for its program",
-         %{ctx: ctx} do
+    test "is met by no row that is not a driven program with a kept home", %{ctx: ctx} do
+      publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
+      _scratch = program!(ctx, "claude", %{home: "scratch"})
+
+      assert {:ok, %{needs: [%{candidates: []}]}} =
+               Plan.plan(ctx, %{ref: "reagent:local.plan-mount"})
+    end
+
+    test "a required login need no row meets says to set up its program", %{ctx: ctx} do
       publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
 
       assert {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-mount"})
       assert [%{need: "claude", candidates: []}] = plan.needs
 
-      assert ("need 'claude' wants login entry for the program claude, and none can yet. " <>
+      assert ("need 'claude' wants the program claude with a kept folder, and none can yet. " <>
                 "Create one first.") in plan.warnings
     end
 
-    test "commits to a login entry, attach-only and projecting nothing", %{ctx: ctx} do
+    test "commits to the program row: the binding names the row's id", %{ctx: ctx} do
       publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
       ref = "reagent:local.plan-mount"
-      claude = login_entry!(ctx, "claude")
+      claude = program!(ctx, "claude")
 
       commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: claude.id}]})
 
       {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
-      assert [%{vault_entry_id: id}] = head.vault_refs
+      assert [%{mcp_server_id: id, vault_entry_id: nil, scope: "athanor"}] = head.vault_refs
       assert id == claude.id
+
+      %{"nodes" => %{^ref => %{"edges" => %{"@ingress" => %{"vault" => vault}}}}} =
+        Jason.decode!(head.resolved_policy)
+
+      assert %{
+               "entry_id" => ^id,
+               "scope" => "athanor",
+               "destination" => %{"program" => "claude"},
+               "projection" => %{"fields" => %{}, "scopes" => []}
+             } = vault
+
+      refute Map.has_key?(vault, "attach")
     end
 
-    test "refuses a login entry naming another program", %{ctx: ctx} do
+    test "refuses another program's row, a vault entry and another athanor's row",
+         %{ctx: ctx} do
       publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
       ref = "reagent:local.plan-mount"
-      codex = login_entry!(ctx, "codex")
+      codex = program!(ctx, "codex")
+      key = api_key!(ctx)
+      elsewhere = program!(ctx, "claude", %{athanor_id: "ath_elsewhere"})
 
-      assert {:error, {:entry_mismatch, "claude"}} =
-               Sanctum.Consent.Commit.preview(ctx, %{
-                 ref: ref,
-                 bindings: [%{need: "claude", entry_id: codex.id}]
-               })
+      preview = fn id ->
+        Sanctum.Consent.Commit.preview(ctx, %{
+          ref: ref,
+          bindings: [%{need: "claude", entry_id: id}]
+        })
+      end
+
+      assert {:error, {:entry_mismatch, "claude"}} = preview.(codex.id)
+      assert {:error, {:entry_unavailable, key_id, :not_found}} = preview.(key.id)
+      assert key_id == key.id
+      assert {:error, {:entry_unavailable, row_id, :not_found}} = preview.(elsewhere.id)
+      assert row_id == elsewhere.id
     end
 
     test "in a dependency's manifest no longer refuses the plan", %{ctx: ctx} do
@@ -337,34 +405,43 @@ defmodule Sanctum.Consent.PlanTest do
       assert {:ok, _plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-mount-app"})
     end
 
-    test "the @ingress slot never offers a login entry, and no share is offered for a login need" do
-      login = %{
-        id: "vlt_login",
+    test "offers a program row for a login need alone, and no share or entry for it" do
+      row = %{
+        id: "mcp_claude",
         name: "claude",
-        kind: "login",
+        transport: "program",
+        mark: "driven",
+        home: "kept"
+      }
+
+      entry = %{
+        id: "vlt_key",
+        name: "claude",
+        kind: "api_key",
         provider_hint: "",
-        destination: %{"program" => "claude"},
+        destination: %{"hosts" => ["api.anthropic.com"], "scheme" => "https"},
         attach_only: false,
-        field_names: [],
+        field_names: ["api_key"],
         oauth_scopes: []
       }
 
       share = %{
-        id: "shr_login",
+        id: "shr_key",
         owner: %{name: "Ada"},
-        kind: "login",
+        kind: "api_key",
         provider_hint: "",
         destination: %{"program" => "claude"},
         field_names: []
       }
 
-      assert %{candidates: []} =
-               Plan.need_choice(%{own: [login], shares: [share], defaults: %{}}, nil)
+      sources = %{own: [entry], programs: [row], shares: [share], defaults: %{}}
 
       [need] = Prima.Manifest.Needs.from_manifest(%{"needs" => %{"claude" => @login_need}})
-      sources = %{own: [login], shares: [share], defaults: %{}}
+      assert %{candidates: [%{entry_id: "mcp_claude"}]} = Plan.need_choice(sources, need)
 
-      assert %{candidates: [%{entry_id: "vlt_login"}]} = Plan.need_choice(sources, need)
+      # The `@ingress` slot of a manifest declaring no needs is never met by
+      # a program row.
+      assert %{candidates: [%{entry_id: "vlt_key"}]} = Plan.need_choice(sources, nil)
     end
   end
 

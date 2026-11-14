@@ -198,25 +198,49 @@ defmodule Arca.McpServerStorage do
   @doc """
   Delete an MCP server config by name, scoped to the given tenant, and
   answer the row that was deleted.
+
+  A program row a login need binds goes with its bindings (the
+  baseline's cascade), so in one transaction the row is locked, every
+  profile whose head binds it is blocked to ask again
+  (`Arca.ConsentStorage.block_dependents/4`, the order a revision binding
+  the row takes), and then the row is deleted.
   """
   @spec delete(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
   def delete(%Prima.Actor{athanor_id: athanor_id} = actor, name)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.delete", fn ->
-      query =
-        from(s in McpServer, where: s.name == ^name, select: s)
-        |> where_tenant(actor)
-
-      case Arca.Repo.delete_all(query) do
-        {1, [server]} -> {:ok, server}
-        {0, _} -> {:error, :not_found}
-      end
+      Arca.Repo.locking_transaction(fn ->
+        with %McpServer{id: id} <- locked(actor, name) || {:error, :not_found},
+             {:ok, _blocked} <-
+               Arca.ConsentStorage.block_dependents(
+                 actor,
+                 {athanor_id, id},
+                 [],
+                 Arca.StatusTransitions.blocked_profile_status()
+               ),
+             {1, [server]} <-
+               Arca.Repo.delete_all(
+                 from(s in McpServer, where: s.id == ^id, select: s)
+                 |> where_tenant(actor)
+               ) do
+          server
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
     end)
     |> Arca.Data.project()
   end
 
   def delete(%Prima.Actor{}, _name), do: {:error, :no_athanor}
+
+  defp locked(actor, name) do
+    from(s in McpServer, where: s.name == ^name)
+    |> where_tenant(actor)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+  end
 
   @doc """
   Update fields of a server config (`:transport`, `:url`, `:config_json`,

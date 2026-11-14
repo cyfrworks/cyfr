@@ -11,7 +11,8 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   Each argument struct serializes its declared action discriminator.
 
   The file also carries the rosters the CLI validates and classifies by,
-  read from their owners: the credential kinds (`Prima.CredentialKinds`).
+  read from their owners: the need kinds a consent binds
+  (`Prima.Manifest.Needs.binding_kinds/0`).
 
       mix ops.gen.cli
       mix ops.gen.cli --check
@@ -85,8 +86,9 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   @spec rosters() :: [roster()]
   def rosters do
     [
-      {"CredentialKinds", "every credential kind a manifest need may name",
-       Prima.CredentialKinds.all()}
+      {"BindingKinds",
+       "every need kind a consent binds: the credential kinds, and login, which binds a program",
+       Prima.Manifest.Needs.binding_kinds()}
     ]
   end
 

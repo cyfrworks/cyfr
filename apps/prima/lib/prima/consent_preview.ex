@@ -41,7 +41,11 @@ defmodule Prima.ConsentPreview do
     * `storage` — `paths`, `actions`.
     * `tools` — `tools`, the expanded `tool.action` names, or `["*"]`
       alone when the ask names every tool and the grant is the whole ask.
-    * `tool_servers` — `name`, `digest`, `tool_patterns`. One row per server.
+    * `tool_servers` — `name`, `digest`, `tool_patterns` and `record`,
+      what the server reaches as the grant records it: its `address` and
+      each header (`headers`) or environment variable (`env`) by name with
+      the vault entry it names, a literal by its name alone
+      (`Prima.Authority.Blob.server_record?/1`). One row per server.
     * `limits` — the seven fields of `Prima.Limits`, as `Prima.Limits.to_map/1` writes them.
     * `frame` — a tincture's `capabilities`, `placement` (`canvas` for a
       desktop, one that declares the `tincture.desktop` block; absent for the
@@ -412,8 +416,13 @@ defmodule Prima.ConsentPreview.Row do
 
   defp spec(:tool_servers),
     do:
-      {~w(name digest tool_patterns), [],
-       %{"name" => &text?/1, "digest" => &Encoding.digest?/1, "tool_patterns" => &set?/1}}
+      {~w(name digest tool_patterns record), [],
+       %{
+         "name" => &text?/1,
+         "digest" => &Encoding.digest?/1,
+         "tool_patterns" => &set?/1,
+         "record" => &Prima.Authority.Blob.server_record?/1
+       }}
 
   defp spec(:limits) do
     fields = Enum.map(Prima.Limits.fields(), &Atom.to_string/1)

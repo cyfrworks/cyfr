@@ -58,7 +58,11 @@ defmodule Prima.Authority.BlobTest do
                 %{
                   "server_digest" => "sha256:srv",
                   "server_name" => "github",
-                  "tool_patterns" => ["github.*"]
+                  "tool_patterns" => ["github.*"],
+                  "record" => %{
+                    "address" => "https://api.github.example/mcp",
+                    "headers" => [%{"name" => "authorization", "entry" => "github"}]
+                  }
                 }
               ]
             },
@@ -128,7 +132,8 @@ defmodule Prima.Authority.BlobTest do
                    server_digest: "sha256:srv",
                    server_name: "github",
                    tool_patterns: ["github.*"],
-                   descriptions_digest: nil
+                   descriptions_digest: nil,
+                   record: %{"address" => "https://api.github.example/mcp"}
                  }
                ]
              } = source
@@ -404,6 +409,47 @@ defmodule Prima.Authority.BlobTest do
                  %{"tool_patterns" => ["a.*"]}
                ])
                |> Blob.parse()
+    end
+
+    test "a tool server's record names its address and each value by name, never a literal's value" do
+      server = fn record ->
+        golden()
+        |> put_in(["nodes", @formula, "edges", "#{@catalyst}|source", "tool_servers"], [
+          %{
+            "server_digest" => "sha256:srv",
+            "server_name" => "github",
+            "tool_patterns" => ["github.*"],
+            "record" => record
+          }
+        ])
+        |> Blob.parse()
+      end
+
+      held = %{
+        "address" => "npx -y server-github",
+        "env" => [
+          %{"name" => "GITHUB_TOKEN", "entry" => "personal"},
+          %{"name" => "NODE_ENV", "literal" => true}
+        ]
+      }
+
+      assert {:ok, blob} = server.(held)
+
+      assert %Edge{tool_servers: [%{record: ^held}]} =
+               blob.nodes[@formula].edges["#{@catalyst}|source"]
+
+      for refused <- [
+            nil,
+            Map.delete(held, "address"),
+            Map.put(held, "headers", []),
+            put_in(held, ["env", Access.at(1), "value"], "production"),
+            put_in(held, ["env", Access.at(0), "literal"], true),
+            Map.update!(held, "env", &Enum.reverse/1),
+            Map.update!(held, "env", &(&1 ++ [%{"name" => "NODE_ENV", "entry" => "x"}]))
+          ] do
+        assert {:error, {:invalid_resource, @formula, _, :tool_servers, _}} = server.(refused),
+               inspect(refused)
+      end
     end
   end
 

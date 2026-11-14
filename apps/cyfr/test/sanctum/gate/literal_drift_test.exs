@@ -12,9 +12,10 @@ defmodule Sanctum.Gate.LiteralDriftTest do
   from the catalog: a renamed or retired action fails `go build` there.
   This test refuses a checked-in render that is stale, so the build sees
   the catalog as it is. Argument fields and their presence are generated from the same
-  declarations; renamed fields fail the Go build. The credential kinds the
-  CLI reads are rendered into the same file from `Prima.CredentialKinds`,
-  so a roster that moves makes the render stale.
+  declarations; renamed fields fail the Go build. The need kinds a consent
+  binds, which the CLI reads, are rendered into the same file from
+  `Prima.Manifest.Needs.binding_kinds/0`, so a roster that moves makes the
+  render stale.
 
   The one library site that dispatches by name across an app boundary
   (the build host registering a compiled component) still spells a
@@ -74,7 +75,7 @@ defmodule Sanctum.Gate.LiteralDriftTest do
     operations = Mix.Tasks.Ops.Gen.Cli.operations()
     rosters = Mix.Tasks.Ops.Gen.Cli.rosters()
 
-    assert Enum.map(rosters, &elem(&1, 2)) == [Prima.CredentialKinds.all()]
+    assert Enum.map(rosters, &elem(&1, 2)) == [Prima.Manifest.Needs.binding_kinds()]
 
     for {name, comment, [_ | _] = values} <- rosters do
       assert text =~ "var #{name} = []string{#{Enum.map_join(values, ", ", &~s("#{&1}"))}}"
