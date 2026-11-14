@@ -1328,6 +1328,51 @@ defmodule Opus.ProviderTest do
     end
   end
 
+  # Logs, cancel and retry read the run's record, which needs
+  # `:storage_read` beside the operations' `:execute`. Without it the
+  # caller is told which permission it lacks, the same for its own run,
+  # an unknown id and another athanor's run, and nothing is cancelled.
+  describe "execution tool - reading a run without storage_read" do
+    test "logs, cancel and retry name the permission whatever the id", %{ctx: ctx} do
+      own = Opus.Record.new(ctx, "reagent:local.reader:1.0.0", %{})
+      :ok = Opus.Record.write_started(ctx, own)
+
+      other = %{ctx | athanor_id: ctx.athanor_id <> "_other", user_id: ctx.user_id <> "_other"}
+      Arca.Test.Actor.athanor!(other.athanor_id)
+      foreign = Opus.Record.new(other, "reagent:local.reader:1.0.0", %{})
+      :ok = Opus.Record.write_started(other, foreign)
+
+      execute_only = %{ctx | permissions: MapSet.new([:execute])}
+
+      for action <- ["logs", "cancel", "retry"],
+          id <- [own.id, "exec_nonexistent", foreign.id] do
+        assert Provider.handle("execution", execute_only, %{
+                 "action" => action,
+                 "execution_id" => id
+               }) == {:error, {:missing_permission, :storage_read}},
+               "#{action} #{id}"
+      end
+
+      assert %Prima.Refusal{
+               class: :forbidden,
+               message:
+                 "Unauthorized: missing required permission 'storage_read' " <>
+                   "(API key does not include this scope — recreate with --scope storage_read)"
+             } = Sanctum.Refusals.classify({:missing_permission, :storage_read}, :api_key)
+
+      assert ["running", "running"] =
+               Arca.Repo.all(
+                 from(e in "executions", where: e.id in ^[own.id, foreign.id], select: e.status)
+               )
+
+      # With the permission, another athanor's run reads as an unknown one.
+      for id <- ["exec_nonexistent", foreign.id] do
+        assert Provider.handle("execution", ctx, %{"action" => "logs", "execution_id" => id}) ==
+                 {:error, {:not_found, "Execution", id}}
+      end
+    end
+  end
+
   # ============================================================================
   # Execution Tool - Cancel Action
   # ============================================================================

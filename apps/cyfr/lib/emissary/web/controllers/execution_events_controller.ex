@@ -47,6 +47,7 @@ defmodule Emissary.Web.ExecutionEventsController do
         ctx = conn.assigns[:context]
 
         with {:auth, %Sanctum.Context{authenticated: true} = ctx} <- {:auth, ctx},
+             :ok <- may_read_runs(ctx),
              {:exec, %{id: _} = exec} <-
                {:exec, Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), execution_id)},
              :ok <- authorize_execution_read(ctx, exec),
@@ -65,6 +66,9 @@ defmodule Emissary.Web.ExecutionEventsController do
         else
           {:auth, _} ->
             CyfrWeb.ApiError.send(conn, 401, :unauthenticated, nil)
+
+          {:refused, refusal} ->
+            CyfrWeb.ApiError.send(conn, 403, refusal, nil)
 
           # Non-existent and not-yours both return 404 to avoid leaking which
           # execution IDs exist in the system via 403/404 distinction.
@@ -90,6 +94,17 @@ defmodule Emissary.Web.ExecutionEventsController do
               nil
             )
         end
+    end
+  end
+
+  # A credential without `:storage_read` reads no run's events, and is told
+  # so before the id is looked up: the refusal is the same for a run that
+  # exists and one that does not, so it discloses nothing. An API key's
+  # sentence names the scope to make it with.
+  defp may_read_runs(%Sanctum.Context{} = ctx) do
+    case Sanctum.Context.require_permission(ctx, :storage_read) do
+      :ok -> :ok
+      {:error, reason} -> {:refused, Sanctum.Refusals.classify(reason, ctx.auth_method)}
     end
   end
 

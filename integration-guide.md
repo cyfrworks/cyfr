@@ -787,6 +787,8 @@ data: {"status":"completed","duration_ms":15234}
 
 The endpoint supports `Last-Event-ID` for reconnection — either form of id — and sends keep-alive comments every 15 seconds. Durable events are delivered in the order they were numbered, whatever order they were published in. The connection closes on the terminal lifecycle event.
 
+Reading a run needs `storage_read` beside `execute`: the stream, `execution.logs`, `execution.cancel` and `execution.retry` refuse a credential without it as `forbidden`, naming the permission, whatever id it asks for. With it, an unknown run and another athanor's are both `not_found`.
+
 **Setup required events (during streaming):**
 
 When a formula invokes a sub-component whose consent isn't satisfiable — a need with no live vault entry bound, or a shape that drifted past its approved consent — the system automatically emits a `setup_required` event with machine-readable fix instructions:
