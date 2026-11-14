@@ -233,6 +233,11 @@ defmodule Sanctum.Providers.Door do
       {:error, :not_found} ->
         {:error, {:not_found, "Allowlist entry", id}}
 
+      {:error, :platform_admin} ->
+        {:error,
+         {:invalid_argument,
+          "That allow lets this server's platform administrator sign in, so it is never removed"}}
+
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Door] door.remove failed: #{inspect(reason)}")
         {:error, {:unavailable, "The sign-in allowlist"}}

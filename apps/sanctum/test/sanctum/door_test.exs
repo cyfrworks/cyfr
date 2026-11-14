@@ -358,6 +358,21 @@ defmodule Sanctum.DoorTest do
       assert {:ok, :allowed} = Door.admit_person(operator)
     end
 
+    test "the platform administrator's allow is never removed; anyone else's is" do
+      operator = local!(36)
+      enrolled!(operator, 36)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
+      {:ok, own} = Store.allow("identifier", identifier(36), "setup")
+      {:ok, other} = Store.allow("identifier", identifier(37), "ops")
+
+      assert {:error, :platform_admin} = Store.remove(own.id)
+      assert {:ok, :allowed} = Door.admit_person(operator)
+
+      assert :ok = Store.remove(other.id)
+      assert [%{id: id}] = Store.list()
+      assert id == own.id
+    end
+
     test "concurrent requests and allows for one identifier leave one row each, and nobody sees a conflict" do
       requests =
         1..6

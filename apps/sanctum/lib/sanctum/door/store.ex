@@ -153,9 +153,23 @@ defmodule Sanctum.Door.Store do
     end
   end
 
-  @doc "Delete an entry by id."
-  @spec remove(String.t()) :: :ok | {:error, :not_found | :database_error}
-  def remove(id) when is_binary(id), do: Doors.delete(actor(), id)
+  @doc """
+  Delete an entry by id. Refuses the allow of a platform administrator's
+  identifier (`:platform_admin`), as `deny/4` refuses a deny of them: the
+  door has no exception for the administrator, so removing it would shut
+  them out of their own CYFR.
+  """
+  @spec remove(String.t()) :: :ok | {:error, :not_found | :platform_admin | :database_error}
+  def remove(id) when is_binary(id) do
+    with {:ok, entry} <- get(id) do
+      if admins_allow?(entry), do: {:error, :platform_admin}, else: Doors.delete(actor(), id)
+    end
+  end
+
+  defp admins_allow?(%{effect: "allow", kind: "identifier", value: value}),
+    do: names_platform_admin?("identifier", value)
+
+  defp admins_allow?(_entry), do: false
 
   @doc """
   Record that someone wants the person identifier `value` let in — one a

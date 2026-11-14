@@ -975,7 +975,9 @@ defmodule Prima.Refusal do
        "This invitation can no longer be used. Ask whoever invited you for a new one."}
 
   # A handle the registry answers no one for, a reserved one included.
-  defp row(:handle_not_found), do: {:not_found, "No one holds that handle at the registry."}
+  defp row(:handle_not_found),
+    do:
+      {:not_found, "No account with that name yet: check the spelling, or ask them to make one."}
 
   # A person at a CYFR that requires a company sign-in, whose sign-in with
   # it is missing, past its days, or given under another company
