@@ -210,13 +210,18 @@ defmodule Sanctum.Providers.System do
 
   @impl true
   def handle("tools", %Context{} = ctx, %{"action" => "list"} = args) do
-    tools = Sanctum.Catalog.list_tools()
+    # The athanor's outside tools: inside a running chain every one its
+    # servers answer, which the gate prunes to the chain's grant after
+    # this handler; outside one, those a call is admitted for now. They
+    # are not CYFR operations, so the catalogue's visibility filter, which
+    # reads a schema's action enum as CYFR's actions, never sees them.
+    external_tools =
+      if ctx.plane == :guest,
+        do: Sanctum.Proxy.impl!().list_external_tools(ctx),
+        else: Sanctum.Visibility.external_tools(ctx)
 
-    # Augment with tenant-specific external MCP server tools
-    external_tools = Sanctum.Proxy.impl!().list_external_tools(ctx)
-
-    all_tools = tools ++ external_tools
-    all_tools = Sanctum.Visibility.filter_for_context(all_tools, ctx)
+    all_tools =
+      Sanctum.Visibility.filter_for_context(Sanctum.Catalog.list_tools(), ctx) ++ external_tools
 
     case args["component_ref"] do
       nil ->
