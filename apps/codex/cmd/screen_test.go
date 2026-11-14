@@ -249,7 +249,9 @@ func TestScreenRefusalsChangeNothing(t *testing.T) {
 // is refused before anything is written, in words alone. A password refused at the screen
 // step, once the project is written, says what is true: the project is set
 // up, the screen is not, and cyfr screen on sets it up; no screen file is
-// written and the project's files are as init wrote them.
+// written and the project's files are as init wrote them. So does an
+// account in the sudo group at the question and out of it by the screen
+// step: no password is asked and nothing runs as root.
 func TestInitScreenRefusals(t *testing.T) {
 	t.Run("outside the groups", func(t *testing.T) {
 		s, _ := initProjectOnScreen(t)
@@ -280,6 +282,31 @@ func TestInitScreenRefusals(t *testing.T) {
 			t.Fatalf("err = %v\n%s", err, out.String())
 		}
 		if fileExists(screenDir) || !fileExists(".env") || s.applied != nil || s.authenticated != 1 {
+			t.Errorf("screen files %v, .env %v, applied %q, authenticated %d", fileExists(screenDir), fileExists(".env"), s.applied, s.authenticated)
+		}
+	})
+	t.Run("out of the groups once the project is written", func(t *testing.T) {
+		s, _ := initProjectOnScreen(t)
+		stubLauncher(t, true, nil)
+		// In the sudo group at the question, out of it by the screen step.
+		groups := machine.groups
+		machine.groups = func(account string) []string {
+			if account != "" && fileExists(".env") {
+				return s.member
+			}
+			return groups(account)
+		}
+		askInput = strings.NewReader("1\n")
+		var out bytes.Buffer
+		err := runInit(context.Background(), initOptions{}, &out, &out)
+		want := "Your account, " + currentAccount(t) + ", is not in the sudo or admin group, so the screen was not set up; CYFR is set up in this directory. Whoever administers this machine can add your account to the sudo group; then run `cyfr screen on` here"
+		if err == nil || err.Error() != want {
+			t.Fatalf("err = %v, want %q\n%s", err, want, out.String())
+		}
+		if ending := "\n\n" + localEnding("http://localhost:4000") + setupLinkLine(t, "http://localhost:4000"); !strings.HasSuffix(out.String(), ending) {
+			t.Errorf("init printed:\n%s\nwant it to end on:\n%s", out.String(), ending)
+		}
+		if fileExists(screenDir) || !fileExists(".env") || s.applied != nil || s.authenticated != 0 {
 			t.Errorf("screen files %v, .env %v, applied %q, authenticated %d", fileExists(screenDir), fileExists(".env"), s.applied, s.authenticated)
 		}
 	})

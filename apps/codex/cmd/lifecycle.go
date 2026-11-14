@@ -486,10 +486,18 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 	var screenErr error
 	if screen {
 		// The password is asked here, not before the project is written:
-		// sudo's login would lapse during the image pulls between them.
+		// sudo's login would lapse during the image pulls between them. A
+		// refusal here, of the password or of an account that has left the
+		// sudo group since the question, comes after the project is
+		// written, and says so.
+		const notSetUp = "so the screen was not set up; CYFR is set up in this directory."
 		var refused passwordRefused
-		if screenErr = screenOn(ctx, false, out); errors.As(screenErr, &refused) {
-			screenErr = errors.New("The password was not accepted, so the screen was not set up; CYFR is set up in this directory. Run `cyfr screen on` here to set it up")
+		var outside outsideTheGroups
+		switch screenErr = screenOn(ctx, false, out); {
+		case errors.As(screenErr, &refused):
+			screenErr = errors.New("The password was not accepted, " + notSetUp + " Run `cyfr screen on` here to set it up")
+		case errors.As(screenErr, &outside):
+			screenErr = fmt.Errorf("Your account, %s, is not in the sudo or admin group, %s Whoever administers this machine can add your account to the sudo group; then run `cyfr screen on` here", outside.account, notSetUp)
 		}
 	}
 	initEnding(out, screen && screenErr == nil)

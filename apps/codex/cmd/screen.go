@@ -183,7 +183,14 @@ func screenAdministrator(again string) error {
 	if err != nil || administers {
 		return err
 	}
-	return fmt.Errorf("Your account, %s, is not in the sudo or admin group, so CYFR does not run commands as root for it. Nothing was changed. Whoever administers this machine can add your account to the sudo group; then run `%s` again", account, again)
+	return outsideTheGroups{account, again}
+}
+
+// outsideTheGroups is screenAdministrator's refusal: nothing has run.
+type outsideTheGroups struct{ account, again string }
+
+func (o outsideTheGroups) Error() string {
+	return fmt.Sprintf("Your account, %s, is not in the sudo or admin group, so CYFR does not run commands as root for it. Nothing was changed. Whoever administers this machine can add your account to the sudo group; then run `%s` again", o.account, o.again)
 }
 
 // screenSite is the project directory and the account the screen's files
