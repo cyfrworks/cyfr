@@ -644,14 +644,15 @@ clean_install() {
   fi
 
   # volumes_seen AT: the docker volumes with their labels, and the docker
-  # context, as the test account and as root, in GUEST_DIR/volumes-AT.txt
-  # and printed: an observation, never a check.
+  # context, as the test account and as root, with root's view of the
+  # daemon's root directory and every container's mounts, in
+  # GUEST_DIR/volumes-AT.txt and printed: an observation, never a check.
   volumes_seen() {
     {
       echo "volumes $1, as proof:"
       guest_ssh 'docker context show; docker volume ls --format "{{.Name}} {{.Labels}}"' 2>&1 || echo "(the read failed)"
       echo "volumes $1, as root:"
-      guest_root_out 'docker context show; docker volume ls --format "{{.Name}} {{.Labels}}"' 2>&1 || echo "(the read failed)"
+      guest_root_out 'docker context show; docker info --format "root {{.DockerRootDir}} driver {{.Driver}}"; docker volume ls --format "{{.Name}} {{.Labels}}"; echo containers:; docker ps -a --format "{{.Names}} {{.Status}} {{.Mounts}}"' 2>&1 || echo "(the read failed)"
     } | tee "$GUEST_DIR/volumes-$1.txt" | sed 's/^/observed: /'
   }
 
@@ -716,8 +717,11 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   # The screen's browser writes its profile in the folder until the screen
   # stops, which cyfr down leaves running: it is stopped before the first
   # listing, so the two listings compare cyfr down's stop with the
-  # uninstall's.
-  guest_root 'systemctl stop cyfr-screen' || fail "the screen was not stopped ($GUEST_DIR/root.txt)"
+  # uninstall's. Its browser can outlive the service's stop, so the step
+  # waits until no process holds the profile (the bracket keeps the pattern
+  # from matching the shell that carries it).
+  guest_root 'systemctl stop cyfr-screen; p=--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]; pkill -f -- "$p"; for i in $(seq 30); do pgrep -f -- "$p" >/dev/null || exit 0; sleep 1; done; exit 1' ||
+    fail "the screen's browser did not stop ($GUEST_DIR/root.txt)"
   volumes_seen after-the-reboot-and-cyfr-down
   left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
   # The screen holds tty1 since the reboot, which ended tty1's tmux
