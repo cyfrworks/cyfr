@@ -19,22 +19,22 @@ import (
 // compositor still running, and when the compositor ends by itself. It
 // asks no password either way, and exits 0, so a stop leaves the service
 // stopped and Restart= starts it again only after the compositor's own end.
-// A refused end is said on standard error and exits 1, so the service
-// shows it failed.
+// A refused end is said in the journal through logger, and nothing on
+// standard error, and exits 1, so the service shows it failed.
 func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 	const stays = "echo $$ >\"$BIN/compositor\"\nexec sleep 60"
+	const refused = "-t cyfr-screen -p user.err loginctl could not end the screen's login session, so its processes, Chrome among them, still run\n"
 	for _, c := range []struct {
 		name, compositor, loginctl string
 		stop                       bool
 		status                     int
-		said                       string
+		said, logged               string
 	}{
-		{"at the stop", stays, "", true, 0, ""},
-		{"when the compositor ends by itself", "exit 3", "", false, 0, ""},
+		{"at the stop", stays, "", true, 0, "", ""},
+		{"when the compositor ends by itself", "exit 3", "", false, 0, "", ""},
 		{"refused, at the stop", stays, "echo 'Failed to terminate session: Access denied' >&2\nexit 1", true, 1,
-			"Failed to terminate session: Access denied\nloginctl could not end the screen's login session, so its processes, Chrome among them, still run\n"},
-		{"refused, when the compositor ends by itself", "exit 3", "exit 1", false, 1,
-			"loginctl could not end the screen's login session, so its processes, Chrome among them, still run\n"},
+			"Failed to terminate session: Access denied\n", refused},
+		{"refused, when the compositor ends by itself", "exit 3", "exit 1", false, 1, "", refused},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			screenProject(t)
@@ -45,6 +45,7 @@ func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 			for name, body := range map[string]string{
 				"dbus-run-session": "#!/bin/sh\necho \"$*\" >\"$BIN/compositor-args\"\n" + c.compositor + "\n",
 				"loginctl":         "#!/bin/sh\necho \"$*\" >>\"$BIN/loginctl.ran\"\n" + c.loginctl + "\n",
+				"logger":           "#!/bin/sh\necho \"$*\" >>\"$BIN/logger.ran\"\n",
 			} {
 				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 					t.Fatal(err)
@@ -100,7 +101,10 @@ func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 				t.Errorf("loginctl ran as %q, want %q", got, want)
 			}
 			if got := read(t, said.Name()); got != c.said {
-				t.Errorf("the session said %q, want %q", got, c.said)
+				t.Errorf("the session said %q on standard error, want %q", got, c.said)
+			}
+			if got, _ := os.ReadFile(filepath.Join(bin, "logger.ran")); string(got) != c.logged {
+				t.Errorf("logger ran as %q, want %q", got, c.logged)
 			}
 		})
 	}

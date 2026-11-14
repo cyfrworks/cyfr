@@ -353,7 +353,7 @@ func TestScreenFilesAreFilledIn(t *testing.T) {
 		}
 	}
 	unit := read(t, filepath.Join(screenDir, "cyfr-screen.service"))
-	for _, want := range []string{"User=alice\n", "WorkingDirectory=/home/alice/cyfr\n", "Conflicts=getty@tty1.service\n", "TTYPath=/dev/tty1\n", "PAMName=login\n", "StandardInput=tty\n", "StandardError=journal\n", "Restart=always\n", "ExecStart=/home/alice/cyfr/.cyfr/screen/session.sh\n"} {
+	for _, want := range []string{"User=alice\n", "WorkingDirectory=/home/alice/cyfr\n", "Conflicts=getty@tty1.service\n", "TTYPath=/dev/tty1\n", "PAMName=login\n", "StandardInput=tty\n", "Restart=always\n", "ExecStart=/home/alice/cyfr/.cyfr/screen/session.sh\n"} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("the unit lacks %q:\n%s", want, unit)
 		}

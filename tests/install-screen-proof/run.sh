@@ -920,6 +920,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   screen_stop_watched "systemctl stop cyfr-screen" 'systemctl stop cyfr-screen' screen-holders.txt
   screen_session_record after-the-stop
   check "the screen's stop ends its login session" screen_session_gone
+  check "the guest has logger, which the screen's session.sh says a refused end with, installing nothing" guest_ssh 'command -v logger'
   volumes_seen after-the-reboot-and-cyfr-down
   left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
   guest_ssh 'docker volume ls -q --filter label=com.docker.compose.project=cyfr' >"$GUEST_DIR/stack-volumes.txt" 2>&1 ||
