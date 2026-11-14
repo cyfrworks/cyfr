@@ -258,8 +258,16 @@ defmodule Compendium.Pull do
            cref.namespace,
            cref.name
          ) do
-      {:ok, %{"version" => version}} when is_binary(version) and version != "" ->
-        {:ok, version}
+      {:ok, %{"version" => version}} ->
+        case Prima.ComponentRef.validate_version(version) do
+          :ok ->
+            {:ok, version}
+
+          {:error, _} ->
+            {:error,
+             "The registry named #{inspect(version)} as the newest release of " <>
+               "#{Prima.ComponentRef.to_string(cref)}, which is not a version"}
+        end
 
       {:ok, _unexpected} ->
         {:error, "The registry named no release of #{Prima.ComponentRef.to_string(cref)}"}

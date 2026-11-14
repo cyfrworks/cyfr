@@ -554,6 +554,43 @@ defmodule Compendium.OCI.ClientTest do
              end)
     end
 
+    # The person holds a personal token the registry no longer accepts and
+    # a token for the publisher's namespace: the registry's answer is read
+    # under the publisher's token, as the pull itself is.
+    test "the registry's answer is read under the token of the namespace pulled from", ctx do
+      member = caller("oci_member")
+
+      :ok =
+        CredentialStore.put_push_token(member, ctx.registry, "member", "tok_revoked", "personal")
+
+      :ok = CredentialStore.put_push_token(member, ctx.registry, "alice", "tok_alice", "member")
+      allow(ctx.agent, ["Bearer tok_alice"])
+      newest_eligible(ctx.agent, "1.0.0")
+
+      assert pull_ref(member, "reagent:alice.pinned") ==
+               {:ok, Map.delete(pulled(ctx, "1.0.0"), :auth_note)}
+
+      assert [
+               {"GET", "/v1/components/reagent/alice/pinned", "Bearer tok_alice"},
+               {"GET", "/v2/alice/reagents/pinned/manifests/1.0.0", "Bearer tok_alice"} | _
+             ] = requests(ctx.agent)
+    end
+
+    test "an answer that names no version pulls nothing", ctx do
+      allow(ctx.agent, [:anonymous])
+
+      for named <- ["latest", "1.2.3.4"] do
+        newest_eligible(ctx.agent, named)
+
+        assert pull_ref(caller("oci_not_a_version"), "reagent:alice.pinned") ==
+                 {:error,
+                  "The registry named #{inspect(named)} as the newest release of " <>
+                    "reagent:alice.pinned, which is not a version"}
+
+        assert [{"GET", "/v1/components/reagent/alice/pinned", nil}] = requests(ctx.agent)
+      end
+    end
+
     test "a component with no eligible release pulls nothing", ctx do
       allow(ctx.agent, [:anonymous])
 
