@@ -51,6 +51,7 @@ defmodule PrismWeb.InviteLive do
      |> assign(:step, :reading)
      |> assign(:hash, nil)
      |> assign(:invitation, nil)
+     |> assign(:directory_host, URI.parse(Sanctum.directory_url()).host)
      |> assign(:error, nil), layout: false}
   end
 
@@ -148,6 +149,9 @@ defmodule PrismWeb.InviteLive do
                 @invitation.expires_at,
                 "%-d %B %Y, %H:%M UTC"
               )}.
+            </p>
+            <p data-test="account-host" class="text-sm text-gray-400 leading-relaxed">
+              Your account lives at {@directory_host}. These buttons take you there and bring you back here.
             </p>
             <button
               type="button"

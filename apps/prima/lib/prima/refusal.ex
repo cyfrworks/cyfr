@@ -930,7 +930,7 @@ defmodule Prima.Refusal do
   defp row({:door, :unavailable}), do: row(:unavailable)
 
   defp row({:door, reason}) when reason in [:denied, :not_allowed],
-    do: {:forbidden, "not allowed on this server — ask the operator"}
+    do: {:forbidden, "This CYFR has not let you in. Whoever runs it can let you in."}
 
   # An answer to a sign-in request this CYFR refused: spent, expired, for
   # another browser or channel, or not signed by a key the account lists.
