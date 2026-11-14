@@ -198,6 +198,19 @@ defmodule Compendium.OCI.ClientTest do
 
     defp serve(conn, state) do
       case conn.path_info do
+        # The OCI store's tag list keeps every published tag, a yanked
+        # release's among them.
+        ["v2", "alice", "reagents", "pinned", "tags", "list"] ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(%{
+              "name" => "alice/reagents/pinned",
+              "tags" => ["1.0.0" | Map.keys(state.manifests)]
+            })
+          )
+
         # The registry's answer for the component with no version: the
         # newest release it holds eligible, or 404 when none is.
         ["v1", "components", "reagent", "alice", "pinned"] when is_binary(state.latest) ->
