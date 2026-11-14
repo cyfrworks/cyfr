@@ -2079,12 +2079,14 @@ func (u *updater) restartOld(reason error) error {
 }
 
 // leaveStopped releases the update's hold at an exit that leaves the stack
-// stopped on purpose. A release that fails leaves the hold, so the next
-// cyfr command starts the stack: it answers the sentence that says so, in
-// place of the promise that the stack stays stopped, "" once released.
+// stopped on purpose, "" once released. A release that fails may have left
+// the hold (its removal failed) or not (its directory's sync failed after
+// the removal), so the next cyfr command may start the stack: it answers
+// the sentence that says so, in place of the promise that the stack stays
+// stopped.
 func (u *updater) leaveStopped() string {
 	if err := u.engine.Release(); err != nil {
-		return fmt.Sprintf("The record of the stop could not be removed (%v), so the next cyfr command will start CYFR as .env and docker-compose.yml then hold it", engineFailure(err))
+		return fmt.Sprintf("Clearing the record of the stop could not be confirmed (%v), so the next cyfr command may start CYFR as .env and docker-compose.yml then hold it", engineFailure(err))
 	}
 	return ""
 }

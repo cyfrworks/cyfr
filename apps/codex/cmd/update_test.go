@@ -3211,9 +3211,11 @@ func TestUpdateHoldsTheStackUntilItsSwitch(t *testing.T) {
 	})
 	// A release that fails where the update leaves the stack stopped on
 	// purpose promises no stopped stack: its answer says the next cyfr
-	// command will start CYFR (the engine's recovery, which
-	// TestAHoldWhoseReleaseFailsIsStartedByTheNextCommand shows doing so).
-	unreleased := "The record of the stop could not be removed (access: remove journal.json: input/output error), so the next cyfr command will start CYFR as .env and docker-compose.yml then hold it"
+	// command may start CYFR. The engine's recovery does when the removal
+	// failed (TestAHoldWhoseReleaseFailsIsStartedByTheNextCommand) and does
+	// not when only the directory's sync failed after it
+	// (TestAHoldWhoseReleaseSyncFailsStartsNothing).
+	unreleased := "Clearing the record of the stop could not be confirmed (access: remove journal.json: input/output error), so the next cyfr command may start CYFR as .env and docker-compose.yml then hold it"
 	t.Run("a failed snapshot whose release fails", func(t *testing.T) {
 		s := newUpdateScenario(t, shippedCompose(t), nil)
 		if err := os.MkdirAll(s.snapshotDir(), 0700); err != nil {

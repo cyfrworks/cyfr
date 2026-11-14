@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -343,4 +344,50 @@ func TestAHoldWhoseRecoveryReceiptFailsStaysUnfinished(t *testing.T) {
 	if running := h.fake.runningServices(); !slices.Equal(running, baseStack) {
 		t.Errorf("%v run, want the started stack", running)
 	}
+}
+
+// A release whose removal of the journal worked and whose directory sync
+// failed answers an error with the hold gone: the next command's recovery
+// starts nothing, which is why the update says the next command "may"
+// start CYFR.
+func TestAHoldWhoseReleaseSyncFailsStartsNothing(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory this user may write and not read")
+	}
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	if err := h.e.Hold("update"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.e.Stop(bg, "update", true); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(h.dir, stateDir)
+	info, err := os.Stat(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(state, info.Mode().Perm()) })
+	if err := os.Chmod(state, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.Release(); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("the release answered %v", err)
+	}
+	if err := os.Chmod(state, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := h.e.readJournal(); j != nil || err != nil {
+		t.Fatalf("the journal holds %+v (%v): the removal did not happen", j, err)
+	}
+	h.crash()
+	h.open()
+	before := len(h.fake.calls())
+	if receipts, err := h.e.Resume(bg); err != nil || len(receipts) != 0 {
+		t.Errorf("recovery answered %+v, %v", receipts, err)
+	}
+	if calls := h.fake.calls()[before:]; slices.ContainsFunc(calls, func(c fakeCall) bool { return strings.Contains(" "+c.String()+" ", " up ") }) {
+		t.Errorf("recovery started the stack: %v", calls)
+	}
+	h.assertConverged()
 }
