@@ -360,6 +360,14 @@ defmodule Emissary.Web.DeviceChannelTest do
         "forbidden",
         :established
       )
+
+      # The decision names what the channel was doing and why it refused,
+      # so the person's Activities row has something to act on.
+      assert [decision] =
+               Enum.filter(decisions_of(state.ctx.request_id), &(&1.admission == "refused"))
+
+      assert {decision.tool, decision.action, decision.reason} ==
+               {"device", "keepalive", "This device's pairing was revoked"}
     end
 
     test "a person denied at the door is refused before new work", %{
