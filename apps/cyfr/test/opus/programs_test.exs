@@ -1849,6 +1849,58 @@ defmodule Opus.ProgramsTest do
       refute_received {:session, "open", _message, _fields}
     end
 
+    # A row whose stored hosts do not read has no record, so its removal
+    # cannot be shown and is not asked; an update with hosts that read,
+    # confirmed as the command line confirms it, makes it whole again.
+    test "a row whose stored hosts do not read is saved again by an update, then removed",
+         %{ctx: ctx, admin: admin} do
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+      broken = driven_row(ctx, "broken", %{hosts: "not a list"})
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "broken"})
+
+      assert {:error, _unread} = Sanctum.ToolServerDigest.recorded(broken)
+      assert {:error, {:invalid_argument, sentence}} = delete.(person)
+      assert sentence =~ "cannot be shown in full"
+      assert {:ok, ^broken} = Arca.McpServerStorage.get(actor, "broken")
+
+      update =
+        &Provider.handle("mcp_servers", &1, %{
+          "action" => "update",
+          "name" => "broken",
+          "epoch" => broken.epoch,
+          "config" => %{
+            "transport" => "program",
+            "mark" => "driven",
+            "home" => "kept",
+            "command" => "npx -y @anthropic-ai/claude-code",
+            "login_command" => "claude auth login",
+            "memory_bytes" => 1_073_741_824,
+            "home_max_bytes" => 2_147_483_648,
+            "hosts" => ["api.anthropic.com"],
+            "env" => %{}
+          }
+        })
+
+      assert {:error, {:confirmation_required, %{id: id}}} = update.(person)
+
+      assert %{
+               "operation" => "mcp_servers.update",
+               "details" => %{"hosts" => ["api.anthropic.com"]}
+             } =
+               preview(person, id)
+
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, _saved} = update.(%{person | confirmation_id: id})
+
+      assert {:ok, saved} = Arca.McpServerStorage.get(actor, "broken")
+      assert {saved.id, saved.hosts} == {broken.id, ~s(["api.anthropic.com"])}
+      assert {:ok, _record} = Sanctum.ToolServerDigest.recorded(saved)
+
+      assert {:ok, %{deleted: "broken"}} = Sanctum.TestContext.confirming(person, delete)
+      assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "broken")
+    end
+
     test "removing a tool server elsewhere asks nothing", %{ctx: ctx, admin: admin} do
       {:ok, _} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{

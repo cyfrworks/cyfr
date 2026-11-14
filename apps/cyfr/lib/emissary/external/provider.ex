@@ -916,7 +916,7 @@ defmodule Emissary.External.Provider do
   defp confirm_removal(_ctx, _name, _stored), do: :ok
 
   defp confirmed(ctx, {:ok, change}) do
-    case Sanctum.Consent.confirm(ctx, :program_definition, change) do
+    case Sanctum.Consent.confirm_program_definition(ctx, change) do
       {:error, :invalid_request} -> {:error, unshowable()}
       decided -> decided
     end
@@ -934,7 +934,7 @@ defmodule Emissary.External.Provider do
   @doc """
   The `program_definition` change `operation` (`mcp_servers.create`,
   `update` or `delete`) makes to the program row `row` named `name`, as
-  `Sanctum.Consent.confirm/3` takes it: what the confirmation shows
+  `Sanctum.Consent.confirm_program_definition/2` takes it: what the confirmation shows
   and what it binds, from one definition.
 
   The row is a stored row, or the row an add or update would store (its

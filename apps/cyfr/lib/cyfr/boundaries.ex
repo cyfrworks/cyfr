@@ -547,8 +547,8 @@ defmodule Cyfr.Boundaries do
           "unsealing any: a header's entry's destination covers the server's URL " <>
           "(`destination_matches?/3`) and a backend env's entry is disclosed " <>
           "(`disclosed?/2`). A program's definition is a fresh confirmation, decided " <>
-          "through `Sanctum.Consent.confirm/3`, and its removal names the grants that " <>
-          "bind its row (`Sanctum.Mount.granted_to/2`). " <>
+          "through `Sanctum.Consent.confirm_program_definition/2`, and its removal " <>
+          "names the grants that bind its row (`Sanctum.Mount.granted_to/2`). " <>
           "An outbound call's row runs under its caller's grant, checked through " <>
           "Sanctum.ExecutionStanding as it is admitted and closed, and the MCP " <>
           "controller answers a `Sanctum.UnauthorizedError` raised in the request " <>
@@ -1897,9 +1897,14 @@ defmodule Cyfr.Boundaries do
     # to stand on, and a setup plan, say why: never granted or revoked
     # (`ungranted/2`), and a setup plan reads ready only where the head
     # stands for the release a run would start (`head_stands/4`).
+    # Every other confirmed operation is decided inside the Sanctum module
+    # that owns its data (vault, shares, api keys, pairing, directory),
+    # while a program row is written by Emissary's provider through Arca,
+    # so no Sanctum module decides it; `confirm_program_definition/2` asks
+    # for and consumes that one action only.
     "Sanctum.Consent" => [
       binding_live: 4,
-      confirm: 3,
+      confirm_program_definition: 2,
       head_consent: 2,
       head_stands: 4,
       profiles: 2,

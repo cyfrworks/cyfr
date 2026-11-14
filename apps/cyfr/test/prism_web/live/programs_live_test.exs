@@ -972,6 +972,49 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert flash(view, "info") == "'claude' removed."
   end
 
+  test "a program whose stored hosts do not read is saved again from Edit, then removed",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    row = driven_row!(athanor)
+    {:ok, _} = Arca.McpServerStorage.update(ctx(athanor), "claude", %{hosts: "not a list"})
+    {:ok, broken} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+    assert {:error, _unread} = Sanctum.ToolServerDigest.recorded(broken)
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+
+    # The person types the hosts again and saves; it reaches more than a
+    # list that does not read, so it is asked.
+    view
+    |> form("form#add-program", %{
+      "command" => "npx -y @anthropic-ai/claude",
+      "mark" => "driven",
+      "home" => "kept",
+      "login_command" => "claude auth login",
+      "hosts" => "api.anthropic.com"
+    })
+    |> render_submit()
+
+    answered(view)
+
+    assert %{"details" => %{"hosts" => ["api.anthropic.com"]}} =
+             asked(user, athanor, "mcp_servers.update")
+
+    confirm!(view, user, athanor, "mcp_servers.update")
+    assert flash(view, "info") =~ "'claude' saved"
+
+    assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+    assert {saved.id, saved.hosts} == {row.id, ~s(["api.anthropic.com"])}
+    assert {:ok, _record} = Sanctum.ToolServerDigest.recorded(saved)
+
+    # Whole again, it is removed once its removal is confirmed.
+    view |> element(~s([data-test="remove-program"])) |> render_click()
+    answered(view)
+    confirm!(view, user, athanor, "mcp_servers.delete")
+    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+  end
+
   test "a program's hosts are set in its form, shown on its row and changed there",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()

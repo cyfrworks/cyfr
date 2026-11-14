@@ -712,6 +712,17 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
+  # A stored network list as the page shows it. A list the keeper would not
+  # take is answered as its stored text, which is shown as unreadable and
+  # never as every public host, and the form starts empty so it can be
+  # saved again.
+  defp hosts_shown(nil), do: "every public host"
+  defp hosts_shown(hosts) when is_list(hosts), do: Enum.join(hosts, ", ")
+  defp hosts_shown(_unreadable), do: "a stored list that does not read: save the hosts again"
+
+  defp hosts_typed(hosts) when is_list(hosts), do: Enum.join(hosts, ", ")
+  defp hosts_typed(_none_or_unreadable), do: ""
+
   # The hosts a form names, split on commas and white space; none, no list.
   defp host_list(params) do
     case String.split(params["hosts"] || "", [",", " ", "\n", "\t", "\r"], trim: true) do
@@ -1150,7 +1161,7 @@ defmodule PrismWeb.ProgramsLive do
                         </dd>
                         <dt class="text-gray-500">Hosts</dt>
                         <dd class="font-mono text-gray-300" data-test="program-hosts">
-                          {Enum.join(config(@detail)["hosts"] || ["every public host"], ", ")}
+                          {hosts_shown(config(@detail)["hosts"])}
                         </dd>
                       </dl>
                       <form
@@ -1164,7 +1175,7 @@ defmodule PrismWeb.ProgramsLive do
                           <label class="block text-xs text-gray-500 uppercase mb-1">Hosts</label>
                           <.input
                             name="hosts"
-                            value={Enum.join(config(@detail)["hosts"] || [], ", ")}
+                            value={hosts_typed(config(@detail)["hosts"])}
                             placeholder="every public host"
                             class="font-mono"
                           />
@@ -1336,7 +1347,7 @@ defmodule PrismWeb.ProgramsLive do
       <label class="block text-xs text-gray-500 uppercase mb-1">Hosts</label>
       <.input
         name="hosts"
-        value={Enum.join(@prefill["hosts"] || [], ", ")}
+        value={hosts_typed(@prefill["hosts"])}
         placeholder="every public host"
         class="font-mono"
       />
