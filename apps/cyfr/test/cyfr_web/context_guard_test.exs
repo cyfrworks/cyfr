@@ -187,8 +187,8 @@ defmodule CyfrWeb.ContextGuardTest do
   # A person-wide revocation names exactly the sessions its delete
   # removed: the deleting statement answers their keys, and nothing reads
   # the person's sessions before it, so nothing can come between a read
-  # and the delete. Calls into Arca.SessionStorage made by the revoking
-  # process are traced around the production revoke.
+  # and the delete. The revoking process's calls of the store's delete and
+  # read are traced around the production revoke.
   describe "revoke_all_for_user/1" do
     test "announces exactly the keys its delete returned, reading none before it",
          %{conn: conn} do
@@ -203,8 +203,8 @@ defmodule CyfrWeb.ContextGuardTest do
 
       assert result == {:ok, 2}
 
-      # The first storage call is the delete, and nothing read the
-      # person's sessions before it.
+      # The delete is the first of the two, and nothing read the person's
+      # sessions before it.
       assert [{:call, :delete_by_user} | _] = calls
       refute {:call, :hashes_by_user} in calls
       [{:ok, deleted}] = for {:return, :delete_by_user, answer} <- calls, do: answer
@@ -219,38 +219,55 @@ defmodule CyfrWeb.ContextGuardTest do
       end
     end
 
-    # This process's calls into Arca.SessionStorage while `fun` runs, in
-    # order: `{:call, name}` and `{:return, name, answer}`.
+    # This process's calls of the session store's delete and read while
+    # `fun` runs, in order: `{:call, name}` and `{:return, name, answer}`,
+    # collected by a tracer of their own.
     defp storage_calls(fun) do
-      :erlang.trace_pattern({Arca.SessionStorage, :_, :_}, [{:_, [], [{:return_trace}]}], [])
-      :erlang.trace(self(), true, [:call])
+      test = self()
 
-      result =
+      mfas = [
+        {Arca.SessionStorage, :delete_by_user, 1},
+        {Arca.SessionStorage, :hashes_by_user, 1}
+      ]
+
+      collector = spawn_link(fn -> collect(test, []) end)
+
+      on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:global]) end)
+
+      # A pattern applies only to a loaded module, so it is loaded first,
+      # and one that matched nothing fails here rather than tracing nothing.
+      Code.ensure_loaded!(Arca.SessionStorage)
+
+      for mfa <- mfas do
+        assert :erlang.trace_pattern(mfa, [{:_, [], [{:return_trace}]}], [:global]) == 1
+      end
+
+      :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+      answer =
         try do
           fun.()
         after
-          :erlang.trace(self(), false, [:call])
-          :erlang.trace_pattern({Arca.SessionStorage, :_, :_}, false, [])
+          :erlang.trace(test, false, [:call])
         end
 
-      ref = :erlang.trace_delivered(self())
-
-      receive do
-        {:trace_delivered, _, ^ref} -> :ok
-      end
-
-      {result, traced([])}
+      delivered = :erlang.trace_delivered(test)
+      assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+      send(collector, {:done, delivered})
+      assert_receive {:collected, ^delivered, calls}, 5_000
+      {answer, calls}
     end
 
-    defp traced(acc) do
+    defp collect(test, calls) do
       receive do
-        {:trace, _pid, :call, {Arca.SessionStorage, name, _args}} ->
-          traced([{:call, name} | acc])
+        {:trace, ^test, :call, {Arca.SessionStorage, name, _args}} ->
+          collect(test, [{:call, name} | calls])
 
-        {:trace, _pid, :return_from, {Arca.SessionStorage, name, _arity}, answer} ->
-          traced([{:return, name, answer} | acc])
-      after
-        0 -> Enum.reverse(acc)
+        {:trace, ^test, :return_from, {Arca.SessionStorage, name, _arity}, answer} ->
+          collect(test, [{:return, name, answer} | calls])
+
+        {:done, ref} ->
+          send(test, {:collected, ref, Enum.reverse(calls)})
       end
     end
   end
