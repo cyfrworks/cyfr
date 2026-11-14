@@ -27,23 +27,14 @@ defmodule PrismWeb.AquaSetupTest do
     Arca.Cache.init()
 
     run_dir = Path.join(System.tmp_dir!(), "aqua_setup_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :registry_url]
-    previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    on_exit(fn -> File.rm_rf!(run_dir) end)
     seed = Fixture.lay_seed!(Path.join(run_dir, "seed"), mode: :attach)
 
-    Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
-    Application.put_env(:arca, :seed_path, seed)
-    Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
-
-    on_exit(fn ->
-      for {{app, key}, value} <- previous do
-        if value,
-          do: Application.put_env(app, key, value),
-          else: Application.delete_env(app, key)
-      end
-
-      File.rm_rf!(run_dir)
-    end)
+    Prima.Test.Env.put_app_env(:arca, :base_path, Path.join(run_dir, "data"))
+    Prima.Test.Env.put_app_env(:arca, :seed_path, seed)
+    # The seed names no published component, and nothing may be dialled
+    # but the attach-mode upstream.
+    Prima.Test.Env.put_app_env(:cyfr, :registry_url, "127.0.0.1:19")
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
