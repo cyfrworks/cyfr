@@ -121,11 +121,7 @@ func askScreen(ctx context.Context, out io.Writer) (bool, error) {
 	if answer != "1" {
 		return false, nil
 	}
-	account, err := user.Current()
-	if err != nil {
-		return false, err
-	}
-	return true, mayAdministerScreen(account.Username, out, "cyfr init")
+	return true, screenAdministrator("cyfr init")
 }
 
 // screenOn writes what shows CYFR into the project, then installs it through
@@ -145,7 +141,7 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := mayAdministerScreen(account, out, "cyfr screen on"); err != nil {
+	if err := screenAdministrator("cyfr screen on"); err != nil {
 		return err
 	}
 	commands := screenCommands(dir, account)
@@ -178,13 +174,16 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	return nil
 }
 
-// mayAdministerScreen refuses an account outside the sudo and admin groups
-// before the screen is asked for or anything is written. The screen's
-// commands install files this account's cyfr writes, so whoever
-// administers the machine is shown the one command that lets this account
-// set it up: joining the sudo group.
-func mayAdministerScreen(account string, out io.Writer, again string) error {
-	return mayAdminister([]string{"usermod -aG sudo " + shellQuote([]string{account})}, out, again)
+// screenAdministrator refuses an account outside the sudo and admin groups
+// before the screen is asked for or anything is written, in words alone:
+// the screen is this account's, so it cannot be set up from another, and
+// CYFR prints no command that grants an account sudo.
+func screenAdministrator(again string) error {
+	account, administers, err := administrator()
+	if err != nil || administers {
+		return err
+	}
+	return fmt.Errorf("Your account, %s, is not in the sudo or admin group, so CYFR does not run commands as root for it. Nothing was changed. Whoever administers this machine can add your account to the sudo group; then run `%s` again", account, again)
 }
 
 // screenSite is the project directory and the account the screen's files
@@ -248,7 +247,7 @@ func screenOff(out io.Writer) error {
 		"systemctl daemon-reload",
 		"systemctl enable --now getty@tty1",
 	}
-	if err := mayAdminister(commands, out, "cyfr screen off"); err != nil {
+	if err := screenAdministrator("cyfr screen off"); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "These commands give this machine's screen back to its login prompt, as root:")

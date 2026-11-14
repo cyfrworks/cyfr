@@ -113,19 +113,26 @@ const dockerGroup = "docker"
 // machine through sudo.
 var administrators = []string{"sudo", "admin"}
 
+// administrator is this account's name and whether it is in Ubuntu's sudo
+// or admin group.
+func administrator() (string, bool, error) {
+	account, err := user.Current()
+	if err != nil {
+		return "", false, err
+	}
+	return account.Username, slices.ContainsFunc(machine.groups(account.Username), func(g string) bool { return slices.Contains(administrators, g) }), nil
+}
+
 // mayAdminister refuses, before anything asks, runs or is written, an
 // account outside Ubuntu's sudo and admin groups: it says what was checked
 // and shows forThem as one sudo line for whoever administers the machine,
 // again being the command to run once they have.
 func mayAdminister(forThem []string, out io.Writer, again string) error {
-	account, err := user.Current()
-	if err != nil {
+	account, administers, err := administrator()
+	if err != nil || administers {
 		return err
 	}
-	if slices.ContainsFunc(machine.groups(account.Username), func(g string) bool { return slices.Contains(administrators, g) }) {
-		return nil
-	}
-	fmt.Fprintf(out, "Your account, %s, is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:\n", account.Username)
+	fmt.Fprintf(out, "Your account, %s, is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:\n", account)
 	fmt.Fprintf(out, "  sudo sh -c %s\n", shellQuote([]string{strings.Join(forThem, " &&\n    ")}))
 	return fmt.Errorf("Nothing was changed. Run `%s` again once they have", again)
 }
