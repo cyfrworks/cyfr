@@ -105,7 +105,7 @@ defmodule Opus.TinctureTest do
 
   # A profile of `kind` for the tincture `node`, with a head consent that
   # binds its edge to the dependency.
-  defp profile!(ctx, node, kind, status \\ :active, origins \\ [:interactive]) do
+  defp profile!(ctx, node, kind, status \\ :active) do
     id = "prof_#{kind}_#{System.unique_integer([:positive])}"
     {:ok, component, _ref} = Compendium.Component.resolve_component(ctx, node)
     {:ok, %{graph: activation}} = Compendium.Activation.resolve_verified(ctx, component)
@@ -120,7 +120,6 @@ defmodule Opus.TinctureTest do
           scope: :versionless,
           pinned_version: "",
           invoke_mode: if(kind == :public, do: :edge_only, else: :open_inert),
-          admitted_origins: origins,
           shape_digest: "sha256:shape-#{id}",
           commit_digest: "sha256:commit-#{id}",
           resolved_policy:
@@ -553,8 +552,7 @@ defmodule Opus.TinctureTest do
     test "opens a listed tincture's route, whose dependency runs on the person's grant",
          %{issuer: issuer} do
       node = tincture!(issuer, "tinc-listed")
-      # The grant admits the person's own calls and their keys' alike.
-      _owner = profile!(issuer, node, :owner, :active, [:interactive, :programmatic])
+      _owner = profile!(issuer, node, :owner)
       worker!([%{"answer" => 1}, %{"answer" => 2}])
       ScriptedWorker.fresh_limits!(issuer, [@dep_ref])
       narrowed = key_ctx!(issuer, "listed", ["t:local.tinc-listed"])
