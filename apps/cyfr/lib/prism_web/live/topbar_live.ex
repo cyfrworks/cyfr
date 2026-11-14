@@ -38,6 +38,7 @@ defmodule PrismWeb.TopbarLive do
   @recent_requests_limit 5
   @recent_tincture_limit 5
   @max_in_flight_builds 5
+  @running_executions_limit 20
 
   # The indicator refresh window and drain order; see `refresh/2`.
   @refresh_window_ms 250
@@ -289,7 +290,7 @@ defmodule PrismWeb.TopbarLive do
     case call_tool(socket, "execution", %{
            "action" => "list",
            "status" => "running",
-           "limit" => 20
+           "limit" => @running_executions_limit
          }) do
       {:ok, %{executions: list}} when is_list(list) -> assign(socket, :running_executions, list)
       _ -> assign(socket, :running_executions, [])
@@ -446,6 +447,13 @@ defmodule PrismWeb.TopbarLive do
       |> assign(:next_schedule, List.first(assigns.upcoming_schedules))
       |> assign(:builds_count, length(assigns.in_flight_builds))
       |> assign(:tincture_count, length(assigns.recent_tinctures))
+      |> assign(:builds_text, counted(assigns.in_flight_builds, @max_in_flight_builds))
+      |> assign(:tincture_text, counted(assigns.recent_tinctures, @recent_tincture_limit))
+      |> assign(:requests_text, counted(assigns.running_requests, @recent_requests_limit))
+      |> assign(
+        :executions_text,
+        counted(assigns.running_executions, @running_executions_limit)
+      )
 
     ~H"""
     <div class="relative flex h-12 items-center justify-between gap-2 border-b border-gray-800 bg-gray-900 px-3 text-xs">
@@ -537,7 +545,8 @@ defmodule PrismWeb.TopbarLive do
             :if={@builds_count > 0}
             name="builds"
             open={@open_popover == "builds"}
-            label={"#{@builds_count}"}
+            label={@builds_text}
+            title={"Builds in flight: #{@builds_text}"}
             icon="wrench"
             dot_class="bg-amber-400 animate-pulse"
           >
@@ -567,7 +576,8 @@ defmodule PrismWeb.TopbarLive do
             :if={@tincture_count > 0}
             name="tinctures"
             open={@open_popover == "tinctures"}
-            label={"#{@tincture_count}"}
+            label={@tincture_text}
+            title={"Tinctures run recently: #{@tincture_text}"}
             icon="palette"
           >
             <:popover>
@@ -597,6 +607,7 @@ defmodule PrismWeb.TopbarLive do
             name="schedules"
             open={@open_popover == "schedules"}
             label={f(@next_schedule, :name)}
+            title={"Next schedule: #{f(@next_schedule, :name)}"}
             icon="clock"
           >
             <:popover>
@@ -624,7 +635,8 @@ defmodule PrismWeb.TopbarLive do
           <.indicator
             name="rate"
             open={@open_popover == "rate"}
-            label={"#{@log_stats.total}/h"}
+            label={"#{@log_stats.total} requests/h"}
+            title={"Requests in your athanor in the last hour: #{@log_stats.total}"}
           >
             <:popover>
               <h4 class="text-xs font-medium text-gray-400 mb-2">Request rate (last 1h)</h4>
@@ -660,7 +672,8 @@ defmodule PrismWeb.TopbarLive do
           <.indicator
             name="executions"
             open={@open_popover == "executions"}
-            label={"#{@running_executions_count}"}
+            label={"#{@executions_text} running"}
+            title={"Executions running now: #{@executions_text}"}
             icon="cube"
             dot_class={
               if @running_executions_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"
@@ -694,7 +707,8 @@ defmodule PrismWeb.TopbarLive do
           <.indicator
             name="activity"
             open={@open_popover == "activity"}
-            label={"#{@running_requests_count}"}
+            label={"#{@requests_text} in flight"}
+            title={"Requests in flight now: #{@requests_text}"}
             icon="play"
             dot_class={
               if @running_requests_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"
@@ -734,6 +748,7 @@ defmodule PrismWeb.TopbarLive do
             name="health"
             open={@open_popover == "health"}
             label={f(@system_status, :version) || "—"}
+            title="CYFR's version and the health of its services"
             dot_class={health_dot_class(@services)}
           >
             <:popover>
@@ -783,6 +798,7 @@ defmodule PrismWeb.TopbarLive do
           name="user"
           open={@open_popover == "user"}
           label={@person}
+          title="Your account"
           icon="user"
         >
           <:popover>
@@ -818,6 +834,11 @@ defmodule PrismWeb.TopbarLive do
     """
   end
 
+  # How many a list the bar keeps holds: the bar reads at most `limit` of
+  # them, so a list at its limit may stand for more.
+  defp counted(list, limit) when length(list) >= limit, do: "#{length(list)} or more"
+  defp counted(list, _limit), do: "#{length(list)}"
+
   # ----------------------------------------------------------------------------
   # Indicator function component — button + anchored popover.
   # ----------------------------------------------------------------------------
@@ -827,6 +848,11 @@ defmodule PrismWeb.TopbarLive do
   attr :label, :string, default: nil
   attr :icon, :string, default: nil
   attr :dot_class, :string, default: nil
+
+  attr :title, :string,
+    required: true,
+    doc: "what the counter counts: the button's one accessible name, and its hover text"
+
   slot :popover, required: true
 
   defp indicator(assigns) do
@@ -836,6 +862,8 @@ defmodule PrismWeb.TopbarLive do
         type="button"
         phx-click="toggle_popover"
         phx-value-name={@name}
+        title={@title}
+        aria-label={@title}
         class={[
           "inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors",
           if(@open,

@@ -43,6 +43,77 @@ defmodule PrismWeb.TopbarLiveTest do
     refute has_element?(bar, ~s([phx-value-name="athanors"]))
   end
 
+  test "each counter of the bar has one accessible name, which says what it counts", %{
+    conn: conn
+  } do
+    # The platform administrator starts in dev, where the counters show.
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("")
+    bar = topbar(view)
+
+    # The counts move as the page itself is served; the words do not.
+    for {name, title, words} <- [
+          {"rate", "Requests in your athanor in the last hour: ", ~r/\d+ requests\/h/},
+          {"executions", "Executions running now: ", ~r/\d+ running/},
+          {"activity", "Requests in flight now: ", ~r/\d+ in flight/},
+          {"health", "CYFR's version and the health of its services", nil},
+          {"user", "Your account", nil}
+        ] do
+      [label] = attribute(bar, name, "aria-label")
+      assert String.starts_with?(label, title), name
+      assert attribute(bar, name, "title") == [label], name
+
+      # The name is said once: no second, hidden copy of it in the button.
+      refute has_element?(bar, ~s(button[phx-value-name="#{name}"] .sr-only)), name
+      if words, do: assert(has_element?(bar, ~s(button[phx-value-name="#{name}"]), words), name)
+    end
+
+    # Every counter of the bar carries a name.
+    html = bar |> element("#live-indicators") |> render()
+    tags = Regex.scan(~r/<button[^>]*phx-value-name="[^"]+"[^>]*>/, html)
+    assert tags != []
+    assert Enum.all?(tags, fn [tag] -> tag =~ ~s(aria-label=") end)
+  end
+
+  test "a list the bar keeps at its limit is counted as that many or more", %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("")
+    bar = topbar(view)
+    actor = %Prima.Actor{Prima.Actor.system() | athanor_id: seated_athanor().id, scope: :athanor}
+
+    started = fn n ->
+      for i <- 1..n do
+        send(
+          bar.pid,
+          Cyfr.Bus.Build.new(actor, :started, %{build_id: "bld_#{n}_#{i}", reference: "r#{i}"})
+        )
+      end
+
+      :sys.get_state(bar.pid)
+    end
+
+    # Under the limit: the count as it is.
+    started.(2)
+    assert attribute(bar, "builds", "aria-label") == ["Builds in flight: 2"]
+    assert has_element?(bar, ~s(button[phx-value-name="builds"]), "2")
+
+    # At the limit the bar keeps (five), and past it: that many or more.
+    started.(6)
+    assert attribute(bar, "builds", "aria-label") == ["Builds in flight: 5 or more"]
+    assert has_element?(bar, ~s(button[phx-value-name="builds"]), "5 or more")
+  end
+
+  # The attribute `attr` of the bar's button `name`, as a browser reads it.
+  defp attribute(bar, name, attr) do
+    bar
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(button[phx-value-name="#{name}"]))
+    |> LazyHTML.attribute(attr)
+  end
+
   test "the bar names the person as people are named, never by their id", %{conn: conn} do
     # No name, no email and no name at cyfr.run yet.
     unnamed = test_user(email: nil)
