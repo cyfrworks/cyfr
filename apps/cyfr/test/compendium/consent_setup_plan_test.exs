@@ -91,6 +91,12 @@ defmodule Compendium.ConsentSetupPlanTest do
   defp seed!(ctx, ref, edges, refs) do
     nodes = %{ref => %{"limits" => @limits, "edges" => Map.put(edges, "@ingress", %{})}}
 
+    # The installed release's own verified activation, so the head stands
+    # for the release a run starts: a plan reads ready only where a run is
+    # admitted.
+    {:ok, component, _ref} = Compendium.Component.resolve_component(ctx, ref)
+    {:ok, %{graph: activation}} = Compendium.resolve_verified_activation(ctx, component)
+
     nodes =
       if edges == %{},
         do: nodes,
@@ -107,7 +113,7 @@ defmodule Compendium.ConsentSetupPlanTest do
           shape_digest: "sha256:shape",
           commit_digest: "sha256:commit",
           resolved_policy: Jason.encode!(%{"canonical" => "jcs-1", "nodes" => nodes}),
-          activation: %{ref => "sha256:act"},
+          activation: activation,
           vault_refs: refs
         }
       )

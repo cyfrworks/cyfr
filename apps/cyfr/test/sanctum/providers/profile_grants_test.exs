@@ -618,7 +618,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       lender = lender!(ctx, entry)
       via = %{"via" => %{"label" => "default"}}
       one = borrower!(ctx, "g-one", via)
-      two = borrower!(ctx, "g-two", via)
+      two = borrower!(ctx, "g-other", via)
 
       assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
       assert ids(answer) == Enum.sort([lender, one, two])

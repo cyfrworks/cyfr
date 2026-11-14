@@ -248,17 +248,15 @@ defmodule Opus.ProviderTest do
     end
 
     test "returns error for unregistered component", %{ctx: ctx} do
-      # An unregistered component has no profile, so the consent gate
-      # refuses before resolution is attempted.
-      {:error, msg} =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => "reagent:local.nonexistent:0.1.0",
-          "input" => %{"a" => 1, "b" => 2}
-        })
+      # A reference naming nothing installed in the caller's athanor is not
+      # found, before any grant is asked about.
+      ref = "reagent:local.nonexistent:0.1.0"
 
-      assert {:consent_required, %{}} = msg
-      assert err_msg(msg) =~ "Consent required"
+      assert Provider.handle("execution", ctx, %{
+               "action" => "run",
+               "reference" => ref,
+               "input" => %{"a" => 1, "b" => 2}
+             }) == {:error, {:not_found, {:component, ref}}}
     end
 
     test "a connection roots the run under the account its profile's ingress binds by that " <>
@@ -1735,18 +1733,15 @@ defmodule Opus.ProviderTest do
 
   describe "execution tool - error handling" do
     test "handles unregistered component gracefully", %{ctx: ctx} do
-      # Unregistered component should return a clear error — no profile
-      # exists for it, so the consent gate names the fix.
-      result =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => "reagent:local.nonexistent-component:0.1.0",
-          "input" => %{}
-        })
+      # A reference naming nothing installed reads as itself, not as a
+      # grant to make.
+      ref = "reagent:local.nonexistent-component:0.1.0"
 
-      assert {:error, msg} = result
-      assert {:consent_required, %{}} = msg
-      assert err_msg(msg) =~ "Consent required"
+      result =
+        Provider.handle("execution", ctx, %{"action" => "run", "reference" => ref, "input" => %{}})
+
+      assert result == {:error, {:not_found, {:component, ref}}}
+      assert err_msg(elem(result, 1)) == "Component not found: #{ref}"
     end
 
     test "handles empty reference gracefully", %{ctx: ctx} do
@@ -1808,14 +1803,15 @@ defmodule Opus.ProviderTest do
     end
 
     test "an unregistered component is refused before any record is written", %{ctx: ctx} do
-      # No profile exists for it, so the consent gate refuses before a record
-      # could be written; a failed record is the trapping run's, above.
-      assert {:error, {:consent_required, %{}}} =
-               Provider.handle("execution", ctx, %{
-                 "action" => "run",
-                 "reference" => "reagent:local.unregistered-crash:0.1.0",
-                 "input" => %{}
-               })
+      # It is not found before a record could be written; a failed record is
+      # the trapping run's, above.
+      ref = "reagent:local.unregistered-crash:0.1.0"
+
+      assert Provider.handle("execution", ctx, %{
+               "action" => "run",
+               "reference" => ref,
+               "input" => %{}
+             }) == {:error, {:not_found, {:component, ref}}}
 
       assert Arca.Execution.list(Prima.Actor.in_athanor(ctx.athanor_id),
                user_id: ctx.user_id,
@@ -1875,16 +1871,15 @@ defmodule Opus.ProviderTest do
     end
 
     test "a component that never resolves opens no execution span", %{ctx: ctx} do
-      # The gate comes first: an unregistered reference has no consent
-      # profile, so the call is refused before the executor is reached.
-      assert {:error, {:consent_required, %{"ref" => ref}}} =
-               Provider.handle("execution", ctx, %{
-                 "action" => "run",
-                 "reference" => "reagent:local.unregistered-telemetry:0.1.0",
-                 "input" => %{}
-               })
+      # A reference naming nothing installed is not found before the
+      # executor is reached.
+      ref = "reagent:local.unregistered-telemetry:0.1.0"
 
-      assert ref == "reagent:local.unregistered-telemetry:0.1.0"
+      assert Provider.handle("execution", ctx, %{
+               "action" => "run",
+               "reference" => ref,
+               "input" => %{}
+             }) == {:error, {:not_found, {:component, ref}}}
 
       # And no span is opened for it. A `:start` with no `:stop` or
       # `:exception` is an execution that leaks — every consumer counting

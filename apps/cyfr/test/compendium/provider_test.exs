@@ -1399,6 +1399,7 @@ defmodule Compendium.ProviderTest do
               "type" => "api_key:example.com",
               "reason" => "optional enrichment",
               "required" => false,
+              "fields" => ["KEY"],
               "hosts" => ["api.example.com"]
             }
           },
