@@ -703,7 +703,14 @@ async function confirmRegrant(page, ref, { timeoutMs = 45_000, whileOpen = async
     const p = await prompt(page);
     return !p || p.kind !== "grant" ? true : null;
   }, { timeoutMs, what: `the grant prompt for ${ref} confirmed` });
-  return { title: asked.title, asked_for: asked.title === `Grant ${ref}`, place, meanwhile };
+  return { title: asked.title, asked_for: asked.title === `Grant ${componentName(ref)}`, place, meanwhile };
+}
+
+// A component by its name, as the system layer titles its grant: the part of
+// `type:namespace.name[:version]` after the namespace.
+function componentName(ref) {
+  const body = ref.split(":")[1];
+  return body.slice(body.indexOf(".") + 1);
 }
 
 // What the shell draws, for a step that did not find what it expected.
