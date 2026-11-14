@@ -10,7 +10,9 @@ set -eu
 # Environment variables:
 #   CYFR_VERSION              - the exact version to install, a pre-release
 #                               such as 0.6.0-alpha.1 included (default: the
-#                               latest release that is not a pre-release)
+#                               newest release that is not a pre-release,
+#                               or while none is published the newest
+#                               pre-release)
 #   CYFR_INSTALL_DIR          - installation directory (default: /usr/local/bin or ~/.local/bin)
 #   CYFR_ALLOW_UNVERIFIED     - set to 1 to install without cosign, or without the
 #                               release's signature bundle: checksums.txt's
@@ -48,7 +50,7 @@ main() {
 
     install_dir="$(resolve_install_dir)"
 
-    printf "Installing cyfr v%s (%s/%s) to %s\n" "$version" "$os" "$arch" "$install_dir"
+    printf "Installing cyfr v%s, %s (%s/%s), to %s\n" "$version" "$(which_release "$version")" "$os" "$arch" "$install_dir"
 
     tmpdir="$(mktemp -d)"
     trap 'rm -rf "$tmpdir"' EXIT
@@ -81,6 +83,20 @@ main() {
     fi
 
     printf "\nNext: mkdir my-cyfr && cd my-cyfr && cyfr init\n"
+}
+
+# Which release $1 is, as resolve_version took it: the one CYFR_VERSION
+# names, or the newest, a pre-release only while no release that is not
+# one is published.
+which_release() {
+    if [ -n "${CYFR_VERSION:-}" ]; then
+        echo "the version CYFR_VERSION names"
+        return
+    fi
+    case "$1" in
+        *-*) echo "the newest pre-release, since no release that is not a pre-release is published yet" ;;
+        *) echo "the newest release" ;;
+    esac
 }
 
 # macOS's tip for the version $1 installed, before the next step. The
@@ -129,38 +145,97 @@ resolve_version() {
         return
     fi
 
-    # List recent releases and pick the newest CLI release, as `cyfr update`
-    # does (internal/release.Latest): the greatest bare MAJOR.MINOR.PATCH tag
-    # without leading zeros, compared numerically, whatever order the API
-    # lists them in. Drafts, releases GitHub marks as pre-releases and tags
-    # outside the bare release-version grammar are skipped.
+    # List recent releases and take the one `cyfr update` takes
+    # (internal/release.Latest; tests/fixtures/release_manifest.json's
+    # selection): the newest release that is not a pre-release and, while
+    # none is listed, the newest pre-release, by SemVer precedence, whatever
+    # order or page the API lists them in. A pre-release is one GitHub marks as such
+    # or whose tag carries one; drafts and tags outside the release-version
+    # grammar are skipped.
     # Each release's tag_name, draft and prerelease are its own top-level
     # keys, tag_name first; a string value cannot hold an unescaped quote, so
     # no release body matches them. A release whose flags are not both read
-    # is skipped.
-    api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20"
-    if command -v curl >/dev/null 2>&1; then
-        response="$(curl -fsSL "$api_url")"
-    elif command -v wget >/dev/null 2>&1; then
-        response="$(wget -qO- "$api_url")"
-    else
-        printf "Error: curl or wget is required\n" >&2
-        exit 1
-    fi
+    # is skipped. awk runs under LC_ALL=C, so its ranges and its string
+    # order are ASCII's.
+    # The listing is read from page 1, 100 releases a page, until a page
+    # holds fewer, so a release past the first page still counts; a full
+    # tenth page refuses rather than miss a release past it (as
+    # release.Latest reads it).
+    response=""
+    page=1
+    while :; do
+        api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100&page=${page}"
+        if command -v curl >/dev/null 2>&1; then
+            listed="$(curl -fsSL "$api_url")"
+        elif command -v wget >/dev/null 2>&1; then
+            listed="$(wget -qO- "$api_url")"
+        else
+            printf "Error: curl or wget is required\n" >&2
+            exit 1
+        fi
+        # A shell cannot parse JSON, so a page is held to what is taken
+        # from it: release tags. It is the empty list, which ends the
+        # listing, or it yields at least one tag; a page with fewer than
+        # 100 is the last. Anything else could hide a release, and refuses.
+        # A malformed page that still carries well-formed tags is read for
+        # them: the listing only chooses a version, and the release chosen
+        # is verified by its signature before anything is installed.
+        tags="$(printf '%s\n' "$listed" | tr -d '\n' | grep -oE '"tag_name":[[:space:]]*"[^"]*"' | wc -l | tr -d ' ')"
+        if [ "$tags" -eq 0 ]; then
+            [ "$(printf '%s' "$listed" | tr -d ' \t\r\n')" = "[]" ] && break
+            printf "Error: the release listing could not be read whole: page %s holds no release, so the newest release cannot be known; nothing was installed. Try again, or set CYFR_VERSION to the version to install (https://github.com/%s/releases lists them)\n" "$page" "$GITHUB_REPO" >&2
+            exit 1
+        fi
+        response="$response
+$listed"
+        [ "$tags" -ge 100 ] || break
+        if [ "$page" -eq 10 ]; then
+            printf "Error: the release listing could not be read whole: it holds more than 1000 releases, so the newest release cannot be known; nothing was installed. Set CYFR_VERSION to the version to install (https://github.com/%s/releases lists them)\n" "$GITHUB_REPO" >&2
+            exit 1
+        fi
+        page=$((page + 1))
+    done
 
     version="$(printf '%s\n' "$response" | tr -d '\n' |
         grep -oE '"(tag_name|draft|prerelease)":[[:space:]]*("[^"]*"|true|false)' |
-        awk '
-            function newer(a, b,    x, y, i) {
-                split(a, x, ".")
-                split(b, y, ".")
-                for (i = 1; i <= 3; i++)
-                    if (x[i] + 0 != y[i] + 0) return x[i] + 0 > y[i] + 0
-                return 0
+        LC_ALL=C awk '
+            # SemVer 2.0 precedence: -1, 0 or 1. Numeric identifiers by
+            # length, then digit by digit, below alphanumeric ones, which
+            # compare as strings; a shorter run of equal identifiers is lower,
+            # and a version with a pre-release is lower than the one without.
+            function cmp_id(a, b,    an, bn) {
+                a = a ""; b = b ""
+                an = a ~ /^[0-9]+$/; bn = b ~ /^[0-9]+$/
+                if (an && bn && length(a) != length(b)) return length(a) < length(b) ? -1 : 1
+                if (an != bn) return an ? -1 : 1
+                return a < b ? -1 : (a > b ? 1 : 0)
+            }
+            function cmp_list(x, nx, y, ny,    i, c) {
+                for (i = 1; i <= nx && i <= ny; i++)
+                    if ((c = cmp_id(x[i], y[i])) != 0) return c
+                return nx < ny ? -1 : (nx > ny ? 1 : 0)
+            }
+            function cmp(a, b,    ac, ap, bc, bp, i, x, y, nx, ny, c) {
+                ac = a; ap = ""; bc = b; bp = ""
+                if ((i = index(a, "-")) > 0) { ac = substr(a, 1, i - 1); ap = substr(a, i + 1) }
+                if ((i = index(b, "-")) > 0) { bc = substr(b, 1, i - 1); bp = substr(b, i + 1) }
+                nx = split(ac, x, "."); ny = split(bc, y, ".")
+                if ((c = cmp_list(x, nx, y, ny)) != 0) return c
+                if (ap == bp) return 0
+                if (ap == "") return 1
+                if (bp == "") return -1
+                nx = split(ap, x, "."); ny = split(bp, y, ".")
+                return cmp_list(x, nx, y, ny)
             }
             function flush() {
-                if (tag ~ /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ && draft == "false" && pre == "false" && (best == "" || newer(tag, best)))
-                    best = tag
+                if (tag ~ /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$/ &&
+                    draft == "false" && (pre == "false" || pre == "true")) {
+                    if (pre == "false" && index(tag, "-") == 0) {
+                        if (release == "" || cmp(tag, release) > 0) release = tag
+                    } else if (prerelease == "" || cmp(tag, prerelease) > 0) {
+                        prerelease = tag
+                    }
+                }
                 tag = ""; draft = ""; pre = ""
             }
             {
@@ -170,13 +245,12 @@ resolve_version() {
             key == "tag_name" { flush(); tag = value }
             key == "draft" { draft = value }
             key == "prerelease" { pre = value }
-            END { flush(); print best }
+            END { flush(); print (release != "" ? release : prerelease) }
         ')"
 
-    # The sentence internal/release.ErrNoRelease begins: CYFR_VERSION alone
-    # installs a pre-release.
+    # The sentence internal/release.ErrNoRelease begins.
     if [ -z "$version" ]; then
-        printf "Error: no CYFR release is published yet apart from pre-releases; set CYFR_VERSION to the version to install (https://github.com/%s/releases lists them)\n" "$GITHUB_REPO" >&2
+        printf "Error: no CYFR release is published yet (https://github.com/%s/releases lists them)\n" "$GITHUB_REPO" >&2
         exit 1
     fi
 
@@ -384,8 +458,9 @@ link_onto_path() {
     esac
     command -v sudo >/dev/null 2>&1 || return 1
     { : </dev/tty; } 2>/dev/null || return 1
-    printf "\nThis command puts cyfr on your PATH:\n  sudo ln -sf %s/cyfr /usr/local/bin/cyfr\n" "$1"
-    sudo ln -sf "$1/cyfr" /usr/local/bin/cyfr </dev/tty
+    printf "\nLinking cyfr into /usr/local/bin, which is on your PATH, with sudo:\n  sudo ln -sf %s/cyfr /usr/local/bin/cyfr\n" "$1"
+    sudo ln -sf "$1/cyfr" /usr/local/bin/cyfr </dev/tty || return 1
+    printf "Linked /usr/local/bin/cyfr to %s/cyfr, so cyfr is on your PATH.\n" "$1"
 }
 
 main

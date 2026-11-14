@@ -225,76 +225,120 @@ run_case "a missing bundle with CYFR_ALLOW_UNVERIFIED=1 installs on the checksum
     "signature is NOT verified"
 
 # resolve_version reads the releases API through a curl on PATH that prints
-# a fixture: the newest release is the greatest bare MAJOR.MINOR.PATCH by
-# number, whatever the listing's order; drafts, releases flagged as
-# pre-releases, tags with a pre-release, tags with a leading zero and tags
-# that are no version are skipped, and a release body quoting the keys is
-# only text.
+# a listing, and takes from each of tests/fixtures/release_manifest.json's
+# selection rows the release the row names, refusing a listing with none,
+# from the listing as the API answers it and minified alike. The curl
+# answers the row's page the URL asks for, an empty page past them, and
+# notes each URL, so the pages read are the rule's.
 api_bin="$fixture/api-bin"
 mkdir "$api_bin"
-cat > "$fixture/releases.json" <<'JSON'
-[
-  {
-    "url": "https://api.github.com/repos/cyfrworks/cyfr/releases/1",
-    "author": {"login": "release-bot", "type": "Bot", "site_admin": false},
-    "tag_name": "0.5.12",
-    "name": "0.5.12",
-    "draft": false,
-    "prerelease": false,
-    "body": "Backport. Not \"tag_name\": \"9.9.9\", \"draft\": false, \"prerelease\": false."
-  },
-  {"tag_name": "0.11.0", "draft": true, "prerelease": false, "assets": [{"name": "cyfr_0.11.0_linux_amd64.tar.gz", "state": "uploaded"}]},
-  {"tag_name": "0.10.0", "draft": false, "prerelease": true},
-  {"tag_name": "porta-v1.2.0", "draft": false, "prerelease": false},
-  {"tag_name": "v0.20.0", "draft": false, "prerelease": false},
-  {"tag_name": "0.9.1-rc1", "draft": false, "prerelease": false},
-  {"tag_name": "1.0.0-rc.1", "draft": false, "prerelease": false},
-  {"tag_name": "1.1.0-alpha.1", "draft": false, "prerelease": true},
-  {"tag_name": "01.0.0", "draft": false, "prerelease": false},
-  {"tag_name": "0.9.1", "draft": false, "prerelease": false},
-  {"tag_name": "0.6.3", "draft": false, "prerelease": false}
-]
-JSON
-printf '#!/bin/sh\ncat "%s"\n' "$fixture/releases.json" > "$api_bin/curl"
-chmod +x "$api_bin/curl"
+python3 -I - "$REPO_ROOT/tests/fixtures/release_manifest.json" "$fixture/selection" <<'PY' || { echo "FAIL: the selection rows do not read"; exit 1; }
+import json, os, sys
+rows = json.load(open(sys.argv[1]))["selection"]
+assert rows, "no selection rows"
+os.mkdir(sys.argv[2])
+for i, row in enumerate(rows):
+    base = os.path.join(sys.argv[2], str(i))
+    for n, page in enumerate(row["pages"], 1):
+        with open("%s.json.%d" % (base, n), "w") as f:
+            json.dump(page, f, indent=2)
+        with open("%s.min.json.%d" % (base, n), "w") as f:
+            json.dump(page, f, separators=(",", ":"))
+    full = len(row["pages"][-1]) == 100
+    with open(base + ".asked", "w") as f:
+        f.write("".join("per_page=100&page=%d\n" % n for n in range(1, len(row["pages"]) + 1 + full)))
+    with open(base + ".name", "w") as f:
+        f.write(row["name"])
+    with open(base + ".picks", "w") as f:
+        f.write(row["picks"] or "")
+    with open(base + ".incomplete", "w") as f:
+        f.write("yes" if row.get("incomplete") else "")
+PY
 
-run_case "the newest release is the greatest bare version, drafts and pre-releases skipped" ok \
-    "PATH='$api_bin:$PATH'
-     unset CYFR_VERSION
-     version=\$(resolve_version) || exit 1
-     printf 'resolved %s\n' \"\$version\"
-     [ \"\$version\" = 0.9.1 ]" \
-    "resolved 0.9.1"
+no_release="Error: no CYFR release is published yet (https://github.com/cyfrworks/cyfr/releases lists them)"
+for name_file in "$fixture"/selection/*.name; do
+    row="${name_file%.name}"
+    name="$(cat "$name_file")"
+    picks="$(cat "$row.picks")"
+    incomplete="$(cat "$row.incomplete")"
+    for listing in "$row.json" "$row.min.json"; do
+        rm -f "$fixture/asked"
+        cat > "$api_bin/curl" <<CURL
+#!/bin/sh
+url=\$(for a in "\$@"; do :; done; printf '%s' "\$a")
+printf '%s\\n' "\${url#*\\?}" >> "$fixture/asked"
+page=\${url##*page=}
+if [ -f "$listing.\$page" ]; then cat "$listing.\$page"; else echo '[]'; fi
+CURL
+        chmod +x "$api_bin/curl"
+        if [ -n "$incomplete" ]; then
+            run_case "selection: $name ($(basename "$listing")) refuses" fail \
+                "PATH='$api_bin:$PATH'
+                 unset CYFR_VERSION
+                 resolve_version" \
+                "Error: the release listing could not be read whole: it holds more than 1000 releases"
+        elif [ -n "$picks" ]; then
+            run_case "selection: $name ($(basename "$listing"))" ok \
+                "PATH='$api_bin:$PATH'
+                 unset CYFR_VERSION
+                 version=\$(resolve_version) || exit 1
+                 printf 'resolved %s\n' \"\$version\"
+                 [ \"\$version\" = '$picks' ] && cmp -s '$fixture/asked' '$row.asked'" \
+                "resolved $picks"
+        else
+            run_case "selection: $name ($(basename "$listing")) refuses" fail \
+                "PATH='$api_bin:$PATH'
+                 unset CYFR_VERSION
+                 resolve_version" \
+                "$no_release"
+        fi
+    done
+done
 
-tr -d '\n ' < "$fixture/releases.json" > "$fixture/releases.min.json"
-printf '#!/bin/sh\ncat "%s"\n' "$fixture/releases.min.json" > "$api_bin/curl"
-run_case "the API's minified answer resolves the same release" ok \
-    "PATH='$api_bin:$PATH'
-     unset CYFR_VERSION
-     version=\$(resolve_version) || exit 1
-     printf 'resolved %s\n' \"\$version\"
-     [ \"\$version\" = 0.9.1 ]" \
-    "resolved 0.9.1"
-
-# With no release to take as the latest, the refusal names CYFR_VERSION,
-# the one way to install a pre-release.
-no_release="no CYFR release is published yet apart from pre-releases; set CYFR_VERSION to the version to install (https://github.com/cyfrworks/cyfr/releases lists them)"
-no_release_case() {
-    printf '%s' "$2" > "$fixture/releases.none.json"
-    printf '#!/bin/sh\ncat "%s"\n' "$fixture/releases.none.json" > "$api_bin/curl"
-    run_case "$1 refuses, naming CYFR_VERSION" fail \
+# A page is held to the release tags it yields: a later page that yields
+# none and is not the empty list refuses, garbled or cut short, and the
+# first page's releases are never taken alone; the empty list ends the
+# listing.
+python3 -I -c 'import json; print(json.dumps([{"tag_name": "2.0.0-alpha.%d" % i, "draft": False, "prerelease": True} for i in range(100)]))' > "$fixture/full-page.json"
+later_page_case() {
+    printf '%s' "$2" > "$fixture/later-page.json"
+    cat > "$api_bin/curl" <<CURL
+#!/bin/sh
+case "\$*" in
+  *page=1) cat "$fixture/full-page.json" ;;
+  *) cat "$fixture/later-page.json" ;;
+esac
+CURL
+    chmod +x "$api_bin/curl"
+    run_case "$1 on page 2 refuses" fail \
         "PATH='$api_bin:$PATH'
          unset CYFR_VERSION
          resolve_version" \
-        "$no_release"
+        "Error: the release listing could not be read whole: page 2 holds no release"
 }
-no_release_case "an empty release list" '[]'
-no_release_case "only releases flagged as pre-releases" \
-    '[{"tag_name": "0.6.0", "draft": false, "prerelease": true}, {"tag_name": "0.6.0-alpha.1", "draft": false, "prerelease": true}]'
-no_release_case "only tags with a pre-release" \
-    '[{"tag_name": "0.6.0-alpha.1", "draft": false, "prerelease": false}, {"tag_name": "1.0.0-rc.2", "draft": false, "prerelease": false}]'
-no_release_case "no released bare version" \
-    '[{"tag_name": "1.0.0", "draft": true, "prerelease": false}, {"tag_name": "porta-v2.0.0", "draft": false, "prerelease": false}]'
+later_page_case "[garbage]" '[garbage]'
+later_page_case "[{]" '[{]'
+later_page_case "an object" '{'
+later_page_case "a page cut short before its first release" '[{"url": "https://api.github.com/repos/cyfrworks/cyfr/releases/1", "author": {"lo'
+printf '[]' > "$fixture/later-page.json"
+run_case "the empty list on page 2 ends the listing" ok \
+    "PATH='$api_bin:$PATH'
+     unset CYFR_VERSION
+     version=\$(resolve_version) || exit 1
+     printf 'resolved %s\n' \"\$version\"
+     [ \"\$version\" = 2.0.0-alpha.99 ]" \
+    "resolved 2.0.0-alpha.99"
+
+# The install says which release it took.
+run_case "a release taken from the listing is the newest release" ok \
+    "unset CYFR_VERSION; which_release 0.9.1" \
+    "the newest release"
+run_case "a pre-release taken from the listing says no release is published yet" ok \
+    "unset CYFR_VERSION; which_release 0.6.0-alpha.15" \
+    "the newest pre-release, since no release that is not a pre-release is published yet"
+run_case "a version CYFR_VERSION names says so" ok \
+    "CYFR_VERSION=0.6.0-alpha.1; which_release 0.6.0-alpha.1" \
+    "the version CYFR_VERSION names"
 
 # CYFR_VERSION names the exact version, a pre-release included, and no
 # listing is read: the curl on PATH fails.
