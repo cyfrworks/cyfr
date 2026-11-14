@@ -30,7 +30,9 @@ defmodule PrismWeb.DeviceUnlockController do
   # its unlock's sessions carry (`tests/fixtures/device_unlock.json`,
   # `exchange.shell`). Its Lock posts there, so the browser names this
   # page's origin, which the shell requires; its confirm opens there with
-  # the public ref alone, so the asking page stays and repeats its change.
+  # the public ref alone, so the asking page stays and repeats its change;
+  # and so does the approval of a passkey a browser offered for the
+  # account, which the shell reads from this CYFR by that ref.
   @shell_origin "http://127.0.0.1:7340"
   @shell_provider "unlock"
 
@@ -47,6 +49,11 @@ defmodule PrismWeb.DeviceUnlockController do
   @spec confirm_url(String.t()) :: String.t()
   def confirm_url(ref) when is_binary(ref),
     do: @shell_origin <> "/confirm?" <> URI.encode_query(%{"ref" => ref})
+
+  @doc "Where a box's screen approves the waiting passkey `ref`: its shell's page."
+  @spec passkey_url(String.t()) :: String.t()
+  def passkey_url(ref) when is_binary(ref),
+    do: @shell_origin <> "/passkey?" <> URI.encode_query(%{"ref" => ref})
 
   @doc "`GET /auth/device/complete`: the page that posts the fragment's ticket."
   def show(conn, _params) do

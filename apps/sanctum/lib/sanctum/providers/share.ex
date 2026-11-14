@@ -167,8 +167,9 @@ defmodule Sanctum.Providers.Share do
           "share",
           "offered",
           "The shares offered to you: each with its owner, the entry's kind, provider, " <>
-            "field names and destination, and how many requests you made through it today " <>
-            "(used_today); never another person's use",
+            "field names and destination, how many requests you made through it today " <>
+            "(used_today) and the most you may make in a day (person_daily, null for no " <>
+            "limit); never another person's use",
           [],
           [sources: [:outside]] ++ read
         )

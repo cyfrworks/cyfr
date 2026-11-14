@@ -53,6 +53,9 @@ func TestServer_AdmitsOnlyTheShellsOwnRequests(t *testing.T) {
 		{"Prism's Origin for Lock", "POST", Listen, "/lock", prism, 303},
 		{"Confirm on this device, a navigation", "GET", Listen, "/confirm?ref=cnr_x", "", 200},
 		{"Confirm by POST", "POST", Listen, "/confirm", prism, 404},
+		{"Prism's Origin for a passkey decision", "POST", Listen, "/passkey/decide", prism, 403},
+		{"Approve a passkey on this device, a navigation", "GET", Listen, "/passkey?ref=pkw_x", "", 200},
+		{"A passkey by POST", "POST", Listen, "/passkey", prism, 404},
 		{"Prism's Lock, a navigation", "GET", Listen, "/lock", "", 303},
 		{"a preflight", "OPTIONS", Listen, "/lock", prism, 404},
 		{"an unknown path", "POST", Listen, "/sign", Origin, 404},
@@ -141,10 +144,15 @@ func TestPages_RunOnlyTheHashedScripts(t *testing.T) {
 	}
 }
 
-// The shell's origin and Prism's two entries into it are the fixture's
-// exchange.shell: Lock a POST with no form, Confirm a navigation naming
-// its ref.
+// The shell's origin and Prism's three entries into it are the fixture's
+// exchange.shell: Lock a POST with no form, Confirm and Approve a passkey
+// navigations naming their ref in a window of their own, each served by
+// the shell.
 func TestServer_EntriesAreTheFixtures(t *testing.T) {
+	type navigation struct {
+		Method, Path, Target string
+		Query                []string
+	}
 	var v struct {
 		Exchange struct {
 			Shell struct {
@@ -153,21 +161,26 @@ func TestServer_EntriesAreTheFixtures(t *testing.T) {
 					Method, Path string
 					Form         []string
 				} `json:"lock"`
-				Confirm struct {
-					Method, Path, Target string
-					Query                []string
-				} `json:"confirm"`
+				Confirm navigation `json:"confirm"`
+				Passkey navigation `json:"passkey"`
 			} `json:"shell"`
 		} `json:"exchange"`
 	}
 	fixture(t, "device_unlock.json", &v)
 	sh := v.Exchange.Shell
 	if sh.Origin != Origin || (sh.Lock.Method != "POST" && sh.Lock.Method != "GET") || sh.Lock.Path != "/lock" || len(sh.Lock.Form) != 0 ||
-		sh.Confirm.Method != "GET" || sh.Confirm.Path != "/confirm" || len(sh.Confirm.Query) != 1 || sh.Confirm.Query[0] != "ref" {
+		sh.Confirm.Method != "GET" || sh.Confirm.Path != "/confirm" || len(sh.Confirm.Query) != 1 || sh.Confirm.Query[0] != "ref" ||
+		sh.Passkey.Method != "GET" || sh.Passkey.Path != "/passkey" || len(sh.Passkey.Query) != 1 || sh.Passkey.Query[0] != "ref" ||
+		sh.Confirm.Target != "_blank" || sh.Passkey.Target != "_blank" {
 		t.Fatalf("the fixture's shell %+v, the shell's origin %s", sh, Origin)
 	}
 	if _, ok := actions[sh.Lock.Path]; !ok || !actions[sh.Lock.Path].prism {
 		t.Fatal("Prism cannot post the fixture's Lock")
+	}
+	b := newBox(t, newFakeHome(t), t.TempDir())
+	w := b.do(sh.Passkey.Method, sh.Passkey.Path+"?"+sh.Passkey.Query[0]+"=pkw_x", "", nil)
+	if w.Code != http.StatusOK || !strings.Contains(body(w), "Unlock this screen first, then approve the passkey again from Your devices.") {
+		t.Fatalf("the fixture's passkey entry answered %d:\n%s", w.Code, body(w))
 	}
 }
 
@@ -310,6 +323,7 @@ func TestServer_TheProofIsHandedOverOnlyByTheOpening(t *testing.T) {
 		"Open CYFR":        b.do(http.MethodPost, "/open", Origin, url.Values{"proof": {proof}}),
 		"the code's POST":  b.do(http.MethodPost, "/recovery", Origin, url.Values{"proof": {proof}}),
 		"a confirmation":   b.do(http.MethodGet, "/confirm?ref=cnr_x", "", nil),
+		"a passkey":        b.do(http.MethodGet, "/passkey?ref=pkw_x", "", nil),
 		"a refused Origin": b.do(http.MethodPost, "/open", "https://evil.example", url.Values{"proof": {proof}}),
 		"Lock":             b.do(http.MethodGet, "/lock", "", nil),
 	}
@@ -587,5 +601,25 @@ func TestServer_APlainReadShowsNoConfirmation(t *testing.T) {
 	other := b.do(http.MethodGet, "/confirm?ref=cnr_2", "", nil).Body.String()
 	if strings.Contains(other, "Household") || strings.Contains(other, "cnr_1") {
 		t.Fatalf("a request naming another reference is shown the drawn one:\n%s", other)
+	}
+}
+
+// A drawn passkey request's code and reference go only to the request that
+// names its reference: a plain read, a read naming none and one naming
+// another are shown neither, and the request stays drawn for its own.
+func TestServer_APlainReadShowsNoPasskeyRequest(t *testing.T) {
+	_, b, _, _, key := passkeyAsked(t)
+	code := account.ShortCode(key.Kid)
+	if drawn := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)); !strings.Contains(drawn, code) || !strings.Contains(drawn, `value="pkw_1"`) {
+		t.Fatalf("the drawing request is not shown its passkey request:\n%s", drawn)
+	}
+	for name, path := range map[string]string{"a plain read": "/", "no ref": "/passkey", "another ref": "/passkey?ref=pkw_2"} {
+		page := body(b.do(http.MethodGet, path, "", nil))
+		if strings.Contains(page, code) || strings.Contains(page, "pkw_1") || !strings.Contains(page, "<h1>A passkey request is open</h1>") {
+			t.Errorf("%s with a passkey request drawn:\n%s", name, page)
+		}
+	}
+	if again := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)); !strings.Contains(again, code) {
+		t.Fatalf("the request is no longer drawn for its own reference:\n%s", again)
 	}
 }

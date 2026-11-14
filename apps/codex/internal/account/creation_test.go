@@ -167,19 +167,19 @@ func TestApprove_AddsTheKeyByThisDevicesSignature(t *testing.T) {
 	d := account.Directory{URL: a.Directory}
 	sign := func(m []byte) []byte { return ed25519.Sign(dev, m) }
 	svc.Lose = 1
-	if err := account.Approve(context.Background(), d, a.Identifier, devPub, sign, other, now()); err != nil {
+	if err := account.Approve(context.Background(), d, a.Identifier, devPub, sign, account.DeviceKey(other), now()); err != nil {
 		t.Fatal(err)
 	}
 	st := svc.State(t, a.Identifier)
 	if _, listed := st.Key(account.Kid(other)); !listed || len(svc.Log(a.Identifier)) != 3 {
 		t.Fatalf("the log lists %d keys in %d entries", len(st.Keys), len(svc.Log(a.Identifier)))
 	}
-	if err := account.Approve(context.Background(), d, a.Identifier, devPub, sign, other, now()); !errors.Is(err, account.ErrListed) {
+	if err := account.Approve(context.Background(), d, a.Identifier, devPub, sign, account.DeviceKey(other), now()); !errors.Is(err, account.ErrListed) {
 		t.Fatalf("a listed key is %v", err)
 	}
 	stranger := newDevice(t)
 	err := account.Approve(context.Background(), d, a.Identifier, stranger.Public().(ed25519.PublicKey),
-		func(m []byte) []byte { return ed25519.Sign(stranger, m) }, newDevice(t).Public().(ed25519.PublicKey), now())
+		func(m []byte) []byte { return ed25519.Sign(stranger, m) }, account.DeviceKey(newDevice(t).Public().(ed25519.PublicKey)), now())
 	if !errors.Is(err, account.ErrNotListed) {
 		t.Fatalf("an unlisted signer is %v", err)
 	}

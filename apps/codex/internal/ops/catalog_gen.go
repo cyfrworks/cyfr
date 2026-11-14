@@ -181,6 +181,7 @@ const (
 	PairingList             = "list"
 	PairingRenew            = "renew"
 	PairingRevoke           = "revoke"
+	PairingWaiting          = "waiting"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
 	PolicyLogList           = "list"
@@ -319,7 +320,7 @@ var Actions = map[string][]string{
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
-	"pairing":             {"list", "renew", "revoke"},
+	"pairing":             {"list", "renew", "revoke", "waiting"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -2692,6 +2693,21 @@ func (args PairingRevokeArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PairingRevoke, fields: fields(args)})
+}
+
+// PairingWaitingArgs carries arguments for pairing.waiting.
+type PairingWaitingArgs struct {
+	// waiting: one waiting passkey's ref, to read that one alone
+	Ref Field[string] `json:"ref,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingWaitingArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingWaitingArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingWaiting, fields: fields(args)})
 }
 
 // PolicyLogCorrelateArgs carries arguments for policy_log.correlate.

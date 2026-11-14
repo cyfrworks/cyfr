@@ -160,9 +160,10 @@ async function main(browser, proxy) {
   record.refused_passkey = await refusedPasskey(stranger, passkeys(), A);
   if (!row("refused_passkey",
     record.refused_passkey.error === "The passkey was not used. Try again when you are ready." && record.refused_passkey.ways &&
-      record.refused_passkey.carries && record.refused_passkey.recover === "enter",
-    "a browser holding no passkey for the account signs in at A: the sign page says the passkey was not used and offers adding one " +
-      "with the recovery code, whose link carries A's request to the recovery page",
+      record.refused_passkey.offered && record.refused_passkey.carries && record.refused_passkey.recover === "enter",
+    "a browser holding no passkey for the account signs in at A: the sign page says the passkey was not used, offers making one " +
+      "in this browser (No passkey in this browser?, which asks the account's name) and adding one with the recovery code, whose " +
+      "link carries A's request to the recovery page",
     record.refused_passkey)) return;
 
   // second_code

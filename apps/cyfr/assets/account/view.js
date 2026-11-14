@@ -24,6 +24,7 @@ const WORDS = {
   name_invalid: "A name is 1 to 39 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.",
   policy_changed: "The terms changed. Accept the new terms to finish.",
   name_elsewhere: "That name is not this account's. Type the name of the account this code recovers.",
+  name_unknown: "No account has that name. Check what you typed.",
   not_a_code: "That is not a recovery code. Check what you typed.",
   typo: "That recovery code has a typo. Check each group and try again.",
   code_replaced: "That recovery code no longer works for its account.",

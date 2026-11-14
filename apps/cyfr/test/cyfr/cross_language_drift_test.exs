@@ -453,6 +453,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/assets/test/device_unlock/complete.test.mjs", ~w(exchange)},
       {"apps/cyfr/test/emissary/web/controllers/device_session_controller_test.exs",
        ~w(exchange)},
+      {"apps/cyfr/test/prism_web/controllers/device_unlock_controller_test.exs", ~w(exchange)},
       {"apps/prima/test/prima/device_cert_test.exs", ~w(keys proofs purpose_fields verify)},
       {"apps/prima/test/prima/device_unlock_test.exs",
        ~w(protocol common_fields purpose_fields keys proofs verify exchange)}
@@ -504,6 +505,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # SHA-256), outside this roster's reach.
     "identity.json" => [
       {"apps/codex/cmd/thread_test.go", ~w(identifiers)},
+      {"apps/codex/internal/account/approve_test.go", ~w(chains entries keys)},
       {"apps/codex/internal/account/identity_test.go",
        ~w(chains entries identifiers keys kits user_ids webauthn)},
       {"apps/cyfr/assets/test/account/identity.test.mjs",
@@ -640,7 +642,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "sign_in.json" => [
       {"apps/codex/cmd/registry_sign_test.go", ~w(requests)},
-      {"apps/codex/internal/account/wire_test.go", ~w(answers keys request_refusals requests)},
+      {"apps/codex/internal/account/wire_test.go",
+       ~w(answer_refusals answers keys request_refusals requests)},
       {"apps/cyfr/assets/test/account/pages.test.mjs",
        ~w(answers directory fragments identity keys max_fragment_bytes requests verify)},
       {"apps/cyfr/assets/test/account/sign_in.test.mjs",
