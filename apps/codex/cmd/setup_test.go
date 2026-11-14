@@ -32,7 +32,7 @@ func newSetupRun(t *testing.T) (*fakeStack, *setupSession, *bytes.Buffer) {
 	standInMachine(t).reachable = true
 	ctx, cancel := context.WithCancel(context.Background())
 	out := &bytes.Buffer{}
-	sess := newSetupSession(ctx, setupOptions{noPull: true}, &syncWriter{w: out})
+	sess := newSetupSession(ctx, setupOptions{noPull: true}, true, &syncWriter{w: out})
 	t.Cleanup(func() {
 		cancel()
 		if sess.begun() {
@@ -255,8 +255,12 @@ func TestSetupRefusesAStartOnceSetUpMeanwhile(t *testing.T) {
 // on, at a terminal, and writes nothing: no .env, so cyfr setup and cyfr
 // init both still find a new project, and no step begins.
 func TestSetupWithoutDockerWritesNothing(t *testing.T) {
-	s, sess, out := newSetupRun(t)
-	standInMachine(t).reachable = false
+	newInitProject(t)
+	s := useFakeEngine(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &bytes.Buffer{}
+	sess := newSetupSession(ctx, setupOptions{noPull: true}, false, &syncWriter{w: out})
 	if err := sess.Start(); !errors.Is(err, errNoDocker) {
 		t.Fatalf("a start without Docker answered %v", err)
 	}
@@ -272,17 +276,22 @@ func TestSetupWithoutDockerWritesNothing(t *testing.T) {
 	nothingWritten(t, ".env.example")
 }
 
-// The pages show the refusal as the start's own answer and stay at their
-// welcome; cyfr setup leaves nothing but its lock's file when it stops.
+// Without a Docker this account can use, cyfr setup serves the pages
+// writing nothing, not its lock nor its address file, so they are found
+// at the address it prints; their start shows the refusal and they stay
+// at their welcome, and once it stops the folder is as it was found.
 func TestSetupPagesWithoutDockerWriteNothing(t *testing.T) {
 	newInitProject(t)
 	useFakeEngine(t)
 	standInMachine(t).reachable = false
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var out bytes.Buffer
+	printed := &syncWriter{w: &out}
 	done := make(chan error, 1)
-	go func() { done <- runSetup(ctx, setupOptions{noPull: true, noOpen: true}, io.Discard) }()
-	c := openPages(t)
+	go func() { done <- runSetup(ctx, setupOptions{noPull: true, noOpen: true}, printed) }()
+	c := pagesAt(t, printed, &out)
+	nothingWritten(t, ".env.example")
 	st, status := c.do(http.MethodPost, "/api/start", struct{}{})
 	if status != http.StatusUnprocessableEntity || !reflect.DeepEqual(st, setup.State{Sentence: errNoDocker.Error()}) {
 		t.Errorf("the start answered %d %+v, want %d and the refusal alone", status, st, http.StatusUnprocessableEntity)
@@ -294,9 +303,31 @@ func TestSetupPagesWithoutDockerWriteNothing(t *testing.T) {
 	if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted before the start; nothing of the new CYFR was written" {
 		t.Errorf("cyfr setup answered %v", err)
 	}
-	nothingWritten(t, ".cyfr", ".env.example")
-	if entries, _ := os.ReadDir(".cyfr"); len(entries) != 1 || entries[0].Name() != "setup.lock" {
-		t.Errorf(".cyfr holds %v, want the setup's lock alone", entries)
+	nothingWritten(t, ".env.example")
+}
+
+// pagesAt waits for the address cyfr setup prints and answers a client of
+// the pages it names.
+func pagesAt(t *testing.T, w *syncWriter, out *bytes.Buffer) *pagesClient {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		w.mu.Lock()
+		text := out.String()
+		w.mu.Unlock()
+		if rest, ok := strings.CutPrefix(text, "Setup is at "); ok {
+			if line, _, ok := strings.Cut(rest, "\n"); ok {
+				u, err := url.Parse(line)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return &pagesClient{t: t, base: u.Scheme + "://" + u.Host, token: u.Fragment}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cyfr setup printed no address: %q", text)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

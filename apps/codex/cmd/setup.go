@@ -37,7 +37,7 @@ var setupCmd = &cobra.Command{
 
 cyfr setup serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser as 'cyfr open' does. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url. A Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display, and there cyfr setup without --no-open refuses before it serves anything. Nothing off this machine reaches the pages: the address carries a token of this run, and every request must come from the pages themselves.
 
-CYFR runs on Docker, which 'cyfr init' installs at a terminal and the pages do not: when Docker does not answer this account, the start writes nothing and the pages say to run 'cyfr init', then 'cyfr up', at a terminal. In a terminal older than the account's docker group, cyfr setup runs itself again with the group before it serves anything, as 'cyfr up' does. A step that fails shows why, in the command line's own sentence; a start that fails offers to try it again. Once CYFR is up, the pages show its setup link, <CYFR address>/setup#<token>, the token being CYFR_SETUP_TOKEN from .env, with a Copy button, and move the browser there: the link sets up CYFR's first person, who administers it, with a passkey. The program stops serving the pages once they have read that, or a minute after. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
+CYFR runs on Docker, which 'cyfr init' installs at a terminal and the pages do not: when Docker does not answer this account, cyfr setup writes nothing, not even its lock or .cyfr/setup.url, and the pages' start says to run 'cyfr init', then 'cyfr up', at a terminal. When Docker refuses this account in a terminal older than the account's docker group, cyfr setup runs itself again with the group through sg before it serves anything, as 'cyfr up' does. A step that fails shows why, in the command line's own sentence; a start that fails offers to try it again. Once CYFR is up, the pages show its setup link, <CYFR address>/setup#<token>, the token being CYFR_SETUP_TOKEN from .env, with a Copy button, and move the browser there: the link sets up CYFR's first person, who administers it, with a passkey. The program stops serving the pages once they have read that, or a minute after. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
 
 Run in a project whose .env exists, cyfr setup serves no pages and says the next step instead: with no one set up, the setup link, as 'cyfr up' says it; once its first person is set up, 'cyfr open'; when it cannot tell, the setup link alone. The link opens in the default browser on a machine with a display unless --no-open is given or CYFR has tailnet access. While CYFR is stopped, 'cyfr up' comes first.
 
@@ -67,10 +67,14 @@ Exit status 1: CYFR was not set up and started, the message saying why.`,
 // setupWithGroup is cyfr setup's first step, in a terminal older than the
 // account's docker group, as cyfr up's (upWithGroup): the same cyfr setup,
 // through sg, serves the pages, so every step of their run reaches Docker
-// and a failed one shows its own sentence. It answers true when that run
-// did the work.
+// and a failed one shows its own sentence. It runs nothing when Docker
+// already answers this account, a rootless Docker included, or when there
+// is no sg to run it with, and answers true when that run did the work.
 func setupWithGroup(args []string, out, errOut io.Writer) (bool, error) {
-	if !machine.supported() {
+	if !machine.supported() || machine.reachable() {
+		return false, nil
+	}
+	if _, err := os.Stat(sgProgram); err != nil {
 		return false, nil
 	}
 	account, err := user.Current()
@@ -110,20 +114,27 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 	if !o.noOpen && !hasDisplay() {
 		return errors.New("This machine has no browser for cyfr setup's pages. Run cyfr init here instead.")
 	}
-	// One setup serves a project's pages: a second would race the first
-	// for .env and for the address file. The lock is the setup's own, as
-	// the run takes the stack's lock for each step it runs.
-	if err := os.MkdirAll(".cyfr", 0o700); err != nil {
-		return fmt.Errorf("cyfr setup cannot make .cyfr (%v). Nothing was changed", err)
+	// Without a Docker this account can use, the pages serve only to say
+	// so: their start is refused, and nothing is written, the setup's lock
+	// and address file included, so the folder stays as it was found.
+	docker := machine.reachable()
+	if docker {
+		// One setup serves a project's pages: a second would race the
+		// first for .env and for the address file. The lock is the
+		// setup's own, as the run takes the stack's lock for each step it
+		// runs.
+		if err := os.MkdirAll(".cyfr", 0o700); err != nil {
+			return fmt.Errorf("cyfr setup cannot make .cyfr (%v). Nothing was changed", err)
+		}
+		release, busy, err := access.LockFile(setupLockFile)
+		switch {
+		case err != nil:
+			return fmt.Errorf("cyfr setup cannot take %s (%v). Nothing was changed", setupLockFile, err)
+		case busy:
+			return errors.New("Another cyfr setup is serving this project's pages, at the address in .cyfr/setup.url. Nothing was changed. Use those pages, or stop that cyfr setup and run this again")
+		}
+		defer release()
 	}
-	release, busy, err := access.LockFile(setupLockFile)
-	switch {
-	case err != nil:
-		return fmt.Errorf("cyfr setup cannot take %s (%v). Nothing was changed", setupLockFile, err)
-	case busy:
-		return errors.New("Another cyfr setup is serving this project's pages, at the address in .cyfr/setup.url. Nothing was changed. Use those pages, or stop that cyfr setup and run this again")
-	}
-	defer release()
 	token, err := setup.NewToken()
 	if err != nil {
 		return err
@@ -133,7 +144,7 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 		return fmt.Errorf("cyfr setup cannot serve its pages on 127.0.0.1:%d (%v). Nothing was changed", o.port, err)
 	}
 	out = &syncWriter{w: out}
-	s := newSetupSession(ctx, o, out)
+	s := newSetupSession(ctx, o, docker, out)
 	srv := setup.NewServer(s, token, l.Addr().(*net.TCPAddr).Port)
 	hs := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
@@ -149,9 +160,11 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 	// The address is this run's while it holds the setup's lock, so it
 	// goes with this run.
 	address := setup.Address(l, token)
-	defer os.Remove(setupURLFile)
-	if err := writeFileAtomic(setupURLFile, []byte(address+"\n"), 0o600); err != nil {
-		return fmt.Errorf("cyfr setup cannot write %s (%v). Nothing was changed", setupURLFile, err)
+	if docker {
+		defer os.Remove(setupURLFile)
+		if err := writeFileAtomic(setupURLFile, []byte(address+"\n"), 0o600); err != nil {
+			return fmt.Errorf("cyfr setup cannot write %s (%v). Nothing was changed", setupURLFile, err)
+		}
 	}
 	fmt.Fprintf(out, "Setup is at %s\n", hyperlink(out, address))
 	if openOnDisplay(address, o.noOpen, out) {
@@ -251,6 +264,9 @@ type setupSession struct {
 	o        setupOptions
 	out      io.Writer
 	finished chan struct{}
+	// docker is whether Docker answered this account when the pages were
+	// served; without it the start is refused.
+	docker bool
 
 	mu      sync.Mutex
 	st      setup.State
@@ -260,8 +276,8 @@ type setupSession struct {
 	choice chan string
 }
 
-func newSetupSession(ctx context.Context, o setupOptions, out io.Writer) *setupSession {
-	return &setupSession{ctx: ctx, o: o, out: out, finished: make(chan struct{}), st: setup.State{Phase: setup.PhaseReady}}
+func newSetupSession(ctx context.Context, o setupOptions, docker bool, out io.Writer) *setupSession {
+	return &setupSession{ctx: ctx, o: o, docker: docker, out: out, finished: make(chan struct{}), st: setup.State{Phase: setup.PhaseReady}}
 }
 
 func (s *setupSession) State() setup.State {
@@ -295,12 +311,6 @@ var errNoDocker = errors.New("Docker is not ready for CYFR on this machine, so n
 // Start begins the run, refusing a project whose .env exists by now, and
 // one whose Docker does not answer, before anything is written.
 func (s *setupSession) Start() error {
-	// Docker is asked outside the lock, since docker info takes its time
-	// and the pages read the state meanwhile; a start already begun and a
-	// project set up meanwhile keep their own refusals below.
-	if !s.begun() && !fileExists(".env") && !machine.reachable() {
-		return errNoDocker
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.started || s.ctx.Err() != nil {
@@ -308,6 +318,9 @@ func (s *setupSession) Start() error {
 	}
 	if fileExists(".env") {
 		return errSetUpMeanwhile
+	}
+	if !s.docker {
+		return errNoDocker
 	}
 	s.started = true
 	s.st = setup.State{Phase: setup.PhaseRunning, Steps: setupSteps(s.o.noPull), Step: initStepFiles}

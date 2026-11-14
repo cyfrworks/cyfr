@@ -8,6 +8,7 @@ package cmd
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 )
@@ -43,18 +44,22 @@ func TestSetupContinuesInATerminalOlderThanTheGroup(t *testing.T) {
 	}
 }
 
-// cyfr setup carries on as it is when sg has nothing to give it.
+// cyfr setup carries on as it is when Docker already answers this
+// account, a rootless Docker or a group the account holds already among
+// them, and when sg has nothing to give it or there is no sg.
 func TestSetupNeedsNoContinuation(t *testing.T) {
 	for name, set := range map[string]func(*standIn){
+		"Docker answers":     func(s *standIn) { s.reachable = true },
 		"another system":     func(s *standIn) { s.supported = false },
 		"not in the group":   func(s *standIn) { s.member = nil },
 		"the process has it": func(s *standIn) { s.process = []string{"docker"} },
+		"no sg":              func(*standIn) { sgProgram = filepath.Join(os.TempDir(), "no-such-sg") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := standInMachine(t)
 			s.member = []string{"docker"}
-			set(s)
 			record := sgStandIn(t, "0")
+			set(s)
 			if continued, err := setupWithGroup(nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
 				t.Fatalf("continued %t, err %v", continued, err)
 			}
