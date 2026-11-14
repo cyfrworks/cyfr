@@ -657,14 +657,14 @@ defmodule PrismWeb.LoginLiveTest do
     {:ok, record} =
       Prima.Confirmation.new(
         id: Prima.Confirmation.ref("cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32))),
-        home: PrismWeb.Endpoint.url(),
-        rp_id: URI.parse(PrismWeb.Endpoint.url()).host,
+        home: Sanctum.origin(),
+        rp_id: URI.parse(Sanctum.origin()).host,
         athanor: athanor_id,
         person: user.id,
         operation: "vault.create",
         args_digest: Prima.Digest.sha256("args"),
         action: "credential_entry",
-        preview: %{home: PrismWeb.Endpoint.url(), athanor: "Home", operation: "vault.create"},
+        preview: %{home: Sanctum.origin(), athanor: "Home", operation: "vault.create"},
         challenge: :crypto.strong_rand_bytes(32),
         expires_at: System.system_time(:millisecond) + 300_000
       )
