@@ -192,16 +192,15 @@ defmodule PrismWeb.WebhooksLive do
   end
 
   def handle_event("submit", params, socket) do
-    case decode_template_param(params["input_template"]) do
-      {:ok, template_map} ->
-        if socket.assigns.editing_name do
-          submit_update(socket, params, template_map)
-        else
-          submit_create(socket, params, template_map)
-        end
-
-      {:error, msg} ->
-        {:noreply, assign(socket, :form_error, msg)}
+    with {:ok, template_map} <- decode_template_param(params["input_template"]),
+         :ok <- offered_profile(socket, params) do
+      if socket.assigns.editing_name do
+        submit_update(socket, params, template_map)
+      else
+        submit_create(socket, params, template_map)
+      end
+    else
+      {:error, msg} -> {:noreply, assign(socket, :form_error, msg)}
     end
   end
 
@@ -365,17 +364,27 @@ defmodule PrismWeb.WebhooksLive do
   # The target component's grants a delivery can stand on: its active
   # profiles, read when the target is named. A target that names no
   # component, or one never granted, offers none.
-  defp load_profiles(socket, target_ref) when is_binary(target_ref) and target_ref != "" do
-    profiles =
-      case call_tool(socket, "profile/list", %{"ref" => target_ref}) do
-        {:ok, %{profiles: profiles}} -> Enum.filter(profiles, &(&1[:status] == :active))
-        _unread -> []
-      end
+  defp load_profiles(socket, target_ref),
+    do: assign(socket, :profiles, offered_profiles(socket, target_ref))
 
-    assign(socket, :profiles, profiles)
+  defp offered_profiles(socket, target_ref) when is_binary(target_ref) and target_ref != "" do
+    case call_tool(socket, "profile/list", %{"ref" => target_ref}) do
+      {:ok, %{profiles: profiles}} -> Enum.filter(profiles, &(&1[:status] == :active))
+      _unread -> []
+    end
   end
 
-  defp load_profiles(socket, _target_ref), do: assign(socket, :profiles, [])
+  defp offered_profiles(_socket, _target_ref), do: []
+
+  # A submit names a grant the form offers for its target, read again as
+  # the select is filled: one it never offered is refused, nothing made.
+  defp offered_profile(socket, params) do
+    offered = Enum.map(offered_profiles(socket, params["target_ref"]), & &1.id)
+
+    if params["profile_id"] in offered,
+      do: :ok,
+      else: {:error, "Choose one of the target component's grants."}
+  end
 
   defp profile_option(%{label: label, id: id}) when is_binary(label) and label != "",
     do: "#{label} (#{id})"

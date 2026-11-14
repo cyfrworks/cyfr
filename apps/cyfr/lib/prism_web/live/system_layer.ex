@@ -761,7 +761,15 @@ defmodule PrismWeb.SystemLayer do
     {:ok, socket}
   end
 
-  def update(%{outcome: {ref, outcome}}, socket), do: {:ok, on_outcome(socket, ref, outcome)}
+  # A completed change closes its prompt and shows the next, which may
+  # read through the context: inside the guard, as every update that acts
+  # on it.
+  def update(%{outcome: {ref, outcome}}, socket) do
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.guard(socket, &{:noreply, on_outcome(&1, ref, outcome)})
+
+    {:ok, socket}
+  end
 
   def update(%{expire: ref}, socket), do: {:ok, expire(socket, ref)}
 

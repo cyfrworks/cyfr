@@ -72,6 +72,37 @@ defmodule PrismWeb.SecretRevealTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "a rotated API key is revealed once its prompt closes, and dismissible",
+       %{conn: conn} do
+    user = test_user()
+    ctx = person(user)
+    name = "reveal-rotate-#{System.unique_integer([:positive])}"
+
+    {:ok, %{api_key: first}} =
+      Sanctum.TestContext.create_key(ctx, %{name: name, type: :application, scope: ["execute"]})
+
+    {view, _html} = conn |> log_in_user(user) |> mount_athanor("/api-keys")
+
+    # Rotating asks first, then reveals the new key the way creating does.
+    render_click(view, "rotate", %{"id" => name})
+    refute assigns(view).new_key
+    ref = confirm!(view, ctx, "key.rotate")
+
+    wait_until(fn -> is_map(assigns(view).new_key) end, 2_000, "the repeated rotation")
+    key = assigns(view).new_key
+    assert is_binary(key[:api_key])
+    refute key[:api_key] == first
+    assert render(view) =~ "not be shown again"
+    wait_until(fn -> not (render(view) =~ ~s(data-ref="#{ref}")) end, 2_000, "the closed prompt")
+    refute flash(view) =~ "cnf_"
+
+    render_click(view, "dismiss_key")
+
+    refute assigns(view).new_key
+    refute settled_render(view) =~ "not be shown again"
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "a webhook secret is dismissible too", %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)

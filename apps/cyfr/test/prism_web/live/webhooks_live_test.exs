@@ -114,6 +114,45 @@ defmodule PrismWeb.WebhooksLiveTest do
       assert is_binary(error) and error =~ "replay"
     end
 
+    # The submit takes only a grant the form offers for its target, read as
+    # the select is filled: a hand-made one naming a grant that waits for
+    # consent is refused, with nothing asked and nothing made.
+    test "a submit naming a grant the form does not offer is refused",
+         %{view: view, profile_id: profile_id, ctx: ctx} do
+      :ok =
+        Arca.ProfileStorage.transition(
+          Sanctum.Context.actor(ctx),
+          profile_id,
+          :any,
+          "needs_consent"
+        )
+
+      render_click(view, "toggle_create")
+
+      view
+      |> form("#webhook-form", %{"target_ref" => "reagent:local.hook-target"})
+      |> render_change()
+
+      assert options(view) == [{"", "No grant to choose"}]
+      name = "offered-only-#{System.unique_integer([:positive])}"
+
+      render_submit(view, "submit", %{
+        "name" => name,
+        "target_ref" => "reagent:local.hook-target",
+        "profile_id" => profile_id,
+        "accept_replays" => "on",
+        "input_template" => "{}"
+      })
+
+      assert :sys.get_state(view.pid).socket.assigns.form_error ==
+               "Choose one of the target component's grants."
+
+      assert {:ok, []} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      assert {:error, :not_found} = Sanctum.Webhook.get(ctx, name)
+    end
+
     test "the profile is picked from the target component's grants",
          %{view: view, profile_id: profile_id} do
       render_click(view, "toggle_create")
