@@ -2042,7 +2042,6 @@ defmodule Cyfr.Boundaries do
       binding: 1,
       directory_host: 0,
       record_namespace: 2,
-      request: 2,
       request: 3
     ],
     "Sanctum.Tenancy" => [channel_active?: 2, continuation: 3, revalidate: 1],
