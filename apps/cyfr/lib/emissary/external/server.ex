@@ -2132,9 +2132,12 @@ defmodule Emissary.External.Server do
   # An upstream server can echo request headers back in its result (debug
   # endpoints, error bodies, proxies). External responses never pass through
   # the executor's SecretMasker, so what THIS plane sent is masked here:
-  # every header value it stores, a resolved `vault:` value and a literal
-  # alike, since a literal's name says nothing of what it holds and the page
-  # that edits it never sees it, and the session id the peer issued.
+  # every header value it stores of at least @min_masked_bytes, a resolved
+  # `vault:` value and a literal alike, since a literal's name says nothing
+  # of what it holds and the page that edits it never sees it, and the
+  # session id the peer issued. A shorter value is not masked: masking is by
+  # substring, and a short value replaced wherever its bytes occur marks its
+  # own place and length, telling more than it hides.
   defp mask_credentials(term, state) do
     case sensitive_header_values(state) do
       [] -> term

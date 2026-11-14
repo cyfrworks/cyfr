@@ -1382,7 +1382,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert Arca.McpServerStorage.config(saved)["headers"]["X-Hub"] == "hub-literal-new"
   end
 
-  test "a kept literal an upstream echoes after an Edit reaches neither the answer, the flash nor the log",
+  test "a kept literal an upstream echoes after an Edit reaches neither the answer, the flash nor the log, eight bytes or more",
        %{conn: conn, athanor: athanor} do
     stub = HTTPStub.open()
 
@@ -1390,6 +1390,7 @@ defmodule PrismWeb.ProgramsLiveTest do
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       request = Jason.decode!(body)
       [hub] = Plug.Conn.get_req_header(conn, "x-hub")
+      [short] = Plug.Conn.get_req_header(conn, "x-short")
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
@@ -1398,7 +1399,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         Jason.encode!(%{
           "jsonrpc" => "2.0",
           "id" => request["id"],
-          "error" => %{"code" => -32001, "message" => "rejected header #{hub}"}
+          "error" => %{"code" => -32001, "message" => "rejected headers #{hub} #{short}"}
         })
       )
     end)
@@ -1409,7 +1410,8 @@ defmodule PrismWeb.ProgramsLiveTest do
         name: "relay",
         url: "http://127.0.0.1:#{stub.port}/mcp",
         enabled: false,
-        config_json: Jason.encode!(%{"headers" => %{"X-Hub" => "hub-literal-0123"}})
+        config_json:
+          Jason.encode!(%{"headers" => %{"X-Hub" => "hub-literal-0123", "X-Short" => "seven77"}})
       })
 
     {:ok, _} = Arca.McpServerStorage.update(ctx(athanor), "relay", %{enabled: true})
@@ -1429,11 +1431,17 @@ defmodule PrismWeb.ProgramsLiveTest do
         refute html =~ "hub-literal-0123"
       end)
 
-    assert flash(view, "error") == "'relay' saved — rejected header [REDACTED]"
+    # The masker's stated limit: a stored value under eight bytes is shown as
+    # the upstream sent it (a secret belongs in a vault entry).
+    assert flash(view, "error") == "'relay' saved — rejected headers [REDACTED] seven77"
     refute log =~ "hub-literal-0123"
-    assert log =~ "[REDACTED]"
+    assert log =~ "[REDACTED] seven77"
 
     {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "relay")
-    assert Arca.McpServerStorage.config(saved)["headers"] == %{"X-Hub" => "hub-literal-0123"}
+
+    assert Arca.McpServerStorage.config(saved)["headers"] == %{
+             "X-Hub" => "hub-literal-0123",
+             "X-Short" => "seven77"
+           }
   end
 end
