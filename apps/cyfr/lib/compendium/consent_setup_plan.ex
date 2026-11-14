@@ -6,8 +6,13 @@ defmodule Compendium.ConsentSetupPlan do
   The consent-sourced half of `Compendium.Component.setup_plan/2`.
 
   A profile is ready only when every required need has a live vault binding
-  whose digest matches the consent. Rebinding or revocation can make it
-  unready without changing the manifest.
+  whose digest matches the consent, and its head stands for the release a
+  run would start, as the run's own load decides it
+  (`Sanctum.Consent.head_stands/4`): a release whose shape moved since the
+  grant is not ready. Rebinding or revocation can make it unready without
+  changing the manifest. A component with no profile is not ready either,
+  since a run has no grant to stand on: never granted, or revoked
+  (`Sanctum.Consent.ungranted/2`). So `ready` and a run agree.
 
   Each row of the head revision is read by what it names
   (`Sanctum.Consent.row_binding/3`): the athanor's own entry, held
@@ -40,33 +45,71 @@ defmodule Compendium.ConsentSetupPlan do
   @entry_unread "the bound vault entry cannot be read right now — try again"
 
   @doc """
-  The consent section for a source ref, or `nil` when no profile exists
-  (the component then reads ready only if it requires nothing).
+  The consent section for a source ref whose installed release is
+  `component` (its registry row).
+
+  A source with no profile a run could stand on is a section that is not
+  ready, with `head_state` `"missing"` when it was never granted or
+  `"revoked"` when its grant was revoked, and its `reason`.
 
   A store that cannot be read, or a profile row that cannot be decoded
   where the one asked about would be, is a section that is not ready
   (`profile_status: :unavailable` or `:corrupt`, with `head_state`
   `"unavailable"` or `"damaged"` and its `reason`) — never `nil`, which
-  would read "nothing granted" and let a component that needs nothing
-  report ready on a store nobody could read.
+  would read as a grant still to make.
 
   A profile's section carries its head's `head_state`, as `profile.list`
   names it: `"present"` when the head was read, and otherwise
   `"missing"`, `"damaged"` or `"unavailable"`, each with the `reason`
   sentence a person can act on.
   """
-  @spec section(Context.t(), String.t()) :: map() | nil
-  def section(%Context{} = ctx, source_ref) do
+  @spec section(Context.t(), String.t(), map()) :: map()
+  def section(%Context{} = ctx, source_ref, component) when is_map(component) do
     with {:ok, name_ref} <- name_ref(source_ref),
-         {:ok, [_ | _] = entries} <- read_profiles(ctx, name_ref) do
-      case pick_profile(entries) do
-        %{status: :corrupt} = corrupt -> not_ready(corrupt.id, :corrupt)
-        profile -> describe(ctx, profile)
+         {:ok, entries} <- read_profiles(ctx, name_ref) do
+      case entries do
+        [] ->
+          ungranted(ctx, name_ref)
+
+        entries ->
+          case pick_profile(entries) do
+            %{status: :corrupt} = corrupt -> not_ready(corrupt.id, :corrupt)
+            profile -> describe(ctx, profile, component)
+          end
       end
     else
       {:error, :unavailable} -> not_ready(nil, :unavailable)
-      _ -> nil
+      :none -> not_ready(nil, :unavailable)
     end
+  end
+
+  # No profile a run could stand on: the run is refused, so the component
+  # is not ready, and the section says whether it was ever granted.
+  defp ungranted(ctx, name_ref) do
+    case Sanctum.Consent.ungranted(ctx, name_ref) do
+      {:ok, :no_grant} ->
+        unset("missing", "this component has not been granted yet — grant it to run it")
+
+      {:ok, :revoked} ->
+        unset("revoked", "this component's grant was revoked — grant it again to run it")
+
+      {:error, _unanswered} ->
+        not_ready(nil, :unavailable)
+    end
+  end
+
+  defp unset(state, reason) do
+    %{
+      profile_id: nil,
+      profile_kind: nil,
+      profile_status: nil,
+      head_state: state,
+      reason: reason,
+      revision: nil,
+      scope: nil,
+      needs: [],
+      ready: false
+    }
   end
 
   defp read_profiles(ctx, name_ref) do
@@ -109,7 +152,7 @@ defmodule Compendium.ConsentSetupPlan do
   defp name_ref(ref) do
     case Prima.ComponentRef.to_name_ref(ref) do
       {:ok, name_ref} -> {:ok, name_ref}
-      _ -> :error
+      _ -> :none
     end
   end
 
@@ -122,7 +165,7 @@ defmodule Compendium.ConsentSetupPlan do
       Enum.find(entries, &(&1.status == :corrupt)) || hd(entries)
   end
 
-  defp describe(ctx, profile) do
+  defp describe(ctx, profile, component) do
     case Sanctum.Consent.head_consent(ctx, profile.id) do
       {:ok, consent} ->
         bound = check_needs(ctx, profile.id, consent)
@@ -138,6 +181,7 @@ defmodule Compendium.ConsentSetupPlan do
           needs: needs,
           ready: profile.status == :active and Enum.all?(needs, & &1.satisfied)
         }
+        |> stands(ctx, profile, consent, component)
 
       {:error, refused} ->
         {state, reason} = unread_head(refused, profile.id)
@@ -155,6 +199,55 @@ defmodule Compendium.ConsentSetupPlan do
         }
     end
   end
+
+  # A head whose needs are met is ready only where it stands for the
+  # release a run would start, read as admission reads it: the verified
+  # activation of the installed row and the source's live shape, a shape
+  # that cannot be derived being unknown, which the decision asks again
+  # for. A refusal the run would meet makes the section not ready, with
+  # the sentence for it.
+  defp stands(%{ready: false} = section, _ctx, _profile, _consent, _component), do: section
+
+  defp stands(section, ctx, profile, consent, component) do
+    live = live_activation(ctx, component)
+
+    shape =
+      case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do
+        {:ok, digest} -> digest
+        {:error, _underivable} -> nil
+      end
+
+    case Sanctum.Consent.head_stands(ctx, profile, consent,
+           live: live,
+           live_shape_digest: shape
+         ) do
+      :ok -> section
+      {:error, reason} -> %{section | ready: false} |> Map.put(:reason, unstood(reason, profile))
+    end
+  end
+
+  defp live_activation(ctx, component) do
+    case Compendium.resolve_verified_activation(ctx, component) do
+      {:ok, _verified} = verified -> verified
+      {:error, {:incomplete, _}} = incomplete -> incomplete
+      {:error, _unresolved} -> {:error, {:incomplete, :invalid_graph}}
+    end
+  end
+
+  defp unstood({:consent_required, _ask}, _profile),
+    do: "this component asks for more than its grant holds — grant it again to run it"
+
+  defp unstood({unread, _target}, _profile)
+       when unread in [:lender_unavailable, :head_unavailable],
+       do: "this profile's consent cannot be read right now — try again"
+
+  defp unstood({:setup_required, _need}, _profile),
+    do: "this component's release is not ready to run — install it again"
+
+  defp unstood(_damaged_or_unread, profile),
+    do:
+      "this profile's consent cannot be used for the installed release — " <>
+        "revoke profile #{profile.id} and grant it again"
 
   # A head that could not be given, as `profile.list` names its state, and
   # what the person can do: a head never granted asks for a grant, a
@@ -373,9 +466,6 @@ defmodule Compendium.ConsentSetupPlan do
     do: "the #{label} profile's key was rebound since this consent — re-approve to continue"
 
   defp unresolved(label, :nothing_bound), do: "the #{label} profile binds no key"
-
-  defp unresolved(label, {:consent_required, _payload}),
-    do: "the #{label} profile's grant does not admit this origin"
 
   # A lent share's answers (`Sanctum.Consent.row_binding/3` tags them), as a
   # share row's are said.

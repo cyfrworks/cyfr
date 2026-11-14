@@ -495,7 +495,6 @@ defmodule Cyfr.Test.AttemptFixtures do
           blob_digest: Prima.Digest.sha256(policy),
           resolved_policy: policy,
           activation: Jason.encode!(%{source => "sha256:act"}),
-          admitted_origins: [:interactive],
           granted_by: "system:fixture",
           granted_via: "bootstrap"
         },

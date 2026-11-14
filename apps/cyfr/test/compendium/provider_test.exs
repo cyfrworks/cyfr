@@ -1240,6 +1240,38 @@ defmodule Compendium.ProviderTest do
       ])
     end
 
+    # The person's grant of `ref` through the consent walk, binding nothing.
+    defp grant!(ctx, ref) do
+      decisions = %{ref: ref}
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+      {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+      {:ok, _} =
+        Sanctum.Consent.Commit.commit(ctx, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+    end
+
+    # The consent section of a source no one has granted: not ready, as a
+    # run of it is refused.
+    defp ungranted_section do
+      %{
+        profile_id: nil,
+        profile_kind: nil,
+        profile_status: nil,
+        head_state: "missing",
+        reason: "this component has not been granted yet — grant it to run it",
+        revision: nil,
+        scope: nil,
+        needs: [],
+        ready: false
+      }
+    end
+
     test "returns setup plan for a catalyst with declared needs", %{ctx: ctx, test_dir: test_dir} do
       comp_dir =
         setup_plan_component(test_dir, "catalyst", "setup-claude", "0.2.0", %{
@@ -1276,13 +1308,14 @@ defmodule Compendium.ProviderTest do
       assert need.required == true
       assert need.reason =~ "Anthropic"
 
-      # No profile yet: a required need means the consent walk is pending.
-      assert result.consent == nil
+      # No grant yet: a run would be refused, so it is not ready.
+      assert result.consent == ungranted_section()
       assert result.ready == false
       assert is_list(result.dependencies)
     end
 
-    test "a component with no needs and no profile is ready", %{ctx: ctx, test_dir: test_dir} do
+    test "a component with no needs is ready once granted, and not before",
+         %{ctx: ctx, test_dir: test_dir} do
       comp_dir =
         setup_plan_component(test_dir, "catalyst", "setup-web", "0.2.0", %{
           "type" => "catalyst",
@@ -1300,7 +1333,18 @@ defmodule Compendium.ProviderTest do
 
       assert result.component_ref =~ "setup-web"
       assert result.needs == []
-      assert result.consent == nil
+      assert result.consent == ungranted_section()
+      assert result.ready == false
+
+      grant!(ctx, "catalyst:local.setup-web")
+
+      {:ok, result} =
+        Provider.handle("component", ctx, %{
+          "action" => "setup_plan",
+          "reference" => "catalyst:local.setup-web:0.2.0"
+        })
+
+      assert %{head_state: "present", needs: [], ready: true} = result.consent
       assert result.ready == true
     end
 
@@ -1362,6 +1406,7 @@ defmodule Compendium.ProviderTest do
         })
 
       {:ok, _} = Registry.register_from_arca(ctx, comp_dir)
+      grant!(ctx, "catalyst:local.ready-opt")
 
       {:ok, result} =
         Provider.handle("component", ctx, %{

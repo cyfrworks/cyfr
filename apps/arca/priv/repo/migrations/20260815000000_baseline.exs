@@ -1938,9 +1938,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :granted_by, :string, null: false
       add :granted_via, :string, null: false
       add :granted_at, :utc_datetime_usec, null: false
-      # The origins the revision admits (`Prima.Origin`), a non-empty JSON
-      # array of their wire spellings in the enum's order.
-      add :admitted_origins, :text, null: false
     end
 
     create index(:consents, [:athanor_id, :profile_id])

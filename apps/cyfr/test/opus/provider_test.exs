@@ -155,35 +155,54 @@ defmodule Opus.ProviderTest do
   # started and then completed or failed, which is what these cases inspect.
   # ============================================================================
 
-  describe "the origin a run over the API runs under" do
-    test "a grant naming interactive alone refuses it, recording nothing; naming programmatic admits it",
+  describe "a run over the API" do
+    defp run(ctx, ref) do
+      Provider.handle("execution", ctx, %{
+        "action" => "run",
+        "reference" => ref,
+        "input" => %{"a" => 1, "b" => 2}
+      })
+    end
+
+    test "stands on its person's grant, and records that the API started it",
          %{ctx: ctx, ref: ref} do
       {:ok, %{profile_id: profile_id}} = Opus.authority_for(ctx, :default, ref)
 
-      run = fn ->
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => ref,
-          "input" => %{"a" => 1, "b" => 2}
-        })
-      end
-
-      # The person's grant, as a first grant leaves it: interactive alone.
-      Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile_id, [:interactive])
-
-      assert {:error, {:consent_required, %{profile_id: ^profile_id}}} = run.()
-      assert {:ok, %{count: 0}} = Provider.handle("execution", ctx, %{"action" => "list"})
-
-      # Granted again naming programmatic: the run is admitted as one.
-      Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile_id, [:interactive, :programmatic])
-
-      _ = run.()
+      _ = run(ctx, ref)
 
       assert {:ok, %{executions: [%{execution_id: id}]}} =
                Provider.handle("execution", ctx, %{"action" => "list"})
 
       assert %{origin: "programmatic", profile_id: ^profile_id} =
                Arca.Repo.get!(Arca.Schemas.Execution, id)
+    end
+
+    test "a reference naming no component is not found, recording nothing", %{ctx: ctx} do
+      missing = "reagent:local.test-mat"
+
+      assert run(ctx, missing) == {:error, {:not_found, {:component, missing}}}
+      assert {:ok, %{count: 0}} = Provider.handle("execution", ctx, %{"action" => "list"})
+    end
+
+    test "a component never granted, and one whose grant was revoked, each say so",
+         %{ctx: ctx, ref: ref} do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "never-granted",
+          version: "0.1.0",
+          type: "reagent"
+        })
+
+      assert run(ctx, "reagent:local.never-granted:0.1.0") ==
+               {:error,
+                {:consent_required, %{cause: :no_grant, ref: "reagent:local.never-granted"}}}
+
+      {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "reagent:local.test-math")
+
+      assert run(ctx, ref) ==
+               {:error, {:consent_required, %{cause: :revoked, ref: "reagent:local.test-math"}}}
+
+      assert {:ok, %{count: 0}} = Provider.handle("execution", ctx, %{"action" => "list"})
     end
   end
 
@@ -938,7 +957,6 @@ defmodule Opus.ProviderTest do
 
     root = "reagent:local.lent-root"
     limits = Prima.Test.AuthorityFixtures.limits_map()
-    origins = [:interactive, :programmatic]
     lender_key = Prima.Authority.Blob.binding_key(@lender, "@ingress", nil)
 
     lender_policy =
@@ -984,7 +1002,6 @@ defmodule Opus.ProviderTest do
           commit_digest: "sha256:commit-lend-key",
           resolved_policy: lender_policy,
           activation: %{@lender => "sha256:act-lend-key"},
-          admitted_origins: origins,
           vault_refs: [
             %{
               binding_key: lender_key,
@@ -1030,7 +1047,6 @@ defmodule Opus.ProviderTest do
           commit_digest: "sha256:commit-lent-root",
           resolved_policy: root_policy,
           activation: %{root => component.release_digest},
-          admitted_origins: origins,
           vault_refs: [
             %{
               binding_key: Prima.Authority.Blob.binding_key(root, @lender, nil),
@@ -1107,7 +1123,6 @@ defmodule Opus.ProviderTest do
           commit_digest: "sha256:commit-twice-root",
           resolved_policy: policy,
           activation: %{root => component.release_digest},
-          admitted_origins: [:interactive, :programmatic],
           vault_refs:
             for {key, digest} <- [
                   {ingress_key, "sha256:twice-one"},
@@ -2050,7 +2065,6 @@ defmodule Opus.ProviderTest do
 
     decisions = %{
       ref: ref,
-      origins: [:interactive, :programmatic],
       bindings: [
         %{need: "api_key", entry_id: entry.("default").id},
         %{need: "api_key", name: "Work", entry_id: entry.("work").id}

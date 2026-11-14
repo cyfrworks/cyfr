@@ -6,15 +6,14 @@
 # harness starts a home (tests/browser/harness.sh), home.test behind the
 # harness's HTTPS front, one person signed in, and their tincture
 # grant-probe published. In Chromium (proof.mjs) the person grants it on
-# the console's Components page, narrowed and admitting interactive alone;
-# the command line previews the same decisions; a version asking to run
-# in the background is shown and asked again; a version that only rewords
-# its need's reason asks nothing; a version that lets one more class reach
-# the host the person kept is asked again, the new flow ticked and granted
-# under the digest the command line previews; a key a second person shares
-# with everyone is picked for the tincture's need on the grant prompt and
-# the tincture's attached request carries it; and a revocation is measured
-# at admission.
+# the console's Components page, narrowed; the command line previews the
+# same decisions; a version asking to run in the background is shown and
+# asked again; a version that only rewords its need's reason asks nothing;
+# a version that lets one more class reach the host the person kept is
+# asked again, the new flow ticked and granted under the digest the command
+# line previews; a key a second person shares with everyone is picked for
+# the tincture's need on the grant prompt and the tincture's attached
+# request carries it; and a revocation is measured at admission.
 #
 # The proof asks the server for its part through the output directory
 # (`ask-N.json`), and this script answers each (`answer-N.json`) through

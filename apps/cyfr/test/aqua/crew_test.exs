@@ -43,8 +43,7 @@ defmodule Aqua.CrewTest do
     # once its fill has run.
     {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(athanor, ctx)
 
-    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"},
-      origins: [:interactive, :programmatic]
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"}
     )
 
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
@@ -206,8 +205,7 @@ defmodule Aqua.CrewTest do
     Sanctum.Test.ConsentFixtures.bind_key!(
       ctx,
       "catalyst:local.gemini",
-      %{"GEMINI_API_KEY" => "g-test"},
-      origins: [:interactive, :programmatic]
+      %{"GEMINI_API_KEY" => "g-test"}
     )
 
     assert {:ok, index} = Crew.index(ctx, roster)

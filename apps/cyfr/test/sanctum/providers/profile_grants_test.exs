@@ -153,7 +153,6 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
           commit_digest: "sha256:commit-#{name}",
           resolved_policy: policy,
           activation: %{ref => "sha256:act"},
-          admitted_origins: Keyword.get(opts, :origins, [:interactive]),
           vault_refs: Keyword.get(opts, :vault_refs, [])
         }
       )
@@ -242,8 +241,8 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   defp names?(_param, _consent_id), do: false
 
   # What `Sanctum.Consent.Loader.load_root/3` carries on the borrower's
-  # edge to `@dep` when its profile runs under `origin`.
-  defp loaded_vault(ctx, name, origin) do
+  # edge to `@dep`.
+  defp loaded_vault(ctx, name) do
     ref = "reagent:local.#{name}"
     activation = %{ref => "sha256:act"}
     {:ok, digest} = Prima.JCS.hash(activation)
@@ -265,7 +264,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
     }
 
     {:ok, authority, _stamp} =
-      Loader.load_root(%{ctx | origin: origin}, profile, live: live, live_shape_digest: nil)
+      Loader.load_root(ctx, profile, live: live, live_shape_digest: nil)
 
     authority.policy.nodes[ref].edges[borrowed_edge()].vault
   end
@@ -482,7 +481,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       # The loader carries the lender's entry on the borrower's edge.
       assert %{entry_id: ^entry, lender: %{profile_id: ^lender}} =
-               loaded_vault(ctx, "g-borrower", :interactive)
+               loaded_vault(ctx, "g-borrower")
 
       assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
       assert ids(answer) == Enum.sort([lender, borrower])
@@ -490,7 +489,6 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       # The borrower's row says it borrows, and through which label, and
       # reads under its lender's field map.
-      assert by_id[borrower].admitted_origins == ["interactive"]
       assert [%{node: "reagent:local.g-borrower", vault: vault} = edge] = by_id[borrower].edges
       assert edge.edge == borrowed_edge()
 
@@ -614,27 +612,20 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
                Sanctum.Refusals.classify(reason)
     end
 
-    test "a borrower reaches the entry only under an origin its lender admits", %{ctx: ctx} do
-      entry = "vlt_origins_#{System.unique_integer([:positive])}"
-      lender = lender!(ctx, entry, origins: [:schedule])
+    test "every borrower reaches its lender's entry: no grant says who may start it",
+         %{ctx: ctx} do
+      entry = "vlt_borrowers_#{System.unique_integer([:positive])}"
+      lender = lender!(ctx, entry)
       via = %{"via" => %{"label" => "default"}}
-
-      # Its load under `interactive`, the first origin it admits, is
-      # refused; under `schedule` the key is lent.
-      both = borrower!(ctx, "g-both", via, origins: [:interactive, :schedule])
-      _neither = borrower!(ctx, "g-neither", via, origins: [:interactive, :programmatic])
+      one = borrower!(ctx, "g-one", via)
+      two = borrower!(ctx, "g-two", via)
 
       assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
-      assert ids(answer) == Enum.sort([lender, both])
+      assert ids(answer) == Enum.sort([lender, one, two])
+      refute Enum.any?(answer.grants, &Map.has_key?(&1, :admitted_origins))
 
-      # The row names the origins its own revision admits.
-      assert %{admitted_origins: ["interactive", "schedule"]} =
-               Enum.find(answer.grants, &(&1.profile_id == both))
-
-      # The lender refuses every load of the other, so it reaches nothing
-      # at all, its own domain included.
       assert {:ok, answer} = grants(ctx, %{"domain" => "borrow.example"})
-      assert ids(answer) == [both]
+      assert ids(answer) == Enum.sort([one, two])
     end
   end
 
@@ -843,7 +834,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert ids(answer) == [theirs_id]
     end
 
-    test "a narrowed grant reaches only its narrowing, and shows the origins it admits",
+    test "a narrowed grant reaches only its narrowing",
          %{ctx: ctx} do
       ref = "reagent:local.grants-narrow"
 
@@ -875,7 +866,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
         }
       }
 
-      decisions = %{ref: ref, subset: subset, origins: [:programmatic, :interactive]}
+      decisions = %{ref: ref, subset: subset}
       {:ok, plan} = Plan.plan(ctx, %{ref: ref})
       {:ok, preview} = Commit.preview(ctx, decisions)
 
@@ -890,7 +881,6 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       assert {:ok, %{grants: [grant]}} = grants(ctx, %{"domain" => "api.one.example"})
       assert grant.profile_id == profile_id
-      assert grant.admitted_origins == ["interactive", "programmatic"]
       assert [%{egress: %{domains: ["api.one.example"]}}] = grant.edges
 
       # What the narrowing dropped, no grant reaches.

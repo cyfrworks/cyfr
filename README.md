@@ -1276,7 +1276,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | sign-in method | a company's sign-in, which a CYFR may require of every person there (`CYFR_COMPANY_LOGIN`) as a condition of being there; it never signs anyone in, since a person signs in with their account | — | — | — | — | — | — | — |
 | fresh confirmation | a key of the person's account signing one pending confirmation, a passkey at the account pages or a device after its unlock; each sensitive change needs one | — | — | — | — | — | — | — |
 | pending confirmation | one sensitive change waiting for its fresh confirmation, with the preview CYFR stores and shows on every device of the person's | — | — | — | — | — | — | — |
-| origin | how a run started, `interactive`, `programmatic`, `schedule` or `webhook`, set by the path that admitted it; a grant names the origins it admits | — | — | — | — | — | — | — |
+| origin | how a run started, `interactive`, `programmatic`, `schedule` or `webhook`, set by the path that admitted it, for the record; a run stands on its person's grant whatever started it | — | — | — | — | — | — | — |
 
 Every setting of the control plane is a `CYFR_` variable; a part named with a prefix of its own beneath it owns those settings. A setting an island's release reads carries the island's own prefix, and the control plane's copy of an island's key carries `CYFR_` before it: `CYFR_LOCUS_BACKENDS_KEY` in `.env` is `LOCUS_BACKENDS_KEY` in the `locus-backends` service. `HostAPI` and `WorkerAPI` are protocol names, and `CYFR_HOST_API_` serves the first.
 

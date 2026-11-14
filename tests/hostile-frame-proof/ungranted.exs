@@ -49,7 +49,6 @@ fn [user_id, name] ->
         blob_digest: Prima.Digest.sha256(policy),
         resolved_policy: policy,
         activation: Jason.encode!(%{}),
-        admitted_origins: [:interactive],
         granted_by: user.id,
         granted_via: "interactive"
       },

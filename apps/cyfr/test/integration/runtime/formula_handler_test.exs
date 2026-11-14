@@ -274,7 +274,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
   # admitting runs over the API, its own calls binding no account.
   defp grant_programmatic!(ref) do
     person = Sanctum.TestContext.local(:prism)
-    decisions = %{ref: ref, origins: [:interactive, :programmatic]}
+    decisions = %{ref: ref}
     {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: ref})
     {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
 
