@@ -530,3 +530,98 @@ func TestChipRefusesAnotherStorageKey(t *testing.T) {
 		t.Fatalf("lockout counter = %d after a refused storage key; want 0", got)
 	}
 }
+
+// The chip is read before any PIN is asked: a chip the holder can seal in,
+// fresh or provisioned by the holder before, is offered, and reading it
+// changes nothing and counts nothing.
+func TestChipPresentOffersAChipItCanSealIn(t *testing.T) {
+	startSWTPM(t)
+	if !ChipPresent() {
+		t.Fatalf("a fresh chip is not offered: %v", tpmUsable())
+	}
+	if readProperty(t, tpm2.TPMPTPermanent)&permanentLockoutAuthSet != 0 || readProperty(t, tpm2.TPMPTMaxAuthFail) == daMaxTries {
+		t.Fatal("reading a fresh chip provisioned it")
+	}
+	r := newChipRecord(t)
+	openWrong(t, r)
+	if !ChipPresent() {
+		t.Fatalf("a chip the holder provisioned is not offered: %v", tpmUsable())
+	}
+	if got := readProperty(t, tpm2.TPMPTLockoutCounter); got != 1 {
+		t.Fatalf("lockout counter = %d after reading the chip, want the one wrong PIN", got)
+	}
+}
+
+// A chip the holder could not seal in, or whose PIN would be refused, is
+// not offered, so the person makes a passphrase before typing any PIN.
+func TestChipPresentRefusesAChipItCannotUse(t *testing.T) {
+	refused := func(t *testing.T, want string) {
+		t.Helper()
+		var got *ChipRefusedError
+		if err := tpmUsable(); !errors.As(err, &got) || !strings.Contains(got.Reason, want) {
+			t.Fatalf("tpmUsable = %v; want a refusal saying %q", err, want)
+		}
+		if ChipPresent() {
+			t.Fatal("a chip the holder cannot use is offered")
+		}
+	}
+
+	t.Run("another owner's lockout", func(t *testing.T) {
+		startSWTPM(t)
+		withTPM(t, func(tp transport.TPM) {
+			if err := daParameters(tp, 32, 7200, 86400); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := (tpm2.HierarchyChangeAuth{AuthHandle: tpm2.TPMRHLockout,
+				NewAuth: tpm2.TPM2BAuth{Buffer: []byte("someone else's")}}).Execute(tp); err != nil {
+				t.Fatal(err)
+			}
+		})
+		refused(t, "the chip's lockout is set by someone else, and the chip locks after 32 wrong PINs, not 8")
+		if a, b := readProperty(t, tpm2.TPMPTMaxAuthFail), readProperty(t, tpm2.TPMPTLockoutInterval); a != 32 || b != 7200 {
+			t.Fatalf("reading the chip changed its limits to %d/%d", a, b)
+		}
+	})
+
+	t.Run("an owner's password", func(t *testing.T) {
+		startSWTPM(t)
+		withTPM(t, func(tp transport.TPM) {
+			if _, err := (tpm2.HierarchyChangeAuth{AuthHandle: tpm2.TPMRHOwner,
+				NewAuth: tpm2.TPM2BAuth{Buffer: []byte("the owner's")}}).Execute(tp); err != nil {
+				t.Fatal(err)
+			}
+		})
+		refused(t, "the chip's owner hierarchy has a password someone else set")
+	})
+
+	t.Run("locked out after wrong PINs", func(t *testing.T) {
+		startSWTPM(t)
+		r := newChipRecord(t)
+		for range daMaxTries {
+			openWrong(t, r)
+		}
+		refused(t, "the chip is locked after too many wrong PINs")
+	})
+}
+
+// A device node this user cannot open is a chip the holder cannot use; a
+// missing one is no chip. Neither is offered.
+func TestChipPresentWithoutAChipItCanOpen(t *testing.T) {
+	saved := openTPM
+	t.Cleanup(func() { openTPM = saved })
+
+	openTPM = func() (transport.TPMCloser, error) {
+		return nil, fmt.Errorf("open %s: %w", tpmPath, os.ErrPermission)
+	}
+	var refused *ChipRefusedError
+	if err := tpmUsable(); !errors.As(err, &refused) || !strings.Contains(refused.Reason, "permission denied") || ChipPresent() {
+		t.Fatalf("an unopenable chip: tpmUsable = %v, offered %t", err, ChipPresent())
+	}
+
+	openTPM = func() (transport.TPMCloser, error) {
+		return nil, fmt.Errorf("open %s: %w", tpmPath, os.ErrNotExist)
+	}
+	if err := tpmUsable(); !errors.Is(err, ErrNoChip) || errors.As(err, &refused) || ChipPresent() {
+		t.Fatalf("no chip: tpmUsable = %v, offered %t", err, ChipPresent())
+	}
+}

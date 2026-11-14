@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -33,18 +32,24 @@ const (
 	daLockoutRecovery = 86400
 )
 
-// permanentLockoutAuthSet is TPMA_PERMANENT's lockoutAuthSet bit (TPM 2.0
-// Part 2, 8.6): the lockout hierarchy's authorization is not empty.
-const permanentLockoutAuthSet = 1 << 2
+// TPMA_PERMANENT's bits (TPM 2.0 Part 2, 8.6): ownerAuthSet, the owner
+// hierarchy's authorization is not empty; lockoutAuthSet, the lockout
+// hierarchy's is not; inLockout, the chip refuses every authorization the
+// dictionary-attack logic counts until it recovers.
+const (
+	permanentOwnerAuthSet   = 1 << 0
+	permanentLockoutAuthSet = 1 << 2
+	permanentInLockout      = 1 << 9
+)
 
 // openTPM opens the chip. Tests point it at a disposable swtpm.
 var openTPM = func() (transport.TPMCloser, error) { return linuxtpm.Open(tpmPath) }
 
 func init() {
 	chip = &chipOps{
-		present: func() bool { _, err := os.Stat(tpmPath); return err == nil },
-		seal:    tpmSeal,
-		unseal:  tpmUnseal,
+		usable: tpmUsable,
+		seal:   tpmSeal,
+		unseal: tpmUnseal,
 	}
 }
 
@@ -154,6 +159,36 @@ func (p *parent) encryptIn() tpm2.Session {
 
 func (p *parent) auth() tpm2.AuthHandle {
 	return tpm2.AuthHandle{Handle: p.handle, Name: p.name, Auth: tpm2.PasswordAuth(nil)}
+}
+
+// tpmUsable opens the chip and reads its permanent attributes, and its
+// wrong-PIN policy when someone set its lockout authorization, refusing
+// what tpmSeal would refuse or what would refuse the PIN afterwards. It
+// sends no command that changes the chip or counts toward its lockout.
+func tpmUsable() error {
+	t, err := dial()
+	if err != nil {
+		return err
+	}
+	defer t.Close()
+	perm, err := property(t, tpm2.TPMPTPermanent)
+	if err != nil {
+		return &ChipRefusedError{Reason: err.Error()}
+	}
+	switch {
+	case perm&permanentOwnerAuthSet != 0:
+		return &ChipRefusedError{Reason: "the chip's owner hierarchy has a password someone else set, and CYFR never changes it"}
+	case perm&permanentInLockout != 0:
+		return &ChipRefusedError{Reason: "the chip is locked after too many wrong PINs"}
+	case perm&permanentLockoutAuthSet != 0:
+		var refused *ChipRefusedError
+		if err := checkDA(t); errors.As(err, &refused) {
+			return &ChipRefusedError{Reason: "the chip's lockout is set by someone else, and " + refused.Reason}
+		} else if err != nil {
+			return &ChipRefusedError{Reason: err.Error()}
+		}
+	}
+	return nil
 }
 
 // tpmSeal provisions the chip's dictionary-attack policy, seals seed under
