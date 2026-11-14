@@ -683,23 +683,27 @@ defmodule Sanctum.ApiKey do
   def looks_like_key?(_), do: false
 
   @doc """
-  Whether the key a context acts with may start `reference`, a component
-  a run is rooted at or an outside server's `server:tool`: a context of no
-  key, and a key with no tools, may; a key with tools may start only
-  those, a component whatever its version. A key whose row cannot be read
-  now (revoked, suspended, gone) starts nothing.
+  Whether the key a context acts with may start `target`: `{:component,
+  reference}`, a component a run is rooted at, or `{:outside, name}`, an
+  outside server's `server:tool`. The caller says which kind it starts;
+  the name never decides it. A context of no key, and a key with no
+  tools, may; a key with tools may start only those it lists of that
+  kind: a component whatever its version, an outside tool exactly as
+  written. A key whose row cannot be read now (revoked, suspended, gone)
+  starts nothing.
   """
-  @spec admit_tool(Context.t(), String.t()) ::
+  @spec admit_tool(Context.t(), {:component | :outside, String.t()}) ::
           :ok | {:error, :key_tool_not_named | :invalid_api_key | :database_error}
-  def admit_tool(%Context{api_key_id: nil}, _reference), do: :ok
+  def admit_tool(%Context{api_key_id: nil}, {kind, _name}) when kind in [:component, :outside],
+    do: :ok
 
-  def admit_tool(%Context{api_key_id: api_key_id} = ctx, reference)
-      when is_binary(api_key_id) and is_binary(reference) do
+  def admit_tool(%Context{api_key_id: api_key_id} = ctx, {kind, name} = target)
+      when is_binary(api_key_id) and kind in [:component, :outside] and is_binary(name) do
     case Arca.ApiKeyStorage.get_key_by_id(actor!(ctx), api_key_id) do
       {:ok, row} ->
         case stored_scope(row.scope) do
           {:ok, {_scope_list, []}} -> :ok
-          {:ok, {_scope_list, tools}} -> named(tools, reference)
+          {:ok, {_scope_list, tools}} -> named(tools, target)
           {:error, :invalid_key} -> {:error, :invalid_api_key}
         end
 
@@ -711,11 +715,23 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  defp named(tools, reference) do
-    case tool_name(reference) do
-      {:ok, name} -> if name in tools, do: :ok, else: {:error, :key_tool_not_named}
-      :error -> {:error, :key_tool_not_named}
+  # A component target matches only a component entry, by its name
+  # whatever the version; an outside target only an outside entry, as
+  # written. An outside server named like a component type has no entry
+  # that can name it, so a narrowed key is refused its tools.
+  defp named(tools, {:component, reference}) do
+    with {:ok, name} <- Prima.ComponentRef.to_name_ref(reference),
+         true <- name in Enum.filter(tools, &component?/1) do
+      :ok
+    else
+      _ -> {:error, :key_tool_not_named}
     end
+  end
+
+  defp named(tools, {:outside, name}) do
+    if name in Enum.reject(tools, &component?/1),
+      do: :ok,
+      else: {:error, :key_tool_not_named}
   end
 
   # ============================================================================
@@ -779,19 +795,6 @@ defmodule Sanctum.ApiKey do
   end
 
   defp versionless(_), do: :error
-
-  # The name a started tool is matched by: a component's whatever its
-  # version, an outside tool's as it is called.
-  defp tool_name(reference) do
-    if component?(reference) do
-      case Prima.ComponentRef.to_name_ref(reference) do
-        {:ok, name} -> {:ok, name}
-        {:error, _} -> :error
-      end
-    else
-      outside_tool(reference)
-    end
-  end
 
   defp component?(name) do
     case String.split(name, ":", parts: 2) do

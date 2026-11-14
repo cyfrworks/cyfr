@@ -187,6 +187,63 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     refute Sanctum.Refusals.render(reason) =~ "Denied by chain authority"
   end
 
+  # A key narrowed to named tools is asked of the root it starts; the
+  # root's outside dependencies stand on the grant, as for the person.
+  describe "a key narrowed to the chain's root" do
+    setup %{ctx: ctx} do
+      _owner = Sanctum.TestContext.owner!()
+      issuer = Sanctum.TestContext.issuer!(%{ctx | user_id: Arca.Test.Actor.owner_id()})
+
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(issuer, %{
+          name: "consumer-only",
+          scope: ["execute"],
+          tools: ["f:local.mcp-consumer"]
+        })
+
+      {:ok, key} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      {:ok, key: Sanctum.TestContext.via(key, :api)}
+    end
+
+    test "its root's granted outside dependency is admitted, though the key does not list it",
+         %{key: key, digest: digest} do
+      assert Sanctum.ApiKey.admit_tool(key, {:component, "f:local.mcp-consumer:0.1.0"}) == :ok
+
+      {:error, reason} =
+        Sanctum.Gate.call_in_chain(
+          "ghserver:issues.list",
+          guest(key),
+          %{},
+          authority_with_server(digest),
+          lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(key))
+        )
+
+      # Past the admission: the failure is the unreachable upstream.
+      refute match?(%Prima.Refusal{stage: :admission}, reason)
+      refute Sanctum.Refusals.render(reason) =~ "This API key may run only"
+    end
+
+    test "a dependency its root is not granted is refused by the grant, not by the key",
+         %{key: key, digest: digest} do
+      {:error, %Prima.Refusal{stage: :admission, message: message}} =
+        Sanctum.Gate.call_in_chain(
+          "ghserver:repo_get",
+          guest(key),
+          %{},
+          authority_with_server(digest),
+          lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(key))
+        )
+
+      assert message =~ "Denied by chain authority"
+    end
+
+    test "the same outside tool called by the key itself is refused by the key",
+         %{key: key} do
+      assert {:error, %Prima.Refusal{stage: :admission, reason: :key_tool_not_named}} =
+               Sanctum.Gate.call_external("ghserver:issues.list", key, %{})
+    end
+  end
+
   test "a tool outside the granted patterns is not callable", %{ctx: ctx, digest: digest} do
     auth = authority_with_server(digest)
 

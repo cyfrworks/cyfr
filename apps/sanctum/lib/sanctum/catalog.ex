@@ -716,8 +716,10 @@ defmodule Sanctum.Catalog do
   `server:tool` the table declares no operation for: the access every
   such tool is declared with (signed in, holding `execute`, as a run),
   decided as a declared action's is (`Sanctum.Visibility.authorize/4`),
-  then, for a `server:tool`, the caller's API key's: a key narrowed to
-  named tools is admitted only to those it lists (`Sanctum.ApiKey.admit_tool/2`),
+  then, for a root call of a `server:tool`, the caller's API key's: a key
+  narrowed to named tools is admitted only to the outside tools it lists
+  (`Sanctum.ApiKey.admit_tool/2`); in a chain the tool is a dependency of
+  the root the key started, and its grant decides, as for a component's,
   then the storage reserve's: an outside call is not a read and takes no
   authority away, so while the reserve is depleted it is refused before
   anything is written.
@@ -730,16 +732,17 @@ defmodule Sanctum.Catalog do
   @spec authorize_proxied(String.t(), Context.t(), boolean()) :: :ok | {:error, term()}
   def authorize_proxied(name, %Context{} = ctx, in_chain?) when is_binary(name) do
     with :ok <- Sanctum.Visibility.authorize(name, @proxied_access, ctx, in_chain?),
-         :ok <- key_admits(name, ctx) do
+         :ok <- key_admits(name, ctx, in_chain?) do
       if Arca.StorageReserve.depleted?(), do: {:error, reserve_refusal()}, else: :ok
     end
   end
 
   # Discovery's own admission names no tool (`"tools/list"`), so only a
-  # `server:tool` is asked of the key; its tools are then each asked.
-  defp key_admits(name, ctx) do
-    if String.contains?(name, ":") do
-      case Sanctum.ApiKey.admit_tool(ctx, name) do
+  # `server:tool` is asked of the key; its tools are then each asked. A
+  # call in a chain is not asked: the key was asked of the chain's root.
+  defp key_admits(name, ctx, in_chain?) do
+    if String.contains?(name, ":") and not in_chain? do
+      case Sanctum.ApiKey.admit_tool(ctx, {:outside, name}) do
         :ok -> :ok
         {:error, reason} -> {:error, Prima.Refusal.classify(reason)}
       end

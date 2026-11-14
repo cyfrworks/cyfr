@@ -184,7 +184,7 @@ defmodule Opus do
     # turn does, with the fill asked for, and an unavailable executor
     # refuses: both before any consent is resolved or any row is written.
     # Dispatch checks the worker again when it runs.
-    with :ok <- Sanctum.ApiKey.admit_tool(ctx, reference),
+    with :ok <- Sanctum.ApiKey.admit_tool(ctx, {:component, reference}),
          :ok <- Sanctum.Provisioning.ready(ctx),
          {:ok, _worker} <- Dispatch.worker(reference),
          {:ok, %{authority: authority, stamp: stamp, profile: profile}} <-
@@ -225,7 +225,7 @@ defmodule Opus do
     # The tincture is the root a key starts here, so a key narrowed to
     # named tools opens only a listed tincture's route; what the tincture
     # runs stands on the person's grant of it, as it does for the person.
-    with :ok <- Sanctum.ApiKey.admit_tool(ctx, source_ref),
+    with :ok <- Sanctum.ApiKey.admit_tool(ctx, {:component, source_ref}),
          {:ok, %{root: root, decision: decision}} <-
            Admission.root_edge(ctx, source_ref, reference, opts) do
       dispatch_child(

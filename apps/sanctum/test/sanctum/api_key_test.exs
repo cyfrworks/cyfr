@@ -101,8 +101,12 @@ defmodule Sanctum.ApiKeyTest do
         key_ctx = %{ctx | api_key_id: id}
 
         capture_log(fn ->
-          for tool <- ["catalyst:local.ship:1.0.0", "catalyst:local.other:1.0.0"] do
-            assert {:error, :invalid_api_key} = ApiKey.admit_tool(key_ctx, tool)
+          for target <- [
+                {:component, "catalyst:local.ship:1.0.0"},
+                {:component, "catalyst:local.other:1.0.0"},
+                {:outside, "greeter:hello"}
+              ] do
+            assert {:error, :invalid_api_key} = ApiKey.admit_tool(key_ctx, target)
           end
         end)
 
