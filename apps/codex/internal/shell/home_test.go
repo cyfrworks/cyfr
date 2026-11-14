@@ -55,15 +55,19 @@ type fakeHome struct {
 	locked         []string
 	confirmed      []map[string]any
 	pending        map[string]map[string]any // ref -> record
-	asked          map[string]map[string]any // challenge -> the confirm request answered
-	capabilities   [][]string
-	unlockSeq      int
-	conns          []*websocket.Conn
-	closeWith      websocket.StatusCode
-	stalled        chan struct{}
-	sessions       map[string]string // spent ticket -> the session's bearer
-	sessionFields  []string
-	shapes         []string
+	waiting        map[string]map[string]any // ref -> a passkey a browser asks to add
+	// onWaiting runs once a pairing.waiting read has taken its answer,
+	// under the home's lock, as a change the CYFR makes right after it.
+	onWaiting     func(ref string)
+	asked         map[string]map[string]any // challenge -> the confirm request answered
+	capabilities  [][]string
+	unlockSeq     int
+	conns         []*websocket.Conn
+	closeWith     websocket.StatusCode
+	stalled       chan struct{}
+	sessions      map[string]string // spent ticket -> the session's bearer
+	sessionFields []string
+	shapes        []string
 	// stale is a certificate this CYFR will not take any more (4408).
 	stale func(cert map[string]any) bool
 }
@@ -90,7 +94,7 @@ func newFakeHome(t *testing.T) *fakeHome {
 	fixture(t, "device_unlock.json", &v)
 	h := &fakeHome{t: t, accounts: accounttest.New(t), setupToken: strings.Repeat("ab", 32), members: map[string]bool{},
 		clients: map[string]*fakeClient{}, held: map[string]map[string]any{}, requests: map[string]map[string]any{},
-		pending: map[string]map[string]any{}, sessions: map[string]string{}, sessionFields: v.Exchange.HTTP.DeviceSession.Request}
+		pending: map[string]map[string]any{}, waiting: map[string]map[string]any{}, sessions: map[string]string{}, sessionFields: v.Exchange.HTTP.DeviceSession.Request}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/device/websocket", h.channel)
 	mux.HandleFunc("POST /device/session", h.deviceSession)
@@ -525,6 +529,16 @@ func (h *fakeHome) intent(op string, args, binding map[string]any) (any, any) {
 		entry := map[string]any{"ref": ref, "operation": rec["operation"], "preview": rec["preview"],
 			"asker": map[string]any{"name": "Prism"}}
 		return map[string]any{"confirmations": []any{entry}}, nil
+	case "pairing.waiting":
+		ref, _ := args["ref"].(string)
+		rec := h.waiting[ref]
+		if h.onWaiting != nil {
+			h.onWaiting(ref)
+		}
+		if rec != nil {
+			return map[string]any{"waiting": []any{rec}}, nil
+		}
+		return map[string]any{"waiting": []any{}}, nil
 	case "confirmation.request":
 		ref, _ := args["ref"].(string)
 		rec := h.pending[ref]
@@ -686,7 +700,7 @@ func (h *fakeHome) account(t *testing.T, name string) (string, ed25519.PrivateKe
 func (h *fakeHome) approve(t *testing.T, identifier string, dev ed25519.PrivateKey, pub []byte) {
 	t.Helper()
 	err := account.Approve(context.Background(), account.Directory{URL: h.accounts.URL()}, identifier,
-		dev.Public().(ed25519.PublicKey), func(m []byte) []byte { return ed25519.Sign(dev, m) }, pub, time.Now().UnixMilli())
+		dev.Public().(ed25519.PublicKey), func(m []byte) []byte { return ed25519.Sign(dev, m) }, account.DeviceKey(pub), time.Now().UnixMilli())
 	if err != nil {
 		t.Fatal(err)
 	}

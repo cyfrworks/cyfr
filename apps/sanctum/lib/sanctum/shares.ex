@@ -254,7 +254,7 @@ defmodule Sanctum.Shares do
                  Authz.confirm(ctx, :credential_sharing, %{
                    operation: "share.set_audience",
                    arguments: %{share_id: id, audience: audience, expected: expected},
-                   resource: id,
+                   resource: entry_name(ctx, share.vault_entry_id),
                    details: sharing_details(audience, %{})
                  }),
                do: write_audience(ctx, id, expected, audience)
@@ -359,7 +359,9 @@ defmodule Sanctum.Shares do
 
   @doc """
   `offered/1`, each share with the context's person's own count of its
-  use today (`used_today`), as a claim counts it, and no other person's.
+  use today (`used_today`), as a claim counts it, and no other person's,
+  and the most a person may use it in a day (`person_daily`, nil for no
+  limit).
   """
   @spec offered_with_use(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def offered_with_use(%Context{} = ctx) do
@@ -368,7 +370,11 @@ defmodule Sanctum.Shares do
         owner = Context.actor(owner_context(offered))
 
         with {:ok, count} <- unavailable(Usage.used_today(owner, view.id, ctx.user_id)),
-             do: {:ok, Map.put(view, :used_today, count)}
+             do:
+               {:ok,
+                view
+                |> Map.put(:used_today, count)
+                |> Map.put(:person_daily, offered.share.person_daily)}
       end)
     end
   end
@@ -740,6 +746,19 @@ defmodule Sanctum.Shares do
 
   # The entry of the person's own athanor a creation names, read for the
   # confirmation's preview; the store reads it again under its lock.
+  # The shared entry by the name its person sees it under, for a
+  # confirmation's preview: an entry that cannot be read, or a name the
+  # preview cannot hold, names nothing, never the share's id, and changes
+  # nothing else about the change.
+  defp entry_name(ctx, entry_id) do
+    with {:ok, %{name: name}} <- own_entry(ctx, entry_id),
+         true <- Prima.Identity.Encoding.text?(name, Prima.Confirmation.Preview.max_text()) do
+      name
+    else
+      _unnamed -> nil
+    end
+  end
+
   defp own_entry(ctx, entry_id) do
     case Arca.VaultStorage.get(Context.actor(ctx), entry_id) do
       {:ok, entry} -> {:ok, entry}

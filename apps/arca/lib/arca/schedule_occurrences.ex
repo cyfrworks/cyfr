@@ -22,7 +22,7 @@ defmodule Arca.ScheduleOccurrences do
 
   An occurrence is ended only by the claimant that holds it, for the
   execution it intends to end, and only under the member's live slot:
-  `finish/6` and `settle_dead/4` each lock the occurrence's row, check
+  `finish/6` and `settle_dead/5` each lock the occurrence's row, check
   the slot under that lock (`Arca.CronSchedule.slot_fence/0`) and then
   compare-and-set the claimant and the execution, in the one transaction
   that writes the terminal state and the outcome's record. A member whose
@@ -400,7 +400,7 @@ defmodule Arca.ScheduleOccurrences do
   def finish(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id, _state, _opts),
     do: {:error, :no_athanor}
 
-  # An occurrence's end (`finish/6`, `settle_dead/4`): one locking
+  # An occurrence's end (`finish/6`, `settle_dead/5`): one locking
   # transaction that locks the occurrence's row, checks the member's slot
   # under that lock (`Arca.CronSchedule.slot_fence/0`) and only then runs
   # `write`, whose `{:ok, value}` commits and whose `{:error, reason}`
@@ -639,16 +639,31 @@ defmodule Arca.ScheduleOccurrences do
   the member's slot as `finish/6`'s is (`{:error, :not_owner}` for a
   member whose slot was taken over, with nothing moved).
 
+  `also:` is `finish/6`'s: the owner's closure, run in the same
+  transaction once the row moved, handed what the end read there, its
+  refusal rolling the end back.
+
   Answers the state written, or `{:error, :stale}` when neither matched:
   the occurrence was ended already, or another claimant or execution
   holds it now, and nothing moved.
   """
-  @spec settle_dead(Prima.Actor.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, String.t()} | {:error, :stale | :not_owner | :no_athanor | :database_error}
-  def settle_dead(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, claimed_by, execution_id)
+  @spec settle_dead(Prima.Actor.t(), String.t(), String.t() | nil, String.t() | nil, keyword()) ::
+          {:ok, String.t()}
+          | {:error, :stale | :not_owner | :no_athanor | :database_error | term()}
+  def settle_dead(actor, occurrence_id, claimed_by, execution_id, opts \\ [])
+
+  def settle_dead(
+        %Prima.Actor{athanor_id: athanor_id},
+        occurrence_id,
+        claimed_by,
+        execution_id,
+        opts
+      )
       when is_binary(athanor_id) and athanor_id != "" and
              (is_binary(claimed_by) or is_nil(claimed_by)) and
-             (is_binary(execution_id) or is_nil(execution_id)) do
+             (is_binary(execution_id) or is_nil(execution_id)) and is_list(opts) do
+    also = Keyword.get(opts, :also)
+
     Errors.with_db_rescue("ScheduleOccurrences.settle_dead", fn ->
       ending(athanor_id, occurrence_id, fn ->
         never_invoked =
@@ -657,21 +672,26 @@ defmodule Arca.ScheduleOccurrences do
           |> where_execution(nil)
           |> ended("failed")
 
-        case {never_invoked, execution_id} do
-          {{:ok, 1}, _execution_id} ->
-            {:ok, "failed"}
+        settled =
+          case {never_invoked, execution_id} do
+            {{:ok, 1}, _execution_id} ->
+              {:ok, "failed"}
 
-          {{:error, :stale}, nil} ->
-            {:error, :stale}
+            {{:error, :stale}, nil} ->
+              {:error, :stale}
 
-          {{:error, :stale}, execution_id} ->
-            started_uncertain(athanor_id, occurrence_id, claimed_by, execution_id)
-        end
+            {{:error, :stale}, execution_id} ->
+              started_uncertain(athanor_id, occurrence_id, claimed_by, execution_id)
+          end
+
+        with {:ok, state} <- settled,
+             :ok <- ran(also, athanor_id, occurrence_id),
+             do: {:ok, state}
       end)
     end)
   end
 
-  def settle_dead(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id),
+  def settle_dead(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id, _opts),
     do: {:error, :no_athanor}
 
   # A started occurrence whose runner died, ended `uncertain` only while
