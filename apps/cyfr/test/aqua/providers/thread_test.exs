@@ -112,29 +112,97 @@ defmodule Aqua.Providers.ThreadTest do
   end
 
   describe "turns" do
-    test "no one suspends or recovers a turn: the tool is unknown, and offered to no one", %{
-      ctx: ctx,
-      thread: thread
-    } do
+    test "no one suspends or recovers a turn: the tool is unknown, alike to every caller, and offered to no one",
+         %{ctx: ctx, thread: thread} do
       admin = %{ctx | platform_admin: true}
+      key = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
+      guest = guest(ctx)
+      lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx)
 
-      for caller <- [ctx, admin], action <- ["suspend", "recover"] do
-        assert {:refused, {:unknown_tool, "turn"}} =
-                 admission(caller, "turn", %{
-                   "action" => action,
-                   "thread" => thread.id,
-                   "turn" => "trn_named"
-                 })
+      unknown = %Prima.Refusal{
+        stage: :admission,
+        class: :not_found,
+        reason: {:unknown_tool, "turn"},
+        message: "Unknown tool: turn"
+      }
+
+      for action <- ["suspend", "recover"] do
+        args = %{"action" => action, "thread" => thread.id, "turn" => "trn_named"}
+
+        for caller <- [ctx, admin, key] do
+          assert Sanctum.Gate.call_external("turn", caller, args) == {:error, unknown}
+        end
+
+        assert Sanctum.Gate.call_in_chain("turn", guest, args, chain_authority(),
+                 lineage: lineage
+               ) == {:error, unknown}
       end
 
       assert Enum.map(Tool.tools(), & &1.name) == ["thread", "crew"]
       refute Enum.any?(Sanctum.Catalog.tool_actions(), &String.starts_with?(&1, "turn."))
 
-      for caller <- [ctx, admin] do
+      for caller <- [ctx, admin, key] do
         shown = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), caller)
         refute Enum.any?(shown, &(&1["name"] == "turn"))
       end
+
+      in_chain = Sanctum.Catalog.in_chain_view(Sanctum.Catalog.list_tools())
+      refute Enum.any?(in_chain, &(&1["name"] == "turn"))
     end
+  end
+
+  # A guest of the person's athanor inside a running chain, holding every
+  # permission, so nothing but the tool's absence can refuse its call.
+  defp guest(ctx) do
+    Sanctum.Context.enter_guest(%Sanctum.Context{
+      origin: :programmatic,
+      user_id: ctx.user_id,
+      athanor_id: ctx.athanor_id,
+      scope: :athanor,
+      permissions: MapSet.new([:*]),
+      authenticated: true
+    })
+  end
+
+  # A chain's grant whose one edge names an action the guest may reach,
+  # so the authority admits the call up to the tool's lookup.
+  defp chain_authority do
+    node = "formula:local.turns"
+
+    {:ok, blob} =
+      Prima.Authority.Blob.parse(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          node => %{
+            "limits" => %{
+              "timeout" => "1m",
+              "max_memory_bytes" => 67_108_864,
+              "max_request_size" => 1_048_576,
+              "max_response_size" => 5_242_880,
+              "rate_limit" => %{"requests" => 100, "window" => "1m"},
+              "max_concurrent_tasks" => 10,
+              "batch_timeout" => "1m"
+            },
+            "edges" => %{"@ingress" => %{"tools" => ["crew.list"]}}
+          }
+        }
+      })
+
+    {:ok, authority} =
+      Prima.Authority.root(
+        %{
+          profile_id: "prof-turns",
+          consent_id: "consent-turns",
+          source_ref: node,
+          kind: :owner,
+          invoke_mode: :open_inert,
+          activation: %{node => "sha256:turns"}
+        },
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
+      )
+
+    authority
   end
 
   describe "gates" do
