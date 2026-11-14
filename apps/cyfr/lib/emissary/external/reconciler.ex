@@ -7,13 +7,13 @@ defmodule Emissary.External.Reconciler do
   servers.
 
   Server processes cache resolved header credentials for their lifetime,
-  and the backends service holds a stdio server's resolved env for its
+  and the backends service holds a program's resolved env for its
   lease, so a rotate, rebind, revoke, delete or rename of a referenced
   entry would otherwise keep flowing until a restart. This listener watches the global
   vault signal and acts on the names it carries — a signal that names no
   entry matches every template:
 
-    1. in memory first, the backends controller releases every live stdio
+    1. in memory first, the backends controller releases every live program
        owner of the athanor whose env templates reference a changed name
        (`Opus.Programs.release_referencing/2`), which needs no store;
     2. then the tenant's servers whose header or env templates reference one
@@ -51,7 +51,7 @@ defmodule Emissary.External.Reconciler do
   that failed delays a home's retirement by a sweep and never loses it,
   and a store that cannot answer retires nothing.
 
-  A kept stdio row runs its sessions in the home of the login entry it
+  A kept mcp program runs its sessions in the home of the login entry it
   names (`login_entry_id`), and a sign-in and a catalyst's pipe session run
   in one: a change to that entry stops the rows that mount it as a change
   to a referenced credential does, and ends its sign-ins and pipe sessions
@@ -425,7 +425,7 @@ defmodule Emissary.External.Reconciler do
         do: {name, stale}
   end
 
-  # A kept stdio row runs its sessions in the home of the login entry it
+  # A kept mcp program runs its sessions in the home of the login entry it
   # names: a change to that entry stops it as a change to a referenced
   # credential does.
   defp mounts?(%{login_entry_id: entry_id}, entry_id) when is_binary(entry_id), do: true

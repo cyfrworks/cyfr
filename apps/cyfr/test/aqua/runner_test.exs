@@ -84,9 +84,7 @@ defmodule Aqua.RunnerTest do
     {:ok, [_soul]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @soul)
     # The model catalyst unseals its key when its runner attaches; the key
     # is lent to a script's turns over the API as well as the person's.
-    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"},
-      origins: [:interactive, :programmatic]
-    )
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
 
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
@@ -1285,10 +1283,8 @@ defmodule Aqua.RunnerTest do
   end
 
   describe "a line under another origin" do
-    test "a programmatic line from the sender does not steer an interactive turn; its own turn is judged by its own grant",
+    test "a programmatic line from the sender does not steer an interactive turn; its own turn runs on the person's grant",
          %{ctx: ctx, thread: thread} do
-      # The soul's grant admits the sender's interactive runs alone.
-      admit_only!(ctx, [:interactive])
       script!([{:probe, self()}, reply("answered"), reply("never")])
 
       {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
@@ -1307,24 +1303,11 @@ defmodule Aqua.RunnerTest do
 
       send(pids.call, :continue)
       wait_until(fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, first)) end, 60_000)
-      calls = ScriptedWorker.calls()
 
-      # Its own grant does not name programmatic: it roots nothing and
-      # calls no model.
-      wait_until(
-        fn ->
-          match?({:ok, %{status: status}} when status != "accepted", Tape.turn(ctx, queued))
-        end,
-        60_000
-      )
-
-      assert {:ok, %{status: status, root_execution_id: nil}} = Tape.turn(ctx, queued)
-      refute status in ["running", "completed"]
-      assert ScriptedWorker.calls() == calls
-
-      assert [] =
-               Arca.Repo.all(Arca.Schemas.Execution)
-               |> Enum.filter(&(&1.origin == "programmatic"))
+      # It stands on the person's grant as theirs does, and records that
+      # it came over the API.
+      wait_until(fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, queued)) end, 60_000)
+      assert {:ok, %{status: "completed", origin: "programmatic"}} = Tape.turn(ctx, queued)
     end
 
     test "a programmatic line does not continue an interactive turn stopped on an unknown outcome",
@@ -1384,15 +1367,6 @@ defmodule Aqua.RunnerTest do
         set: [origin: @unknown_origin]
       )
 
-    :ok
-  end
-
-  # The soul's grant, granted again admitting `origins` alone.
-  defp admit_only!(ctx, origins) do
-    {:ok, %{profile_id: profile_id}} =
-      Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
-
-    _ = Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile_id, origins)
     :ok
   end
 

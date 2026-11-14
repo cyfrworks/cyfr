@@ -15,7 +15,8 @@ import {next, passkeyAdded, signWith, userId} from "../identity.js"
 import {codeFor, drawRecovery, readCode} from "../recovery.js"
 import {isHandle} from "../registry.js"
 import {addedAt, appendOnce, here, keyLabel, shortCode} from "./common.js"
-import {$, attempt, copyCode, drawCode, only, say, words} from "../view.js"
+import {readSigned} from "./sign.js"
+import {$, attempt, copyCode, drawCode, keyRow, only, say, words} from "../view.js"
 
 export class Recovery {
   /** The account a typed code recovers; throws `not_a_code`, `typo` or `code_replaced`. */
@@ -27,7 +28,7 @@ export class Recovery {
   }
 
   constructor(env, place, identifier, key, {state, entries}) {
-    Object.assign(this, {env, place, identifier, key, state, entries, fresh: null, pending: null})
+    Object.assign(this, {env, place, identifier, key, state, entries, fresh: null, pending: null, passkeyAdded: false})
   }
 
   /** A new passkey for the account, labelled with its name, which must be this account's. */
@@ -72,9 +73,11 @@ export class Recovery {
   async submit(entry) {
     const retry = entry === undefined
     if (!retry) this.pending = entry
-    const {kind} = this.pending
-    const read = await appendOnce(this.place.directory, this.identifier, this.pending, retry)
+    const landed = this.pending
+    const {kind} = landed
+    const read = await appendOnce(this.place.directory, this.identifier, landed, retry)
     this.pending = null
+    if (kind === "add_key" && landed.key.kind === "passkey") this.passkeyAdded = true
     if (kind === "recover") this.key = this.fresh.key
     if (kind === "recover" || kind === "add_recovery") this.fresh = null
     Object.assign(this, read)
@@ -97,24 +100,30 @@ export async function run(doc, env) {
     return
   }
   only(doc, "enter")
+  // A CYFR's request the sign page sent along (`#request=`), whose passkey
+  // the browser refused; one that does not read is dropped.
+  let sent = null
+  const text = new URLSearchParams((env.location?.hash ?? "").slice(1)).get("request")
+  if (text) {
+    try {
+      sent = {text, request: readSigned(text, env.now())}
+      $(doc, "return-link").textContent = `Continue to ${sent.request.audience}`
+      $(doc, "return-link").setAttribute("href", `sign#${sent.text}`)
+    } catch (_error) {
+      sent = null
+    }
+  }
   let recovery = null
   // What "I saved it" submits once a new code is shown.
   let afterSaved = null
 
   const draw = () => {
-    const rows = recovery.keys().map((key) => {
-      const row = doc.createElement("li")
-      const label = doc.createElement("span")
-      label.textContent = keyLabel(key)
-      const remove = doc.createElement("button")
-      remove.type = "button"
-      remove.textContent = "Remove"
-      remove.addEventListener("click", () => act(remove, () => recovery.removeKey(key.kid)))
-      row.append(label, remove)
-      return row
-    })
+    const rows = recovery.keys().map((key) => keyRow(doc, keyLabel(key), {current: false, remove: (button) => act(button, () => recovery.removeKey(key.kid))}))
     $(doc, "keys").replaceChildren(...rows)
     $(doc, "no-keys").hidden = rows.length > 0
+    // The way back to the CYFR that sent the request: once a passkey this
+    // page added has landed, while the request holds, however it landed.
+    $(doc, "return").hidden = !(sent && recovery.passkeyAdded && env.now() < sent.request.expires_at)
     only(doc, "account")
   }
 

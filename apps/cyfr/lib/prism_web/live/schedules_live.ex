@@ -6,13 +6,10 @@ defmodule PrismWeb.SchedulesLive do
   Cron schedules: list, create, pause, resume and delete through the
   `schedule` tool.
 
-  A schedule runs its component under the profile it names, and a run a
-  schedule starts carries the `schedule` origin. Making one for a profile
-  whose grant does not admit that origin raises the grant prompt for that
-  profile first, in the page's system layer (`PrismWeb.SystemLayer`):
-  once the grant is confirmed the page reads the profile's grant again
-  and makes the schedule only if it now admits schedules. A grant
-  dismissed, or confirmed without that origin, makes no schedule.
+  A schedule runs its component under the profile it names, standing on
+  the person's grant: making it on this page is the person's decision that
+  it runs, so no grant asks again who may start it. A run a schedule
+  starts records the `schedule` origin.
 
   Below the schedules, the athanor's feeds (`feed.list`): each feed's name,
   binding id, component, operation, interval, the time of its last
@@ -84,7 +81,6 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:cron_custom, "")
       |> assign(:form, to_form(@empty_form))
       |> assign(:focused_id, nil)
-      |> assign(:origin_grant, nil)
 
     {:ok, socket}
   end
@@ -133,7 +129,7 @@ defmodule PrismWeb.SchedulesLive do
           "profile_id" => params["profile_id"]
         })
 
-      {:noreply, create_admitted(socket, args)}
+      {:noreply, create_schedule(socket, args)}
     else
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
@@ -215,28 +211,6 @@ defmodule PrismWeb.SchedulesLive do
   defp focused_id(id) when is_binary(id) and id != "", do: id
   defp focused_id(_id), do: nil
 
-  # The grant prompt a schedule waited for. A refused commit leaves the
-  # prompt open for the person to try again or dismiss; any other end
-  # makes no schedule.
-  @impl PrismWeb.SystemLayer.Hook
-  def system_layer_report(id, outcome, %{assigns: %{origin_grant: {id, args}}} = socket) do
-    case outcome do
-      :confirmed ->
-        {:noreply, socket |> assign(:origin_grant, nil) |> origin_granted(args)}
-
-      {:refused, reason} when reason != :invalid_prompt ->
-        {:noreply, socket}
-
-      _ended ->
-        {:noreply,
-         socket
-         |> assign(:origin_grant, nil)
-         |> put_flash(:error, "No schedule was made: the grant was not changed.")}
-    end
-  end
-
-  def system_layer_report(_id, _outcome, _socket), do: :pass
-
   @impl true
   def handle_info(:load, socket) do
     {:noreply,
@@ -275,36 +249,6 @@ defmodule PrismWeb.SchedulesLive do
     {:noreply, socket}
   end
 
-  # A schedule is made only under a grant that admits its runs: one whose
-  # profile's grant lacks the `schedule` origin raises the grant prompt
-  # for that profile first, and the schedule waits for its outcome.
-  defp create_admitted(socket, %{"reference" => ref, "profile_id" => profile_id} = args) do
-    case SystemLayer.admits_origin(socket, ref, profile_id, :schedule) do
-      {:missing, label} -> ask_origin(socket, args, label)
-      _admitted_or_unknown -> create_schedule(socket, args)
-    end
-  end
-
-  defp ask_origin(socket, %{"reference" => ref} = args, label) do
-    id = "grant-schedule-#{System.unique_integer([:positive])}"
-
-    case SystemLayer.grant_prompt(socket, id, ref, label: label) do
-      {:ok, prompt} ->
-        SystemLayer.show(prompt)
-
-        socket
-        |> assign(:origin_grant, {id, args})
-        |> put_flash(
-          :info,
-          "This profile's grant does not let it run on a schedule. " <>
-            "Grant it \"Also on a schedule\" to make this schedule."
-        )
-
-      {:error, reason} ->
-        put_flash(socket, :error, "No schedule was made: #{error_message(reason)}")
-    end
-  end
-
   defp create_schedule(socket, args) do
     case call_tool(socket, "schedule", args) do
       {:ok, _} ->
@@ -318,22 +262,6 @@ defmodule PrismWeb.SchedulesLive do
 
       {:error, reason} ->
         put_flash(socket, :error, "Failed: #{error_message(reason)}")
-    end
-  end
-
-  # The grant the schedule waited for, confirmed: its profile's grant is
-  # read again, and the schedule made only if it now admits schedules.
-  defp origin_granted(socket, %{"reference" => ref, "profile_id" => profile_id} = args) do
-    case SystemLayer.admits_origin(socket, ref, profile_id, :schedule) do
-      {:missing, _label} ->
-        put_flash(
-          socket,
-          :error,
-          "No schedule was made: the grant does not let this profile run on a schedule."
-        )
-
-      _admitted_or_unknown ->
-        create_schedule(socket, args)
     end
   end
 

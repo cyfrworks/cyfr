@@ -410,33 +410,6 @@ defmodule Sanctum.Consent.Normalize do
     end
   end
 
-  @doc false
-  # The origins a grant admits: a non-empty list of distinct
-  # `Prima.Origin` values, answered as their wire spellings in the enum's
-  # order, so two lists naming the same origins are one input.
-  def origins(map, key, tag) do
-    case Map.fetch(map, key) do
-      {:ok, [_ | _] = origins} ->
-        if Enum.all?(origins, &Prima.Origin.origin?/1) do
-          if length(Enum.uniq(origins)) == length(origins),
-            do: {:ok, Prima.Origin.to_wire_list(origins)},
-            else: {:error, {tag, key, "names an origin twice"}}
-        else
-          {:error,
-           {tag, key, "must name only origins: #{Enum.join(Prima.Origin.spellings(), ", ")}"}}
-        end
-
-      {:ok, []} ->
-        {:error, {tag, key, "must name at least one origin"}}
-
-      {:ok, _other} ->
-        {:error, {tag, key, "must be a list of origins"}}
-
-      :error ->
-        {:error, {tag, key, "is required"}}
-    end
-  end
-
   # The kinds a subset may name, each with the fields it narrows; `tools`,
   # the limits and the exits are their own shapes below.
   @subset_sets %{

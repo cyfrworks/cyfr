@@ -62,7 +62,6 @@ defmodule Opus.Schedules.SchedulerTest do
 
   # The scheduled component, registered, and the profile schedules name
   # with its head consent: the component's node under the fixture limits.
-  # The grant admits the runs a schedule starts and the person's own.
   defp consented!(ctx) do
     {:ok, component} =
       Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
@@ -71,13 +70,12 @@ defmodule Opus.Schedules.SchedulerTest do
         type: "reagent"
       })
 
-    granted!(ctx, component, [:interactive, :schedule])
+    granted!(ctx, component)
     component
   end
 
-  # The profile's head consent, admitting `origins`, written again over
-  # whatever head it had.
-  defp granted!(ctx, component, origins) do
+  # The profile's head consent, written again over whatever head it had.
+  defp granted!(ctx, component) do
     profile = %{
       id: @profile_id,
       kind: :owner,
@@ -106,7 +104,6 @@ defmodule Opus.Schedules.SchedulerTest do
             }
           }),
         activation: %{@reference => component.release_digest},
-        admitted_origins: origins,
         vault_refs: []
       })
   end
@@ -729,28 +726,13 @@ defmodule Opus.Schedules.SchedulerTest do
       assert request_id == decision.request_id
     end
 
-    test "a fire under a grant that does not name schedule invokes nothing until it does",
-         %{ctx: ctx, component: component} do
-      # The person's grant admits interactive alone.
-      granted!(ctx, component, [:interactive])
+    test "a fire stands on the person's grant, and records that a schedule started it",
+         %{ctx: ctx} do
       script!([%{"ran" => true}])
-      # Its cadence's next time is half an hour away: only the fires this
-      # case makes run it.
+      # Its cadence's next time is half an hour away: only the fire this
+      # case makes runs it.
       schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
-      pid = scheduler!()
-
-      wait_until(fn ->
-        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
-      end)
-
-      assert [%{state: "failed", execution_id: nil, attempts: 0}] = occurrences(ctx, schedule)
-      assert [] = Arca.Repo.all(Arca.Schemas.Execution)
-      assert ScriptedWorker.calls() == []
-
-      # Granted again naming schedule: the next fire runs, as a scheduled run.
-      granted!(ctx, component, [:interactive, :schedule])
-      _ = due!(schedule)
-      send(pid, {:fire, schedule.id})
+      scheduler!()
 
       wait_until(fn ->
         Enum.any?(occurrences(ctx, schedule), &(&1.state == "completed"))
@@ -1558,8 +1540,7 @@ defmodule Opus.Schedules.SchedulerTest do
             entry_id: entry.id,
             lifetime: %{kind: "until", until: DateTime.to_iso8601(until)}
           }
-        ],
-        origins: [:interactive, :schedule]
+        ]
       }
 
       {:ok, plan} = Sanctum.Consent.Plan.plan(walk, %{ref: ref})

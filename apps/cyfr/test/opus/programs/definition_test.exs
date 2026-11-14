@@ -3,11 +3,12 @@
 
 defmodule Opus.Programs.DefinitionTest do
   @moduledoc """
-  A stdio server's backends: named, capped per server, a command that
+  A program's backends: named, capped per server, a command that
   names no vault entry, env names that are neither malformed nor reserved,
   and env values that are vault templates except for the non-secret names
   that may hold literals; a command that places a vault-bound value on the
-  command line is accepted and warned of.
+  command line is accepted and warned of. A program is one kind, marked
+  mcp or driven, both defined and run by the same rules.
   """
   use ExUnit.Case, async: true
 
@@ -251,5 +252,76 @@ defmodule Opus.Programs.DefinitionTest do
 
     assert BackendDefinition.entry_names(backends) == ["gh-token", "zeta"]
     assert BackendDefinition.entry_names(nil) == []
+  end
+
+  describe "one kind of program, marked by how it is spoken to" do
+    defp row(overrides),
+      do:
+        Map.merge(
+          %{"transport" => "program", "backends" => [backend()], "home" => "scratch"},
+          overrides
+        )
+
+    test "a program saved as mcp and one saved as driven run through one definition" do
+      assert {:ok, mcp} = BackendDefinition.validate_row(row(%{"mark" => "mcp"}))
+      assert {:ok, driven} = BackendDefinition.validate_row(row(%{"mark" => "driven"}))
+
+      # The columns differ in the mark alone, and the programs a sync defines
+      # from either row are the same, on the wire as in memory.
+      assert Map.delete(mcp, :mark) == Map.delete(driven, :mark)
+      assert {mcp.mark, driven.mark} == {"mcp", "driven"}
+
+      stored = fn columns -> Map.merge(columns, %{transport: "program"}) end
+      {:ok, [backend]} = BackendDefinition.validate([backend()])
+
+      assert {:ok, [program]} = BackendDefinition.programs(stored.(mcp), [backend])
+      assert {:ok, [^program]} = BackendDefinition.programs(stored.(driven), [backend])
+      assert BackendDefinition.wire(program).command == backend()["command"]
+    end
+
+    test "the mark is mcp or driven, and nothing reads the old kinds" do
+      for mark <- [nil, "pipe", "stdio", "MCP"] do
+        assert {:error, {:invalid_argument, message}} =
+                 BackendDefinition.validate_row(row(%{"mark" => mark}))
+
+        assert message =~ "config.mark must be mcp"
+      end
+
+      for transport <- ["stdio", "pipe", "http"] do
+        assert {:error, {:invalid_argument, "Only a row whose transport is program is a program"}} =
+                 BackendDefinition.validate_row(row(%{"transport" => transport, "mark" => "mcp"}))
+      end
+    end
+
+    test "a driven program is one backend; an mcp program may define several" do
+      two = [backend(), backend(%{"name" => "other"})]
+
+      assert {:ok, %{mark: "mcp"}} =
+               BackendDefinition.validate_row(row(%{"mark" => "mcp", "backends" => two}))
+
+      assert {:error,
+              {:invalid_argument,
+               "A driven program is one program: it defines exactly one backend"}} =
+               BackendDefinition.validate_row(row(%{"mark" => "driven", "backends" => two}))
+    end
+
+    test "a kept mcp program names its login entry; a driven one names none" do
+      assert {:error, {:invalid_argument, message}} =
+               BackendDefinition.validate_row(row(%{"mark" => "mcp", "home" => "kept"}))
+
+      assert message =~ "A kept mcp program names the login entry"
+
+      assert {:ok, %{login_entry_id: "ent_1"}} =
+               BackendDefinition.validate_row(
+                 row(%{"mark" => "mcp", "home" => "kept", "login_entry_id" => "ent_1"})
+               )
+
+      assert {:error,
+              {:invalid_argument,
+               "A driven program names no login entry: its catalyst's need binds one"}} =
+               BackendDefinition.validate_row(
+                 row(%{"mark" => "driven", "home" => "kept", "login_entry_id" => "ent_1"})
+               )
+    end
   end
 end

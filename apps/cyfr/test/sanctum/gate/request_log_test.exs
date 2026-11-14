@@ -970,7 +970,7 @@ defmodule Sanctum.Gate.RequestLogTest do
       )
 
       target = "f:local.#{component}"
-      profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, target, origins: [:webhook])
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, target)
 
       {:ok, %{secret: secret}} =
         Sanctum.TestContext.create_webhook(ctx, %{

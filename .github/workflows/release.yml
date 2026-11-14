@@ -348,12 +348,15 @@ jobs:
 
       # Written once, outside the checkout: the bytes signed below are the
       # bytes released, and GoReleaser finds the tree as the tag left it.
+      # The schema fingerprint is the release's own cyfr image's answer, by
+      # the merged digest, so Arca's one definition of it is the one read.
       - name: Write the release manifest
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/release"
           cyfr=$(cat "$RUNNER_TEMP/merged/cyfr/digest")
           locus=$(cat "$RUNNER_TEMP/merged/cyfr-locus/digest")
+          schema=$(docker run --rm -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" "ghcr.io/cyfrworks/cyfr@$cyfr" bin/cyfr eval 'IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())' | sed -n 's/^CYFR_SCHEMA=//p')
           caddy=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*caddy:[^@[:space:]]*@(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' docker-compose.yml)
           tailscale=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*tailscale\/tailscale:[^@[:space:]]*@(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' docker-compose.yml)
           scaffold=$(sha256sum apps/codex/cyfr-scaffold.tar.gz | cut -d' ' -f1)
@@ -364,7 +367,8 @@ jobs:
             --arg caddy "$caddy" \
             --arg tailscale "$tailscale" \
             --arg scaffold "sha256:$scaffold" \
-            '{version: $version, images: {cyfr: $cyfr, cyfr_locus: $locus, caddy: $caddy, tailscale: $tailscale}, scaffold: $scaffold}' \
+            --arg schema "$schema" \
+            '{version: $version, images: {cyfr: $cyfr, cyfr_locus: $locus, caddy: $caddy, tailscale: $tailscale}, scaffold: $scaffold, schema_fingerprint: $schema}' \
             > "$RUNNER_TEMP/release/release.json"
 
       # The manifest's shape (tests/fixtures/release_manifest.json's rules),

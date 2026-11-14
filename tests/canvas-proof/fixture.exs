@@ -22,10 +22,9 @@
 #       and a feed's result is only ever one the fixture accepts. Its
 #       manifest's `results` declares the shape of each operation's data:
 #       `quote`, a symbol's price and its candles. Beside it, its owner
-#       profile, active, whose head consent admits the `interactive` and
-#       `schedule` origins, minted through Arca's one profile mint as a
-#       person's grant leaves one; a feed fires under `schedule`. Answers
-#       the reference and the profile id.
+#       profile, active, and its head consent, minted through Arca's one
+#       profile mint as a person's grant leaves one. Answers the reference
+#       and the profile id.
 #
 #   ungranted TOKEN NAME
 #       `catalyst:local.NAME` at 1.0.0, the suite's catalyst guest published
@@ -464,7 +463,6 @@ fn args ->
             blob_digest: Prima.Digest.sha256(policy),
             resolved_policy: policy,
             activation: Jason.encode!(%{}),
-            admitted_origins: [:interactive, :schedule],
             granted_by: ctx.user_id,
             granted_via: "interactive"
           },

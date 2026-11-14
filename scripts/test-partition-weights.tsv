@@ -323,7 +323,6 @@
 0.0	apps/cyfr/test/cyfr/env_example_secrets_test.exs
 0.1	apps/cyfr/test/cyfr/env_files_test.exs
 1.7	apps/cyfr/test/cyfr/files_test.exs
-0.3	apps/cyfr/test/cyfr/frame_grant_origin_test.exs
 0.2	apps/cyfr/test/cyfr/frame_request_seam_test.exs
 0.3	apps/cyfr/test/cyfr/genserver_catchall_test.exs
 11.0	apps/cyfr/test/cyfr/graceful_stop_test.exs
