@@ -59,7 +59,8 @@ type Images struct {
 	Tailscale string `json:"tailscale"`
 }
 
-// Manifest is a release's `release.json`. `cyfr update` reads its images;
+// Manifest is a release's `release.json`. `cyfr update` reads its images
+// and its schema fingerprint;
 // its Scaffold digest is not compared when the scaffold downloads, because
 // the scaffold is verified against the release's checksums.txt, signed on
 // its own by the same workflow identity and verified before a byte of the
@@ -69,6 +70,11 @@ type Manifest struct {
 	Version  string `json:"version"`
 	Images   Images `json:"images"`
 	Scaffold string `json:"scaffold"`
+	// SchemaFingerprint is the schema fingerprint of the release's Arca
+	// (Arca.SchemaFingerprint.current/0), read from the release's own cyfr
+	// image when the manifest is written: the release runs only on a
+	// database built from that schema.
+	SchemaFingerprint string `json:"schema_fingerprint"`
 }
 
 // Identity is the certificate identity the release workflow signs under for
@@ -95,15 +101,20 @@ func (m *Manifest) Digest(repo string) (string, bool) {
 // reports.
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
+// fingerprintPattern is a schema fingerprint as Arca records it: 64
+// lower-case hex digits.
+var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 // ParseManifest reads data as a release manifest of exactly its shape: the
-// keys version, images and scaffold, images holding exactly cyfr,
-// cyfr_locus, caddy and tailscale, every value a string, the version a
-// release version (IsVersion) and every digest `sha256:` and 64 lower-case
-// hex digits. Keys match exactly (encoding/json's case-folding does not
+// keys version, images, scaffold and schema_fingerprint, images holding
+// exactly cyfr, cyfr_locus, caddy and tailscale, every value a string, the
+// version a release version (IsVersion), every digest `sha256:` and 64
+// lower-case hex digits and the schema fingerprint 64 lower-case hex
+// digits. Keys match exactly (encoding/json's case-folding does not
 // apply), and a missing, unknown or repeated key, a null, another type or
 // anything after the object refuses.
 func ParseManifest(data []byte) (*Manifest, error) {
-	top, err := strictObject(data, "version", "images", "scaffold")
+	top, err := strictObject(data, "version", "images", "scaffold", "schema_fingerprint")
 	if err != nil {
 		return nil, fmt.Errorf("%w: release.json: %v", ErrUnverified, err)
 	}
@@ -119,6 +130,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 		into *string
 	}{
 		{"version", top["version"], &m.Version},
+		{"schema_fingerprint", top["schema_fingerprint"], &m.SchemaFingerprint},
 		{"scaffold", top["scaffold"], &m.Scaffold},
 		{"images.cyfr", images["cyfr"], &m.Images.Cyfr},
 		{"images.cyfr_locus", images["cyfr_locus"], &m.Images.CyfrLocus},
@@ -137,7 +149,10 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	if !IsVersion(m.Version) {
 		return nil, fmt.Errorf("%w: release.json version %q is not a release version (MAJOR.MINOR.PATCH, or with a pre-release)", ErrUnverified, m.Version)
 	}
-	for _, f := range fields[1:] {
+	if !fingerprintPattern.MatchString(m.SchemaFingerprint) {
+		return nil, fmt.Errorf("%w: release.json schema_fingerprint %q is not 64 lower-case hex digits", ErrUnverified, m.SchemaFingerprint)
+	}
+	for _, f := range fields[2:] {
 		if !digestPattern.MatchString(*f.into) {
 			return nil, fmt.Errorf("%w: release.json %s %q is not sha256: and 64 lower-case hex digits", ErrUnverified, f.name, *f.into)
 		}

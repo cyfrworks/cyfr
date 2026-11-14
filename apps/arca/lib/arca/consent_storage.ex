@@ -110,7 +110,6 @@ defmodule Arca.ConsentStorage do
           required(:blob_digest) => String.t() | nil,
           required(:resolved_policy) => String.t(),
           required(:activation) => %{String.t() => String.t()},
-          required(:admitted_origins) => [Prima.Origin.t(), ...],
           required(:vault_refs) => [binding_ref()]
         }
 
@@ -188,14 +187,6 @@ defmodule Arca.ConsentStorage do
   other status is left as it is. A revoke that blocks the profile then
   lands wholly before the revision or after it, never between the
   revision and its reactivation.
-
-  `attrs[:admitted_origins]` is the non-empty list of origins the revision
-  admits (`Prima.Origin` atoms or their wire spellings), stored as their
-  spellings in the enum's order; a revision without it, an empty list, a
-  duplicate or an origin outside the enum is refused `{:error, {:invalid,
-  %{admitted_origins: …}}}` with nothing written. A stored revision whose
-  origins do not parse does not decode, so no reader meets a revision
-  that admits none.
   """
   @spec insert_revision(map(), [map()], String.t() | nil, keyword()) ::
           {:ok, map()} | {:error, term()}
@@ -618,41 +609,12 @@ defmodule Arca.ConsentStorage do
               "consent revisions require a blob_digest, got: #{Prima.LoggerContext.shape(other)}"
     end
 
-    with {:ok, origins} <- admitted_origins(Map.get(attrs, :admitted_origins)) do
-      {:ok,
-       attrs
-       |> Map.put(:athanor_id, athanor_id)
-       |> Map.put(:admitted_origins, origins)
-       |> Map.put_new(:id, Prima.UUID7.generate_id("cons"))
-       |> Map.put_new(:granted_at, DateTime.utc_now())}
-    end
+    {:ok,
+     attrs
+     |> Map.put(:athanor_id, athanor_id)
+     |> Map.put_new(:id, Prima.UUID7.generate_id("cons"))
+     |> Map.put_new(:granted_at, DateTime.utc_now())}
   end
-
-  # The origins a revision admits, as the column stores them: a JSON array
-  # of wire spellings in the enum's order. A revision names them or is not
-  # written.
-  defp admitted_origins(origins) when is_list(origins) do
-    spellings =
-      Enum.map(origins, fn
-        origin when is_atom(origin) and not is_nil(origin) and not is_boolean(origin) ->
-          if Prima.Origin.origin?(origin), do: Prima.Origin.to_wire(origin), else: origin
-
-        spelling ->
-          spelling
-      end)
-
-    case Prima.Origin.parse_list(spellings) do
-      {:ok, parsed} -> {:ok, Jason.encode!(Prima.Origin.to_wire_list(parsed))}
-      {:error, reason} -> {:error, {:invalid, %{admitted_origins: [origin_refusal(reason)]}}}
-    end
-  end
-
-  defp admitted_origins(_origins),
-    do: {:error, {:invalid, %{admitted_origins: ["is a non-empty list of origins"]}}}
-
-  defp origin_refusal(:empty_origins), do: "is a non-empty list of origins"
-  defp origin_refusal(:duplicate_origin), do: "names an origin twice"
-  defp origin_refusal({:unknown_origin, _spelling}), do: "names an origin outside the enum"
 
   defp revision_multi(multi, row, refs, expected_head, athanor_id, opts) do
     verify = Keyword.get(opts, :verify, fn -> :ok end)
@@ -1310,6 +1272,29 @@ defmodule Arca.ConsentStorage do
   end
 
   @doc """
+  Whether the actor's athanor holds a revoked owner profile of the
+  name-level `source_ref`: a grant its person made and revoked, told apart
+  from one never made. `profiles/2` lists no revoked profile, so a source
+  it answers none for is one of the two.
+  """
+  @spec revoked_owner?(Prima.Actor.t(), String.t()) :: {:ok, boolean()} | {:error, term()}
+  def revoked_owner?(%Prima.Actor{athanor_id: athanor_id}, source_ref)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.revoked_owner?", fn ->
+      revoked =
+        from(p in Arca.Schemas.Profile,
+          where: p.source_ref == ^source_ref and p.kind == "owner" and p.status == "revoked"
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.exists?()
+
+      {:ok, revoked}
+    end)
+  end
+
+  def revoked_owner?(%Prima.Actor{}, _source_ref), do: {:error, :no_athanor}
+
+  @doc """
   The head consent revision of a profile, fully decoded with its vault refs.
 
   Decoding fails closed — a stored scope or invoke mode outside the closed
@@ -1347,8 +1332,7 @@ defmodule Arca.ConsentStorage do
              "open_inert" => :open_inert,
              "edge_only" => :edge_only
            }),
-         {:ok, activation} <- decode_activation(consent.activation),
-         {:ok, origins} <- decode_origins(consent.admitted_origins) do
+         {:ok, activation} <- decode_activation(consent.activation) do
       {:ok,
        %{
          id: consent.id,
@@ -1361,7 +1345,6 @@ defmodule Arca.ConsentStorage do
          blob_digest: consent.blob_digest,
          resolved_policy: consent.resolved_policy,
          activation: activation,
-         admitted_origins: origins,
          vault_refs: Enum.map(refs, &binding_ref/1)
        }}
     end
@@ -1403,15 +1386,4 @@ defmodule Arca.ConsentStorage do
   end
 
   defp decode_activation(_), do: {:error, {:invalid_stored_value, :activation}}
-
-  # A stored list that does not parse refuses the consent rather than
-  # guessing which origins it admits.
-  defp decode_origins(json) do
-    with {:ok, spellings} <- Jason.decode(json),
-         {:ok, origins} <- Prima.Origin.parse_list(spellings) do
-      {:ok, origins}
-    else
-      _ -> {:error, {:invalid_stored_value, :admitted_origins}}
-    end
-  end
 end

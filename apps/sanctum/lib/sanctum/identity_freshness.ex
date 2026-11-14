@@ -34,8 +34,11 @@ defmodule Sanctum.IdentityFreshness do
   or not, and `add_key` and `add_recovery` nothing; then
   the head advances (`Arca.DirectoryHeads.advance/5`). A key removed and
   added again between two refreshes is therefore retired and admitted
-  afresh, never kept. The retired sessions' memos are dropped on every
-  member once the walk committed (`Sanctum.Caller.drop_retired/2`).
+  afresh, never kept: what it bound before its removal is retired, and
+  a sign-in reads the log live (`Sanctum.SignIn`), so what it signs after
+  it was added again binds the head that lists it again and stands. The
+  retired sessions' memos are dropped on every member once the walk
+  committed (`Sanctum.Caller.drop_retired/2`).
 
   A log that does not hold the cached head (`/from/{hash}` answers
   `not_found`) is not the history this home verified: the cache is left as

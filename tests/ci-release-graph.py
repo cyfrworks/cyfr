@@ -11,8 +11,8 @@
 # platform's runner before its digest is uploaded, merges each image's two digests
 # by exact name, attests the merge's printed digest and hands it to the
 # CLI release, which pins the scaffold's compose to the merged digests,
-# writes release.json, checks it and signs it before GoReleaser attaches
-# both, and grants each job only what it needs. The build, and the
+# writes release.json with the schema fingerprint its merged cyfr image
+# answers, checks it and signs it before GoReleaser attaches both, and grants each job only what it needs. The build, and the
 # publication test in test.yml's static job, first switch the runner's
 # Docker daemon to the containerd image store, which alone can load an
 # image carrying its attestation.
@@ -35,7 +35,7 @@
 # LC_ALL=C keeps their match to ASCII. Needs PyYAML for this mode.
 #
 # The release job's own mode checks the manifest it wrote, without PyYAML:
-# its shape by the vector file's rules, its version against the tag, its
+# its shape by the vector file's rules (the schema fingerprint among them), its version against the tag, its
 # scaffold digest against the tarball's, its Caddy and Tailscale digests
 # against the ones docker-compose.yml pins (third-party images the release
 # does not build), and the tarball's compose against its image digests.
@@ -189,6 +189,15 @@ locus=$(cat "$RUNNER_TEMP/merged/cyfr-locus/digest")
 bash scripts/scaffold-tarball.sh apps/codex/cyfr-scaffold.tar.gz "$GITHUB_REF_NAME" "$cyfr" "$locus"
 """
 MANIFEST_OUT = '> "$RUNNER_TEMP/release/release.json"\n'
+# The manifest step reads the schema fingerprint from the release's own
+# cyfr image, by the merged digest, and writes it as schema_fingerprint.
+SCHEMA_READ = (
+    """schema=$(docker run --rm -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" """
+    """"ghcr.io/cyfrworks/cyfr@$cyfr" bin/cyfr eval 'IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())' """
+    """| sed -n 's/^CYFR_SCHEMA=//p')"""
+)
+SCHEMA_ARG = '--arg schema "$schema" \\'
+SCHEMA_KEY = "schema_fingerprint: $schema}"
 VALIDATE_RUN = (
     'python3 -I tests/ci-release-graph.py --manifest "$RUNNER_TEMP/release/release.json" '
     '--version "$GITHUB_REF_NAME" --scaffold apps/codex/cyfr-scaffold.tar.gz'
@@ -216,6 +225,7 @@ MANIFEST_GLOBS = [
 CHECKOUT_WRITES = ["apps/codex/" + SCAFFOLD_GLOB]
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 # The one rule for a release version: MAJOR.MINOR.PATCH without leading
 # zeros, optionally a SemVer pre-release, no build metadata, ASCII only.
 # Always used with fullmatch, since $ also matches before a final newline,
@@ -740,6 +750,9 @@ def check_release_manifest(wf, merge, release):
             return reason
         order.append(at)
     scaffold, manifest, validate, sign, goreleaser = order
+    lines = run_lines(steps[manifest])
+    if SCHEMA_READ not in lines or SCHEMA_ARG not in lines or not any(SCHEMA_KEY in line for line in lines):
+        return "the CLI release's manifest does not carry the schema fingerprint its merged cyfr image answers"
     for at, want in [(scaffold, SCAFFOLD_RUN), (validate, VALIDATE_RUN), (sign, SIGN_RUN)]:
         if run_lines(steps[at]) != run_lines({"run": want}):
             return f"the CLI release runs {steps[at].get('run')!r}, not {want!r}"
@@ -909,13 +922,17 @@ def strict_json(data):
 
 def validate_manifest(obj, rule=SEMVER):
     """None when obj is a release manifest, else the reason it is not:
-    exactly version, images and scaffold; images exactly cyfr, cyfr_locus,
-    caddy and tailscale; every digest sha256:<64 lowercase hex>; the version
-    a release version by rule."""
+    exactly version, images, scaffold and schema_fingerprint; images exactly
+    cyfr, cyfr_locus, caddy and tailscale; every digest sha256:<64 lowercase
+    hex>; the schema fingerprint 64 lowercase hex; the version a release
+    version by rule."""
     if not isinstance(obj, dict):
         return f"the manifest is {type(obj).__name__}, not an object"
-    if set(obj) != {"version", "images", "scaffold"}:
-        return f"the manifest's keys are {sorted(obj)}, not images, scaffold and version"
+    if set(obj) != {"version", "images", "scaffold", "schema_fingerprint"}:
+        return f"the manifest's keys are {sorted(obj)}, not images, scaffold, schema_fingerprint and version"
+    fingerprint = obj["schema_fingerprint"]
+    if not isinstance(fingerprint, str) or not FINGERPRINT.fullmatch(fingerprint):
+        return f"the schema fingerprint {fingerprint!r} is not 64 lowercase hex"
     version = obj["version"]
     if not isinstance(version, str) or not rule.fullmatch(version):
         return f"the version {version!r} is not a {RELEASE_VERSION}"
@@ -1872,6 +1889,7 @@ def manifest_mode_failures(pinned, version):
             "version": at,
             "images": {"cyfr": FAKE_CYFR, "cyfr_locus": FAKE_LOCUS, "caddy": caddy, "tailscale": tailscale},
             "scaffold": scaffold,
+            "schema_fingerprint": "5e" * 32,
         }
 
     core = version.partition("-")[0]
@@ -1920,6 +1938,8 @@ def manifest_mode_failures(pinned, version):
         ("another cyfr digest", with_(cyfr=wrong), version, 1),
         ("the image digests swapped", with_(cyfr=FAKE_LOCUS, cyfr_locus=FAKE_CYFR), version, 1),
         ("an extra key", json.dumps({**good, "latest": True}).encode(), version, 1),
+        ("the schema fingerprint dropped", json.dumps({k: v for k, v in good.items() if k != "schema_fingerprint"}).encode(), version, 1),
+        ("an empty schema fingerprint", with_(schema_fingerprint=""), version, 1),
         ("a duplicate key", good_bytes[:-1] + b', "version": "' + version.encode() + b'"}', version, 1),
         ("trailing data", good_bytes + b"{}", version, 1),
     ]]
@@ -2500,6 +2520,21 @@ def sign_once(wf):
     step["run"] = step["run"].replace("scripts/ci/retry.sh ", "", 1)
 
 
+def schema_not_read(wf):
+    step = release_step(wf, is_manifest)
+    step["run"] = "\n".join(line for line in step["run"].splitlines() if not line.strip().startswith("schema=$("))
+
+
+def schema_from_a_tag(wf):
+    step = release_step(wf, is_manifest)
+    step["run"] = step["run"].replace('"ghcr.io/cyfrworks/cyfr@$cyfr"', '"ghcr.io/cyfrworks/cyfr:$GITHUB_REF_NAME"', 1)
+
+
+def schema_not_written(wf):
+    step = release_step(wf, is_manifest)
+    step["run"] = step["run"].replace(", schema_fingerprint: $schema}", "}", 1)
+
+
 def manifest_in_checkout(wf):
     step = release_step(wf, is_validate)
     step["run"] = step["run"].replace('"$RUNNER_TEMP/release/release.json"', "apps/codex/release.json")
@@ -2639,6 +2674,9 @@ MUTANTS = [
     ("the manifest's bundle under another name", bundle_renamed),
     ("GoReleaser before the manifest's signature", move_release_step(is_goreleaser, is_sign)),
     ("the manifest validated inside the checkout", manifest_in_checkout),
+    ("no schema fingerprint read for the manifest", schema_not_read),
+    ("the schema fingerprint read from a tag, not the merged digest", schema_from_a_tag),
+    ("the schema fingerprint read and not written", schema_not_written),
     ("no RELEASE_MANIFEST_DIR on GoReleaser", no_manifest_dir_env),
     ("a RELEASE_MANIFEST_DIR that is not the manifest's", manifest_dir_elsewhere),
 ]

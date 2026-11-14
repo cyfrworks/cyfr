@@ -74,7 +74,6 @@ defmodule Arca.ConsentStorageTest do
       blob_digest: Prima.Digest.sha256("{}"),
       resolved_policy: "{}",
       activation: "{}",
-      admitted_origins: [:interactive],
       granted_by: "test",
       granted_via: "bootstrap"
     }
@@ -727,74 +726,30 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
-  describe "admitted origins" do
-    test "are written with the revision and read back with it", %{athanor: athanor} do
-      profile = profile!(athanor, "prof_origins")
-
-      attrs =
-        consent_attrs(athanor, profile.id, 1)
-        |> Map.put(:admitted_origins, ["schedule", :interactive])
-
-      assert {:ok, _} = ConsentStorage.insert_revision(attrs, [], nil)
-
-      assert {:ok, %{admitted_origins: [:interactive, :schedule]}} =
-               ConsentStorage.head_consent(Prima.Actor.in_athanor(athanor), profile.id)
-    end
-
-    test "an empty list, a duplicate or an origin outside the enum is refused", %{
+  describe "revoked_owner?/2" do
+    test "tells a revoked grant from one never made, in the actor's athanor alone", %{
       athanor: athanor
     } do
-      profile = profile!(athanor, "prof_bad_origins")
+      actor = Prima.Actor.in_athanor(athanor)
+      source = "reagent:local.storage-test"
 
-      for origins <- [nil, [], ["interactive", "interactive"], ["batch"], "interactive"] do
-        attrs = Map.put(consent_attrs(athanor, profile.id, 1), :admitted_origins, origins)
+      assert ConsentStorage.revoked_owner?(actor, source) == {:ok, false}
 
-        assert {:error, {:invalid, %{admitted_origins: [_]}}} =
-                 ConsentStorage.insert_revision(attrs, [], nil)
-      end
+      _ = profile!(athanor, "prof_revoked")
+      assert ConsentStorage.revoked_owner?(actor, source) == {:ok, false}
 
-      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
+      assert {:ok, ["prof_revoked"]} = ProfileStorage.revoke_for_source(actor, source)
+      assert ConsentStorage.revoked_owner?(actor, source) == {:ok, true}
+      assert ConsentStorage.revoked_owner?(actor, "reagent:local.other") == {:ok, false}
+
+      other = "ath_revoked_elsewhere"
+      Arca.Test.Actor.ensure_athanor_row(other)
+      assert ConsentStorage.revoked_owner?(Prima.Actor.in_athanor(other), source) == {:ok, false}
     end
 
-    test "a revision written without them is refused", %{athanor: athanor} do
-      profile = profile!(athanor, "prof_no_origins")
-      attrs = Map.delete(consent_attrs(athanor, profile.id, 1), :admitted_origins)
-
-      assert {:error, {:invalid, %{admitted_origins: [_]}}} =
-               ConsentStorage.insert_revision(attrs, [], nil)
-
-      assert {:error, {:invalid, %{admitted_origins: [_]}}} =
-               ConsentStorage.mint_profile_with_revision(
-                 %{
-                   id: "prof_no_origins_minted",
-                   athanor_id: athanor,
-                   source_ref: "reagent:local.storage-test-minted",
-                   kind: "owner",
-                   label: "default",
-                   status: "active"
-                 },
-                 Map.put(attrs, :profile_id, "prof_no_origins_minted"),
-                 []
-               )
-
-      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
-      refute Arca.Repo.get(Arca.Schemas.Profile, "prof_no_origins_minted")
-    end
-
-    test "a stored list that does not parse refuses the consent", %{athanor: athanor} do
-      profile = profile!(athanor, "prof_corrupt_origins")
-
-      {:ok, consent} =
-        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
-
-      {1, _} =
-        Arca.Repo.update_all(
-          Ecto.Query.from(c in Arca.Schemas.Consent, where: c.id == ^consent.id),
-          set: [admitted_origins: ~s(["batch"])]
-        )
-
-      assert {:error, {:invalid_stored_value, :admitted_origins}} =
-               ConsentStorage.head_consent(Prima.Actor.in_athanor(athanor), profile.id)
+    test "a context with no athanor is refused" do
+      assert ConsentStorage.revoked_owner?(%Prima.Actor{}, "reagent:local.storage-test") ==
+               {:error, :no_athanor}
     end
   end
 
@@ -1830,7 +1785,6 @@ defmodule Arca.ConsentStorageRaceTest do
       blob_digest: Prima.Digest.sha256("{}"),
       resolved_policy: "{}",
       activation: "{}",
-      admitted_origins: [:interactive],
       granted_by: "test",
       granted_via: "bootstrap"
     }

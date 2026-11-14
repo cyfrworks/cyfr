@@ -126,9 +126,7 @@ defmodule Cyfr.Cluster.Person do
     {:ok, [_soul]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @soul)
 
     entry =
-      Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"},
-        origins: [:interactive, :programmatic]
-      )
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
 
     Map.put(person, :key_entry_id, entry.id)
   end

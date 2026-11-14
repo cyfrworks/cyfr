@@ -201,6 +201,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   `script:` its items, `window:` the context window a description answers
   for any model (default 200_000), `media_types:` the media types it says
   the model takes inline (default image/png and application/pdf),
+  `provider_tools:` the provider tools it says the model has (default none),
   `describe:` `{:refuse, error}` to have a described model refused instead, `lose_start_answer:` true to answer
   every start `{:error, :lost}` once its runner attached.
   """
@@ -338,6 +339,7 @@ defmodule Cyfr.Test.ScriptedWorker do
        script: Keyword.get(opts, :script, []),
        window: Keyword.get(opts, :window, 200_000),
        media_types: Keyword.get(opts, :media_types, ["image/png", "application/pdf"]),
+       provider_tools: Keyword.get(opts, :provider_tools, []),
        describe: Keyword.get(opts, :describe, :answer),
        lose_start_answer: Keyword.get(opts, :lose_start_answer, false) == true,
        watchdog_grace_ms: Keyword.get(opts, :watchdog_grace_ms, @watchdog_grace_ms),
@@ -462,7 +464,7 @@ defmodule Cyfr.Test.ScriptedWorker do
     do: {:noreply, reported(%{state | report_waiters: [from | state.report_waiters]})}
 
   def handle_call(:settings, _from, state),
-    do: {:reply, Map.take(state, [:window, :media_types, :describe]), state}
+    do: {:reply, Map.take(state, [:window, :media_types, :provider_tools, :describe]), state}
 
   def handle_call(:take, _from, %{script: []} = state), do: {:reply, nil, state}
 
@@ -709,8 +711,8 @@ defmodule Cyfr.Test.ScriptedWorker do
       %{describe: {:refuse, error}} ->
         {:complete, %{"status" => 429, "error" => error}}
 
-      %{describe: :answer, window: window, media_types: types} ->
-        {:complete, %{"status" => 200, "data" => description(params, window, types)}}
+      %{describe: :answer, window: window, media_types: types, provider_tools: tools} ->
+        {:complete, %{"status" => 200, "data" => description(params, window, types, tools)}}
     end
   end
 
@@ -785,7 +787,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   defp kill_waiter(%{waiter: waiter}) when is_pid(waiter), do: Process.exit(waiter, :kill)
   defp kill_waiter(_runner), do: :ok
 
-  defp description(params, window, media_types) do
+  defp description(params, window, media_types, provider_tools) do
     model =
       case params do
         %{"model" => model} when is_binary(model) ->
@@ -800,7 +802,7 @@ defmodule Cyfr.Test.ScriptedWorker do
         "contracts" => ["model/chat@1"],
         "provider" => "scripted",
         "tools" => true,
-        "provider_tools" => [],
+        "provider_tools" => provider_tools,
         "media_types" => media_types,
         "streaming" => true,
         "defaults" => %{}

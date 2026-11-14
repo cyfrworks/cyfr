@@ -110,7 +110,7 @@ defmodule Compendium.Providers.Component do
                 "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
             ),
             Arg.new("registry", :string,
-              description: "OCI registry hostname for push/discover (e.g., ghcr.io)"
+              description: "OCI registry hostname for push (e.g., ghcr.io)"
             ),
             Arg.new("progress_id", :string,
               description: "Correlation ID for transfer progress events"
@@ -170,9 +170,6 @@ defmodule Compendium.Providers.Component do
           [
             Arg.new("namespace", :string,
               description: "Publisher namespace filter (discover action)"
-            ),
-            Arg.new("registry", :string,
-              description: "OCI registry hostname for push/discover (e.g., ghcr.io)"
             ),
             Arg.new("type", :string,
               description:
@@ -322,7 +319,10 @@ defmodule Compendium.Providers.Component do
         ),
         # deprecate and yank carry :component_manage like every sibling
         # mutation; the handlers' namespace-bearer check is the
-        # registry-identity check beside it.
+        # registry-identity check beside it. Like a push, each is a
+        # person's act under a namespace they hold: an API key is an
+        # athanor's credential and nobody's publisher, so the gate admits
+        # a signed-in session alone (`consent: :interactive`).
         Operation.new(
           "component",
           "deprecate",
@@ -341,6 +341,7 @@ defmodule Compendium.Providers.Component do
           ],
           kind: :destructive,
           sources: [:outside],
+          consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -361,6 +362,7 @@ defmodule Compendium.Providers.Component do
           ],
           kind: :destructive,
           sources: [:outside],
+          consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -509,64 +511,65 @@ defmodule Compendium.Providers.Component do
     end
   end
 
-  # Pull action - pull component from registry (local or OCI)
+  # Pull action - pull component from registry (local or OCI). A ref with
+  # no version takes the newest the source offers (the registry's newest
+  # release tag, the seed's newest shipped version), never the version
+  # already installed.
   def handle(%Context{} = ctx, %{"action" => "pull", "reference" => reference} = args) do
     progress_id = args["progress_id"]
 
-    with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
-      oci_reference =
-        cond do
-          Compendium.OCI.Reference.oci_ref?(reference) -> {:ok, reference}
-          shipped_ref?(reference) -> :shipped
-          true -> convert_to_oci_ref(reference)
+    oci_reference =
+      cond do
+        Compendium.OCI.Reference.oci_ref?(reference) -> {:ok, reference}
+        shipped_ref?(reference) -> :shipped
+        true -> Compendium.Pull.oci_reference_for(ctx, reference)
+      end
+
+    case oci_reference do
+      # A `local` ref names what the server ships: the pull copies the
+      # shipped version from the seed rather than dialling a registry.
+      :shipped ->
+        broadcast_progress(ctx, progress_id, :pulling, "Copying shipped #{reference}...")
+
+        case Compendium.Provisioning.install_shipped(ctx, reference) do
+          {:ok, res} ->
+            broadcast_progress(ctx, progress_id, :complete, "Pulled #{res.component_ref}")
+            broadcast_components_changed(ctx)
+            {:ok, res}
+
+          {:error, :not_owner} = refused ->
+            broadcast_progress(ctx, progress_id, :error, "Pull failed")
+            refused
+
+          {:error, reason} ->
+            broadcast_progress(ctx, progress_id, :error, "Pull failed")
+            {:error, shipped_pull_error(reference, reason)}
         end
 
-      case oci_reference do
-        # A `local` ref names what the server ships: the pull copies the
-        # shipped version from the seed rather than dialling a registry.
-        :shipped ->
-          broadcast_progress(ctx, progress_id, :pulling, "Copying shipped #{reference}...")
+      {:ok, ref} ->
+        broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
+        result = do_oci_pull(ctx, ref)
 
-          case Compendium.Provisioning.install_shipped(ctx, reference) do
-            {:ok, res} ->
-              broadcast_progress(ctx, progress_id, :complete, "Pulled #{res.component_ref}")
-              broadcast_components_changed(ctx)
-              {:ok, res}
+        case result do
+          {:ok, res} ->
+            broadcast_progress(
+              ctx,
+              progress_id,
+              :complete,
+              "Pulled #{res[:component_ref] || ref}"
+            )
 
-            {:error, :not_owner} = refused ->
-              broadcast_progress(ctx, progress_id, :error, "Pull failed")
-              refused
+            broadcast_components_changed(ctx)
 
-            {:error, reason} ->
-              broadcast_progress(ctx, progress_id, :error, "Pull failed")
-              {:error, shipped_pull_error(reference, reason)}
-          end
+          {:error, reason} ->
+            Logger.error("[Compendium.Providers.Component] Pull failed: #{inspect(reason)}")
+            broadcast_progress(ctx, progress_id, :error, "Pull failed")
+        end
 
-        {:ok, ref} ->
-          broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
-          result = do_oci_pull(ctx, ref)
+        result
 
-          case result do
-            {:ok, res} ->
-              broadcast_progress(
-                ctx,
-                progress_id,
-                :complete,
-                "Pulled #{res[:component_ref] || ref}"
-              )
-
-              broadcast_components_changed(ctx)
-
-            {:error, reason} ->
-              Logger.error("[Compendium.Providers.Component] Pull failed: #{inspect(reason)}")
-              broadcast_progress(ctx, progress_id, :error, "Pull failed")
-          end
-
-          result
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -925,31 +928,23 @@ defmodule Compendium.Providers.Component do
   end
 
   # Discover action - list components on the configured registry (cyfr.run
-  # REST API). The registry host is set via CYFR_REGISTRY_URL.
+  # REST API), the one this deployment names (CYFR_REGISTRY_URL).
   def handle(%Context{} = ctx, %{"action" => "discover"} = args) do
-    registry = args["registry"] || default_registry()
+    params = %{namespace: args["namespace"], type: args["type"]}
 
-    case Compendium.RegistryHost.validate_host(registry) do
-      {:error, msg} ->
-        {:error, msg}
+    case Compendium.Registry.Client.discover(ctx, params) do
+      {:ok, result} ->
+        {:ok, result}
 
-      :ok ->
-        params = %{namespace: args["namespace"], type: args["type"]}
+      {:error, %Errors{} = err} ->
+        Logger.error(
+          "[Compendium.Providers.Component] DISCOVER FAILED — #{Errors.to_log_string(err)}"
+        )
 
-        case Compendium.Registry.Client.discover(ctx, params) do
-          {:ok, result} ->
-            {:ok, result}
+        {:error, Shared.refusal(err)}
 
-          {:error, %Errors{} = err} ->
-            Logger.error(
-              "[Compendium.Providers.Component] DISCOVER FAILED — #{Errors.to_log_string(err)}"
-            )
-
-            {:error, Shared.refusal(err)}
-
-          {:error, {:corrupt, :registry_credential}} = corrupt ->
-            corrupt
-        end
+      {:error, {:corrupt, :registry_credential}} = corrupt ->
+        corrupt
     end
   end
 
@@ -1484,8 +1479,6 @@ defmodule Compendium.Providers.Component do
   # Convert a component-ref style reference to an OCI reference for pulling.
   # A ref carrying a registry host skips this branch entirely, so the
   # binding refusal lives in `OCI.Client.pull/2`.
-  defp convert_to_oci_ref(reference), do: Compendium.Pull.oci_reference_for(reference)
-
   defp shipped_pull_error(reference, :not_shipped),
     do:
       "#{reference} is not a version the server ships — a local component is " <>

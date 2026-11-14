@@ -117,12 +117,11 @@ defmodule PrismWeb.ConsentSheetComponent do
       a time, removed or kept again but never one the ask does not name
       (`Prism.ConsentChoices.toggle_flow/4`). Where a catalyst's network
       ask names methods beside GET and HEAD, one control narrows it to the
-      GET and HEAD it asks for, named by those methods;
-    * the origins the grant admits: `interactive` is always named, and
-      "also for agents and scripts" (`programmatic`), "also on a
-      schedule" and "also from webhooks" are each a visible choice,
-      unticked on a first grant. A re-grant starts from the origins its
-      head admits, so it never quietly drops one.
+      GET and HEAD it asks for, named by those methods.
+
+  It never asks who may start the component: a grant is what it may reach
+  and use, and every run of the person's stands on it, whatever started
+  it.
 
   What changed since the head (the plan's `shape_diff`) is worded against
   the head as the person narrowed it: what the component asks for that
@@ -169,12 +168,11 @@ defmodule PrismWeb.ConsentSheetComponent do
       asked_flows: 2,
       candidates_of: 1,
       choices_of: 2,
-      decisions: 5,
+      decisions: 4,
       declared?: 1,
       dep_row: 3,
       field: 2,
       held_choices: 4,
-      in_order: 1,
       initial_choices: 2,
       label_of: 1,
       lifetime_of: 3,
@@ -184,7 +182,6 @@ defmodule PrismWeb.ConsentSheetComponent do
       map_pending?: 1,
       mapped: 2,
       new_choice: 3,
-      origins_of: 2,
       row_needs: 1,
       session_end_of: 1,
       session_until: 2,
@@ -194,12 +191,6 @@ defmodule PrismWeb.ConsentSheetComponent do
       walk_account: 4
     ]
 
-  @interactive "interactive"
-  @extra_origins [
-    {"programmatic", "Also for agents and scripts"},
-    {"schedule", "Also on a schedule"},
-    {"webhook", "Also from webhooks"}
-  ]
   @set_fields %{
     "egress" => ~w(domains methods schemes private_ips),
     "storage" => ~w(paths actions)
@@ -215,7 +206,6 @@ defmodule PrismWeb.ConsentSheetComponent do
        preview: nil,
        choices: %{},
        opened: MapSet.new(),
-       origins: nil,
        subset: %{},
        label: nil,
        picker: nil,
@@ -296,8 +286,8 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   # The walk the prompt arrived with: its plan and preview, the entry each
-  # need and each dependency was bound to, the origins and narrowing it
-  # was previewed with, and the session's end.
+  # need and each dependency was bound to, the narrowing it was previewed
+  # with, and the session's end.
   defp from_walk(socket, plan, walk) do
     decisions = Map.get(walk, :decisions) || %{}
     held = Map.get(walk, :held)
@@ -316,7 +306,6 @@ defmodule PrismWeb.ConsentSheetComponent do
       plan: plan,
       preview: if(maps_pending?(choices), do: nil, else: Map.get(walk, :preview)),
       choices: choices,
-      origins: origins_of(decisions["origins"], plan),
       subset: subset_of(decisions["subset"]),
       label: label_of(decisions["label"]) || socket.assigns.label,
       session_end: session_end_of(Map.get(walk, :session_expires_at)),
@@ -611,30 +600,6 @@ defmodule PrismWeb.ConsentSheetComponent do
     end)
   end
 
-  def handle_event("toggle_origin", %{"origin" => origin}, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      if origin in Enum.map(@extra_origins, &elem(&1, 0)) do
-        origins = socket.assigns.origins || [@interactive]
-
-        origins =
-          if origin in origins, do: List.delete(origins, origin), else: [origin | origins]
-
-        {:noreply, socket |> assign(:origins, in_order(origins)) |> walk_again(:origins)}
-      else
-        {:noreply, socket}
-      end
-    end)
-  end
-
-  # One value of a set the enforcement point narrows: chosen or not, from
-  # the values the ask names. Anything else is not a choice the sheet
-  # offered and changes nothing.
-  #
-  # The value rides in `choice`, never `value`: for a checkbox LiveView
-  # sends the box's own value under `value`, overwriting any attribute
-  # naming that key, and sends no `value` at all for a box unticked, so
-  # a choice carried there would reach the home as nothing while the box
-  # shows it changed.
   def handle_event(
         "toggle_value",
         %{"node" => node, "kind" => kind, "field" => field, "choice" => value},
@@ -920,7 +885,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp previewed(%{assigns: %{preview: %{} = preview}} = socket) do
     assign(socket, :previewed, %{
       choices: socket.assigns.choices,
-      origins: socket.assigns.origins,
       subset: socket.assigns.subset,
       preview: preview
     })
@@ -1118,7 +1082,6 @@ defmodule PrismWeb.ConsentSheetComponent do
 
         socket
         |> assign(plan: plan, error: nil, choices: mapped(socket.assigns.choices, plan))
-        |> assign(:origins, socket.assigns.origins || origins_of(nil, plan))
         |> preview()
 
       {:error, reason} ->
@@ -1131,9 +1094,8 @@ defmodule PrismWeb.ConsentSheetComponent do
   # (`was`) — a release landed (another shape), or another client committed
   # (another head revision, which a refused commit's `stale_plan` names) —
   # nothing the sheet holds was chosen against them: not its narrowing, its
-  # origins, its accounts nor its lifetimes. So it opens again exactly as a
-  # prompt opening now would (`head_narrowing`, `head_origins`, the plan's
-  # own choices), never carrying the old head's grant over the new one, and
+  # accounts nor its lifetimes. So it opens again exactly as a prompt
+  # opening now would (`head_narrowing`, the plan's own choices), never carrying the old head's grant over the new one, and
   # says so. Only a plan made again over the same ask and the same head
   # keeps what the person chose.
   #
@@ -1146,7 +1108,6 @@ defmodule PrismWeb.ConsentSheetComponent do
     if shape_of(was) != shape_of(plan) or head_of(was) != head_of(plan) do
       assign(socket,
         subset: subset_of(plan[:head_narrowing]),
-        origins: origins_of(nil, plan),
         choices: initial_choices(plan, DateTime.utc_now()),
         moved: true,
         previewed: nil,
@@ -1206,7 +1167,6 @@ defmodule PrismWeb.ConsentSheetComponent do
             socket
             |> assign(
               choices: last.choices,
-              origins: last.origins,
               subset: last.subset,
               preview: last.preview,
               error: nil
@@ -1252,7 +1212,6 @@ defmodule PrismWeb.ConsentSheetComponent do
     decisions(
       socket.assigns.ref,
       socket.assigns.label,
-      socket.assigns.origins || [@interactive],
       socket.assigns.subset,
       socket.assigns.choices
     )
@@ -1329,8 +1288,6 @@ defmodule PrismWeb.ConsentSheetComponent do
       assigns
       |> assign(:shown, shown_rows(assigns.plan, assigns.preview))
       |> assign(:approving?, approving?(assigns.preview))
-      |> assign(:extra_origins, @extra_origins)
-      |> assign(:origins_now, assigns.origins || [@interactive])
       |> assign(:now, DateTime.utc_now())
 
     ~H"""
@@ -1462,29 +1419,6 @@ defmodule PrismWeb.ConsentSheetComponent do
           </div>
         </section>
 
-        <section class="consent-sheet__origins" data-test="grant-origins">
-          <h4 class="font-medium">When it may run</h4>
-          <label class="consent-sheet__origin flex items-center gap-2">
-            <input type="checkbox" checked disabled data-origin="interactive" />
-            When you use it (interactive)
-          </label>
-          <label
-            :for={{origin, text} <- @extra_origins}
-            class="consent-sheet__origin flex items-center gap-2"
-          >
-            <input
-              type="checkbox"
-              phx-click="toggle_origin"
-              phx-target={@myself}
-              phx-value-origin={origin}
-              checked={origin in @origins_now}
-              data-origin={origin}
-            />
-            {text} ({origin})
-          </label>
-          <.refusal refusal={@refusal} at={:origins} />
-        </section>
-
         <section class="consent-sheet__rows space-y-2" data-test="grant-rows">
           <h4 class="font-medium">
             {if @approving?, do: "You are approving", else: "This app asks for"}
@@ -1531,9 +1465,6 @@ defmodule PrismWeb.ConsentSheetComponent do
             </p>
           </div>
 
-          <p :if={@approving?} class="consent-sheet__admits" data-test="grant-admits">
-            Admits runs started: {Enum.map_join(@preview.origins, ", ", &origin_label/1)}.
-          </p>
           <p class="consent-sheet__note text-gray-400">
             Vault entries are sealed at rest. A component never holds a vault entry's value
             unless its row says the value is disclosed to it.
@@ -2771,12 +2702,6 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp limit_value("rate_requests", values), do: get_in(values, ["rate_limit", "requests"])
   defp limit_value(field, values), do: values[field] || "none"
-
-  defp origin_label("interactive"), do: "when you use it (interactive)"
-  defp origin_label("programmatic"), do: "by agents and scripts (programmatic)"
-  defp origin_label("schedule"), do: "on a schedule (schedule)"
-  defp origin_label("webhook"), do: "from webhooks (webhook)"
-  defp origin_label(origin), do: origin
 
   # What changed since the head, by node: the app's own first, unheaded,
   # then each dependency under its ref, a new one as a new dependency and

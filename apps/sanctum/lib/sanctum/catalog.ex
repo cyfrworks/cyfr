@@ -706,16 +706,30 @@ defmodule Sanctum.Catalog do
 
   defp reserve_refusal, do: Prima.Refusal.classify(Arca.StorageReserve.refusal())
 
+  # The access every outside server's tool is declared with, since the
+  # table holds no operation for one: a call to it is a run like any
+  # other, by a caller who signed in and holds the permission a run needs.
+  @proxied_access %{auth: :required, permission: :execute}
+
   @doc """
-  The admission under the storage reserve of a write the table declares
-  no operation for: a proxied `server:tool` call (`Sanctum.Dispatch`). It
-  is not a read and takes no authority away, so while the reserve is
-  depleted it is refused as every other such operation is, before
+  The gate's admission of an outside server's tool, `name` a
+  `server:tool` the table declares no operation for: the access every
+  such tool is declared with (signed in, holding `execute`, as a run),
+  decided as a declared action's is (`Sanctum.Visibility.authorize/4`),
+  then the storage reserve's: an outside call is not a read and takes no
+  authority away, so while the reserve is depleted it is refused before
   anything is written.
+
+  It is the one place a caller's standing to call an outside tool is
+  decided, for a call on either plane (`Sanctum.Dispatch`) and for
+  discovery (`Sanctum.Visibility.external_tools/1`); the server, the tool
+  and the plane are the proxy port's to resolve after it.
   """
-  @spec undeclared_write_admission() :: :ok | {:error, Prima.Refusal.t()}
-  def undeclared_write_admission do
-    if Arca.StorageReserve.depleted?(), do: {:error, reserve_refusal()}, else: :ok
+  @spec authorize_proxied(String.t(), Context.t(), boolean()) :: :ok | {:error, term()}
+  def authorize_proxied(name, %Context{} = ctx, in_chain?) when is_binary(name) do
+    with :ok <- Sanctum.Visibility.authorize(name, @proxied_access, ctx, in_chain?) do
+      if Arca.StorageReserve.depleted?(), do: {:error, reserve_refusal()}, else: :ok
+    end
   end
 
   @doc """

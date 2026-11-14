@@ -156,6 +156,50 @@ defmodule Sanctum.SignInTest do
       assert is_binary(token)
     end
 
+    test "a passkey removed and added again signs in on the head that lists it again, and the session stands",
+         %{dir: dir, account: account} do
+      user = first!(account)
+      [before] = sessions(user.id)
+      passkey = hd(account.passkeys)
+
+      {:ok, key} =
+        Prima.Identity.Key.new(
+          alg: :es256,
+          kind: :passkey,
+          pub: passkey.pub,
+          credential_id: passkey.credential_id
+        )
+
+      # Both entries land while this CYFR's cached head is fresh and still
+      # lists the passkey from before its removal.
+      account = DirectoryServer.remove_key!(dir.dir, account, Prima.Identity.Key.kid(passkey.pub))
+      account = DirectoryServer.extend!(account, kind: :add_key, key: key)
+      DirectoryServer.publish(dir.dir, account.identifier, account.log)
+
+      {request, _url} = minted(:sign_in, @browser)
+
+      assert {:ok, %{purpose: :sign_in, user: %{id: same}, session_token: token}} =
+               SignIn.answer(answer(request, account), @browser)
+
+      assert same == user.id
+      hash = Sanctum.Session.token_hash(token)
+      kid = Prima.Identity.Key.kid(passkey.pub)
+      head = DirectoryServer.head(account)
+
+      # The session from before the removal is retired; the new one is
+      # bound to the head that lists the passkey again.
+      assert [%{token_hash: ^hash, kid: ^kid, head: ^head}] = sessions(user.id)
+      refute before.token_hash == hash
+
+      # A refresh past the bound reads nothing after that head.
+      Arca.Repo.update_all(Arca.Schemas.DirectoryHead,
+        set: [verified_at: ~U[2000-01-01 00:00:00Z]]
+      )
+
+      assert {:ok, %{head_hash: ^head}} = Sanctum.IdentityFreshness.fresh?(account.identifier)
+      assert [%{token_hash: ^hash, kid: ^kid, head: ^head}] = sessions(user.id)
+    end
+
     test "a browser's sign-in records the browser and system its user agent names", %{
       dir: dir,
       account: account

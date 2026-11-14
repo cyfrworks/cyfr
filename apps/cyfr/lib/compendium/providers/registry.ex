@@ -300,6 +300,10 @@ defmodule Compendium.Providers.Registry do
             Arg.new("target_component_ref", :string,
               description:
                 "Component reference being reported (for report action; required if no target_namespace)"
+            ),
+            Arg.new("attestations_signed", :boolean,
+              description:
+                "Whether the person ticked the report sheet's three acknowledgements; a dmca report is refused without it, and no other category carries it"
             )
           ],
           kind: :external,
@@ -455,6 +459,10 @@ defmodule Compendium.Providers.Registry do
   # User-side abuse report submission. Auth: any push token belonging to the
   # caller — the head of the caller's stored push tokens. At
   # least one of target_namespace or target_component_ref must be set.
+  # A copyright claim (`dmca`) is the one category the registry asks a
+  # signed statement of: it is refused here, before the registry, unless
+  # the person ticked the report sheet's acknowledgements, and no other
+  # category sends the statement, which its reporter never saw.
   def handle(%Context{} = ctx, %{"action" => "report"} = args) do
     category = Map.get(args, "category", "")
     target_namespace = Map.get(args, "target_namespace")
@@ -464,6 +472,7 @@ defmodule Compendium.Providers.Registry do
     with :ok <- ensure_present(category, "category"),
          :ok <- ensure_present(details, "details"),
          :ok <- ensure_target(target_namespace, target_component_ref),
+         {:ok, attested} <- statement(category, Map.get(args, "attestations_signed")),
          {:ok, component_id} <- resolve_component_id(target_component_ref),
          {:ok, bearer} <- any_push_token(ctx),
          {:ok, body} <-
@@ -472,6 +481,7 @@ defmodule Compendium.Providers.Registry do
              target_namespace,
              component_id,
              details,
+             attested,
              bearer
            ) do
       {:ok, body}
@@ -685,6 +695,16 @@ defmodule Compendium.Providers.Registry do
   defp ensure_present(value, _field) when is_binary(value) and value != "", do: :ok
   defp ensure_present(_, field), do: {:error, {:invalid_argument, "'#{field}' is required"}}
 
+  defp statement("dmca", true), do: {:ok, true}
+
+  defp statement("dmca", _unticked),
+    do:
+      {:error,
+       {:invalid_argument,
+        "A copyright claim needs the report sheet's three acknowledgements ticked before it is sent."}}
+
+  defp statement(_category, _), do: {:ok, false}
+
   defp ensure_target(nil, nil),
     do:
       {:error,
@@ -725,7 +745,7 @@ defmodule Compendium.Providers.Registry do
         {:ok, token}
 
       {:ok, []} ->
-        {:error, {:invalid_argument, "no push token available — run `cyfr registry sync`"}}
+        {:error, no_push_token()}
 
       {:error, _refused} = refusal ->
         refusal
@@ -733,6 +753,17 @@ defmodule Compendium.Providers.Registry do
   end
 
   defp any_push_token(_), do: {:error, {:invalid_argument, "authentication required"}}
+
+  # The refusal of a report or a report listing to a person who holds no
+  # push token yet. Its reason, `:no_push_token`, is what the Reports page
+  # matches to offer the Registry page's sync.
+  defp no_push_token do
+    %Prima.Refusal{
+      class: :setup_required,
+      reason: :no_push_token,
+      message: "You hold no push token yet: sync your push tokens on the Registry page."
+    }
+  end
 
   # The caller's usable push tokens, personal first — the head is the
   # bearer the head-of-list heuristics above pick. A row that cannot be

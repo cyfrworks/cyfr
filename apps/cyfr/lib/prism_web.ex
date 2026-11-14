@@ -78,6 +78,8 @@ defmodule PrismWeb do
       use Phoenix.LiveView,
         layout: {PrismWeb.Layouts, :app}
 
+      on_mount {PrismWeb.CoreComponents, :flash}
+
       import PrismWeb.Ops
       import PrismWeb.DisplayHelpers
 

@@ -65,7 +65,7 @@ defmodule Compendium.Registry.Client do
   @doc """
   Discover components on the cyfr.run registry.
 
-  Sends GET /v1/components with publisher/namespace filter.
+  Sends GET /v1/components, filtered by `namespace` and `type` when given.
   """
   @spec discover(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t() | corrupt()}
   def discover(%Context{} = ctx, params) when is_map(params) do
@@ -106,9 +106,37 @@ defmodule Compendium.Registry.Client do
   @spec get_component(Context.t(), String.t(), String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, Errors.t() | corrupt()}
   def get_component(%Context{} = ctx, type, publisher, name, version) do
-    path = "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
+    component_at(
+      ctx,
+      publisher,
+      "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
+    )
+  end
 
-    case request(:get, path, [], nil, ctx) do
+  @doc """
+  The newest release the registry holds eligible for a pull that names no
+  version: GET /v1/components/:type/:publisher/:name. The registry decides
+  eligibility (active or deprecated, never yanked or taken down) and
+  answers 404 when no release is eligible.
+  """
+  @spec get_latest_component(Context.t(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Errors.t() | corrupt()}
+  def get_latest_component(%Context{} = ctx, type, publisher, name) do
+    component_at(ctx, publisher, "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}")
+  end
+
+  # A component read carries the push token of the namespace that owns it,
+  # chosen as an OCI pull of it chooses (`Compendium.OCI.Auth`), so a
+  # private component's read and its pull speak as the same credential.
+  defp component_at(ctx, publisher, path) do
+    registry = Compendium.RegistryHost.canonical_host()
+
+    answer =
+      with {:ok, auth} <- Compendium.OCI.Auth.auth_headers(registry, "", publisher, ctx) do
+        Transport.request(:get, url(path), auth, nil)
+      end
+
+    case answer do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, component} when is_map(component) ->
@@ -393,7 +421,8 @@ defmodule Compendium.Registry.Client do
   @doc """
   Call `POST /v1/abuse-reports`. Auth: any valid push token (user must hold
   at least one — verified server-side). Body carries category + target +
-  details.
+  details, and `attestations_signed`, whether the person made the
+  statement a copyright claim carries.
 
   At least one of `target_namespace` or `target_component_id` must be set.
   """
@@ -402,15 +431,25 @@ defmodule Compendium.Registry.Client do
           String.t() | nil,
           String.t() | nil,
           String.t(),
+          boolean(),
           String.t()
         ) :: {:ok, map()} | {:error, Errors.t()}
-  def create_abuse_report(category, target_namespace, target_component_id, details, bearer_token) do
+  def create_abuse_report(
+        category,
+        target_namespace,
+        target_component_id,
+        details,
+        attestations_signed,
+        bearer_token
+      )
+      when is_boolean(attestations_signed) do
     body =
       Jason.encode!(%{
         category: category,
         target_namespace: target_namespace,
         target_component_id: target_component_id,
-        details: details
+        details: details,
+        attestations_signed: attestations_signed
       })
 
     headers = json_headers() ++ bearer(bearer_token)
@@ -596,7 +635,7 @@ defmodule Compendium.Registry.Client do
   defp build_discover_query(params) do
     pairs =
       [
-        {"publisher", params[:namespace]},
+        {"namespace", params[:namespace]},
         {"type", params[:type]},
         {"limit", params[:limit]}
       ]

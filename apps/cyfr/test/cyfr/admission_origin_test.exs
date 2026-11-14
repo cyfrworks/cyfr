@@ -276,7 +276,7 @@ defmodule Cyfr.AdmissionOriginTest do
 
   def webhook_delivery(conn) do
     ctx = Sanctum.TestContext.local()
-    runnable!(ctx, [%{"ran" => true}], [:webhook])
+    runnable!(ctx, [%{"ran" => true}])
     hook = hook!(ctx)
     watch_deliveries()
 
@@ -294,7 +294,7 @@ defmodule Cyfr.AdmissionOriginTest do
 
   def schedule_fire(_conn) do
     {ctx, _person} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
-    runnable!(ctx, [%{"ran" => true}], [:schedule])
+    runnable!(ctx, [%{"ran" => true}])
     Application.put_env(:cyfr, :cron_scheduler_enabled, true)
 
     {:ok, schedule} =
@@ -486,7 +486,7 @@ defmodule Cyfr.AdmissionOriginTest do
   describe "a webhook replayed" do
     test "runs once under its idempotency, and its row keeps the origin webhook", %{conn: conn} do
       ctx = Sanctum.TestContext.local()
-      runnable!(ctx, [%{"ran" => true}, %{"ran" => true}], [:webhook])
+      runnable!(ctx, [%{"ran" => true}, %{"ran" => true}])
       hook = hook!(ctx, idempotency_key_header: "x-delivery-id")
       watch_deliveries()
 
@@ -655,9 +655,9 @@ defmodule Cyfr.AdmissionOriginTest do
   end
 
   # A component that runs: the dependency published, its profile's head
-  # consent activating it and admitting `origins`, the runs its driver
-  # starts, and a scripted worker service answering its runs.
-  defp runnable!(ctx, script, origins) do
+  # consent activating it, and a scripted worker service answering its
+  # runs.
+  defp runnable!(ctx, script) do
     runnable_dep!(ctx)
 
     :ok =
@@ -686,7 +686,6 @@ defmodule Cyfr.AdmissionOriginTest do
               }
             }),
           activation: %{@dep => digest_of("origin-dep")},
-          admitted_origins: origins,
           vault_refs: []
         }
       )

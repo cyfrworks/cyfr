@@ -67,16 +67,22 @@ defmodule Sanctum.SignIn do
        unexpired and for this audience (`:answer_refused`): a replayed
        answer meets a spent request, and an answer from another browser
        or channel, or one past the request's expiry, signs no one in;
-    3. the answering account's log, read within freshness's policy
-       (`Sanctum.IdentityFreshness`): the cached head within its bound, or
-       for an account this CYFR never read, its whole log at this
-       deployment's directory (`:identity_stale`, `:identity_gone`,
-       `:unavailable`);
+    3. the answering account's log (`:identity_stale`, `:identity_gone`,
+       `:unavailable`). A sign-in's is read now
+       (`Sanctum.IdentityFreshness.fresh!/2`), the entries after the
+       cached head walked before anything binds, a directory that does not
+       answer left to the access mode: what it binds lasts, so a key
+       removed and added again binds the head that lists it again, where
+       the walk that retired its older bindings never reaches it, and a
+       key just removed signs no one in. A confirmation's is read within
+       freshness's policy (`Sanctum.IdentityFreshness`): the cached head
+       within its bound. For an account this CYFR never read, either reads
+       its whole log at this deployment's directory;
     4. the signature over the request's digest by a key the log lists
-       (`Prima.SignIn.verify/4`, `:answer_refused`); a key the cached log
-       does not list yet is looked for once more in the log read now
-       (`Sanctum.IdentityFreshness.fresh!/2`), so a passkey or device just
-       added to the account answers at once;
+       (`Prima.SignIn.verify/4`, `:answer_refused`); for a confirmation, a
+       key the cached log does not list yet is looked for once more in the
+       log read now, so a passkey or device just added to the account
+       answers at once;
     5. what the purpose does:
        * `:sign_in` asks about the identifier's person here. A person this
          CYFR holds is asked about by the door (`Sanctum.Door.sign_in/1`);
@@ -636,13 +642,16 @@ defmodule Sanctum.SignIn do
 
   defp answering(_answer, _held), do: refused(:wrong_answer)
 
-  # The key of the account that signed, read within freshness's policy: the
-  # cached head, or for an account never read here, its whole log at this
-  # deployment's directory. A key the cached log does not list yet is
-  # looked for once more in the log read now, so a passkey or device just
-  # added to the account answers at once.
+  # The key of the account that signed. A sign-in's log is read now, since
+  # a binding made on a cached head from before a key's removal would be
+  # retired by the next refresh even after the key was added again. A
+  # confirmation's is read within freshness's policy: the cached head, or
+  # for an account never read here, its whole log at this deployment's
+  # directory; a key the cached log does not list yet is looked for once
+  # more in the log read now, so a passkey or device just added to the
+  # account answers at once.
   defp signed_by(answer, request, identifier, now) do
-    with {:ok, head, state, read} <- account(identifier) do
+    with {:ok, head, state, read} <- account(identifier, request.purpose) do
       case verify(answer, request, state, now) do
         {:ok, key} -> {:ok, key, head}
         {:error, :unknown_key} when read == :cached -> signed_now(answer, request, head, now)
@@ -672,19 +681,22 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  defp account(identifier) do
+  defp account(identifier, purpose) do
     fresh =
-      case Arca.DirectoryHeads.get(Prima.Actor.system(), identifier) do
-        {:error, :not_found} ->
+      case {purpose, Arca.DirectoryHeads.get(Prima.Actor.system(), identifier)} do
+        {_purpose, {:error, :not_found}} ->
           read(
             Sanctum.IdentityFreshness.fresh!(identifier, directory: Sanctum.directory_url()),
             :read
           )
 
-        {:ok, _cached} ->
+        {:sign_in, {:ok, _cached}} ->
+          read(Sanctum.IdentityFreshness.fresh!(identifier), :read)
+
+        {_purpose, {:ok, _cached}} ->
           read(Sanctum.IdentityFreshness.fresh?(identifier), :cached)
 
-        {:error, _unanswered} ->
+        {_purpose, {:error, _unanswered}} ->
           {:error, :unavailable}
       end
 

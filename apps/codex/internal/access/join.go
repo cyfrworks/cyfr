@@ -46,6 +46,9 @@ type joinRecord struct {
 	Name      string    `json:"name,omitempty"`
 	NodeID    string    `json:"node_id,omitempty"`
 	HTTPS     *bool     `json:"https,omitempty"`
+	// Key is whether the join was given an auth key, which says why one
+	// that ended did.
+	Key bool `json:"key,omitempty"`
 }
 
 // joinAttempt is a join as its journal carries it: the record, the
@@ -57,7 +60,6 @@ type joinAttempt struct {
 	NewNode       bool   `json:"new_node,omitempty"`
 	Image         string `json:"image,omitempty"`
 	Container     string `json:"container,omitempty"`
-	Key           bool   `json:"key,omitempty"`
 }
 
 func (e *Engine) readJoin() (*joinRecord, error) {
@@ -82,13 +84,23 @@ func (r *joinRecord) refusal() *Refusal {
 	case "expired":
 		return Refuse("tailnet_join_expired", nil)
 	case "ended":
-		return Refuse("tailnet_join_ended", nil)
+		return r.ended()
 	case "cancelled":
 		return Refuse("tailnet_join_cancelled", nil)
 	case "unsupported":
 		return Refuse("tailnet_node_id_unsupported", map[string]string{"value": r.NodeID})
 	}
 	return Refuse("tailnet_not_joined", nil)
+}
+
+// ended is the refusal of a join that ended before its machine joined:
+// given an auth key, Tailscale refused it; given none, the join stopped
+// waiting for the machine's approval.
+func (r *joinRecord) ended() *Refusal {
+	if r.Key {
+		return Refuse("tailnet_join_ended", nil)
+	}
+	return Refuse("tailnet_join_unapproved", nil)
 }
 
 // frozenJoin is the name and id join joinID froze: join.json's while it
@@ -188,8 +200,8 @@ func (e *Engine) doJoin(ctx context.Context, r JoinRequest) (Receipt, error) {
 	}
 
 	a := &joinAttempt{
-		joinRecord:    joinRecord{JoinID: newRequestID(), RequestID: r.ID, Deadline: e.now().Add(JoinDeadline).UTC().Truncate(time.Second), State: "waiting"},
-		RequestDigest: digest, Hostname: hostname, NewNode: r.NewNode, Image: image, Key: len(key) > 0,
+		joinRecord:    joinRecord{JoinID: newRequestID(), RequestID: r.ID, Deadline: e.now().Add(JoinDeadline).UTC().Truncate(time.Second), State: "waiting", Key: len(key) > 0},
+		RequestDigest: digest, Hostname: hostname, NewNode: r.NewNode, Image: image,
 	}
 	j := &journal{Op: "join", RequestID: r.ID, RequestDigest: digest, Join: a}
 	if err := e.setPhase(j, "accepted"); err != nil {
@@ -478,7 +490,7 @@ func (e *Engine) endedJoin(ctx context.Context, j *journal) (Receipt, error) {
 	if err := e.writeJoin(j.Join.joinRecord); err != nil {
 		return e.outcomeUnknown(j, err)
 	}
-	return e.endJoin(ctx, j, Refuse("tailnet_join_ended", nil))
+	return e.endJoin(ctx, j, j.Join.ended())
 }
 
 func (e *Engine) expireJoin(ctx context.Context, j *journal) (Receipt, error) {

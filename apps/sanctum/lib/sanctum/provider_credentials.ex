@@ -18,8 +18,8 @@ defmodule Sanctum.ProviderCredentials do
     caller context at all — it is reachable only from the host's OAuth
     exchange/refresh plane, never through a caller's permission set, and
     every read emits telemetry. A provider with no stored credentials is
-    an error carrying the operator's setup instructions; there is no
-    fallback source.
+    refused `{:oauth_client_required, provider}`, a setup the person
+    does on the Vault page; there is no fallback source.
   """
 
   alias Sanctum.CipherAAD
@@ -95,9 +95,10 @@ defmodule Sanctum.ProviderCredentials do
   permission set can reach the client secret through this function, and the
   executing component's context never touches it.
 
-  Returns `{:ok, %{"client_id" => ..., "client_secret" => ... | nil}}`.
+  Returns `{:ok, %{"client_id" => ..., "client_secret" => ... | nil}}`, or
+  `{:error, {:oauth_client_required, provider}}` when none is stored.
   """
-  @spec fetch_for_oauth(String.t(), String.t()) :: {:ok, map()} | {:error, String.t()}
+  @spec fetch_for_oauth(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def fetch_for_oauth(athanor_id, provider) do
     with :ok <- validate_provider(provider) do
       case Arca.ProviderCredentialStorage.get(Prima.Actor.in_athanor(athanor_id), provider) do
@@ -106,7 +107,7 @@ defmodule Sanctum.ProviderCredentials do
           unseal(row)
 
         {:error, :not_found} ->
-          {:error, not_configured_message(provider)}
+          {:error, {:oauth_client_required, provider}}
 
         {:error, reason} ->
           {:error, "failed to read OAuth provider credentials: #{Prima.Refusal.message(reason)}"}
@@ -141,10 +142,6 @@ defmodule Sanctum.ProviderCredentials do
         # tampering, never something to fall through past.
         {:error, "stored OAuth provider credentials for '#{row.provider}' failed to unseal"}
     end
-  end
-
-  defp not_configured_message(provider) do
-    "OAuth provider credentials not configured for '#{provider}' — run oauth.set_client"
   end
 
   defp emit_fetch(provider) do

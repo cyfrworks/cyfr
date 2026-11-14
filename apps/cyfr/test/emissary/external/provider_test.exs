@@ -487,7 +487,7 @@ defmodule Emissary.External.ProviderTest do
     end
   end
 
-  describe "handle/3 - stdio servers" do
+  describe "handle/3 - programs" do
     # The entry the backends' env reads, disclosed: an environment hands it
     # to the process it starts.
     setup %{ctx: ctx} do
@@ -503,8 +503,9 @@ defmodule Emissary.External.ProviderTest do
       :ok
     end
 
-    @stdio_config %{
-      "transport" => "stdio",
+    @program_config %{
+      "transport" => "program",
+      "mark" => "mcp",
       "backends" => [
         %{
           "name" => "github",
@@ -521,7 +522,7 @@ defmodule Emissary.External.ProviderTest do
                Provider.handle("mcp_servers", ctx, %{
                  "action" => "create",
                  "name" => "piped",
-                 "config" => @stdio_config
+                 "config" => @program_config
                })
 
       assert message =~ "CYFR_LOCUS_BACKENDS_KEY"
@@ -530,8 +531,8 @@ defmodule Emissary.External.ProviderTest do
 
     test "carry no url or headers, and their backends are validated", %{ctx: ctx} do
       for {config, fragment} <- [
-            {Map.put(@stdio_config, "url", "https://x/mcp"), "no url"},
-            {Map.put(@stdio_config, "headers", %{}), "no headers"},
+            {Map.put(@program_config, "url", "https://x/mcp"), "no url"},
+            {Map.put(@program_config, "headers", %{}), "no headers"},
             {%{"url" => "https://x/mcp", "backends" => []}, "no backends"}
           ] do
         assert {:error, {:invalid_argument, message}} =
@@ -551,14 +552,14 @@ defmodule Emissary.External.ProviderTest do
                Sanctum.Gate.call_external("mcp_servers", Sanctum.TestContext.local(:api), %{
                  "action" => "create",
                  "name" => "piped",
-                 "config" => Map.put(@stdio_config, "transport", "ws")
+                 "config" => Map.put(@program_config, "transport", "ws")
                })
 
       assert message =~ "config.transport"
       assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "piped")
     end
 
-    test "restart is for an enabled stdio server only", %{ctx: ctx} do
+    test "restart is for an enabled program only", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: "webby",
@@ -568,10 +569,11 @@ defmodule Emissary.External.ProviderTest do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: "sleepy",
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
         enabled: false,
-        config_json: Jason.encode!(@stdio_config)
+        config_json: Jason.encode!(@program_config)
       })
 
       assert {:error, {:invalid_argument, "Only a program restarts" <> _}} =
@@ -600,9 +602,10 @@ defmodule Emissary.External.ProviderTest do
       Arca.McpServerStorage.insert(actor, %{
         cap: 0,
         name: "kept",
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
-        config_json: Jason.encode!(@stdio_config)
+        config_json: Jason.encode!(@program_config)
       })
 
       {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(actor, "kept")
@@ -617,18 +620,19 @@ defmodule Emissary.External.ProviderTest do
 
     test "get shows the warnings a stored definition carries, and none when it carries none",
          %{ctx: ctx} do
-      [backend] = @stdio_config["backends"]
+      [backend] = @program_config["backends"]
 
       expanding =
-        Map.put(@stdio_config, "backends", [
+        Map.put(@program_config, "backends", [
           %{backend | "command" => "npx server --token ${GITHUB_PERSONAL_ACCESS_TOKEN}"}
         ])
 
-      for {name, config} <- [{"warned", expanding}, {"quiet", @stdio_config}] do
+      for {name, config} <- [{"warned", expanding}, {"quiet", @program_config}] do
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
           cap: 0,
           name: name,
-          transport: "stdio",
+          transport: "program",
+          mark: "mcp",
           url: nil,
           enabled: false,
           config_json: Jason.encode!(config)
@@ -652,15 +656,22 @@ defmodule Emissary.External.ProviderTest do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: "listed",
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
-        config_json: Jason.encode!(@stdio_config)
+        config_json: Jason.encode!(@program_config)
       })
 
       assert {:ok, %{servers: [server]}} =
                Provider.handle("mcp_servers", ctx, %{"action" => "list"})
 
-      assert %{name: "listed", transport: "stdio", url: nil, vault_refs: ["gh-token"]} = server
+      assert %{
+               name: "listed",
+               transport: "program",
+               mark: "mcp",
+               url: nil,
+               vault_refs: ["gh-token"]
+             } = server
     end
   end
 

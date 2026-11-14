@@ -33,11 +33,11 @@ defmodule Sanctum.Consent do
 
       plan     {ref, label?, kind?}
                → plan token, shape digest, expected revision, candidates,
-                 defaults, the ask as preview rows, the default origins
+                 defaults, the ask as preview rows
 
       preview  {decisions}
-               → the structured preview (rows, origins, the head's
-                 bindings it removes, commit digest) and the proof
+               → the structured preview (rows, the head's bindings it
+                 removes, commit digest) and the proof
 
       commit   {decisions, plan_token, proof, commit_digest,
                 expected_consent_revision}
@@ -45,14 +45,13 @@ defmodule Sanctum.Consent do
                  the expected revision, consume the plan token, check the
                  presented commit digest against the recomputed one,
                  consume the proof bound to it, then in one transaction
-                 insert the revision with its admitted origins, write its
-                 rows, re-verify vault binding liveness and compare-and-set
+                 insert the revision, write its rows, re-verify vault binding liveness and compare-and-set
                  the head
 
   Beside the three steps, `grant` (`profile.grant`) writes a revision of
   an existing owner profile whose shape has not moved, binding an entry
   to a need, with no plan, preview or proof: it re-issues the head's
-  scope, invoke mode, origins and narrowing under the same revision
+  scope, invoke mode and narrowing under the same revision
   compare-and-set (`Sanctum.Consent.Commit.grant/2`).
 
   `preview` exists so a proof can bind the exact commit digest that was
@@ -61,9 +60,13 @@ defmodule Sanctum.Consent do
   operator never gave.
 
   Decisions may narrow the ask (`subset`, per consent-graph node and
-  resource kind) and name the origins the grant admits (`origins`,
-  `interactive` alone when absent); the commit digest binds both
+  resource kind); the commit digest binds the narrowing
   (`Sanctum.Consent.Commit`).
+
+  A grant says what a component may reach and use, never who may start
+  it: every run of the person's, from a screen, a key, a schedule or a
+  webhook, stands on the person's grant, and records how it started
+  (`Prima.Origin`) for the record alone.
 
   ## Errors
 
@@ -72,14 +75,19 @@ defmodule Sanctum.Consent do
   than incidental.
 
       setup_required         {profile_id, node_ref, need, reason}
-      consent_required       {profile_id, current_revision, shape_diff}
+      consent_required       {cause, ref}
       consent_conflict       {expected_revision, actual_revision, cause}
       confirmation_required  {id, operation, expires_at}
 
-  `consent_required`'s `shape_diff` is what changed since the head, one
-  entry per capability of each node of the closure, each naming its
-  `node` and whether the head never held it (`new`) or the ask no longer
-  names it (`dropped`) (`Sanctum.Consent.ShapeDiff`).
+  `consent_required`'s `cause` says why the run has no grant to stand on,
+  and `ref` names the component: `no_grant` when nobody granted it,
+  `revoked` when its grant was revoked, and `shape_moved` when the release
+  asks for something the head did not grant. Only `shape_moved` carries
+  the head's `profile_id` and `current_revision`, and `shape_diff`, what
+  changed since the head, one entry per capability of each node of the
+  closure, each naming its `node` and whether the head never held it
+  (`new`) or the ask no longer names it (`dropped`)
+  (`Sanctum.Consent.ShapeDiff`).
 
   `consent_conflict`'s cause distinguishes a stale plan from a digest that
   changed under the operator from a genuine race — different remedies:
@@ -114,9 +122,11 @@ defmodule Sanctum.Consent do
         }
 
   @type consent_required :: %{
-          profile_id: String.t(),
-          current_revision: non_neg_integer(),
-          shape_diff: [Sanctum.Consent.ShapeDiff.entry()]
+          optional(:profile_id) => String.t(),
+          optional(:current_revision) => non_neg_integer(),
+          optional(:shape_diff) => [Sanctum.Consent.ShapeDiff.entry()],
+          cause: :no_grant | :revoked | :shape_moved,
+          ref: String.t()
         }
 
   @type consent_conflict :: %{
@@ -135,21 +145,19 @@ defmodule Sanctum.Consent do
   What `preview` answers: a `Prima.ConsentPreview` document, its fields
   beside the envelope a commit presents.
 
-    * `v`, `rows`, `origins`, `commit_digest`, `removed` — the document:
-      its version, its typed rows each in the row's JSON form
-      (`Prima.ConsentPreview.Row`), the origins the grant would admit as
-      their wire spellings, the commit digest binding them, and the
+    * `v`, `rows`, `commit_digest`, `removed` — the document: its
+      version, its typed rows each in the row's JSON form
+      (`Prima.ConsentPreview.Row`), the commit digest binding them, and the
       bindings of the profile's head the revision would remove, each in
       its JSON form (`Prima.ConsentPreview`'s "Removed bindings"), empty
       when it removes none. `Prima.ConsentPreview.decode/1` reads these
-      five back.
+      four back.
     * `proof` and `expected_consent_revision` — what the commit presents
       with the digest.
   """
   @type preview :: %{
           v: pos_integer(),
           rows: [%{required(String.t()) => term()}],
-          origins: [String.t(), ...],
           commit_digest: String.t(),
           removed: [Prima.ConsentPreview.removed()],
           proof: String.t(),
@@ -186,6 +194,37 @@ defmodule Sanctum.Consent do
       {:ok, entries} -> {:ok, entries}
       {:error, :no_athanor} -> {:error, :no_athanor}
       {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  Whether `consent`, the head of `profile`, stands for the installed
+  release a run would start, decided as a run's load decides it
+  (`Sanctum.Consent.Loader.evaluate_head/4`, whose options it takes):
+  `:ok`, or the refusal the run would meet. A reader that answers whether
+  a component is ready asks this, so it never says ready where a run is
+  refused.
+  """
+  @spec head_stands(Sanctum.Context.t(), map(), map(), keyword()) ::
+          :ok | {:error, Sanctum.Consent.Loader.load_error()}
+  def head_stands(%Sanctum.Context{} = ctx, profile, consent, opts)
+      when is_map(profile) and is_map(consent),
+      do: Sanctum.Consent.Loader.evaluate_head(ctx, profile, consent, opts)
+
+  @doc """
+  Why the name-level `source_ref` has no profile a run could stand on,
+  once `profiles/2` lists none: `:revoked` when its person granted it and
+  revoked the grant, `:no_grant` when nobody has granted it. A store that
+  could not answer is `{:error, :unavailable}`, never a cause.
+  """
+  @spec ungranted(Sanctum.Context.t(), String.t()) ::
+          {:ok, :no_grant | :revoked} | {:error, :unavailable | :no_athanor}
+  def ungranted(%Sanctum.Context{} = ctx, source_ref) when is_binary(source_ref) do
+    case Arca.ConsentStorage.revoked_owner?(Sanctum.Context.actor(ctx), source_ref) do
+      {:ok, true} -> {:ok, :revoked}
+      {:ok, false} -> {:ok, :no_grant}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
@@ -251,8 +290,8 @@ defmodule Sanctum.Consent do
   @doc """
   What one vault row of the head revision `consent` (from
   `head_consent/2`) binds now, read by its tag: the athanor's own entry,
-  a selection of another profile's key resolved as a run resolves it
-  under the context's origin, a share read live as the context's person
+  a selection of another profile's key resolved as a run resolves it, a
+  share read live as the context's person
   is offered it and held to the row's digest, or a row naming none
   (`Sanctum.Consent.Loader.row_binding/3`). Nothing is raised.
   """

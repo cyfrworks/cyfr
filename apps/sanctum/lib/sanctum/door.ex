@@ -26,8 +26,10 @@ defmodule Sanctum.Door do
 
   A refusal the operator can undo leaves a trace: a remote person, or a
   remote newcomer, the door does not admit is recorded as a pending
-  request naming their identifier, which `door.requests` lists and
-  `door.resolve` turns into an allow. A deny already has its answer, so
+  request naming their identifier, labelled with their name when it is
+  known (the person's namespace, or the name the admission learned from
+  the registry), which `door.requests` lists and `door.resolve` turns into
+  an allow. A deny already has its answer, so
   it leaves none. Refusals carry no detail a stranger could use to
   enumerate the list.
 
@@ -97,16 +99,21 @@ defmodule Sanctum.Door do
             _unread -> nil
           end
 
-        refused(reason, user_id, identifier)
+        refused(reason, user_id, identifier, user[:namespace])
     end
   end
 
-  @doc "`admit_identifier/1` at a remote newcomer's sign-in, refusing as `sign_in/1` does."
-  @spec sign_in_identifier(String.t()) :: {:ok, :allowed} | {:error, {:door, atom()}}
-  def sign_in_identifier(identifier) when is_binary(identifier) do
+  @doc """
+  `admit_identifier/1` at a remote newcomer's sign-in, refusing as
+  `sign_in/1` does; `name`, the name the account holds or `nil`, labels
+  the request a refusal leaves.
+  """
+  @spec sign_in_identifier(String.t(), String.t() | nil) ::
+          {:ok, :allowed} | {:error, {:door, atom()}}
+  def sign_in_identifier(identifier, name) when is_binary(identifier) do
     case admit_identifier(identifier) do
       {:ok, :allowed} -> {:ok, :allowed}
-      {:error, reason} -> refused(reason, nil, identifier)
+      {:error, reason} -> refused(reason, nil, identifier, name)
     end
   end
 
@@ -233,26 +240,29 @@ defmodule Sanctum.Door do
   defp admits({:ok, false}), do: :no
   defp admits({:error, :unavailable}), do: {:error, :unavailable}
 
-  defp refused(reason, user_id, identifier) do
+  defp refused(reason, user_id, identifier, name) do
     :telemetry.execute([:cyfr, :sanctum, :door, :refused], %{count: 1}, %{
       user_id: user_id,
       identifier: identifier,
       reason: reason
     })
 
-    record_request(reason, identifier)
+    record_request(reason, identifier, name)
     {:error, {:door, reason}}
   end
 
   # A refusal the operator can act on: only `:not_allowed` of an identifier.
   # A `:denied` refusal already has its answer, and writing a request for
   # it would offer to undo a deny by approving it.
-  defp record_request(:not_allowed, identifier) when is_binary(identifier) do
-    case Store.request("identifier", identifier, identifier, "refused at sign-in") do
+  defp record_request(:not_allowed, identifier, name) when is_binary(identifier) do
+    case Store.request("identifier", identifier, identifier,
+           note: "refused at sign-in",
+           label: name
+         ) do
       {:ok, :created, _} -> Sanctum.Notify.allowlist_request(identifier)
       _ -> :ok
     end
   end
 
-  defp record_request(_reason, _identifier), do: :ok
+  defp record_request(_reason, _identifier, _name), do: :ok
 end

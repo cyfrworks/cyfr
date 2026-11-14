@@ -53,7 +53,7 @@ defmodule Sanctum.DoorPlacementTest do
     # The admission mints a newcomer only past the door's verdict on the
     # identifier, or the setup token, compared in constant time.
     newcomer = source(@newcomer)
-    assert newcomer =~ "Sanctum.Door.sign_in_identifier(identifier)"
+    assert newcomer =~ "Sanctum.Door.sign_in_identifier(identifier, name)"
     assert newcomer =~ "Plug.Crypto.secure_compare(configured, token)"
   end
 end

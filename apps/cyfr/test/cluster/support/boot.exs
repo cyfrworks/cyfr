@@ -340,7 +340,6 @@ defmodule Cyfr.Cluster.Boot do
           commit_digest: "sha256:commit-#{profile_id}",
           resolved_policy: Jason.encode!(%{"canonical" => "jcs-1", "nodes" => %{}}),
           activation: %{},
-          admitted_origins: [:schedule],
           vault_refs: []
         }
       )

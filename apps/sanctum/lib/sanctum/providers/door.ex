@@ -13,7 +13,10 @@ defmodule Sanctum.Providers.Door do
   before anything is written and written as an identifier entry labelled
   with the handle. The entry keeps the identifier, so a handle the
   registry later gives someone else moves no access; `list` shows the
-  label beside the identifier.
+  label beside the identifier. Each entry `list` and `requests` answer
+  carries the `name` of whom it names, when one is known: its label, else
+  the name the person it names holds here; and a request a member asked
+  for carries `asked_by_name`, theirs.
 
   `allow` writes an allow of an identifier or `*`, by which the door
   admits an account at sign-in. Every person here is an account's, and the
@@ -388,7 +391,8 @@ defmodule Sanctum.Providers.Door do
   defp refused_kind("wildcard", "deny"),
     do: "Remove the * entry instead of denying it"
 
-  # The label is a key only when the entry was made from a handle.
+  # The label is a key only when the entry was made from a handle; a name
+  # only when one is known.
   defp render(entry) do
     %{
       id: entry.id,
@@ -402,5 +406,24 @@ defmodule Sanctum.Providers.Door do
       created_at: entry.created_at
     }
     |> then(&if(is_binary(entry.label), do: Map.put(&1, :label, entry.label), else: &1))
+    |> known(:name, entry.label || held_name(entry.kind, entry.value))
+    |> known(:asked_by_name, asker_name(entry))
   end
+
+  defp known(rendered, _key, nil), do: rendered
+  defp known(rendered, key, name), do: Map.put(rendered, key, name)
+
+  # The name the person an entry names holds here, by their id or their
+  # account's identifier.
+  defp held_name("person", user_id), do: namespace(Users.get(user_id))
+  defp held_name("identifier", identifier), do: namespace(Users.get_by_identifier(identifier))
+  defp held_name(_kind, _value), do: nil
+
+  # A request is asked by a member, by their id, or by the refused account
+  # itself, whose name the entry already carries.
+  defp asker_name(%{requested_by: "usr_" <> _ = user_id}), do: held_name("person", user_id)
+  defp asker_name(_entry), do: nil
+
+  defp namespace({:ok, %{namespace: name}}) when is_binary(name) and name != "", do: name
+  defp namespace(_unnamed), do: nil
 end

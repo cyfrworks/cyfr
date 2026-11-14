@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -590,7 +591,7 @@ var accessCmd = &cobra.Command{
   tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one)
   public   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
 
-It shows the change first: who will reach CYFR and at what address, with the ports public access opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes with it for browsers, command lines, OAuth apps, webhook senders and saved addresses, unless no one is set up on CYFR yet; accounts and their passkeys do not change. Confirm it (or pass --yes), and the access containers are stopped, removed and checked stopped, keeping the networks, .env is rewritten, and what was running is started again in the new mode; a start that fails puts CYFR back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
+It shows the change first: who will reach CYFR and at what address, with the ports public access opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes with it for browsers, command lines, OAuth apps, webhook senders and saved addresses, unless no one is set up on CYFR yet; accounts and their passkeys do not change. Confirm it (or pass --yes), and the access containers are stopped, removed and checked stopped, keeping the networks, .env is rewritten, and what was running is started again in the new mode; a start that fails puts CYFR back as it was. A public change then resolves the domain from this machine: it ends on Done only when the domain resolves, and otherwise says that no one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
 
 When CYFR has tailnet access and its Tailscale Serve is closed, because the machine was not ready when it started (HTTPS certificates off, say), 'cyfr access tailnet' serves it on the tailnet again: it shows that, and once confirmed checks the machine again and opens Serve without stopping anything or rewriting .env.
 
@@ -718,7 +719,7 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 		return err
 	}
 	if err == nil {
-		fmt.Fprintf(out, "Done. CYFR is reached %s.\n", reachedBy(p.New))
+		fmt.Fprintln(out, switchedSentence(ctx, p.New))
 		if p.Reopen {
 			printTailscale(ctx, e, out)
 		}
@@ -738,6 +739,35 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 		}
 	}
 	return errors.Join(err, screenErr)
+}
+
+// lookupDomain resolves domain as this machine resolves names; tests stand
+// in for it.
+var lookupDomain = func(ctx context.Context, domain string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err := net.DefaultResolver.LookupHost(ctx, domain)
+	return err
+}
+
+// switchedSentence is the sentence a change that took ends on: Done, with
+// how CYFR is reached at head, once a public domain resolves. A public
+// domain the resolver answers does not exist is said instead, since no one
+// reaches CYFR there and no certificate can be issued until its DNS names
+// this machine; a lookup that times out or fails otherwise proves neither,
+// and is said as a check this machine could not make.
+func switchedSentence(ctx context.Context, head access.Head) string {
+	if head.Mode == access.ModePublic {
+		err := lookupDomain(ctx, head.Host)
+		var dns *net.DNSError
+		switch {
+		case errors.As(err, &dns) && dns.IsNotFound:
+			return fmt.Sprintf("CYFR is set to be reached %s, but %s does not resolve from this machine (%v). No one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine's public address; CYFR takes its certificate once it does, and cyfr access status shows it.", reachedBy(head), head.Host, err)
+		case err != nil:
+			return fmt.Sprintf("CYFR is set to be reached %s, but this machine could not check whether %s resolves (%v). CYFR takes its certificate once the domain's DNS names this machine's public address; cyfr access status shows whether it has one.", reachedBy(head), head.Host, err)
+		}
+	}
+	return "Done. CYFR is reached " + reachedBy(head) + "."
 }
 
 // joinStands is what a join made before a change that was not made leaves

@@ -129,7 +129,9 @@ defmodule Compendium.AgentSourceTest do
 
     tools = manifest["caps"]["tools"]
     assert "files.read" in tools and "component.list" in tools
-    refute "native_search" in tools
+    # The provider's own search, which the shipped soul turns on, is one
+    # of its tools by its name.
+    assert "native_search" in tools
     assert tools == Enum.sort(tools)
     assert manifest["agent"]["model"] == agent.model
     assert manifest["agent"]["catalyst"] == agent.catalyst_ref
@@ -146,7 +148,11 @@ defmodule Compendium.AgentSourceTest do
     # hands, under which it runs.
     {:ok, explorer} = AgentSource.latest_row(ctx, "explorer")
     assert explorer.manifest["caps"] == manifest["caps"]
-    assert explorer.manifest["agent"]["policy"] == manifest["agent"]["policy"]
+
+    # The policy's modes are no part of the manifest; the provider's own
+    # search, on, is one of its tools.
+    refute Map.has_key?(manifest["agent"], "policy")
+    assert "native_search" in manifest["caps"]["tools"]
     assert explorer.manifest["agent"]["catalyst"] == "catalyst:local.gemini"
 
     hands = deps |> Enum.map(& &1["ref"]) |> List.delete(agent.catalyst_ref)
@@ -224,7 +230,7 @@ defmodule Compendium.AgentSourceTest do
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
 
     assert "explorer.*" in soul.manifest["caps"]["tools"]
-    assert "explorer.*" in soul.manifest["agent"]["policy"]["auto"]
+    refute Map.has_key?(soul.manifest["agent"], "policy")
 
     refute "agent:local.explorer" in Enum.map(
              soul.manifest["dependencies"]["static"],

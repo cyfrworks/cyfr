@@ -111,7 +111,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
             }
           }
         ],
-        origins: ["interactive"],
         removed: [],
         proof: "p",
         commit_digest: "d"
@@ -416,7 +415,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       Prism.ConsentChoices.decisions(
         "tincture:local.sheet-app",
         nil,
-        ["interactive"],
         %{},
         choices
       )
@@ -967,7 +965,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   # ---------------------------------------------------------------------------
 
   defp keyed_preview(rows),
-    do: %{v: 1, rows: rows, origins: ["interactive"], removed: [], proof: "p", commit_digest: "d"}
+    do: %{v: 1, rows: rows, removed: [], proof: "p", commit_digest: "d"}
 
   defp credential_row(ref, lifetime) do
     %{
@@ -1137,8 +1135,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   defp regrant_sheet(plan) do
     choices = Prism.ConsentChoices.initial_choices(plan, DateTime.utc_now())
 
-    decisions =
-      Prism.ConsentChoices.decisions(@regrant, nil, ["interactive"], %{}, choices)
+    decisions = Prism.ConsentChoices.decisions(@regrant, nil, %{}, choices)
 
     rows =
       for %{"lifetime" => lifetime} <- decisions["bindings"],
@@ -1334,9 +1331,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
     choices = Prism.ConsentChoices.initial_choices(lent, DateTime.utc_now())
 
-    assert Prism.ConsentChoices.decisions(@regrant, nil, ["interactive"], %{}, choices)[
-             "selections"
-           ] == [
+    assert Prism.ConsentChoices.decisions(@regrant, nil, %{}, choices)["selections"] == [
              %{
                "dep" => dep,
                "from" => @regrant,
@@ -1415,8 +1410,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
     choices = Prism.ConsentChoices.initial_choices(plan, DateTime.utc_now())
 
-    decisions =
-      Prism.ConsentChoices.decisions(@regrant, nil, ["interactive"], %{}, choices)
+    decisions = Prism.ConsentChoices.decisions(@regrant, nil, %{}, choices)
 
     assert decisions["bindings"] == [
              %{"need" => "api_key", "entry_id" => "vlt_h", "lifetime" => %{"kind" => "standing"}},
@@ -1516,7 +1510,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         preview: %{
           v: 1,
           rows: rows,
-          origins: ["interactive"],
           removed: [],
           proof: "p",
           commit_digest: "d"
@@ -1560,7 +1553,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     assert html =~ ~s(data-test="grant-unresolved")
     assert html =~ "reagent:local.absent is missing"
     refute html =~ ~s(data-test="grant-rows")
-    refute html =~ ~s(data-test="grant-origins")
   end
 
   test "what changed is worded against the person's grant, never as the component widening" do
@@ -1584,7 +1576,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
           }
         ]
       },
-      preview: %{v: 1, rows: [], origins: ["interactive"], proof: "p", commit_digest: "d"},
+      preview: %{v: 1, rows: [], proof: "p", commit_digest: "d"},
       decisions: %{"ref" => "tincture:local.sheet-delta", "bindings" => []}
     }
 
@@ -1639,7 +1631,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
           entry.(held, "egress.methods", {["PATCH"], []}, :held)
         ]
       },
-      preview: %{v: 1, rows: [], origins: ["interactive"], proof: "p", commit_digest: "d"},
+      preview: %{v: 1, rows: [], proof: "p", commit_digest: "d"},
       decisions: %{"ref" => app, "bindings" => []}
     }
 

@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +21,68 @@ import (
 	"github.com/cyfr/codex/internal/access"
 	"github.com/spf13/cobra"
 )
+
+// No test resolves a name over the network: every domain resolves, unless
+// a test stands in otherwise.
+func init() { lookupDomain = func(context.Context, string) error { return nil } }
+
+// A public domain is resolved before the change ends on Done; one that
+// does not resolve from this machine is said in Done's place, with what
+// the change left: CYFR set to be reached there, its certificate waiting
+// on the domain's DNS. The change stands and is no failure.
+func TestAccessPublicSaysADomainThatDoesNotResolve(t *testing.T) {
+	s := newAccessProject(t)
+	saved := lookupDomain
+	t.Cleanup(func() { lookupDomain = saved })
+	var asked []string
+	lookupDomain = func(_ context.Context, domain string) error {
+		asked = append(asked, domain)
+		return &net.DNSError{Err: "no such host", Name: "cyfr.example.com", IsNotFound: true}
+	}
+	var out bytes.Buffer
+	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, &out); err != nil {
+		t.Fatalf("cyfr access public: %v\n%s", err, out.String())
+	}
+	want := "CYFR will be reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n" +
+		"CYFR is set to be reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine, but cyfr.example.com does not resolve from this machine (lookup cyfr.example.com: no such host). No one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine's public address; CYFR takes its certificate once it does, and cyfr access status shows it.\n"
+	if out.String() != want {
+		t.Errorf("cyfr access printed:\n%s\nwant:\n%s", out.String(), want)
+	}
+	if !slices.Equal(asked, []string{"cyfr.example.com"}) || len(s.switches) != 1 || accessOf(t) != access.ModePublic {
+		t.Errorf("resolved %v, %d switches, CYFR reached as %s; want cyfr.example.com resolved once after one switch to public", asked, len(s.switches), accessOf(t))
+	}
+
+	// A lookup that times out, or fails short of an answer, is a check
+	// this machine could not make, never a name that does not resolve.
+	for i, failed := range []error{
+		context.DeadlineExceeded,
+		&net.DNSError{Err: "i/o timeout", Name: "cyfr.example.com", IsTimeout: true},
+		&net.DNSError{Err: "server misbehaving", Name: "cyfr.example.com", IsTemporary: true},
+	} {
+		domain := fmt.Sprintf("c%d.example.com", i)
+		lookupDomain = func(context.Context, string) error { return failed }
+		out.Reset()
+		if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: domain}, true, &out); err != nil {
+			t.Fatalf("cyfr access public: %v\n%s", err, out.String())
+		}
+		reached := "by anyone on the internet, who still has to sign in, at https://" + domain + ", through ports 80 and 443 on this machine"
+		want := "CYFR will be reached " + reached + ".\n" +
+			"CYFR is set to be reached " + reached + ", but this machine could not check whether " + domain + " resolves (" + failed.Error() + "). CYFR takes its certificate once the domain's DNS names this machine's public address; cyfr access status shows whether it has one.\n"
+		if out.String() != want {
+			t.Errorf("after %v cyfr access printed:\n%s\nwant:\n%s", failed, out.String(), want)
+		}
+	}
+	lookupDomain = func(_ context.Context, domain string) error { asked = append(asked, domain); return nil }
+
+	// Local and tailnet access name no domain to resolve.
+	asked = nil
+	if err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 0 {
+		t.Errorf("local access resolved %v", asked)
+	}
+}
 
 // newAccessProject makes the working directory a project whose .env is the
 // shipped template written for a local home, as init writes it.

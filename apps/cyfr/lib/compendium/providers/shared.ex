@@ -13,9 +13,9 @@ defmodule Compendium.Providers.Shared do
   @doc """
   A registry's own refusal as the gate's normalized form, at the
   provider's edge: a `%Compendium.OCI.Errors{}` becomes a
-  `%Prima.Refusal{}` classed by the registry's HTTP answer — 401
-  `unauthenticated`, 403 `forbidden`, 404 `not_found`, 429
-  `rate_limited`, anything else `unavailable` — with reason
+  `%Prima.Refusal{}` classed by the registry's HTTP answer — 400
+  `invalid_argument`, 401 `unauthenticated`, 403 `forbidden`, 404
+  `not_found`, 429 `rate_limited`, anything else `unavailable` — with reason
   `{:registry, oci_reason}`, so the struct never reaches the gate. Its
   sentence is `Compendium.OCI.Errors.to_string/1` with the actionable
   hint; the verbose `detail` stays in the client's log. Any other reason,
@@ -36,6 +36,7 @@ defmodule Compendium.Providers.Shared do
 
   def refusal(reason), do: reason
 
+  defp registry_class(400), do: :invalid_argument
   defp registry_class(401), do: :unauthenticated
   defp registry_class(403), do: :forbidden
   defp registry_class(404), do: :not_found
