@@ -20,6 +20,50 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// No test resolves a name over the network: every domain resolves, unless
+// a test stands in otherwise.
+func init() { lookupDomain = func(context.Context, string) error { return nil } }
+
+// A public domain is resolved before the change ends on Done; one that
+// does not resolve from this machine is said in Done's place, with what
+// the change left: CYFR set to be reached there, its certificate waiting
+// on the domain's DNS. The change stands and is no failure.
+func TestAccessPublicSaysADomainThatDoesNotResolve(t *testing.T) {
+	s := newAccessProject(t)
+	saved := lookupDomain
+	t.Cleanup(func() { lookupDomain = saved })
+	var asked []string
+	resolves := false
+	lookupDomain = func(_ context.Context, domain string) error {
+		asked = append(asked, domain)
+		if resolves {
+			return nil
+		}
+		return errors.New("lookup cyfr.example.com: no such host")
+	}
+	var out bytes.Buffer
+	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, &out); err != nil {
+		t.Fatalf("cyfr access public: %v\n%s", err, out.String())
+	}
+	want := "CYFR will be reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n" +
+		"CYFR is set to be reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine, but cyfr.example.com does not resolve from this machine (lookup cyfr.example.com: no such host). No one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine's public address; CYFR takes its certificate once it does, and cyfr access status shows it.\n"
+	if out.String() != want {
+		t.Errorf("cyfr access printed:\n%s\nwant:\n%s", out.String(), want)
+	}
+	if !slices.Equal(asked, []string{"cyfr.example.com"}) || len(s.switches) != 1 || accessOf(t) != access.ModePublic {
+		t.Errorf("resolved %v, %d switches, CYFR reached as %s; want cyfr.example.com resolved once after one switch to public", asked, len(s.switches), accessOf(t))
+	}
+
+	// Local and tailnet access name no domain to resolve.
+	asked = nil
+	if err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 0 {
+		t.Errorf("local access resolved %v", asked)
+	}
+}
+
 // newAccessProject makes the working directory a project whose .env is the
 // shipped template written for a local home, as init writes it.
 func newAccessProject(t *testing.T) *fakeStack {
