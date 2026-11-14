@@ -34,6 +34,20 @@ defmodule PrismWeb.LoginLive do
   deadline, and the browser gives up on an event it waits on for 30
   seconds. The page answers the event at once and says it is checking.
 
+  **The registry's terms.** A person accepts them once, when their
+  account is made at the account pages; a later version asks nobody to
+  accept again, and using the registry is accepting it. After a registry
+  signature completes, the registry's current version
+  (`registry/legal_version`: `policy_version`, `updated_at`) is held to
+  the version this person was last shown, their own preference
+  `registry_terms_seen` (`Sanctum.Tenancy.Users.put_prefs/2`). A version
+  they were not shown is said once in this tab, beside what the act did,
+  with the date it changed and the way to read it, and is then recorded;
+  with no version recorded yet, the current one is recorded and nothing
+  is said, since the person accepted it when they made their account. A
+  registry that does not answer its version says nothing and records
+  nothing.
+
   A CYFR with no person yet offers nothing but the way to set up.
   """
 
@@ -75,6 +89,9 @@ defmodule PrismWeb.LoginLive do
      # True while an answer handed here is checked, and a registry
      # signature it carries sent.
      |> assign(:checking, false)
+     # A completed registry signature whose terms notice is shown here
+     # before the browser goes back (`terms_notice/1`).
+     |> assign(:terms_changed, nil)
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
@@ -140,8 +157,16 @@ defmodule PrismWeb.LoginLive do
   defp answered(socket, {:error, reason}), do: assign(socket, :error, sentence(reason))
 
   @impl true
-  def handle_async(:answer, {:ok, {:registered, back, {kind, message}}}, socket),
+  def handle_async(:answer, {:ok, {:registered, back, {kind, message}, nil}}, socket),
     do: {:noreply, socket |> put_flash(kind, message) |> redirect(to: back)}
+
+  # A notice comes only with a completed act (`registered/2`).
+  def handle_async(:answer, {:ok, {:registered, back, {:info, message}, notice}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:checking, false)
+     |> assign(:terms_changed, Map.merge(notice, %{back: back, message: message}))}
+  end
 
   def handle_async(:answer, {:ok, outcome}, socket),
     do: {:noreply, socket |> assign(:checking, false) |> answered(outcome)}
@@ -181,7 +206,8 @@ defmodule PrismWeb.LoginLive do
   defp checked(answer, bindings, user_agent) do
     case Sanctum.SignIn.answer(answer, bindings, user_agent: user_agent) do
       {:ok, %{purpose: :registry} = outcome} ->
-        {:registered, outcome.back || ~p"/", registered(bindings, outcome)}
+        {result, notice} = registered(bindings, outcome)
+        {:registered, outcome.back || ~p"/", result, notice}
 
       outcome ->
         outcome
@@ -191,10 +217,55 @@ defmodule PrismWeb.LoginLive do
   defp registered(bindings, outcome) do
     with {:ok, ctx} <- session_caller(bindings),
          {:ok, result} <- Compendium.complete_registry(ctx, outcome) do
-      {:info, done(outcome.registry_request, result)}
+      {{:info, done(outcome.registry_request, result)}, terms_notice(ctx)}
     else
-      {:error, reason} -> {:error, "That did not go through: " <> Ops.error_message(reason)}
+      {:error, reason} ->
+        {{:error, "That did not go through: " <> Ops.error_message(reason)}, nil}
     end
+  end
+
+  # The registry's current terms held to the version this person was last
+  # shown (the module doc): `%{version, changed_on, read}` when it is one
+  # they were not shown, recorded as shown; nil otherwise. The read of the
+  # registry, of the person and the write of their preference are each
+  # best-effort: the act is done by now, and a failure shows nothing more.
+  defp terms_notice(ctx) do
+    with {:ok, %{"policy_version" => version, "updated_at" => at}} when is_binary(version) <-
+           Ops.call_tool(ctx, "registry/legal_version", %{}),
+         {:ok, changed, 0} <- DateTime.from_iso8601(to_string(at)),
+         {:ok, user} <- Sanctum.Tenancy.Users.get(ctx.user_id) do
+      case Sanctum.Tenancy.Users.prefs(user)["registry_terms_seen"] do
+        ^version ->
+          nil
+
+        seen ->
+          shown(user, version)
+          if is_binary(seen), do: notice(ctx, version, changed)
+      end
+    else
+      _unread -> nil
+    end
+  end
+
+  defp shown(user, version) do
+    case Sanctum.Tenancy.Users.put_prefs(user, %{"registry_terms_seen" => version}) do
+      {:ok, _user} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[LoginLive] the registry's terms version shown was not recorded: " <>
+            Prima.LoggerContext.shape(reason)
+        )
+    end
+  end
+
+  defp notice(ctx, version, changed) do
+    %{
+      version: version,
+      changed_on: Calendar.strftime(changed, "%-d %B %Y"),
+      read: if(route = PrismWeb.Focus.route_of(ctx), do: PrismWeb.Focus.path(route, "/legal"))
+    }
   end
 
   # The caller a registry signature completes under: the session its
@@ -219,9 +290,6 @@ defmodule PrismWeb.LoginLive do
 
   # What a completed registry request did, in the person's words.
   defp done(%{operation: "tokens.mint"}, _result), do: "Your push tokens are synced."
-
-  defp done(%{operation: "policy.accept", body: %{"policy_version" => version}}, _result),
-    do: "You accepted the policies, version #{version}."
 
   defp done(%{operation: "appeal.file"}, _result),
     do: "Your appeal is filed. Moderators review every appeal."
@@ -351,7 +419,39 @@ defmodule PrismWeb.LoginLive do
             Checking what you signed. You will see the answer when it comes.
           </p>
 
-          <div :if={@set_up and !@checking} class="space-y-4">
+          <div :if={@terms_changed} data-test="terms-changed" class="space-y-4">
+            <p
+              role="status"
+              data-test="registry-done"
+              class="text-sm text-gray-200"
+            >
+              {@terms_changed.message}
+            </p>
+            <p
+              role="status"
+              data-test="terms-notice"
+              class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-sm text-gray-200"
+            >
+              The account service's terms changed on {@terms_changed.changed_on}. They are now version {@terms_changed.version}, and using the account service means you accept them.
+              <a
+                :if={@terms_changed.read}
+                href={@terms_changed.read}
+                data-test="terms-read"
+                class="underline"
+              >
+                Read the terms
+              </a>
+            </p>
+            <a
+              href={@terms_changed.back}
+              data-test="terms-continue"
+              class="block w-full text-center px-4 py-3 bg-indigo-900/60 hover:bg-indigo-900 text-white rounded-lg border border-indigo-700 transition-colors"
+            >
+              Continue
+            </a>
+          </div>
+
+          <div :if={@set_up and !@checking and !@terms_changed} class="space-y-4">
             <div
               :if={@error}
               role="alert"

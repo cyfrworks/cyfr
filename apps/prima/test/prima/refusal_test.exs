@@ -640,12 +640,13 @@ defmodule Prima.RefusalTest do
                "The stored registry credential is damaged; run `cyfr registry sync` to replace it."
     end
 
-    test "a policy refusal names the version the registry requires" do
+    test "a policy refusal says the account has no acceptance on record, naming the version" do
       assert Refusal.message({:policy_required, "2026-09"}) ==
-               "Accept the registry's policy version 2026-09 first."
+               "The account service has no record that your account accepted its terms " <>
+                 "(version 2026-09), so it refused this."
 
       assert Refusal.message({:policy_required, nil}) ==
-               "Accept the registry's current policy first."
+               "The account service has no record that your account accepted its terms, so it refused this."
     end
 
     test "a refusal about an account says account, never cyfr.run or directory" do

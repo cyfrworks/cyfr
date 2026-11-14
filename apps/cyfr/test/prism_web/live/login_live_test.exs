@@ -216,21 +216,27 @@ defmodule PrismWeb.LoginLiveTest do
       |> Prima.SignIn.fragment()
     end
 
-    # The registry, checking each request as the registry does under the
-    # account's log, and answering `answer.(request)`.
-    defp registry(account, answer) do
+    # The registry, checking each signed request as the registry does under
+    # the account's log, and answering `answer.(request)`; its terms'
+    # version read answers `legal.()`, by default a registry that cannot
+    # answer it.
+    defp registry(account, answer, legal \\ fn -> {503, ""} end) do
       {:ok, state} = Prima.Identity.verify_chain(account.log)
 
-      Sanctum.Test.RegistryStub.start!(fn %{body: body} = request ->
-        case Prima.RegistryRequest.verify(
-               body,
-               state,
-               %{host: Sanctum.Test.RegistryStub.host(), directory: account.url},
-               System.system_time(:millisecond)
-             ) do
-          {:ok, signed} -> answer.(Map.put(request, :signed, signed))
-          {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
-        end
+      Sanctum.Test.RegistryStub.start!(fn
+        %{method: "GET", path: "/v1/legal/version"} ->
+          legal.()
+
+        %{body: body} = request ->
+          case Prima.RegistryRequest.verify(
+                 body,
+                 state,
+                 %{host: Sanctum.Test.RegistryStub.host(), directory: account.url},
+                 System.system_time(:millisecond)
+               ) do
+            {:ok, signed} -> answer.(Map.put(request, :signed, signed))
+            {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
+          end
       end)
     end
 
@@ -442,7 +448,7 @@ defmodule PrismWeb.LoginLiveTest do
                assert_redirect(view, @answered_ms)
 
       assert_received {:registry_request, %{path: "/v1/tokens/mint"}}
-      refute_received {:registry_request, _second}
+      refute_received {:registry_request, %{path: "/v1/tokens/mint"}}
     end
 
     test "a mint the registry makes after the person left is stored", %{conn: conn, dir: dir} do
@@ -522,7 +528,7 @@ defmodule PrismWeb.LoginLiveTest do
 
     test "a registry's refusal is the flash the browser returns with, in a person's words",
          %{conn: conn, dir: dir} do
-      asked = asked!(conn, dir, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+      asked = asked!(conn, dir, %{"action" => "sync"})
 
       registry(asked.account, fn _request ->
         Sanctum.Test.RegistryStub.refusal(:unknown_identity)
@@ -541,7 +547,7 @@ defmodule PrismWeb.LoginLiveTest do
 
     test "returned in a browser without the session that asked, it is sent nowhere",
          %{conn: conn, dir: dir} do
-      asked = asked!(conn, dir, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+      asked = asked!(conn, dir, %{"action" => "sync"})
       registry(asked.account, fn _request -> flunk("nothing is sent") end)
 
       {:ok, view, _html} = live(conn, ~p"/login")
@@ -550,6 +556,176 @@ defmodule PrismWeb.LoginLiveTest do
 
       assert html =~ "nobody was signed in"
       refute_received {:registry_request, _}
+    end
+  end
+
+  describe "the registry's terms after a registry signature" do
+    # A registry whose mint answers each time and whose terms' version is
+    # what `versions` holds now, published on `on`.
+    defp terms_registry(account, versions, on \\ "2026-11-10T09:30:00Z") do
+      registry(
+        account,
+        fn %{path: "/v1/tokens/mint"} ->
+          {200,
+           Sanctum.Test.RegistryStub.answer(%{
+             "personal_namespace" => %{"slug" => "terms-person", "token" => "cyfr_pt_terms"},
+             "memberships" => []
+           })}
+        end,
+        fn ->
+          {200,
+           Jason.encode!(%{
+             "policy_version" => Agent.get(versions, & &1),
+             "policies" => [],
+             "updated_at" => on
+           })}
+        end
+      )
+    end
+
+    # One sync signed at the account pages and handed to a fresh sign tab
+    # under the session that asked: the tab.
+    defp synced!(asked) do
+      {:ok, %{request: map}} =
+        Compendium.Providers.Registry.handle(asked.ctx, %{"action" => "sync"})
+
+      {:ok, request} = Prima.SignIn.decode(map)
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+
+      render_hook(view, "account_answer", %{
+        "answer" => signed_at_pages(%{asked | request: request})
+      })
+
+      view
+    end
+
+    defp seen(user_id) do
+      {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+      Sanctum.Tenancy.Users.prefs(user)["registry_terms_seen"]
+    end
+
+    defp seen!(user_id, version) do
+      {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+      {:ok, _user} = Sanctum.Tenancy.Users.put_prefs(user, %{"registry_terms_seen" => version})
+    end
+
+    defp notice!(view) do
+      Prima.Test.Wait.wait_until(
+        fn -> has_element?(view, "[data-test=terms-notice]") end,
+        @answered_ms,
+        "the terms notice to be shown"
+      )
+
+      view |> element("[data-test=terms-changed]") |> render()
+    end
+
+    defp text(html),
+      do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.split() |> Enum.join(" ")
+
+    defp synced?(asked) do
+      match?(
+        {:ok, %{token: "cyfr_pt_terms"}},
+        Compendium.Registry.CredentialStore.get(
+          asked.ctx,
+          Compendium.RegistryHost.canonical_host(),
+          "terms-person"
+        )
+      )
+    end
+
+    test "a version the person was not shown is said once beside what the act did, and again when it changes again",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      {:ok, versions} = Agent.start_link(fn -> "2026-11" end)
+      terms_registry(asked.account, versions)
+      seen!(asked.ctx.user_id, "2026-09")
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(asked.ctx.athanor_id)
+      legal = "/a/" <> Sanctum.Tenancy.Athanors.route_slug(athanor) <> "/legal"
+
+      view = synced!(asked)
+      html = notice!(view)
+
+      assert text(html) ==
+               "Your push tokens are synced. The account service's terms changed on 10 November 2026. " <>
+                 "They are now version 2026-11, and using the account service means you accept them. " <>
+                 "Read the terms Continue"
+
+      assert view |> element("[data-test=terms-read]") |> render() =~ ~s(href="#{legal}")
+      assert view |> element("[data-test=terms-continue]") |> render() =~ ~s(href="/")
+      refute_vocabulary(html)
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-11"
+
+      # The same version again says nothing: the browser goes back.
+      view = synced!(asked)
+
+      assert {"/", %{"info" => "Your push tokens are synced."}} =
+               assert_redirect(view, @answered_ms)
+
+      assert seen(asked.ctx.user_id) == "2026-11"
+
+      # A newer version is said again.
+      Agent.update(versions, fn _ -> "2026-12" end)
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-12,"
+      assert seen(asked.ctx.user_id) == "2026-12"
+    end
+
+    test "a person with no version recorded is shown nothing, and the current one is recorded",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      {:ok, versions} = Agent.start_link(fn -> "2026-11" end)
+      terms_registry(asked.account, versions)
+      assert seen(asked.ctx.user_id) == nil
+
+      view = synced!(asked)
+
+      assert {"/", %{"info" => "Your push tokens are synced."}} =
+               assert_redirect(view, @answered_ms)
+
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-11"
+    end
+
+    test "a registry that does not answer its version: the act completes, nothing is said or recorded",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      seen!(asked.ctx.user_id, "2026-09")
+
+      registry(asked.account, fn %{path: "/v1/tokens/mint"} ->
+        {200,
+         Sanctum.Test.RegistryStub.answer(%{
+           "personal_namespace" => %{"slug" => "terms-person", "token" => "cyfr_pt_terms"},
+           "memberships" => []
+         })}
+      end)
+
+      view = synced!(asked)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {"/", %{"info" => "Your push tokens are synced."}} =
+                 assert_redirect(view, @answered_ms)
+      end)
+
+      assert_received {:registry_request, %{method: "GET", path: "/v1/legal/version"}}
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "another person's recorded version is untouched", %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      other = Sanctum.Test.RegistryStub.person!()
+
+      {:ok, _other} =
+        Sanctum.Tenancy.Users.put_prefs(other, %{"registry_terms_seen" => "2026-01"})
+
+      {:ok, versions} = Agent.start_link(fn -> "2026-11" end)
+      terms_registry(asked.account, versions)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      assert text(notice!(synced!(asked))) =~ "They are now version 2026-11,"
+      assert seen(asked.ctx.user_id) == "2026-11"
+      assert seen(other.id) == "2026-01"
     end
   end
 

@@ -452,11 +452,19 @@ defmodule Prima.Refusal do
   defp row(:dns_timeout),
     do: {:unavailable, "The registry's DNS lookup timed out; try again shortly."}
 
+  # An account accepts the registry's terms when it is made, and a later
+  # version asks nobody again: the registry refuses only an account with
+  # no acceptance of any version on record.
   defp row({:policy_required, version}) when is_binary(version),
-    do: {:conflict, "Accept the registry's policy version #{version} first."}
+    do:
+      {:conflict,
+       "The account service has no record that your account accepted its terms " <>
+         "(version #{version}), so it refused this."}
 
   defp row({:policy_required, nil}),
-    do: {:conflict, "Accept the registry's current policy first."}
+    do:
+      {:conflict,
+       "The account service has no record that your account accepted its terms, so it refused this."}
 
   defp row(:banned), do: {:forbidden, "The registry has banned this identity."}
 
