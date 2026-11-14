@@ -106,6 +106,10 @@ defmodule PrismWeb.ReportComponent do
       details = params |> Map.get("details", "") |> String.trim()
 
       cond do
+        # A submit with no sheet opened on a target reports nothing.
+        is_nil(socket.assigns.target) ->
+          {:noreply, socket}
+
         # The allowlist is enforced, not just rendered: `category` is a
         # client value forwarded to the registry.
         category not in Enum.map(@categories, &elem(&1, 0)) ->

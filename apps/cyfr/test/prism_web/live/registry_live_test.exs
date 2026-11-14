@@ -215,8 +215,29 @@ defmodule PrismWeb.RegistryLiveTest do
     render_async(view, 5_000)
     html = render(view)
     assert html =~ "Components you&#39;ve published to the registry."
-    assert html =~ "The account service&#39;s terms: version"
+    assert terms_line(view) =~ "The account service's terms: version"
     refute html =~ "cyfr.run"
+  end
+
+  # The registry answering `answer` for its terms, and nothing else.
+  defp terms!(answer) do
+    RegistryStub.start!(fn
+      %{method: "GET", path: "/v1/legal/version"} -> {200, RegistryStub.answer(answer)}
+      %{method: "GET"} -> {404, ""}
+    end)
+  end
+
+  # The terms line as a person reads it.
+  defp terms_line(view) do
+    view
+    |> element("#registry-terms")
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.text()
+    |> String.split()
+    |> Enum.join(" ")
+    |> String.replace(" :", ":")
+    |> String.replace(" ,", ",")
   end
 
   # The terms are accepted once, when the account is made; a later
@@ -228,29 +249,38 @@ defmodule PrismWeb.RegistryLiveTest do
       {view, _html} = mount_athanor(conn, "/registry")
       render_async(view, 5_000)
 
-      assert view |> element("#registry-terms") |> render() =~
-               ~r{The account service&#39;s terms: version <span class="font-mono">2026-09</span>, updated 14 September 2026}
+      assert terms_line(view) ==
+               "The account service's terms: version 2026-09, updated 14 September 2026"
 
       assert has_element?(view, ~s(#registry-terms a[href$="/legal"]))
     end
 
     test "with no date from the registry, the page names the version alone", %{conn: conn} do
-      RegistryStub.start!(fn
-        %{method: "GET", path: "/v1/legal/version"} ->
-          {200, RegistryStub.answer(%{"policy_version" => "2026-09", "policies" => []})}
-
-        %{method: "GET"} ->
-          {404, ""}
-      end)
-
+      terms!(%{"policy_version" => "2026-09", "policies" => []})
       {view, _html} = mount_athanor(conn, "/registry")
       render_async(view, 5_000)
-      line = view |> element("#registry-terms") |> render()
 
-      assert line =~
-               ~s(The account service&#39;s terms: version <span class="font-mono">2026-09</span>)
+      assert terms_line(view) == "The account service's terms: version 2026-09"
+    end
 
-      refute line =~ "updated"
+    # A version is 1 to 64 letters, digits, `.`, `_` and `-`, starting with
+    # a letter or digit; the line names no other.
+    test "a version spelled otherwise is left out of the line", %{conn: conn} do
+      for version <- ["", "-2026", "v 1", "<b>1</b>", String.duplicate("a", 65), 7] do
+        terms!(%{"policy_version" => version, "updated_at" => "2026-09-14T08:30:00Z"})
+        {view, _html} = mount_athanor(conn, "/registry")
+        render_async(view, 5_000)
+
+        assert terms_line(view) == "The account service's terms, updated 14 September 2026",
+               inspect(version)
+      end
+
+      terms!(%{"policy_version" => String.duplicate("a", 64)})
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+
+      assert terms_line(view) ==
+               "The account service's terms: version #{String.duplicate("a", 64)}"
     end
 
     test "nothing on the page asks to accept the terms", %{conn: conn} do
@@ -733,11 +763,17 @@ defmodule PrismWeb.RegistryLiveTest do
       view |> form("#add-member", %{"handle" => "carol", "role" => "member"}) |> render_submit()
       sent("POST")
 
+      # The role is what was refused, which no sync of push tokens gives.
       Prima.Test.Wait.wait_until(
-        fn -> render(view) =~ "Adding failed: " end,
+        fn ->
+          render(view) =~
+            "Adding failed: Only an administrator of this namespace can add, change or remove its members."
+        end,
         5_000,
         "the refusal"
       )
+
+      refute render(view) =~ "registry sync"
 
       assert :sys.get_state(view.pid).socket.assigns.members == members
       assert :sys.get_state(view.pid).socket.assigns.acting == nil
@@ -780,11 +816,19 @@ defmodule PrismWeb.RegistryLiveTest do
       |> render_submit()
 
       receive do
-        {:registry_request, %{method: "POST", path: "/v1/abuse-reports", body: body}} ->
-          sent = Jason.decode!(body)
-          assert sent["target_namespace"] == "spam.example"
-          refute Map.has_key?(sent, "target_component_ref")
-          assert sent["category"] == "spam"
+        {:registry_request, %{method: "POST", path: "/v1/abuse-reports", body: body} = report} ->
+          assert Jason.decode!(body) == %{
+                   "category" => "spam",
+                   "target_namespace" => "spam.example",
+                   "target_component_id" => nil,
+                   "details" => "Floods search.",
+                   "attestations_signed" => false
+                 }
+
+          assert Enum.any?(
+                   report.headers,
+                   &(String.downcase(&1) == "authorization: bearer cyfr_pt_personal")
+                 )
       after
         5_000 -> flunk("the report did not reach the registry")
       end
@@ -794,6 +838,21 @@ defmodule PrismWeb.RegistryLiveTest do
         5_000,
         "the report's answer"
       )
+    end
+
+    # The sheet's submit, sent as a crafted event while no target is open.
+    test "a report sent before the sheet is opened on a target is refused and sends nothing",
+         %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+
+      view
+      |> with_target("#report-modal")
+      |> render_submit("submit_report", %{"category" => "spam", "details" => "probe"})
+
+      assert Process.alive?(view.pid)
+      refute render(view) =~ "Report this"
+      refute_received {:registry_request, %{method: "POST"}}
     end
 
     test "a report with no namespace named opens nothing", %{conn: conn} do

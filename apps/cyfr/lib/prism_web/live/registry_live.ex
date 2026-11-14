@@ -486,13 +486,23 @@ defmodule PrismWeb.RegistryLive do
   # using the registry, so the page asks for nothing.
   defp terms(ctx) do
     case call_tool(ctx, "registry/legal_version", %{}) do
-      {:ok, %{"policy_version" => version} = answer} when is_binary(version) ->
-        %{version: version, updated: updated(answer["updated_at"])}
+      {:ok, %{} = answer} ->
+        %{version: version(answer["policy_version"]), updated: updated(answer["updated_at"])}
 
       _unavailable ->
         nil
     end
   end
+
+  # A version is shown only as the terms' versions are spelled: 1 to 64
+  # letters, digits, `.`, `_` and `-`, starting with a letter or digit.
+  # Anything else the registry answers is left out of the line.
+  @version ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/
+
+  defp version(version) when is_binary(version),
+    do: if(Regex.match?(@version, version), do: version)
+
+  defp version(_none), do: nil
 
   defp updated(at) when is_binary(at) do
     case DateTime.from_iso8601(at) do
@@ -675,7 +685,7 @@ defmodule PrismWeb.RegistryLive do
 
       <p :if={@terms} id="registry-terms" class="text-xs text-gray-400">
         <a href={PrismWeb.Focus.path(@athanor_route, "/legal")} class="underline hover:text-gray-300">
-          The account service's terms: version <span class="font-mono">{@terms.version}</span>{if @terms.updated,
+          The account service's terms<span :if={@terms.version}>: version <span class="font-mono">{@terms.version}</span></span>{if @terms.updated,
             do: ", updated #{@terms.updated}"}
         </a>
       </p>

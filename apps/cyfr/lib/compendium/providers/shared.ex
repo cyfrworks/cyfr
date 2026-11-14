@@ -23,6 +23,15 @@ defmodule Compendium.Providers.Shared do
   gate to classify.
   """
   @spec refusal(term()) :: Prima.Refusal.t() | term()
+  # The registry refused the caller's role, which nothing here mends: its
+  # sentence is the whole refusal.
+  def refusal(%Compendium.OCI.Errors{reason: :admin_required} = err),
+    do: %Prima.Refusal{
+      class: :forbidden,
+      reason: {:registry, :admin_required},
+      message: err.message
+    }
+
   def refusal(%Compendium.OCI.Errors{} = err) do
     msg = Compendium.OCI.Errors.to_string(err)
     hint = Compendium.OCI.Errors.actionable_hint(err)
