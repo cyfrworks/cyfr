@@ -549,6 +549,24 @@ defmodule Sanctum.InvitationsTest do
       assert {:ok, []} = SharedThreads.list(carol.id)
     end
 
+    test "one naming no thread is left unspent by a person the door admits already; one naming a thread is spent" do
+      admin = admin!()
+      alice = person!()
+      carol = remote!()
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", carol.identifier, admin.id)
+      {:ok, %{invitation: open, code: code}} = Invitations.create(ctx(admin), nil)
+
+      assert {:ok, :unspent} = Invitations.redeem_for(hash(code), carol.id)
+      assert %{redeemed_at: nil, redeemed_by: nil} = row(open.id)
+      assert :ok = redeemable(code)
+
+      thread = thread!(alice)
+      {:ok, %{invitation: seated, code: code}} = Invitations.create(ctx(alice), thread.id)
+      assert {:ok, %{redeemed_by: by}} = Invitations.redeem_for(hash(code), carol.id)
+      assert by == carol.id
+      assert %{redeemed_at: %DateTime{}} = row(seated.id)
+    end
+
     test "a deny of the identifier or of the person refuses it, the invitation unspent and no seat" do
       alice = person!()
       thread = thread!(alice)
