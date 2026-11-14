@@ -387,23 +387,25 @@ defmodule Aqua.Loop.RequestTest do
     # The grant carries it, but the policy does not turn it on.
     refute Request.native_search?(%{"native_search" => "ask"}, granted.(["native_search"]))
     refute Request.native_search?(%{}, granted.(["native_search"]))
+
+    # A request offers it, and a turn records the open web, only where the
+    # turn may search and the model has the tool.
+    searching = %{provider_tools: ["web_search"]}
+    assert Request.offers_search?(on, granted.(["native_search"]), searching)
+    refute Request.offers_search?(on, granted.([]), searching)
+    refute Request.offers_search?(on, granted.(["native_search"]), %{provider_tools: []})
   end
 
   test "the request carries the ceiling and the provider tools the catalyst offers" do
     caps = %{max_output_tokens: 4_000, default_max_tokens: 8_000, provider_tools: ["web_search"]}
 
     request =
-      Request.build(model: "m", messages: [], tools: [], capabilities: caps, native_search?: true)
+      Request.build(model: "m", messages: [], tools: [], capabilities: caps, offers_search?: true)
 
     assert request["max_tokens"] == 4_000
     assert request["provider_tools"] == ["web_search"]
 
-    assert Request.build(
-             model: "m",
-             messages: [],
-             capabilities: %{provider_tools: []},
-             native_search?: true
-           )["provider_tools"] == []
+    assert Request.build(model: "m", messages: [], capabilities: caps)["provider_tools"] == []
 
     assert Request.build(model: "m", messages: [])["max_tokens"] == 16_384
   end

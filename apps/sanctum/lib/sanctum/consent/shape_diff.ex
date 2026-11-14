@@ -55,7 +55,6 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   @egress ~w(domains methods schemes private_ips)
   @storage ~w(paths actions)
-  @provider_search "native_search"
 
   # The side of a node the head never held, or the ask no longer names.
   @none %{"tools" => [], "egress" => %{}, "storage" => %{}, "flows" => []}
@@ -289,7 +288,7 @@ defmodule Sanctum.Consent.ShapeDiff do
     {granted_search, granted_tools} = split_search(granted["tools"])
     {live_search, live_tools} = split_search(live["tools"])
     tools = entry("tools", granted_tools, live_tools)
-    search = entry(@provider_search, granted_search, live_search)
+    search = entry(Sanctum.Consent.ShapeDerivation.provider_search(), granted_search, live_search)
 
     egress =
       Enum.map(@egress, fn key ->
@@ -308,7 +307,10 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   # An agent's provider search is its own row, switched on or off, never
   # one tool among its catalog actions.
-  defp split_search(tools), do: tools |> normalize() |> Enum.split_with(&(&1 == @provider_search))
+  defp split_search(tools) do
+    search = Sanctum.Consent.ShapeDerivation.provider_search()
+    tools |> normalize() |> Enum.split_with(&(&1 == search))
+  end
 
   defp entry(capability, granted, live) do
     granted = normalize(granted)

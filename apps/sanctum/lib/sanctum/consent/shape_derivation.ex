@@ -461,6 +461,13 @@ defmodule Sanctum.Consent.ShapeDerivation do
     expand_tools(patterns) ++ if(@provider_search in patterns, do: [@provider_search], else: [])
   end
 
+  @doc """
+  The provider's own search as a grant names it: the one tool no catalog
+  action is, carried by its name (`granted_tools/1`).
+  """
+  @spec provider_search() :: String.t()
+  def provider_search, do: @provider_search
+
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
@@ -528,6 +535,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
     # consented under, none included (see the moduledoc).
     |> Map.put("flows", Enum.map(caps.flows, &"#{&1.from}>#{&1.to}"))
     |> Map.put("tincture.connect", connect)
+    # The provider's own search, which no catalog action is, so
+    # `tool_actions` cannot hold it: switching it moves the shape.
+    |> put_list("tools.provider_search", Enum.filter(caps.tools, &(&1 == @provider_search)))
     |> put_limits(caps.limits)
   end
 

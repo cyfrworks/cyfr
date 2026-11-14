@@ -261,6 +261,36 @@ defmodule Sanctum.Consent.AgentConsentTest do
     refute Map.has_key?(input, :tool_policy)
   end
 
+  test "a grant narrowed to fewer tools keeps the provider's search it does not untick",
+       %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+    {_, head, _} = head!(ctx, @soul)
+    tools = edge!(head.resolved_policy, @soul, "@ingress").tools
+    assert "native_search" in tools and "aqua.list" in tools
+    kept = tools -- ["aqua.list"]
+
+    decisions = %{
+      ref: @soul,
+      selections: [%{dep: "catalyst:local.claude", label: "default"}],
+      subset: %{@soul => %{"tools" => kept}}
+    }
+
+    {:ok, plan} = Plan.plan(ctx, %{ref: @soul})
+    assert {:ok, preview} = Commit.preview(ctx, decisions)
+
+    assert {:ok, _} =
+             Commit.commit(ctx, %{
+               decisions: decisions,
+               plan_token: plan.plan_token,
+               proof: preview.proof,
+               commit_digest: preview.commit_digest,
+               expected_consent_revision: plan.expected_consent_revision
+             })
+
+    {_, narrowed, _} = head!(ctx, @soul)
+    assert Enum.sort(edge!(narrowed.resolved_policy, @soul, "@ingress").tools) == Enum.sort(kept)
+  end
+
   # A catalog action the soul's policy does not reach, of a tool no
   # bundled catalyst serves, so granting it adds no dependency.
   defp ungranted_action(ctx) do

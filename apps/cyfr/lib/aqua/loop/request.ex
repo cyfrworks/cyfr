@@ -281,11 +281,23 @@ defmodule Aqua.Loop.Request do
   def native_search?(_policy, _authority), do: false
 
   @doc """
+  Whether a turn's request offers the provider's own search: the turn may
+  search (`native_search?/2`) and the model has the tool. The one answer
+  both the request (`build/1`'s `provider_tools`) and the sources the turn
+  records read.
+  """
+  @spec offers_search?(map(), Prima.Authority.t(), map() | nil) :: boolean()
+  def offers_search?(policy, authority, capabilities),
+    do:
+      native_search?(policy, authority) and
+        "web_search" in (Map.get(capabilities || %{}, :provider_tools) || [])
+
+  @doc """
   The request: `model`, `system`, `messages`, `tools`, `provider_tools`
   and `max_tokens`, and `session` and `options` when given. `opts`:
   `:model`, `:system`, `:tools`, `:messages`, `:capabilities` (for the
   output ceiling, the provider tools and the options the brain declares),
-  `:native_search?` (`native_search?/2`),
+  `:offers_search?` (`offers_search?/3`),
   `:max_tokens`, `:session` (the brain's session a response named) and
   `:options` (the brain options a crew request set). An option the brain
   does not declare, or a value not of its kind, is refused
@@ -301,7 +313,7 @@ defmodule Aqua.Loop.Request do
         :messages,
         :tools,
         :capabilities,
-        :native_search?,
+        :offers_search?,
         :max_tokens,
         :session,
         :options
@@ -310,11 +322,7 @@ defmodule Aqua.Loop.Request do
     caps = Keyword.get(opts, :capabilities, %{})
     max_tokens = max_tokens(caps, Keyword.get(opts, :max_tokens))
 
-    provider_tools =
-      if Keyword.get(opts, :native_search?, false) and
-           "web_search" in (Map.get(caps, :provider_tools) || []),
-         do: ["web_search"],
-         else: []
+    provider_tools = if Keyword.get(opts, :offers_search?, false), do: ["web_search"], else: []
 
     request =
       %{
