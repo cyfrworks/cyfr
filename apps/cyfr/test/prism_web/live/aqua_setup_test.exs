@@ -163,7 +163,8 @@ defmodule PrismWeb.AquaSetupTest do
       "the turn"
     )
 
-    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn_id)
+    {:ok, turn} = Tape.turn(ctx, turn_id)
+    assert turn.status == "completed", edges_state(person)
 
     assert [%{kind: "text", content: "The fixture answers."}] =
              for(
@@ -173,6 +174,31 @@ defmodule PrismWeb.AquaSetupTest do
              )
 
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  # The soul's edge into its brain as its head stores it and as the loader
+  # resolves it, for a failure's message.
+  defp edges_state(ctx) do
+    soul = "agent:local.aqua"
+    {:ok, [profile | _]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), soul)
+    {:ok, head, refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
+
+    stored =
+      with {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
+           {:ok, edge} <- Prima.Authority.Blob.lookup_edge(blob, soul, Fixture.ref(), "") do
+        edge.vault
+      end
+
+    inspect(
+      %{
+        granted_via: head.granted_via,
+        stored: stored,
+        refs: refs,
+        resolved: Opus.authority_for(ctx, :default, soul) |> brain_edge(soul)
+      },
+      limit: :infinity,
+      printable_limit: 4000
+    )
   end
 
   # The soul's edge into its brain as the loader resolved it, or why it
