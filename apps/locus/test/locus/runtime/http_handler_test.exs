@@ -566,6 +566,21 @@ defmodule Locus.Runtime.HttpHandlerTest do
     end
   end
 
+  # A connect that times out is told apart from a request that got no
+  # answer in time, each naming the limit it ran out of.
+  describe "fetch_error/2 for a timeout" do
+    test "a connect names the connect limit, a wait for the answer the request's" do
+      limits = EdgeFixtures.limits(timeout: "30s")
+
+      assert HttpHandler.fetch_error("connect_timeout", limits) ==
+               {:timeout,
+                "HTTP request could not connect within #{Prima.Network.connect_timeout_ms()}ms"}
+
+      assert HttpHandler.fetch_error("timeout", limits) ==
+               {:timeout, "HTTP request timed out after 30000ms"}
+    end
+  end
+
   describe "encode_response/3" do
     test "returns valid JSON with response structure" do
       result = HttpHandler.encode_response(200, [{"content-type", "application/json"}], "{}")

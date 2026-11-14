@@ -361,6 +361,10 @@ defmodule Locus.Runtime.HttpHandler do
   def fetch_error("timeout", limits),
     do: {:timeout, "HTTP request timed out after #{request_timeout(limits)}ms"}
 
+  def fetch_error("connect_timeout", _limits),
+    do:
+      {:timeout, "HTTP request could not connect within #{Prima.Network.connect_timeout_ms()}ms"}
+
   def fetch_error("rate_limited", _limits),
     do: {:rate_limited, "HTTP egress refused: the consented rate limit is exhausted"}
 

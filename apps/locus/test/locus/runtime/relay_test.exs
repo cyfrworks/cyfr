@@ -904,6 +904,21 @@ defmodule Locus.Runtime.RelayTest do
     end
   end
 
+  # The connect and the wait for the answer time out alike; only a wait
+  # that ran the whole receive timeout can be the answer's.
+  describe "timeout_code/2" do
+    test "a timeout sooner than the receive timeout was the connect" do
+      connect = Prima.Network.connect_timeout_ms()
+
+      assert Locus.Runtime.Relay.timeout_code(connect + 110, 30_000) == "connect_timeout"
+      assert Locus.Runtime.Relay.timeout_code(30_000, 30_000) == "timeout"
+      assert Locus.Runtime.Relay.timeout_code(45_000, 30_000) == "timeout"
+
+      # Limits that are equal name the request's own.
+      assert Locus.Runtime.Relay.timeout_code(connect - 1, connect) == "timeout"
+    end
+  end
+
   describe "attached fetches" do
     # A guest's request naming a connection, as the runner's handler builds it.
     defp attached(url \\ "http://api.test/v1/x", opts \\ []) do

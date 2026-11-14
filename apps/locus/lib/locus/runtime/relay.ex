@@ -877,6 +877,7 @@ defmodule Locus.Runtime.Relay do
   defp connect(relay, re, bound, request) do
     timeout = max(min(fetch_timeout(bound), bound.deadline - now()), 1)
     max_bytes = bound.limits.max_response_size
+    started = System.monotonic_time(:millisecond)
 
     with {:ok, pinned} <-
            Egress.connect_options(request.pin, request.uri,
@@ -919,7 +920,7 @@ defmodule Locus.Runtime.Relay do
           Process.get({__MODULE__, :error})
 
         {:error, %Req.TransportError{reason: :timeout}} ->
-          "timeout"
+          timeout_code(System.monotonic_time(:millisecond) - started, timeout)
 
         {:error, %Req.TransportError{reason: reason}} when is_atom(reason) ->
           code(reason)
@@ -933,6 +934,20 @@ defmodule Locus.Runtime.Relay do
   end
 
   defp fetch_timeout(bound), do: HttpRequestValidation.timeout_ms(bound.limits)
+
+  @doc false
+  # Which limit a transport timeout was, from how long the fetch ran: the
+  # connect and the answer's wait time out alike, but a wait for the answer
+  # times out only after the whole receive timeout has passed, so one that
+  # ended sooner was the connect, whose limit is shorter
+  # (`Prima.Network.connect_timeout_ms/0`). Where the two limits are equal
+  # nothing tells them apart, and the request's own is named.
+  @spec timeout_code(non_neg_integer(), pos_integer()) :: String.t()
+  def timeout_code(elapsed_ms, receive_timeout_ms) do
+    if Prima.Network.connect_timeout_ms() < receive_timeout_ms and elapsed_ms < receive_timeout_ms,
+      do: "connect_timeout",
+      else: "timeout"
+  end
 
   defp head_once(relay, re, resp) do
     unless Process.get({__MODULE__, :headed}) do
