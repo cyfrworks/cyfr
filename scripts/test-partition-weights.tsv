@@ -222,7 +222,6 @@
 0.0	apps/cyfr/test/cluster/settings_test.exs
 0.0	apps/cyfr/test/cluster/shared_authority_test.exs
 0.0	apps/cyfr/test/cluster/stream_test.exs
-0.0	apps/cyfr/test/cluster/suspend_test.exs
 0.0	apps/cyfr/test/cluster/thread_test.exs
 0.0	apps/cyfr/test/cluster/worker_watch_test.exs
 1.2	apps/cyfr/test/compendium/activation_cache_test.exs

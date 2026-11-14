@@ -3,18 +3,15 @@
 
 defmodule Aqua.Providers.Thread do
   @moduledoc """
-  Chat on the wire: the `thread` tool, and the `turn` tool beside it.
+  Chat on the wire: the `thread` tool, and the `crew` tool beside it.
 
   Exposes AQUA thread addressing, queuing, history and approvals to
   MCP clients through the thread runner.
 
-  `turn` is the second tool this provider serves: `suspend` sets a turn
-  down with every row kept, its runtime released and the thread's claim
-  given up, and `recover` takes a suspended or abandoned turn back.
-  `crew` is the third: `ask` and `list`, the soul's hand-off to a crew
-  member from inside its turn (`Aqua.Crew`). The provider's `service/0`
-  is `"aqua"` for all three, so `system.status` and the request log's
-  `routed_to` read one label.
+  `crew` is the second tool this provider serves: `ask` and `list`, the
+  soul's hand-off to a crew member from inside its turn (`Aqua.Crew`).
+  The provider's `service/0` is `"aqua"` for both, so `system.status`
+  and the request log's `routed_to` read one label.
 
   Every turn-shaped action here **wraps `Aqua.Runner`** — there
   is no second implementation of a turn, and no path that starts one
@@ -91,7 +88,7 @@ defmodule Aqua.Providers.Thread do
   # (`Opus.Provider` answers `"opus"`, `Emissary.External.Provider`
   # answers `"emissary"`).
   @impl true
-  def tools, do: [definition(), turn_definition(), crew_definition()]
+  def tools, do: [definition(), crew_definition()]
 
   # A day: the longest a grant on either stream lives.
   @deadline_bound 86_400
@@ -526,65 +523,6 @@ defmodule Aqua.Providers.Thread do
   end
 
   @doc false
-  def turn_definition do
-    alias Prima.{Arg, Operation}
-    # `:external` for the reason every `thread` action is: a running agent
-    # must not be able to set a turn down or pick one up, its own
-    # included. `:interactive` because only a person's own session may
-    # move their work, never a standing credential. `standing: false`
-    # because neither is something a person pre-answers: every call is a
-    # click. And `recover` is deliberately NOT `recovery: :replay_safe` —
-    # recovery is never itself replay-safe.
-    Operation.tool(
-      [
-        Operation.new(
-          "turn",
-          "suspend",
-          "Suspend turn",
-          [
-            Arg.new("thread", :string,
-              required: true,
-              description: "The thread whose turn to suspend."
-            ),
-            Arg.new("turn", :string,
-              description:
-                "suspend: the turn id. A caller that read one suspends exactly that turn, never its successor."
-            ),
-            Arg.new("reason", :string,
-              description: "suspend: recorded on the turn and shown in the transcript.",
-              max: 200
-            )
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive,
-          standing: false
-        ),
-        Operation.new(
-          "turn",
-          "recover",
-          "Recover turn",
-          [
-            Arg.new("thread", :string, required: true, description: "The thread."),
-            Arg.new("turn", :string,
-              required: true,
-              description:
-                "recover: the turn to resume. Recovery names its turn; there is no \"whatever is there now\"."
-            )
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive,
-          standing: false
-        )
-      ],
-      description:
-        "Move a turn between servers: suspend sets it down with every row it has written kept, its runtime capacity released and the thread's claim given up, so any server may pick it up; recover takes a suspended or abandoned turn and carries it on, under a new fence, with the consent head and the capability identity read again. Suspending is not stopping — a stopped turn ends, a suspended one waits. A turn a live server is running is refused rather than taken, and a turn recovered too many times ends uncertain.",
-      title: "Turns"
-    )
-  end
-
-  @doc false
   def crew_definition do
     alias Prima.{Arg, Operation}
     # In a chain only: the soul's turn hands a job to a crew member, and a
@@ -640,7 +578,6 @@ defmodule Aqua.Providers.Thread do
 
   @impl true
   def handle("thread", %Context{} = ctx, args), do: dispatch(ctx, args)
-  def handle("turn", %Context{} = ctx, args), do: turn(ctx, args)
   def handle("crew", %Context{} = ctx, %{"action" => "ask"} = args), do: Aqua.Crew.ask(ctx, args)
 
   def handle("crew", %Context{} = ctx, %{"action" => "list"} = args),
@@ -648,56 +585,6 @@ defmodule Aqua.Providers.Thread do
 
   def handle("crew", _ctx, _args),
     do: {:error, {:invalid_argument, "crew takes the action ask or list"}}
-
-  # ---------------------------------------------------------------------------
-  # `turn`
-  # ---------------------------------------------------------------------------
-
-  defp turn(ctx, %{"action" => "suspend", "thread" => id} = args)
-       when is_binary(id) and id != "" do
-    opts =
-      []
-      |> put_opt(:turn, args["turn"])
-      |> put_opt(:reason, String.slice(args["reason"] || "", 0, 200))
-
-    case Runner.suspend_turn(ctx, id, opts) do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, turn_refusal(reason, id)}
-    end
-  end
-
-  defp turn(ctx, %{"action" => "recover", "thread" => id, "turn" => turn_id})
-       when is_binary(id) and id != "" and is_binary(turn_id) and turn_id != "" do
-    case Runner.recover_turn(ctx, id, turn_id) do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, turn_refusal(reason, id)}
-    end
-  end
-
-  defp turn(_ctx, %{"action" => "suspend"}),
-    do: {:error, {:invalid_argument, "turn.suspend requires a 'thread'"}}
-
-  defp turn(_ctx, %{"action" => "recover"}),
-    do: {:error, {:invalid_argument, "turn.recover requires a 'thread' and a 'turn'"}}
-
-  # The turn vocabulary on top of the thread one: a turn a live member is
-  # running is a conflict, not a refusal; a turn that is not the caller's
-  # athanor's is absent, which `translate/2` already answers.
-  defp turn_refusal(:held_elsewhere, _id),
-    do: {:conflict, "That turn is running on another server. Try again once it is down."}
-
-  defp turn_refusal(:not_running, _id),
-    do: {:conflict, "No turn is running in this thread."}
-
-  defp turn_refusal(:not_suspended, _id),
-    do: {:conflict, "That turn is running. Stop or suspend it before recovering it."}
-
-  defp turn_refusal(:recovery_exhausted, _id),
-    do:
-      {:conflict, "That turn has been recovered too many times and has been ended as uncertain."}
-
-  defp turn_refusal({:superseded, why}, _id), do: {:conflict, why}
-  defp turn_refusal(reason, id), do: translate(reason, id)
 
   # ---------------------------------------------------------------------------
   # Actions

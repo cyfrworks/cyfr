@@ -60,21 +60,16 @@ defmodule Cyfr.Cluster.PersonTest do
       assert Observer.turn(turn_id)["status"] == "running"
       Cell.kill(:a)
 
-      # The person's next request lands on the survivor. It may carry the
-      # turn on once the dead member's slot is takeable: until then the
-      # rows name a live holder.
+      # The person opens the thread again and lands on the survivor, whose
+      # runner carries the turn on once the dead member's slot is
+      # takeable: until then the rows name a live holder.
       Wait.until!(
         fn -> Observer.takeable?(Cell.member(:a).node) end,
         "the dead member's slot never became takeable",
         @slot_bound_ms * 2
       )
 
-      assert {:ok, _recovered} =
-               Cell.call(:b, Person, :call, [
-                 person.token,
-                 "turn",
-                 %{"action" => "recover", "thread" => thread, "turn" => turn_id}
-               ])
+      assert %{} = Cell.call(:b, Person, :open, [person.token, thread])
 
       Wait.until!(
         fn -> Observer.turn(turn_id)["status"] == "completed" end,

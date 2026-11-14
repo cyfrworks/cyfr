@@ -49,7 +49,6 @@ const (
 	Tincture           = "tincture"
 	TinctureVisibility = "tincture_visibility"
 	Tools              = "tools"
-	Turn               = "turn"
 	Vault              = "vault"
 	Webhook            = "webhook"
 )
@@ -278,8 +277,6 @@ const (
 	TinctureInvokePublic    = "invoke_public"
 	TinctureVisibilityGet   = "get"
 	ToolsList               = "list"
-	TurnRecover             = "recover"
-	TurnSuspend             = "suspend"
 	VaultAuthorize          = "authorize"
 	VaultCreate             = "create"
 	VaultDelete             = "delete"
@@ -338,7 +335,6 @@ var Actions = map[string][]string{
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
-	"turn":                {"recover", "suspend"},
 	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate", "set_default", "status"},
 	"webhook":             {"create", "get", "list", "reenable", "revoke", "rotate", "update"},
 }
@@ -5018,42 +5014,6 @@ func (args ToolsListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ToolsList, fields: fields(args)})
-}
-
-// TurnRecoverArgs carries arguments for turn.recover.
-type TurnRecoverArgs struct {
-	// The thread.
-	Thread string `json:"thread"`
-	// recover: the turn to resume. Recovery names its turn; there is no "whatever is there now".
-	Turn string `json:"turn"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args TurnRecoverArgs) MarshalJSON() ([]byte, error) {
-	type fields TurnRecoverArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: TurnRecover, fields: fields(args)})
-}
-
-// TurnSuspendArgs carries arguments for turn.suspend.
-type TurnSuspendArgs struct {
-	// The thread whose turn to suspend.
-	Thread string `json:"thread"`
-	// suspend: the turn id. A caller that read one suspends exactly that turn, never its successor.
-	Turn Field[string] `json:"turn,omitzero"`
-	// suspend: recorded on the turn and shown in the transcript.
-	Reason Field[string] `json:"reason,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args TurnSuspendArgs) MarshalJSON() ([]byte, error) {
-	type fields TurnSuspendArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: TurnSuspend, fields: fields(args)})
 }
 
 // VaultAuthorizeArgs carries arguments for vault.authorize.

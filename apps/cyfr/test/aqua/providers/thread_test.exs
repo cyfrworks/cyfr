@@ -111,90 +111,29 @@ defmodule Aqua.Providers.ThreadTest do
     card
   end
 
-  describe "the turn tool" do
-    test "suspend and recover are declared once, and every derived view follows" do
-      annotations =
-        Tool.turn_definition()
-        |> Sanctum.Annotations.actions_of()
+  describe "turns" do
+    test "no one suspends or recovers a turn: the tool is unknown, and offered to no one", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      admin = %{ctx | platform_admin: true}
 
-      assert Map.keys(annotations) |> Enum.sort() == ["recover", "suspend"]
-
-      for {action, annotation} <- annotations do
-        assert annotation.kind == :write, "#{action}: not a write"
-
-        assert annotation.planes == [:external],
-               "#{action}: a running agent must not reach it"
-
-        assert annotation.consent == :interactive,
-               "#{action}: a standing credential must not move a person's work"
-
-        assert annotation.standing == false, "#{action}: every call is a click"
+      for caller <- [ctx, admin], action <- ["suspend", "recover"] do
+        assert {:refused, {:unknown_tool, "turn"}} =
+                 admission(caller, "turn", %{
+                   "action" => action,
+                   "thread" => thread.id,
+                   "turn" => "trn_named"
+                 })
       end
 
-      # Recovery is never itself replay-safe.
-      assert Sanctum.Annotations.recovery(Tool.turn_definition(), "recover") == nil
-      assert Sanctum.Annotations.recovery(Tool.turn_definition(), "suspend") == nil
+      assert Enum.map(Tool.tools(), & &1.name) == ["thread", "crew"]
+      refute Enum.any?(Sanctum.Catalog.tool_actions(), &String.starts_with?(&1, "turn."))
 
-      # A turn to recover is named; a turn to suspend need not be.
-      schema = Tool.turn_definition().input_schema
-      assert "thread" in schema["required"]
-      refute "turn" in schema["required"]
-
-      # And the catalog serves both, under the provider's one service.
-      served = MapSet.new(Sanctum.Catalog.tool_actions())
-      assert MapSet.member?(served, "turn.suspend")
-      assert MapSet.member?(served, "turn.recover")
-      assert Sanctum.Services.service_name(Tool) == "aqua"
-    end
-
-    test "an API key cannot set a person's turn down, and is not shown the tool", %{
-      ctx: ctx,
-      thread: thread
-    } do
-      star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
-
-      assert {:error,
-              %Prima.Refusal{
-                stage: :admission,
-                reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
-              }} =
-               Sanctum.Gate.call_external("turn", star, %{
-                 "action" => "suspend",
-                 "thread" => thread.id
-               })
-
-      shown = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), star)
-      refute Enum.any?(shown, &(&1["name"] == "turn"))
-
-      assert Enum.any?(
-               Visibility.filter_for_context(Sanctum.Catalog.list_tools(), ctx),
-               &(&1["name"] == "turn")
-             )
-    end
-
-    test "the wire says what happened in sentences, not the runner's atoms", %{
-      ctx: ctx,
-      thread: thread
-    } do
-      # Nothing is running here, so there is nothing to set down.
-      assert {:error, {:conflict, message}} =
-               Tool.handle("turn", ctx, %{"action" => "suspend", "thread" => thread.id})
-
-      assert message =~ "No turn is running"
-
-      # A turn nobody minted is absent, never denied.
-      assert {:error, {:not_found, "thread", _}} =
-               Tool.handle("turn", ctx, %{
-                 "action" => "recover",
-                 "thread" => thread.id,
-                 "turn" => "trn_never_minted"
-               })
-
-      assert {:refused, {:invalid_argument, _}} =
-               admission(ctx, "turn", %{"action" => "recover", "thread" => thread.id})
-
-      assert {:refused, {:unknown_action, "turn.stop"}} =
-               admission(ctx, "turn", %{"action" => "stop", "thread" => thread.id})
+      for caller <- [ctx, admin] do
+        shown = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), caller)
+        refute Enum.any?(shown, &(&1["name"] == "turn"))
+      end
     end
   end
 
