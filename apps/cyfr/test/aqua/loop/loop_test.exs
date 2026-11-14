@@ -1484,7 +1484,9 @@ defmodule Aqua.LoopTest do
     assert "native_search" in ingress.tools
     commit_soul!(ctx, ingress.tools -- ["native_search"])
 
-    kept = accept!(ctx, thread, "@aqua again")
+    # A thread of its own, so nothing the first turn read is carried in.
+    {:ok, fresh} = Threads.create(Sanctum.Context.actor(ctx))
+    kept = accept!(ctx, fresh, "@aqua again")
     assert :completed = Task.await(run(ctx, kept), 30_000)
     assert chat_provider_tools() == [["web_search"], []]
     refute web_source?(ctx, kept)

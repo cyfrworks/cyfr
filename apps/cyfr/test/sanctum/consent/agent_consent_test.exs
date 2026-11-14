@@ -264,6 +264,9 @@ defmodule Sanctum.Consent.AgentConsentTest do
   test "a grant narrowed to fewer tools keeps the provider's search it does not untick",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
+    # The soul's edge into its model lends the model's own profile, which
+    # holds the key.
+    _entry = bind_claude!(ctx)
     {_, head, _} = head!(ctx, @soul)
     tools = edge!(head.resolved_policy, @soul, "@ingress").tools
     assert "native_search" in tools and "aqua.list" in tools
@@ -402,12 +405,13 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {_, still, _} = head!(ctx, "agent:local.explorer")
     assert still.revision == first.revision
 
-    # Back to the shipped model, an edit of the soul's policy moves the
-    # member's shape with the soul's: neither is re-minted.
+    # Back to the shipped model, a tool the soul gains moves the member's
+    # shape with the soul's: neither is re-minted.
     write_agent!(ctx, "explorer", &%{&1 | model: "gemini-pro-latest"})
+    gained = ungranted_action(ctx)
 
     write_agent!(ctx, "aqua", fn agent ->
-      %{agent | tool_policy: Map.put(agent.tool_policy, "storage.write", "ask")}
+      %{agent | tool_policy: Map.put(agent.tool_policy, gained, "ask")}
     end)
 
     {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
