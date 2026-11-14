@@ -490,9 +490,15 @@
   }
   async function within(limit, timers, ask) {
     const controller = new AbortController();
-    const timer = timers.setTimeout(() => controller.abort(), limit);
+    let timer;
+    const gaveUp = new Promise((_resolve, reject) => {
+      timer = timers.setTimeout(() => {
+        controller.abort();
+        reject(new Refusal("timed_out"));
+      }, limit);
+    });
     try {
-      return await ask(controller.signal);
+      return await Promise.race([ask(controller.signal), gaveUp]);
     } catch (error) {
       if (controller.signal.aborted) refuse("timed_out");
       throw error;
@@ -1734,7 +1740,7 @@
       return new _Recovery(env2, place, identifier2, key, read2);
     }
     constructor(env2, place, identifier2, key, { state, entries }) {
-      Object.assign(this, { env: env2, place, identifier: identifier2, key, state, entries, fresh: null, pending: null });
+      Object.assign(this, { env: env2, place, identifier: identifier2, key, state, entries, fresh: null, pending: null, passkeyAdded: false });
     }
     /** A new passkey for the account, labelled with its name, which must be this account's. */
     async addPasskey(name) {
@@ -1772,9 +1778,11 @@
     async submit(entry) {
       const retry = entry === void 0;
       if (!retry) this.pending = entry;
-      const { kind } = this.pending;
-      const read2 = await appendOnce(this.place.directory, this.identifier, this.pending, retry);
+      const landed = this.pending;
+      const { kind } = landed;
+      const read2 = await appendOnce(this.place.directory, this.identifier, landed, retry);
       this.pending = null;
+      if (kind === "add_key" && landed.key.kind === "passkey") this.passkeyAdded = true;
       if (kind === "recover") this.key = this.fresh.key;
       if (kind === "recover" || kind === "add_recovery") this.fresh = null;
       Object.assign(this, read2);
@@ -1800,6 +1808,8 @@
     if (text2) {
       try {
         sent2 = { text: text2, request: readSigned(text2, env2.now()) };
+        $(doc, "return-link").textContent = `Continue to ${sent2.request.audience}`;
+        $(doc, "return-link").setAttribute("href", `sign#${sent2.text}`);
       } catch (_error) {
         sent2 = null;
       }
@@ -1810,6 +1820,7 @@
       const rows = recovery2.keys().map((key) => keyRow(doc, keyLabel(key), { current: false, remove: (button) => act(button, () => recovery2.removeKey(key.kid)) }));
       $(doc, "keys").replaceChildren(...rows);
       $(doc, "no-keys").hidden = rows.length > 0;
+      $(doc, "return").hidden = !(sent2 && recovery2.passkeyAdded && env2.now() < sent2.request.expires_at);
       only(doc, "account");
     };
     const act = (button, action) => attempt(doc, button, "account-error", async () => {
@@ -1832,17 +1843,7 @@
       })
     );
     const addPasskey = $(doc, "add-passkey");
-    addPasskey.addEventListener(
-      "click",
-      () => act(addPasskey, async () => {
-        await recovery2.addPasskey($(doc, "passkey-name").value.trim().toLowerCase());
-        if (sent2 && env2.now() < sent2.request.expires_at) {
-          $(doc, "return-link").textContent = `Continue to ${sent2.request.audience}`;
-          $(doc, "return-link").setAttribute("href", `sign#${sent2.text}`);
-          $(doc, "return").hidden = false;
-        }
-      })
-    );
+    addPasskey.addEventListener("click", () => act(addPasskey, () => recovery2.addPasskey($(doc, "passkey-name").value.trim().toLowerCase())));
     const showCode = async (then) => {
       const code = await recovery2.drawCode();
       drawCode(doc, $(doc, "code"), code);

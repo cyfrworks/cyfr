@@ -890,6 +890,39 @@ describe("ways on", () => {
     assert.equal(doc.getElementById("return").hidden, true)
   })
 
+  test("the way back shows once the passkey lands, also when it landed through Retry after a lost read", async () => {
+    const now = signIn.verify.find((c) => c.name === "a passkey signs in").now_ms
+    const text = signIn.fragments.requests.sign_in
+    const net = world()
+    const {env, code, identifier} = await accountWithPasskey(net)
+    const second = await authenticator(identity.keys.passkey_2, identifier)
+    const doc = documentFor("recover")
+    await recoveryRun(doc, failingReadAfterWrite({...env, passkeys: second, now: () => now, location: {hash: `#request=${text}`}}))
+    doc.getElementById("code-input").value = code
+    await doc.getElementById("enter-code").click()
+    doc.getElementById("passkey-name").value = "alice"
+    await doc.getElementById("add-passkey").click()
+    assert.match(doc.getElementById("account-error").textContent, /could not be reached/)
+    assert.equal(doc.getElementById("return").hidden, true)
+    await doc.getElementById("retry").click()
+    assert.equal(doc.getElementById("account-error").textContent, "")
+    assert.equal(doc.getElementById("keys").children.length, 2)
+    assert.equal(doc.getElementById("return").hidden, false)
+    assert.equal(doc.getElementById("return-link").href, `sign#${text}`)
+  })
+
+  test("an answer the browser gives after the page gave up is ignored", async () => {
+    let fire = null
+    let answer = null
+    const timers = {setTimeout: (f) => ((fire = f), 1), clearTimeout: () => {}}
+    const late = {create: () => new Promise((resolve) => (answer = resolve))}
+    const pending = passkeys(late, RP_ID, {limit: 5, timers}).create({userId: new Uint8Array(32), name: "@alice", challenge: new Uint8Array(32)})
+    fire()
+    answer({rawId: new Uint8Array(16), response: {getPublicKey: () => null, getPublicKeyAlgorithm: () => -7}})
+    const error = await pending.then(() => assert.fail("used the late answer"), (e) => e)
+    assert.equal(error.reason, "timed_out")
+  })
+
   test("Remove asks first: Keep sends nothing, and the row's own Remove removes", async () => {
     const net = world()
     const account = await accountWithPasskey(net)

@@ -28,7 +28,7 @@ export class Recovery {
   }
 
   constructor(env, place, identifier, key, {state, entries}) {
-    Object.assign(this, {env, place, identifier, key, state, entries, fresh: null, pending: null})
+    Object.assign(this, {env, place, identifier, key, state, entries, fresh: null, pending: null, passkeyAdded: false})
   }
 
   /** A new passkey for the account, labelled with its name, which must be this account's. */
@@ -73,9 +73,11 @@ export class Recovery {
   async submit(entry) {
     const retry = entry === undefined
     if (!retry) this.pending = entry
-    const {kind} = this.pending
-    const read = await appendOnce(this.place.directory, this.identifier, this.pending, retry)
+    const landed = this.pending
+    const {kind} = landed
+    const read = await appendOnce(this.place.directory, this.identifier, landed, retry)
     this.pending = null
+    if (kind === "add_key" && landed.key.kind === "passkey") this.passkeyAdded = true
     if (kind === "recover") this.key = this.fresh.key
     if (kind === "recover" || kind === "add_recovery") this.fresh = null
     Object.assign(this, read)
@@ -105,6 +107,8 @@ export async function run(doc, env) {
   if (text) {
     try {
       sent = {text, request: readSigned(text, env.now())}
+      $(doc, "return-link").textContent = `Continue to ${sent.request.audience}`
+      $(doc, "return-link").setAttribute("href", `sign#${sent.text}`)
     } catch (_error) {
       sent = null
     }
@@ -117,6 +121,9 @@ export async function run(doc, env) {
     const rows = recovery.keys().map((key) => keyRow(doc, keyLabel(key), {current: false, remove: (button) => act(button, () => recovery.removeKey(key.kid))}))
     $(doc, "keys").replaceChildren(...rows)
     $(doc, "no-keys").hidden = rows.length > 0
+    // The way back to the CYFR that sent the request: once a passkey this
+    // page added has landed, while the request holds, however it landed.
+    $(doc, "return").hidden = !(sent && recovery.passkeyAdded && env.now() < sent.request.expires_at)
     only(doc, "account")
   }
 
@@ -142,18 +149,7 @@ export async function run(doc, env) {
   )
 
   const addPasskey = $(doc, "add-passkey")
-  addPasskey.addEventListener("click", () =>
-    act(addPasskey, async () => {
-      await recovery.addPasskey($(doc, "passkey-name").value.trim().toLowerCase())
-      // The request a CYFR's sign page sent along, while it holds: the new
-      // passkey signs it there.
-      if (sent && env.now() < sent.request.expires_at) {
-        $(doc, "return-link").textContent = `Continue to ${sent.request.audience}`
-        $(doc, "return-link").setAttribute("href", `sign#${sent.text}`)
-        $(doc, "return").hidden = false
-      }
-    })
-  )
+  addPasskey.addEventListener("click", () => act(addPasskey, () => recovery.addPasskey($(doc, "passkey-name").value.trim().toLowerCase())))
 
   const showCode = async (then) => {
     const code = await recovery.drawCode()

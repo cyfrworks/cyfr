@@ -10,7 +10,7 @@
 // the browser leaves unanswered is given up after `limit` milliseconds
 // (two minutes unless a test gives another), refused `timed_out`.
 
-import {hex, refuse} from "./encoding.js"
+import {Refusal, hex, refuse} from "./encoding.js"
 import {identifierForUserId} from "./identity.js"
 
 const ES256 = -7
@@ -47,13 +47,21 @@ function bytes(buffer) {
   return buffer instanceof ArrayBuffer ? new Uint8Array(buffer.slice(0)) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength).slice()
 }
 
-// `ask(signal)` under a signal aborted after `limit`: a rejection after the
-// abort is the browser left unanswered, whatever error it carries.
+// `ask(signal)` given up after `limit`: the signal aborts, and the page
+// stops waiting then, whatever the browser does. An answer that comes after
+// is ignored, never used, and a rejection after the abort is the browser
+// left unanswered, whatever error it carries.
 async function within(limit, timers, ask) {
   const controller = new AbortController()
-  const timer = timers.setTimeout(() => controller.abort(), limit)
+  let timer
+  const gaveUp = new Promise((_resolve, reject) => {
+    timer = timers.setTimeout(() => {
+      controller.abort()
+      reject(new Refusal("timed_out"))
+    }, limit)
+  })
   try {
-    return await ask(controller.signal)
+    return await Promise.race([ask(controller.signal), gaveUp])
   } catch (error) {
     if (controller.signal.aborted) refuse("timed_out")
     throw error
