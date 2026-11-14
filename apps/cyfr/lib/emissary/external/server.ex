@@ -2131,9 +2131,13 @@ defmodule Emissary.External.Server do
 
   # An upstream server can echo request headers back in its result (debug
   # endpoints, error bodies, proxies). External responses never pass through
-  # the executor's SecretMasker, so the credentials THIS plane injected are
-  # masked here: every resolved `vault:` header value, the value of any
-  # credential-shaped literal header, and the session id the peer issued.
+  # the executor's SecretMasker, so what THIS plane sent is masked here:
+  # every header value it stores of at least @min_masked_bytes, a resolved
+  # `vault:` value and a literal alike, since a literal's name says nothing
+  # of what it holds and the page that edits it never sees it, and the
+  # session id the peer issued. A shorter value is not masked: masking is by
+  # substring, and a short value replaced wherever its bytes occur marks its
+  # own place and length, telling more than it hides.
   defp mask_credentials(term, state) do
     case sensitive_header_values(state) do
       [] -> term
@@ -2146,12 +2150,7 @@ defmodule Emissary.External.Server do
     |> Enum.flat_map(fn {key, raw} ->
       resolved = Map.get(state.headers, key)
 
-      cond do
-        not is_binary(resolved) -> []
-        Prima.VaultRef.vault_ref?(raw) -> with_bare_token(resolved)
-        credential_shaped_header?(key) -> with_bare_token(resolved)
-        true -> []
-      end
+      if is_binary(resolved) and is_binary(raw), do: with_bare_token(resolved), else: []
     end)
     |> Enum.concat(List.wrap(state.headers[@session_id_header]))
     |> Enum.filter(&(byte_size(&1) >= @min_masked_bytes))
@@ -2164,14 +2163,6 @@ defmodule Emissary.External.Server do
       [_] -> [value]
       parts -> [value, List.last(parts)]
     end
-  end
-
-  defp credential_shaped_header?(key) do
-    k = key |> to_string() |> String.downcase()
-
-    session_header?(k) or Prima.Network.credential_header?(k) or String.contains?(k, "token") or
-      String.contains?(k, "secret") or
-      String.contains?(k, "auth") or String.contains?(k, "key")
   end
 
   defp mask_values(term, values) when is_binary(term) do
