@@ -33,7 +33,6 @@ defmodule Compendium.Resolver do
 
   """
 
-
   alias Sanctum.Context
   alias Prima.ComponentRef
 
