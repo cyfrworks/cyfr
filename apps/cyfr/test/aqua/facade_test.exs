@@ -64,7 +64,7 @@ defmodule Aqua.FacadeTest do
   end
 
   test "the brains a setup offers are Aqua.Models'" do
-    outside = Sanctum.Context.build(user_id: "usr_outside", scope: :platform)
+    outside = Sanctum.Context.build(user_id: "usr_outside")
 
     assert Aqua.providers(outside) == Aqua.Models.providers(outside)
     assert {:error, :forbidden} = Aqua.providers(outside)

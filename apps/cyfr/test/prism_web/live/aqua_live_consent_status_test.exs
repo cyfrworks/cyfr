@@ -136,6 +136,7 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
         description: "A model catalyst",
         manifest:
           Jason.encode!(%{
+            "contracts" => [Prima.Model.chat_contract()],
             "needs" => %{
               "api_key" => %{
                 "type" => "api_key:status.test",

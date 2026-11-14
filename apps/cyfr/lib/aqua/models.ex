@@ -383,7 +383,8 @@ defmodule Aqua.Models do
 
   @typedoc """
   A brain the athanor can connect (`providers/1`): its `provider` (as
-  `catalogue/1` names it), the newest installed release `ref`, the `need`
+  `catalogue/1` names it), its versionless `ref`, which the newest
+  installed release answers, the `need`
   connecting it meets — the first required one, `%{name, kind, qualifier,
   reason, program}` with `kind` `"login"` for a program's own sign-in and
   the credential kind otherwise (`qualifier` the provider its key is
