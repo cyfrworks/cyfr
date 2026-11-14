@@ -539,11 +539,11 @@ async function signUp(page) {
 
 // The page's own request, waiting on its record, proven with the passkey at
 // the account pages in the tab the system layer opens: what the sign page
-// asked and whether the tab came back to home.test.
+// asked and whether home.test's return page confirmed it.
 async function proveHere(page, panel) {
   const tab = await confirmInTab(page, keys, CELL_HOME,
     () => page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 }));
-  return { what: tab.what, landed: tab.landed, error: tab.error || null };
+  return { what: tab.what, confirmed: tab.confirmed, error: tab.error || null };
 }
 
 // The grant prompt for the component `ref`, the tincture unless named,

@@ -144,7 +144,7 @@ async function main(browser, proxy) {
     { timeout: 30_000 }).then(() => true).catch(() => false);
   record.confirm = { confirmed, key_shown: shown };
   if (!row("confirm",
-    confirmed.what === `Confirm a change at ${H.origin}` && confirmed.landed && shown,
+    confirmed.what === `Confirm a change at ${H.origin}` && confirmed.confirmed && shown,
     "an API key the person asks for at H waits on a fresh confirmation; the sign page asks to confirm a change at H, the passkey " +
       "signs it, and the waiting page makes the key",
     record.confirm)) return;
