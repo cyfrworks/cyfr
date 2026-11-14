@@ -656,11 +656,11 @@ defmodule Locus.Backends.ServiceTest do
       end
     end
 
-    test "the vectors' terminal open reads and verifies, in a kept home", ctx do
+    test "the vectors' terminal open reads and verifies, in its program's scratch home", ctx do
       answer =
         control(
           ctx,
-          sync_message([%{program("fetch", "exec cat") | home: :kept}], %{
+          sync_message([program("fetch", "exec cat")], %{
             "fetch" => %{"API_TOKEN" => @canary}
           })
         )

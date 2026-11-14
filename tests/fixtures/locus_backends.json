@@ -1618,8 +1618,8 @@
   },
   "open_terminal": {
     "answer": "{\"resumed\":false,\"session\":\"ss_6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b\",\"status\":\"running\",\"version\":3}",
-    "body": "{\"argv\":[\"auth\",\"login\"],\"cols\":120,\"e\":7,\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"key\":\"person\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":3}",
-    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249606\nn_open_terminal_7d3e9a\nbe04b7e514774040d2075a464a3ee581d38e4485229b1f31d5af8dc0ef31e3b2",
+    "body": "{\"argv\":[\"auth\",\"login\"],\"cols\":120,\"e\":7,\"key\":\"person\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":3}",
+    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249606\nn_open_terminal_7d3e9a\n3b253bb8a39f8d566c2a377842c3587dd766b043b1efaeff93995008feec0a31",
     "fields": {
       "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
       "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
@@ -1629,8 +1629,8 @@
       "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
       "ts": 1789305249606
     },
-    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249606 nonce=n_open_terminal_7d3e9a body=be04b7e514774040d2075a464a3ee581d38e4485229b1f31d5af8dc0ef31e3b2 mac=IXwhYn8JMzN7LDFxPMC1YT-03k8LD8PDP4Cza-RZiNQ",
-    "mac": "IXwhYn8JMzN7LDFxPMC1YT-03k8LD8PDP4Cza-RZiNQ"
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249606 nonce=n_open_terminal_7d3e9a body=3b253bb8a39f8d566c2a377842c3587dd766b043b1efaeff93995008feec0a31 mac=QotNn7x5SQO4maKwVWJbSRLBxjix3hVn-XYt5Ml4BUg",
+    "mac": "QotNn7x5SQO4maKwVWJbSRLBxjix3hVn-XYt5Ml4BUg"
   },
   "output": {
     "answer": "{\"chunks\":[{\"bytes\":\"G1sxbVBhc3RlIGNvZGUgaGVyZSBpZiBwcm9tcHRlZCA+IBtbMG0=\",\"seq\":2},{\"bytes\":\"//4gcmF3IA0K\",\"seq\":3}],\"dropped\":1,\"running\":true,\"version\":3}",
