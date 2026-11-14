@@ -673,7 +673,7 @@ defmodule Opus.Provider do
   # its row: its seed was empty and it named no account, while a run
   # started anywhere else may have carried a launch's sources or an
   # account the row does not record. The retry starts as the caller's own
-  # run, under the caller's origin, which the grant admits or refuses. It
+  # run, recording the caller's origin. It
   # answers `accepted` with the new run's id once the run is admitted
   # (`Opus.start_root/5`), and the run goes on as a fired run does: its
   # outcome is the run's own, on its row and `runs.changes`, never the
@@ -895,21 +895,30 @@ defmodule Opus.Provider do
 
   defp rooted_at(_ctx, %Record{}), do: {:error, :retry_grant_moved}
 
-  # Execution requires a profile; return a typed setup error when none is selected.
+  # A run stands on its person's grant. With none to stand on, the refusal
+  # names its cause: a reference that names no component is not found,
+  # whatever profiles exist, and otherwise the component was never granted
+  # or its grant was revoked (`Sanctum.Consent.ungranted/2`).
   defp run_root_formatted(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
     case Opus.run_root(ctx, selector, reference, input, opts) do
       {:error, :no_profile} when selector == :default ->
-        {:error,
-         {:consent_required,
-          %{
-            "ref" => reference,
-            "detail" => "no profile — grant it first (profile.plan, or cyfr profile grant)"
-          }}}
+        ungranted(ctx, reference)
 
       other ->
         format_root_result(other)
+    end
+  end
+
+  defp ungranted(ctx, reference) do
+    with {:ok, component_ref, _type, _component} <-
+           Opus.Admission.inspect_component(ctx, reference),
+         {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(component_ref) do
+      case Sanctum.Consent.ungranted(ctx, name_ref) do
+        {:ok, cause} -> {:error, {:consent_required, %{cause: cause, ref: name_ref}}}
+        {:error, _unanswered} -> {:error, {:unavailable, "Profiles"}}
+      end
     end
   end
 

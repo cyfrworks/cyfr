@@ -13,8 +13,7 @@ defmodule Sanctum.Consent.LoaderTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
 
-    # A person at Prism: the admission path every case here models but the
-    # origin cases below.
+    # A person at Prism: the admission path every case here models.
     ctx = %Context{
       user_id: "loader_test_user",
       athanor_id: "ath_test",
@@ -154,10 +153,6 @@ defmodule Sanctum.Consent.LoaderTest do
     assert {:error, {:head_corrupt, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
 
     seed(ctx, profile, consent())
-    :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-1", admitted_origins: "not a list")
-    assert {:error, {:head_corrupt, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
-
-    seed(ctx, profile, consent())
     Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
     assert {:error, {:head_unavailable, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
   end
@@ -290,7 +285,13 @@ defmodule Sanctum.Consent.LoaderTest do
     assert {:error, {:consent_required, payload}} =
              Loader.load_root(ctx, profile, live: live_for(drifted))
 
-    assert payload == %{profile_id: "prof-1", current_revision: 1, shape_diff: []}
+    assert payload == %{
+             cause: :shape_moved,
+             ref: profile.source_ref,
+             profile_id: "prof-1",
+             current_revision: 1,
+             shape_diff: []
+           }
   end
 
   test "versionless drift with an unchanged shape records the new activation", %{ctx: ctx} do
@@ -356,37 +357,23 @@ defmodule Sanctum.Consent.LoaderTest do
   end
 
   describe "the origin a run is admitted under" do
-    test "a context with no origin, or one the revision does not name, is asked to grant again",
+    test "decides nothing: a run under any origin, or none, stands on the person's grant",
          %{ctx: ctx} do
       profile = profile_summary()
       consent = consent()
       seed(ctx, profile, consent)
       live = live_for(consent.activation)
 
+      {:ok, %Authority{} = interactive, stamp} = Loader.load_root(ctx, profile, live: live)
+      granted = Map.take(interactive, [:profile_id, :consent_id, :policy])
+
       for origin <- [nil, :programmatic, :schedule, :webhook] do
-        assert {:error,
-                {:consent_required,
-                 %{profile_id: "prof-1", current_revision: 1, shape_diff: []} = payload}} =
+        assert {:ok, %Authority{} = authority, ^stamp} =
                  Loader.load_root(%{ctx | origin: origin}, profile, live: live)
 
-        # The signal's payload, unchanged: what every surface already reads.
-        assert Map.keys(payload) |> Enum.sort() == [:current_revision, :profile_id, :shape_diff]
+        assert Map.take(authority, [:profile_id, :consent_id, :policy]) == granted,
+               "#{inspect(origin)} was not admitted as interactive is"
       end
-
-      assert {:ok, %Authority{}, _stamp} = Loader.load_root(ctx, profile, live: live)
-    end
-
-    test "a revision that names an origin admits a run under it", %{ctx: ctx} do
-      profile = profile_summary()
-      consent = consent(%{admitted_origins: [:interactive, :programmatic]})
-      seed(ctx, profile, consent)
-      live = live_for(consent.activation)
-
-      assert {:ok, %Authority{}, _} =
-               Loader.load_root(%{ctx | origin: :programmatic}, profile, live: live)
-
-      assert {:error, {:consent_required, _}} =
-               Loader.load_root(%{ctx | origin: :schedule}, profile, live: live)
     end
   end
 
@@ -575,19 +562,6 @@ defmodule Sanctum.Consent.LoaderTest do
              ) == plain
     end
 
-    test "leaves the run's own origin to load_root/3", %{ctx: ctx} do
-      profile = profile_summary()
-      consent = consent()
-      seed(ctx, profile, consent)
-      live = live_for(consent.activation)
-
-      assert {:error, {:consent_required, _}} =
-               Loader.load_root(%{ctx | origin: :schedule}, profile, live: live)
-
-      assert {:ok, %Prima.Authority.Blob{}} =
-               Loader.admitted_blob(%{ctx | origin: :schedule}, profile, head!(ctx, profile))
-    end
-
     test "refuses each head load_root/3 refuses on the head itself, with its answer",
          %{ctx: ctx} do
       profile = profile_summary()
@@ -656,7 +630,14 @@ defmodule Sanctum.Consent.LoaderTest do
             {:lender_corrupt, "catalyst:local.lender", "prof-lender"},
             {:head_corrupt, @own},
             {:profile_unavailable, :revoked},
-            {:consent_required, %{profile_id: @own, current_revision: 1, shape_diff: []}},
+            {:consent_required,
+             %{
+               cause: :shape_moved,
+               ref: @source,
+               profile_id: @own,
+               current_revision: 1,
+               shape_diff: []
+             }},
             {:setup_required, %{profile_id: @own}},
             :connection_not_granted,
             :unavailable,

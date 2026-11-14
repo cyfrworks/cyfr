@@ -135,10 +135,7 @@ defmodule Opus.Feeds do
        `invalid_argument` naming its pointer and reason, never a value.
     4. The caller may bind the profile to the pinned version
        (`Sanctum.Consent.RegistrationBinding.authorize/3`).
-    5. The profile's head consent admits the `schedule` origin a fire runs
-       under, or the bind answers the consent signal that raises the grant
-       prompt for that profile.
-    6. The row is created under the athanor's feed cap
+    5. The row is created under the athanor's feed cap
        (`Arca.CronSchedule.create_feed/2`), and the scheduler is told.
 
   Answers the binding id, the feed's name, its label, its interval and
@@ -153,7 +150,6 @@ defmodule Opus.Feeds do
          {:ok, shape} <- result_shape(ctx, pinned, reference, Map.get(args, "operation")),
          {:ok, binding} <- binding(args, shape),
          :ok <- authorize_profile(ctx, pinned, profile_id),
-         :ok <- schedule_origin(ctx, profile_id),
          {:ok, row} <- create(ctx, binding, pinned, profile_id) do
       Opus.Schedules.Scheduler.add(row.id)
 
@@ -385,33 +381,6 @@ defmodule Opus.Feeds do
     case RegistrationBinding.authorize(ctx, pinned, profile_id) do
       :ok -> :ok
       {:error, reason} -> {:error, RegistrationBinding.refusal(reason)}
-    end
-  end
-
-  # A feed fires with the `schedule` origin: a profile whose head consent
-  # does not admit it is asked to grant again, as the loader asks.
-  defp schedule_origin(ctx, profile_id) do
-    case Sanctum.Consent.head_consent(ctx, profile_id) do
-      {:ok, %{admitted_origins: origins, revision: revision}} ->
-        if :schedule in origins do
-          :ok
-        else
-          {:error,
-           {:consent_required,
-            %{profile_id: profile_id, current_revision: revision, shape_diff: []}}}
-        end
-
-      {:error, :not_found} ->
-        {:error, RegistrationBinding.refusal({:no_head_consent, profile_id})}
-
-      {:error, :corrupt} ->
-        {:error, RegistrationBinding.refusal({:head_corrupt, profile_id})}
-
-      {:error, :unavailable} ->
-        {:error, RegistrationBinding.refusal({:head_unavailable, profile_id})}
-
-      {:error, :no_athanor} ->
-        {:error, :no_athanor}
     end
   end
 

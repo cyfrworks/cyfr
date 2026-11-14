@@ -205,8 +205,7 @@ defmodule Cyfr.Cluster.PersonTest do
       decisions = %{
         ref: ref,
         label: "scheduled",
-        bindings: [%{need: "api_key", entry_id: person.key_entry_id}],
-        origins: [:schedule]
+        bindings: [%{need: "api_key", entry_id: person.key_entry_id}]
       }
 
       %{plan: plan, preview: preview} =
@@ -234,8 +233,7 @@ defmodule Cyfr.Cluster.PersonTest do
       decisions = %{
         ref: Person.model(),
         label: "scheduled",
-        bindings: [%{need: "api_key", entry_id: person.key_entry_id}],
-        origins: [:schedule]
+        bindings: [%{need: "api_key", entry_id: person.key_entry_id}]
       }
 
       %{plan: plan, preview: preview} =

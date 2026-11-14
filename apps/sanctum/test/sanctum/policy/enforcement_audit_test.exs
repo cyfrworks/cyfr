@@ -38,7 +38,6 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
           blob_digest: Prima.Digest.sha256("{}"),
           resolved_policy: "{}",
           activation: "{}",
-          admitted_origins: [:interactive],
           granted_by: "operator@example",
           granted_via: "interactive"
         },

@@ -615,3 +615,34 @@ func TestNewClient_OffATerminalRepeatsNothing(t *testing.T) {
 		t.Errorf("the output shows the secret:\n%s\n%s", out, rendered)
 	}
 }
+
+// Each consent_required names its cause and the component it refuses:
+// never granted, revoked, or a release asking for more than the grant.
+func TestFormatConsentError_ConsentRequiredNamesItsCause(t *testing.T) {
+	cases := []struct {
+		payload map[string]any
+		want    string
+	}{
+		{
+			map[string]any{"cause": "no_grant", "ref": "r:local.city-greeting"},
+			"r:local.city-greeting has not been granted.\n" +
+				"  Grant it in CYFR, or run: cyfr profile grant r:local.city-greeting",
+		},
+		{
+			map[string]any{"cause": "revoked", "ref": "r:local.city-greeting"},
+			"Your grant for r:local.city-greeting was revoked.\n" +
+				"  Grant it again in CYFR, or run: cyfr profile grant r:local.city-greeting",
+		},
+		{
+			map[string]any{"cause": "shape_moved", "ref": "r:local.city-greeting",
+				"profile_id": "prof_1", "current_revision": float64(2), "shape_diff": []any{}},
+			"r:local.city-greeting asks for more than your grant holds (consent rev 2).\n" +
+				"  Review and grant it again in CYFR, or run: cyfr profile grant r:local.city-greeting",
+		},
+	}
+	for _, c := range cases {
+		if got := formatConsentError("consent_required", c.payload); got != c.want {
+			t.Errorf("%v:\ngot:\n%s\nwant:\n%s", c.payload["cause"], got, c.want)
+		}
+	}
+}

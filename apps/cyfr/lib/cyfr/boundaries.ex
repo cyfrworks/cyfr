@@ -1892,15 +1892,20 @@ defmodule Cyfr.Boundaries do
     # A person's attention stream lists their open confirmations by ref,
     # operation and opening alone. A frame's request is shown the person
     # on the preview the identity domain builds of exactly the call that
-    # runs once they approve it (`request_preview/4`).
+    # runs once they approve it (`request_preview/4`). A run with no grant
+    # to stand on, and a setup plan, say why: never granted or revoked
+    # (`ungranted/2`), and a setup plan reads ready only where the head
+    # stands for the release a run would start (`head_stands/4`).
     "Sanctum.Consent" => [
       binding_live: 4,
       head_consent: 2,
+      head_stands: 4,
       profiles: 2,
       request_preview: 4,
       revoke_source: 2,
       row_binding: 3,
       tincture_grant: 2,
+      ungranted: 2,
       waiting_confirmations: 1
     ],
     # The assistant reads which named accounts an app's own ingress binds

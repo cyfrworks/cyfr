@@ -153,7 +153,7 @@ A feed is one operation of an installed component, run on an interval,
 whose result a canvas reads by the feed's name. `feed.list` lists the
 person's feeds with their result shapes and actions, never their values.
 Propose `feed.bind` or `feed.remove` and let the person say yes: a feed
-runs on its own, under a grant that admits runs on a schedule.
+runs on its own, under the person's grant of its component.
 
 ## Shared keys
 

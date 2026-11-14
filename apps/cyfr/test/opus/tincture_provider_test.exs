@@ -287,7 +287,7 @@ defmodule Opus.Providers.TinctureTest do
     test "is served under the address's active public profile", %{ctx: ctx} do
       node = tincture!(ctx, "tinc-mcp-public")
       # An anonymous call over /mcp is programmatic: the public profile names it.
-      public_profile!(ctx, node, [:interactive, :programmatic])
+      public_profile!(ctx, node)
       start_supervised!({ScriptedWorker, ref: @dep_ref, script: [%{"answer" => 3}]})
       ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
 
@@ -367,8 +367,8 @@ defmodule Opus.Providers.TinctureTest do
   end
 
   # An active public profile for the tincture `node`, with a head consent
-  # binding its edge to the dependency and admitting `origins`.
-  defp public_profile!(ctx, node, origins) do
+  # binding its edge to the dependency.
+  defp public_profile!(ctx, node) do
     id = "prof_public_#{System.unique_integer([:positive])}"
     {:ok, component, _ref} = Compendium.Component.resolve_component(ctx, node)
     {:ok, %{graph: activation}} = Compendium.Activation.resolve_verified(ctx, component)
@@ -398,7 +398,6 @@ defmodule Opus.Providers.TinctureTest do
               }
             }),
           activation: activation,
-          admitted_origins: origins,
           vault_refs: []
         }
       )
