@@ -267,7 +267,17 @@ defmodule PrismWeb.SettingsLiveTest do
     {:ok, %{person: second}} = Sanctum.Newcomer.admit(:open, allowed)
     assert {:error, {:door, :not_allowed}} = Sanctum.Newcomer.admit(:open, refused)
 
+    # A request a member asked for names them.
+    asked = "per_" <> Prima.Digest.sha256_hex("asked-#{n}")
+    {:ok, :created, _} = Sanctum.Door.Store.request("identifier", asked, ops.user_id)
+
     {view, _html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+
+    assert has_element?(
+             view,
+             "#allowlist tr",
+             ~r/#{Regex.escape(asked)}\s*#{Regex.escape(asked)}\s*@#{Regex.escape(ops.namespace)}/
+           )
 
     for {identifier, name} <- [{invited.identifier, mira}, {allowed.identifier, oren}] do
       assert has_element?(

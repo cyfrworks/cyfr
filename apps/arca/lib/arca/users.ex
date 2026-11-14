@@ -182,6 +182,13 @@ defmodule Arca.Users do
       `{:error, reason}`, which rolls the whole mint back with that reason.
       It writes only its owner's rows through Arca and makes no network
       call.
+    * `namespace:` — the name the person takes as their namespace when no
+      person here holds it, decided after the installation guard, so under
+      the order every mint serializes on: of two admissions taking one
+      name at once, the later is made without it, never refused. A writer
+      outside that order (a namespace recorded at a sign-in) may still take
+      the name before the insert: the insert that meets the name's unique
+      index then makes the person without it.
 
   The installation guard runs first, inside the same transaction
   (`Arca.InstallationClaims.guard!/1`): the installation's first person is
@@ -227,11 +234,7 @@ defmodule Arca.Users do
         admitted when admitted in [:first, :ok] ->
           with :ok <- also_ran(verify.()),
                {:ok, user} <-
-                 admitted
-                 |> born()
-                 |> User.changeset(user_attrs)
-                 |> Arca.Repo.insert()
-                 |> settled(),
+                 person_row(admitted, free_namespace(user_attrs, opts[:namespace])),
                :ok <- also_ran(also.(Arca.Data.project(user))) do
             {:ok, {admitted, user}}
           end
@@ -250,6 +253,45 @@ defmodule Arca.Users do
         refusal
     end
   end
+
+  # The namespace a mint takes, read under the mints' order (`mint/3`): a
+  # name another person holds is left out.
+  defp free_namespace(user_attrs, name) when is_binary(name) do
+    if Arca.Repo.exists?(from(u in User, where: u.namespace == ^name)),
+      do: user_attrs,
+      else: Map.put(user_attrs, :namespace, name)
+  end
+
+  defp free_namespace(user_attrs, nil), do: user_attrs
+
+  # The person's row. One that meets the namespace's unique index, a
+  # name taken since it was read free, is written without it: the insert
+  # runs in a savepoint, so its refusal leaves the mint's transaction
+  # usable on PostgreSQL.
+  defp person_row(admitted, %{namespace: name} = user_attrs) when is_binary(name) do
+    named =
+      Arca.Repo.transaction(fn ->
+        case insert(admitted, user_attrs) do
+          {:ok, user} -> user
+          {:error, changeset} -> Arca.Repo.rollback(changeset)
+        end
+      end)
+
+    case named do
+      {:ok, user} ->
+        {:ok, user}
+
+      {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+        if Keyword.has_key?(errors, :namespace) and unique?(errors),
+          do: person_row(admitted, Map.delete(user_attrs, :namespace)),
+          else: {:error, refusal(changeset)}
+    end
+  end
+
+  defp person_row(admitted, user_attrs), do: admitted |> insert(user_attrs) |> settled()
+
+  defp insert(admitted, user_attrs),
+    do: admitted |> born() |> User.changeset(user_attrs) |> Arca.Repo.insert()
 
   # The installation's first person is born with the platform
   # administrator's mark, on the row itself and past every changeset.

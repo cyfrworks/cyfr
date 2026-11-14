@@ -68,7 +68,6 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:system_status, nil)
       |> assign(:log_stats, %{total: 0, errors: 0, avg_duration_ms: 0, error_rate: 0.0})
       |> assign(:door_entries, [])
-      |> assign(:door_names, %{})
       |> assign(:door_requests, [])
       |> assign(:door_value, "")
       |> assign(:door_note, "")
@@ -295,13 +294,12 @@ defmodule PrismWeb.SettingsLive do
 
     socket
     |> assign(:door_entries, entries)
-    |> assign(:door_names, names(entries ++ requests))
     |> assign(:door_requests, requests)
   end
 
   # A socket whose capability went since it read the door drops what it read.
   defp load_door(socket),
-    do: assign(socket, door_entries: [], door_names: %{}, door_requests: [])
+    do: assign(socket, door_entries: [], door_requests: [])
 
   # The invitations to this CYFR that name no thread, newest first: the
   # administrator's section. A thread's own are its people's.
@@ -327,41 +325,18 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # The name each person an entry or request names holds here, by their
-  # person id or their identifier, and the name of each member who asked;
-  # an entry made from a name shows its label instead.
-  defp names(entries) do
-    unlabelled = for entry <- entries, is_nil(entry[:label]), do: {entry.kind, entry.value}
-    askers = for %{requested_by: "usr_" <> _ = user_id} <- entries, do: {"person", user_id}
-
-    for {kind, value} <- Enum.uniq(unlabelled ++ askers),
-        {:ok, %{namespace: name}} when is_binary(name) <- [person(kind, value)],
-        into: %{},
-        do: {value, name}
-  end
-
-  defp person("person", user_id), do: Sanctum.Tenancy.Users.get(user_id)
-  defp person("identifier", identifier), do: Sanctum.Tenancy.Users.get_by_identifier(identifier)
-  defp person(_kind, _value), do: {:error, :not_found}
-
-  # An entry's name: its label, the person's name here, everyone for `*`,
-  # or, while no name is known, the identifier itself.
-  defp entry_name(%{kind: "wildcard"}, _names), do: "everyone"
-  defp entry_name(%{label: label}, _names) when is_binary(label), do: "@" <> label
-  defp entry_name(%{value: value}, names), do: known_name(value, names)
+  # An entry's name, as the door answers it, everyone for `*`, or, while
+  # no name is known, the identifier itself.
+  defp entry_name(%{kind: "wildcard"}), do: "everyone"
+  defp entry_name(%{name: name}), do: "@" <> name
+  defp entry_name(%{value: value}), do: value
 
   # Who asked for a request: the person refused at sign-in themselves, or
   # the member who invited them.
-  defp asked_by(%{requested_by: by, value: by}, _names), do: "themselves, at sign-in"
-  defp asked_by(%{requested_by: nil}, _names), do: "-"
-  defp asked_by(%{requested_by: by}, names), do: known_name(by, names)
-
-  defp known_name(value, names) do
-    case Map.fetch(names, value) do
-      {:ok, name} -> "@" <> name
-      :error -> value
-    end
-  end
+  defp asked_by(%{requested_by: by, value: by}), do: "themselves, at sign-in"
+  defp asked_by(%{requested_by: nil}), do: "-"
+  defp asked_by(%{asked_by_name: name}), do: "@" <> name
+  defp asked_by(%{requested_by: by}), do: by
 
   defp setting_call(socket, tool, args, ok_message) do
     args = if is_nil(args["revision"]), do: Map.delete(args, "revision"), else: args
@@ -626,10 +601,10 @@ defmodule PrismWeb.SettingsLive do
               <h4 class="text-xs text-gray-500 uppercase mb-2">Requests</h4>
               <.table id="door-requests" rows={@door_requests}>
                 <:col :let={r} label="Name">
-                  <span data-test="door-request-name">{entry_name(r, @door_names)}</span>
+                  <span data-test="door-request-name">{entry_name(r)}</span>
                 </:col>
                 <:col :let={r} label="Identifier">{r.value}</:col>
-                <:col :let={r} label="Asked by">{asked_by(r, @door_names)}</:col>
+                <:col :let={r} label="Asked by">{asked_by(r)}</:col>
                 <:col :let={r} label="Actions">
                   <div class="flex gap-2">
                     <.button
@@ -659,7 +634,7 @@ defmodule PrismWeb.SettingsLive do
             <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
               <:col :let={e} label="Entry">{e.value}</:col>
               <:col :let={e} label="Name">
-                <span data-test="door-entry-name">{entry_name(e, @door_names)}</span>
+                <span data-test="door-entry-name">{entry_name(e)}</span>
               </:col>
               <:col :let={e} label="Kind">{e.kind}</:col>
               <:col :let={e} label="Effect">

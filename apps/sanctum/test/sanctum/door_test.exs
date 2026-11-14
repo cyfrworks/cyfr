@@ -255,6 +255,27 @@ defmodule Sanctum.DoorTest do
     end
   end
 
+  describe "a request's label" do
+    test "a pending request with none takes the name a later ask knows, and keeps it" do
+      assert {:ok, :created, %{label: nil}} =
+               Store.request("identifier", identifier(23), identifier(23))
+
+      assert {:ok, :existing, %{label: "wren"}} =
+               Store.request("identifier", identifier(23), identifier(23), label: "wren")
+
+      assert {:ok, :existing, %{label: "wren"}} =
+               Store.request("identifier", identifier(23), identifier(23), label: "other")
+
+      assert [%{label: "wren", status: "requested"}] = Store.requests()
+
+      # An answered entry is never relabelled by an ask.
+      {:ok, _} = Store.allow("identifier", identifier(24), "ops")
+
+      assert {:ok, :existing, %{label: nil, status: "allowed"}} =
+               Store.request("identifier", identifier(24), identifier(24), label: "wren")
+    end
+  end
+
   describe "a remote newcomer" do
     test "is admitted by * or an allow of their identifier, and a refusal leaves one request with their name" do
       assert {:error, {:door, :not_allowed}} = Door.sign_in_identifier(identifier(20), "wren")

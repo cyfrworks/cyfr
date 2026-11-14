@@ -28,12 +28,15 @@ defmodule Sanctum.Newcomer do
   ## The name
 
   Once the account reads, the admission asks the registry which name the
-  account holds (`Sanctum.Handle.name_of/1`). While no one here holds that
-  name it is the person's namespace from their first row, so their
-  athanor's slug and name are it, and it labels the identifier allow that
-  setup or an invitation writes and the request a refusal at the open door
-  leaves. A lookup that fails, or a name another person here holds, admits
-  the person unnamed.
+  account holds (`Sanctum.Handle.name_of/1`). The name labels the
+  identifier allow that setup or an invitation writes and the request a
+  refusal at the open door leaves. It is also the person's namespace from
+  their first row, so their athanor's slug and name, when no person here
+  holds it, which the mint decides under the order every mint serializes
+  on (`Arca.Users.mint/3`'s `namespace:`): a person whose name another
+  holds, or loses it to an admission at the same moment, is admitted
+  without a namespace and keeps the name as their labels. A lookup that
+  fails admits the person unnamed.
 
   ## The setup token
 
@@ -188,16 +191,14 @@ defmodule Sanctum.Newcomer do
     do: {:error, {:invalid_argument, "An account is its identifier, directory and head"}}
 
   # The name the account holds at the registry, asked by its identifier
-  # once its signature is verified, while no one here holds that name: the
-  # person's namespace, the slug of their athanor, the label of their
-  # allow and of the request a refusal leaves. A lookup that fails admits
-  # them unnamed, and the sign-in asks again later (`Sanctum.SignIn`).
+  # once its signature is verified: the label of the person's allow and of
+  # the request a refusal leaves, and their namespace where it is free (the
+  # mint decides). A lookup that fails admits them unnamed, and the sign-in
+  # asks again later (`Sanctum.SignIn`).
   defp account_name(%{identifier: identifier}) do
-    with {:ok, %Prima.HandleAnswer{handle: name}} <- Sanctum.Handle.name_of(identifier),
-         {:error, :not_found} <- Users.get_by_namespace(name) do
-      name
-    else
-      _unnamed -> nil
+    case Sanctum.Handle.name_of(identifier) do
+      {:ok, %Prima.HandleAnswer{handle: name}} -> name
+      {:error, _unnamed} -> nil
     end
   end
 
@@ -232,7 +233,6 @@ defmodule Sanctum.Newcomer do
 
     user_attrs = %{
       id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-      namespace: name,
       prefs: Jason.encode!(%{}),
       first_seen_at: now,
       last_seen_at: now,
@@ -243,7 +243,11 @@ defmodule Sanctum.Newcomer do
     Arca.Users.mint(
       Prima.Actor.system(),
       user_attrs,
-      [admission: kind(admission), also: &also(admission, account, name, also, &1)] ++
+      [
+        admission: kind(admission),
+        namespace: name,
+        also: &also(admission, account, name, also, &1)
+      ] ++
         verify(admission)
     )
     |> case do

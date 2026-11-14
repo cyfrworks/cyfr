@@ -261,6 +261,126 @@ defmodule Sanctum.NewcomerTest do
       end
     end
 
+    test "of two accounts taking one name at once, the later is admitted without the namespace, never refused",
+         %{dir: dir} do
+      {first, _account} = first!(dir)
+      {:ok, _} = Store.allow("wildcard", "*", first.id)
+      early = account!(dir)
+      late = account!(dir)
+
+      # The registry names both accounts by one name, as it does a name it
+      # gave the second after the first gave it up.
+      RegistryStub.start!(fn %{path: "/v1/identities/" <> rest} ->
+        {200, name_answer("mira", String.replace_suffix(rest, "/handle", ""))}
+      end)
+
+      # The later admission has learned its name and reads the door; at its
+      # first door read, the earlier admission is made and takes the name,
+      # before the later one mints.
+      test_pid = self()
+      handler = "newcomer-race-#{System.unique_integer([:positive])}"
+
+      late_task =
+        Task.async(fn ->
+          receive do
+            :go -> Newcomer.admit(:open, late)
+          end
+        end)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, metadata, late_pid ->
+            if self() == late_pid and metadata[:source] == "server_allowlist" and
+                 Process.get(:early_made) != true do
+              Process.put(:early_made, true)
+              made = Task.async(fn -> Newcomer.admit(:open, early) end) |> Task.await(30_000)
+              send(test_pid, {:early, made})
+            end
+          end,
+          late_task.pid
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      send(late_task.pid, :go)
+
+      assert {:ok, %{person: late_person}} = Task.await(late_task, 30_000)
+      assert_receive {:early, {:ok, %{person: early_person}}}, 30_000
+
+      assert %{namespace: "mira"} = early_person
+      assert slug(early_person.id) == {"mira", "mira"}
+      assert %{namespace: nil} = late_person
+      assert {"me" <> _, "Me"} = slug(late_person.id)
+    end
+
+    test "a name a sign-in records between the mint's read and its insert admits the person without it",
+         %{dir: dir} do
+      {first, _account} = first!(dir)
+      {:ok, _} = Store.allow("wildcard", "*", first.id)
+      late = account!(dir)
+
+      RegistryStub.start!(fn %{path: "/v1/identities/" <> rest} ->
+        {200, name_answer("mira", String.replace_suffix(rest, "/handle", ""))}
+      end)
+
+      # When the mint has read the name free, a writer outside the mints'
+      # order records it for the first person, as a sign-in that learned
+      # their name does (`Sanctum.Tenancy.Users.set_namespace/2`).
+      handler = "newcomer-taken-#{System.unique_integer([:positive])}"
+      {:ok, holder} = Sanctum.Tenancy.Users.get(first.id)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, metadata, minter ->
+            if self() == minter and metadata[:source] == "users" and
+                 String.contains?(metadata[:query] || "", "namespace") and
+                 Process.get(:name_taken) != true do
+              Process.put(:name_taken, true)
+              {:ok, _} = Sanctum.Tenancy.Users.set_namespace(holder, "mira")
+            end
+          end,
+          self()
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, %{person: person}} = Newcomer.admit(:open, late)
+      :telemetry.detach(handler)
+      assert Process.get(:name_taken)
+
+      assert %{namespace: nil} = person
+      assert {"me" <> _, "Me"} = slug(person.id)
+      assert {:ok, %{namespace: "mira"}} = Sanctum.Tenancy.Users.get(first.id)
+    end
+
+    test "a name another person here holds still labels the allow and the request it leaves", %{
+      dir: dir
+    } do
+      {first, _account} = first!(dir)
+      {:ok, holder} = Sanctum.Tenancy.Users.get(first.id)
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(holder, "held")
+      invited = account!(dir)
+      refused = account!(dir)
+
+      RegistryStub.start!(fn %{path: "/v1/identities/" <> rest} ->
+        {200, name_answer("held", String.replace_suffix(rest, "/handle", ""))}
+      end)
+
+      ctx = Sanctum.TestContext.session!(first.id) |> Map.put(:platform_admin, true)
+      {:ok, %{code: code}} = Sanctum.Invitations.create(ctx, nil)
+      {:ok, hash} = Sanctum.Invitations.code_hash(code)
+
+      {:ok, %{person: person}} = Newcomer.admit({:invitation, hash}, invited)
+      assert %{namespace: nil} = person
+      assert %{effect: "allow", label: "held"} = entry(invited.identifier)
+
+      assert {:error, {:door, :not_allowed}} = Newcomer.admit(:open, refused)
+      assert %{status: "requested", label: "held"} = entry(refused.identifier)
+    end
+
     defp name_answer(name, identifier) do
       RegistryStub.answer(%{
         "protocol" => Prima.HandleAnswer.protocol(),
