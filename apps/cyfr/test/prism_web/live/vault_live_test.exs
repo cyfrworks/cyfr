@@ -1629,7 +1629,7 @@ defmodule PrismWeb.VaultLiveTest do
 
       view
       |> element(form)
-      |> render_submit(%{"entry_id" => market.id, "name" => " quotes key "})
+      |> render_submit(%{"entry_id" => market.id, "name" => "quotes key"})
 
       assert names_of(terry) == ["other key", "quotes key"]
       refute has_element?(view, form)

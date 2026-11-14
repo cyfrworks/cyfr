@@ -918,7 +918,7 @@ defmodule PrismWeb.VaultLive do
   end
 
   defp rename(socket, id, name) do
-    case call_tool(socket, "vault/rename", %{"id" => id, "name" => String.trim(name)}) do
+    case call_tool(socket, "vault/rename", %{"id" => id, "name" => name}) do
       {:ok, _} ->
         {:noreply,
          socket
