@@ -274,12 +274,11 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
 
-    {:error, %Prima.Refusal{stage: :admission, message: message}} =
-      Sanctum.Gate.call_in_chain("fetcher:issues.list", guest(ctx), %{}, auth,
-        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
-      )
-
-    assert message =~ "Denied by chain authority"
+    assert {:error,
+            %Prima.Refusal{stage: :admission, class: :forbidden, reason: {:invoke_denied, _}}} =
+             Sanctum.Gate.call_in_chain("fetcher:issues.list", guest(ctx), %{}, auth,
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+             )
   end
 
   # The call under `auth` passes the authority (it fails later, at the
@@ -288,8 +287,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     case Sanctum.Gate.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
            lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
          ) do
-      {:error, %Prima.Refusal{stage: :admission, message: message}} ->
-        assert message =~ "Denied by chain authority"
+      {:error, %Prima.Refusal{stage: :admission, class: :forbidden, reason: {:invoke_denied, _}}} ->
         false
 
       {:error, _upstream} ->
