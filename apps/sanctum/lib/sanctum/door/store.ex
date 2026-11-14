@@ -182,7 +182,8 @@ defmodule Sanctum.Door.Store do
 
     case find(kind, value) do
       {:ok, %{status: "requested", label: nil} = entry} when is_binary(label) ->
-        with {:ok, labelled} <- update(entry, %{label: label}), do: {:ok, :existing, labelled}
+        with {:ok, labelled} <- Doors.label_request(actor(), entry.id, label),
+             do: {:ok, :existing, labelled}
 
       {:ok, entry} ->
         {:ok, :existing, entry}

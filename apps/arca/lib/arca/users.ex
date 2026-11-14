@@ -264,27 +264,27 @@ defmodule Arca.Users do
 
   defp free_namespace(user_attrs, nil), do: user_attrs
 
-  # The person's row. One that meets the namespace's unique index, a
-  # name taken since it was read free, is written without it: the insert
-  # runs in a savepoint, so its refusal leaves the mint's transaction
-  # usable on PostgreSQL.
+  # The person's row. One that meets the namespace's unique index, a name
+  # taken since it was read free, is written without it: the named insert
+  # does nothing on that index alone (`namespace_taken/0`), which neither
+  # raises nor aborts the mint's transaction on either adapter, and a row
+  # it did not write is written again unnamed. Any other constraint, the
+  # id's among them, still refuses the insert.
   defp person_row(admitted, %{namespace: name} = user_attrs) when is_binary(name) do
     named =
-      Arca.Repo.transaction(fn ->
-        case insert(admitted, user_attrs) do
-          {:ok, user} -> user
-          {:error, changeset} -> Arca.Repo.rollback(changeset)
-        end
-      end)
+      admitted
+      |> born()
+      |> User.changeset(user_attrs)
+      |> Arca.Repo.insert(on_conflict: :nothing, conflict_target: namespace_taken())
 
     case named do
-      {:ok, user} ->
-        {:ok, user}
+      {:ok, %User{id: id} = user} ->
+        if Arca.Repo.exists?(from(u in User, where: u.id == ^id)),
+          do: {:ok, user},
+          else: person_row(admitted, Map.delete(user_attrs, :namespace))
 
-      {:error, %Ecto.Changeset{errors: errors} = changeset} ->
-        if Keyword.has_key?(errors, :namespace) and unique?(errors),
-          do: person_row(admitted, Map.delete(user_attrs, :namespace)),
-          else: {:error, refusal(changeset)}
+      {:error, changeset} ->
+        {:error, refusal(changeset)}
     end
   end
 
@@ -292,6 +292,11 @@ defmodule Arca.Users do
 
   defp insert(admitted, user_attrs),
     do: admitted |> born() |> User.changeset(user_attrs) |> Arca.Repo.insert()
+
+  # The namespace's unique index, partial over the named rows
+  # (`users_namespace_index` in the baseline), as a conflict target both
+  # adapters read.
+  defp namespace_taken, do: {:unsafe_fragment, "(namespace) WHERE namespace IS NOT NULL"}
 
   # The installation's first person is born with the platform
   # administrator's mark, on the row itself and past every changeset.

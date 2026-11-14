@@ -276,6 +276,37 @@ defmodule Sanctum.DoorTest do
     end
   end
 
+  test "an administrator's answer that lands between a late ask's read and its write keeps its label" do
+    {:ok, :created, _} = Store.request("identifier", identifier(25), identifier(25))
+
+    # Once the late ask has read the pending row, the administrator allows
+    # the identifier under a label of their own, before the ask writes.
+    handler = "door-label-race-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, metadata, asker ->
+          if self() == asker and metadata[:source] == "server_allowlist" and
+               Process.get(:answered) != true do
+            Process.put(:answered, true)
+            {:ok, _} = Store.allow("identifier", identifier(25), "ops", label: "chosen")
+          end
+        end,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:ok, :existing, %{status: "allowed", label: "chosen"}} =
+             Store.request("identifier", identifier(25), identifier(25), label: "wren")
+
+    :telemetry.detach(handler)
+    assert Process.get(:answered)
+    assert [%{status: "allowed", label: "chosen"}] = Store.list()
+  end
+
   describe "a remote newcomer" do
     test "is admitted by * or an allow of their identifier, and a refusal leaves one request with their name" do
       assert {:error, {:door, :not_allowed}} = Door.sign_in_identifier(identifier(20), "wren")
