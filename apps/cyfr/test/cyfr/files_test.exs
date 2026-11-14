@@ -10,7 +10,9 @@ defmodule Arca.FilesTest.Store do
   # :eio}` (`:refuse`), kills its caller once its bytes landed (`:kill`),
   # or runs a function once they landed and answers `:ok` (`{:run, fun}`)
   # or `{:error, :eio}` (`{:run_and_refuse, fun}`): a move's store, between
-  # its read and its publish.
+  # its read and its publish. A function runs once in the process that
+  # armed store reaches, since the write it makes may store a `last.txt`
+  # of its own. A test arms it through `Prima.Test.Env` at `armed/0`.
   use Arca.Storage.TestDouble
 
   @held {__MODULE__, :held}
@@ -18,8 +20,7 @@ defmodule Arca.FilesTest.Store do
 
   def hold, do: :persistent_term.put(@held, true)
   def release, do: :persistent_term.erase(@held)
-  def arm(how), do: :persistent_term.put(@armed, how)
-  def disarm, do: :persistent_term.erase(@armed)
+  def armed, do: @armed
 
   def last_modified(actor, path), do: Arca.Adapters.Local.last_modified(actor, path)
 
@@ -40,8 +41,9 @@ defmodule Arca.FilesTest.Store do
 
       {run, fun} when run in [:run, :run_and_refuse] ->
         :ok = super(actor, key, content)
-        :persistent_term.erase(@armed)
-        fun.()
+
+        unless Process.put({__MODULE__, :ran}, true), do: fun.()
+
         if run == :run, do: :ok, else: {:error, :eio}
 
       _unarmed ->
@@ -313,9 +315,7 @@ defmodule Arca.FilesTest do
       armed!()
       {:ok, _} = Files.write(actor, "data/last.txt", "first")
 
-      Arca.FilesTest.Store.arm(
-        {:run, fn -> {:ok, _} = Files.write(actor, "data/last.txt", "second") end}
-      )
+      arm!({:run, fn -> {:ok, _} = Files.write(actor, "data/last.txt", "second") end})
 
       assert Files.move(actor, "data/last.txt", "data/moved/last.txt") ==
                {:error,
@@ -329,9 +329,7 @@ defmodule Arca.FilesTest do
       {:ok, _} = Files.write(actor, "data/batch/a.txt", "a")
       {:ok, _} = Files.write(actor, "data/batch/last.txt", "l")
 
-      Arca.FilesTest.Store.arm(
-        {:run, fn -> {:ok, _} = Files.write(actor, "data/batch/new.txt", "n") end}
-      )
+      arm!({:run, fn -> {:ok, _} = Files.write(actor, "data/batch/new.txt", "n") end})
 
       assert Files.move(actor, "data/batch", "data/moved") ==
                {:error,
@@ -349,9 +347,7 @@ defmodule Arca.FilesTest do
       armed!()
       {:ok, _} = Files.write(actor, "data/src/last.txt", "mine")
 
-      Arca.FilesTest.Store.arm(
-        {:run, fn -> {:ok, _} = Files.write(actor, "data/dest/last.txt", "theirs") end}
-      )
+      arm!({:run, fn -> {:ok, _} = Files.write(actor, "data/dest/last.txt", "theirs") end})
 
       assert Files.move(actor, "data/src", "data/dest") ==
                {:error, {:conflict, "'data/dest' already exists — choose another name"}}
@@ -362,9 +358,7 @@ defmodule Arca.FilesTest do
       # Any file under the destination, not only one the move lands on.
       {:ok, _} = Files.write(actor, "data/lone/last.txt", "lone")
 
-      Arca.FilesTest.Store.arm(
-        {:run, fn -> {:ok, _} = Files.write(actor, "data/folder/unrelated.txt", "u") end}
-      )
+      arm!({:run, fn -> {:ok, _} = Files.write(actor, "data/folder/unrelated.txt", "u") end})
 
       assert Files.move(actor, "data/lone", "data/folder") ==
                {:error, {:conflict, "'data/folder' already exists — choose another name"}}
@@ -379,7 +373,7 @@ defmodule Arca.FilesTest do
       {:ok, _} = Files.write(actor, "data/two/a.txt", "a")
       {:ok, _} = Files.write(actor, "data/two/last.txt", "l")
 
-      Arca.FilesTest.Store.arm(
+      arm!(
         {:run_and_refuse, fn -> {:ok, _} = Files.write(actor, "data/there/a.txt", "theirs") end}
       )
 
@@ -397,10 +391,10 @@ defmodule Arca.FilesTest do
       {:ok, _} = Files.write(actor, "data/batch/a.txt", "a")
       {:ok, _} = Files.write(actor, "data/batch/last.txt", "l")
 
-      Arca.FilesTest.Store.arm(:refuse)
+      arm!(:refuse)
       assert Files.move(actor, "data/batch", "data/moved") == {:error, {:unavailable, "Storage"}}
 
-      Arca.FilesTest.Store.arm(:kill)
+      arm!(:kill)
       {pid, ref} = spawn_monitor(fn -> Files.move(actor, "data/batch", "data/gone") end)
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
 
@@ -457,18 +451,13 @@ defmodule Arca.FilesTest do
   end
 
   # The store double in place of the configured adapter for one test.
-  defp armed! do
-    previous_adapter = Application.get_env(:arca, :storage_adapter)
+  defp armed!,
+    do: Prima.Test.Env.put_app_env(:arca, :storage_adapter, Arca.FilesTest.Store)
 
-    on_exit(fn ->
-      Arca.FilesTest.Store.disarm()
-
-      if previous_adapter,
-        do: Application.put_env(:arca, :storage_adapter, previous_adapter),
-        else: Application.delete_env(:arca, :storage_adapter)
-    end)
-
-    Application.put_env(:arca, :storage_adapter, Arca.FilesTest.Store)
+  # How the double's next store of a `last.txt` behaves, run anew.
+  defp arm!(how) do
+    Process.delete({Arca.FilesTest.Store, :ran})
+    Prima.Test.Env.put_persistent_term(Arca.FilesTest.Store.armed(), how)
   end
 
   defp generations(actor, path) do
