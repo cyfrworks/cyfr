@@ -266,6 +266,34 @@ defmodule PrismWeb.FilesLiveTest do
     assert {:ok, "f"} = Arca.get(actor, ["data", "stored", "f.txt"])
   end
 
+  test "at phone width a row's actions take a line of their own under its name", %{
+    conn: conn,
+    ctx: ctx
+  } do
+    :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "a-long-report-name.csv"], "x")
+    {view, _html} = mount_athanor(conn, "/files?p=data")
+
+    page = view |> render() |> LazyHTML.from_document()
+
+    # Below the sm breakpoint the row is a wrapping flex line and the
+    # actions cell is a whole line; from sm up both are table parts again.
+    assert page |> LazyHTML.query("#files-entries tr") |> LazyHTML.attribute("class") ==
+             ["flex flex-wrap items-center hover:bg-gray-800/30 sm:table-row"]
+
+    assert page
+           |> LazyHTML.query("#files-entries td[data-row-actions]")
+           |> LazyHTML.attribute("class") ==
+             [
+               "w-full px-3 pb-2 text-left sm:table-cell sm:w-auto sm:pt-2 sm:text-right " <>
+                 "sm:whitespace-nowrap"
+             ]
+
+    actions = page |> LazyHTML.query("#files-entries td[data-row-actions] :is(a, button)")
+
+    assert actions |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim())) ==
+             ~w(Download Rename Move Delete)
+  end
+
   test "the download route knows no folder the page does not show", %{conn: conn, route: route} do
     assert get(conn, "/a/#{route}/files/download/payloads/sha256/abc").status == 404
     assert get(conn, "/a/#{route}/files/download/data/missing.txt").status == 404

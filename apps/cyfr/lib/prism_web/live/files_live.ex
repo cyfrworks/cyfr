@@ -811,14 +811,15 @@ defmodule PrismWeb.FilesLive do
           <table
             :if={!@loading && @listing && entries(@listing, @path, @new_folders) != []}
             id="files-entries"
-            class="min-w-full"
+            class="block w-full sm:table"
           >
-            <tbody class="divide-y divide-gray-800/50">
+            <tbody class="block divide-y divide-gray-800/50 sm:table-row-group">
+              <%!-- At phone width a row wraps: its actions take a line of their own under the name. --%>
               <tr
                 :for={entry <- entries(@listing, @path, @new_folders)}
-                class="hover:bg-gray-800/30"
+                class="flex flex-wrap items-center hover:bg-gray-800/30 sm:table-row"
               >
-                <td :if={in_data?(@path)} class="w-6 pl-3 py-2">
+                <td :if={in_data?(@path)} class="w-6 pl-3 py-2 sm:table-cell">
                   <input
                     :if={entry.kind == :file}
                     type="checkbox"
@@ -829,7 +830,7 @@ defmodule PrismWeb.FilesLive do
                     class="rounded border-gray-600 bg-gray-800"
                   />
                 </td>
-                <td class="px-3 py-2 text-sm">
+                <td class="min-w-0 flex-1 px-3 py-2 text-sm sm:table-cell">
                   <button
                     :if={entry.kind == :dir}
                     type="button"
@@ -838,7 +839,7 @@ defmodule PrismWeb.FilesLive do
                     class="flex items-center gap-2 text-gray-200 hover:text-white"
                   >
                     <.icon name="folder" class="h-4 w-4 text-gray-500" />
-                    <span class="font-mono">{entry.name}/</span>
+                    <span class="font-mono break-all text-left">{entry.name}/</span>
                   </button>
                   <button
                     :if={entry.kind == :file}
@@ -848,13 +849,16 @@ defmodule PrismWeb.FilesLive do
                     class="flex items-center gap-2 text-gray-300 hover:text-white"
                   >
                     <.icon name="document" class="h-4 w-4 text-gray-600" />
-                    <span class="font-mono">{entry.name}</span>
+                    <span class="font-mono break-all text-left">{entry.name}</span>
                   </button>
                 </td>
-                <td class="px-3 py-2 text-xs text-gray-500 text-right whitespace-nowrap">
+                <td class="px-3 py-2 text-xs text-gray-500 text-right whitespace-nowrap sm:table-cell">
                   {size_label(entry.size)}
                 </td>
-                <td class="px-3 py-2 text-right whitespace-nowrap">
+                <td
+                  data-row-actions
+                  class="w-full px-3 pb-2 text-left sm:table-cell sm:w-auto sm:pt-2 sm:text-right sm:whitespace-nowrap"
+                >
                   <a
                     :if={entry.kind == :file}
                     href={download_href(@athanor_route, child(@path, entry.name))}
