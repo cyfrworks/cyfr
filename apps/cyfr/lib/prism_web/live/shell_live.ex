@@ -738,9 +738,8 @@ defmodule PrismWeb.ShellLive do
   def handle_event("shell_key", %{"key" => "desktops"}, socket),
     do: {:noreply, open_chooser(socket)}
 
-  def handle_event("choose_desktop", %{"tincture" => tincture_id}, socket)
-      when is_binary(tincture_id),
-      do: {:noreply, choose_desktop(socket, tincture_id)}
+  def handle_event("choose_desktop", %{"ref" => ref}, socket) when is_binary(ref),
+    do: {:noreply, choose_desktop(socket, ref)}
 
   def handle_event("close_chooser", _params, socket), do: {:noreply, close_chooser(socket)}
 
@@ -2572,10 +2571,10 @@ defmodule PrismWeb.ShellLive do
   # layout made and written as a gesture is (`gesture/3`), its apps kept.
   # The frames follow at once: the canvas's frame for the tincture it ran
   # is let go, and the chosen one is decided as any canvas is.
-  defp choose_desktop(socket, tincture_id) do
+  defp choose_desktop(socket, chosen) do
     socket = close_chooser(socket)
 
-    with %{} = card <- Enum.find(socket.assigns.canvases, &(&1.id == tincture_id)),
+    with %{} = card <- Enum.find(socket.assigns.canvases, &(desktop_ref(&1) == chosen)),
          canvas_id when is_binary(canvas_id) <- chosen_canvas(socket.assigns) do
       ref = Frames.ref_of(card)
 
@@ -2597,6 +2596,12 @@ defmodule PrismWeb.ShellLive do
         put_flash(socket, :error, "That desktop could not be set.")
     end
   end
+
+  # A desktop as the chooser names it: its whole reference, publisher,
+  # name and the version the registry lists, so two publishers' desktops
+  # of one name are two choices.
+  defp desktop_ref(card),
+    do: Prima.ComponentRef.build("tincture", card.publisher, card.name, card.version)
 
   # The canvas a chosen desktop goes on: the visible one, while the layout
   # is held and places it.
@@ -3684,11 +3689,11 @@ defmodule PrismWeb.ShellLive do
           No desktop is installed.
         </p>
         <ul class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <li :for={card <- @canvases} id={"chooser-" <> card.id}>
+          <li :for={card <- @canvases} id={"chooser-" <> desktop_ref(card)}>
             <button
               type="button"
               phx-click="choose_desktop"
-              phx-value-tincture={card.id}
+              phx-value-ref={desktop_ref(card)}
               aria-current={if Frames.ref_of(card) == @in_use, do: "true"}
               class="group flex w-full flex-col overflow-hidden rounded-md border border-gray-700 bg-gray-950 text-left hover:border-blue-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
             >
@@ -3706,6 +3711,12 @@ defmodule PrismWeb.ShellLive do
               <div class="space-y-1 p-3">
                 <p class="flex items-center gap-2 text-sm font-medium text-white">
                   {card.name}
+                  <span
+                    :if={card.publisher != Prima.ComponentPath.default_publisher()}
+                    class="text-xs font-normal text-gray-400"
+                  >
+                    by {card.publisher}
+                  </span>
                   <span
                     :if={Frames.ref_of(card) == @in_use}
                     class="rounded bg-blue-900/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-blue-200"

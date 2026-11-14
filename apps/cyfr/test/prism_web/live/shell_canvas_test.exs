@@ -60,18 +60,20 @@ defmodule PrismWeb.ShellCanvasTest do
   # ---- what the athanor holds -----------------------------------------------
 
   # A tincture version laid in the athanor's tree with its component row:
-  # `tincture` its manifest's block, `files` its files. Answers the row's
-  # release digest.
+  # `tincture` its manifest's block, `files` its files, under `publisher`
+  # (`local` unless named). Answers the row's release digest.
   defp lay!(ctx, name, version, tincture, files, opts \\ []) do
+    publisher = Keyword.get(opts, :publisher, "local")
+
     manifest = %{
       "name" => name,
       "type" => "tincture",
       "version" => version,
-      "publisher" => "local",
+      "publisher" => publisher,
       "tincture" => tincture
     }
 
-    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, version,
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", publisher, name, version,
       manifest: manifest,
       files: files
     )
@@ -93,8 +95,8 @@ defmodule PrismWeb.ShellCanvasTest do
         size: 100,
         exports: "[]",
         manifest: Jason.encode!(manifest),
-        publisher: "local",
-        publisher_id: "local|local|#{ctx.namespace}",
+        publisher: publisher,
+        publisher_id: "local|#{publisher}|#{ctx.namespace}",
         source: Compendium.Source.filesystem(),
         signature_verified: false,
         inserted_at: now,
@@ -104,7 +106,7 @@ defmodule PrismWeb.ShellCanvasTest do
     acknowledged!(ctx)
 
     if Keyword.get(opts, :granted, true),
-      do: Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.#{name}")
+      do: Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:#{publisher}.#{name}")
 
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
     release_digest
@@ -1863,6 +1865,9 @@ defmodule PrismWeb.ShellCanvasTest do
       :ok
     end
 
+    defp chooser(name, publisher \\ "local"),
+      do: ~s([id="chooser-tincture:#{publisher}.#{name}:1.0.0"])
+
     defp layout_tinctures(user, athanor) do
       {:ok, %{document: document}} = Compendium.Providers.Layout.read(person(user, athanor))
       for %{id: id, tincture: tincture} <- document.canvases, do: {id, tincture}
@@ -1876,11 +1881,11 @@ defmodule PrismWeb.ShellCanvasTest do
       render_hook(view, "shell_key", %{"key" => "desktops"})
 
       for name <- ["markets", "notes-canvas", "garden"],
-          do: assert(has_element?(view, "#chooser-iframe_#{name}"), name)
+          do: assert(has_element?(view, chooser(name)), name)
 
-      assert has_element?(view, ~s(#chooser-iframe_markets [aria-current="true"]))
+      assert has_element?(view, chooser("markets") <> ~s( [aria-current="true"]))
 
-      view |> element(~s(#chooser-iframe_garden button)) |> render_click()
+      view |> element(chooser("garden") <> " button") |> render_click()
       refute has_element?(view, "#desktop-chooser")
 
       settle!(view, fn -> match?(%{reference: %{name: "garden"}}, canvas(view)) end)
@@ -1904,7 +1909,7 @@ defmodule PrismWeb.ShellCanvasTest do
       before = layout_tinctures(user, athanor)
 
       render_hook(view, "shell_key", %{"key" => "desktops"})
-      view |> element(~s(#chooser-iframe_notes-canvas button)) |> render_click()
+      view |> element(chooser("notes-canvas") <> " button") |> render_click()
 
       assert Frames.visible_canvas(frames(view)) == "work"
       assert assigns(view).pending == []
@@ -1925,6 +1930,33 @@ defmodule PrismWeb.ShellCanvasTest do
       render_keydown(view, "close_chooser", %{"key" => "Escape"})
       refute has_element?(view, "#desktop-chooser")
       assert %{state: :live} = canvas(view)
+    end
+
+    test "two publishers' desktops of one name are two choices, each chosen by its whole reference",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "garden", "1.0.0", %{"data" => ["runs.changes"]}, publisher: "alice")
+      view = shell!(conn)
+
+      render_hook(view, "shell_key", %{"key" => "desktops"})
+      assert has_element?(view, chooser("garden"))
+      assert has_element?(view, chooser("garden", "alice"), "by alice")
+
+      view |> element(chooser("garden", "alice") <> " button") |> render_click()
+
+      wait_until(
+        fn -> {"main", "tincture:alice.garden"} in layout_tinctures(user, athanor) end,
+        2_000,
+        "alice's garden to be written"
+      )
+
+      render_hook(view, "shell_key", %{"key" => "desktops"})
+      view |> element(chooser("garden") <> " button") |> render_click()
+
+      wait_until(
+        fn -> {"main", "tincture:local.garden"} in layout_tinctures(user, athanor) end,
+        2_000,
+        "the local garden to be written"
+      )
     end
 
     test "the shelf opens it", %{conn: conn} do

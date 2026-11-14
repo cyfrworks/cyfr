@@ -25,6 +25,9 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   require Logger
 
   @max_recent 8
+  # The installed components a typed search shows at most, as the
+  # component domain matches them.
+  @max_matches 50
 
   @impl true
   def mount(socket) do
@@ -34,6 +37,8 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
      |> assign(:query, "")
      |> assign(:items, [])
      |> assign(:all_items, [])
+     |> assign(:components?, false)
+     |> assign(:components, [])
      |> assign(:loading, false)}
   end
 
@@ -55,11 +60,12 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   def handle_event("close", _params, socket), do: {:noreply, close(socket)}
 
-  def handle_event("search", %{"value" => query}, socket) do
-    # The item SET is loaded once, on open — only the filter changes while
-    # typing. Reloading here re-ran two tool calls per (debounced)
-    # keystroke for a set that cannot change under the palette.
-    {:noreply, socket |> assign(:query, query) |> refilter()}
+  # The pages, requests and tinctures are loaded once, on open, and only
+  # filtered while typing. Installed components are the component domain's
+  # to match (`component.search` over the installed ones), so a search
+  # finds one by its name however many are installed.
+  def handle_event("search", %{"value" => query}, socket) when is_binary(query) do
+    {:noreply, socket |> assign(:query, query) |> find_components() |> refilter()}
   end
 
   # Every target is a page path; `Nav.href/2` decides whether the focus
@@ -78,6 +84,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     |> assign(:query, "")
     |> assign(:items, [])
     |> assign(:all_items, [])
+    |> assign(:components, [])
   end
 
   # ============================================================================
@@ -85,7 +92,8 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   # ============================================================================
 
   # The mode's pages always; the developer's lookups — recent requests,
-  # components — only where those pages exist to open.
+  # components — only where those pages exist to open. Before anything is
+  # typed the components are the newest few.
   defp load_items(socket) do
     ctx = socket.assigns[:context]
     mode = Prism.Labels.mode(socket.assigns[:ui_mode])
@@ -99,7 +107,6 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           nav_items(mode) ++
             context_actions(socket.assigns[:active_context]) ++
             recent_request_items(ctx) ++
-            component_items(ctx) ++
             tincture_items(ctx)
 
         true ->
@@ -108,11 +115,34 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
     socket
     |> assign(:all_items, items)
+    |> assign(:components?, not is_nil(ctx) and Prism.Labels.dev?(mode))
+    |> find_components()
     |> refilter()
   end
 
   defp refilter(socket) do
-    assign(socket, :items, filter_items(socket.assigns.all_items, socket.assigns.query))
+    %{all_items: items, query: query, components: components} = socket.assigns
+    assign(socket, :items, filter_items(items, query) ++ components)
+  end
+
+  defp find_components(%{assigns: %{components?: false}} = socket),
+    do: assign(socket, :components, [])
+
+  defp find_components(socket) do
+    ctx = socket.assigns.context
+
+    case String.trim(socket.assigns.query) do
+      "" ->
+        assign(
+          socket,
+          :components,
+          component_items(ctx, "component/list", %{"limit" => @max_recent})
+        )
+
+      typed ->
+        args = %{"query" => typed, "source" => "local", "limit" => @max_matches}
+        assign(socket, :components, component_items(ctx, "component/search", args))
+    end
   end
 
   defp nav_items(mode) do
@@ -195,10 +225,8 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     end
   end
 
-  defp component_items(ctx) do
-    # Every installed component, as the list's own bound reads them: a
-    # search that saw only the newest few could not find one by its name.
-    case call_tool(ctx, "component/list", %{}) do
+  defp component_items(ctx, tool, args) do
+    case call_tool(ctx, tool, args) do
       {:ok, %{components: list}} when is_list(list) ->
         Enum.map(list, fn comp ->
           ref = comp[:component_ref] || ""

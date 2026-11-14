@@ -87,7 +87,32 @@ defmodule PrismWeb.CommandPaletteTest do
     refute has_element?(view, ~s(#command-palette [phx-value-to*="/tinctures"]))
   end
 
-  test "every installed component is offered, not the newest few: one is found by its name",
+  # A component row as the registry writes one, `inserted_at` naming how new
+  # it is.
+  defp component_row!(ctx, name, inserted_at) do
+    {:ok, _} =
+      Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
+        id: "cmp_#{name}",
+        name: name,
+        version: "0.1.0",
+        component_type: "catalyst",
+        description: name,
+        tags: "[]",
+        digest: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower),
+        release_digest: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower),
+        size: 100,
+        exports: "[]",
+        manifest: "{}",
+        publisher: "local",
+        publisher_id: "local|local|#{ctx.namespace}",
+        source: Compendium.Source.filesystem(),
+        signature_verified: false,
+        inserted_at: inserted_at,
+        updated_at: inserted_at
+      })
+  end
+
+  test "an installed component is found by its name past every listing's bound",
        %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
@@ -96,16 +121,16 @@ defmodule PrismWeb.CommandPaletteTest do
     athanor = seated_athanor()
     ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
 
-    # `http` first, so nine newer components stand before it.
-    for name <- ["http" | Enum.map(1..9, &"newer-#{&1}")] do
-      {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
-          name: name,
-          version: "0.1.0",
-          type: "catalyst",
-          description: name
-        })
-    end
+    # `http` first, and the 1,000 a list answers at most newer than it.
+    start = DateTime.utc_now() |> DateTime.add(-3_600) |> DateTime.truncate(:microsecond)
+    component_row!(ctx, "http", start)
+    for n <- 1..1_000, do: component_row!(ctx, "newer-#{n}", DateTime.add(start, n))
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
+
+    {:ok, :acknowledged} =
+      Arca.StorageProjectionChanges.replace(actor, "components", token, fn -> :acknowledged end)
 
     {view, _html} = mount_athanor(conn, "/settings")
     view |> with_target("#command-palette") |> render_click("toggle", %{})
