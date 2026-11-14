@@ -322,7 +322,10 @@ defmodule Compendium.Providers.Component do
         ),
         # deprecate and yank carry :component_manage like every sibling
         # mutation; the handlers' namespace-bearer check is the
-        # registry-identity check beside it.
+        # registry-identity check beside it. Like a push, each is a
+        # person's act under a namespace they hold: an API key is an
+        # athanor's credential and nobody's publisher, so the gate admits
+        # a signed-in session alone (`consent: :interactive`).
         Operation.new(
           "component",
           "deprecate",
@@ -341,6 +344,7 @@ defmodule Compendium.Providers.Component do
           ],
           kind: :destructive,
           sources: [:outside],
+          consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -361,6 +365,7 @@ defmodule Compendium.Providers.Component do
           ],
           kind: :destructive,
           sources: [:outside],
+          consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
         ),

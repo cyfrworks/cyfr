@@ -2469,6 +2469,58 @@ defmodule Compendium.ProviderTest do
       assert "search" in visible_component_actions(key_ctx)
     end
 
+    # Deprecating and yanking speak for a publisher, as a push does: an API
+    # key with every permission is refused at the gate, and discovery hides
+    # both from it.
+    test "component.deprecate and component.yank are a person's acts — an API key is refused at the gate" do
+      key_ctx = %Context{
+        user_id: "github|https://github.com|keyholder",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:*]),
+        scope: :athanor,
+        auth_method: :api_key,
+        authenticated: true
+      }
+
+      for action <- ~w(deprecate yank) do
+        assert {:error,
+                %Prima.Refusal{
+                  stage: :admission,
+                  class: :forbidden,
+                  reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+                }} =
+                 Sanctum.Gate.call_external("component", key_ctx, %{
+                   "action" => action,
+                   "reference" => "reagent:alice.widget:1.0.0",
+                   "reason" => "superseded"
+                 }),
+               "component.#{action} admitted an API key"
+
+        refute action in visible_component_actions(key_ctx)
+      end
+    end
+
+    # A signed-in person passes the gate and reaches the handler, which
+    # asks for the namespace's push token.
+    test "component.deprecate and component.yank admit a signed-in person to the handler",
+         %{ctx: ctx} do
+      ctx = %{ctx | origin: :interactive}
+      assert ctx.auth_method == :oidc
+
+      for action <- ~w(deprecate yank) do
+        assert action in visible_component_actions(ctx)
+
+        assert {:error, reason} =
+                 Sanctum.Gate.call_external("component", ctx, %{
+                   "action" => action,
+                   "reference" => "reagent:alice.widget:1.0.0",
+                   "reason" => "superseded"
+                 })
+
+        assert Sanctum.Refusals.render(reason) =~ "no push token for namespace 'alice'"
+      end
+    end
+
     test "registry's person-only actions refuse an API key at the gate, and discovery hides them" do
       key_ctx = %Context{
         user_id: "github|https://github.com|keyholder",
