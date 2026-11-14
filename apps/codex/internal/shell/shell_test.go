@@ -38,6 +38,9 @@ type box struct {
 	record   string
 	restarts atomic.Int32
 	now      atomic.Int64
+	// proof is what the page's script keeps: the proof the last answer
+	// that handed one over carried.
+	proof string
 }
 
 func newBox(t *testing.T, home *fakeHome, dir string) *box {
@@ -76,8 +79,21 @@ func (b *box) do(method, path, origin string, fields url.Values) *httptest.Respo
 	return w
 }
 
+// post is a form of the shell's own page, as its script sends it: with
+// the proof the page keeps, unless the form names one, and keeping the
+// proof an answer hands over.
 func (b *box) post(path string, fields url.Values) *httptest.ResponseRecorder {
-	return b.do(http.MethodPost, path, Origin, fields)
+	if fields == nil {
+		fields = url.Values{}
+	}
+	if !fields.Has("proof") {
+		fields.Set("proof", b.proof)
+	}
+	w := b.do(http.MethodPost, path, Origin, fields)
+	if p := proofIn(w); p != "" {
+		b.proof = p
+	}
+	return w
 }
 
 func (b *box) page() string {
@@ -113,23 +129,41 @@ func (b *box) shown() string {
 }
 
 // setUp sets the box up as name, through the pages, to the recovery page,
-// and answers its passphrase.
+// whose answer hands over the proof and shows the code, and answers its
+// passphrase.
 func (b *box) setUp(name string) string {
 	b.t.Helper()
 	p := b.shown()
 	w := b.post("/setup", url.Values{"name": {name}, "secret": {p}, "again": {p}})
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
-		b.t.Fatalf("setup answered %d %q", w.Code, w.Header().Get("Location"))
+	if w.Code != http.StatusOK || proofIn(w) == "" || !codeShape.MatchString(w.Body.String()) {
+		b.t.Fatalf("setup answered %d %q:\n%s", w.Code, w.Header().Get("Location"), w.Body.String())
 	}
 	return p
 }
 
+// recovery is the recovery code the page holding the proof fetches.
+func (b *box) recovery() string {
+	b.t.Helper()
+	m := codeShape.FindStringSubmatch(body(b.post("/recovery", nil)))
+	if m == nil {
+		b.t.Fatal("the page holding the proof is shown no recovery code")
+	}
+	return m[1]
+}
+
+var toShape = regexp.MustCompile(`data-to="([^"]*)"`)
+
+// ticketOf is the ticket an answer sends the browser on with: a redirect,
+// or the page an unlock answers, whose script goes on to it.
 func ticketOf(t *testing.T, w *httptest.ResponseRecorder, home *fakeHome) string {
 	t.Helper()
 	loc := w.Header().Get("Location")
+	if m := toShape.FindStringSubmatch(w.Body.String()); w.Code == http.StatusOK && m != nil {
+		loc = html.UnescapeString(m[1])
+	}
 	prefix := home.address() + "/auth/device/complete#"
-	if w.Code != http.StatusSeeOther || !strings.HasPrefix(loc, prefix) {
-		t.Fatalf("answered %d %q, want a redirect to %s<ticket>", w.Code, loc, prefix)
+	if (w.Code != http.StatusSeeOther && w.Code != http.StatusOK) || !strings.HasPrefix(loc, prefix) {
+		t.Fatalf("answered %d %q, want to go on to %s<ticket>", w.Code, loc, prefix)
 	}
 	return strings.TrimPrefix(loc, prefix)
 }
@@ -171,8 +205,8 @@ func TestSetup_MakesTheAccountAndOpensPrism(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("the key record: %v %v", info, err)
 	}
-	page := b.page()
-	code := b.shown()
+	page := body(b.post("/recovery", nil))
+	code := b.recovery()
 	if !strings.HasPrefix(code, "CYFR-") || !strings.Contains(page, "<svg") || !strings.Contains(page, `id="print"`) || !strings.Contains(page, "@alice") {
 		t.Fatalf("the recovery page shows no code, QR or Print:\n%s", page)
 	}
@@ -240,7 +274,7 @@ func TestSetup_ARestartedBoxFinishesWithTheRecoveryCode(t *testing.T) {
 	dir := t.TempDir()
 	b := newBox(t, home, dir)
 	p := b.setUp("alice")
-	code := b.shown()
+	code := b.recovery()
 	home.accounts.Down = true
 	b.post("/saved", nil)
 

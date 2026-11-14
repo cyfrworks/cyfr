@@ -16,9 +16,11 @@
 # The setup page makes the person's account, the box its first device:
 # typed on the guest's keyboard through QMP, a name and the PIN (or
 # passphrase) twice make the box's key and show the account's recovery
-# code before anything reaches the box's account service; "I saved it"
-# makes the account there, lists the box's key in it, claims the name and
-# opens Prism with the box's hello under the setup token. Then, reading
+# code before anything reaches the box's account service, to the page that
+# typed the PIN alone, never to another local program reading it; "I saved
+# it" makes the account there, lists the box's key in it, claims the name
+# and opens Prism with the box's hello under the setup token. A local
+# program naming the shell's Host and Origin gets no ticket. Then, reading
 # what the box holds over SSH: the lock after five minutes without input,
 # a wrong PIN, the unlock; Prism's Lock; an API key made in Prism, which
 # asks a fresh confirmation, confirmed on this device after a Cancel and
@@ -45,9 +47,9 @@
 # /tmp/cyfr-evidence.install-screen.XXXXXX, printed, which scripts/janitor.sh
 # removes a week later, its rule 5), the guest's in clean/. The run's
 # scratch directory, <run prefix>install-screen.XXXXXX under
-# ${TMPDIR:-/tmp}, holds the guest's SSH key and password and the box's
-# recovery code: the teardown
-# removes it, and scripts/janitor.sh's rule 1 removes a killed run's. The
+# ${TMPDIR:-/tmp}, holds the guest's SSH key and password and the setup
+# token: the teardown removes it, and scripts/janitor.sh's rule 1 removes
+# a killed run's. The
 # base image is the host's cache and the proof image is shared, each made
 # by tests/install-screen-proof/prepare.sh, and this tree's server image
 # is shared too, made by scripts/image.sh --undated app, all outside the
@@ -302,9 +304,8 @@ box_install() {
 # as the screen reads it, from the guest.
 screen_signed_in() {
   local id
-  check "the recovery code is shown with its QR" grep -q '<svg' "$GUEST_DIR/shell-recovery.html"
-  sed -n 's/.*<p class="code">\(CYFR-[^<]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-recovery.html" | head -n 1 | tr -d '\n' >"$WORK/recovery-code"
-  check "the code is CYFR- and fourteen groups of eight letters and digits" grep -qE '^CYFR-[A-Z0-9]{8}([- ]?[A-Z0-9]{8}){13}$' "$WORK/recovery-code"
+  check "a local program reading the page is shown neither the recovery code nor its QR, only the form the screen's page asks for it with" \
+    sh -c '! grep -qE "CYFR-|<svg" "$1" && grep -qF "<form id=\"reveal\" method=\"post\" action=\"/recovery\">" "$1"' sh "$GUEST_DIR/shell-recovery.html"
   guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/v1/handles/alice" >"$GUEST_DIR/handle-shown.json" 2>&1
   guest_ssh 'cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder-shown.json" 2>&1
   check "nothing reached the account service while the code is shown: no one holds alice, and the box's key names no account" \
@@ -335,6 +336,8 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/cyfr/.cyfr/screen/client.json'
   check "Chrome holds the session cookie Prism opened with" screen_cookie prism
   check "the home serves that cookie on a page that needs a session" cookie_is in prism
+  guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/open" >"$GUEST_DIR/open-forged.txt" 2>&1
+  check "a local program naming the shell's Host and Origin is sent back to the page, with no ticket" grep -qx '303 http://127.0.0.1:7340/' "$GUEST_DIR/open-forged.txt"
   check "Chrome's profile is copied while Prism is open" guest_ssh "cp -a $SCREEN_PROFILE ~/chrome-copy"
 
   step "five minutes without input lock the screen"

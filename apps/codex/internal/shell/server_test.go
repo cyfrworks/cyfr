@@ -4,10 +4,14 @@
 package shell
 
 import (
+	"encoding/base64"
+	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -100,20 +104,36 @@ func TestServer_RefusesWhatIsNotAForm(t *testing.T) {
 	}
 }
 
-// The pages run only the two scripts their policy hashes.
+// The pages run only the three scripts their policy hashes: every page
+// the one that keeps the proof, the recovery page shown its code the one
+// that prints it too, and the policy admits those three and no other.
 func TestPages_RunOnlyTheHashedScripts(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
 	b.setUp("alice")
-	page := b.do(http.MethodGet, "/", "", nil)
-	if !strings.Contains(page.Body.String(), "<script>"+printScript+"</script>") {
-		t.Fatal("the recovery page's script is not the hashed one")
-	}
-	if n := strings.Count(page.Body.String(), "<script"); n != 1 {
-		t.Fatalf("%d scripts", n)
-	}
-	if !strings.Contains(page.Body.String(), "<style>"+style+"</style>") {
-		t.Fatal("the style is not the hashed one")
+	for name, c := range map[string]struct {
+		page    *httptest.ResponseRecorder
+		scripts []string
+	}{
+		"the plain read":     {b.do(http.MethodGet, "/", "", nil), []string{keepScript}},
+		"the code's request": {b.post("/recovery", nil), []string{printScript, keepScript}},
+	} {
+		page := c.page.Body.String()
+		want := ""
+		for _, script := range c.scripts {
+			want += "<script>" + script + "</script>"
+		}
+		got := strings.Join(regexp.MustCompile(`<script>[^<]*</script>`).FindAllString(page, -1), "")
+		if got != want || strings.Count(page, "<script") != len(c.scripts) {
+			t.Errorf("%s runs %s", name, got)
+		}
+		if !strings.Contains(page, "<style>"+style+"</style>") {
+			t.Errorf("%s: the style is not the hashed one", name)
+		}
+		csp := c.page.Header().Get("Content-Security-Policy")
+		if !strings.Contains(csp, "script-src "+hash(printScript)+" "+hash(closeScript)+" "+hash(keepScript)+";") {
+			t.Errorf("%s: the policy %s", name, csp)
+		}
 	}
 }
 
@@ -172,5 +192,209 @@ func TestServer_PrismsLockIsANavigationThatLocks(t *testing.T) {
 	}
 	if w := b.do(http.MethodGet, "/lock", "", nil); w.Code != http.StatusSeeOther || len(home.locked) != 1 || b.restarts.Load() != 1 {
 		t.Fatalf("a repeated GET /lock did more: %d %v", w.Code, home.locked)
+	}
+}
+
+// onwardRoutes are the nine POSTs that end in onward, each of which hands
+// the browser a ticket once the box is unlocked.
+var onwardRoutes = []string{"/setup", "/make", "/create", "/enroll", "/saved", "/resume", "/unlock", "/name", "/open"}
+
+var proofShape = regexp.MustCompile(`data-proof="([^"]*)"`)
+
+// proofIn is the proof an answer hands its page, or "" for none.
+func proofIn(w *httptest.ResponseRecorder) string {
+	if m := proofShape.FindStringSubmatch(w.Body.String()); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// toHome is whether an answer sends the browser to the home with a ticket,
+// by a redirect or by its page.
+func toHome(w *httptest.ResponseRecorder, home *fakeHome) bool {
+	prefix := home.address() + "/auth/device/complete#"
+	return strings.HasPrefix(w.Header().Get("Location"), prefix) || strings.Contains(w.Body.String(), prefix)
+}
+
+// SEC-1: a local program that names the shell's Host and Origin but holds
+// no proof gets no ticket from any of the nine routes of an unlocked box:
+// each answers exactly a redirect to the page, with no body, and no
+// session is reserved at the home.
+func TestServer_NoRouteHandsATicketWithoutTheProof(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	setUpAndOpen(t, home, b)
+	for _, route := range onwardRoutes {
+		ops := len(home.opsSeen())
+		w := b.do(http.MethodPost, route, Origin, url.Values{"x": {"y"}})
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" || w.Body.Len() != 0 || len(home.opsSeen()) != ops {
+			t.Errorf("%s answered %d %q %q, the home saw %v", route, w.Code, w.Header().Get("Location"), w.Body.String(), home.opsSeen()[ops:])
+		}
+	}
+	if !b.shell.Unlocked() {
+		t.Fatal("the box locked meanwhile, so the routes were not asked while unlocked")
+	}
+}
+
+// #1549: after setup, a plain local read of the page shows the recovery
+// page without its code or the code's QR.
+func TestServer_APlainReadShowsNoRecoveryCode(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := b.shown()
+	b.post("/setup", url.Values{"name": {"alice"}, "secret": {p}, "again": {p}})
+	v := b.shell.View()
+	if v.Page != PageRecovery || !strings.HasPrefix(v.RecoveryCode, "CYFR-") {
+		t.Fatalf("the box is not showing a recovery code: %+v", v)
+	}
+	page := b.do(http.MethodGet, "/", "", nil).Body.String()
+	if !strings.Contains(page, "<h1>Your recovery code</h1>") || strings.Contains(page, v.RecoveryCode) ||
+		strings.Contains(page, html.EscapeString(v.RecoveryCode)) || strings.Contains(page, "<svg") {
+		t.Fatalf("a plain read of the recovery page shows the code %v, its QR %v", strings.Contains(page, v.RecoveryCode), strings.Contains(page, "<svg"))
+	}
+}
+
+// The recovery page read plainly asks for its code by a POST with the
+// proof the page keeps; that POST without the current proof is shown the
+// page without the code and without the form, so a page holding a stale
+// proof does not ask again and again.
+func TestServer_TheRecoveryCodeGoesOnlyToTheProof(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	b.setUp("alice")
+	code := b.shell.View().RecoveryCode
+	plain := b.do(http.MethodGet, "/", "", nil).Body.String()
+	if !strings.Contains(plain, `<form id="reveal" method="post" action="/recovery"><input type="hidden" name="proof"></form>`) {
+		t.Fatal("the plain read does not ask for the code")
+	}
+	for name, proof := range map[string]string{"no proof": "", "another proof": "AAAA" + b.proof[4:], "a proof cut short": b.proof[:20]} {
+		page := b.do(http.MethodPost, "/recovery", Origin, url.Values{"proof": {proof}}).Body.String()
+		if strings.Contains(page, code) || strings.Contains(page, "<svg") || strings.Contains(page, `id="reveal"`) || !strings.Contains(page, "<h1>Your recovery code</h1>") {
+			t.Errorf("%s: shown the code %v, its QR %v, the form %v", name, strings.Contains(page, code), strings.Contains(page, "<svg"), strings.Contains(page, `id="reveal"`))
+		}
+	}
+	if got := b.recovery(); got != code {
+		t.Fatalf("the page holding the proof is shown %q, the box holds %q", got, code)
+	}
+}
+
+// The proof is 32 bytes, handed over by the answer whose PIN opened the key
+// and by no other answer; a wrong PIN, or an unlock of an unlocked box,
+// opens nothing and hands over none.
+func TestServer_TheProofIsHandedOverOnlyByTheOpening(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := setUpAndOpen(t, home, b)
+	b.do(http.MethodGet, "/lock", "", nil)
+	wrong := b.do(http.MethodPost, "/unlock", Origin, url.Values{"secret": {otherPassphrase(t, p)}})
+	if wrong.Code != http.StatusSeeOther || wrong.Header().Get("Location") != "/" || wrong.Body.Len() != 0 {
+		t.Fatalf("a wrong passphrase answered %d %q %q", wrong.Code, wrong.Header().Get("Location"), wrong.Body.String())
+	}
+	opened := b.do(http.MethodPost, "/unlock", Origin, url.Values{"secret": {p}})
+	proof := proofIn(opened)
+	raw, err := base64.RawURLEncoding.DecodeString(proof)
+	if opened.Code != http.StatusOK || err != nil || len(raw) != 32 {
+		t.Fatalf("the unlock answered %d with the proof %q (%v)", opened.Code, proof, err)
+	}
+	ticketOf(t, opened, home)
+	again := b.do(http.MethodPost, "/unlock", Origin, url.Values{"secret": {p}, "proof": {proof}})
+	if proofIn(again) != "" || !strings.HasPrefix(again.Header().Get("Location"), home.address()) {
+		t.Fatalf("an unlock of the unlocked box answered %d %q", again.Code, again.Header().Get("Location"))
+	}
+	answers := map[string]*httptest.ResponseRecorder{
+		"the page":         b.do(http.MethodGet, "/", "", nil),
+		"Open CYFR":        b.do(http.MethodPost, "/open", Origin, url.Values{"proof": {proof}}),
+		"the code's POST":  b.do(http.MethodPost, "/recovery", Origin, url.Values{"proof": {proof}}),
+		"a confirmation":   b.do(http.MethodGet, "/confirm?ref=cnr_x", "", nil),
+		"a refused Origin": b.do(http.MethodPost, "/open", "https://evil.example", url.Values{"proof": {proof}}),
+		"Lock":             b.do(http.MethodGet, "/lock", "", nil),
+	}
+	for name, w := range answers {
+		if strings.Contains(w.Body.String(), proof) || strings.Contains(fmt.Sprint(w.Header()), proof) {
+			t.Errorf("%s carries the proof", name)
+		}
+	}
+}
+
+// A key made before (Already have an account?) makes its own account
+// only with its PIN: a wrong one makes nothing and hands over no proof;
+// the right one hands over the proof the recovery code is shown to.
+func TestServer_MakingTheAccountOfAKeyMadeBeforeAsksThePIN(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := b.shown()
+	b.post("/make", url.Values{"secret": {p}, "again": {p}})
+	if b.proof != "" || !strings.Contains(b.page(), "Add this box to your account") {
+		t.Fatalf("making the key handed over %q, or shows:\n%s", b.proof, b.page())
+	}
+	wrong := b.post("/create", url.Values{"name": {"alice"}, "secret": {otherPassphrase(t, p)}})
+	if wrong.Code != http.StatusSeeOther || wrong.Header().Get("Location") != "/" || b.proof != "" ||
+		b.shell.View().Page != PageEnroll || !strings.Contains(b.page(), "not this screen") {
+		t.Fatalf("a wrong passphrase answered %d, the box shows %s", wrong.Code, b.shell.View().Page)
+	}
+	made := b.post("/create", url.Values{"name": {"alice"}, "secret": {p}})
+	code := b.shell.View().RecoveryCode
+	if made.Code != http.StatusOK || b.proof == "" || code == "" || !strings.Contains(body(made), `<p class="code">`+code+`</p>`) {
+		t.Fatalf("the account's making answered %d:\n%s", made.Code, body(made))
+	}
+	if strings.Contains(b.page(), code) {
+		t.Fatal("a plain read shows the code")
+	}
+	b.post("/saved", nil)
+	if !strings.Contains(b.page(), "CYFR is locked") {
+		t.Fatalf("the made account does not ask the passphrase:\n%s", b.page())
+	}
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+}
+
+// A page served from another loopback port is another origin: whatever it
+// holds, the current proof included, every POST it sends is refused before
+// anything acts, and no answer of the shell's sets a cookie, which
+// 127.0.0.1 would send to every port.
+func TestServer_AnotherLoopbackPortGetsNothing(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := setUpAndOpen(t, home, b)
+	b.do(http.MethodGet, "/lock", "", nil)
+	unlocked := b.post("/unlock", url.Values{"secret": {p}})
+	proof := proofIn(unlocked)
+	other := "http://127.0.0.1:7341"
+	for route := range actions {
+		ops := len(home.opsSeen())
+		w := b.do(http.MethodPost, route, other, url.Values{"proof": {proof}})
+		if w.Code != http.StatusForbidden || toHome(w, home) || len(home.opsSeen()) != ops {
+			t.Errorf("%s from %s answered %d %q", route, other, w.Code, w.Header().Get("Location"))
+		}
+	}
+	for _, w := range []*httptest.ResponseRecorder{unlocked, b.do(http.MethodGet, "/", "", nil), b.post("/open", url.Values{"proof": {proof}})} {
+		if c := w.Header().Values("Set-Cookie"); len(c) != 0 {
+			t.Errorf("an answer sets a cookie: %v", c)
+		}
+	}
+}
+
+// A proof from before a lock gets nothing: after a lock and a new unlock,
+// only the new unlock's proof opens CYFR.
+func TestServer_AProofFromBeforeALockGetsNothing(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := setUpAndOpen(t, home, b)
+	b.do(http.MethodGet, "/lock", "", nil)
+	before := proofIn(b.post("/unlock", url.Values{"secret": {p}}))
+	b.do(http.MethodGet, "/lock", "", nil)
+	after := proofIn(b.post("/unlock", url.Values{"secret": {p}}))
+	if !b.shell.Unlocked() {
+		t.Fatal("the second unlock did not unlock")
+	}
+	ops := len(home.opsSeen())
+	w := b.do(http.MethodPost, "/open", Origin, url.Values{"proof": {before}})
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" || w.Body.Len() != 0 || len(home.opsSeen()) != ops {
+		t.Fatalf("the proof from before the lock answered %d %q", w.Code, w.Header().Get("Location"))
+	}
+	if before == after || after == "" {
+		t.Fatalf("the unlocks' proofs %q and %q", before, after)
+	}
+	if ticket := ticketOf(t, b.do(http.MethodPost, "/open", Origin, url.Values{"proof": {after}}), home); ticket == "" {
+		t.Fatal("the current proof opened nothing")
 	}
 }
