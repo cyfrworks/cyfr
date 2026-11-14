@@ -933,9 +933,9 @@ defmodule PrismWeb.VaultLive do
     do:
       Map.new(used_by, fn {ref, readers} -> {ref, Enum.sort_by(readers, &{&1.name, &1.kind})} end)
 
-  # The readers of `name` where knowing none is harmless (the row, Revoke's
-  # warning): an unread list names none there.
-  defp readers_named(:unread, _name), do: []
+  # The readers of `name`, or `:unread` when the listing failed, which the
+  # row and Revoke's warning say rather than naming none.
+  defp readers_named(:unread, _name), do: :unread
   defp readers_named(used_by, name), do: Map.get(used_by, name, [])
 
   defp reader_kind("program"), do: :program
@@ -1305,10 +1305,17 @@ defmodule PrismWeb.VaultLive do
                 Nothing uses it yet.
               </div>
               <div
-                :if={readers_named(@used_by, entry.name) != []}
+                :if={readers_named(@used_by, entry.name) not in [[], :unread]}
                 class="text-xs text-amber-400/90"
               >
                 {used_by_line(readers_named(@used_by, entry.name))}
+              </div>
+              <div
+                :if={readers_named(@used_by, entry.name) == :unread}
+                class="text-xs text-amber-400/90"
+                data-test="entry-readers-unread"
+              >
+                {readers_unknown()}
               </div>
             </div>
           </:col>
@@ -1843,6 +1850,9 @@ defmodule PrismWeb.VaultLive do
 
   defp readers_unread, do: @readers_unread
 
+  defp readers_unknown,
+    do: "Which programs and tool servers read this entry by its name could not be read."
+
   defp renaming?(%{id: id}, %{id: id}), do: true
   defp renaming?(_renaming, _entry), do: false
 
@@ -1873,6 +1883,9 @@ defmodule PrismWeb.VaultLive do
     base = "Profiles bound to this entry stop receiving it at their next run."
 
     case readers_named(used_by, entry.name) do
+      :unread ->
+        base <> " " <> readers_unknown() <> " Revoke?"
+
       [] ->
         base <> " Revoke?"
 

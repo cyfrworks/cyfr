@@ -1844,6 +1844,39 @@ defmodule PrismWeb.VaultLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "while who reads an entry cannot be read, Revoke's warning and the row say so, " <>
+           "and Revoke stays offered" do
+      %{terry: terry} = traders!()
+      token = key!(terry, "bridge-token", %{"hosts" => ["example.com"]})
+      tool_server!(terry, "bridge", "bridge-token")
+      unknown = "Which programs and tool servers read this entry by its name could not be read."
+      revoke = ~s(button[phx-click="revoke"][phx-value-id="#{token.id}"])
+
+      {view, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          hide_table!("mcp_servers")
+          {view, _html} = vault!(terry)
+          render(view)
+          restore_table!("mcp_servers")
+          view
+        end)
+
+      assert [confirm] =
+               view
+               |> element(revoke)
+               |> render()
+               |> LazyHTML.from_fragment()
+               |> LazyHTML.attribute("data-confirm")
+
+      assert confirm ==
+               "Profiles bound to this entry stop receiving it at their next run. " <>
+                 unknown <> " Revoke?"
+
+      assert texts(view, ~s([data-test="entry-readers-unread"])) == [unknown]
+      refute render(view) =~ "used by the tool server bridge"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "Rename is not offered on a revoked entry" do
       %{terry: terry} = traders!()
       market = key!(terry, "market key", @market)
