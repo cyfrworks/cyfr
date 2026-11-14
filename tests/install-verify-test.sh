@@ -227,7 +227,9 @@ run_case "a missing bundle with CYFR_ALLOW_UNVERIFIED=1 installs on the checksum
 # resolve_version reads the releases API through a curl on PATH that prints
 # a listing, and takes from each of tests/fixtures/release_manifest.json's
 # selection rows the release the row names, refusing a listing with none,
-# from the listing as the API answers it and minified alike.
+# from the listing as the API answers it and minified alike. The curl
+# answers the row's page the URL asks for, an empty page past them, and
+# notes each URL, so the pages read are the rule's.
 api_bin="$fixture/api-bin"
 mkdir "$api_bin"
 python3 -I - "$REPO_ROOT/tests/fixtures/release_manifest.json" "$fixture/selection" <<'PY' || { echo "FAIL: the selection rows do not read"; exit 1; }
@@ -237,10 +239,14 @@ assert rows, "no selection rows"
 os.mkdir(sys.argv[2])
 for i, row in enumerate(rows):
     base = os.path.join(sys.argv[2], str(i))
-    with open(base + ".json", "w") as f:
-        json.dump(row["releases"], f, indent=2)
-    with open(base + ".min.json", "w") as f:
-        json.dump(row["releases"], f, separators=(",", ":"))
+    for n, page in enumerate(row["pages"], 1):
+        with open("%s.json.%d" % (base, n), "w") as f:
+            json.dump(page, f, indent=2)
+        with open("%s.min.json.%d" % (base, n), "w") as f:
+            json.dump(page, f, separators=(",", ":"))
+    full = len(row["pages"][-1]) == 100
+    with open(base + ".asked", "w") as f:
+        f.write("".join("per_page=100&page=%d\n" % n for n in range(1, len(row["pages"]) + 1 + full)))
     with open(base + ".name", "w") as f:
         f.write(row["name"])
     with open(base + ".picks", "w") as f:
@@ -253,7 +259,14 @@ for name_file in "$fixture"/selection/*.name; do
     name="$(cat "$name_file")"
     picks="$(cat "$row.picks")"
     for listing in "$row.json" "$row.min.json"; do
-        printf '#!/bin/sh\ncat "%s"\n' "$listing" > "$api_bin/curl"
+        rm -f "$fixture/asked"
+        cat > "$api_bin/curl" <<CURL
+#!/bin/sh
+url=\$(for a in "\$@"; do :; done; printf '%s' "\$a")
+printf '%s\\n' "\${url#*\\?}" >> "$fixture/asked"
+page=\${url##*page=}
+if [ -f "$listing.\$page" ]; then cat "$listing.\$page"; else echo '[]'; fi
+CURL
         chmod +x "$api_bin/curl"
         if [ -n "$picks" ]; then
             run_case "selection: $name ($(basename "$listing"))" ok \
@@ -261,7 +274,7 @@ for name_file in "$fixture"/selection/*.name; do
                  unset CYFR_VERSION
                  version=\$(resolve_version) || exit 1
                  printf 'resolved %s\n' \"\$version\"
-                 [ \"\$version\" = '$picks' ]" \
+                 [ \"\$version\" = '$picks' ] && cmp -s '$fixture/asked' '$row.asked'" \
                 "resolved $picks"
         else
             run_case "selection: $name ($(basename "$listing")) refuses" fail \

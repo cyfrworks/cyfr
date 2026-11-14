@@ -149,7 +149,7 @@ resolve_version() {
     # (internal/release.Latest; tests/fixtures/release_manifest.json's
     # selection): the newest release that is not a pre-release and, while
     # none is listed, the newest pre-release, by SemVer precedence, whatever
-    # order the API lists them in. A pre-release is one GitHub marks as such
+    # order or page the API lists them in. A pre-release is one GitHub marks as such
     # or whose tag carries one; drafts and tags outside the release-version
     # grammar are skipped.
     # Each release's tag_name, draft and prerelease are its own top-level
@@ -157,15 +157,26 @@ resolve_version() {
     # no release body matches them. A release whose flags are not both read
     # is skipped. awk runs under LC_ALL=C, so its ranges and its string
     # order are ASCII's.
-    api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20"
-    if command -v curl >/dev/null 2>&1; then
-        response="$(curl -fsSL "$api_url")"
-    elif command -v wget >/dev/null 2>&1; then
-        response="$(wget -qO- "$api_url")"
-    else
-        printf "Error: curl or wget is required\n" >&2
-        exit 1
-    fi
+    # The listing is read from page 1, 100 releases a page, until a page
+    # holds fewer, at most 10 pages, so a release past the first page
+    # still counts (as release.Latest reads it).
+    response=""
+    page=1
+    while [ "$page" -le 10 ]; do
+        api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100&page=${page}"
+        if command -v curl >/dev/null 2>&1; then
+            listed="$(curl -fsSL "$api_url")"
+        elif command -v wget >/dev/null 2>&1; then
+            listed="$(wget -qO- "$api_url")"
+        else
+            printf "Error: curl or wget is required\n" >&2
+            exit 1
+        fi
+        response="$response
+$listed"
+        [ "$(printf '%s\n' "$listed" | grep -oE '"tag_name":' | wc -l)" -ge 100 ] || break
+        page=$((page + 1))
+    done
 
     version="$(printf '%s\n' "$response" | tr -d '\n' |
         grep -oE '"(tag_name|draft|prerelease)":[[:space:]]*("[^"]*"|true|false)' |

@@ -7,9 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -41,13 +44,27 @@ func TestIsNewer(t *testing.T) {
 	}
 }
 
-// withAPIURL points apiURL at a test server for the duration of the test.
+// withAPIURL points apiURL at a test server answering body for page 1.
 func withAPIURL(t *testing.T, body string, status int) {
 	t.Helper()
+	withAPIPages(t, []string{body}, status)
+}
+
+// withAPIPages points apiURL at a test server answering pages[n-1] for
+// page n, and an empty page past them, and answers the queries it was
+// asked, in order.
+func withAPIPages(t *testing.T, pages []string, status int) *[]string {
+	t.Helper()
+	var asked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.RawQuery)
 		if status != http.StatusOK {
 			w.WriteHeader(status)
 			return
+		}
+		body := "[]"
+		if n, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && n >= 1 && n <= len(pages) {
+			body = pages[n-1]
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
@@ -58,6 +75,7 @@ func withAPIURL(t *testing.T, body string, status int) {
 		apiURL = old
 		srv.Close()
 	})
+	return &asked
 }
 
 func TestLatestNon200(t *testing.T) {
@@ -88,16 +106,17 @@ func TestLatestRejectsShellMetacharacters(t *testing.T) {
 }
 
 // selectionCase is one of tests/fixtures/release_manifest.json's selection
-// rows: a listing as the GitHub releases API answers it, and the release
-// taken from it, null for none.
+// rows: a listing as the GitHub releases API answers it, page by page, and
+// the release taken from it, null for none.
 type selectionCase struct {
-	Name     string          `json:"name"`
-	Releases json.RawMessage `json:"releases"`
-	Picks    *string         `json:"picks"`
+	Name  string            `json:"name"`
+	Pages []json.RawMessage `json:"pages"`
+	Picks *string           `json:"picks"`
 }
 
 // Latest takes from each listing the release the shared selection rows
-// name, and answers ErrNoRelease where they name none.
+// name, and answers ErrNoRelease where they name none, reading every page
+// up to the first that is not full.
 func TestLatestFollowsTheSelectionRows(t *testing.T) {
 	raw, err := os.ReadFile(fixturePath)
 	if err != nil {
@@ -113,8 +132,21 @@ func TestLatestFollowsTheSelectionRows(t *testing.T) {
 		t.Fatal("the vector file has no selection rows")
 	}
 	for _, c := range vectors.Selection {
-		withAPIURL(t, string(c.Releases), http.StatusOK)
+		var pages []string
+		var want []string
+		for i, page := range c.Pages {
+			pages = append(pages, string(page))
+			want = append(want, fmt.Sprintf("per_page=%d&page=%d", perPage, i+1))
+		}
+		var last []json.RawMessage
+		if json.Unmarshal(c.Pages[len(c.Pages)-1], &last) == nil && len(last) == perPage {
+			want = append(want, fmt.Sprintf("per_page=%d&page=%d", perPage, len(c.Pages)+1))
+		}
+		asked := withAPIPages(t, pages, http.StatusOK)
 		got, err := Latest(context.Background())
+		if !slices.Equal(*asked, want) {
+			t.Errorf("%s: Latest asked %q, want %q", c.Name, *asked, want)
+		}
 		switch {
 		case c.Picks == nil && !errors.Is(err, ErrNoRelease):
 			t.Errorf("%s: Latest = %q, %v; want ErrNoRelease", c.Name, got, err)

@@ -69,12 +69,33 @@ defmodule Cyfr.ReleaseChannelTest do
       assert ReleaseChannel.newest(releases) == "99999999999999.0.0"
     end
 
-    test "takes from each listing the release the shared selection rows name" do
+    test "takes from each listing the release the shared selection rows name, reading every page up to the first that is not full" do
       assert @selection != []
 
-      for %{"name" => name, "releases" => releases, "picks" => picks} <- @selection do
+      for %{"name" => name, "pages" => pages, "picks" => picks} <- @selection do
+        {:ok, asked} = Agent.start_link(fn -> [] end)
+
+        fetch = fn page ->
+          Agent.update(asked, &(&1 ++ [page]))
+          {:ok, 200, [], Jason.encode!(Enum.at(pages, page - 1, []))}
+        end
+
+        assert {:ok, releases} = ReleaseChannel.listing(fetch)
         assert ReleaseChannel.newest(releases) == picks, name
+
+        full = length(List.last(pages)) == 100
+        assert Agent.get(asked, & &1) == Enum.to_list(1..(length(pages) + if(full, do: 1, else: 0))), name
+        Agent.stop(asked)
       end
+    end
+
+    test "a page that fails fails the listing" do
+      fetch = fn
+        1 -> {:ok, 200, [], Jason.encode!(for n <- 1..100, do: %{"tag_name" => "0.6.0-alpha.#{n}"})}
+        2 -> {:ok, 403, [], "rate limited"}
+      end
+
+      assert ReleaseChannel.listing(fetch) == {:error, {:status, 403}}
     end
 
     test "skips drafts and entries that are no release, and newer pre-releases beside a release" do
@@ -101,7 +122,7 @@ defmodule Cyfr.ReleaseChannelTest do
       test = self()
 
       # A read that tells the test it began and answers what the test hands it.
-      fetch = fn ->
+      fetch = fn _page ->
         send(test, {:fetched, self()})
 
         receive do
@@ -205,7 +226,7 @@ defmodule Cyfr.ReleaseChannelTest do
     test "the release read ends when its channel ends by #{ending}" do
       caller = self()
 
-      fetch = fn ->
+      fetch = fn _page ->
         send(caller, {:read_started, self()})
 
         receive do
