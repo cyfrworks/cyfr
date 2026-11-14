@@ -5821,5 +5821,101 @@ defmodule PrismWeb.SystemLayerTest do
       refute html =~ "Revoke"
       PrismWeb.Vocabulary.refute_vocabulary(html)
     end
+
+    # A passkey a browser offered for the account asks to be added with its
+    # code. The box's own screen approves it on its shell's page, which it
+    # opens with the request's public ref alone; any other surface says to
+    # approve it on the box.
+    test "a passkey a browser offered asks to be added, approved on the box's shell by its ref" do
+      waiting = %{
+        ref: "ref-1",
+        code: "90536cacfa867215",
+        key: %{"kid" => "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141"},
+        asked_at: "2026-11-14T09:00:00Z"
+      }
+
+      for shell <- [true, false] do
+        html =
+          render_component(&PrismWeb.SystemLayer.Pairing.devices/1,
+            prompt_id: "pairing-1",
+            pairing: %{clients: {:ok, []}, waiting: {:ok, [waiting]}},
+            shell: shell,
+            myself: nil,
+            button_class: ""
+          )
+
+        doc = LazyHTML.from_fragment(html)
+        [offer] = Enum.to_list(LazyHTML.query(doc, ~s([data-test="pairing-waiting"])))
+        text = offer |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()
+
+        assert LazyHTML.attribute(offer, "data-ref") == ["ref-1"]
+
+        approve = LazyHTML.query(offer, ~s([data-test="pairing-approve"]))
+
+        if shell do
+          assert LazyHTML.attribute(approve, "href") == [
+                   "http://127.0.0.1:7340/passkey?ref=ref-1"
+                 ]
+
+          assert LazyHTML.attribute(approve, "target") == ["_blank"]
+
+          assert text ==
+                   "A browser asks to add a passkey Its code is 90536cacfa867215. Approve it " <>
+                     "only if a browser in front of you shows this same code. If you did not ask " <>
+                     "for it, leave it: it is forgotten five minutes after it was asked, and " <>
+                     "nothing is added. Asked " <>
+                     "2026-11-14T09:00:00Z Approve"
+        else
+          assert Enum.empty?(approve)
+
+          assert text ==
+                   "A browser asks to add a passkey Its code is 90536cacfa867215. Approve it " <>
+                     "only if a browser in front of you shows this same code. If you did not ask " <>
+                     "for it, leave it: it is forgotten five minutes after it was asked, and " <>
+                     "nothing is added. Asked " <>
+                     "2026-11-14T09:00:00Z Approve it on your CYFR box's own screen, in Your " <>
+                     "devices there."
+        end
+
+        PrismWeb.Vocabulary.refute_vocabulary(html)
+      end
+    end
+
+    test "the times are the browser's to show in its own time zone, and an unencrypted box is told what to do" do
+      device = %{
+        client_id: "pcl_box",
+        source: "device_cert",
+        display_name: "CYFR box",
+        holder_kind: "chip",
+        paired_at: "2026-11-07T09:00:00Z",
+        certificate_expires_at: "2026-11-08T09:00:00Z",
+        storage: %{root: "unencrypted", data: "encrypted"}
+      }
+
+      html =
+        render_component(&PrismWeb.SystemLayer.Pairing.devices/1,
+          prompt_id: "pairing-1",
+          pairing: %{clients: {:ok, [device]}, waiting: {:ok, []}},
+          myself: nil,
+          button_class: ""
+        )
+
+      doc = LazyHTML.from_fragment(html)
+      times = LazyHTML.query(doc, "time[data-local]")
+
+      assert LazyHTML.attribute(times, "datetime") == [
+               "2026-11-07T09:00:00Z",
+               "2026-11-08T09:00:00Z"
+             ]
+
+      [storage] = Enum.to_list(LazyHTML.query(doc, ~s([data-test="pairing-storage"])))
+
+      assert storage |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim() ==
+               "This box keeps its data unencrypted, whoever takes it reads everything " <>
+                 "(system disk). Keep the box where only people you trust can reach it, or " <>
+                 "install Ubuntu again with disk encryption turned on."
+
+      assert Enum.empty?(LazyHTML.query(doc, ~s([data-test="pairing-waiting"])))
+    end
   end
 end

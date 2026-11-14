@@ -8,7 +8,9 @@ defmodule Sanctum.Providers.Pairing do
   and the passkeys that signed in here: renew a paired device's
   certificate; sign one out of this CYFR (`pairing_revocation`), which
   ends its client here and leaves its key on the account, since only
-  removing a key from the account ends it everywhere; and list them. Every
+  removing a key from the account ends it everywhere; list them; and list
+  the passkeys browsers offered for the person's account here, which wait
+  for a device of it to add them (`Sanctum.SignIn.waiting/2`). Every
   action is a person's, through an interactive surface (`consent:
   :interactive`); a proof is the field `proof`, which the redaction
   vocabulary (`Prima.Sanitizer`) keeps out of every log.
@@ -30,6 +32,12 @@ defmodule Sanctum.Providers.Pairing do
       last minute (`storage`: `root` and `data`, each `encrypted`,
       `unencrypted` or `unknown`), information a person reads and never
       an input to a decision.
+    * `waiting` answers the passkeys waiting for the person's account,
+      oldest first, or with `ref` that one alone: each its `ref`, its
+      short `code`, its `key` as the account's log would list it, and
+      when a browser offered it (`asked_at`). A device of the account
+      reads one by its `ref`, draws its code, and adds the key with its
+      own; nothing here adds it.
   """
 
   alias Prima.{Arg, DeviceCert, Operation}
@@ -68,10 +76,23 @@ defmodule Sanctum.Providers.Pairing do
           kind: :read,
           planes: [:external],
           consent: :interactive
+        ),
+        Operation.new(
+          "pairing",
+          "waiting",
+          "List the passkeys browsers offered for your account",
+          [
+            Arg.new("ref", :string,
+              description: "waiting: one waiting passkey's ref, to read that one alone"
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          consent: :interactive
         )
       ],
       description:
-        "Your paired devices in the athanor in focus: renew a device's certificate, sign one out of this CYFR, and list them.",
+        "Your paired devices in the athanor in focus: renew a device's certificate, sign one out of this CYFR, and list them; and the passkeys browsers offered for your account, waiting for a device of yours to add them.",
       title: "Paired Devices"
     )
   end
@@ -134,6 +155,13 @@ defmodule Sanctum.Providers.Pairing do
     end
   end
 
+  def handle(%Context{} = ctx, %{"action" => "waiting"} = args) do
+    with {:ok, ref} <- ref(args["ref"]),
+         {:ok, waiting} <- Sanctum.SignIn.waiting(ctx, ref) do
+      {:ok, %{waiting: Enum.map(waiting, &offered/1)}}
+    end
+  end
+
   def handle(_ctx, %{"action" => "revoke"}),
     do: {:error, {:invalid_argument, "Missing required argument: client_id"}}
 
@@ -149,6 +177,19 @@ defmodule Sanctum.Providers.Pairing do
         {:error,
          {:invalid_argument, "The device key is not unpadded base64url of a 32-byte public key"}}
     end
+  end
+
+  defp ref(nil), do: {:ok, nil}
+  defp ref(ref) when is_binary(ref) and ref != "", do: {:ok, ref}
+  defp ref(_ref), do: {:error, {:invalid_argument, "A waiting passkey is named by its ref"}}
+
+  defp offered(waiting) do
+    %{
+      ref: waiting.ref,
+      code: waiting.code,
+      key: Prima.Identity.Key.encode(waiting.key),
+      asked_at: waiting.asked_at |> DateTime.from_unix!(:millisecond) |> Prima.Time.iso8601()
+    }
   end
 
   defp completed(%{client_id: client_id, certificate: certificate}),

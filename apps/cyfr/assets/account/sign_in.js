@@ -6,7 +6,10 @@
 // tests/fixtures/sign_in.json. The page reads the request out of its
 // fragment, refuses one that is malformed or past its expiry, signs its
 // digest with the passkey the person picks, and puts the answer in the
-// fragment of the request's `return`. Checking the answer is the CYFR's.
+// fragment of the request's `return`. A browser holding no passkey of the
+// account answers a sign-in with a new passkey instead (`newPasskey`),
+// which a device of the account adds once the person compares its code.
+// Checking the answer is the CYFR's.
 
 import {fromB64url} from "./base64url.js"
 import {Refusal, b64, binary, check, directoryOrigin, fields, isDigest, isDirectoryUrl, isHome, isMs, isObject, jcs, protocol, refuse, sha256, utf8} from "./encoding.js"
@@ -70,6 +73,15 @@ export function answer(request, {identifier, credentialId, authenticatorData, cl
     signature: b64(signature),
     ...(request.purpose === "registry" ? {signer} : {})
   }
+}
+
+/**
+ * The page's answer offering a new passkey for the account `identifier`
+ * names: the request's challenge and the passkey's `key` as the account's
+ * log would list it (`identity.js`'s `keyOf`). It signs nothing.
+ */
+export function newPasskey(request, identifier, key) {
+  return {challenge: request.challenge, identifier, key}
 }
 
 /** The fragment that carries a request or an answer: unpadded base64url of its JCS bytes. */

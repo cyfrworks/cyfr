@@ -46,10 +46,18 @@ defmodule Prima.SignIn do
     * `Prima.SignIn.DeviceAnswer`, over the device channel:
       `{challenge, kid, sig}`. A device answers `sign_in` and `confirm`; for
       `registry` a terminal signs the registry request itself.
+    * `Prima.SignIn.NewPasskey`, from the account pages to a `sign_in`
+      request when the browser holds no passkey of the account:
+      `{challenge, identifier, key}`, the passkey the page made for the
+      account `identifier` names, as its log would list it
+      (`Prima.Identity.Key`). It signs nothing: a key the account lists
+      adds it (an `add_key` a device of the account signs after the person
+      compares its short code, `code/1`), and the browser then signs in
+      with it as with any passkey.
 
   ## Fragments
 
-  The request travels to the account pages, and a passkey's answer back to
+  The request travels to the account pages, and the page's answer back to
   `return`, in a URL fragment (`fragment/1`, `parse_fragment/1`): the
   unpadded base64url of the object's JCS bytes, at most
   `max_fragment_bytes/0`, checked before it is decoded. Any other spelling
@@ -59,14 +67,15 @@ defmodule Prima.SignIn do
 
   `verify/4` is the CYFR's check of an answer against the request it
   held for that answer's challenge, in the order the CYFR makes it, the
-  first failure refusing. Whether the request is unspent and bound to the
-  browser or channel answering, which log policy the state was read
+  first failure refusing; `offered/3` is its check of a new passkey,
+  which no log is read for. Whether the request is unspent and bound to
+  the browser or channel answering, which log policy the state was read
   under, and what each purpose then does are the CYFR's.
   """
 
   alias Prima.Identity.{Encoding, Key, State, WebAuthn}
   alias Prima.RegistryRequest
-  alias Prima.SignIn.{DeviceAnswer, PasskeyAnswer}
+  alias Prima.SignIn.{DeviceAnswer, NewPasskey, PasskeyAnswer}
 
   @protocol "cyfr-sign-in/v1"
   @lifetime_ms 300_000
@@ -204,12 +213,24 @@ defmodule Prima.SignIn do
     do: RegistryRequest.challenge(%{request | signer: signer})
 
   @doc "The fragment that carries a request or an answer: unpadded base64url of its JCS bytes."
-  @spec fragment(t() | PasskeyAnswer.t()) :: String.t()
+  @spec fragment(t() | PasskeyAnswer.t() | NewPasskey.t()) :: String.t()
   def fragment(%__MODULE__{} = request),
     do: request |> encode() |> Encoding.jcs!() |> Encoding.b64()
 
   def fragment(%PasskeyAnswer{} = answer),
     do: answer |> PasskeyAnswer.encode() |> Encoding.jcs!() |> Encoding.b64()
+
+  def fragment(%NewPasskey{} = answer),
+    do: answer |> NewPasskey.encode() |> Encoding.jcs!() |> Encoding.b64()
+
+  @doc """
+  The answer the account pages returned, as `parse_fragment/1` read it: a
+  new passkey when it names a `key` (`NewPasskey.decode/1`), a passkey's
+  assertion otherwise (`PasskeyAnswer.decode/1`).
+  """
+  @spec decode_answer(map()) :: {:ok, PasskeyAnswer.t() | NewPasskey.t()} | {:error, reason()}
+  def decode_answer(%{"key" => _key} = map), do: NewPasskey.decode(map)
+  def decode_answer(map), do: PasskeyAnswer.decode(map)
 
   @doc """
   The JSON object a fragment carries, its length checked before it is
@@ -217,7 +238,7 @@ defmodule Prima.SignIn do
   for anything that is not unpadded base64url, in its one spelling, of a
   JSON object's JCS bytes: whitespace, another key order, a repeated key
   or a number JCS does not write are each refused. The object is then read
-  as a request (`decode/1`) or an answer (`PasskeyAnswer.decode/1`).
+  as a request (`decode/1`) or an answer (`decode_answer/1`).
   """
   @spec parse_fragment(term()) :: {:ok, map()} | {:error, :too_large | :invalid_fragment}
   def parse_fragment(fragment) when is_binary(fragment) do
@@ -325,6 +346,28 @@ defmodule Prima.SignIn do
 
   defp unexpired(%__MODULE__{expires_at: expires_at}, now) when now < expires_at, do: :ok
   defp unexpired(_request, _now), do: {:error, :expired}
+
+  @doc """
+  Check a new passkey against `request`, the request the CYFR held for its
+  challenge; `opts` as `verify/4`'s. In order, the first failure
+  answering: the answer's challenge is the request's
+  (`:unknown_challenge`), the request is unexpired (`:expired`), its
+  audience is this CYFR (`:wrong_audience`), and it is a `sign_in`
+  request (`:wrong_purpose`). Answers the key offered, which no log was
+  read for: it is added only by a key the account lists.
+  """
+  @spec offered(NewPasskey.t(), t(), keyword()) :: {:ok, Key.t()} | {:error, reason()}
+  def offered(%NewPasskey{} = answer, %__MODULE__{} = request, opts) do
+    home = Keyword.fetch!(opts, :home)
+    now = Keyword.fetch!(opts, :now)
+
+    with :ok <- same(answer.challenge, request.challenge, :unknown_challenge),
+         :ok <- unexpired(request, now),
+         :ok <- same(request.audience, home, :wrong_audience),
+         :ok <- same(request.purpose, :sign_in, :wrong_purpose) do
+      {:ok, answer.key}
+    end
+  end
 
   @doc """
   The signed registry request a passkey's answer to a `registry` request
@@ -503,4 +546,63 @@ defmodule Prima.SignIn.DeviceAnswer do
       "sig" => Encoding.b64(answer.sig)
     }
   end
+end
+
+defmodule Prima.SignIn.NewPasskey do
+  @moduledoc """
+  The account pages' answer to a `sign_in` request from a browser that
+  holds no passkey of the account: `{challenge, identifier, key}`, the
+  request's challenge, the account the person named, and the passkey the
+  page made for it as the account's log would list it
+  (`Prima.Identity.Key`, `kind` `passkey`). The person compares its short
+  code (`code/1`) on a device of the account before that device adds it.
+  """
+
+  alias Prima.Identity.{Encoding, Key}
+
+  @fields ~w(challenge identifier key)
+
+  @type t :: %__MODULE__{challenge: binary(), identifier: String.t(), key: Key.t()}
+
+  @enforce_keys [:challenge, :identifier, :key]
+  defstruct @enforce_keys
+
+  @doc "Read an answer from its JSON map."
+  @spec decode(term()) :: {:ok, t()} | {:error, Encoding.reason()}
+  def decode(map) when is_map(map) and not is_struct(map) do
+    with :ok <- Encoding.fields(map, @fields, []),
+         {:ok, challenge} <- Encoding.binary(map, "challenge", Prima.SignIn.challenge_bytes()),
+         {:ok, identifier} <- Encoding.check(map, "identifier", &Encoding.identifier?/1),
+         {:ok, key} <- passkey(map["key"]) do
+      {:ok, %__MODULE__{challenge: challenge, identifier: identifier, key: key}}
+    end
+  end
+
+  def decode(_value), do: {:error, {:invalid_field, "answer"}}
+
+  # A passkey's key, in its one shape, its kid its point's.
+  defp passkey(map) do
+    case Key.decode(map) do
+      {:ok, %Key{kind: :passkey} = key} -> {:ok, key}
+      _other -> {:error, {:invalid_field, "key"}}
+    end
+  end
+
+  @doc "The JSON map of an answer."
+  @spec encode(t()) :: map()
+  def encode(%__MODULE__{} = answer) do
+    %{
+      "challenge" => Encoding.b64(answer.challenge),
+      "identifier" => answer.identifier,
+      "key" => Key.encode(answer.key)
+    }
+  end
+
+  @doc """
+  The code a person compares for a key: the first 16 hex digits of its
+  kid, as the account pages and a device show it.
+  """
+  @spec code(Key.t() | t()) :: String.t()
+  def code(%__MODULE__{key: key}), do: code(key)
+  def code(%Key{kid: "sha256:" <> hex}), do: binary_part(hex, 0, 16)
 end

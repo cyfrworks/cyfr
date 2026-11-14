@@ -6,9 +6,10 @@ import {readFileSync} from "node:fs"
 import {describe, test} from "node:test"
 
 import {b64, directoryOrigin, unb64} from "../../account/encoding.js"
-import {identifierForUserId, userId, walk} from "../../account/identity.js"
+import {decodeKey, identifierForUserId, keyOf, userId, walk} from "../../account/identity.js"
+import {shortCode} from "../../account/pages/common.js"
 import {sent} from "../../account/registry.js"
-import {answer, digest, fragment, parseFragment, readRequest} from "../../account/sign_in.js"
+import {answer, digest, fragment, newPasskey, parseFragment, readRequest} from "../../account/sign_in.js"
 import {verifyAssertion} from "../../account/webauthn.js"
 
 const vectors = JSON.parse(readFileSync(new URL("../../../../../tests/fixtures/sign_in.json", import.meta.url), "utf8"))
@@ -66,6 +67,20 @@ describe("sign_in.json", () => {
       composed++
     }
     assert.ok(composed >= 15, `composed ${composed}`)
+  })
+
+  test("composes each new passkey the page offers from the passkey it made, its fragment and its code", async () => {
+    const offers = Object.entries(vectors.answers).filter(([, v]) => v.kind === "new_passkey")
+    assert.ok(offers.length >= 2)
+    for (const [name, v] of offers) {
+      const {request} = vectors.requests[v.request]
+      const {key} = v.answer
+      const made = newPasskey(request, v.answer.identifier, await keyOf({pub: unb64(key.pub, 65), credentialId: unb64(key.credential_id, 1, 1023)}))
+      assert.deepEqual(made, v.answer, name)
+      assert.equal(fragment(made), vectors.fragments.answers[name], name)
+      assert.equal(await decodeKey(made.key), true, name)
+      assert.equal(shortCode(made.key.kid), v.code, name)
+    }
   })
 
   test("parses every answer's fragment back to the answer", () => {
