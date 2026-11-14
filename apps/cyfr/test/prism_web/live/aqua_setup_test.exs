@@ -136,6 +136,7 @@ defmodule PrismWeb.AquaSetupTest do
              ~s(#system-layer-dialog [data-test="grant-pick"][aria-pressed="true"])
            )
 
+    tracer = trace_consent!(ctx)
     view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
     wait_until(fn -> render(view) =~ "aqua consented again." end, 10_000, "the soul's consent")
     refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
@@ -164,6 +165,7 @@ defmodule PrismWeb.AquaSetupTest do
     )
 
     {:ok, turn} = Tape.turn(ctx, turn_id)
+    print_trace!(tracer)
     assert turn.status == "completed", edges_state(person, turn)
 
     assert [%{kind: "text", content: "The fixture answers."}] =
@@ -175,6 +177,166 @@ defmodule PrismWeb.AquaSetupTest do
 
     Cyfr.Test.Sandbox.end_views()
   end
+
+  # Diagnostic: every consent write from the person's confirmation through
+  # the turn, and every `Opus.Attempt.fetch_secrets/1` and
+  # `Sanctum.Consent.Loader.pinned_intact?/2` call with its return, each
+  # beside the live heads of the soul's profile and of every lender the
+  # call names, read the moment the tracer hears it.
+  @traced [
+    {Opus.Attempt, :fetch_secrets, 1},
+    {Sanctum.Consent.Loader, :pinned_intact?, 2},
+    {Arca.ConsentStorage, :insert_revision, 4},
+    {Arca.ConsentStorage, :mint_profile_with_revision, 4}
+  ]
+
+  defp trace_consent!(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+
+    profiles =
+      for {name, ref} <- [soul: "agent:local.aqua", brain: Fixture.ref()],
+          {:ok, [profile | _]} <- [Arca.ConsentStorage.profiles(actor, ref)],
+          into: %{},
+          do: {name, profile.id}
+
+    tracer = spawn(fn -> trace_loop(actor, profiles, []) end)
+    :erlang.trace(:all, true, [:call, {:tracer, tracer}])
+
+    for mfa <- @traced,
+        do:
+          :erlang.trace_pattern(mfa, [{:_, [], [{:return_trace}, {:exception_trace}]}], [:local])
+
+    tracer
+  end
+
+  defp print_trace!(tracer) do
+    :erlang.trace(:all, false, [:call])
+    for mfa <- @traced, do: :erlang.trace_pattern(mfa, false, [:local])
+    send(tracer, {:done, self()})
+
+    receive do
+      {:trace_lines, lines} -> Enum.each(lines, &IO.puts("TRACE| " <> &1))
+    after
+      10_000 -> IO.puts("TRACE| the tracer did not answer")
+    end
+  end
+
+  defp trace_loop(actor, profiles, lines) do
+    receive do
+      {:done, from} ->
+        send(from, {:trace_lines, Enum.reverse(lines)})
+
+      {:trace, pid, :call, {m, f, args}} ->
+        line = "#{inspect(pid)} CALL #{inspect(m)}.#{f} #{described_args(f, args)}"
+        trace_loop(actor, profiles, [heads_line(actor, profiles, args), line | lines])
+
+      {:trace, pid, :return_from, {m, f, a}, value} ->
+        line = "#{inspect(pid)} RETURN #{inspect(m)}.#{f}/#{a} #{whole(redacted(f, value))}"
+        trace_loop(actor, profiles, [heads_line(actor, profiles, []), line | lines])
+
+      {:trace, pid, :exception_from, {m, f, a}, value} ->
+        line = "#{inspect(pid)} EXCEPTION #{inspect(m)}.#{f}/#{a} #{whole(value)}"
+        trace_loop(actor, profiles, [line | lines])
+
+      other ->
+        trace_loop(actor, profiles, ["OTHER #{whole(other)}" | lines])
+    end
+  end
+
+  # What a run was handed is named, never shown.
+  defp redacted(:fetch_secrets, {:ok, secrets}) when is_map(secrets),
+    do: {:ok, {:fields, Map.keys(secrets)}}
+
+  defp redacted(_f, value), do: value
+
+  defp described_args(:fetch_secrets, [state]) do
+    whole(%{
+      authority: authority_pins(Map.get(state, :authority)),
+      ctx: context_coords(Map.get(state, :ctx)),
+      close_ctx: context_coords(state |> Map.get(:close) |> then(&(&1 && Map.get(&1, :ctx))))
+    })
+  end
+
+  defp described_args(:pinned_intact?, [ctx, authority]),
+    do: whole(%{ctx: context_coords(ctx), authority: authority_pins(authority)})
+
+  defp described_args(_commit, args), do: whole(args)
+
+  defp context_coords(%Sanctum.Context{} = ctx),
+    do: Map.take(ctx, [:user_id, :athanor_id, :plane, :origin, :auth_method, :anonymous])
+
+  defp context_coords(other), do: other
+
+  defp authority_pins(%Prima.Authority{} = auth) do
+    %{
+      profile_id: auth.profile_id,
+      consent_id: auth.consent_id,
+      source_ref: auth.source_ref,
+      cursor: auth.cursor,
+      vault: auth.resources |> then(&(is_map(&1) && Map.get(&1, :vault))),
+      policy_lenders: policy_lenders(auth.policy)
+    }
+  end
+
+  defp authority_pins(other), do: other
+
+  defp policy_lenders(%Prima.Authority.Blob{nodes: nodes}) do
+    for {node, %{edges: edges}} <- nodes,
+        {key, %{vault: %{lender: lender} = vault}} <- edges,
+        do: %{node: node, edge: key, lender: lender, binding_digest: vault[:binding_digest]}
+  end
+
+  defp policy_lenders(other), do: other
+
+  # The live heads of the soul's and the brain's profiles, and of every
+  # profile the call names as a lender.
+  defp heads_line(actor, profiles, args) do
+    named =
+      for %{profile_id: id} <- List.flatten([lenders_in(args)]), is_binary(id), do: {id, id}
+
+    heads =
+      for {name, id} <- Map.to_list(profiles) ++ named, into: %{} do
+        profile =
+          case Arca.ProfileStorage.get(actor, id) do
+            {:ok, row} -> Map.take(row, [:status, :head_consent_id])
+            other -> other
+          end
+
+        head =
+          case Arca.ConsentStorage.get_head(actor, id) do
+            {:ok, row, _refs} -> Map.take(row, [:id, :revision, :shape_digest, :granted_via])
+            other -> other
+          end
+
+        {name, %{profile_id: id, profile: profile, head: head}}
+      end
+
+    "  HEADS #{whole(heads)}"
+  end
+
+  defp lenders_in([state]) when is_map(state), do: lenders_of(Map.get(state, :authority))
+  defp lenders_in([_ctx, authority]), do: lenders_of(authority)
+  defp lenders_in(_args), do: []
+
+  defp lenders_of(%Prima.Authority{} = auth) do
+    from_resources =
+      case auth.resources do
+        %{vault: %{lender: lender}} -> [lender]
+        _ -> []
+      end
+
+    from_policy =
+      case policy_lenders(auth.policy) do
+        list when is_list(list) -> Enum.map(list, & &1.lender)
+        _ -> []
+      end
+
+    from_resources ++ from_policy
+  end
+
+  defp lenders_of(_other), do: []
+
+  defp whole(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
 
   # The soul's edge into its brain as its head stores it and as the loader
   # resolves it, for a failure's message.
