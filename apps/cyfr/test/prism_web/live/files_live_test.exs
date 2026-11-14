@@ -227,25 +227,43 @@ defmodule PrismWeb.FilesLiveTest do
     refute Arca.exists?(actor, ["data", "archive", "taken.csv"])
     refute Arca.exists?(actor, ["data", "archive", "q4.csv"])
 
-    # A held folder, still empty, offers Rename and Delete, both the page's
-    # own, and no Move.
+    # A held folder offers Remove alone, which lets it go with the held
+    # folders under it.
     view |> element("#files-new-folder") |> render_click()
-    view |> form("#files-folder-form", %{"name" => "empty"}) |> render_submit()
+    view |> form("#files-folder-form", %{"name" => "outer"}) |> render_submit()
+    view |> element("#files-new-folder") |> render_click()
+    view |> form("#files-folder-form", %{"name" => "inner"}) |> render_submit()
+    assert_patch(view, "/a/#{route}/files?p=data%2Fouter%2Finner")
+
     view |> element("#files-crumbs button", "data") |> render_click()
-    held = "#files-entries button[phx-value-path='data/empty']"
-    assert has_element?(view, held, "Rename")
-    refute has_element?(view, held, "Move")
+    outer = "#files-entries button[phx-value-path='data/outer']"
+    assert has_element?(view, outer, "Remove")
 
-    view |> element(held, "Rename") |> render_click()
-    view |> form("#files-move", %{"name" => "blank"}) |> render_submit()
-    assert render(view) =~ "Renamed data/empty to data/blank"
-    refute has_element?(view, held)
-    blank = "#files-entries button[phx-value-path='data/blank']"
-    assert has_element?(view, blank)
+    for action <- ~w(Rename Move Delete) do
+      refute has_element?(view, outer, action)
+    end
 
-    view |> element(blank, "Delete") |> render_click()
-    assert render(view) =~ "Removed the empty folder data/blank"
-    refute has_element?(view, blank)
+    view |> element(outer, "Remove") |> render_click()
+    assert render(view) =~ "Removed the empty folder data/outer"
+    refute has_element?(view, outer)
+    view |> element("#files-new-folder") |> render_click()
+    view |> form("#files-folder-form", %{"name" => "outer"}) |> render_submit()
+    refute has_element?(view, "#files-entries button[phx-value-path='data/outer/inner']")
+
+    # New folder refuses a name already there, stored or held.
+    :ok = Arca.put(actor, ["data", "stored", "f.txt"], "f")
+    view |> element("#files-crumbs button", "data") |> render_click()
+
+    for name <- ~w(stored outer) do
+      unless has_element?(view, "#files-folder-form"),
+        do: view |> element("#files-new-folder") |> render_click()
+
+      view |> form("#files-folder-form", %{"name" => name}) |> render_submit()
+      assert render(view) =~ "&#39;#{name}&#39; already exists here — choose another name"
+      assert has_element?(view, "#files-folder-form")
+    end
+
+    assert {:ok, "f"} = Arca.get(actor, ["data", "stored", "f.txt"])
   end
 
   test "the download route knows no folder the page does not show", %{conn: conn, route: route} do

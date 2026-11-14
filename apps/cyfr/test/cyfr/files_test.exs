@@ -359,6 +359,20 @@ defmodule Arca.FilesTest do
       assert {:ok, %{content: "theirs"}} = Files.read(actor, "data/dest/last.txt")
       assert {:ok, %{content: "mine"}} = Files.read(actor, "data/src/last.txt")
 
+      # Any file under the destination, not only one the move lands on.
+      {:ok, _} = Files.write(actor, "data/lone/last.txt", "lone")
+
+      Arca.FilesTest.Store.arm(
+        {:run, fn -> {:ok, _} = Files.write(actor, "data/folder/unrelated.txt", "u") end}
+      )
+
+      assert Files.move(actor, "data/lone", "data/folder") ==
+               {:error, {:conflict, "'data/folder' already exists — choose another name"}}
+
+      assert {:ok, %{content: "u"}} = Files.read(actor, "data/folder/unrelated.txt")
+      refute Arca.exists?(actor, ["data", "folder", "last.txt"])
+      assert {:ok, %{content: "lone"}} = Files.read(actor, "data/lone/last.txt")
+
       # A file written at the destination meanwhile, then a store that
       # fails: nothing of the move is published, and nothing is taken back
       # by path, so that writer's file stays.

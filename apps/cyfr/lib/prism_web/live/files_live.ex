@@ -16,10 +16,12 @@ defmodule PrismWeb.FilesLive do
   types a browser draws and never runs; anything else is downloaded.
 
   A new folder is held by the page, listed in its parent and opened,
-  until a file is written there: storage keeps no empty folder. Rename
+  until a file is written there: storage keeps no empty folder. A held
+  folder offers one action, Remove, which lets it go with every held
+  folder under it; once a file lands in it, it is a stored folder. Rename
   and Move are both `file/move`, a rename keeping the folder and a move
-  the name, and are offered under `data/`, where a move works; a held
-  folder, with nothing stored, is renamed on the page.
+  the name, offered on stored files and folders under `data/`, where a
+  move works.
 
   ## Sending a copy
 
@@ -197,10 +199,15 @@ defmodule PrismWeb.FilesLive do
 
   def handle_event("save", _params, socket), do: {:noreply, socket}
 
-  def handle_event("delete", %{"path" => path}, socket) do
-    if held?(socket, path),
-      do: {:noreply, forget_folder(socket, path)},
-      else: {:noreply, delete(socket, path)}
+  def handle_event("delete", %{"path" => path}, socket), do: {:noreply, delete(socket, path)}
+
+  # A held folder has nothing stored: Remove lets it go, with every held
+  # folder under it.
+  def handle_event("remove", %{"path" => path}, socket) do
+    {:noreply,
+     socket
+     |> update(:new_folders, &forget(&1, path))
+     |> put_flash(:info, "Removed the empty folder #{path}")}
   end
 
   # ---- folders, rename and move -------------------------------------------
@@ -214,7 +221,7 @@ defmodule PrismWeb.FilesLive do
   def handle_event("create_folder", %{"name" => name}, socket) do
     name = String.trim(name)
 
-    case folder_name(name) do
+    case folder_name(name, socket.assigns) do
       :ok ->
         folder = child(socket.assigns.path, name)
 
@@ -237,12 +244,8 @@ defmodule PrismWeb.FilesLive do
   def handle_event("cancel_relocate", _params, socket),
     do: {:noreply, assign(socket, :relocating, nil)}
 
-  # A held folder has nothing stored to move: its rename is the page's own.
-  def handle_event("move", params, %{assigns: %{relocating: %{path: path, mode: mode}}} = socket) do
-    if held?(socket, path),
-      do: {:noreply, rename_held(socket, path, params)},
-      else: {:noreply, move(socket, path, destination(path, mode, params))}
-  end
+  def handle_event("move", params, %{assigns: %{relocating: %{path: path, mode: mode}}} = socket),
+    do: {:noreply, move(socket, path, destination(path, mode, params))}
 
   def handle_event("move", _params, socket), do: {:noreply, socket}
 
@@ -390,25 +393,6 @@ defmodule PrismWeb.FilesLive do
     end
   end
 
-  defp held?(socket, path), do: MapSet.member?(socket.assigns.new_folders, path)
-
-  defp rename_held(socket, path, params) do
-    name = params |> Map.get("name", "") |> String.trim()
-
-    case folder_name(name) do
-      :ok ->
-        to = child(parent(path), name)
-
-        socket
-        |> update(:new_folders, &(&1 |> MapSet.delete(path) |> MapSet.put(to)))
-        |> assign(:relocating, nil)
-        |> put_flash(:info, "Renamed #{path} to #{to}")
-
-      {:error, message} ->
-        put_flash(socket, :error, message)
-    end
-  end
-
   defp move(socket, path, to) do
     case Ops.call_tool(socket, "file/move", %{"path" => path, "to" => to}) do
       {:ok, %{moved: moved, to: to}} ->
@@ -419,7 +403,7 @@ defmodule PrismWeb.FilesLive do
         |> assign(:open, open)
         |> assign(:editing, false)
         |> update(:selected, &MapSet.delete(&1, moved))
-        |> update(:new_folders, &moved_under(&1, moved, to))
+        |> update(:new_folders, &forget(&1, moved))
         |> put_flash(:info, "Moved #{moved} to #{to}")
         |> load()
 
@@ -428,21 +412,9 @@ defmodule PrismWeb.FilesLive do
     end
   end
 
-  # The held folders below a moved folder go with it.
-  defp moved_under(held, moved, to) do
-    MapSet.new(held, fn folder ->
-      if String.starts_with?(folder, moved <> "/"),
-        do: to <> String.trim_leading(folder, moved),
-        else: folder
-    end)
-  end
-
-  # A folder the page holds has nothing stored to delete.
-  defp forget_folder(socket, path) do
-    socket
-    |> update(:new_folders, &MapSet.delete(&1, path))
-    |> put_flash(:info, "Removed the empty folder #{path}")
-  end
+  # The held folders at or under `path`.
+  defp forget(held, path),
+    do: MapSet.reject(held, &(&1 == path or String.starts_with?(&1, path <> "/")))
 
   defp delete(socket, path) do
     case Ops.call_tool(socket, "file/delete", %{"path" => path}) do
@@ -471,14 +443,18 @@ defmodule PrismWeb.FilesLive do
 
   defp destination(path, _mode, _params), do: path
 
-  defp folder_name(""), do: {:error, "Name the folder."}
+  defp folder_name("", _assigns), do: {:error, "Name the folder."}
 
-  defp folder_name(name) do
-    with false <- String.contains?(name, "/"),
-         :ok <- Prima.PathSafety.validate_segments([name]) do
-      :ok
-    else
-      _refused -> {:error, "'#{name}' cannot name a folder: use one name without / or .."}
+  defp folder_name(name, %{listing: listing, path: path, new_folders: held}) do
+    cond do
+      String.contains?(name, "/") or Prima.PathSafety.validate_segments([name]) != :ok ->
+        {:error, "'#{name}' cannot name a folder: use one name without / or .."}
+
+      listing && Enum.any?(entries(listing, path, held), &(&1.name == name)) ->
+        {:error, "'#{name}' already exists here — choose another name"}
+
+      true ->
+        :ok
     end
   end
 
@@ -548,14 +524,14 @@ defmodule PrismWeb.FilesLive do
 
   defp parent(path), do: path |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
 
-  # A held folder the listing shows is stored now, and the page lets it
-  # go: a child listed under the folder in view, or that folder itself
+  # What the listing shows stored is held no more, nor is any folder above
+  # it: a child listed under the folder in view, and that folder itself
   # once anything is in it.
   defp unheld(held, path, %{entries: entries}) do
-    listed = MapSet.new(entries, &child(path, &1.name))
+    stored = Enum.map(entries, &child(path, &1.name)) ++ if(entries != [], do: [path], else: [])
 
     MapSet.reject(held, fn folder ->
-      MapSet.member?(listed, folder) or (folder == path and entries != [])
+      Enum.any?(stored, &(&1 == folder or String.starts_with?(&1, folder <> "/")))
     end)
   end
 
@@ -866,10 +842,7 @@ defmodule PrismWeb.FilesLive do
                     Download
                   </a>
                   <button
-                    :if={
-                      @path != "" and writable?(@listing) and
-                        (in_data?(@path) or Map.get(entry, :held, false))
-                    }
+                    :if={in_data?(@path) and not Map.get(entry, :held, false)}
                     type="button"
                     phx-click="relocate"
                     phx-value-path={child(@path, entry.name)}
@@ -889,7 +862,7 @@ defmodule PrismWeb.FilesLive do
                     Move
                   </button>
                   <button
-                    :if={@path != "" and writable?(@listing)}
+                    :if={@path != "" and writable?(@listing) and not Map.get(entry, :held, false)}
                     type="button"
                     phx-click="delete"
                     phx-value-path={child(@path, entry.name)}
@@ -897,6 +870,15 @@ defmodule PrismWeb.FilesLive do
                     class="text-xs text-gray-500 hover:text-red-300"
                   >
                     Delete
+                  </button>
+                  <button
+                    :if={Map.get(entry, :held, false)}
+                    type="button"
+                    phx-click="remove"
+                    phx-value-path={child(@path, entry.name)}
+                    class="text-xs text-gray-500 hover:text-red-300"
+                  >
+                    Remove
                   </button>
                 </td>
               </tr>

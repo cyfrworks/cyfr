@@ -87,7 +87,7 @@ defmodule Arca.ObjectRevisions do
   raise on a store error.
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [from: 2, dynamic: 2]
 
   require Logger
 
@@ -674,11 +674,12 @@ defmodule Arca.ObjectRevisions do
        transaction.
     4. **Publish.** One transaction locks the source's rows and the
        destination's, requires the source to hold exactly the generations
-       step 1 read, no more and no fewer, settles every create, and
-       tombstones every source row, as `delete_tree/2` tombstones one.
+       step 1 read, no more and no fewer, and nothing settled anywhere at
+       or under the destination, settles every create, and tombstones
+       every source row, as `delete_tree/2` tombstones one.
 
-  A source that changed after its read is `{:error, :changed}`, a
-  destination settled meanwhile `{:error, :exists}`: either way the publish
+  A source that changed after its read is `{:error, :changed}`, anything
+  settled at or under the destination meanwhile `{:error, :exists}`: either way the publish
   rolls back and nothing a reader sees has moved. A move stopped before
   its publish commits, by a failure, a timeout or its process's death,
   leaves the source as it was and its marks pending, never settled, which
@@ -699,7 +700,7 @@ defmodule Arca.ObjectRevisions do
          :ok <- admit_all(placed, admit),
          {:ok, marks} <- mark_moves(actor, placed),
          :ok <- store_moves(actor, marks, placed) do
-      publish_move(actor, athanor_id, src, read, marks)
+      publish_move(actor, athanor_id, {src, dest}, read, marks)
     end
   end
 
@@ -775,7 +776,15 @@ defmodule Arca.ObjectRevisions do
     end)
   end
 
-  defp publish_move(actor, athanor_id, src, read, marks) do
+  # The invariant this transaction keeps: afterwards every file the move
+  # read is at its source or at its destination, never both and never
+  # neither, and no other writer's file is changed. It compares the
+  # source's rows and the destination's under the locks below, but a folder
+  # has no row to lock, so a file another writer adds under either folder
+  # in the instant after the comparison, before this commits, is not
+  # excluded: it stays where it was written, beside what moved, and the
+  # move still answers that it moved what it read.
+  defp publish_move(actor, athanor_id, {src, dest}, read, marks) do
     expected =
       Map.new(read, fn {path, generation, _sources, _bytes} -> {key(path), generation} end)
 
@@ -784,19 +793,19 @@ defmodule Arca.ObjectRevisions do
 
     Arca.Repo.Errors.with_db_rescue("Arca.ObjectRevisions.move", fn ->
       Arca.Repo.locking_transaction(fn ->
-        lock_move!(athanor_id, src, prefix, marks)
+        lock_move!(
+          athanor_id,
+          [prefix, key(dest)],
+          Enum.flat_map(marks, &(&1.segments |> ancestors())) ++ ancestors(src)
+        )
 
-        settled =
-          from(r in ObjectRevision,
-            where: r.athanor_id == ^athanor_id and not is_nil(r.settled_generation),
-            where: r.deleted == false,
-            select: {r.path, r.settled_generation}
-          )
-          |> at_or_under(prefix)
-          |> Arca.Repo.all()
-          |> Map.new()
+        if settled_at_or_under(athanor_id, prefix) != expected,
+          do: Arca.Repo.rollback(:changed)
 
-        if settled != expected, do: Arca.Repo.rollback(:changed)
+        # Nothing of anyone else's may be under the destination, not only
+        # at the paths this move lands on.
+        if settled_at_or_under(athanor_id, key(dest)) != %{},
+          do: Arca.Repo.rollback(:exists)
 
         for mark <- marks do
           case settle!(actor, mark, [], fresh: true) do
@@ -831,37 +840,52 @@ defmodule Arca.ObjectRevisions do
     end
   end
 
-  # Every row the publish reads or writes, locked in the one ascending path
-  # order every locker of these rows takes (`lock_ancestors!/2`): the
-  # source's and the destination's ancestors, the source's rows and every
-  # row under it, and the destination's own. `settle!/4` then takes each
-  # create's locks again, already held.
   # arca:db-raise-ok inside the caller's transaction
-  defp lock_move!(athanor_id, src, prefix, marks) do
-    named =
-      Enum.flat_map(marks, &[&1.key | ancestors(&1.segments)]) ++ ancestors(src)
+  defp settled_at_or_under(athanor_id, prefix) do
+    from(r in ObjectRevision,
+      where: r.athanor_id == ^athanor_id and not is_nil(r.settled_generation),
+      where: r.deleted == false,
+      select: {r.path, r.settled_generation}
+    )
+    |> at_or_under(prefix)
+    |> Arca.Repo.all()
+    |> Map.new()
+  end
 
+  # Every row the publish reads or writes, locked in the one ascending path
+  # order every locker of these rows takes (`lock_ancestors!/2`): the rows
+  # at or under the source and the destination, the destination's own
+  # marks among them, and both sides' ancestors. `settle!/4` then takes
+  # each create's locks again, already held.
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_move!(athanor_id, prefixes, ancestors) do
     from(r in ObjectRevision,
       where: r.athanor_id == ^athanor_id,
       order_by: [asc: r.path],
       select: r.path
     )
-    |> at_or_under_or_named(prefix, Enum.uniq(named))
+    |> at_or_under_any(prefixes, Enum.uniq(ancestors))
     |> Arca.QueryHelpers.for_update()
     |> Arca.Repo.all()
 
     :ok
   end
 
-  defp at_or_under_or_named(query, prefix, named) do
-    below = prefix <> "/"
-    n = code_points(below)
+  # One condition on the path, joined to the query's own (its athanor
+  # among them) by `and`.
+  defp at_or_under_any(query, prefixes, named) do
+    paths =
+      Enum.reduce(prefixes, dynamic([r], r.path in ^named), fn prefix, paths ->
+        below = prefix <> "/"
+        n = code_points(below)
 
-    from(r in query,
-      where:
-        r.path == ^prefix or fragment("substr(?, 1, ?)", r.path, ^n) == ^below or
-          r.path in ^named
-    )
+        dynamic(
+          [r],
+          ^paths or r.path == ^prefix or fragment("substr(?, 1, ?)", r.path, ^n) == ^below
+        )
+      end)
+
+    from(r in query, where: ^paths)
   end
 
   # ---------------------------------------------------------------------------
