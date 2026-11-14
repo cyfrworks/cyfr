@@ -239,6 +239,16 @@ var Guides = []string{
 	"devices-guide.md",
 }
 
+// Items are the scaffold tarball's entries at a project's root besides
+// aqua/: scripts/scaffold-tarball.sh's ITEMS, a directory without its
+// slash, and the seccomp profile shipped beside them. They are what
+// `cyfr init` lays down from the tarball and `cyfr uninstall` removes;
+// TestScaffoldItemsAreTheTarballs binds this list to the script's.
+var Items = append(slices.Clone(Guides),
+	"LICENSE", "LICENSES", "FAIR_SOURCE.md", "wit",
+	"docker-compose.yml", "Caddyfile", ".env.example", ".env.locus.example",
+	SeccompProfile)
+
 // IsManaged returns true for files that are maintained by cyfr and should be
 // overwritten during an update (guides, WIT interface definitions, the
 // keeper's seccomp profile, and the shipped AQUA soul, crew and scrolls).

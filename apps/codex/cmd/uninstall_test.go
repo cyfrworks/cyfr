@@ -25,7 +25,7 @@ d="$FAKE_DOCKER_DIR"
 printf '%s\n' "$*" >> "$d/log"
 case "$1 $2" in
   "network ls") printf 'n1\nn2\n' ;;
-  "volume ls") printf 'v1\n' ;;
+  "volume ls") printf 'cyfr_homes\ncyfr_tailscale\n' ;;
   "image rm")
     if grep -qxF "$3" "$d/in-use" 2>/dev/null; then echo "Error response from daemon: conflict: unable to remove repository reference \"$3\" (must force) - container 0123 is using its referenced image" >&2; exit 1; fi
     if grep -qxF "$3" "$d/absent" 2>/dev/null; then echo "Error response from daemon: No such image: $3" >&2; exit 1; fi ;;
@@ -33,44 +33,56 @@ esac
 exit 0
 `
 
-// uninstallScenario is one CYFR's directory beside its data, a home with
-// the program's settings, this program at a path of the test's with its
-// link onto PATH, a fake docker and a fake engine, and the commands sudo
-// was handed.
+// uninstallScenario is one CYFR's directory as cyfr init leaves it, with
+// its data, a person's own files beside them, a home holding the
+// program's settings and device key, this program at a path of the
+// test's with its link onto PATH, a fake docker and a fake engine, and
+// the commands sudo was handed, one per call.
 type uninstallScenario struct {
-	t                *testing.T
-	dir, fake, home  string
-	self, link       string
-	engine           *fakeStack
-	root             [][]string
-	refuseRoot       bool
-	compose          []byte
-	images, projectN string
+	t               *testing.T
+	dir, fake, home string
+	self, link      string
+	engine          *fakeStack
+	root            []string
+	// refuseRoot fails the root command that contains it.
+	refuseRoot string
+	compose    []byte
 }
 
 func newUninstallScenario(t *testing.T) *uninstallScenario {
 	s := &uninstallScenario{t: t, dir: filepath.Join(t.TempDir(), "my-cyfr"), fake: t.TempDir(), home: t.TempDir(), compose: shippedCompose(t)}
 	bin := t.TempDir()
 	s.self, s.link = filepath.Join(bin, "cyfr"), filepath.Join(bin, "link", "cyfr")
-	for path, data := range map[string]string{
-		filepath.Join(s.dir, "docker-compose.yml"):    string(s.compose),
-		filepath.Join(s.dir, ".env"):                  "CYFR_ACCESS=local\n",
-		filepath.Join(s.dir, "Caddyfile"):             "",
-		filepath.Join(s.dir, "wit", "cyfr", "a.wit"):  "package cyfr:a;\n",
-		filepath.Join(s.dir, ".cyfr", "lock"):         "",
-		filepath.Join(s.dir, "data", "cyfr.db"):       "db",
-		filepath.Join(s.dir, "backups", "x", "db"):    "db",
-		filepath.Join(s.home, ".cyfr", "config.json"): "{}",
-		s.self:                          "program",
-		filepath.Join(s.fake, "docker"): uninstallDocker,
-	} {
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(data), 0755); err != nil {
-			t.Fatal(err)
-		}
+	files := map[string]string{
+		"docker-compose.yml":      string(s.compose),
+		"Caddyfile":               "",
+		".env":                    "CYFR_ACCESS=local\n",
+		".env.example":            "CYFR_ACCESS=\n",
+		".env.locus.example":      "",
+		"keeper.seccomp.json":     "{}",
+		"configuration-guide.md":  "# guide\n",
+		"LICENSE":                 "",
+		"LICENSES/Apache-2.0.txt": "",
+		"FAIR_SOURCE.md":          "",
+		"wit/cyfr/a.wit":          "package cyfr:a;\n",
+		".gitignore":              projectGitignore,
+		".cyfr/lock":              "",
+		"aqua/aqua.md":            "# soul\n",
+		"aqua/crew/explorer.md":   "# shipped\n",
+		"aqua/crew/mine.md":       "# the person's own crew member\n",
+		"data/cyfr.db":            "db",
+		"backups/x/db":            "db",
+		"store/cyfr.db":           "the person's own data root",
+		"personal-document.txt":   "not CYFR's",
 	}
+	for name, data := range files {
+		s.write(filepath.Join(s.dir, name), data)
+	}
+	s.write(filepath.Join(s.home, ".cyfr", "config.json"), "{}")
+	s.write(filepath.Join(s.home, ".cyfr", "version-check.json"), "{}")
+	s.write(filepath.Join(s.home, ".cyfr", "device", "key.json"), "device key")
+	s.write(s.self, "program")
+	s.write(filepath.Join(s.fake, "docker"), uninstallDocker)
 	if err := os.MkdirAll(filepath.Dir(s.link), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -93,34 +105,44 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 	caskInstalled = func() bool { return false }
 	usrLocalLink = s.link
 	screenInstalled = func() bool { return false }
-	// The root commands run here as this account, on the test's own
+	// Each root command runs here as this account, on the test's own
 	// paths; the screen's, which reach the host's systemd, are recorded
 	// and never run.
 	machine.apply = func(commands []string) error {
-		s.root = append(s.root, commands)
-		if s.refuseRoot {
+		if len(commands) != 1 {
+			t.Fatalf("sudo was handed %d commands at once: %q", len(commands), commands)
+		}
+		c := commands[0]
+		s.root = append(s.root, c)
+		if s.refuseRoot != "" && strings.Contains(c, s.refuseRoot) {
 			return errors.New("sudo: 3 incorrect password attempts")
 		}
-		for _, c := range commands {
-			if strings.Contains(c, "systemctl") || strings.Contains(c, screenUnit) {
-				continue
-			}
-			if out, err := exec.Command("sh", "-c", c).CombinedOutput(); err != nil {
-				t.Fatalf("%s: %v %s", c, err, out)
-			}
+		if strings.Contains(c, "systemctl") || strings.Contains(c, screenUnit) {
+			return nil
+		}
+		if out, err := exec.Command("sh", "-c", c).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v %s", c, err, out)
 		}
 		return nil
 	}
 	machine.forget = func() {}
-	s.projectN = access.ProjectName(s.dir)
-	s.images = strings.Join(imagesFromCompose("docker-compose.yml", []string{buildsProfile, access.ModePublic, access.ModeTailnet}), ", ")
 	return s
 }
 
-func (s *uninstallScenario) run(deleteData, yes bool) (string, error) {
+func (s *uninstallScenario) write(path, data string) {
+	s.t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		s.t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), 0755); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+func (s *uninstallScenario) run(yes, deleteData bool) (string, error) {
 	s.t.Helper()
 	var out bytes.Buffer
-	err := runUninstall(context.Background(), &out, deleteData, yes)
+	err := runUninstall(context.Background(), &out, yes, deleteData)
 	if holder := s.engine.held(); holder != "" {
 		s.t.Errorf("the lock is still held, by %s", holder)
 	}
@@ -135,17 +157,29 @@ func (s *uninstallScenario) log() []string {
 	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 }
 
-// left are the entries left in the directory, or nil when it is gone.
-func (s *uninstallScenario) left() []string {
-	entries, err := os.ReadDir(s.dir)
+// left is every file left under dir, relative to it, sorted; nil when dir
+// is gone.
+func left(t *testing.T, dir string) []string {
+	t.Helper()
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			rel, _ := filepath.Rel(dir, path)
+			files = append(files, filepath.ToSlash(rel))
+		}
+		return nil
+	})
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
+	if err != nil {
+		t.Fatal(err)
 	}
-	return names
+	slices.Sort(files)
+	return files
 }
 
 func exists(path string) bool {
@@ -153,116 +187,147 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// shown is the plan as cyfr uninstall shows it for the scenario.
-func (s *uninstallScenario) shown(deleteData bool) string {
-	lines := []string{
-		"cyfr uninstall removes from this machine:",
-		"  the CYFR stack of " + s.dir + ": its containers, networks and volumes, and the images " + s.images,
-		"  in " + s.dir + ": .cyfr, .env, Caddyfile, docker-compose.yml, wit",
-	}
-	if deleteData {
-		lines = append(lines, "  CYFR's data, "+filepath.Join(s.dir, "backups"), "  CYFR's data, "+filepath.Join(s.dir, "data"))
-	}
-	lines = append(lines,
-		"  this program, "+s.self+", and its link "+s.link,
-		"  its settings, "+filepath.Join(s.home, ".cyfr"),
-		"It keeps:")
-	if !deleteData {
-		lines = append(lines, "  CYFR's data, data/ and backups/ in "+s.dir+" (cyfr uninstall --delete-data removes it too)")
-	}
-	lines = append(lines, "  Docker, and every package other software uses",
-		"These commands run as root, through one sudo, which asks for this machine's password:")
-	for _, c := range s.rootCommands(deleteData) {
-		lines = append(lines, "  "+c)
-	}
-	return strings.Join(lines, "\n") + "\n"
+// kept is what an uninstall that keeps the data leaves in the directory:
+// the data, the person's own files and AQUA crew member, and the data
+// root they configured themselves.
+var kept = []string{"aqua/crew/mine.md", "backups/x/db", "data/cyfr.db", "personal-document.txt", "store/cyfr.db"}
+
+func (s *uninstallScenario) images() []string {
+	path := filepath.Join(s.t.TempDir(), "docker-compose.yml")
+	s.write(path, string(s.compose))
+	return imagesFromCompose(path, []string{buildsProfile, access.ModePublic, access.ModeTailnet})
 }
 
-func (s *uninstallScenario) rootCommands(deleteData bool) []string {
-	var commands []string
-	if deleteData {
-		commands = append(commands, shellQuote([]string{"rm", "-rf", "--", filepath.Join(s.dir, "backups"), filepath.Join(s.dir, "data")}))
-	}
-	return append(commands, shellQuote([]string{"rm", "-f", "--", s.link}))
-}
-
-// removed is the docker log of a whole uninstall: the stack stopped under
-// the lock, then its networks, volumes and images removed.
-func (s *uninstallScenario) removed() []string {
-	label := "label=com.docker.compose.project=" + s.projectN
-	log := []string{
-		"ENGINE lock uninstall", "ENGINE resume", "ENGINE stop uninstall all=true",
-		"network ls -q --filter " + label, "network rm n1 n2",
-		"volume ls -q --filter " + label, "volume rm v1",
-	}
-	for _, image := range strings.Split(s.images, ", ") {
+// removalLog is the whole docker log of an uninstall: the stack stopped
+// under its lock, its networks and images removed and its volumes listed,
+// and, when the data goes, the volumes removed at the end.
+func (s *uninstallScenario) removalLog(deleteData bool) []string {
+	label := "label=com.docker.compose.project=" + access.ProjectName(s.dir)
+	log := []string{"ENGINE lock uninstall", "ENGINE resume", "ENGINE stop uninstall all=true", "network ls -q --filter " + label, "network rm n1 n2"}
+	for _, image := range s.images() {
 		log = append(log, "image rm "+image)
+	}
+	log = append(log, "volume ls -q --filter "+label)
+	if deleteData {
+		log = append(log, "volume rm cyfr_homes cyfr_tailscale")
 	}
 	return log
 }
 
-// An uninstall shows what it removes and keeps, then removes the stack,
-// the directory's files but its data, the link onto PATH as root, the
-// settings and the program, and keeps the data.
-func TestUninstallRemovesTheStackAndTheProgramAndKeepsTheData(t *testing.T) {
+// An uninstall answered yes once removes the stack, CYFR's own files, the
+// link onto PATH as root, the program and its settings, and keeps the
+// data, every volume, the device key and every file CYFR did not put
+// there.
+func TestUninstallRemovesWhatCYFRPutThereAndKeepsTheData(t *testing.T) {
 	s := newUninstallScenario(t)
-	out, err := s.run(false, true)
-	want := s.shown(false) + "CYFR is uninstalled. Its data stays in " + s.dir + "; cyfr uninstall --delete-data, or sudo rm -rf " + s.dir + ", removes it.\n"
-	if err != nil || out != want {
-		t.Fatalf("cyfr uninstall answered %v, printing\n%s\nwant\n%s", err, out, want)
+	out, err := s.run(true, false)
+	if err != nil {
+		t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
 	}
-	if got := s.log(); !slices.Equal(got, s.removed()) {
-		t.Errorf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(s.removed(), "\n"))
+	if got := left(t, s.dir); !slices.Equal(got, kept) {
+		t.Errorf("the directory holds %q, want %q", got, kept)
 	}
-	if len(s.root) != 1 || !slices.Equal(s.root[0], s.rootCommands(false)) {
-		t.Errorf("sudo ran %q", s.root)
+	if got := s.log(); !slices.Equal(got, s.removalLog(false)) {
+		t.Errorf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(s.removalLog(false), "\n"))
 	}
-	if got := s.left(); !slices.Equal(got, []string{"backups", "data"}) {
-		t.Errorf("the directory holds %q, want its data alone", got)
+	if want := []string{shellQuote([]string{"rm", "-f", "--", s.link})}; !slices.Equal(s.root, want) {
+		t.Errorf("sudo ran %q, want %q", s.root, want)
 	}
-	for _, gone := range []string{s.self, s.link, filepath.Join(s.home, ".cyfr")} {
+	if got := left(t, s.home); !slices.Equal(got, []string{".cyfr/device/key.json"}) {
+		t.Errorf("the home holds %q, want the device key alone", got)
+	}
+	for _, gone := range []string{s.self, s.link} {
 		if exists(gone) {
 			t.Errorf("%s is still there", gone)
 		}
 	}
+	for _, line := range []string{
+		"It keeps:\n  CYFR's data, unless you say next to delete it: " + filepath.Join(s.dir, "backups") + ", " + filepath.Join(s.dir, "data") + ", the stack's volumes (the programs' kept files among them), " + filepath.Join(s.home, ".cyfr", "device", "key.json") + " (this machine's device key)\n",
+		"  the other files in " + s.dir + ": personal-document.txt, store\n",
+		"CYFR's data stays.\n",
+		"CYFR is uninstalled. Its data stays: ",
+	} {
+		if !strings.Contains(out, line) {
+			t.Errorf("the output lacks %q:\n%s", line, out)
+		}
+	}
 }
 
-// --delete-data removes data/ and backups/ as root, and the directory with
-// them.
-func TestUninstallDeletesTheDataWhenAsked(t *testing.T) {
+// The data is its own question, asked after the first and read: answered
+// no, the uninstall goes on and keeps it; answered yes, the data goes too,
+// last, with every volume and the device key, and the person's own files
+// stay.
+func TestUninstallAsksAboutTheDataApart(t *testing.T) {
 	s := newUninstallScenario(t)
-	out, err := s.run(true, true)
-	want := s.shown(true) + "CYFR is uninstalled, its data with it.\n"
-	if err != nil || out != want {
-		t.Fatalf("cyfr uninstall --delete-data answered %v, printing\n%s\nwant\n%s", err, out, want)
+	askWith(t, true, strings.NewReader("yes\nno\n"))
+	out, err := s.run(false, false)
+	if err != nil || !strings.Contains(out, "Uninstall CYFR? (yes/no) [no]: ") || !strings.Contains(out, "Delete CYFR's data too? It cannot be undone. (yes/no) [no]: CYFR's data stays.\n") {
+		t.Fatalf("cyfr uninstall answered yes then no answered %v\n%s", err, out)
 	}
-	if len(s.root) != 1 || !slices.Equal(s.root[0], s.rootCommands(true)) {
-		t.Errorf("sudo ran %q", s.root)
+	if got := left(t, s.dir); !slices.Equal(got, kept) {
+		t.Errorf("the directory holds %q, want %q", got, kept)
 	}
-	if exists(s.dir) {
-		t.Errorf("the directory is still there, holding %q", s.left())
+	if got := s.log(); !slices.Equal(got, s.removalLog(false)) {
+		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
+	}
+
+	s = newUninstallScenario(t)
+	askWith(t, true, strings.NewReader("yes\nyes\n"))
+	out, err = s.run(false, false)
+	if err != nil || !strings.HasSuffix(out, "Removed this machine's device key.\nCYFR is uninstalled, its data with it.\n") {
+		t.Fatalf("cyfr uninstall answered yes twice answered %v\n%s", err, out)
+	}
+	if got, want := left(t, s.dir), []string{"aqua/crew/mine.md", "personal-document.txt", "store/cyfr.db"}; !slices.Equal(got, want) {
+		t.Errorf("the directory holds %q, want %q", got, want)
+	}
+	if got := s.log(); !slices.Equal(got, s.removalLog(true)) {
+		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
+	}
+	if got := left(t, s.home); len(got) != 0 {
+		t.Errorf("the home holds %q", got)
+	}
+	data := shellQuote([]string{"rm", "-rf", "--", filepath.Join(s.dir, "backups"), filepath.Join(s.dir, "data")})
+	if want := []string{shellQuote([]string{"rm", "-f", "--", s.link}), data}; !slices.Equal(s.root, want) {
+		t.Errorf("sudo ran %q, want %q", s.root, want)
 	}
 }
 
-// Without a terminal and --yes, and answered no, the plan is shown and
-// nothing is removed or stopped.
+// --yes answers the first question alone: without a terminal the data is
+// kept. --delete-data-without-asking answers the second.
+func TestUninstallYesKeepsTheDataAndItsOwnFlagDeletesIt(t *testing.T) {
+	s := newUninstallScenario(t)
+	if _, err := s.run(true, false); err != nil || !exists(filepath.Join(s.dir, "data", "cyfr.db")) {
+		t.Fatalf("cyfr uninstall --yes answered %v; the directory holds %q", err, left(t, s.dir))
+	}
+	s = newUninstallScenario(t)
+	if _, err := s.run(true, true); err != nil || exists(filepath.Join(s.dir, "data")) || exists(filepath.Join(s.dir, "backups")) {
+		t.Fatalf("cyfr uninstall --yes --delete-data-without-asking answered %v; the directory holds %q", err, left(t, s.dir))
+	}
+	if got := s.log(); !slices.Equal(got, s.removalLog(true)) {
+		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// Without a terminal and --yes, and answered no, nothing is removed or
+// stopped.
 func TestUninstallRemovesNothingUnconfirmed(t *testing.T) {
 	s := newUninstallScenario(t)
-	out, err := s.run(false, false)
-	if err == nil || err.Error() != "Nothing was removed: there is no terminal to confirm the uninstall on. Run it again with --yes to uninstall, or at a terminal" || out != s.shown(false) {
-		t.Fatalf("cyfr uninstall with no terminal answered %v, printing\n%s", err, out)
+	before := left(t, s.dir)
+	_, err := s.run(false, false)
+	if err == nil || err.Error() != "Nothing was removed: there is no terminal to confirm the uninstall on. Run it again with --yes to uninstall, or at a terminal" {
+		t.Fatalf("cyfr uninstall with no terminal answered %v", err)
 	}
-	s.nothingRemoved()
+	s.nothingRemoved(before)
 
 	askWith(t, true, strings.NewReader("no\n"))
-	out, err = s.run(false, false)
-	if err != nil || out != s.shown(false)+"Uninstall CYFR? (yes/no) [no]: Nothing was removed.\n" {
-		t.Fatalf("cyfr uninstall answered no answered %v, printing\n%s", err, out)
+	out, err := s.run(false, false)
+	if err != nil || !strings.HasSuffix(out, "Uninstall CYFR? (yes/no) [no]: Nothing was removed.\n") {
+		t.Fatalf("cyfr uninstall answered no answered %v\n%s", err, out)
 	}
-	s.nothingRemoved()
+	s.nothingRemoved(before)
 }
 
-func (s *uninstallScenario) nothingRemoved() {
+func (s *uninstallScenario) nothingRemoved(before []string) {
 	s.t.Helper()
 	if log := s.log(); len(log) != 0 {
 		s.t.Errorf("cyfr uninstall ran:\n%s", strings.Join(log, "\n"))
@@ -270,64 +335,92 @@ func (s *uninstallScenario) nothingRemoved() {
 	if len(s.root) != 0 {
 		s.t.Errorf("sudo ran %q", s.root)
 	}
-	s.everythingStays()
-}
-
-func (s *uninstallScenario) everythingStays() {
-	s.t.Helper()
-	if got := s.left(); !slices.Equal(got, []string{".cyfr", ".env", "Caddyfile", "backups", "data", "docker-compose.yml", "wit"}) {
-		s.t.Errorf("the directory holds %q", got)
+	if got := left(s.t, s.dir); !slices.Equal(got, before) {
+		s.t.Errorf("the directory holds %q, want %q", got, before)
 	}
-	for _, kept := range []string{s.self, s.link, filepath.Join(s.home, ".cyfr", "config.json")} {
-		if !exists(kept) {
-			s.t.Errorf("%s is gone", kept)
+	for _, path := range []string{s.self, s.link, filepath.Join(s.home, ".cyfr", "config.json")} {
+		if !exists(path) {
+			s.t.Errorf("%s is gone", path)
 		}
 	}
 }
 
-// A refused sudo removes nothing: the stack is stopped, and 'cyfr up'
-// starts it again.
-func TestUninstallRemovesNothingWhenSudoIsRefused(t *testing.T) {
+// A project in ~/.cyfr itself keeps its data: the settings are removed as
+// the files they are, never the directory with what is in it.
+func TestUninstallInTheSettingsDirectoryKeepsTheData(t *testing.T) {
 	s := newUninstallScenario(t)
-	s.refuseRoot = true
-	_, err := s.run(true, true)
-	if err == nil || err.Error() != "The commands as root did not run, so nothing was removed; the stack is stopped, and 'cyfr up' starts it again" {
-		t.Fatalf("cyfr uninstall answered %v", err)
+	project := filepath.Join(s.home, ".cyfr")
+	for _, name := range []string{"docker-compose.yml", ".env", ".cyfr", "data", "backups", "aqua", "wit"} {
+		if err := os.Rename(filepath.Join(s.dir, name), filepath.Join(project, name)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := s.log(); !slices.Equal(got, s.removed()[:3]) {
-		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
+	s.dir = project
+	t.Chdir(project)
+	if _, err := s.run(true, false); err != nil {
+		t.Fatal(err)
 	}
-	s.everythingStays()
+	if got, want := left(t, project), []string{"aqua/crew/mine.md", "backups/x/db", "data/cyfr.db", "device/key.json"}; !slices.Equal(got, want) {
+		t.Errorf("~/.cyfr holds %q, want %q", got, want)
+	}
 }
 
-// Outside CYFR's directory nothing is removed.
-func TestUninstallRefusesADirectoryWithoutACompose(t *testing.T) {
+// Each root command runs alone, and a failure says what is gone and what
+// is still here: before CYFR's files go, 'cyfr up' starts the stack
+// again; once the data is going, it is never offered.
+func TestUninstallSaysWhatIsGoneWhenAStepFails(t *testing.T) {
 	s := newUninstallScenario(t)
-	t.Chdir(t.TempDir())
-	_, err := s.run(false, true)
-	want := "There is no CYFR in this directory, so nothing was removed: it holds no compose file (" + strings.Join(access.ComposeMainFiles, ", ") + "). Run 'cyfr uninstall' in CYFR's directory, the one that holds its docker-compose.yml"
+	s.refuseRoot = "'-f'"
+	_, err := s.run(true, true)
+	if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall stopped: removing the link "+s.link+" failed (sudo: 3 incorrect password attempts). Already removed: the stack's containers. CYFR's data is still here: ") || !strings.Contains(err.Error(), "so 'cyfr up' starts the stack again.") {
+		t.Fatalf("a refused link removal answered %v", err)
+	}
+	if got := left(t, s.dir); !slices.Contains(got, "docker-compose.yml") || !slices.Contains(got, "data/cyfr.db") {
+		t.Errorf("the directory holds %q", got)
+	}
+
+	s = newUninstallScenario(t)
+	s.refuseRoot = "'-rf'"
+	_, err = s.run(true, true)
+	if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall stopped: removing "+filepath.Join(s.dir, "backups")+" and "+filepath.Join(s.dir, "data")+" as root failed") || strings.Contains(err.Error(), "cyfr up") || !strings.Contains(err.Error(), "Already removed: the stack's containers; the link "+s.link+"; the stack's networks; the stack's images; the files CYFR put in "+s.dir+"; its settings; this program.") {
+		t.Fatalf("a refused data removal answered %v", err)
+	}
+	if log := s.log(); log[len(log)-1] == "volume rm cyfr_homes cyfr_tailscale" {
+		t.Error("the volumes were removed after the data's removal failed")
+	}
+}
+
+// Only a CYFR cyfr init made is uninstalled: a directory with an unrelated
+// compose project, or none, is refused with nothing removed.
+func TestUninstallRefusesWhatIsNotACYFR(t *testing.T) {
+	s := newUninstallScenario(t)
+	s.write(filepath.Join(s.dir, ".env"), "OTHER=1\n")
+	s.write(filepath.Join(s.dir, "docker-compose.yml"), "services:\n  unrelated:\n    image: busybox:latest\n")
+	before := left(t, s.dir)
+	_, err := s.run(true, true)
+	want := "This directory is not a CYFR that cyfr init made, so nothing was removed: it lacks a compose file, .cyfr/ or a .env that names CYFR_ACCESS. Run 'cyfr uninstall' in CYFR's directory"
 	if err == nil || err.Error() != want {
 		t.Fatalf("cyfr uninstall answered %v, want %q", err, want)
 	}
-	t.Chdir(s.dir)
-	s.nothingRemoved()
+	s.nothingRemoved(before)
+
+	t.Chdir(t.TempDir())
+	if _, err := s.run(true, true); err == nil || err.Error() != want {
+		t.Fatalf("cyfr uninstall in an empty directory answered %v", err)
+	}
 }
 
-// The screen service goes first among the root commands; a Homebrew
+// The screen service is given back, one root command at a time; a Homebrew
 // install keeps its program for brew; an image another container uses
 // stays and is said, and one that is not on the machine is no failure.
 func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T) {
 	s := newUninstallScenario(t)
 	screenInstalled = func() bool { return true }
 	caskInstalled = func() bool { return true }
-	images := strings.Split(s.images, ", ")
-	if err := os.WriteFile(filepath.Join(s.fake, "in-use"), []byte(images[0]+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(s.fake, "absent"), []byte(images[1]+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	out, err := s.run(false, true)
+	images := s.images()
+	s.write(filepath.Join(s.fake, "in-use"), images[0]+"\n")
+	s.write(filepath.Join(s.fake, "absent"), images[1]+"\n")
+	out, err := s.run(true, false)
 	if err != nil {
 		t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
 	}
@@ -340,11 +433,8 @@ func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T)
 			t.Errorf("the output lacks %q:\n%s", line, out)
 		}
 	}
-	if strings.Contains(out, "this program, "+s.self) {
-		t.Errorf("a Homebrew install's program is in the list:\n%s", out)
-	}
-	if len(s.root) != 1 || !slices.Equal(s.root[0], screenOffCommands) {
-		t.Errorf("sudo ran %q, want the screen's commands alone", s.root)
+	if !slices.Equal(s.root, screenOffCommands) {
+		t.Errorf("sudo ran %q, want the screen's commands one by one", s.root)
 	}
 	if !exists(s.self) {
 		t.Error("a Homebrew install's program was removed")
