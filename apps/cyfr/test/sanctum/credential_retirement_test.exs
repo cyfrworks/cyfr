@@ -256,7 +256,7 @@ defmodule Sanctum.CredentialRetirementTest do
       assert denied.security_generation == 2
       assert denied.denied_at
 
-      assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: uid}
+      assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: uid, reason: :denied}
       assert uid == user.id
       assert_receive {:telemetry, [:cyfr, :sanctum, :caller, :invalidated], %{hash: ^hash}}
       assert_receive {:telemetry, [:cyfr, :sanctum, :athanor, :archived], %{athanor_id: own_id}}

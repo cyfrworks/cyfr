@@ -1350,10 +1350,10 @@ defmodule PrismWeb.ConsentSheetComponent do
               <li :for={entry <- group.entries}>
                 <strong>{capability_label(entry.capability)}</strong>
                 <span :if={entry.added != []}>
-                  asks for {Enum.join(entry.added, ", ")}, which your grant does not give
+                  asks for {delta_values(entry.capability, entry.added)}, which your grant does not give
                 </span>
                 <span :if={entry.removed != []}>
-                  no longer asks for {Enum.join(entry.removed, ", ")}
+                  no longer asks for {delta_values(entry.capability, entry.removed)}
                 </span>
               </li>
             </ul>
@@ -2733,8 +2733,13 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp capability_label("tools"), do: "Tools:"
   defp capability_label("egress." <> field), do: "Network #{field}:"
   defp capability_label("storage." <> field), do: "Files #{field}:"
-  defp capability_label("policy." <> mode), do: "Agent policy #{mode}:"
+  defp capability_label("native_search"), do: "Web search:"
   defp capability_label(capability), do: "#{capability}:"
+
+  # A change's values as the person reads them: an agent's provider search
+  # is the one value of its row, named by what it is.
+  defp delta_values("native_search", _values), do: "its provider's own web search"
+  defp delta_values(_capability, values), do: Enum.join(values, ", ")
 
   # Each field the component reads and the entry field that answers it.
   defp field_map_label(fields, _none) when is_map(fields) and map_size(fields) > 0 do

@@ -33,6 +33,9 @@ defmodule PrismWeb.FilesLive do
   answer names unless the person names another, or declined; the files
   accepted here that are still landing, or that could not be delivered;
   and the offers sent from this athanor, each withdrawn while it waits.
+  An offer accepted here stays listed while the page is open, saying what
+  its receipts say: still landing, not delivered, or landed, with the
+  folder and a way there only once it has landed.
   Nothing of an offered file's bytes reaches the page before it lands.
   The page reads the offers again whenever the person's own topic
   (`Cyfr.Bus.file_offers/1`) says one of theirs moved.
@@ -71,6 +74,7 @@ defmodule PrismWeb.FilesLive do
      |> assign(:new_folders, MapSet.new())
      |> assign(:naming, nil)
      |> assign(:relocating, nil)
+     |> assign(:accepted, [])
      |> allow_upload(:files,
        accept: :any,
        max_entries: 10,
@@ -140,10 +144,15 @@ defmodule PrismWeb.FilesLive do
 
   # An offer of several files is announced once per file: the messages
   # already queued behind this one ask for the same read, so one serves
-  # them all.
-  def handle_info(%Bus.FileOffer{}, socket) do
-    drain_offer_messages()
-    {:noreply, load_offers(socket)}
+  # them all. Each is applied to the accepted cards first, so a landing or
+  # a failure the page heard settles its card whatever the read answers.
+  def handle_info(%Bus.FileOffer{} = message, socket) do
+    messages = [message | drain_offer_messages([])]
+
+    {:noreply,
+     socket
+     |> update(:accepted, &Enum.reduce(messages, &1, fn m, cards -> heard(cards, m) end))
+     |> load_offers()}
   end
 
   def handle_info(msg, socket) do
@@ -358,9 +367,15 @@ defmodule PrismWeb.FilesLive do
       end
 
     case Ops.call_tool(socket, "file/accept", args) do
-      {:ok, %{folder: folder}} ->
+      {:ok, %{folder: folder, receipts: receipts}} ->
+        card = accepted(socket.assigns, offer_id, folder, receipts)
+
         {:noreply,
-         socket |> put_flash(:info, "Accepted into #{folder}") |> load_offers() |> load()}
+         socket
+         |> update(:accepted, &[card | &1])
+         |> put_flash(:info, accepted_flash(card))
+         |> load_offers()
+         |> load()}
 
       {:error, reason} ->
         {:noreply, socket |> put_flash(:error, Ops.error_message(reason)) |> load_offers()}
@@ -380,16 +395,109 @@ defmodule PrismWeb.FilesLive do
     end
   end
 
+  # What the Inbox keeps of an offer accepted here: its files, as the
+  # acceptance's own receipts name them and with those already published
+  # counted as landed; who sent it, by the name the page showed (the
+  # answer does not carry the sender); the folder it was accepted into;
+  # and its delivery as the receipts say. The folder an answer
+  # names, `<into>/<offer>[-<n>]/`, is where the files are only once every
+  # receipt is published; its parent is the folder accepted into.
+  defp accepted(%{offers: offers, people: people}, offer_id, folder, receipts) do
+    offer =
+      if is_map(offers), do: Enum.find(offers.awaiting, &(&1.offer_id == offer_id)), else: nil
+
+    %{
+      offer_id: offer_id,
+      into: folder |> String.trim_trailing("/") |> Path.dirname(),
+      from: person(people, offer && offer.sender),
+      files: Enum.map(receipts, &Map.take(&1, [:filename, :size])),
+      landed:
+        for(
+          %{status: status, filename: name} <- receipts,
+          status in ~w(published completed),
+          into: MapSet.new(),
+          do: name
+        ),
+      delivery: delivery(Enum.map(receipts, & &1.status), folder)
+    }
+  end
+
+  defp delivery([_ | _] = statuses, folder) do
+    cond do
+      "failed" in statuses -> :failed
+      Enum.all?(statuses, &(&1 in ~w(published completed))) -> {:landed, folder}
+      true -> :landing
+    end
+  end
+
+  defp delivery([], _folder), do: :landing
+
+  defp accepted_flash(%{delivery: {:landed, folder}}), do: "Accepted into #{folder}"
+  defp accepted_flash(%{delivery: :failed}), do: "Accepted, but it could not be delivered"
+  defp accepted_flash(%{delivery: :landing}), do: "Accepted; it is still landing"
+
+  # What the page heard of a card's offer: a failed file fails it; a
+  # landed file counts, and the card has landed once every file it lists
+  # has, in a folder under the one it was accepted into, since the message
+  # names no path. Only a card not yet settled moves.
+  defp heard(cards, %Bus.FileOffer{kind: kind, offer_id: id, filename: filename})
+       when kind in [:failed, :landed] do
+    Enum.map(cards, fn
+      %{offer_id: ^id, delivery: :landing} = card ->
+        heard_file(card, kind, filename)
+
+      %{offer_id: ^id, delivery: {:unlisted, _into}} = card ->
+        heard_file(card, kind, filename)
+
+      card ->
+        card
+    end)
+  end
+
+  defp heard(cards, _message), do: cards
+
+  defp heard_file(card, :failed, _filename), do: %{card | delivery: :failed}
+
+  defp heard_file(card, :landed, filename) do
+    landed = MapSet.put(card.landed, filename)
+    names = MapSet.new(card.files, & &1.filename)
+
+    if MapSet.subset?(names, landed),
+      do: %{card | landed: landed, delivery: {:landed_under, card.into}},
+      else: %{card | landed: landed}
+  end
+
+  # A card still landing takes what `file/offers` now lists of its
+  # receipts: a failed one fails it and one still received keeps it
+  # landing. None listed proves nothing, since retention removes a failed
+  # receipt too: the card says it no longer knows, and only a landing it
+  # heard says it landed.
+  defp redelivered(cards, receipts) do
+    Enum.map(cards, fn
+      %{delivery: :landing, offer_id: id} = card ->
+        statuses = for %{offer_id: ^id, status: status} <- receipts, do: status
+
+        cond do
+          "failed" in statuses -> %{card | delivery: :failed}
+          statuses != [] -> card
+          true -> %{card | delivery: {:unlisted, card.into}}
+        end
+
+      card ->
+        card
+    end)
+  end
+
   # Only a file under `data/` is offered; the operation holds to it too.
   defp offerable?(path), do: String.starts_with?(path, "data/")
 
   defp in_data?(folder), do: folder == "data" or offerable?(folder)
 
-  defp drain_offer_messages do
+  defp drain_offer_messages(acc) do
     receive do
-      %Bus.FileOffer{} -> drain_offer_messages()
+      %Bus.FileOffer{} = message -> drain_offer_messages([message | acc])
     after
-      0 -> :ok
+      0 -> Enum.reverse(acc)
     end
   end
 
@@ -497,6 +605,7 @@ defmodule PrismWeb.FilesLive do
         socket
         |> assign(:offers, %{awaiting: waiting, receipts: receipts, sent: sent})
         |> assign(:people, people)
+        |> update(:accepted, &redelivered(&1, receipts))
 
       {:error, reason} ->
         Logger.debug("[PrismWeb.FilesLive] offers not read: #{inspect(reason)}")
@@ -790,14 +899,15 @@ defmodule PrismWeb.FilesLive do
           <table
             :if={!@loading && @listing && entries(@listing, @path, @new_folders) != []}
             id="files-entries"
-            class="min-w-full"
+            class="block w-full sm:table"
           >
-            <tbody class="divide-y divide-gray-800/50">
+            <tbody class="block divide-y divide-gray-800/50 sm:table-row-group">
+              <%!-- At phone width a row wraps: its actions take a line of their own under the name. --%>
               <tr
                 :for={entry <- entries(@listing, @path, @new_folders)}
-                class="hover:bg-gray-800/30"
+                class="flex flex-wrap items-center hover:bg-gray-800/30 sm:table-row"
               >
-                <td :if={in_data?(@path)} class="w-6 pl-3 py-2">
+                <td :if={in_data?(@path)} class="w-6 pl-3 py-2 sm:table-cell">
                   <input
                     :if={entry.kind == :file}
                     type="checkbox"
@@ -808,7 +918,7 @@ defmodule PrismWeb.FilesLive do
                     class="rounded border-gray-600 bg-gray-800"
                   />
                 </td>
-                <td class="px-3 py-2 text-sm">
+                <td class="min-w-0 flex-1 px-3 py-2 text-sm sm:table-cell">
                   <button
                     :if={entry.kind == :dir}
                     type="button"
@@ -816,8 +926,8 @@ defmodule PrismWeb.FilesLive do
                     phx-value-path={child(@path, entry.name)}
                     class="flex items-center gap-2 text-gray-200 hover:text-white"
                   >
-                    <.icon name="folder" class="h-4 w-4 text-gray-500" />
-                    <span class="font-mono">{entry.name}/</span>
+                    <.icon name="folder" class="h-4 w-4 shrink-0 text-gray-500" />
+                    <span class="font-mono break-all text-left sm:break-normal">{entry.name}/</span>
                   </button>
                   <button
                     :if={entry.kind == :file}
@@ -826,14 +936,17 @@ defmodule PrismWeb.FilesLive do
                     phx-value-path={child(@path, entry.name)}
                     class="flex items-center gap-2 text-gray-300 hover:text-white"
                   >
-                    <.icon name="document" class="h-4 w-4 text-gray-600" />
-                    <span class="font-mono">{entry.name}</span>
+                    <.icon name="document" class="h-4 w-4 shrink-0 text-gray-600" />
+                    <span class="font-mono break-all text-left sm:break-normal">{entry.name}</span>
                   </button>
                 </td>
-                <td class="px-3 py-2 text-xs text-gray-500 text-right whitespace-nowrap">
+                <td class="px-3 py-2 text-xs text-gray-500 text-right whitespace-nowrap sm:table-cell">
                   {size_label(entry.size)}
                 </td>
-                <td class="px-3 py-2 text-right whitespace-nowrap">
+                <td
+                  data-row-actions
+                  class="w-full px-3 pb-2 text-left sm:table-cell sm:w-auto sm:pt-2 sm:text-right sm:whitespace-nowrap"
+                >
                   <a
                     :if={entry.kind == :file}
                     href={download_href(@athanor_route, child(@path, entry.name))}
@@ -1052,6 +1165,49 @@ defmodule PrismWeb.FilesLive do
                   Decline
                 </.button>
               </div>
+            </div>
+
+            <div
+              :for={offer <- @accepted}
+              id={"accepted-#{offer.offer_id}"}
+              class="space-y-2 rounded-lg border border-gray-800 p-3"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span :if={offer.delivery == :landing} class="text-gray-200">
+                  From {offer.from}, accepted. It is still landing: it waits for space in this athanor, or for the next retry.
+                </span>
+                <span :if={offer.delivery == :failed} class="text-red-300">
+                  From {offer.from}, accepted, but it could not be delivered. Ask them to send it again.
+                </span>
+                <span :if={match?({:landed, _}, offer.delivery)} class="text-gray-200">
+                  From {offer.from}, landed in
+                  <span class="font-mono">{elem(offer.delivery, 1)}</span>
+                </span>
+                <span :if={match?({:landed_under, _}, offer.delivery)} class="text-gray-200">
+                  From {offer.from}, landed in a folder under
+                  <span class="font-mono">{elem(offer.delivery, 1)}/</span>
+                </span>
+                <span :if={match?({:unlisted, _}, offer.delivery)} class="text-gray-200">
+                  From {offer.from}, accepted. Its delivery is no longer listed; look in
+                  <span class="font-mono">{elem(offer.delivery, 1)}/</span>
+                  for it.
+                </span>
+                <.button
+                  :if={is_tuple(offer.delivery)}
+                  variant="ghost"
+                  size="sm"
+                  phx-click="navigate"
+                  phx-value-path={String.trim_trailing(elem(offer.delivery, 1), "/")}
+                >
+                  Open
+                </.button>
+              </div>
+              <ul class="space-y-0.5 text-xs text-gray-400">
+                <li :for={file <- offer.files} class="flex justify-between gap-2">
+                  <span class="font-mono">{file.filename}</span>
+                  <span>{size_label(file.size)}</span>
+                </li>
+              </ul>
             </div>
 
             <ul

@@ -69,11 +69,6 @@ defmodule Aqua.Runner do
   waits for that process to end, holds the turns behind it, and recovers
   the turn then, while the member still holds its slot.
 
-  `suspend` sets a turn down with every row kept, its runtime released
-  and the thread's claim given up, so any member may pick it up;
-  `recover` takes a suspended or abandoned turn back, under a new fence
-  and against the recovery cap.
-
   Every loop result, notification and timer checks the slot again. If it
   is lost or has expired, the runner stops its loop and exits without
   changing the tape or advancing queued turns. A holding runner recovers
@@ -81,7 +76,7 @@ defmodule Aqua.Runner do
 
   ## Broadcasts — `Cyfr.Bus.ThreadEvent` on `Cyfr.Bus.thread/2`
 
-  The rows from the tape (`:message`, `:turn_suspended`, `:turn_finished`,
+  The rows from the tape (`:message`, `:turn_finished`,
   `:approval_resolved`), and from here `:turn_starting`, `:turn_started`,
   `:turn_paused`, `:queued`, `:grants` and `:restart_prompt`; the loop
   announces `:usage`, `:tool_activity`, `:intents`, `:consent_required`,
@@ -96,7 +91,7 @@ defmodule Aqua.Runner do
 
   require Logger
 
-  alias Aqua.Runner.{Admission, RecoveryPolicy, RecoveryTable}
+  alias Aqua.Runner.{Admission, RecoveryTable}
   alias Aqua.Tape
   alias Cyfr.Bus.{Notify, ThreadEvent}
   alias Sanctum.Context
@@ -308,138 +303,6 @@ defmodule Aqua.Runner do
     do: call(ctx, thread_id, {:restart_for_consent, ctx, result})
 
   @doc """
-  Set the thread's turn down: every row it has written kept, its runtime
-  capacity released and the thread's claim given up, so any member may
-  pick it up (`turn.suspend`). `opts`: `:turn` — the exact turn the
-  caller read, so a caller never suspends its successor — and `:reason`,
-  which is recorded on the turn and shown in the transcript.
-
-  A thread with no runner here is not this member's to set down: a turn a
-  live peer runs is `{:error, :held_elsewhere}` and anything else is
-  already down,
-  `{:error, :not_running}`.
-  """
-  @spec suspend_turn(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def suspend_turn(%Context{} = ctx, thread_id, opts \\ []) do
-    request = {:suspend, ctx, Keyword.get(opts, :turn), Keyword.get(opts, :reason)}
-
-    with :ok <- held(),
-         {:ok, thread} <- Tape.thread(ctx, thread_id),
-         :ok <- open?(thread.athanor_id) do
-      case whereis(thread_id) do
-        nil -> nothing_to_suspend(ctx, thread_id)
-        pid -> safe_call(pid, request)
-      end
-    end
-  end
-
-  defp nothing_to_suspend(ctx, thread_id) do
-    case Tape.claim_holder(ctx, thread_id) do
-      {:ok, %{live_peer?: true}} -> {:error, :held_elsewhere}
-      {:ok, _free_or_ours} -> {:error, :not_running}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  Take a suspended or abandoned turn and carry it on (`turn.recover`):
-  the turn is named, never "whatever is there now".
-
-  What the rows call for is the recovery table's to say, and the take is
-  the thread's claim — refused for a turn a live peer runs
-  (`{:error, :held_elsewhere}`) and for one still running here
-  (`{:error, :not_suspended}`). The turn's pinned consent head and
-  capability identity are read again first: a recovery asked for by hand
-  is a fresh admission of old work. Past the recovery cap the turn ends
-  `uncertain` and the call answers `{:error, :recovery_exhausted}`.
-  """
-  @spec recover_turn(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def recover_turn(%Context{} = ctx, thread_id, turn_id)
-      when is_binary(thread_id) and is_binary(turn_id) do
-    with :ok <- held(),
-         {:ok, thread} <- Tape.thread(ctx, thread_id),
-         :ok <- open?(thread.athanor_id),
-         {:ok, turn} <- turn_of(ctx, thread, turn_id),
-         :ok <- recoverable?(ctx, thread, turn),
-         :ok <- RecoveryTable.pins_hold(ctx, turn) do
-      case whereis(thread_id) do
-        # No runner here yet: starting one IS the recovery. It reads the
-        # thread's open turns and does what their rows say, taking each
-        # only through its thread claim and counting each take there.
-        nil ->
-          with {:ok, _pid} <- ensure(thread_id, thread.athanor_id),
-               do: recovered(ctx, turn_id)
-
-        pid ->
-          safe_call(pid, {:recover, ctx, turn_id})
-      end
-    end
-  end
-
-  # The named turn, and it has to be this thread's: a turn of another
-  # thread — or of another tenant, which the scoped read already refused —
-  # is absent, never denied, so an id cannot be probed for.
-  defp turn_of(ctx, thread, turn_id) do
-    case Tape.turn(ctx, turn_id) do
-      {:ok, %{thread_id: id} = turn} when id == thread.id -> {:ok, turn}
-      {:ok, _elsewhere} -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  # A turn that is over has nothing to carry on; one a live peer is
-  # running is that peer's; one a process here still holds is running, and
-  # running is not suspended.
-  defp recoverable?(ctx, thread, turn) do
-    cond do
-      Tape.terminal?(turn) ->
-        {:error, :not_open}
-
-      Aqua.Loop.holder(turn.id) ->
-        {:error, :not_suspended}
-
-      match?({:ok, %{live_peer?: true}}, Tape.claim_holder(ctx, thread.id)) ->
-        {:error, :held_elsewhere}
-
-      true ->
-        :ok
-    end
-  end
-
-  # What a freshly started runner made of the turn: the row, read again. A
-  # turn it gave up on because its limit was spent is `uncertain` with the
-  # limit's own count, which is the limit answering; `uncertain` for any
-  # other reason is reported as the status it is.
-  defp recovered(ctx, turn_id) do
-    case Tape.turn(ctx, turn_id) do
-      {:ok, %{status: "uncertain", recovery_attempts: spent} = turn} ->
-        if spent >= recovery_limit(turn),
-          do: {:error, :recovery_exhausted},
-          else: {:ok, report_row(turn)}
-
-      {:ok, turn} ->
-        {:ok, report_row(turn)}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # The limit a turn is held to: the one its row stores, or — for a turn
-  # only accepted, which stores none yet — the policy.
-  defp recovery_limit(%{recovery_limit: limit}) when is_integer(limit), do: limit
-  defp recovery_limit(_turn), do: RecoveryPolicy.max_attempts()
-
-  defp report_row(turn) do
-    %{
-      recovered: true,
-      turn: turn.id,
-      status: turn.status,
-      running: Aqua.Loop.holder(turn.id) != nil
-    }
-  end
-
-  @doc """
   Start a runner for every thread holding an open turn, while this boot
   owns the control plane.
 
@@ -635,26 +498,6 @@ defmodule Aqua.Runner do
 
       refusal ->
         {:reply, refusal, state}
-    end
-  end
-
-  defp handle_owned_call({:suspend, ctx, turn_id, reason}, _from, state) do
-    case Admission.standing(ctx, state.athanor_id) do
-      :ok ->
-        case target_turn(state, turn_id) do
-          nil -> {:reply, {:error, :not_running}, state}
-          id -> suspend_work(state, id, reason)
-        end
-
-      refusal ->
-        {:reply, refusal, state}
-    end
-  end
-
-  defp handle_owned_call({:recover, ctx, turn_id}, _from, state) do
-    case Admission.standing(ctx, state.athanor_id) do
-      :ok -> recover_named(state, turn_id)
-      refusal -> {:reply, refusal, state}
     end
   end
 
@@ -1448,97 +1291,6 @@ defmodule Aqua.Runner do
 
   defp local_holder(%{live: %{turn_id: id, task: task}}, id), do: task.pid
   defp local_holder(state, id), do: get_in(state.held, [id, :pid])
-
-  # ---------------------------------------------------------------------------
-  # Setting a turn down, and picking one up
-  # ---------------------------------------------------------------------------
-
-  # Which turn a suspend names: the one the caller read, when this runner
-  # is working it, and otherwise the one it is working now. A caller that
-  # read a turn never sets its successor down by accident.
-  defp target_turn(state, nil),
-    do: (state.live || state.paused) && (state.live || state.paused).turn_id
-
-  defp target_turn(state, id) do
-    known =
-      Enum.flat_map([state.live, state.paused], fn
-        nil -> []
-        entry -> [entry.turn_id]
-      end) ++ Map.keys(state.held) ++ Enum.map(state.queue, & &1.turn_id)
-
-    if id in known, do: id, else: nil
-  end
-
-  # The turn is taken from its holder first — the fence raised, the loop
-  # and every worker under it stopped, its children cancelled and its
-  # steps settled — so nothing it had in flight lands afterwards. Only
-  # then is it set down durably, with the thread's claim released. Every
-  # row written along the way stays: this ends no turn.
-  defp suspend_work(state, id, reason) do
-    text = reason || "the turn was suspended"
-
-    with :ok <- held(),
-         {:ok, turn} <- Tape.turn(state.ctx, id),
-         false <- Tape.terminal?(turn),
-         {:ok, aborted} <-
-           Aqua.Loop.abort(state.ctx, turn, text, fn ->
-             Aqua.Loop.Worker.stop(local_holder(state, id))
-           end),
-         {:ok, suspended} <- Tape.suspend(state.ctx, aborted, reason) do
-      state = state |> retire_turn(id) |> start_next()
-
-      {:reply, {:ok, %{suspended: true, turn: suspended.id, reason: reason}}, state}
-    else
-      true -> {:reply, {:error, :not_open}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
-    end
-  end
-
-  # A turn this runner already holds was recovered by the runner's own
-  # start, which reads the same rows and takes the same claim: the call is
-  # answered with what that made of it, and no second recovery is spent.
-  # A turn it does not hold is taken now — the claim and the count in one
-  # transaction — and carried out by the action its rows call for.
-  defp recover_named(state, turn_id) do
-    if target_turn(state, turn_id) do
-      {:reply, {:ok, report(state, turn_id)}, state}
-    else
-      case Tape.turn(state.ctx, turn_id) do
-        {:ok, turn} -> recover_unheld(state, turn)
-        {:error, reason} -> {:reply, {:error, reason}, state}
-      end
-    end
-  end
-
-  defp recover_unheld(state, turn) do
-    if Tape.terminal?(turn) do
-      {:reply, {:error, :not_open}, state}
-    else
-      case Tape.recover(state.ctx, turn, RecoveryPolicy.max_attempts()) do
-        {:ok, recovered} ->
-          state =
-            RecoveryTable.claimed(state.ctx, recovered)
-            |> List.wrap()
-            |> Enum.reduce(state, &recover_one/2)
-
-          {:reply, {:ok, report(state, turn.id)}, touch(state)}
-
-        {:error, :recovery_exhausted} ->
-          state = give_up(state, turn, "the turn was interrupted too many times")
-          {:reply, {:error, :recovery_exhausted}, state}
-
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
-    end
-  end
-
-  defp report(state, turn_id) do
-    case Tape.turn(state.ctx, turn_id) do
-      {:ok, turn} -> report_row(turn)
-      _ -> %{recovered: true, turn: turn_id, status: nil, running: false}
-    end
-  end
 
   defp retire_turn(state, id) do
     if match?(%{turn_id: ^id}, state.live), do: Process.demonitor(state.live.task.ref, [:flush])

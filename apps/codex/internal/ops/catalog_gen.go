@@ -49,7 +49,6 @@ const (
 	Tincture           = "tincture"
 	TinctureVisibility = "tincture_visibility"
 	Tools              = "tools"
-	Turn               = "turn"
 	Vault              = "vault"
 	Webhook            = "webhook"
 )
@@ -197,7 +196,6 @@ const (
 	RegistryAppeal          = "appeal"
 	RegistryClaimPublisher  = "claim_publisher"
 	RegistryGetNamespace    = "get_namespace"
-	RegistryLegalAccept     = "legal_accept"
 	RegistryLegalPage       = "legal_page"
 	RegistryLegalVersion    = "legal_version"
 	RegistryListMyReports   = "list_my_reports"
@@ -278,8 +276,6 @@ const (
 	TinctureInvokePublic    = "invoke_public"
 	TinctureVisibilityGet   = "get"
 	ToolsList               = "list"
-	TurnRecover             = "recover"
-	TurnSuspend             = "suspend"
 	VaultAuthorize          = "authorize"
 	VaultCreate             = "create"
 	VaultDelete             = "delete"
@@ -325,7 +321,7 @@ var Actions = map[string][]string{
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
@@ -338,7 +334,6 @@ var Actions = map[string][]string{
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
-	"turn":                {"recover", "suspend"},
 	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate", "set_default", "status"},
 	"webhook":             {"create", "get", "list", "reenable", "revoke", "rotate", "update"},
 }
@@ -2337,6 +2332,8 @@ type McpServersUpdateArgs struct {
 	Config McpServersUpdateArgsConfig `json:"config"`
 	// The epoch the caller read with get (required for update; refused when the server has changed since)
 	Epoch int `json:"epoch"`
+	// Headers of a tool server that keep the value stored at that epoch, which get shows as [set] and never answers; a name kept is not also given in config.headers
+	KeepHeaders Field[[]string] `json:"keep_headers,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -3507,23 +3504,6 @@ func (args RegistryGetNamespaceArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: RegistryGetNamespace, fields: fields(args)})
-}
-
-// RegistryLegalAcceptArgs carries arguments for registry.legal_accept.
-type RegistryLegalAcceptArgs struct {
-	// Policy version string (for legal_accept; obtained via legal_version)
-	PolicyVersion string `json:"policy_version"`
-	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
-	Answer Field[any] `json:"answer,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryLegalAcceptArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryLegalAcceptArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: RegistryLegalAccept, fields: fields(args)})
 }
 
 // RegistryLegalPageArgs carries arguments for registry.legal_page.
@@ -5022,42 +5002,6 @@ func (args ToolsListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ToolsList, fields: fields(args)})
-}
-
-// TurnRecoverArgs carries arguments for turn.recover.
-type TurnRecoverArgs struct {
-	// The thread.
-	Thread string `json:"thread"`
-	// recover: the turn to resume. Recovery names its turn; there is no "whatever is there now".
-	Turn string `json:"turn"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args TurnRecoverArgs) MarshalJSON() ([]byte, error) {
-	type fields TurnRecoverArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: TurnRecover, fields: fields(args)})
-}
-
-// TurnSuspendArgs carries arguments for turn.suspend.
-type TurnSuspendArgs struct {
-	// The thread whose turn to suspend.
-	Thread string `json:"thread"`
-	// suspend: the turn id. A caller that read one suspends exactly that turn, never its successor.
-	Turn Field[string] `json:"turn,omitzero"`
-	// suspend: recorded on the turn and shown in the transcript.
-	Reason Field[string] `json:"reason,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args TurnSuspendArgs) MarshalJSON() ([]byte, error) {
-	type fields TurnSuspendArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: TurnSuspend, fields: fields(args)})
 }
 
 // VaultAuthorizeArgs carries arguments for vault.authorize.
