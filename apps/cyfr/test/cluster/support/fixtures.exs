@@ -138,49 +138,19 @@ defmodule Cyfr.Cluster.Fixtures do
   holder}}` when another turn holds the thread, `{:error, :stale}` when a
   peer accepted the next message first.
   """
-  @spec start_turn(String.t(), String.t(), non_neg_integer(), pos_integer(), keyword()) ::
+  @spec start_turn(String.t(), String.t(), non_neg_integer(), pos_integer()) ::
           {:ok, map()} | {:error, term()}
-  def start_turn(athanor_id, turn_id, turn_seq, fence, opts \\ []) do
-    attrs =
-      with_root(
-        %{
-          fence: fence,
-          turn_seq: turn_seq,
-          recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
-        },
-        Keyword.get(opts, :root, false),
-        {athanor_id, turn_id}
-      )
+  def start_turn(athanor_id, turn_id, turn_seq, fence) do
+    attrs = %{
+      fence: fence,
+      turn_seq: turn_seq,
+      recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+    }
 
     case Arca.TurnStorage.start(actor(athanor_id), turn_id, attrs) do
       {:ok, turn} -> {:ok, %{id: turn.id, status: turn.status, runner_id: turn.runner_id}}
       other -> other
     end
-  end
-
-  # A turn that will be suspended needs the root execution a real one
-  # carries: `suspend/3` closes the attempt's running interval, and a turn
-  # with no attempt has none to close. The root records the origin the
-  # turn was accepted under (`accept!/3`'s).
-  defp with_root(attrs, false, _athanor_id), do: attrs
-
-  defp with_root(attrs, true, {athanor_id, turn_id}) do
-    {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(
-        %{
-          id: Prima.UUID7.execution_id(),
-          reference: "agent:local.aqua",
-          user_id: "usr_cluster",
-          athanor_id: athanor_id,
-          component_type: "agent",
-          kind: "turn",
-          turn_id: turn_id,
-          origin: :interactive
-        },
-        standing(athanor_id)
-      )
-
-    Map.merge(attrs, %{root_execution_id: execution.id, attempt: attempt.attempt})
   end
 
   # A root's admission reads its athanor's standing now and checks it again
@@ -204,37 +174,6 @@ defmodule Cyfr.Cluster.Fixtures do
   def claim_thread(athanor_id, thread_id, turn_id, turn_seq) do
     case Arca.ThreadStorage.claim(actor(athanor_id), thread_id, turn_id, turn_seq) do
       {:ok, thread} -> {:ok, thread.active_turn_id}
-      other -> other
-    end
-  end
-
-  @doc """
-  Set `turn_id` down from this member (`turn.suspend`'s storage half):
-  every Tape row is preserved and the thread's claim is given up, so any
-  member may pick the turn up.
-  """
-  @spec suspend_turn(String.t(), String.t(), pos_integer(), String.t()) ::
-          {:ok, map()} | {:error, term()}
-  def suspend_turn(athanor_id, turn_id, fence, reason) do
-    case Arca.TurnStorage.suspend(actor(athanor_id), turn_id, %{fence: fence, reason: reason}) do
-      {:ok, turn} -> {:ok, turn(turn)}
-      other -> other
-    end
-  end
-
-  @doc """
-  Take `turn_id` on this member and carry it on (`turn.recover`'s storage
-  half): the thread's claim and the recovery count in one transaction, so
-  a member that did not take the claim cannot spend a recovery.
-  """
-  @spec recover_turn(String.t(), String.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
-  def recover_turn(athanor_id, turn_id, fence) do
-    case Arca.TurnStorage.recover(actor(athanor_id), turn_id, %{
-           fence: fence,
-           grant: :stored,
-           verify: &Sanctum.ExecutionStanding.verify/1
-         }) do
-      {:ok, turn} -> {:ok, turn(turn)}
       other -> other
     end
   end
@@ -291,23 +230,6 @@ defmodule Cyfr.Cluster.Fixtures do
     |> actor()
     |> Arca.ThreadStorage.pending_approvals(thread_id)
     |> Enum.map(& &1.id)
-  end
-
-  @doc "Spend `turn_id`'s recovery budget down to its stored limit, as that many recoveries would."
-  @spec spend_recoveries(String.t(), String.t()) :: :ok
-  def spend_recoveries(athanor_id, turn_id) do
-    import Ecto.Query, only: [from: 2]
-
-    {1, _} =
-      Arca.Repo.update_all(
-        from(t in Arca.Schemas.Turn,
-          where: t.id == ^turn_id and t.athanor_id == ^athanor_id,
-          update: [set: [recovery_attempts: t.recovery_limit]]
-        ),
-        []
-      )
-
-    :ok
   end
 
   @doc "Who holds `thread_id`'s claim, as this member reads it."

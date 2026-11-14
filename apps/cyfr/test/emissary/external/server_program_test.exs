@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.External.ServerStdioTest do
+defmodule Emissary.External.ServerProgramTest do
   @moduledoc """
-  The stdio arm of an external MCP server against a program that answers
+  The program arm of an external MCP server against a program that answers
   as an MCP server over stdio does (`Cyfr.Test.ScriptedBackends`): its
   `tools/list` pages under `nextCursor`, which the connect follows to the
   last page, and a call it cannot serve is answered with a JSON-RPC error,
@@ -15,7 +15,7 @@ defmodule Emissary.External.ServerStdioTest do
   alias Emissary.External.Servers
 
   @root :crypto.strong_rand_bytes(32)
-  @secret "ghp_stdio-test-secret-0123456789"
+  @secret "ghp_program-test-secret-0123456789"
   @generation_key {Arca.ControlPlane, :generation}
   @tools ~w(github__search github__issues github__pulls)
 
@@ -48,7 +48,8 @@ defmodule Emissary.External.ServerStdioTest do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: "gh",
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
         config_json:
           Jason.encode!(%{

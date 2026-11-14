@@ -5,8 +5,8 @@ defmodule Sanctum.Consent.PlanTest do
   @moduledoc """
   The plan answers the ask as `Prima.ConsentPreview` rows: one per resource
   each node of the closure asks for, its limits, and a tincture's frame,
-  streams and system actions, none narrowed, in one order; with the
-  origins a decision that names none admits, `interactive` alone.
+  streams and system actions, none narrowed, in one order. It names no
+  one who may start the component: a grant never says.
   """
 
   use ExUnit.Case, async: false
@@ -121,7 +121,6 @@ defmodule Sanctum.Consent.PlanTest do
       ConsentPreview.decode(%{
         "v" => ConsentPreview.version(),
         "rows" => rows,
-        "origins" => ["interactive"],
         "commit_digest" => @placeholder_digest,
         "removed" => []
       })
@@ -148,11 +147,11 @@ defmodule Sanctum.Consent.PlanTest do
       :ok
     end
 
-    test "every node of the closure, none narrowed, admitting interactive alone", %{ctx: ctx} do
+    test "every node of the closure, none narrowed, naming no origins", %{ctx: ctx} do
       {:ok, plan} = Plan.plan(ctx, %{ref: @source})
 
-      assert plan.origins == ["interactive"]
-      assert Plan.default_origins() == [:interactive]
+      refute Map.has_key?(plan, :origins)
+      refute Map.has_key?(plan, :head_origins)
 
       rows = decode!(plan.rows)
       grouped = by_kind(rows)
@@ -370,10 +369,10 @@ defmodule Sanctum.Consent.PlanTest do
   end
 
   describe "what the head holds" do
-    test "a first grant has no head: no origins of its own and no delta", %{ctx: ctx} do
+    test "a first grant has no head: no bindings of its own and no delta", %{ctx: ctx} do
       publish!(ctx, "plan-first", "1.0.0", %{})
       {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-first"})
-      assert plan.head_origins == nil
+      assert plan.head_bindings == []
       assert plan.shape_diff == []
       assert plan.head_narrowing == %{}
     end
@@ -766,20 +765,17 @@ defmodule Sanctum.Consent.PlanTest do
       assert Enum.any?(answers, &match?({:ok, _}, &1))
     end
 
-    test "a re-grant names the origins the head admits, and what changed against the head " <>
-           "as the person narrowed it",
+    test "a re-grant names what changed against the head as the person narrowed it",
          %{ctx: ctx} do
       ref = "reagent:local.plan-head"
       ask = fn domains -> %{"caps" => %{"egress" => %{"domains" => domains}}} end
       publish!(ctx, "plan-head", "1.0.0", ask.(["a.example", "b.example"]))
 
       commit!(ctx, ref, %{
-        origins: [:interactive, :webhook],
         subset: %{ref => %{"egress" => %{"domains" => ["a.example"]}}}
       })
 
       {:ok, unchanged} = Plan.plan(ctx, %{ref: ref})
-      assert unchanged.head_origins == ["interactive", "webhook"]
       assert unchanged.shape_diff == []
 
       publish!(ctx, "plan-head", "1.1.0", ask.(["a.example", "b.example", "c.example"]))

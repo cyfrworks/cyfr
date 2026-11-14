@@ -9,16 +9,26 @@ defmodule Sanctum.ToolServerDigestTest do
   @base %{
     id: "mcp_row_1",
     transport: "http",
+    mark: nil,
     url: "https://mcp.example/sse",
     enabled: true,
     headers: %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr"},
     backends: [],
-    tool_patterns: ["*"]
+    program: nil
   }
 
-  @stdio %{
+  @program %{
     @base
-    | transport: "stdio",
+    | transport: "program",
+      mark: "mcp",
+      program: %{
+        "hosts" => ["api.github.com", "github.com"],
+        "home" => "kept",
+        "login_entry" => "ent_1",
+        "memory_bytes" => 268_435_456,
+        "home_max_bytes" => 1_073_741_824,
+        "login_command" => "gh auth login"
+      },
       url: nil,
       headers: %{},
       backends: [
@@ -43,27 +53,61 @@ defmodule Sanctum.ToolServerDigestTest do
       assert a == b
     end
 
-    test "every config axis moves the digest" do
+    test "what decides where a tool server's calls go and which entries ride along moves the digest" do
       {:ok, base} = ToolServerDigest.compute(@base)
 
       variants = [
         %{@base | id: "mcp_row_2"},
+        %{@base | url: "http://mcp.example/sse"},
         %{@base | url: "https://evil.example/sse"},
+        %{@base | url: "https://mcp.example:8443/sse"},
+        %{@base | url: "https://mcp.example/other"},
         %{@base | enabled: false},
-        %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN"}},
-        %{@base | tool_patterns: ["issues.*"]},
-        %{@base | transport: "stdio", url: nil}
+        %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN", "user-agent" => "cyfr"}},
+        %{@base | headers: %{"user-agent" => "cyfr"}},
+        %{@base | headers: Map.put(@base.headers, "x-extra", "Bearer vault:EXTRA")},
+        %{@base | transport: "program", mark: "mcp", url: nil, program: %{}}
       ]
 
       for variant <- variants do
         {:ok, digest} = ToolServerDigest.compute(variant)
-        refute digest == base
+        refute digest == base, inspect(variant)
       end
     end
 
-    test "every backend axis of a stdio server moves the digest, and its env order does not" do
-      {:ok, base} = ToolServerDigest.compute(@stdio)
-      [backend] = @stdio.backends
+    test "every header moves the digest, a literal by its value; tool patterns keep it" do
+      {:ok, base} = ToolServerDigest.compute(@base)
+
+      for headers <- [
+            %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr/2"},
+            %{"authorization" => "vault:GH_TOKEN"},
+            %{
+              "authorization" => "vault:GH_TOKEN",
+              "user-agent" => "cyfr",
+              "host" => "other.example"
+            }
+          ] do
+        {:ok, digest} = ToolServerDigest.compute(%{@base | headers: headers})
+        refute digest == base, inspect(headers)
+      end
+
+      row = fn patterns ->
+        %{
+          id: "mcp_row_1",
+          transport: "http",
+          url: "https://mcp.example/sse",
+          enabled: true,
+          config_json: Jason.encode!(%{"headers" => @base.headers, "tool_patterns" => patterns})
+        }
+      end
+
+      assert {:ok, ^base} = ToolServerDigest.from_server(row.(["*"]))
+      assert {:ok, ^base} = ToolServerDigest.from_server(row.(["issues.*"]))
+    end
+
+    test "every backend axis of an mcp program moves the digest, and its env order does not" do
+      {:ok, base} = ToolServerDigest.compute(@program)
+      [backend] = @program.backends
 
       variants = [
         [%{backend | "command" => "npx -y @modelcontextprotocol/server-github@2"}],
@@ -73,7 +117,7 @@ defmodule Sanctum.ToolServerDigestTest do
       ]
 
       for backends <- variants do
-        {:ok, digest} = ToolServerDigest.compute(%{@stdio | backends: backends})
+        {:ok, digest} = ToolServerDigest.compute(%{@program | backends: backends})
         refute digest == base, inspect(backends)
       end
 
@@ -82,7 +126,87 @@ defmodule Sanctum.ToolServerDigestTest do
         | "env" => %{"NODE_ENV" => "production", "GITHUB_TOKEN" => "vault:gh"}
       }
 
-      assert {:ok, ^base} = ToolServerDigest.compute(%{@stdio | backends: [reordered]})
+      assert {:ok, ^base} = ToolServerDigest.compute(%{@program | backends: [reordered]})
+    end
+
+    test "everything that decides what a program is and reaches moves its digest" do
+      {:ok, base} = ToolServerDigest.compute(@program)
+
+      for {key, value} <- [
+            {"hosts", nil},
+            {"hosts", ["api.github.com", "github.com", "evil.example"]},
+            {"hosts", ["api.github.com"]},
+            {"hosts", []},
+            {"home", "scratch"},
+            {"login_entry", "ent_2"},
+            {"memory_bytes", nil},
+            {"home_max_bytes", 2_147_483_648},
+            {"login_command", "gh auth login --web"}
+          ] do
+        {:ok, digest} = ToolServerDigest.compute(put_in(@program, [:program, key], value))
+        refute digest == base, "#{key} -> #{inspect(value)} kept the digest"
+      end
+    end
+
+    test "a program's hosts are a set: one digest in any order, apart from no restriction" do
+      {:ok, base} = ToolServerDigest.compute(@program)
+
+      for hosts <- [
+            ["github.com", "api.github.com"],
+            ["github.com", "api.github.com", "github.com"]
+          ] do
+        assert {:ok, ^base} =
+                 ToolServerDigest.compute(put_in(@program, [:program, "hosts"], hosts))
+      end
+
+      {:ok, unrestricted} = ToolServerDigest.compute(put_in(@program, [:program, "hosts"], nil))
+      {:ok, empty} = ToolServerDigest.compute(put_in(@program, [:program, "hosts"], []))
+      refute unrestricted == empty
+      refute empty == base
+    end
+
+    test "a stored host list read from the row is the same set, and one that does not read has no digest" do
+      row = fn hosts ->
+        %{
+          id: "mcp_row_1",
+          transport: "program",
+          mark: "mcp",
+          url: nil,
+          enabled: true,
+          hosts: hosts,
+          home: "kept",
+          login_entry_id: "ent_1",
+          memory_bytes: 268_435_456,
+          home_max_bytes: 1_073_741_824,
+          login_command: "gh auth login",
+          config_json: Jason.encode!(%{"backends" => @program.backends})
+        }
+      end
+
+      {:ok, a} = ToolServerDigest.from_server(row.(~s(["api.github.com","github.com"])))
+      {:ok, b} = ToolServerDigest.from_server(row.(~s(["github.com","api.github.com"])))
+      assert a == b
+      assert {:ok, ^a} = ToolServerDigest.compute(@program)
+
+      assert {:error, {:invalid_server_config, _}} =
+               ToolServerDigest.from_server(row.("not json"))
+
+      assert {:error, {:invalid_server_config, _}} =
+               ToolServerDigest.from_server(row.(~s({"a":1})))
+    end
+
+    test "only a tool server has a digest: a driven program and an old kind have none" do
+      for row <- [
+            %{@program | mark: "driven"},
+            %{@program | mark: nil},
+            %{@base | mark: "mcp"},
+            %{@program | transport: "stdio", mark: nil},
+            %{@program | transport: "pipe", mark: nil},
+            %{@program | program: nil},
+            %{@base | program: %{}}
+          ] do
+        assert {:error, {:invalid_server_config, ^row}} = ToolServerDigest.compute(row)
+      end
     end
 
     test "distinct servers never share a digest" do

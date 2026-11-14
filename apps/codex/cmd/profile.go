@@ -34,10 +34,6 @@ func init() {
 			"which names an entry; the lifetime is as --entry's")
 	profileGrantCmd.Flags().Bool("get-head-only", false,
 		"Narrow each catalyst whose network ask names other methods to its GET and HEAD")
-	profileGrantCmd.Flags().StringSlice("origin", nil,
-		"An origin the grant admits: interactive, programmatic, schedule or webhook "+
-			"(repeatable). Absent, a re-grant keeps the grant's origins and a first "+
-			"grant admits interactive alone")
 
 	profileCmd.AddCommand(profileGrantCmd)
 	profileCmd.AddCommand(profileListCmd)
@@ -150,10 +146,9 @@ var profileGrantCmd = &cobra.Command{
 		"that account's slot alone. A re-grant keeps each binding the grant holds, its entry " +
 		"and its lifetime, unless a flag names its slot; one whose time has passed is asked " +
 		"for again, and refused without a terminal until a flag names it.\n\n" +
-		"The grant admits the runs --origin names. With no --origin, a first grant " +
-		"admits interactive alone and a re-grant keeps the origins the grant " +
-		"already admits, so an agent, a script, a schedule or a webhook runs the " +
-		"component only under a grant that names its origin.\n\n" +
+		"A grant says what the component may reach and use. Every run of yours " +
+		"stands on it, from the screen, a script with your key, a schedule or a " +
+		"webhook.\n\n" +
 		"A name-level reference grants what the newest installed version asks for; a " +
 		"reference pinned to an installed version (c:local.model:1.2.0) grants what " +
 		"that version asks for.",
@@ -161,8 +156,7 @@ var profileGrantCmd = &cobra.Command{
   cyfr profile grant f:local.daily-report --entry @ingress=vlt_abc123
   cyfr profile grant c:local.model --entry api_key=shr_abc123:1h
   cyfr profile grant f:local.report --selection reagent:local.db=vlt_def456:once
-  cyfr profile grant f:local.report --selection 'reagent:local.db|Supabase 2=vlt_def789'
-  cyfr profile grant f:local.daily-report --origin interactive --origin schedule`,
+  cyfr profile grant f:local.report --selection 'reagent:local.db|Supabase 2=vlt_def789'`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
@@ -187,13 +181,6 @@ var profileGrantCmd = &cobra.Command{
 		// say what is missing instead of drawing the source alone as the ask.
 		if missing, unresolved := unresolvedPlan(plan); unresolved {
 			return fmt.Errorf("%s cannot be granted yet: %s", ref, missing)
-		}
-
-		named, _ := cmd.Flags().GetStringSlice("origin")
-		admitted, kept := grantOrigins(named, plan)
-		if kept && !flagJSON {
-			fmt.Printf("Keeping the origins this grant admits: %s (name --origin to change them)\n",
-				strings.Join(admitted, ", "))
 		}
 
 		if !flagJSON {
@@ -223,7 +210,7 @@ var profileGrantCmd = &cobra.Command{
 		}
 
 		decisions := ops.ProfilePreviewArgsDecisions{
-			Ref: ops.Value(ref), Bindings: ops.Value(decided.bindings), Origins: ops.Value(admitted)}
+			Ref: ops.Value(ref), Bindings: ops.Value(decided.bindings)}
 		if len(decided.selections) > 0 {
 			decisions.Selections = ops.Value(decided.selections)
 		}
@@ -1384,28 +1371,6 @@ func needLines(component, from string, need needRow, lenders []map[string]any) [
 	return lines
 }
 
-// grantOrigins is what a grant admits, and whether it is the head's kept:
-// the origins --origin names, each once; with none named, the origins the
-// profile's head admits (the plan's head_origins), so a re-grant never
-// quietly drops one; and interactive alone on a first grant.
-func grantOrigins(named []string, plan map[string]any) ([]string, bool) {
-	if len(named) == 0 {
-		if head := stringList(plan["head_origins"]); len(head) > 0 {
-			return head, true
-		}
-		return []string{"interactive"}, false
-	}
-	seen := map[string]bool{}
-	origins := make([]string, 0, len(named))
-	for _, origin := range named {
-		if !seen[origin] {
-			seen[origin] = true
-			origins = append(origins, origin)
-		}
-	}
-	return origins, false
-}
-
 // stringList is a JSON array of strings, nil for anything else.
 func stringList(value any) []string {
 	items, ok := value.([]any)
@@ -1466,8 +1431,7 @@ var kindHeadings = map[string]string{
 
 // renderPreview draws a Prima.ConsentPreview's typed rows in the terminal,
 // grouped by kind in its own words, every value each row carries shown,
-// each binding of the head the grant removes, and the origins the grant
-// admits. A kind it does not know is still drawn, with its values as the
+// and each binding of the head the grant removes. A kind it does not know is still drawn, with its values as the
 // home sent them: no row is hidden.
 func renderPreview(w io.Writer, preview map[string]any) {
 	fmt.Fprintln(w, "You are approving:")
@@ -1518,10 +1482,6 @@ func renderPreview(w io.Writer, preview map[string]any) {
 				fmt.Fprintf(w, "    %s\n", removalLine(item))
 			}
 		}
-	}
-
-	if origins := joinStrings(preview["origins"]); origins != "" {
-		fmt.Fprintf(w, "\n  Admits runs started: %s\n", origins)
 	}
 
 	fmt.Fprint(w, "\n  Vault entries are sealed at rest. A component never holds a vault entry's value\n"+

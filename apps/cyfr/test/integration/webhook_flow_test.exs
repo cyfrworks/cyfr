@@ -336,8 +336,7 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
           entry_id: entry.id,
           lifetime: %{kind: "until", until: DateTime.to_iso8601(until)}
         }
-      ],
-      origins: [:interactive, :webhook]
+      ]
     }
 
     {:ok, plan} = Sanctum.Consent.Plan.plan(walk, %{ref: ref})

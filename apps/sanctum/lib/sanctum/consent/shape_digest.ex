@@ -57,10 +57,6 @@ defmodule Sanctum.Consent.ShapeDigest do
             optional(String.t()) => %{
               optional(String.t()) => %{String.t() => map()}
             }
-          },
-          optional(:tool_policy) => %{
-            optional(:auto) => [String.t()],
-            optional(:ask) => [String.t()]
           }
         }
 
@@ -116,7 +112,7 @@ defmodule Sanctum.Consent.ShapeDigest do
            Normalize.only_keys(
              shape,
              ~w(scope source_ref release_identity needs caps tool_actions slots
-                dependency_releases model_target tool_policy tincture_digest provides)a,
+                dependency_releases model_target tincture_digest provides)a,
              :invalid_shape
            ),
          {:ok, scope} <- Normalize.enum(shape, :scope, [:versionless, :pinned], :invalid_shape),
@@ -129,7 +125,6 @@ defmodule Sanctum.Consent.ShapeDigest do
          {:ok, dependency_releases} <-
            Normalize.string_set(shape, :dependency_releases, :invalid_shape),
          {:ok, model_target} <- Normalize.optional_string(shape, :model_target, :invalid_shape),
-         {:ok, tool_policy} <- Normalize.tool_policy(shape, :tool_policy, :invalid_shape),
          {:ok, tincture_digest} <- tincture_digest(shape),
          {:ok, provides} <- Normalize.provides(shape, :provides, :invalid_shape) do
       canonical =
@@ -144,7 +139,6 @@ defmodule Sanctum.Consent.ShapeDigest do
         }
         |> Normalize.put_optional("release_identity", release_identity)
         |> Normalize.put_optional("model_target", model_target)
-        |> Normalize.put_optional("tool_policy", tool_policy)
         |> Normalize.put_optional("tincture_digest", tincture_digest)
         |> Normalize.put_optional("provides", provides)
 

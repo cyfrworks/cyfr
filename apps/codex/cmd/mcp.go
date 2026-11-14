@@ -36,41 +36,43 @@ func init() {
 
 var mcpCmd = &cobra.Command{
 	Use:     "mcp",
-	Short:   "Manage external MCP server connections and programs",
+	Short:   "Manage programs and tool servers",
 	GroupID: "admin",
-	Long: `Connect to external MCP servers (Notion, GitHub, custom servers) via the
-standard MCP protocol. External server tools appear alongside built-in
-tools in tools/list as server_name:tool_name.
+	Long: `Connect to tool servers elsewhere (Notion, GitHub, custom servers) via the
+standard MCP protocol, and define the programs CYFR runs. A tool server's
+and an MCP program's tools appear alongside built-in tools in tools/list as
+server_name:tool_name.
 
-An http server's config uses the same JSON format as mcp.json entries.
+A tool server's config uses the same JSON format as mcp.json entries.
 Header values can reference a stored vault entry with the vault: prefix.
 
-A stdio server ({"transport":"stdio","backends":[...]}) runs its backends
-on the backends service: each backend is a command and an env whose
-credentials are vault: templates. A pipe program ({"transport":"pipe"},
-one backend) is driven by a catalyst instead. A program may keep its home
-("home":"kept"), bound its memory ("memory_bytes") and a kept home's disk
+A program ({"transport":"program","mark":...,"backends":[...]}) runs its
+backends on the backends service: each backend is a command and an env
+whose credentials are vault: templates. Its mark says how it is spoken to:
+"mcp", CYFR speaks MCP to it and offers its tools, or "driven", one backend
+a person or a brain runs. A program may keep its home ("home":"kept"),
+bound its memory ("memory_bytes") and a kept home's disk
 ("home_max_bytes"), and name the command a sign-in runs ("login_command");
-a kept stdio server names its login entry ("login_entry_id"). Signing a
+a kept MCP program names its login entry ("login_entry_id"). Signing a
 program in runs on a terminal, which the console's Programs page shows.`,
 }
 
 var mcpAddCmd = &cobra.Command{
 	Use:   "add <name> <config-json>",
-	Short: "Add an external MCP server",
-	Long: `Register and connect to an external MCP server. Config is a JSON object
-in the same format as an mcp.json server entry. The server is initialized
-immediately and its tools are discovered.
+	Short: "Add a program or a tool server",
+	Long: `Register a tool server or a program. Config is a JSON object in the same
+format as an mcp.json server entry. A tool server or an MCP program is
+initialized immediately and its tools are discovered.
 
 Header values can reference a stored vault entry with the vault: prefix.
-A stdio server names "transport":"stdio" and its backends instead of a url;
-an env value is a vault: template, except NODE_ENV, LOG_LEVEL, TZ, LANG,
-LC_ALL, NO_COLOR and DEBUG, which may be literals.
+A program names "transport":"program", its "mark" and its backends instead
+of a url; an env value is a vault: template, except NODE_ENV, LOG_LEVEL, TZ,
+LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
 
 Adding a server takes a signed-in session (cyfr login); an API key cannot.`,
 	Example: `  cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key"}}'
   cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'
-  cyfr mcp add gh '{"transport":"stdio","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:gh-token"}}]}'`,
+  cyfr mcp add gh '{"transport":"program","mark":"mcp","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:gh-token"}}]}'`,
 	Args: cobra.RangeArgs(0, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
@@ -168,10 +170,11 @@ func printWarnings(result map[string]any) {
 
 var mcpUpdateCmd = &cobra.Command{
 	Use:   "update <name> <config-json>",
-	Short: "Replace an external MCP server's config",
-	Long: `Replace the connection config of a server already added, whole. The
-server keeps its enabled or disabled state; an enabled one reconnects with
-the new config and its tools are discovered again.
+	Short: "Replace a program's or a tool server's config",
+	Long: `Replace the config of a program or a tool server already added, whole.
+It keeps its enabled or disabled state and a kept program its folder; an
+enabled one reconnects with the new config and its tools are discovered
+again.
 
 --epoch is the epoch "cyfr mcp get" showed: the update is refused when the
 server has changed since.
@@ -213,8 +216,8 @@ key cannot.`,
 var mcpRemoveCmd = &cobra.Command{
 	Use:     "remove <name>",
 	Aliases: []string{"rm", "delete"},
-	Short:   "Remove an external MCP server",
-	Long:    "Remove an external MCP server configuration and disconnect. Its tools will no longer appear in tools/list.",
+	Short:   "Remove a program or a tool server",
+	Long:    "Remove a program or a tool server and stop it. Its tools no longer appear in tools/list.",
 	Example: "  cyfr mcp remove notion",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -245,7 +248,7 @@ var mcpRemoveCmd = &cobra.Command{
 var mcpListCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
-	Short:   "List configured MCP servers",
+	Short:   "List the programs and tool servers",
 	Example: "  cyfr mcp list",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
@@ -282,8 +285,8 @@ var mcpListCmd = &cobra.Command{
 
 var mcpGetCmd = &cobra.Command{
 	Use:     "get <name>",
-	Short:   "Get details of an MCP server",
-	Long:    "Show detailed information about an external MCP server, including its configuration, status, and discovered tools.",
+	Short:   "Get details of a program or a tool server",
+	Long:    "Show a program or a tool server: its configuration, status and discovered tools.",
 	Example: "  cyfr mcp get notion",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -334,7 +337,7 @@ var mcpTestCmd = &cobra.Command{
 
 var mcpEnableCmd = &cobra.Command{
 	Use:     "enable <name>",
-	Short:   "Enable a disabled MCP server",
+	Short:   "Enable a disabled program or tool server",
 	Example: "  cyfr mcp enable notion",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -354,7 +357,7 @@ var mcpEnableCmd = &cobra.Command{
 
 var mcpDisableCmd = &cobra.Command{
 	Use:     "disable <name>",
-	Short:   "Disable an MCP server without removing it",
+	Short:   "Disable a program or a tool server without removing it",
 	Example: "  cyfr mcp disable notion",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -374,7 +377,7 @@ var mcpDisableCmd = &cobra.Command{
 
 var mcpRefreshCmd = &cobra.Command{
 	Use:   "refresh [name]",
-	Short: "Re-discover tools from MCP servers",
+	Short: "Re-discover the tools of tool servers and MCP programs",
 	Long:  "Re-initialize and re-discover tools from one or all external MCP servers.",
 	Example: `  cyfr mcp refresh          # refresh all
   cyfr mcp refresh notion   # refresh one`,

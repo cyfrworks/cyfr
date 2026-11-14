@@ -10,7 +10,7 @@
 
 import {next} from "../identity.js"
 import {addedAt, appendOnce, here, keyLabel, namedByPasskey, shortCode, signedByPasskey} from "./common.js"
-import {$, attempt, only, say, words} from "../view.js"
+import {$, attempt, keyRow, only, say, words} from "../view.js"
 
 /** The account's keys as the page lists them. */
 export function listing(session) {
@@ -45,28 +45,19 @@ export async function run(doc, env) {
   let pending = null
 
   const draw = () => {
-    const rows = listing(session).map((key) => {
-      const row = doc.createElement("li")
-      const label = doc.createElement("span")
-      label.textContent = keyLabel(key)
-      row.append(label)
-      if (!key.current) {
-        const remove = doc.createElement("button")
-        remove.type = "button"
-        remove.textContent = "Remove"
-        remove.addEventListener("click", () =>
-          attempt(doc, remove, "list-error", async () => {
+    const rows = listing(session).map((key) =>
+      keyRow(doc, keyLabel(key), {
+        current: key.current,
+        remove: (button) =>
+          attempt(doc, button, "list-error", async () => {
             const retry = pending?.kid === key.kid
             if (!retry) pending = {kid: key.kid, entry: await removal(env, session, key.kid)}
             session = {...session, ...(await appendOnce(place.directory, session.identifier, pending.entry, retry))}
             pending = null
             draw()
           })
-        )
-        row.append(remove)
-      }
-      return row
-    })
+      })
+    )
     $(doc, "keys").replaceChildren(...rows)
     only(doc, "list")
   }

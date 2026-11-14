@@ -5,7 +5,8 @@ defmodule Opus.Programs do
   @moduledoc """
   The programs controller: what the backends service runs, its sessions and
   its kept homes. Programs are the `mcp_servers` rows whose transport is
-  `stdio` (Emissary speaks MCP to them) or `pipe` (a catalyst drives them).
+  `program`, marked `mcp` (Emissary speaks MCP to them) or `driven` (a
+  person or a brain drives them).
 
   It is shaped per box: one `Opus.Programs.Box` per backends service, each
   with its own owner table and lease loop, found by name in this
@@ -322,7 +323,7 @@ defmodule Opus.Programs do
 
   @doc """
   Open, for the attempt `opener`, the `run` session of the program row
-  `row` (a stored `mcp_servers` row, `pipe` or `stdio` with a kept home)
+  `row` (a stored `mcp_servers` program row with a kept home)
   in the kept home `home_id` under `key`, starting its program with `argv`
   appended unless it runs for the key. Answers the session and whether it
   was running (`resumed`); a repeat by the same opener while the session

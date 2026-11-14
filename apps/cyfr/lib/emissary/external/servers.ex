@@ -5,8 +5,8 @@ defmodule Emissary.External.Servers do
   @moduledoc """
   What a stored `mcp_servers` row means as a live connection.
 
-  One athanor's row is a name, a transport, a URL (http) or backends
-  (stdio), an epoch and a config document; a running
+  One athanor's row is a name, a transport, a URL (http) or a program's
+  mark and backends, an epoch and a config document; a running
   `Emissary.External.Server` needs resolved headers, a timeout and the
   athanor it belongs to. Turning one into the other is the only thing both
   halves of the external-server subsystem share — the `mcp_servers` tool
@@ -31,8 +31,8 @@ defmodule Emissary.External.Servers do
 
   @doc """
   The keyword config `Emissary.External.ServerSupervisor.ensure_started/1`
-  takes, from a stored row: its id, name, transport, epoch, url, header
-  templates, backends and timeout.
+  takes, from a stored row: its id, name, transport, a program's mark,
+  epoch, url, header templates, backends and timeout.
   """
   @spec server_config(map(), Context.t()) :: keyword()
   def server_config(%{id: id, name: name, url: url} = server, %Context{} = ctx) do
@@ -42,32 +42,36 @@ defmodule Emissary.External.Servers do
       id: id,
       name: name,
       transport: transport(server),
+      mark: mark(server),
       epoch: Map.get(server, :epoch),
       url: url,
       headers: config["headers"] || %{},
       backends: config["backends"] || [],
-      login_entry_id: stdio_entry(server),
+      login_entry_id: login_entry(server),
       timeout_ms: config["timeout_ms"] || @default_timeout_ms,
       athanor_id: ctx.athanor_id
     ]
   end
 
-  defp transport(%{transport: "stdio"}), do: :stdio
-  defp transport(%{transport: "pipe"}), do: :pipe
+  defp transport(%{transport: "program"}), do: :program
   defp transport(_server), do: :http
 
-  # A kept stdio row's sessions run in its login entry's home.
-  defp stdio_entry(%{transport: "stdio", home: "kept"} = server),
+  defp mark(%{transport: "program", mark: "mcp"}), do: :mcp
+  defp mark(%{transport: "program", mark: "driven"}), do: :driven
+  defp mark(_server), do: nil
+
+  # A kept mcp program's sessions run in its login entry's home.
+  defp login_entry(%{transport: "program", mark: "mcp", home: "kept"} = server),
     do: Map.get(server, :login_entry_id)
 
-  defp stdio_entry(_server), do: nil
+  defp login_entry(_server), do: nil
 
   @doc """
   Start the server if it is not running, and return its tool catalogue.
 
   Always a typed answer: a server stopped between the two halves — a vault
   revocation, an archived athanor, a restart on a config change, or a
-  stdio backend whose claim moved to another member of the cell — is
+  program's backend whose claim moved to another member of the cell — is
   `{:error, {:server_exited, reason}}` and never an exit of this caller.
   """
   @spec ensure_started(map(), Context.t()) :: {:ok, [map()]} | {:error, term()}

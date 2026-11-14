@@ -451,7 +451,6 @@ defmodule Opus.ProviderRetryTest do
             }
           }),
         activation: %{@reference => release_digest},
-        admitted_origins: [:interactive, :schedule],
         vault_refs: []
       })
   end

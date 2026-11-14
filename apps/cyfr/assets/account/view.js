@@ -31,6 +31,7 @@ const WORDS = {
   stale_head: "Your account changed while this page was open. Start again.",
   duplicate_key: "That is already on your account.",
   cancelled: "The passkey was not used. Try again when you are ready.",
+  timed_out: "Your browser did not answer within two minutes, so this page stopped waiting. Try again.",
   no_public_key: "This browser made a passkey but did not hand over its key. Use Safari, Chrome or Firefox.",
   rate_limited: "Too many requests from your network just now. Wait a minute and try again."
 }
@@ -56,17 +57,61 @@ export function say(doc, id, text) {
   element.hidden = text === ""
 }
 
-/** Run `action` with `button` disabled, showing what went wrong in the element `errorId`. */
+/**
+ * A passkey the browser refused: the person cancelled, or this browser
+ * holds no passkey the page may use, which the page cannot tell apart.
+ */
+export const refusedPasskey = (error) => error?.name === "NotAllowedError"
+
+/**
+ * Run `action` with `button` disabled, showing what went wrong in the
+ * element `errorId`; a page with an element `ways` shows it, the ways on,
+ * after a refused passkey, and hides it otherwise.
+ */
 export async function attempt(doc, button, errorId, action) {
   button.disabled = true
   say(doc, errorId, "")
+  const ways = $(doc, "ways")
+  if (ways) ways.hidden = true
   try {
     await action()
   } catch (error) {
     say(doc, errorId, words(error))
+    if (ways) ways.hidden = !refusedPasskey(error)
   } finally {
     button.disabled = false
   }
+}
+
+/**
+ * A key's row: its label and a Remove button that asks first, then calls
+ * `remove(button)` from its own Remove; the passkey in use gets no button.
+ */
+export function keyRow(doc, label, {current, remove}) {
+  const row = doc.createElement("li")
+  const text = doc.createElement("span")
+  text.textContent = label
+  row.append(text)
+  if (current) return row
+  const ask = doc.createElement("button")
+  ask.type = "button"
+  ask.textContent = "Remove"
+  ask.addEventListener("click", () => {
+    const question = doc.createElement("span")
+    question.textContent = `Remove ${label}? It stops working at every CYFR.`
+    const yes = doc.createElement("button")
+    yes.type = "button"
+    yes.className = "danger"
+    yes.textContent = "Remove"
+    yes.addEventListener("click", () => remove(yes))
+    const keep = doc.createElement("button")
+    keep.type = "button"
+    keep.textContent = "Keep"
+    keep.addEventListener("click", () => row.replaceChildren(text, ask))
+    row.replaceChildren(text, question, yes, keep)
+  })
+  row.append(ask)
+  return row
 }
 
 /** The recovery code drawn into `slot`, a line break allowed only after each group's hyphen. */

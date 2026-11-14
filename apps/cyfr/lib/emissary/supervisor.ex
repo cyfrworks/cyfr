@@ -20,7 +20,7 @@ defmodule Emissary.Supervisor do
       [
         # The external-server registry, servers and reconciler restart from
         # the registry down: a failure restarts its dependents. The programs
-        # controller a stdio server releases its owner through is Opus's
+        # controller an mcp program releases its owner through is Opus's
         # (`Opus.Programs`), started before this tree and stopped after it.
         # The reconciler's 5 s is its stop, which holds no work in flight.
         %{

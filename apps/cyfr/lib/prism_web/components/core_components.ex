@@ -485,8 +485,10 @@ defmodule PrismWeb.CoreComponents do
   attr :rows, :list, required: true
   attr :row_click, :any, default: nil
 
+  # A `sticky` column stays in view while the table scrolls sideways.
   slot :col, required: true do
     attr :label, :string, required: true
+    attr :sticky, :boolean
   end
 
   def table(assigns) do
@@ -497,7 +499,10 @@ defmodule PrismWeb.CoreComponents do
           <tr>
             <th
               :for={col <- @col}
-              class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+              class={[
+                "px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500",
+                col[:sticky] && "sticky left-0 z-10 bg-gray-900"
+              ]}
             >
               {col[:label]}
             </th>
@@ -509,7 +514,13 @@ defmodule PrismWeb.CoreComponents do
             class={["hover:bg-gray-800/50 transition-colors", @row_click && "cursor-pointer"]}
             phx-click={@row_click && @row_click.(row)}
           >
-            <td :for={col <- @col} class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">
+            <td
+              :for={col <- @col}
+              class={[
+                "px-4 py-3 text-sm text-gray-300 whitespace-nowrap",
+                col[:sticky] && "sticky left-0 z-10 bg-gray-900"
+              ]}
+            >
               {render_slot(col, row)}
             </td>
           </tr>
@@ -716,7 +727,7 @@ defmodule PrismWeb.CoreComponents do
   attr :class, :string, default: ""
 
   attr :rest, :global,
-    include: ~w(name value required placeholder disabled readonly id phx-debounce)
+    include: ~w(name value required placeholder disabled readonly id list phx-debounce)
 
   def input(assigns) do
     ~H"""

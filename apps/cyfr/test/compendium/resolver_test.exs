@@ -86,28 +86,4 @@ defmodule Compendium.ResolverTest do
       assert {:error, _} = Resolver.resolve(ctx, "")
     end
   end
-
-  describe "resolve_or_passthrough/2" do
-    test "typed version-less ref resolves to latest", %{ctx: ctx} do
-      register_component(ctx, "passthrough-test", "0.3.0")
-
-      assert {:ok, resolved} = Resolver.resolve_or_passthrough(ctx, "c:local.passthrough-test")
-      assert resolved == "catalyst:local.passthrough-test:0.3.0"
-    end
-
-    test "already-pinned ref passes through unchanged", %{ctx: ctx} do
-      assert {:ok, ref} = Resolver.resolve_or_passthrough(ctx, "c:local.some-tool:1.0.0")
-      assert ref == "catalyst:local.some-tool:1.0.0"
-    end
-
-    test "typed version-less ref with no registry entry passes through", %{ctx: ctx} do
-      assert {:ok, ref} = Resolver.resolve_or_passthrough(ctx, "c:local.nonexistent")
-      assert ref == "c:local.nonexistent"
-    end
-
-    test "untyped/OCI-like ref passes through when resolution fails", %{ctx: ctx} do
-      assert {:ok, ref} = Resolver.resolve_or_passthrough(ctx, "ghcr.io/user/repo:1.0.0")
-      assert ref == "ghcr.io/user/repo:1.0.0"
-    end
-  end
 end

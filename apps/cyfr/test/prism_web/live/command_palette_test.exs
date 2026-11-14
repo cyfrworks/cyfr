@@ -86,4 +86,115 @@ defmodule PrismWeb.CommandPaletteTest do
 
     refute has_element?(view, ~s(#command-palette [phx-value-to*="/tinctures"]))
   end
+
+  # A component row as the registry writes one, `inserted_at` naming how new
+  # it is.
+  defp component_row!(ctx, name, inserted_at, description \\ nil) do
+    {:ok, _} =
+      Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
+        id: "cmp_#{name}",
+        name: name,
+        version: "0.1.0",
+        component_type: "catalyst",
+        description: description || name,
+        tags: "[]",
+        digest: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower),
+        release_digest: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower),
+        size: 100,
+        exports: "[]",
+        manifest: "{}",
+        publisher: "local",
+        publisher_id: "local|local|#{ctx.namespace}",
+        source: Compendium.Source.filesystem(),
+        signature_verified: false,
+        inserted_at: inserted_at,
+        updated_at: inserted_at
+      })
+  end
+
+  test "an installed component is found by its name past every listing's bound",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    # `http` first, and the 1,000 a list answers at most newer than it.
+    start = DateTime.utc_now() |> DateTime.add(-3_600) |> DateTime.truncate(:microsecond)
+    component_row!(ctx, "http", start)
+    component_row!(ctx, "fetcher", DateTime.add(start, 1), "Fetches pages, v1.2 and later")
+    for n <- 1..1_000, do: component_row!(ctx, "newer-#{n}", DateTime.add(start, n + 1))
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
+
+    {:ok, :acknowledged} =
+      Arca.StorageProjectionChanges.replace(actor, "components", token, fn -> :acknowledged end)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+
+    # By its plain name, by a kind and publisher before the start of its
+    # name, and by the whole label it is shown by.
+    for typed <- ["http", "catalyst:local.ht", "catalyst:local.http:0.1.0"] do
+      view |> element("#command-palette input") |> render_keyup(%{"value" => typed})
+
+      assert has_element?(
+               view,
+               ~s(#command-palette [phx-value-to="/components/catalyst:local.http:0.1.0"])
+             ),
+             typed
+
+      refute has_element?(view, ~s(#command-palette [phx-value-to*="newer-"])), typed
+    end
+
+    # Text with a dot that no reference holds is searched as typed: a
+    # description's words are still found.
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "v1.2"})
+
+    assert has_element?(
+             view,
+             ~s(#command-palette [phx-value-to="/components/catalyst:local.fetcher:0.1.0"])
+           )
+
+    # A reference of another kind finds nothing of this one.
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "reagent:local.http"})
+    refute has_element?(view, ~s(#command-palette [phx-value-to*="catalyst:local.http"]))
+  end
+
+  test "a desktop is offered as the chooser of desktops, by the shell's key", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    manifest = %{
+      "name" => "palette-desk",
+      "type" => "tincture",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "tincture" => %{"entry" => "index.html", "desktop" => %{}}
+    }
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "palette-desk", "1.0.0",
+      manifest: manifest,
+      files: [{"index.html", "<!doctype html><title>palette-desk</title>"}]
+    )
+
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+
+    route = Sanctum.Tenancy.Athanors.route_slug(athanor)
+
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view
+             |> element(~s(#command-palette button[phx-value-to="/?shell=desktops"]), "desktop")
+             |> render_click()
+
+    assert to == "/a/#{route}/?shell=desktops"
+  end
 end

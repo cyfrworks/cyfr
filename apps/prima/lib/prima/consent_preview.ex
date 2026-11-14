@@ -4,15 +4,12 @@
 defmodule Prima.ConsentPreview do
   @moduledoc """
   What a consent preview answers: typed rows, one per resource an edge
-  grants, the origins the grant admits and the commit digest that binds
-  them. It carries no sentence; every surface renders the rows in its own
+  grants, and the commit digest that binds them. It carries no sentence; every surface renders the rows in its own
   words, and a surface never hides a row kind.
   `tests/fixtures/consent_preview.json` holds its vectors.
 
-  The document is `{"v": 1, "rows": [...], "origins": [...],
-  "commit_digest": "sha256:...", "removed": [...]}`: `origins` a non-empty
-  list of `Prima.Origin` spellings, answered in the enum's order, and
-  `removed` the bindings the profile's head holds that the revision
+  The document is `{"v": 1, "rows": [...], "commit_digest": "sha256:...",
+  "removed": [...]}`: `removed` the bindings the profile's head holds that the revision
   removes (below). Each row
   (`Prima.ConsentPreview.Row`) is `{"kind", "node", "values", "narrowed"}`:
   the resource kind, the consent graph node (the component) it belongs to,
@@ -93,7 +90,6 @@ defmodule Prima.ConsentPreview do
 
   alias Prima.ConsentPreview.Row
   alias Prima.Identity.Encoding
-  alias Prima.Origin
 
   @version 1
   @kinds [
@@ -129,7 +125,6 @@ defmodule Prima.ConsentPreview do
 
   @type t :: %__MODULE__{
           rows: [Row.t()],
-          origins: [Origin.t(), ...],
           commit_digest: String.t(),
           removed: [removed()]
         }
@@ -140,12 +135,9 @@ defmodule Prima.ConsentPreview do
           | {:unknown_kind, term()}
           | {:not_narrowable, kind()}
           | :duplicate_row
-          | :empty_origins
-          | :duplicate_origin
-          | {:unknown_origin, term()}
 
-  @enforce_keys [:rows, :origins, :commit_digest, :removed]
-  defstruct [:rows, :origins, :commit_digest, :removed]
+  @enforce_keys [:rows, :commit_digest, :removed]
+  defstruct [:rows, :commit_digest, :removed]
 
   @doc "The document's version."
   @spec version() :: pos_integer()
@@ -162,29 +154,26 @@ defmodule Prima.ConsentPreview do
   @doc "Read a preview from its JSON map."
   @spec decode(term()) :: {:ok, t()} | {:error, reason()}
   def decode(map) when is_map(map) and not is_struct(map) do
-    with :ok <- Encoding.fields(map, ~w(v rows origins commit_digest removed), []),
+    with :ok <- Encoding.fields(map, ~w(v rows commit_digest removed), []),
          :ok <- version(map["v"]),
          {:ok, rows} <- rows(map["rows"]),
-         {:ok, origins} <- Origin.parse_list(map["origins"]),
          {:ok, digest} <- Encoding.check(map, "commit_digest", &Encoding.digest?/1),
          {:ok, removed} <- check_removed(map["removed"]) do
-      {:ok, %__MODULE__{rows: rows, origins: origins, commit_digest: digest, removed: removed}}
+      {:ok, %__MODULE__{rows: rows, commit_digest: digest, removed: removed}}
     end
   end
 
   def decode(_value), do: {:error, {:invalid_field, "preview"}}
 
   @doc """
-  A preview from its rows, admitted origins, commit digest and removed
-  bindings, held to the same shape.
+  A preview from its rows, commit digest and removed bindings, held to the
+  same shape.
   """
-  @spec new([Row.t()], [Origin.t()], String.t(), [removed()]) :: {:ok, t()} | {:error, reason()}
-  def new(rows, origins, commit_digest, removed)
-      when is_list(rows) and is_list(origins) and is_list(removed) do
+  @spec new([Row.t()], String.t(), [removed()]) :: {:ok, t()} | {:error, reason()}
+  def new(rows, commit_digest, removed) when is_list(rows) and is_list(removed) do
     decode(%{
       "v" => @version,
       "rows" => Enum.map(rows, &Row.encode/1),
-      "origins" => Enum.map(origins, &to_string/1),
       "commit_digest" => commit_digest,
       "removed" => removed
     })
@@ -211,7 +200,6 @@ defmodule Prima.ConsentPreview do
     %{
       "v" => @version,
       "rows" => Enum.map(preview.rows, &Row.encode/1),
-      "origins" => Origin.to_wire_list(preview.origins),
       "commit_digest" => preview.commit_digest,
       "removed" => preview.removed
     }
