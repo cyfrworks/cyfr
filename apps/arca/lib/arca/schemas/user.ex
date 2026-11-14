@@ -31,9 +31,8 @@ defmodule Arca.Schemas.User do
   the admission that made the installation's first person
   (`Arca.Users.mint/3`), then set or cleared by an administrator's act
   (`Arca.Users.set_platform_admin/4`), never the last one cleared, and
-  never by a changeset here. A denial would clear it
-  (`Arca.SecurityTransitions`), but no deny names an administrator
-  (`Sanctum.Door.Store.deny/4`).
+  never by a changeset here. A denial never clears it: a marked person is
+  never denied (`Arca.SecurityTransitions`, `Sanctum.Door.Store.deny/4`).
   """
 
   use Ecto.Schema

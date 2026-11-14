@@ -174,7 +174,10 @@ defmodule Sanctum.Providers.DirectoryTest do
       only_admins!([first.id, second.id])
 
       assert {:ok, %{gone: true}} = Sanctum.TestContext.confirming(person, &tombstone(&1, a))
-      assert {:error, :last_admin} = Sanctum.Tenancy.Users.clear_platform_admin(second)
+
+      assert {:error, :last_admin} =
+               Sanctum.Tenancy.Users.clear_platform_admin(second, second.id)
+
       assert Sanctum.Tenancy.platform_admin?(second.id)
     end
 
@@ -187,7 +190,7 @@ defmodule Sanctum.Providers.DirectoryTest do
       second = person_of!(b, true)
       only_admins!([first.id, second.id])
 
-      assert {:ok, _cleared} = Sanctum.Tenancy.Users.clear_platform_admin(second)
+      assert {:ok, _cleared} = Sanctum.Tenancy.Users.clear_platform_admin(second, second.id)
 
       assert {:error, {:invalid_argument, @only}} =
                Sanctum.TestContext.confirming(person, &tombstone(&1, a))

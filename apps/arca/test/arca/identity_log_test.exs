@@ -657,8 +657,9 @@ defmodule Arca.IdentityLogRaceTest do
     refute Task.yield(second, 300), "the second change decided while the first held its locks"
   end
 
+  # An administrator taking their own mark away.
   defp clear(user_id, opts \\ []),
-    do: Arca.Users.set_platform_admin(server(), user_id, false, opts)
+    do: Arca.Users.set_platform_admin(server(), user_id, false, [by: user_id] ++ opts)
 
   # The closure's own check, as the directory passes it.
   defp close(identifier, verify \\ & &1) do

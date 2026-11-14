@@ -38,7 +38,7 @@ defmodule Sanctum.Providers.Door do
   `mark_admin` makes another person of this CYFR a platform administrator
   and writes their identifier's allow; `clear_admin` takes the mark away,
   never the last one (`Sanctum.Tenancy.Users.mark_platform_admin/2`,
-  `clear_platform_admin/1`). Each is a sensitive change
+  `clear_platform_admin/2`). Each is a sensitive change
   (`platform_admin_marking`): the administrator's fresh confirmation names
   the person (`Sanctum.Consent.Authz.confirm/3`).
   """
@@ -357,7 +357,7 @@ defmodule Sanctum.Providers.Door do
       result =
         case action do
           "mark_admin" -> Users.mark_platform_admin(user, ctx.user_id)
-          "clear_admin" -> Users.clear_platform_admin(user)
+          "clear_admin" -> Users.clear_platform_admin(user, ctx.user_id)
         end
 
       case result do
@@ -544,6 +544,10 @@ defmodule Sanctum.Providers.Door do
        {:invalid_argument,
         "That is this CYFR's last platform administrator, whose mark stays; make another " <>
           "person an administrator first"}}
+
+  # The administrator who asked was no longer one when the change was
+  # decided, though their session still read them as one.
+  defp marking_refused(:not_admin), do: {:error, :platform_admin_required}
 
   defp marking_refused(:not_active),
     do: {:error, {:invalid_argument, "That person is denied here; allow them first"}}

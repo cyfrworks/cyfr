@@ -102,6 +102,37 @@ defmodule Sanctum.Providers.DoorAdminTest do
     assert id == ops.id
   end
 
+  test "an administrator whose mark was cleared marks and clears nothing, though their session still reads the mark",
+       %{admin: admin, ops: ops, mira: mira} do
+    assert {:ok, %{platform_admin: true}} =
+             Sanctum.TestContext.confirming(admin, &door(&1, "mark_admin", mira.id))
+
+    # Mira's session read her mark; ops then takes it away.
+    mira_admin = Sanctum.TestContext.session!(mira.id) |> Map.put(:platform_admin, true)
+
+    assert {:ok, %{platform_admin: false}} =
+             Sanctum.TestContext.confirming(admin, &door(&1, "clear_admin", mira.id))
+
+    assert {:error, :platform_admin_required} =
+             Sanctum.TestContext.confirming(mira_admin, &door(&1, "clear_admin", ops.id))
+
+    assert {:error, :platform_admin_required} =
+             Sanctum.TestContext.confirming(mira_admin, &door(&1, "mark_admin", mira.id))
+
+    assert Tenancy.platform_admin?(ops.id)
+    refute Tenancy.platform_admin?(mira.id)
+  end
+
+  test "a deny of the person by their id refuses their marking", %{admin: admin, mira: mira} do
+    {:ok, _} = Sanctum.Door.Store.deny("person", mira.id, admin.user_id)
+
+    assert {:error,
+            {:invalid_argument, "A deny names that person's account; remove the deny first"}} =
+             Sanctum.TestContext.confirming(admin, &door(&1, "mark_admin", mira.id))
+
+    refute Tenancy.platform_admin?(mira.id)
+  end
+
   test "a denied person, a deny of their account and a person no one here is are refused", %{
     admin: admin,
     mira: mira

@@ -158,7 +158,9 @@ defmodule Arca.Users do
   by every closure of an account (`closable/2`), so two changes never each
   count the other's administrator and leave none: clearing the mark of the
   last administrator who can still act (active, marked, and holding no
-  account this CYFR's directory has closed) is refused `:last_admin`. Only
+  account this CYFR's directory has closed) is refused `:last_admin`.
+  `by:` (required) is the administrator who asks, counted among those
+  rows: one who can no longer act is refused `:not_admin`. Only
   an active person is marked (`:not_active`); marking a marked person, or
   clearing an unmarked one, changes nothing. `also:`, a function of the
   person's row run last in the transaction, answers `:ok` or
@@ -167,18 +169,20 @@ defmodule Arca.Users do
   """
   @spec set_platform_admin(Prima.Actor.t(), String.t(), boolean(), keyword()) ::
           {:ok, map()}
-          | {:error, :not_found | :not_active | :last_admin | :not_owner | term()}
+          | {:error, :not_found | :not_active | :last_admin | :not_admin | :not_owner | term()}
           | refusal()
   def set_platform_admin(actor, user_id, mark?, opts \\ [])
 
   def set_platform_admin(%Prima.Actor{scope: :platform}, user_id, mark?, opts)
       when is_binary(user_id) and is_boolean(mark?) and is_list(opts) do
+    by = Keyword.fetch!(opts, :by)
     also = Keyword.get(opts, :also, fn _user -> :ok end)
 
     Arca.Repo.owned("Arca.Users.set_platform_admin", fn ->
       marked = Arca.Repo.all(from(u in admins(), select: u.id) |> QueryHelpers.for_update())
 
-      with {:ok, user} <- found(Arca.Repo.get(User, user_id)),
+      with :ok <- acting(by, marked),
+           {:ok, user} <- found(Arca.Repo.get(User, user_id)),
            :ok <- markable(user, mark?, marked),
            {:ok, user} <- marked(user, mark?),
            :ok <- also_ran(also.(Arca.Data.project(user))) do
@@ -191,6 +195,12 @@ defmodule Arca.Users do
 
   defp admins,
     do: from(u in User, where: not is_nil(u.platform_admin_at) and u.status == "active")
+
+  # The administrator who asks is read under the lock the change holds, so
+  # one whose mark was cleared or whose account was closed since their
+  # session last read it changes nothing.
+  defp acting(by, marked),
+    do: if(by in standing(marked), do: :ok, else: {:error, :not_admin})
 
   defp markable(%User{status: "active"}, true, _marked), do: :ok
   defp markable(%User{}, true, _marked), do: {:error, :not_active}
@@ -211,6 +221,45 @@ defmodule Arca.Users do
     |> Ecto.Changeset.change(platform_admin_at: if(mark?, do: now), updated_at: now)
     |> Arca.Repo.update()
     |> settled()
+  end
+
+  @doc """
+  Run `write` for the person `{kind, value}` names, by their id
+  (`"person"`) or their account's identifier (`"identifier"`), unless they
+  carry the platform administrator's mark: `{:error, :platform_admin}`,
+  and nothing is written. One transaction only the control plane's holder
+  runs (`Arca.Repo.owned/2`); `write` answers `{:ok, value}` or
+  `{:error, reason}`, which rolls it back. A value that names nobody here
+  runs `write`.
+
+  The person's row is locked before the mark is read, the row a marking
+  writes, so a door's removal of their allow or deny of them and their
+  marking are decided one after the other: the locks are taken in the
+  order every change of the mark takes them, the people's rows before the
+  door's (`set_platform_admin/4` locks the marked rows, then writes the
+  person's, then their allow).
+  """
+  @spec unless_admin(Prima.Actor.t(), {String.t(), String.t()}, (-> {:ok, term()}
+                                                                    | {:error, term()})) ::
+          {:ok, term()} | {:error, :platform_admin | :not_owner | term()} | refusal()
+  # arca:unscoped-ok a person is the instance's, held by no athanor.
+  def unless_admin(%Prima.Actor{scope: :platform}, {kind, value}, write)
+      when kind in ["person", "identifier"] and is_binary(value) and is_function(write, 0) do
+    Arca.Repo.owned("Arca.Users.unless_admin", fn ->
+      case Arca.Repo.one(kind |> named(value) |> QueryHelpers.for_update()) do
+        %User{platform_admin_at: %DateTime{}} -> {:error, :platform_admin}
+        _unmarked_or_nobody -> write.()
+      end
+    end)
+  end
+
+  def unless_admin(%Prima.Actor{}, _named, _write), do: {:error, :cross_tenant}
+
+  defp named("person", user_id), do: from(u in User, where: u.id == ^user_id)
+
+  defp named("identifier", identifier) do
+    holder = from(p in PersonIdentity, where: p.identifier == ^identifier, select: p.user_id)
+    from(u in User, where: u.id in subquery(holder))
   end
 
   @doc """

@@ -13,8 +13,11 @@ defmodule Sanctum.Door.Store do
   identifier the door does not admit, or a CYFR sign-in the door refused;
   it admits nobody until a platform admin resolves it. A `deny` entry
   cannot be written for a platform administrator, named by their person
-  id or their identifier: the installation's administrator is never shut
-  out of it.
+  id or their identifier, nor their identifier's allow removed: an
+  administrator is never shut out. The mark is read and the entry written
+  in one transaction, with the person's row locked as a marking locks it
+  (`Arca.Users.unless_admin/3`), so a person made an administrator
+  meanwhile is either seen or waits for the write.
 
   The rows are `Arca.Doors`', asked as the server (`Prima.Actor.system/0`).
   The door is consulted **before** a session exists, so at admission time
@@ -118,16 +121,16 @@ defmodule Sanctum.Door.Store do
   `kind` is `"person"` or `"identifier"`; `opts` and the label as
   `allow/4` writes them. Refuses a platform administrator
   (`:platform_admin`), named by their person id or their identifier, and
-  writes nothing when the person cannot be read (`:unavailable`).
+  writes nothing when the store cannot answer (`:unavailable`).
   """
   @spec deny(String.t(), String.t(), String.t() | nil, write_opts()) ::
           {:ok, entry()} | {:error, :platform_admin | :unavailable | term()}
   def deny(kind, value, added_by, opts \\ []) when kind in @deny_kinds do
     opts = Keyword.validate!(opts, [:note, :label])
 
-    with :ok <- not_an_admin(kind, value) do
-      # A deny answers whatever request produced the row: the member who
-      # asked is no longer who this entry is about.
+    # A deny answers whatever request produced the row: the member who
+    # asked is no longer who this entry is about.
+    unless_admin(kind, value, fn ->
       upsert(kind, value, %{
         effect: "deny",
         status: "allowed",
@@ -136,43 +139,44 @@ defmodule Sanctum.Door.Store do
         label: opts[:label],
         requested_by: nil
       })
-    end
+    end)
   end
 
   @doc """
   Delete an entry by id. Refuses the allow of a platform administrator's
   identifier (`:platform_admin`), as `deny/4` refuses a deny of them: the
   door has no exception for the administrator, so removing it would shut
-  them out of their own CYFR. When the person it names cannot be read it
-  removes nothing (`:unavailable`).
+  them out of their own CYFR. When the store cannot answer it removes
+  nothing (`:unavailable`).
   """
   @spec remove(String.t()) ::
           :ok | {:error, :not_found | :platform_admin | :unavailable | :database_error}
   def remove(id) when is_binary(id) do
-    with {:ok, entry} <- get(id),
-         :ok <- removable(entry),
-         do: Doors.delete(actor(), id)
+    with {:ok, entry} <- get(id), do: removed(entry)
   end
 
-  defp removable(%{effect: "allow", kind: "identifier", value: value}),
-    do: not_an_admin("identifier", value)
+  defp removed(%{effect: "allow", kind: "identifier", value: value, id: id}) do
+    with {:ok, :removed} <- unless_admin("identifier", value, fn -> delete(id) end), do: :ok
+  end
 
-  defp removable(_entry), do: :ok
+  defp removed(%{id: id}), do: Doors.delete(actor(), id)
 
-  # Whether the person an entry names, by their id or by the identifier
-  # their identity row holds, carries the platform administrator's mark.
-  # A read that fails cannot tell, and what it guards is refused
-  # (`:unavailable`), never let through.
-  defp not_an_admin("person", user_id), do: marked(Sanctum.Tenancy.Users.get(user_id))
+  defp delete(id) do
+    case Doors.delete(actor(), id) do
+      :ok -> {:ok, :removed}
+      {:error, _} = error -> error
+    end
+  end
 
-  defp not_an_admin("identifier", identifier),
-    do: marked(Sanctum.Tenancy.Users.get_by_identifier(identifier))
-
-  defp marked({:ok, user}),
-    do: if(Sanctum.Tenancy.platform_admin?(user), do: {:error, :platform_admin}, else: :ok)
-
-  defp marked({:error, :not_found}), do: :ok
-  defp marked({:error, _unanswered}), do: {:error, :unavailable}
+  # `write` unless the person `{kind, value}` names carries the platform
+  # administrator's mark, in one transaction with their row locked. A store
+  # that cannot answer refuses (`:unavailable`), never lets it through.
+  defp unless_admin(kind, value, write) do
+    case Arca.Users.unless_admin(actor(), {kind, value}, write) do
+      {:error, :database_error} -> {:error, :unavailable}
+      answer -> answer
+    end
+  end
 
   @doc """
   Record that someone wants the person identifier `value` let in — one a

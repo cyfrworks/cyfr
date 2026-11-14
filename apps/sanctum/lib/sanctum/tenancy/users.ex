@@ -138,27 +138,32 @@ defmodule Sanctum.Tenancy.Users do
   `by` (`Arca.Users.set_platform_admin/4`), writing their identifier's
   allow in the same transaction, since a person admitted through `*` has
   none and every administrator's allow stays (`Sanctum.Door.Store.remove/1`).
-  A deny of the identifier refuses it (`{:door, :denied}`), as one of a
-  person with no account does (`:no_account`).
+  A deny of the person or of their identifier refuses it
+  (`{:door, :denied}`), as one of a person with no account does
+  (`:no_account`); `by` no longer able to act as an administrator is
+  refused `:not_admin`.
   """
   @spec mark_platform_admin(user(), String.t()) :: {:ok, user()} | {:error, term()}
   def mark_platform_admin(%{id: user_id}, by) when is_binary(by) do
     with {:ok, identifier} <- account_identifier(user_id),
          do:
            Arca.Users.set_platform_admin(server(), user_id, true,
+             by: by,
              also: &admin_allowed(&1, identifier, by)
            )
   end
 
   @doc """
   Clear the platform administrator's mark of `user`, by the administrator
-  `by` (`Arca.Users.set_platform_admin/4`): the last mark is refused
-  `:last_admin`. Their open sessions lose the capability once the context
-  is next established (`Sanctum.Caller`'s memo).
+  `by` (`Arca.Users.set_platform_admin/4`): the last administrator who
+  can still act keeps the mark (`:last_admin`), and `by` no longer able to
+  act as one is refused `:not_admin`. Their open sessions lose the
+  capability once the context is next established (`Sanctum.Caller`'s
+  memo).
   """
-  @spec clear_platform_admin(user()) :: {:ok, user()} | {:error, term()}
-  def clear_platform_admin(%{id: user_id}),
-    do: Arca.Users.set_platform_admin(server(), user_id, false)
+  @spec clear_platform_admin(user(), String.t()) :: {:ok, user()} | {:error, term()}
+  def clear_platform_admin(%{id: user_id}, by) when is_binary(by),
+    do: Arca.Users.set_platform_admin(server(), user_id, false, by: by)
 
   defp account_identifier(user_id) do
     case identifier(user_id) do
@@ -168,12 +173,20 @@ defmodule Sanctum.Tenancy.Users do
     end
   end
 
-  defp admin_allowed(user, identifier, by) do
-    case Sanctum.Door.Store.allow_unless_denied("identifier", identifier, by,
-           note: "administrator",
-           label: user[:namespace]
-         ) do
-      {:ok, _entry} -> :ok
+  # Inside the marking, after the person's row is written: a deny of the
+  # person by their id, written under that row's lock
+  # (`Sanctum.Door.Store.deny/4`), is read once it committed, and a deny
+  # of their identifier is the row the allow will not overwrite.
+  defp admin_allowed(%{id: user_id} = user, identifier, by) do
+    with {:ok, false} <- Sanctum.Door.Store.denied(user_id, nil),
+         {:ok, _entry} <-
+           Sanctum.Door.Store.allow_unless_denied("identifier", identifier, by,
+             note: "administrator",
+             label: user[:namespace]
+           ) do
+      :ok
+    else
+      {:ok, true} -> {:error, {:door, :denied}}
       {:error, :denied} -> {:error, {:door, :denied}}
       {:error, reason} -> {:error, reason}
     end
@@ -267,9 +280,10 @@ defmodule Sanctum.Tenancy.Users do
   Eject a person from this server, as one transaction
   (`Arca.SecurityTransitions.deny_user/3`): mark them denied, revoke every
   session and API key they created, archive their own athanor (revoking
-  its keys), clear their platform administrator's mark, and remove their
-  seats and invitations in shared threads, archiving every pair they sit
-  in and every shared thread they leave empty. Either all of it
+  its keys), and remove their seats and invitations in shared threads,
+  archiving every pair they sit in and every shared thread they leave
+  empty. A person carrying the platform administrator's mark is refused
+  `:platform_admin`, read under the denial's own lock. Either all of it
   commits or none of it does, and a failure is answered, never reported
   as an eject: a member that does not hold its slot is answered
   `:not_owner` and changes nothing. The door entry that keeps them out is written by the

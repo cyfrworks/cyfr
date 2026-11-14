@@ -192,8 +192,11 @@ defmodule PrismWeb.SettingsLiveTest do
 
     # The first administrator's mark comes off; the last one, Mira's, stays.
     {:ok, ops_row} = Sanctum.Tenancy.Users.get(ops.user_id)
-    {:ok, _} = Sanctum.Tenancy.Users.clear_platform_admin(ops_row)
-    assert {:error, :last_admin} = Sanctum.Tenancy.Users.clear_platform_admin(mira_row)
+    {:ok, _} = Sanctum.Tenancy.Users.clear_platform_admin(ops_row, mira.user_id)
+
+    assert {:error, :last_admin} =
+             Sanctum.Tenancy.Users.clear_platform_admin(mira_row, mira.user_id)
+
     assert Sanctum.Tenancy.platform_admin?(mira.user_id)
   end
 
