@@ -134,14 +134,24 @@ defmodule PrismWeb.CommandPaletteTest do
 
     {view, _html} = mount_athanor(conn, "/settings")
     view |> with_target("#command-palette") |> render_click("toggle", %{})
-    view |> element("#command-palette input") |> render_keyup(%{"value" => "http"})
 
-    assert has_element?(
-             view,
-             ~s(#command-palette [phx-value-to="/components/catalyst:local.http:0.1.0"])
-           )
+    # By its plain name, by a kind and publisher before the start of its
+    # name, and by the whole label it is shown by.
+    for typed <- ["http", "catalyst:local.ht", "catalyst:local.http:0.1.0"] do
+      view |> element("#command-palette input") |> render_keyup(%{"value" => typed})
 
-    refute has_element?(view, ~s(#command-palette [phx-value-to*="newer-"]))
+      assert has_element?(
+               view,
+               ~s(#command-palette [phx-value-to="/components/catalyst:local.http:0.1.0"])
+             ),
+             typed
+
+      refute has_element?(view, ~s(#command-palette [phx-value-to*="newer-"])), typed
+    end
+
+    # A reference of another kind finds nothing of this one.
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "reagent:local.http"})
+    refute has_element?(view, ~s(#command-palette [phx-value-to*="catalyst:local.http"]))
   end
 
   test "a desktop is offered as the chooser of desktops, by the shell's key", %{conn: conn} do

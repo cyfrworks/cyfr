@@ -900,18 +900,22 @@ defmodule PrismWeb.ComponentsLiveTest do
       end
     end
 
-    test "a refused revoke says so on the page, and the grant stays listed as the store holds it",
+    @tag :capture_log
+    test "a revoke the store refuses says so on the page, and the grant stays listed",
          %{conn: conn, ctx: ctx} do
       profile = ConsentFixtures.grant_tincture!(ctx, @ref)
       {view, _html} = expanded_html(conn)
       grant = ~s([id="grants-#{@ref}-#{profile}"])
 
-      # Revoked behind the page's back: the page's revoke has nothing left
-      # to revoke, and the operation refuses it.
-      set_profile!(ctx, profile, status: "revoked")
+      # The profiles cannot be read when the revoke comes: the operation
+      # refuses it, and nothing is revoked.
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
       view |> element(grant <> " button", "Revoke") |> render_click()
+      Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
 
       assert has_element?(view, ~s([id="grants-#{@ref}"]), "The grant was not revoked:")
+      assert has_element?(view, grant, "Granted · revision 1")
+      assert {:ok, [%{id: ^profile, status: :active}]} = Sanctum.Consent.profiles(ctx, @ref)
     end
   end
 end

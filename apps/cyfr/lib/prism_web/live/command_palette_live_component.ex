@@ -140,9 +140,47 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
         )
 
       typed ->
-        args = %{"query" => typed, "source" => "local", "limit" => @max_matches}
-        assign(socket, :components, component_items(ctx, "component/search", args))
+        assign(socket, :components, matching_components(ctx, typed))
     end
+  end
+
+  # The component domain matches a name or a description. Text shaped as a
+  # reference, the label a component is shown by (`catalyst:local.http:0.1.0`)
+  # or any start of one, asks it for the name part, narrowed to the kind
+  # when one is named, and keeps the answers whose reference holds the text.
+  defp matching_components(ctx, typed) do
+    case reference_parts(typed) do
+      nil ->
+        args = %{"query" => typed, "source" => "local", "limit" => @max_matches}
+        component_items(ctx, "component/search", args)
+
+      {type, name} ->
+        args = %{"query" => name, "source" => "local", "limit" => @max_matches}
+        args = if type, do: Map.put(args, "type", type), else: args
+        needle = String.downcase(typed)
+
+        ctx
+        |> component_items("component/search", args)
+        |> Enum.filter(&String.contains?(String.downcase(&1.label), needle))
+    end
+  end
+
+  # `{kind or nil, name part}` of text shaped as a reference: a kind before
+  # a colon, or a publisher and a name joined by a dot; nil for plain text.
+  defp reference_parts(typed) do
+    {type, rest} =
+      case String.split(typed, ":", parts: 2) do
+        [kind, rest] -> {if(kind in Prima.ComponentRef.valid_types(), do: kind), rest}
+        [rest] -> {nil, rest}
+      end
+
+    name =
+      case rest |> String.split(":", parts: 2) |> hd() |> String.split(".", parts: 2) do
+        [_publisher, name] -> name
+        [only] -> if type, do: only
+      end
+
+    if name, do: {type, name}
   end
 
   defp nav_items(mode) do
