@@ -306,7 +306,12 @@ defmodule Sanctum.Providers.ShareTest do
     test "Alice, in the thread Terry shared with, sees his share with its owner, and after " <>
            "she leaves the thread the same read omits it",
          %{terry: terry, alice: alice, traders: traders, entry: entry} do
-      share = share!(terry, entry, %{"audience" => "thread", "thread_id" => traders.id})
+      share =
+        share!(terry, entry, %{
+          "audience" => "thread",
+          "thread_id" => traders.id,
+          "person_daily" => 40
+        })
 
       assert {:ok, %{shares: [offer]}} = call(alice.ctx, %{"action" => "offered"})
 
@@ -316,7 +321,8 @@ defmodule Sanctum.Providers.ShareTest do
                :provider_hint,
                :field_names,
                :destination,
-               :used_today
+               :used_today,
+               :person_daily
              ]) ==
                %{
                  id: share.id,
@@ -324,7 +330,8 @@ defmodule Sanctum.Providers.ShareTest do
                  provider_hint: "example.com",
                  field_names: ["API_KEY"],
                  destination: @destination,
-                 used_today: 0
+                 used_today: 0,
+                 person_daily: 40
                }
 
       refute inspect(offer) =~ "sealed-bytes"

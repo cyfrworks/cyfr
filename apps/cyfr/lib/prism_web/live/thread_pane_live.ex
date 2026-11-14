@@ -326,6 +326,9 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:token_usage, %{input: 0, output: 0})
     |> assign(:grants, MapSet.new())
     |> assign(:announcement, "")
+    # Whether the running turn wrote a reply: its end is announced as one
+    # only then.
+    |> assign(:turn_replied, false)
     |> assign(:grant_prompt, nil)
     |> assign(:grant_retry, nil)
     |> assign(:restart_prompt, nil)
@@ -776,6 +779,7 @@ defmodule PrismWeb.ThreadPaneLive do
     socket
     |> upsert_message(row)
     |> assign(:partials, Aqua.stream_landed(socket.assigns.partials, row))
+    |> assign(:turn_replied, socket.assigns.turn_replied or replied?(row, socket))
   end
 
   defp handle_thread_event(socket, :request, row) do
@@ -827,6 +831,7 @@ defmodule PrismWeb.ThreadPaneLive do
     socket = assign(socket, :announcement, "AQUA is thinking.")
 
     socket
+    |> assign(:turn_replied, false)
     |> assign(:running, true)
     |> assign(:paused, false)
     |> assign(:paused_reason, nil)
@@ -864,9 +869,13 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp handle_thread_event(socket, :turn_finished, _data) do
-    socket = assign(socket, :announcement, "AQUA replied.")
+    said =
+      if socket.assigns.turn_replied, do: "AQUA replied.", else: "AQUA stopped without a reply."
+
+    socket = assign(socket, :announcement, said)
 
     socket
+    |> assign(:turn_replied, false)
     |> assign(:running, false)
     |> assign(:paused, false)
     |> assign(:paused_reason, nil)
@@ -934,6 +943,10 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp handle_thread_event(socket, :error, text), do: put_flash(socket, :error, text)
   defp handle_thread_event(socket, _kind, _data), do: socket
+
+  # A text row an agent wrote while a turn runs is the turn's reply.
+  defp replied?(%{kind: "text", author: @agent_author}, %{assigns: %{running: true}}), do: true
+  defp replied?(_row, _socket), do: false
 
   # The stream owns membership and ordering (stream_insert replaces an
   # existing dom id in place); only the two derived facts the templates
@@ -1373,8 +1386,9 @@ defmodule PrismWeb.ThreadPaneLive do
   # Whether this athanor's AQUA can answer at all: a soul, and a model
   # with a key behind it. A fresh furnace has neither, and the pane's empty
   # state is where someone finds that out. A model whose consent
-  # exists but is damaged, or could not be read, is said as such: no model
-  # is offered to connect over a consent that exists.
+  # exists but is damaged, could not be read, or no longer covers what the
+  # soul runs on, is said as such: no model is offered to connect over a
+  # consent that exists.
   # An agents list that could not be read is not a room with no model.
   defp model_ready(_ctx, :unread), do: :agents_unavailable
 
@@ -1409,6 +1423,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp unready_model(statuses) do
     cond do
       Enum.any?(statuses, &match?({:ready, _}, &1)) -> :ready
+      Enum.any?(statuses, &match?({:consent_stale, _}, &1)) -> :consent_stale
       Enum.any?(statuses, &match?({:consent_damaged, _}, &1)) -> :consent_damaged
       Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
       Enum.any?(statuses, &match?({:model_unavailable, _}, &1)) -> :model_unavailable
@@ -1696,7 +1711,25 @@ defmodule PrismWeb.ThreadPaneLive do
                 <span data-test="model-pending">Reading the model…</span>
               <% @model_ready in [:no_model, :no_key] -> %>
                 <span>{athanor_label(@athanor, @context)} has no model yet.</span>
-                <span class="text-gray-500">Connect one on your AQUA page.</span>
+                <.link
+                  navigate={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
+                  data-test="model-connect"
+                  class="text-blue-400 hover:underline"
+                >
+                  Connect one on your AQUA page.
+                </.link>
+              <% @model_ready == :consent_stale -> %>
+                <%!-- The soul's shape moved since its consent: consenting
+                     again is all it needs, never a model to connect. --%>
+                <span data-test="model-consent">
+                  What AQUA runs on changed since it was consented.
+                </span>
+                <.link
+                  navigate={PrismWeb.Focus.path(@athanor, "/aqua")}
+                  class="text-blue-400 hover:underline"
+                >
+                  Consent again on your AQUA page.
+                </.link>
               <% @model_ready == :consent_damaged -> %>
                 <%!-- A consent that exists but is damaged, or could not be read,
                      is no model to connect: it is said as such. --%>

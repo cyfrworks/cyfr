@@ -671,14 +671,19 @@ defmodule Sanctum.SharesTest do
          %{terry: terry, alice: alice} do
       bob = person!("Bob")
       entry = key!(terry)
-      share = share!(terry, entry)
+      share = share!(terry, entry, %{person_daily: 25})
 
       for _ <- 1..2, do: {:ok, @secret} = resolve(alice, share, digest!(entry))
       {:ok, @secret} = resolve(bob, share, digest!(entry))
 
+      # Each person's own count, and the most a person may use it in a day.
       {:ok, view} = Shares.binding(alice, share.id)
-      assert {:ok, [Map.put(view, :used_today, 2)]} == Shares.offered_with_use(alice)
-      assert {:ok, [Map.put(view, :used_today, 1)]} == Shares.offered_with_use(bob)
+
+      assert {:ok, [Map.merge(view, %{used_today: 2, person_daily: 25})]} ==
+               Shares.offered_with_use(alice)
+
+      assert {:ok, [Map.merge(view, %{used_today: 1, person_daily: 25})]} ==
+               Shares.offered_with_use(bob)
     end
 
     test "an anonymous caller, and one no person row names, is offered nothing and binds and " <>
