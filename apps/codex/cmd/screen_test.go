@@ -330,7 +330,8 @@ func TestScreenOnDeclinedOrFailed(t *testing.T) {
 }
 
 // The files name this program, the account and the directory; the token
-// stays in .env, which the shell reads itself; and the launcher can run.
+// stays in .env, which the shell reads itself; and the unit runs the
+// session, which runs the launcher, both of which can run.
 func TestScreenFilesAreFilledIn(t *testing.T) {
 	screenProject(t)
 	if err := writeScreenFiles("/home/alice/cyfr", "alice"); err != nil {
@@ -341,12 +342,18 @@ func TestScreenFilesAreFilledIn(t *testing.T) {
 	if !strings.Contains(launcher, "\n    "+self+" screen shell\n") || strings.Contains(launcher, "@") {
 		t.Errorf("launcher:\n%s", launcher)
 	}
-	info, err := os.Stat(filepath.Join(screenDir, "launcher.sh"))
-	if err != nil || info.Mode().Perm() != 0o755 {
-		t.Errorf("launcher mode %v (%v)", info.Mode(), err)
+	session := read(t, filepath.Join(screenDir, "session.sh"))
+	if !strings.Contains(session, "\ndbus-run-session labwc -C /home/alice/cyfr/.cyfr/screen -s /home/alice/cyfr/.cyfr/screen/launcher.sh ") || strings.Contains(session, "@") {
+		t.Errorf("session:\n%s", session)
+	}
+	for _, name := range []string{"launcher.sh", "session.sh"} {
+		info, err := os.Stat(filepath.Join(screenDir, name))
+		if err != nil || info.Mode().Perm() != 0o755 {
+			t.Errorf("%s mode %v (%v)", name, info.Mode(), err)
+		}
 	}
 	unit := read(t, filepath.Join(screenDir, "cyfr-screen.service"))
-	for _, want := range []string{"User=alice\n", "WorkingDirectory=/home/alice/cyfr\n", "Conflicts=getty@tty1.service\n", "TTYPath=/dev/tty1\n", "PAMName=login\n", "StandardInput=tty\n", "Restart=always\n", "-s /home/alice/cyfr/.cyfr/screen/launcher.sh\n"} {
+	for _, want := range []string{"User=alice\n", "WorkingDirectory=/home/alice/cyfr\n", "Conflicts=getty@tty1.service\n", "TTYPath=/dev/tty1\n", "PAMName=login\n", "StandardInput=tty\n", "Restart=always\n", "ExecStart=/home/alice/cyfr/.cyfr/screen/session.sh\n"} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("the unit lacks %q:\n%s", want, unit)
 		}
