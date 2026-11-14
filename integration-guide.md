@@ -1147,7 +1147,16 @@ The committed consent is the runtime capability — `ask ∩ operator choices �
 
 ## Inbound Webhooks
 
-A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:slug` a sender signs with HMAC-SHA256. The signature is verified before anything else: an unknown or disabled slug answers 404, a missing or wrong signature 401, and a webhook store that cannot answer 503. A webhook configured with an idempotency key header (GitHub's `X-GitHub-Delivery`, a Stripe event id) runs each delivery once: a request without the header answers 400, a key already seen answers 200 `{"status": "duplicate", "first_seen_at": "..."}` without running the target again, and when the replay store cannot answer the claim the delivery answers 503 `unavailable` and runs nothing, since without the claim nothing proves the delivery has not already run. A delivery that ends non-2xx gives its claim back, so the sender's retry runs as a fresh delivery. An accepted delivery whose run fails gives its claim back the same way, but one whose run ends with its outcome unknown (its runner was lost after it may have acted, or its result was not kept) keeps it: the sender's retry answers `duplicate` and runs nothing, since the first run may already have taken effect.
+A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:slug` a sender signs with HMAC-SHA256 under the webhook's secret. The signature header, `x-cyfr-signature` unless the webhook names another `signature_header`, carries `sha256=` and the lowercase hex HMAC of the exact body. A webhook that names a `timestamp_header` signs the time as well: that header carries the time the delivery is sent in Unix seconds, the HMAC is over `<time>.<body>` (the time, a dot, the body), and a time further from now than `webhook_max_skew_seconds` (300 by default) is refused as a replay.
+
+```bash
+body='{"event":"ping"}'
+sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+curl -X POST "https://<your CYFR>/hooks/<slug>" -H 'content-type: application/json' \
+  -H "x-cyfr-signature: sha256=$sig" -d "$body"
+```
+
+The signature is verified before anything else: an unknown or disabled slug answers 404; a signature or timestamp that is missing, malformed, wrong or out of the window answers 401 with a sentence naming which, the header and the form to sign in; and a webhook store that cannot answer 503. A webhook configured with an idempotency key header (GitHub's `X-GitHub-Delivery`, a Stripe event id) runs each delivery once: a request without the header answers 400, a key already seen answers 200 `{"status": "duplicate", "first_seen_at": "..."}` without running the target again, and when the replay store cannot answer the claim the delivery answers 503 `unavailable` and runs nothing, since without the claim nothing proves the delivery has not already run. A delivery that ends non-2xx gives its claim back, so the sender's retry runs as a fresh delivery. An accepted delivery whose run fails gives its claim back the same way, but one whose run ends with its outcome unknown (its runner was lost after it may have acted, or its result was not kept) keeps it: the sender's retry answers `duplicate` and runs nothing, since the first run may already have taken effect.
 
 ---
 

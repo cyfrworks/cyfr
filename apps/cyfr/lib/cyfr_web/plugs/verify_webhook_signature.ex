@@ -19,7 +19,9 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
       is checked against, could not answer. Never a 404, which would read
       as "no such hook" to a sender that retries on 5xx only.
     * 401 — signature or timestamp header missing, malformed, or
-      mismatched, or a timestamp outside the skew window.
+      mismatched, or a timestamp outside the skew window, each named in
+      its own sentence with the header it concerns and the format a
+      sender signs in (`Prima.Refusal`'s `:webhook_signature` rows).
     * 400 — no raw body was captured: the sender used a content type no
       parser reads, so there is nothing to verify a signature over.
     * 500 — the stored signing secret could not be opened.
@@ -34,8 +36,8 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
   open a signing secret: the lookup `WebhookRateLimit` cached is dropped
   too. The secrets are opened here, by verification, and nowhere before.
 
-  All response bodies are generic — secret material and structural error
-  detail never leak.
+  No response body carries secret material: a refusal names the header
+  and the format, never the expected signature.
   """
 
   import Plug.Conn
@@ -105,12 +107,14 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
 
     case reason do
       :missing_raw_body -> deny_400(conn)
-      :missing_signature -> deny_401(conn)
-      :missing_timestamp -> deny_401(conn)
-      :malformed_signature -> deny_401(conn)
-      :malformed_timestamp -> deny_401(conn)
-      :timestamp_skew -> deny_401(conn)
-      :signature_mismatch -> deny_401(conn)
+      :missing_signature -> deny_401(conn, reason, webhook.signature_header)
+      :malformed_signature -> deny_401(conn, reason, webhook.signature_header)
+      :missing_timestamp -> deny_401(conn, reason, webhook.timestamp_header)
+      :malformed_timestamp -> deny_401(conn, reason, webhook.timestamp_header)
+      :timestamp_skew -> deny_401(conn, reason, webhook.timestamp_header)
+      # The time is part of what is signed only where the webhook names a
+      # timestamp header.
+      :signature_mismatch -> deny_401(conn, reason, webhook.timestamp_header)
       # The server cannot read its own secret — a keyring rotated without
       # re-sealing, or a restored backup. Not the sender's fault and not
       # fixable by them, so it must not read as a signature failure.
@@ -167,8 +171,8 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
     |> CyfrWeb.ApiError.halt(503, :unavailable, nil)
   end
 
-  defp deny_401(conn) do
-    CyfrWeb.ApiError.halt(conn, 401, :signature_invalid, nil)
+  defp deny_401(conn, reason, header) do
+    CyfrWeb.ApiError.halt(conn, 401, {:webhook_signature, reason, header}, nil)
   end
 
   # The sender used a content type no parser matches, so `RawBodyReader`
