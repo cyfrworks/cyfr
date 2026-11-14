@@ -12,12 +12,13 @@ defmodule Sanctum.ToolServerDigest do
   the digest, while re-pointing the URL, swapping a header or env
   reference, changing a backend's command, or deleting the row and
   creating another under the same name must. A program's `program` member
-  is everything else that decides what it is and what it reaches: its
-  hosts (the stored list's text; none is every public host), its folder's
+  is everything else that decides what it is and what it reaches, each
+  setting it holds: its hosts (the stored list's text; absent, every
+  public host), its folder's
   identity (its home and the login entry a kept home is), its memory and
   disk bounds and its sign-in command, so a definition replaced with
   wider hosts, another folder or other bounds no longer matches a grant
-  made for the old one. An http row's is null. A program's `url` is the empty string. Only a
+  made for the old one. An http row has neither a mark nor a program. A program's `url` is the empty string. Only a
   tool server has a digest: an `http` row or a program marked `mcp`; a
   `driven` program offers no tools. There is
   deliberately no stored digest column — a stored digest is a cache someone
@@ -54,23 +55,35 @@ defmodule Sanctum.ToolServerDigest do
              ((transport == "http" and is_nil(program)) or
                 (transport == "program" and is_map(program))) do
     with {:ok, backends} <- backend_templates(backends) do
-      JCS.hash(%{
-        "id" => id,
-        "transport" => transport,
-        "mark" => mark,
-        "url" => url || "",
-        "enabled" => enabled,
-        "header_templates" => templates(headers),
-        "backends" => backends,
-        "tool_patterns" => Enum.sort(patterns),
-        "program" => program
-      })
+      JCS.hash(
+        %{
+          "id" => id,
+          "transport" => transport,
+          "url" => url || "",
+          "enabled" => enabled,
+          "header_templates" => templates(headers),
+          "backends" => backends,
+          "tool_patterns" => Enum.sort(patterns)
+        }
+        |> with_program(mark, program)
+      )
     else
       :error -> {:error, {:invalid_server_config, server}}
     end
   end
 
   def compute(other), do: {:error, {:invalid_server_config, other}}
+
+  # JCS takes no null, so an absent member is left out: a program's mark and
+  # program members are present, each setting it has not left absent.
+  defp with_program(document, nil, nil), do: document
+
+  defp with_program(document, mark, program) do
+    Map.merge(document, %{
+      "mark" => mark,
+      "program" => Map.reject(program, fn {_key, value} -> is_nil(value) end)
+    })
+  end
 
   defp templates(map) do
     map
