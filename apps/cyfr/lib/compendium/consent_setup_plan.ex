@@ -70,9 +70,9 @@ defmodule Compendium.ConsentSetupPlan do
   def section(%Context{} = ctx, source_ref, component) when is_map(component) do
     with {:ok, name_ref} <- name_ref(source_ref),
          {:ok, entries} <- read_profiles(ctx, name_ref) do
-      case Enum.filter(entries, &(&1.status == :corrupt)) do
-        [damaged | _] -> not_ready(damaged.id, :corrupt)
-        [] -> selected(ctx, name_ref, entries, component)
+      case Prima.Authority.RootSelect.candidates(entries, nil) do
+        {:ok, candidates} -> selected(ctx, name_ref, candidates, component)
+        {:error, {:corrupt, {:profile, id}}} -> not_ready(id, :corrupt)
       end
     else
       {:error, :unavailable} -> not_ready(nil, :unavailable)
@@ -154,9 +154,8 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   # The profile a run of the source would stand on, picked by the run's own
-  # default selection (`Prima.Authority.RootSelect.select/2`) after the run's
-  # admission has refused any damaged row, as the section above does: the
-  # one active owner profile. None is a run with no grant, as the run says
+  # default selection (`Prima.Authority.RootSelect.candidates/2`, then
+  # `select/2`): the one active owner profile. None is a run with no grant, as the run says
   # it (a public twin is no grant of the person's runs); one owner waiting
   # for consent is described not ready; several active owners are the
   # ambiguity a run refuses.
