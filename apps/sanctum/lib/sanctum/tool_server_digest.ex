@@ -13,7 +13,7 @@ defmodule Sanctum.ToolServerDigest do
   reference, changing a backend's command, or deleting the row and
   creating another under the same name must. A program's `program` member
   is everything else that decides what it is and what it reaches, each
-  setting it holds: its hosts (the stored list's text; absent, every
+  setting it holds: its hosts (the set of names, in one order; absent, every
   public host), its folder's
   identity (its home and the login entry a kept home is), its memory and
   disk bounds and its sign-in command, so a definition replaced with
@@ -54,7 +54,8 @@ defmodule Sanctum.ToolServerDigest do
              is_list(backends) and is_list(patterns) and
              ((transport == "http" and is_nil(program)) or
                 (transport == "program" and is_map(program))) do
-    with {:ok, backends} <- backend_templates(backends) do
+    with {:ok, backends} <- backend_templates(backends),
+         :ok <- readable_hosts(program) do
       JCS.hash(
         %{
           "id" => id,
@@ -74,16 +75,29 @@ defmodule Sanctum.ToolServerDigest do
 
   def compute(other), do: {:error, {:invalid_server_config, other}}
 
+  defp readable_hosts(%{"hosts" => hosts}) when not is_nil(hosts) do
+    if is_list(hosts) and Enum.all?(hosts, &is_binary/1), do: :ok, else: :error
+  end
+
+  defp readable_hosts(_program), do: :ok
+
   # JCS takes no null, so an absent member is left out: a program's mark and
   # program members are present, each setting it has not left absent.
   defp with_program(document, nil, nil), do: document
 
   defp with_program(document, mark, program) do
-    Map.merge(document, %{
-      "mark" => mark,
-      "program" => Map.reject(program, fn {_key, value} -> is_nil(value) end)
-    })
+    program =
+      program
+      |> Map.update("hosts", nil, &host_set/1)
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    Map.merge(document, %{"mark" => mark, "program" => program})
   end
+
+  # What a program may reach is a set: its hosts in one order, each once.
+  # Absent is no restriction, which a list, even an empty one, never reads as.
+  defp host_set(hosts) when is_list(hosts), do: hosts |> Enum.uniq() |> Enum.sort()
+  defp host_set(nil), do: nil
 
   defp templates(map) do
     map
@@ -143,9 +157,11 @@ defmodule Sanctum.ToolServerDigest do
   end
 
   # What else decides what a program is and reaches, as its row stores it.
+  # A stored host list that does not read leaves the row without a digest,
+  # never with one that reads it as no restriction.
   defp program(%{transport: "program"} = server) do
     %{
-      "hosts" => Map.get(server, :hosts),
+      "hosts" => stored_hosts(Map.get(server, :hosts)),
       "home" => Map.get(server, :home),
       "login_entry" => Map.get(server, :login_entry_id),
       "memory_bytes" => Map.get(server, :memory_bytes),
@@ -155,6 +171,17 @@ defmodule Sanctum.ToolServerDigest do
   end
 
   defp program(_server), do: nil
+
+  defp stored_hosts(nil), do: nil
+
+  defp stored_hosts(text) when is_binary(text) do
+    case Jason.decode(text) do
+      {:ok, hosts} when is_list(hosts) -> hosts
+      _ -> :unreadable
+    end
+  end
+
+  defp stored_hosts(_other), do: :unreadable
 
   @doc """
   A server's exposure patterns: what the operator allowed this server to

@@ -22,6 +22,14 @@ defmodule Sanctum.ToolServerDigestTest do
     @base
     | transport: "program",
       mark: "mcp",
+      program: %{
+        "hosts" => ["api.github.com", "github.com"],
+        "home" => "kept",
+        "login_entry" => "ent_1",
+        "memory_bytes" => 268_435_456,
+        "home_max_bytes" => 1_073_741_824,
+        "login_command" => "gh auth login"
+      },
       url: nil,
       headers: %{},
       backends: [
@@ -93,7 +101,9 @@ defmodule Sanctum.ToolServerDigestTest do
 
       for {key, value} <- [
             {"hosts", nil},
-            {"hosts", ~s(["api.github.com","evil.example"])},
+            {"hosts", ["api.github.com", "github.com", "evil.example"]},
+            {"hosts", ["api.github.com"]},
+            {"hosts", []},
             {"home", "scratch"},
             {"login_entry", "ent_2"},
             {"memory_bytes", nil},
@@ -103,6 +113,53 @@ defmodule Sanctum.ToolServerDigestTest do
         {:ok, digest} = ToolServerDigest.compute(put_in(@program, [:program, key], value))
         refute digest == base, "#{key} -> #{inspect(value)} kept the digest"
       end
+    end
+
+    test "a program's hosts are a set: one digest in any order, apart from no restriction" do
+      {:ok, base} = ToolServerDigest.compute(@program)
+
+      for hosts <- [
+            ["github.com", "api.github.com"],
+            ["github.com", "api.github.com", "github.com"]
+          ] do
+        assert {:ok, ^base} =
+                 ToolServerDigest.compute(put_in(@program, [:program, "hosts"], hosts))
+      end
+
+      {:ok, unrestricted} = ToolServerDigest.compute(put_in(@program, [:program, "hosts"], nil))
+      {:ok, empty} = ToolServerDigest.compute(put_in(@program, [:program, "hosts"], []))
+      refute unrestricted == empty
+      refute empty == base
+    end
+
+    test "a stored host list read from the row is the same set, and one that does not read has no digest" do
+      row = fn hosts ->
+        %{
+          id: "mcp_row_1",
+          transport: "program",
+          mark: "mcp",
+          url: nil,
+          enabled: true,
+          hosts: hosts,
+          home: "kept",
+          login_entry_id: "ent_1",
+          memory_bytes: 268_435_456,
+          home_max_bytes: 1_073_741_824,
+          login_command: "gh auth login",
+          config_json: Jason.encode!(%{"backends" => @program.backends})
+        }
+      end
+
+      {:ok, a} = ToolServerDigest.from_server(row.(~s(["api.github.com","github.com"])))
+      {:ok, b} = ToolServerDigest.from_server(row.(~s(["github.com","api.github.com"])))
+      assert a == b
+      assert {:ok, ^a} = ToolServerDigest.compute(@program)
+
+      assert {:error, {:invalid_server_config, _}} =
+               ToolServerDigest.from_server(row.("not json"))
+
+      assert {:error, {:invalid_server_config, _}} =
+               ToolServerDigest.from_server(row.(~s({"a":1})))
     end
 
     test "only a tool server has a digest: a driven program and an old kind have none" do
