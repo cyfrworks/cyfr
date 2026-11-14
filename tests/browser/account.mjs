@@ -240,7 +240,10 @@ const listed = (page) => page.$$eval("#keys li > span", (els) => els.map((e) => 
 async function removeRow(page, kid) {
   const row = page.locator("#keys li", { hasText: shortCode(kid) });
   if ((await row.count()) !== 1) throw new Error(`the page lists ${await row.count()} rows for the key ${shortCode(kid)}`);
-  await row.locator("button").click();
+  // Remove asks first: the row then holds the question, its own Remove
+  // (the one that acts) and Keep.
+  await row.locator("button", { hasText: "Remove" }).click();
+  await row.locator("button.danger", { hasText: "Remove" }).click();
 }
 
 // The recovery code's page at `directory`, opened with `code`: `opened`
