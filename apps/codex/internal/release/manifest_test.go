@@ -156,12 +156,15 @@ func TestValidManifestParses(t *testing.T) {
 	if !digestPattern.MatchString(m.Scaffold) {
 		t.Errorf("scaffold = %q", m.Scaffold)
 	}
+	if !fingerprintPattern.MatchString(m.SchemaFingerprint) {
+		t.Errorf("schema_fingerprint = %q", m.SchemaFingerprint)
+	}
 
 	pre, err := ParseManifest(f.ValidPrerelease)
 	if err != nil {
 		t.Fatalf("the valid pre-release manifest: %v", err)
 	}
-	if pre.Version != "1.2.3-rc.1" || pre.Images != m.Images || pre.Scaffold != m.Scaffold {
+	if pre.Version != "1.2.3-rc.1" || pre.Images != m.Images || pre.Scaffold != m.Scaffold || pre.SchemaFingerprint != m.SchemaFingerprint {
 		t.Errorf("the valid pre-release manifest is %+v, want the valid one's digests at 1.2.3-rc.1", *pre)
 	}
 }

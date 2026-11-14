@@ -144,6 +144,106 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       end
     end
 
+    @acknowledgements %{
+      "good_faith" =>
+        "I believe in good faith that the use I report is not authorised by the copyright owner, its agent or the law.",
+      "accuracy" =>
+        "The information in this report is accurate, and under penalty of perjury I am the copyright owner or authorised to act for the owner of an exclusive right that is allegedly infringed.",
+      "identified" => "I have identified the copyrighted work and the material that infringes it."
+    }
+
+    defp copyright_claim(ticked) do
+      %{
+        "category" => "dmca",
+        "details" => "It copies my published work.",
+        "acknowledgements" => Map.new(ticked, &{&1, "true"})
+      }
+    end
+
+    defp report_bodies do
+      receive do
+        {:registry_request, %{method: "POST", path: "/v1/abuse-reports", body: body}} ->
+          [Jason.decode!(body) | report_bodies()]
+
+        {:registry_request, _other} ->
+          report_bodies()
+      after
+        0 -> []
+      end
+    end
+
+    test "the sheet shows the three acknowledgements for a copyright claim alone",
+         %{conn: conn, ctx: ctx} do
+      publish_reportable!(ctx)
+      view = reporting!(conn)
+      form = element(view, ~s(form[phx-submit="submit_report"]))
+
+      html = render_change(form, %{"category" => "dmca", "details" => "Mine."})
+      for {_key, sentence} <- @acknowledgements, do: assert(html =~ html_escape(sentence))
+
+      html = render_change(form, %{"category" => "ip_infringement", "details" => "Mine."})
+      for {_key, sentence} <- @acknowledgements, do: refute(html =~ html_escape(sentence))
+      # What was written stays through the change of category.
+      assert html =~ "Mine."
+    end
+
+    test "a copyright claim ticked in full is sent with the statement",
+         %{conn: conn, ctx: ctx, user: user} do
+      publish_reportable!(ctx)
+      registry!(ctx, user, :nothing_held)
+      view = reporting!(conn)
+
+      render_submit(
+        element(view, ~s(form[phx-submit="submit_report"])),
+        copyright_claim(Map.keys(@acknowledgements))
+      )
+
+      Prima.Test.Wait.wait_until(
+        fn -> render(view) =~ "Report submitted. Thanks." end,
+        @answered_ms,
+        "the registry's answer to reach the page"
+      )
+
+      assert report_bodies() == [
+               %{
+                 "category" => "dmca",
+                 "target_namespace" => nil,
+                 "target_component_id" => "cmp_reportable",
+                 "details" => "It copies my published work.",
+                 "attestations_signed" => true
+               }
+             ]
+    end
+
+    test "a copyright claim not ticked in full is refused and nothing is sent",
+         %{conn: conn, ctx: ctx, user: user} do
+      publish_reportable!(ctx)
+      registry!(ctx, user, :nothing_held)
+      view = reporting!(conn)
+
+      render_submit(
+        element(view, ~s(form[phx-submit="submit_report"])),
+        copyright_claim(["good_faith", "identified"])
+      )
+
+      Prima.Test.Wait.wait_until(
+        fn ->
+          render(view) =~
+            html_escape(
+              "A copyright claim needs the report sheet's three acknowledgements ticked before it is sent."
+            )
+        end,
+        @answered_ms,
+        "the refusal to reach the page"
+      )
+
+      assert has_element?(view, "#report-modal")
+      assert report_bodies() == []
+    end
+
+    defp html_escape(text),
+      do: text |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
+
     defp reports_sent do
       receive do
         {:registry_request, %{method: "POST", path: "/v1/abuse-reports"}} -> 1 + reports_sent()

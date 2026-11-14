@@ -419,7 +419,7 @@ func TestJoinKilledAtEveryPhaseRecovers(t *testing.T) {
 			if c.code == "" && receipts[0].Payload["name"] != "cyfr.tail1234.ts.net" {
 				t.Errorf("the join's receipt is %+v", receipts[0])
 			}
-			if c.code != "" && receipts[0].Refusal().Message() != joinEnded {
+			if c.code != "" && receipts[0].Refusal().Message() != joinEndedKey {
 				t.Errorf("the sentence reads %q", receipts[0].Refusal().Message())
 			}
 			if slices.Contains(h.fake.runningServices(), "join") {
@@ -454,28 +454,36 @@ func TestJoinStopsTheTailscaleServiceFirst(t *testing.T) {
 	}
 }
 
-const joinEnded = "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How CYFR is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again."
+// The sentences of a join that ended before its machine joined: given an
+// auth key, and without one.
+const (
+	joinEndedKey   = "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access tailnet` again."
+	joinEndedNoKey = "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access tailnet` again and approve the machine with the link it prints."
+)
 
-// A join container that ends before its deadline without joining, as one
-// does when Tailscale refuses its key, answers tailnet_join_ended; one
-// still waiting when its deadline passes answers tailnet_join_expired.
+// A join container that ends before its deadline without joining answers
+// tailnet_join_ended when it was given an auth key, which Tailscale
+// refused, and tailnet_join_unapproved when it was given none; one still
+// waiting when its deadline passes answers tailnet_join_expired.
 func TestJoinEndsOrExpires(t *testing.T) {
-	for _, c := range []struct {
-		name, code, sentence string
-		at                   func(h *testHome, n int)
-	}{
-		{"refused key", "tailnet_join_ended", joinEnded, func(h *testHome, n int) {
-			if n == 3 {
-				h.fake.mu.Lock()
-				for name, ct := range h.fake.st.Containers {
-					if ct.Join {
-						delete(h.fake.st.Containers, name)
-					}
+	ends := func(h *testHome, n int) {
+		if n == 3 {
+			h.fake.mu.Lock()
+			for name, ct := range h.fake.st.Containers {
+				if ct.Join {
+					delete(h.fake.st.Containers, name)
 				}
-				h.fake.mu.Unlock()
 			}
-		}},
-		{"deadline", "tailnet_join_expired", "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access tailnet` for a new link.", func(h *testHome, n int) {
+			h.fake.mu.Unlock()
+		}
+	}
+	for _, c := range []struct {
+		name, key, code, sentence string
+		at                        func(h *testHome, n int)
+	}{
+		{"refused key", refusedKey, "tailnet_join_ended", joinEndedKey, ends},
+		{"no key", "", "tailnet_join_unapproved", joinEndedNoKey, ends},
+		{"deadline", "", "tailnet_join_expired", "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access tailnet` for a new link.", func(h *testHome, n int) {
 			if n == 3 {
 				h.clock.advance(JoinDeadline)
 			}
@@ -485,7 +493,11 @@ func TestJoinEndsOrExpires(t *testing.T) {
 			h := newHome(t)
 			sleeps := 0
 			h.clock.onSleep = func(time.Time) { sleeps++; c.at(h, sleeps) }
-			rc, err := h.e.Join(bg, JoinRequest{ID: id(1)})
+			req := JoinRequest{ID: id(1)}
+			if c.key != "" {
+				req.AuthKey = strings.NewReader(c.key)
+			}
+			rc, err := h.e.Join(bg, req)
 			rec, _ := h.e.readJoin()
 			if refusalCode(err) != c.code || rc.State != "completed" || rc.Outcome != "failed" || !mapsEqual(rc.Payload, map[string]string{"join_id": rec.JoinID}) {
 				t.Fatalf("join answered %+v, %v", rc, err)

@@ -56,6 +56,7 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
     {:tailnet_join_expired, [{%{}, []}]},
     {:tailnet_join_cancelled, [{%{}, []}]},
     {:tailnet_join_ended, [{%{}, []}]},
+    {:tailnet_join_unapproved, [{%{}, []}]},
     {:tailnet_join_not_current, [{%{}, []}]},
     {:docker_unavailable, [{%{}, ~w(reason)}]},
     {:access_rolled_back,
