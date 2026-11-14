@@ -97,8 +97,11 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   # the page acts on. A registry signature it carries is completed in the
   # same task as the session its request was bound to, read from the store
   # and revalidated, and answers only the sentence the page shows
-  # (`PrismWeb.LoginLive`).
-  @unfocused %{"live/login_live.ex" => {1, [:answer]}}
+  # (`PrismWeb.LoginLive`). The check starts one task of its own, the
+  # account service's terms read, under that session, and awaits it for a
+  # bounded time; its result reaches the page only inside the check's
+  # `:answer`, so the page takes no second answer.
+  @unfocused %{"live/login_live.ex" => {2, [:answer]}}
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/
 
