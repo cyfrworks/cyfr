@@ -1271,7 +1271,7 @@ The installation's first person, made by its setup, is its platform
 administrator, a mark on their person that no other
 path writes: minted
 their own athanor past the server caps, never denied by the allowlist, and able
-to run the operator verbs (`door.*`, `execution.force_release`).
+to run the operator verbs (`door.*`).
 The capability is over the instance: an operator works inside their
 own athanor like everyone else and enters no other — opening another person's is
 refused like anyone's — and there is no cross-athanor reach. They hold no seat in

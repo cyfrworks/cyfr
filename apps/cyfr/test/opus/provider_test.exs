@@ -1552,34 +1552,21 @@ defmodule Opus.ProviderTest do
   end
 
   # ============================================================================
-  # Force Release Action
+  # Slot status
   # ============================================================================
 
-  describe "execution tool - force_release action" do
-    test "the handler releases when reached; the operator gate is the annotation" do
-      # Releasing every athanor's slots is a server-wide side effect. The
-      # `scope: :platform` annotation admits platform admins alone at
-      # dispatch (the gate); the handler itself does not
-      # re-check, so a direct call releases.
+  describe "execution tool - slot status" do
+    test "a platform administrator's status names no athanor: the instance's totals and the focused athanor's count alone" do
       admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
 
-      {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => "force_release"})
-      assert result.force_released == true
-    end
+      {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => "status"})
 
-    test "a platform administrator's status and release name no athanor: the instance's totals and the focused athanor's count alone" do
-      admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
-
-      for action <- ["status", "force_release"] do
-        {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => action})
-
-        refute Map.has_key?(result, :keys), "execution.#{action} named the executing athanors"
-        refute Map.has_key?(result, :holders), "execution.#{action} named the slots' holders"
-        refute Map.has_key?(result, :unreaped), "execution.#{action} named the penalised athanors"
-        assert is_integer(result.key_active)
-        assert is_integer(result.key_unreaped)
-        assert is_integer(result.key_max)
-      end
+      refute Map.has_key?(result, :keys), "execution.status named the executing athanors"
+      refute Map.has_key?(result, :holders), "execution.status named the slots' holders"
+      refute Map.has_key?(result, :unreaped), "execution.status named the penalised athanors"
+      assert is_integer(result.key_active)
+      assert is_integer(result.key_unreaped)
+      assert is_integer(result.key_max)
     end
 
     test "a member's status names no other athanor's unreaped kills, only its own count", %{
@@ -1595,11 +1582,18 @@ defmodule Opus.ProviderTest do
       assert result.key_unreaped == 0
     end
 
-    test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
-      assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
-               Sanctum.Gate.call_external("execution", ctx, %{
-                 "action" => "force_release"
-               })
+    test "no one releases every athanor's slots: the action is unknown, and offered to no one",
+         %{ctx: ctx} do
+      admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
+
+      for caller <- [ctx, admin_ctx] do
+        assert {:error,
+                %Prima.Refusal{
+                  stage: :admission,
+                  reason: {:unknown_action, "execution.force_release"}
+                }} =
+                 Sanctum.Gate.call_external("execution", caller, %{"action" => "force_release"})
+      end
 
       [tool] =
         Sanctum.Visibility.filter_for_context(

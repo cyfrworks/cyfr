@@ -118,7 +118,6 @@ const (
 	DoorRequests            = "requests"
 	DoorResolve             = "resolve"
 	ExecutionCancel         = "cancel"
-	ExecutionForceRelease   = "force_release"
 	ExecutionList           = "list"
 	ExecutionLogs           = "logs"
 	ExecutionReadResource   = "read_resource"
@@ -312,7 +311,7 @@ var Actions = map[string][]string{
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"directory":           {"tombstone"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
-	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
+	"execution":           {"cancel", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
 	"file":                {"accept", "decline", "delete", "list", "move", "offer", "offers", "read", "withdraw", "write"},
 	"invitation":          {"create", "list", "revoke"},
@@ -1451,19 +1450,6 @@ func (args ExecutionCancelArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ExecutionCancel, fields: fields(args)})
-}
-
-// ExecutionForceReleaseArgs carries arguments for execution.force_release.
-type ExecutionForceReleaseArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ExecutionForceReleaseArgs) MarshalJSON() ([]byte, error) {
-	type fields ExecutionForceReleaseArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ExecutionForceRelease, fields: fields(args)})
 }
 
 // ExecutionListArgs carries arguments for execution.list.
