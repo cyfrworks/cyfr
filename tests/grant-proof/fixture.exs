@@ -19,8 +19,8 @@
 #
 #   head USER_ID REF
 #       The head of the person's active owner profile of REF: its
-#       revision, digests, admitted origins, and the hosts, storage paths,
-#       flows and background permission its policy grants.
+#       revision, digests, and the hosts, storage paths, flows and
+#       background permission its policy grants.
 #
 #   plan SESSION_TOKEN REF
 #       The consent walk's plan for REF, as the console asks for it under
@@ -223,7 +223,6 @@ fn args ->
             revision: head.revision,
             commit_digest: head.commit_digest,
             shape_digest: head.shape_digest,
-            admitted_origins: Prima.Origin.to_wire_list(head.admitted_origins),
             domains: (ingress.egress && ingress.egress.domains) || [],
             paths: Prima.Authority.Blob.Edge.paths(ingress),
             flows: Enum.map(ingress.flows, &"#{&1.from} to #{&1.to}")

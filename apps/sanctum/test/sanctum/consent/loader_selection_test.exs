@@ -111,14 +111,13 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         blob_digest: Keyword.get(opts, :blob_digest, Prima.Digest.sha256(policy)),
         resolved_policy: policy,
         activation: %{source_ref => "sha256:act-c"},
-        admitted_origins: Keyword.get(opts, :origins, [:interactive]),
         vault_refs: refs
       })
   end
 
   # The formula's profile: its edge to the catalyst selects the profile
   # above. Its rows are the selection's own unless `refs` names others.
-  defp put_formula!(ctx, selection, origins \\ [:interactive], refs \\ nil) do
+  defp put_formula!(ctx, selection, refs \\ nil) do
     profile = %{
       id: "prof-aqua",
       kind: :owner,
@@ -157,7 +156,6 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         blob_digest: Prima.Digest.sha256(policy),
         resolved_policy: policy,
         activation: @activation,
-        admitted_origins: origins,
         vault_refs: refs || selection_refs(@formula, @catalyst, selection)
       })
 
@@ -300,7 +298,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
           {"until", DateTime.add(DateTime.utc_now(), 3600, :second)}
         ] do
       profile =
-        put_formula!(ctx, bound, [:interactive], [
+        put_formula!(ctx, bound, [
           %{
             binding_key: key,
             vault_entry_id: "vault-anthropic",
@@ -365,7 +363,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
           %{row | binding_digest: "sha256:other"},
           %{row | binding_digest: nil}
         ] do
-      profile = put_formula!(ctx, selection, [:interactive], [stale])
+      profile = put_formula!(ctx, selection, [stale])
 
       assert {:error, {:blob_refs_mismatch, %{blob_only: blob_only, refs_only: refs_only}}} =
                load(ctx, profile)
@@ -375,7 +373,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     end
 
     # A selection with no row of its own is refused the same way.
-    profile = put_formula!(ctx, selection, [:interactive], [])
+    profile = put_formula!(ctx, selection, [])
 
     assert {:error, {:blob_refs_mismatch, %{blob_only: [{:via, ^key, _, _}]}}} =
              load(ctx, profile)
@@ -816,26 +814,13 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     assert %{via: _} = edge_vault(load!(ctx, pinned))
   end
 
-  test "a lender whose grant does not admit the run's origin refuses the whole load, naming it",
-       %{ctx: ctx} do
-    # The key's own profile admits interactive alone; the formula borrowing
-    # it admits programmatic as well.
-    put_catalyst!(ctx, origins: [:interactive])
+  test "a lender lends its key to the borrower's run whatever started it", %{ctx: ctx} do
+    put_catalyst!(ctx)
+    profile = put_formula!(ctx, %{"via" => %{"label" => "default"}})
 
-    profile =
-      put_formula!(ctx, %{"via" => %{"label" => "default"}}, [:interactive, :programmatic])
-
-    assert {:error,
-            {:consent_required, %{profile_id: "prof-claude", current_revision: 1, shape_diff: []}}} =
-             load(%{ctx | origin: :programmatic}, profile)
-
-    # Under an origin both name, the key is lent.
-    assert %{entry_id: "vault-anthropic"} = edge_vault(load!(ctx, profile))
-
-    # Once the lender names it too, the programmatic run borrows the key.
-    put_catalyst!(ctx, origins: [:interactive, :programmatic])
-
-    assert {:ok, authority, _} = load(%{ctx | origin: :programmatic}, profile)
-    assert %{entry_id: "vault-anthropic"} = edge_vault(authority)
+    for origin <- [:interactive, :programmatic, :schedule, :webhook] do
+      assert {:ok, authority, _} = load(%{ctx | origin: origin}, profile)
+      assert %{entry_id: "vault-anthropic"} = edge_vault(authority), inspect(origin)
+    end
   end
 end

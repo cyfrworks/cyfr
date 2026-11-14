@@ -449,12 +449,6 @@ fn args ->
           :invalid_decision
         )
 
-      origins =
-        for origin <- Map.fetch!(spec, "origins") do
-          {:ok, origin} = Prima.Origin.from_wire(origin)
-          origin
-        end
-
       # The source's bindings ride its ingress as one resource: the default
       # with each named account beside it (`Commit`'s `source_resource/1`).
       source_vault =
@@ -537,7 +531,6 @@ fn args ->
           label: "default",
           kind: :owner,
           invoke_mode: :open_inert,
-          origins: origins,
           bindings: Enum.map(bindings, digest_binding),
           selections: Enum.map(selections, digest_selection),
           tool_servers: [],

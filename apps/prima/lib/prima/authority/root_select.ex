@@ -49,6 +49,9 @@ defmodule Prima.Authority.RootSelect do
           required(:status) => status()
         }
 
+  @typedoc "A stored profile row that cannot be decoded, as a source's entries carry it."
+  @type damaged :: %{required(:id) => String.t(), required(:status) => :corrupt}
+
   @type select_error ::
           :no_profile
           | {:not_found, String.t()}
@@ -106,6 +109,36 @@ defmodule Prima.Authority.RootSelect do
   end
 
   def decode(_), do: :default
+
+  @doc """
+  The candidates a selection chooses among, from a source's stored profile
+  entries. A row that cannot be decoded (`t:damaged/0`) is unavailable,
+  never skipped: a selection by kind or label could be the one it would
+  have answered, so it refuses every selection with
+  `{:error, {:corrupt, {:profile, id}}}`, naming the first damaged row,
+  but one pinned to another profile's id (`pinned`), which chooses among
+  the rows that decode. Every reader that picks the profile a run stands
+  on asks this before `select/2`.
+  """
+  @spec candidates([profile_summary() | damaged()], String.t() | nil) ::
+          {:ok, [profile_summary()]} | {:error, {:corrupt, {:profile, String.t()}}}
+  def candidates(entries, pinned) when is_list(entries) do
+    case Enum.filter(entries, &(&1.status == :corrupt)) do
+      [] ->
+        {:ok, entries}
+
+      damaged ->
+        bearing =
+          if is_binary(pinned),
+            do: Enum.find(damaged, &(&1.id == pinned)),
+            else: hd(damaged)
+
+        case bearing do
+          nil -> {:ok, entries -- damaged}
+          %{id: id} -> {:error, {:corrupt, {:profile, id}}}
+        end
+    end
+  end
 
   @doc """
   Select the root profile: by explicit id or label, or — with `:default` —

@@ -24,7 +24,6 @@ defmodule Prism.ConsentChoices do
   until each has an entry field (`answer_map/5`).
   """
 
-  @interactive "interactive"
   @integer_limits ~w(max_memory_bytes max_request_size max_response_size max_concurrent_tasks)
   @duration_limits ~w(timeout batch_timeout)
 
@@ -148,10 +147,6 @@ defmodule Prism.ConsentChoices do
         is_nil(choice.lifetime) or map_pending?(choice)
       end)
 
-  def origins_of(origins, _plan) when is_list(origins) and origins != [], do: in_order(origins)
-  def origins_of(_none, %{head_origins: [_ | _] = origins}), do: in_order(origins)
-  def origins_of(_none, _plan), do: [@interactive]
-
   def subset_of(subset) when is_map(subset), do: subset
   def subset_of(_none), do: %{}
 
@@ -167,12 +162,6 @@ defmodule Prism.ConsentChoices do
 
   def session_end_of(%DateTime{} = at), do: at
   def session_end_of(_none), do: nil
-
-  # The origins named, `interactive` always among them, in the enum's order.
-  def in_order(origins) do
-    named = [@interactive | Enum.map(origins, &to_string/1)]
-    Enum.filter(Prima.Origin.spellings(), &(&1 in named))
-  end
 
   @doc """
   The choices a grant opens with, by slot. A re-grant never opens wider
@@ -410,13 +399,12 @@ defmodule Prism.ConsentChoices do
   dependencies' selections with their entries, lifetimes, `renew` and the
   field map an entry is bound under where the choice holds one
   (`fields`; a lending profile's label never sends one), each edge's
-  default first and then its named accounts under their names, the
-  origins, and the label and narrowing when there are any, as
+  default first and then its named accounts under their names, and the
+  label and narrowing when there are any, as
   `profile.preview` and `profile.commit` take them.
   """
-  @spec decisions(String.t(), String.t() | nil, [String.t()], map(), %{slot() => choice()}) ::
-          map()
-  def decisions(ref, label, origins, subset, choices) do
+  @spec decisions(String.t(), String.t() | nil, map(), %{slot() => choice()}) :: map()
+  def decisions(ref, label, subset, choices) do
     # A binding whose lifetime or field map the person has yet to choose is
     # no decision, nor an account with no entry chosen or no name it can
     # carry.
@@ -438,7 +426,7 @@ defmodule Prism.ConsentChoices do
         for {{:account, {:dep, from, dep}, _ref}, choice} <- accounts,
             do: Map.put(selection(from, dep, choice), "name", choice.name)
 
-    %{"ref" => ref, "bindings" => bindings, "origins" => origins}
+    %{"ref" => ref, "bindings" => bindings}
     |> then(&if selections == [], do: &1, else: Map.put(&1, "selections", selections))
     |> Prima.MapUtil.put_present("label", label)
     |> then(&if subset == %{}, do: &1, else: Map.put(&1, "subset", subset))

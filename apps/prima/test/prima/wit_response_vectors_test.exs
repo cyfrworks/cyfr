@@ -27,7 +27,8 @@ defmodule Prima.WitResponseVectorsTest do
   @atoms Map.new(
            ~w(busy cancelled consent_required control_plane_lost enospc error failed filed
               flow_not_declared guest_error invalid_objects lost message_too_long no_agent
-              not_found not_member ok oops outside revoked setup_required some_internal_state
+              no_grant not_found not_member ok oops outside revoked setup_required shape_moved
+              some_internal_state
               stale_revision timeout type unavailable
               dispatch_error domain_blocked flow_blocked http_error request_failed
               resource_limit storage_error storage_unavailable unknown)a,

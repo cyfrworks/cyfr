@@ -2753,8 +2753,6 @@ type ProfileCommitArgsDecisions struct {
 	PublishFrom    Field[string]                                      `json:"publish_from,omitzero"`
 	NeedIds        Field[[]string]                                    `json:"need_ids,omitzero"`
 	DurableStorage Field[bool]                                        `json:"durable_storage,omitzero"`
-	// The origins the grant admits; absent, interactive alone
-	Origins Field[[]string] `json:"origins,omitzero"`
 	// Per consent-graph component, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
 	Subset Field[map[string]ProfileCommitArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }
@@ -3134,8 +3132,6 @@ type ProfilePreviewArgsDecisions struct {
 	PublishFrom    Field[string]                                       `json:"publish_from,omitzero"`
 	NeedIds        Field[[]string]                                     `json:"need_ids,omitzero"`
 	DurableStorage Field[bool]                                         `json:"durable_storage,omitzero"`
-	// The origins the grant admits; absent, interactive alone
-	Origins Field[[]string] `json:"origins,omitzero"`
 	// Per consent-graph component, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
 	Subset Field[map[string]ProfilePreviewArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }

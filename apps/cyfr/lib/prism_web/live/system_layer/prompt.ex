@@ -21,12 +21,12 @@ defmodule PrismWeb.SystemLayer.Prompt do
       `profile.plan` answers it (`plan_token`, `expected_consent_revision`,
       the needs and the vault entries that can meet them, its rows), the
       `preview` of the decisions — a `Prima.ConsentPreview` (`v`, `rows`,
-      `origins`, `commit_digest`, and `removed`, the head's bindings the
+      `commit_digest`, and `removed`, the head's bindings the
       grant would remove) with the `proof` a commit presents, or
       `nil` for a plan whose closure is `unresolved`, which has nothing to
       preview or commit — the `decisions` payload (`%{"ref" => ref,
-      "bindings" => [...]}`, with the `selections`, `origins`, `subset` and
-      `label` it names), committed through `profile.commit`, and optionally
+      "bindings" => [...]}`, with the `selections`, `subset` and `label`
+      it names), committed through `profile.commit`, and optionally
       `session_expires_at`, when the person's session ends (RFC 3339, as
       `session.whoami` answers it), which the sheet's "this session"
       lifetime is held to, `suggestion_refused`, the home's sentence
@@ -398,7 +398,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
          %{
            v: v,
            rows: rows,
-           origins: origins,
            commit_digest: digest,
            removed: removed,
            proof: proof
@@ -411,7 +410,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
       Prima.ConsentPreview.decode(%{
         "v" => v,
         "rows" => rows,
-        "origins" => origins,
         "commit_digest" => digest,
         "removed" => removed
       })
@@ -422,14 +420,10 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp decisions?(%{"ref" => ref, "bindings" => bindings} = decisions, ref)
        when is_list(bindings) do
-    origins?(Map.get(decisions, "origins")) and is_map(Map.get(decisions, "subset", %{})) and
-      label?(Map.get(decisions, "label"))
+    is_map(Map.get(decisions, "subset", %{})) and label?(Map.get(decisions, "label"))
   end
 
   defp decisions?(_decisions, _ref), do: false
-
-  defp origins?(nil), do: true
-  defp origins?(origins), do: match?({:ok, _origins}, Prima.Origin.parse_list(origins))
 
   defp label?(nil), do: true
   defp label?(label), do: is_binary(label) and label != ""
