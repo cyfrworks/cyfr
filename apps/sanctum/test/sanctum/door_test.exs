@@ -27,6 +27,16 @@ defmodule Sanctum.DoorTest do
   defp uid(n), do: "github|https://github.com|door#{n}"
   defp identifier(n), do: "per_" <> Prima.Digest.sha256_hex("door-#{n}")
 
+  # `fun` run while `table` cannot be read, renamed away and back in the
+  # test's own transaction (the sandbox keeps a failed read from spoiling
+  # it on PostgreSQL).
+  defp unreadable(table, fun) do
+    Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+    result = fun.()
+    Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+    result
+  end
+
   # A person with no identity row: no admission makes one, and the door
   # admits no one by it.
   defp local!(n) do
@@ -356,6 +366,65 @@ defmodule Sanctum.DoorTest do
       assert {:error, :platform_admin} = Store.deny("identifier", identifier(31), "ops")
       assert [%{effect: "allow"}] = Store.list()
       assert {:ok, :allowed} = Door.admit_person(operator)
+    end
+
+    test "the platform administrator's allow is never removed; anyone else's is" do
+      operator = local!(36)
+      enrolled!(operator, 36)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
+      {:ok, own} = Store.allow("identifier", identifier(36), "setup")
+      {:ok, other} = Store.allow("identifier", identifier(37), "ops")
+
+      assert {:error, :platform_admin} = Store.remove(own.id)
+      assert {:ok, :allowed} = Door.admit_person(operator)
+
+      assert :ok = Store.remove(other.id)
+      assert [%{id: id}] = Store.list()
+      assert id == own.id
+    end
+
+    @tag :capture_log
+    test "a guard that cannot read the person refuses, removing nothing and writing no deny" do
+      operator = local!(39)
+      enrolled!(operator, 39)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
+      {:ok, own} = Store.allow("identifier", identifier(39), "setup")
+
+      # The identity row unreadable, then the person's row: neither tells
+      # whether the entry names the administrator.
+      for table <- ~w(person_identities users) do
+        assert {:error, :unavailable} = unreadable(table, fn -> Store.remove(own.id) end)
+
+        assert {:error, :unavailable} =
+                 unreadable(table, fn -> Store.deny("identifier", identifier(39), "ops") end)
+
+        assert [%{id: id, effect: "allow"}] = Store.list()
+        assert id == own.id
+      end
+
+      assert {:error, :unavailable} =
+               unreadable("users", fn -> Store.deny("person", operator.id, "ops") end)
+
+      assert [%{effect: "allow"}] = Store.list()
+    end
+
+    @tag :capture_log
+    test "an allow whose people cannot be read stands and says none was restored" do
+      denied = remote!(40)
+      {:ok, _} = Sanctum.Tenancy.Users.deny(denied)
+      ctx = Sanctum.TestContext.local() |> Map.put(:platform_admin, true)
+
+      assert {:error, %Prima.Refusal{message: message}} =
+               unreadable("person_identities", fn ->
+                 Sanctum.Providers.Door.handle(ctx, %{
+                   "action" => "allow",
+                   "value" => identifier(40)
+                 })
+               end)
+
+      assert message =~ "Sign-in is allowed, but the people it names could not be read"
+      assert {:ok, true} = Store.allowed("identifier", identifier(40))
+      assert {:ok, %{status: "denied"}} = Sanctum.Tenancy.Users.get(denied.id)
     end
 
     test "concurrent requests and allows for one identifier leave one row each, and nobody sees a conflict" do

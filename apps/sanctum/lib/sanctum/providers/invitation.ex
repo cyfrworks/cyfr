@@ -14,7 +14,9 @@ defmodule Sanctum.Providers.Invitation do
   `<this CYFR's address>/invite#<code>` (`Sanctum.origin/0`). The
   code travels in the fragment, so no server log records it; both keys
   are ones the request log redacts (`Prima.Sanitizer`), and the code is
-  never stored or shown again. `revoke` closes one still open, as its
+  never stored or shown again. While this CYFR's address is this
+  computer's loopback, the answer carries `local_only: true`, since the
+  link opens nowhere else; otherwise it has no such key. `revoke` closes one still open, as its
   issuer or the administrator; `list` answers every invitation to the
   administrator and the caller's own to anyone else. Each is a person's
   act: an API-key context is refused. An answer carries no null: an
@@ -85,12 +87,15 @@ defmodule Sanctum.Providers.Invitation do
   def handle(%Context{} = ctx, %{"action" => "create"} = args) do
     with {:ok, %{invitation: invitation, code: code}} <-
            Invitations.create(ctx, Map.get(args, "thread_id"), Map.get(args, "name")) do
-      {:ok,
-       %{
-         invitation: render(invitation),
-         code: code,
-         invitation_url: Sanctum.origin() <> "/invite#" <> code
-       }}
+      origin = Sanctum.origin()
+
+      answer = %{
+        invitation: render(invitation),
+        code: code,
+        invitation_url: origin <> "/invite#" <> code
+      }
+
+      {:ok, if(local_only?(origin), do: Map.put(answer, :local_only, true), else: answer)}
     end
   end
 
@@ -111,6 +116,13 @@ defmodule Sanctum.Providers.Invitation do
     do: {:error, {:unknown_action, "invitation.#{action}"}}
 
   def handle(_ctx, _args), do: {:error, :action_missing}
+
+  defp local_only?(origin) do
+    case URI.parse(origin) do
+      %URI{host: host} when is_binary(host) -> Sanctum.loopback_host?(host)
+      _unparsed -> false
+    end
+  end
 
   defp render(invitation), do: Map.update!(invitation, :expires_at, &DateTime.to_iso8601/1)
 end

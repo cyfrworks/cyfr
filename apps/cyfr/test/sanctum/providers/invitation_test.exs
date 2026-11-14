@@ -100,6 +100,39 @@ defmodule Sanctum.Providers.InvitationTest do
     assert Arca.Repo.aggregate(Arca.Schemas.Invitation, :count) == 1
   end
 
+  test "create says when the link opens only on this computer, and says nothing where it opens elsewhere",
+       %{ops: ops} do
+    admin = ctx(ops, platform_admin: true)
+
+    Prima.Test.Env.put_app_env(:sanctum, :public_url, "http://localhost:4010")
+
+    assert {:ok, %{local_only: true, invitation_url: "http://localhost:4010/invite#" <> _}} =
+             call(admin, %{"action" => "create"})
+
+    Prima.Test.Env.put_app_env(:sanctum, :public_url, "http://127.0.0.1:4000")
+    assert {:ok, %{local_only: true}} = call(admin, %{"action" => "create"})
+
+    Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://cyfr.example.com")
+
+    assert {:ok, %{invitation_url: "https://cyfr.example.com/invite#" <> _} = created} =
+             call(admin, %{"action" => "create"})
+
+    refute Map.has_key?(created, :local_only)
+  end
+
+  test "list answers the name an invitation offers, and none where it offers none", %{ops: ops} do
+    admin = ctx(ops, platform_admin: true)
+    {:ok, %{invitation: named}} = call(admin, %{"action" => "create", "name" => "uj-wren"})
+    {:ok, %{invitation: unnamed}} = call(admin, %{"action" => "create"})
+
+    assert %{name: "uj-wren"} = named
+    refute Map.has_key?(unnamed, :name)
+
+    {:ok, %{invitations: listed}} = call(admin, %{"action" => "list"})
+    assert Enum.find(listed, &(&1.id == named.id)) == named
+    assert Enum.find(listed, &(&1.id == unnamed.id)) == unnamed
+  end
+
   test "an invitation naming no thread carries no thread keys and no null", %{ops: ops} do
     assert {:ok, %{invitation: invitation} = created} =
              call(ctx(ops, platform_admin: true), %{"action" => "create"})
