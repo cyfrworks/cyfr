@@ -4,10 +4,9 @@
 defmodule Aqua.Runner.RecoveryPolicyTest do
   @moduledoc """
   The recovery cap is the assistant's policy and the turn row enforces
-  it: a turn stores the policy's limit when it starts, each takeover or
-  recovery spends one of it under the turn's lock, a limit a caller names
-  later never widens it, and the count is the turn's own. Of a recovery
-  and a takeover racing from one fence, one lands.
+  it: a turn stores the policy's limit when it starts, each takeover
+  spends one of it under the turn's lock, and the count is the turn's
+  own. Of two takeovers racing from one fence, one lands.
   """
 
   use ExUnit.Case, async: false
@@ -76,9 +75,6 @@ defmodule Aqua.Runner.RecoveryPolicyTest do
 
     assert {:error, :recovery_exhausted} = Tape.bump_recovery(ctx, last)
 
-    # A caller naming a wider limit changes nothing: the row's is the one.
-    assert {:error, :recovery_exhausted} = Tape.recover(ctx, last, 100)
-
     assert {:ok, %{recovery_attempts: 3, recovery_limit: 3}} = Tape.turn(ctx, turn.id)
   end
 
@@ -94,14 +90,11 @@ defmodule Aqua.Runner.RecoveryPolicyTest do
     assert {:ok, %{recovery_attempts: 1}} = Tape.bump_recovery(ctx, fresh)
   end
 
-  test "of a recovery and a takeover from one fence, one lands", %{ctx: ctx} do
+  test "of two takeovers from one fence, one lands", %{ctx: ctx} do
     turn = started!(ctx)
 
     results =
-      [
-        fn -> Tape.recover(ctx, turn, RecoveryPolicy.max_attempts()) end,
-        fn -> Tape.bump_recovery(ctx, turn) end
-      ]
+      [fn -> Tape.bump_recovery(ctx, turn) end, fn -> Tape.bump_recovery(ctx, turn) end]
       |> Enum.map(&Task.async/1)
       |> Enum.map(&Task.await(&1, 25_000))
 
