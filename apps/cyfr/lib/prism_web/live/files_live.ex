@@ -395,9 +395,11 @@ defmodule PrismWeb.FilesLive do
     end
   end
 
-  # What the Inbox keeps of an offer accepted here: its files, who sent
-  # it, by the name the page showed, the folder it was accepted into, and
-  # its delivery as the acceptance's receipts say. The folder an answer
+  # What the Inbox keeps of an offer accepted here: its files, as the
+  # acceptance's own receipts name them and with those already published
+  # counted as landed; who sent it, by the name the page showed (the
+  # answer does not carry the sender); the folder it was accepted into;
+  # and its delivery as the receipts say. The folder an answer
   # names, `<into>/<offer>[-<n>]/`, is where the files are only once every
   # receipt is published; its parent is the folder accepted into.
   defp accepted(%{offers: offers, people: people}, offer_id, folder, receipts) do
@@ -408,8 +410,14 @@ defmodule PrismWeb.FilesLive do
       offer_id: offer_id,
       into: folder |> String.trim_trailing("/") |> Path.dirname(),
       from: person(people, offer && offer.sender),
-      files: if(offer, do: offer.files, else: []),
-      landed: MapSet.new(),
+      files: Enum.map(receipts, &Map.take(&1, [:filename, :size])),
+      landed:
+        for(
+          %{status: status, filename: name} <- receipts,
+          status in ~w(published completed),
+          into: MapSet.new(),
+          do: name
+        ),
       delivery: delivery(Enum.map(receipts, & &1.status), folder)
     }
   end

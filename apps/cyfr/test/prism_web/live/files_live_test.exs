@@ -660,6 +660,49 @@ defmodule PrismWeb.FilesLiveTest do
       assert has_element?(view, "#{card} button", "Open")
     end
 
+    test "an acceptance made while the offers could not be read expects the files its own " <>
+           "receipts name, landing only once every one has",
+         %{conn: conn, ctx: ctx} do
+      sender = sharing_person!(ctx, name: "Sam Sender")
+      put!(sender, "a.txt", "alpha")
+      put!(sender, "b.txt", "beta")
+
+      {:ok, %{offer_id: offer_id}} =
+        call(sender.ctx, "offer", %{"paths" => ["data/a.txt", "data/b.txt"], "to" => ctx.user_id})
+
+      {view, _html} = mount_athanor(conn, "/files")
+      stall_publication!()
+      settled(view)
+      card = "#accepted-#{offer_id}"
+
+      # 1. A read of the offers fails; the page holds no offers.
+      offers_unreadable(fn ->
+        send(view.pid, :load_offers)
+        settled(view)
+      end)
+
+      assert render(view) =~ "Your offers could not be read."
+
+      # 2. The acceptance a form drawn before then sends: two receipts, both waiting.
+      render_submit(view, "accept", %{"offer_id" => offer_id})
+      assert has_element?(view, card, "still landing")
+      assert has_element?(view, card, "a.txt")
+      assert has_element?(view, card, "b.txt")
+
+      # 3. One of the two lands: still landing, no Open.
+      send(view.pid, Cyfr.Bus.FileOffer.new(:landed, offer_id, sender.ctx.user_id, "a.txt"))
+      settled(view)
+      assert has_element?(view, card, "still landing")
+      refute has_element?(view, card, "landed in")
+      refute has_element?(view, "#{card} button", "Open")
+
+      # 4. The other fails: the card says so.
+      send(view.pid, Cyfr.Bus.FileOffer.new(:failed, offer_id, sender.ctx.user_id, "b.txt"))
+      settled(view)
+      assert has_element?(view, card, "could not be delivered")
+      refute has_element?(view, "#{card} button", "Open")
+    end
+
     test "a read that errors leaves an accepted card as it was", %{conn: conn, ctx: ctx} do
       sender = sharing_person!(ctx, name: "Sam Sender")
       put!(sender, "late.csv", "landed")
