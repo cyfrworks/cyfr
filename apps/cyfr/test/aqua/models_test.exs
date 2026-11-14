@@ -271,6 +271,7 @@ defmodule Aqua.ModelsTest do
     chat_brain!(ctx, "keyed", %{
       "api_key" => %{
         "type" => "api_key:keyed.test",
+        "reason" => "to call the model with your key",
         "fields" => ["KEYED_API_KEY"],
         "required" => true,
         "hosts" => ["api.keyed.test"]
@@ -295,6 +296,7 @@ defmodule Aqua.ModelsTest do
     chat_brain!(ctx, "keyed", %{
       "api_key" => %{
         "type" => "api_key:keyed.test",
+        "reason" => "to call the model with your key",
         "fields" => ["KEYED_API_KEY"],
         "required" => true,
         "hosts" => ["api.keyed.test"]
