@@ -1593,6 +1593,59 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     refute html =~ "now wants"
   end
 
+  # An agent's provider search is a tool its grant carries: switched on or
+  # off, its row is named by what it is, never by its id.
+  test "an agent's provider search is worded as what it is, on and off" do
+    for {added, removed, sentence} <- [
+          {["native_search"], [],
+           "asks for its provider's own web search, which your grant does not give"},
+          {[], ["native_search"], "no longer asks for its provider's own web search"}
+        ] do
+      walk = %{
+        ref: "agent:local.sheet-search",
+        plan: %{
+          plan_token: "not-read",
+          expected_consent_revision: 1,
+          needs: [],
+          candidates: [],
+          rows: [],
+          shape_diff: [
+            %{
+              node: "agent:local.sheet-search",
+              capability: "native_search",
+              change: :changed,
+              added: added,
+              removed: removed,
+              new: false,
+              dropped: false
+            }
+          ]
+        },
+        preview: %{v: 1, rows: [], proof: "p", commit_digest: "d"},
+        decisions: %{"ref" => "agent:local.sheet-search", "bindings" => []}
+      }
+
+      html =
+        render_component(PrismWeb.ConsentSheetComponent,
+          id: "consent-sheet",
+          ref: walk.ref,
+          walk: walk,
+          context: oidc_ctx()
+        )
+
+      text =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-test="grant-delta-node"] li))
+        |> LazyHTML.text()
+        |> String.split()
+        |> Enum.join(" ")
+
+      assert text == "Web search: " <> sentence
+      refute html =~ "native_search"
+    end
+  end
+
   test "what changed is grouped by node: the app's own first, then each dependency under its " <>
          "ref, a new one as a new dependency and a dropped one as no longer used" do
     app = "reagent:local.sheet-delta-app"
