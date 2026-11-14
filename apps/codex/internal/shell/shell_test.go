@@ -289,8 +289,8 @@ func TestSetup_ARestartedBoxFinishesWithTheRecoveryCode(t *testing.T) {
 		t.Fatal("a wrong code was not said")
 	}
 	w := again.post("/resume", url.Values{"code": {strings.ToLower(code)}})
-	if loc := w.Header().Get("Location"); loc != "/" {
-		t.Fatalf("resume answered %q", loc)
+	if w.Code != http.StatusOK || proofIn(w) == "" || !strings.Contains(body(w), "CYFR is locked") {
+		t.Fatalf("resume answered %d %q", w.Code, w.Header().Get("Location"))
 	}
 	if !strings.Contains(again.page(), "CYFR is locked") {
 		t.Fatalf("the finished account does not ask the passphrase:\n%s", again.page())

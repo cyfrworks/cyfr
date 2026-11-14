@@ -15,6 +15,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/codex/internal/account"
+	"github.com/cyfr/codex/internal/holder"
 )
 
 // The listener is literal loopback: an address, never a name.
@@ -457,5 +460,66 @@ func TestServer_AChipBoxDrawsNoPassphrase(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" || w.Body.Len() != 0 || b.shell.passphrase != "" ||
 		!strings.Contains(page, "Choose a six-digit PIN") || strings.Contains(page, `action="/passphrase"`) {
 		t.Fatalf("a draw on a chip box answered %d %q:\n%s", w.Code, w.Header().Get("Location"), page)
+	}
+}
+
+// forged is a request a local program sends naming the shell's Host and
+// Origin, with no PIN and no proof.
+func (b *box) forged(path string, fields url.Values) *httptest.ResponseRecorder {
+	return b.do(http.MethodPost, path, Origin, fields)
+}
+
+// No request without the PIN that just opened the key or the current
+// proof acts with what the shell holds for the page that typed it: the
+// pending account's recovery key, its claim, its acceptance, its name.
+// Each case sets the person's own flow to the state the action acts in,
+// then a local program asks; the account service hears nothing.
+func TestServer_NoActionUsesTheHeldKeysWithoutTheProof(t *testing.T) {
+	type state struct {
+		writes            int
+		holder, accepted  string
+		identifier, named string
+	}
+	read := func(home *fakeHome, b *box, name string) state {
+		rec, _ := holder.Load(b.record)
+		id := ""
+		if rec != nil {
+			id = rec.Identifier
+		}
+		pending := b.shell.View().Name
+		return state{writes: home.accounts.Writes, holder: home.accounts.Holder(name), accepted: home.accounts.Accepted(id), identifier: id, named: pending}
+	}
+	cases := []struct {
+		name   string
+		reach  func(home *fakeHome, b *box)
+		path   string
+		fields url.Values
+		claim  string
+	}{
+		{"the recovery code shown, a submit", func(home *fakeHome, b *box) { b.setUp("alice") },
+			"/saved", url.Values{"x": {"y"}}, "alice"},
+		{"a name taken meanwhile, another name", func(home *fakeHome, b *box) {
+			b.setUp("alice")
+			home.accounts.Hold("alice", "per_"+strings.Repeat("0", 64))
+			b.post("/saved", nil)
+		}, "/name", url.Values{"name": {"attacker-name"}}, "attacker-name"},
+		{"the terms changed, their acceptance", func(home *fakeHome, b *box) {
+			home.accounts.Policy = &account.Policy{Version: "2026-10", URL: "https://cyfr.example/terms"}
+			b.page()
+			p := b.shown()
+			b.post("/setup", url.Values{"name": {"alice"}, "secret": {p}, "again": {p}, "accept": {"yes"}})
+			home.accounts.Policy = &account.Policy{Version: "2026-11", URL: "https://cyfr.example/terms"}
+			b.post("/saved", nil)
+		}, "/saved", url.Values{"accept": {"yes"}}, "alice"},
+	}
+	for _, c := range cases {
+		home := newFakeHome(t)
+		b := newBox(t, home, t.TempDir())
+		c.reach(home, b)
+		before := read(home, b, c.claim)
+		b.forged(c.path, c.fields)
+		if after := read(home, b, c.claim); after != before {
+			t.Errorf("%s: a local program's %s changed %+v to %+v", c.name, c.path, before, after)
+		}
 	}
 }

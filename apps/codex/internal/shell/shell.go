@@ -884,6 +884,26 @@ func (s *Shell) begin(c account.Config, name, accepted string) {
 func (s *Shell) Saved(ctx context.Context, accepted string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.saved(ctx, accepted)
+}
+
+// asPage runs act for a page's request only when it carries the current
+// proof, compared under the shell's one lock, which act then runs under:
+// every page action that acts with what the shell holds for the page that
+// typed the PIN (the held key, an account's recovery key, its claim, its
+// acceptance, its name) passes through here. Without the proof nothing is
+// done, and the page says so.
+func (s *Shell) asPage(proof []byte, act func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.holds(proof) {
+		s.say("Only the page this %s's PIN or passphrase was typed on can do that. Nothing was sent.", s.cfg.Noun)
+		return
+	}
+	act()
+}
+
+func (s *Shell) saved(ctx context.Context, accepted string) {
 	s.refresh()
 	m := s.making
 	if m == nil || m.taken || s.listedElsewhere(m) {
@@ -915,26 +935,45 @@ func (s *Shell) Saved(ctx context.Context, accepted string) {
 func (s *Shell) Resume(ctx context.Context, code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.resume(ctx, code)
+}
+
+// resumeByPage is Resume for a page: the recovery code typed is the
+// account's own authority, so a code that re-derives the account's key
+// issues the proof, which the account's later steps (a name, the terms)
+// take. It answers that proof, or "".
+func (s *Shell) resumeByPage(ctx context.Context, code string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.resume(ctx, code) {
+		return ""
+	}
+	return s.issueProof()
+}
+
+// resume answers whether code re-derived the account's recovery key.
+func (s *Shell) resume(ctx context.Context, code string) bool {
 	s.refresh()
 	if s.unfinished == nil || s.making != nil || s.rec == nil || s.rec.Identifier != "" {
-		return
+		return false
 	}
 	identifier, secret, err := account.DecodeRecoveryCode(code)
 	switch {
 	case errors.Is(err, account.ErrTypo):
 		s.say("That recovery code has a typo. Check it and type it again.")
-		return
+		return false
 	case err != nil:
 		s.say("That is not a recovery code.")
-		return
+		return false
 	case identifier != s.unfinished.Identifier:
 		clear(secret)
 		s.say("That is another account's recovery code.")
-		return
+		return false
 	}
 	s.making = &making{attempt: *s.unfinished, key: account.RecoveryKey(secret), saved: true}
 	clear(secret)
 	s.submit(ctx)
+	return true
 }
 
 // Rename takes another name for the account being made, whose name
@@ -942,6 +981,10 @@ func (s *Shell) Resume(ctx context.Context, code string) {
 func (s *Shell) Rename(ctx context.Context, name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.rename(ctx, name)
+}
+
+func (s *Shell) rename(ctx context.Context, name string) {
 	s.refresh()
 	m := s.making
 	if m == nil || !m.taken || s.listedElsewhere(m) {
@@ -1030,6 +1073,23 @@ var pollEvery = 2 * time.Second
 func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.enroll(ctx, name, wait, true)
+}
+
+// enrollByPage is Enroll for a page. Reading the account's public log and
+// keeping which account lists this key needs no authority; opening the
+// first connection with a key held since a setup does, so only a request
+// carrying the current proof, compared under this lock, opens it, and any
+// other leaves the device locked for its PIN.
+func (s *Shell) enrollByPage(ctx context.Context, name string, wait time.Duration, proof []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enroll(ctx, name, wait, s.holds(proof))
+}
+
+// enroll is Enroll; useHeld is whether the first connection may open with
+// a key held since a setup.
+func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, useHeld bool) {
 	s.refresh()
 	if s.rec == nil || s.rec.Identifier != "" || s.making != nil || s.unfinished != nil {
 		return
@@ -1083,7 +1143,9 @@ func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 	case s.rec == nil || !bytes.Equal(s.rec.PublicKey, pub):
 		return
 	case s.rec.Identifier == found.Identifier:
-		s.firstConnection(ctx)
+		if useHeld {
+			s.firstConnection(ctx)
+		}
 		return
 	case s.rec.Identifier != "":
 		s.say("This machine's key is on another account already, added by another %s here.", s.cfg.Noun)
@@ -1094,7 +1156,9 @@ func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 		s.say("This %s could not save its account (%v). Try again.", s.cfg.Noun, err)
 		return
 	}
-	s.firstConnection(ctx)
+	if useHeld {
+		s.firstConnection(ctx)
+	}
 }
 
 // CheckListed reads the log of the account the key's record names, before

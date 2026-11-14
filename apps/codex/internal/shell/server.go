@@ -53,6 +53,12 @@ const Origin = "http://" + Listen
 // opens the key (/setup, /create, /unlock) is a page carrying the proof
 // that opening issued, which keepScript keeps in sessionStorage, private
 // to this origin, port included, and puts in every form's proof field.
+// So does what acts with what the shell holds for that page, the held key
+// and an account's recovery key, its claim, its acceptance and its name:
+// /saved and /name pass through Shell.asPage, and /enroll opens a first
+// connection with a held key only for the proof, each checked under the
+// shell's one lock where it acts. A typed recovery code is the account's
+// own authority: /resume, when it re-derives the key, issues the proof.
 // Never a cookie: 127.0.0.1's cookies go to every port on it, so another
 // local listener would collect and replay one. A setup's passphrase, the
 // secret-to-be on a machine without a chip, is shown only in the answer to
@@ -200,16 +206,16 @@ var actions = map[string]action{
 		srv.onward(ctx, w, r, f, proof)
 	}},
 	"/enroll": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Enroll(ctx, string(f.get("name")), enrollWait)
+		srv.Shell.enrollByPage(ctx, string(f.get("name")), enrollWait, f.get("proof"))
 		srv.onward(ctx, w, r, f, "")
 	}},
 	"/saved": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Saved(ctx, srv.accepted(f))
+		accepted := srv.accepted(f)
+		srv.Shell.asPage(f.get("proof"), func() { srv.Shell.saved(ctx, accepted) })
 		srv.onward(ctx, w, r, f, "")
 	}},
 	"/resume": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Resume(ctx, string(f.get("code")))
-		srv.onward(ctx, w, r, f, "")
+		srv.onward(ctx, w, r, f, srv.Shell.resumeByPage(ctx, string(f.get("code"))))
 	}},
 	// The account's log is read before the key is opened, as cyfr login
 	// reads it: a key the log no longer lists shows its code again, and
@@ -223,7 +229,7 @@ var actions = map[string]action{
 		srv.onward(ctx, w, r, f, proof)
 	}},
 	"/name": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Rename(ctx, string(f.get("name")))
+		srv.Shell.asPage(f.get("proof"), func() { srv.Shell.rename(ctx, string(f.get("name"))) })
 		srv.onward(ctx, w, r, f, "")
 	}},
 	"/open": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {

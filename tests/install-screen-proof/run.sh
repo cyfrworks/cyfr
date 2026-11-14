@@ -307,9 +307,12 @@ screen_signed_in() {
   local id
   check "a local program reading the page is shown neither the recovery code nor its QR, only the form the screen's page asks for it with" \
     sh -c '! grep -qE "CYFR-|<svg" "$1" && grep -qF "<form id=\"reveal\" method=\"post\" action=\"/recovery\">" "$1"' sh "$GUEST_DIR/shell-recovery.html"
+  # A local program naming the shell's Host and Origin asks the recovery
+  # page's "I saved it", without the proof: the check below holds after it.
+  guest_ssh "curl -s -o /dev/null --max-time 30 -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/saved" >/dev/null 2>&1
   guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/v1/handles/alice" >"$GUEST_DIR/handle-shown.json" 2>&1
   guest_ssh 'cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder-shown.json" 2>&1
-  check "nothing reached the account service while the code is shown: no one holds alice, and the box's key names no account" \
+  check "nothing reached the account service while the code is shown, a local program's I saved it included: no one holds alice, and the box's key names no account" \
     python3 -I -c '
 import json, sys
 handle, holder = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
