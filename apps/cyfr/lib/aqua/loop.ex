@@ -666,7 +666,7 @@ defmodule Aqua.Loop do
       messages: messages,
       tools: spec.tools,
       capabilities: spec.capabilities,
-      native_search?: Map.get(spec.policy, "native_search") == "auto",
+      native_search?: Request.native_search?(spec.policy, spec.authority),
       session: state.session,
       options: spec.brain_options
     )

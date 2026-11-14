@@ -268,11 +268,24 @@ defmodule Aqua.Loop.Request do
   end
 
   @doc """
+  Whether a turn asks the provider for its own search: the agent's policy
+  turns it on (`native_search: auto`) and the grant the turn runs under
+  carries it on the agent's ingress (`Compendium.AgentSource`). A grant
+  that lacks it never searches, whatever the policy says.
+  """
+  @spec native_search?(map(), Prima.Authority.t()) :: boolean()
+  def native_search?(policy, %Prima.Authority{resources: %Prima.Authority.Blob.Edge{tools: tools}})
+      when is_map(policy) and is_list(tools),
+      do: Map.get(policy, "native_search") == "auto" and "native_search" in tools
+
+  def native_search?(_policy, _authority), do: false
+
+  @doc """
   The request: `model`, `system`, `messages`, `tools`, `provider_tools`
   and `max_tokens`, and `session` and `options` when given. `opts`:
   `:model`, `:system`, `:tools`, `:messages`, `:capabilities` (for the
   output ceiling, the provider tools and the options the brain declares),
-  `:native_search?` (the policy grants `native_search: auto`),
+  `:native_search?` (`native_search?/2`),
   `:max_tokens`, `:session` (the brain's session a response named) and
   `:options` (the brain options a crew request set). An option the brain
   does not declare, or a value not of its kind, is refused
