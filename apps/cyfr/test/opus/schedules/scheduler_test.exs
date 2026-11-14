@@ -767,6 +767,95 @@ defmodule Opus.Schedules.SchedulerTest do
     end
   end
 
+  describe "a failed fire on the schedule" do
+    test "keeps its reason and its run, which the schedule's get answers, until a good run clears it",
+         %{ctx: ctx} do
+      script!([{:error, "the upstream closed the connection"}, %{"ran" => true}])
+      failures = watch_failures()
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+      pid = scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert [%{state: "failed", execution_id: run}] = occurrences(ctx, schedule)
+      assert is_binary(run)
+      assert_receive {^failures, %{execution_id: ^run}}, 10_000
+
+      # Said from the run's own row, as it stores its end.
+      assert %{status: "failed", error_message: message} =
+               Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), run)
+
+      said = "Last run failed: " <> Sanctum.Refusals.render(message)
+
+      assert {:ok, %{last_error: ^said, last_execution_id: ^run}} =
+               CronSchedule.get_for_daemon(schedule.id)
+
+      assert {:ok, %{last_error: ^said, last_execution_id: ^run, error_count: 1}} =
+               Opus.Schedules.Provider.handle("schedule", ctx, %{
+                 "action" => "get",
+                 "schedule_id" => schedule.id
+               })
+
+      # The next fire runs well: the reason goes, and its run is the last.
+      due!(schedule)
+      send(pid, {:fire, schedule.id})
+
+      wait_until(fn ->
+        match?({:ok, %{run_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert [_failed, %{state: "completed", execution_id: good}] =
+               Enum.sort_by(occurrences(ctx, schedule), & &1.scheduled_for, DateTime)
+
+      assert {:ok, %{last_error: nil, last_execution_id: ^good, error_count: 1}} =
+               CronSchedule.get_for_daemon(schedule.id)
+    end
+
+    test "that started no run keeps its reason and names no run, never an earlier one",
+         %{ctx: ctx} do
+      script!([%{"ran" => true}])
+      failures = watch_failures()
+
+      schedule =
+        due!(
+          create_schedule(ctx, %{profile_id: "prof_unconsented", cron_expression: hourly_away()})
+        )
+
+      # An earlier good run on record, which the failure must not name.
+      {:ok, _} = CronSchedule.record_run(Sanctum.Context.actor(ctx), schedule.id, "exec_earlier")
+      scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert [%{state: "failed", execution_id: nil}] = occurrences(ctx, schedule)
+      assert_receive {^failures, %{reason: reason}}, 10_000
+      said = "Last run did not start: " <> Sanctum.Refusals.render(reason)
+
+      assert {:ok, %{last_error: ^said, last_execution_id: nil}} =
+               CronSchedule.get_for_daemon(schedule.id)
+    end
+  end
+
+  # The scheduler's failure events, as `{ref, metadata}` messages to the case.
+  defp watch_failures do
+    ref = make_ref()
+    id = {__MODULE__, ref}
+
+    :telemetry.attach(
+      id,
+      [:cyfr, :schedules, :failed],
+      fn _event, _measurements, metadata, {test, ref} -> send(test, {ref, metadata}) end,
+      {self(), ref}
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+    ref
+  end
+
   test "a boot that does not own the control plane claims no occurrence, and fires once it does",
        %{ctx: ctx} do
     # The row is written while this boot may write it; it then loses the
@@ -899,6 +988,300 @@ defmodule Opus.Schedules.SchedulerTest do
     assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
     # The cursor is untouched: recovery re-runs a claim, it never claims anew.
     assert [_, _] = occurrences(ctx, schedule)
+
+    # Both endings are on the schedule: the lapsed run's failure counted,
+    # and the re-run, ending last, its last run with no failure left.
+    wait_until(fn ->
+      match?({:ok, %{run_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+    end)
+
+    assert {:ok,
+            %{run_count: 1, error_count: 1, last_error: nil, last_execution_id: ^execution_id}} =
+             CronSchedule.get_for_daemon(schedule.id)
+  end
+
+  describe "a recovered run on the schedule" do
+    test "one its row stores as failed is a failure, with the reason its row keeps and its run",
+         %{ctx: ctx} do
+      script!([])
+      schedule = create_schedule(ctx, %{cron_expression: hourly_away()})
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, _} = CronSchedule.record_run(actor, schedule.id, "exec_earlier")
+      started_and_ended!(ctx, schedule, "exec_recovered", "The upstream closed the connection.")
+      scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{state: "uncertain"}}, ScheduleOccurrences.get(actor, "occ_recovered"))
+      end)
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert {:ok,
+              %{
+                run_count: 1,
+                error_count: 1,
+                last_error: "Last run failed: The upstream closed the connection.",
+                last_execution_id: "exec_recovered"
+              }} = CronSchedule.get_for_daemon(schedule.id)
+    end
+
+    test "one whose row is gone did not report its end, which is never called a failure",
+         %{ctx: ctx} do
+      script!([])
+      schedule = create_schedule(ctx, %{cron_expression: hourly_away()})
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, _} = CronSchedule.record_run(actor, schedule.id, "exec_earlier")
+
+      Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+        id: "occ_gone",
+        athanor_id: ctx.athanor_id,
+        schedule_id: schedule.id,
+        scheduled_for: DateTime.add(DateTime.utc_now(), -60, :second),
+        state: "started",
+        execution_id: "exec_gone",
+        claimed_by: "gone",
+        claimed_at: DateTime.utc_now()
+      })
+
+      scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert {:ok, %{state: "uncertain"}} = ScheduleOccurrences.get(actor, "occ_gone")
+
+      assert {:ok,
+              %{
+                run_count: 1,
+                error_count: 1,
+                last_error:
+                  "Last run did not report its end, so whether it had its effect is not known.",
+                last_execution_id: "exec_gone"
+              }} = CronSchedule.get_for_daemon(schedule.id)
+    end
+  end
+
+  describe "an occurrence's one ending" do
+    test "a summary that cannot be written leaves the occurrence open, and the next pass ends both",
+         %{ctx: ctx} do
+      script!([])
+      schedule = create_schedule(ctx, %{cron_expression: hourly_away()})
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, before} = CronSchedule.record_run(actor, schedule.id, "exec_earlier")
+      started_and_ended!(ctx, schedule, "exec_recovered", "The upstream closed the connection.")
+      refusals = watch_summary_refusals()
+      refuse_summaries!(schedule.id)
+      pid = scheduler!()
+
+      assert_receive {^refusals, %{schedule_id: refused}}, 10_000
+      assert refused == schedule.id
+
+      # Neither was written: the occurrence is still the gone member's,
+      # open, and the schedule is as it stood.
+      assert {:ok, %{state: "started", claimed_by: "gone"}} =
+               ScheduleOccurrences.get(actor, "occ_recovered")
+
+      assert {:ok, still} = CronSchedule.get_for_daemon(schedule.id)
+
+      assert Map.take(still, [:run_count, :error_count, :last_error, :last_execution_id]) ==
+               Map.take(before, [:run_count, :error_count, :last_error, :last_execution_id])
+
+      allow_summaries!()
+      send(pid, :recover_occurrences)
+
+      wait_until(fn ->
+        match?({:ok, %{state: "uncertain"}}, ScheduleOccurrences.get(actor, "occ_recovered"))
+      end)
+
+      assert {:ok,
+              %{
+                run_count: 1,
+                error_count: 1,
+                last_error: "Last run failed: The upstream closed the connection.",
+                last_execution_id: "exec_recovered"
+              }} = CronSchedule.get_for_daemon(schedule.id)
+    end
+
+    test "a runner's death says the outcome its run's row already stores", %{ctx: ctx} do
+      script!([:hang])
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+      pid = scheduler!()
+      wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
+      wait_until(fn -> match?([_], ScriptedWorker.calls()) end, 5_000)
+      assert [%{state: "started", execution_id: run}] = occurrences(ctx, schedule)
+      actor = Sanctum.Context.actor(ctx)
+      execution = Arca.Execution.get_tenant(actor, run)
+
+      {:ok, _} =
+        Arca.Execution.record_end(
+          actor,
+          run,
+          "failed",
+          %{
+            completed_at: DateTime.utc_now(),
+            duration_ms: 1,
+            error_message: "The upstream closed the connection."
+          },
+          execution.current_attempt,
+          Cyfr.Test.AttemptFixtures.stored()
+        )
+
+      Process.exit(running_task(), :kill)
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert [%{state: "uncertain", execution_id: ^run}] = occurrences(ctx, schedule)
+
+      assert {:ok,
+              %{
+                run_count: 0,
+                error_count: 1,
+                last_error: "Last run failed: The upstream closed the connection.",
+                last_execution_id: ^run
+              }} = CronSchedule.get_for_daemon(schedule.id)
+    end
+
+    test "a recovered claim that cannot read its input says its run did not start",
+         %{ctx: ctx} do
+      script!([])
+      schedule = create_schedule(ctx, %{cron_expression: hourly_away()})
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, _} = CronSchedule.record_run(actor, schedule.id, "exec_earlier")
+      {:ok, _} = CronSchedule.update(actor, schedule.id, %{input: "{"})
+
+      Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+        id: "occ_bad_input",
+        athanor_id: ctx.athanor_id,
+        schedule_id: schedule.id,
+        scheduled_for: DateTime.add(DateTime.utc_now(), -60, :second),
+        state: "claimed",
+        claimed_by: "gone",
+        claimed_at: DateTime.utc_now()
+      })
+
+      scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{state: "failed"}}, ScheduleOccurrences.get(actor, "occ_bad_input"))
+      end)
+
+      assert {:ok,
+              %{
+                run_count: 1,
+                error_count: 1,
+                last_error: "Last run did not start: Invalid JSON input",
+                last_execution_id: nil
+              }} = CronSchedule.get_for_daemon(schedule.id)
+    end
+  end
+
+  # The summary refusals the scheduler raises, as `{ref, metadata}`.
+  defp watch_summary_refusals do
+    ref = make_ref()
+    id = {__MODULE__, ref}
+
+    :telemetry.attach(
+      id,
+      [:cyfr, :schedules, :scheduler, :record_error_failed],
+      fn _event, _measurements, metadata, {test, ref} -> send(test, {ref, metadata}) end,
+      {self(), ref}
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+    ref
+  end
+
+  # The case's own database refuses any write of a reason onto schedule
+  # `id`'s row, until `allow_summaries!/0`, as a store that cannot take
+  # the summary would. Both are statements in the case's sandbox, which
+  # takes them back with it.
+  defp refuse_summaries!(id) do
+    if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      Arca.Repo.query!("""
+      CREATE FUNCTION refuse_summary() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'summary refused'; END $$ LANGUAGE plpgsql
+      """)
+
+      Arca.Repo.query!("""
+      CREATE TRIGGER refuse_summary BEFORE UPDATE ON cron_schedules FOR EACH ROW
+      WHEN (NEW.id = '#{id}' AND NEW.last_error IS NOT NULL) EXECUTE FUNCTION refuse_summary()
+      """)
+    else
+      Arca.Repo.query!("""
+      CREATE TRIGGER refuse_summary BEFORE UPDATE ON cron_schedules
+      WHEN NEW.id = '#{id}' AND NEW.last_error IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'summary refused'); END
+      """)
+    end
+
+    :ok
+  end
+
+  defp allow_summaries! do
+    if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      Arca.Repo.query!("DROP TRIGGER IF EXISTS refuse_summary ON cron_schedules")
+      Arca.Repo.query!("DROP FUNCTION IF EXISTS refuse_summary()")
+    else
+      Arca.Repo.query!("DROP TRIGGER IF EXISTS refuse_summary")
+    end
+
+    :ok
+  end
+
+  # A run of `schedule` admitted against its claimed occurrence
+  # (`occ_recovered`), which admission moves to `started`, and ended failed
+  # with `message` after its claimant is gone.
+  defp started_and_ended!(ctx, schedule, execution_id, message) do
+    now = DateTime.utc_now()
+
+    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+      id: "occ_recovered",
+      athanor_id: ctx.athanor_id,
+      schedule_id: schedule.id,
+      scheduled_for: DateTime.add(now, -60, :second),
+      state: "claimed",
+      claimed_by: Prima.Boot.id(),
+      claimed_at: now
+    })
+
+    {:ok, %{attempt: attempt}} =
+      Arca.Execution.admit(
+        %{
+          id: execution_id,
+          reference: "reagent:local.test:1.0.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent",
+          schedule_id: schedule.id,
+          origin: :schedule
+        },
+        [occurrence_id: "occ_recovered"] ++ Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
+
+    {:ok, _} =
+      Arca.Execution.record_end(
+        Sanctum.Context.actor(ctx),
+        execution_id,
+        "failed",
+        %{completed_at: now, duration_ms: 1, error_message: message},
+        attempt.attempt,
+        Cyfr.Test.AttemptFixtures.stored()
+      )
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(o in Arca.Schemas.ScheduleOccurrence,
+          where: o.id == "occ_recovered" and o.athanor_id == ^ctx.athanor_id
+        ),
+        set: [claimed_by: "gone"]
+      )
+
+    :ok
   end
 
   test "a claimed occurrence whose athanor no longer stands is not run on recovery, as the fire path would not",
@@ -1415,6 +1798,22 @@ defmodule Opus.Schedules.SchedulerTest do
     Process.exit(task_pid, :kill)
 
     wait_until(fn -> match?([%{state: "uncertain"}], occurrences(ctx, schedule)) end)
+    assert [%{execution_id: run}] = occurrences(ctx, schedule)
+
+    # Its outcome is not known: the schedule says so and names the run,
+    # and never says it failed.
+    wait_until(fn ->
+      match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+    end)
+
+    assert {:ok,
+            %{
+              run_count: 0,
+              error_count: 1,
+              last_error:
+                "Last run did not report its end, so whether it had its effect is not known.",
+              last_execution_id: ^run
+            }} = CronSchedule.get_for_daemon(schedule.id)
   end
 
   # A run that crashes exits with its stacktrace, whose failing frame holds

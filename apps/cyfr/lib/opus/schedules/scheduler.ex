@@ -201,6 +201,8 @@ defmodule Opus.Schedules.Scheduler do
   # The most missed times one catch-up episode fires; the CHECK on
   # `cron_schedules.catch_up_limit` holds the same number on each adapter.
   @max_catch_up 24
+  # What a schedule says of a run whose end is not known.
+  @unknown_end "Last run did not report its end, so whether it had its effect is not known."
   # Two ticks: the grace a live member's lapsed run is given, and the age at
   # which a claim is any member's to recover (`abandoned_before/0`). The
   # standing pass comes a second later than this (`arm_standing/1`).
@@ -721,18 +723,20 @@ defmodule Opus.Schedules.Scheduler do
 
                 # Ended only as it was read: a row another member moved since
                 # is `:stale`, and left alone; a member whose slot is gone
-                # (`:not_owner`) ends nothing and leaves it to the holder.
-                ScheduleOccurrences.finish(
-                  Prima.Actor.in_athanor(occurrence.athanor_id),
-                  occurrence.id,
+                # (`:not_owner`) ends nothing and leaves it to the holder. An
+                # end whose summary could not be written ended nothing, and
+                # the next pass ends both.
+                occurrence
+                |> end_occurrence(
                   occurrence.claimed_by,
                   occurrence.execution_id,
-                  "uncertain"
+                  "uncertain",
+                  nil
                 )
-                |> logged_stale(occurrence)
                 |> case do
-                  {:error, :database_error} -> recover_later(acc)
-                  _ -> acc
+                  {:ok, _ended} -> acc
+                  {:error, reason} when reason in [:stale, :not_owner] -> acc
+                  {:error, _not_ended} -> recover_later(acc)
                 end
 
               true ->
@@ -816,23 +820,37 @@ defmodule Opus.Schedules.Scheduler do
             "active — not run"
         )
 
-        # The occurrence is ended first, so one that is another member's
-        # now records no error and announces no failure. One this member
-        # re-took and did not end is left open.
-        ended = fail_recovered(occurrence, generation)
+        # The occurrence ends with its schedule's summary, so one that is
+        # another member's now records no error and announces no failure.
+        # One this member re-took and did not end is left open.
+        ended =
+          fail_recovered(
+            occurrence,
+            "Athanor or creator no longer active — run skipped",
+            generation
+          )
 
-        if ended != nil and not refused?(ended) do
-          ctx = context_of(schedule)
-          record_error(ctx, schedule.id, "Athanor or creator no longer active — run skipped")
-          emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive", occurrence)
-        end
+        if ended != nil and not refused?(ended),
+          do:
+            emit_schedule_failed(
+              schedule,
+              context_of(schedule),
+              "athanor_or_creator_inactive",
+              occurrence
+            )
 
         left_open_unless_ended(state, ended)
 
-      _ ->
-        left_open_unless_ended(state, fail_recovered(occurrence, generation))
+      not_run ->
+        left_open_unless_ended(state, fail_recovered(occurrence, not_run(not_run), generation))
     end
   end
+
+  # Why a recovered claim is not run, in the words its schedule keeps.
+  defp not_run({:error, :invalid_input}), do: "Invalid JSON input"
+  defp not_run({:error, :damaged_reference}), do: "Damaged schedule: no pinned reference"
+  defp not_run({:ok, %{status: status}}), do: "the schedule is " <> status
+  defp not_run({:error, reason}), do: Sanctum.Refusals.render(reason)
 
   defp standing(schedule) do
     if Sanctum.Tenancy.channel_active?(schedule.athanor_id, schedule.user_id),
@@ -840,21 +858,13 @@ defmodule Opus.Schedules.Scheduler do
       else: {:error, {:not_standing, schedule}}
   end
 
-  # A recovered occurrence that will not run, ended as this member's:
-  # `recover/4` made it this member's claim, never started. Answers the
-  # end's answer, or nil when the member no longer holds its standing and
-  # ends nothing.
-  defp fail_recovered(occurrence, generation) do
-    if still_ours?(generation) do
-      ScheduleOccurrences.finish(
-        Prima.Actor.in_athanor(occurrence.athanor_id),
-        occurrence.id,
-        claimant(),
-        nil,
-        "failed"
-      )
-      |> logged_stale(occurrence)
-    end
+  # A recovered occurrence that will not run, ended as this member's with
+  # `reason` on its schedule: `recover/4` made it this member's claim,
+  # never started. Answers the end's answer, or nil when the member no
+  # longer holds its standing and ends nothing.
+  defp fail_recovered(occurrence, reason, generation) do
+    if still_ours?(generation),
+      do: end_occurrence(occurrence, claimant(), nil, "failed", reason)
   end
 
   defp take_over(occurrence) do
@@ -900,6 +910,7 @@ defmodule Opus.Schedules.Scheduler do
           )
 
           record_error(ctx, schedule_id, "Athanor or creator no longer active — run skipped")
+
           emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive")
           recheck_later(schedule_id, state)
         end
@@ -1094,12 +1105,17 @@ defmodule Opus.Schedules.Scheduler do
 
           # Never started, so the end matches the claim with no execution;
           # an end that did not happen leaves the claim open.
-          ended = finish(occurrence, execution_id, "failed")
+          ended =
+            end_occurrence(
+              occurrence,
+              claimant(),
+              execution_id,
+              "failed",
+              Sanctum.Refusals.render(:unavailable)
+            )
 
-          unless refused?(ended) do
-            emit_schedule_failed(schedule, ctx, {:spawn_failed, reason}, occurrence)
-            record_error(ctx, schedule.id, Sanctum.Refusals.render(:unavailable))
-          end
+          unless refused?(ended),
+            do: emit_schedule_failed(schedule, ctx, {:spawn_failed, reason}, occurrence)
 
           schedule_timer(schedule.id, left_open_unless_ended(state, ended))
         else
@@ -1163,7 +1179,14 @@ defmodule Opus.Schedules.Scheduler do
   # The seq was refused before the run: the occurrence never started, so
   # its end matches the claim with no execution.
   defp seq_refused(schedule, occurrence, ctx, reason, execution_id) do
-    ended = finish(occurrence, execution_id, "failed")
+    ended =
+      end_occurrence(
+        occurrence,
+        claimant(),
+        execution_id,
+        "failed",
+        Sanctum.Refusals.render(reason)
+      )
 
     unless refused?(ended) do
       Logger.warning(
@@ -1171,7 +1194,6 @@ defmodule Opus.Schedules.Scheduler do
       )
 
       emit_schedule_failed(schedule, ctx, reason, occurrence)
-      record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
     end
 
     left_to_recovery_unless_ended(ended)
@@ -1271,7 +1293,6 @@ defmodule Opus.Schedules.Scheduler do
               left_to_recovery()
 
             finished ->
-              recorded = record_run(ctx, schedule.id, execution_id)
               Sanctum.Decisions.close(ctx, call_id, closed)
 
               :telemetry.execute(
@@ -1296,7 +1317,7 @@ defmodule Opus.Schedules.Scheduler do
                 output: output
               }
 
-              publish_completion(ctx, completed, finished, recorded, generation)
+              publish_completion(ctx, completed, finished, generation)
 
               Logger.debug(
                 "[Opus.Schedules.Scheduler] schedule #{schedule.id} completed (#{execution_id})"
@@ -1327,7 +1348,14 @@ defmodule Opus.Schedules.Scheduler do
           # An admission that failed left the occurrence claimed; a run
           # that failed left it started, under this run's execution. Either
           # way it ends failed, and nothing was invoked twice.
-          ended = finish(occurrence, execution_id, "failed")
+          ended =
+            end_occurrence(
+              occurrence,
+              claimant(),
+              execution_id,
+              "failed",
+              Sanctum.Refusals.render(reason)
+            )
 
           Sanctum.Decisions.close(ctx, call_id, %{
             result: {:error, reason},
@@ -1341,7 +1369,6 @@ defmodule Opus.Schedules.Scheduler do
             )
 
             emit_schedule_failed(schedule, ctx, reason, occurrence, execution_id)
-            record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
           end
 
           left_to_recovery_unless_ended(ended)
@@ -1391,7 +1418,15 @@ defmodule Opus.Schedules.Scheduler do
 
       {:error, {:refused, refusal}} ->
         reason = refused_result(refusal)
-        ended = finish(occurrence, fired.execution_id, "failed")
+
+        ended =
+          end_occurrence(
+            occurrence,
+            claimant(),
+            fired.execution_id,
+            "failed",
+            Sanctum.Refusals.render(reason)
+          )
 
         unless refused?(ended) do
           Logger.warning(
@@ -1400,13 +1435,19 @@ defmodule Opus.Schedules.Scheduler do
           )
 
           emit_schedule_failed(schedule, ctx, reason, occurrence, fired.execution_id)
-          record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
         end
 
         left_to_recovery_unless_ended(ended)
 
       {:error, reason} ->
-        ended = finish(occurrence, fired.execution_id, "failed")
+        ended =
+          end_occurrence(
+            occurrence,
+            claimant(),
+            fired.execution_id,
+            "failed",
+            Sanctum.Refusals.render(reason)
+          )
 
         unless refused?(ended) do
           Logger.warning(
@@ -1414,7 +1455,6 @@ defmodule Opus.Schedules.Scheduler do
           )
 
           emit_schedule_failed(schedule, ctx, reason, occurrence, fired.execution_id)
-          record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
         end
 
         left_to_recovery_unless_ended(ended)
@@ -1446,11 +1486,9 @@ defmodule Opus.Schedules.Scheduler do
   # the run. An occurrence that is another member's now records no run.
   # The line names the outcome, never the result.
   defp feed_ended(schedule, occurrence, ctx, feed, fired, outcome) do
-    ended = finish(occurrence, fired.execution_id, "completed")
+    ended = end_occurrence(occurrence, claimant(), fired.execution_id, "completed", nil)
 
     unless refused?(ended) do
-      _ = record_run(ctx, schedule.id, fired.execution_id)
-
       :telemetry.execute(
         [:cyfr, :schedules, :completed],
         %{system_time: System.system_time(), duration_ms: fired.duration_ms},
@@ -1487,17 +1525,6 @@ defmodule Opus.Schedules.Scheduler do
   # it minted for the run, or the claim with none when the run never
   # started. `:stale` is logged once here, and its caller writes nothing
   # further.
-  defp finish(occurrence, execution_id, state) do
-    ScheduleOccurrences.finish(
-      Prima.Actor.in_athanor(occurrence.athanor_id),
-      occurrence.id,
-      claimant(),
-      execution_id,
-      state
-    )
-    |> logged_stale(occurrence)
-  end
-
   @doc false
   # A completed run's end of its occurrence (`finish/3`, `claimed_by` this
   # boot), with the outcome's record (`Prima.OutboxRecord`) written in
@@ -1525,15 +1552,9 @@ defmodule Opus.Schedules.Scheduler do
   @spec complete(map(), map(), String.t(), term()) ::
           {:ok, 1} | {:error, :stale | :not_owner | :no_athanor | :database_error | term()}
   def complete(schedule, occurrence, execution_id, output) do
-    ScheduleOccurrences.finish(
-      Prima.Actor.in_athanor(occurrence.athanor_id),
-      occurrence.id,
-      claimant(),
-      execution_id,
-      "completed",
+    end_occurrence(occurrence, claimant(), execution_id, "completed", nil,
       also: &record_outcome(&1, schedule, execution_id, output)
     )
-    |> logged_stale(occurrence)
   end
 
   defp record_outcome(%{occurrence: occurrence} = finished, read_before, execution_id, output) do
@@ -1640,42 +1661,93 @@ defmodule Opus.Schedules.Scheduler do
 
   # The runner died without answering: the occurrence it held ends as
   # what the row says — never invoked, or started under the execution this
-  # member minted with an unknown end — while it is still this member's.
-  # Answers the settlement, so a settlement that did not happen leaves
-  # the occurrence open (`left_open_unless_ended/2`).
+  # member minted — while it is still this member's, with its schedule's
+  # summary read from that execution's row (`end_occurrence/6`). Answers
+  # the settlement, so a settlement that did not happen leaves the
+  # occurrence open (`left_open_unless_ended/2`).
   defp runner_died(schedule_id, task, reason) do
     Logger.warning(
       "[Opus.Schedules.Scheduler] schedule #{schedule_id} execution failed: " <>
         Prima.LogFilter.inspect_reason(reason)
     )
 
-    settled =
-      ScheduleOccurrences.settle_dead(
-        Prima.Actor.in_athanor(task.athanor_id),
-        task.occurrence_id,
-        claimant(),
-        task.execution_id
-      )
-      |> logged_stale(%{id: task.occurrence_id, schedule_id: schedule_id})
-
-    unless refused?(settled),
-      do: record_error(task.ctx, schedule_id, Sanctum.Refusals.render(reason))
-
-    settled
+    end_occurrence(
+      %{id: task.occurrence_id, athanor_id: task.athanor_id, schedule_id: schedule_id},
+      claimant(),
+      task.execution_id,
+      :dead,
+      Sanctum.Refusals.render(reason)
+    )
   end
 
-  defp record_run(ctx, schedule_id, execution_id) do
-    case CronSchedule.record_run(Sanctum.Context.actor(ctx), schedule_id, execution_id) do
-      {:ok, row} ->
-        announce(row, ctx)
-        {:ok, row}
+  # An occurrence's one ending. The occurrence ends — `state`, or `:dead`
+  # for a runner that died (`Arca.ScheduleOccurrences.settle_dead/5`) —
+  # and its schedule's summary is written in the same transaction (the
+  # end's `also:`, after the owner's own `opts[:also]`), so both are
+  # written or neither, and an end whose summary cannot be written leaves
+  # the occurrence open for the next recovery pass. The summary is read
+  # there from the outcome the run's row stores (`summary/2`); `reason` is
+  # the caller's, for a run that never started or a result refused after
+  # its run. The schedule is announced once both committed.
+  defp end_occurrence(occurrence, claimed_by, execution_id, state, reason, opts \\ []) do
+    actor = Prima.Actor.in_athanor(occurrence.athanor_id)
+    own = Keyword.get(opts, :also, fn _finished -> :ok end)
 
-      {:error, reason} ->
+    also = fn finished ->
+      with :ok <- own.(finished), do: summary(finished, reason)
+    end
+
+    ended =
+      case state do
+        :dead ->
+          ScheduleOccurrences.settle_dead(actor, occurrence.id, claimed_by, execution_id,
+            also: also
+          )
+
+        state ->
+          ScheduleOccurrences.finish(actor, occurrence.id, claimed_by, execution_id, state,
+            also: also
+          )
+      end
+      |> logged_stale(occurrence)
+
+    with {:ok, _ended} <- ended, do: Changes.changed(actor, occurrence.schedule_id)
+    ended
+  end
+
+  # The schedule's summary of an occurrence that just ended, inside its
+  # end's transaction: a completed run is the last run; anything else is
+  # what `said/3` reads from the run's row. A summary refused rolls the
+  # end back, and says so to the operator.
+  defp summary(%{occurrence: occurrence}, reason) do
+    actor = Prima.Actor.in_athanor(occurrence.athanor_id)
+
+    written =
+      case said(actor, occurrence, reason) do
+        :completed ->
+          CronSchedule.record_run(actor, occurrence.schedule_id, occurrence.execution_id)
+
+        sentence ->
+          CronSchedule.record_error(actor, occurrence.schedule_id, sentence, occurrence.id)
+      end
+
+    case written do
+      {:ok, _row} ->
+        :ok
+
+      {:error, err} = refused ->
         Logger.warning(
-          "[Opus.Schedules.Scheduler] failed to record_run for #{schedule_id}: #{inspect(reason)}"
+          "[Opus.Schedules.Scheduler] occurrence #{occurrence.id} not ended: its schedule's " <>
+            "summary could not be written (#{inspect(err)})"
         )
 
-        {:error, reason}
+        :telemetry.execute(
+          [:cyfr, :schedules, :scheduler, :record_error_failed],
+          %{count: 1},
+          %{schedule_id: occurrence.schedule_id, error: err}
+        )
+
+        refused
     end
   end
 
@@ -1688,7 +1760,7 @@ defmodule Opus.Schedules.Scheduler do
   # reaches here, since that closer's is the only word; the `moved > 0`
   # guard is the shape this clause accepts, and anything else, a finish
   # the store could not answer included, publishes nothing.
-  defp publish_completion(ctx, completed, {:ok, moved}, {:ok, _row}, generation)
+  defp publish_completion(ctx, completed, {:ok, moved}, generation)
        when is_integer(moved) and moved > 0 do
     %{schedule: schedule} = completed
 
@@ -1709,7 +1781,7 @@ defmodule Opus.Schedules.Scheduler do
     :ok
   end
 
-  defp publish_completion(_ctx, _completed, _finished, _recorded, _generation), do: :ok
+  defp publish_completion(_ctx, _completed, _finished, _generation), do: :ok
 
   @doc false
   # Whether a schedule keeps its outcome, and under which note name, read
@@ -1732,10 +1804,43 @@ defmodule Opus.Schedules.Scheduler do
     end
   end
 
-  defp record_error(ctx, schedule_id, message) do
-    case CronSchedule.record_error(Sanctum.Context.actor(ctx), schedule_id, message) do
-      {:ok, row} ->
-        announce(row, ctx)
+  # What a schedule says of an ended occurrence, read from the outcome its
+  # run's row stores, never worded without it: `:completed` for a run that
+  # completed; a failure or a cancellation
+  # with the reason the row keeps (else the caller's); a completed run whose
+  # occurrence then failed (its result refused), with the caller's reason,
+  # and one whose occurrence was recovered, as the last run; a run whose row is
+  # still open, gone or unreadable, which is not known and never called a
+  # failure; and an occurrence that started no run, with the caller's
+  # reason.
+  defp said(_actor, %{execution_id: nil}, reason), do: sentence("Last run did not start", reason)
+
+  defp said(actor, %{execution_id: execution_id, state: state}, reason) do
+    case Arca.Execution.get_tenant(actor, execution_id) do
+      %{status: "completed"} when state in ["completed", "uncertain"] -> :completed
+      %{status: "completed"} -> sentence("Last run failed", reason)
+      %{status: "failed"} = row -> sentence("Last run failed", kept(row, reason))
+      %{status: "cancelled"} = row -> sentence("Last run was cancelled", kept(row, reason))
+      _open_gone_or_unread -> @unknown_end
+    end
+  end
+
+  defp kept(%{error_message: message}, _reason) when is_binary(message) and message != "",
+    do: Sanctum.Refusals.render(message)
+
+  defp kept(_row, reason), do: reason
+
+  defp sentence(said, reason) when is_binary(reason) and reason != "", do: said <> ": " <> reason
+  defp sentence(said, _none), do: said <> "."
+
+  # A fire skipped before any occurrence was claimed: no run started.
+  defp record_error(%Sanctum.Context{} = ctx, schedule_id, reason) do
+    actor = Sanctum.Context.actor(ctx)
+    said = sentence("Last run did not start", reason)
+
+    case CronSchedule.record_error(actor, schedule_id, said, nil) do
+      {:ok, _row} ->
+        Changes.changed(actor, schedule_id)
 
       {:error, err} ->
         Logger.warning(
