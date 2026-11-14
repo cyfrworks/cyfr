@@ -106,8 +106,9 @@ defmodule PrismWeb.AquaSetupTest do
              "key, shared with you, up to 25 requests a day"
            )
 
-    settled(
+    wait_until(
       fn -> has_element?(view, "#aqua-setup-pick option[value^=\"chat-fixture::\"]") end,
+      10_000,
       "the fixture's models"
     )
 
@@ -121,10 +122,11 @@ defmodule PrismWeb.AquaSetupTest do
     view |> form("#aqua-setup-pick", %{"value" => choice}) |> render_change()
 
     # One confirmation: the soul's consent, asked again for its new brain.
-    settled(
+    wait_until(
       fn ->
         has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.aqua")
       end,
+      10_000,
       "the soul's grant"
     )
 
