@@ -130,9 +130,19 @@ defmodule PrismWeb.AquaSetupTest do
       "the soul's grant"
     )
 
+    # The grant reopens on what the soul's head bound for its brain.
+    assert has_element?(
+             view,
+             ~s(#system-layer-dialog [data-test="grant-pick"][aria-pressed="true"])
+           )
+
     view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
     wait_until(fn -> render(view) =~ "aqua consented again." end, 10_000, "the soul's consent")
     refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+    # The soul's brain is connected through the key it was shared.
+    assert %{"aqua" => {:ready, _}} =
+             Aqua.model_status(ctx, [%{"name" => "aqua", "catalyst_ref" => Fixture.ref()}])
 
     # Aqua answers.
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
