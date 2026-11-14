@@ -278,9 +278,8 @@ defmodule Opus.TurnRootTest do
 
     assert [] = registered(claim.execution_id)
 
-    # A background task registers before it runs what it registered
-    # (`execution.run_stream`): the entry is the task's, and the root's
-    # release leaves it.
+    # A background task registers before it runs what it registered: the
+    # entry is the task's, and the root's release leaves it.
     me = self()
     {:ok, _} = Registry.register(Opus.Registry, claim.execution_id, :running)
 

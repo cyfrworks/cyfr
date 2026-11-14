@@ -410,7 +410,9 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init first shows the commands that install what is missing (docker.io, docker-compose-v2 and apparmor, the running service and this account's membership of the docker group), asks, and runs them through one sudo; answered no, init installs nothing, writes nothing and exits 0. The rest of init then runs in a process that has the group, and 'cyfr up' gets the group the same way.
+On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init first shows the commands that install what is missing (docker.io, docker-compose-v2 and apparmor, the running service and this account's membership of the docker group), asks, and runs them through one sudo; answered no, init installs nothing, writes nothing and exits 0. CYFR never asks for, reads or keeps a password: when sudo will ask, init first says it asks for the password you log in to this machine with, and sudo asks in its own prompt before any command runs, so a refused password changes nothing. An account outside the sudo and admin groups is told so before anything is asked, with the commands as one sudo line for whoever administers the machine, and nothing is changed; answered 1 at the screen question, it is told before anything is written, in words alone, that whoever administers the machine can add it to the sudo group. The rest of init then runs in a process that has the group, and 'cyfr up' gets the group the same way.
+
+On macOS and Windows at a terminal, while Docker does not answer, init offers to open Docker's installer page for Docker Desktop and says what the system's prompt will be (a Mac's login password or Touch ID; Windows asking to allow the app to make changes), or, with Docker Desktop installed, says to start it; then it waits, writing nothing, until Docker answers, and goes on. Answered no, init opens and writes nothing and exits 0.
 
 The CYFR init makes is reached from this machine, at http://localhost:<CYFR_PORT>. 'cyfr access tailnet' reaches it from your phone and laptop too, and 'cyfr access public --domain <your domain>' from the internet. On Ubuntu 26.04 LTS on amd64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
 
@@ -483,7 +485,20 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 	}
 	var screenErr error
 	if screen {
-		screenErr = screenOn(ctx, false, out)
+		// The password is asked here, not before the project is written:
+		// sudo's login would lapse during the image pulls between them. A
+		// refusal here, of the password or of an account that has left the
+		// sudo group since the question, comes after the project is
+		// written, and says so.
+		const notSetUp = "so the screen was not set up; CYFR is set up in this directory."
+		var refused passwordRefused
+		var outside outsideTheGroups
+		switch screenErr = screenOn(ctx, false, out); {
+		case errors.As(screenErr, &refused):
+			screenErr = errors.New("The password was not accepted, " + notSetUp + " Run `cyfr screen on` here to set it up")
+		case errors.As(screenErr, &outside):
+			screenErr = fmt.Errorf("Your account, %s, is not in the sudo or admin group, %s Whoever administers this machine can add your account to the sudo group; then run `cyfr screen on` here", outside.account, notSetUp)
+		}
 	}
 	initEnding(out, screen && screenErr == nil)
 	return screenErr

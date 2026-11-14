@@ -493,6 +493,131 @@ defmodule Emissary.MCP.RouterTest do
       end
     end
 
+    # A key narrowed to named tools is admitted to, and shown, only the
+    # outside tools it lists; the fixture athanor's owner mints it there.
+    defp narrowed_key!(ctx, name, tools) do
+      _owner = Sanctum.TestContext.owner!()
+      issuer = Sanctum.TestContext.issuer!(%{ctx | user_id: Arca.Test.Actor.owner_id()})
+
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(issuer, %{name: name, scope: ["execute"], tools: tools})
+
+      {:ok, key} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      key
+    end
+
+    test "a key narrowed to an outside tool calls and is shown that tool",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+      key = narrowed_key!(ctx, "greeter-only", ["greeter:hello"])
+
+      assert {tools_tool_outside_names(key), outside_names(key)} ==
+               {["greeter:hello"], ["greeter:hello"]}
+
+      assert call(key, "greeter:hello", %{}) == @hello_back
+      assert_received {:tools_call, %{"name" => "hello"}}
+    end
+
+    test "a key narrowed to other tools is neither shown nor let call an outside tool, and the server hears nothing",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+
+      for {name, tools} <- [
+            {"component-only", ["c:local.ship"]},
+            {"other-outside", ["greeter:goodbye"]}
+          ] do
+        key = narrowed_key!(ctx, name, tools)
+
+        assert {tools_tool_outside_names(key), outside_names(key)} == {[], []}
+
+        assert call(key, "greeter:hello", %{}) ==
+                 {:error, :insufficient_permissions,
+                  "This API key may run only the tools named when it was made, and this is " <>
+                    "not one of them."}
+
+        refute_received {:tools_call, _}
+      end
+    end
+
+    # A stub server listing `tools`, which tells the test of any call.
+    defp stub_listing(tools) do
+      stub = Cyfr.Test.HTTPStub.open()
+      test = self()
+
+      Cyfr.Test.HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        body = Jason.decode!(raw)
+
+        result =
+          case body["method"] do
+            "tools/list" ->
+              %{
+                "tools" =>
+                  Enum.map(tools, &%{"name" => &1, "inputSchema" => %{"type" => "object"}})
+              }
+
+            "tools/call" ->
+              send(test, {:tools_call, body["params"]})
+              %{"content" => [%{"type" => "text", "text" => "called"}]}
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end)
+
+      "http://127.0.0.1:#{stub.port}/mcp"
+    end
+
+    # The kind of what a key starts is the caller's to say, never the
+    # name's: an outside tool whose name reads like a component matches no
+    # component entry, and no outside entry can name a server called like
+    # a component type, so a narrowed key is refused it.
+    test "a key narrowed to a component is refused, and not shown, an outside tool spelled like it",
+         %{context: ctx} do
+      outside_server(ctx, "c", stub_listing(["local.ship", "local.ship:1.0.0"]), %{
+        "console" => true
+      })
+
+      outside_server(ctx, "catalyst", stub_listing(["local.ship"]), %{"console" => true})
+      key = narrowed_key!(ctx, "ship-only", ["c:local.ship"])
+
+      # The person sees all three; the key sees none.
+      assert Enum.sort(outside_names(ctx)) ==
+               ["c:local.ship", "c:local.ship:1.0.0", "catalyst:local.ship"]
+
+      assert {tools_tool_outside_names(key), outside_names(key)} == {[], []}
+
+      for name <- ["c:local.ship", "catalyst:local.ship", "c:local.ship:1.0.0"] do
+        assert {name, call(key, name, %{})} ==
+                 {name,
+                  {:error, :insufficient_permissions,
+                   "This API key may run only the tools named when it was made, and this is " <>
+                     "not one of them."}}
+      end
+
+      refute_received {:tools_call, _}
+
+      # The component it names is still the key's to run.
+      assert Sanctum.ApiKey.admit_tool(key, {:component, "catalyst:local.ship:1.0.0"}) == :ok
+      assert Sanctum.ApiKey.admit_tool(key, {:component, "c:local.ship"}) == :ok
+    end
+
+    test "a key with execute and no tool list is shown and admitted as before",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+      key = narrowed_key!(ctx, "any-tool", [])
+
+      assert {tools_tool_outside_names(key), outside_names(key)} ==
+               {["greeter:hello"], ["greeter:hello"]}
+
+      assert call(key, "greeter:hello", %{}) == @hello_back
+      assert_received {:tools_call, %{"name" => "hello"}}
+    end
+
     test "a server without console is refused with the setting to turn on", %{
       context: ctx,
       url: url

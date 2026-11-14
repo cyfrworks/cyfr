@@ -189,7 +189,9 @@ type Receipt struct {
 	Payload       map[string]string `json:"payload,omitempty"`
 	FinalHead     *Head             `json:"final_head,omitempty"`
 	Observed      []string          `json:"observed,omitempty"`
-	At            time.Time         `json:"at"`
+	// Cause is a hold's command (Hold).
+	Cause string    `json:"cause,omitempty"`
+	At    time.Time `json:"at"`
 }
 
 // Refusal is the code a receipt answers with, nil for a plain success. A
@@ -387,6 +389,21 @@ func (e *Engine) CloseServe(ctx context.Context) error {
 	}
 	return e.redactor().err(e.closeServe())
 }
+
+// Hold records durably, before a command stops the running stack itself
+// (update's and backup's own stops), that cause stops it and owes it a
+// start. The command's own Start or StartWithin closes the hold, whatever
+// the start answers; Release closes it with nothing started. A command
+// that dies holding it leaves the start to the next command's Resume,
+// which starts .env's head as Start does and answers a completed receipt
+// of op hold naming cause. It requires the lock, and refuses while the
+// journal holds another operation.
+func (e *Engine) Hold(cause string) error { return e.redactor().err(e.hold(cause)) }
+
+// Release closes the hold without starting anything, for a command past
+// the point where the stack it stopped may start again (an update from
+// its switch on). It requires the lock; with no hold it does nothing.
+func (e *Engine) Release() error { return e.redactor().err(e.closeHold()) }
 
 // Receipt answers the receipt or the unfinished journal entry of request
 // id, reading without the lock.

@@ -24,8 +24,8 @@ func init() {
 	keyCmd.AddCommand(keyRotateCmd)
 
 	keyCreateCmd.Flags().String("name", "", "Key name (required in non-interactive mode)")
-	keyCreateCmd.Flags().String("type", "application", "Key type: application, service, admin")
-	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes (execute, vault_read, component_read, component_manage, storage_read, storage_write, admin)")
+	keyCreateCmd.Flags().StringSlice("scope", nil, "What the key may do (execute, component_read, storage_read, component_manage, storage_write, admin, vault_read)")
+	keyCreateCmd.Flags().StringSlice("tool", nil, "The only tools the key may run, each named without its version (c:local.my-tool)")
 	keyCreateCmd.Flags().StringSlice("ip-allowlist", nil, "Allowed IPs/CIDRs")
 }
 
@@ -33,26 +33,25 @@ var keyCmd = &cobra.Command{
 	Use:     "key",
 	Short:   "Manage API keys",
 	GroupID: "security",
-	Long:    "Create, list, rotate, and revoke API keys. Key prefixes indicate type: cyfr_pk_ (application), cyfr_sk_ (service), cyfr_ak_ (admin).",
+	Long:    "Create, list, rotate, and revoke API keys. A key (cyfr_sk_) acts as you in your athanor, within the permissions and tools it was made with, which never change.",
 }
 
 var keyCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new API key",
-	Long: `Generate a new API key with the given name and type. Scopes and an IP allowlist are optional.
+	Long: `Generate a new API key with the given name. What it may do is fixed once it is made.
 Run without --name for an interactive form.
 
-Default scopes per type (applied when --scope is omitted):
-  application: execute, component_read, storage_read
-  service:     execute, vault_read, component_read, storage_read, storage_write
-  admin:       * (all permissions)`,
-	Example: `  cyfr key create --name my-service --type service
-  cyfr key create --name ci-runner --type application --scope execute,component_read
-  cyfr key create --name prod --type admin --ip-allowlist 10.0.0.0/8`,
+Without --scope the key may run tools and read their runs (execute, component_read,
+storage_read). Without --tool it runs any tool you granted.`,
+	Example: `  cyfr key create --name ci-runner
+  cyfr key create --name deploy --tool c:local.ship
+  cyfr key create --name builder --scope execute,component_read,storage_read,component_manage,storage_write
+  cyfr key create --name ops --scope admin --ip-allowlist 10.0.0.0/8`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
-		keyType, _ := cmd.Flags().GetString("type")
 		scope, _ := cmd.Flags().GetStringSlice("scope")
+		tools, _ := cmd.Flags().GetStringSlice("tool")
 		ipAllowlist, _ := cmd.Flags().GetStringSlice("ip-allowlist")
 
 		// If --name not provided, try interactive mode
@@ -69,19 +68,23 @@ Default scopes per type (applied when --scope is omitted):
 				return fmt.Errorf("Prompt failed: %w", err)
 			}
 			name = form.Name
-			keyType = form.Type
 			if len(form.Scopes) > 0 {
 				scope = form.Scopes
+			}
+			if form.Tools != "" {
+				tools = strings.FieldsFunc(form.Tools, func(r rune) bool { return r == ',' || r == ' ' })
 			}
 			if form.IPAllowlist != "" {
 				ipAllowlist = strings.Split(form.IPAllowlist, ",")
 			}
 		}
 
-		toolArgs := ops.KeyCreateArgs{Name: name,
-			Type: ops.Value(keyType)}
+		toolArgs := ops.KeyCreateArgs{Name: name}
 		if len(scope) > 0 {
 			toolArgs.Scope = ops.Value(scope)
+		}
+		if len(tools) > 0 {
+			toolArgs.Tools = ops.Value(tools)
 		}
 		if len(ipAllowlist) > 0 {
 			toolArgs.IpAllowlist = ops.Value(ipAllowlist)
@@ -99,7 +102,7 @@ Default scopes per type (applied when --scope is omitted):
 var keyGetCmd = &cobra.Command{
 	Use:     "get <name>",
 	Short:   "Get key info",
-	Long:    "Show metadata for an API key including type and scopes.",
+	Long:    "Show an API key's permissions and tools.",
 	Example: "  cyfr key get my-service",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -115,7 +118,7 @@ var keyGetCmd = &cobra.Command{
 var keyListCmd = &cobra.Command{
 	Use:     "list",
 	Short:   "List all API keys",
-	Long:    "List all API keys with their names, types, and creation dates.",
+	Long:    "List all API keys with their names, permissions, tools and creation dates.",
 	Example: "  cyfr key list",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()

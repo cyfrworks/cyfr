@@ -10,8 +10,8 @@ defmodule PrismWeb do
   `CyfrWeb.Router`.
 
   A default that decides authority when nobody chooses is read from the
-  module that owns its policy, never set here: an API key's default
-  scopes are `Sanctum.ApiKey.default_scopes/1`'s, and a consent sheet
+  module that owns its policy, never set here: an API key's presets
+  are `Sanctum.ApiKey.presets/0`'s, and a consent sheet
   opens on what the grant's head binds and the suggestions of Sanctum's
   plan rows (`Prism.ConsentChoices.initial_choices/2`).
 

@@ -33,7 +33,6 @@ defmodule Sanctum.RestoreChecklistTest do
           name: "key-#{System.unique_integer([:positive])}",
           key_hash: :crypto.strong_rand_bytes(32),
           key_prefix: "cyfr_sk_rs",
-          type: "service",
           scope: "[]",
           revoked: false,
           suspended: false,
