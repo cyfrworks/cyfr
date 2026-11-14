@@ -6,7 +6,8 @@ defmodule Aqua.ModelsTest do
   The model listing's refusals: the listing reads the athanor's catalysts
   through the component domain's facade and refuses as it refuses, and a
   model status needs a context and keeps a damaged or unreadable consent
-  apart from a key to connect. The assistant's root roster is
+  apart from a key to connect, and a brain whose grant is all it needs
+  asks for the grant. The assistant's root roster is
   `Aqua.FacadeTest`'s.
   """
 
@@ -260,6 +261,82 @@ defmodule Aqua.ModelsTest do
   end
 
   # A person's walk, from their own page.
+  # A brain with no grant to stand on asks for what connecting it takes:
+  # the grant alone when it needs nothing else of the person, never a key
+  # it does not need, both before its first grant and after a revocation.
+  test "a brain whose grant is all it needs asks for the grant, never granted or revoked" do
+    ctx = storage_root!("models_grant_only")
+    chat_brain!(ctx, "open", %{})
+
+    chat_brain!(ctx, "keyed", %{
+      "api_key" => %{
+        "type" => "api_key:keyed.test",
+        "fields" => ["KEYED_API_KEY"],
+        "required" => true,
+        "hosts" => ["api.keyed.test"]
+      }
+    })
+
+    assert states(ctx) == %{"keyed" => :needs_key, "open" => :needs_grant}
+
+    commit!(ctx, "catalyst:local.open", %{})
+    assert states(ctx) == %{"keyed" => :needs_key, "open" => :ready}
+
+    {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "catalyst:local.open")
+    assert states(ctx) == %{"keyed" => :needs_key, "open" => :needs_grant}
+  end
+
+  # The limit: an ungranted plan carries no binding, so a brain whose key
+  # was bound before its grant was revoked asks for the key again, as one
+  # never connected does.
+  test "a keyed brain whose grant was revoked asks for its key" do
+    ctx = storage_root!("models_revoked_key")
+
+    chat_brain!(ctx, "keyed", %{
+      "api_key" => %{
+        "type" => "api_key:keyed.test",
+        "fields" => ["KEYED_API_KEY"],
+        "required" => true,
+        "hosts" => ["api.keyed.test"]
+      }
+    })
+
+    ConsentFixtures.bind_key!(ctx, "catalyst:local.keyed", %{"KEYED_API_KEY" => "k-test"})
+    assert states(ctx) == %{"keyed" => :ready}
+
+    {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "catalyst:local.keyed")
+    assert states(ctx) == %{"keyed" => :needs_key}
+  end
+
+  # A catalyst that speaks `model/chat@1` with `needs`, published under
+  # the test's storage root.
+  defp chat_brain!(ctx, name, needs) do
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
+        name: name,
+        version: "0.1.0",
+        type: "catalyst",
+        manifest:
+          Jason.encode!(%{
+            "contracts" => [Prima.Model.chat_contract()],
+            "needs" => needs,
+            "caps" => %{
+              "egress" => %{"domains" => Enum.flat_map(Map.values(needs), &(&1["hosts"] || []))}
+            }
+          })
+      })
+  end
+
+  # The state each of the test's own brains reads in Aqua's setup.
+  defp states(ctx) do
+    {:ok, providers} = Aqua.providers(ctx)
+
+    for %{provider: p, state: state} <- providers,
+        p in ["open", "keyed"],
+        into: %{},
+        do: {p, state}
+  end
+
   defp commit!(ctx, ref, over) do
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
     decisions = Map.merge(%{ref: ref}, over)

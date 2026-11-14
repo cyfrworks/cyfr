@@ -389,7 +389,8 @@ defmodule Aqua.Models do
   reason, program}` with `kind` `"login"` for a program's own sign-in and
   the credential kind otherwise (`qualifier` the provider its key is
   for), or nil for a brain that needs nothing — its `state` as its own
-  consent reads it, and `shared`, `%{owner, person_daily}` when what
+  consent reads it (`:needs_grant` for a brain never granted, or whose
+  grant was revoked, that needs nothing else of the person), and `shared`, `%{owner, person_daily}` when what
   binds it is a key someone shared with the person.
   """
   @type provider :: %{
@@ -398,6 +399,7 @@ defmodule Aqua.Models do
           need: map() | nil,
           state:
             :ready
+            | :needs_grant
             | :needs_key
             | :needs_sign_in
             | :consent_damaged
@@ -455,7 +457,17 @@ defmodule Aqua.Models do
   end
 
   defp plan_state(%{ready: true}, _ref), do: :ready
-  defp plan_state(plan, ref), do: plan |> unready(ref) |> elem(0)
+
+  defp plan_state(plan, ref) do
+    if grant_only?(plan), do: :needs_grant, else: plan |> unready(ref) |> elem(0)
+  end
+
+  # A brain with no grant to stand on, never made or revoked, and no
+  # required need: the person's grant is all it asks, so no key is offered.
+  # A required need already met before a revocation is not told apart
+  # here, since an ungranted plan carries no binding to read it from.
+  defp grant_only?(plan),
+    do: head_state(plan) in ["missing", "revoked"] and is_nil(need_of(plan))
 
   # A bound need whose binding is a share offered to the person: the share
   # the setup plan names is the one the person's consent holds.

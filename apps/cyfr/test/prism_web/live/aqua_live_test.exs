@@ -1212,10 +1212,51 @@ defmodule PrismWeb.AquaLiveTest do
              )
     end
 
+    test "a brain that needs nothing asks only for the grant, and is connected once granted",
+         %{conn: conn, ctx: ctx} do
+      publish_brain!(ctx, "open", %{})
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      assert has_element?(view, ~s(#aqua-setup-brain-open[data-state="needs_grant"]))
+      assert has_element?(view, "#aqua-setup-brain-open label", "needs only your grant")
+      refute has_element?(view, "#aqua-setup-brain-open", "connected")
+
+      assert has_element?(
+               view,
+               ~s([data-test="setup-needs"]),
+               "Aqua needs a key or a plan to answer: tick one you have."
+             )
+
+      view |> element("#aqua-setup-brain-open input") |> render_click()
+      assert has_element?(view, "#aqua-setup-step-open", "open: grant it to connect.")
+      refute has_element?(view, "#aqua-setup-step-open", "key")
+
+      view
+      |> element("#aqua-setup-step-open button[phx-click=open_consent]", "Grant")
+      |> render_click()
+
+      assert has_element?(
+               view,
+               ~s(#system-layer-dialog [data-kind="grant"]),
+               "This app asks for no credentials."
+             )
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+      Prima.Test.Wait.wait_until(
+        fn -> has_element?(view, ~s(#aqua-setup-brain-open[data-state="ready"]), "connected") end,
+        5_000,
+        "the brain connected"
+      )
+
+      assert has_element?(view, "#aqua-setup-pick", "Which connected brain is Aqua's own?")
+    end
+
     test "picking a connected brain for Aqua asks for its consent again at once",
          %{conn: conn, ctx: ctx} do
       athanor = seated_athanor()
       publish_brain!(ctx, "open", %{})
+      grant!(ctx, "catalyst:local.open", %{bindings: []})
 
       :ok =
         PrismWeb.ModelCatalog.remember(athanor.id, %{
