@@ -428,7 +428,7 @@ defmodule Sanctum.ProviderTest do
                   reason: :invalid_tool,
                   message:
                     "Name each tool as its type, namespace and name without a version, " <>
-                      "such as c:local.my-tool"
+                      "such as c:local.my-tool, or an outside server's tool as server:tool"
                 }} =
                  key_tool(ctx, %{"action" => "create", "name" => "narrow", "tools" => [tool]})
       end

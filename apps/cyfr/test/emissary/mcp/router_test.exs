@@ -493,6 +493,64 @@ defmodule Emissary.MCP.RouterTest do
       end
     end
 
+    # A key narrowed to named tools is admitted to, and shown, only the
+    # outside tools it lists; the fixture athanor's owner mints it there.
+    defp narrowed_key!(ctx, name, tools) do
+      _owner = Sanctum.TestContext.owner!()
+      issuer = Sanctum.TestContext.issuer!(%{ctx | user_id: Arca.Test.Actor.owner_id()})
+
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(issuer, %{name: name, scope: ["execute"], tools: tools})
+
+      {:ok, key} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      key
+    end
+
+    test "a key narrowed to an outside tool calls and is shown that tool",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+      key = narrowed_key!(ctx, "greeter-only", ["greeter:hello"])
+
+      assert {tools_tool_outside_names(key), outside_names(key)} ==
+               {["greeter:hello"], ["greeter:hello"]}
+
+      assert call(key, "greeter:hello", %{}) == @hello_back
+      assert_received {:tools_call, %{"name" => "hello"}}
+    end
+
+    test "a key narrowed to other tools is neither shown nor let call an outside tool, and the server hears nothing",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+
+      for {name, tools} <- [
+            {"component-only", ["c:local.ship"]},
+            {"other-outside", ["greeter:goodbye"]}
+          ] do
+        key = narrowed_key!(ctx, name, tools)
+
+        assert {tools_tool_outside_names(key), outside_names(key)} == {[], []}
+
+        assert call(key, "greeter:hello", %{}) ==
+                 {:error, :insufficient_permissions,
+                  "This API key may run only the tools named when it was made, and this is " <>
+                    "not one of them."}
+
+        refute_received {:tools_call, _}
+      end
+    end
+
+    test "a key with execute and no tool list is shown and admitted as before",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+      key = narrowed_key!(ctx, "any-tool", [])
+
+      assert {tools_tool_outside_names(key), outside_names(key)} ==
+               {["greeter:hello"], ["greeter:hello"]}
+
+      assert call(key, "greeter:hello", %{}) == @hello_back
+      assert_received {:tools_call, %{"name" => "hello"}}
+    end
+
     test "a server without console is refused with the setting to turn on", %{
       context: ctx,
       url: url

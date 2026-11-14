@@ -13,9 +13,10 @@ defmodule Sanctum.ApiKey do
   There is one kind of key, `cyfr_sk_`, acting as the person who made it
   in the athanor it was made in. What it may do is fixed when it is made
   and never changed: its permissions, ticked from a preset (`presets/0`),
-  and optionally the named tools it may run (`tools`), each a component
-  named without its version. Left without tools, it runs any tool its
-  person granted. Both live in the stored `scope` list: a tool's name
+  and optionally the named tools it may run (`tools`): each a component
+  named without its version, or an outside server's tool by its
+  `server:tool` name. Left without tools, it runs any tool its person
+  granted. Both live in the stored `scope` list: a tool's name
   always holds a `:` and a permission never does, and a name outside the
   permission vocabulary never reaches the key's context
   (`context_from_metadata/1`), so only `admit_tool/2` reads the tools.
@@ -682,9 +683,10 @@ defmodule Sanctum.ApiKey do
   def looks_like_key?(_), do: false
 
   @doc """
-  Whether the key a context acts with may start a run of `reference`: a
-  context of no key, and a key with no tools, may; a key with tools may
-  run only those, whatever the version. A key whose row cannot be read
+  Whether the key a context acts with may start `reference`, a component
+  a run is rooted at or an outside server's `server:tool`: a context of no
+  key, and a key with no tools, may; a key with tools may start only
+  those, a component whatever its version. A key whose row cannot be read
   now (revoked, suspended, gone) starts nothing.
   """
   @spec admit_tool(Context.t(), String.t()) ::
@@ -754,26 +756,52 @@ defmodule Sanctum.ApiKey do
 
   defp tools_of(other), do: {:error, {:invalid_tool, other}}
 
-  # A tool is named as a person names a component they run, without its
-  # version, so the key keeps running it across updates.
+  # A listed tool is one of two kinds, told apart by what precedes its
+  # first `:`. A component type there (`c`, `catalyst`, ... or a source
+  # type) makes it a component, named as a person names one they run,
+  # without its version, so the key keeps running it across updates; its
+  # name is the canonical one. Anything else is an outside server's tool,
+  # `server:tool`, kept as written. So an outside server named like a
+  # component type cannot have its tools listed on a key.
   defp versionless(tool) when is_binary(tool) do
-    with {:ok, %Prima.ComponentRef{version: nil} = ref} <- Prima.ComponentRef.parse(tool),
-         :ok <- Prima.ComponentRef.validate_type(ref.type),
-         :ok <- Prima.ComponentRef.validate_namespace(ref.namespace),
-         :ok <- Prima.ComponentRef.validate_name(ref.name) do
-      {:ok, Prima.ComponentRef.to_name_ref(ref)}
+    if component?(tool) do
+      with {:ok, %Prima.ComponentRef{version: nil} = ref} <- Prima.ComponentRef.parse(tool),
+           :ok <- Prima.ComponentRef.validate_type(ref.type),
+           :ok <- Prima.ComponentRef.validate_namespace(ref.namespace),
+           :ok <- Prima.ComponentRef.validate_name(ref.name) do
+        {:ok, Prima.ComponentRef.to_name_ref(ref)}
+      else
+        _ -> :error
+      end
     else
-      _ -> :error
+      outside_tool(tool)
     end
   end
 
   defp versionless(_), do: :error
 
+  # The name a started tool is matched by: a component's whatever its
+  # version, an outside tool's as it is called.
   defp tool_name(reference) do
-    case Prima.ComponentRef.to_name_ref(reference) do
-      {:ok, name} -> {:ok, name}
-      {:error, _} -> :error
+    if component?(reference) do
+      case Prima.ComponentRef.to_name_ref(reference) do
+        {:ok, name} -> {:ok, name}
+        {:error, _} -> :error
+      end
+    else
+      outside_tool(reference)
     end
+  end
+
+  defp component?(name) do
+    case String.split(name, ":", parts: 2) do
+      [prefix, _rest] -> Prima.ComponentRef.type_prefix?(prefix)
+      _no_colon -> false
+    end
+  end
+
+  defp outside_tool(name) do
+    if name =~ ~r/\A[^\s:]+:\S+\z/, do: {:ok, name}, else: :error
   end
 
   # The stored list split into its permissions and its tools. Every entry

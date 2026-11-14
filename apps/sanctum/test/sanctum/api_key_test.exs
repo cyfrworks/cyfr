@@ -115,27 +115,42 @@ defmodule Sanctum.ApiKeyTest do
 
     test "tools are kept by name without a version; a versioned or bare name makes no key",
          %{ctx: ctx} do
-      for tool <- ["c:local.ship:1.0.0", "ship", "agent:local.aqua", 7] do
+      for tool <- [
+            "c:local.ship:1.0.0",
+            "c:ship",
+            "ship",
+            "agent:local.aqua",
+            "greeter: hello",
+            7
+          ] do
         assert {:error, {:invalid_tool, ^tool}} =
                  create_key(ctx, %{name: "narrow", tools: [tool]})
       end
 
-      assert {:ok, %{scope: ["execute"], tools: ["catalyst:local.ship", "reagent:acme.io.fetch"]}} =
+      # A component by its canonical name; an outside server's tool as
+      # written.
+      named = ["catalyst:local.ship", "reagent:acme.io.fetch", "greeter:hello"]
+
+      assert {:ok, %{scope: ["execute"], tools: ^named}} =
                create_key(ctx, %{
                  name: "narrow",
                  scope: ["execute"],
-                 tools: ["c:local.ship", "r:acme.io.fetch", "catalyst:local.ship"]
+                 tools: [
+                   "c:local.ship",
+                   "r:acme.io.fetch",
+                   "catalyst:local.ship",
+                   "greeter:hello"
+                 ]
                })
 
-      assert {:ok, %{scope: ["execute"], tools: ["catalyst:local.ship", "reagent:acme.io.fetch"]}} =
-               ApiKey.get(ctx, "narrow")
+      assert {:ok, %{scope: ["execute"], tools: ^named}} = ApiKey.get(ctx, "narrow")
 
       # The tools never reach the key's permissions.
       {:ok, key} = ApiKey.list(ctx)
       [%{id: id}] = key
       [row] = Arca.Repo.all(from(k in Arca.Schemas.ApiKey, where: k.id == ^id, select: k.scope))
 
-      assert Jason.decode!(row) == ["execute", "catalyst:local.ship", "reagent:acme.io.fetch"]
+      assert Jason.decode!(row) == ["execute" | named]
     end
 
     test "generates unique keys", %{ctx: ctx} do

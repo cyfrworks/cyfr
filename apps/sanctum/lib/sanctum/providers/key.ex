@@ -41,8 +41,9 @@ defmodule Sanctum.Providers.Key do
             ),
             Arg.new("tools", {:array, Arg.new(nil, :string)},
               description:
-                "The only tools the key may run, each named without its version (c:local.my-tool), " <>
-                  "fixed once it is made; omitted, it runs any tool you granted"
+                "The only tools the key may run, each a component named without its version " <>
+                  "(c:local.my-tool) or an outside server's tool (server:tool), fixed once it is " <>
+                  "made; omitted, it runs any tool you granted"
             ),
             Arg.new("ip_allowlist", {:array, Arg.new(nil, :string)},
               description: "List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])"
@@ -179,7 +180,7 @@ defmodule Sanctum.Providers.Key do
            reason: :invalid_tool,
            message:
              "Name each tool as its type, namespace and name without a version, " <>
-               "such as c:local.my-tool"
+               "such as c:local.my-tool, or an outside server's tool as server:tool"
          }}
 
       {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->

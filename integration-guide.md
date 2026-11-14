@@ -148,7 +148,7 @@ A key's permissions are ticked from a preset; the first is what a key made witho
 
 #### Tools
 
-`tools` names the only tools a key may run, each a component reference without its version (`c:local.weather`), so the key keeps running it across updates; what a named tool runs as its own dependencies stands on your grant of it. A run of any other tool, started, streamed or retried with the key, and the route of a tincture not named, are refused: "This API key may run only the tools named when it was made, and this is not one of them." Left empty, the key runs any tool you granted.
+`tools` names the only tools a key may run: each a component reference without its version (`c:local.weather`), so the key keeps running it across updates, or an outside server's tool by the name `tools/list` gives it (`greeter:hello`). What a named tool runs as its own dependencies stands on your grant of it. A run of any other tool (started, streamed or retried with the key), the route of a tincture not named, and a call to an outside tool not named are refused, and `tools/list` shows the key only the outside tools it names: "This API key may run only the tools named when it was made, and this is not one of them." Left empty, the key runs any tool you granted.
 
 ### IP Allowlist
 
