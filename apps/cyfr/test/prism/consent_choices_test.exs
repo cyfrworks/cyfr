@@ -825,6 +825,12 @@ defmodule Prism.ConsentChoicesTest do
              %{}
            ) ==
              {:ok, %{"max_memory_bytes" => 2_097_152}}
+
+    assert ConsentChoices.lowered(%{"rate_requests" => "11"}, asked, %{}) ==
+             {:error, "The rate can be at most 10 requests."}
+
+    assert ConsentChoices.lowered(%{"rate_requests" => "x"}, asked, %{}) ==
+             {:error, "The rate must be a whole number of requests."}
   end
 
   # The form shows memory in MiB, rounded; the value it shows, sent back
@@ -863,12 +869,6 @@ defmodule Prism.ConsentChoicesTest do
 
     assert ConsentChoices.lowered(%{"max_memory_bytes" => "999999"}, asked, %{}) ==
              {:error, "Memory (MiB) can be at most 1.5."}
-
-    assert ConsentChoices.lowered(%{"rate_requests" => "11"}, asked, %{}) ==
-             {:error, "The rate can be at most 10 requests."}
-
-    assert ConsentChoices.lowered(%{"rate_requests" => "x"}, asked, %{}) ==
-             {:error, "The rate must be a whole number of requests."}
   end
 
   describe "an exit's flows" do
