@@ -523,3 +523,69 @@ func TestServer_NoActionUsesTheHeldKeysWithoutTheProof(t *testing.T) {
 		}
 	}
 }
+
+// A restarted box finishes its account only with that account's own
+// recovery code: one made from the pending identifier with any other
+// secret, as anyone can make one, a malformed one and another account's
+// are refused before anything is sent, and none is handed the proof.
+func TestServer_ResumeTakesOnlyTheAccountsOwnCode(t *testing.T) {
+	home := newFakeHome(t)
+	dir := t.TempDir()
+	b := newBox(t, home, dir)
+	b.setUp("alice")
+	code := b.recovery()
+	home.accounts.Down = true
+	b.post("/saved", nil)
+	home.accounts.Down = false
+	again := newBox(t, home, dir)
+	identifier, _, err := account.DecodeRecoveryCode(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invented := func(id string) string {
+		secret := make([]byte, 32)
+		for i := range secret {
+			secret[i] = byte(i + 7)
+		}
+		c, err := account.EncodeRecoveryCode(id, secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	for name, c := range map[string]struct{ code, says string }{
+		"the identifier with an invented secret": {invented(identifier), "not this account's"},
+		"another account's code":                 {invented("per_" + strings.Repeat("ab", 32)), "another account's"},
+		"no code at all":                         {"CYFR-0000", "not a recovery code"},
+	} {
+		writes := home.accounts.Writes
+		w := again.forged("/resume", url.Values{"code": {c.code}})
+		if proofIn(w) != "" || home.accounts.Writes != writes || again.shell.View().Page != PageResume || !strings.Contains(again.page(), c.says) {
+			t.Errorf("%s: answered %d with proof %q, writes %d to %d, page %s", name, w.Code, proofIn(w), writes, home.accounts.Writes, again.shell.View().Page)
+		}
+	}
+	writes := home.accounts.Writes
+	w := again.forged("/resume", url.Values{"code": {code}})
+	if proofIn(w) == "" || home.accounts.Writes == writes || again.shell.View().Page != PageLocked {
+		t.Fatalf("the account's own code answered %d with proof %q, writes %d to %d", w.Code, proofIn(w), writes, home.accounts.Writes)
+	}
+}
+
+// A drawn confirmation's preview and reference go only to the request that
+// names its reference; a plain read shows neither.
+func TestServer_APlainReadShowsNoConfirmation(t *testing.T) {
+	_, b, _ := confirmable(t)
+	drawn := b.do(http.MethodGet, "/confirm?ref=cnr_1", "", nil).Body.String()
+	if !strings.Contains(drawn, "Household") || !strings.Contains(drawn, `value="cnr_1"`) {
+		t.Fatalf("the drawing request is not shown its confirmation:\n%s", drawn)
+	}
+	plain := b.do(http.MethodGet, "/", "", nil).Body.String()
+	if strings.Contains(plain, "Household") || strings.Contains(plain, "cnr_1") || strings.Contains(plain, "vault.create") ||
+		!strings.Contains(plain, "<h1>A confirmation is open</h1>") {
+		t.Fatalf("a plain read with a confirmation drawn:\n%s", plain)
+	}
+	other := b.do(http.MethodGet, "/confirm?ref=cnr_2", "", nil).Body.String()
+	if strings.Contains(other, "Household") || strings.Contains(other, "cnr_1") {
+		t.Fatalf("a request naming another reference is shown the drawn one:\n%s", other)
+	}
+}

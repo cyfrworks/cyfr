@@ -58,7 +58,11 @@ const Origin = "http://" + Listen
 // /saved and /name pass through Shell.asPage, and /enroll opens a first
 // connection with a held key only for the proof, each checked under the
 // shell's one lock where it acts. A typed recovery code is the account's
-// own authority: /resume, when it re-derives the key, issues the proof.
+// own authority only when it derives the recovery key the pending
+// attempt's genesis was made with: /resume checks that before it sends
+// anything, and only then issues the proof. A drawn confirmation's
+// preview goes only to the request naming its reference (GET /confirm,
+// /confirm/decide), never to a plain read.
 // Never a cookie: 127.0.0.1's cookies go to every port on it, so another
 // local listener would collect and replay one. A setup's passphrase, the
 // secret-to-be on a machine without a chip, is shown only in the answer to
@@ -145,8 +149,9 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == "/confirm" {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		srv.Shell.Draw(ctx, r.URL.Query().Get("ref"))
-		srv.page(w, pageData{View: srv.Shell.pageView(nil)})
+		ref := r.URL.Query().Get("ref")
+		srv.Shell.Draw(ctx, ref)
+		srv.page(w, pageData{View: srv.Shell.confirmView(ref)})
 		return
 	}
 	action, ok := actions[r.URL.Path]
@@ -247,7 +252,7 @@ var actions = map[string]action{
 	}},
 	"/confirm/decide": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.Decide(ctx, string(f.get("ref")), string(f.get("decision")) == "confirm", f.get("secret"))
-		v := srv.Shell.pageView(nil)
+		v := srv.Shell.confirmView(string(f.get("ref")))
 		if v.Page == PageConfirm {
 			srv.page(w, pageData{View: v})
 			return

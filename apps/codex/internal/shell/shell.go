@@ -483,7 +483,21 @@ func (s *Shell) pageView(proof []byte) View {
 	if !s.holds(proof) {
 		v.RecoveryCode = ""
 	}
-	v.Passphrase = ""
+	v.Passphrase, v.Confirm = "", nil
+	return v
+}
+
+// confirmView is pageView for the request that names ref: a drawn
+// confirmation's preview goes only to a request naming its reference, the
+// one the CYFR handed the page that asked, never to a plain read.
+func (s *Shell) confirmView(ref string) View {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.view()
+	v.RecoveryCode, v.Passphrase, v.Confirm = "", "", nil
+	if s.confirm != nil && ref != "" && s.confirm.Ref == ref {
+		v.Confirm = s.confirm
+	}
 	return v
 }
 
@@ -970,10 +984,36 @@ func (s *Shell) resume(ctx context.Context, code string) bool {
 		s.say("That is another account's recovery code.")
 		return false
 	}
-	s.making = &making{attempt: *s.unfinished, key: account.RecoveryKey(secret), saved: true}
+	key := account.RecoveryKey(secret)
 	clear(secret)
+	// The code is the account's authority only when its key is the
+	// recovery key the attempt's genesis was made with: a code's checksum
+	// anyone can compute, and its identifier is no secret. Checked before
+	// anything is sent, and before the proof is issued.
+	if !madeWith(s.unfinished.Genesis, s.unfinished.Identifier, key) {
+		clear(key)
+		s.say("That recovery code is not this account's.")
+		return false
+	}
+	s.making = &making{attempt: *s.unfinished, key: key, saved: true}
 	s.submit(ctx)
 	return true
+}
+
+// madeWith is whether genesis, signed and naming identifier, lists key's
+// public half among its recovery keys.
+func madeWith(genesis map[string]any, identifier string, key ed25519.PrivateKey) bool {
+	state, err := account.Walk([]any{genesis})
+	if err != nil || state.Identifier != identifier {
+		return false
+	}
+	pub := key.Public().(ed25519.PublicKey)
+	for _, listed := range state.Recovery {
+		if bytes.Equal(listed, pub) {
+			return true
+		}
+	}
+	return false
 }
 
 // Rename takes another name for the account being made, whose name

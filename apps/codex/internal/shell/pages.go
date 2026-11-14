@@ -88,6 +88,9 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{else if eq .Page "name"}}
 <h1>Your name</h1>
 <form method="post" action="/name">{{template "proof"}}<label>A name for life<input name="name" value="{{.Name}}" autocomplete="off" required></label><button>Take it</button></form>
+{{else if and (eq .Page "confirm") (not .Confirm)}}
+<h1>A confirmation is open</h1>
+<p>It is shown in the window that asked for it.</p>
 {{else if eq .Page "confirm"}}
 <h1>Confirm on this screen</h1>
 <p>CYFR asks to confirm <b>{{.Confirm.Operation}}</b>:</p>
