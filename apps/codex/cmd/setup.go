@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/user"
 	"slices"
 	"strings"
 	"sync"
@@ -57,31 +56,11 @@ Exit status 1: CYFR was not set up and started, the message saying why.`,
 		if port < 0 || port > 65535 {
 			return fmt.Errorf("--port takes a port from 1 to 65535, or 0 for a free one; %d is none", port)
 		}
-		if continued, err := setupWithGroup(continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
+		if continued, err := withDockerGroup("setup", continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
 			return err
 		}
 		return runSetup(ctx, setupOptions{port: port, noPull: noPull, noOpen: noOpen}, cmd.OutOrStdout())
 	},
-}
-
-// setupWithGroup is cyfr setup's first step, in a terminal older than the
-// account's docker group, as cyfr up's (upWithGroup): the same cyfr setup,
-// through sg, serves the pages, so every step of their run reaches Docker
-// and a failed one shows its own sentence. It runs nothing when Docker
-// already answers this account, a rootless Docker included, or when there
-// is no sg to run it with, and answers true when that run did the work.
-func setupWithGroup(args []string, out, errOut io.Writer) (bool, error) {
-	if !machine.supported() || machine.reachable() {
-		return false, nil
-	}
-	if _, err := os.Stat(sgProgram); err != nil {
-		return false, nil
-	}
-	account, err := user.Current()
-	if err != nil {
-		return false, err
-	}
-	return continueWithGroup("setup", args, account.Username, out, errOut)
 }
 
 // setupOptions are cyfr setup's flags.
