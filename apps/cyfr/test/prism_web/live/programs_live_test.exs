@@ -1286,4 +1286,162 @@ defmodule PrismWeb.ProgramsLiveTest do
              "console" => true
            }
   end
+
+  # A tool server elsewhere holding a literal header, a vault-bound one and
+  # members the form does not show.
+  defp tool_server!(user, athanor) do
+    entry!(user, athanor, "local-key", %{"hosts" => ["127.0.0.1"], "port" => 9})
+
+    {:ok, row} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "relay",
+        url: "https://127.0.0.1:9/mcp",
+        enabled: false,
+        config_json:
+          Jason.encode!(%{
+            "headers" => %{"X-Hub" => "hub-literal-0123", "Authorization" => "vault:local-key"},
+            "timeout_ms" => 45_000,
+            "tool_patterns" => ["search"],
+            "console" => true
+          })
+      })
+
+    row
+  end
+
+  defp edit_relay(view) do
+    view |> element("tr[phx-value-name=relay]") |> render_click()
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+  end
+
+  test "Edit on a tool server shows its address and headers, a literal as [set] and never its value",
+       %{conn: conn, athanor: athanor, user: user} do
+    tool_server!(user, athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    html = edit_relay(view)
+
+    assert has_element?(
+             view,
+             ~s(form#edit-server input[name="url"][value="https://127.0.0.1:9/mcp"])
+           )
+
+    assert view |> element("form#edit-server textarea[name=headers]") |> render() =~
+             "Authorization: vault:local-key\nX-Hub: [set]"
+
+    refute html =~ "hub-literal-0123"
+    refute render(view) =~ "hub-literal-0123"
+  end
+
+  test "an Edit of a tool server keeps a [set] header's stored value and every unshown member",
+       %{conn: conn, athanor: athanor, user: user} do
+    before = tool_server!(user, athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    edit_relay(view)
+
+    view |> form("form#edit-server", %{"url" => "https://127.0.0.1:9/mcp/v2"}) |> render_submit()
+    answered(view)
+
+    assert flash(view, "info") =~ "'relay' saved"
+    assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+
+    assert {saved.id, saved.url, saved.epoch} ==
+             {before.id, "https://127.0.0.1:9/mcp/v2", before.epoch + 1}
+
+    assert Arca.McpServerStorage.config(saved) == %{
+             "headers" => %{"X-Hub" => "hub-literal-0123", "Authorization" => "vault:local-key"},
+             "timeout_ms" => 45_000,
+             "tool_patterns" => ["search"],
+             "console" => true
+           }
+  end
+
+  test "an Edit of a tool server takes a typed value in place of [set], and one saved as read writes nothing",
+       %{conn: conn, athanor: athanor, user: user} do
+    tool_server!(user, athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    edit_relay(view)
+
+    view |> form("form#edit-server", %{}) |> render_submit()
+    assert flash(view, "info") == "Nothing changed in 'relay'."
+    {:ok, unchanged} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+
+    # The row stays open; Edit opens the form again.
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+
+    view
+    |> form("form#edit-server", %{
+      "headers" => "Authorization: vault:local-key\nX-Hub: hub-literal-new"
+    })
+    |> render_submit()
+
+    answered(view)
+
+    assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+    assert saved.epoch == unchanged.epoch + 1
+    assert Arca.McpServerStorage.config(saved)["headers"]["X-Hub"] == "hub-literal-new"
+  end
+
+  test "a kept literal an upstream echoes after an Edit reaches neither the answer, the flash nor the log, eight bytes or more",
+       %{conn: conn, athanor: athanor} do
+    stub = HTTPStub.open()
+
+    HTTPStub.stub(stub, "POST", "/v2", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      request = Jason.decode!(body)
+      [hub] = Plug.Conn.get_req_header(conn, "x-hub")
+      [short] = Plug.Conn.get_req_header(conn, "x-short")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => request["id"],
+          "error" => %{"code" => -32001, "message" => "rejected headers #{hub} #{short}"}
+        })
+      )
+    end)
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "relay",
+        url: "http://127.0.0.1:#{stub.port}/mcp",
+        enabled: false,
+        config_json:
+          Jason.encode!(%{"headers" => %{"X-Hub" => "hub-literal-0123", "X-Short" => "seven77"}})
+      })
+
+    {:ok, _} = Arca.McpServerStorage.update(ctx(athanor), "relay", %{enabled: true})
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("relay", athanor.id) end)
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=relay]") |> render_click()
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        view
+        |> form("form#edit-server", %{"url" => "http://127.0.0.1:#{stub.port}/v2"})
+        |> render_submit()
+
+        html = answered(view)
+        refute html =~ "hub-literal-0123"
+      end)
+
+    # The masker's stated limit: a stored value under eight bytes is shown as
+    # the upstream sent it (a secret belongs in a vault entry).
+    assert flash(view, "error") == "'relay' saved — rejected headers [REDACTED] seven77"
+    refute log =~ "hub-literal-0123"
+    assert log =~ "[REDACTED] seven77"
+
+    {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+
+    assert Arca.McpServerStorage.config(saved)["headers"] == %{
+             "X-Hub" => "hub-literal-0123",
+             "X-Short" => "seven77"
+           }
+  end
 end

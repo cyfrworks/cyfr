@@ -274,12 +274,117 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
 
-    {:error, %Prima.Refusal{stage: :admission, message: message}} =
-      Sanctum.Gate.call_in_chain("fetcher:issues.list", guest(ctx), %{}, auth,
-        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
-      )
+    assert {:error,
+            %Prima.Refusal{stage: :admission, class: :forbidden, reason: {:invoke_denied, _}}} =
+             Sanctum.Gate.call_in_chain("fetcher:issues.list", guest(ctx), %{}, auth,
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+             )
+  end
 
-    assert message =~ "Denied by chain authority"
+  # The call under `auth` passes the authority (it fails later, at the
+  # upstream nothing serves here) or is refused by it.
+  defp authorized?(ctx, auth) do
+    case Sanctum.Gate.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+           lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+         ) do
+      {:error, %Prima.Refusal{stage: :admission, class: :forbidden, reason: {:invoke_denied, _}}} ->
+        false
+
+      {:error, _upstream} ->
+        true
+    end
+  end
+
+  # The server's whole definition replaced through `mcp_servers.update`, the
+  # edit's own path, at the epoch it stands at now.
+  defp edit(ctx, config, extra \\ %{}) do
+    {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "ghserver")
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("ghserver", ctx.athanor_id) end)
+
+    assert {:ok, _} =
+             Emissary.External.Provider.handle(
+               "mcp_servers",
+               ctx,
+               Map.merge(
+                 %{
+                   "action" => "update",
+                   "name" => "ghserver",
+                   "epoch" => epoch,
+                   "config" => config
+                 },
+                 extra
+               )
+             )
+
+    Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+  end
+
+  @granted %{
+    "url" => "https://127.0.0.1:1/mcp",
+    "headers" => %{},
+    "timeout_ms" => 1_000,
+    "tool_patterns" => ["issues.*", "repo_get"]
+  }
+
+  test "an edit that changes neither the address nor a header keeps the grant",
+       %{ctx: ctx, digest: digest} do
+    auth = authority_with_server(digest)
+    assert authorized?(ctx, auth)
+
+    # The same definition saved again, another timeout and other tool
+    # patterns: none changes where the calls go or what rides along.
+    for config <- [
+          @granted,
+          %{@granted | "timeout_ms" => 5_000},
+          %{@granted | "tool_patterns" => ["issues.*"]}
+        ] do
+      edit(ctx, config)
+      assert authorized?(ctx, auth), inspect(config)
+    end
+  end
+
+  test "an edit of the address or of any header no longer matches the grant, a literal Host among them",
+       %{ctx: ctx} do
+    for name <- ["gh-key", "gh-key-2"] do
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: name,
+          kind: "api_key",
+          fields: %{"token" => "ghp_grant_test_0123456789"},
+          destination: %{"hosts" => ["127.0.0.1", "127.0.0.2"], "port" => 1}
+        })
+    end
+
+    # The grant is made for a definition carrying a vault-bound header and
+    # a literal one.
+    granted = %{
+      @granted
+      | "headers" => %{"Authorization" => "Bearer vault:gh-key", "X-Team" => "blue"}
+    }
+
+    edit(ctx, granted)
+    {:ok, server} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "ghserver")
+    {:ok, digest} = Sanctum.ToolServerDigest.from_server(server)
+    auth = authority_with_server(digest)
+    assert authorized?(ctx, auth)
+
+    for config <- [
+          %{granted | "url" => "https://127.0.0.2:1/mcp"},
+          %{granted | "url" => "https://127.0.0.1:1/other"},
+          put_in(granted, ["headers", "Authorization"], "Bearer vault:gh-key-2"),
+          %{granted | "headers" => %{"X-Team" => "blue"}},
+          put_in(granted, ["headers", "X-Team"], "green"),
+          %{granted | "headers" => %{"Authorization" => "Bearer vault:gh-key"}},
+          # The address and the vault-bound header kept, a literal Host
+          # added: a peer routing on it sends the credential elsewhere.
+          put_in(granted, ["headers", "Host"], "other-tenant.example")
+        ] do
+      edit(ctx, config)
+      refute authorized?(ctx, auth), inspect(config)
+
+      edit(ctx, granted)
+      assert authorized?(ctx, auth)
+    end
   end
 
   test "an unknown server resolves to the sentinel and denies", %{ctx: ctx, digest: digest} do
