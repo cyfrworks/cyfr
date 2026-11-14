@@ -39,7 +39,7 @@ var restoreCmd = &cobra.Command{
 	Short: "Put a snapshot from backups/ back with the whole cluster stopped, and declare the restore",
 	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential the backup carried until its owner re-enables it.
 
-1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops.
+1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops. So does a project directory, scaffold directory or directory of ./data this account cannot write: on native Linux the server's container owns the storage root once the stack has run, so the restore runs as root, with sudo.
 2. Take the stack's lock, finishing a change an interrupted command left; cancel a tailnet join that waits for approval; then stop this host's stack, timing each service.
 3. Bar CYFR from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
 4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, so the compose file in place delivers the setting at every step. A refusal here puts the two files back as they were, which lifts the bar.
@@ -48,7 +48,7 @@ var restoreCmd = &cobra.Command{
 7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
 8. Forget the record of the machine's last tailnet join, since the snapshot's .env names its own tailnet machine, then start the stack as every cyfr start runs, waiting for cyfr's health, unless --no-start.
 
-Exit status 3: the restore is declared and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one the snapshot's .env names, not joined, or HTTPS off); the message says what to do. A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
+Exit status 3: the restore is declared and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one the snapshot's .env names, not joined, or HTTPS off); the message says what to do. Run through sudo, the restore gives .env, docker-compose.yml, the scaffold files and .cyfr/ back to the account that ran sudo (SUDO_UID and SUDO_GID); the storage root and the database are left to the image's user, which the next start hands them to. A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
 	GroupID: "server",
 	Example: "  cyfr restore backups/20261016T120000Z",
 	Args:    cobra.ExactArgs(1),
@@ -323,6 +323,13 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	if err != nil {
 		return err
 	}
+	if err := refuseUnwritableProject(snap); err != nil {
+		return err
+	}
+	// Run as root through sudo, what the restore writes of the project goes
+	// back to the person who ran sudo, after the lock is released, on every
+	// way out.
+	defer returnToSudoAccount(snap, errOut)
 	// The lock an up, an update and an access change hold too, held from
 	// before the first docker call to the restore's end; a change recovery
 	// could not finish leaves the stack in no known state, and the restore
@@ -446,7 +453,7 @@ func (r *restorer) run() error {
 		if stopErr := r.stopFailedStart(ctx); stopErr != nil {
 			message = fmt.Sprintf("The restored stack did not start (%v), and %v; stop it with 'cyfr down'", err, stopErr)
 		}
-		return fmt.Errorf("%s.\nThe restore %s is declared and the next start takes it; read 'cyfr logs', fix the cause and run 'cyfr up'", message, r.restoreID)
+		return fmt.Errorf("%s.\nThe restore %s is declared and the next start takes it; read its log with 'docker compose logs cyfr', fix the cause and run 'cyfr up'", message, r.restoreID)
 	}
 	fmt.Fprintf(r.out, "\nRestored the snapshot of release %s taken at %s; restore %s.\n", m.Version, m.TakenAt, r.restoreID)
 	return nil
@@ -860,26 +867,83 @@ func (r *restorer) probeRestoredPostgres() error {
 	return nil
 }
 
-// refuseUnwritableParts refuses, before any part is put back, a place
-// the put-back writes or removes in that this process cannot: the image's
-// entrypoint hands the storage root to the image's user at every start,
-// so on native Linux a person who is not root cannot clear or rename what
-// it holds. The places are putParts's, in its order, so that once this
-// passes no later step fails for a permission: the project directory
-// (publishCompose and the barrier's lowering), each scaffold file's
-// directory, each storage mount's directory and every directory clearDir
-// removes or empties under it, and the SQLite file's directory. A place
-// that does not exist yet is made in its nearest existing parent.
-func (r *restorer) refuseUnwritableParts() error {
-	c := r.config
+// refuseUnwritableProject refuses, before anything stops, a restore this
+// process could not write the project's own places for: the project
+// directory, each scaffold file's directory and every directory of the
+// shipped storage root, ./data, which the image's entrypoint hands to the
+// image's user at every start. On native Linux a person who is not root
+// learns there that the restore needs sudo. refuseUnwritableParts checks
+// again, once the restored configuration names every place.
+func refuseUnwritableProject(snap *snapshotFiles) error {
+	dirs := snap.projectPlaces()
+	err := filepath.WalkDir(storageRoot, func(p string, d fs.DirEntry, err error) error {
+		switch {
+		case errors.Is(err, fs.ErrNotExist) && p == storageRoot:
+			return nil
+		case err != nil:
+			return err
+		case d.IsDir():
+			dirs = append(dirs, p)
+		}
+		return nil
+	})
+	if err == nil {
+		err = firstUnwritable(dirs)
+	}
+	if err != nil {
+		return fmt.Errorf("%v; nothing was changed", unwritable(err))
+	}
+	return nil
+}
+
+// storageRoot is the storage root the shipped docker-compose.yml binds.
+const storageRoot = "data"
+
+// projectPlaces are the directories the put-back writes in that the
+// snapshot alone names: the project directory (publishCompose and the
+// barrier's lowering) and each scaffold file's directory, where the
+// snapshot or the project holds the file.
+func (s *snapshotFiles) projectPlaces() []string {
 	dirs := []string{"."}
-	for _, name := range r.snap.manifest.Scaffold {
-		_, err := os.Lstat(filepath.Join(r.snap.dir, "scaffold", name))
+	for _, name := range s.manifest.Scaffold {
+		_, err := os.Lstat(filepath.Join(s.dir, "scaffold", name))
 		if _, held := os.Lstat(name); errors.Is(err, fs.ErrNotExist) && errors.Is(held, fs.ErrNotExist) {
 			continue
 		}
 		dirs = append(dirs, filepath.Dir(name))
 	}
+	return dirs
+}
+
+// firstUnwritable answers the first of dirs this process cannot create,
+// rename and remove entries in, a place that does not exist yet judged by
+// its nearest existing parent, as the put-back would make it there.
+func firstUnwritable(dirs []string) error {
+	for _, dir := range dirs {
+		for {
+			if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) || filepath.Dir(dir) == dir {
+				break
+			}
+			dir = filepath.Dir(dir)
+		}
+		if err := canReplaceIn(dir); err != nil {
+			return &fs.PathError{Op: "write", Path: dir, Err: err}
+		}
+	}
+	return nil
+}
+
+// refuseUnwritableParts refuses, before any part is put back, a place
+// the put-back writes or removes in that this process cannot: the image's
+// entrypoint hands the storage root to the image's user at every start,
+// so on native Linux a person who is not root cannot clear or rename what
+// it holds. The places are putParts's, in its order, so that once this
+// passes no later step fails for a permission: the snapshot's own
+// (projectPlaces), each storage mount's directory and every directory
+// clearDir removes or empties under it, and the SQLite file's directory.
+func (r *restorer) refuseUnwritableParts() error {
+	c := r.config
+	dirs := r.snap.projectPlaces()
 	if c.storage == "local" {
 		keep := sqliteKeep(c.sqliteFile)
 		for i, m := range c.storageMounts {
@@ -910,16 +974,8 @@ func (r *restorer) refuseUnwritableParts() error {
 	if c.adapter == "sqlite" {
 		dirs = append(dirs, filepath.Dir(c.sqliteFile))
 	}
-	for _, dir := range dirs {
-		for {
-			if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) || filepath.Dir(dir) == dir {
-				break
-			}
-			dir = filepath.Dir(dir)
-		}
-		if err := canReplaceIn(dir); err != nil {
-			return unwritable(&fs.PathError{Op: "write", Path: dir, Err: err})
-		}
+	if err := firstUnwritable(dirs); err != nil {
+		return unwritable(err)
 	}
 	return nil
 }
