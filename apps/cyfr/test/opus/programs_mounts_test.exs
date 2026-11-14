@@ -183,10 +183,12 @@ defmodule Opus.ProgramsMountsTest do
       :ok = Programs.sign_in_attach(admin(ctx), token, self())
 
       assert {:ok, %{deleted: "claude"}} =
-               Provider.handle("mcp_servers", admin(ctx), %{
-                 "action" => "delete",
-                 "name" => "claude"
-               })
+               Sanctum.TestContext.confirming(admin(ctx), fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "delete",
+                   "name" => "claude"
+                 })
+               end)
 
       assert_receive {Opus.Programs, ^token, {:ended, :row_ended}}, 3_000
       home_id = row.id
@@ -202,10 +204,12 @@ defmodule Opus.ProgramsMountsTest do
       driven_row(ctx, "scratchy", "scratch")
 
       assert {:ok, _deleted} =
-               Provider.handle("mcp_servers", admin(ctx), %{
-                 "action" => "delete",
-                 "name" => "scratchy"
-               })
+               Sanctum.TestContext.confirming(admin(ctx), fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "delete",
+                   "name" => "scratchy"
+                 })
+               end)
 
       :sys.get_state(Emissary.External.Reconciler)
       refute_receive {:control, "home", _message, _fields}, 300

@@ -529,9 +529,37 @@ defmodule PrismWeb.SystemLayer do
           | {:error, term(), Phoenix.LiveView.Socket.t()}
           | {:asked, Phoenix.LiveView.Socket.t()}
   def call(socket, tag, tool, args, opts \\ []) do
+    result = Ops.call_tool(socket, tool, args, repeating(socket, tag))
+    answer(socket, tag, tool, args, result, opts)
+  end
+
+  @doc """
+  The options a dispatch of the change `tag` names carries
+  (`PrismWeb.Ops.call_tool/4`): the secret of the ask the page holds under
+  `tag`, which makes the dispatch its repeat, or none. For a page that
+  dispatches off its own process, a change whose answer can take longer
+  than the browser waits for an event, and hands the answer back to
+  `answer/6` on its process; `call/5` is the two in one.
+  """
+  @spec repeating(Phoenix.LiveView.Socket.t(), term()) :: keyword()
+  def repeating(socket, tag) do
+    case held_for(socket, tag) do
+      nil -> []
+      held -> [confirmation_id: held.id]
+    end
+  end
+
+  @doc """
+  What `call/5` answers for `result`, the answer of `tool` dispatched with
+  `args` as the change `tag` names, under the options `repeating/2` gave
+  it: the held ask settled by it, and a new ask held and shown.
+  """
+  @spec answer(Phoenix.LiveView.Socket.t(), term(), String.t(), map(), term(), keyword()) ::
+          {:ok, term(), Phoenix.LiveView.Socket.t()}
+          | {:error, term(), Phoenix.LiveView.Socket.t()}
+          | {:asked, Phoenix.LiveView.Socket.t()}
+  def answer(socket, tag, tool, args, result, opts \\ []) do
     held = held_for(socket, tag)
-    repeat = if held, do: [confirmation_id: held.id], else: []
-    result = Ops.call_tool(socket, tool, args, repeat)
     socket = if held, do: settle_held(socket, held, result), else: socket
 
     case result do
@@ -2889,7 +2917,8 @@ defmodule PrismWeb.SystemLayer do
       assign(assigns,
         entry: assigns.panel.entry,
         methods: (assigns.panel.entry && assigns.panel.entry[:methods]) || [],
-        open: assigns.panel.status in [:pending, :waiting]
+        open: assigns.panel.status in [:pending, :waiting],
+        removal: removal(assigns.panel.entry)
       )
 
     ~H"""
@@ -2909,6 +2938,8 @@ defmodule PrismWeb.SystemLayer do
         preview={@entry.preview}
         test="confirmation-preview"
       />
+
+      <p :if={@removal} class="text-sm" data-test="confirmation-removal">{@removal}</p>
 
       <p
         :if={is_nil(@entry) or is_nil(@entry[:preview])}
@@ -3129,6 +3160,32 @@ defmodule PrismWeb.SystemLayer do
 
   defp detail(value) when is_list(value), do: Enum.join(value, ", ")
   defp detail(value), do: value
+
+  # What removing a program does beyond its row, said before it is
+  # confirmed: its sessions and its folder end with it, and the grants
+  # that use it, which its confirmation names, ask again.
+  defp removal(%{
+         action: "program_definition",
+         preview: %{"operation" => "mcp_servers.delete", "details" => details}
+       }) do
+    ends =
+      if details["folder"] == "scratch",
+        do: "Removing it ends its sessions.",
+        else: "Removing it ends its sessions and removes its folder with everything kept there."
+
+    case details["grants_asking_again"] do
+      [one] ->
+        "#{ends} The one grant that uses it will ask again: #{one}."
+
+      [_ | _] = all ->
+        "#{ends} The #{length(all)} grants that use it will ask again: #{Enum.join(all, ", ")}."
+
+      _none ->
+        "#{ends} No grant uses it."
+    end
+  end
+
+  defp removal(_entry), do: nil
 
   # The client that asked, as the home named it: a hint, never a proof.
   defp asker(%{"kind" => "client"} = asker), do: "a paired device#{named(asker)}"

@@ -516,7 +516,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # Each agent's catalyst, read once through its setup plan: the programs
   # its login needs offer to install, and whether it runs on a program's
   # own sign-in (`Aqua.brain_signs_in?/1`), so its card offers to change
-  # the entry, not a key. A plan that cannot be read offers nothing.
+  # the program, not a key. A plan that cannot be read offers nothing.
   defp assign_plans(socket, ctx, agents) do
     plans =
       for ref <- agents |> Enum.map(& &1["catalyst_ref"]) |> Enum.uniq(),
@@ -577,9 +577,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         "/aqua?" <> URI.encode_query(%{"setup" => "1", "agent" => agent["name"]})
       )
 
-  # A ready brain's action changes what it is bound to: a key, or the login
-  # entry its program signs in with, which holds no key.
-  defp change_label({:ready, _}, true), do: "Change the entry"
+  # A ready brain's action changes what it is bound to: a key, or the
+  # program row it runs its program in, which holds no key.
+  defp change_label({:ready, _}, true), do: "Change the program"
   defp change_label({:ready, _}, false), do: "Change the key"
   defp change_label(_unready, _signs_in?), do: "Connect a model"
 
@@ -1097,8 +1097,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet
         </span>
-        <span :if={match?({:needs_sign_in, _}, @model_status)} class="text-amber-300">
-          Program not signed in — it signs in on the Programs page
+        <span :if={match?({:needs_program, _}, @model_status)} class="text-amber-300">
+          Not connected — set up its program on the Programs page, then grant it
         </span>
         <%!-- A consent that exists but is damaged, or could not be read, is
              no key to connect: no Connect button is offered over it. --%>
@@ -1128,7 +1128,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {if @installing, do: "Installing…", else: "Install"}
         </button>
         <.link
-          :if={match?({status, _} when status in [:needs_key, :needs_sign_in], @model_status)}
+          :if={match?({status, _} when status in [:needs_key, :needs_program], @model_status)}
           patch={setup_path(@athanor, @agent, @is_soul)}
           data-test="connect"
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"

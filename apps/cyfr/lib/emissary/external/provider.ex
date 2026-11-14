@@ -45,6 +45,17 @@ defmodule Emissary.External.Provider do
   refresh, restart, enable, disable, delete — and defines none. No action
   is reachable from a running chain.
 
+  A program's definition is also a sensitive change (`program_definition`
+  in `Sanctum.Pairing`'s table), confirmed by the person whatever surface
+  asks: adding a program, an update that lets it reach more than the
+  stored row (a new host, a new or changed vault binding, a larger memory
+  or disk bound, another command, sign-in command, mark or kind of
+  folder), and its removal, which names the grants that use it and will
+  ask again. The confirmation shows and binds the whole definition
+  (`definition_change/4`), so one given for `TOKEN=vault:personal` does
+  not admit `TOKEN=vault:work`. An update that only narrows asks nothing,
+  and a tool server elsewhere asks none.
+
   `create` and `update` refuse a definition whose header names no active
   vault entry with a destination covering the server's URL, or whose
   env names no active disclosed entry, reading the entries'
@@ -402,7 +413,8 @@ defmodule Emissary.External.Provider do
   # a stale value, and no fallback number stands in for it.
   defp handle_create(ctx, args) do
     with {:ok, name, attrs} <- server_args(ctx, args),
-         {:ok, cap} <- server_cap() do
+         {:ok, cap} <- server_cap(),
+         :ok <- confirm_definition(ctx, "mcp_servers.create", name, nil, attrs) do
       attrs = Map.merge(attrs, %{name: name, cap: cap})
 
       case Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), attrs) do
@@ -433,7 +445,9 @@ defmodule Emissary.External.Provider do
   defp handle_update(ctx, args) do
     with {:ok, epoch} <- epoch_arg(args),
          {:ok, args} <- kept_headers(ctx, args, epoch),
-         {:ok, name, attrs} <- server_args(ctx, args) do
+         {:ok, name, attrs} <- server_args(ctx, args),
+         {:ok, stored} <- stored_at(ctx, name, epoch),
+         :ok <- confirm_definition(ctx, "mcp_servers.update", name, stored, attrs) do
       case Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), name, attrs, epoch) do
         {:ok, %{enabled: true} = server} ->
           stop_process(ctx, name)
@@ -489,6 +503,23 @@ defmodule Emissary.External.Provider do
   end
 
   defp kept_headers(_ctx, args, _epoch), do: {:ok, args}
+
+  # The row an update replaces, at the epoch the caller read: what its
+  # confirmation is decided against.
+  defp stored_at(ctx, name, epoch) do
+    case stored_for_keep(ctx, name) do
+      {:ok, %{epoch: ^epoch} = stored} ->
+        {:ok, stored}
+
+      {:ok, _moved} ->
+        {:error,
+         {:conflict,
+          "Server '#{name}' changed since epoch #{epoch} — read it again with get and retry"}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
 
   defp stored_for_keep(ctx, name) do
     case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
@@ -821,7 +852,9 @@ defmodule Emissary.External.Provider do
   # The row is deleted first; stopping the process then releases what it
   # ran.
   defp handle_delete(ctx, args) do
-    with {:ok, name} <- name_arg(args) do
+    with {:ok, name} <- name_arg(args),
+         {:ok, stored} <- program_row(ctx, name),
+         :ok <- confirm_removal(ctx, name, stored) do
       case Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), name) do
         {:ok, server} ->
           stop_process(ctx, name)
@@ -841,6 +874,174 @@ defmodule Emissary.External.Provider do
       end
     end
   end
+
+  # ============================================================================
+  # A program's definition, confirmed
+  # ============================================================================
+
+  # A program row's definition is a sensitive change (`program_definition`,
+  # `Sanctum.Pairing`): adding one, from Add program, an install block or
+  # the command line; an update that lets the stored row reach more
+  # (`widens?/2`); and its removal. A tool server elsewhere asks none, and
+  # neither does an update that only narrows what a program reaches.
+  defp confirm_definition(ctx, operation, name, stored, %{transport: "program"} = attrs) do
+    if is_nil(stored) or widens?(stored, attrs) do
+      row = Map.merge(%{id: folder_id(stored), enabled: enabled?(stored)}, attrs)
+      confirmed(ctx, definition_change(operation, name, row, nil))
+    else
+      :ok
+    end
+  end
+
+  defp confirm_definition(_ctx, _operation, _name, _stored, _attrs), do: :ok
+
+  defp folder_id(nil), do: "new"
+  defp folder_id(%{id: id}), do: id
+
+  defp enabled?(nil), do: true
+  defp enabled?(%{enabled: enabled}), do: enabled == true
+
+  # A removal names the grants it asks again (`Sanctum.Mount.granted_to/2`)
+  # before it is given: they are part of what is confirmed.
+  defp confirm_removal(ctx, name, %{transport: "program"} = stored) do
+    case Sanctum.Mount.granted_to(ctx.athanor_id, stored.id) do
+      {:ok, grants} ->
+        confirmed(ctx, definition_change("mcp_servers.delete", name, stored, grants))
+
+      {:error, :unavailable} ->
+        {:error, {:unavailable, "The grants that use '#{name}'"}}
+    end
+  end
+
+  defp confirm_removal(_ctx, _name, _stored), do: :ok
+
+  defp confirmed(ctx, {:ok, change}) do
+    case Sanctum.Consent.confirm(ctx, :program_definition, change) do
+      {:error, :invalid_request} -> {:error, unshowable()}
+      decided -> decided
+    end
+  end
+
+  defp confirmed(_ctx, {:error, _unrecorded}), do: {:error, unshowable()}
+
+  defp unshowable,
+    do:
+      {:invalid_argument,
+       "This program cannot be shown in full in its confirmation, so it is not asked: " <>
+         "its command at most #{Prima.Confirmation.Preview.max_text()} bytes and at most " <>
+         "64 environment variables."}
+
+  @doc """
+  The `program_definition` change `operation` (`mcp_servers.create`,
+  `update` or `delete`) makes to the program row `row` named `name`, as
+  `Sanctum.Consent.confirm/3` takes it: what the confirmation shows
+  and what it binds, from one definition.
+
+  The row is a stored row, or the row an add or update would store (its
+  `id` the stored row's, `"new"` for an add). What is shown is its record
+  (`Sanctum.ToolServerDigest.recorded/1`): the command, and each
+  environment variable by its name with the vault entry it names
+  (`TOKEN=vault:personal`), a literal by its name alone; and its settings:
+  the mark, the folder (a kept program's is the row's own, `"new"` until
+  it is made; a scratch program's is `"scratch"`), the hosts, the memory
+  and disk bounds and the sign-in command. A removal also names
+  `grants`, the components whose grant binds the row and asks again
+  (`Sanctum.Mount.granted_to/2`). The arguments are the same definition
+  with the row's stored config beside it, so a literal's value is bound
+  without being shown. `{:error, _}` for a row that is no program or
+  whose record does not read.
+  """
+  @spec definition_change(String.t(), String.t(), map(), [String.t()] | nil) ::
+          {:ok, map()} | {:error, term()}
+  def definition_change(operation, name, row, grants) do
+    with {:ok, record} <- Sanctum.ToolServerDigest.recorded(row) do
+      settings = Definition.settings(row)
+
+      shown =
+        %{
+          "command" => record["address"],
+          "environment" => environment(record["env"]),
+          "mark" => row.mark,
+          "folder" => if(row.home == "kept", do: row.id, else: "scratch"),
+          "hosts" => settings["hosts"] || "every public host",
+          "memory_bytes" => bound(row.memory_bytes, "the backends service's bound"),
+          "home_max_bytes" =>
+            if(row.home == "kept",
+              do: bound(row.home_max_bytes, "the folders' volume"),
+              else: "scratch folder"
+            )
+        }
+        |> put_present("sign_in_command", Map.get(row, :login_command))
+        |> put_present("grants_asking_again", if(grants == [], do: "none", else: grants))
+
+      {:ok,
+       %{
+         operation: operation,
+         arguments: Map.merge(shown, %{"name" => name, "config" => row.config_json}),
+         resource: name,
+         details: shown
+       }}
+    end
+  end
+
+  defp environment([]), do: "none"
+
+  defp environment(variables) do
+    Enum.map(variables, fn
+      %{"name" => name, "entry" => entry} = variable ->
+        "#{name}=#{scheme(variable)}vault:#{entry}"
+
+      %{"name" => name} ->
+        "#{name} (a literal, not shown)"
+    end)
+  end
+
+  defp scheme(%{"scheme" => scheme}), do: scheme <> " "
+  defp scheme(_variable), do: ""
+
+  defp bound(bytes, _absent) when is_integer(bytes), do: Integer.to_string(bytes)
+  defp bound(nil, absent), do: absent
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  # Whether `attrs`, a program's definition, reaches more than the stored
+  # row: a tool server made a program; another command, sign-in command,
+  # mark or kind of folder; a host the stored list does not hold, or no
+  # list where one stood; a larger memory or disk bound, or none where one
+  # stood; an environment variable bound to a vault entry, or to another
+  # entry, that it was not. Removing a binding, a host or raising nothing
+  # is no widening.
+  defp widens?(%{transport: "program"} = stored, attrs) do
+    old = Arca.McpServerStorage.config(stored)
+    new = Jason.decode!(attrs.config_json)
+
+    stored.mark != attrs.mark or old["command"] != new["command"] or
+      stored.login_command != attrs.login_command or stored.home != attrs.home or
+      larger?(stored.memory_bytes, attrs.memory_bytes) or
+      larger?(stored.home_max_bytes, attrs.home_max_bytes) or
+      more_hosts?(Definition.settings(stored)["hosts"], Definition.settings(attrs)["hosts"]) or
+      new_binding?(old["env"] || %{}, new["env"] || %{})
+  end
+
+  defp widens?(_tool_server, _attrs), do: true
+
+  # No bound is the largest.
+  defp larger?(nil, _new), do: false
+  defp larger?(old, new) when is_integer(old) and is_integer(new), do: new > old
+  defp larger?(_old, _new), do: true
+
+  # No list is every public host; a stored list that does not read is
+  # read as reaching nothing, so any new list asks.
+  defp more_hosts?(nil, _new), do: false
+
+  defp more_hosts?(old, new) when is_list(old) and is_list(new),
+    do: not MapSet.subset?(MapSet.new(new), MapSet.new(old))
+
+  defp more_hosts?(_old, _new), do: true
+
+  defp new_binding?(old, new),
+    do: Enum.any?(new, fn {var, value} -> VaultRef.vault_ref?(value) and old[var] != value end)
 
   # A program is released and started again at a new epoch.
   defp handle_restart(ctx, args) do

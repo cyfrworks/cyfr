@@ -33,6 +33,7 @@ defmodule Sanctum.PairingTest do
     :home_transfer,
     :pairing_revocation,
     :restore_reenable,
+    :program_definition,
     :directory_tombstone
   ]
 

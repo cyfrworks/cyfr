@@ -52,8 +52,10 @@ defmodule Sanctum.ToolServerDigest do
   carries its own patterns and only ever reaches their intersection with
   the server's (`tool_patterns/1`). An http row has no mark, command, env
   or program; a program has no url.
-  Only a tool server is recorded or has a digest: an `http` row or a
-  program marked `mcp`; a `driven` program offers no tools.
+  Only a tool server has a digest: an `http` row or a program marked
+  `mcp`; a `driven` program offers no tools. A program of either mark is
+  recorded: its install confirmation shows and binds the record
+  (`Emissary.External.Provider`).
 
   There is deliberately no stored digest column — a stored digest is a cache someone
   forgets to recompute; deriving at read makes "changed config ⇒ mismatch ⇒
@@ -73,6 +75,8 @@ defmodule Sanctum.ToolServerDigest do
 
   @doc "Compute the digest for a server's stored configuration."
   @spec compute(map()) :: {:ok, String.t()} | {:error, term()}
+  def compute(%{mark: "driven"} = server), do: {:error, {:invalid_server_config, server}}
+
   def compute(server) do
     with {:ok, record, literals} <- record_of(server) do
       JCS.hash(
@@ -116,7 +120,7 @@ defmodule Sanctum.ToolServerDigest do
        when is_binary(id) and
               ((transport == "http" and is_binary(url) and is_nil(mark) and is_nil(command) and
                   is_nil(env) and is_nil(program)) or
-                 (transport == "program" and is_nil(url) and mark == "mcp" and
+                 (transport == "program" and is_nil(url) and mark in ["mcp", "driven"] and
                     is_binary(command) and is_map(env) and is_map(program))) and
               is_boolean(enabled) and is_map(headers) do
     {address, member, values} =

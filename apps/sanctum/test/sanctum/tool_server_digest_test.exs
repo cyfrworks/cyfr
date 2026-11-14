@@ -279,8 +279,12 @@ defmodule Sanctum.ToolServerDigestTest do
                   ]
                 }}
 
+      # A driven program offers no tools and has no digest, but is recorded
+      # as a program of either mark is: its install confirmation shows it.
+      assert ToolServerDigest.recorded(%{row | mark: "driven"}) == ToolServerDigest.recorded(row)
+
       assert {:error, {:invalid_server_config, _}} =
-               ToolServerDigest.recorded(%{row | mark: "driven"})
+               ToolServerDigest.from_server(%{row | mark: "driven"})
     end
 
     test "never carries a literal's value, which the digest still covers" do

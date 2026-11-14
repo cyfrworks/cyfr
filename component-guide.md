@@ -577,7 +577,7 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 
 An OAuth need declares the provider, its scopes and the hosts the token is sent to (`"type": "oauth:google"`, `"scopes": [...]`, `"hosts": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
 
-A **login need** names a program the component runs with the person's own sign-in: `"type": "login"`, `"program"` the name of the program's row (lowercase letters, digits and hyphens), `reason` and `required`, and no `hosts`, `paths`, `attach`, `disclose`, `fields` or `scopes`. It is satisfied by a login entry whose destination is that program: the program runs in the folder the entry keeps, where its own sign-in lives, and nothing is attached to the component's requests or disclosed to it. An optional `install` block suggests the row: `command`, what fetches or runs the program, and `login_command`, its own sign-in, each held to the rules of a program's command (at most 4096 bytes, no NUL, no `vault:`). The component's setup plan and the AQUA page offer **install `<program>`** with both shown and editable; the person decides, and accepting defines the row, makes the login entry and opens the sign-in terminal. Pin the version your component was tested against in `command`. The component reaches the program through its pipe ([`cyfr:process/pipe`](#cyfrprocesspipe--a-programs-session)), naming the need.
+A **login need** names a program the component runs with the person's own sign-in: `"type": "login"`, `"program"` the name of the program's row (lowercase letters, digits and hyphens), `reason` and `required`, and no `hosts`, `paths`, `attach`, `disclose`, `fields` or `scopes`. It is satisfied by the athanor's own program row of that name, a driven program with a kept folder, which the grant binds: the program runs in the row's own folder, where its own sign-in lives, and nothing is attached to the component's requests or disclosed to it. A program's folder is never shared, so no share meets a login need. An optional `install` block suggests the row: `command`, what fetches or runs the program, and `login_command`, its own sign-in, each held to the rules of a program's command (at most 4096 bytes, no NUL, no `vault:`). The component's setup plan and the AQUA page offer **install `<program>`** with both shown and editable; the person decides, confirms the program's whole definition once, and accepting defines the row and opens the sign-in terminal in its folder; the component's grant then binds the row. Pin the version your component was tested against in `command`. The component reaches the program through its pipe ([`cyfr:process/pipe`](#cyfrprocesspipe--a-programs-session)), naming the need.
 
 ```json
 "needs": {
@@ -958,7 +958,7 @@ Error: `{"error": {"type": "...", "message": "..."}}`.
 
 ### `cyfr:process/pipe` — a program's session
 
-A catalyst drives a program its `login` need names (see [`needs` Section](#needs-section)) over lines: it writes lines to the program's standard input and reads the lines it writes, each numbered in the session's sequence. The program runs in its own box, in the folder the bound login entry keeps, under the person's own sign-in; the component never holds a credential or an address of its own, and CYFR checks every call against the run's grant.
+A catalyst drives a program its `login` need names (see [`needs` Section](#needs-section)) over lines: it writes lines to the program's standard input and reads the lines it writes, each numbered in the session's sequence. The program runs in its own box, in the folder of the program row the grant binds, under the person's own sign-in; the component never holds a credential or an address of its own, and CYFR checks every call against the run's grant.
 
 | Function | Answers |
 |---|---|
@@ -972,14 +972,14 @@ A catalyst drives a program its `login` need names (see [`needs` Section](#needs
 - **`recv`** answers the lines past `after` (0 for the first read), waiting at most `max-wait-ms` (at most 20 000) for one when there is none. A line is kept until a later call names an `after` at or past it, so asking again with the same `after` answers the same lines; an answer carries as many lines as fit, and the next read names the last `seq` it got. A reader that falls behind loses the oldest lines past the session's buffer (8 MiB), counted in `dropped`. `running: false` says the program ended; a session no longer held answers no lines and `running: false`.
 - **`close`** ends the session and its program; a repeat is harmless.
 
-A session also ends when its program row is disabled or deleted, and when its login entry is revoked, suspended or deleted.
+A session also ends when its program row is disabled or deleted.
 
 An error is a code:
 
 | Code | What it means |
 |---|---|
-| `denied` | The manifest declares no `login` need of that name, the run's grant binds no login entry to it or binds one of another program, or the session is not one this run opened |
-| `setup_required` | The bound login entry, its program row or the grant no longer serves (revoked, disabled, expired, shared with you), or the program's folder is past its cap |
+| `denied` | The manifest declares no `login` need of that name, the run's grant binds no program row to it or binds another program's, or the session is not one this run opened |
+| `setup_required` | The bound program row or the grant no longer serves (deleted, disabled, revoked, expired), or the program's folder is past its cap |
 | `busy` | The box runs as many programs as it may; try again later |
 | `ended` | A send to a session whose program ended: open the key again |
 | `invalid_request` | A key over 256 bytes, an argument or line the pipe refuses |

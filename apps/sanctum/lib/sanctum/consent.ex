@@ -316,6 +316,17 @@ defmodule Sanctum.Consent do
   defdelegate request_preview(ctx, operation, args, resource), to: Sanctum.Consent.Authz
 
   @doc """
+  Decide a sensitive change a domain outside Sanctum makes, where its
+  effect is one call: `action` from `Sanctum.Pairing`'s table, `change`
+  the operation, its exact arguments and its preview
+  (`Sanctum.Consent.Authz.confirm/3`). A program's definition is one
+  (`program_definition`, `Emissary.External.Provider`).
+  """
+  @spec confirm(Sanctum.Context.t(), Sanctum.Pairing.action(), Sanctum.Consent.Authz.change()) ::
+          :ok | {:error, term()}
+  defdelegate confirm(ctx, action, change), to: Sanctum.Consent.Authz
+
+  @doc """
   The context's own person's confirmations of sensitive changes still
   open in its athanor, oldest first, each as its public `ref`
   (`Prima.Confirmation.ref/1`), the operation it confirms and when it

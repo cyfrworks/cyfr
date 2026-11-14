@@ -521,10 +521,12 @@ defmodule Opus.ProgramsTest do
 
     test "delete commits, then releases", %{ctx: ctx, row: row, admin: admin} do
       assert {:ok, %{deleted: "stoppable"}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "delete",
-                 "name" => "stoppable"
-               })
+               Sanctum.TestContext.confirming(admin, fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "delete",
+                   "name" => "stoppable"
+                 })
+               end)
 
       assert_released(row, 1)
 
@@ -938,11 +940,13 @@ defmodule Opus.ProgramsTest do
     vault_entry(ctx, %{name: "gh-disclosed"})
 
     assert {:ok, %{status: "ready"}} =
-             Provider.handle("mcp_servers", admin, %{
-               "action" => "create",
-               "name" => "disclosed",
-               "config" => naming.("gh-disclosed")
-             })
+             Sanctum.TestContext.confirming(admin, fn person ->
+               Provider.handle("mcp_servers", person, %{
+                 "action" => "create",
+                 "name" => "disclosed",
+                 "config" => naming.("gh-disclosed")
+               })
+             end)
 
     assert_receive {:sealed_env, _server, %{"program" => %{"GITHUB_TOKEN" => @secret}}}, 2_000
   end
@@ -1061,11 +1065,13 @@ defmodule Opus.ProgramsTest do
     log =
       capture_log(fn ->
         assert {:ok, %{status: "ready", warnings: [^warning]}} =
-                 Provider.handle("mcp_servers", admin, %{
-                   "action" => "create",
-                   "name" => "expanding",
-                   "config" => config.(expanding)
-                 })
+                 Sanctum.TestContext.confirming(admin, fn person ->
+                   Provider.handle("mcp_servers", person, %{
+                     "action" => "create",
+                     "name" => "expanding",
+                     "config" => config.(expanding)
+                   })
+                 end)
       end)
 
     # The definition is stored as written, its program runs with the value
@@ -1081,14 +1087,17 @@ defmodule Opus.ProgramsTest do
              Provider.handle("mcp_servers", admin, %{"action" => "get", "name" => "expanding"})
 
     # An update keeps the warning while the command expands the name, and
-    # drops it once the program reads the value from its environment.
+    # drops it once the program reads the value from its environment. A
+    # changed command is confirmed.
     update = fn epoch, command ->
-      Provider.handle("mcp_servers", admin, %{
-        "action" => "update",
-        "name" => "expanding",
-        "epoch" => epoch,
-        "config" => config.(command)
-      })
+      Sanctum.TestContext.confirming(admin, fn person ->
+        Provider.handle("mcp_servers", person, %{
+          "action" => "update",
+          "name" => "expanding",
+          "epoch" => epoch,
+          "config" => config.(command)
+        })
+      end)
     end
 
     assert capture_log(fn ->
@@ -1183,6 +1192,22 @@ defmodule Opus.ProgramsTest do
       )
 
     row
+  end
+
+  # The preview a pending confirmation shows, as the store holds it.
+  defp preview(ctx, id) do
+    {:ok, record} =
+      Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), Prima.Confirmation.ref(id))
+
+    Jason.decode!(record.preview)
+  end
+
+  # The confirmations opened for `operation` in the context's athanor.
+  defp confirmations(ctx, operation) do
+    Ecto.Query.from(c in Arca.Schemas.PendingConfirmation,
+      where: c.athanor_id == ^ctx.athanor_id and c.operation == ^operation
+    )
+    |> Arca.Repo.all()
   end
 
   # A crew member `harness` whose brain, a catalyst with one login need of
@@ -1439,11 +1464,13 @@ defmodule Opus.ProgramsTest do
       end
 
       assert {:ok, _} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "create",
-                 "name" => "claude",
-                 "config" => config.(["api.anthropic.com", "statsig.anthropic.com"])
-               })
+               Sanctum.TestContext.confirming(admin, fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "create",
+                   "name" => "claude",
+                   "config" => config.(["api.anthropic.com", "statsig.anthropic.com"])
+                 })
+               end)
 
       assert {:ok, row} = Arca.McpServerStorage.get(actor, "claude")
       assert Jason.decode!(row.hosts) == ["api.anthropic.com", "statsig.anthropic.com"]
@@ -1475,13 +1502,16 @@ defmodule Opus.ProgramsTest do
         assert sentence =~ "config.hosts", inspect(hosts)
       end
 
+      # No list is every public host: more than the list, so it is confirmed.
       assert {:ok, _} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "update",
-                 "name" => "claude",
-                 "epoch" => row.epoch,
-                 "config" => config.(nil)
-               })
+               Sanctum.TestContext.confirming(admin, fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "update",
+                   "name" => "claude",
+                   "epoch" => row.epoch,
+                   "config" => config.(nil)
+                 })
+               end)
 
       assert {:ok, %{hosts: nil}} = Arca.McpServerStorage.get(actor, "claude")
     end
@@ -1543,11 +1573,13 @@ defmodule Opus.ProgramsTest do
       end
 
       assert {:ok, _} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "create",
-                 "name" => "editable",
-                 "config" => program.(%{})
-               })
+               Sanctum.TestContext.confirming(admin, fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "create",
+                   "name" => "editable",
+                   "config" => program.(%{})
+                 })
+               end)
 
       {:ok, before} = Arca.McpServerStorage.get(actor, "editable")
 
@@ -1557,6 +1589,7 @@ defmodule Opus.ProgramsTest do
             with_env.(%{"MODE" => "a literal where a credential belongs"}),
             program.(%{"home" => "kept", "login_entry_id" => "vlt_01"}),
             program.(%{"backends" => [%{"name" => "a", "command" => "a", "env" => %{}}]}),
+            program.(%{"command" => String.duplicate("x", 5_000)}),
             program.(%{"command" => nil}),
             program.(%{"hosts" => ["*.example.com"]}),
             program.(%{"command" => "run vault:gh-token", "env" => %{}})
@@ -1581,6 +1614,254 @@ defmodule Opus.ProgramsTest do
       end
 
       assert {:ok, ^before} = Arca.McpServerStorage.get(actor, "editable")
+    end
+
+    # A program's definition is the person's confirmed act
+    # (`program_definition`): the record shows the whole definition and is
+    # bound to it, so it admits that definition and no other.
+    test "an add asks once, shows the whole definition and is admitted with its confirmation",
+         %{ctx: ctx, admin: admin} do
+      vault_entry(ctx, %{name: "personal"})
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+
+      args = %{
+        "action" => "create",
+        "name" => "coder",
+        "config" => %{
+          "transport" => "program",
+          "mark" => "driven",
+          "home" => "kept",
+          "command" => "npx -y coder",
+          "login_command" => "coder login",
+          "hosts" => ["api.coder.test"],
+          "memory_bytes" => 1_073_741_824,
+          "env" => %{"TOKEN" => "vault:personal", "NODE_ENV" => "production"}
+        }
+      }
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Provider.handle("mcp_servers", person, args)
+
+      assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "coder")
+
+      assert %{
+               "operation" => "mcp_servers.create",
+               "resource" => "coder",
+               "details" => %{
+                 "command" => "npx -y coder",
+                 "mark" => "driven",
+                 "folder" => "new",
+                 "hosts" => ["api.coder.test"],
+                 "memory_bytes" => "1073741824",
+                 "home_max_bytes" => "the folders' volume",
+                 "sign_in_command" => "coder login",
+                 "environment" => ["NODE_ENV (a literal, not shown)", "TOKEN=vault:personal"]
+               }
+             } = preview(person, id)
+
+      refute preview(person, id) |> Jason.encode!() =~ "production"
+
+      Sanctum.TestContext.prove!(person, id)
+      confirmed = %{person | confirmation_id: id}
+      assert {:ok, %{name: "coder"}} = Provider.handle("mcp_servers", confirmed, args)
+      assert {:ok, %{mark: "driven", home: "kept"}} = Arca.McpServerStorage.get(actor, "coder")
+
+      # It was asked once, and is spent.
+      assert [_one] = confirmations(person, "mcp_servers.create")
+    end
+
+    test "a confirmation shown for TOKEN=vault:personal refuses a definition carrying " <>
+           "TOKEN=vault:work",
+         %{ctx: ctx, admin: admin} do
+      vault_entry(ctx, %{name: "personal"})
+      vault_entry(ctx, %{name: "work"})
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+
+      create = fn ctx, entry ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "create",
+          "name" => "coder",
+          "config" => %{
+            "transport" => "program",
+            "mark" => "driven",
+            "command" => "npx -y coder",
+            "env" => %{"TOKEN" => "vault:" <> entry}
+          }
+        })
+      end
+
+      assert {:error, {:confirmation_required, %{id: id}}} = create.(person, "personal")
+      Sanctum.TestContext.prove!(person, id)
+      confirmed = %{person | confirmation_id: id}
+
+      # The proven record is another definition's: nothing is stored, and
+      # a record of its own is opened for it.
+      assert {:error, {:confirmation_required, %{id: other}}} = create.(confirmed, "work")
+      assert other != id
+      assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "coder")
+
+      assert {:ok, _} = create.(confirmed, "personal")
+      {:ok, row} = Arca.McpServerStorage.get(actor, "coder")
+      assert Arca.McpServerStorage.config(row)["env"] == %{"TOKEN" => "vault:personal"}
+
+      # An update is bound the same way.
+      update = fn ctx, entry ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "coder",
+          "epoch" => row.epoch,
+          "config" => %{
+            "transport" => "program",
+            "mark" => "driven",
+            "command" => "npx -y coder",
+            "env" => %{"TOKEN" => "vault:personal", "OTHER" => "vault:" <> entry}
+          }
+        })
+      end
+
+      assert {:error, {:confirmation_required, %{id: id}}} = update.(person, "personal")
+      Sanctum.TestContext.prove!(person, id)
+      confirmed = %{person | confirmation_id: id}
+      assert {:error, {:confirmation_required, %{id: _another}}} = update.(confirmed, "work")
+      assert {:ok, ^row} = Arca.McpServerStorage.get(actor, "coder")
+      assert {:ok, %{epoch: 2}} = update.(confirmed, "personal")
+    end
+
+    test "an update that only narrows asks nothing, and one that reaches more asks",
+         %{ctx: ctx, admin: admin, row: row} do
+      vault_entry(ctx, %{name: "personal"})
+      vault_entry(ctx, %{name: "work"})
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+
+      wide = %{
+        "transport" => "program",
+        "mark" => "driven",
+        "home" => "kept",
+        "command" => "npx -y @anthropic-ai/claude-code",
+        "login_command" => "claude auth login",
+        "hosts" => ["a.example", "b.example"],
+        "memory_bytes" => 1_073_741_824,
+        "home_max_bytes" => 2_147_483_648,
+        "env" => %{"TOKEN" => "vault:personal", "OTHER" => "vault:work"}
+      }
+
+      update = fn ctx, epoch, config ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "claude",
+          "epoch" => epoch,
+          "config" => config
+        })
+      end
+
+      assert {:ok, %{epoch: 2}} =
+               Sanctum.TestContext.confirming(person, &update.(&1, row.epoch, wide))
+
+      narrow =
+        Map.merge(wide, %{
+          "hosts" => ["a.example"],
+          "memory_bytes" => 536_870_912,
+          "home_max_bytes" => 1_073_741_824,
+          "env" => %{"TOKEN" => "vault:personal"}
+        })
+
+      # Fewer hosts, smaller bounds and a binding removed reach less.
+      assert {:ok, %{epoch: 3}} = update.(person, 2, narrow)
+      assert confirmations(person, "mcp_servers.update") |> length() == 1
+
+      for {why, config} <- [
+            {"a host added", Map.put(narrow, "hosts", ["a.example", "c.example"])},
+            {"no host list", Map.delete(narrow, "hosts")},
+            {"a larger memory bound", Map.put(narrow, "memory_bytes", 2_147_483_648)},
+            {"no memory bound", Map.delete(narrow, "memory_bytes")},
+            {"a larger disk bound", Map.put(narrow, "home_max_bytes", 4_294_967_296)},
+            {"a binding added",
+             Map.put(narrow, "env", %{"TOKEN" => "vault:personal", "MORE" => "vault:work"})},
+            {"a binding changed", Map.put(narrow, "env", %{"TOKEN" => "vault:work"})},
+            {"another command", Map.put(narrow, "command", "npx -y other")},
+            {"another sign-in command", Map.put(narrow, "login_command", "claude login --other")},
+            {"another mark", Map.put(narrow, "mark", "mcp")}
+          ] do
+        assert {:error, {:confirmation_required, _signal}} = update.(person, 3, config), why
+      end
+
+      assert {:ok, %{epoch: 3}} = Arca.McpServerStorage.get(actor, "claude")
+    end
+
+    # Removing a program ends its sessions and retires its folder, and every
+    # grant that binds it asks again: the confirmation says so, and names
+    # them, before it is given. The grants' bindings go with the row, and a
+    # run under them is refused for its consent.
+    test "a removal asks, names the grants that use it, and asks them again",
+         %{ctx: ctx, admin: admin, row: row} do
+      ctx = harness_member!(ctx, row.id)
+      {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
+      actor = Sanctum.Context.actor(ctx)
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "claude"})
+
+      assert {:error, {:confirmation_required, %{id: id}}} = delete.(person)
+      assert {:ok, ^row} = Arca.McpServerStorage.get(actor, "claude")
+
+      assert %{
+               "operation" => "mcp_servers.delete",
+               "resource" => "claude",
+               "details" => %{
+                 "folder" => folder,
+                 "grants_asking_again" => [
+                   "agent:local.harness",
+                   "catalyst:local.harnessbrain"
+                 ]
+               }
+             } = preview(person, id)
+
+      assert folder == row.id
+
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, %{deleted: "claude"}} = delete.(%{person | confirmation_id: id})
+
+      bound =
+        Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef, where: r.mcp_server_id == ^row.id)
+        |> Arca.Repo.all()
+
+      assert bound == []
+
+      for source <- ["catalyst:local.harnessbrain", "agent:local.harness"] do
+        assert {:ok, [%{status: "needs_consent"}]} =
+                 Arca.ProfileStorage.list_for_source(actor, source)
+      end
+
+      # A run of the brain stands on no grant now: it is refused for its
+      # consent, and nothing reaches the row that is gone.
+      Sanctum.TestContext.ready!(ctx.athanor_id)
+
+      assert {:error, refused} =
+               Aqua.Ops.call_tool("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => "catalyst:local.harnessbrain",
+                 "type" => "catalyst",
+                 "input" => %{"operation" => "models", "params" => %{}}
+               })
+
+      assert Sanctum.Refusals.render(refused) =~ "needs_consent"
+      refute_received {:session, "open", _message, _fields}
+    end
+
+    test "removing a tool server elsewhere asks nothing", %{ctx: ctx, admin: admin} do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "remote",
+          url: "https://mcp.example.test/mcp",
+          config_json: ~s({"headers":{}})
+        })
+
+      {person, _user} = Sanctum.TestContext.person!(admin)
+
+      assert {:ok, %{deleted: "remote"}} =
+               Provider.handle("mcp_servers", person, %{"action" => "delete", "name" => "remote"})
     end
 
     test "a sign-in runs the login command in the row's home and relays its lines both ways",

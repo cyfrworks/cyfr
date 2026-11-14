@@ -125,7 +125,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Locus: where untrusted things run
 
 - The runtime's OS runners, with no network of their own, and the build and backend services, each signed with its own key.
-- The backends service runs programs, each a process whose lines go to and from one owner; a program's home is scratch, scrubbed at retirement, or kept, one folder per login entry under a uid of its own that no other owner is ever given and no backup carries. *Not built yet:* the VM level and the computer per athanor.
+- The backends service runs programs, each a process whose lines go to and from one owner; a program's home is scratch, scrubbed at retirement, or kept, the program row's own folder, made and retired with the row, under a uid of its own that no other owner is ever given and no backup carries. *Not built yet:* the VM level and the computer per athanor.
 - The keeper, `cyfr-locus`, which runs every child under a uid and bounds of its own and scrubs it on release.
 - Perception bodies on a device. *Not built yet:* perception bodies.
 - Opus, Compendium and Emissary decide what runs; Locus only runs it.
@@ -206,7 +206,7 @@ A consent binds to the exact action and resources its preview showed, and a vers
 
 ### 5.5 Credentials
 
-An entry has five uses: attach, dispense, disclose, mount and sign. CYFR attaches a credential to the request it is bound to, which goes once to its pinned address, and the component never holds it unless its consent names that disclosure. A login entry holds no material: its one use is to mount, running the program its destination names in the entry's kept home. Each entry is bound to its destination, and material that must never leave the vault is used only through Sanctum's signing. A credential lives in one vault entry, and a share is the only way it reaches another athanor (§5.1). A shared entry is used attach-only, to its own destination, under the share's audience and caps, and only while its owner stands and the entry stands at the digest the recipient approved. Masking and log redaction are defence in depth, not the bound. *Not built yet:* Sanctum signing with a vault-held key; a recipient's use of a shared login entry.
+An entry has four uses: attach, dispense, disclose and sign. CYFR attaches a credential to the request it is bound to, which goes once to its pinned address, and the component never holds it unless its consent names that disclosure. A program's own sign-in is no entry: it lives in the program row's kept folder, and a grant that lets a component run the program there binds the row. The row's definition, and every change that lets it reach more, is a fresh confirmation showing its whole definition, each environment name with the vault entry it names. A program's folder is never shared. Each entry is bound to its destination, and material that must never leave the vault is used only through Sanctum's signing. A credential lives in one vault entry, and a share is the only way it reaches another athanor (§5.1). A shared entry is used attach-only, to its own destination, under the share's audience and caps, and only while its owner stands and the entry stands at the digest the recipient approved. Masking and log redaction are defence in depth, not the bound. *Not built yet:* Sanctum signing with a vault-held key.
 
 ### 5.6 Egress
 

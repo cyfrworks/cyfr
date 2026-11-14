@@ -182,11 +182,11 @@ defmodule Aqua.CrewTest do
     assert roster |> Enum.map(& &1["name"]) |> Enum.sort() ==
              ~w(aqua claude-code explorer openai-codex planner)
 
-    # The harnesses' catalysts ship, with no login entry bound to their
-    # programs, and the explorer's key is not bound: none is told of.
+    # The harnesses' catalysts ship, with no program row bound to their
+    # needs, and the explorer's key is not bound: none is told of.
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["claude-code"] == {:needs_sign_in, "catalyst:local.claude-code:0.1.4"}
-    assert status["openai-codex"] == {:needs_sign_in, "catalyst:local.openai-codex:0.1.2"}
+    assert status["claude-code"] == {:needs_program, "catalyst:local.claude-code:0.1.4"}
+    assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.2"}
     assert {:needs_key, _} = status["explorer"]
 
     assert Crew.index(ctx, roster) ==
@@ -269,11 +269,11 @@ defmodule Aqua.CrewTest do
 
   # Readiness holds at every way a job reaches a member, not only in the
   # index: the shipped explorer has no key bound here, and the programs of
-  # claude-code and openai-codex have no login entry signed in.
+  # claude-code and openai-codex are not set up.
   @unready [
     {"explorer", :no_key, "no key bound"},
-    {"claude-code", :not_signed_in, "not signed in"},
-    {"openai-codex", :not_signed_in, "not signed in"}
+    {"claude-code", :no_program, "program is not set up"},
+    {"openai-codex", :no_program, "program is not set up"}
   ]
 
   test "a person's @name of a member that is not ready is refused with why, and writes nothing",

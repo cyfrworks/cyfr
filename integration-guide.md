@@ -1405,21 +1405,25 @@ value, it refuses to boot. `.env.locus.example` documents the builder's own
 
 Programs run on the Locus backends service (the `locus-backends` compose
 service), which CYFR reaches over a signed wire; every compose deploy
-starts it. A program row (`"transport": "program"`) is marked by how it is
-spoken to: `mcp`, CYFR's MCP client speaking to each backend over the
-lines of a session the service runs for it, or `driven`, one backend a
-person or a brain runs. A tool server elsewhere is an `http` row. Each backend's process
-runs under a pooled uid of its own, started by `cyfr-locus`, with a private
-home directory, an environment built only from its server's definition and
-a memory bound of its own; the service keeps nothing of CYFR's, and CYFR
+starts it. A program row (`"transport": "program"`) is one command and one
+environment, marked by how it is spoken to: `mcp`, CYFR's MCP client
+speaking to it over the lines of a session the service runs for it, its
+tools named `<row>:<tool>`, or `driven`, a program a person or a brain
+runs. A package that bundles several MCP servers is a row for each. A
+tool server elsewhere is an `http` row. Adding a program, an update that
+lets it reach more and its removal are each confirmed by the person, who
+is shown the whole definition (`program_definition`, as `mcp_servers`
+documents it). A program's process runs under a pooled uid of its own, or
+its kept folder's, started by `cyfr-locus`, with an environment built
+only from its definition and a memory bound of its own; the service keeps nothing of CYFR's, and CYFR
 sends each program's definition again when the service restarts. With the URL or the key unset CYFR refuses programs; with a
 malformed value it refuses to boot. Programs are not available in a
 cluster. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
 side.
 
-A backend's environment may name only a single-field disclosed entry of its own athanor (`NAME=vault:entry`). An attach-only entry is refused when the definition is made and when the backend starts, and a key shared with you is never available to a definition. Material is resolved in the host and sent sealed to the backends service for that server's environment, never in the command line.
+A program's environment may name only a single-field disclosed entry of its own athanor (`NAME=vault:entry`). An attach-only entry is refused when the definition is made and when the program starts, and a key shared with you is never available to a definition. Material is resolved in the host and sent sealed to the backends service for that server's environment, never in the command line.
 
-Every process on the backends service, every other athanor's backends included, can read each backend's command line, though not its environment: the service runs its backends in one process namespace with an ordinary `/proc`. Hiding command lines would take `CAP_SYS_ADMIN` in the container, to mount its `/proc` with `hidepid`, or seccomp and AppArmor profiles that let `cyfr-locus` give each backend a process namespace and a `/proc` of its own; the shipped service holds neither. A backend's command runs as `/bin/sh -c command`, so the safe route for a credential is the program's environment, where it reads the value itself. A definition whose command names `vault:` is refused: a vault reference in a command is never resolved, so the program would receive the reference's text. A command that holds one of its own vault-bound env names as an expansion (`$NAME`, `${NAME}`, `${NAME:-…}` and every other `${NAME…}` form, quoted or escaped alike), or holds, beside a vault-bound name, a form that computes a value when the shell runs it — a command substitution (`$(…)`, a backtick, `${ …; }`, `${|…;}`), an arithmetic expansion (`$((…))`, `$[…]`) or an indirection (`${!…}`) — places the value on the command line, where every process on the service, every other athanor's backends included, can read it. The administrator decides: such a definition is saved and its backends start, and CYFR warns, naming the backend and the variable, in the answer to `mcp_servers.create` and `mcp_servers.update` (their `warnings` list), in the console's flash, in `mcp_servers.get` and in the log each time its backends start. The check reads the command's text with its line continuations joined; a command with no vault-bound name carries no warning. What the program does with a value is its own: a command such as `printenv NAME | xargs …`, or a program that passes the value on the command line of a process it starts, puts it where the service's other backends can read it, and no warning says so.
+Every process on the backends service, every other athanor's programs included, can read each program's command line, though not its environment: the service runs its programs in one process namespace with an ordinary `/proc`. Hiding command lines would take `CAP_SYS_ADMIN` in the container, to mount its `/proc` with `hidepid`, or seccomp and AppArmor profiles that let `cyfr-locus` give each program a process namespace and a `/proc` of its own; the shipped service holds neither. A program's command runs as `/bin/sh -c command`, so the safe route for a credential is the program's environment, where it reads the value itself. A definition whose command names `vault:` is refused: a vault reference in a command is never resolved, so the program would receive the reference's text. A command that holds one of its own vault-bound env names as an expansion (`$NAME`, `${NAME}`, `${NAME:-…}` and every other `${NAME…}` form, quoted or escaped alike), or holds, beside a vault-bound name, a form that computes a value when the shell runs it — a command substitution (`$(…)`, a backtick, `${ …; }`, `${|…;}`), an arithmetic expansion (`$((…))`, `$[…]`) or an indirection (`${!…}`) — places the value on the command line, where every process on the service, every other athanor's programs included, can read it. The administrator decides: such a definition is saved and its program starts, and CYFR warns, naming the variable, in the answer to `mcp_servers.create` and `mcp_servers.update` (their `warnings` list), in the console's flash, in `mcp_servers.get` and in the log each time its program starts. The check reads the command's text with its line continuations joined; a command with no vault-bound name carries no warning. What the program does with a value is its own: a command such as `printenv NAME | xargs …`, or a program that passes the value on the command line of a process it starts, puts it where the service's other programs can read it, and no warning says so.
 
 ### Running a worker outside Compose
 

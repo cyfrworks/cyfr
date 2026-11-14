@@ -201,6 +201,44 @@ defmodule Sanctum.Mount do
   end
 
   @doc """
+  The components whose grant binds the program row `row_id` of
+  `athanor_id`: the source of each profile there, not revoked, whose head
+  binds the row (`Arca.ConsentStorage.head_profiles_referencing/2`),
+  sorted, each once. They are the grants a removal of the row asks again
+  (`Arca.McpServerStorage.delete/2`), which its confirmation names before
+  it is given. `{:error, :unavailable}` when the store cannot answer.
+  """
+  @spec granted_to(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, :unavailable}
+  def granted_to(athanor_id, row_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    with {:ok, ids} <- Arca.ConsentStorage.head_profiles_referencing(actor, row_id),
+         {:ok, profiles} <- profiles(actor, ids) do
+      {:ok,
+       for(
+         %{status: status, source_ref: source} <- profiles,
+         status != "revoked",
+         uniq: true,
+         do: source
+       )
+       |> Enum.sort()}
+    else
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp profiles(actor, ids) do
+    Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, read} ->
+      case Arca.ProfileStorage.get(actor, id) do
+        {:ok, profile} -> {:cont, {:ok, [profile | read]}}
+        {:error, :not_found} -> {:cont, {:ok, read}}
+        {:error, _unanswered} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  @doc """
   Which of the kept homes `home_ids` (a box's) no program row keeps any
   more, with the athanor each was its row's (nil for a row that is gone):
   its row deleted, no longer a program with a kept home, or its athanor

@@ -647,7 +647,7 @@ defmodule PrismWeb.AquaLive do
                   Grant
                 </button>
               <% brain.need && brain.need.kind == "login" -> %>
-                {brain.provider}: sign in to {brain.need.program || "its program"} on the Programs page.
+                {brain.provider}: set up {brain.need.program || "its program"} on the Programs page.
                 <.link
                   navigate={programs_path(@athanor, brain)}
                   class="text-blue-400 hover:underline"
@@ -713,7 +713,7 @@ defmodule PrismWeb.AquaLive do
   # A brain ticked that is not yet connected is a step; a damaged or
   # unreadable consent is no step the person can take here.
   defp step?(%{state: state, provider: provider}, ticked),
-    do: state in [:needs_grant, :needs_key, :needs_sign_in] and MapSet.member?(ticked, provider)
+    do: state in [:needs_grant, :needs_key, :needs_program] and MapSet.member?(ticked, provider)
 
   defp shared_line(%{owner: owner, person_daily: cap}) when is_integer(cap),
     do: "#{owner}'s key, shared with you, up to #{cap} requests a day"

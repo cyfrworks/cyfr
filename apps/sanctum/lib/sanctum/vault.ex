@@ -1054,8 +1054,8 @@ defmodule Sanctum.Vault do
     end
   end
 
-  # An active entry is fine; one that waits for its owner's sign-in or a
-  # rotation needs reauthorisation; any other stands no more.
+  # An active entry is fine; one that waits for its owner to authorize it
+  # again or rotate it needs reauthorisation; any other stands no more.
   defp stream_view(%{kind: kind, status: "active"}), do: %{type: kind, status: "fine"}
 
   defp stream_view(%{kind: kind, status: "needs_reauth"}),

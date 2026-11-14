@@ -59,6 +59,7 @@ defmodule Sanctum.Pairing do
   | `:home_transfer` | a fresh confirmation |
   | `:pairing_revocation` | a fresh confirmation |
   | `:restore_reenable` | a fresh confirmation |
+  | `:program_definition` | a fresh confirmation |
   | `:directory_tombstone` | a fresh confirmation, the platform administrator's |
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
@@ -67,7 +68,10 @@ defmodule Sanctum.Pairing do
   people than before: a new share (`share.create`) and a share's audience
   widened to everyone or to another group (`share.set_audience`), decided
   by `Sanctum.Shares`. Whether a change widens is decided from the stored
-  row, and the confirmation is asked only then.
+  row, and the confirmation is asked only then. `program_definition` is a
+  program row's whole definition, decided by `Emissary.External.Provider`:
+  adding one, an update that lets it reach more than the stored row, and
+  its removal.
 
   `sensitive?/1` is what the deciding sites ask
   (`Sanctum.Consent.Authz.confirm/3`): the table's answer, so a sensitive
@@ -103,6 +107,7 @@ defmodule Sanctum.Pairing do
     home_transfer: :fresh,
     pairing_revocation: :fresh,
     restore_reenable: :fresh,
+    program_definition: :fresh,
     directory_tombstone: :fresh
   }
 
@@ -117,6 +122,7 @@ defmodule Sanctum.Pairing do
           | :home_transfer
           | :pairing_revocation
           | :restore_reenable
+          | :program_definition
           | :directory_tombstone
 
   @typedoc "A paired client and the certificate it connects under."

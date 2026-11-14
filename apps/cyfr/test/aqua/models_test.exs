@@ -185,13 +185,12 @@ defmodule Aqua.ModelsTest do
     assert {:consent_unavailable, ^resolved} = status.()
   end
 
-  # A brain that mounts a program's own sign-in reads ready once its login
-  # entry is bound on the catalyst's own consent and on the crew member's
-  # edge into it, and its program has signed in. Before the binding, and
-  # bound but before the sign-in, it waits on that sign-in, and the
-  # readiness every hand-off applies refuses the member.
-  test "a crew member whose brain mounts a login reads ready once its login entry is bound " <>
-         "and its program signed in" do
+  # A brain that runs a program on its own sign-in reads ready once the
+  # program's row is bound on the catalyst's own consent and on the crew
+  # member's edge into it: the program is signed in when it says so.
+  # Before the binding it waits on its program, and the readiness every
+  # hand-off applies refuses the member.
+  test "a crew member whose brain runs a program reads ready once the program's row is bound" do
     ctx = storage_root!("models_login")
     ref = "catalyst:local.loginbrain"
 
@@ -233,28 +232,26 @@ defmodule Aqua.ModelsTest do
 
     # A brain whose one need is a program's own sign-in asks for that, not
     # for a key.
-    assert %{"harness" => {:needs_sign_in, resolved}} = Aqua.model_status(ctx, member)
+    assert %{"harness" => {:needs_program, resolved}} = Aqua.model_status(ctx, member)
     assert resolved =~ ref
+    assert Aqua.Crew.ready(ctx, "harness") == {:error, {:crew_unready, "harness", :no_program}}
 
-    {:ok, entry} =
-      Sanctum.TestContext.create_vault(ctx, %{
-        name: "login-claude",
-        kind: "login",
-        program: "claude"
+    {:ok, row} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "claude",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
       })
 
-    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: entry.id}]})
+    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: row.id}]})
 
     commit!(ctx, Prima.AgentRef.ref("harness"), %{
-      selections: [%{dep: ref, need: "claude", entry_id: entry.id}]
+      selections: [%{dep: ref, need: "claude", entry_id: row.id}]
     })
-
-    # Bound, its program not signed in yet: it still waits on the sign-in.
-    assert Aqua.model_status(ctx, member) == %{"harness" => {:needs_sign_in, resolved}}
-    assert Aqua.Crew.ready(ctx, "harness") == {:error, {:crew_unready, "harness", :not_signed_in}}
-
-    # The sign-in whose command exited 0.
-    :ok = Sanctum.TestContext.activate_login(ctx, entry.id)
 
     assert Aqua.model_status(ctx, member) == %{"harness" => {:ready, resolved}}
     assert Aqua.Crew.ready(ctx, "harness") == :ok
