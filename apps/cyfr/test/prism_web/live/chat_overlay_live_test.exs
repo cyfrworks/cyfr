@@ -321,7 +321,7 @@ defmodule PrismWeb.ChatOverlayLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the overlay is CYFR's own: no frame, and every sharing act a plain click in its thread view",
+  test "the overlay is CYFR's own: no frame, and every sharing act in its own thread view",
        %{conn: conn, alice: alice} do
     bob = test_user()
     {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
@@ -338,8 +338,12 @@ defmodule PrismWeb.ChatOverlayLiveTest do
     refute html =~ "phx-hook=\"IframeBridge\""
     assert html =~ "A body of words"
 
-    for click <- ~w(invite_link archive leave),
+    for click <- ~w(toggle_invite archive leave),
         do: assert(has_element?(shared, ~s([phx-click="#{click}"])), click)
+
+    # The invitation is made by the form its button opens.
+    shared |> element(~s([phx-click="toggle_invite"])) |> render_click()
+    assert has_element?(shared, ~s(form[phx-submit="invite_link"]))
 
     Cyfr.Test.Sandbox.end_views()
   end
