@@ -33,7 +33,7 @@ defmodule PrismWeb.LegalLiveTest do
 
   # `config/test.exs` configures a registry that is not cyfr.run.
   test "the page names the registry it reads by its address, never cyfr.run", %{conn: conn} do
-    host = Compendium.RegistryHost.canonical_rest_host()
+    host = Sanctum.registry_url()
     {view, _html} = mount_athanor(conn, "/legal")
     html = render(view)
     assert html =~ "Policy text published by #{host}."
@@ -44,7 +44,7 @@ defmodule PrismWeb.LegalLiveTest do
     conn: conn
   } do
     registry!()
-    base = Compendium.RegistryHost.base_url(Compendium.RegistryHost.canonical_rest_host())
+    base = Sanctum.registry_base_url(Sanctum.registry_url())
     {view, _html} = mount_athanor(conn, "/legal")
 
     raw =

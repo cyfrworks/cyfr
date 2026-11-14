@@ -9,7 +9,7 @@ defmodule PrismWeb.LegalLive do
   Each tab triggers a fresh fetch (cached server-side at 5min by the
   upstream Cache-Control); markdown is rendered by the
   `MarkdownContent` JS hook. The pages are the registry's this deployment
-  names (`Compendium.RegistryHost`, cyfr.run unless configured), so a link
+  names (`Sanctum.registry_url/0`, cyfr.run unless configured), so a link
   in them that names a path alone is made absolute against its address
   before it is rendered: on this CYFR such a path names nothing.
 
@@ -45,7 +45,7 @@ defmodule PrismWeb.LegalLive do
       |> assign(:markdown, "")
       |> assign(:loading, true)
       |> assign(:error, nil)
-      |> assign(:publisher, Compendium.RegistryHost.canonical_rest_host())
+      |> assign(:publisher, Sanctum.registry_url())
 
     if connected?(socket) do
       send(self(), {:load, initial})
@@ -165,8 +165,7 @@ defmodule PrismWeb.LegalLive do
   # A link that names a path alone, in Markdown or in HTML, made absolute
   # against the address of the registry whose pages these are.
   defp absolute_links(markdown) do
-    base =
-      Compendium.RegistryHost.canonical_rest_host() |> Compendium.RegistryHost.base_url()
+    base = Sanctum.registry_base_url(Sanctum.registry_url())
 
     markdown
     |> String.replace(~r{\]\((/[^/)\s][^)\s]*)}, "](" <> base <> "\\1")
