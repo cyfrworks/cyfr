@@ -70,6 +70,14 @@ defmodule Compendium.OCI.ErrorsTest do
              }
     end
 
+    test "400's message is shown with a credential it echoes redacted" do
+      secret = Prima.CredentialShape.mint(:confirmation_secret)
+      body = Jason.encode!(%{"errors" => [%{"message" => "unknown reference #{secret}"}]})
+
+      assert %Errors{reason: :invalid_request, message: "unknown reference [REDACTED]"} =
+               Errors.from_response(400, body, "cyfr.run")
+    end
+
     test "400 without a message says the registry refused the request" do
       assert Errors.from_response(400, "<html>bad request</html>", "cyfr.run") == %Errors{
                reason: :invalid_request,

@@ -42,14 +42,18 @@ defmodule Compendium.OCI.Errors do
   @doc "Build an error from an HTTP response status and body."
   @spec from_response(integer(), binary(), String.t()) :: t()
   # 400: the registry refused what was sent and says why in its first
-  # error's message, which is the sentence the person reads.
+  # error's message, which is the sentence the person reads, with any
+  # credential of a shape the platform issues redacted (`Prima.Sanitizer`).
   def from_response(400, body, registry) do
     parsed = parse_errors(body)
 
     message =
       case parsed do
-        [%{"message" => msg} | _] when is_binary(msg) and msg != "" -> msg
-        _ -> "Request refused by #{registry}"
+        [%{"message" => msg} | _] when is_binary(msg) and msg != "" ->
+          Prima.Sanitizer.sanitize(msg)
+
+        _ ->
+          "Request refused by #{registry}"
       end
 
     %__MODULE__{

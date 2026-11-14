@@ -104,6 +104,58 @@ defmodule PrismWeb.RegistryLiveTest do
                    5_000
   end
 
+  # The registry holds another publisher's component beside the person's
+  # own: asked by namespace it answers only the namespace's, and the page
+  # lists what it was answered, under that namespace.
+  test "the page lists the person's own components, never another publisher's",
+       %{conn: conn, user: user} do
+    row = fn slug, name ->
+      %{
+        "id" => "cmp_#{name}",
+        "name" => name,
+        "version" => "1.0.0",
+        "component_type" => "reagent",
+        "namespace_slug" => slug,
+        "status" => "active"
+      }
+    end
+
+    listing = fn rows ->
+      {200, Jason.encode!(%{"components" => rows, "total" => length(rows)})}
+    end
+
+    RegistryStub.start!(fn
+      %{method: "GET", path: "/v1/components?" <> query} ->
+        case URI.decode_query(query) do
+          %{"namespace" => "acme.dev"} -> listing.([row.("acme.dev", "acme-widget")])
+          %{"namespace" => _other} -> listing.([])
+          _unfiltered -> listing.([row.("zeta.dev", "zeta-widget")])
+        end
+
+      %{method: "GET"} ->
+        {404, ""}
+    end)
+
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: seated_athanor().id}
+
+    :ok =
+      Compendium.Registry.CredentialStore.put_push_token(
+        ctx,
+        Compendium.RegistryHost.canonical_host(),
+        "acme.dev",
+        "cyfr_pt_fake_acme",
+        "owner"
+      )
+
+    {view, _html} = mount_athanor(conn, "/registry")
+    render_async(view, 5_000)
+    render_async(view, 5_000)
+
+    html = render(view)
+    assert html =~ "acme-widget"
+    refute html =~ "zeta-widget"
+  end
+
   test "an appeal is a request the person's passkey signs, with no sign-in method asked",
        %{conn: conn, user: user} do
     {view, _html} = mount_athanor(conn, "/registry")
