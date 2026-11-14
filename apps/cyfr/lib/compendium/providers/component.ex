@@ -110,7 +110,7 @@ defmodule Compendium.Providers.Component do
                 "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
             ),
             Arg.new("registry", :string,
-              description: "OCI registry hostname for push/discover (e.g., ghcr.io)"
+              description: "OCI registry hostname for push (e.g., ghcr.io)"
             ),
             Arg.new("progress_id", :string,
               description: "Correlation ID for transfer progress events"
@@ -170,9 +170,6 @@ defmodule Compendium.Providers.Component do
           [
             Arg.new("namespace", :string,
               description: "Publisher namespace filter (discover action)"
-            ),
-            Arg.new("registry", :string,
-              description: "OCI registry hostname for push/discover (e.g., ghcr.io)"
             ),
             Arg.new("type", :string,
               description:
@@ -930,31 +927,23 @@ defmodule Compendium.Providers.Component do
   end
 
   # Discover action - list components on the configured registry (cyfr.run
-  # REST API). The registry host is set via CYFR_REGISTRY_URL.
+  # REST API), the one this deployment names (CYFR_REGISTRY_URL).
   def handle(%Context{} = ctx, %{"action" => "discover"} = args) do
-    registry = args["registry"] || default_registry()
+    params = %{namespace: args["namespace"], type: args["type"]}
 
-    case Compendium.RegistryHost.validate_host(registry) do
-      {:error, msg} ->
-        {:error, msg}
+    case Compendium.Registry.Client.discover(ctx, params) do
+      {:ok, result} ->
+        {:ok, result}
 
-      :ok ->
-        params = %{namespace: args["namespace"], type: args["type"]}
+      {:error, %Errors{} = err} ->
+        Logger.error(
+          "[Compendium.Providers.Component] DISCOVER FAILED — #{Errors.to_log_string(err)}"
+        )
 
-        case Compendium.Registry.Client.discover(ctx, params) do
-          {:ok, result} ->
-            {:ok, result}
+        {:error, Shared.refusal(err)}
 
-          {:error, %Errors{} = err} ->
-            Logger.error(
-              "[Compendium.Providers.Component] DISCOVER FAILED — #{Errors.to_log_string(err)}"
-            )
-
-            {:error, Shared.refusal(err)}
-
-          {:error, {:corrupt, :registry_credential}} = corrupt ->
-            corrupt
-        end
+      {:error, {:corrupt, :registry_credential}} = corrupt ->
+        corrupt
     end
   end
 

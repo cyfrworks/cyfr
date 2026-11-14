@@ -1221,7 +1221,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr registry publisher claim/verify <domain>` | Claim + DNS-verify a publisher namespace by requests your account signs with this command line's PIN or passphrase; verifying stores the founding member's push token `[i]` |
 | `cyfr registry tokens list/issue/revoke <ns>` | Manage push tokens for a namespace; issuing one needs a fresh confirmation given in Prism `[i]` |
 | `cyfr registry members list/add/update/remove <ns>` | Manage members of a publisher namespace `[i]` |
-| `cyfr registry discover <registry>` | Inspect OCI registry capabilities (distribution discovery) |
+| `cyfr registry discover <namespace>` | List a publisher's components on the registry |
 | `cyfr webhook create/get/list/update/revoke/rotate` | Manage inbound HMAC-signed webhooks that trigger a component `[i]` |
 | `cyfr notify <event> <target>` | Send a webhook notification |
 | `cyfr context list/set/add` | Manage server connections (local only) |

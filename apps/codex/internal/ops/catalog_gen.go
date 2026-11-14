@@ -937,8 +937,6 @@ func (args ComponentDeprecateArgs) MarshalJSON() ([]byte, error) {
 type ComponentDiscoverArgs struct {
 	// Publisher namespace filter (discover action)
 	Namespace Field[string] `json:"namespace,omitzero"`
-	// OCI registry hostname for push/discover (e.g., ghcr.io)
-	Registry Field[string] `json:"registry,omitzero"`
 	// Component type (required for create action, optional filter for search/list)
 	Type Field[string] `json:"type,omitzero"`
 }
@@ -1041,7 +1039,7 @@ func (args ComponentPullArgs) MarshalJSON() ([]byte, error) {
 type ComponentPushArgs struct {
 	// Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component).
 	Reference string `json:"reference"`
-	// OCI registry hostname for push/discover (e.g., ghcr.io)
+	// OCI registry hostname for push (e.g., ghcr.io)
 	Registry Field[string] `json:"registry,omitzero"`
 	// Correlation ID for transfer progress events
 	ProgressId Field[string] `json:"progress_id,omitzero"`
@@ -3649,6 +3647,8 @@ type RegistryReportArgs struct {
 	TargetNamespace Field[string] `json:"target_namespace,omitzero"`
 	// Component reference being reported (for report action; required if no target_namespace)
 	TargetComponentRef Field[string] `json:"target_component_ref,omitzero"`
+	// Whether the person ticked the report sheet's three acknowledgements; a dmca report is refused without it, and no other category carries it
+	AttestationsSigned Field[bool] `json:"attestations_signed,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
