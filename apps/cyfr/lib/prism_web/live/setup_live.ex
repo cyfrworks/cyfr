@@ -48,7 +48,7 @@ defmodule PrismWeb.SetupLive do
       |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
       |> assign(:step, :reading)
       |> assign(:token, nil)
-      |> assign(:directory_host, URI.parse(Sanctum.directory_url()).host)
+      |> assign(:directory_host, Sanctum.SignIn.directory_host())
       |> assign(:error, nil)
 
     {:ok, signed_in(socket, params, session), layout: false}

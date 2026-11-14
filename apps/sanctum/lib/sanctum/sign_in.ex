@@ -454,6 +454,13 @@ defmodule Sanctum.SignIn do
     end
   end
 
+  @doc """
+  The host of the account pages a browser is sent to (`request/3`'s url),
+  which the setup and invitation pages name before they send it there.
+  """
+  @spec directory_host() :: String.t()
+  def directory_host, do: URI.parse(directory()).host
+
   # The directory's origin: its account pages are served at its root. The
   # boot refused a deployment naming none, or one that is no directory URL
   # (`Sanctum.Supervisor`).

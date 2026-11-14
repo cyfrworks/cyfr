@@ -2040,6 +2040,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.SignIn" => [
       answer: 3,
       binding: 1,
+      directory_host: 0,
       record_namespace: 2,
       request: 2,
       request: 3

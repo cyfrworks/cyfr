@@ -51,7 +51,7 @@ defmodule PrismWeb.InviteLive do
      |> assign(:step, :reading)
      |> assign(:hash, nil)
      |> assign(:invitation, nil)
-     |> assign(:directory_host, URI.parse(Sanctum.directory_url()).host)
+     |> assign(:directory_host, Sanctum.SignIn.directory_host())
      |> assign(:error, nil), layout: false}
   end
 
