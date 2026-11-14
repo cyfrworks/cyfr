@@ -1084,7 +1084,8 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # A thread the person holds no seat in answers as a missing one does.
+  # A thread the person's list of threads does not name, one they hold no
+  # seat in or one archived, answers as a missing one does.
   defp shared_thread(ctx, id, args) do
     with {:ok, _user_id} <- reader(ctx, args),
          {:ok, %{text: text, unread: unread}} <-

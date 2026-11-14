@@ -23,10 +23,10 @@ defmodule Aqua.RoomExcerpt do
   person's AQUA reading a thread they sit in when a question needs it
   (`read_marked/2`): there each message the person has not seen is marked,
   a message of files alone is named as one, and the answer counts them.
-  The marks are made by the person's read mark, read before the lines
-  (`Sanctum.SharedThreads.tail/3`): what someone else wrote past it is
-  unread, their own messages never are, and a message that arrives while
-  the thread is read is past the mark too. Reading moves no read mark.
+  The mark, the count and the lines come from one read
+  (`Sanctum.SharedThreads.tail/3`): what someone else wrote past the
+  person's read mark is unread, and their own messages never are.
+  Reading moves no read mark.
   """
 
   alias Sanctum.Context
@@ -71,11 +71,8 @@ defmodule Aqua.RoomExcerpt do
   def read_marked(%Context{user_id: user_id}, %{shared_thread_id: thread_id} = room)
       when is_binary(user_id) and is_binary(thread_id) do
     with {:ok, thread} <- SharedThreads.get(user_id, thread_id),
-         {:ok, %{read_seq: mark, messages: messages}} <-
-           SharedThreads.tail(user_id, thread_id, @rows),
-         {:ok, before} <- unread_before(user_id, thread_id, mark, messages) do
-      unread = before + Enum.count(messages, &unread?(&1, user_id, mark))
-
+         {:ok, %{read_seq: mark, unread: unread, messages: messages}} <-
+           SharedThreads.tail(user_id, thread_id, @rows) do
       case lines(messages, user_id, mark) do
         [] ->
           {:ok, %{text: "", unread: unread}}
@@ -107,21 +104,6 @@ defmodule Aqua.RoomExcerpt do
 
   defp unread?(%{author: author, seq: seq}, user_id, mark),
     do: is_integer(mark) and seq > mark and author != user_id
-
-  # The unread messages older than the lines read, between the mark and the
-  # oldest line: a range that no later message enters, so the count stays
-  # the one the lines were marked by.
-  defp unread_before(user_id, thread_id, mark, [%{seq: oldest} | _]) when oldest > mark + 1 do
-    with {:ok, older} <-
-           SharedThreads.messages(user_id, thread_id,
-             after_seq: mark,
-             limit: oldest - mark - 1
-           ) do
-      {:ok, Enum.count(older, &(&1.seq < oldest and &1.author != user_id))}
-    end
-  end
-
-  defp unread_before(_user_id, _thread_id, _mark, _messages), do: {:ok, 0}
 
   # What people said, each named once per author. With a read mark (`mark`
   # an integer) each message past it that someone else wrote is marked

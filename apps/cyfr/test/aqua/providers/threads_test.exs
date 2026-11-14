@@ -31,8 +31,10 @@ defmodule Aqua.Providers.ThreadsTest do
 
     me = %{reader.ctx | origin: :interactive}
 
+    {turn, run} = open_turn!(me)
+
     {:ok,
-     me: me, reader: reader.user.id, other: other.user.id, thread: thread, turn: open_turn!(me)}
+     me: me, reader: reader.user.id, other: other.user.id, thread: thread, turn: turn, run: run}
   end
 
   defp say(user_id, thread, text) do
@@ -45,7 +47,8 @@ defmodule Aqua.Providers.ThreadsTest do
   defp threads(ctx, args, lineage), do: Tool.handle("threads", ctx, Map.merge(args, lineage))
 
   # An open turn of the person's AQUA in a thread of their own, with its
-  # root execution: the lineage a call from it carries.
+  # root execution: the lineage a call from it carries, as the handler reads
+  # it, and as the host stamps a call its own run makes.
   defp open_turn!(ctx) do
     {:ok, own} = Threads.create(Context.actor(ctx))
 
@@ -81,7 +84,13 @@ defmodule Aqua.Providers.ThreadsTest do
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 
-    %{"thread_id" => own.id, "root_execution_id" => execution.id}
+    {%{"thread_id" => own.id, "root_execution_id" => execution.id},
+     %{
+       parent_execution_id: execution.id,
+       root_execution_id: execution.id,
+       attempt: attempt.attempt,
+       thread_id: own.id
+     }}
   end
 
   # A chain authority granting the two reads, the shape the consent blob
@@ -125,16 +134,16 @@ defmodule Aqua.Providers.ThreadsTest do
     auth
   end
 
-  # A call through the gate from a running chain: its execution is a real
-  # attempt the host names, and a lineage a case gives is stamped over it.
-  defp in_chain(ctx, args, lineage \\ %{}) do
-    caller =
+  # A call through the gate from a component's run: a real execution's
+  # attempt, which the host names in the lineage, and no turn's.
+  defp in_chain(ctx, args) do
+    lineage =
       ctx
       |> Cyfr.Test.AttemptFixtures.lineage!()
       |> Map.take([:parent_execution_id, :root_execution_id, :attempt])
 
     Sanctum.Gate.call_in_chain("threads", Context.enter_guest(ctx), args, granting(),
-      lineage: Map.merge(caller, lineage)
+      lineage: lineage
     )
   end
 
@@ -186,36 +195,59 @@ defmodule Aqua.Providers.ThreadsTest do
     {:ok, [%{unread: 2}]} = SharedThreads.listed(reader)
   end
 
-  # Fires once, in the reading process, after its first read of a seat.
+  # Fires once, in the reading process, after its second read of a seat:
+  # the first is the thread's title (`SharedThreads.get/2`), the second
+  # the read of the mark and the lines (`SharedThreads.tail/3`).
   @doc false
   def arrive(_event, _measurements, metadata, %{test: test, act: act}) do
-    if self() == test and Process.get(:threads_race) == :armed and
-         metadata[:source] == "shared_thread_members" do
-      Process.put(:threads_race, :fired)
-      act.()
+    with true <- self() == test,
+         {:armed, seen} <- Process.get(:threads_race),
+         "shared_thread_members" <- metadata[:source] do
+      if seen == 1 do
+        Process.put(:threads_race, :fired)
+        act.()
+      else
+        Process.put(:threads_race, {:armed, seen + 1})
+      end
     end
 
     :ok
   end
 
-  test "a message that arrives while a thread is read is marked and counted with the rest",
+  test "what is marked and counted is what was unread at one instant, whatever happens while it is read",
        %{me: me, reader: reader, other: other, thread: thread, turn: turn} do
-    say(reader, thread, "plan?")
-    :ok = SharedThreads.mark_read(reader, thread.id)
     say(other, thread, "A")
 
-    # B arrives once the reader's seat has been read, before its lines are.
-    handler = "threads-race-#{System.unique_integer([:positive])}"
-    config = %{test: self(), act: fn -> say(other, thread, "B") end}
-    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.arrive/4, config)
-    on_exit(fn -> :telemetry.detach(handler) end)
-    Process.put(:threads_race, :armed)
+    # Once the mark has been read with the lines: the person reads A, and
+    # someone else says B. A was unread and B not yet said at that instant.
+    act = fn ->
+      :ok = SharedThreads.mark_read(reader, thread.id)
+      say(other, thread, "B")
+    end
 
-    assert {:ok, %{unread: 2, text: text}} =
+    handler = "threads-race-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.arrive/4, %{
+        test: self(),
+        act: act
+      })
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    Process.put(:threads_race, {:armed, 0})
+
+    assert {:ok, %{unread: 1, text: text}} =
              threads(me, %{"action" => "read", "thread" => thread.id}, turn)
 
     assert Process.get(:threads_race) == :fired
-    assert text =~ "Rae: plan?\n(unread) Otto: A\n(unread) Otto: B"
+    assert text =~ "\n(unread) Otto: A"
+    refute text =~ "Otto: B"
+
+    # Read again, it is B alone.
+    assert {:ok, %{unread: 1, text: again}} =
+             threads(me, %{"action" => "read", "thread" => thread.id}, turn)
+
+    assert again =~ "\nOtto: A\n(unread) Otto: B"
   end
 
   test "an unread message of files alone is counted and named as one",
@@ -234,16 +266,44 @@ defmodule Aqua.Providers.ThreadsTest do
     refute text =~ "FILE-BYTES"
   end
 
-  test "unread messages older than the lines read are counted too",
+  test "every unread message is counted, past any page of messages",
        %{me: me, other: other, thread: thread, turn: turn} do
-    for n <- 1..45, do: say(other, thread, "line #{n}")
+    # Written straight into the table, `seq` dense from 1: more than a page
+    # of messages, without posting each.
+    unread = Arca.SharedMessages.max_page() + 41
 
-    assert {:ok, %{unread: 45, text: text}} =
+    rows =
+      for seq <- 1..unread do
+        %{
+          id: Prima.UUID7.generate_id("shm"),
+          thread_id: thread.id,
+          seq: seq,
+          author: other,
+          content: "line #{seq}",
+          inserted_at: DateTime.utc_now()
+        }
+      end
+
+    {^unread, _} = Arca.Repo.insert_all("shared_messages", rows)
+
+    assert {:ok, %{unread: ^unread, text: text}} =
              threads(me, %{"action" => "read", "thread" => thread.id}, turn)
 
-    refute text =~ "Otto: line 5\n"
-    assert text =~ "(unread) Otto: line 6\n"
-    assert text =~ "(unread) Otto: line 45"
+    refute text =~ "Otto: line #{unread - 40}\n"
+    assert text =~ "(unread) Otto: line #{unread - 39}\n"
+    assert String.ends_with?(text, "(unread) Otto: line #{unread}")
+  end
+
+  test "read takes exactly the threads list names: an archived one is missing",
+       %{me: me, reader: reader, other: other, thread: thread, turn: turn} do
+    say(other, thread, "before the archive")
+    {:ok, _} = SharedThreads.archive(reader, thread.id)
+    thread_id = thread.id
+
+    assert threads(me, %{"action" => "list"}, turn) == {:ok, %{count: 0, threads: []}}
+
+    assert threads(me, %{"action" => "read", "thread" => thread_id}, turn) ==
+             {:error, {:not_found, "Thread", thread_id}}
   end
 
   test "a thread nobody has spoken in reads empty", %{me: me, thread: thread, turn: turn} do
@@ -291,8 +351,8 @@ defmodule Aqua.Providers.ThreadsTest do
     assert threads(%{me | user_id: nil}, read, turn) == {:error, :not_in_a_turn}
   end
 
-  test "a component granted the reads, started by a key or a webhook, is refused; from the turn it answers",
-       %{me: me, other: other, thread: thread, turn: turn} do
+  test "a component granted the reads, started by a key or a webhook, is refused; the turn's own run is answered",
+       %{me: me, other: other, thread: thread, run: run} do
     say(other, thread, "ship friday")
     read = %{"action" => "read", "thread" => thread.id}
 
@@ -304,12 +364,11 @@ defmodule Aqua.Providers.ThreadsTest do
       assert in_chain(started, args) == {:error, :not_in_a_turn}
     end
 
-    lineage = %{
-      root_execution_id: turn["root_execution_id"],
-      thread_id: turn["thread_id"]
-    }
+    assert {:ok, %{unread: 1, text: text}} =
+             Sanctum.Gate.call_in_chain("threads", Context.enter_guest(me), read, granting(),
+               lineage: run
+             )
 
-    assert {:ok, %{unread: 1, text: text}} = in_chain(me, read, lineage)
     assert text =~ "(unread) Otto: ship friday"
   end
 
