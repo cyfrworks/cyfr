@@ -25,9 +25,8 @@ import (
 // dockerPackages are the packages cyfr init installs.
 var dockerPackages = []string{"docker.io", "docker-compose-v2", "apparmor"}
 
-// machine is how cyfr observes this machine and changes it. Tests stand
-// in for all of it.
-var machine = struct {
+// machineSeams is how cyfr observes a machine and changes it.
+type machineSeams struct {
 	// supported is Ubuntu 26.04, run by an account that is not root.
 	supported func() bool
 	// arch is this program's architecture.
@@ -58,7 +57,11 @@ var machine = struct {
 	apply func(commands []string) error
 	// forget invalidates sudo's cached login.
 	forget func()
-}{
+}
+
+// machine is this machine, as cyfr observes and changes it. Tests stand
+// in for all of it.
+var machine = machineSeams{
 	supported: func() bool {
 		raw, _ := os.ReadFile("/etc/os-release")
 		lines := strings.Split(string(raw), "\n")
