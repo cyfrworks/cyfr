@@ -32,11 +32,15 @@ defmodule PrismWeb.SystemLayer do
   in either clears both. `athanor_route` and
   `athanor_name` name the athanor a grant lands in. `covered` (false by
   default) is the desktop's while a Dashboard page covers it: the layer
-  then draws none of its prompts and nothing of it is modal, whatever
-  raised the prompt, while each keeps its place and what it holds (a
-  grant's walk, a credential entry's waiting record) and the facts of its
-  records are still taken, so it is drawn again as it stands once the
-  layer is uncovered. The browser clears a prompt's forms as it closes, so
+  then draws none of the prompts a frame can raise and nothing of them is
+  modal, while each keeps its place and what it holds (a grant's walk, a
+  credential entry's waiting record) and the facts of its records are
+  still taken, so it is drawn again as it stands once the layer is
+  uncovered. The pairing prompt alone is drawn over the page: only the
+  person's press on the desktop's own chrome raises it, never a frame.
+  When it waits behind a prompt hidden under the page, it stays there and
+  the layer says, in a line over the page, that something on the desktop
+  waits for an answer. The browser clears a prompt's forms as it closes, so
   a typed value is typed again. A prompt
   (`PrismWeb.SystemLayer.Prompt`) arrives by `show/2`, which is
   `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`. A prompt that arrives while another is open
@@ -81,9 +85,8 @@ defmodule PrismWeb.SystemLayer do
       opens it with the plan's suggestions bound for the required needs)
       and draws the preview's typed rows itself: the vault entry each need
       of the app and of its dependencies is bound to, the named accounts
-      beside each edge's default, and how long each binding lives, the
-      narrowing and the origins the person chooses,
-      each previewed again after each choice, the warnings and what
+      beside each edge's default, how long each binding lives and the
+      narrowing the person chooses, each previewed again after each choice, the warnings and what
       changed. It hands the layer the walk as it stands. Confirming asks
       the sheet for its walk at that moment, after every choice that came
       before the confirm, and commits exactly that walk, its decisions,
@@ -121,7 +124,8 @@ defmodule PrismWeb.SystemLayer do
       (`credential_sharing`); the prompt reports `:confirmed` once the
       share is made, and shows a refusal's sentence and stays open
       otherwise;
-    * pairing — `pairing.list` when it opens, and `pairing.revoke`;
+    * pairing — `pairing.list` and `pairing.waiting` when it opens, and
+      `pairing.revoke`;
     * a frame's request — the call the prompt names (`tool` and `args`),
       dispatched as the layer's own change once the person approves it,
       with the preview CYFR built of exactly that call drawn first and
@@ -291,14 +295,12 @@ defmodule PrismWeb.SystemLayer do
   The `:grant` prompt `id` for the component `ref`, read under `ctx` (a
   context, or a socket holding one, as `PrismWeb.Ops.call_tool/3` takes
   it): the consent walk's plan as `profile.plan` answers it, with what its
-  head holds (`head_origins`, `head_bindings`, and `shape_diff` when the
+  head holds (`head_bindings`, and `shape_diff` when the
   shape moved), its preview of what the grant opens with
   (`Prism.ConsentChoices.initial_choices/2`: on a re-grant, what
   the head binds with its lifetime, never wider, and elsewhere the plan's
   suggestions bound for the required needs of the app and of each
-  dependency) under the origins
-  the head admits (`interactive` alone on a first grant) and the
-  narrowing it holds (`head_narrowing`: a method the head narrowed off,
+  dependency) under the narrowing it holds (`head_narrowing`: a method the head narrowed off,
   or one newly asked for, opens off; a first grant opens on the ask),
   when the
   person's session ends (`session.whoami`'s `session_expires_at`, which
@@ -369,9 +371,8 @@ defmodule PrismWeb.SystemLayer do
 
   # The decisions the grant opens with, their preview, and why the
   # suggestions were not bound, if they were not: the plan's suggestions
-  # bound for the required needs, under the origins the head admits
-  # (`interactive` alone on a first grant), and the account it is opened
-  # for beside its edge's default; with nothing bound when the home
+  # bound for the required needs, and the account it is opened for beside
+  # its edge's default; with nothing bound when the home
   # refuses to preview the suggestions, so the person chooses, and the
   # home's sentence for that refusal, which the sheet shows.
   defp first_walk(_ctx_or_socket, {ref, label, _account}, %{unresolved: %{}} = plan),
@@ -419,7 +420,6 @@ defmodule PrismWeb.SystemLayer do
     Prism.ConsentChoices.decisions(
       ref,
       label,
-      plan[:head_origins] || ["interactive"],
       head_narrowing(plan),
       choices
     )
@@ -439,40 +439,6 @@ defmodule PrismWeb.SystemLayer do
       _none -> nil
     end
   end
-
-  @doc """
-  Whether the grant a run would start under admits `origin`: the profile
-  `profile_id` of the component `ref`, read under `ctx` (a context, or a
-  socket holding one) through `Sanctum.Consent.profiles/2` and its head
-  through `Sanctum.Consent.head_consent/2`. `:admitted` when its head
-  admits it; `{:missing, label}` when an owner profile's head does not,
-  `label` the profile's, for the grant prompt that asks for it
-  (`grant_prompt/4`'s `label:`); `:unknown` when the profile is not one of
-  `ref`'s owner profiles with a head, or cannot be read, which leaves the
-  decision to the operation itself.
-  """
-  @spec admits_origin(
-          Context.t() | Phoenix.LiveView.Socket.t(),
-          String.t(),
-          String.t(),
-          Prima.Origin.t()
-        ) :: :admitted | {:missing, String.t()} | :unknown
-  def admits_origin(ctx_or_socket, ref, profile_id, origin)
-      when is_binary(ref) and is_binary(profile_id) do
-    with %Context{} = ctx <- context_of(ctx_or_socket),
-         {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(ref),
-         {:ok, entries} <- Sanctum.Consent.profiles(ctx, name_ref),
-         %{kind: :owner, label: label} <- Enum.find(entries, &(&1.id == profile_id)),
-         {:ok, head} <- Sanctum.Consent.head_consent(ctx, profile_id) do
-      if origin in head.admitted_origins,
-        do: :admitted,
-        else: {:missing, label}
-    else
-      _unknown -> :unknown
-    end
-  end
-
-  def admits_origin(_ctx_or_socket, _ref, _profile_id, _origin), do: :unknown
 
   defp context_of(%Context{} = ctx), do: ctx
   defp context_of(%Phoenix.LiveView.Socket{assigns: %{context: ctx}}), do: ctx
@@ -800,7 +766,15 @@ defmodule PrismWeb.SystemLayer do
     {:ok, socket}
   end
 
-  def update(%{outcome: {ref, outcome}}, socket), do: {:ok, on_outcome(socket, ref, outcome)}
+  # A completed change closes its prompt and shows the next, which may
+  # read through the context: inside the guard, as every update that acts
+  # on it.
+  def update(%{outcome: {ref, outcome}}, socket) do
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.guard(socket, &{:noreply, on_outcome(&1, ref, outcome)})
+
+    {:ok, socket}
+  end
 
   def update(%{expire: ref}, socket), do: {:ok, expire(socket, ref)}
 
@@ -1108,11 +1082,12 @@ defmodule PrismWeb.SystemLayer do
 
   defp approve_landed(socket, _ref, false), do: socket
 
-  # A completed change lets go of the form that typed it. A release's
-  # outcome replaces the record's `cancelled` fact heard before it, so the
-  # prompt ends saying why, whichever arrived first; an outcome that the
-  # approval could not be withdrawn never does, since the fact shows it
-  # was.
+  # A completed change closes its prompt and lets go of the form that
+  # typed it: the page shows what the change made (a secret to copy among
+  # it), and nothing is left over it. A release's outcome replaces the
+  # record's `cancelled` fact heard before it, so the prompt ends saying
+  # why, whichever arrived first; an outcome that the approval could not
+  # be withdrawn never does, since the fact shows it was.
   defp on_outcome(socket, ref, outcome) do
     case Map.get(socket.assigns.panels, ref) do
       nil ->
@@ -1121,11 +1096,21 @@ defmodule PrismWeb.SystemLayer do
       %{status: {:ended, :cancelled}} when is_unwithdrawn(outcome) ->
         socket
 
-      panel ->
-        socket = set_status(socket, ref, outcome)
-        if outcome == :completed, do: clear_forms(socket, panel), else: socket
+      panel when outcome == :completed ->
+        socket |> clear_forms(panel) |> drop_panel(ref) |> close_prompt(panel.prompt_id)
+
+      _panel ->
+        set_status(socket, ref, outcome)
     end
   end
+
+  # A prompt that ended with nothing more to say leaves the layer: the next
+  # one waiting is shown in its place.
+  defp close_prompt(%{assigns: %{current: %{id: id}}} = socket, id),
+    do: socket |> drop_prompt_asks(id) |> advance()
+
+  defp close_prompt(socket, id),
+    do: assign(socket, :queue, Enum.reject(socket.assigns.queue, &(&1.id == id)))
 
   # One record, read by its ref as the `request`.
   defp pending_entry(socket, ref) do
@@ -1355,14 +1340,19 @@ defmodule PrismWeb.SystemLayer do
 
   # The pairing prompt, as it is shown, has its list still to read.
   defp mark_shown(%{assigns: %{current: %{kind: :pairing, id: id}}} = socket),
-    do: assign(socket, pairing: %{prompt_id: id, clients: :unread})
+    do: assign(socket, pairing: %{prompt_id: id, clients: :unread, waiting: :unread})
 
   defp mark_shown(socket), do: assign(socket, pairing: nil)
 
   # What a shown prompt reads: for the pairing prompt, the person's paired
-  # clients.
+  # clients and the passkeys waiting for their account.
   defp load_shown(%{assigns: %{pairing: %{clients: :unread} = pairing}} = socket),
-    do: assign(socket, :pairing, %{pairing | clients: clients(socket)})
+    do:
+      assign(socket, :pairing, %{
+        pairing
+        | clients: clients(socket),
+          waiting: waiting_passkeys(socket)
+      })
 
   defp load_shown(socket), do: socket
 
@@ -2281,6 +2271,13 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  defp waiting_passkeys(socket) do
+    case Ops.call_tool(socket.assigns.context, "pairing/waiting", %{}) do
+      {:ok, %{waiting: waiting}} -> {:ok, waiting}
+      {:error, reason} -> {:error, Ops.error_message(reason)}
+    end
+  end
+
   defp pairing_revoke(socket, prompt, client_id) do
     case layer_call(socket, prompt, {:pairing_revoke, client_id}, "pairing/revoke", %{
            "client_id" => client_id
@@ -2304,7 +2301,7 @@ defmodule PrismWeb.SystemLayer do
         pairing
 
       _other ->
-        %{prompt_id: prompt.id, clients: {:ok, []}}
+        %{prompt_id: prompt.id, clients: {:ok, []}, waiting: {:ok, []}}
     end
   end
 
@@ -2504,6 +2501,15 @@ defmodule PrismWeb.SystemLayer do
   defp can_prove?(%Sanctum.Context{} = context), do: Sanctum.Pairing.can_confirm?(context)
   defp can_prove?(_context), do: false
 
+  # What a covered layer still draws over the page. An app keeps running
+  # under a page and its bridge forwards a verb without the person's input,
+  # so no prompt a frame can raise stands modal over the page's own asks.
+  # The pairing prompt carries nothing of a frame's and only the person's
+  # press on the desktop's own Devices control raises it, which no frame
+  # draws or reaches.
+  defp over_page?(%{kind: :pairing}), do: true
+  defp over_page?(_prompt), do: false
+
   # ---------------------------------------------------------------------------
   # Render
   # ---------------------------------------------------------------------------
@@ -2511,11 +2517,21 @@ defmodule PrismWeb.SystemLayer do
   @impl true
   def render(assigns) do
     # The prompt drawn, `shown`: the open one, or none while the layer is
-    # covered, when it keeps its place and state and is drawn again as it
-    # stands. Derived on every render from `covered` and `current`
-    # together, so the browser sees the dialog open again once the layer is
-    # uncovered, though `current` itself never moved.
-    shown = if assigns.covered, do: nil, else: assigns.current
+    # covered and the open one is not drawn over a page, when it keeps its
+    # place and state and is drawn again as it stands. Derived on every
+    # render from `covered` and `current` together, so the browser sees the
+    # dialog open again once the layer is uncovered, though `current`
+    # itself never moved.
+    shown =
+      if assigns.covered and not over_page?(assigns.current),
+        do: nil,
+        else: assigns.current
+
+    # A prompt drawn over a page that waits behind one hidden there (the
+    # devices', behind a frame's) is not put in front of it, which may hold
+    # an approved change waiting for its proof; the person is told instead
+    # where the hidden one is.
+    held_back = assigns.covered and is_nil(shown) and Enum.any?(assigns.queue, &over_page?/1)
     may = shown && may_confirm?(assigns[:context], shown)
 
     panel =
@@ -2527,6 +2543,7 @@ defmodule PrismWeb.SystemLayer do
     assigns =
       assign(assigns,
         shown: shown,
+        held_back: held_back,
         may: may,
         # A record is proven here only by a client with a person behind it;
         # one with none waits for another client of the person.
@@ -2569,6 +2586,7 @@ defmodule PrismWeb.SystemLayer do
             myself={@myself}
             id={@id}
             pairing={@pairing}
+            shell={@shell}
             context={assigns[:context]}
             athanor_route={@athanor_route}
             athanor_name={@athanor_name}
@@ -2594,6 +2612,18 @@ defmodule PrismWeb.SystemLayer do
           </p>
         </div>
       </dialog>
+
+      <%!-- Above the Devices chip, at the chips' level, so it stands over
+           the page that covers the desktop. --%>
+      <p
+        :if={@held_back}
+        id={"#{@id}-held-back"}
+        data-test="held-back"
+        role="status"
+        class="pointer-events-none absolute bottom-10 left-2 z-[67] max-w-xs rounded-md bg-black/70 px-2 py-1 text-xs text-white/90"
+      >
+        Something on your desktop is waiting for your answer. Go back to the desktop to see it.
+      </p>
 
       <.notice :if={@notice} id={@id} notice={@notice} error={@notice_error} myself={@myself} />
 
@@ -2695,6 +2725,7 @@ defmodule PrismWeb.SystemLayer do
   attr :myself, :any, required: true
   attr :id, :string, required: true
   attr :pairing, :map, default: nil
+  attr :shell, :boolean, default: false
   attr :context, :any, default: nil
   attr :athanor_route, :any, default: nil
   attr :athanor_name, :any, default: nil
@@ -2868,6 +2899,7 @@ defmodule PrismWeb.SystemLayer do
     <Pairing.devices
       prompt_id={@prompt.id}
       pairing={@pairing}
+      shell={@shell}
       myself={@myself}
       button_class={button_class(false)}
     />
@@ -3202,7 +3234,6 @@ defmodule PrismWeb.SystemLayer do
     do: "Waiting for your confirmation, here or on another of your devices."
 
   defp status(%{status: :approved}), do: "Approved. Completing the change."
-  defp status(%{status: :completed}), do: "Completed."
 
   defp status(%{status: {:refused, :asked_again}}),
     do: "The request changed, so it was asked for again. Nothing was changed."

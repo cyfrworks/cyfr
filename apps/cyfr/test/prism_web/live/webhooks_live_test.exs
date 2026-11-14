@@ -54,7 +54,6 @@ defmodule PrismWeb.WebhooksLiveTest do
 
     test "ticking the box creates a webhook that names neither header",
          %{view: view, profile_id: profile_id, ctx: ctx} do
-      grant_origins!(ctx, [:interactive, :webhook])
       name = "console-hook-#{System.unique_integer([:positive])}"
 
       render_click(view, "toggle_create")
@@ -68,8 +67,10 @@ defmodule PrismWeb.WebhooksLiveTest do
       })
 
       # Past the replay decision, the create waits on its record, shown as
-      # this page's own; nothing is minted, and no error is written.
+      # this page's own; nothing is minted, no error is written, and no grant
+      # is asked for: the profile's grant stands for every delivery.
       refute :sys.get_state(view.pid).socket.assigns.form_error
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
       assert {:ok, [%{ref: ref, operation: "webhook.create"}]} =
                Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
@@ -84,13 +85,22 @@ defmodule PrismWeb.WebhooksLiveTest do
 
       refute :sys.get_state(view.pid).socket.assigns.form_error
       assert {:ok, %{name: ^name}} = Sanctum.Webhook.get(ctx, name)
-      wait_until(fn -> render(view) =~ ~s(data-status="completed") end, 2_000, "completed")
+
+      # Completed, the page's prompt closes, so nothing sits over the new
+      # secret; a new webhook has no old secret to speak of.
+      wait_until(
+        fn -> not (render(view) =~ ~s(data-ref="#{ref}")) end,
+        2_000,
+        "the closed prompt"
+      )
+
+      assert render(view) =~ "not be shown again"
+      refute has_element?(view, ~s([data-test="old-secret"]))
       Cyfr.Test.Sandbox.end_views()
     end
 
     test "leaving it unticked refuses, and says which decision is missing",
-         %{view: view, profile_id: profile_id, ctx: ctx} do
-      grant_origins!(ctx, [:interactive, :webhook])
+         %{view: view, profile_id: profile_id} do
       render_click(view, "toggle_create")
 
       render_submit(view, "submit", %{
@@ -103,9 +113,68 @@ defmodule PrismWeb.WebhooksLiveTest do
       error = :sys.get_state(view.pid).socket.assigns.form_error
       assert is_binary(error) and error =~ "replay"
     end
+
+    # The submit takes only a grant the form offers for its target, read as
+    # the select is filled: a hand-made one naming a grant that waits for
+    # consent is refused, with nothing asked and nothing made.
+    test "a submit naming a grant the form does not offer is refused",
+         %{view: view, profile_id: profile_id, ctx: ctx} do
+      :ok =
+        Arca.ProfileStorage.transition(
+          Sanctum.Context.actor(ctx),
+          profile_id,
+          :any,
+          "needs_consent"
+        )
+
+      render_click(view, "toggle_create")
+
+      view
+      |> form("#webhook-form", %{"target_ref" => "reagent:local.hook-target"})
+      |> render_change()
+
+      assert options(view) == [{"", "No grant to choose"}]
+      name = "offered-only-#{System.unique_integer([:positive])}"
+
+      render_submit(view, "submit", %{
+        "name" => name,
+        "target_ref" => "reagent:local.hook-target",
+        "profile_id" => profile_id,
+        "accept_replays" => "on",
+        "input_template" => "{}"
+      })
+
+      assert :sys.get_state(view.pid).socket.assigns.form_error ==
+               "Choose one of the target component's grants."
+
+      assert {:ok, []} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      assert {:error, :not_found} = Sanctum.Webhook.get(ctx, name)
+    end
+
+    test "the profile is picked from the target component's grants",
+         %{view: view, profile_id: profile_id} do
+      render_click(view, "toggle_create")
+
+      assert options(view) == [{"", "No grant to choose"}]
+      refute has_element?(view, ~s(#webhook-form input[name="profile_id"]))
+
+      view
+      |> form("#webhook-form", %{"target_ref" => "reagent:local.hook-target"})
+      |> render_change()
+
+      assert options(view) == [{"", "Choose a grant"}, {profile_id, "default (#{profile_id})"}]
+
+      view
+      |> form("#webhook-form", %{"target_ref" => "reagent:local.not-installed"})
+      |> render_change()
+
+      assert options(view) == [{"", "No grant to choose"}]
+    end
   end
 
-  describe "a profile whose grant does not admit webhooks" do
+  describe "the list" do
     setup %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
@@ -116,124 +185,77 @@ defmodule PrismWeb.WebhooksLiveTest do
           user_id: user.user_id
       }
 
-      wasm = Cyfr.Test.Guests.wasm(:reagent)
-
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, wasm, %{
-          name: "hook-target",
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "listed-target",
           version: "0.1.0",
           type: "reagent",
           description: "webhook target"
         })
 
-      profile_id = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.hook-target")
+      profile_id =
+        Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.listed-target")
+
+      name = "listed-hook-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Sanctum.TestContext.create_webhook(ctx, %{
+          name: name,
+          target_ref: "reagent:local.listed-target",
+          profile_id: profile_id,
+          timestamp_header: "x-cyfr-timestamp",
+          idempotency_key_header: "x-cyfr-delivery"
+        })
+
       {view, _html} = mount_athanor(conn, "/webhooks")
-      render_click(view, "toggle_create")
-
-      params = %{
-        "name" => "console-hook-origin-#{System.unique_integer([:positive])}",
-        "target_ref" => "reagent:local.hook-target",
-        "profile_id" => profile_id,
-        "accept_replays" => "on",
-        "input_template" => "{}"
-      }
-
-      {:ok, view: view, ctx: ctx, params: params}
-    end
-
-    test "raises the grant prompt first, and a dismissal makes no webhook",
-         %{view: view, ctx: ctx, params: params} do
-      render_submit(view, "submit", params)
-      render(view)
-
-      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
-      assert {:error, :not_found} = Sanctum.Webhook.get(ctx, params["name"])
-
-      # No secret was asked for: nothing waits on a confirmation.
-      assert {:ok, []} =
-               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
-
-      view |> element(~s(#system-layer button[phx-click="dismiss"])) |> render_click()
-      render(view)
-
-      assert :sys.get_state(view.pid).socket.assigns.form_error =~ "No webhook was made"
-      assert {:error, :not_found} = Sanctum.Webhook.get(ctx, params["name"])
-    end
-
-    test "granted without the webhook origin, no webhook is made",
-         %{view: view, ctx: ctx, params: params} do
-      render_submit(view, "submit", params)
-      render(view)
-      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
-
-      # Confirmed as it opened: the grant is made again, still without
-      # webhooks, and the page's second check makes nothing.
-      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
 
       wait_until(
-        fn ->
-          render(view)
-
-          (:sys.get_state(view.pid).socket.assigns.form_error || "") =~
-            "No webhook was made: the grant does not let webhooks start this profile"
-        end,
+        fn -> has_element?(view, ~s([data-test="webhook-headers"])) end,
         2_000,
-        "the refusal"
+        "the list"
       )
 
-      {:ok, head} = Sanctum.Consent.head_consent(ctx, params["profile_id"])
-      refute :webhook in head.admitted_origins
-      assert {:error, :not_found} = Sanctum.Webhook.get(ctx, params["name"])
-
-      assert {:ok, []} =
-               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+      {:ok, view: view, name: name}
     end
 
-    test "granted with the webhook origin, the create goes on to its confirmation",
-         %{view: view, ctx: ctx, params: params} do
-      render_submit(view, "submit", params)
-      render(view)
+    test "names every header a delivery is checked by, beside the signature header",
+         %{view: view} do
+      headers =
+        view
+        |> element(~s([data-test="webhook-headers"]))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("div div")
+        |> Enum.map(&(&1 |> LazyHTML.text() |> String.split() |> Enum.join(" ")))
 
-      view
-      |> element(~s(input[phx-click="toggle_origin"][phx-value-origin="webhook"]))
-      |> render_click()
+      assert headers == [
+               "Signature: #{Prima.Webhook.default_signature_header()}",
+               "Timestamp: x-cyfr-timestamp",
+               "Idempotency key: x-cyfr-delivery"
+             ]
+    end
 
-      render(view)
-      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
+    test "Revoke asks in the command's words, and the actions stack at phone width",
+         %{view: view, name: name} do
+      assert has_element?(
+               view,
+               ~s(button[phx-click="revoke"][data-confirm="Revoke webhook '#{name}'? The URL stops accepting POSTs."])
+             )
 
-      wait_until(
-        fn ->
-          render(view)
-
-          match?(
-            {:ok, [%{operation: "webhook.create"}]},
-            Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
-          )
-        end,
-        2_000,
-        "the create's confirmation"
-      )
-
-      {:ok, head} = Sanctum.Consent.head_consent(ctx, params["profile_id"])
-      assert :webhook in head.admitted_origins
-      Cyfr.Test.Sandbox.end_views()
+      assert has_element?(view, ~s([data-test="webhook-actions"].flex-col))
     end
   end
 
-  # The profile's grant, made again through the walk with `origins`.
-  defp grant_origins!(ctx, origins) do
-    ref = "reagent:local.hook-target"
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    decisions = %{ref: ref, origins: origins}
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
+  # The profile select's options, each as its value and its text.
+  defp options(view) do
+    view
+    |> element(~s(#webhook-form select[name="profile_id"]))
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("option")
+    |> Enum.map(fn option ->
+      {option |> LazyHTML.attribute("value") |> List.first(),
+       option |> LazyHTML.text() |> String.trim()}
+    end)
   end
 end

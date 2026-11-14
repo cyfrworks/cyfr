@@ -144,15 +144,17 @@ defmodule CyfrWeb.ApiErrorTest do
   end
 
   test "a consent signal carries its data" do
-    signal = {:consent_required, %{"detail" => "scope widened"}}
-    conn = answer(conn(:get, "/"), signal)
+    payload = %{"cause" => "revoked", "ref" => "reagent:local.weather"}
+    conn = answer(conn(:get, "/"), {:consent_required, payload})
 
     assert conn.status == 403
 
     assert body(conn) == %{
              "code" => "consent_required",
-             "message" => "Consent required: scope widened",
-             "data" => %{"tag" => "consent_required", "payload" => %{"detail" => "scope widened"}}
+             "message" =>
+               "Consent required: the grant for reagent:local.weather was revoked — " <>
+                 "grant it again to run it",
+             "data" => %{"tag" => "consent_required", "payload" => payload}
            }
   end
 

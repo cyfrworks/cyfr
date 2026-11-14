@@ -118,7 +118,10 @@ func askScreen(ctx context.Context, out io.Writer) (bool, error) {
 	if err != nil {
 		return false, interruption{errQuestionInterrupted}
 	}
-	return answer == "1", nil
+	if answer != "1" {
+		return false, nil
+	}
+	return true, screenAdministrator("cyfr init")
 }
 
 // screenOn writes what shows CYFR into the project, then installs it through
@@ -138,8 +141,8 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := writeScreenFiles(dir, account); err != nil {
-		return fmt.Errorf("cyfr screen could not write %s (%v)", screenDir, err)
+	if err := screenAdministrator("cyfr screen on"); err != nil {
+		return err
 	}
 	commands := screenCommands(dir, account)
 	fmt.Fprintln(out, "These commands show CYFR on this machine's own screen, as root:")
@@ -156,12 +159,38 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 			return errDeclined
 		}
 	}
-	err = machine.apply(commands)
-	machine.forget()
-	if err != nil {
+	// The files the commands install are written once sudo has the login,
+	// so a refusal leaves the project as it was.
+	defer machine.forget()
+	if err := unlockSudo(out, "cyfr screen on"); err != nil {
+		return err
+	}
+	if err := writeScreenFiles(dir, account); err != nil {
+		return fmt.Errorf("cyfr screen could not write %s (%v)", screenDir, err)
+	}
+	if machine.apply(commands) != nil {
 		return errors.New("Showing CYFR on this screen failed. Fix what is shown above, then run `cyfr screen on` again")
 	}
 	return nil
+}
+
+// screenAdministrator refuses an account outside the sudo and admin groups
+// before the screen is asked for or anything is written, in words alone:
+// the screen is this account's, so it cannot be set up from another, and
+// CYFR prints no command that grants an account sudo.
+func screenAdministrator(again string) error {
+	account, administers, err := administrator()
+	if err != nil || administers {
+		return err
+	}
+	return outsideTheGroups{account, again}
+}
+
+// outsideTheGroups is screenAdministrator's refusal: nothing has run.
+type outsideTheGroups struct{ account, again string }
+
+func (o outsideTheGroups) Error() string {
+	return fmt.Sprintf("Your account, %s, is not in the sudo or admin group, so CYFR does not run commands as root for it. Nothing was changed. Whoever administers this machine can add your account to the sudo group; then run `%s` again", o.account, o.again)
 }
 
 // screenSite is the project directory and the account the screen's files
@@ -214,24 +243,33 @@ func screenCommands(dir, account string) []string {
 		"systemctl enable cyfr-screen")
 }
 
+// screenOffCommands give this machine's screen back to its login prompt,
+// as root: `cyfr screen off` and `cyfr uninstall` run them.
+var screenOffCommands = []string{
+	"{ systemctl disable --now cyfr-screen || true; }",
+	"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
+	"systemctl daemon-reload",
+	"systemctl enable --now getty@tty1",
+}
+
 // screenOff leaves the packages, Chrome's profile and the project.
 func screenOff(out io.Writer) error {
 	if !askTerminal() || !machine.supported() {
 		return errors.New("`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS, as your own account")
 	}
-	commands := []string{
-		"{ systemctl disable --now cyfr-screen || true; }",
-		"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
-		"systemctl daemon-reload",
-		"systemctl enable --now getty@tty1",
+	if err := screenAdministrator("cyfr screen off"); err != nil {
+		return err
 	}
+	commands := screenOffCommands
 	fmt.Fprintln(out, "These commands give this machine's screen back to its login prompt, as root:")
 	for _, c := range commands {
 		fmt.Fprintf(out, "  %s\n", c)
 	}
-	err := machine.apply(commands)
-	machine.forget()
-	if err != nil {
+	defer machine.forget()
+	if err := unlockSudo(out, "cyfr screen off"); err != nil {
+		return err
+	}
+	if machine.apply(commands) != nil {
 		return errors.New("Giving the screen back failed. Fix what is shown above, then run `cyfr screen off` again")
 	}
 	return nil

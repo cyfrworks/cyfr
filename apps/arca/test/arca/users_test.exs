@@ -173,6 +173,30 @@ defmodule Arca.UsersTest do
       assert {:error, :conflict} = Users.mint(server(), user, admission: "open")
       assert {:ok, %{id: ^id}} = Users.get(server(), id)
       assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
+
+      # The same with the namespace the first mint took: the second neither
+      # succeeds nor runs its callback.
+      named = user_attrs()
+      name = "named-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      also = fn person ->
+        send(test_pid, {:also, person.id})
+        :ok
+      end
+
+      {:ok, %{id: named_id, namespace: ^name}} =
+        Users.mint(server(), named, admission: "open", namespace: name, also: also)
+
+      assert_received {:also, ^named_id}
+      people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
+
+      assert {:error, :conflict} =
+               Users.mint(server(), named, admission: "open", namespace: name, also: also)
+
+      refute_received {:also, _}
+      assert {:ok, %{id: ^named_id, namespace: ^name}} = Users.get(server(), named_id)
+      assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
     end
 
     test "a row whose id is not a person's is refused" do

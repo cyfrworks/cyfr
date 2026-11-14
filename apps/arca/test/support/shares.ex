@@ -182,7 +182,6 @@ defmodule Arca.Test.Shares do
       blob_digest: Prima.Digest.sha256("{}"),
       resolved_policy: "{}",
       activation: "{}",
-      admitted_origins: [:interactive],
       granted_by: "test",
       granted_via: "bootstrap"
     }

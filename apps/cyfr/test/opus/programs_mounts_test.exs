@@ -5,7 +5,7 @@ defmodule Opus.ProgramsMountsTest do
   @moduledoc """
   What a login entry's life does to the programs mounted on it, against a
   scripted backends service (`Cyfr.Test.ScriptedBackends`): a revoked or
-  deleted entry stops the kept stdio rows that name it and ends its
+  deleted entry stops the kept mcp programs that name it and ends its
   sign-ins at once; a renewal releases the owner of a row whose entry no
   longer stands (a restore's `needs_reauth` among them); every open of a
   kept row asks the entry again; a sign-in shows none of its text in its
@@ -69,14 +69,15 @@ defmodule Opus.ProgramsMountsTest do
     entry.id
   end
 
-  # A kept stdio row naming `entry`, with no vault reference in its env:
+  # A kept mcp program naming `entry`, with no vault reference in its env:
   # only its mount ties it to the vault.
-  defp kept_stdio_row(ctx, entry) do
+  defp kept_mcp_row(ctx, entry) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: "gh",
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
         home: "kept",
         login_entry_id: entry,
@@ -92,12 +93,13 @@ defmodule Opus.ProgramsMountsTest do
     row
   end
 
-  defp pipe_row(ctx) do
+  defp driven_row(ctx) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: "claude",
-        transport: "pipe",
+        transport: "program",
+        mark: "driven",
         url: nil,
         home: "kept",
         login_command: "claude auth login",
@@ -150,13 +152,13 @@ defmodule Opus.ProgramsMountsTest do
   end
 
   describe "a login entry's end" do
-    test "a revoked entry stops the kept stdio row that mounts it, and the next call is refused",
+    test "a revoked entry stops the kept mcp program that mounts it, and the next call is refused",
          %{ctx: ctx} do
       # Signed in before the reconciler starts: the sign-in's own change
       # signal would raise the row's epoch under the start below.
       entry = login_entry(ctx, "gh-login", "gh")
       start_reconciler()
-      row = kept_stdio_row(ctx, entry)
+      row = kept_mcp_row(ctx, entry)
       assert {:ok, [%{"name" => "github__search"}]} = Servers.ensure_started(row, ctx)
       pid = server_pid(ctx, row)
       ref = Process.monitor(pid)
@@ -178,7 +180,7 @@ defmodule Opus.ProgramsMountsTest do
          %{ctx: ctx} do
       entry = login_entry(ctx, "gh-login", "gh")
       start_reconciler()
-      row = kept_stdio_row(ctx, entry)
+      row = kept_mcp_row(ctx, entry)
       assert {:ok, _tools} = Servers.ensure_started(row, ctx)
       pid = server_pid(ctx, row)
       ref = Process.monitor(pid)
@@ -209,7 +211,7 @@ defmodule Opus.ProgramsMountsTest do
       # Signed in before the reconciler starts, as above.
       entry = login_entry(ctx, "claude-login", "claude")
       start_reconciler()
-      pipe_row(ctx)
+      driven_row(ctx)
       admin = %{ctx | permissions: MapSet.new([:*])}
 
       assert {:ok, %{session: token}} =
@@ -230,7 +232,7 @@ defmodule Opus.ProgramsMountsTest do
     test "a renewal releases the owner of a row whose entry no longer stands, a restore's needs_reauth included",
          %{ctx: ctx, controller: controller} do
       entry = login_entry(ctx, "gh-login", "gh")
-      row = kept_stdio_row(ctx, entry)
+      row = kept_mcp_row(ctx, entry)
       assert {:ok, _tools} = Servers.ensure_started(row, ctx)
       pid = server_pid(ctx, row)
       ref = Process.monitor(pid)
@@ -246,7 +248,7 @@ defmodule Opus.ProgramsMountsTest do
 
     test "every open of a kept row asks its entry again", %{ctx: ctx, fake: fake} do
       entry = login_entry(ctx, "gh-login", "gh")
-      row = kept_stdio_row(ctx, entry)
+      row = kept_mcp_row(ctx, entry)
       assert {:ok, _tools} = Servers.ensure_started(row, ctx)
       pid = server_pid(ctx, row)
 
@@ -278,7 +280,7 @@ defmodule Opus.ProgramsMountsTest do
     test "renewal keeps the owner for the sign-in alone, which completes, while the row's MCP session stands down",
          %{ctx: ctx, fake: fake, controller: controller} do
       entry = login_entry(ctx, "gh-login", "gh")
-      row = kept_stdio_row(ctx, entry)
+      row = kept_mcp_row(ctx, entry)
       assert {:ok, _tools} = Servers.ensure_started(row, ctx)
       server = server_pid(ctx, row)
       server_ref = Process.monitor(server)
@@ -319,7 +321,7 @@ defmodule Opus.ProgramsMountsTest do
   describe "a kept row's status" do
     test "names its stderr's length and never its text", %{ctx: ctx, fake: fake} do
       entry = login_entry(ctx, "gh-login", "gh")
-      row = kept_stdio_row(ctx, entry)
+      row = kept_mcp_row(ctx, entry)
       assert {:ok, _tools} = Servers.ensure_started(row, ctx)
       Scripted.set(fake, :stderr_bytes, 12)
 
@@ -331,7 +333,7 @@ defmodule Opus.ProgramsMountsTest do
 
   describe "a sign-in's status" do
     test "shows none of the lines it holds or the text sent to it", %{ctx: ctx, fake: fake} do
-      row = pipe_row(ctx)
+      row = driven_row(ctx)
       entry = login_entry(ctx, "claude-login", "claude")
       admin = %{ctx | permissions: MapSet.new([:*])}
 

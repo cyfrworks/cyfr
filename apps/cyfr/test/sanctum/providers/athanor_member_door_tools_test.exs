@@ -241,6 +241,20 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     session
   end
 
+  test "door.remove refuses the platform administrator's own allow, in words, and leaves it",
+       %{ops: ops, ctx: ctx} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    {:ok, identifier} = Users.identifier(ops)
+    {:ok, %{id: own}} = Sanctum.Door.Store.allow("identifier", identifier, ops, note: "setup")
+
+    assert {:error, reason} = call(admin, "door", %{"action" => "remove", "id" => own})
+
+    assert Refusals.render(reason) ==
+             "That allow lets this server's platform administrator sign in, so it is never removed"
+
+    assert {:ok, %{id: ^own}} = Sanctum.Door.Store.get(own)
+  end
+
   test "door.remove of an allow through the gate ejects the remote person it admitted, and only them",
        %{alice: alice, bob: bob, ops: ops, ctx: ctx, n: n} do
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
@@ -315,7 +329,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     identifier = "per_" <> Prima.Digest.sha256_hex("door-tools-#{n}")
 
     # An unadmitted remote newcomer waits for the operator as an identifier.
-    assert {:error, {:door, :not_allowed}} = Sanctum.Door.sign_in_identifier(identifier)
+    assert {:error, {:door, :not_allowed}} = Sanctum.Door.sign_in_identifier(identifier, nil)
 
     assert {:ok, %{requests: requests}} = call(admin, "door", %{"action" => "requests"})
 
@@ -446,7 +460,9 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     RegistryStub.handles!(%{})
     assert {:error, reason} = call(admin, "door", %{"action" => "deny", "value" => "@nobody"})
-    assert Refusals.render(reason) == "No one holds that handle at the registry."
+
+    assert Refusals.render(reason) ==
+             "No account with that name yet: check the spelling, or ask them to make one."
 
     assert {:error, {:invalid_argument, message}} =
              call(admin, "door", %{"action" => "allow", "value" => "@Not-A-Handle"})

@@ -1263,10 +1263,12 @@ defmodule Aqua.LoopTest do
     assert Enum.sort(covered) == Enum.sort(Enum.map(gets, & &1.id))
   end
 
-  test "a rate limit is retried and an authentication refusal ends the turn asking for setup", %{
-    ctx: ctx,
-    thread: thread
-  } do
+  test "a rate limit is retried; a refused key is a line in the provider's words and asks " <>
+         "for no grant, while a key not bound asks for setup",
+       %{
+         ctx: ctx,
+         thread: thread
+       } do
     turn = accept!(ctx, thread, "@aqua hi")
     # A typed refusal rides the envelope's error, not the engine's.
     script!([
@@ -1282,12 +1284,33 @@ defmodule Aqua.LoopTest do
              %{kind: "model", outcome: "ok"}
            ] = steps
 
-    other = accept!(ctx, thread, "@aqua again")
-    ScriptedWorker.script([{:refuse, %{"type" => "authentication", "message" => "no key"}}])
-    result = Task.await(run(ctx, other), 60_000)
+    _ = drain()
+    refused = accept!(ctx, thread, "@aqua again")
 
-    assert {:failed, :setup_required} = result
-    assert {:ok, %{status: "failed"}} = Tape.turn(ctx, other.id)
+    ScriptedWorker.script([
+      {:refuse, %{"type" => "authentication", "message" => "invalid x-api-key"}}
+    ])
+
+    line = "The model refused its key: invalid x-api-key"
+    assert {:failed, ^line} = Task.await(run(ctx, refused), 60_000)
+    assert {:ok, %{status: "failed"}} = Tape.turn(ctx, refused.id)
+
+    assert [%{kind: "system", content: ^line}] =
+             for(
+               %{turn_id: turn_id, kind: "system"} = row <-
+                 Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               turn_id == refused.id,
+               do: row
+             )
+
+    # The turn's end is announced after anything it asked for.
+    assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
+    refute Enum.any?(thread_events(drain()), &match?({:consent_required, _}, &1))
+
+    unbound = accept!(ctx, thread, "@aqua once more")
+    ScriptedWorker.script([{:refuse, %{"type" => "secret_denied", "message" => "no key"}}])
+    assert {:failed, :setup_required} = Task.await(run(ctx, unbound), 60_000)
+    assert {:ok, %{status: "failed"}} = Tape.turn(ctx, unbound.id)
     assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user}}, 5_000
     assert ref =~ @model and user == ctx.user_id
   end
@@ -1460,6 +1483,105 @@ defmodule Aqua.LoopTest do
     assert {:failed, :setup_required} = Task.await(run(ctx, other), 30_000)
     assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user}}, 5_000
     assert ref =~ @model and user == ctx.user_id
+
+    stop_supervised!(ScriptedWorker)
+
+    # A brain whose provider refused its key while describing the model
+    # says so in the thread, and asks for no grant.
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [],
+       describe: {:refuse, %{"type" => "authentication", "message" => "invalid x-api-key"}}}
+    )
+
+    _ = drain()
+    refused = accept!(ctx, thread, "@aqua and again")
+    assert {:failed, {:model_refused, _, _}} = Task.await(run(ctx, refused), 30_000)
+
+    assert [%{kind: "system", content: "The model refused its key: invalid x-api-key"}] =
+             for(
+               %{turn_id: turn_id, kind: "system"} = row <-
+                 Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               turn_id == refused.id,
+               do: row
+             )
+
+    # The turn's end is announced after anything it asked for.
+    assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
+    refute Enum.any?(thread_events(drain()), &match?({:consent_required, _}, &1))
+  end
+
+  test "a turn offers the provider's search, and records the open web, only when its grant " <>
+         "carries it",
+       %{ctx: ctx, thread: thread} do
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model, script: [reply("searched"), reply("kept")], provider_tools: ["web_search"]}
+    )
+
+    # The shipped soul turns search on, and its first fill's grant carries it.
+    searched = accept!(ctx, thread, "@aqua look it up")
+    assert :completed = Task.await(run(ctx, searched), 30_000)
+    assert chat_provider_tools() == [["web_search"]]
+    assert web_source?(ctx, searched)
+
+    # The person narrows the soul's grant to every tool but the search; its
+    # policy still says auto.
+    {_, head, _} = consent_head!(ctx, @soul)
+    {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
+    {:ok, ingress} = Prima.Authority.Blob.ingress(blob, @soul)
+    assert "native_search" in ingress.tools
+    commit_soul!(ctx, ingress.tools -- ["native_search"])
+
+    # A thread of its own, so nothing the first turn read is carried in.
+    {:ok, fresh} = Threads.create(Sanctum.Context.actor(ctx))
+    kept = accept!(ctx, fresh, "@aqua again")
+    assert :completed = Task.await(run(ctx, kept), 30_000)
+    assert chat_provider_tools() == [["web_search"], []]
+    refute web_source?(ctx, kept)
+  end
+
+  defp chat_provider_tools do
+    for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+        do: params["provider_tools"]
+  end
+
+  defp web_source?(ctx, turn) do
+    {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
+
+    Prima.Source.outside("web_search") in Enum.map(
+      Jason.decode!(sources),
+      &Prima.Source.from_json/1
+    )
+  end
+
+  defp consent_head!(ctx, ref) do
+    {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    {:ok, row, refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
+    {profile, row, refs}
+  end
+
+  # The soul's grant committed again, its ingress narrowed to `tools`, its
+  # edge into the model still lending the model's default profile.
+  defp commit_soul!(ctx, tools) do
+    decisions = %{
+      ref: @soul,
+      selections: [%{dep: @model, label: "default"}],
+      subset: %{@soul => %{"tools" => tools}}
+    }
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @soul})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
   end
 
   test "the step cap ends a turn that never stops calling", %{ctx: ctx, thread: thread} do

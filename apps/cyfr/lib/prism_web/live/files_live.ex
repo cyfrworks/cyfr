@@ -11,7 +11,17 @@ defmodule PrismWeb.FilesLive do
 
   Every read and change goes through the `file` tool; the bytes of a
   file are downloaded from `PrismWeb.FileController`. The folder in view
-  rides the URL (`?p=data/reports`), so a location is a link.
+  rides the URL (`?p=data/reports`), so a location is a link. A picture
+  shows in the open panel only when its bytes begin as one of the raster
+  types a browser draws and never runs; anything else is downloaded.
+
+  A new folder is held by the page, listed in its parent and opened,
+  until a file is written there: storage keeps no empty folder. A held
+  folder offers one action, Remove, which lets it go with every held
+  folder under it; once a file lands in it, it is a stored folder. Rename
+  and Move are both `file/move`, a rename keeping the folder and a move
+  the name, offered on stored files and folders under `data/`, where a
+  move works.
 
   ## Sending a copy
 
@@ -23,6 +33,9 @@ defmodule PrismWeb.FilesLive do
   answer names unless the person names another, or declined; the files
   accepted here that are still landing, or that could not be delivered;
   and the offers sent from this athanor, each withdrawn while it waits.
+  An offer accepted here stays listed while the page is open, saying what
+  its receipts say: still landing, not delivered, or landed, with the
+  folder and a way there only once it has landed.
   Nothing of an offered file's bytes reaches the page before it lands.
   The page reads the offers again whenever the person's own topic
   (`Cyfr.Bus.file_offers/1`) says one of theirs moved.
@@ -58,6 +71,10 @@ defmodule PrismWeb.FilesLive do
      |> assign(:picker, nil)
      |> assign(:offers, nil)
      |> assign(:people, %{})
+     |> assign(:new_folders, MapSet.new())
+     |> assign(:naming, nil)
+     |> assign(:relocating, nil)
+     |> assign(:accepted, [])
      |> allow_upload(:files,
        accept: :any,
        max_entries: 10,
@@ -103,7 +120,14 @@ defmodule PrismWeb.FilesLive do
   @impl true
   def handle_params(params, _uri, socket) do
     path = params |> Map.get("p", "") |> String.trim("/")
-    socket = socket |> assign(:path, path) |> assign(:open, nil) |> assign(:editing, false)
+
+    socket =
+      socket
+      |> assign(:path, path)
+      |> assign(:open, nil)
+      |> assign(:editing, false)
+      |> assign(:naming, nil)
+      |> assign(:relocating, nil)
 
     if connected?(socket) do
       send(self(), :load)
@@ -120,10 +144,15 @@ defmodule PrismWeb.FilesLive do
 
   # An offer of several files is announced once per file: the messages
   # already queued behind this one ask for the same read, so one serves
-  # them all.
-  def handle_info(%Bus.FileOffer{}, socket) do
-    drain_offer_messages()
-    {:noreply, load_offers(socket)}
+  # them all. Each is applied to the accepted cards first, so a landing or
+  # a failure the page heard settles its card whatever the read answers.
+  def handle_info(%Bus.FileOffer{} = message, socket) do
+    messages = [message | drain_offer_messages([])]
+
+    {:noreply,
+     socket
+     |> update(:accepted, &Enum.reduce(messages, &1, fn m, cards -> heard(cards, m) end))
+     |> load_offers()}
   end
 
   def handle_info(msg, socket) do
@@ -141,7 +170,10 @@ defmodule PrismWeb.FilesLive do
   def handle_event("open", %{"path" => path}, socket) do
     case Ops.call_tool(socket, "file/read", %{"path" => path}) do
       {:ok, file} ->
-        {:noreply, socket |> assign(:open, file) |> assign(:editing, false)}
+        {:noreply,
+         socket
+         |> assign(:open, Map.put(file, :picture, picture(file)))
+         |> assign(:editing, false)}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, Ops.error_message(reason))}
@@ -176,23 +208,55 @@ defmodule PrismWeb.FilesLive do
 
   def handle_event("save", _params, socket), do: {:noreply, socket}
 
-  def handle_event("delete", %{"path" => path}, socket) do
-    case Ops.call_tool(socket, "file/delete", %{"path" => path}) do
-      {:ok, _} ->
-        open = if match?(%{path: ^path}, socket.assigns.open), do: nil, else: socket.assigns.open
+  def handle_event("delete", %{"path" => path}, socket), do: {:noreply, delete(socket, path)}
+
+  # A held folder has nothing stored: Remove lets it go, with every held
+  # folder under it.
+  def handle_event("remove", %{"path" => path}, socket) do
+    {:noreply,
+     socket
+     |> update(:new_folders, &forget(&1, path))
+     |> put_flash(:info, "Removed the empty folder #{path}")}
+  end
+
+  # ---- folders, rename and move -------------------------------------------
+
+  def handle_event("new_folder", _params, socket),
+    do: {:noreply, socket |> assign(:naming, :folder) |> assign(:relocating, nil)}
+
+  def handle_event("cancel_new_folder", _params, socket),
+    do: {:noreply, assign(socket, :naming, nil)}
+
+  def handle_event("create_folder", %{"name" => name}, socket) do
+    name = String.trim(name)
+
+    case folder_name(name, socket.assigns) do
+      :ok ->
+        folder = child(socket.assigns.path, name)
 
         {:noreply,
          socket
-         |> assign(:open, open)
-         |> assign(:editing, false)
-         |> update(:selected, &MapSet.delete(&1, path))
-         |> put_flash(:info, "Deleted #{path}")
-         |> load()}
+         |> update(:new_folders, &MapSet.put(&1, folder))
+         |> assign(:naming, nil)
+         |> push_patch(to: folder_href(socket.assigns.athanor_route, folder))}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, Ops.error_message(reason))}
+      {:error, message} ->
+        {:noreply, put_flash(socket, :error, message)}
     end
   end
+
+  def handle_event("relocate", %{"path" => path, "mode" => mode}, socket)
+      when mode in ~w(rename move) do
+    {:noreply, socket |> assign(:relocating, %{path: path, mode: mode}) |> assign(:naming, nil)}
+  end
+
+  def handle_event("cancel_relocate", _params, socket),
+    do: {:noreply, assign(socket, :relocating, nil)}
+
+  def handle_event("move", params, %{assigns: %{relocating: %{path: path, mode: mode}}} = socket),
+    do: {:noreply, move(socket, path, destination(path, mode, params))}
+
+  def handle_event("move", _params, socket), do: {:noreply, socket}
 
   # ---- uploads --------------------------------------------------------------
 
@@ -303,9 +367,15 @@ defmodule PrismWeb.FilesLive do
       end
 
     case Ops.call_tool(socket, "file/accept", args) do
-      {:ok, %{folder: folder}} ->
+      {:ok, %{folder: folder, receipts: receipts}} ->
+        card = accepted(socket.assigns, offer_id, folder, receipts)
+
         {:noreply,
-         socket |> put_flash(:info, "Accepted into #{folder}") |> load_offers() |> load()}
+         socket
+         |> update(:accepted, &[card | &1])
+         |> put_flash(:info, accepted_flash(card))
+         |> load_offers()
+         |> load()}
 
       {:error, reason} ->
         {:noreply, socket |> put_flash(:error, Ops.error_message(reason)) |> load_offers()}
@@ -325,16 +395,174 @@ defmodule PrismWeb.FilesLive do
     end
   end
 
+  # What the Inbox keeps of an offer accepted here: its files, as the
+  # acceptance's own receipts name them and with those already published
+  # counted as landed; who sent it, by the name the page showed (the
+  # answer does not carry the sender); the folder it was accepted into;
+  # and its delivery as the receipts say. The folder an answer
+  # names, `<into>/<offer>[-<n>]/`, is where the files are only once every
+  # receipt is published; its parent is the folder accepted into.
+  defp accepted(%{offers: offers, people: people}, offer_id, folder, receipts) do
+    offer =
+      if is_map(offers), do: Enum.find(offers.awaiting, &(&1.offer_id == offer_id)), else: nil
+
+    %{
+      offer_id: offer_id,
+      into: folder |> String.trim_trailing("/") |> Path.dirname(),
+      from: person(people, offer && offer.sender),
+      files: Enum.map(receipts, &Map.take(&1, [:filename, :size])),
+      landed:
+        for(
+          %{status: status, filename: name} <- receipts,
+          status in ~w(published completed),
+          into: MapSet.new(),
+          do: name
+        ),
+      delivery: delivery(Enum.map(receipts, & &1.status), folder)
+    }
+  end
+
+  defp delivery([_ | _] = statuses, folder) do
+    cond do
+      "failed" in statuses -> :failed
+      Enum.all?(statuses, &(&1 in ~w(published completed))) -> {:landed, folder}
+      true -> :landing
+    end
+  end
+
+  defp delivery([], _folder), do: :landing
+
+  defp accepted_flash(%{delivery: {:landed, folder}}), do: "Accepted into #{folder}"
+  defp accepted_flash(%{delivery: :failed}), do: "Accepted, but it could not be delivered"
+  defp accepted_flash(%{delivery: :landing}), do: "Accepted; it is still landing"
+
+  # What the page heard of a card's offer: a failed file fails it; a
+  # landed file counts, and the card has landed once every file it lists
+  # has, in a folder under the one it was accepted into, since the message
+  # names no path. Only a card not yet settled moves.
+  defp heard(cards, %Bus.FileOffer{kind: kind, offer_id: id, filename: filename})
+       when kind in [:failed, :landed] do
+    Enum.map(cards, fn
+      %{offer_id: ^id, delivery: :landing} = card ->
+        heard_file(card, kind, filename)
+
+      %{offer_id: ^id, delivery: {:unlisted, _into}} = card ->
+        heard_file(card, kind, filename)
+
+      card ->
+        card
+    end)
+  end
+
+  defp heard(cards, _message), do: cards
+
+  defp heard_file(card, :failed, _filename), do: %{card | delivery: :failed}
+
+  defp heard_file(card, :landed, filename) do
+    landed = MapSet.put(card.landed, filename)
+    names = MapSet.new(card.files, & &1.filename)
+
+    if MapSet.subset?(names, landed),
+      do: %{card | landed: landed, delivery: {:landed_under, card.into}},
+      else: %{card | landed: landed}
+  end
+
+  # A card still landing takes what `file/offers` now lists of its
+  # receipts: a failed one fails it and one still received keeps it
+  # landing. None listed proves nothing, since retention removes a failed
+  # receipt too: the card says it no longer knows, and only a landing it
+  # heard says it landed.
+  defp redelivered(cards, receipts) do
+    Enum.map(cards, fn
+      %{delivery: :landing, offer_id: id} = card ->
+        statuses = for %{offer_id: ^id, status: status} <- receipts, do: status
+
+        cond do
+          "failed" in statuses -> %{card | delivery: :failed}
+          statuses != [] -> card
+          true -> %{card | delivery: {:unlisted, card.into}}
+        end
+
+      card ->
+        card
+    end)
+  end
+
   # Only a file under `data/` is offered; the operation holds to it too.
   defp offerable?(path), do: String.starts_with?(path, "data/")
 
   defp in_data?(folder), do: folder == "data" or offerable?(folder)
 
-  defp drain_offer_messages do
+  defp drain_offer_messages(acc) do
     receive do
-      %Bus.FileOffer{} -> drain_offer_messages()
+      %Bus.FileOffer{} = message -> drain_offer_messages([message | acc])
     after
-      0 -> :ok
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  defp move(socket, path, to) do
+    case Ops.call_tool(socket, "file/move", %{"path" => path, "to" => to}) do
+      {:ok, %{moved: moved, to: to}} ->
+        open = if match?(%{path: ^moved}, socket.assigns.open), do: nil, else: socket.assigns.open
+
+        socket
+        |> assign(:relocating, nil)
+        |> assign(:open, open)
+        |> assign(:editing, false)
+        |> update(:selected, &MapSet.delete(&1, moved))
+        |> update(:new_folders, &forget(&1, moved))
+        |> put_flash(:info, "Moved #{moved} to #{to}")
+        |> load()
+
+      {:error, reason} ->
+        put_flash(socket, :error, Ops.error_message(reason))
+    end
+  end
+
+  # The held folders at or under `path`.
+  defp forget(held, path),
+    do: MapSet.reject(held, &(&1 == path or String.starts_with?(&1, path <> "/")))
+
+  defp delete(socket, path) do
+    case Ops.call_tool(socket, "file/delete", %{"path" => path}) do
+      {:ok, _} ->
+        open = if match?(%{path: ^path}, socket.assigns.open), do: nil, else: socket.assigns.open
+
+        socket
+        |> assign(:open, open)
+        |> assign(:editing, false)
+        |> update(:selected, &MapSet.delete(&1, path))
+        |> put_flash(:info, "Deleted #{path}")
+        |> load()
+
+      {:error, reason} ->
+        put_flash(socket, :error, Ops.error_message(reason))
+    end
+  end
+
+  # A rename keeps the folder and takes the typed name; a move keeps the
+  # name and takes the typed folder.
+  defp destination(path, "rename", %{"name" => name}),
+    do: child(parent(path), String.trim(name))
+
+  defp destination(path, "move", %{"folder" => folder}),
+    do: child(String.trim(folder, "/") |> String.trim(), Path.basename(path))
+
+  defp destination(path, _mode, _params), do: path
+
+  defp folder_name("", _assigns), do: {:error, "Name the folder."}
+
+  defp folder_name(name, %{listing: listing, path: path, new_folders: held}) do
+    cond do
+      String.contains?(name, "/") or Prima.PathSafety.validate_segments([name]) != :ok ->
+        {:error, "'#{name}' cannot name a folder: use one name without / or .."}
+
+      listing && Enum.any?(entries(listing, path, held), &(&1.name == name)) ->
+        {:error, "'#{name}' already exists here — choose another name"}
+
+      true ->
+        :ok
     end
   end
 
@@ -343,7 +571,10 @@ defmodule PrismWeb.FilesLive do
   defp load(socket) do
     case Ops.call_tool(socket, "file/list", %{"path" => socket.assigns.path}) do
       {:ok, listing} ->
-        socket |> assign(:listing, listing) |> assign(:loading, false)
+        socket
+        |> assign(:listing, listing)
+        |> assign(:loading, false)
+        |> update(:new_folders, &unheld(&1, socket.assigns.path, listing))
 
       {:error, reason} ->
         socket
@@ -374,6 +605,7 @@ defmodule PrismWeb.FilesLive do
         socket
         |> assign(:offers, %{awaiting: waiting, receipts: receipts, sent: sent})
         |> assign(:people, people)
+        |> update(:accepted, &redelivered(&1, receipts))
 
       {:error, reason} ->
         Logger.debug("[PrismWeb.FilesLive] offers not read: #{inspect(reason)}")
@@ -398,6 +630,49 @@ defmodule PrismWeb.FilesLive do
   end
 
   defp child(path, name), do: Enum.join(Enum.reject([path, name], &(&1 == "")), "/")
+
+  defp parent(path), do: path |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
+
+  # What the listing shows stored is held no more, nor is any folder above
+  # it: a child listed under the folder in view, and that folder itself
+  # once anything is in it.
+  defp unheld(held, path, %{entries: entries}) do
+    stored = Enum.map(entries, &child(path, &1.name)) ++ if(entries != [], do: [path], else: [])
+
+    MapSet.reject(held, fn folder ->
+      Enum.any?(stored, &(&1 == folder or String.starts_with?(&1, folder <> "/")))
+    end)
+  end
+
+  # The folder's entries with the new folders the page holds under it,
+  # directories first, each by name, as the listing orders them.
+  defp entries(%{entries: entries}, path, new_folders) do
+    listed = MapSet.new(entries, & &1.name)
+
+    held =
+      for folder <- new_folders,
+          parent(folder) == path,
+          name = Path.basename(folder),
+          not MapSet.member?(listed, name),
+          do: %{name: name, kind: :dir, size: nil, held: true}
+
+    Enum.sort_by(entries ++ held, &{&1.kind != :dir, &1.name})
+  end
+
+  # The raster types a browser draws and never runs, told by their first
+  # bytes rather than the file's name; SVG, which can carry script, is
+  # downloaded like any other file.
+  defp picture(%{encoding: "base64", content: content}) do
+    case Base.decode64(binary_part(content, 0, min(byte_size(content), 16))) do
+      {:ok, <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, _::binary>>} -> "image/png"
+      {:ok, <<0xFF, 0xD8, 0xFF, _::binary>>} -> "image/jpeg"
+      {:ok, <<"GIF8", v, "a", _::binary>>} when v in [?7, ?9] -> "image/gif"
+      {:ok, <<"RIFF", _size::binary-size(4), "WEBP", _::binary>>} -> "image/webp"
+      _other -> nil
+    end
+  end
+
+  defp picture(_file), do: nil
 
   # The breadcrumb: each folder on the way, with the path it opens.
   defp crumbs(""), do: []
@@ -548,22 +823,91 @@ defmodule PrismWeb.FilesLive do
         </div>
       </.card>
 
+      <.card :if={@relocating}>
+        <form id="files-move" phx-submit="move" class="space-y-2">
+          <label :if={@relocating.mode == "rename"} class="block text-sm text-gray-300">
+            Rename <span class="font-mono">{@relocating.path}</span>
+            to
+            <input
+              type="text"
+              name="name"
+              value={Path.basename(@relocating.path)}
+              class="mt-1 block w-full rounded bg-gray-800 border border-gray-700 px-2 py-1 font-mono text-xs text-white"
+            />
+          </label>
+          <label :if={@relocating.mode == "move"} class="block text-sm text-gray-300">
+            Move <span class="font-mono">{@relocating.path}</span>
+            into the folder
+            <input
+              type="text"
+              name="folder"
+              value={parent(@relocating.path)}
+              class="mt-1 block w-full rounded bg-gray-800 border border-gray-700 px-2 py-1 font-mono text-xs text-white"
+            />
+          </label>
+          <div class="flex gap-2">
+            <.button type="submit" size="sm">
+              {if @relocating.mode == "rename", do: "Rename", else: "Move"}
+            </.button>
+            <.button type="button" variant="ghost" size="sm" phx-click="cancel_relocate">
+              Cancel
+            </.button>
+          </div>
+        </form>
+      </.card>
+
       <div class="grid gap-6 lg:grid-cols-5">
         <.card class={if @open, do: "lg:col-span-2", else: "lg:col-span-5"}>
+          <div :if={@path != "" and writable?(@listing)} class="mb-3 space-y-2">
+            <.button
+              :if={is_nil(@naming)}
+              id="files-new-folder"
+              variant="ghost"
+              size="sm"
+              phx-click="new_folder"
+            >
+              New folder
+            </.button>
+            <form
+              :if={@naming == :folder}
+              id="files-folder-form"
+              phx-submit="create_folder"
+              class="flex flex-wrap items-center gap-2"
+            >
+              <input
+                type="text"
+                name="name"
+                aria-label="The new folder's name"
+                class="min-w-0 flex-1 rounded bg-gray-800 border border-gray-700 px-2 py-1 font-mono text-xs text-white"
+              />
+              <.button type="submit" size="sm">Create</.button>
+              <.button type="button" variant="ghost" size="sm" phx-click="cancel_new_folder">
+                Cancel
+              </.button>
+            </form>
+          </div>
+
           <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
 
-          <div :if={!@loading && @listing && @listing.entries == []} class="py-8">
+          <div
+            :if={!@loading && @listing && entries(@listing, @path, @new_folders) == []}
+            class="py-8"
+          >
             <.empty_state message="Nothing here yet" />
           </div>
 
           <table
-            :if={!@loading && @listing && @listing.entries != []}
+            :if={!@loading && @listing && entries(@listing, @path, @new_folders) != []}
             id="files-entries"
-            class="min-w-full"
+            class="block w-full sm:table"
           >
-            <tbody class="divide-y divide-gray-800/50">
-              <tr :for={entry <- @listing.entries} class="hover:bg-gray-800/30">
-                <td :if={in_data?(@path)} class="w-6 pl-3 py-2">
+            <tbody class="block divide-y divide-gray-800/50 sm:table-row-group">
+              <%!-- At phone width a row wraps: its actions take a line of their own under the name. --%>
+              <tr
+                :for={entry <- entries(@listing, @path, @new_folders)}
+                class="flex flex-wrap items-center hover:bg-gray-800/30 sm:table-row"
+              >
+                <td :if={in_data?(@path)} class="w-6 pl-3 py-2 sm:table-cell">
                   <input
                     :if={entry.kind == :file}
                     type="checkbox"
@@ -574,7 +918,7 @@ defmodule PrismWeb.FilesLive do
                     class="rounded border-gray-600 bg-gray-800"
                   />
                 </td>
-                <td class="px-3 py-2 text-sm">
+                <td class="min-w-0 flex-1 px-3 py-2 text-sm sm:table-cell">
                   <button
                     :if={entry.kind == :dir}
                     type="button"
@@ -582,8 +926,8 @@ defmodule PrismWeb.FilesLive do
                     phx-value-path={child(@path, entry.name)}
                     class="flex items-center gap-2 text-gray-200 hover:text-white"
                   >
-                    <.icon name="folder" class="h-4 w-4 text-gray-500" />
-                    <span class="font-mono">{entry.name}/</span>
+                    <.icon name="folder" class="h-4 w-4 shrink-0 text-gray-500" />
+                    <span class="font-mono break-all text-left sm:break-normal">{entry.name}/</span>
                   </button>
                   <button
                     :if={entry.kind == :file}
@@ -592,14 +936,17 @@ defmodule PrismWeb.FilesLive do
                     phx-value-path={child(@path, entry.name)}
                     class="flex items-center gap-2 text-gray-300 hover:text-white"
                   >
-                    <.icon name="document" class="h-4 w-4 text-gray-600" />
-                    <span class="font-mono">{entry.name}</span>
+                    <.icon name="document" class="h-4 w-4 shrink-0 text-gray-600" />
+                    <span class="font-mono break-all text-left sm:break-normal">{entry.name}</span>
                   </button>
                 </td>
-                <td class="px-3 py-2 text-xs text-gray-500 text-right whitespace-nowrap">
+                <td class="px-3 py-2 text-xs text-gray-500 text-right whitespace-nowrap sm:table-cell">
                   {size_label(entry.size)}
                 </td>
-                <td class="px-3 py-2 text-right whitespace-nowrap">
+                <td
+                  data-row-actions
+                  class="w-full px-3 pb-2 text-left sm:table-cell sm:w-auto sm:pt-2 sm:text-right sm:whitespace-nowrap"
+                >
                   <a
                     :if={entry.kind == :file}
                     href={download_href(@athanor_route, child(@path, entry.name))}
@@ -608,7 +955,27 @@ defmodule PrismWeb.FilesLive do
                     Download
                   </a>
                   <button
-                    :if={@path != "" and writable?(@listing)}
+                    :if={in_data?(@path) and not Map.get(entry, :held, false)}
+                    type="button"
+                    phx-click="relocate"
+                    phx-value-path={child(@path, entry.name)}
+                    phx-value-mode="rename"
+                    class="text-xs text-gray-500 hover:text-white mr-2"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    :if={in_data?(@path) and not Map.get(entry, :held, false)}
+                    type="button"
+                    phx-click="relocate"
+                    phx-value-path={child(@path, entry.name)}
+                    phx-value-mode="move"
+                    class="text-xs text-gray-500 hover:text-white mr-2"
+                  >
+                    Move
+                  </button>
+                  <button
+                    :if={@path != "" and writable?(@listing) and not Map.get(entry, :held, false)}
                     type="button"
                     phx-click="delete"
                     phx-value-path={child(@path, entry.name)}
@@ -616,6 +983,15 @@ defmodule PrismWeb.FilesLive do
                     class="text-xs text-gray-500 hover:text-red-300"
                   >
                     Delete
+                  </button>
+                  <button
+                    :if={Map.get(entry, :held, false)}
+                    type="button"
+                    phx-click="remove"
+                    phx-value-path={child(@path, entry.name)}
+                    class="text-xs text-gray-500 hover:text-red-300"
+                  >
+                    Remove
                   </button>
                 </td>
               </tr>
@@ -708,7 +1084,18 @@ defmodule PrismWeb.FilesLive do
               class="whitespace-pre-wrap break-words font-mono text-xs text-gray-300 bg-gray-950/60 rounded p-3 max-h-[70vh] overflow-auto"
             >{@open.content}</pre>
 
-            <p :if={@open.encoding == "base64"} class="text-xs text-gray-500">
+            <img
+              :if={@open.picture}
+              id="files-picture"
+              src={"data:#{@open.picture};base64,#{@open.content}"}
+              alt={@open.path}
+              class="max-h-[70vh] max-w-full rounded"
+            />
+
+            <p
+              :if={@open.encoding == "base64" and is_nil(@open.picture)}
+              class="text-xs text-gray-500"
+            >
               Binary content — download it to open.
             </p>
           </div>
@@ -778,6 +1165,49 @@ defmodule PrismWeb.FilesLive do
                   Decline
                 </.button>
               </div>
+            </div>
+
+            <div
+              :for={offer <- @accepted}
+              id={"accepted-#{offer.offer_id}"}
+              class="space-y-2 rounded-lg border border-gray-800 p-3"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span :if={offer.delivery == :landing} class="text-gray-200">
+                  From {offer.from}, accepted. It is still landing: it waits for space in this athanor, or for the next retry.
+                </span>
+                <span :if={offer.delivery == :failed} class="text-red-300">
+                  From {offer.from}, accepted, but it could not be delivered. Ask them to send it again.
+                </span>
+                <span :if={match?({:landed, _}, offer.delivery)} class="text-gray-200">
+                  From {offer.from}, landed in
+                  <span class="font-mono">{elem(offer.delivery, 1)}</span>
+                </span>
+                <span :if={match?({:landed_under, _}, offer.delivery)} class="text-gray-200">
+                  From {offer.from}, landed in a folder under
+                  <span class="font-mono">{elem(offer.delivery, 1)}/</span>
+                </span>
+                <span :if={match?({:unlisted, _}, offer.delivery)} class="text-gray-200">
+                  From {offer.from}, accepted. Its delivery is no longer listed; look in
+                  <span class="font-mono">{elem(offer.delivery, 1)}/</span>
+                  for it.
+                </span>
+                <.button
+                  :if={is_tuple(offer.delivery)}
+                  variant="ghost"
+                  size="sm"
+                  phx-click="navigate"
+                  phx-value-path={String.trim_trailing(elem(offer.delivery, 1), "/")}
+                >
+                  Open
+                </.button>
+              </div>
+              <ul class="space-y-0.5 text-xs text-gray-400">
+                <li :for={file <- offer.files} class="flex justify-between gap-2">
+                  <span class="font-mono">{file.filename}</span>
+                  <span>{size_label(file.size)}</span>
+                </li>
+              </ul>
             </div>
 
             <ul

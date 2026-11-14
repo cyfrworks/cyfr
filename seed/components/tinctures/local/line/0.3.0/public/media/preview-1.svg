@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <rect width="1600" height="900" fill="#eef3f3"/>
+  <rect width="662" height="900" fill="#ffffff"/>
+  <rect x="662" width="3" height="900" fill="#0a7783"/>
+
+  <!-- your side: what waits on you -->
+  <text x="40" y="78" font-size="34" font-weight="500" fill="#0a0a0a"><tspan font-size="44" fill="#0a7783">3</tspan> things wait on you</text>
+  <text x="40" y="112" font-size="19" fill="#5b6060">The oldest since 09:12</text>
+  <g font-size="22">
+    <line x1="40" y1="148" x2="622" y2="148" stroke="#edf0f0" stroke-width="2"/>
+    <rect x="44" y="175" width="26" height="26" rx="5" fill="none" stroke="#0a0a0a" stroke-width="2.4"/>
+    <path d="M50 188l5 5 9-10" fill="none" stroke="#0a0a0a" stroke-width="2.4" stroke-linecap="round"/>
+    <text x="92" y="186" font-weight="500" fill="#0a0a0a">Trip planning</text>
+    <text x="92" y="212" font-size="17" fill="#5b6060">Approval · since 09:12</text>
+    <rect x="490" y="168" width="132" height="42" rx="7" fill="#141414"/>
+    <text x="556" y="196" font-size="18" fill="#ffffff" text-anchor="middle">Approve</text>
+
+    <line x1="40" y1="238" x2="622" y2="238" stroke="#edf0f0" stroke-width="2"/>
+    <path d="M57 264l14 24H43z" fill="none" stroke="#c4242a" stroke-width="2.4" stroke-linejoin="round"/>
+    <text x="92" y="276" font-weight="500" fill="#0a0a0a">digest</text>
+    <text x="92" y="302" font-size="17" fill="#5b6060">Failed · timed out · since 10:40</text>
+    <rect x="490" y="258" width="132" height="42" rx="7" fill="#ffffff" stroke="#cdd3d3" stroke-width="2"/>
+    <text x="556" y="286" font-size="18" fill="#0a0a0a" text-anchor="middle">Retry</text>
+
+    <line x1="40" y1="328" x2="622" y2="328" stroke="#edf0f0" stroke-width="2"/>
+    <path d="M50 352h12l7 7v20a3 3 0 0 1-3 3H50a3 3 0 0 1-3-3v-24a3 3 0 0 1 3-3z" fill="none" stroke="#0a0a0a" stroke-width="2.4" stroke-linejoin="round"/>
+    <text x="92" y="366" font-weight="500" fill="#0a0a0a">budget.xlsx</text>
+    <text x="92" y="392" font-size="17" fill="#5b6060">File offer from Sam · since 13:10</text>
+    <rect x="490" y="348" width="132" height="42" rx="7" fill="#ffffff" stroke="#cdd3d3" stroke-width="2"/>
+    <text x="556" y="376" font-size="18" fill="#0a0a0a" text-anchor="middle">Open files</text>
+    <line x1="40" y1="418" x2="622" y2="418" stroke="#edf0f0" stroke-width="2"/>
+  </g>
+
+  <!-- today's log on your side -->
+  <text x="40" y="490" font-size="24" font-weight="500" fill="#0a0a0a">Today</text>
+  <text x="122" y="490" font-size="18" fill="#5b6060">5 runs · 1 failed</text>
+  <g font-size="18" fill="#0a0a0a">
+    <text x="40" y="540" fill="#5b6060">14:12</text><text x="120" y="540">Compare ferry times</text><text x="622" y="540" text-anchor="end" fill="#5b6060">explorer</text>
+    <line x1="40" y1="560" x2="622" y2="560" stroke="#edf0f0" stroke-width="2"/>
+    <text x="40" y="594" fill="#5b6060">14:00</text><text x="120" y="594">Weather every 10 min</text><circle cx="548" cy="588" r="6" fill="#247b50"/><text x="622" y="594" text-anchor="end">ok 1.2 s</text>
+    <line x1="40" y1="614" x2="622" y2="614" stroke="#edf0f0" stroke-width="2"/>
+    <text x="40" y="648" fill="#5b6060">12:30</text><text x="120" y="648">Morning digest</text><circle cx="548" cy="642" r="6" fill="#247b50"/><text x="622" y="648" text-anchor="end">ok 2.4 s</text>
+    <line x1="40" y1="668" x2="622" y2="668" stroke="#edf0f0" stroke-width="2"/>
+    <text x="40" y="702" fill="#5b6060">10:40</text><text x="120" y="702">digest</text><text x="622" y="702" text-anchor="end" fill="#c4242a" font-weight="600">failed</text>
+    <line x1="40" y1="722" x2="622" y2="722" stroke="#edf0f0" stroke-width="2"/>
+    <text x="40" y="756" fill="#5b6060">09:12</text><text x="120" y="756" fill="#5b6060">Backup photos settled</text><text x="622" y="756" text-anchor="end" fill="#5b6060">done</text>
+  </g>
+
+  <!-- the side your CYFR runs on its own -->
+  <text x="704" y="74" font-size="24" font-weight="500" fill="#0a0a0a">Running on its own</text>
+  <text x="704" y="104" font-size="18" fill="#5b6060">Healthy · model connected · crew 2 of 2</text>
+  <rect x="1440" y="52" width="120" height="44" rx="7" fill="#ffffff" stroke="#cdd3d3" stroke-width="2"/>
+  <text x="1500" y="81" font-size="18" fill="#0a0a0a" text-anchor="middle">Arrange</text>
+
+  <g font-size="18">
+    <!-- Weather -->
+    <rect x="704" y="136" width="270" height="226" rx="10" fill="#ffffff" stroke="#e0e5e5" stroke-width="2"/>
+    <text x="728" y="176" font-weight="500" fill="#0a0a0a">Weather</text><text x="950" y="176" text-anchor="end" fill="#5b6060">at 14:10</text>
+    <text x="728" y="262" font-size="64" font-weight="500" fill="#0a0a0a">21</text><text x="802" y="236" font-size="26" fill="#0a0a0a">°</text>
+    <text x="826" y="250" fill="#5b6060">Lisbon · clear</text>
+    <text x="728" y="306" fill="#5b6060">Wind</text><text x="950" y="306" text-anchor="end" fill="#0a0a0a">14 km/h</text>
+    <text x="728" y="338" fill="#5b6060">Next</text><text x="950" y="338" text-anchor="end" fill="#0a0a0a">20° 19° 18°</text>
+
+    <!-- VPN -->
+    <rect x="994" y="136" width="270" height="226" rx="10" fill="#ffffff" stroke="#e0e5e5" stroke-width="2"/>
+    <text x="1018" y="176" font-weight="500" fill="#0a0a0a">VPN</text><text x="1240" y="176" text-anchor="end" fill="#5b6060">at 14:18</text>
+    <text x="1018" y="256" font-size="52" font-weight="500" fill="#0a0a0a">84</text>
+    <text x="1100" y="252" fill="#5b6060">Mb/s down</text>
+    <text x="1018" y="306" fill="#5b6060">State</text><text x="1240" y="306" text-anchor="end" fill="#247b50">connected</text>
+    <text x="1018" y="338" fill="#5b6060">Server</text><text x="1240" y="338" text-anchor="end" fill="#0a0a0a">lis-2</text>
+
+    <!-- System -->
+    <rect x="1284" y="136" width="276" height="226" rx="10" fill="#ffffff" stroke="#e0e5e5" stroke-width="2"/>
+    <text x="1308" y="176" font-weight="500" fill="#0a0a0a">System</text><text x="1536" y="176" text-anchor="end" fill="#5b6060">CYFR</text>
+    <text x="1308" y="222" fill="#247b50">Healthy</text>
+    <text x="1308" y="262" fill="#5b6060">Storage</text><text x="1536" y="262" text-anchor="end" fill="#0a0a0a">38 of 100 GB</text>
+    <rect x="1308" y="276" width="228" height="8" rx="4" fill="#edf0f0"/><rect x="1308" y="276" width="87" height="8" rx="4" fill="#0a0a0a"/>
+    <text x="1308" y="320" fill="#5b6060">Model</text><text x="1536" y="320" text-anchor="end" fill="#0a0a0a">Connected</text>
+    <text x="1308" y="348" fill="#5b6060">Crew</text><text x="1536" y="348" text-anchor="end" fill="#0a0a0a">2 of 2 ready</text>
+
+    <!-- Schedules -->
+    <rect x="704" y="382" width="560" height="232" rx="10" fill="#ffffff" stroke="#e0e5e5" stroke-width="2"/>
+    <text x="728" y="422" font-weight="500" fill="#0a0a0a">Schedules</text><text x="1240" y="422" text-anchor="end" fill="#5b6060">3 running</text>
+    <text x="728" y="470" fill="#0a0a0a">Weather every 10 min</text><text x="1060" y="470" fill="#5b6060">next 14:30</text>
+    <rect x="1160" y="446" width="80" height="34" rx="6" fill="#ffffff" stroke="#cdd3d3" stroke-width="2"/><text x="1200" y="469" font-size="16" text-anchor="middle" fill="#0a0a0a">Pause</text>
+    <line x1="728" y1="496" x2="1240" y2="496" stroke="#edf0f0" stroke-width="2"/>
+    <text x="728" y="530" fill="#0a0a0a">Morning digest</text><text x="1060" y="530" fill="#5b6060">next 07:00</text>
+    <rect x="1160" y="506" width="80" height="34" rx="6" fill="#ffffff" stroke="#cdd3d3" stroke-width="2"/><text x="1200" y="529" font-size="16" text-anchor="middle" fill="#0a0a0a">Pause</text>
+    <line x1="728" y1="556" x2="1240" y2="556" stroke="#edf0f0" stroke-width="2"/>
+    <text x="728" y="590" fill="#5b6060">Weekly review</text><text x="1060" y="590" fill="#5b6060">paused</text>
+    <rect x="1160" y="566" width="80" height="34" rx="6" fill="#141414"/><text x="1200" y="589" font-size="16" text-anchor="middle" fill="#ffffff">Resume</text>
+
+    <!-- Apps -->
+    <rect x="1284" y="382" width="276" height="232" rx="10" fill="#ffffff" stroke="#e0e5e5" stroke-width="2"/>
+    <text x="1308" y="422" font-weight="500" fill="#0a0a0a">Apps</text><text x="1536" y="422" text-anchor="end" fill="#5b6060">4 installed</text>
+    <g font-size="22" font-weight="600" text-anchor="middle" fill="#0a0a0a">
+      <rect x="1308" y="446" width="56" height="56" rx="12" fill="#edf0f0"/><text x="1336" y="482">M</text>
+      <rect x="1376" y="446" width="56" height="56" rx="12" fill="#edf0f0"/><text x="1404" y="482">F</text>
+      <rect x="1444" y="446" width="56" height="56" rx="12" fill="#edf0f0"/><text x="1472" y="482">V</text>
+      <rect x="1308" y="530" width="56" height="56" rx="12" fill="#edf0f0"/><text x="1336" y="566">W</text>
+    </g>
+    <circle cx="1362" cy="448" r="6" fill="#0a7783"/>
+
+    <!-- Threads -->
+    <rect x="704" y="634" width="856" height="226" rx="10" fill="#ffffff" stroke="#e0e5e5" stroke-width="2"/>
+    <text x="728" y="674" font-weight="500" fill="#0a0a0a">Threads</text><text x="1536" y="674" text-anchor="end" fill="#5b6060">3 of 7</text>
+    <text x="728" y="722" fill="#0a0a0a">Family</text><text x="728" y="748" font-size="16" fill="#5b6060">3 people · <tspan font-weight="700" fill="#0a0a0a">2 unread</tspan></text><text x="1536" y="722" text-anchor="end" fill="#5b6060">13:55</text>
+    <line x1="728" y1="768" x2="1536" y2="768" stroke="#edf0f0" stroke-width="2"/>
+    <text x="728" y="806" fill="#0a0a0a">Tax notes</text><text x="728" y="832" font-size="16" fill="#5b6060">With AQUA</text><text x="1536" y="806" text-anchor="end" fill="#5b6060">13:00</text>
+  </g>
+</svg>

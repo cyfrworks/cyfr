@@ -157,10 +157,6 @@ defmodule Sanctum.Providers.Profile do
            Arg.new("publish_from", :string),
            Arg.new("need_ids", {:array, Arg.new(nil, :string)}),
            Arg.new("durable_storage", :boolean),
-           Arg.new("origins", {:array, Arg.new(nil, :string, enum: Prima.Origin.spellings())},
-             min: 1,
-             description: "The origins the grant admits; absent, interactive alone"
-           ),
            Arg.new("subset", {:map, subset_node_arg()},
              description:
                "Per consent-graph component, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none"
@@ -565,10 +561,7 @@ defmodule Sanctum.Providers.Profile do
   # could not answer, or whose profile row or head does not decode, or
   # whose head's bytes fail their digest or do not parse, refuses the
   # whole read with that reason (`Sanctum.Unauthorized`'s sentence): an
-  # answer short of that head's grants would read as "reaches nothing". A
-  # lender admits a borrower's load only under an origin the lender's own
-  # revision names, so a head is loaded under each origin its revision
-  # admits and reaches a resource when any of those loads carries it.
+  # answer short of that head's grants would read as "reaches nothing".
   # Every edge counts:
   #
   # - a domain, as egress pins a host (`Prima.Network.domain_allowed?/2`),
@@ -693,7 +686,6 @@ defmodule Sanctum.Providers.Profile do
              label: profile.label,
              consent_id: consent.id,
              revision: consent.revision,
-             admitted_origins: Prima.Origin.to_wire_list(consent.admitted_origins),
              edges: edges
            }
          ]}
@@ -703,36 +695,29 @@ defmodule Sanctum.Providers.Profile do
     end
   end
 
-  # The edges of the first load, among the origins the revision admits,
-  # that carries the resource; none when no such load does. A lender that
-  # could not be read or does not decode refuses the read. The app's own
-  # head the loader cannot trust refuses it as that damage, in the
-  # loader's one reading of it (`Loader.damage?/1`, `damage_refusal/3`):
-  # read as reaching nothing, a grant that exists would read as none. Any
-  # other refusal, such as a lender that does not admit the origin,
-  # reaches nothing under that origin.
+  # The edges of the head's load that carry the resource; none when the
+  # load carries none. A lender that could not be read or does not decode
+  # refuses the read. The app's own head the loader cannot trust refuses
+  # it as that damage, in the loader's one reading of it
+  # (`Loader.damage?/1`, `damage_refusal/3`): read as reaching nothing, a
+  # grant that exists would read as none.
   defp reaching_edges(ctx, profile, consent, resource) do
-    Enum.reduce_while(consent.admitted_origins, {:ok, []}, fn origin, none ->
-      case Loader.admitted_blob(%{ctx | origin: origin}, profile, consent) do
-        {:ok, blob} ->
-          case loaded_edges(blob, consent, resource) do
-            [] -> {:cont, none}
-            edges -> {:halt, {:ok, edges}}
-          end
+    case Loader.admitted_blob(ctx, profile, consent) do
+      {:ok, blob} ->
+        {:ok, loaded_edges(blob, consent, resource)}
 
-        {:error, {:lender_unavailable, _target}} = refused ->
-          {:halt, refused}
+      {:error, {:lender_unavailable, _target}} = refused ->
+        refused
 
-        {:error, {:lender_corrupt, _target, _profile_id}} = refused ->
-          {:halt, refused}
+      {:error, {:lender_corrupt, _target, _profile_id}} = refused ->
+        refused
 
-        {:error, reason} ->
-          case own_head_refusal(reason, profile) do
-            nil -> {:cont, none}
-            refusal -> {:halt, {:error, refusal}}
-          end
-      end
-    end)
+      {:error, reason} ->
+        case own_head_refusal(reason, profile) do
+          nil -> {:ok, []}
+          refusal -> {:error, refusal}
+        end
+    end
   end
 
   # The app's own head refused: its damage as the loader names it, and,
@@ -833,7 +818,6 @@ defmodule Sanctum.Providers.Profile do
          {:ok, bindings} <- decode_bindings(Map.get(raw, "bindings", [])),
          {:ok, selections} <- decode_selections(Map.get(raw, "selections", [])),
          {:ok, tool_servers} <- decode_tool_servers(Map.get(raw, "tool_servers", [])),
-         {:ok, origins} <- decode_origins(raw),
          {:ok, subset} <- decode_subset(raw) do
       decisions =
         %{
@@ -846,38 +830,11 @@ defmodule Sanctum.Providers.Profile do
         |> Prima.MapUtil.put_present(:label, raw["label"])
         |> Prima.MapUtil.put_present(:scope, scope)
         |> Prima.MapUtil.put_present(:invoke_mode, invoke_mode)
-        |> Prima.MapUtil.put_present(:origins, origins)
         |> Prima.MapUtil.put_present(:subset, subset)
         |> Map.put(:override, raw["override"] == true)
         |> maybe_publish_passthrough(raw)
 
       {:ok, decisions}
-    end
-  end
-
-  # The origins the grant admits, from their wire spellings; absent, the
-  # commit admits interactive alone.
-  defp decode_origins(raw) do
-    case Map.fetch(raw, "origins") do
-      :error ->
-        {:ok, nil}
-
-      {:ok, spellings} ->
-        case Prima.Origin.parse_list(spellings) do
-          {:ok, origins} ->
-            {:ok, origins}
-
-          {:error, :empty_origins} ->
-            {:error, {:invalid_argument, "origins must name at least one origin"}}
-
-          {:error, :duplicate_origin} ->
-            {:error, {:invalid_argument, "origins names an origin twice"}}
-
-          {:error, {:unknown_origin, _spelling}} ->
-            {:error,
-             {:invalid_argument,
-              "origins must name only #{Enum.join(Prima.Origin.spellings(), ", ")}"}}
-        end
     end
   end
 

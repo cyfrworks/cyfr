@@ -13,7 +13,10 @@ defmodule Sanctum.Providers.Door do
   before anything is written and written as an identifier entry labelled
   with the handle. The entry keeps the identifier, so a handle the
   registry later gives someone else moves no access; `list` shows the
-  label beside the identifier.
+  label beside the identifier. Each entry `list` and `requests` answer
+  carries the `name` of whom it names, when one is known: its label, else
+  the name the person it names holds here; and a request a member asked
+  for carries `asked_by_name`, theirs.
 
   `allow` writes an allow of an identifier or `*`, by which the door
   admits an account at sign-in. Every person here is an account's, and the
@@ -139,20 +142,29 @@ defmodule Sanctum.Providers.Door do
     with {:ok, kind, value, label} <- entry_for(value, "allow") do
       case Store.allow(kind, value, ctx.user_id, note: Map.get(args, "note"), label: label) do
         {:ok, entry} ->
+          Sanctum.Notify.allowlist_changed()
+
           # A person denied earlier may sign in again and their own athanor
           # reopens; the thread seats the deny removed stay removed — a
           # thread's people add them again. Said in the result, not left to guess.
-          restored = denied_users(kind, value)
-          failed = refused(restored, &Users.allow/1)
-          Sanctum.Notify.allowlist_changed()
+          case denied_users(kind, value) do
+            {:ok, restored} ->
+              failed = refused(restored, &Users.allow/1)
 
-          partial(
-            failed,
-            restored,
-            "Sign-in is allowed",
-            @not_restored,
-            with_restore_note(render(entry), restored)
-          )
+              partial(
+                failed,
+                restored,
+                "Sign-in is allowed",
+                @not_restored,
+                with_restore_note(render(entry), restored)
+              )
+
+            {:error, :unavailable} ->
+              unread(
+                "Sign-in is allowed",
+                "a denied one was not restored; allow again once it answers"
+              )
+          end
 
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Door] door.allow failed: #{inspect(reason)}")
@@ -166,23 +178,37 @@ defmodule Sanctum.Providers.Door do
     with {:ok, kind, value, label} <- entry_for(value, "deny") do
       case Store.deny(kind, value, ctx.user_id, note: Map.get(args, "note"), label: label) do
         {:ok, entry} ->
-          denied = known_users(kind, value)
-          failed = refused(denied, &Users.deny/1)
-          ejected = length(denied) - length(failed)
+          Sanctum.Notify.allowlist_changed()
 
           # An identifier nobody here holds can still hold invitations in
           # shared threads. `Users.deny/1` withdraws them for a person it
           # knows; for an identifier it does not, this is the whole eject.
-          withdrawn = withdraw_pending(kind, value)
+          with {:ok, denied} <- known_users(kind, value),
+               {:ok, withdrawn} <- withdraw_pending(kind, value) do
+            failed = refused(denied, &Users.deny/1)
+            ejected = length(denied) - length(failed)
 
-          rendered =
-            render(entry) |> Map.put(:ejected, ejected) |> Map.put(:invites_withdrawn, withdrawn)
+            rendered =
+              render(entry)
+              |> Map.put(:ejected, ejected)
+              |> Map.put(:invites_withdrawn, withdrawn)
 
-          Sanctum.Notify.allowlist_changed()
-
-          # The entry is written (the door is shut) but a person's sessions,
-          # keys or rows may survive — say so rather than report a clean eject.
-          partial(failed, denied, "Sign-in is denied", "known people were not ejected", rendered)
+            # The entry is written (the door is shut) but a person's sessions,
+            # keys or rows may survive — say so rather than report a clean eject.
+            partial(
+              failed,
+              denied,
+              "Sign-in is denied",
+              "known people were not ejected",
+              rendered
+            )
+          else
+            {:error, :unavailable} ->
+              unread(
+                "Sign-in is denied",
+                "nobody was ejected and no invitation withdrawn; deny again once it answers"
+              )
+          end
 
         {:error, :platform_admin} ->
           {:error,
@@ -205,9 +231,7 @@ defmodule Sanctum.Providers.Door do
       restored =
         if entry.effect == "deny",
           do: denied_users(entry.kind, entry.value),
-          else: []
-
-      failed = refused(restored, &Users.allow/1)
+          else: {:ok, []}
 
       # Removing an allow is closing the door on whoever it admitted, and the
       # credentials it issued would otherwise outlive it by their whole TTL.
@@ -219,16 +243,32 @@ defmodule Sanctum.Providers.Door do
 
       Sanctum.Notify.allowlist_changed()
 
-      partial(
-        failed,
-        restored,
-        "The entry is removed",
-        @not_restored,
-        with_restore_note(%{id: id, removed: true, ejected: ejected}, restored)
-      )
+      case restored do
+        {:ok, restored} ->
+          failed = refused(restored, &Users.allow/1)
+
+          partial(
+            failed,
+            restored,
+            "The entry is removed",
+            @not_restored,
+            with_restore_note(%{id: id, removed: true, ejected: ejected}, restored)
+          )
+
+        {:error, :unavailable} ->
+          unread(
+            "The entry is removed",
+            "a denied one stays denied; allow them to let them back in"
+          )
+      end
     else
       {:error, :not_found} ->
         {:error, {:not_found, "Allowlist entry", id}}
+
+      {:error, :platform_admin} ->
+        {:error,
+         {:invalid_argument,
+          "That allow lets this server's platform administrator sign in, so it is never removed"}}
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Door] door.remove failed: #{inspect(reason)}")
@@ -309,35 +349,41 @@ defmodule Sanctum.Providers.Door do
      }}
   end
 
+  # What an entry's write answers when the people it names, or their
+  # invitations, could not be read: the write stands, and nothing was done
+  # to them, which the sentence says rather than report a clean result.
+  defp unread(done, left) do
+    refusal = Sanctum.Refusals.classify({:unavailable, "The people this entry names"})
+
+    {:error,
+     %{refusal | message: "#{done}, but the people it names could not be read, so #{left}"}}
+  end
+
   # Every invitation the identifier still holds, withdrawn once; the count
   # is what a pending seat cost.
   defp withdraw_pending("identifier", value) do
     case Sanctum.SharedThreads.withdraw_identifier(value) do
-      {:ok, count} -> count
-      {:error, _} -> 0
+      {:ok, count} -> {:ok, count}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  defp withdraw_pending(_kind, _value), do: 0
+  defp withdraw_pending(_kind, _value), do: {:ok, 0}
 
-  defp known_users("person", value) do
-    case Users.get(value) do
-      {:ok, user} -> [user]
-      _ -> []
-    end
+  # The people an entry names here, or `{:error, :unavailable}` when they
+  # could not be read: never none for a read that failed.
+  defp known_users("person", value), do: people(Users.get(value))
+  defp known_users("identifier", value), do: people(Users.get_by_identifier(value))
+  defp known_users(_kind, _value), do: {:ok, []}
+
+  defp people({:ok, user}), do: {:ok, [user]}
+  defp people({:error, :not_found}), do: {:ok, []}
+  defp people({:error, _unanswered}), do: {:error, :unavailable}
+
+  defp denied_users(kind, value) do
+    with {:ok, people} <- known_users(kind, value),
+         do: {:ok, Enum.filter(people, &(&1.status == "denied"))}
   end
-
-  defp known_users("identifier", value) do
-    case Users.get_by_identifier(value) do
-      {:ok, user} -> [user]
-      _ -> []
-    end
-  end
-
-  defp known_users(_kind, _value), do: []
-
-  defp denied_users(kind, value),
-    do: kind |> known_users(value) |> Enum.filter(&(&1.status == "denied"))
 
   # The entry a value names, as `{kind, value, label}`. A handle is asked
   # of the registry first, and only its answer's identifier is written:
@@ -388,7 +434,8 @@ defmodule Sanctum.Providers.Door do
   defp refused_kind("wildcard", "deny"),
     do: "Remove the * entry instead of denying it"
 
-  # The label is a key only when the entry was made from a handle.
+  # The label is a key only when the entry was made from a handle; a name
+  # only when one is known.
   defp render(entry) do
     %{
       id: entry.id,
@@ -402,5 +449,24 @@ defmodule Sanctum.Providers.Door do
       created_at: entry.created_at
     }
     |> then(&if(is_binary(entry.label), do: Map.put(&1, :label, entry.label), else: &1))
+    |> known(:name, entry.label || held_name(entry.kind, entry.value))
+    |> known(:asked_by_name, asker_name(entry))
   end
+
+  defp known(rendered, _key, nil), do: rendered
+  defp known(rendered, key, name), do: Map.put(rendered, key, name)
+
+  # The name the person an entry names holds here, by their id or their
+  # account's identifier.
+  defp held_name("person", user_id), do: namespace(Users.get(user_id))
+  defp held_name("identifier", identifier), do: namespace(Users.get_by_identifier(identifier))
+  defp held_name(_kind, _value), do: nil
+
+  # A request is asked by a member, by their id, or by the refused account
+  # itself, whose name the entry already carries.
+  defp asker_name(%{requested_by: "usr_" <> _ = user_id}), do: held_name("person", user_id)
+  defp asker_name(_entry), do: nil
+
+  defp namespace({:ok, %{namespace: name}}) when is_binary(name) and name != "", do: name
+  defp namespace(_unnamed), do: nil
 end

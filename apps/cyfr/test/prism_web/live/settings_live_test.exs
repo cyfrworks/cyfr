@@ -63,69 +63,214 @@ defmodule PrismWeb.SettingsLiveTest do
     assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
   end
 
-  describe "invite to this CYFR" do
+  describe "invitation links" do
     defp text(html), do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.trim()
 
-    test "the administrator creates a link naming no thread, shown once, lists it and revokes it",
+    test "the administrator makes a link offering a name, shown once, lists every link by name and place, and revokes one",
          %{conn: conn} do
       ops = test_user()
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
 
-      # The administrator's invitation into a thread they sit in is the
-      # thread's, and this section does not list it.
+      # The administrator's invitation into a thread they sit in is listed
+      # too, by the thread's title.
       {:ok, thread} = Sanctum.SharedThreads.create(ops.user_id, "Settings thread")
       ctx = Sanctum.TestContext.session!(ops.user_id)
       {:ok, %{invitation: threaded}} = Sanctum.Invitations.create(ctx, thread.id)
 
       {view, html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
-      assert html =~ "Invite to this CYFR"
+      assert html =~ "Invitation links"
       assert has_element?(view, ~s([data-test="invite-cyfr"] [data-test="invitation-create"]))
       refute has_element?(view, ~s([data-test="invitation-new"]))
-      refute has_element?(view, ~s([phx-value-id="#{threaded.id}"]))
+      assert has_element?(view, ~s(#invite-cyfr tr), ~r/Settings thread\s*pending/)
 
-      view
-      |> element(~s([data-test="invitation-create"]))
-      |> render_click()
+      assert has_element?(
+               view,
+               ~s([data-test="invitation-revoke"][phx-value-id="#{threaded.id}"])
+             )
+
+      view |> form("#invitation-form", %{"name" => "uj-wren"}) |> render_submit()
 
       link = view |> element(~s([data-test="invitation-link"])) |> render() |> text()
       assert String.starts_with?(link, Sanctum.origin() <> "/invite#")
       code = link |> String.split("#") |> List.last()
       assert has_element?(view, ~s([data-test="invitation-copy"]))
 
-      [%{id: id, issued_by: issuer}] =
+      # A test CYFR's address is this computer's loopback, which the link
+      # opens nowhere else than.
+      assert has_element?(view, ~s([data-test="invitation-local"]), "opens only on this computer")
+
+      [%{id: id, issued_by: issuer, name: "uj-wren"}] =
         Arca.Repo.all(from(i in Arca.Schemas.Invitation, where: is_nil(i.thread_id)))
 
       assert issuer == ops.user_id
-      assert {:ok, shown} = Sanctum.Invitations.lookup(code)
+      assert {:ok, %{name: "uj-wren"} = shown} = Sanctum.Invitations.lookup(code)
       refute Map.has_key?(shown, :thread)
 
+      assert has_element?(view, ~s(#invite-cyfr tr), ~r/uj-wren\s*this CYFR\s*pending/)
       revoke = ~s(#invite-cyfr [data-test="invitation-revoke"][phx-value-id="#{id}"])
       assert has_element?(view, revoke)
-      refute has_element?(view, ~s([phx-value-id="#{threaded.id}"]))
 
       # Shown once: the page read again lists the link and no longer shows it.
       {again, html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
       refute has_element?(again, ~s([data-test="invitation-new"]))
       refute html =~ code
-      assert has_element?(again, "#invite-cyfr td", "pending")
 
       again |> element(revoke) |> render_click()
 
-      assert has_element?(again, "#invite-cyfr td", "revoked")
+      assert has_element?(again, ~s(#invite-cyfr tr), ~r/uj-wren\s*this CYFR\s*revoked/)
       refute has_element?(again, revoke)
       assert %DateTime{} = Arca.Repo.get!(Arca.Schemas.Invitation, id).revoked_at
       assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
       assert Arca.Repo.get!(Arca.Schemas.Invitation, threaded.id).revoked_at == nil
     end
 
-    test "a person who is not the administrator does not see the section", %{conn: conn} do
+    test "a person who is not the administrator sees their own thread links with Revoke, and makes none here",
+         %{conn: conn} do
       person = test_user()
       {view, html} = conn |> log_in_user(person) |> mount_athanor("/settings")
-
-      refute html =~ "Invite to this CYFR"
+      refute html =~ "Invitation links"
       refute has_element?(view, ~s([data-test="invite-cyfr"]))
+
+      {:ok, thread} = Sanctum.SharedThreads.create(person.user_id, "Crew thread")
+      ctx = Sanctum.TestContext.session!(person.user_id)
+      {:ok, %{invitation: invitation}} = Sanctum.Invitations.create(ctx, thread.id, "uj-oren")
+
+      {view, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
+      assert has_element?(view, ~s(#invite-cyfr tr), ~r/uj-oren\s*Crew thread\s*pending/)
       refute has_element?(view, ~s([data-test="invitation-create"]))
+
+      view
+      |> element(~s([data-test="invitation-revoke"][phx-value-id="#{invitation.id}"]))
+      |> render_click()
+
+      assert %DateTime{} = Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id).revoked_at
     end
+  end
+
+  test "the page says in words what Mode, the request card, a setting and the sign-in are, and Remove asks first",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", ops.user_id)
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+
+    assert has_element?(view, "#mode-words", "Executions, where each run's failure says why")
+    assert has_element?(view, "#request-stats h3", "Your requests, last hour")
+    assert has_element?(view, "#request-stats", "Nobody's athanor but yours is counted here.")
+    assert has_element?(view, ~s([data-test="auth-method"]), "your account, in this browser")
+
+    {:ok, %Cyfr.Platform.Settings.Roster.Entry{doc: doc}} =
+      Cyfr.Platform.Settings.Roster.fetch("max_athanors")
+
+    assert has_element?(view, ~s([data-test="setting-doc"]), doc)
+
+    assert has_element?(
+             view,
+             ~s(button[phx-click="door_remove"][data-confirm^="Remove *?"])
+           )
+
+    for html <- [
+          view |> element("#mode-words") |> render(),
+          view |> element("#request-stats") |> render(),
+          view |> element("#approvals") |> render(),
+          view |> element("#host-decisions") |> render()
+        ],
+        do: PrismWeb.Vocabulary.refute_vocabulary(html)
+  end
+
+  test "an approval's wait is saved as whole hours, and the page links to API Keys", %{conn: conn} do
+    person = test_user()
+    {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+
+    assert has_element?(view, ~s(#approval-hours[placeholder="default"]))
+    refute has_element?(view, ~s(#approval-hours[value]))
+    assert has_element?(view, ~s([data-test="api-keys-link"] a[href$="/api-keys"]))
+
+    view |> form("#approvals-form", %{"hours" => "0"}) |> render_submit()
+    assert render(view) =~ "the wait is a whole number of hours"
+
+    view |> form("#approvals-form", %{"hours" => "6"}) |> render_submit()
+    assert has_element?(view, ~s(#approval-hours[value="6"]))
+
+    # Saved in the athanor's settings, where AQUA reads it: the page read
+    # again shows it.
+    {again, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
+    assert has_element?(again, ~s(#approval-hours[value="6"]))
+
+    # Cleared, the stored wait is gone and AQUA's own default holds again.
+    again |> form("#approvals-form", %{"hours" => ""}) |> render_submit()
+    assert render(again) =~ "Approvals wait AQUA&#39;s default time again."
+    refute has_element?(again, ~s(#approval-hours[value]))
+    assert has_element?(again, "#approvals", "Left empty, AQUA's own default")
+
+    athanor = seated_athanor()
+    {:ok, row} = Sanctum.Tenancy.Athanors.get(athanor.id)
+
+    refute Map.has_key?(
+             Sanctum.Tenancy.Athanors.settings(row)["approvals"] || %{},
+             "expiry_hours"
+           )
+  end
+
+  test "the request card names the page where a failed request with no execution is read", %{
+    conn: conn
+  } do
+    person = test_user()
+    {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+
+    assert has_element?(
+             view,
+             ~s(#request-stats [data-test="activities-link"][href$="/activities"]),
+             "Activities"
+           )
+
+    refute view |> element("#request-stats") |> render() =~ "Executions"
+
+    # A failed call that starts no execution: revoking an invitation that
+    # does not exist.
+    render_click(view, "invitation_revoke", %{"id" => "inv_missing"})
+
+    {activities, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/activities")
+    assert has_element?(activities, "tr", ~r/invitation\.revoke.*failed/s)
+  end
+
+  test "the administrator reads the host's decisions, opens one, and closing an account asks a confirmation",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+
+    # A refused call no athanor holds: a decision about the host.
+    request_id = Prima.UUID7.request_id()
+
+    anonymous =
+      Sanctum.Context.build(authenticated: false, permissions: [], request_id: request_id)
+
+    {:error, _} = Sanctum.Gate.call_external("tools", anonymous, %{"action" => "list"})
+
+    {:ok, [refused]} =
+      Arca.DecisionLog.list_global(%Prima.Actor{platform_admin: true}, request_id: request_id)
+
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+    assert has_element?(view, "#host-decisions tr", ~r/tools\.list\s*refused/)
+
+    view
+    |> element(~s(#host-decisions button[phx-value-id="#{refused.call_id}"]))
+    |> render_click()
+
+    assert has_element?(view, "#host-decision dd", refused.call_id)
+
+    identifier = "per_" <> Prima.Digest.sha256_hex("closed-#{ops.user_id}")
+    view |> form("#tombstone-form", %{"identifier" => identifier}) |> render_submit()
+
+    assert [%{operation: "directory.tombstone"}] =
+             Arca.Repo.all(
+               from(c in Arca.Schemas.PendingConfirmation, where: c.user_id == ^ops.user_id)
+             )
+
+    # Someone who is not the administrator sees neither.
+    person = test_user()
+    {view, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
+    refute has_element?(view, "#host-decisions")
   end
 
   # A key the platform administrator offers is shared from their own
@@ -182,16 +327,18 @@ defmodule PrismWeb.SettingsLiveTest do
 
     door_entry(view, "door_allow", "@alice")
     assert has_element?(view, "td", alice)
-    assert has_element?(view, ~s(td [data-test="door-entry-label"]), "@alice")
+    assert has_element?(view, ~s(td [data-test="door-entry-name"]), "@alice")
     assert {:ok, :allowed} = Sanctum.Door.admit_identifier(alice)
 
     door_entry(view, "door_deny", "@bob")
     assert has_element?(view, "td", bob)
-    assert has_element?(view, ~s(td [data-test="door-entry-label"]), "@bob")
+    assert has_element?(view, ~s(td [data-test="door-entry-name"]), "@bob")
     assert {:error, :denied} = Sanctum.Door.admit_identifier(bob)
 
     door_entry(view, "door_allow", "@nobody")
-    assert render(view) =~ "No one holds that handle at the registry."
+
+    assert render(view) =~
+             "No account with that name yet: check the spelling, or ask them to make one."
 
     ExUnit.CaptureLog.capture_log(fn ->
       door_entry(view, "door_allow", "@down")
@@ -201,7 +348,7 @@ defmodule PrismWeb.SettingsLiveTest do
     assert [_, _] = Sanctum.Door.Store.list()
 
     # An entry made by no name: a person here shows their name, `*`
-    # everyone, and an identifier nothing here names where it came from.
+    # everyone, and an identifier nothing here names the identifier.
     held = test_user()
     record_namespace!(held)
     typed = "per_" <> Prima.Digest.sha256_hex("typed-#{n}")
@@ -214,7 +361,7 @@ defmodule PrismWeb.SettingsLiveTest do
 
     for {value, name} <- [
           {held.user_id, "@" <> held.namespace},
-          {typed, "added from the command line"},
+          {typed, typed},
           {"*", "everyone"}
         ] do
       assert has_element?(
@@ -223,6 +370,83 @@ defmodule PrismWeb.SettingsLiveTest do
                ~r/#{Regex.escape(value)}\s+#{Regex.escape(name)}/
              ),
              value
+    end
+  end
+
+  test "people are admitted under their account's name, which the allowlist, the requests and their public address show",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+
+    tls = Sanctum.Test.DirectoryServer.tls()
+    Sanctum.Test.DirectoryServer.listen!()
+    Sanctum.Test.DirectoryServer.seam!(tls)
+    directory = Sanctum.Test.DirectoryServer.start!(tls)
+
+    [invited, allowed, refused] =
+      for _ <- 1..3 do
+        account = Sanctum.Test.DirectoryServer.account!(directory.dir, directory.url)
+        head = Sanctum.Test.DirectoryServer.cached!(account)
+
+        %{
+          identifier: account.identifier,
+          directory_url: directory.url,
+          head_hash: head.head_hash
+        }
+      end
+
+    n = System.unique_integer([:positive])
+    [mira, oren, wren] = for name <- ["mira", "oren", "wren"], do: "#{name}-#{n}"
+
+    RegistryStub.handles!(
+      %{mira => invited.identifier, oren => allowed.identifier, wren => refused.identifier},
+      directory.url
+    )
+
+    # One comes in by an invitation, one by an allow typed as an
+    # identifier, and the third is refused at the door.
+    admin = Sanctum.TestContext.session!(ops.user_id) |> Map.put(:platform_admin, true)
+    {:ok, %{code: code}} = Sanctum.Invitations.create(admin, nil)
+    {:ok, hash} = Sanctum.Invitations.code_hash(code)
+    {:ok, _} = Sanctum.Door.Store.allow("identifier", allowed.identifier, ops.user_id)
+
+    {:ok, %{person: first}} = Sanctum.Newcomer.admit({:invitation, hash}, invited)
+    {:ok, %{person: second}} = Sanctum.Newcomer.admit(:open, allowed)
+    assert {:error, {:door, :not_allowed}} = Sanctum.Newcomer.admit(:open, refused)
+
+    # A request a member asked for names them.
+    asked = "per_" <> Prima.Digest.sha256_hex("asked-#{n}")
+    {:ok, :created, _} = Sanctum.Door.Store.request("identifier", asked, ops.user_id)
+
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+
+    assert has_element?(
+             view,
+             "#allowlist tr",
+             ~r/#{Regex.escape(asked)}\s*#{Regex.escape(asked)}\s*@#{Regex.escape(ops.namespace)}/
+           )
+
+    for {identifier, name} <- [{invited.identifier, mira}, {allowed.identifier, oren}] do
+      assert has_element?(
+               view,
+               "#allowlist tr",
+               ~r/#{Regex.escape(identifier)}\s*@#{Regex.escape(name)}\s*identifier/
+             ),
+             name
+    end
+
+    assert has_element?(
+             view,
+             "#allowlist tr",
+             ~r/@#{Regex.escape(wren)}\s*#{Regex.escape(refused.identifier)}\s*themselves, at sign-in/
+           )
+
+    # Each one's athanor is at their name, as a public address reads it.
+    for {person, name} <- [{first, mira}, {second, oren}] do
+      {:ok, %{id: athanor_id, slug: ^name}} = Sanctum.Tenancy.Athanors.get_by_owner(person.id)
+
+      assert {:ok, %{athanor_id: ^athanor_id}} =
+               Sanctum.TinctureAccess.public_context("@" <> name)
     end
   end
 

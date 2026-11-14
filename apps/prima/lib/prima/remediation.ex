@@ -56,25 +56,23 @@ defmodule Prima.Remediation do
   end
 
   def analyze({:consent_required, %{} = payload}) do
-    profile_id = payload[:profile_id] || payload["profile_id"]
-    revision = payload[:current_revision] || payload["current_revision"]
+    component_ref = payload[:ref] || payload["ref"] || ""
+    cause = to_string(payload[:cause] || payload["cause"])
 
     {:setup_required,
      %{
-       "component_ref" => "",
-       "profile_id" => profile_id,
-       "message" =>
-         "This app's permissions changed since you approved them " <>
-           "(consent revision #{revision}). Review and approve to continue.",
-       "setup_command" => "cyfr profile grant",
+       "component_ref" => component_ref,
+       "profile_id" => payload[:profile_id] || payload["profile_id"],
+       "message" => consent_message(cause),
+       "setup_command" => grant_command(component_ref),
        "issues" => [
          %{
            "type" => "consent_required",
-           "message" => "A new consent revision is required before this can run",
+           "message" => consent_message(cause),
            "fix" => %{
              "tool" => "profile",
              "action" => "plan",
-             "args" => %{"profile_id" => profile_id}
+             "args" => %{"ref" => component_ref}
            }
          }
        ]
@@ -87,6 +85,13 @@ defmodule Prima.Remediation do
   # issues carry the fix, so the sentence names only the need.
   defp setup_message(""), do: "This app needs setup before it can run"
   defp setup_message(need), do: "This app needs a vault entry for \"#{need}\""
+
+  # Why a run has no grant to stand on (`Sanctum.Consent`'s errors).
+  defp consent_message("no_grant"), do: "This app has not been granted yet"
+  defp consent_message("revoked"), do: "This app's grant was revoked; grant it again to continue"
+
+  defp consent_message(_moved),
+    do: "This app asks for more than its grant holds; review and grant it again to continue"
 
   defp grant_command(""), do: "cyfr profile grant"
   defp grant_command(ref), do: "cyfr profile grant #{ref}"

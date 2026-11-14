@@ -99,11 +99,6 @@ defmodule Sanctum.Consent.Bootstrap do
   who does not stand, or a person denied, and the catalyst is minted, or
   revised, without a binding.
 
-  A machine-minted revision admits the `interactive` and `programmatic`
-  origins: the seed is the operator's own first-party install, run from
-  its screens and from its command line and agents alike. A schedule or a
-  webhook is admitted only by a person's grant naming it.
-
   ## Why provisioning is the only caller
 
   This mints a consent nobody was asked for, which `Sanctum.Consent.Authz`
@@ -147,9 +142,6 @@ defmodule Sanctum.Consent.Bootstrap do
 
   # The profile a shipped source's selection names on a shipped dependency.
   @selected_label "default"
-
-  # The origins a machine-minted revision admits.
-  @seeded_origins [:interactive, :programmatic]
 
   # The stores' declared outage terms, as `Sanctum.Consent.Plan` reads
   # them: a store that could not answer.
@@ -824,7 +816,6 @@ defmodule Sanctum.Consent.Bootstrap do
                blob_digest: digests.blob_digest,
                resolved_policy: blob_json,
                activation: activation_json,
-               admitted_origins: @seeded_origins,
                granted_by: granted_by(ctx),
                granted_via: "bootstrap"
              },
@@ -891,7 +882,6 @@ defmodule Sanctum.Consent.Bootstrap do
              label: "default",
              kind: :owner,
              invoke_mode: :open_inert,
-             origins: @seeded_origins,
              # The share a first sign-in binds, or the share a revision
              # keeps, when there is one: what the revision decided, as a
              # commit's digest names it.
@@ -957,7 +947,6 @@ defmodule Sanctum.Consent.Bootstrap do
                blob_digest: digests.blob_digest,
                resolved_policy: blob_json,
                activation: activation_json,
-               admitted_origins: @seeded_origins,
                granted_by: granted_by(ctx),
                granted_via: "bootstrap"
              },

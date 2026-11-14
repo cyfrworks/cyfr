@@ -27,6 +27,16 @@ defmodule Sanctum.DoorTest do
   defp uid(n), do: "github|https://github.com|door#{n}"
   defp identifier(n), do: "per_" <> Prima.Digest.sha256_hex("door-#{n}")
 
+  # `fun` run while `table` cannot be read, renamed away and back in the
+  # test's own transaction (the sandbox keeps a failed read from spoiling
+  # it on PostgreSQL).
+  defp unreadable(table, fun) do
+    Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+    result = fun.()
+    Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+    result
+  end
+
   # A person with no identity row: no admission makes one, and the door
   # admits no one by it.
   defp local!(n) do
@@ -183,13 +193,16 @@ defmodule Sanctum.DoorTest do
       assert {:error, :denied} = Door.admit_person(dave)
     end
 
-    test "an unadmitted one leaves one request naming the identifier, which resolve admits" do
+    test "an unadmitted one leaves one request naming the identifier and their name, which resolve admits" do
       carol = remote!(14)
+      {:ok, carol} = Sanctum.Tenancy.Users.set_namespace(carol, "carol")
 
       assert {:error, {:door, :not_allowed}} = Door.sign_in(carol)
       assert {:error, {:door, :not_allowed}} = Door.sign_in(carol)
 
-      assert [%{kind: "identifier", status: "requested"} = request] = Store.requests()
+      assert [%{kind: "identifier", status: "requested", label: "carol"} = request] =
+               Store.requests()
+
       assert request.value == identifier(14)
       assert {:error, :not_allowed} = Door.admit_person(carol)
 
@@ -252,21 +265,73 @@ defmodule Sanctum.DoorTest do
     end
   end
 
+  describe "a request's label" do
+    test "a pending request with none takes the name a later ask knows, and keeps it" do
+      assert {:ok, :created, %{label: nil}} =
+               Store.request("identifier", identifier(23), identifier(23))
+
+      assert {:ok, :existing, %{label: "wren"}} =
+               Store.request("identifier", identifier(23), identifier(23), label: "wren")
+
+      assert {:ok, :existing, %{label: "wren"}} =
+               Store.request("identifier", identifier(23), identifier(23), label: "other")
+
+      assert [%{label: "wren", status: "requested"}] = Store.requests()
+
+      # An answered entry is never relabelled by an ask.
+      {:ok, _} = Store.allow("identifier", identifier(24), "ops")
+
+      assert {:ok, :existing, %{label: nil, status: "allowed"}} =
+               Store.request("identifier", identifier(24), identifier(24), label: "wren")
+    end
+  end
+
+  test "an administrator's answer that lands between a late ask's read and its write keeps its label" do
+    {:ok, :created, _} = Store.request("identifier", identifier(25), identifier(25))
+
+    # Once the late ask has read the pending row, the administrator allows
+    # the identifier under a label of their own, before the ask writes.
+    handler = "door-label-race-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, metadata, asker ->
+          if self() == asker and metadata[:source] == "server_allowlist" and
+               Process.get(:answered) != true do
+            Process.put(:answered, true)
+            {:ok, _} = Store.allow("identifier", identifier(25), "ops", label: "chosen")
+          end
+        end,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:ok, :existing, %{status: "allowed", label: "chosen"}} =
+             Store.request("identifier", identifier(25), identifier(25), label: "wren")
+
+    :telemetry.detach(handler)
+    assert Process.get(:answered)
+    assert [%{status: "allowed", label: "chosen"}] = Store.list()
+  end
+
   describe "a remote newcomer" do
-    test "is admitted by * or an allow of their identifier, and a refusal leaves one request" do
-      assert {:error, {:door, :not_allowed}} = Door.sign_in_identifier(identifier(20))
-      assert [%{kind: "identifier"} = request] = Store.requests()
+    test "is admitted by * or an allow of their identifier, and a refusal leaves one request with their name" do
+      assert {:error, {:door, :not_allowed}} = Door.sign_in_identifier(identifier(20), "wren")
+      assert [%{kind: "identifier", label: "wren"} = request] = Store.requests()
       assert request.value == identifier(20)
       refute Door.identifier_admitted?(identifier(20))
 
       {:ok, _} = Store.allow("identifier", identifier(21), "ops")
-      assert {:ok, :allowed} = Door.sign_in_identifier(identifier(21))
+      assert {:ok, :allowed} = Door.sign_in_identifier(identifier(21), nil)
       assert Door.identifier_admitted?(identifier(21))
 
       {:ok, _} = Store.deny("identifier", identifier(22), "ops")
       {:ok, _} = Store.allow("wildcard", "*", "ops")
       assert {:ok, :allowed} = Door.admit_identifier(identifier(20))
-      assert {:error, {:door, :denied}} = Door.sign_in_identifier(identifier(22))
+      assert {:error, {:door, :denied}} = Door.sign_in_identifier(identifier(22), nil)
     end
   end
 
@@ -301,6 +366,65 @@ defmodule Sanctum.DoorTest do
       assert {:error, :platform_admin} = Store.deny("identifier", identifier(31), "ops")
       assert [%{effect: "allow"}] = Store.list()
       assert {:ok, :allowed} = Door.admit_person(operator)
+    end
+
+    test "the platform administrator's allow is never removed; anyone else's is" do
+      operator = local!(36)
+      enrolled!(operator, 36)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
+      {:ok, own} = Store.allow("identifier", identifier(36), "setup")
+      {:ok, other} = Store.allow("identifier", identifier(37), "ops")
+
+      assert {:error, :platform_admin} = Store.remove(own.id)
+      assert {:ok, :allowed} = Door.admit_person(operator)
+
+      assert :ok = Store.remove(other.id)
+      assert [%{id: id}] = Store.list()
+      assert id == own.id
+    end
+
+    @tag :capture_log
+    test "a guard that cannot read the person refuses, removing nothing and writing no deny" do
+      operator = local!(39)
+      enrolled!(operator, 39)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
+      {:ok, own} = Store.allow("identifier", identifier(39), "setup")
+
+      # The identity row unreadable, then the person's row: neither tells
+      # whether the entry names the administrator.
+      for table <- ~w(person_identities users) do
+        assert {:error, :unavailable} = unreadable(table, fn -> Store.remove(own.id) end)
+
+        assert {:error, :unavailable} =
+                 unreadable(table, fn -> Store.deny("identifier", identifier(39), "ops") end)
+
+        assert [%{id: id, effect: "allow"}] = Store.list()
+        assert id == own.id
+      end
+
+      assert {:error, :unavailable} =
+               unreadable("users", fn -> Store.deny("person", operator.id, "ops") end)
+
+      assert [%{effect: "allow"}] = Store.list()
+    end
+
+    @tag :capture_log
+    test "an allow whose people cannot be read stands and says none was restored" do
+      denied = remote!(40)
+      {:ok, _} = Sanctum.Tenancy.Users.deny(denied)
+      ctx = Sanctum.TestContext.local() |> Map.put(:platform_admin, true)
+
+      assert {:error, %Prima.Refusal{message: message}} =
+               unreadable("person_identities", fn ->
+                 Sanctum.Providers.Door.handle(ctx, %{
+                   "action" => "allow",
+                   "value" => identifier(40)
+                 })
+               end)
+
+      assert message =~ "Sign-in is allowed, but the people it names could not be read"
+      assert {:ok, true} = Store.allowed("identifier", identifier(40))
+      assert {:ok, %{status: "denied"}} = Sanctum.Tenancy.Users.get(denied.id)
     end
 
     test "concurrent requests and allows for one identifier leave one row each, and nobody sees a conflict" do

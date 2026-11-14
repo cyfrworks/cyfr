@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" font-family="'Arial Narrow', 'Roboto Condensed', system-ui, sans-serif">
+  <defs>
+    <radialGradient id="jack" cx=".5" cy=".45" r=".6">
+      <stop offset="0" stop-color="#e6d9a6"/><stop offset=".55" stop-color="#c7a54a"/><stop offset="1" stop-color="#7d6526"/>
+    </radialGradient>
+    <filter id="vfd" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <g id="j"><circle r="15" fill="url(#jack)"/><circle r="7" fill="#1a1e18"/></g>
+  </defs>
+  <rect width="1600" height="900" fill="#b9c8ad"/>
+
+  <!-- header: badge, clock, readout, rack key -->
+  <rect width="1600" height="92" fill="#252924"/>
+  <rect x="24" y="18" width="240" height="56" rx="4" fill="#343932"/>
+  <text x="44" y="56" font-size="26" font-weight="700" letter-spacing="4" fill="#ddd8c4">CYFR</text>
+  <text x="140" y="55" font-size="18" fill="#a9a693">Noor's board</text>
+  <rect x="288" y="16" width="250" height="60" rx="4" fill="#07110e"/>
+  <text x="306" y="56" font-family="'Courier New', monospace" font-size="18" font-weight="700" fill="#8ff7df" opacity=".7">FRI</text>
+  <text x="360" y="60" font-family="'Courier New', monospace" font-size="38" font-weight="700" fill="#8ff7df" filter="url(#vfd)">14:20</text>
+  <text x="490" y="60" font-family="'Courier New', monospace" font-size="18" font-weight="700" fill="#8ff7df" opacity=".6">36</text>
+  <rect x="562" y="16" width="860" height="60" rx="4" fill="#07110e"/>
+  <text x="584" y="54" font-family="'Courier New', monospace" font-size="22" font-weight="700" fill="#8ff7df" filter="url(#vfd)">3 CALLING · 2 BUSY · ALL IS WELL</text>
+  <rect x="1446" y="22" width="130" height="48" rx="4" fill="#ddd8c4"/>
+  <text x="1511" y="53" font-size="19" font-weight="700" fill="#1a1e18" text-anchor="middle">RACK</text>
+
+  <!-- the field: lines on strips of dymo tape, a jack and a lamp each -->
+  <g font-size="15" font-weight="700">
+    <!-- calls -->
+    <rect x="24" y="112" width="760" height="112" rx="4" fill="#a8b79c"/>
+    <text x="40" y="136" font-size="14" letter-spacing="2" fill="#384034">CALLS</text>
+    <g transform="translate(40 150)">
+      <rect width="150" height="24" fill="#161816"/><text x="10" y="17" fill="#f1f0e8">TRIP PLANNING</text>
+      <use href="#j" x="190" y="12"/><circle cx="230" cy="12" r="9" fill="#ffb12e"/><circle cx="230" cy="12" r="15" fill="#ffb12e" opacity=".3"/>
+    </g>
+    <g transform="translate(300 150)">
+      <rect width="96" height="24" fill="#161816"/><text x="10" y="17" fill="#f1f0e8">DIGEST</text>
+      <use href="#j" x="136" y="12"/><circle cx="176" cy="12" r="9" fill="#ff5a44"/><circle cx="176" cy="12" r="15" fill="#ff5a44" opacity=".3"/>
+    </g>
+    <g transform="translate(510 150)">
+      <rect width="130" height="24" fill="#161816"/><text x="10" y="17" fill="#f1f0e8">BUDGET.XLSX</text>
+      <use href="#j" x="170" y="12"/><circle cx="210" cy="12" r="9" fill="#ffb12e"/>
+    </g>
+    <!-- threads -->
+    <rect x="24" y="236" width="760" height="100" rx="4" fill="#a8b79c"/>
+    <text x="40" y="260" font-size="14" letter-spacing="2" fill="#384034">THREADS</text>
+    <g transform="translate(40 280)">
+      <rect width="90" height="24" fill="#161816"/><text x="10" y="17" fill="#f1f0e8">FAMILY</text>
+      <use href="#j" x="128" y="12"/><circle cx="166" cy="12" r="9" fill="#fbf6e4"/>
+    </g>
+    <g transform="translate(250 280)">
+      <rect width="112" height="24" fill="#161816"/><text x="10" y="17" fill="#f1f0e8">TAX NOTES</text>
+      <use href="#j" x="150" y="12"/><circle cx="188" cy="12" r="9" fill="#5d6a55"/>
+    </g>
+    <g transform="translate(480 280)">
+      <rect width="104" height="24" fill="#161816"/><text x="10" y="17" fill="#f1f0e8">WEEKEND</text>
+      <use href="#j" x="142" y="12"/><circle cx="180" cy="12" r="9" fill="#5d6a55"/>
+    </g>
+    <!-- apps -->
+    <rect x="24" y="348" width="760" height="100" rx="4" fill="#a8b79c"/>
+    <text x="40" y="372" font-size="14" letter-spacing="2" fill="#384034">APPS</text>
+    <g transform="translate(40 392)">
+      <rect width="70" height="24" fill="#161816"/><text x="10" y="17" fill="#f1f0e8">MAPS</text>
+      <use href="#j" x="108" y="12"/><circle cx="146" cy="12" r="9" fill="#6ee68f"/>
+    </g>
+    <g transform="translate(230 392)">
+      <rect width="90" height="24" fill="#161816"/><text x="10" y="17" fill="#f1f0e8">FLIGHTS</text>
+      <use href="#j" x="128" y="12"/><circle cx="166" cy="12" r="9" fill="#5d6a55"/>
+    </g>
+    <g transform="translate(440 392)">
+      <rect width="84" height="24" fill="#161816"/><text x="10" y="17" fill="#f1f0e8">VOXELS</text>
+      <use href="#j" x="122" y="12"/><circle cx="160" cy="12" r="9" fill="#5d6a55"/>
+    </g>
+  </g>
+
+  <!-- the operator's position: where a cord is patched -->
+  <rect x="806" y="112" width="120" height="336" rx="4" fill="#252924"/>
+  <g font-size="15" font-weight="700" fill="#ddd8c4" text-anchor="middle">
+    <text x="866" y="146">AQUA</text><use href="#j" x="866" y="172"/>
+    <text x="866" y="226">CHAT</text><use href="#j" x="866" y="252"/>
+    <text x="866" y="306">APP</text><use href="#j" x="866" y="332"/>
+    <text x="866" y="386">SETTINGS</text><use href="#j" x="866" y="412"/>
+  </g>
+  <!-- a patch cord from the call to AQUA -->
+  <path d="M230 168 C 300 250, 700 250, 866 176" fill="none" stroke="#4a1610" stroke-width="9" stroke-linecap="round"/>
+  <path d="M230 168 C 300 250, 700 250, 866 176" fill="none" stroke="#b23a2a" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- the meters: weather and the VPN -->
+  <rect x="948" y="112" width="628" height="160" rx="4" fill="#c6d3ba" stroke="#8b9980" stroke-width="2"/>
+  <text x="966" y="138" font-size="14" font-weight="700" letter-spacing="2" fill="#384034">WEATHER · LISBON</text>
+  <rect x="966" y="152" width="176" height="100" rx="4" fill="#07110e"/>
+  <text x="984" y="226" font-family="'Courier New', monospace" font-size="62" font-weight="700" fill="#8ff7df" filter="url(#vfd)">21°</text>
+  <text x="1162" y="170" font-size="16" font-weight="600" fill="#384034">clear · wind 14</text>
+  <g font-size="14" font-weight="700" fill="#1a1e18" text-anchor="middle">
+    <rect x="1170" y="194" width="20" height="34" fill="#384034"/><text x="1180" y="246">20°</text>
+    <rect x="1214" y="200" width="20" height="28" fill="#384034"/><text x="1224" y="246">19°</text>
+    <rect x="1258" y="206" width="20" height="22" fill="#384034"/><text x="1268" y="246">18°</text>
+    <rect x="1302" y="212" width="20" height="16" fill="#384034"/><text x="1312" y="246">17°</text>
+  </g>
+  <rect x="1440" y="186" width="114" height="40" rx="4" fill="#ddd8c4" stroke="#8b9980"/><text x="1497" y="212" font-size="15" font-weight="700" fill="#1a1e18" text-anchor="middle">REFRESH</text>
+
+  <rect x="948" y="288" width="628" height="160" rx="4" fill="#c6d3ba" stroke="#8b9980" stroke-width="2"/>
+  <text x="966" y="314" font-size="14" font-weight="700" letter-spacing="2" fill="#384034">VPN · LIS-2</text>
+  <g font-size="14" font-weight="700">
+    <text x="966" y="350" fill="#384034">OUT</text><use href="#j" x="1010" y="346"/>
+    <rect x="1100" y="334" width="60" height="22" fill="#161816"/><text x="1108" y="350" fill="#f1f0e8">LIS-1</text><use href="#j" x="1186" y="346"/>
+    <rect x="1240" y="334" width="60" height="22" fill="#161816"/><text x="1248" y="350" fill="#f1f0e8">LIS-2</text><use href="#j" x="1326" y="346"/><circle cx="1354" cy="346" r="7" fill="#6ee68f"/>
+    <rect x="1390" y="334" width="66" height="22" fill="#161816"/><text x="1398" y="350" fill="#f1f0e8">AMS-1</text><use href="#j" x="1482" y="346"/>
+  </g>
+  <path d="M1010 346 C 1100 410, 1250 410, 1326 346" fill="none" stroke="#4a1610" stroke-width="9" stroke-linecap="round"/>
+  <path d="M1010 346 C 1100 410, 1250 410, 1326 346" fill="none" stroke="#b23a2a" stroke-width="6" stroke-linecap="round"/>
+  <rect x="966" y="400" width="240" height="34" rx="2" fill="#efe9d8" stroke="#8b9980"/>
+  <g stroke="#22211d" stroke-width="1.5"><line x1="986" y1="404" x2="986" y2="414"/><line x1="1026" y1="404" x2="1026" y2="410"/><line x1="1066" y1="404" x2="1066" y2="414"/><line x1="1106" y1="404" x2="1106" y2="410"/><line x1="1146" y1="404" x2="1146" y2="414"/><line x1="1186" y1="404" x2="1186" y2="410"/></g>
+  <line x1="1134" y1="402" x2="1134" y2="432" stroke="#b0261d" stroke-width="2.5"/>
+  <text x="1222" y="424" font-size="16" font-weight="600" fill="#384034">84 Mbps down</text>
+  <rect x="1440" y="396" width="114" height="40" rx="4" fill="#ddd8c4" stroke="#8b9980"/><text x="1497" y="422" font-size="15" font-weight="700" fill="#1a1e18" text-anchor="middle">DISCONNECT</text>
+
+  <!-- the shelf: schedules, the run printer, vault, crew, files -->
+  <rect y="470" width="1600" height="430" fill="#a8b79c"/>
+  <rect y="470" width="1600" height="4" fill="#8b9980"/>
+  <!-- schedules: a sequencer with levers -->
+  <rect x="24" y="494" width="420" height="380" rx="4" fill="#c6d3ba" stroke="#8b9980" stroke-width="2"/>
+  <text x="42" y="522" font-size="14" font-weight="700" letter-spacing="2" fill="#384034">SCHEDULES</text>
+  <g font-size="16" font-weight="600" fill="#1a1e18">
+    <text x="42" y="568">Weather every 10 min</text><text x="42" y="590" font-size="14" fill="#384034">next 14:30</text>
+    <rect x="356" y="548" width="66" height="40" rx="4" fill="#252924"/><rect x="384" y="552" width="10" height="20" rx="2" fill="#6ee68f"/>
+    <text x="42" y="646">Morning digest</text><text x="42" y="668" font-size="14" fill="#384034">next 07:00</text>
+    <rect x="356" y="626" width="66" height="40" rx="4" fill="#252924"/><rect x="384" y="630" width="10" height="20" rx="2" fill="#6ee68f"/>
+    <text x="42" y="724">Weekly review</text><text x="42" y="746" font-size="14" fill="#384034">paused</text>
+    <rect x="356" y="704" width="66" height="40" rx="4" fill="#252924"/><rect x="384" y="720" width="10" height="20" rx="2" fill="#ffb12e"/>
+  </g>
+  <g fill="#384034" opacity=".35"><rect x="42" y="790" width="380" height="6"/></g>
+  <g fill="#6ee68f"><rect x="60" y="788" width="10" height="10"/><rect x="140" y="788" width="10" height="10"/><rect x="220" y="788" width="10" height="10"/><rect x="300" y="788" width="10" height="10"/></g>
+
+  <!-- runs: the ticket printer -->
+  <rect x="464" y="494" width="420" height="380" rx="4" fill="#c6d3ba" stroke="#8b9980" stroke-width="2"/>
+  <text x="482" y="522" font-size="14" font-weight="700" letter-spacing="2" fill="#384034">RUNS</text>
+  <rect x="482" y="538" width="384" height="14" rx="3" fill="#252924"/>
+  <rect x="500" y="550" width="348" height="306" fill="#efe9d8"/>
+  <g font-family="'Courier New', monospace" font-size="17" font-weight="700" fill="#22211d">
+    <text x="516" y="584">14:10 weather ........ ok</text>
+    <text x="516" y="620">12:30 morning digest . ok</text>
+    <text x="516" y="656" fill="#b0261d">10:40 digest ..... FAULT</text>
+    <text x="516" y="680" font-size="14" fill="#b0261d">      timed out</text>
+    <text x="516" y="716">09:00 backup photos .. ok</text>
+    <text x="516" y="752">08:30 sync notes ... busy</text>
+  </g>
+  <rect x="690" y="774" width="140" height="40" rx="4" fill="#ddd8c4" stroke="#8b9980"/><text x="760" y="800" font-size="15" font-weight="700" fill="#1a1e18" text-anchor="middle">RETRY</text>
+  <g stroke="#c9c1a8" stroke-dasharray="4 6"><line x1="500" y1="600" x2="848" y2="600"/><line x1="500" y1="636" x2="848" y2="636"/><line x1="500" y1="696" x2="848" y2="696"/><line x1="500" y1="732" x2="848" y2="732"/></g>
+
+  <!-- vault: an annunciator -->
+  <rect x="904" y="494" width="300" height="180" rx="4" fill="#c6d3ba" stroke="#8b9980" stroke-width="2"/>
+  <text x="922" y="522" font-size="14" font-weight="700" letter-spacing="2" fill="#384034">VAULT</text>
+  <g font-size="14" font-weight="700" text-anchor="middle">
+    <rect x="922" y="540" width="80" height="50" fill="#d9f5c8" stroke="#384034"/><text x="962" y="570" fill="#1a1e18">GITHUB</text>
+    <rect x="1012" y="540" width="80" height="50" fill="#d9f5c8" stroke="#384034"/><text x="1052" y="570" fill="#1a1e18">GMAIL</text>
+    <rect x="1102" y="540" width="80" height="50" fill="#ffd9a0" stroke="#384034"/><text x="1142" y="570" fill="#1a1e18">BANK</text>
+    <rect x="922" y="600" width="80" height="50" fill="#e5e2d2" stroke="#384034"/><text x="962" y="630" fill="#384034">MAPS</text>
+  </g>
+
+  <!-- crew and how CYFR stands -->
+  <rect x="904" y="694" width="300" height="180" rx="4" fill="#c6d3ba" stroke="#8b9980" stroke-width="2"/>
+  <text x="922" y="722" font-size="14" font-weight="700" letter-spacing="2" fill="#384034">CREW</text>
+  <g font-size="15" font-weight="600" fill="#1a1e18">
+    <circle cx="930" cy="752" r="7" fill="#fbf6e4" stroke="#384034"/><text x="946" y="757">explorer · ferry times</text>
+    <circle cx="930" cy="782" r="7" fill="#6ee68f" stroke="#384034"/><text x="946" y="787">model connected</text>
+    <text x="922" y="822" font-size="14" fill="#384034">STORAGE 38 / 100 GB</text>
+    <rect x="922" y="834" width="260" height="12" fill="#efe9d8" stroke="#384034"/><rect x="923" y="835" width="98" height="10" fill="#384034"/>
+  </g>
+
+  <!-- files -->
+  <rect x="1224" y="494" width="352" height="380" rx="4" fill="#c6d3ba" stroke="#8b9980" stroke-width="2"/>
+  <text x="1242" y="522" font-size="14" font-weight="700" letter-spacing="2" fill="#384034">FILES</text>
+  <g font-size="16" font-weight="600" fill="#1a1e18">
+    <circle cx="1252" cy="562" r="7" fill="#ffb12e"/><text x="1270" y="567">budget.xlsx · from Sam</text>
+    <text x="1270" y="607" fill="#384034">cover.png · 13:02</text>
+    <text x="1270" y="647" fill="#384034">trip.md · 12:40</text>
+    <text x="1270" y="687" fill="#384034">notes.txt · 09:15</text>
+  </g>
+</svg>

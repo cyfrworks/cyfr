@@ -123,9 +123,12 @@ defmodule Opus.MCPIngressTest do
 
   test "no profile refuses with consent guidance — nothing runs", %{ctx: ctx} do
     TwoServices.watch!()
-    assert {:error, {:consent_required, payload}} = run(ctx, %{})
-    assert %{"detail" => detail} = payload
-    assert detail =~ "profile.plan"
+    signal = {:consent_required, %{cause: :no_grant, ref: @node}}
+    assert run(ctx, %{}) == {:error, signal}
+
+    assert Prima.ConsentSignal.message(signal) ==
+             "Consent required: #{@node} has not been granted — grant it to run it"
+
     assert entered() == []
   end
 

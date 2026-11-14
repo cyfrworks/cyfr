@@ -384,59 +384,6 @@ defmodule Sanctum.Consent.Normalize do
   defp normalize_cap(key, _value, tag),
     do: {:error, {tag, :caps, "key must be a string, got: #{inspect(key)}"}}
 
-  @doc false
-  # An agent's policy modes: two disjoint string sets. A key in both
-  # would be two answers to one question.
-  def tool_policy(map, key, tag) do
-    case Map.get(map, key) do
-      nil ->
-        {:ok, nil}
-
-      policy when is_map(policy) ->
-        with :ok <- only_keys(policy, ~w(auto ask)a, tag),
-             {:ok, auto} <- string_set(policy, :auto, tag),
-             {:ok, ask} <- string_set(policy, :ask, tag) do
-          overlap = auto -- (auto -- ask)
-
-          if overlap == [] do
-            {:ok, %{"auto" => auto, "ask" => ask}}
-          else
-            {:error, {tag, key, "auto and ask must be disjoint"}}
-          end
-        end
-
-      _other ->
-        {:error, {tag, key, "must be a map"}}
-    end
-  end
-
-  @doc false
-  # The origins a grant admits: a non-empty list of distinct
-  # `Prima.Origin` values, answered as their wire spellings in the enum's
-  # order, so two lists naming the same origins are one input.
-  def origins(map, key, tag) do
-    case Map.fetch(map, key) do
-      {:ok, [_ | _] = origins} ->
-        if Enum.all?(origins, &Prima.Origin.origin?/1) do
-          if length(Enum.uniq(origins)) == length(origins),
-            do: {:ok, Prima.Origin.to_wire_list(origins)},
-            else: {:error, {tag, key, "names an origin twice"}}
-        else
-          {:error,
-           {tag, key, "must name only origins: #{Enum.join(Prima.Origin.spellings(), ", ")}"}}
-        end
-
-      {:ok, []} ->
-        {:error, {tag, key, "must name at least one origin"}}
-
-      {:ok, _other} ->
-        {:error, {tag, key, "must be a list of origins"}}
-
-      :error ->
-        {:error, {tag, key, "is required"}}
-    end
-  end
-
   # The kinds a subset may name, each with the fields it narrows; `tools`,
   # the limits and the exits are their own shapes below.
   @subset_sets %{
@@ -512,9 +459,17 @@ defmodule Sanctum.Consent.Normalize do
   defp subset_kind(node, kind, value, tag) when is_map_key(@subset_sets, kind),
     do: subset_sets(node, kind, value, Map.fetch!(@subset_sets, kind), tag)
 
+  # An agent's provider search is a tool kept by its name, beside the
+  # catalog actions a narrowing names
+  # (`Sanctum.Consent.ShapeDerivation.granted_tools/1`).
   defp subset_kind(node, "tools", value, tag) do
-    case tool_actions(%{tools: value}, :tools, tag) do
-      {:ok, tools} -> {:ok, tools}
+    search = Sanctum.Consent.ShapeDerivation.provider_search()
+
+    {kept, actions} =
+      if is_list(value), do: Enum.split_with(value, &(&1 == search)), else: {[], value}
+
+    case tool_actions(%{tools: actions}, :tools, tag) do
+      {:ok, tools} -> {:ok, Enum.sort(Enum.uniq(kept) ++ tools)}
       {:error, {^tag, :tools, why}} -> {:error, {tag, :subset, "#{node} tools #{why}"}}
     end
   end

@@ -6,12 +6,17 @@
 // `return`. The page names no account (the browser's passkey picker does)
 // and sends nothing to its own server for a sign-in or a confirmation; a
 // registry signature reads the account's log first, since the registry
-// request it signs names the passkey's kid.
+// request it signs names the passkey's kid. A browser that holds no
+// passkey of the account may make one for a sign-in (`offer`): the person
+// names the account, and the new passkey goes back to the CYFR, which
+// shows its code for a device of the account to add it.
 
 import {fromB64url} from "../base64url.js"
 import {Refusal, b64, refuse} from "../encoding.js"
+import {keyOf, userId} from "../identity.js"
+import {isHandle} from "../registry.js"
 import {here} from "./common.js"
-import {answer, digest, fragment, parseFragment, readRequest} from "../sign_in.js"
+import {answer, digest, fragment, newPasskey, parseFragment, readRequest} from "../sign_in.js"
 import {$, attempt, only, say, words} from "../view.js"
 
 // Each operation in words, naming every field of the body it signs.
@@ -70,6 +75,21 @@ export async function sign(request, env) {
   return `${request.return}#${fragment(answer(request, {...assertion, identifier}, chosen.kid))}`
 }
 
+/**
+ * A passkey made in this browser for the account `name` holds, offered to
+ * the CYFR that sent the sign-in `request`: resolves to the URL of its
+ * `return` with the new passkey in the fragment. Throws `name_invalid` for
+ * no name's spelling and `name_unknown` for a name no account holds.
+ */
+export async function offer(request, name, env) {
+  if (!isHandle(name)) refuse("name_invalid")
+  const place = await here(env)
+  const identifier = (await place.registry.handle(name)).answer?.identifier
+  if (!identifier) refuse("name_unknown")
+  const {credentialId, pub} = await env.passkeys.create({userId: userId(identifier), name: `@${name}`, challenge: env.random(32)})
+  return `${request.return}#${fragment(newPasskey(request, identifier, await keyOf({pub, credentialId})))}`
+}
+
 export function run(doc, env) {
   let request
   try {
@@ -80,6 +100,16 @@ export function run(doc, env) {
     return
   }
   $(doc, "what").textContent = describe(request)
+  $(doc, "recover-link").setAttribute("href", `recover#request=${env.location.hash.slice(1)}`)
+  $(doc, "offer-way").hidden = request.purpose !== "sign_in"
+  $(doc, "offer-start").addEventListener("click", () => only(doc, "offer"))
+  const make = $(doc, "offer-make")
+  make.addEventListener("click", () =>
+    attempt(doc, make, "offer-error", async () => {
+      if (env.now() >= request.expires_at) refuse("expired")
+      env.navigate(await offer(request, $(doc, "offer-name").value.trim().toLowerCase(), env))
+    })
+  )
   only(doc, "ask")
   const button = $(doc, "use-passkey")
   button.addEventListener("click", () =>

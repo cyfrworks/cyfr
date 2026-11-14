@@ -6,10 +6,11 @@ defmodule PrismWeb.LoginLive do
   The sign-in page, and the return every request this CYFR mints comes
   back to.
 
-  **Sign in with your account.** One button: this CYFR mints a sign-in
-  request bound to this browser, by its session's forgery token
-  (`Sanctum.SignIn.request/3`), and the page sends the browser to the
-  account pages with it (`account:hop`, the system layer's hop). Minting
+  **Sign in with your account**, or **Create your account**: this CYFR
+  mints a sign-in request bound to this browser, by its session's forgery
+  token (`Sanctum.SignIn.request/3`), and the page sends the browser to the
+  account pages with it (`account:hop`, the system layer's hop), at the
+  sign page or the new-account page. Minting
   is bounded per address, per node, before anything else is read; a
   member that does not hold the cell's slot mints nothing.
 
@@ -21,9 +22,16 @@ defmodule PrismWeb.LoginLive do
   browser's session cookie holds: its forgery token, and its session when
   it has one (`Sanctum.SignIn.answer/3`). A sign-in hands a one-time
   ticket bound to this browser to `GET /auth/passkey/complete/:ticket`,
-  which sets the session's cookie (`PrismWeb.PasskeyController`). A
-  confirmation or a registry signature, answered in the tab the system
-  layer opened, sends the browser back where its request named, or to `/`.
+  which sets the session's cookie (`PrismWeb.PasskeyController`). A new
+  passkey, which the account pages answer for a browser holding none of
+  the account's, is held for a device of the account to add, and the page
+  shows its short code with the way on: approve it in Your devices on the
+  box, then sign in with it. The page says the same for any account, so
+  it tells nobody who has one here. A confirmation or a registry
+  signature, answered in the tab the system layer opened, sends the
+  browser back where its request named; one that named nowhere says it is
+  done and closes its tab (`account:close`), since the page that asked
+  goes on by itself.
   A registry signature is completed here first, under the session it was
   bound to (`Compendium.complete_registry/2`): the signed request sent to
   the registry and what its success does done, as the `registry` tool
@@ -80,6 +88,7 @@ defmodule PrismWeb.LoginLive do
           "it, so nobody was signed in. Begin again below."
   @unavailable "The server could not sign you in just now. Try again."
   @rate_limited "Too many sign-ins from here. Try again in a minute."
+  @signed_in_already "This browser is signed in already, from another tab."
   # A terms version the account service names: the module doc's rule.
   # How long the act's success waits for the terms' read before it shows
   # without a notice.
@@ -106,6 +115,12 @@ defmodule PrismWeb.LoginLive do
      # True while an answer handed here is checked, and a registry
      # signature it carries sent.
      |> assign(:checking, false)
+     # The short code of a new passkey this browser offered, while it
+     # waits for a device of the account to add it.
+     |> assign(:waiting, nil)
+     |> assign(:confirmed, false)
+     |> assign(:signed_in_already, false)
+     |> assign(:notice, notice_from_params(params))
      # A completed registry signature whose terms notice is shown here
      # before the browser goes back (`terms_notice/1`).
      |> assign(:terms_changed, nil)
@@ -126,6 +141,9 @@ defmodule PrismWeb.LoginLive do
   end
 
   @impl true
+  def handle_event("sign_in", _params, socket), do: {:noreply, hop(socket, :sign)}
+  def handle_event("create", _params, socket), do: {:noreply, hop(socket, {:new, nil})}
+
   # Only what the page holds is used; the event's parameters are not read.
   def handle_event("terms_seen", _params, %{assigns: %{terms_changed: %{} = notice}} = socket) do
     case session_caller(socket.assigns.bindings) do
@@ -140,13 +158,6 @@ defmodule PrismWeb.LoginLive do
 
   def handle_event("terms_seen", _params, socket), do: {:noreply, socket}
 
-  def handle_event("sign_in", _params, socket) do
-    case minted(socket) do
-      {:ok, url} -> {:noreply, push_event(socket, "account:hop", %{url: url})}
-      {:error, message} -> {:noreply, assign(socket, :error, message)}
-    end
-  end
-
   def handle_event("account_answer", _params, %{assigns: %{checking: true}} = socket),
     do: {:noreply, socket}
 
@@ -156,7 +167,14 @@ defmodule PrismWeb.LoginLive do
 
   def handle_event("account_answer", _params, socket), do: {:noreply, socket}
 
-  defp minted(socket) do
+  defp hop(socket, page) do
+    case minted(socket, page) do
+      {:ok, url} -> push_event(socket, "account:hop", %{url: url})
+      {:error, message} -> assign(socket, :error, message)
+    end
+  end
+
+  defp minted(socket, page) do
     cond do
       not Arca.ControlPlane.held?() ->
         {:error, @not_owner}
@@ -168,7 +186,9 @@ defmodule PrismWeb.LoginLive do
         {:error, @rate_limited}
 
       true ->
-        case Sanctum.SignIn.request(:sign_in, {:browser, socket.assigns.browser_binding}) do
+        case Sanctum.SignIn.request(:sign_in, {:browser, socket.assigns.browser_binding},
+               page: page
+             ) do
           {:ok, %{url: url}} -> {:ok, url}
           {:error, reason} -> {:error, sentence(reason)}
         end
@@ -180,10 +200,19 @@ defmodule PrismWeb.LoginLive do
     redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")
   end
 
+  defp answered(socket, {:ok, %{purpose: :sign_in, waiting: code}}),
+    do: socket |> assign(:waiting, code) |> assign(:error, nil)
+
   defp answered(socket, {:ok, %{back: back}}) when is_binary(back),
     do: redirect(socket, to: back)
 
-  defp answered(socket, {:ok, _confirmed}), do: redirect(socket, to: ~p"/")
+  defp answered(socket, {:ok, %{purpose: :confirm}}),
+    do: socket |> assign(:confirmed, true) |> push_event("account:close", %{})
+
+  defp answered(socket, {:ok, _done}), do: redirect(socket, to: ~p"/")
+
+  defp answered(socket, {:error, :signed_in_already}),
+    do: socket |> assign(:signed_in_already, true) |> assign(:error, @signed_in_already)
 
   defp answered(socket, {:error, reason}), do: assign(socket, :error, sentence(reason))
 
@@ -239,6 +268,13 @@ defmodule PrismWeb.LoginLive do
       {:ok, %{purpose: :registry} = outcome} ->
         {result, notice} = registered(bindings, outcome)
         {:registered, outcome.back || ~p"/", result, notice}
+
+      # A sign-in begun in a tab whose binding another tab's sign-in
+      # replaced: this browser holds a session now, which is said.
+      {:error, :answer_refused} = refused ->
+        if match?({:ok, _}, session_caller(bindings)),
+          do: {:error, :signed_in_already},
+          else: refused
 
       outcome ->
         outcome
@@ -387,6 +423,12 @@ defmodule PrismWeb.LoginLive do
   # What each refusal reads as. A refusal of the answer itself says only
   # that this browser holds no sign-in to finish.
   defp sentence(:answer_refused), do: @lost
+
+  defp sentence(:too_many_waiting),
+    do:
+      "Too many browsers already ask to add a passkey to this account. Each is forgotten " <>
+        "five minutes after it was asked: try again then."
+
   defp sentence({:door, _reason}), do: Sanctum.Door.refusal_message()
   defp sentence(:unavailable), do: @unavailable
 
@@ -433,8 +475,10 @@ defmodule PrismWeb.LoginLive do
   defp error_from_params(%{"error" => "unavailable"}),
     do: "The server could not read your account just now. Try again in a moment."
 
-  defp error_from_params(%{"error" => "signed_out"}), do: nil
   defp error_from_params(_), do: nil
+
+  defp notice_from_params(%{"error" => "signed_out"}), do: "You signed out."
+  defp notice_from_params(_), do: nil
 
   @impl true
   def render(assigns) do
@@ -527,7 +571,22 @@ defmodule PrismWeb.LoginLive do
             </button>
           </div>
 
-          <div :if={@set_up and !@checking and !@terms_changed} class="space-y-4">
+          <div :if={@confirmed} role="status" data-test="confirmed" class="space-y-2 text-center">
+            <h2 class="text-lg font-medium text-white">Confirmed</h2>
+            <p class="text-sm text-gray-300">
+              This tab closes by itself. If it stays open, close it: the page that asked goes on.
+            </p>
+          </div>
+
+          <div :if={@set_up and !@checking and !@confirmed and !@terms_changed} class="space-y-4">
+            <p
+              :if={@notice}
+              role="status"
+              data-test="sign-in-notice"
+              class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-sm text-gray-200"
+            >
+              {@notice}
+            </p>
             <div
               :if={@error}
               role="alert"
@@ -535,6 +594,22 @@ defmodule PrismWeb.LoginLive do
               class="rounded-lg bg-red-900/50 border border-red-800 px-4 py-3 text-sm text-red-300"
             >
               {@error}
+              <.link :if={@signed_in_already} navigate={~p"/"} class="underline">Go to CYFR</.link>
+            </div>
+
+            <div
+              :if={@waiting}
+              role="status"
+              data-test="passkey-waiting"
+              class="rounded-lg border border-indigo-700 px-4 py-3 text-sm text-gray-300 space-y-2"
+            >
+              <p class="font-medium text-white">Approve this browser's passkey on your box</p>
+              <p>
+                On your CYFR box's screen, open Your devices, check that it shows the code
+                <span class="font-mono text-white" data-test="passkey-code">{@waiting}</span>
+                and approve it. Then sign in below with your passkey. If nobody approves it
+                within five minutes it is forgotten, and nothing is added.
+              </p>
             </div>
 
             <h2 class="text-lg font-medium text-white text-center">Sign in to continue</h2>
@@ -546,6 +621,14 @@ defmodule PrismWeb.LoginLive do
               class="flex items-center justify-center gap-3 w-full px-4 py-3 bg-indigo-900/60 hover:bg-indigo-900 text-white rounded-lg border border-indigo-700 transition-colors cursor-pointer"
             >
               Sign in with your account
+            </button>
+            <button
+              type="button"
+              phx-click="create"
+              data-test="create-account"
+              class="w-full px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700 transition-colors cursor-pointer"
+            >
+              Create your account
             </button>
           </div>
         </div>

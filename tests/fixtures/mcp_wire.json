@@ -120,16 +120,16 @@
       }
     },
     {
-      "why": "consent_required carrying its detail",
+      "why": "consent_required naming its cause and component",
       "tag": "consent_required",
-      "payload": {"detail": "egress to api.example.com was added"},
+      "payload": {"cause": "no_grant", "ref": "reagent:local.weather"},
       "response": {
         "jsonrpc": "2.0",
         "id": "req-7",
         "error": {
           "code": -33502,
-          "message": "Consent required: egress to api.example.com was added",
-          "data": {"tag": "consent_required", "payload": {"detail": "egress to api.example.com was added"}}
+          "message": "Consent required: reagent:local.weather has not been granted — grant it to run it",
+          "data": {"tag": "consent_required", "payload": {"cause": "no_grant", "ref": "reagent:local.weather"}}
         }
       }
     },

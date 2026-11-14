@@ -331,7 +331,6 @@ const FIELDS = {
     granted_by: minted(SIGN_IN),
     granted_via: exact,
     granted_at: clock,
-    admitted_origins: exact,
   },
   consent_vault_refs: {
     consent_id: minted(ADMISSION),
@@ -589,18 +588,19 @@ async function signUpAdmin(page) {
 
 // The page's own request waiting on its record, proven with the passkey at
 // the account pages in the tab the system layer opens: the panel's words,
-// what the sign page asked, and whether the tab came back to home.test.
+// what the sign page asked, and whether home.test's return page confirmed
+// it.
 async function proveOwn(page) {
   const panel = `${layer} [data-test="confirmation"][data-own="true"]`;
   const confirmation = await page.waitForSelector(panel, { timeout: 30_000 })
     .then((el) => el.innerText()).catch(() => "");
   const tab = await confirmInTab(page, adminKeys, HOME,
     () => page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 }));
-  return { panel: words(confirmation).slice(0, 300), what: tab.what, landed: tab.landed, error: tab.error || null };
+  return { panel: words(confirmation).slice(0, 300), what: tab.what, confirmed: tab.confirmed, by: tab.by, error: tab.error || null };
 }
 
 const provenHere = (confirmation) =>
-  confirmation.landed && confirmation.what === `Confirm a change at ${base}`;
+  confirmation.confirmed && confirmation.what === `Confirm a change at ${base}`;
 
 // A key made on the Vault page: its name, kind, label and destination and
 // its one field typed in the create form, which the browser keeps and
@@ -876,11 +876,9 @@ async function main() {
     const anaHtml = await anaPage.content();
     // Her first sign-in mints one profile of the catalyst, Ana's own owner
     // default, active, headed by one consent: the bootstrap's first
-    // revision, versionless, open and inert, made for Ana, admitting the
-    // two origins a machine-minted revision admits (spelled as the store
-    // writes them), with the policy blob, its digest, the activation and
-    // the shape and commit digests the bootstrap derives from the request,
-    // compared as stored text. The head holds one binding row, Company AI's
+    // revision, versionless, open and inert, made for Ana, with the policy
+    // blob, its digest, the activation and the shape and commit digests the
+    // bootstrap derives from the request, compared as stored text. The head holds one binding row, Company AI's
     // share on the catalyst's own default slot, standing, at the digest
     // Company AI's request implies; the share is used once by Ana, which
     // its entry's last use says; her vault offers both shares, each by the
@@ -908,7 +906,6 @@ async function main() {
         granted_by: ana.user_id,
         granted_via: "bootstrap",
         granted_at: IN_WINDOW,
-        admitted_origins: JSON.stringify(["interactive", "programmatic"]),
         resolved_policy: derived.resolved_policy,
         blob_digest: derived.blob_digest,
         activation: derived.activation,

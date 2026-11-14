@@ -5,15 +5,16 @@ defmodule Arca.Schemas.McpServer do
   @moduledoc """
   Ecto schema for the `mcp_servers` table (backs `Arca.McpServerStorage`).
 
-  `transport` is `"http"` (the server is reached at `url`), `"stdio"` (its
-  backends, in `config_json`, run on the backends service, Emissary speaks
-  MCP to them, and `url` is nil) or `"pipe"` (a program a catalyst
-  drives, its one backend in `config_json`). A program's `home` is
-  `"scratch"`, scrubbed at retirement, or `"kept"`, a home per login entry
-  that survives it; `memory_bytes` and `home_max_bytes` are its bounds
-  (nil: the service's own bound, the homes volume), `login_command` what a
-  sign-in runs, and `login_entry_id` the login entry a kept `stdio` row's
-  sessions run in. `hosts` is a program's network list as JSON text, the
+  `transport` is `"http"`, a tool server elsewhere reached at `url`, or
+  `"program"`, a program CYFR runs on the backends service, its backends
+  in `config_json` and `url` nil. A program's `mark` says how it is
+  spoken to: `"mcp"`, Emissary speaking MCP on its input and output, or
+  `"driven"`, run by a person or a brain; an http row has none. A
+  program's `home` is `"scratch"`, scrubbed at retirement, or `"kept"`, a
+  home per login entry that survives it; `memory_bytes` and
+  `home_max_bytes` are its bounds (nil: the service's own bound, the homes
+  volume), `login_command` what a sign-in runs, and `login_entry_id` the
+  login entry a kept `mcp` program's sessions run in. `hosts` is a program's network list as JSON text, the
   only hosts it reaches (`Opus.Programs.Definition`), nil for every public
   host.
   `epoch` rises with every change to the row, and so does `revision`, the
@@ -27,12 +28,17 @@ defmodule Arca.Schemas.McpServer do
 
   @type t :: %__MODULE__{}
 
-  @transports ~w(http stdio pipe)
+  @transports ~w(http program)
+  @marks ~w(mcp driven)
   @homes ~w(scratch kept)
 
-  @doc "The `transport` vocabulary, the `mcp_servers_transport_url` check's."
+  @doc "The `transport` vocabulary, the `mcp_servers_kind` check's."
   @spec transports() :: [String.t()]
   def transports, do: @transports
+
+  @doc "The `mark` vocabulary, the `mcp_servers_kind` check's."
+  @spec marks() :: [String.t()]
+  def marks, do: @marks
 
   @doc "The `home` vocabulary, the `mcp_servers_home_known` check's."
   @spec homes() :: [String.t()]
@@ -41,6 +47,7 @@ defmodule Arca.Schemas.McpServer do
   schema "mcp_servers" do
     field :name, :string
     field :transport, :string
+    field :mark, :string
     field :home, :string, default: "scratch"
     field :memory_bytes, :integer
     field :home_max_bytes, :integer

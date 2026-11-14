@@ -274,7 +274,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
   # admitting runs over the API, its own calls binding no account.
   defp grant_programmatic!(ref) do
     person = Sanctum.TestContext.local(:prism)
-    decisions = %{ref: ref, origins: [:interactive, :programmatic]}
+    decisions = %{ref: ref}
     {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: ref})
     {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
 
@@ -544,8 +544,8 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
       # No profile roots the reference: the consent signal, as a run naming
       # no account meets it.
-      assert {:error, {:consent_required, %{"ref" => ^ref}}} =
-               Sanctum.Gate.call_external("execution", ctx, Map.put(named, "action", "run"))
+      assert Sanctum.Gate.call_external("execution", ctx, Map.put(named, "action", "run")) ==
+               {:error, {:consent_required, %{cause: :no_grant, ref: "reagent:local.test-math"}}}
 
       # Granted, for runs over the API, with no account on its own calls:
       # the name is a grant to make, never run under the default.

@@ -359,7 +359,9 @@ defmodule Sanctum.Shares do
 
   @doc """
   `offered/1`, each share with the context's person's own count of its
-  use today (`used_today`), as a claim counts it, and no other person's.
+  use today (`used_today`), as a claim counts it, and no other person's,
+  and the most a person may use it in a day (`person_daily`, nil for no
+  limit).
   """
   @spec offered_with_use(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def offered_with_use(%Context{} = ctx) do
@@ -368,7 +370,11 @@ defmodule Sanctum.Shares do
         owner = Context.actor(owner_context(offered))
 
         with {:ok, count} <- unavailable(Usage.used_today(owner, view.id, ctx.user_id)),
-             do: {:ok, Map.put(view, :used_today, count)}
+             do:
+               {:ok,
+                view
+                |> Map.put(:used_today, count)
+                |> Map.put(:person_daily, offered.share.person_daily)}
       end)
     end
   end

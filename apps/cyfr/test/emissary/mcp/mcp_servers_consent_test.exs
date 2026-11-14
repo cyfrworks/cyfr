@@ -50,9 +50,10 @@ defmodule Emissary.MCP.McpServersConsentTest do
       })
   end
 
-  defp stdio_config(entry) do
+  defp program_config(entry) do
     %{
-      "transport" => "stdio",
+      "transport" => "program",
+      "mark" => "mcp",
       "backends" => [
         %{
           "name" => "relay",
@@ -106,7 +107,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
 
       calls = [
         %{"action" => "create", "name" => "relay-http", "config" => http_config("prod-db")},
-        %{"action" => "create", "name" => "relay-stdio", "config" => stdio_config("prod-db")},
+        %{"action" => "create", "name" => "relay-program", "config" => program_config("prod-db")},
         %{
           "action" => "update",
           "name" => "saved",
@@ -129,7 +130,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
              Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "relay-http")
 
     assert {:error, :not_found} =
-             Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "relay-stdio")
+             Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "relay-program")
 
     assert {:ok, %{epoch: 1} = saved} =
              Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "saved")

@@ -402,6 +402,15 @@ defmodule Prima.Refusal do
 
   defp row(:not_mountable), do: {:invalid_argument, "This entry is not a login entry."}
 
+  # An OAuth grant or refresh for a provider this athanor holds no OAuth
+  # client for (`Sanctum.ProviderCredentials`): the client is set on the
+  # Vault page, which shows the return address to register with it.
+  defp row({:oauth_client_required, provider}) when is_binary(provider),
+    do:
+      {:setup_required,
+       "No OAuth client is set for #{provider}. Set one with Set client on the Vault page, " <>
+         "which shows the return address to register with #{provider}."}
+
   defp row({:conflict, message}) when is_binary(message), do: {:conflict, message}
 
   defp row({:unavailable, what}) when is_binary(what),
@@ -620,6 +629,12 @@ defmodule Prima.Refusal do
       {:setup_required,
        "#{member}'s program is not signed in — sign it in on the Programs page, then connect " <>
          "it from its card on the AQUA page"}
+
+  defp row({:crew_unready, member, :consent_stale}) when is_binary(member),
+    do:
+      {:consent_required,
+       "#{member}'s brain changed since it was consented to — confirm the change from its " <>
+         "card on the AQUA page"}
 
   defp row({:crew_unready, member, :consent_damaged}) when is_binary(member),
     do:
@@ -863,9 +878,31 @@ defmodule Prima.Refusal do
   defp row({:cap_unverifiable, key}) when is_atom(key),
     do: {:unavailable, "A limit on this account could not be checked — retry shortly"}
 
-  # A presented credential that does not open anything.
+  # A presented session credential that opens nothing. A revocation
+  # deletes the session it ended, so what ended it is unknown here: the
+  # sentence names every case, the same for every caller, and confirms
+  # nothing about who is let in.
   defp row(:invalid_bearer),
-    do: {:unauthenticated, "The presented credential is not valid. If it expired, sign in again."}
+    do:
+      {:unauthenticated,
+       "This sign-in no longer stands: it expired or was signed out, or this device or " <>
+         "your access was removed. Sign in again; if you are refused, ask the person who " <>
+         "runs this CYFR."}
+
+  # A page whose own session a retirement ended, told why
+  # (`Cyfr.Bus.Session.reasons/0`), or only that it ended.
+  defp row({:session_ended, :denied}),
+    do: {:unauthenticated, "Your access to this CYFR was removed, so you were signed out."}
+
+  defp row({:session_ended, :device_removed}),
+    do: {:unauthenticated, "This device was removed from your account, so its sign-in ended."}
+
+  defp row({:session_ended, :signed_out}),
+    do: {:unauthenticated, "This sign-in was ended. Sign in again to go on."}
+
+  # A page whose session is gone, which no announcement named.
+  defp row({:session_ended, :ended}),
+    do: {:unauthenticated, "Your sign-in ended. Sign in again to go on."}
 
   defp row(:invalid_api_key), do: {:unauthenticated, "Invalid API key"}
   defp row(:api_key_revoked), do: {:unauthenticated, "API key has been revoked"}
@@ -887,7 +924,49 @@ defmodule Prima.Refusal do
   defp row(:stale_generation),
     do: {:unauthenticated, "Your standing changed since this session was read — sign in again"}
 
-  defp row(:signature_invalid), do: {:unauthenticated, "Signature verification failed"}
+  # A webhook delivery whose signature was not verified, by its reason.
+  # `header` is the header the reason concerns, as the webhook names it:
+  # for a mismatch, the timestamp header when the time is signed with the
+  # body, else nil. Each sentence gives the format a sender signs in and
+  # never anything of the secret.
+  defp row({:webhook_signature, :missing_signature, header}),
+    do:
+      {:unauthenticated,
+       "This delivery carries no #{header} header: send sha256=<hex>, the HMAC-SHA256 " <>
+         "of the body under the webhook's secret, in lowercase hex"}
+
+  defp row({:webhook_signature, :malformed_signature, header}),
+    do:
+      {:unauthenticated,
+       "The #{header} header is not sha256=<hex>, the HMAC-SHA256 of the body under the " <>
+         "webhook's secret, in lowercase hex"}
+
+  defp row({:webhook_signature, :missing_timestamp, header}),
+    do:
+      {:unauthenticated,
+       "This webhook requires the #{header} header: the time the delivery is sent, in " <>
+         "Unix seconds, signed with the body as <time>.<body>"}
+
+  defp row({:webhook_signature, :malformed_timestamp, header}),
+    do: {:unauthenticated, "The #{header} header is not a time in whole Unix seconds"}
+
+  defp row({:webhook_signature, :timestamp_skew, header}),
+    do:
+      {:unauthenticated,
+       "The #{header} header's time is too far from now to accept: sign each delivery " <>
+         "with the time it is sent"}
+
+  defp row({:webhook_signature, :signature_mismatch, nil}),
+    do:
+      {:unauthenticated,
+       "The signature does not match: sign the exact body with the webhook's current secret"}
+
+  defp row({:webhook_signature, :signature_mismatch, header}),
+    do:
+      {:unauthenticated,
+       "The signature does not match: sign <time>.<body>, the #{header} header's value, " <>
+         "a dot and the exact body, with the webhook's current secret"}
+
   defp row(:invalid_session), do: {:unauthenticated, "Invalid session token"}
 
   defp row(:denied), do: {:forbidden, "This account is not admitted on this server"}
@@ -946,7 +1025,7 @@ defmodule Prima.Refusal do
   defp row({:door, :unavailable}), do: row(:unavailable)
 
   defp row({:door, reason}) when reason in [:denied, :not_allowed],
-    do: {:forbidden, "not allowed on this server — ask the operator"}
+    do: {:forbidden, "This CYFR has not let you in. Whoever runs it can let you in."}
 
   # An answer to a sign-in request this CYFR refused: spent, expired, for
   # another browser or channel, or not signed by a key the account lists.
@@ -983,7 +1062,9 @@ defmodule Prima.Refusal do
        "This invitation can no longer be used. Ask whoever invited you for a new one."}
 
   # A handle the registry answers no one for, a reserved one included.
-  defp row(:handle_not_found), do: {:not_found, "No one holds that handle at the registry."}
+  defp row(:handle_not_found),
+    do:
+      {:not_found, "No account with that name yet: check the spelling, or ask them to make one."}
 
   # A person at a CYFR that requires a company sign-in, whose sign-in with
   # it is missing, past its days, or given under another company
@@ -1074,6 +1155,13 @@ defmodule Prima.Refusal do
       {:conflict,
        "The grant this launch was approved under has changed since it was approved, so nothing " <>
          "ran: ask again to approve it as it stands now."}
+
+  # A run an API key narrowed to named tools may not start
+  # (`Sanctum.ApiKey.admit_tool/2`).
+  defp row(:key_tool_not_named),
+    do:
+      {:forbidden,
+       "This API key may run only the tools named when it was made, and this is not one of them."}
 
   # A retry of a failed run whose grant has a new revision since it ran
   # (`execution.retry`): nothing ran under a grant the person did not run

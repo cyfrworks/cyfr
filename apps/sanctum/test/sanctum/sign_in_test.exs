@@ -156,6 +156,50 @@ defmodule Sanctum.SignInTest do
       assert is_binary(token)
     end
 
+    test "a passkey removed and added again signs in on the head that lists it again, and the session stands",
+         %{dir: dir, account: account} do
+      user = first!(account)
+      [before] = sessions(user.id)
+      passkey = hd(account.passkeys)
+
+      {:ok, key} =
+        Prima.Identity.Key.new(
+          alg: :es256,
+          kind: :passkey,
+          pub: passkey.pub,
+          credential_id: passkey.credential_id
+        )
+
+      # Both entries land while this CYFR's cached head is fresh and still
+      # lists the passkey from before its removal.
+      account = DirectoryServer.remove_key!(dir.dir, account, Prima.Identity.Key.kid(passkey.pub))
+      account = DirectoryServer.extend!(account, kind: :add_key, key: key)
+      DirectoryServer.publish(dir.dir, account.identifier, account.log)
+
+      {request, _url} = minted(:sign_in, @browser)
+
+      assert {:ok, %{purpose: :sign_in, user: %{id: same}, session_token: token}} =
+               SignIn.answer(answer(request, account), @browser)
+
+      assert same == user.id
+      hash = Sanctum.Session.token_hash(token)
+      kid = Prima.Identity.Key.kid(passkey.pub)
+      head = DirectoryServer.head(account)
+
+      # The session from before the removal is retired; the new one is
+      # bound to the head that lists the passkey again.
+      assert [%{token_hash: ^hash, kid: ^kid, head: ^head}] = sessions(user.id)
+      refute before.token_hash == hash
+
+      # A refresh past the bound reads nothing after that head.
+      Arca.Repo.update_all(Arca.Schemas.DirectoryHead,
+        set: [verified_at: ~U[2000-01-01 00:00:00Z]]
+      )
+
+      assert {:ok, %{head_hash: ^head}} = Sanctum.IdentityFreshness.fresh?(account.identifier)
+      assert [%{token_hash: ^hash, kid: ^kid, head: ^head}] = sessions(user.id)
+    end
+
     test "a browser's sign-in records the browser and system its user agent names", %{
       dir: dir,
       account: account
@@ -386,6 +430,297 @@ defmodule Sanctum.SignInTest do
       {request, _url} = minted(:sign_in, @browser)
       assert {:error, :identity_gone} = SignIn.answer(answer(request, account), @browser)
     end
+  end
+
+  describe "a passkey for an account a browser holds none of" do
+    # The person this CYFR holds, whose account is left with its box's
+    # device key alone, and their own context; and another browser.
+    setup %{dir: dir, account: account} do
+      user = first!(account)
+      {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
+      [session] = sessions(user.id)
+      [passkey] = account.passkeys
+      account = DirectoryServer.remove_key!(dir.dir, account, Prima.Identity.Key.kid(passkey.pub))
+
+      %{
+        account: %{account | passkeys: []},
+        ctx: person_context(user, athanor_id, session),
+        other: {:browser, "csrf-of-another-browser"}
+      }
+    end
+
+    # A passkey the account pages made for `account`, and their answer
+    # offering it to `request`.
+    defp offer(request, account) do
+      {pub, priv} = :crypto.generate_key(:ecdh, :secp256r1)
+      credential_id = :crypto.strong_rand_bytes(16)
+
+      {:ok, key} =
+        Prima.Identity.Key.new(
+          alg: :es256,
+          kind: :passkey,
+          pub: pub,
+          credential_id: credential_id
+        )
+
+      answer = %Prima.SignIn.NewPasskey{
+        challenge: request.challenge,
+        identifier: account.identifier,
+        key: key
+      }
+
+      {answer, %{pub: pub, priv: priv, credential_id: credential_id}}
+    end
+
+    # The box's device key adds `key` to the account's log, as its shell
+    # does once the person approved its code.
+    defp added_by_device!(dir, account, key) do
+      {pub, priv} = hd(account.devices)
+      head = List.last(account.log)
+
+      {:ok, entry} =
+        Prima.Identity.Entry.new(
+          kind: :add_key,
+          prev: Prima.Identity.hash(head),
+          seq: head.seq + 1,
+          at: System.os_time(:millisecond),
+          signer: Prima.Identity.Key.kid(pub),
+          key: key
+        )
+
+      account = %{account | log: account.log ++ [Prima.Identity.sign(entry, priv)]}
+      DirectoryServer.publish(dir.dir, account.identifier, account.log)
+      account
+    end
+
+    test "waits for a device of the account, which adds it; the browser then signs in with it", %{
+      dir: dir,
+      account: account,
+      ctx: ctx,
+      other: other
+    } do
+      assert [%{kind: :device}] = DirectoryServer.cached!(account) |> state!() |> Map.get(:keys)
+
+      {request, _url} = minted(:sign_in, other)
+      {answer, passkey} = offer(request, account)
+      code = binary_part(answer.key.kid, 7, 16)
+
+      # Returned as the account pages return it, the fragment of /login.
+      assert {:ok, %{purpose: :sign_in, waiting: ^code}} =
+               SignIn.answer(Prima.SignIn.fragment(answer), [other])
+
+      assert {:ok, [%{ref: ref, identifier: identifier, key: key, code: ^code} = waiting]} =
+               SignIn.waiting(ctx, nil)
+
+      assert identifier == account.identifier
+      assert key == answer.key
+      assert {:ok, [^waiting]} = SignIn.waiting(ctx, ref)
+      assert {:ok, []} = SignIn.waiting(ctx, "another-ref")
+
+      # As the person's devices read it, over the pairing tool.
+      asked_at = waiting.asked_at |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()
+
+      assert Sanctum.Providers.Pairing.handle(ctx, %{"action" => "waiting", "ref" => ref}) ==
+               {:ok,
+                %{
+                  waiting: [
+                    %{
+                      ref: ref,
+                      code: code,
+                      key: Prima.Identity.Key.encode(key),
+                      asked_at: asked_at
+                    }
+                  ]
+                }}
+
+      assert {:error, {:invalid_argument, _}} =
+               Sanctum.Providers.Pairing.handle(ctx, %{"action" => "waiting", "ref" => 7})
+
+      # Never approved, the passkey signs no one in, and the log lists only
+      # the device.
+      {unapproved, _url} = minted(:sign_in, other)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(unapproved, %{account | passkeys: [passkey]}), other)
+
+      assert length(DirectoryServer.log(dir.dir, account.identifier)) == length(account.log)
+
+      # The device adds it: the owner's list, which reads the log, no
+      # longer shows it, and the browser signs in with it.
+      account = added_by_device!(dir, %{account | passkeys: [passkey]}, key)
+      assert {:ok, []} = SignIn.waiting(ctx, nil)
+      {again, _url} = minted(:sign_in, other)
+
+      assert {:ok, %{purpose: :sign_in, user: %{id: user_id}, session_token: token}} =
+               SignIn.answer(answer(again, account), other)
+
+      assert user_id == ctx.user_id
+      assert is_binary(token)
+      assert {:ok, []} = SignIn.waiting(ctx, nil)
+    end
+
+    test "a device that adds another waiting passkey than the browser's page showed signs that browser in nowhere",
+         %{dir: dir, account: account, ctx: ctx, other: other} do
+      {first, _url} = minted(:sign_in, other)
+      {shown, shown_passkey} = offer(first, account)
+      {:ok, %{waiting: shown_code}} = SignIn.answer(shown, other)
+
+      stranger_browser = {:browser, "csrf-of-a-stranger"}
+      {second, _url} = minted(:sign_in, stranger_browser)
+      {approved, approved_passkey} = offer(second, account)
+      {:ok, %{waiting: approved_code}} = SignIn.answer(approved, stranger_browser)
+      refute shown_code == approved_code
+
+      # The device adds the passkey whose code the page did not show.
+      account = added_by_device!(dir, account, approved.key)
+
+      {again, _url} = minted(:sign_in, other)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(again, %{account | passkeys: [shown_passkey]}), other)
+
+      {theirs, _url} = minted(:sign_in, stranger_browser)
+
+      assert {:ok, %{purpose: :sign_in}} =
+               SignIn.answer(
+                 answer(theirs, %{account | passkeys: [approved_passkey]}),
+                 stranger_browser
+               )
+
+      # The one never added still waits, until its request's lifetime ends.
+      assert {:ok, [%{code: ^shown_code}]} = SignIn.waiting(ctx, nil)
+    end
+
+    test "at most three wait for an account at once, for any account", %{
+      dir: dir,
+      account: account,
+      ctx: ctx
+    } do
+      stranger = DirectoryServer.account!(dir.dir, dir.url)
+
+      for named <- [account, stranger] do
+        for n <- 1..(SignIn.max_waiting() + 1) do
+          browser = {:browser, "csrf-#{n}-#{named.identifier}"}
+          {request, _url} = minted(:sign_in, browser)
+          {answer, _passkey} = offer(request, named)
+          result = SignIn.answer(answer, browser)
+
+          if n <= SignIn.max_waiting(),
+            do: assert({:ok, %{purpose: :sign_in, waiting: _code}} = result),
+            else: assert(result == {:error, :too_many_waiting})
+        end
+      end
+
+      assert {:ok, waiting} = SignIn.waiting(ctx, nil)
+      assert length(waiting) == SignIn.max_waiting()
+    end
+
+    # What an outsider sees of the bound depends on time alone: copying a
+    # passkey the account already lists, from its public log, into every
+    # place the bound allows tells nothing when its owner signs in here.
+    test "a sign-in clears no waiting passkey: the bound stays full, and the owner's list leaves out what the log lists",
+         %{dir: dir, account: account, ctx: ctx, other: other} do
+      # A passkey of the account's, its key public in the account's log.
+      {pub, priv} = :crypto.generate_key(:ecdh, :secp256r1)
+
+      {:ok, listed} =
+        Prima.Identity.Key.new(alg: :es256, kind: :passkey, pub: pub, credential_id: "listed")
+
+      account = added_by_device!(dir, account, listed)
+      account = %{account | passkeys: [%{pub: pub, priv: priv, credential_id: "listed"}]}
+
+      offer_listed = fn n ->
+        browser = {:browser, "csrf-outsider-#{n}"}
+        {request, _url} = minted(:sign_in, browser)
+
+        SignIn.answer(
+          %Prima.SignIn.NewPasskey{
+            challenge: request.challenge,
+            identifier: account.identifier,
+            key: listed
+          },
+          browser
+        )
+      end
+
+      for n <- 1..SignIn.max_waiting(), do: assert({:ok, %{waiting: _}} = offer_listed.(n))
+      assert offer_listed.(:fourth) == {:error, :too_many_waiting}
+      assert {:ok, []} = SignIn.waiting(ctx, nil)
+
+      # The owner signs in with that passkey: the bound is as full as before.
+      {request, _url} = minted(:sign_in, other)
+
+      assert {:ok, %{purpose: :sign_in, user: %{id: user_id}}} =
+               SignIn.answer(answer(request, account), other)
+
+      assert user_id == ctx.user_id
+      assert offer_listed.(:after_the_sign_in) == {:error, :too_many_waiting}
+      assert {:ok, []} = SignIn.waiting(ctx, nil)
+    end
+
+    test "is waited for only by the account it names, and the same code shows for any account", %{
+      dir: dir,
+      ctx: ctx,
+      other: other
+    } do
+      stranger = DirectoryServer.account!(dir.dir, dir.url)
+      {request, _url} = minted(:sign_in, other)
+      {answer, _passkey} = offer(request, stranger)
+      code = binary_part(answer.key.kid, 7, 16)
+
+      assert {:ok, %{purpose: :sign_in, waiting: ^code}} = SignIn.answer(answer, other)
+      assert {:ok, []} = SignIn.waiting(ctx, nil)
+
+      assert {:error, :unauthenticated} =
+               SignIn.waiting(%{ctx | user_id: nil}, nil)
+    end
+
+    test "answers only a browser's own sign-in, once, before its request expires", %{
+      account: account,
+      ctx: ctx,
+      other: other
+    } do
+      # From another browser: refused, and the request is spent.
+      {request, _url} = minted(:sign_in, other)
+      {answer, _passkey} = offer(request, account)
+      assert {:error, :answer_refused} = SignIn.answer(answer, @browser)
+      assert {:error, :answer_refused} = SignIn.answer(answer, other)
+
+      # Past the request's expiry.
+      {late, _url} = minted(:sign_in, other)
+      {answer, _passkey} = offer(late, account)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer, other, now: late.expires_at)
+
+      # To any request but a sign-in: here a registry signature the
+      # person's own session asked for.
+      session = {:session, ctx.session_token_hash}
+
+      {registry, _url} =
+        minted(:registry, session,
+          ctx: ctx,
+          operation: "policy.accept",
+          body: %{"policy_version" => "2026-09"}
+        )
+
+      {answer, _passkey} = offer(registry, account)
+      assert {:error, :answer_refused} = SignIn.answer(answer, session)
+
+      # To a request this CYFR minted under another address.
+      {elsewhere, _url} = minted(:sign_in, other)
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://other.example")
+      {answer, _passkey} = offer(elsewhere, account)
+      assert {:error, :answer_refused} = SignIn.answer(answer, other)
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, @origin)
+
+      assert {:ok, []} = SignIn.waiting(ctx, nil)
+    end
+  end
+
+  defp state!(head) do
+    {:ok, state} = Sanctum.IdentityFreshness.state(head)
+    state
   end
 
   describe "a confirmation" do

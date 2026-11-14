@@ -22,6 +22,21 @@
 <p>Your browser will ask for your passkey.</p>
 <div class="actions"><button type="button" class="primary" id="use-passkey">Use your passkey</button></div>
 <p class="error" id="ask-error" role="alert" hidden></p>
+<div id="ways" hidden>
+<p>No passkey for this account in this browser? <a href="recover" id="recover-link">Add a passkey with your recovery code</a>.</p>
+<div id="offer-way" hidden>
+<p>Or make one here and approve it on your CYFR box.</p>
+<div class="actions"><button type="button" id="offer-start">No passkey in this browser?</button></div>
+</div>
+</div>
+</section>
+<section id="offer" hidden>
+<h1>Make a passkey in this browser</h1>
+<p>Type your name, then make the passkey. CYFR shows its code next: approve that code on your CYFR box's screen, in Your devices, then sign in with the new passkey.</p>
+<label for="offer-name">Your name</label>
+<div class="name"><span>@</span><input id="offer-name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="39"></div>
+<div class="actions"><button type="button" class="primary" id="offer-make">Make a passkey</button></div>
+<p class="error" id="offer-error" role="alert" hidden></p>
 </section>
 </main>
 </body>

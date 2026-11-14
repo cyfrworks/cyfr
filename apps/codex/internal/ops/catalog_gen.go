@@ -49,7 +49,6 @@ const (
 	Tincture           = "tincture"
 	TinctureVisibility = "tincture_visibility"
 	Tools              = "tools"
-	Turn               = "turn"
 	Vault              = "vault"
 	Webhook            = "webhook"
 )
@@ -118,7 +117,6 @@ const (
 	DoorRequests            = "requests"
 	DoorResolve             = "resolve"
 	ExecutionCancel         = "cancel"
-	ExecutionForceRelease   = "force_release"
 	ExecutionList           = "list"
 	ExecutionLogs           = "logs"
 	ExecutionReadResource   = "read_resource"
@@ -135,6 +133,7 @@ const (
 	FileDecline             = "decline"
 	FileDelete              = "delete"
 	FileList                = "list"
+	FileMove                = "move"
 	FileOffer               = "offer"
 	FileOffers              = "offers"
 	FileRead                = "read"
@@ -180,6 +179,7 @@ const (
 	PairingList             = "list"
 	PairingRenew            = "renew"
 	PairingRevoke           = "revoke"
+	PairingWaiting          = "waiting"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
 	PolicyLogList           = "list"
@@ -197,7 +197,6 @@ const (
 	RegistryAppeal          = "appeal"
 	RegistryClaimPublisher  = "claim_publisher"
 	RegistryGetNamespace    = "get_namespace"
-	RegistryLegalAccept     = "legal_accept"
 	RegistryLegalPage       = "legal_page"
 	RegistryLegalVersion    = "legal_version"
 	RegistryListMyReports   = "list_my_reports"
@@ -278,8 +277,6 @@ const (
 	TinctureInvokePublic    = "invoke_public"
 	TinctureVisibilityGet   = "get"
 	ToolsList               = "list"
-	TurnRecover             = "recover"
-	TurnSuspend             = "suspend"
 	VaultAuthorize          = "authorize"
 	VaultCreate             = "create"
 	VaultDelete             = "delete"
@@ -311,9 +308,9 @@ var Actions = map[string][]string{
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"directory":           {"tombstone"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
-	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
+	"execution":           {"cancel", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
-	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
+	"file":                {"accept", "decline", "delete", "list", "move", "offer", "offers", "read", "withdraw", "write"},
 	"invitation":          {"create", "list", "revoke"},
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
@@ -321,11 +318,11 @@ var Actions = map[string][]string{
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
-	"pairing":             {"list", "renew", "revoke"},
+	"pairing":             {"list", "renew", "revoke", "waiting"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
@@ -338,7 +335,6 @@ var Actions = map[string][]string{
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
-	"turn":                {"recover", "suspend"},
 	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate", "set_default", "status"},
 	"webhook":             {"create", "get", "list", "reenable", "revoke", "rotate", "update"},
 }
@@ -1452,19 +1448,6 @@ func (args ExecutionCancelArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ExecutionCancel, fields: fields(args)})
 }
 
-// ExecutionForceReleaseArgs carries arguments for execution.force_release.
-type ExecutionForceReleaseArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ExecutionForceReleaseArgs) MarshalJSON() ([]byte, error) {
-	type fields ExecutionForceReleaseArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ExecutionForceRelease, fields: fields(args)})
-}
-
 // ExecutionListArgs carries arguments for execution.list.
 type ExecutionListArgs struct {
 	// Maximum results to return (list action)
@@ -1779,6 +1762,23 @@ func (args FileListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: FileList, fields: fields(args)})
 }
 
+// FileMoveArgs carries arguments for file.move.
+type FileMoveArgs struct {
+	// A folder-relative path, like data/reports/q3.csv
+	Path string `json:"path"`
+	// Its new folder-relative path, like data/archive/q3.csv
+	To string `json:"to"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FileMoveArgs) MarshalJSON() ([]byte, error) {
+	type fields FileMoveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FileMove, fields: fields(args)})
+}
+
 // FileOfferArgs carries arguments for file.offer.
 type FileOfferArgs struct {
 	// The files to send, under data/, like data/reports/q3.csv
@@ -1907,10 +1907,10 @@ func (args InvitationRevokeArgs) MarshalJSON() ([]byte, error) {
 type KeyCreateArgs struct {
 	// Human-readable name for the key
 	Name string `json:"name"`
-	// Key type: application (frontend), service (backend), admin (CI/CD)
-	Type Field[string] `json:"type,omitzero"`
-	// Permissions scope for the key
+	// What the key may do, fixed once it is made; omitted, the first preset's: execute (Run tools), component_read (Read components), storage_read (Read files, runs and logs), component_manage (Build and publish components), storage_write (Write files), admin (Manage keys, webhooks and programs), vault_read (List OAuth clients)
 	Scope Field[[]string] `json:"scope,omitzero"`
+	// The only tools the key may run, each a component named without its version (c:local.my-tool) or an outside server's tool (server:tool), fixed once it is made; omitted, it runs any tool you granted
+	Tools Field[[]string] `json:"tools,omitzero"`
 	// List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])
 	IpAllowlist Field[[]string] `json:"ip_allowlist,omitzero"`
 }
@@ -2117,7 +2117,7 @@ func (args McpServersCreateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersCreateArgsConfig struct {
-	// The stdio backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	// A program's backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
 	Backends Field[[]McpServersCreateArgsConfigBackendsItem] `json:"backends,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
@@ -2127,8 +2127,10 @@ type McpServersCreateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: a program whose backends Emissary drives as MCP servers. pipe: a program with one backend a catalyst drives.
+	// http (default): a tool server elsewhere, at a URL. program: a program CYFR runs on the backends service.
 	Transport Field[string] `json:"transport,omitzero"`
+	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).
+	Mark Field[string] `json:"mark,omitzero"`
 	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
 	Home Field[string] `json:"home,omitzero"`
 	// A program's memory bound in bytes (default: the backends service's own bound).
@@ -2137,7 +2139,7 @@ type McpServersCreateArgsConfig struct {
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
 	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
 	LoginCommand Field[string] `json:"login_command,omitzero"`
-	// A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own).
+	// A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own).
 	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`
@@ -2295,7 +2297,7 @@ func (args McpServersRestartArgs) MarshalJSON() ([]byte, error) {
 type McpServersSignInArgs struct {
 	// The program's server name
 	Name string `json:"name"`
-	// The id of the login entry whose kept home the sign-in runs in; a kept stdio server's own entry
+	// The id of the login entry whose kept home the sign-in runs in; a kept mcp program's own entry
 	Entry string `json:"entry"`
 }
 
@@ -2331,6 +2333,8 @@ type McpServersUpdateArgs struct {
 	Config McpServersUpdateArgsConfig `json:"config"`
 	// The epoch the caller read with get (required for update; refused when the server has changed since)
 	Epoch int `json:"epoch"`
+	// Headers of a tool server that keep the value stored at that epoch, which get shows as [set] and never answers; a name kept is not also given in config.headers
+	KeepHeaders Field[[]string] `json:"keep_headers,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2343,7 +2347,7 @@ func (args McpServersUpdateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersUpdateArgsConfig struct {
-	// The stdio backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	// A program's backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
 	Backends Field[[]McpServersUpdateArgsConfigBackendsItem] `json:"backends,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
@@ -2353,8 +2357,10 @@ type McpServersUpdateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: a program whose backends Emissary drives as MCP servers. pipe: a program with one backend a catalyst drives.
+	// http (default): a tool server elsewhere, at a URL. program: a program CYFR runs on the backends service.
 	Transport Field[string] `json:"transport,omitzero"`
+	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).
+	Mark Field[string] `json:"mark,omitzero"`
 	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
 	Home Field[string] `json:"home,omitzero"`
 	// A program's memory bound in bytes (default: the backends service's own bound).
@@ -2363,7 +2369,7 @@ type McpServersUpdateArgsConfig struct {
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
 	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
 	LoginCommand Field[string] `json:"login_command,omitzero"`
-	// A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own).
+	// A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own).
 	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`
@@ -2657,6 +2663,21 @@ func (args PairingRevokeArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PairingRevoke, fields: fields(args)})
 }
 
+// PairingWaitingArgs carries arguments for pairing.waiting.
+type PairingWaitingArgs struct {
+	// waiting: one waiting passkey's ref, to read that one alone
+	Ref Field[string] `json:"ref,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingWaitingArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingWaitingArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingWaiting, fields: fields(args)})
+}
+
 // PolicyLogCorrelateArgs carries arguments for policy_log.correlate.
 type PolicyLogCorrelateArgs struct {
 	// Filter by request ID
@@ -2747,8 +2768,6 @@ type ProfileCommitArgsDecisions struct {
 	PublishFrom    Field[string]                                      `json:"publish_from,omitzero"`
 	NeedIds        Field[[]string]                                    `json:"need_ids,omitzero"`
 	DurableStorage Field[bool]                                        `json:"durable_storage,omitzero"`
-	// The origins the grant admits; absent, interactive alone
-	Origins Field[[]string] `json:"origins,omitzero"`
 	// Per consent-graph component, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
 	Subset Field[map[string]ProfileCommitArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }
@@ -3128,8 +3147,6 @@ type ProfilePreviewArgsDecisions struct {
 	PublishFrom    Field[string]                                       `json:"publish_from,omitzero"`
 	NeedIds        Field[[]string]                                     `json:"need_ids,omitzero"`
 	DurableStorage Field[bool]                                         `json:"durable_storage,omitzero"`
-	// The origins the grant admits; absent, interactive alone
-	Origins Field[[]string] `json:"origins,omitzero"`
 	// Per consent-graph component, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
 	Subset Field[map[string]ProfilePreviewArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }
@@ -3503,23 +3520,6 @@ func (args RegistryGetNamespaceArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: RegistryGetNamespace, fields: fields(args)})
-}
-
-// RegistryLegalAcceptArgs carries arguments for registry.legal_accept.
-type RegistryLegalAcceptArgs struct {
-	// Policy version string (for legal_accept; obtained via legal_version)
-	PolicyVersion string `json:"policy_version"`
-	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
-	Answer Field[any] `json:"answer,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryLegalAcceptArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryLegalAcceptArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: RegistryLegalAccept, fields: fields(args)})
 }
 
 // RegistryLegalPageArgs carries arguments for registry.legal_page.
@@ -5018,42 +5018,6 @@ func (args ToolsListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ToolsList, fields: fields(args)})
-}
-
-// TurnRecoverArgs carries arguments for turn.recover.
-type TurnRecoverArgs struct {
-	// The thread.
-	Thread string `json:"thread"`
-	// recover: the turn to resume. Recovery names its turn; there is no "whatever is there now".
-	Turn string `json:"turn"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args TurnRecoverArgs) MarshalJSON() ([]byte, error) {
-	type fields TurnRecoverArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: TurnRecover, fields: fields(args)})
-}
-
-// TurnSuspendArgs carries arguments for turn.suspend.
-type TurnSuspendArgs struct {
-	// The thread whose turn to suspend.
-	Thread string `json:"thread"`
-	// suspend: the turn id. A caller that read one suspends exactly that turn, never its successor.
-	Turn Field[string] `json:"turn,omitzero"`
-	// suspend: recorded on the turn and shown in the transcript.
-	Reason Field[string] `json:"reason,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args TurnSuspendArgs) MarshalJSON() ([]byte, error) {
-	type fields TurnSuspendArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: TurnSuspend, fields: fields(args)})
 }
 
 // VaultAuthorizeArgs carries arguments for vault.authorize.

@@ -64,6 +64,14 @@ defmodule Aqua do
   @spec models(Context.t()) :: {:ok, map()} | {:error, :forbidden | :unavailable}
   defdelegate models(ctx), to: Models, as: :catalogue
 
+  @doc "One brain asked for its models. See `Aqua.Models.models/2`."
+  @spec models(Context.t(), String.t()) :: {:ok, [String.t()]} | {:error, String.t()}
+  defdelegate models(ctx, ref), to: Models
+
+  @doc "Every brain the athanor can connect. See `Aqua.Models.providers/1`."
+  @spec providers(Context.t()) :: {:ok, [Models.provider()]} | {:error, :forbidden | :unavailable}
+  defdelegate providers(ctx), to: Models
+
   @doc "Whether each agent's brain is ready, by name. See `Aqua.Models.model_status/2`."
   @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
   defdelegate model_status(ctx, agents), to: Models

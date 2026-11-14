@@ -43,9 +43,7 @@ defmodule Aqua.CrewTest do
     # once its fill has run.
     {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(athanor, ctx)
 
-    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"},
-      origins: [:interactive, :programmatic]
-    )
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
 
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
     member!(ctx, "planner")
@@ -206,8 +204,7 @@ defmodule Aqua.CrewTest do
     Sanctum.Test.ConsentFixtures.bind_key!(
       ctx,
       "catalyst:local.gemini",
-      %{"GEMINI_API_KEY" => "g-test"},
-      origins: [:interactive, :programmatic]
+      %{"GEMINI_API_KEY" => "g-test"}
     )
 
     assert {:ok, index} = Crew.index(ctx, roster)
@@ -291,6 +288,30 @@ defmodule Aqua.CrewTest do
     assert rows(ctx, room.id) == []
     assert Threads.children(actor(ctx), room.id) == []
     assert pending_records(ctx) == []
+  end
+
+  test "a member whose brain changed and was not confirmed is refused with what to do: confirm it",
+       %{ctx: ctx, room: room} do
+    # The planner's brain moves to another model; its consent is not given
+    # again.
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("planner"),
+        "---\ntitle: planner\ndescription: Plans.\navoid: Building.\n" <>
+          "catalyst_ref: #{@model}\nmodel: claude-opus-5-5\n---\n\nYou are the planner.\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+    assert {:error, {:crew_unready, "planner", :consent_stale} = refusal} =
+             Runner.send_message(ctx, room.id, "@planner look into this")
+
+    assert Aqua.Ops.render_refusal(refusal) ==
+             "planner's brain changed since it was consented to — confirm the change from its " <>
+               "card on the AQUA page"
+
+    assert rows(ctx, room.id) == []
   end
 
   test "the soul's crew.ask of a member that is not ready is refused with why, and asks nobody",
@@ -824,7 +845,7 @@ defmodule Aqua.CrewTest do
     assert {:ok, []} = Tape.pending_approvals(ctx, turn)
   end
 
-  test "archiving cancels every open turn in its own transaction, the suspended one included, and leaves none to recover",
+  test "archiving cancels every open turn in its own transaction, the running one included, and leaves none open",
        %{ctx: ctx, room: room} do
     script!([{:probe, self()}])
     request = soul_request!(ctx, room, "planner", "take a while")
@@ -833,15 +854,25 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     turn_id = delivered_turn(ctx, child, request.id)
 
-    assert {:ok, %{suspended: true}} = Runner.suspend_turn(ctx, child.id, turn: turn_id)
-    assert {:ok, %{status: "paused", paused_reason: "suspended"}} = Tape.turn(ctx, turn_id)
+    assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn_id)
 
     # The store's write alone, as a crash before the runner's stop leaves it.
-    assert {:ok, %{thread: %{archived_at: %DateTime{}}}} = Tape.archive(ctx, child.id)
+    assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: cancelled}} =
+             Tape.archive(ctx, child.id)
+
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
     assert {:ok, []} = Tape.open_turns(ctx, child.id)
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
-    assert {:error, :not_open} = Runner.recover_turn(ctx, child.id, turn_id)
+
+    # Then the runner's stop, as the archive's caller makes it: no attempt
+    # of what the turn ran outlives the case.
+    executions =
+      Arca.Repo.all(
+        from(e in Arca.Schemas.Execution, where: e.athanor_id == ^ctx.athanor_id, select: e.id)
+      )
+
+    assert :ok = Runner.stop_cancelled(cancelled)
+    wait_until(fn -> Enum.all?(executions, &is_nil(Opus.Attempt.whereis(&1))) end, 30_000)
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     assert %{status: "answered"} = row(ctx, request.id)

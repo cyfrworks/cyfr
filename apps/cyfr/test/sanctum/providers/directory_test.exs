@@ -12,6 +12,8 @@ defmodule Sanctum.Providers.DirectoryTest do
   # The directory setting is process-wide.
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Prima.Identity
   alias Prima.Identity.Entry
   alias Sanctum.Providers.Directory
@@ -82,6 +84,136 @@ defmodule Sanctum.Providers.DirectoryTest do
              Sanctum.TestContext.confirming(person, &tombstone(&1, identifier))
 
     assert {:error, :gone} = page(identifier)
+  end
+
+  describe "an administrator's account" do
+    # A person of this CYFR whose account is `identifier`, marked an
+    # administrator when `admin?`.
+    defp person_of!(identifier, admin?) do
+      {:ok, user} =
+        Sanctum.Test.People.remote(
+          %{id: "cyfr|dir|" <> identifier, provider: "cyfr"},
+          %{
+            identifier: identifier,
+            directory_url: "https://dir.example",
+            head_hash: Prima.Digest.sha256("head-" <> identifier)
+          }
+        )
+
+      if admin?, do: {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
+      user
+    end
+
+    # Every other administrator's mark taken away, so the people kept are
+    # the only ones.
+    defp only_admins!(keep) do
+      Arca.Repo.update_all(
+        from(u in Arca.Schemas.User,
+          where: not is_nil(u.platform_admin_at) and u.id not in ^keep
+        ),
+        set: [platform_admin_at: nil]
+      )
+    end
+
+    @only "This is the only administrator of this CYFR. Make someone else an administrator first."
+
+    test "of the only administrator is refused with the sentence, asking and writing nothing", %{
+      person: person,
+      identifier: identifier
+    } do
+      admin = person_of!(identifier, true)
+      only_admins!([admin.id])
+
+      assert {:error, {:invalid_argument, @only}} = tombstone(person, identifier)
+
+      assert {:error, {:invalid_argument, @only}} =
+               Sanctum.TestContext.confirming(person, &tombstone(&1, identifier))
+
+      # Every caller of the closure meets the same refusal where it writes.
+      assert {:error, :only_admin} = Sanctum.Directory.tombstone(identifier)
+      assert {:ok, %{length: 1}} = page(identifier)
+    end
+
+    test "closes while another administrator stands, one whose account another directory keeps",
+         %{person: person, identifier: identifier} do
+      admin = person_of!(identifier, true)
+      other = person_of!("per_" <> String.duplicate("b", 64), true)
+      only_admins!([admin.id, other.id])
+
+      assert {:ok, %{gone: true}} =
+               Sanctum.TestContext.confirming(person, &tombstone(&1, identifier))
+
+      assert {:error, :gone} = page(identifier)
+    end
+
+    test "once one administrator closed the other's account, their own is refused", %{
+      person: person,
+      identifier: a
+    } do
+      b = registered!()
+      first = person_of!(a, true)
+      second = person_of!(b, true)
+      only_admins!([first.id, second.id])
+
+      assert {:ok, %{gone: true}} = Sanctum.TestContext.confirming(person, &tombstone(&1, b))
+
+      assert {:error, {:invalid_argument, @only}} =
+               Sanctum.TestContext.confirming(person, &tombstone(&1, a))
+
+      assert {:error, :only_admin} = Sanctum.Directory.tombstone(a)
+      assert {:ok, %{length: 1}} = page(a)
+    end
+
+    test "a second administrator who is denied does not count", %{
+      person: person,
+      identifier: identifier
+    } do
+      admin = person_of!(identifier, true)
+      denied = person_of!("per_" <> String.duplicate("c", 64), true)
+      only_admins!([admin.id, denied.id])
+
+      Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^denied.id),
+        set: [status: "denied", denied_at: DateTime.utc_now()]
+      )
+
+      assert {:error, {:invalid_argument, @only}} =
+               Sanctum.TestContext.confirming(person, &tombstone(&1, identifier))
+
+      assert {:ok, %{length: 1}} = page(identifier)
+    end
+
+    test "a person who is not an administrator closes", %{
+      person: person,
+      identifier: identifier
+    } do
+      _member = person_of!(identifier, false)
+
+      assert {:ok, %{gone: true}} =
+               Sanctum.TestContext.confirming(person, &tombstone(&1, identifier))
+
+      assert {:error, :gone} = page(identifier)
+    end
+
+    # Each table rename is put back in the test's own transaction, which
+    # the failed read leaves usable on both adapters.
+    @tag :capture_log
+    test "a check that cannot read refuses, before the confirmation and where it writes", %{
+      person: person,
+      identifier: identifier
+    } do
+      admin = person_of!(identifier, true)
+      other = person_of!("per_" <> String.duplicate("d", 64), true)
+      only_admins!([admin.id, other.id])
+
+      Arca.Repo.query!("ALTER TABLE users RENAME TO users_unavailable")
+      asked = tombstone(person, identifier)
+      closed = Sanctum.Directory.tombstone(identifier)
+      Arca.Repo.query!("ALTER TABLE users_unavailable RENAME TO users")
+
+      assert {:error, {:unavailable, "The people of this CYFR"}} = asked
+      assert {:error, :unavailable} = closed
+      assert {:ok, %{length: 1}} = page(identifier)
+    end
   end
 
   test "a malformed identifier asks nothing, and an account the directory never held is not found",

@@ -35,11 +35,7 @@ defmodule Sanctum.Consent.CommitDigest do
   `scope` needs no entry: `ShapeDigest` carries it, and `shape_digest` is
   the first field here.
 
-  ## Origins and narrowing
-
-  `origins`, required, is the set of `Prima.Origin` values the revision
-  admits; it is part of what the operator approves, so a grant that admits
-  `programmatic` never shares a digest with one that does not.
+  ## Narrowing
 
   `subset` is the narrowing the operator chose, per consent-graph node and
   resource kind (`Sanctum.Consent.Normalize.subset/3`). The blob digest
@@ -137,7 +133,6 @@ defmodule Sanctum.Consent.CommitDigest do
           required(:label) => String.t(),
           required(:kind) => :owner | :public,
           required(:invoke_mode) => :open_inert | :edge_only,
-          required(:origins) => [Prima.Origin.t(), ...],
           optional(:bindings) => [binding()],
           optional(:selections) => [selection()],
           optional(:tool_servers) => [tool_server_grant()],
@@ -158,8 +153,7 @@ defmodule Sanctum.Consent.CommitDigest do
       ...>   blob_digest: "sha256:def",
       ...>   label: "default",
       ...>   kind: :owner,
-      ...>   invoke_mode: :open_inert,
-      ...>   origins: [:interactive]
+      ...>   invoke_mode: :open_inert
       ...> })
       iex> String.starts_with?(digest, "sha256:")
       true
@@ -187,7 +181,7 @@ defmodule Sanctum.Consent.CommitDigest do
     with :ok <-
            Normalize.only_keys(
              commit,
-             ~w(shape_digest blob_digest label kind invoke_mode origins bindings selections
+             ~w(shape_digest blob_digest label kind invoke_mode bindings selections
                 tool_servers override subset removed)a,
              tag
            ),
@@ -198,7 +192,6 @@ defmodule Sanctum.Consent.CommitDigest do
          {:ok, invoke_mode} <-
            Normalize.enum(commit, :invoke_mode, [:open_inert, :edge_only], tag),
          :ok <- check_public_is_contained(kind, invoke_mode),
-         {:ok, origins} <- Normalize.origins(commit, :origins, tag),
          {:ok, bindings} <- bindings(commit),
          {:ok, selections} <- selections(commit),
          {:ok, tool_servers} <- tool_servers(commit),
@@ -212,7 +205,6 @@ defmodule Sanctum.Consent.CommitDigest do
          "label" => label,
          "kind" => Atom.to_string(kind),
          "invoke_mode" => Atom.to_string(invoke_mode),
-         "origins" => origins,
          "bindings" => bindings,
          "selections" => selections,
          "tool_servers" => tool_servers,

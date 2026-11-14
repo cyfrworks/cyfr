@@ -192,7 +192,7 @@ either fails whole, and their columns need no class.
 | `vault_entries` | `name`, `provider_hint`, `kind`, `field_names`, `oauth_endpoints`, `oauth_scopes`, `attach_only`, `status`, `payload_rev` | `binding_digest`, `destination`: what her request implies (`requested`); `sealed_payload`: the value she typed, compared inside the fixture | `id`: the Vault page's; `athanor_id`: the sign-in's; `last_used_at`, `inserted_at`, `updated_at`: times |
 | `vault_defaults` | `provider_hint` | | `id`: a default's own id; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's; `inserted_at`, `updated_at`: times |
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
-| `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `admitted_origins` | `shape_digest`, `commit_digest`, `blob_digest`, `resolved_policy`, `activation`: what a commit of her decisions writes (`derived`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
+| `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via` | `shape_digest`, `commit_digest`, `blob_digest`, `resolved_policy`, `activation`: what a commit of her decisions writes (`derived`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
 | `consent_vault_refs` | `binding_key`, `share_id`, `via_label`, `lifetime_kind`, `consumed_by_root` | `binding_digest`: `requested`; `expires_at`: the until the preview showed her | `consent_id`: the admission's; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's |
 
 The bounds:
@@ -226,10 +226,9 @@ typed payload's digest reaches an answer, the record or a question left
 behind.
 
 **Stored text, byte for byte.** A stored JSON text (an entry's destination
-and field names, a consent's admitted origins, policy blob and activation)
-is compared as the text it is, and never parsed first: its owner reads it
-with the first of two duplicate members, and a parse here would keep the
-last.
+and field names, a consent's policy blob and activation) is compared as the
+text it is, and never parsed first: its owner reads it with the first of two
+duplicate members, and a parse here would keep the last.
 
 - **An entry's destination** is compared with the canonical text of the
   destination she sent (`Prima.Destination.canonical/1`), and its binding

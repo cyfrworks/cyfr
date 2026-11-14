@@ -254,6 +254,17 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
   end
 
+  test "the CLI's key form offers Sanctum.ApiKey's permissions, each by what it lets a key do" do
+    form = read!("apps/codex/internal/prompt/form.go")
+
+    offered =
+      ~r/huh\.NewOption\("([^"]+)", "([a-z_]+)"\)/
+      |> Regex.scan(form, capture: :all_but_first)
+      |> Enum.map(fn [what, name] -> {name, what} end)
+
+    assert offered == Sanctum.ApiKey.permissions()
+  end
+
   # Authority error tags must agree across language boundaries.
 
   test "the consent-tag vocabulary agrees across Sanctum, the MCP boundary and the CLI" do
@@ -419,10 +430,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "consent_preview.json" => [
       {"apps/codex/cmd/profile_test.go", ~w(kinds preview)},
-      {"apps/cyfr/test/cyfr/consent_preview_render_test.exs", ~w(origins preview)},
+      {"apps/cyfr/test/cyfr/consent_preview_render_test.exs", ~w(preview)},
       {"apps/prima/test/prima/consent_preview_test.exs",
-       ~w(kinds narrowable_kinds origins preview refusals version)},
-      {"apps/prima/test/prima/origin_test.exs", ~w(origins)}
+       ~w(kinds narrowable_kinds preview refusals version)}
     ],
     "device.json" => [
       {"apps/codex/internal/shell/device_test.go", ~w(keys messages refusals)},
@@ -443,6 +453,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/assets/test/device_unlock/complete.test.mjs", ~w(exchange)},
       {"apps/cyfr/test/emissary/web/controllers/device_session_controller_test.exs",
        ~w(exchange)},
+      {"apps/cyfr/test/prism_web/controllers/device_unlock_controller_test.exs", ~w(exchange)},
       {"apps/prima/test/prima/device_cert_test.exs", ~w(keys proofs purpose_fields verify)},
       {"apps/prima/test/prima/device_unlock_test.exs",
        ~w(protocol common_fields purpose_fields keys proofs verify exchange)}
@@ -494,6 +505,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # SHA-256), outside this roster's reach.
     "identity.json" => [
       {"apps/codex/cmd/thread_test.go", ~w(identifiers)},
+      {"apps/codex/internal/account/approve_test.go", ~w(chains entries keys)},
       {"apps/codex/internal/account/identity_test.go",
        ~w(chains entries identifiers keys kits user_ids webauthn)},
       {"apps/cyfr/assets/test/account/identity.test.mjs",
@@ -599,12 +611,15 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/registry-stand-in/standin_test.py", ~w(answers requests)}
     ],
     "release_manifest.json" => [
+      {"apps/codex/cmd/backup_test.go", ~w(versions)},
       {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},
       {"apps/codex/internal/release/manifest_test.go",
        ~w(valid valid_prerelease refused versions signature)},
+      {"apps/codex/internal/release/release_test.go", ~w(selection)},
       {"apps/codex/internal/scaffold/scaffold_test.go", ~w(signature)},
-      {"apps/cyfr/test/cyfr/release_channel_test.exs", ~w(versions)},
+      {"apps/cyfr/test/cyfr/release_channel_test.exs", ~w(versions selection)},
       {"tests/ci-release-graph.py", ~w(valid valid_prerelease refused versions signature)},
+      {"tests/install-verify-test.sh", ~w(selection)},
       {"tests/release-boot-test.sh", ~w(versions)}
     ],
     "restore_barrier.json" => [
@@ -627,7 +642,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "sign_in.json" => [
       {"apps/codex/cmd/registry_sign_test.go", ~w(requests)},
-      {"apps/codex/internal/account/wire_test.go", ~w(answers keys request_refusals requests)},
+      {"apps/codex/internal/account/wire_test.go",
+       ~w(answer_refusals answers keys request_refusals requests)},
       {"apps/cyfr/assets/test/account/pages.test.mjs",
        ~w(answers directory fragments identity keys max_fragment_bytes requests verify)},
       {"apps/cyfr/assets/test/account/sign_in.test.mjs",

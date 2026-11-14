@@ -6,12 +6,15 @@
 // assertion over a challenge, and a passkey's creation for an account.
 // Every ceremony runs at this page's host as the relying party with
 // `userVerification: "required"`. A ceremony the person cancels, or the
-// browser refuses, rejects; the page says so and sends nothing.
+// browser refuses, rejects; the page says so and sends nothing. A ceremony
+// the browser leaves unanswered is given up after `limit` milliseconds
+// (two minutes unless a test gives another), refused `timed_out`.
 
-import {hex, refuse} from "./encoding.js"
+import {Refusal, hex, refuse} from "./encoding.js"
 import {identifierForUserId} from "./identity.js"
 
 const ES256 = -7
+const LIMIT_MS = 2 * 60 * 1000
 
 // The DER prefix of a P-256 public key's SubjectPublicKeyInfo, before its
 // 65-byte uncompressed point.
@@ -44,8 +47,31 @@ function bytes(buffer) {
   return buffer instanceof ArrayBuffer ? new Uint8Array(buffer.slice(0)) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength).slice()
 }
 
+// `ask(signal)` given up after `limit`: the signal aborts, and the page
+// stops waiting then, whatever the browser does. An answer that comes after
+// is ignored, never used, and a rejection after the abort is the browser
+// left unanswered, whatever error it carries.
+async function within(limit, timers, ask) {
+  const controller = new AbortController()
+  let timer
+  const gaveUp = new Promise((_resolve, reject) => {
+    timer = timers.setTimeout(() => {
+      controller.abort()
+      reject(new Refusal("timed_out"))
+    }, limit)
+  })
+  try {
+    return await Promise.race([ask(controller.signal), gaveUp])
+  } catch (error) {
+    if (controller.signal.aborted) refuse("timed_out")
+    throw error
+  } finally {
+    timers.clearTimeout(timer)
+  }
+}
+
 /** The ceremonies at `rpId` over `credentials`. */
-export function passkeys(credentials, rpId) {
+export function passkeys(credentials, rpId, {limit = LIMIT_MS, timers = globalThis} = {}) {
   return {
     rpId,
 
@@ -58,7 +84,7 @@ export function passkeys(credentials, rpId) {
     async assert({challenge, allow}) {
       const publicKey = {challenge, rpId, userVerification: "required"}
       if (allow) publicKey.allowCredentials = allow.map((id) => ({type: "public-key", id}))
-      const credential = await credentials.get({publicKey})
+      const credential = await within(limit, timers, (signal) => credentials.get({publicKey, signal}))
       const response = credential.response
       const userHandle = bytes(response.userHandle)
       return {
@@ -77,7 +103,8 @@ export function passkeys(credentials, rpId) {
      * maker's `aaguid`; rejects for any other algorithm.
      */
     async create({userId, name, challenge}) {
-      const credential = await credentials.create({
+      const credential = await within(limit, timers, (signal) => credentials.create({
+        signal,
         publicKey: {
           challenge,
           rp: {id: rpId, name: "CYFR"},
@@ -86,7 +113,7 @@ export function passkeys(credentials, rpId) {
           authenticatorSelection: {residentKey: "required", requireResidentKey: true, userVerification: "required"},
           attestation: "none"
         }
-      })
+      }))
       const response = credential.response
       const spki = bytes(response.getPublicKey())
       const p256 = response.getPublicKeyAlgorithm() === ES256 && spki?.length === P256_SPKI.length + 65 && P256_SPKI.every((byte, i) => spki[i] === byte)

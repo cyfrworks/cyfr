@@ -380,7 +380,6 @@ defmodule Sanctum.CallerTest do
       {:ok, %{api_key: raw}} =
         Sanctum.TestContext.create_key(ctx, %{
           name: name,
-          type: :service,
           ip_allowlist: ["192.168.1.0/24"]
         })
 
