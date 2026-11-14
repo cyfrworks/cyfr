@@ -140,9 +140,11 @@ defmodule PrismWeb.AquaSetupTest do
     wait_until(fn -> render(view) =~ "aqua consented again." end, 10_000, "the soul's consent")
     refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
-    # The soul's brain is connected through the key it was shared.
-    status = Aqua.model_status(ctx, [%{"name" => "aqua", "catalyst_ref" => Fixture.ref()}])
-    assert match?(%{"aqua" => {:ready, _}}, status), consent_state(ctx, status)
+    # The soul's brain is connected through the key it was shared, read as
+    # the person reads it on the screen, whose origin the grant admits.
+    person = %{ctx | origin: :interactive}
+    status = Aqua.model_status(person, [%{"name" => "aqua", "catalyst_ref" => Fixture.ref()}])
+    assert match?(%{"aqua" => {:ready, _}}, status), consent_state(person, status)
 
     # Aqua answers.
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
@@ -173,6 +175,17 @@ defmodule PrismWeb.AquaSetupTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # The soul's edge into its brain as the loader resolved it, or why it
+  # refused.
+  defp brain_edge({:ok, authority}, soul) do
+    case Prima.Authority.Blob.lookup_edge(authority.policy, soul, Fixture.ref(), "") do
+      {:ok, edge} -> edge.vault
+      other -> other
+    end
+  end
+
+  defp brain_edge(refused, _soul), do: refused
+
   # What the soul's consent holds against what it is now, for a failure's
   # message.
   defp consent_state(ctx, status) do
@@ -191,7 +204,7 @@ defmodule PrismWeb.AquaSetupTest do
         live: Sanctum.Consent.ShapeDerivation.live_digest(ctx, soul),
         fresh: fresh,
         loaded: Opus.authority_for(ctx, :default, soul) |> elem(0),
-        refused: Opus.authority_for(ctx, :default, soul)
+        refused: Opus.authority_for(ctx, :default, soul) |> brain_edge(soul)
       },
       limit: :infinity,
       printable_limit: 4000
