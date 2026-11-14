@@ -13,6 +13,7 @@ import Thread from "./hooks/thread"
 import AquaChat from "./hooks/aqua_chat"
 import {AquaPanel, AquaPanelKeys} from "./aqua_panel"
 import MarkdownContent from "./hooks/markdown_content"
+import FlashAutoHide from "./hooks/flash_auto_hide"
 import Canvas from "./canvas/index"
 import SystemLayer from "./system_layer/index"
 import {completeUnlock} from "./device_unlock"
@@ -42,17 +43,7 @@ Hooks.MarkdownContent = MarkdownContent
 Hooks.Canvas = Canvas
 Hooks.SystemLayer = SystemLayer
 
-Hooks.FlashAutoHide = {
-  mounted() {
-    this.timer = setTimeout(() => {
-      this.el.style.opacity = "0"
-      setTimeout(() => this.el.remove(), 500)
-    }, 5000)
-  },
-  destroyed() {
-    clearTimeout(this.timer)
-  }
-}
+Hooks.FlashAutoHide = FlashAutoHide
 
 // A tape that follows its newest line — but only while the person is
 // reading the end of it. Someone scrolled up into the history stays where
