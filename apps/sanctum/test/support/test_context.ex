@@ -405,6 +405,22 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
+  The change `Sanctum.Pairing.revoke/2` confirms for the context person's
+  paired client `client_id`: the client named as the person sees it, read
+  from the store.
+  """
+  def pairing_revocation(%Context{} = ctx, client_id) do
+    {:ok, rows} =
+      Arca.PairedClients.list(Context.actor(ctx), user_id: ctx.user_id, standing: :all)
+
+    %{
+      operation: "pairing.revoke",
+      arguments: %{"client_id" => client_id},
+      resource: Enum.find_value(rows, &(&1.id == client_id and &1.display_name))
+    }
+  end
+
+  @doc """
   Run `fun` under `ctx`, made a person's as `confirmed/3` makes it, and
   when it answers the confirmation signal, prove that record as
   `confirmed/3` proves one (`prove!/3`) and run `fun` once more naming

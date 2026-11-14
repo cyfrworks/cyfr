@@ -93,11 +93,10 @@ defmodule Sanctum.IssuanceTest do
   # a confirmation they proved, as `pairing/revoke` takes it.
   defp revoke!(session_ctx, client_id) do
     session_ctx
-    |> Sanctum.TestContext.confirmed(:pairing_revocation, %{
-      operation: "pairing.revoke",
-      arguments: %{"client_id" => client_id},
-      resource: client_id
-    })
+    |> Sanctum.TestContext.confirmed(
+      :pairing_revocation,
+      Sanctum.TestContext.pairing_revocation(session_ctx, client_id)
+    )
     |> Pairing.revoke(client_id)
   end
 

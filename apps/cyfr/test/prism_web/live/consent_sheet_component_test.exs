@@ -1860,7 +1860,13 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
     test "every exit is drawn, an exit with no flow among them, each class a box", %{view: view} do
       assert has_element?(view, ~s([data-row="exits"][data-exit="api.flow.example"]), "pinned")
-      assert has_element?(view, ~s([data-row="exits"][data-exit="api.flow.example"]), "filed notes")
+
+      assert has_element?(
+               view,
+               ~s([data-row="exits"][data-exit="api.flow.example"]),
+               "filed notes"
+             )
+
       refute has_element?(view, ~s([data-row="exits"] span.font-mono), "filed")
 
       assert has_element?(

@@ -293,12 +293,14 @@ defmodule Sanctum.Pairing do
     end
   end
 
-  defp revoke_client(ctx, %{id: client_id}) do
+  # The confirmation names the client by the name the person sees for it;
+  # a client with none is named by nothing rather than by its id.
+  defp revoke_client(ctx, %{id: client_id} = client) do
     with :ok <-
            Authz.confirm(ctx, :pairing_revocation, %{
              operation: "pairing.revoke",
              arguments: %{"client_id" => client_id},
-             resource: client_id
+             resource: Map.get(client, :display_name)
            }) do
       case Arca.PairedClients.revoke(Context.actor(ctx), client_id) do
         {:ok, row} ->
