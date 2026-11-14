@@ -51,14 +51,14 @@ var updateCmd = &cobra.Command{
 
 The program: when a release newer than this one is published, pre-releases aside, cyfr update installs it: a Homebrew cask install through brew, any other install by downloading the release's archive for this platform, verifying it against the release's checksums.txt signed by the release workflow for that tag, and only then replacing this program's file. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. In a directory that holds no compose file the update stops here.
 
-The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
+The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. A CYFR whose database another schema built is refused before anything stops (step 3): a release runs only on a database its own schema built, the schema fingerprint its manifest carries, and there is no upgrade path between schemas. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
-1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, or no network access to it, refuses.
+1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, one without a schema fingerprint (any release's before the fingerprint was carried), or no network access to it, refuses.
 2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale is managed; any other image is an override, left as written and reported.
-3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
+3. While the stack still runs: read its configuration, naming the storage root it snapshots, read the schema fingerprint of the cyfr that runs this CYFR, through the running cyfr or, when cyfr is stopped, offline in a one-off container of its image, and refuse one other than the manifest's or an answer that does not read, then pull every managed image by the manifest's digest, read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
 4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live, or an image on a newer release than this one, restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
-6. Write the release's scaffold files, remove from .env each setting the release this CYFR ran shipped in its .env.example that this release's .env.example no longer declares (read from both releases' verified scaffolds, the names said; a setting the old .env.example never shipped is yours and stays), and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
+6. Write the release's scaffold files, remove from .env each setting the release this CYFR ran shipped in its .env.example that this release's .env.example no longer declares (read from both releases' verified scaffolds, the names said; a setting the old .env.example never shipped is yours and stays), and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the refusal cyfr's boot logged, any part of cyfr's '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data.
 
 The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
@@ -104,6 +104,11 @@ const (
 	// image with nothing of the stack running; Cyfr.Release.live_slots/0
 	// raises on any error, so an answer is a read.
 	liveSlotsExpr = `IO.puts("CYFR_LIVE_SLOTS=" <> JSON.encode!(%{release: Prima.Version.current(), slots: Cyfr.Release.live_slots()}))`
+	// schemaExpr reads the schema fingerprint of the cyfr code that runs
+	// this CYFR's database, through the running node or offline in a
+	// container of its image; a cyfr boots only on a database its own
+	// fingerprint built, so the code's answer is the database's.
+	schemaExpr = `IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())`
 
 	// pgProbeMajor is the major of the client image the server's major is
 	// read with (pgClientImages); the dump and the restore then run in the
@@ -360,7 +365,7 @@ func (u *updater) run() error {
 	// Every step before the stop runs under ctx and changes no deployment
 	// state, so an interrupt or a failure here leaves the stack running on
 	// the compose file and the scaffold files as they were.
-	steps := []func() error{u.readConfig, u.probePostgres, u.pull, u.readRoster, u.fetchScaffold}
+	steps := []func() error{u.readConfig, u.readSchema, u.probePostgres, u.pull, u.readRoster, u.fetchScaffold}
 	for _, step := range steps {
 		if err := step(); err != nil {
 			if u.ctx.Err() != nil {
@@ -488,7 +493,7 @@ func (u *updater) offer(yes bool) (bool, error) {
 			fmt.Fprintf(u.out, "  %s: %s\n", line.service, line.value)
 		}
 	}
-	fmt.Fprintf(u.out, "On that start the release migrates the database, or refuses one it cannot carry forward; only the snapshot takes CYFR back. Read the release notes first: %s/tag/%s\n", releasesPage, u.version)
+	fmt.Fprintf(u.out, "Before it stops anything it checks that this CYFR's database was built from release %s's schema, since there is no upgrade path between schemas; once it has started the release, only the snapshot takes CYFR back. Read the release notes first: %s/tag/%s\n", u.version, releasesPage, u.version)
 	if yes {
 		return false, nil
 	}
@@ -1472,6 +1477,57 @@ func (u *updater) revertScaffold(reason error) error {
 	return u.restartOld(fmt.Errorf("%v; the scaffold files were put back from the snapshot %s", reason, u.snapshot))
 }
 
+// readSchema reads the schema fingerprint of the cyfr that runs this
+// CYFR, through the running cyfr or, while cyfr is stopped, offline in a
+// one-off container of its image, and refuses one other than the
+// release's: the release runs only on a database its own schema built, and
+// there is no upgrade path between schemas. An answer that cannot be read
+// refuses too, never reads as a match.
+func (u *updater) readSchema() error {
+	ctx, cancel := context.WithTimeout(u.ctx, composeRunTimeout)
+	defer cancel()
+	if err := u.listRunning(ctx); err != nil {
+		return err
+	}
+	var args []string
+	var err error
+	if slices.Contains(u.running, "cyfr") {
+		args, err = u.composeArgs(ctx, "exec", "-T", "cyfr", "bin/cyfr", "rpc", schemaExpr)
+	} else {
+		args, err = u.offlineEval(ctx, schemaExpr)
+	}
+	output := ""
+	if err == nil {
+		output, err = u.dockerOutput(ctx, nil, args...)
+	}
+	schema := ""
+	if err == nil {
+		schema, err = markedLine(output, "CYFR_SCHEMA=")
+	}
+	if err == nil && !schemaFingerprint.MatchString(schema) {
+		err = fmt.Errorf("the answer %q is not a schema fingerprint", schema)
+	}
+	if err != nil {
+		return fmt.Errorf("cyfr update could not read which schema this CYFR's database was built from (%v), and release %s runs only on a database built from its own schema; nothing was stopped or changed. Fix the cause and run 'cyfr update' again", err, u.version)
+	}
+	if schema != u.manifest.SchemaFingerprint {
+		return fmt.Errorf("This CYFR's database was built from schema %s, and release %s runs only on a database built from schema %s: there is no upgrade path between them, so nothing was stopped or changed.\nTo start over on release %s, keeping nothing of this CYFR: run 'cyfr down' here, remove this directory (with sudo: CYFR's container owns data/), then run 'cyfr init' and 'cyfr up' in a new directory", shortFingerprint(schema), u.version, shortFingerprint(u.manifest.SchemaFingerprint), u.version)
+	}
+	return nil
+}
+
+// schemaFingerprint is a schema fingerprint as Arca records it.
+var schemaFingerprint = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// shortFingerprint shortens a schema fingerprint to its first 12 hex
+// digits, for reading.
+func shortFingerprint(fingerprint string) string {
+	if len(fingerprint) > 12 {
+		return fingerprint[:12] + "…"
+	}
+	return fingerprint
+}
+
 // rosterSlot is one live slot as the roster and the offline read answer it.
 type rosterSlot struct {
 	Node       string  `json:"node"`
@@ -2079,11 +2135,14 @@ func (u *updater) composeAsRead() string {
 func (u *updater) stopAfterSwitch(reason error) error {
 	ctx, cancel := u.detached(stopTimeout)
 	defer cancel()
-	message := fmt.Sprintf("Release %s did not start (%v); the stack is left stopped", u.version, reason)
+	message := fmt.Sprintf("Release %s did not start (%v); the stack is left stopped.", u.version, reason)
 	if err := u.stopFailedStart(ctx); err != nil {
-		message = fmt.Sprintf("Release %s did not start (%v), and %v; stop it with 'cyfr down'", u.version, reason, err)
+		message = fmt.Sprintf("Release %s did not start (%v), and %v; stop it with 'cyfr down'.", u.version, reason, err)
+	} else if fatal := bootFatal(ctx, u.engine, u.head); fatal != "" {
+		// A stop keeps the container, so its log is still there to read.
+		message += "\n" + fatal
 	}
-	return fmt.Errorf("%s.\nThe snapshot of release %s is %s; restore it with:\n  cyfr restore %s", message, u.oldRelease, u.snapshot, u.snapshot)
+	return fmt.Errorf("%s\nThe snapshot of release %s is %s; restore it with:\n  cyfr restore %s", message, u.oldRelease, u.snapshot, u.snapshot)
 }
 
 // stopFailedStart stops every service of the stack after a start that

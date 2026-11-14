@@ -922,6 +922,12 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		// Before the docker group step and the access settings: a missing
+		// .env reads as empty, so the first refusal would blame the access
+		// settings rather than the directory.
+		if !access.HasComposeFile(".") {
+			return fmt.Errorf("There is no CYFR in this directory, so nothing was started: it holds no compose file (%s). Run 'cyfr up' in CYFR's directory, the one that holds its docker-compose.yml, or 'cyfr init' here to make one", strings.Join(access.ComposeMainFiles, ", "))
+		}
 		if continued, err := upWithGroup(continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
 			return err
 		}
@@ -1022,29 +1028,40 @@ func setupNext(out io.Writer, head access.Head) {
 	}
 }
 
-// bootFatalMarker begins the line a refused boot prints, its sentence
-// after it.
-const bootFatalMarker = "[Cyfr] FATAL:"
+// bootFatalMarker matches the start of the line a refused boot prints,
+// whichever part of cyfr refused (`[Cyfr] FATAL:`, `[Arca] FATAL:` for a
+// database another schema built), its sentence after it.
+var bootFatalMarker = regexp.MustCompile(`\[[A-Z][A-Za-z.]*\] FATAL:`)
 
-// withBootFatal is a failed start with the refusal cyfr's boot last logged,
-// read from the cyfr service's log under the lock: a setting only the
-// release reads, such as a retired name, is refused there, and the start
-// alone sees no more than an unhealthy container.
+// withBootFatal is a failed start with the refusal cyfr's boot last logged
+// (bootFatal).
 func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startErr error) error {
+	if fatal := bootFatal(ctx, e, head); fatal != "" {
+		return fmt.Errorf("%w\n%s", startErr, fatal)
+	}
+	return startErr
+}
+
+// bootFatal is the refusal cyfr's boot last logged, said for a failed
+// start, read from the cyfr service's log: a setting only the release
+// reads, such as a retired name, or a database another schema built is
+// refused there, and the start alone sees no more than an unhealthy
+// container. It is "" when the log holds none or cannot be read.
+func bootFatal(ctx context.Context, e stackEngine, head access.Head) string {
 	res, err := cyfrLog(ctx, e, head)
 	if err != nil {
-		return startErr
+		return ""
 	}
 	fatal := ""
 	for _, line := range strings.Split(string(res.Stdout)+"\n"+string(res.Stderr), "\n") {
-		if i := strings.Index(line, bootFatalMarker); i >= 0 {
-			fatal = strings.TrimSpace(line[i:])
+		if loc := bootFatalMarker.FindStringIndex(line); loc != nil {
+			fatal = strings.TrimSpace(line[loc[0]:])
 		}
 	}
 	if fatal == "" {
-		return startErr
+		return ""
 	}
-	return fmt.Errorf("%w\ncyfr refused to boot, and its log says why:\n  %s", startErr, e.Redactor().Text(fatal))
+	return "cyfr refused to boot, and its log says why:\n  " + e.Redactor().Text(fatal)
 }
 
 // notSetUpMarker begins the line the boot of a CYFR with no person yet

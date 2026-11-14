@@ -89,6 +89,15 @@ func TestUpSurfacesTheBootRefusal(t *testing.T) {
 		t.Errorf("cyfr up ran\n%s\nwant\n%s", strings.Join(log, "\n"), strings.Join(want, "\n"))
 	}
 
+	// Any part of cyfr's refusal is read, Arca's for a database another
+	// schema built among them.
+	const arcaFatal = "[Arca] FATAL: /app/data/cyfr.db was built from a different schema (dabfbe9e); this release's schema is 208aba2f. There is no upgrade path."
+	s.answer("logs.out", "12:00:00.000 [error] "+arcaFatal+"\n")
+	err = runUp(context.Background(), &bytes.Buffer{})
+	if err == nil || !strings.HasSuffix(err.Error(), "\ncyfr refused to boot, and its log says why:\n  "+arcaFatal) {
+		t.Fatalf("cyfr up answered %v, want Arca's FATAL line", err)
+	}
+
 	// A log that holds no refusal leaves the start's own failure.
 	s.answer("logs.out", "cyfr is starting\n")
 	err = runUp(context.Background(), &bytes.Buffer{})
@@ -940,5 +949,16 @@ func TestUpStartsOnThisMachineOnlyThroughTheRealEngine(t *testing.T) {
 	_, stderr, status := runAsCyfr(t, "real-mismatch", dir, "up")
 	if want := "Error: " + refusal.Message() + "\n"; status != exitStartedLocally || stderr != want {
 		t.Errorf("cyfr up exited %d, printing %q; want exit 3 and %q", status, stderr, want)
+	}
+}
+
+// Outside CYFR's directory `cyfr up` says so, before the docker group
+// step and any access setting: a missing .env would otherwise read as one
+// with no access mode.
+func TestUpRefusesADirectoryWithoutACompose(t *testing.T) {
+	stdout, stderr, status := runAsCyfr(t, "plain", t.TempDir(), "up")
+	want := "Error: There is no CYFR in this directory, so nothing was started: it holds no compose file (" + strings.Join(access.ComposeMainFiles, ", ") + "). Run 'cyfr up' in CYFR's directory, the one that holds its docker-compose.yml, or 'cyfr init' here to make one\n"
+	if status != exitFailure || stdout != "" || stderr != want {
+		t.Fatalf("cyfr up exited %d, printing %q and %q; want exit 1 and %q", status, stdout, stderr, want)
 	}
 }
