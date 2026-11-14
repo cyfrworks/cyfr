@@ -144,49 +144,114 @@ defmodule CyfrWeb.ContextGuardTest do
       assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/settings"))
     end
 
-    test "a session inserted while another revocation was being collected is refused when it is announced",
+    # A test of the guard: a page whose session the notice does not name
+    # is refused when it finds its session gone, and told only that its
+    # sign-in ended.
+    test "a page whose session the notice does not name reads only that its sign-in ended",
          %{conn: conn} do
       user = test_user()
-      {_conn, _token, _hash} = signed_in(conn, user)
+      {_conn, _token, named} = signed_in(conn, user)
+      {other_conn, _token, other} = signed_in(build_conn(), user)
+      {view, _html} = mount_athanor(other_conn, "/settings")
 
-      # The revocation collects the hashes it will announce…
-      collected = Arca.SessionStorage.hashes_by_user(user.user_id)
+      delete_session!(named)
+      delete_session!(other)
+      :ok = Sanctum.Session.announce_revoked(user.user_id, [named], :signed_out)
 
-      # …a new session lands and mounts a page…
-      {late_conn, _token, late_hash} = signed_in(build_conn(), user)
-      refute late_hash in collected
-      {view, _html} = mount_athanor(late_conn, "/settings")
-
-      # …and the delete takes every row while the announcement names only
-      # the hashes it collected.
-      {:ok, _} = Arca.SessionStorage.delete_by_user(user.user_id)
-      :ok = Sanctum.Session.announce_revoked(user.user_id, collected, :signed_out)
-
-      # The announcement does not name the late session: its page is
-      # refused and told only that its sign-in ended.
       assert assert_redirect(view, "/login", 2_000) ==
                %{"error" => "Your sign-in ended. Sign in again to go on."}
     end
 
-    # A revocation names exactly the sessions its delete removed: one that
-    # was swept before the delete ran is not named, so its page does not
-    # take the denial, and a session the delete did remove is told it.
-    test "a session swept before a denial is not named by it; one the denial removed is",
+    # A test of the guard: of two pages of one person whose sessions are
+    # both gone, the one the notice names reads its reason, the other
+    # only that its sign-in ended.
+    test "a page the notice names reads its reason; one it does not reads only that it ended",
          %{conn: conn} do
       user = test_user()
-      {swept_conn, _token, swept} = signed_in(conn, user)
+      {gone_conn, _token, gone} = signed_in(conn, user)
       {denied_conn, _token, _denied} = signed_in(build_conn(), user)
-      {swept_view, _html} = mount_athanor(swept_conn, "/settings")
+      {gone_view, _html} = mount_athanor(gone_conn, "/settings")
       {denied_view, _html} = mount_athanor(denied_conn, "/settings")
 
-      delete_session!(swept)
+      delete_session!(gone)
       assert {:ok, 1} = Sanctum.Session.revoke_all_for_user(user.user_id)
 
       assert assert_redirect(denied_view, "/login", 2_000) ==
                %{"error" => "Your access to this CYFR was removed, so you were signed out."}
 
-      assert assert_redirect(swept_view, "/login", 2_000) ==
+      assert assert_redirect(gone_view, "/login", 2_000) ==
                %{"error" => "Your sign-in ended. Sign in again to go on."}
+    end
+  end
+
+  # A person-wide revocation names exactly the sessions its delete
+  # removed: the deleting statement answers their keys, and nothing reads
+  # the person's sessions before it, so nothing can come between a read
+  # and the delete. Calls into Arca.SessionStorage made by the revoking
+  # process are traced around the production revoke.
+  describe "revoke_all_for_user/1" do
+    test "announces exactly the keys its delete returned, reading none before it",
+         %{conn: conn} do
+      user = test_user()
+      {a_conn, _token, a} = signed_in(conn, user)
+      {b_conn, _token, b} = signed_in(build_conn(), user)
+      {a_view, _html} = mount_athanor(a_conn, "/settings")
+      {b_view, _html} = mount_athanor(b_conn, "/settings")
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
+
+      {result, calls} = storage_calls(fn -> Sanctum.Session.revoke_all_for_user(user.user_id) end)
+
+      assert result == {:ok, 2}
+
+      # The first storage call is the delete, and nothing read the
+      # person's sessions before it.
+      assert [{:call, :delete_by_user} | _] = calls
+      refute {:call, :hashes_by_user} in calls
+      [{:ok, deleted}] = for {:return, :delete_by_user, answer} <- calls, do: answer
+      assert Enum.sort(deleted) == Enum.sort([a, b])
+
+      assert_receive %Cyfr.Bus.Session{kind: :revoked, reason: :denied, session_keys: announced}
+      assert announced == deleted
+
+      for view <- [a_view, b_view] do
+        assert assert_redirect(view, "/login", 2_000) ==
+                 %{"error" => "Your access to this CYFR was removed, so you were signed out."}
+      end
+    end
+
+    # This process's calls into Arca.SessionStorage while `fun` runs, in
+    # order: `{:call, name}` and `{:return, name, answer}`.
+    defp storage_calls(fun) do
+      :erlang.trace_pattern({Arca.SessionStorage, :_, :_}, [{:_, [], [{:return_trace}]}], [])
+      :erlang.trace(self(), true, [:call])
+
+      result =
+        try do
+          fun.()
+        after
+          :erlang.trace(self(), false, [:call])
+          :erlang.trace_pattern({Arca.SessionStorage, :_, :_}, false, [])
+        end
+
+      ref = :erlang.trace_delivered(self())
+
+      receive do
+        {:trace_delivered, _, ^ref} -> :ok
+      end
+
+      {result, traced([])}
+    end
+
+    defp traced(acc) do
+      receive do
+        {:trace, _pid, :call, {Arca.SessionStorage, name, _args}} ->
+          traced([{:call, name} | acc])
+
+        {:trace, _pid, :return_from, {Arca.SessionStorage, name, _arity}, answer} ->
+          traced([{:return, name, answer} | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
     end
   end
 
