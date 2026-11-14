@@ -1069,11 +1069,12 @@ defmodule PrismWeb.SystemLayer do
 
   defp approve_landed(socket, _ref, false), do: socket
 
-  # A completed change lets go of the form that typed it. A release's
-  # outcome replaces the record's `cancelled` fact heard before it, so the
-  # prompt ends saying why, whichever arrived first; an outcome that the
-  # approval could not be withdrawn never does, since the fact shows it
-  # was.
+  # A completed change closes its prompt and lets go of the form that
+  # typed it: the page shows what the change made (a secret to copy among
+  # it), and nothing is left over it. A release's outcome replaces the
+  # record's `cancelled` fact heard before it, so the prompt ends saying
+  # why, whichever arrived first; an outcome that the approval could not
+  # be withdrawn never does, since the fact shows it was.
   defp on_outcome(socket, ref, outcome) do
     case Map.get(socket.assigns.panels, ref) do
       nil ->
@@ -1082,11 +1083,21 @@ defmodule PrismWeb.SystemLayer do
       %{status: {:ended, :cancelled}} when is_unwithdrawn(outcome) ->
         socket
 
-      panel ->
-        socket = set_status(socket, ref, outcome)
-        if outcome == :completed, do: clear_forms(socket, panel), else: socket
+      panel when outcome == :completed ->
+        socket |> clear_forms(panel) |> drop_panel(ref) |> close_prompt(panel.prompt_id)
+
+      _panel ->
+        set_status(socket, ref, outcome)
     end
   end
+
+  # A prompt that ended with nothing more to say leaves the layer: the next
+  # one waiting is shown in its place.
+  defp close_prompt(%{assigns: %{current: %{id: id}}} = socket, id),
+    do: socket |> drop_prompt_asks(id) |> advance()
+
+  defp close_prompt(socket, id),
+    do: assign(socket, :queue, Enum.reject(socket.assigns.queue, &(&1.id == id)))
 
   # One record, read by its ref as the `request`.
   defp pending_entry(socket, ref) do
@@ -3163,7 +3174,6 @@ defmodule PrismWeb.SystemLayer do
     do: "Waiting for your confirmation, here or on another of your devices."
 
   defp status(%{status: :approved}), do: "Approved. Completing the change."
-  defp status(%{status: :completed}), do: "Completed."
 
   defp status(%{status: {:refused, :asked_again}}),
     do: "The request changed, so it was asked for again. Nothing was changed."

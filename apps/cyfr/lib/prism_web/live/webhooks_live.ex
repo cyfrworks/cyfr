@@ -18,6 +18,9 @@ defmodule PrismWeb.WebhooksLive do
   own, and the page repeats the change once its record is confirmed,
   wherever the person proved it.
 
+  The form picks that profile from the target component's own grants
+  (`profile.list`), so the person never types an id.
+
   A delivery's run stands on the grant of the profile the webhook names:
   creating the webhook on this page is the person's decision that
   deliveries start it, so no grant asks again who may start it. The run
@@ -57,6 +60,7 @@ defmodule PrismWeb.WebhooksLive do
      |> assign(:form_name, "")
      |> assign(:form_target_ref, "")
      |> assign(:form_profile_id, "")
+     |> assign(:profiles, [])
      |> assign(:form_signature_header, @default_signature_header)
      |> assign(:form_timestamp_header, "")
      |> assign(:form_idempotency_key_header, "")
@@ -130,6 +134,7 @@ defmodule PrismWeb.WebhooksLive do
          |> assign(:form_name, hook[:name] || "")
          |> assign(:form_target_ref, hook[:target_ref] || "")
          |> assign(:form_profile_id, hook[:profile_id] || "")
+         |> load_profiles(hook[:target_ref])
          |> assign(:form_signature_header, hook.signature_header)
          |> assign(:form_timestamp_header, hook[:timestamp_header] || "")
          |> assign(:form_idempotency_key_header, hook[:idempotency_key_header] || "")
@@ -149,10 +154,17 @@ defmodule PrismWeb.WebhooksLive do
   end
 
   def handle_event("form_changed", params, socket) do
+    target_ref = params["target_ref"] || socket.assigns.form_target_ref
+
+    socket =
+      if target_ref == socket.assigns.form_target_ref,
+        do: socket,
+        else: load_profiles(socket, target_ref)
+
     {:noreply,
      socket
      |> assign(:form_name, params["name"] || socket.assigns.form_name)
-     |> assign(:form_target_ref, params["target_ref"] || socket.assigns.form_target_ref)
+     |> assign(:form_target_ref, target_ref)
      |> assign(:form_profile_id, params["profile_id"] || socket.assigns.form_profile_id)
      |> assign(
        :form_signature_header,
@@ -218,7 +230,8 @@ defmodule PrismWeb.WebhooksLive do
          |> assign(:new_secret, %{
            name: name,
            secret: result.secret,
-           url: result.url
+           url: result.url,
+           previous_expires_at: result[:previous_expires_at]
          })
          |> put_flash(:info, "Secret rotated. Copy the new secret now.")}
 
@@ -310,6 +323,7 @@ defmodule PrismWeb.WebhooksLive do
     |> assign(:form_name, "")
     |> assign(:form_target_ref, "")
     |> assign(:form_profile_id, "")
+    |> assign(:profiles, [])
     |> assign(:form_signature_header, @default_signature_header)
     # These two were missing from the reset, so a webhook edited with e.g.
     # x-github-delivery left its header names pre-filled in the next
@@ -347,6 +361,26 @@ defmodule PrismWeb.WebhooksLive do
   defp encode_template_for_form(%{} = map), do: Jason.encode!(map, pretty: true)
   defp encode_template_for_form(other) when is_binary(other), do: other
   defp encode_template_for_form(_), do: "{}"
+
+  # The target component's grants a delivery can stand on: its active
+  # profiles, read when the target is named. A target that names no
+  # component, or one never granted, offers none.
+  defp load_profiles(socket, target_ref) when is_binary(target_ref) and target_ref != "" do
+    profiles =
+      case call_tool(socket, "profile/list", %{"ref" => target_ref}) do
+        {:ok, %{profiles: profiles}} -> Enum.filter(profiles, &(&1[:status] == :active))
+        _unread -> []
+      end
+
+    assign(socket, :profiles, profiles)
+  end
+
+  defp load_profiles(socket, _target_ref), do: assign(socket, :profiles, [])
+
+  defp profile_option(%{label: label, id: id}) when is_binary(label) and label != "",
+    do: "#{label} (#{id})"
+
+  defp profile_option(%{id: id}), do: id
 
   defp fetch_webhooks(socket) do
     list =
@@ -402,6 +436,17 @@ defmodule PrismWeb.WebhooksLive do
               Set <code>CYFR_PUBLIC_URL</code> on the server to display the full URL.
             </p>
           </div>
+          <p
+            :if={@new_secret[:previous_expires_at]}
+            class="text-sm text-gray-300"
+            data-test="old-secret"
+          >
+            The old secret keeps working until {format_time(
+              @new_secret[:previous_expires_at],
+              :datetime
+            )}.
+            To end it now, revoke the webhook.
+          </p>
           <label class="block text-xs text-gray-500 uppercase mb-1 mt-2">Secret</label>
           <div class="flex items-start gap-2">
             <code class="flex-1 block bg-gray-950 rounded p-3 text-sm text-green-400 font-mono break-all">
@@ -450,10 +495,25 @@ defmodule PrismWeb.WebhooksLive do
 
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">Profile</label>
-            <.input name="profile_id" value={@form_profile_id} required placeholder="profile id" />
+            <select
+              name="profile_id"
+              required
+              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
+            >
+              <option value="">
+                {if @profiles == [], do: "No grant to choose", else: "Choose a grant"}
+              </option>
+              <option
+                :for={profile <- @profiles}
+                value={profile.id}
+                selected={profile.id == @form_profile_id}
+              >
+                {profile_option(profile)}
+              </option>
+            </select>
             <p class="text-xs text-gray-600 mt-1">
-              Deliveries run under this profile's consented authority. Grant one from the
-              target component's consent sheet, then bind its id here.
+              Deliveries run under this grant of the target component. Name the target first;
+              a component never granted has none, so grant it from its page.
             </p>
           </div>
 
@@ -559,12 +619,20 @@ defmodule PrismWeb.WebhooksLive do
           <:col :let={hook} label="URL">
             <code class="text-xs text-blue-300 break-all">{display_url(hook)}</code>
           </:col>
-          <:col :let={hook} label="Header">
-            <code class="text-xs text-gray-400">{hook[:signature_header] || "-"}</code>
+          <:col :let={hook} label="Headers">
+            <div class="space-y-1 text-xs text-gray-400" data-test="webhook-headers">
+              <div>Signature: <code>{hook[:signature_header] || "-"}</code></div>
+              <div :if={hook[:timestamp_header]}>
+                Timestamp: <code>{hook[:timestamp_header]}</code>
+              </div>
+              <div :if={hook[:idempotency_key_header]}>
+                Idempotency key: <code>{hook[:idempotency_key_header]}</code>
+              </div>
+            </div>
           </:col>
           <:col :let={hook} label="Created">{hook[:created_at] || "-"}</:col>
           <:col :let={hook} label="Actions">
-            <div class="flex gap-2">
+            <div class="flex flex-col items-start gap-2 sm:flex-row" data-test="webhook-actions">
               <.button variant="ghost" phx-click="edit" phx-value-id={hook[:name]}>
                 Edit
               </.button>
@@ -575,7 +643,7 @@ defmodule PrismWeb.WebhooksLive do
                 variant="ghost"
                 phx-click="revoke"
                 phx-value-id={hook[:name]}
-                data-confirm="Are you sure?"
+                data-confirm={"Revoke webhook '#{hook[:name]}'? The URL stops accepting POSTs."}
               >
                 Revoke
               </.button>
