@@ -150,7 +150,7 @@ defmodule Compendium.Pull do
   component's own releases are counted.
   """
   @spec oci_reference_for(Context.t(), String.t()) ::
-          {:ok, String.t()} | {:error, String.t() | {:corrupt, :registry_credential}}
+          {:ok, String.t()} | {:error, term()}
   def oci_reference_for(%Context{} = ctx, reference) when is_binary(reference) do
     case Prima.ComponentRef.parse(reference) do
       {:ok, %Prima.ComponentRef{namespace: ns} = cref} ->
@@ -252,34 +252,37 @@ defmodule Compendium.Pull do
   # store keeps for pinned pulls. No answer pulls nothing: a guess from
   # the tag list could take a yanked release.
   defp latest_release(ctx, %Prima.ComponentRef{} = cref) do
-    case Compendium.Registry.Client.get_latest_component(
-           ctx,
-           cref.type,
-           cref.namespace,
-           cref.name
-         ) do
-      {:ok, %{"version" => version}} ->
-        case Prima.ComponentRef.validate_version(version) do
-          :ok ->
-            {:ok, version}
+    answer =
+      Compendium.Registry.Client.get_latest_component(ctx, cref.type, cref.namespace, cref.name)
 
-          {:error, _} ->
-            {:error,
-             "The registry named #{inspect(version)} as the newest release of " <>
-               "#{Prima.ComponentRef.to_string(cref)}, which is not a version"}
+    case answer do
+      {:ok, %{"version" => version} = component} ->
+        case Prima.ComponentRef.validate_version(version) do
+          :ok -> {:ok, version}
+          {:error, _} -> unreadable(component)
         end
 
-      {:ok, _unexpected} ->
-        {:error, "The registry named no release of #{Prima.ComponentRef.to_string(cref)}"}
+      {:ok, component} ->
+        unreadable(component)
 
       {:error, %Compendium.OCI.Errors{reason: :not_found}} ->
-        {:error, "#{Prima.ComponentRef.to_string(cref)} has no release to pull"}
+        {:error, {:not_found, "Release", Prima.ComponentRef.to_string(cref)}}
 
       {:error, %Compendium.OCI.Errors{} = err} ->
-        {:error, Compendium.OCI.Errors.to_string(err)}
+        {:error, Compendium.Providers.Shared.refusal(err)}
 
       {:error, {:corrupt, :registry_credential}} = corrupt ->
         corrupt
     end
+  end
+
+  # An answer that names no version is a registry answer this CYFR cannot
+  # read, refused as one (`Compendium.OCI.Errors.parse_error/2`), never a
+  # tag to ask for.
+  defp unreadable(component) do
+    {:error,
+     Compendium.Providers.Shared.refusal(
+       Compendium.OCI.Errors.parse_error("get_latest_component", component)
+     )}
   end
 end

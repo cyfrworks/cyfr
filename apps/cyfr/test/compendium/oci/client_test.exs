@@ -495,6 +495,8 @@ defmodule Compendium.OCI.ClientTest do
       :ok
     end
 
+    defp port_of(ctx), do: ctx.registry |> String.split(":") |> List.last()
+
     defp pull_ref(ctx, reference) do
       Compendium.Provider.handle("component", ctx, %{
         "action" => "pull",
@@ -582,10 +584,16 @@ defmodule Compendium.OCI.ClientTest do
       for named <- ["latest", "1.2.3.4"] do
         newest_eligible(ctx.agent, named)
 
-        assert pull_ref(caller("oci_not_a_version"), "reagent:alice.pinned") ==
-                 {:error,
-                  "The registry named #{inspect(named)} as the newest release of " <>
-                    "reagent:alice.pinned, which is not a version"}
+        assert {:error, refusal} = pull_ref(caller("oci_not_a_version"), "reagent:alice.pinned")
+
+        assert refusal == %Prima.Refusal{
+                 class: :unavailable,
+                 reason: {:registry, :parse_error},
+                 message:
+                   "Unexpected response format from 127.0.0.1:#{port_of(ctx)} during " <>
+                     "get_latest_component. This may indicate a registry API version " <>
+                     "mismatch. Check for updates."
+               }
 
         assert [{"GET", "/v1/components/reagent/alice/pinned", nil}] = requests(ctx.agent)
       end
@@ -594,8 +602,13 @@ defmodule Compendium.OCI.ClientTest do
     test "a component with no eligible release pulls nothing", ctx do
       allow(ctx.agent, [:anonymous])
 
-      assert pull_ref(caller("oci_none"), "reagent:alice.pinned") ==
-               {:error, "reagent:alice.pinned has no release to pull"}
+      assert {:error, reason} = pull_ref(caller("oci_none"), "reagent:alice.pinned")
+
+      assert Prima.Refusal.classify(reason) == %Prima.Refusal{
+               class: :not_found,
+               reason: {:not_found, "Release", "reagent:alice.pinned"},
+               message: "Release not found: reagent:alice.pinned"
+             }
 
       assert [{"GET", "/v1/components/reagent/alice/pinned", nil}] = requests(ctx.agent)
     end
