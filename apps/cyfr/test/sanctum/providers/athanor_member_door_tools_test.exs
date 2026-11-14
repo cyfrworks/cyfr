@@ -193,7 +193,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert [] = Enum.filter(Sanctum.Door.Store.list(), &(&1.value == identifier))
   end
 
-  test "door.deny on a member whose slot a successor took answers the ownership refusal, and ejects no one",
+  test "door.deny on a member whose slot a successor took answers the ownership refusal, and writes and ejects nothing",
        %{alice: alice, ops: ops, ctx: ctx} do
     # A claimant runs and this member took a slot; its restore is
     # registered before each change.
@@ -217,10 +217,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, %Prima.Refusal{class: :not_owner, reason: :not_owner, message: message}} =
              call(admin, "door", %{"action" => "deny", "value" => alice})
 
-    assert message ==
-             "Sign-in is denied, but 1 of 1 known people were not ejected — #{alice}: " <>
-               "This server does not currently own its control plane — retry shortly"
-
+    assert message == "This server does not currently own its control plane — retry shortly"
+    assert [] = Enum.filter(Sanctum.Door.Store.list(), &(&1.value == alice))
     assert {:ok, %{status: "active"}} = Users.get(alice)
   end
 

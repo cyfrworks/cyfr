@@ -150,13 +150,17 @@ defmodule Sanctum.Door.Store do
   nothing (`:unavailable`).
   """
   @spec remove(String.t()) ::
-          :ok | {:error, :not_found | :platform_admin | :unavailable | :database_error}
+          :ok
+          | {:error, :not_found | :platform_admin | :unavailable | :not_owner | :database_error}
   def remove(id) when is_binary(id) do
     with {:ok, entry} <- get(id), do: removed(entry)
   end
 
   defp removed(%{effect: "allow", kind: "identifier", value: value, id: id}) do
-    with {:ok, :removed} <- unless_admin("identifier", value, fn -> delete(id) end), do: :ok
+    case unless_admin("identifier", value, fn -> delete(id) end) do
+      {:ok, _removed} -> :ok
+      {:error, _} = refused -> refused
+    end
   end
 
   defp removed(%{id: id}), do: Doors.delete(actor(), id)

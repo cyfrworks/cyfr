@@ -25,12 +25,6 @@ defmodule Arca.UsersMarkingRaceTest do
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
-  @slot_keys [
-    {Arca.ControlPlane, :standing},
-    {Arca.ControlPlane, :generation},
-    {Arca.ControlPlane, :slot}
-  ]
-
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
 
@@ -47,28 +41,19 @@ defmodule Arca.UsersMarkingRaceTest do
   end
 
   # This member's slot, taken on a real connection so every connection
-  # reads the lease; the lease row, the process-wide standing and the
-  # claim switch are given back after the case.
+  # reads the lease; the process-wide standing and the claim switch are
+  # restored after the case, and the lease row is removed.
   defp hold_slot! do
-    saved = Map.new(@slot_keys, &{&1, :persistent_term.get(&1, :absent)})
-    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+    for key <- [:standing, :generation, :slot],
+        do: Prima.Test.Env.erase_persistent_term({Arca.ControlPlane, key})
+
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
     node = "node-#{System.unique_integer([:positive])}"
 
     on_exit(fn ->
       unboxed(fn -> Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node)) end)
-
-      for {key, value} <- saved do
-        if value == :absent,
-          do: :persistent_term.erase(key),
-          else: :persistent_term.put(key, value)
-      end
-
-      if is_nil(claim),
-        do: Application.delete_env(:arca, :control_plane_claim_enabled),
-        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
     end)
 
-    Application.put_env(:arca, :control_plane_claim_enabled, true)
     {:ok, slot} = unboxed(fn -> ControlPlane.take(node, node <> "#boot", 60_000) end)
     slot
   end

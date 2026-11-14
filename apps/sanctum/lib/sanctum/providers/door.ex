@@ -261,6 +261,11 @@ defmodule Sanctum.Providers.Door do
            {:invalid_argument,
             "That is this server's platform administrator, who is never denied here"}}
 
+        # The deny is decided under this member's slot: a member whose slot
+        # a successor took writes no entry.
+        {:error, :not_owner} = refused ->
+          refused
+
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Door] door.deny failed: #{inspect(reason)}")
           {:error, {:unavailable, "The sign-in allowlist"}}
@@ -315,6 +320,9 @@ defmodule Sanctum.Providers.Door do
         {:error,
          {:invalid_argument,
           "That allow lets this server's platform administrator sign in, so it is never removed"}}
+
+      {:error, :not_owner} = refused ->
+        refused
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Door] door.remove failed: #{inspect(reason)}")
