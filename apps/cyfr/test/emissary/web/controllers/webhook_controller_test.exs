@@ -200,8 +200,7 @@ defmodule Emissary.Web.WebhookControllerTest do
       )
 
       profile =
-        Sanctum.Test.ConsentFixtures.bindable_profile(in_athanor, "f:local.#{comp}"
-        )
+        Sanctum.Test.ConsentFixtures.bindable_profile(in_athanor, "f:local.#{comp}")
 
       {:ok, %{slug: slug, secret: secret}} =
         Sanctum.TestContext.create_webhook(in_athanor, %{
