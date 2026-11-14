@@ -23,6 +23,19 @@ defmodule PrismWeb.ComponentDetailLiveTest do
     %{conn: conn, ctx: ctx, user: user}
   end
 
+  # The store made unable to read `table` for the rest of the test: the
+  # table renamed inside the test's sandbox transaction, which the sandbox
+  # rolls back on every exit of the test, the table's name with it. No
+  # restore is made inside the transaction: on postgres the first failed
+  # read aborts it, and nothing the test runs after that reaches the
+  # database, so the outage is the test's last step that does. This file
+  # is synchronous (`async: false`) because the rename is seen by every
+  # process on the test's connection.
+  defp unreadable!(table) do
+    Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unreadable")
+    :ok
+  end
+
   defp publish_reportable!(ctx) do
     {:ok, _} =
       Compendium.Registry.publish_bytes(
@@ -394,6 +407,79 @@ defmodule PrismWeb.ComponentDetailLiveTest do
                      @answered_ms
 
       assert reports_sent() == 0
+    end
+  end
+
+  describe "the run form" do
+    setup %{ctx: ctx} do
+      Cyfr.Test.SeedBundle.isolate!()
+
+      {:ok, _} =
+        Arca.Test.UnitFixtures.ship_bytes!(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "run-probe",
+          version: "0.1.0",
+          type: "reagent",
+          description: "answers every input but a trap"
+        })
+
+      {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+      :ok
+    end
+
+    defp runs(ctx) do
+      {:ok, %{count: count}} =
+        Sanctum.Gate.call_external("execution", ctx, %{"action" => "list"})
+
+      count
+    end
+
+    test "sends typed JSON as the run's input and shows the run's result", %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/components/reagent:local.run-probe:0.1.0")
+
+      view |> form("#run-form", %{"input" => ~s({"a": 1})}) |> render_submit()
+
+      assert has_element?(view, "#run-result", "Completed")
+      assert has_element?(view, "#run-result pre", ~s("ran": true))
+      refute has_element?(view, "#run-error")
+    end
+
+    test "input that is not a JSON object runs nothing and says why", %{conn: conn, ctx: ctx} do
+      {view, _html} = mount_athanor(conn, "/components/reagent:local.run-probe:0.1.0")
+      before = runs(ctx)
+
+      view |> form("#run-form", %{"input" => "[1, 2]"}) |> render_submit()
+      assert has_element?(view, "#run-error", "The input must be a JSON object")
+
+      view |> form("#run-form", %{"input" => "{oops"}) |> render_submit()
+      assert has_element?(view, "#run-error", "The input is not valid JSON.")
+
+      refute has_element?(view, "#run-result")
+      assert runs(ctx) == before
+    end
+
+    @tag :capture_log
+    test "a grant whose head the store cannot answer says so and offers to read it again",
+         %{conn: conn} do
+      path = "/components/reagent:local.run-probe:0.1.0"
+
+      {view, _html} = mount_athanor(conn, path)
+      assert has_element?(view, "#grants li", "Granted · revision")
+
+      # One read of the grants once the heads cannot be read, the list's own.
+      :ok = unreadable!("consents")
+      view |> with_target("#grants") |> render_click("reload", %{})
+
+      assert has_element?(view, "#grants li", "Could not be read just now.")
+      assert has_element?(view, "#grants li button", "Try again")
+      refute has_element?(view, "#grants li", "Granted")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "lists the component's grants, each with Revoke", %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/components/reagent:local.run-probe:0.1.0")
+
+      assert has_element?(view, "#grants li", "Your grant")
+      assert has_element?(view, "#grants li button", "Revoke")
     end
   end
 end

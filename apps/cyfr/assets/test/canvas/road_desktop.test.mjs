@@ -711,3 +711,27 @@ describe("the road desktop 0.2.0 draws", () => {
     assert.ok(sections.find((sec) => sec.title === "CYFR").items.some((i) => i.text === "Storage: 92 GB of 100 GB"))
   })
 })
+
+// ---- 0.3.0 -------------------------------------------------------------------------------------
+
+describe("the road desktop 0.3.0", () => {
+  const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`
+
+  test("the windmill and the tram line with no reading name their feed and say to ask AQUA for one, until a reading comes", async () => {
+    const p = page({version: "0.3.0"})
+    await settle()
+    p.pump()
+    assert.equal(label(p, "Windmill"), `Windmill: ${sentence("weather")}`)
+    assert.equal(label(p, "Tram line"), `Tram line: ${sentence("vpn")}`)
+    // The plain page says the same.
+    p.win.RoadList.show()
+    const plain = p.ids.lists.children.filter((c) => c.tagName === "SECTION").map((sec) => sec.children.map((c) => c.textContent).join(" | "))
+    assert.ok(plain.includes(`Weather | ${sentence("weather")}`), plain.join("\n"))
+    assert.ok(plain.includes(`VPN | ${sentence("vpn")}`), plain.join("\n"))
+
+    picture(p, "feed:weather", [{binding: "bnd_w", feed: "weather", label: "Lisbon", result: {place: "Lisbon", temp_c: 21, sky: "clear"}, actions: []}])
+    assert.ok(label(p, "Weather in Lisbon"), labels(p).join(" | "))
+    assert.equal(label(p, "Windmill"), "")
+    assert.equal(label(p, "Tram line"), `Tram line: ${sentence("vpn")}`)
+  })
+})

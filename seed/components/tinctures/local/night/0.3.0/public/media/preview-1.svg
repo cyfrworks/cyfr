@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" font-family="ui-rounded, 'Trebuchet MS', system-ui, sans-serif">
+  <defs>
+    <filter id="glow" x="-30%" y="-60%" width="160%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1022"/><stop offset="1" stop-color="#05060b"/>
+    </linearGradient>
+    <linearGradient id="puddle" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a0c13"/><stop offset="1" stop-color="#05060b"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#sky)"/>
+  <g fill="#c3cadf" opacity=".5">
+    <circle cx="210" cy="30" r="1.5"/><circle cx="520" cy="18" r="1.2"/><circle cx="880" cy="40" r="1.5"/><circle cx="1210" cy="22" r="1.2"/><circle cx="1460" cy="44" r="1.5"/>
+  </g>
+  <!-- the wires between the signs -->
+  <path d="M0 96 Q400 130 800 98 T1600 104" fill="none" stroke="#2b3247" stroke-width="2"/>
+
+  <!-- header plate -->
+  <rect x="40" y="26" width="300" height="58" rx="10" fill="#0a0c13" stroke="#2b3144" stroke-width="2"/>
+  <text x="62" y="64" font-size="28" fill="#c3cadf">your street</text>
+  <text x="372" y="62" font-size="22" fill="#8a93ad">3 things burn for you</text>
+
+  <!-- the wall -->
+  <g>
+    <!-- threads -->
+    <rect x="40" y="120" width="330" height="440" rx="10" fill="#0a0c13" stroke="#1a1f2d" stroke-width="2"/>
+    <text x="64" y="166" font-size="30" fill="#3a4259">Threads</text>
+    <g font-size="24">
+      <text x="64" y="226" fill="#ff3d9a" filter="url(#glow)">Trip planning</text>
+      <text x="64" y="254" font-size="17" fill="#8a93ad">approve · since 09:12</text>
+      <text x="64" y="310" fill="#2b3144">Family</text>
+      <text x="64" y="338" font-size="17" fill="#8a93ad">3 people · 2 unread</text>
+      <text x="64" y="394" fill="#2b3144">Tax notes</text>
+      <text x="64" y="422" font-size="17" fill="#8a93ad">with AQUA</text>
+      <text x="64" y="478" fill="#2b3144">Weekend</text>
+      <text x="64" y="506" font-size="17" fill="#8a93ad">2 people</text>
+    </g>
+
+    <!-- schedules board -->
+    <rect x="394" y="120" width="420" height="440" rx="10" fill="#0a0c13" stroke="#1a1f2d" stroke-width="2"/>
+    <text x="418" y="166" font-size="30" fill="#3a4259">Schedules</text>
+    <text x="418" y="204" font-size="16" fill="#8a93ad">NEXT</text>
+    <g font-family="'Courier New', monospace" font-size="19" font-weight="700" fill="#cdb88f">
+      <text x="418" y="238">14:30</text><text x="500" y="238">weather</text>
+      <text x="418" y="270">19:00</text><text x="500" y="270">evening digest</text>
+      <text x="418" y="302">07:00</text><text x="500" y="302">morning digest</text>
+    </g>
+    <text x="418" y="352" font-size="16" fill="#8a93ad">LATELY</text>
+    <g font-size="20">
+      <text x="418" y="388" fill="#8a93ad">14:10</text><text x="490" y="388" fill="#2b3144">weather</text><circle cx="784" cy="382" r="6" fill="#3b9a62"/>
+      <text x="418" y="424" fill="#8a93ad">10:40</text><text x="490" y="424" fill="#ff4b3a" filter="url(#glow)">digest</text><text x="580" y="424" fill="#ff4b3a" opacity=".55" font-size="17">timed out</text><circle cx="784" cy="418" r="6" fill="#ff4b3a" filter="url(#glow)"/>
+      <text x="418" y="460" fill="#8a93ad">09:00</text><text x="490" y="460" fill="#2b3144">backup photos</text><circle cx="784" cy="454" r="6" fill="#3b9a62"/>
+      <text x="418" y="496" fill="#8a93ad">08:30</text><text x="490" y="496" fill="#cfeaff" filter="url(#glow)">sync notes</text><circle cx="784" cy="490" r="6" fill="#cfeaff"/>
+    </g>
+
+    <!-- weather roof sign -->
+    <rect x="838" y="120" width="380" height="210" rx="10" fill="#0a0c13" stroke="#1a1f2d" stroke-width="2"/>
+    <text x="862" y="238" font-size="92" fill="#d9e4ff" filter="url(#glow)">21°</text>
+    <text x="1030" y="188" font-size="24" fill="#c3cadf">Lisbon</text>
+    <text x="1030" y="216" font-size="18" fill="#a3abc4">clear · wind 14</text>
+    <g fill="#2b3144">
+      <rect x="1030" y="260" width="22" height="40" rx="3"/><rect x="1064" y="268" width="22" height="32" rx="3"/><rect x="1098" y="276" width="22" height="24" rx="3"/><rect x="1132" y="284" width="22" height="16" rx="3"/>
+    </g>
+    <text x="862" y="304" font-size="16" fill="#8a93ad">updated 14:10</text>
+
+    <!-- crew sign -->
+    <rect x="838" y="350" width="380" height="210" rx="10" fill="#0a0c13" stroke="#1a1f2d" stroke-width="2"/>
+    <text x="862" y="410" font-size="34" fill="#cfeaff" filter="url(#glow)">explorer</text>
+    <text x="862" y="446" font-size="20" fill="#a3abc4">Compare ferry times</text>
+    <text x="862" y="476" font-size="16" fill="#8a93ad">for Noor · since 14:12</text>
+    <g fill="#cfeaff" filter="url(#glow)"><circle cx="866" cy="520" r="4"/><circle cx="886" cy="520" r="4" opacity=".5"/><circle cx="906" cy="520" r="4" opacity=".25"/></g>
+
+    <!-- vpn mast -->
+    <rect x="1242" y="120" width="318" height="440" rx="10" fill="#0a0c13" stroke="#1a1f2d" stroke-width="2"/>
+    <rect x="1398" y="140" width="5" height="250" fill="#2b3247"/>
+    <circle cx="1400" cy="140" r="5" fill="#ff463c" filter="url(#glow)"/>
+    <g font-size="20" fill="#2b3144">
+      <rect x="1290" y="180" width="100" height="34" rx="6" fill="#0e111a"/><text x="1306" y="204">lis-1</text>
+      <rect x="1410" y="230" width="110" height="34" rx="6" fill="#0e111a"/><text x="1426" y="254" fill="#3b9a62" filter="url(#glow)">lis-2</text>
+      <rect x="1290" y="280" width="100" height="34" rx="6" fill="#0e111a"/><text x="1306" y="304">ams-1</text>
+    </g>
+    <rect x="1266" y="410" width="270" height="130" rx="8" fill="#0e111a"/>
+    <text x="1288" y="456" font-size="34" fill="#d9e4ff" filter="url(#glow)">VPN</text>
+    <text x="1288" y="490" font-size="20" fill="#a3abc4">connected · lis-2</text>
+    <text x="1288" y="520" font-size="16" fill="#8a93ad">84 Mb/s down</text>
+  </g>
+
+  <!-- street level: CYFR, the apps, files -->
+  <rect x="0" y="584" width="1600" height="4" fill="#1a1f2d"/>
+  <g>
+    <rect x="40" y="606" width="250" height="128" rx="10" fill="#0e111a" stroke="#1a1f2d" stroke-width="2"/>
+    <text x="64" y="648" font-size="26" fill="#c3cadf">CYFR</text>
+    <text x="64" y="680" font-size="18" fill="#a3abc4">all is well</text>
+    <text x="64" y="708" font-size="16" fill="#8a93ad">38 of 100 GB · crew 2 of 2</text>
+
+    <g font-size="20" text-anchor="middle">
+      <rect x="314" y="606" width="190" height="128" rx="10" fill="#0e111a" stroke="#1a1f2d" stroke-width="2"/>
+      <rect x="374" y="626" width="70" height="56" rx="8" fill="#141826"/><text x="409" y="664" fill="#ffd27a" filter="url(#glow)">M</text><text x="409" y="716" fill="#a3abc4">Maps</text>
+      <rect x="520" y="606" width="190" height="128" rx="10" fill="#0e111a" stroke="#1a1f2d" stroke-width="2"/>
+      <rect x="580" y="626" width="70" height="56" rx="8" fill="#141826"/><text x="615" y="664" fill="#3a4259">F</text><text x="615" y="716" fill="#a3abc4">Flights</text>
+      <rect x="726" y="606" width="190" height="128" rx="10" fill="#0e111a" stroke="#1a1f2d" stroke-width="2"/>
+      <rect x="786" y="626" width="70" height="56" rx="8" fill="#141826"/><text x="821" y="664" fill="#3a4259">V</text><text x="821" y="716" fill="#a3abc4">Voxels</text>
+      <rect x="932" y="606" width="190" height="128" rx="10" fill="#0e111a" stroke="#1a1f2d" stroke-width="2"/>
+      <rect x="992" y="626" width="70" height="56" rx="8" fill="#141826"/><text x="1027" y="664" fill="#3a4259">W</text><text x="1027" y="716" fill="#a3abc4">Weather</text>
+    </g>
+
+    <rect x="1146" y="606" width="414" height="128" rx="10" fill="#0e111a" stroke="#1a1f2d" stroke-width="2"/>
+    <text x="1170" y="648" font-size="26" fill="#3a4259">Files</text>
+    <text x="1170" y="684" font-size="22" fill="#2ee6ff" filter="url(#glow)">budget.xlsx</text>
+    <text x="1326" y="684" font-size="17" fill="#8a93ad">offer from Sam</text>
+    <text x="1170" y="714" font-size="17" fill="#8a93ad">cover.png · 13:02</text>
+  </g>
+
+  <!-- the puddle: the burning signs again, under the rain -->
+  <rect x="0" y="756" width="1600" height="144" fill="url(#puddle)"/>
+  <g opacity=".28" filter="url(#glow)">
+    <rect x="64" y="776" width="170" height="6" rx="3" fill="#ff3d9a"/>
+    <rect x="490" y="790" width="70" height="5" rx="2.5" fill="#ff4b3a"/>
+    <rect x="862" y="782" width="140" height="10" rx="5" fill="#d9e4ff"/>
+    <rect x="1170" y="796" width="150" height="5" rx="2.5" fill="#2ee6ff"/>
+    <rect x="1288" y="810" width="70" height="6" rx="3" fill="#d9e4ff"/>
+  </g>
+  <g stroke="#1a1f2d" stroke-width="2">
+    <line x1="120" y1="840" x2="260" y2="840"/><line x1="640" y1="860" x2="820" y2="860"/><line x1="1100" y1="846" x2="1260" y2="846"/>
+  </g>
+</svg>

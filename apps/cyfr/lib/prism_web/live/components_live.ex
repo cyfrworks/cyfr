@@ -1445,6 +1445,19 @@ defmodule PrismWeb.ComponentsLive do
                       <td colspan="3" class="px-4 py-4">
                         <.live_loading :if={@expanded_loading} message="Loading…" />
                         <div :if={@expanded_detail} class="space-y-4">
+                          <.link
+                            :if={group.component_type != "tincture"}
+                            navigate={
+                              PrismWeb.Focus.path(
+                                @athanor_route,
+                                "/components/" <> URI.encode(comp_ref(group.latest))
+                              )
+                            }
+                            data-test="run-page"
+                            class="inline-flex items-center gap-1 text-sm text-blue-400 hover:underline"
+                          >
+                            Run {extract_name(group.name_ref)} &rarr;
+                          </.link>
                           <!-- Description -->
                           <div :if={@expanded_detail["description"] not in [nil, ""]}>
                             <p class="text-sm text-gray-300">
@@ -1750,6 +1763,15 @@ defmodule PrismWeb.ComponentsLive do
                                   {comp_field(dep, :ref)}
                                 </.badge>
                               </dd>
+                            </div>
+
+                            <div class="px-4 pb-4">
+                              <.live_component
+                                module={PrismWeb.GrantsComponent}
+                                id={"grants-" <> group.name_ref}
+                                ref={group.name_ref}
+                                context={@context}
+                              />
                             </div>
                           </div>
                         </div>

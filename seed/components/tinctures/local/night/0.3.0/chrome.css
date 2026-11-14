@@ -1,0 +1,19 @@
+@font-face {
+  font-family: "Tilt Neon";
+  src: url(fonts/tilt-neon-latin.woff2) format("woff2");
+}
+:root {
+  --chrome-ground-dark: #05060b;
+  --chrome-surface-dark: #0a0c13;
+  --chrome-ink-dark: #eef1f8;
+  --chrome-accent-dark: #d9e4ff;
+  --chrome-radius: 10px;
+  --chrome-border: 2px;
+  --chrome-edge: 8px;
+  --chrome-title-height: 34px;
+  --chrome-controls: right;
+  --chrome-title-align: left;
+  --chrome-glyphs: round;
+  --chrome-font: "Tilt Neon";
+  --chrome-texture-shelf: url(shelf.svg);
+}

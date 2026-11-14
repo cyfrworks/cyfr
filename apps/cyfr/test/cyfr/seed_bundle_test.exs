@@ -100,11 +100,11 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is 0.6.0 on the react template, the default layout's, and the publish check accepts it" do
+  test "the shipped canvas is 0.6.1 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
-    assert canvas.version == "0.6.0"
+    assert canvas.version == "0.6.1"
 
     # The seed ships it beside the versions before it, which stay as they
     # shipped.
@@ -113,6 +113,7 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert dir |> Path.dirname() |> File.ls!() |> Enum.sort() == [
              "0.4.0",
              "0.5.0",
+             "0.6.0",
              canvas.version
            ]
 
@@ -198,9 +199,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     # the declaration and its streams, the served types and the lockfile.
     assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
 
-    # Its sources with the lockfile beside its package manifest, and the
-    # build's page, its assets and the notices of the packages it bundles:
-    # no build debris.
+    # Its sources with the lockfile beside its package manifest and its
+    # preview picture, and the build's page, its assets, the notices of the
+    # packages it bundles and the copy of public/ Vite makes: no build
+    # debris.
     files =
       for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
           File.regular?(path),
@@ -209,17 +211,19 @@ defmodule Cyfr.Test.SeedBundleTest do
     {built, sources} = Enum.split_with(files, &String.starts_with?(&1, "dist/"))
 
     assert Enum.sort(sources) ==
-             ~w(chrome.css cyfr-manifest.json index.html package-lock.json package.json src/App.tsx
-                src/cyfr.d.ts src/index.css src/main.tsx src/model.ts tsconfig.json vite.config.ts)
+             ~w(chrome.css cyfr-manifest.json index.html package-lock.json package.json
+                public/media/preview-1.svg src/App.tsx src/cyfr.d.ts src/index.css src/main.tsx
+                src/model.ts tsconfig.json vite.config.ts)
 
     assert {[_js], [_css]} =
              built
              |> Enum.filter(&(&1 =~ ~r{\Adist/assets/index-[A-Za-z0-9_-]+\.(js|css)\z}))
              |> Enum.split_with(&String.ends_with?(&1, ".js"))
 
-    assert length(built) == 4
+    assert length(built) == 5
     assert "dist/index.html" in built
     assert "dist/third-party-notices.json" in built
+    assert "dist/media/preview-1.svg" in built
   end
 
   # A desktop's Retry: `execution.retry`, picked from the runs it reads at
@@ -237,41 +241,70 @@ defmodule Cyfr.Test.SeedBundleTest do
     )
   end
 
-  # A shipped version is immutable: each desktop's earlier version (the
-  # five's 0.1.0, the canvas's 0.5.0) ships beside its new one as it
-  # shipped, still a desktop the publish check accepts, with no retry
-  # control.
-  test "each shipped desktop's earlier version still ships beside the new one and passes the publish check" do
+  # Each shipped desktop: the versions it shipped before, oldest first,
+  # and its newest.
+  @desktops [
+    {"canvas", ~w(0.4.0 0.5.0 0.6.0), "0.6.1"},
+    {"line", ~w(0.1.0 0.2.0), "0.3.0"},
+    {"night", ~w(0.1.0 0.2.0), "0.3.0"},
+    {"road", ~w(0.1.0 0.2.0), "0.3.0"},
+    {"street", ~w(0.1.0 0.2.0), "0.3.0"},
+    {"switchboard", ~w(0.1.0 0.2.0), "0.3.0"}
+  ]
+  # The earlier versions that shipped before Retry did.
+  @before_retry ~w(0.1.0 0.4.0 0.5.0)
+
+  # A shipped version is immutable: each desktop's earlier versions ship
+  # beside its newest as they shipped, each still a desktop the publish
+  # check accepts, with Retry only where it shipped with one.
+  test "each shipped desktop's earlier versions still ship beside the newest and pass the publish check" do
     components = Path.expand("../../../../seed/components", __DIR__)
 
-    for {name, before, now} <- [
-          {"canvas", "0.5.0", "0.6.0"},
-          {"line", "0.1.0", "0.2.0"},
-          {"night", "0.1.0", "0.2.0"},
-          {"road", "0.1.0", "0.2.0"},
-          {"street", "0.1.0", "0.2.0"},
-          {"switchboard", "0.1.0", "0.2.0"}
-        ] do
+    for {name, earlier, now} <- @desktops do
       unit = SeedBundle.local_unit!("tinctures", name)
       assert unit.version == now, name
-      dir = Path.join(components, "tinctures/local/#{name}/#{before}")
-      assert before in (dir |> Path.dirname() |> File.ls!()), name
+      versions = Path.join(components, "tinctures/local/#{name}")
+      assert versions |> File.ls!() |> Enum.sort() == earlier ++ [now], name
 
-      manifest = dir |> Path.join("cyfr-manifest.json") |> File.read!() |> Jason.decode!()
-      assert manifest["version"] == before, name
-      assert Prima.Manifest.validate(manifest, fn _ -> true end) == :ok, name
-      assert {:ok, declaration} = Compendium.tincture_declaration(manifest)
-      assert Prima.Manifest.Tincture.canvas?(declaration), name
-      assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
-      refute Enum.any?(declaration.desktop.controls, &(&1.operation == "execution.retry")), name
-      assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
+      for before <- earlier do
+        dir = Path.join(versions, before)
+        manifest = dir |> Path.join("cyfr-manifest.json") |> File.read!() |> Jason.decode!()
+        assert manifest["version"] == before, "#{name} #{before}"
+        assert Prima.Manifest.validate(manifest, fn _ -> true end) == :ok, "#{name} #{before}"
+        assert {:ok, declaration} = Compendium.tincture_declaration(manifest)
+        assert Prima.Manifest.Tincture.canvas?(declaration), "#{name} #{before}"
+        assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
+
+        assert Enum.any?(declaration.desktop.controls, &(&1.operation == "execution.retry")) ==
+                 before not in @before_retry,
+               "#{name} #{before}"
+
+        assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
+      end
     end
   end
 
-  test "the line desktop is 0.2.0 on the vanilla template, and the publish check accepts it" do
+  # The picker shows a version's previews from public/media/
+  # (Compendium.Tincture.media/2): each desktop's newest version carries
+  # one, a vector picture that draws itself, with no script, no embedded
+  # document and nothing it loads.
+  test "each shipped desktop's newest version carries its preview picture" do
+    components = Path.expand("../../../../seed/components", __DIR__)
+
+    for {name, _earlier, now} <- @desktops do
+      path = Path.join(components, "tinctures/local/#{name}/#{now}/public/media/preview-1.svg")
+      assert File.regular?(path), path
+      svg = File.read!(path)
+      assert byte_size(svg) < 100_000, path
+      assert svg =~ ~r/\A<svg [^>]*viewBox="0 0 1600 900"/, path
+      refute svg =~ ~r/<script|<foreignObject|<image|\son[a-z]+=|href="(?!#)|url\((?!#)/i, path
+    end
+  end
+
+  test "the line desktop is 0.3.0 on the vanilla template, and the publish check accepts it" do
     line = SeedBundle.local_unit!("tinctures", "line")
     assert line.ref == "tincture:local.line"
-    assert line.version == "0.2.0"
+    assert line.version == "0.3.0"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), line.rel)
 
     assert Prima.Manifest.validate(line.manifest, fn _ -> true end) == :ok
@@ -326,7 +359,8 @@ defmodule Cyfr.Test.SeedBundleTest do
           do: Path.relative_to(path, dir)
 
     assert Enum.sort(files) ==
-             ~w(app.js chrome.css cyfr-manifest.json fonts/geist-latin.woff2 index.html style.css)
+             ~w(app.js chrome.css cyfr-manifest.json fonts/geist-latin.woff2 index.html
+                public/media/preview-1.svg style.css)
   end
 
   test "the shipped night desktop is a vanilla page that reads what it declares and passes the publish check" do
@@ -345,7 +379,7 @@ defmodule Cyfr.Test.SeedBundleTest do
     # It reads what waits, the threads, runs, schedules, crew, components,
     # vault, files and how CYFR stands, and two feeds by name; it pauses and
     # resumes the schedules it reads and runs a failed run again.
-    assert night.version == "0.2.0"
+    assert night.version == "0.3.0"
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
     assert declaration.desktop.feeds == ["weather", "vpn"]
@@ -383,7 +417,8 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert files |> Enum.map(&elem(&1, 0)) |> Enum.sort() ==
              ~w(chrome.css cyfr-manifest.json fonts/doto-latin.woff2 fonts/tilt-neon-latin.woff2
-                index.html model.js scene.js shelf.svg street.js styles.css)
+                index.html model.js public/media/preview-1.svg scene.js shelf.svg street.js
+                styles.css)
 
     # Its page loads its own files alone and reads nothing but its streams.
     for name <- ~w(index.html model.js scene.js street.js styles.css) do
@@ -399,10 +434,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute Map.has_key?(night.manifest, "dependencies")
   end
 
-  test "the road desktop is 0.2.0 on the vanilla template, and the publish check accepts it" do
+  test "the road desktop is 0.3.0 on the vanilla template, and the publish check accepts it" do
     road = SeedBundle.local_unit!("tinctures", "road")
     assert road.ref == "tincture:local.road"
-    assert road.version == "0.2.0"
+    assert road.version == "0.3.0"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), road.rel)
 
     assert Prima.Manifest.validate(road.manifest, fn _ -> true end) == :ok
@@ -477,13 +512,13 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert Enum.sort(files) ==
              ~w(art.js azulejo.svg boot.js calcada.svg chrome.css cyfr-manifest.json font.js
-                index.html list.js model.js road-pixel.woff2 scene.js)
+                index.html list.js model.js public/media/preview-1.svg road-pixel.woff2 scene.js)
   end
 
-  test "the switchboard desktop is 0.2.0 on the vanilla template, reads what it declares and passes the publish check" do
+  test "the switchboard desktop is 0.3.0 on the vanilla template, reads what it declares and passes the publish check" do
     board = SeedBundle.local_unit!("tinctures", "switchboard")
     assert board.ref == "tincture:local.switchboard"
-    assert board.version == "0.2.0"
+    assert board.version == "0.3.0"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), board.rel)
 
     assert Prima.Manifest.validate(board.manifest, fn _ -> true end) == :ok
@@ -543,7 +578,7 @@ defmodule Cyfr.Test.SeedBundleTest do
              ~w(board.js chrome.css cords.js cyfr-manifest.json fonts/doto-800.woff2
                 fonts/michroma-400.woff2 fonts/saira-semi-condensed-500.woff2
                 fonts/saira-semi-condensed-600.woff2 fonts/saira-semi-condensed-700.woff2
-                index.html main.js model.js plain.js style.css)
+                index.html main.js model.js plain.js public/media/preview-1.svg style.css)
 
     # Its page loads its own files alone and reads nothing but its streams.
     for name <- ~w(index.html board.js cords.js main.js model.js plain.js style.css) do
@@ -559,10 +594,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute Map.has_key?(board.manifest, "dependencies")
   end
 
-  test "the street desktop is 0.2.0 on the vanilla template, and the publish check accepts it" do
+  test "the street desktop is 0.3.0 on the vanilla template, and the publish check accepts it" do
     street = SeedBundle.local_unit!("tinctures", "street")
     assert street.ref == "tincture:local.street"
-    assert street.version == "0.2.0"
+    assert street.version == "0.3.0"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), street.rel)
 
     assert Prima.Manifest.validate(street.manifest, fn _ -> true end) == :ok
@@ -622,7 +657,8 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert Enum.sort(files) ==
              ~w(app.js assets/pixelify.woff2 assets/silkscreen.woff2 chrome.css chrome/shelf.svg
-                chrome/title.svg cyfr-manifest.json index.html public/media/icon.svg style.css)
+                chrome/title.svg cyfr-manifest.json index.html public/media/icon.svg
+                public/media/preview-1.svg style.css)
   end
 
   test "the shipped vault declares only what a frame can complete, and passes the publish check" do

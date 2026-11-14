@@ -67,6 +67,19 @@ defmodule PrismWeb.ComponentsLiveTest do
     {:ok, conn: conn, ctx: ctx, seed: seed}
   end
 
+  # The store made unable to read `table` for the rest of the test: the
+  # table renamed inside the test's sandbox transaction, which the sandbox
+  # rolls back on every exit of the test, the table's name with it. No
+  # restore is made inside the transaction: on postgres the first failed
+  # read aborts it, and nothing the test runs after that reaches the
+  # database, so the outage is the test's last step that does. This file
+  # is synchronous (`async: false`) because the rename is seen by every
+  # process on the test's connection.
+  defp unreadable!(table) do
+    Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unreadable")
+    :ok
+  end
+
   defp expanded_html(conn) do
     {view, _html} = mount_athanor(conn, "/components")
     render_click(view, "toggle_expand", %{"ref" => "reagent:local.shelf-tool"})
@@ -769,5 +782,148 @@ defmodule PrismWeb.ComponentsLiveTest do
 
     assert html =~ "A distinctive description"
     assert html =~ "distinctive-tag"
+  end
+
+  describe "the expanded row" do
+    test "links the component's run page", %{conn: conn} do
+      {view, _html} = expanded_html(conn)
+
+      assert has_element?(
+               view,
+               ~s(a[data-test="run-page"][href$="/components/reagent:local.shelf-tool:1.0.0"])
+             )
+    end
+
+    test "lists each grant with Revoke, and a revoke leaves the component with none",
+         %{conn: conn, ctx: ctx} do
+      profile = ConsentFixtures.grant_tincture!(ctx, @ref)
+      {view, _html} = expanded_html(conn)
+      grant = ~s([id="grants-#{@ref}-#{profile}"])
+
+      assert has_element?(view, grant, "Your grant")
+
+      view |> element(grant <> " button", "Revoke") |> render_click()
+
+      assert {:ok, []} = Sanctum.Consent.profiles(ctx, @ref)
+      refute has_element?(view, grant)
+      assert has_element?(view, ~s([id="grants-#{@ref}"]), "No grants.")
+    end
+
+    # The expanded row drawn afresh, so its grants are read again.
+    defp reexpanded(view) do
+      render_click(view, "toggle_expand", %{"ref" => @ref})
+      render_click(view, "toggle_expand", %{"ref" => @ref})
+      view
+    end
+
+    defp set_profile!(ctx, id, changes) do
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.Profile,
+            where: p.athanor_id == ^ctx.athanor_id and p.id == ^id
+          ),
+          set: changes
+        )
+    end
+
+    test "a grant whose head is missing or damaged says so, and only one that reads is granted",
+         %{conn: conn, ctx: ctx} do
+      profile = ConsentFixtures.grant_tincture!(ctx, @ref)
+      {view, _html} = expanded_html(conn)
+      grant = ~s([id="grants-#{@ref}-#{profile}"])
+      assert has_element?(view, grant, "Granted · revision 1")
+
+      set_profile!(ctx, profile, head_consent_id: nil)
+      reexpanded(view)
+      assert has_element?(view, grant, "Not granted: no grant is recorded for it.")
+      refute has_element?(view, grant, "Granted ·")
+
+      set_profile!(ctx, profile, head_consent_id: "cons_shelf_tool")
+      :ok = ConsentFixtures.hand_edit_head!(ctx, profile, scope: "sideways")
+      reexpanded(view)
+      assert has_element?(view, grant, "Damaged: it cannot be read.")
+      refute has_element?(view, grant, "Granted ·")
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, profile, scope: "versionless")
+      reexpanded(view)
+      assert has_element?(view, grant, "Granted · revision 1")
+    end
+
+    test "another athanor's grant of the component, the administrator's among them, is neither listed nor revocable",
+         %{conn: conn, ctx: ctx} do
+      own = ConsentFixtures.grant_tincture!(ctx, @ref)
+
+      foreign =
+        for {id, athanor_id} <- [
+              {"prof_other_person", "ath_other_person_#{System.unique_integer([:positive])}"},
+              {"prof_administrator", "ath_administrator_#{System.unique_integer([:positive])}"}
+            ] do
+          Arca.Test.Actor.athanor!(athanor_id)
+          other = %{ctx | athanor_id: athanor_id}
+
+          :ok =
+            ConsentFixtures.seed_head!(
+              other,
+              %{id: id, kind: :owner, source_ref: @ref, label: "default", status: :active},
+              %{
+                id: "cons_" <> id,
+                revision: 1,
+                scope: :versionless,
+                pinned_version: "",
+                invoke_mode: :open_inert,
+                shape_digest: "sha256:shape",
+                commit_digest: "sha256:commit",
+                resolved_policy: ConsentFixtures.empty_policy(@ref),
+                activation: %{@ref => "sha256:act"}
+              }
+            )
+
+          {other, id}
+        end
+
+      {view, _html} = expanded_html(conn)
+      assert has_element?(view, ~s([id="grants-#{@ref}-#{own}"]), "Your grant")
+
+      for {other, id} <- foreign do
+        refute has_element?(view, ~s([id="grants-#{@ref}-#{id}"]))
+
+        # Asked for anyway, by the page's event and by the operation as the
+        # person: neither reaches another athanor's row.
+        view
+        |> with_target(~s([id="grants-#{@ref}"]))
+        |> render_click("revoke", %{"profile" => id})
+
+        person = :sys.get_state(view.pid).socket.assigns.context
+
+        assert {:error, _not_theirs} =
+                 Sanctum.Gate.call_external("profile", person, %{
+                   "action" => "revoke",
+                   "profile_id" => id
+                 })
+
+        assert {:ok, %{status: "active"}} =
+                 Arca.ProfileStorage.get(Sanctum.Context.actor(other), id)
+      end
+    end
+
+    @tag :capture_log
+    test "a revoke the store refuses says so on the page, and the grant stays listed",
+         %{conn: conn, ctx: ctx} do
+      profile = ConsentFixtures.grant_tincture!(ctx, @ref)
+      {view, _html} = expanded_html(conn)
+      grant = ~s([id="grants-#{@ref}-#{profile}"])
+
+      assert {:ok, [%{id: ^profile, status: :active}]} = Sanctum.Consent.profiles(ctx, @ref)
+
+      # The profiles cannot be read when the revoke comes: the operation
+      # refuses it before it writes, and the page says so, the grant still
+      # listed as it was.
+      :ok = unreadable!("profiles")
+      view |> element(grant <> " button", "Revoke") |> render_click()
+
+      assert has_element?(view, ~s([id="grants-#{@ref}"]), "The grant was not revoked:")
+      assert has_element?(view, grant, "Granted · revision 1")
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 end

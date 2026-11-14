@@ -168,7 +168,7 @@ function stub() {
 // events into, whose `press` answers `answer` (a value, or a function of
 // the press), and whose first opens of the streams named in `refuse` reject
 // with that code. Its timers wait until the test runs them.
-function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}} = {}) {
+function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}, version = V2} = {}) {
   const els = new Map(["street", "header", "wall", "level", "puddle-index", "plate", "fusebox"].map((id) => [`#${id}`, stub()]))
   const frames = []
   const timers = []
@@ -217,7 +217,7 @@ function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}} = {}
   }
   page.window = page
   vm.createContext(page)
-  for (const file of ["model.js", "street.js"]) vm.runInContext(readFileSync(new URL(file, V2), "utf8"), page, {filename: file})
+  for (const file of ["model.js", "street.js"]) vm.runInContext(readFileSync(new URL(file, version), "utf8"), page, {filename: file})
   const html = (id) => els.get(`#${id}`).innerHTML
   return {
     opened,
@@ -607,5 +607,26 @@ describe("the night desktop 0.2.0", () => {
     p.tap({"data-target": "file:data/trip.md"})
     press(p, "Open files")
     assert.deepEqual(p.pages, [["files"]])
+  })
+})
+
+// ---------- 0.3.0: a feed's sign with no reading names its feed ----------
+
+const V3 = new URL("../../../../../seed/components/tinctures/local/night/0.3.0/", import.meta.url)
+
+describe("the night desktop 0.3.0", () => {
+  test("a feed sign with no reading names its feed and says to ask AQUA for one, from the moment it opens", async () => {
+    const p = night2({version: V3, widgets: {vpn: {on: true}}})
+    await settle()
+    p.draw()
+    const says = (name) => p.street().includes(`No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`)
+    // Opened and not yet answered: the sign is not left dark.
+    assert.ok(says("weather") && says("vpn"), p.street())
+
+    for (const line of p.opened) picture(line, line.key === "feed:weather" ? [{binding: "bnd_w", feed: "weather", label: "Lisbon", result: {temp_c: 21, sky: "clear"}}] : [])
+    p.draw()
+    assert.ok(!says("weather"), "a reading replaces the words")
+    assert.match(p.street(), /Lisbon/)
+    assert.ok(says("vpn"), "a feed whose picture holds no reading still says so")
   })
 })

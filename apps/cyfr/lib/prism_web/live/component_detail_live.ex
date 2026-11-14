@@ -19,6 +19,9 @@ defmodule PrismWeb.ComponentDetailLive do
      |> assign(:ref, ref)
      |> assign(:component, nil)
      |> assign(:readme, nil)
+     |> assign(:input, "")
+     |> assign(:run, nil)
+     |> assign(:run_error, nil)
      |> assign(:loading, true)}
   end
 
@@ -57,20 +60,31 @@ defmodule PrismWeb.ComponentDetailLive do
     end
   end
 
+  # The run form's input is JSON, an object, as `execution.run` declares
+  # it; an empty form runs with none. Input that is not an object is told
+  # here and runs nothing. A run that completes shows its result on the
+  # page; the run is also on Executions.
   @impl true
   def handle_event("execute", %{"input" => input}, socket) do
-    args = %{"reference" => socket.assigns.ref}
-    args = if input != "", do: Map.put(args, "input", input), else: args
+    socket = assign(socket, :input, input)
 
-    case call_tool(socket, "execution/run", args) do
-      {:ok, %{execution_id: _id}} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Execution started.")
-         |> push_navigate(to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/activities"))}
+    case run_input(input) do
+      {:ok, run_input} ->
+        args = Map.merge(%{"reference" => socket.assigns.ref}, run_input)
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to execute: #{error_message(reason)}")}
+        case call_tool(socket, "execution/run", args) do
+          {:ok, %{execution_id: _id} = run} ->
+            {:noreply, socket |> assign(:run, run) |> assign(:run_error, nil)}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:run, nil)
+             |> assign(:run_error, "The run failed: #{error_message(reason)}")}
+        end
+
+      {:error, sentence} ->
+        {:noreply, socket |> assign(:run, nil) |> assign(:run_error, sentence)}
     end
   end
 
@@ -99,6 +113,36 @@ defmodule PrismWeb.ComponentDetailLive do
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
+  end
+
+  defp run_input(input) do
+    case String.trim(input) do
+      "" ->
+        {:ok, %{}}
+
+      text ->
+        case Jason.decode(text) do
+          {:ok, %{} = object} ->
+            {:ok, %{"input" => object}}
+
+          {:ok, _other} ->
+            {:error,
+             "The input must be a JSON object, such as {\"url\": \"https://example.com\"}."}
+
+          {:error, _invalid} ->
+            {:error, "The input is not valid JSON."}
+        end
+    end
+  end
+
+  defp result_json(result), do: Jason.encode!(result, pretty: true)
+
+  # The grants are a component's, whatever version the page shows.
+  defp name_ref(ref) do
+    case Prima.ComponentRef.to_name_ref(ref) do
+      {:ok, name_ref} -> name_ref
+      _unparsed -> ref
+    end
   end
 
   @impl true
@@ -166,18 +210,41 @@ defmodule PrismWeb.ComponentDetailLive do
           </p>
         </.card>
 
-        <!-- Execute -->
+        <!-- Run -->
         <.card>
-          <h3 class="text-sm font-medium text-gray-400 mb-3">Execute Component</h3>
-          <form phx-submit="execute" class="flex gap-3">
-            <input
-              type="text"
+          <h3 class="text-sm font-medium text-gray-400 mb-3">Run</h3>
+          <form id="run-form" phx-submit="execute" class="space-y-3">
+            <textarea
               name="input"
-              placeholder="Input (optional)"
-              class="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-            />
-            <.button type="submit">Execute</.button>
+              rows="4"
+              placeholder="Input as JSON (optional), such as {&quot;url&quot;: &quot;https://example.com&quot;}"
+              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 font-mono text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            >{@input}</textarea>
+            <.button type="submit">Run</.button>
           </form>
+          <p :if={@run_error} id="run-error" class="mt-3 text-sm text-red-300">{@run_error}</p>
+          <div :if={@run} id="run-result" class="mt-4 space-y-2">
+            <p class="text-sm text-gray-300">
+              {String.capitalize(to_string(@run[:status]))}
+              <span :if={@run[:duration_ms]} class="text-gray-500">in {@run[:duration_ms]} ms</span>
+              ·
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/executions")}
+                class="text-blue-400 hover:underline"
+              >run {@run.execution_id}</.link>
+            </p>
+            <pre class="max-h-96 overflow-auto rounded bg-gray-950 p-3 text-xs text-gray-200 whitespace-pre-wrap">{result_json(@run[:result])}</pre>
+          </div>
+        </.card>
+
+        <!-- Grants -->
+        <.card>
+          <.live_component
+            module={PrismWeb.GrantsComponent}
+            id="grants"
+            ref={name_ref(@ref)}
+            context={@context}
+          />
         </.card>
 
         <!-- README -->
