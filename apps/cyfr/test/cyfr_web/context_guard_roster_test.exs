@@ -43,7 +43,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   @components ~w(
     AquaLive.AgentsComponent AquaLive.NotesComponent AquaLive.RestoreComponent
     AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent SignInTerminalComponent
-    CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive
+    CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive GrantsComponent
   )
 
   # The tasks started from the console, by file, and each answer they send
@@ -67,7 +67,12 @@ defmodule CyfrWeb.ContextGuardRosterTest do
       {1, [{"live/components/report_component.ex", :report}]},
     # A deprecate or a yank, and the page's read of the registry.
     "live/registry_live.ex" =>
-      {2, [{"live/registry_live.ex", :act}, {"live/registry_live.ex", :load}]},
+      {3,
+       [
+         {"live/registry_live.ex", :act},
+         {"live/registry_live.ex", :load},
+         {"live/registry_live.ex", :managed}
+       ]},
     # A program row's call: adding one, or its Test, Refresh, Restart,
     # hosts or Reset folder.
     "live/programs_live.ex" => {1, [{"live/programs_live.ex", :call}]},
