@@ -25,7 +25,7 @@ import (
 type standIn struct {
 	supported, running, reachableAfter bool
 	reachable, displayManager          bool
-	passwordless                       bool
+	passwordless, noTerminal           bool
 	arch, system                       string
 	installed, member, process         []string
 	administrator                      []string
@@ -67,6 +67,7 @@ func standInMachine(t *testing.T) *standIn {
 		return append(slices.Clone(s.member), s.administrator...)
 	}
 	machine.passwordless = func() bool { return s.passwordless }
+	machine.terminal = func() bool { return !s.noTerminal }
 	machine.authenticate = func() error {
 		s.authenticated++
 		if s.prompt != nil {

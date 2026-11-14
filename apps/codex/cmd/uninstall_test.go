@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -76,9 +77,15 @@ type uninstallScenario struct {
 	// asks is sudo asking a password, whose prompt authErr refuses;
 	// authenticated counts the prompts.
 	notAdministrator, asks bool
-	authErr                error
-	authenticated          int
-	compose                []byte
+	// notUbuntu is a machine other than Ubuntu 26.04, a Mac among them;
+	// noTerminal is no terminal for sudo to ask at.
+	notUbuntu, noTerminal bool
+	// adminGroup is the administrators\' group the account is in, sudo
+	// unless a test names admin, a Mac\'s.
+	adminGroup    string
+	authErr       error
+	authenticated int
+	compose       []byte
 }
 
 // newUninstallScenario builds the scenario. It fails at once unless no sh,
@@ -125,9 +132,11 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 		if s.notAdministrator {
 			return []string{"users"}
 		}
-		return []string{"users", "sudo"}
+		return []string{"users", cmp.Or(s.adminGroup, "sudo")}
 	}
 	machine.passwordless = func() bool { return !s.asks }
+	machine.supported = func() bool { return !s.notUbuntu }
+	machine.terminal = func() bool { return !s.noTerminal }
 	machine.authenticate = func() error {
 		s.authenticated++
 		return s.authErr
@@ -484,7 +493,9 @@ func TestUninstallSaysWhatIsGoneWhenAStepFails(t *testing.T) {
 // screen's and the link's commands as one sudo line for whoever
 // administers the machine; a refused password, asked after the question
 // and before the stack stops, changes nothing; an accepted one comes after
-// the sentence, once, before every root command.
+// the sentence, once, before every root command. The sentence names Ubuntu
+// on Ubuntu 26.04 alone, and with no terminal for sudo nothing is
+// announced.
 func TestUninstallChecksTheAccountAndThePasswordFirst(t *testing.T) {
 	t.Run("outside the groups", func(t *testing.T) {
 		s := newUninstallScenario(t)
@@ -508,30 +519,80 @@ func TestUninstallChecksTheAccountAndThePasswordFirst(t *testing.T) {
 	t.Run("the password refused", func(t *testing.T) {
 		s := newUninstallScenario(t)
 		s.asks, s.authErr = true, errors.New("exit status 1")
+		plan, _ := s.plan()
 		before := listing(t, s.dir)
 		out, err := s.run(true)
 		if err == nil || err.Error() != "The password was not accepted, so nothing was changed. Run `cyfr uninstall` again to try again" {
 			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
 		}
-		if !strings.HasSuffix(out, passwordSentence) || s.authenticated != 1 {
-			t.Errorf("sudo asked %d times:\n%s", s.authenticated, out)
+		if want := plan + passwordSentence; out != want || s.authenticated != 1 {
+			t.Errorf("sudo asked %d times; printed:\n%s\nwant:\n%s", s.authenticated, out, want)
 		}
 		s.nothingRemoved(before)
 	})
 	t.Run("the password accepted", func(t *testing.T) {
 		s := newUninstallScenario(t)
 		s.asks = true
+		plan, removed := s.plan()
 		out, err := s.run(true)
 		if err != nil {
 			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
 		}
-		if strings.Count(out, passwordSentence) != 1 || !strings.Contains(out, passwordSentence+"Removed the stack's containers.\n") || s.authenticated != 1 {
-			t.Errorf("sudo asked %d times:\n%s", s.authenticated, out)
+		if want := plan + passwordSentence + removed; out != want || s.authenticated != 1 {
+			t.Errorf("sudo asked %d times; printed:\n%s\nwant:\n%s", s.authenticated, out, want)
 		}
 		if !slices.Equal(s.root, []string{linkRemoval()}) {
 			t.Errorf("sudo ran %q", s.root)
 		}
 	})
+	// An install.sh install on a Mac has the link onto PATH: sudo's
+	// sentence names no system there.
+	t.Run("a Mac", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		s.asks, s.notUbuntu, s.adminGroup = true, true, "admin"
+		plan, removed := s.plan()
+		out, err := s.run(true)
+		if err != nil {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		want := plan + "This machine will now ask for your password: the one you log in to it with. Nothing shows while you type.\n" + removed
+		if out != want || s.authenticated != 1 {
+			t.Errorf("sudo asked %d times; printed:\n%s\nwant:\n%s", s.authenticated, out, want)
+		}
+	})
+	// With --yes, no terminal and sudo needing a password, nothing is
+	// announced and nothing removed: the uninstall is to run at a terminal.
+	t.Run("no terminal", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		s.asks, s.noTerminal = true, true
+		plan, _ := s.plan()
+		before := listing(t, s.dir)
+		out, err := s.run(true)
+		if err == nil || err.Error() != "sudo needs your password and there is no terminal for it to ask at, so nothing was changed. Run `cyfr uninstall` at a terminal" {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		if out != plan || s.authenticated != 0 {
+			t.Errorf("sudo asked %d times; printed:\n%s\nwant:\n%s", s.authenticated, out, plan)
+		}
+		s.nothingRemoved(before)
+	})
+}
+
+// plan is what the uninstall shows before it asks, and what a whole run
+// of the scenario as made prints after it: each removal, then what is
+// left.
+func (s *uninstallScenario) plan() (shown, removed string) {
+	s.t.Helper()
+	s.t.Chdir(s.dir)
+	p, err := readUninstallPlan()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var b strings.Builder
+	p.show(&b)
+	removed = "Removed the stack's containers.\nRemoved the link " + s.link + ".\nRemoved the stack's networks.\nRemoved the stack's images.\nRemoved this program.\n" +
+		p.left([]string{"cyfr_homes", "cyfr_tailscale"})
+	return b.String(), removed
 }
 
 // Only a CYFR cyfr init made is uninstalled: a directory with an unrelated

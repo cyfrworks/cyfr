@@ -36,7 +36,7 @@ cyfr uninstall shows what it removes and what it leaves, then asks once (--yes a
 - this program, by the path it runs from. A Homebrew install is left to 'brew uninstall --cask cyfr'.
 The program or its link stays when this directory holds it, or holds what it resolves to.
 
-CYFR never asks for, reads or keeps a password. When the screen service or the link is to go, an account outside the sudo and admin groups is refused before anything is shown or asked, with those commands as one sudo line for whoever administers the machine. Otherwise, after the question and before the stack stops, CYFR says whose password sudo will ask for, when it will ask, and sudo asks in its own prompt; a refused password changes nothing.
+CYFR never asks for, reads or keeps a password. When the screen service or the link is to go, an account outside the sudo and admin groups is refused before anything is shown or asked, with those commands as one sudo line for whoever administers the machine. Otherwise, after the question and before the stack stops, CYFR says whose password sudo will ask for, when it will ask, and sudo asks in its own prompt; a refused password changes nothing, and so does a sudo that needs a password with no terminal to ask at.
 
 It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes, this program's settings files in ~/.cyfr and this machine's device key. It ends by naming each by its path, and the command that removes the volumes.
 

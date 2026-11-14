@@ -51,6 +51,8 @@ var machine = struct {
 	// passwordless is whether sudo runs any command now without asking for
 	// a password: a login it still keeps, or no entry that asks one.
 	passwordless func() bool
+	// terminal is whether this process has a terminal for sudo to ask at.
+	terminal func() bool
 	// authenticate is sudo's own password prompt on this terminal; it
 	// runs no command.
 	authenticate func() error
@@ -93,6 +95,14 @@ var machine = struct {
 	// one rule, its manual's "sudo -v" sentence. A password any command
 	// would ask is asked here first, after the sentence.
 	passwordless: func() bool { return exec.Command("sudo", "-n", "-v").Run() == nil },
+	terminal: func() bool {
+		f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			return false
+		}
+		f.Close()
+		return true
+	},
 	authenticate: func() error {
 		cmd := exec.Command("sudo", "-v")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -147,14 +157,23 @@ func (p passwordRefused) Error() string {
 // unlockSudo is the password step after mayAdminister and any question,
 // before root commands and before anything is written for them. CYFR
 // never asks for, reads or keeps a password: when sudo will ask, the one
-// sentence before its prompt says whose, and sudo asks on this terminal
-// before any command runs (passwordRefused). The caller forgets sudo's
+// sentence before its prompt says whose, naming Ubuntu only where it is
+// Ubuntu 26.04, and sudo asks on this terminal before any command runs
+// (passwordRefused). With no terminal for sudo to ask at, nothing is
+// announced and the step refuses at once. The caller forgets sudo's
 // login (machine.forget).
 func unlockSudo(out io.Writer, again string) error {
 	if machine.passwordless() {
 		return nil
 	}
-	fmt.Fprintln(out, "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.")
+	if !machine.terminal() {
+		return fmt.Errorf("sudo needs your password and there is no terminal for it to ask at, so nothing was changed. Run `%s` at a terminal", again)
+	}
+	if machine.supported() {
+		fmt.Fprintln(out, "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.")
+	} else {
+		fmt.Fprintln(out, "This machine will now ask for your password: the one you log in to it with. Nothing shows while you type.")
+	}
 	if machine.authenticate() != nil {
 		return passwordRefused{again}
 	}
