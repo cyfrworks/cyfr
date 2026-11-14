@@ -1909,7 +1909,7 @@ type KeyCreateArgs struct {
 	Name string `json:"name"`
 	// What the key may do, fixed once it is made; omitted, the first preset's: execute (Run tools), component_read (Read components), storage_read (Read files, runs and logs), component_manage (Build and publish components), storage_write (Write files), admin (Manage keys, webhooks and programs), vault_read (List OAuth clients)
 	Scope Field[[]string] `json:"scope,omitzero"`
-	// The only tools the key may run, each named without its version (c:local.my-tool), fixed once it is made; omitted, it runs any tool you granted
+	// The only tools the key may run, each a component named without its version (c:local.my-tool) or an outside server's tool (server:tool), fixed once it is made; omitted, it runs any tool you granted
 	Tools Field[[]string] `json:"tools,omitzero"`
 	// List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])
 	IpAllowlist Field[[]string] `json:"ip_allowlist,omitzero"`
