@@ -8,7 +8,13 @@ defmodule PrismWeb.LegalLive do
 
   Each tab triggers a fresh fetch (cached server-side at 5min by the
   upstream Cache-Control); markdown is rendered by the
-  `MarkdownContent` JS hook.
+  `MarkdownContent` JS hook. The pages are the registry's this deployment
+  names (`Compendium.RegistryHost`, cyfr.run unless configured), so a link
+  in them that names a path alone is made absolute against its address
+  before it is rendered: on this CYFR such a path names nothing.
+
+  The Privacy tab opens with a paragraph of this CYFR's own, saying who
+  can read what is kept here, before cyfr.run's policy.
   """
 
   use PrismWeb, :live_view
@@ -39,6 +45,7 @@ defmodule PrismWeb.LegalLive do
       |> assign(:markdown, "")
       |> assign(:loading, true)
       |> assign(:error, nil)
+      |> assign(:publisher, Compendium.RegistryHost.canonical_rest_host())
 
     if connected?(socket) do
       send(self(), {:load, initial})
@@ -66,7 +73,7 @@ defmodule PrismWeb.LegalLive do
         {:noreply,
          socket
          |> assign(:title, title)
-         |> assign(:markdown, md)
+         |> assign(:markdown, absolute_links(md))
          |> assign(:loading, false)
          |> assign(:error, nil)}
 
@@ -98,7 +105,7 @@ defmodule PrismWeb.LegalLive do
       <div>
         <h2 class="text-lg font-semibold text-white">Legal</h2>
         <p class="text-sm text-gray-400 mt-1">
-          Policy text published by the registry. Lawyer-drafted final copy
+          Policy text published by {@publisher}. Lawyer-drafted final copy
           replaces placeholders before public launch.
         </p>
       </div>
@@ -124,6 +131,22 @@ defmodule PrismWeb.LegalLive do
         Couldn't load page: {@error}
       </div>
 
+      <section
+        :if={@active_tab == "privacy"}
+        id="who-reads"
+        class="rounded-lg border border-gray-800 bg-gray-900/60 p-4 text-sm text-gray-300"
+      >
+        <h3 class="text-base font-semibold text-white mb-2">Who can read what on this CYFR</h3>
+        <p>
+          Whoever runs the machine this CYFR runs on can read what it keeps there: your files,
+          your vault's values and your messages among them. The people of a thread see its
+          messages, and leaving a thread does not take yours out of it. A key someone shares
+          with you is used for you and never shown to you. What you ask AQUA goes to the model
+          provider whose key AQUA uses. The policy below is {@publisher}'s, for your account
+          and the components you publish there.
+        </p>
+      </section>
+
       <div :if={!@loading && !@error}>
         <h3 class="text-base font-semibold text-white mb-3">{@title}</h3>
         <div
@@ -137,6 +160,17 @@ defmodule PrismWeb.LegalLive do
       </div>
     </div>
     """
+  end
+
+  # A link that names a path alone, in Markdown or in HTML, made absolute
+  # against the address of the registry whose pages these are.
+  defp absolute_links(markdown) do
+    base =
+      Compendium.RegistryHost.canonical_rest_host() |> Compendium.RegistryHost.base_url()
+
+    markdown
+    |> String.replace(~r{\]\((/[^/)\s][^)\s]*)}, "](" <> base <> "\\1")
+    |> String.replace(~r{href="(/[^/"][^"]*)"}, ~s(href=") <> base <> ~s(\\1"))
   end
 
   defp tab_class(true),
