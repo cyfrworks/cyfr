@@ -164,6 +164,38 @@ defmodule Sanctum.Providers.DirectoryTest do
       assert {:ok, %{length: 1}} = page(a)
     end
 
+    test "once one administrator's account is closed, the other's mark stays", %{
+      person: person,
+      identifier: a
+    } do
+      b = registered!()
+      first = person_of!(a, true)
+      second = person_of!(b, true)
+      only_admins!([first.id, second.id])
+
+      assert {:ok, %{gone: true}} = Sanctum.TestContext.confirming(person, &tombstone(&1, a))
+      assert {:error, :last_admin} = Sanctum.Tenancy.Users.clear_platform_admin(second)
+      assert Sanctum.Tenancy.platform_admin?(second.id)
+    end
+
+    test "once one administrator's mark is cleared, the other's account stays open", %{
+      person: person,
+      identifier: a
+    } do
+      b = registered!()
+      first = person_of!(a, true)
+      second = person_of!(b, true)
+      only_admins!([first.id, second.id])
+
+      assert {:ok, _cleared} = Sanctum.Tenancy.Users.clear_platform_admin(second)
+
+      assert {:error, {:invalid_argument, @only}} =
+               Sanctum.TestContext.confirming(person, &tombstone(&1, a))
+
+      assert {:error, :only_admin} = Sanctum.Directory.tombstone(a)
+      assert {:ok, %{length: 1}} = page(a)
+    end
+
     test "a second administrator who is denied does not count", %{
       person: person,
       identifier: identifier
