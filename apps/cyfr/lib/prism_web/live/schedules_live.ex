@@ -615,7 +615,7 @@ defmodule PrismWeb.SchedulesLive do
                       ({f(sched, :error_count)} err)
                     </span>
                     <p :if={f(sched, :last_error)} class="mt-1 text-xs text-red-400 break-words">
-                      Last run failed: {f(sched, :last_error)}
+                      {f(sched, :last_error)}
                       <.link
                         :if={f(sched, :last_execution_id)}
                         navigate={

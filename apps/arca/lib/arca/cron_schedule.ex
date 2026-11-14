@@ -17,7 +17,7 @@ defmodule Arca.CronSchedule do
 
   A row is a `schedule` or a `feed`. The scheduler fires both, so
   `active_schedules/0`, `get_for_daemon/1`, `record_run/3` and
-  `record_error/3` answer either. `list/2` and `get_by_id_or_name/3` take
+  `record_error/4` answer either. `list/2` and `get_by_id_or_name/3` take
   a `kind:` option (nil reads both). A live name is unique per kind, so a feed may share a schedule's name.
 
   ## Feeds
@@ -52,7 +52,7 @@ defmodule Arca.CronSchedule do
 
   ## The generic writers
 
-  The generic writers (`update/3`, `record_run/3`, `record_error/3`,
+  The generic writers (`update/3`, `record_run/3`, `record_error/4`,
   `soft_delete/2`) read and lock their row tenant-scoped in a transaction
   of their own, and check the member's slot in it after the lock
   (`slot_fence/0`), whatever the row's kind: a member that lost its slot
@@ -304,12 +304,13 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Records a failed fire with tenant-scoped lookup: `reason`, the sentence
-  a person reads, is kept as the last failure's, and `execution_id` is
-  the fire's run, or nil when it failed before a run started, so the
-  failure names the run it was and never an earlier one. Every row,
-  whatever its kind, is written only under the member's live slot
-  (`:not_owner` otherwise).
+  Records a fire that did not succeed, with tenant-scoped lookup: `said`,
+  the sentence a person reads, is kept as the last one's, and the run it
+  names is the one `occurrence_id`'s row records, read in the same
+  transaction, or none when the fire failed before a run started or had
+  no occurrence (nil). A failure so never names an earlier run, and never
+  loses its run to a read of its own. Every row, whatever its kind, is
+  written only under the member's live slot (`:not_owner` otherwise).
   """
   @spec record_error(Prima.Actor.t(), String.t(), String.t(), String.t() | nil) ::
           {:ok, map()}
@@ -317,15 +318,15 @@ defmodule Arca.CronSchedule do
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
   # Atomic increment, for the reason spelled out at `record_run/3`.
-  def record_error(%Prima.Actor{} = actor, id, reason, execution_id)
-      when is_binary(reason) and (is_binary(execution_id) or is_nil(execution_id)) do
+  def record_error(%Prima.Actor{} = actor, id, said, occurrence_id)
+      when is_binary(said) and (is_binary(occurrence_id) or is_nil(occurrence_id)) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
       guarded(actor, id, fn schedule ->
         from(s in Row, where: s.id == ^schedule.id)
         |> Arca.Repo.update_all(
           set: [
-            last_error: reason,
-            last_execution_id: execution_id,
+            last_error: said,
+            last_execution_id: run_of(schedule, occurrence_id),
             updated_at: DateTime.utc_now()
           ],
           inc: [error_count: 1]
@@ -335,6 +336,19 @@ defmodule Arca.CronSchedule do
       end)
     end)
     |> Arca.Data.project()
+  end
+
+  # The run an occurrence of this schedule records, in its athanor.
+  # arca:db-raise-ok inside the caller's transaction
+  defp run_of(_schedule, nil), do: nil
+
+  defp run_of(schedule, occurrence_id) do
+    from(o in Arca.Schemas.ScheduleOccurrence,
+      where: o.athanor_id == ^schedule.athanor_id and o.id == ^occurrence_id,
+      where: o.schedule_id == ^schedule.id,
+      select: o.execution_id
+    )
+    |> Arca.Repo.one()
   end
 
   @doc """
@@ -709,7 +723,7 @@ defmodule Arca.CronSchedule do
   end
 
   # A generic writer's transaction (`update/3`, `record_run/3`,
-  # `record_error/3`, `soft_delete/2`): the row is read and locked
+  # `record_error/4`, `soft_delete/2`): the row is read and locked
   # tenant-scoped, `:live` reading a row that is not deleted and `:any`
   # any row, then the member's slot is checked, in the same transaction
   # and before anything is written, whatever the row's kind.

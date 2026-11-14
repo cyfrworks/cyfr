@@ -201,6 +201,8 @@ defmodule Opus.Schedules.Scheduler do
   # The most missed times one catch-up episode fires; the CHECK on
   # `cron_schedules.catch_up_limit` holds the same number on each adapter.
   @max_catch_up 24
+  # What a schedule says of a run whose end was never recorded.
+  @unknown_end "Last run did not report its end, so whether it had its effect is not known."
   # Two ticks: the grace a live member's lapsed run is given, and the age at
   # which a claim is any member's to recover (`abandoned_before/0`). The
   # standing pass comes a second later than this (`arm_standing/1`).
@@ -731,8 +733,15 @@ defmodule Opus.Schedules.Scheduler do
                 )
                 |> logged_stale(occurrence)
                 |> case do
-                  {:error, :database_error} -> recover_later(acc)
-                  _ -> acc
+                  {:ok, _ended} ->
+                    recovered_run(occurrence)
+                    acc
+
+                  {:error, :database_error} ->
+                    recover_later(acc)
+
+                  _ ->
+                    acc
                 end
 
               true ->
@@ -767,6 +776,32 @@ defmodule Opus.Schedules.Scheduler do
 
       left_open(state)
   end
+
+  # A recovered run is written to its schedule as every other ending is,
+  # from the outcome its row stores: a completed run is the last run; a
+  # failed or cancelled one a failure, with the reason its row keeps; one
+  # whose row is gone or cannot be read a run whose end is not known, which
+  # is never called a failure.
+  defp recovered_run(%{athanor_id: athanor_id, execution_id: execution_id} = occurrence) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    case execution_id && Arca.Execution.get_tenant(actor, execution_id) do
+      %{status: "completed"} ->
+        record_run(actor, occurrence.schedule_id, execution_id)
+
+      %{status: status} = row when status in ["failed", "cancelled"] ->
+        record_error(actor, occurrence.schedule_id, {:failed, kept_reason(row)}, occurrence.id)
+
+      _gone_or_unread ->
+        record_error(actor, occurrence.schedule_id, :unknown, occurrence.id)
+    end
+  end
+
+  defp kept_reason(%{error_message: message}) when is_binary(message) and message != "",
+    do: Sanctum.Refusals.render(message)
+
+  defp kept_reason(%{status: "cancelled"}), do: "The run was cancelled."
+  defp kept_reason(_row), do: "The run ended failed and kept no reason."
 
   # The occurrence is taken from its abandoned claimant in one statement
   # before anything is run under it: of two recoverers reading the same
@@ -823,7 +858,14 @@ defmodule Opus.Schedules.Scheduler do
 
         if ended != nil and not refused?(ended) do
           ctx = context_of(schedule)
-          record_error(ctx, schedule.id, "Athanor or creator no longer active — run skipped", nil)
+
+          record_error(
+            ctx,
+            schedule.id,
+            {:failed, "Athanor or creator no longer active — run skipped"},
+            nil
+          )
+
           emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive", occurrence)
         end
 
@@ -899,7 +941,13 @@ defmodule Opus.Schedules.Scheduler do
               "creator #{inspect(schedule.user_id)} no longer active — skipping run"
           )
 
-          record_error(ctx, schedule_id, "Athanor or creator no longer active — run skipped", nil)
+          record_error(
+            ctx,
+            schedule_id,
+            {:failed, "Athanor or creator no longer active — run skipped"},
+            nil
+          )
+
           emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive")
           recheck_later(schedule_id, state)
         end
@@ -941,7 +989,7 @@ defmodule Opus.Schedules.Scheduler do
         )
 
         emit_schedule_failed(schedule, ctx, :damaged_reference)
-        record_error(ctx, schedule.id, "Damaged schedule: no pinned reference", nil)
+        record_error(ctx, schedule.id, {:failed, "Damaged schedule: no pinned reference"}, nil)
         recheck_later(schedule.id, state)
 
       {:error, :invalid_input} ->
@@ -950,7 +998,7 @@ defmodule Opus.Schedules.Scheduler do
         )
 
         emit_schedule_failed(schedule, ctx, :invalid_input)
-        record_error(ctx, schedule.id, "Invalid JSON input", nil)
+        record_error(ctx, schedule.id, {:failed, "Invalid JSON input"}, nil)
         recheck_later(schedule.id, state)
 
       {:ok, exec_reference, input} ->
@@ -1098,7 +1146,7 @@ defmodule Opus.Schedules.Scheduler do
 
           unless refused?(ended) do
             emit_schedule_failed(schedule, ctx, {:spawn_failed, reason}, occurrence)
-            record_error(ctx, schedule.id, Sanctum.Refusals.render(:unavailable), nil)
+            record_error(ctx, schedule.id, {:failed, Sanctum.Refusals.render(:unavailable)}, nil)
           end
 
           schedule_timer(schedule.id, left_open_unless_ended(state, ended))
@@ -1171,7 +1219,7 @@ defmodule Opus.Schedules.Scheduler do
       )
 
       emit_schedule_failed(schedule, ctx, reason, occurrence)
-      record_error(ctx, schedule.id, Sanctum.Refusals.render(reason), nil)
+      record_error(ctx, schedule.id, {:failed, Sanctum.Refusals.render(reason)}, nil)
     end
 
     left_to_recovery_unless_ended(ended)
@@ -1341,7 +1389,13 @@ defmodule Opus.Schedules.Scheduler do
             )
 
             emit_schedule_failed(schedule, ctx, reason, occurrence, execution_id)
-            record_error(ctx, schedule.id, Sanctum.Refusals.render(reason), run_of(occurrence))
+
+            record_error(
+              ctx,
+              schedule.id,
+              {:failed, Sanctum.Refusals.render(reason)},
+              occurrence.id
+            )
           end
 
           left_to_recovery_unless_ended(ended)
@@ -1400,7 +1454,13 @@ defmodule Opus.Schedules.Scheduler do
           )
 
           emit_schedule_failed(schedule, ctx, reason, occurrence, fired.execution_id)
-          record_error(ctx, schedule.id, Sanctum.Refusals.render(reason), run_of(occurrence))
+
+          record_error(
+            ctx,
+            schedule.id,
+            {:failed, Sanctum.Refusals.render(reason)},
+            occurrence.id
+          )
         end
 
         left_to_recovery_unless_ended(ended)
@@ -1414,7 +1474,13 @@ defmodule Opus.Schedules.Scheduler do
           )
 
           emit_schedule_failed(schedule, ctx, reason, occurrence, fired.execution_id)
-          record_error(ctx, schedule.id, Sanctum.Refusals.render(reason), run_of(occurrence))
+
+          record_error(
+            ctx,
+            schedule.id,
+            {:failed, Sanctum.Refusals.render(reason)},
+            occurrence.id
+          )
         end
 
         left_to_recovery_unless_ended(ended)
@@ -1658,22 +1724,30 @@ defmodule Opus.Schedules.Scheduler do
       )
       |> logged_stale(%{id: task.occurrence_id, schedule_id: schedule_id})
 
-    unless refused?(settled),
-      do:
-        record_error(
-          task.ctx,
-          schedule_id,
-          Sanctum.Refusals.render(reason),
-          run_of(%{id: task.occurrence_id, athanor_id: task.athanor_id})
-        )
+    # One never invoked failed. One started under its execution ended with
+    # its outcome unknown, and so did one whose settlement could not be
+    # read: neither is called a failure. Another member's now says nothing.
+    cond do
+      refused?(settled) ->
+        :ok
+
+      settled == {:ok, "failed"} ->
+        record_error(task.ctx, schedule_id, {:failed, Sanctum.Refusals.render(reason)}, nil)
+
+      true ->
+        record_error(task.ctx, schedule_id, :unknown, task.occurrence_id)
+    end
 
     settled
   end
 
-  defp record_run(ctx, schedule_id, execution_id) do
-    case CronSchedule.record_run(Sanctum.Context.actor(ctx), schedule_id, execution_id) do
+  defp record_run(%Sanctum.Context{} = ctx, schedule_id, execution_id),
+    do: record_run(Sanctum.Context.actor(ctx), schedule_id, execution_id)
+
+  defp record_run(%Prima.Actor{} = actor, schedule_id, execution_id) do
+    case CronSchedule.record_run(actor, schedule_id, execution_id) do
       {:ok, row} ->
-        announce(row, ctx)
+        announce(row, actor)
         {:ok, row}
 
       {:error, reason} ->
@@ -1738,25 +1812,20 @@ defmodule Opus.Schedules.Scheduler do
     end
   end
 
-  # The run a failed fire's occurrence was joined to by its admission,
-  # read from the row once it has ended: none when the fire failed before
-  # a run started, so the failure never names an earlier run.
-  defp run_of(%{id: occurrence_id, athanor_id: athanor_id}) do
-    case ScheduleOccurrences.get(Prima.Actor.in_athanor(athanor_id), occurrence_id) do
-      {:ok, %{execution_id: execution_id}} -> execution_id
-      _unread -> nil
-    end
-  end
+  # What a schedule says of a fire that did not succeed, in the words its
+  # page shows: a failure with its reason, or a run whose end was never
+  # recorded, which is never called a failure. The run it names is the one
+  # the fire's occurrence records (`Arca.CronSchedule.record_error/4`).
+  defp said({:failed, reason}), do: "Last run failed: " <> reason
+  defp said(:unknown), do: @unknown_end
 
-  defp record_error(ctx, schedule_id, message, execution_id) do
-    case CronSchedule.record_error(
-           Sanctum.Context.actor(ctx),
-           schedule_id,
-           message,
-           execution_id
-         ) do
+  defp record_error(%Sanctum.Context{} = ctx, schedule_id, outcome, occurrence_id),
+    do: record_error(Sanctum.Context.actor(ctx), schedule_id, outcome, occurrence_id)
+
+  defp record_error(%Prima.Actor{} = actor, schedule_id, outcome, occurrence_id) do
+    case CronSchedule.record_error(actor, schedule_id, said(outcome), occurrence_id) do
       {:ok, row} ->
-        announce(row, ctx)
+        announce(row, actor)
 
       {:error, err} ->
         Logger.warning(
@@ -1935,6 +2004,7 @@ defmodule Opus.Schedules.Scheduler do
 
   # A write moved what a schedule's row shows: the row is announced as it
   # reads now (`Opus.Schedules.Changes`). A feed's row announces nothing.
-  defp announce(%{kind: "feed"}, _ctx), do: :ok
-  defp announce(%{id: id}, ctx), do: Changes.changed(Sanctum.Context.actor(ctx), id)
+  defp announce(%{kind: "feed"}, _whose), do: :ok
+  defp announce(%{id: id}, %Prima.Actor{} = actor), do: Changes.changed(actor, id)
+  defp announce(row, %Sanctum.Context{} = ctx), do: announce(row, Sanctum.Context.actor(ctx))
 end
