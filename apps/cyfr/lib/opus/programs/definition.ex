@@ -7,8 +7,8 @@ defmodule Opus.Programs.Definition do
   settings a row carries beside it (`validate_row/1`), and the programs a
   sync defines (`programs/2`, `wire/1`).
 
-  A `stdio` or `pipe` row runs its backends on the backends service Locus
-  serves (`Opus.Programs`), each a shell command with an environment:
+  A program row runs its backends on the backends service Locus serves
+  (`Opus.Programs`), each a shell command with an environment:
 
       [%{"name" => "github", "command" => "npx -y @modelcontextprotocol/server-github",
          "env" => %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token"}}]
@@ -58,15 +58,15 @@ defmodule Opus.Programs.Definition do
   @spec max_backends() :: pos_integer()
   def max_backends, do: @max_backends
 
-  @doc "Validate and normalize a stdio server's backends."
+  @doc "Validate and normalize a program's backends."
   @spec validate(term()) :: {:ok, [backend()]} | {:error, {:invalid_argument, String.t()}}
   def validate(backends) when is_list(backends) do
     cond do
       backends == [] ->
-        invalid("A stdio server needs at least one backend")
+        invalid("A program needs at least one backend")
 
       length(backends) > max_backends() ->
-        invalid("A stdio server defines at most #{max_backends()} backends")
+        invalid("A program defines at most #{max_backends()} backends")
 
       true ->
         with {:ok, normalized} <- each(backends, &backend/1),
@@ -93,7 +93,7 @@ defmodule Opus.Programs.Definition do
   def entry_names(_backends), do: []
 
   @doc """
-  The warnings a stdio server's backends carry, in backend order: each
+  The warnings a program's backends carry, in backend order: each
   vault-bound env name a command expands, then, beside the vault-bound
   names it does not expand, the first form that computes a value when the
   shell runs it. Empty when there is nothing to warn of.
@@ -160,12 +160,12 @@ defmodule Opus.Programs.Definition do
         }
 
   @doc """
-  The program settings a row carries beside its backends, checked: a
-  `transport` of `stdio` or `pipe` (an `http` row has none); a `pipe` row
-  has exactly one backend, the program its catalyst drives; `home` is
-  `"scratch"` or `"kept"`, and a kept `stdio` row names the login entry its
-  sessions run in (`login_entry_id`; whether it is one is the caller's to
-  check); `memory_bytes` lies in the keeper's range; `home_max_bytes` is a
+  The program settings a row carries beside its backends, checked: the
+  `transport` is `program` (an `http` row has none); its `mark` is `mcp`
+  or `driven`, and a `driven` program has exactly one backend, the program
+  a person or a brain drives; `home` is `"scratch"` or `"kept"`, and a kept
+  `mcp` program names the login entry its sessions run in
+  (`login_entry_id`; whether it is one is the caller's to check); `memory_bytes` lies in the keeper's range; `home_max_bytes` is a
   kept home's alone, at least 1 MiB; `login_command` meets
   `Prima.LocusBackends.check_command/1`; `hosts`, the only hosts the
   program reaches beside the resolver and the deployment's private hosts,
@@ -176,18 +176,21 @@ defmodule Opus.Programs.Definition do
   `{:error, {:invalid_argument, message}}`.
   """
   @spec validate_row(map()) :: {:ok, map()} | {:error, {:invalid_argument, String.t()}}
-  def validate_row(%{"transport" => transport} = config) when transport in ["stdio", "pipe"] do
+  def validate_row(%{"transport" => "program"} = config) do
     home = Map.get(config, "home") || "scratch"
+    mark = config["mark"]
 
-    with :ok <- one_program(transport, config["backends"]),
+    with :ok <- check_mark(mark),
+         :ok <- one_program(mark, config["backends"]),
          :ok <- check_home(home),
          :ok <- check_memory(config["memory_bytes"]),
          :ok <- check_home_max(home, config["home_max_bytes"]),
          :ok <- check_login_command(config["login_command"]),
-         {:ok, entry} <- check_login_entry(transport, home, config["login_entry_id"]),
+         {:ok, entry} <- check_login_entry(mark, home, config["login_entry_id"]),
          {:ok, hosts} <- check_hosts(config["hosts"]) do
       {:ok,
        %{
+         mark: mark,
          home: home,
          memory_bytes: config["memory_bytes"],
          home_max_bytes: config["home_max_bytes"],
@@ -198,18 +201,26 @@ defmodule Opus.Programs.Definition do
     end
   end
 
-  def validate_row(_config), do: invalid("Only a stdio or pipe server is a program")
+  def validate_row(_config), do: invalid("Only a row whose transport is program is a program")
 
-  @program_keys ~w(home memory_bytes home_max_bytes login_command login_entry_id hosts)
+  @program_keys ~w(mark home memory_bytes home_max_bytes login_command login_entry_id hosts)
 
   @doc "The config keys that are a program's settings, stored as columns rather than in `config_json`."
   @spec program_keys() :: [String.t()]
   def program_keys, do: @program_keys
 
-  defp one_program("pipe", backends) when is_list(backends) and length(backends) != 1,
-    do: invalid("A pipe server is one program: it defines exactly one backend")
+  defp check_mark(mark) when mark in ["mcp", "driven"], do: :ok
 
-  defp one_program(_transport, _backends), do: :ok
+  defp check_mark(_mark),
+    do:
+      invalid(
+        "config.mark must be mcp (CYFR speaks MCP to it) or driven (a person or a brain runs it)"
+      )
+
+  defp one_program("driven", backends) when is_list(backends) and length(backends) != 1,
+    do: invalid("A driven program is one program: it defines exactly one backend")
+
+  defp one_program(_mark, _backends), do: :ok
 
   defp check_home(home) when home in ["scratch", "kept"], do: :ok
   defp check_home(_home), do: invalid("config.home must be scratch or kept")
@@ -316,20 +327,20 @@ defmodule Opus.Programs.Definition do
 
   defp unreadable, do: invalid("The program's stored hosts do not read; save the program again")
 
-  # A kept stdio row's sessions run in its login entry's home; a pipe row's
-  # catalyst names its entry by its need, so the row names none.
-  defp check_login_entry("stdio", "kept", entry) when is_binary(entry) and entry != "",
+  # A kept mcp program's sessions run in its login entry's home; a driven
+  # program's catalyst names its entry by its need, so the row names none.
+  defp check_login_entry("mcp", "kept", entry) when is_binary(entry) and entry != "",
     do: {:ok, entry}
 
-  defp check_login_entry("stdio", "kept", _entry),
-    do: invalid("A kept stdio server names the login entry its home is: config.login_entry_id")
+  defp check_login_entry("mcp", "kept", _entry),
+    do: invalid("A kept mcp program names the login entry its home is: config.login_entry_id")
 
-  defp check_login_entry(_transport, _home, nil), do: {:ok, nil}
+  defp check_login_entry(_mark, _home, nil), do: {:ok, nil}
 
-  defp check_login_entry("pipe", _home, _entry),
-    do: invalid("A pipe server names no login entry: its catalyst's need binds one")
+  defp check_login_entry("driven", _home, _entry),
+    do: invalid("A driven program names no login entry: its catalyst's need binds one")
 
-  defp check_login_entry(_transport, _home, _entry),
+  defp check_login_entry(_mark, _home, _entry),
     do: invalid("config.login_entry_id names the entry of a kept home: set config.home to kept")
 
   @doc """

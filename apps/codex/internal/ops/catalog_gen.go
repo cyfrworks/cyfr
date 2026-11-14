@@ -2119,7 +2119,7 @@ func (args McpServersCreateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersCreateArgsConfig struct {
-	// The stdio backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	// A program's backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
 	Backends Field[[]McpServersCreateArgsConfigBackendsItem] `json:"backends,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
@@ -2129,8 +2129,10 @@ type McpServersCreateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: a program whose backends Emissary drives as MCP servers. pipe: a program with one backend a catalyst drives.
+	// http (default): a tool server elsewhere, at a URL. program: a program CYFR runs on the backends service.
 	Transport Field[string] `json:"transport,omitzero"`
+	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).
+	Mark Field[string] `json:"mark,omitzero"`
 	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
 	Home Field[string] `json:"home,omitzero"`
 	// A program's memory bound in bytes (default: the backends service's own bound).
@@ -2139,7 +2141,7 @@ type McpServersCreateArgsConfig struct {
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
 	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
 	LoginCommand Field[string] `json:"login_command,omitzero"`
-	// A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own).
+	// A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own).
 	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`
@@ -2297,7 +2299,7 @@ func (args McpServersRestartArgs) MarshalJSON() ([]byte, error) {
 type McpServersSignInArgs struct {
 	// The program's server name
 	Name string `json:"name"`
-	// The id of the login entry whose kept home the sign-in runs in; a kept stdio server's own entry
+	// The id of the login entry whose kept home the sign-in runs in; a kept mcp program's own entry
 	Entry string `json:"entry"`
 }
 
@@ -2345,7 +2347,7 @@ func (args McpServersUpdateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersUpdateArgsConfig struct {
-	// The stdio backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	// A program's backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
 	Backends Field[[]McpServersUpdateArgsConfigBackendsItem] `json:"backends,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
@@ -2355,8 +2357,10 @@ type McpServersUpdateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: a program whose backends Emissary drives as MCP servers. pipe: a program with one backend a catalyst drives.
+	// http (default): a tool server elsewhere, at a URL. program: a program CYFR runs on the backends service.
 	Transport Field[string] `json:"transport,omitzero"`
+	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).
+	Mark Field[string] `json:"mark,omitzero"`
 	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
 	Home Field[string] `json:"home,omitzero"`
 	// A program's memory bound in bytes (default: the backends service's own bound).
@@ -2365,7 +2369,7 @@ type McpServersUpdateArgsConfig struct {
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
 	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
 	LoginCommand Field[string] `json:"login_command,omitzero"`
-	// A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own).
+	// A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own).
 	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`

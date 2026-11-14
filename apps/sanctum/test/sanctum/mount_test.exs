@@ -52,7 +52,8 @@ defmodule Sanctum.MountTest do
         %{
           id: Prima.UUID7.generate_id("mcp"),
           name: "claude",
-          transport: "pipe",
+          transport: "program",
+          mark: "driven",
           home: "kept",
           enabled: true,
           epoch: 1,
@@ -149,12 +150,12 @@ defmodule Sanctum.MountTest do
       assert mounted.home == "kept"
     end
 
-    test "a stdio row with a kept home is mounted too", %{ctx: ctx} do
+    test "an mcp program with a kept home is mounted too", %{ctx: ctx} do
       entry = login!(ctx)
-      row!(ctx, %{transport: "stdio"})
+      row!(ctx, %{transport: "program", mark: "mcp"})
       {authority, _consent} = bound!(ctx, entry)
 
-      assert {:ok, {:mount, _home, %{transport: "stdio"}}} =
+      assert {:ok, {:mount, _home, %{transport: "program", mark: "mcp"}}} =
                Mount.resolve(ctx, authority, "claude", @root)
     end
 

@@ -3,15 +3,14 @@
 
 defmodule PrismWeb.ProgramsLive do
   @moduledoc """
-  The athanor's programs and external MCP servers — the rows of the
-  `mcp_servers` tool, which keeps its name (the page says Programs). Each
-  row has a transport:
+  The athanor's programs and tool servers — the rows of the `mcp_servers`
+  tool, which keeps its name (the page says Programs). A row is one of two
+  kinds:
 
-    * `http` — a remote MCP server reached at its URL;
-    * `stdio` — an MCP server the backends service runs as a program, CYFR
-      speaking MCP over its lines;
-    * `pipe` — a program a component drives (a coding harness), one
-      backend, run with a kept home.
+    * `http` — a tool server elsewhere, reached at its URL;
+    * `program` — a program the backends service runs, marked `mcp` (CYFR
+      speaks MCP to it and offers its tools) or `driven` (a person or a
+      brain runs it, such as a coding harness; one backend).
 
   A program's home is `scratch`, made for each process and scrubbed when
   it ends, or `kept`, one folder per login entry that survives retirement.
@@ -22,16 +21,24 @@ defmodule PrismWeb.ProgramsLive do
   program forms set and an expanded program row changes (`mcp_servers.update`
   with the row's config and the new list); none named, every public host.
 
-  Forms add an http server (its config as JSON), a stdio server and a pipe
-  program. A kept row offers **Sign in**: the sign-in terminal
+  Forms add an http server (its config as JSON) and a program, one
+  backend named for the program, its mark chosen. **Edit** on an expanded
+  program replaces its whole definition (`mcp_servers.update` at the epoch
+  it was read at), in the program form, or in the config form when it
+  defines more than one backend; its folder is kept. A kept row offers
+  **Sign in**: the sign-in terminal
   (`PrismWeb.SignInTerminalComponent`) runs the row's login command in a
-  login entry's home, for the entry a kept stdio row names, or for one the
-  person picks or makes (`vault.create kind=login`) on a pipe row. **Reset
-  home** empties a login entry's home under the same uid
+  login entry's home, for the entry a kept mcp program names, or for one
+  the person picks or makes (`vault.create kind=login`) on a driven
+  program. **Reset home** empties a login entry's home under the same uid
   (`mcp_servers.reset_home`).
 
-  `?install=<component_ref>&need=<need>` opens the pipe form prefilled
-  from that component's login need (`component.setup_plan`): the program
+  An expanded row's details are read again after it is enabled or
+  disabled, and when the list says it is disabled, so a disabled program
+  reads as stopped.
+
+  `?install=<component_ref>&need=<need>` opens the program form, driven,
+  prefilled from that component's login need (`component.setup_plan`): the program
   named, its command and login command as the need's install block
   suggests, its home kept, every field editable. Saving it defines the row,
   makes a login entry for it and opens the sign-in terminal. `?name=` (the
@@ -41,8 +48,8 @@ defmodule PrismWeb.ProgramsLive do
   whose connect is refused, and a Test whose connect is refused, say why
   in the flash, and a definition saved with warnings shows them.
 
-  Adding a row, and a row's Test, Refresh, Restart, hosts and Reset
-  folder, call off the page's process (`call/5`): a connect waits up to a
+  Adding or replacing a row, and a row's Enable, Disable, Test, Refresh,
+  Restart, hosts and Reset folder, call off the page's process (`call/5`): a connect waits up to a
   minute, and the browser gives up on an event it waits on for 30
   seconds. The page says what it is doing until the answer comes, takes
   no other of these meanwhile, and the call runs to its end if the person
@@ -68,10 +75,10 @@ defmodule PrismWeb.ProgramsLive do
 
   @placeholder_env "GITHUB_PERSONAL_ACCESS_TOKEN=vault:github-token"
 
-  @forms ~w(config stdio pipe)
+  @forms ~w(config program)
 
   # The events that call off the page's process, one at a time.
-  @calls ~w(add_server add_stdio add_pipe test refresh restart reset_home set_hosts)
+  @calls ~w(add_server add_program toggle_enabled test refresh restart reset_home set_hosts)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -94,6 +101,8 @@ defmodule PrismWeb.ProgramsLive do
       |> assign(:form_error, nil)
       |> assign(:prefill, %{})
       |> assign(:install, nil)
+      # The row whose definition an open form replaces: %{name, epoch}.
+      |> assign(:editing, nil)
       |> assign(:logins, [])
       |> assign(:terminal, nil)
       # What the page is doing until a call's answer comes; nil when idle.
@@ -115,13 +124,36 @@ defmodule PrismWeb.ProgramsLive do
      |> assign(:show_add, show)
      |> assign(:form_error, nil)
      |> assign(:prefill, %{})
-     |> assign(:install, nil)}
+     |> assign(:install, nil)
+     |> assign(:editing, nil)}
   end
 
-  def handle_event("add_server", %{"name" => name, "config" => config_json}, socket) do
+  # The whole definition of an expanded program, in the form that holds
+  # it: the program form for one backend, the config form for more.
+  def handle_event("edit", %{"name" => name}, socket) do
+    case socket.assigns.detail do
+      %{name: ^name, epoch: epoch} = detail ->
+        {form, prefill} = edit_prefill(config(detail))
+
+        {:noreply,
+         socket
+         |> assign(:show_add, form)
+         |> assign(:form_error, nil)
+         |> assign(:install, nil)
+         |> assign(:editing, %{name: name, epoch: epoch})
+         |> assign(:prefill, Map.put(prefill, "name", name))}
+
+      _not_read ->
+        {:noreply, put_flash(socket, :error, "Open the program first, then edit it.")}
+    end
+  end
+
+  def handle_event("add_server", %{"config" => config_json} = params, socket) do
+    name = form_name(socket, params)
+
     with {:name, true} <- {:name, name != ""},
          {:json, {:ok, %{} = config}} <- {:json, Jason.decode(config_json)} do
-      create(socket, name, config)
+      save(socket, name, config)
     else
       {:name, _} ->
         {:noreply, assign(socket, :form_error, "Name is required.")}
@@ -134,16 +166,17 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  def handle_event("add_stdio", params, socket) do
-    name = trimmed(params, "name")
-    backend = trimmed(params, "backend")
+  # One backend, named for the program unless the definition it replaces
+  # named it otherwise.
+  def handle_event("add_program", params, socket) do
+    name = form_name(socket, params)
+    backend = blank_nil(trimmed(params, "backend")) || name
 
-    with {:filled, true} <-
-           {:filled, name != "" and backend != "" and trimmed(params, "command") != ""},
+    with {:filled, true} <- {:filled, name != "" and trimmed(params, "command") != ""},
          {:ok, program} <- program_config(params) do
       config =
         Map.merge(program, %{
-          "transport" => "stdio",
+          "transport" => "program",
           "backends" => [
             %{"name" => backend, "command" => trimmed(params, "command"), "env" => program["env"]}
           ]
@@ -151,31 +184,11 @@ defmodule PrismWeb.ProgramsLive do
         |> Map.delete("env")
         |> put_entry(params)
 
-      create(socket, name, config)
-    else
-      {:filled, false} ->
-        {:noreply, assign(socket, :form_error, "Name, backend name and command are required.")}
-
-      {:error, message} ->
-        {:noreply, assign(socket, :form_error, message)}
-    end
-  end
-
-  def handle_event("add_pipe", params, socket) do
-    name = trimmed(params, "name")
-
-    with {:filled, true} <- {:filled, name != "" and trimmed(params, "command") != ""},
-         {:ok, program} <- program_config(Map.put_new(params, "home", "kept")) do
-      config =
-        Map.merge(program, %{
-          "transport" => "pipe",
-          "backends" => [
-            %{"name" => name, "command" => trimmed(params, "command"), "env" => program["env"]}
-          ]
-        })
-        |> Map.delete("env")
-
-      install(socket, name, config)
+      # A new driven program is installed: with a kept home and a sign-in,
+      # its login entry is made and its sign-in opened.
+      if socket.assigns.editing == nil and config["mark"] == "driven",
+        do: install(socket, name, config),
+        else: save(socket, name, config)
     else
       {:filled, false} ->
         {:noreply, assign(socket, :form_error, "Name and command are required.")}
@@ -205,16 +218,15 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
+  # Enabling starts nothing here, but the details read after it may: a
+  # `get` of an enabled row connects it, so the call runs off the page.
   def handle_event("toggle_enabled", %{"name" => name, "enabled" => enabled}, socket) do
-    action = if enabled == "true", do: "disable", else: "enable"
+    {action, working} =
+      if enabled == "true",
+        do: {"disable", "Disabling #{name}…"},
+        else: {"enable", "Enabling #{name}…"}
 
-    case call_tool(socket, "mcp_servers/#{action}", %{"name" => name}) do
-      {:ok, _} ->
-        {:noreply, refresh_servers(socket)}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
-    end
+    {:noreply, call(socket, working, {:toggle, name}, "mcp_servers/#{action}", %{"name" => name})}
   end
 
   def handle_event("test", %{"name" => name}, socket),
@@ -244,7 +256,7 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # The person signs a kept row in: with the entry a stdio row names, or
+  # The person signs a kept row in: with the entry an mcp program names, or
   # the entry picked, or a new one made for the program.
   def handle_event("sign_in", %{"name" => name} = params, socket) do
     case sign_in_entry(socket, name, params["entry"]) do
@@ -355,7 +367,17 @@ defmodule PrismWeb.ProgramsLive do
   def handle_info({SignInTerminalComponent, :closed}, socket),
     do: {:noreply, socket |> assign(:terminal, nil) |> refresh_servers()}
 
-  def handle_info(%Cyfr.Bus.McpServers{}, socket), do: {:noreply, refresh_servers(socket)}
+  # A row expanded here and disabled elsewhere has its details read again:
+  # a disabled row's `get` starts nothing, so it is read in place.
+  def handle_info(%Cyfr.Bus.McpServers{}, socket) do
+    socket = refresh_servers(socket)
+    name = socket.assigns.expanded_name
+
+    case Enum.find(socket.assigns.servers, &(&1[:name] == name)) do
+      %{enabled: false} -> {:noreply, expand_server(socket, name)}
+      _other -> {:noreply, socket}
+    end
+  end
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
@@ -400,7 +422,9 @@ defmodule PrismWeb.ProgramsLive do
     )
   end
 
-  defp expanded_after({kind, name}) when kind in [:restart, :set_hosts], do: name
+  defp expanded_after({kind, name}) when kind in [:restart, :set_hosts, :toggle, :update],
+    do: name
+
   defp expanded_after(_answer), do: nil
 
   defp called(socket, answer, {:error, _crashed} = result),
@@ -451,6 +475,24 @@ defmodule PrismWeb.ProgramsLive do
   defp answered(socket, {:set_hosts, _name}, {:error, reason}),
     do: put_flash(socket, :error, "Saving the hosts failed: #{error_message(reason)}")
 
+  defp answered(socket, {:toggle, _name}, {:ok, _}), do: socket
+
+  defp answered(socket, {:toggle, _name}, {:error, reason}),
+    do: put_flash(socket, :error, "Failed: #{error_message(reason)}")
+
+  defp answered(socket, {:update, name}, {:ok, result}) do
+    socket
+    |> assign(:show_add, nil)
+    |> assign(:form_error, nil)
+    |> assign(:prefill, %{})
+    |> assign(:editing, nil)
+    |> saved_flash(name, result)
+    |> warnings_flash(result)
+  end
+
+  defp answered(socket, {:update, _name}, {:error, reason}),
+    do: assign(socket, :form_error, "Failed to save: #{error_message(reason)}")
+
   defp answered(socket, {:create, name}, {:ok, result}) do
     socket
     |> assign(:show_add, nil)
@@ -460,7 +502,7 @@ defmodule PrismWeb.ProgramsLive do
     |> warnings_flash(result)
   end
 
-  # A pipe program: the row, then (from an install, or for any kept home)
+  # A new driven program: the row, then (for a kept home with a sign-in)
   # a login entry for it and the sign-in terminal on it.
   defp answered(socket, {:install, name, config}, {:ok, result}) do
     socket =
@@ -478,10 +520,45 @@ defmodule PrismWeb.ProgramsLive do
 
   # ————— defining a row —————
 
-  defp create(socket, name, config) do
+  # A new row, or the whole definition of the row the form edits.
+  defp save(%{assigns: %{editing: %{name: name, epoch: epoch}}} = socket, name, config) do
+    args = %{"name" => name, "epoch" => epoch, "config" => config}
+    {:noreply, call(socket, "Saving #{name}…", {:update, name}, "mcp_servers/update", args)}
+  end
+
+  defp save(socket, name, config) do
     args = %{"name" => name, "config" => config}
     {:noreply, call(socket, "Adding #{name}…", {:create, name}, "mcp_servers/create", args)}
   end
+
+  # An edit keeps the row's name: an update names the row it replaces.
+  defp form_name(%{assigns: %{editing: %{name: name}}}, _params), do: name
+  defp form_name(_socket, params), do: trimmed(params, "name")
+
+  # The form an edit opens and what it holds: the program form for one
+  # backend, the config form, as JSON, for more.
+  defp edit_prefill(%{"backends" => [backend]} = config) do
+    {"program",
+     %{
+       "backend" => backend["name"],
+       "command" => backend["command"],
+       "env" => Enum.map_join(backend["env"] || %{}, "\n", fn {k, v} -> "#{k}=#{v}" end),
+       "mark" => config["mark"],
+       "home" => config["home"],
+       "memory_mib" => mib_text(config["memory_bytes"]),
+       "disk_mib" => mib_text(config["home_max_bytes"]),
+       "login_command" => config["login_command"],
+       "login_entry_id" => config["login_entry_id"],
+       "hosts" => config["hosts"]
+     }}
+  end
+
+  defp edit_prefill(config), do: {"config", %{"config" => Jason.encode!(config, pretty: true)}}
+
+  defp mib_text(bytes) when is_integer(bytes) and rem(bytes, @mib) == 0,
+    do: Integer.to_string(div(bytes, @mib))
+
+  defp mib_text(_bytes), do: nil
 
   defp install(socket, name, config) do
     args = %{"name" => name, "config" => config}
@@ -490,16 +567,18 @@ defmodule PrismWeb.ProgramsLive do
      call(socket, "Adding #{name}…", {:install, name, config}, "mcp_servers/create", args)}
   end
 
-  # The program fields both program forms share: the env, the home, the
-  # bounds in MiB and the login command. Only what is set is sent.
+  # The program form's settings: the mark, the env, the home, the bounds
+  # in MiB, the login command and the hosts. Only what is set is sent.
   defp program_config(params) do
     with {:ok, env} <- parse_env(params["env"] || ""),
          {:ok, memory} <- mib(params, "memory_mib", "Memory"),
          {:ok, disk} <- mib(params, "disk_mib", "Disk") do
       home = if params["home"] == "kept", do: "kept", else: "scratch"
 
+      mark = if params["mark"] == "driven", do: "driven", else: "mcp"
+
       {:ok,
-       %{"env" => env, "home" => home}
+       %{"env" => env, "home" => home, "mark" => mark}
        |> put_present("memory_bytes", memory)
        |> put_present("home_max_bytes", if(home == "kept", do: disk))
        |> put_present("login_command", blank_nil(trimmed(params, "login_command")))
@@ -515,8 +594,8 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # A kept stdio row names its login entry.
-  defp put_entry(%{"home" => "kept"} = config, params),
+  # A kept mcp program names its login entry.
+  defp put_entry(%{"home" => "kept", "mark" => "mcp"} = config, params),
     do: put_present(config, "login_entry_id", blank_nil(trimmed(params, "login_entry")))
 
   defp put_entry(config, _params), do: config
@@ -539,6 +618,12 @@ defmodule PrismWeb.ProgramsLive do
 
   defp added_flash(socket, name, result),
     do: put_flash(socket, :info, "'#{name}' added (#{result[:status] || "saved"}).")
+
+  defp saved_flash(socket, name, %{error: sentence}) when is_binary(sentence),
+    do: put_flash(socket, :error, "'#{name}' saved — #{sentence}")
+
+  defp saved_flash(socket, name, result),
+    do: put_flash(socket, :info, "'#{name}' saved (#{result[:status] || "saved"}).")
 
   defp warnings_flash(socket, %{warnings: [_ | _] = warnings}),
     do: put_flash(socket, :warning, Enum.join(warnings, " "))
@@ -564,8 +649,9 @@ defmodule PrismWeb.ProgramsLive do
 
   # ————— installing from a component's need —————
 
-  # The pipe form, prefilled from the component's login need: what the
-  # need's install block suggests, every field the person's to change.
+  # The program form, driven and kept, prefilled from the component's login
+  # need: what the need's install block suggests, every field the person's
+  # to change.
   defp prefill_install(socket, ref, need_name) do
     with {:ok, plan} <-
            call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}),
@@ -573,10 +659,13 @@ defmodule PrismWeb.ProgramsLive do
       install = field(need, :install) || %{}
 
       socket
-      |> assign(:show_add, "pipe")
+      |> assign(:show_add, "program")
       |> assign(:form_error, nil)
+      |> assign(:editing, nil)
       |> assign(:install, %{ref: ref, need: need_name, reason: field(need, :reason)})
       |> assign(:prefill, %{
+        "mark" => "driven",
+        "home" => "kept",
         "name" => field(need, :program),
         "command" => field(install, :command),
         "login_command" => field(install, :login_command)
@@ -601,11 +690,11 @@ defmodule PrismWeb.ProgramsLive do
     named = config(socket.assigns.detail)["login_entry_id"]
 
     cond do
-      server[:transport] == "stdio" and present?(named) ->
+      server[:mark] == "mcp" and present?(named) ->
         {:ok, named}
 
-      server[:transport] == "stdio" ->
-        {:error, "This server names no login entry; edit it to name one, then sign in."}
+      server[:mark] == "mcp" ->
+        {:error, "This program names no login entry; edit it to name one, then sign in."}
 
       entry in [nil, "", "new"] ->
         :new
@@ -777,11 +866,8 @@ defmodule PrismWeb.ProgramsLive do
     <div class="space-y-6">
       <.page_header title="Programs">
         <:actions>
-          <.button variant="ghost" phx-click="toggle_add" phx-value-form="pipe">
-            {if @show_add == "pipe", do: "Cancel", else: "Add program"}
-          </.button>
-          <.button variant="ghost" phx-click="toggle_add" phx-value-form="stdio">
-            {if @show_add == "stdio", do: "Cancel", else: "Add stdio server"}
+          <.button variant="ghost" phx-click="toggle_add" phx-value-form="program">
+            {if @show_add == "program", do: "Cancel", else: "Add program"}
           </.button>
           <.button phx-click="toggle_add" phx-value-form="config">
             {if @show_add == "config", do: "Cancel", else: "Add server"}
@@ -804,17 +890,22 @@ defmodule PrismWeb.ProgramsLive do
         entry={@terminal.entry}
       />
 
-      <.card :if={@show_add == "pipe"}>
-        <form id="add-pipe" phx-submit="add_pipe" class="space-y-4">
+      <.card :if={@show_add == "program"}>
+        <form id="add-program" phx-submit="add_program" class="space-y-4">
           <p :if={@install} class="text-sm text-gray-300" data-test="install-from">
             Install <span class="font-mono">{@prefill["name"]}</span>
             for <span class="font-mono">{@install.ref}</span>
-            — {@install.reason}. This is the row as it will run; change anything first.
+            — {@install.reason}. This is the program as it will run; change anything first.
             Saving it makes a login entry for it and opens its sign-in.
           </p>
-          <p :if={!@install} class="text-xs text-gray-500">
-            A program a component drives, such as a coding harness. Its command fetches or runs
-            it; CYFR ships none. A program that keeps its folder keeps its own sign-in between runs.
+          <p :if={@editing} class="text-sm text-gray-300" data-test="editing">
+            Replace the whole definition of <span class="font-mono">{@editing.name}</span>.
+            Its folder is kept.
+          </p>
+          <p :if={!@install && !@editing} class="text-xs text-gray-500">
+            A program the backends service runs under a user of its own, such as an
+            <code class="text-gray-400">npx</code>
+            package. Its command fetches or runs it; CYFR ships none.
           </p>
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
@@ -822,9 +913,11 @@ defmodule PrismWeb.ProgramsLive do
               name="name"
               required
               value={@prefill["name"]}
-              placeholder="claude"
+              disabled={@editing != nil}
+              placeholder="github"
               class="max-w-xs font-mono"
             />
+            <input type="hidden" name="backend" value={@prefill["backend"]} />
           </div>
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">Command</label>
@@ -832,73 +925,73 @@ defmodule PrismWeb.ProgramsLive do
               name="command"
               required
               value={@prefill["command"]}
-              placeholder="npx -y @anthropic-ai/claude-code"
-              class="font-mono"
-            />
-          </div>
-          <.program_fields kind="pipe" prefill={@prefill} logins={[]} />
-          <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>
-          <.button type="submit">{if @install, do: "Install", else: "Add program"}</.button>
-        </form>
-      </.card>
-
-      <.card :if={@show_add == "stdio"}>
-        <form id="add-stdio" phx-submit="add_stdio" class="space-y-4">
-          <p class="text-xs text-gray-500">
-            A stdio MCP server (for example an <code class="text-gray-400">npx</code>
-            package) that the backends service runs as a program under a user of its own. Its tools
-            appear as <span class="font-mono">&lt;name&gt;:&lt;backend&gt;__&lt;tool&gt;</span>.
-          </p>
-          <div class="grid gap-3 md:grid-cols-2">
-            <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
-              <.input name="name" required placeholder="github" class="font-mono" />
-            </div>
-            <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Backend name</label>
-              <.input name="backend" required placeholder="github" class="font-mono" />
-            </div>
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 uppercase mb-1">Command</label>
-            <.input
-              name="command"
-              required
               placeholder="npx -y @modelcontextprotocol/server-github"
               class="font-mono"
             />
           </div>
-          <.program_fields kind="stdio" prefill={%{}} logins={@logins} />
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-1">How it is spoken to</label>
+            <select
+              name="mark"
+              data-test="mark"
+              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
+            >
+              <option value="mcp" selected={@prefill["mark"] != "driven"}>
+                MCP: CYFR offers its tools, named &lt;name&gt;:&lt;name&gt;__&lt;tool&gt;
+              </option>
+              <option value="driven" selected={@prefill["mark"] == "driven"}>
+                driven: a person or a brain runs it, such as a coding harness
+              </option>
+            </select>
+          </div>
+          <.program_fields prefill={@prefill} logins={@logins} />
           <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>
-          <.button type="submit">Add stdio server</.button>
+          <.button type="submit">
+            {cond do
+              @install -> "Install"
+              @editing -> "Save program"
+              true -> "Add program"
+            end}
+          </.button>
         </form>
       </.card>
 
       <.card :if={@show_add == "config"}>
         <form id="add-config" phx-submit="add_server" class="space-y-4">
+          <p :if={@editing} class="text-sm text-gray-300" data-test="editing">
+            Replace the whole definition of <span class="font-mono">{@editing.name}</span>.
+            Its folder is kept.
+          </p>
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
-            <.input name="name" required placeholder="notion" class="max-w-xs font-mono" />
+            <.input
+              name="name"
+              required
+              value={@prefill["name"]}
+              disabled={@editing != nil}
+              placeholder="notion"
+              class="max-w-xs font-mono"
+            />
           </div>
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">
               Config (mcp.json format)
             </label>
-            <.textarea
+            <textarea
               name="config"
               rows="6"
               required
               placeholder={@placeholder_config}
-              class="font-mono"
-            />
+              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono"
+            >{@prefill["config"]}</textarea>
             <p class="text-xs text-gray-600 mt-1">
               A header value may be <code class="text-gray-500">vault:ENTRY</code>
               or <code class="text-gray-500">Bearer vault:ENTRY</code>, a single-field entry
-              whose destination covers this server's URL (create one on the Vault page). A program's config is <code class="text-gray-500">{"{\"transport\": \"stdio\" | \"pipe\", \"backends\": [...], \"home\": ..., ...}"}</code>.
+              whose destination covers this server's URL (create one on the Vault page). A program's config is <code class="text-gray-500">{"{\"transport\": \"program\", \"mark\": \"mcp\" | \"driven\", \"backends\": [...], \"home\": ..., ...}"}</code>.
             </p>
           </div>
           <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>
-          <.button type="submit">Add server</.button>
+          <.button type="submit">{if @editing, do: "Save", else: "Add server"}</.button>
         </form>
       </.card>
 
@@ -940,7 +1033,7 @@ defmodule PrismWeb.ProgramsLive do
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
                     <span class="font-mono text-blue-400">{server[:name]}</span>
                     <span class="ml-2 text-xs text-gray-500" data-test="transport">
-                      {server[:transport] || "http"}
+                      {kind(server)}
                     </span>
                   </td>
                   <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">
@@ -970,7 +1063,7 @@ defmodule PrismWeb.ProgramsLive do
                         {warning}
                       </div>
                       <dl
-                        :if={server[:transport] in ["stdio", "pipe"]}
+                        :if={server[:transport] == "program"}
                         class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs md:grid-cols-4"
                         data-test="program-settings"
                       >
@@ -989,13 +1082,13 @@ defmodule PrismWeb.ProgramsLive do
                           {config(@detail)["login_command"] || "none"}
                         </dd>
                         <dt
-                          :if={server[:transport] == "stdio" and server[:home] == "kept"}
+                          :if={server[:mark] == "mcp" and server[:home] == "kept"}
                           class="text-gray-500"
                         >
                           Login entry
                         </dt>
                         <dd
-                          :if={server[:transport] == "stdio" and server[:home] == "kept"}
+                          :if={server[:mark] == "mcp" and server[:home] == "kept"}
                           class="font-mono text-gray-300"
                         >
                           {entry_name(@logins, config(@detail)["login_entry_id"]) || "none named"}
@@ -1006,7 +1099,7 @@ defmodule PrismWeb.ProgramsLive do
                         </dd>
                       </dl>
                       <form
-                        :if={@detail && server[:transport] in ["stdio", "pipe"]}
+                        :if={@detail && server[:transport] == "program"}
                         id={"hosts-" <> server[:name]}
                         phx-submit="set_hosts"
                         class="flex flex-wrap items-end gap-2"
@@ -1073,7 +1166,16 @@ defmodule PrismWeb.ProgramsLive do
                           {if server[:enabled] == true, do: "Disable", else: "Enable"}
                         </.button>
                         <.button
-                          :if={server[:transport] != "pipe"}
+                          :if={server[:transport] == "program" and @detail}
+                          variant="ghost"
+                          phx-click="edit"
+                          phx-value-name={server[:name]}
+                          data-test="edit"
+                        >
+                          Edit
+                        </.button>
+                        <.button
+                          :if={server[:mark] != "driven"}
                           variant="ghost"
                           phx-click="test"
                           phx-value-name={server[:name]}
@@ -1081,7 +1183,7 @@ defmodule PrismWeb.ProgramsLive do
                           Test
                         </.button>
                         <.button
-                          :if={server[:transport] != "pipe"}
+                          :if={server[:mark] != "driven"}
                           variant="ghost"
                           phx-click="refresh"
                           phx-value-name={server[:name]}
@@ -1089,7 +1191,7 @@ defmodule PrismWeb.ProgramsLive do
                           Refresh
                         </.button>
                         <.button
-                          :if={server[:transport] == "stdio"}
+                          :if={server[:mark] == "mcp"}
                           variant="ghost"
                           phx-click="restart"
                           phx-value-name={server[:name]}
@@ -1117,11 +1219,10 @@ defmodule PrismWeb.ProgramsLive do
     """
   end
 
-  attr :kind, :string, required: true
   attr :prefill, :map, required: true
   attr :logins, :list, required: true
 
-  # The fields a stdio server and a pipe program share.
+  # A program's settings beside its name, command and mark.
   defp program_fields(assigns) do
     ~H"""
     <div>
@@ -1129,7 +1230,7 @@ defmodule PrismWeb.ProgramsLive do
       <.input
         name="login_command"
         value={@prefill["login_command"]}
-        placeholder={if @kind == "pipe", do: "claude auth login", else: "optional"}
+        placeholder="optional, such as claude auth login"
         class="font-mono"
       />
     </div>
@@ -1140,19 +1241,31 @@ defmodule PrismWeb.ProgramsLive do
           name="home"
           class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
         >
-          <option value="kept" selected={@kind == "pipe"}>
+          <option value="kept" selected={@prefill["home"] == "kept"}>
             kept: the program keeps its folder and its sign-in
           </option>
-          <option value="scratch" selected={@kind != "pipe"}>scratch: a fresh folder each run</option>
+          <option value="scratch" selected={@prefill["home"] != "kept"}>
+            scratch: a fresh folder each run
+          </option>
         </select>
       </div>
       <div>
         <label class="block text-xs text-gray-500 uppercase mb-1">Memory bound (MiB)</label>
-        <.input name="memory_mib" placeholder="the service's" class="font-mono" />
+        <.input
+          name="memory_mib"
+          value={@prefill["memory_mib"]}
+          placeholder="the service's"
+          class="font-mono"
+        />
       </div>
       <div>
         <label class="block text-xs text-gray-500 uppercase mb-1">Disk bound (MiB, kept)</label>
-        <.input name="disk_mib" placeholder="the folders' volume" class="font-mono" />
+        <.input
+          name="disk_mib"
+          value={@prefill["disk_mib"]}
+          placeholder="the folders' volume"
+          class="font-mono"
+        />
       </div>
     </div>
     <div>
@@ -1171,29 +1284,36 @@ defmodule PrismWeb.ProgramsLive do
         front end do, admits that other too.
       </p>
     </div>
-    <div :if={@kind == "stdio"}>
-      <label class="block text-xs text-gray-500 uppercase mb-1">Login entry (kept folder)</label>
+    <div>
+      <label class="block text-xs text-gray-500 uppercase mb-1">
+        Login entry (a kept MCP program)
+      </label>
       <select
         name="login_entry"
         class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
       >
         <option value="">none</option>
-        <option :for={login <- @logins} value={login.id}>
+        <option
+          :for={login <- @logins}
+          value={login.id}
+          selected={login.id == @prefill["login_entry_id"]}
+        >
           {login.name} (program {login.program})
         </option>
       </select>
       <p class="text-xs text-gray-600 mt-1">
-        A server that signs in on its own keeps its folder in a login entry naming this server.
+        An MCP program that signs in on its own keeps its folder in a login entry naming it. A
+        driven program's folder is its component's login entry.
       </p>
     </div>
     <div>
       <label class="block text-xs text-gray-500 uppercase mb-1">Env (NAME=value per line)</label>
-      <.textarea
+      <textarea
         name="env"
         rows="3"
         placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=vault:github-token"
-        class="font-mono"
-      />
+        class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono"
+      >{@prefill["env"]}</textarea>
       <p class="text-xs text-gray-600 mt-1">
         A value is <code class="text-gray-500">vault:ENTRY</code>, a single-field
         disclosed entry on the Vault page; only NODE_ENV, LOG_LEVEL, TZ, LANG,
@@ -1225,7 +1345,7 @@ defmodule PrismWeb.ProgramsLive do
       <form :if={@config["login_command"]} phx-submit="sign_in" class="flex items-end gap-2">
         <input type="hidden" name="name" value={@server[:name]} />
         <select
-          :if={@server[:transport] == "pipe"}
+          :if={@server[:mark] == "driven"}
           name="entry"
           class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white"
         >
@@ -1262,8 +1382,7 @@ defmodule PrismWeb.ProgramsLive do
   defp entry_name(_logins, nil), do: nil
   defp entry_name(logins, id), do: Enum.find_value(logins, id, &(&1.id == id && &1.name))
 
-  defp home_line(%{transport: transport} = server) when transport in ["stdio", "pipe"],
-    do: server[:home] || "scratch"
+  defp home_line(%{transport: "program"} = server), do: server[:home] || "scratch"
 
   defp home_line(_server), do: "—"
 
@@ -1272,15 +1391,19 @@ defmodule PrismWeb.ProgramsLive do
   defp bytes(n, _fallback) when is_integer(n), do: "#{n} bytes"
   defp bytes(_n, fallback), do: fallback
 
-  defp endpoint(%{transport: "stdio"}), do: "stdio (backends service)"
-  defp endpoint(%{transport: "pipe"}), do: "pipe (a component drives it)"
+  defp endpoint(%{mark: "mcp"}), do: "MCP (backends service)"
+  defp endpoint(%{mark: "driven"}), do: "driven by a person or a brain"
   defp endpoint(server), do: server[:url]
+
+  defp kind(%{transport: "program", mark: mark}), do: "#{mark} program"
+  defp kind(_server), do: "http"
 
   defp status_color(status) when status in ["ready", "connected", "running"], do: "green"
   defp status_color(status) when status in ["error", "crashed", "failed"], do: "red"
 
-  defp status_color(status) when status in ["disconnected", "connecting", "starting", "idle"],
-    do: "yellow"
+  defp status_color(status)
+       when status in ["disconnected", "connecting", "starting", "idle", "stopped"],
+       do: "yellow"
 
   defp status_color(_), do: "gray"
 end

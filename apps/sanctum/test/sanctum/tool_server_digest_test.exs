@@ -9,6 +9,7 @@ defmodule Sanctum.ToolServerDigestTest do
   @base %{
     id: "mcp_row_1",
     transport: "http",
+    mark: nil,
     url: "https://mcp.example/sse",
     enabled: true,
     headers: %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr"},
@@ -16,9 +17,10 @@ defmodule Sanctum.ToolServerDigestTest do
     tool_patterns: ["*"]
   }
 
-  @stdio %{
+  @program %{
     @base
-    | transport: "stdio",
+    | transport: "program",
+      mark: "mcp",
       url: nil,
       headers: %{},
       backends: [
@@ -52,7 +54,7 @@ defmodule Sanctum.ToolServerDigestTest do
         %{@base | enabled: false},
         %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN"}},
         %{@base | tool_patterns: ["issues.*"]},
-        %{@base | transport: "stdio", url: nil}
+        %{@base | transport: "program", mark: "mcp", url: nil}
       ]
 
       for variant <- variants do
@@ -61,9 +63,9 @@ defmodule Sanctum.ToolServerDigestTest do
       end
     end
 
-    test "every backend axis of a stdio server moves the digest, and its env order does not" do
-      {:ok, base} = ToolServerDigest.compute(@stdio)
-      [backend] = @stdio.backends
+    test "every backend axis of an mcp program moves the digest, and its env order does not" do
+      {:ok, base} = ToolServerDigest.compute(@program)
+      [backend] = @program.backends
 
       variants = [
         [%{backend | "command" => "npx -y @modelcontextprotocol/server-github@2"}],
@@ -73,7 +75,7 @@ defmodule Sanctum.ToolServerDigestTest do
       ]
 
       for backends <- variants do
-        {:ok, digest} = ToolServerDigest.compute(%{@stdio | backends: backends})
+        {:ok, digest} = ToolServerDigest.compute(%{@program | backends: backends})
         refute digest == base, inspect(backends)
       end
 
@@ -82,7 +84,19 @@ defmodule Sanctum.ToolServerDigestTest do
         | "env" => %{"NODE_ENV" => "production", "GITHUB_TOKEN" => "vault:gh"}
       }
 
-      assert {:ok, ^base} = ToolServerDigest.compute(%{@stdio | backends: [reordered]})
+      assert {:ok, ^base} = ToolServerDigest.compute(%{@program | backends: [reordered]})
+    end
+
+    test "only a tool server has a digest: a driven program and an old kind have none" do
+      for row <- [
+            %{@program | mark: "driven"},
+            %{@program | mark: nil},
+            %{@base | mark: "mcp"},
+            %{@program | transport: "stdio", mark: nil},
+            %{@program | transport: "pipe", mark: nil}
+          ] do
+        assert {:error, {:invalid_server_config, ^row}} = ToolServerDigest.compute(row)
+      end
     end
 
     test "distinct servers never share a digest" do

@@ -119,7 +119,8 @@ defmodule Locus.Runtime.PipeTest do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: @program,
-        transport: "pipe",
+        transport: "program",
+        mark: "driven",
         url: nil,
         home: "kept",
         config_json:

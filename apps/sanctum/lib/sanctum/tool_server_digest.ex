@@ -11,7 +11,9 @@ defmodule Sanctum.ToolServerDigest do
   resolved values: rotating a referenced vault entry must not move the
   digest, while re-pointing the URL, swapping a header or env reference,
   changing a backend's command, or deleting the row and creating another
-  under the same name must. A stdio server's `url` is the empty string. There is
+  under the same name must. A program's `url` is the empty string. Only a
+  tool server has a digest: an `http` row or a program marked `mcp`; a
+  `driven` program offers no tools. There is
   deliberately no stored digest column — a stored digest is a cache someone
   forgets to recompute; deriving at read makes "changed config ⇒ mismatch ⇒
   deny" true by construction.
@@ -30,6 +32,7 @@ defmodule Sanctum.ToolServerDigest do
         %{
           id: id,
           transport: transport,
+          mark: mark,
           url: url,
           enabled: enabled,
           headers: headers,
@@ -37,8 +40,10 @@ defmodule Sanctum.ToolServerDigest do
           tool_patterns: patterns
         } = server
       )
-      when is_binary(id) and transport in ["http", "stdio"] and (is_binary(url) or is_nil(url)) and
-             is_boolean(enabled) and is_map(headers) and is_list(backends) and is_list(patterns) do
+      when is_binary(id) and
+             ((transport == "http" and is_nil(mark)) or (transport == "program" and mark == "mcp")) and
+             (is_binary(url) or is_nil(url)) and is_boolean(enabled) and is_map(headers) and
+             is_list(backends) and is_list(patterns) do
     with {:ok, backends} <- backend_templates(backends) do
       JCS.hash(%{
         "id" => id,
@@ -103,6 +108,7 @@ defmodule Sanctum.ToolServerDigest do
     compute(%{
       id: server.id,
       transport: server.transport,
+      mark: Map.get(server, :mark),
       url: server.url,
       enabled: server.enabled == true,
       headers: config["headers"] || %{},
