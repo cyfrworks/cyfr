@@ -267,7 +267,9 @@ sys.exit(0 if st["phase"] == "done" and st["address"] == "http://localhost:4000"
     "$GUEST_DIR/setup-pages-state.json"
   check "no step met a Docker this account may not use" sh -c '! grep -q "may not use the Docker daemon" "$1" "$2"' sh "$GUEST_DIR/transcript-setup.txt" "$GUEST_DIR/setup-pages-state.json"
   pane_step_end setup
-  guest_ssh 'cd ~/setup-pages && ~/.local/bin/cyfr down' >"$GUEST_DIR/setup-pages-down.txt" 2>&1 ||
+  # The harness's SSH connection, kept open since before init, predates
+  # the group too.
+  guest_ssh "sg docker -c 'cd ~/setup-pages && ~/.local/bin/cyfr down'" >"$GUEST_DIR/setup-pages-down.txt" 2>&1 ||
     fail "cyfr down in ~/setup-pages failed ($GUEST_DIR/setup-pages-down.txt)"
   guest_root 'docker network prune -f' || fail "the setup pages' networks were not removed ($GUEST_DIR/root.txt)"
 }
