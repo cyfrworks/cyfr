@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -164,7 +165,7 @@ func TestScreenOnRefusesAPathTheUnitCouldNotHold(t *testing.T) {
 }
 
 // cyfr screen on and off take the machine's one root step: the sentence
-// right before sudo's own prompt, and a refused password runs nothing.
+// right before sudo's own prompt.
 func TestScreenSaysWhosePasswordBeforeSudoAsks(t *testing.T) {
 	for name, run := range map[string]func(out io.Writer) error{
 		"on":  func(out io.Writer) error { return screenOn(context.Background(), true, out) },
@@ -181,13 +182,118 @@ func TestScreenSaysWhosePasswordBeforeSudoAsks(t *testing.T) {
 			if !strings.Contains(out.String(), passwordSentence+"[sudo's prompt]\n") || s.authenticated != 1 || len(s.applied) != 1 {
 				t.Fatalf("authenticated %d, applied %d:\n%s", s.authenticated, len(s.applied), out.String())
 			}
-			s.authErr, s.applied = os.ErrPermission, nil
+		})
+	}
+}
+
+// A refusal of cyfr screen on or off, for an account outside the sudo and
+// admin groups or for a refused password, leaves the project as it was,
+// the screen files it already has included, and runs nothing as root. The
+// account outside the groups is told before anything is asked; for screen
+// on, whose commands install files this account's cyfr writes, whoever
+// administers the machine is shown joining the sudo group.
+func TestScreenRefusalsChangeNothing(t *testing.T) {
+	account := currentAccount(t)
+	refusal := func(forThem []string) string {
+		return "Your account, " + account + ", is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:\n" +
+			"  sudo sh -c " + shellQuote([]string{strings.Join(forThem, " &&\n    ")}) + "\n"
+	}
+	for _, c := range []struct {
+		name, command string
+		run           func(out io.Writer) error
+		outside       bool
+		forThem       []string
+	}{
+		{"on outside the groups", "on", func(out io.Writer) error { return screenOn(context.Background(), true, out) }, true, []string{"usermod -aG sudo " + shellQuote([]string{account})}},
+		{"off outside the groups", "off", screenOff, true, []string{
+			"{ systemctl disable --now cyfr-screen || true; }",
+			"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
+			"systemctl daemon-reload",
+			"systemctl enable --now getty@tty1",
+		}},
+		{"on the password refused", "on", func(out io.Writer) error { return screenOn(context.Background(), true, out) }, false, nil},
+		{"off the password refused", "off", screenOff, false, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := screenProject(t)
+			dir, _ := os.Getwd()
+			// The screen files an earlier screen on wrote, one of them since
+			// changed, so a rewrite shows.
+			if err := writeScreenFiles(dir, account); err != nil {
+				t.Fatal(err)
+			}
+			launcher := filepath.Join(screenDir, "launcher.sh")
+			if err := os.WriteFile(launcher, []byte(read(t, launcher)+"# an earlier version\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			before := folderState(t, dir)
 			askInput = strings.NewReader("yes\n")
-			if err := run(&out); err == nil || err.Error() != "The password was not accepted, so nothing was changed. Run `cyfr screen "+name+"` again to try again" || s.applied != nil {
-				t.Fatalf("err = %v, applied %q", err, s.applied)
+			var out bytes.Buffer
+			var want string
+			if c.outside {
+				s.administrator = nil
+				want = "Nothing was changed. Run `cyfr screen " + c.command + "` again once they have"
+			} else {
+				s.authErr = os.ErrPermission
+				want = "The password was not accepted, so nothing was changed. Run `cyfr screen " + c.command + "` again to try again"
+			}
+			if err := c.run(&out); err == nil || err.Error() != want {
+				t.Fatalf("err = %v, want %q\n%s", err, want, out.String())
+			}
+			if after := folderState(t, dir); !maps.Equal(after, before) {
+				t.Errorf("the project changed:\nbefore %v\nafter  %v", before, after)
+			}
+			if s.applied != nil {
+				t.Errorf("applied %q", s.applied)
+			}
+			if c.outside && (out.String() != refusal(c.forThem) || s.authenticated != 0) {
+				t.Errorf("authenticated %d; printed:\n%s\nwant:\n%s", s.authenticated, out.String(), refusal(c.forThem))
+			}
+			if !c.outside && (!strings.HasSuffix(out.String(), passwordSentence) || s.authenticated != 1) {
+				t.Errorf("authenticated %d:\n%s", s.authenticated, out.String())
 			}
 		})
 	}
+}
+
+// Init's screen answered 1 by an account outside the sudo and admin groups
+// is refused before anything is written. A password refused at the screen
+// step, once the project is written, says what is true: the project is set
+// up, the screen is not, and cyfr screen on sets it up; no screen file is
+// written and the project's files are as init wrote them.
+func TestInitScreenRefusals(t *testing.T) {
+	t.Run("outside the groups", func(t *testing.T) {
+		s, _ := initProjectOnScreen(t)
+		s.administrator = nil
+		askInput = strings.NewReader("1\n")
+		dir, _ := os.Getwd()
+		before := folderState(t, dir)
+		var out bytes.Buffer
+		err := runInit(context.Background(), initOptions{}, &out, &out)
+		if err == nil || err.Error() != "Nothing was changed. Run `cyfr init` again once they have" {
+			t.Fatalf("err = %v\n%s", err, out.String())
+		}
+		if after := folderState(t, dir); !maps.Equal(after, before) {
+			t.Errorf("init changed the folder:\nbefore %v\nafter  %v", before, after)
+		}
+		if !strings.HasPrefix(out.String(), screenQuestion+"Your account, ") || strings.Contains(out.String(), "(yes/no)") || s.authenticated != 0 || s.applied != nil {
+			t.Errorf("authenticated %d, applied %q:\n%s", s.authenticated, s.applied, out.String())
+		}
+	})
+	t.Run("the password refused", func(t *testing.T) {
+		s, _ := initProjectOnScreen(t)
+		stubLauncher(t, true, nil)
+		s.authErr = os.ErrPermission
+		askInput = strings.NewReader("1\n")
+		var out bytes.Buffer
+		err := runInit(context.Background(), initOptions{}, &out, &out)
+		if err == nil || err.Error() != "The password was not accepted, so the screen was not set up; CYFR is set up in this directory. Run `cyfr screen on` here to set it up" {
+			t.Fatalf("err = %v\n%s", err, out.String())
+		}
+		if fileExists(screenDir) || !fileExists(".env") || s.applied != nil || s.authenticated != 1 {
+			t.Errorf("screen files %v, .env %v, applied %q, authenticated %d", fileExists(screenDir), fileExists(".env"), s.applied, s.authenticated)
+		}
+	})
 }
 
 // A no changes nothing as root, says so with the next step and is no
@@ -401,6 +507,7 @@ func TestInitEndsWithoutTheScreenWhenItsInstallFails(t *testing.T) {
 // with no `cyfr screen on`, and a project with no screen gets none.
 func TestAccessRewritesTheScreensFiles(t *testing.T) {
 	for _, screen := range []bool{true, false} {
+		standInMachine(t)
 		s := newAccessProject(t)
 		dir, err := filepath.EvalSymlinks(".")
 		if err != nil {
@@ -448,7 +555,9 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 		{"a log unread", notSetUp, "1", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			standInMachine(t)
 			s := newUpdateScenario(t, shippedCompose(t), nil)
+			dockerStandIn(t, s.fake)
 			s.answer("ps.out", "c0ffee\n")
 			s.answer("inspect.out", "2026-10-28T00:01:02.123456789Z\n")
 			s.answer("logs.out", c.log)
@@ -458,7 +567,9 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 			}
 		})
 	}
+	standInMachine(t)
 	s := newUpdateScenario(t, shippedCompose(t), nil)
+	dockerStandIn(t, s.fake)
 	s.answer("ps.out", "c0ffee\n")
 	s.answer("inspect.out", "2026-10-28T00:01:02.123456789Z\n")
 	s.answer("logs.out", "booting\n"+notSetUp)

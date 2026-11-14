@@ -282,8 +282,9 @@ PASSWORD_SENTENCE='Ubuntu will now ask for your password: the one you log in to 
 # installs it, cyfr init's two refusals. In tty1's terminal sudo's own
 # prompt, after cyfr's line saying whose password it asks, is answered
 # three times with a wrong one. Then an account outside the sudo group, at
-# a terminal of its own (script), is told it may not administer the
-# machine, with the commands for whoever does, before anything is asked.
+# a terminal of its own (script), is told it is not in the sudo or admin
+# group, with the commands for whoever administers the machine, before
+# anything is asked.
 # Neither installs, joins a group or writes into its folder; the second
 # account and its copy of cyfr are removed after.
 requirements_refused() {
@@ -299,7 +300,7 @@ requirements_refused() {
   check "nothing was installed, no group joined, nothing written" guest_ssh '! dpkg -s docker.io >/dev/null 2>&1 && ! id -nG proof | grep -qw docker && [ -z "$(ls -A ~/refused)" ] && rmdir ~/refused'
   pane_step_end refused
 
-  step "cyfr init by an account that may not administer this machine"
+  step "cyfr init by an account outside the sudo and admin groups"
   guest_root 'useradd -m -s /bin/bash visitor && install -m 0755 /home/proof/.local/bin/cyfr /tmp/cyfr-visitor' ||
     fail "the second account was not made ($GUEST_DIR/root.txt)"
   status=0
@@ -307,11 +308,11 @@ requirements_refused() {
     >"$GUEST_DIR/visitor.txt" || status=$?
   tr -d '\r' <"$GUEST_DIR/visitor.txt" >"$GUEST_DIR/transcript-visitor.txt"
   check "cyfr init exits 1 (it exited $status)" test "$status" = 1
-  check "it says the account may not administer this machine" grep -qxF 'Your account, visitor, may not administer this machine, so CYFR cannot run these commands as root. Whoever administers it can run them for you:' "$GUEST_DIR/transcript-visitor.txt"
+  check "it says the account is not in the sudo or admin group" grep -qxF 'Your account, visitor, is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:' "$GUEST_DIR/transcript-visitor.txt"
   check "it gives the commands as one sudo line, joining visitor to the docker group" sh -c 'grep -qx "  sudo sh -c '\''apt-get update &&" "$1" && grep -qx "    usermod -aG docker visitor'\''" "$1"' sh "$GUEST_DIR/transcript-visitor.txt"
   check "it says nothing was changed, and when to run init again" grep -qxF 'Error: Nothing was changed. Run `cyfr init` again once they have' "$GUEST_DIR/transcript-visitor.txt"
   check "it asks nothing and sudo never runs" sh -c '! grep -qE -- "Install these requirements|$2" "$1"' sh "$GUEST_DIR/transcript-visitor.txt" "$SUDO_PROMPT"
-  check "nothing was installed or written" guest_root '! dpkg -s docker.io >/dev/null 2>&1 && [ -z "$(ls -A /home/visitor/try)" ]'
+  check "nothing was installed, no group joined, and its folder is as it was: empty" guest_root '! dpkg -s docker.io >/dev/null 2>&1 && ! id -nG visitor | grep -qw docker && [ -z "$(ls -A /home/visitor/try)" ]'
   guest_root 'userdel -r visitor 2>/dev/null; rm -f /tmp/cyfr-visitor; ! id visitor' || fail "the second account was not removed ($GUEST_DIR/root.txt)"
 }
 

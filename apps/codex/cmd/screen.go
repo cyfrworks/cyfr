@@ -118,7 +118,14 @@ func askScreen(ctx context.Context, out io.Writer) (bool, error) {
 	if err != nil {
 		return false, interruption{errQuestionInterrupted}
 	}
-	return answer == "1", nil
+	if answer != "1" {
+		return false, nil
+	}
+	account, err := user.Current()
+	if err != nil {
+		return false, err
+	}
+	return true, mayAdministerScreen(account.Username, out, "cyfr init")
 }
 
 // screenOn writes what shows CYFR into the project, then installs it through
@@ -138,13 +145,10 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := writeScreenFiles(dir, account); err != nil {
-		return fmt.Errorf("cyfr screen could not write %s (%v)", screenDir, err)
-	}
-	commands := screenCommands(dir, account)
-	if err := mayAdminister(commands, out, "cyfr screen on"); err != nil {
+	if err := mayAdministerScreen(account, out, "cyfr screen on"); err != nil {
 		return err
 	}
+	commands := screenCommands(dir, account)
 	fmt.Fprintln(out, "These commands show CYFR on this machine's own screen, as root:")
 	for _, c := range commands {
 		fmt.Fprintf(out, "  %s\n", c)
@@ -159,9 +163,28 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 			return errDeclined
 		}
 	}
-	err = asRoot(commands, out, "cyfr screen on", "Showing CYFR on this screen failed. Fix what is shown above, then run `cyfr screen on` again")
-	machine.forget()
-	return err
+	// The files the commands install are written once sudo has the login,
+	// so a refusal leaves the project as it was.
+	defer machine.forget()
+	if err := unlockSudo(out, "cyfr screen on"); err != nil {
+		return err
+	}
+	if err := writeScreenFiles(dir, account); err != nil {
+		return fmt.Errorf("cyfr screen could not write %s (%v)", screenDir, err)
+	}
+	if machine.apply(commands) != nil {
+		return errors.New("Showing CYFR on this screen failed. Fix what is shown above, then run `cyfr screen on` again")
+	}
+	return nil
+}
+
+// mayAdministerScreen refuses an account outside the sudo and admin groups
+// before the screen is asked for or anything is written. The screen's
+// commands install files this account's cyfr writes, so whoever
+// administers the machine is shown the one command that lets this account
+// set it up: joining the sudo group.
+func mayAdministerScreen(account string, out io.Writer, again string) error {
+	return mayAdminister([]string{"usermod -aG sudo " + shellQuote([]string{account})}, out, again)
 }
 
 // screenSite is the project directory and the account the screen's files
@@ -225,13 +248,21 @@ func screenOff(out io.Writer) error {
 		"systemctl daemon-reload",
 		"systemctl enable --now getty@tty1",
 	}
+	if err := mayAdminister(commands, out, "cyfr screen off"); err != nil {
+		return err
+	}
 	fmt.Fprintln(out, "These commands give this machine's screen back to its login prompt, as root:")
 	for _, c := range commands {
 		fmt.Fprintf(out, "  %s\n", c)
 	}
-	err := asRoot(commands, out, "cyfr screen off", "Giving the screen back failed. Fix what is shown above, then run `cyfr screen off` again")
-	machine.forget()
-	return err
+	defer machine.forget()
+	if err := unlockSudo(out, "cyfr screen off"); err != nil {
+		return err
+	}
+	if machine.apply(commands) != nil {
+		return errors.New("Giving the screen back failed. Fix what is shown above, then run `cyfr screen off` again")
+	}
+	return nil
 }
 
 // followScreen rewrites the screen's files of the project in the working

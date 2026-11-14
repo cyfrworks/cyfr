@@ -4,6 +4,10 @@
 package cmd
 
 import (
+	"cmp"
+	"crypto/sha256"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -117,11 +121,20 @@ const (
 	fakeSgStatus = "CYFR_CMD_TEST_FAKE_SG_STATUS"
 )
 
-// runStandIn is this test binary run as the stand-in its name says, sudo
-// or sg, when the test that started it set that stand-in's record; ok is
-// false for any other run.
+// fakeDockerAnswers marks a run of this test binary as the docker
+// dockerStandIn put on PATH: it answers from FAKE_DOCKER_DIR as the update
+// scenario's fakeDocker does, a call's <key>.out on stdout, <key>.err on
+// stderr and <key>.exit its status, its argv appended to log, and runs
+// nothing.
+const fakeDockerAnswers = "CYFR_CMD_TEST_FAKE_DOCKER"
+
+// runStandIn is this test binary run as the stand-in its name says, sudo,
+// sg or docker, when the test that started it set that stand-in's record;
+// ok is false for any other run.
 func runStandIn() (status int, ok bool) {
 	switch name := filepath.Base(os.Args[0]); {
+	case name == "docker" && os.Getenv(fakeDockerAnswers) != "":
+		return runFakeDocker(os.Getenv("FAKE_DOCKER_DIR"), os.Args[1:]), true
 	case name == "sudo" && os.Getenv(fakeSudoRecord) != "":
 		return runFakeSudo(os.Getenv(fakeSudoRecord)), true
 	case name == "sg" && os.Getenv(fakeSgRecord) != "":
@@ -139,6 +152,105 @@ func runStandIn() (status int, ok bool) {
 		return status, true
 	}
 	return 0, false
+}
+
+// runFakeDocker answers args from dir: a compose call by its subcommand
+// (exec as rpc, stop as stop-<service>, run as eval), any other by its
+// first word (ps as cyfrps, exec as schema).
+func runFakeDocker(dir string, args []string) int {
+	f, err := os.OpenFile(filepath.Join(dir, "log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return 3
+	}
+	_, err = f.WriteString(strings.Join(args, " ") + "\n")
+	if f.Close() != nil || err != nil {
+		return 3
+	}
+	args = append(args, "", "")
+	key := map[string]string{"ps": "cyfrps", "exec": "schema"}[args[0]]
+	if args[0] == "compose" {
+		rest := args[1:]
+		for slices.Contains([]string{"-p", "-f", "--project-directory", "--profile"}, rest[0]) {
+			rest = rest[2:]
+		}
+		key = rest[0]
+		switch key {
+		case "exec":
+			key = "rpc"
+		case "run":
+			key = "eval"
+		case "stop":
+			key = "stop-" + cmp.Or(rest[1], "all")
+		}
+	}
+	key = cmp.Or(key, args[0])
+	if out, err := os.ReadFile(filepath.Join(dir, key+".out")); err == nil {
+		os.Stdout.Write(out)
+	}
+	if out, err := os.ReadFile(filepath.Join(dir, key+".err")); err == nil {
+		os.Stderr.Write(out)
+	}
+	status, err := os.ReadFile(filepath.Join(dir, key+".exit"))
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(status)))
+	if err != nil {
+		return 3
+	}
+	return n
+}
+
+// dockerStandIn makes dir's docker this test binary (runFakeDocker), in
+// place of the script a scenario wrote there, and fails the test unless
+// PATH's docker is it.
+func dockerStandIn(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(dir, "docker")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	standInLink(t, filepath.Join(dir, "docker"))
+	t.Setenv(fakeDockerAnswers, "1")
+	if found, err := exec.LookPath("docker"); err != nil || found != filepath.Join(dir, "docker") {
+		t.Fatalf("PATH's docker is %q (%v), not the stand-in", found, err)
+	}
+}
+
+// folderState is every entry under dir, by path: its kind and mode, a
+// link's target, a file's size and content digest.
+func folderState(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	state := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		entry := info.Mode().String()
+		switch {
+		case info.Mode()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			entry += " -> " + target
+		case info.Mode().IsRegular():
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			entry += fmt.Sprintf(" %d %x", len(data), sha256.Sum256(data))
+		}
+		state[path] = entry
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
 }
 
 func runFakeSudo(record string) int {

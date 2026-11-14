@@ -186,8 +186,9 @@ func TestInitDoesNotRepeatSgWithTheSameGroup(t *testing.T) {
 }
 
 // The real sudo program's calls, a fake standing in for it: whether it
-// needs a password, then its own prompt, then the commands, then sudo -k;
-// a refused password runs no command and still forgets the login.
+// would ask a password for anything (-n -v, refused), then the sentence
+// and its own prompt, then the commands, then sudo -k; a refused password
+// runs no command and still forgets the login.
 func TestInitRunsTheRealSudo(t *testing.T) {
 	production := machine
 	for name, c := range map[string]struct {
@@ -202,14 +203,18 @@ func TestInitRunsTheRealSudo(t *testing.T) {
 			machine.passwordless, machine.authenticate = production.passwordless, production.authenticate
 			machine.apply, machine.forget = production.apply, production.forget
 			record := fakeSudo(t, c.verdict)
-			if continued, _, err := prepare(t); continued || err == nil || err.Error() != c.err {
+			continued, out, err := prepare(t)
+			if continued || err == nil || err.Error() != c.err {
 				t.Fatalf("continued = %t, err = %v", continued, err)
+			}
+			if !strings.HasSuffix(out, "Install these requirements? (yes/no) [no]: "+passwordSentence) {
+				t.Errorf("no sentence before sudo's prompt:\n%s", out)
 			}
 			got, err := os.ReadFile(record)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"-n true", "-v"}
+			want := []string{"-n -v", "-v"}
 			if c.ran {
 				want = append(want, "sh -c apt-get update && apt-get install -y --no-install-recommends docker.io docker-compose-v2 apparmor && systemctl enable --now docker && usermod -aG docker "+currentAccount(t))
 			}
@@ -294,10 +299,10 @@ func TestInitRefusedPasswordChangesNothing(t *testing.T) {
 	emptyDir(t)
 }
 
-// An account outside Ubuntu's administrators is told so before anything is
-// asked, with the commands as one sudo line for whoever administers the
-// machine; nothing runs and init writes nothing.
-func TestInitTellsAnAccountThatMayNotAdminister(t *testing.T) {
+// An account outside Ubuntu's sudo and admin groups is told so before
+// anything is asked, with the commands as one sudo line for whoever
+// administers the machine; nothing runs and init writes nothing.
+func TestInitTellsAnAccountOutsideTheSudoGroups(t *testing.T) {
 	s := standInMachine(t)
 	s.administrator = nil
 	s.member = []string{"users"}
@@ -309,7 +314,7 @@ func TestInitTellsAnAccountThatMayNotAdminister(t *testing.T) {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
 	want := "CYFR needs Docker on this machine.\n" +
-		"Your account, " + account + ", may not administer this machine, so CYFR cannot run these commands as root. Whoever administers it can run them for you:\n" +
+		"Your account, " + account + ", is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:\n" +
 		"  sudo sh -c " + shellQuote([]string{"apt-get update &&\n" +
 		"    apt-get install -y --no-install-recommends docker.io docker-compose-v2 apparmor &&\n" +
 		"    systemctl enable --now docker &&\n" +

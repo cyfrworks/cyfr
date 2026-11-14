@@ -48,8 +48,8 @@ var machine = struct {
 	screenService func() (enabled, active bool)
 	// system is the operating system this program runs on.
 	system func() string
-	// passwordless is whether sudo runs a command now without asking for
-	// a password: a rule that asks none, or a login it still keeps.
+	// passwordless is whether sudo runs any command now without asking for
+	// a password: a login it still keeps, or no entry that asks one.
 	passwordless func() bool
 	// authenticate is sudo's own password prompt on this terminal; it
 	// runs no command.
@@ -86,8 +86,13 @@ var machine = struct {
 		out, _ := exec.Command("id", args...).Output()
 		return strings.Fields(string(out))
 	},
-	system:       func() string { return runtime.GOOS },
-	passwordless: func() bool { return exec.Command("sudo", "-n", "true").Run() == nil },
+	system: func() string { return runtime.GOOS },
+	// sudo -n -v fails rather than ask, and passes without a password only
+	// with the login cached or every entry of the account's NOPASSWD:
+	// sudoers' verifypw at its default (all) in sudo's manual, and sudo-rs's
+	// one rule, its manual's "sudo -v" sentence. A password any command
+	// would ask is asked here first, after the sentence.
+	passwordless: func() bool { return exec.Command("sudo", "-n", "-v").Run() == nil },
 	authenticate: func() error {
 		cmd := exec.Command("sudo", "-v")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -108,11 +113,11 @@ const dockerGroup = "docker"
 // machine through sudo.
 var administrators = []string{"sudo", "admin"}
 
-// mayAdminister refuses, before anything asks or runs, an account outside
-// Ubuntu's administrators: it says so and shows the commands as one sudo
-// line for whoever administers the machine, again being the command to run
-// once they have.
-func mayAdminister(commands []string, out io.Writer, again string) error {
+// mayAdminister refuses, before anything asks, runs or is written, an
+// account outside Ubuntu's sudo and admin groups: it says what was checked
+// and shows forThem as one sudo line for whoever administers the machine,
+// again being the command to run once they have.
+func mayAdminister(forThem []string, out io.Writer, again string) error {
 	account, err := user.Current()
 	if err != nil {
 		return err
@@ -120,29 +125,31 @@ func mayAdminister(commands []string, out io.Writer, again string) error {
 	if slices.ContainsFunc(machine.groups(account.Username), func(g string) bool { return slices.Contains(administrators, g) }) {
 		return nil
 	}
-	fmt.Fprintf(out, "Your account, %s, may not administer this machine, so CYFR cannot run these commands as root. Whoever administers it can run them for you:\n", account.Username)
-	fmt.Fprintf(out, "  sudo sh -c %s\n", shellQuote([]string{strings.Join(commands, " &&\n    ")}))
+	fmt.Fprintf(out, "Your account, %s, is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:\n", account.Username)
+	fmt.Fprintf(out, "  sudo sh -c %s\n", shellQuote([]string{strings.Join(forThem, " &&\n    ")}))
 	return fmt.Errorf("Nothing was changed. Run `%s` again once they have", again)
 }
 
-// asRoot runs commands as root through one sudo; again is the command a
-// person runs to try once more, failed the refusal when the commands
-// themselves fail. CYFR never asks for, reads or keeps a password: when
-// sudo will ask, the one sentence before its prompt says whose, and sudo
-// asks on this terminal before any command runs, so a refused password
-// has run nothing. The caller forgets sudo's login (machine.forget).
-func asRoot(commands []string, out io.Writer, again, failed string) error {
-	if err := mayAdminister(commands, out, again); err != nil {
-		return err
+// passwordRefused is sudo's own prompt refused: nothing has run.
+type passwordRefused struct{ again string }
+
+func (p passwordRefused) Error() string {
+	return fmt.Sprintf("The password was not accepted, so nothing was changed. Run `%s` again to try again", p.again)
+}
+
+// unlockSudo is the password step after mayAdminister and any question,
+// before root commands and before anything is written for them. CYFR
+// never asks for, reads or keeps a password: when sudo will ask, the one
+// sentence before its prompt says whose, and sudo asks on this terminal
+// before any command runs (passwordRefused). The caller forgets sudo's
+// login (machine.forget).
+func unlockSudo(out io.Writer, again string) error {
+	if machine.passwordless() {
+		return nil
 	}
-	if !machine.passwordless() {
-		fmt.Fprintln(out, "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.")
-		if machine.authenticate() != nil {
-			return fmt.Errorf("The password was not accepted, so nothing was changed. Run `%s` again to try again", again)
-		}
-	}
-	if machine.apply(commands) != nil {
-		return errors.New(failed)
+	fmt.Fprintln(out, "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.")
+	if machine.authenticate() != nil {
+		return passwordRefused{again}
 	}
 	return nil
 }
@@ -170,7 +177,7 @@ func requirementCommands(account string) []string {
 
 // prepareMachine is cyfr init's first step at a terminal when this
 // account cannot reach Docker. On Ubuntu 26.04 it shows what is missing,
-// asks, and installs it through one sudo (asRoot); on macOS and Windows it
+// asks, and installs it through one sudo (mayAdminister, unlockSudo); on macOS and Windows it
 // waits for Docker Desktop (awaitDockerDesktop). It answers true when init
 // ends here, the rest of it run in a process carrying the docker group or
 // the installation declined, false when this process goes on to prepare
@@ -210,7 +217,10 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 			fmt.Fprintln(out, "Nothing was installed. Run cyfr init again when you want to continue.")
 			return true, nil
 		}
-		err = asRoot(commands, out, "cyfr init", "Installing the requirements failed. Fix what is shown above, then run `cyfr init` again")
+		err = unlockSudo(out, "cyfr init")
+		if err == nil && machine.apply(commands) != nil {
+			err = errors.New("Installing the requirements failed. Fix what is shown above, then run `cyfr init` again")
+		}
 		machine.forget()
 		if err != nil {
 			return false, err
