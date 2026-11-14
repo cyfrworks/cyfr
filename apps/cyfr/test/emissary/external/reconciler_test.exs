@@ -137,7 +137,7 @@ defmodule Emissary.External.ReconcilerTest do
     assert_receive {:reconciled, %{server: "bearersrv"}}, 2_000
   end
 
-  test "a stdio server whose env template references the entry is matched and its epoch raised",
+  test "an mcp program whose env template references the entry is matched and its epoch raised",
        %{ctx: ctx} do
     {:ok, entry} =
       Sanctum.TestContext.create_vault(ctx, %{
@@ -151,7 +151,8 @@ defmodule Emissary.External.ReconcilerTest do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: "envsrv",
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
         config_json:
           Jason.encode!(%{

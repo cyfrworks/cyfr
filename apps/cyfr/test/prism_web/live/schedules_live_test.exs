@@ -37,11 +37,12 @@ defmodule PrismWeb.SchedulesLiveTest do
     {:ok, conn: conn, view: view, ctx: ctx, params: params}
   end
 
-  # The profile's grant, made again through the walk with `origins`.
-  defp grant_origins!(ctx, origins) do
+  # The profile's grant, made again through the walk as the grant sheet
+  # commits it.
+  defp grant!(ctx) do
     ref = "reagent:local.schedule-target"
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    decisions = %{ref: ref, origins: origins}
+    decisions = %{ref: ref}
     {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
 
     {:ok, _} =
@@ -64,7 +65,6 @@ defmodule PrismWeb.SchedulesLiveTest do
     ctx: ctx,
     params: params
   } do
-    grant_origins!(ctx, [:interactive, :schedule])
     assert has_element?(view, "input[name=profile_id][required]")
     render_submit(view, "create", params)
 
@@ -131,7 +131,6 @@ defmodule PrismWeb.SchedulesLiveTest do
     ctx: ctx,
     params: params
   } do
-    grant_origins!(ctx, [:interactive, :schedule])
     render_submit(view, "create", params)
     assert {:ok, %{id: id}} = schedule(ctx, params)
 
@@ -148,8 +147,6 @@ defmodule PrismWeb.SchedulesLiveTest do
   describe "missed runs" do
     test "a schedule is made with the policy chosen, its row shows it, and the row saves a change",
          %{view: view, ctx: ctx, params: params} do
-      grant_origins!(ctx, [:interactive, :schedule])
-
       render_submit(
         view,
         "create",
@@ -176,8 +173,6 @@ defmodule PrismWeb.SchedulesLiveTest do
 
     test "a catch-up without a whole limit, or with 0, is refused and the schedule stands",
          %{view: view, ctx: ctx, params: params} do
-      grant_origins!(ctx, [:interactive, :schedule])
-
       render_submit(
         view,
         "create",
@@ -201,74 +196,21 @@ defmodule PrismWeb.SchedulesLiveTest do
     end
   end
 
-  describe "a profile whose grant does not admit schedules" do
-    test "raises the grant prompt first, and a dismissal makes no schedule", %{
+  describe "a profile whose grant was made through the walk" do
+    test "making a schedule for it creates the schedule at once, with no grant prompt", %{
       view: view,
       ctx: ctx,
       params: params
     } do
+      grant!(ctx)
       render_submit(view, "create", params)
       render(view)
 
-      assert grant_open?(view)
-      assert {:error, :not_found} = schedule(ctx, params)
-      refute has_element?(view, ~s(input[data-origin="schedule"][checked]))
-
-      view |> element(~s(#system-layer button[phx-click="dismiss"])) |> render_click()
-      render(view)
-
-      assert {:error, :not_found} = schedule(ctx, params)
-      assert :sys.get_state(view.pid).socket.assigns.flash["error"] =~ "No schedule was made"
-    end
-
-    test "granted with the schedule origin, the schedule is made", %{
-      view: view,
-      ctx: ctx,
-      params: params
-    } do
-      render_submit(view, "create", params)
-      render(view)
-      assert grant_open?(view)
-
-      view
-      |> element(~s(input[phx-click="toggle_origin"][phx-value-origin="schedule"]))
-      |> render_click()
-
-      render(view)
-      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
-
-      Prima.Test.Wait.wait_until(
-        fn -> render(view) && match?({:ok, _}, schedule(ctx, params)) end,
-        2_000,
-        "the schedule"
-      )
-
-      {:ok, made} = schedule(ctx, params)
+      refute grant_open?(view)
+      assert {:ok, %{id: id} = made} = schedule(ctx, params)
       assert made.profile_id == params["profile_id"]
-
-      {:ok, head} = Sanctum.Consent.head_consent(ctx, params["profile_id"])
-      assert :schedule in head.admitted_origins
-    end
-
-    test "granted without the schedule origin, no schedule is made", %{
-      view: view,
-      ctx: ctx,
-      params: params
-    } do
-      render_submit(view, "create", params)
-      render(view)
-      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
-
-      Prima.Test.Wait.wait_until(
-        fn ->
-          render(view)
-          (:sys.get_state(view.pid).socket.assigns.flash["error"] || "") =~ "No schedule was made"
-        end,
-        2_000,
-        "the refusal"
-      )
-
-      assert {:error, :not_found} = schedule(ctx, params)
+      assert has_element?(view, "#missed-#{id}")
+      assert :sys.get_state(view.pid).socket.assigns.flash == %{"info" => "Schedule created"}
     end
   end
 

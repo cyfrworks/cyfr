@@ -3,11 +3,11 @@
 
 defmodule Sanctum.Consent.CommitTest do
   @moduledoc """
-  The preview answers a `Prima.ConsentPreview` — typed rows, the origins the
-  grant admits and the commit digest binding them — with no prose summary
-  beside them; a decision names the origins it admits, `interactive` alone when
-  absent, and the revision is written with them; the digest binds the
-  origins and the narrowing and never the prose a need gives as its reason.
+  The preview answers a `Prima.ConsentPreview` — typed rows and the commit
+  digest binding them — with no prose summary beside them; a decision
+  names what the component may reach and never who may start it; the
+  digest binds the narrowing and never the prose a need gives as its
+  reason.
   """
 
   use ExUnit.Case, async: false
@@ -202,7 +202,6 @@ defmodule Sanctum.Consent.CommitTest do
     %{
       "v" => preview.v,
       "rows" => preview.rows,
-      "origins" => preview.origins,
       "commit_digest" => preview.commit_digest,
       "removed" => preview.removed
     }
@@ -585,15 +584,13 @@ defmodule Sanctum.Consent.CommitTest do
 
       assert {:ok, %ConsentPreview{} = decoded} = ConsentPreview.decode(document(preview))
       assert decoded.commit_digest == preview.commit_digest
-      assert decoded.origins == [:interactive]
-      assert preview.origins == ["interactive"]
 
       # The rows are the preview: no prose summary rides beside them, and
       # the answer is the document, the proof and the expected revision.
       refute Map.has_key?(preview, :summary)
 
       assert Map.keys(preview) |> Enum.sort() ==
-               [:commit_digest, :expected_consent_revision, :origins, :proof, :removed, :rows, :v]
+               [:commit_digest, :expected_consent_revision, :proof, :removed, :rows, :v]
 
       assert is_binary(preview.proof)
       assert preview.expected_consent_revision == 0
@@ -640,7 +637,6 @@ defmodule Sanctum.Consent.CommitTest do
 
       decisions = %{
         ref: "reagent:local.commit-same",
-        origins: [:programmatic, :interactive],
         subset: %{
           "reagent:local.commit-same" => %{"egress" => %{"domains" => ["api.one.example"]}}
         }
@@ -651,13 +647,6 @@ defmodule Sanctum.Consent.CommitTest do
 
       assert one.rows == two.rows
       assert one.commit_digest == two.commit_digest
-      assert one.origins == ["interactive", "programmatic"]
-
-      # The same decisions spelled in another order are the same decisions.
-      {:ok, reordered} =
-        Commit.preview(ctx, %{decisions | origins: [:interactive, :programmatic]})
-
-      assert reordered.commit_digest == one.commit_digest
     end
 
     test "a reworded need reason leaves the rows and the digest as they were", %{ctx: ctx} do
@@ -695,12 +684,11 @@ defmodule Sanctum.Consent.CommitTest do
       assert later.rows == before.rows
     end
 
-    test "the origins and the narrowing each move the digest", %{ctx: ctx} do
+    test "the narrowing moves the digest", %{ctx: ctx} do
       publish!(ctx, "commit-moves")
       ref = "reagent:local.commit-moves"
 
       {:ok, plain} = Commit.preview(ctx, %{ref: ref})
-      {:ok, admitted} = Commit.preview(ctx, %{ref: ref, origins: [:interactive, :schedule]})
 
       {:ok, narrowed} =
         Commit.preview(ctx, %{
@@ -708,12 +696,7 @@ defmodule Sanctum.Consent.CommitTest do
           subset: %{ref => %{"storage" => %{"actions" => ["read"]}}}
         })
 
-      digests = Enum.map([plain, admitted, narrowed], & &1.commit_digest)
-      assert length(Enum.uniq(digests)) == 3
-
-      # Naming the default explicitly is the same decision as naming none.
-      {:ok, explicit} = Commit.preview(ctx, %{ref: ref, origins: [:interactive]})
-      assert explicit.commit_digest == plain.commit_digest
+      assert narrowed.commit_digest != plain.commit_digest
     end
 
     test "a tincture's declarations are rows of its preview", %{ctx: ctx} do
@@ -737,64 +720,9 @@ defmodule Sanctum.Consent.CommitTest do
     end
   end
 
-  describe "origins" do
-    test "a revision is written with the origins its decision named", %{ctx: ctx} do
-      publish!(ctx, "commit-origins")
-      ref = "reagent:local.commit-origins"
-
-      assert {:ok, %{profile_id: profile_id}} =
-               walk!(ctx, ref, %{origins: [:webhook, :programmatic, :interactive]})
-
-      assert head!(ctx, profile_id).admitted_origins == [:interactive, :programmatic, :webhook]
-    end
-
-    test "a decision that names none admits interactive alone", %{ctx: ctx} do
-      publish!(ctx, "commit-default")
-
-      assert {:ok, %{profile_id: profile_id}} = walk!(ctx, "reagent:local.commit-default")
-      assert head!(ctx, profile_id).admitted_origins == [:interactive]
-    end
-
-    test "an origins list that is empty, repeats one or names an unknown origin is refused",
+  describe "who may start it" do
+    test "the provider carries a narrowing to the walk, and the preview names no origins",
          %{ctx: ctx} do
-      publish!(ctx, "commit-bad-origins")
-      ref = "reagent:local.commit-bad-origins"
-
-      for origins <- [[], [:interactive, :interactive], [:cli], ["interactive"], :interactive] do
-        assert {:error, {:invalid_argument, why}} =
-                 Commit.preview(ctx, %{ref: ref, origins: origins}),
-               "#{inspect(origins)} was accepted"
-
-        assert why =~ "origins"
-      end
-
-      # Through the provider, a wire spelling outside the enum is refused too.
-      for spellings <- [[], ["cli"], ["interactive", "interactive"]] do
-        assert {:error, {:invalid_argument, _why}} =
-                 Profile.handle(ctx, %{
-                   "action" => "preview",
-                   "decisions" => %{"ref" => ref, "origins" => spellings}
-                 })
-      end
-    end
-
-    test "a proof minted for one set of origins does not commit another", %{ctx: ctx} do
-      publish!(ctx, "commit-bound")
-      ref = "reagent:local.commit-bound"
-      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
-      {:ok, preview} = Commit.preview(ctx, %{ref: ref})
-
-      assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
-               Commit.commit(ctx, %{
-                 decisions: %{ref: ref, origins: [:interactive, :programmatic]},
-                 plan_token: plan.plan_token,
-                 proof: preview.proof,
-                 commit_digest: preview.commit_digest,
-                 expected_consent_revision: plan.expected_consent_revision
-               })
-    end
-
-    test "the provider carries origins and a narrowing to the walk", %{ctx: ctx} do
       publish!(ctx, "commit-wire")
       ref = "reagent:local.commit-wire"
 
@@ -803,12 +731,11 @@ defmodule Sanctum.Consent.CommitTest do
                  "action" => "preview",
                  "decisions" => %{
                    "ref" => ref,
-                   "origins" => ["programmatic", "interactive"],
                    "subset" => %{ref => %{"egress" => %{"domains" => ["api.two.example"]}}}
                  }
                })
 
-      assert preview.origins == ["interactive", "programmatic"]
+      refute Map.has_key?(preview, :origins)
 
       assert [%{"values" => %{"domains" => ["api.two.example"]}, "narrowed" => true}] =
                Enum.filter(preview.rows, &(&1["kind"] == "egress"))
@@ -819,14 +746,13 @@ defmodule Sanctum.Consent.CommitTest do
   end
 
   describe "the simple grant" do
-    test "re-issues the head's origins and its narrowing with the new binding", %{ctx: ctx} do
+    test "re-issues the head's narrowing with the new binding", %{ctx: ctx} do
       publish!(ctx, "commit-grant")
       ref = "reagent:local.commit-grant"
       entry = entry!(ctx)
 
       assert {:ok, %{profile_id: profile_id, revision: 1}} =
                walk!(ctx, ref, %{
-                 origins: [:interactive, :programmatic],
                  subset: %{
                    ref => %{
                      "egress" => %{"domains" => ["api.one.example"]},
@@ -843,7 +769,6 @@ defmodule Sanctum.Consent.CommitTest do
                })
 
       head = head!(ctx, profile_id)
-      assert head.admitted_origins == [:interactive, :programmatic]
       assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
 
       {:ok, blob} = Jason.decode(head.resolved_policy)
@@ -878,7 +803,6 @@ defmodule Sanctum.Consent.CommitTest do
 
       {:ok, %{profile_id: profile_id, revision: 1}} =
         walk!(ctx, ref, %{
-          origins: [:interactive, :programmatic],
           subset: %{ref => %{"egress" => %{"domains" => ["api.one.example"]}}}
         })
 
@@ -889,7 +813,6 @@ defmodule Sanctum.Consent.CommitTest do
          fn ->
            {:ok, %{revision: 2}} =
              walk!(ctx, ref, %{
-               origins: [:interactive],
                subset: %{ref => %{"egress" => %{"domains" => []}}}
              })
          end}
@@ -913,7 +836,6 @@ defmodule Sanctum.Consent.CommitTest do
       assert fired?
       head = head!(ctx, profile_id)
       assert head.revision == 2
-      assert head.admitted_origins == [:interactive]
       {:ok, blob} = Jason.decode(head.resolved_policy)
       assert blob["nodes"][ref]["edges"]["@ingress"]["egress"]["domains"] == []
     end
@@ -1039,7 +961,6 @@ defmodule Sanctum.Consent.CommitTest do
                })
 
       head = head!(ctx, profile_id)
-      assert head.admitted_origins == [:interactive]
       {:ok, blob} = Jason.decode(head.resolved_policy)
 
       assert blob["nodes"][ref]["edges"]["@ingress"]["egress"]["domains"] ==
@@ -1162,12 +1083,12 @@ defmodule Sanctum.Consent.CommitTest do
   end
 
   describe "a public profile's staging" do
-    test "answers what it would grant as rows, with the origins it would admit", %{ctx: ctx} do
+    test "answers what it would grant as rows", %{ctx: ctx} do
       publish!(ctx, "commit-publish")
       {:ok, %{profile_id: owner}} = walk!(ctx, "reagent:local.commit-publish")
 
       assert {:ok, staged} = Commit.stage_publish(ctx, %{profile_id: owner})
-      assert staged.origins == ["interactive"]
+      refute Map.has_key?(staged, :origins)
       refute Map.has_key?(staged, :summary)
 
       # A public profile writes nothing durable unless asked: read alone.
@@ -1850,7 +1771,7 @@ defmodule Sanctum.Consent.CommitTest do
       assert Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
 
       {:ok, %{revision: 2}} =
-        walk!(ctx, ref, %{bindings: bindings, origins: [:interactive, :programmatic]})
+        walk!(ctx, ref, %{bindings: bindings})
 
       refute Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
 
@@ -2574,8 +2495,7 @@ defmodule Sanctum.Consent.CommitTest do
 
       assert {:ok, %{revision: 2}} =
                walk!(alice.ctx, ref, %{
-                 bindings: bindings,
-                 origins: [:interactive, :programmatic]
+                 bindings: bindings
                })
 
       :telemetry.detach(handler)
@@ -3262,7 +3182,7 @@ defmodule Sanctum.Consent.CommitTest do
 
       # A revision that keeps it carries the consumption.
       {:ok, %{revision: 2}} =
-        walk!(ctx, two, %{selections: selections, origins: [:interactive, :programmatic]})
+        walk!(ctx, two, %{selections: selections})
 
       assert rows_by_key(ctx, profile)[work_key].consumed_by_root == "exec_a"
 

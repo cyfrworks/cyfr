@@ -1314,7 +1314,6 @@ defmodule Opus.Schedules.OwnershipFenceTest do
             }
           }),
         activation: %{@reference => component.release_digest},
-        admitted_origins: [:interactive, :schedule],
         vault_refs: []
       })
   end
@@ -2008,7 +2007,6 @@ defmodule Opus.Schedules.OwnershipFenceFeedsTest do
             }
           }),
         activation: %{@reference => component.release_digest},
-        admitted_origins: [:interactive, :schedule],
         vault_refs: []
       })
   end

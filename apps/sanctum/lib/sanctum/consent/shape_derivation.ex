@@ -93,6 +93,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # is named. Only an agent asks for one.
   @exact_only Caps.agent_only_tools()
 
+  # The provider's own search: no catalog action, so no pattern reaches
+  # it, and an agent's consent carries it by its name when its policy
+  # turns it on (`Compendium.AgentSource`). Only an agent asks for it.
+  @provider_search "native_search"
+
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def live_digest(ctx, source_ref) do
     epoch = epoch(ctx)
@@ -192,7 +197,10 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @doc """
   The `ShapeDigest.compute/1` input derived from live state. An agent
   source's shape also carries its model target (`catalyst#model`): the
-  model an agent runs on is what it may do, so changing it re-asks.
+  model an agent runs on is what it may do, so changing it re-asks. Its
+  tool policy's modes are not in it: whether a tool asks first grants
+  nothing the consent does not (`ARCHITECTURE.md` §5.4), so marking one
+  `auto` or `ask` re-asks nothing.
 
   A login need (`Prima.Manifest.Needs.mount_only?/1`) enters the shape
   with the program it mounts into and the row it suggests, so a change to
@@ -231,7 +239,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
          dependency_releases: releases
        }
        |> Prima.MapUtil.put_present(:model_target, model_target(manifest))
-       |> Prima.MapUtil.put_present(:tool_policy, tool_policy(manifest))
        |> Prima.MapUtil.put_present(:tincture_digest, tincture_digest)
        |> Prima.MapUtil.put_present(:provides, provides(manifest))}
     end
@@ -280,22 +287,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
       {"agent", catalyst, model}
       when is_binary(catalyst) and catalyst != "" and is_binary(model) and model != "" ->
         "#{catalyst}##{model}"
-
-      _ ->
-        nil
-    end
-  end
-
-  defp tool_policy(manifest) do
-    case get_in(manifest, ["agent", "policy"]) do
-      %{"auto" => auto, "ask" => ask} when is_list(auto) and is_list(ask) ->
-        %{auto: auto, ask: ask}
-
-      %{"auto" => auto} when is_list(auto) ->
-        %{auto: auto, ask: []}
-
-      %{"ask" => ask} when is_list(ask) ->
-        %{auto: [], ask: ask}
 
       _ ->
         nil
@@ -409,7 +400,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   defp agent_only(caps, source_ref) do
     case Prima.ComponentRef.parse(source_ref) do
       {:ok, %Prima.ComponentRef{type: "agent"}} -> caps
-      _other -> %{caps | tools: caps.tools -- @exact_only}
+      _other -> %{caps | tools: caps.tools -- [@provider_search | @exact_only]}
     end
   end
 
@@ -457,6 +448,25 @@ defmodule Sanctum.Consent.ShapeDerivation do
     |> ToolPattern.expand(Sanctum.Catalog.tool_actions())
     |> Enum.reject(&(&1 in @exact_only and &1 not in patterns))
   end
+
+  @doc """
+  What a node's grant holds of the tools `patterns` names: their catalog
+  actions (`expand_tools/1`), and the provider's own search,
+  `#{@provider_search}`, by its name when an agent names it. A shape takes
+  the actions alone, its `caps` keeping the search; the grant's edge
+  carries both, so a comparison reads the search on either side.
+  """
+  @spec granted_tools([String.t()]) :: [String.t()]
+  def granted_tools(patterns) when is_list(patterns) do
+    expand_tools(patterns) ++ if(@provider_search in patterns, do: [@provider_search], else: [])
+  end
+
+  @doc """
+  The provider's own search as a grant names it: the one tool no catalog
+  action is, carried by its name (`granted_tools/1`).
+  """
+  @spec provider_search() :: String.t()
+  def provider_search, do: @provider_search
 
   # ---------------------------------------------------------------------------
   # Internal
@@ -525,6 +535,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
     # consented under, none included (see the moduledoc).
     |> Map.put("flows", Enum.map(caps.flows, &"#{&1.from}>#{&1.to}"))
     |> Map.put("tincture.connect", connect)
+    # The provider's own search, which no catalog action is, so
+    # `tool_actions` cannot hold it: switching it moves the shape.
+    |> put_list("tools.provider_search", Enum.filter(caps.tools, &(&1 == @provider_search)))
     |> put_limits(caps.limits)
   end
 

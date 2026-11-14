@@ -103,17 +103,9 @@ defmodule Compendium.Component do
 
     description = component.description || manifest["description"]
 
-    # A component with a profile answers "ready" from its consent:
-    # every bound need still live and digest-matching. Without a
-    # profile, only a component that requires nothing reads ready —
-    # anything with a required need is waiting on the consent walk.
-    consent = Compendium.ConsentSetupPlan.section(ctx, canonical_ref)
-
-    ready =
-      case consent do
-        nil -> not Enum.any?(needs, & &1.required)
-        consent -> consent.ready
-      end
+    # A component answers "ready" from its consent, as a run would stand
+    # on it (`Compendium.ConsentSetupPlan`).
+    consent = Compendium.ConsentSetupPlan.section(ctx, canonical_ref, component)
 
     {:ok,
      %{
@@ -123,7 +115,7 @@ defmodule Compendium.Component do
        needs: needs,
        dependencies: deps,
        consent: consent,
-       ready: ready
+       ready: consent.ready
      }}
   end
 

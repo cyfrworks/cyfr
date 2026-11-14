@@ -426,7 +426,6 @@ const FIELDS = {
     granted_by: minted(SIGN_IN),
     granted_via: exact,
     granted_at: clock,
-    admitted_origins: exact,
   },
   consent_vault_refs: {
     consent_id: minted(ADMISSION),
@@ -567,8 +566,7 @@ async function granting(page) {
 // offers, the entry it says it already has and the field map it shows or
 // asks, and its accounts; each previewed credential row with its binding,
 // its sentence, its lifetime and its fields; each network row's methods and
-// the "GET only" control; what the grant removes and admits; and any
-// refusal shown.
+// the "GET only" control; what the grant removes; and any refusal shown.
 function sheet(page) {
   return page.evaluate((dialog) => {
     const root = document.querySelector(dialog);
@@ -652,7 +650,6 @@ function sheet(page) {
       egress,
       removed: [...root.querySelectorAll('[data-test="grant-removed"] [data-binding]')]
         .map((r) => r.getAttribute("data-binding")),
-      admits: text(root.querySelector('[data-test="grant-admits"]')),
       delta: text(root.querySelector('[data-test="grant-delta"]')),
       refusals: [...root.querySelectorAll('[data-test="grant-refusal"], [role="alert"]')].map(text).filter(Boolean),
       confirmable: !!root.querySelector('[data-test="prompt-confirm"]:not([disabled])'),
@@ -904,7 +901,6 @@ async function main() {
       invoke_mode: "open_inert", shape_digest: made.shape_digest, commit_digest: made.commit_digest,
       blob_digest: made.blob_digest, resolved_policy: made.resolved_policy, activation: made.activation,
       granted_by: person.user_id, granted_via: "interactive", granted_at: IN_WINDOW,
-      admitted_origins: JSON.stringify(["interactive"]),
     });
     // A binding row: the entry the key binds, at the digest its request
     // implies, with its lifetime.
@@ -922,7 +918,7 @@ async function main() {
     // What a commit of `decisions` writes, derived by the owner's builders.
     const derive = (decisions) => ask({
       op: "derived",
-      spec: { app: APP, origins: ["interactive"], removed: [], subset: {}, bindings: [], selections: [], ...decisions },
+      spec: { app: APP, removed: [], subset: {}, bindings: [], selections: [], ...decisions },
     });
     // The loader's admission, compared whole: admitted, on the profile and
     // consent the model takes from it, at the source node and activation

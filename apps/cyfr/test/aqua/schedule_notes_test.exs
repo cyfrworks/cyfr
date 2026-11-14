@@ -115,7 +115,6 @@ defmodule Aqua.ScheduleNotesTest do
         commit_digest: "sha256:commit-#{profile_id}",
         resolved_policy: Jason.encode!(%{"canonical" => "jcs-1", "nodes" => %{}}),
         activation: %{},
-        admitted_origins: [:schedule],
         vault_refs: []
       }
     )
@@ -388,7 +387,7 @@ defmodule Aqua.ScheduleNotesTest do
          %{athanor: athanor, ctx: ctx} = context do
       schedule = keeping(context)
       run = ran!(schedule, 60, "kept under the old consent")
-      _ = ConsentFixtures.regrant_origins!(ctx, context.profile_id, [:schedule, :interactive])
+      _ = ConsentFixtures.regrant!(ctx, context.profile_id)
 
       assert {:ok, %{"refused" => 1}} = drain(athanor)
       assert {:ok, "refused"} = outcome(athanor, source(run, schedule))
@@ -898,7 +897,6 @@ defmodule Aqua.ScheduleNotesSchedulerTest do
               }
             }),
           activation: %{@reference => component.release_digest},
-          admitted_origins: [:interactive, :schedule],
           vault_refs: []
         }
       )

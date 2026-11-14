@@ -1067,7 +1067,6 @@ defmodule Opus.FeedsTest do
             }
           }),
         activation: %{@reference => component.release_digest},
-        admitted_origins: [:interactive, :schedule],
         vault_refs: []
       })
   end

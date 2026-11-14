@@ -331,7 +331,6 @@ const FIELDS = {
     granted_by: minted(SIGN_IN),
     granted_via: exact,
     granted_at: clock,
-    admitted_origins: exact,
   },
   consent_vault_refs: {
     consent_id: minted(ADMISSION),
@@ -876,11 +875,9 @@ async function main() {
     const anaHtml = await anaPage.content();
     // Her first sign-in mints one profile of the catalyst, Ana's own owner
     // default, active, headed by one consent: the bootstrap's first
-    // revision, versionless, open and inert, made for Ana, admitting the
-    // two origins a machine-minted revision admits (spelled as the store
-    // writes them), with the policy blob, its digest, the activation and
-    // the shape and commit digests the bootstrap derives from the request,
-    // compared as stored text. The head holds one binding row, Company AI's
+    // revision, versionless, open and inert, made for Ana, with the policy
+    // blob, its digest, the activation and the shape and commit digests the
+    // bootstrap derives from the request, compared as stored text. The head holds one binding row, Company AI's
     // share on the catalyst's own default slot, standing, at the digest
     // Company AI's request implies; the share is used once by Ana, which
     // its entry's last use says; her vault offers both shares, each by the
@@ -908,7 +905,6 @@ async function main() {
         granted_by: ana.user_id,
         granted_via: "bootstrap",
         granted_at: IN_WINDOW,
-        admitted_origins: JSON.stringify(["interactive", "programmatic"]),
         resolved_policy: derived.resolved_policy,
         blob_digest: derived.blob_digest,
         activation: derived.activation,

@@ -97,11 +97,9 @@ func TestRenderPreview_ShowsEveryRowValue(t *testing.T) {
 		}
 	}
 
-	// The admitted origins are the preview's top-level list, not a row.
-	for _, origin := range v.Preview["origins"].([]any) {
-		if !strings.Contains(text, "Admits runs started:") || !strings.Contains(text, str(origin)) {
-			t.Errorf("origin %v missing from\n%s", origin, text)
-		}
+	// A grant says what the component may reach, never who may start it.
+	if strings.Contains(text, "Admits runs started") {
+		t.Errorf("the preview names origins:\n%s", text)
 	}
 }
 
@@ -320,7 +318,7 @@ func TestRenderPreview_ListsWhatTheGrantRemoves(t *testing.T) {
 	if got := strings.Count(text, "    Removes "); got != len(removed) {
 		t.Errorf("%d removal lines, want one per removal (%d):\n%s", got, len(removed), text)
 	}
-	if strings.Index(text, "What this grant removes") > strings.Index(text, "Admits runs started:") {
+	if strings.Index(text, "What this grant removes") > strings.Index(text, "Vault entries are sealed at rest") {
 		t.Errorf("the removals are not listed with what is approved:\n%s", text)
 	}
 
@@ -388,48 +386,38 @@ func TestRenderPreview_DrawsAnUnknownKind(t *testing.T) {
 			"kind": "badge", "node": "tincture:local.x", "narrowed": false,
 			"values": map[string]any{"name": "gold"},
 		}},
-		"origins": []any{"interactive"},
 	})
 	if !strings.Contains(out.String(), `badge tincture:local.x: {"name":"gold"}`) {
 		t.Errorf("an unknown kind was hidden:\n%s", out.String())
 	}
 }
 
-// With no --origin a first grant admits interactive alone and a re-grant
-// keeps the head's origins; --origin names the origins it admits, each
-// once, over both.
-func TestGrantOrigins(t *testing.T) {
-	first := map[string]any{"head_origins": nil}
-	regrant := map[string]any{"head_origins": []any{"interactive", "schedule"}}
-
-	if got, kept := grantOrigins(nil, first); !reflect.DeepEqual(got, []string{"interactive"}) || kept {
-		t.Errorf("first grant, no --origin: got %v (kept %v), want interactive alone", got, kept)
-	}
-	if got, kept := grantOrigins(nil, regrant); !reflect.DeepEqual(got, []string{"interactive", "schedule"}) || !kept {
-		t.Errorf("re-grant, no --origin: got %v (kept %v), want the head's", got, kept)
+// A grant names no origin: it has no --origin flag, and its preview and
+// commit send no origins.
+func TestProfileGrant_SendsNoOrigins(t *testing.T) {
+	if flag := profileGrantCmd.Flags().Lookup("origin"); flag != nil {
+		t.Fatalf("grant still takes --origin: %+v", flag)
 	}
 
-	named := []string{"interactive", "webhook", "webhook", "programmatic"}
-	for _, plan := range []map[string]any{first, regrant} {
-		got, kept := grantOrigins(named, plan)
-		if want := []string{"interactive", "webhook", "programmatic"}; !reflect.DeepEqual(got, want) || kept {
-			t.Errorf("--origin over %v: got %v (kept %v), want %v", plan, got, kept, want)
+	srv := newCLIServer(t, "profile.commit", grantAnswers()...)
+	runGrant(t, srv)
+
+	for _, call := range []int{1, 2} {
+		_, args := srv.call(call)
+		decisions, _ := args["decisions"].(map[string]any)
+		if _, named := decisions["origins"]; named {
+			t.Errorf("call %d sent origins: %v", call, decisions)
 		}
-	}
-
-	flag := profileGrantCmd.Flags().Lookup("origin")
-	if flag == nil || flag.DefValue != "[]" {
-		t.Fatalf("grant has no --origin flag defaulting to none: %+v", flag)
 	}
 }
 
-// grantAnswers are the home's answers to one grant walk: the plan, with the
-// head's origins when there is a head, the preview and the commit.
-func grantAnswers(headOrigins string) []string {
+// grantAnswers are the home's answers to one grant walk: the plan, the
+// preview and the commit.
+func grantAnswers() []string {
 	return []string{
 		`{"plan_token":"pt","expected_consent_revision":1,"needs":[],"candidates":[],` +
-			`"unresolved":null,"head_origins":` + headOrigins + `}`,
-		`{"v":1,"rows":[],"origins":["interactive"],"proof":"pf","expected_consent_revision":1,` +
+			`"unresolved":null}`,
+		`{"v":1,"rows":[],"proof":"pf","expected_consent_revision":1,` +
 			`"commit_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}`,
 		`{"profile_id":"prof_1","revision":2}`,
 	}
@@ -438,7 +426,7 @@ func grantAnswers(headOrigins string) []string {
 // emptyGrantFlags empties the grant's flags: cobra keeps a flag's values,
 // and appends to them, across runs of one process.
 func emptyGrantFlags() {
-	for _, name := range []string{"origin", "entry", "selection"} {
+	for _, name := range []string{"entry", "selection"} {
 		flag := profileGrantCmd.Flags().Lookup(name)
 		_ = flag.Value.(interface{ Replace([]string) error }).Replace(nil)
 		flag.Changed = false
@@ -469,59 +457,6 @@ func tryGrant(t *testing.T, srv *cliServer, args ...string) (string, error) {
 	return runCLI(t, srv, append([]string{"profile", "grant", "f:local.daily-report", "--no-interactive"}, args...)...)
 }
 
-// The origins the preview (call 1) and the commit (call 2) were sent.
-func sentOrigins(t *testing.T, srv *cliServer) [2][]string {
-	t.Helper()
-	var sent [2][]string
-	for i, call := range []int{1, 2} {
-		_, args := srv.call(call)
-		decisions, _ := args["decisions"].(map[string]any)
-		sent[i] = stringList(decisions["origins"])
-	}
-	return sent
-}
-
-func TestProfileGrant_ReGrantKeepsTheHeadsOrigins(t *testing.T) {
-	srv := newCLIServer(t, "profile.commit", grantAnswers(`["interactive","schedule"]`)...)
-	out := runGrant(t, srv)
-
-	want := []string{"interactive", "schedule"}
-	if sent := sentOrigins(t, srv); !reflect.DeepEqual(sent, [2][]string{want, want}) {
-		t.Errorf("a re-grant with no --origin sent %v, want the head's %v to preview and commit", sent, want)
-	}
-	if !strings.Contains(out, "Keeping the origins this grant admits: interactive, schedule") {
-		t.Errorf("the kept origins are not said:\n%s", out)
-	}
-}
-
-func TestProfileGrant_FirstGrantAdmitsInteractiveAlone(t *testing.T) {
-	srv := newCLIServer(t, "profile.commit", grantAnswers(`null`)...)
-	out := runGrant(t, srv)
-
-	want := []string{"interactive"}
-	if sent := sentOrigins(t, srv); !reflect.DeepEqual(sent, [2][]string{want, want}) {
-		t.Errorf("a first grant with no --origin sent %v, want interactive alone", sent)
-	}
-	if strings.Contains(out, "Keeping") {
-		t.Errorf("a first grant keeps no origins:\n%s", out)
-	}
-}
-
-func TestProfileGrant_OriginOverridesTheHead(t *testing.T) {
-	for _, head := range []string{`null`, `["interactive","schedule"]`} {
-		srv := newCLIServer(t, "profile.commit", grantAnswers(head)...)
-		out := runGrant(t, srv, "--origin", "programmatic", "--origin", "webhook")
-
-		want := []string{"programmatic", "webhook"}
-		if sent := sentOrigins(t, srv); !reflect.DeepEqual(sent, [2][]string{want, want}) {
-			t.Errorf("head %s: --origin sent %v, want exactly %v", head, sent, want)
-		}
-		if strings.Contains(out, "Keeping") {
-			t.Errorf("head %s: --origin keeps nothing of the head:\n%s", head, out)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // The credentials a grant binds
 // ---------------------------------------------------------------------------
@@ -531,10 +466,10 @@ func TestProfileGrant_OriginOverridesTheHead(t *testing.T) {
 func planWith(needs, deps, rows string) string {
 	return `{"plan_token":"pt","expected_consent_revision":0,"source_ref":"f:local.daily-report",` +
 		`"needs":` + needs + `,"dependency_needs":` + deps + `,"rows":` + rows + `,` +
-		`"candidates":[],"unresolved":null,"head_origins":null}`
+		`"candidates":[],"unresolved":null}`
 }
 
-const previewAnswer = `{"v":1,"rows":[],"origins":["interactive"],"proof":"pf",` +
+const previewAnswer = `{"v":1,"rows":[],"proof":"pf",` +
 	`"commit_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}`
 
 const commitAnswer = `{"profile_id":"prof_1","revision":1}`
@@ -1006,8 +941,8 @@ const regrantApp = "f:local.daily-report"
 
 // withHeads is a plan answer whose profile's head holds the bindings given.
 func withHeads(plan, heads string) string {
-	return strings.Replace(plan, `"head_origins":null`,
-		`"head_origins":["interactive"],"head_bindings":`+heads, 1)
+	return strings.Replace(plan, `"unresolved":null`,
+		`"unresolved":null,"head_bindings":`+heads, 1)
 }
 
 // headJSON is one of a plan's head_bindings as JSON text: its key, what it

@@ -3,11 +3,11 @@
 
 defmodule Opus.ProgramsTest do
   @moduledoc """
-  The programs controller (`Opus.Programs`, its local box) and the stdio
+  The programs controller (`Opus.Programs`, its local box) and the mcp
   arm of a server process, against a scripted backends service
   (`Cyfr.Test.ScriptedBackends`) that speaks the wire (`Prima.LocusBackends`)
   and verifies every signature the way the service does: the box greets the
-  service and reconciles at start; a stdio server holds its owner, synced
+  service and reconciles at start; an mcp program holds its owner, synced
   with its programs and its env sealed for its version and the service's
   lifetime, and speaks MCP over a session per backend signed with its owner
   key; a session is read only while a call is outstanding, so one left
@@ -20,8 +20,8 @@ defmodule Opus.ProgramsTest do
   generation are greeted and live owners synced again; nothing is sent
   without the control plane; refusals are answered as their kind requires;
   a status names no more owners than the service answers for and is read
-  no further than the answer bound; a pipe row syncs with its program
-  settings; a kept stdio row runs in its login entry's home; a sign-in is
+  no further than the answer bound; a driven program syncs with its program
+  settings; a kept mcp program runs in its login entry's home; a sign-in is
   relayed both ways and ends with its command; a kept home is reset, and a
   retire is sent again until it lands; no key reaches a status or a crash
   report.
@@ -132,12 +132,13 @@ defmodule Opus.ProgramsTest do
     )
   end
 
-  defp stdio_row(ctx, name, env \\ %{"GITHUB_TOKEN" => "vault:gh-token"}) do
+  defp mcp_row(ctx, name, env \\ %{"GITHUB_TOKEN" => "vault:gh-token"}) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: name,
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
         config_json:
           Jason.encode!(%{
@@ -226,11 +227,11 @@ defmodule Opus.ProgramsTest do
            } = :sys.get_state(controller)
   end
 
-  test "a stdio server syncs with its env sealed for its version and lifetime, and signs every request",
+  test "an mcp program syncs with its env sealed for its version and lifetime, and signs every request",
        %{ctx: ctx, fake: fake} do
     start_controller(fake)
     vault_entry(ctx)
-    row = stdio_row(ctx, "gh")
+    row = mcp_row(ctx, "gh")
     pid = connect(ctx, row)
 
     assert_receive {:control, "sync", sync, %{generation: 1, boot: "bb_first"}}, 2_000
@@ -281,7 +282,7 @@ defmodule Opus.ProgramsTest do
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
       vault_entry(ctx)
-      row = stdio_row(ctx, "contended")
+      row = mcp_row(ctx, "contended")
       peer = claimed_by_peer(ctx, row)
 
       assert {:error, :claimed_elsewhere} =
@@ -321,7 +322,7 @@ defmodule Opus.ProgramsTest do
       assert %{lease_ms: 30_000, tick_ms: 10_000} = :sys.get_state(controller)
 
       vault_entry(ctx)
-      row = stdio_row(ctx, "leased-claim")
+      row = mcp_row(ctx, "leased-claim")
       connect(ctx, row)
       claim = claim_row(ctx, row)
 
@@ -341,7 +342,7 @@ defmodule Opus.ProgramsTest do
          %{ctx: ctx, fake: fake} do
       controller = start_controller(fake, lease_ms: 300)
       vault_entry(ctx)
-      row = stdio_row(ctx, "handed-over")
+      row = mcp_row(ctx, "handed-over")
       pid = connect(ctx, row)
       assert_receive {:control, "sync", _sync, _fields}, 2_000
       watched = Process.monitor(pid)
@@ -378,7 +379,7 @@ defmodule Opus.ProgramsTest do
          %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
       vault_entry(ctx)
-      row = stdio_row(ctx, "lapsing")
+      row = mcp_row(ctx, "lapsing")
       pid = connect(ctx, row)
       assert_receive {:control, "sync", _sync, _fields}, 2_000
       held = claim_row(ctx, row)
@@ -405,7 +406,7 @@ defmodule Opus.ProgramsTest do
          %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
       vault_entry(ctx)
-      row = stdio_row(ctx, "reconfigured")
+      row = mcp_row(ctx, "reconfigured")
       pid = connect(ctx, row)
       assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
       first = claim_row(ctx, row)
@@ -438,7 +439,7 @@ defmodule Opus.ProgramsTest do
          %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
       vault_entry(ctx)
-      row = stdio_row(ctx, "headless-claim")
+      row = mcp_row(ctx, "headless-claim")
       connect(ctx, row)
       assert_receive {:control, "sync", _sync, _fields}, 2_000
       before = claim_row(ctx, row)
@@ -461,7 +462,7 @@ defmodule Opus.ProgramsTest do
       reading = start_supervised!({Agent, fn -> :none end}, id: :claim_generation)
       controller = start_controller(fake, generation: fn -> Agent.get(reading, & &1) end)
       vault_entry(ctx)
-      row = stdio_row(ctx, "ungenerated")
+      row = mcp_row(ctx, "ungenerated")
       connect(ctx, row)
       assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
       before = claim_row(ctx, row)
@@ -472,7 +473,7 @@ defmodule Opus.ProgramsTest do
       refute_receive {:control, _type, _message, _fields}, 200
       assert claim_row(ctx, row).fence == before.fence
 
-      other = stdio_row(ctx, "ungenerated-too", %{"NODE_ENV" => "production"})
+      other = mcp_row(ctx, "ungenerated-too", %{"NODE_ENV" => "production"})
 
       assert {:error, :control_plane_lost} =
                Programs.hold(%{athanor_id: ctx.athanor_id, server_id: other.id, epoch: 1})
@@ -491,7 +492,7 @@ defmodule Opus.ProgramsTest do
          %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
       vault_entry(ctx)
-      row = stdio_row(ctx, "regenerated")
+      row = mcp_row(ctx, "regenerated")
       pid = connect(ctx, row)
       assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
       before = claim_row(ctx, row)
@@ -516,7 +517,7 @@ defmodule Opus.ProgramsTest do
     setup %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
       vault_entry(ctx)
-      row = stdio_row(ctx, "stoppable")
+      row = mcp_row(ctx, "stoppable")
       pid = connect(ctx, row)
       assert_receive {:control, "sync", _sync, _fields}, 2_000
       admin = %{ctx | permissions: MapSet.new([:*])}
@@ -629,7 +630,7 @@ defmodule Opus.ProgramsTest do
                Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "stoppable")
 
       # A row whose epoch moved without a stop fails the fence at renewal.
-      other = stdio_row(ctx, "fenced")
+      other = mcp_row(ctx, "fenced")
       other_pid = connect(ctx, other)
       assert_receive {:control, "sync", %{"owner" => %{"server" => server}}, _}, 2_000
       assert server == other.id
@@ -655,7 +656,7 @@ defmodule Opus.ProgramsTest do
     assert_receive {:control, "hello", _hello, _fields}, 2_000
 
     vault_entry(ctx)
-    connect(ctx, stdio_row(ctx, "leased"))
+    connect(ctx, mcp_row(ctx, "leased"))
 
     assert_receive {:control, "sync",
                     %{
@@ -682,7 +683,7 @@ defmodule Opus.ProgramsTest do
        %{ctx: ctx, fake: fake} do
     controller = start_controller(fake)
     vault_entry(ctx)
-    row = stdio_row(ctx, "survivor")
+    row = mcp_row(ctx, "survivor")
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, %{boot: "bb_first"}}, 2_000
 
@@ -702,7 +703,7 @@ defmodule Opus.ProgramsTest do
        %{ctx: ctx, fake: fake} do
     controller = start_controller(fake)
     vault_entry(ctx)
-    row = stdio_row(ctx, "regen")
+    row = mcp_row(ctx, "regen")
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
 
@@ -720,7 +721,7 @@ defmodule Opus.ProgramsTest do
   test "nothing is sent, and no owner synced, while this boot does not own the control plane",
        %{ctx: ctx, fake: fake} do
     controller = start_controller(fake)
-    row = stdio_row(ctx, "headless", %{"NODE_ENV" => "production"})
+    row = mcp_row(ctx, "headless", %{"NODE_ENV" => "production"})
     Arca.ControlPlane.record(:lost)
 
     assert {:error, :control_plane_lost} =
@@ -734,7 +735,7 @@ defmodule Opus.ProgramsTest do
        %{ctx: ctx, fake: fake} do
     reading = start_supervised!({Agent, fn -> :none end}, id: :generation_reading)
     controller = start_controller(fake, generation: fn -> Agent.get(reading, & &1) end)
-    row = stdio_row(ctx, "unreadable", %{"NODE_ENV" => "production"})
+    row = mcp_row(ctx, "unreadable", %{"NODE_ENV" => "production"})
     connect(ctx, row)
     assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
 
@@ -760,7 +761,7 @@ defmodule Opus.ProgramsTest do
 
   test "a call refused as epoch_ahead syncs again and is sent once more", %{ctx: ctx, fake: fake} do
     start_controller(fake)
-    row = stdio_row(ctx, "ahead", %{"NODE_ENV" => "production"})
+    row = mcp_row(ctx, "ahead", %{"NODE_ENV" => "production"})
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, _fields}, 2_000
 
@@ -779,8 +780,8 @@ defmodule Opus.ProgramsTest do
   test "a server that fails is not restarted, and its failures take no other server down",
        %{ctx: ctx, fake: fake} do
     start_controller(fake)
-    failing = stdio_row(ctx, "failing", %{"NODE_ENV" => "production"})
-    bystander_row = stdio_row(ctx, "bystander", %{"NODE_ENV" => "production"})
+    failing = mcp_row(ctx, "failing", %{"NODE_ENV" => "production"})
+    bystander_row = mcp_row(ctx, "bystander", %{"NODE_ENV" => "production"})
     bystander = connect(ctx, bystander_row)
     supervisor = Process.whereis(Emissary.External.ServerSupervisor)
 
@@ -812,7 +813,7 @@ defmodule Opus.ProgramsTest do
     # the service: a request whose client went away is no failure of the
     # service's, here or once the HTTP server has given up on it.
     start_controller(fake)
-    row = stdio_row(ctx, "abandoned", %{"NODE_ENV" => "production"})
+    row = mcp_row(ctx, "abandoned", %{"NODE_ENV" => "production"})
     pid = connect(ctx, row)
     %{grant: grant, sessions: sessions} = :sys.get_state(pid)
     [%{session: session}] = Map.values(sessions)
@@ -828,7 +829,7 @@ defmodule Opus.ProgramsTest do
   test "a call refused as stale_epoch after the row moved leaves the server in error",
        %{ctx: ctx, fake: fake} do
     start_controller(fake)
-    row = stdio_row(ctx, "moved", %{"NODE_ENV" => "production"})
+    row = mcp_row(ctx, "moved", %{"NODE_ENV" => "production"})
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, _fields}, 2_000
 
@@ -844,8 +845,8 @@ defmodule Opus.ProgramsTest do
   test "one athanor holds at most a quarter of the service's pool", %{ctx: ctx, fake: fake} do
     Scripted.set(fake, :pool, 4)
     start_controller(fake)
-    first = stdio_row(ctx, "first", %{"NODE_ENV" => "production"})
-    second = stdio_row(ctx, "second", %{"NODE_ENV" => "production"})
+    first = mcp_row(ctx, "first", %{"NODE_ENV" => "production"})
+    second = mcp_row(ctx, "second", %{"NODE_ENV" => "production"})
     connect(ctx, first)
     assert_receive {:control, "sync", _sync, _fields}, 2_000
 
@@ -860,7 +861,7 @@ defmodule Opus.ProgramsTest do
     fake: fake
   } do
     start_controller(fake)
-    row = stdio_row(ctx, "unresolved", %{"GITHUB_TOKEN" => "vault:absent"})
+    row = mcp_row(ctx, "unresolved", %{"GITHUB_TOKEN" => "vault:absent"})
 
     assert {:error, {:env_unresolved, "github", "GITHUB_TOKEN"}} =
              Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
@@ -868,7 +869,10 @@ defmodule Opus.ProgramsTest do
     refute_receive {:control, "sync", _sync, _fields}, 200
   end
 
-  test "stdio refuses an attach-only entry before starting a backend", %{ctx: ctx, fake: fake} do
+  test "an mcp program refuses an attach-only entry before starting a backend", %{
+    ctx: ctx,
+    fake: fake
+  } do
     start_controller(fake)
     attached = vault_entry(ctx, %{disclose: false})
     admin = %{ctx | permissions: MapSet.new([:*])}
@@ -876,7 +880,8 @@ defmodule Opus.ProgramsTest do
 
     naming = fn entry ->
       %{
-        "transport" => "stdio",
+        "transport" => "program",
+        "mark" => "mcp",
         "backends" => [
           %{
             "name" => "github",
@@ -901,7 +906,7 @@ defmodule Opus.ProgramsTest do
 
     assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "attached")
 
-    literal = stdio_row(ctx, "literal", %{"NODE_ENV" => "production"})
+    literal = mcp_row(ctx, "literal", %{"NODE_ENV" => "production"})
 
     assert {:error, {:invalid_argument, ^refusal}} =
              Provider.handle("mcp_servers", admin, %{
@@ -918,7 +923,7 @@ defmodule Opus.ProgramsTest do
 
     # A row naming it underneath is refused at sync, in the reader's words,
     # before its env is sealed or anything reaches the service.
-    underneath = stdio_row(ctx, "underneath")
+    underneath = mcp_row(ctx, "underneath")
 
     assert {:error, :disclosure_refused} =
              Programs.hold(%{athanor_id: ctx.athanor_id, server_id: underneath.id, epoch: 1})
@@ -962,7 +967,7 @@ defmodule Opus.ProgramsTest do
     # The disclosed entry's variable sorts first, so a resolution that
     # unsealed as it went would have read it before meeting the other.
     row =
-      stdio_row(ctx, "mixed", %{
+      mcp_row(ctx, "mixed", %{
         "A_TOKEN" => "vault:gh-token",
         "B_TOKEN" => "vault:gh-attached"
       })
@@ -978,7 +983,7 @@ defmodule Opus.ProgramsTest do
 
     # An entry that is not there refuses the sync alike, the disclosed one
     # still unread.
-    absent = stdio_row(ctx, "absent", %{"A_TOKEN" => "vault:gh-token", "B_TOKEN" => "vault:nope"})
+    absent = mcp_row(ctx, "absent", %{"A_TOKEN" => "vault:gh-token", "B_TOKEN" => "vault:nope"})
 
     assert {:error, {:env_unresolved, "github", "B_TOKEN"}} =
              Programs.hold(%{athanor_id: ctx.athanor_id, server_id: absent.id, epoch: 1})
@@ -1002,7 +1007,7 @@ defmodule Opus.ProgramsTest do
 
     before = shared_state(shared)
     assert {%{status: "active", last_used_at: nil}, %{status: "active"}, _usage} = before
-    row = stdio_row(ctx, "shared-named", %{"GITHUB_TOKEN" => "vault:" <> entry_name})
+    row = mcp_row(ctx, "shared-named", %{"GITHUB_TOKEN" => "vault:" <> entry_name})
 
     assert {:error, {:env_unresolved, "github", "GITHUB_TOKEN"}} =
              Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
@@ -1017,14 +1022,20 @@ defmodule Opus.ProgramsTest do
     assert shared_state(shared) == before
   end
 
-  test "get reports what the service runs for a stdio server", %{ctx: ctx, fake: fake} do
+  test "get reports what the service runs for an mcp program", %{ctx: ctx, fake: fake} do
     start_controller(fake)
-    row = stdio_row(ctx, "described", %{"NODE_ENV" => "production"})
+    row = mcp_row(ctx, "described", %{"NODE_ENV" => "production"})
     connect(ctx, row)
     admin = %{ctx | permissions: MapSet.new([:*])}
 
     assert {:ok,
-            %{transport: "stdio", epoch: 1, status: "ready", programs: [%{"name" => "github"}]}} =
+            %{
+              transport: "program",
+              mark: "mcp",
+              epoch: 1,
+              status: "ready",
+              programs: [%{"name" => "github"}]
+            }} =
              Provider.handle("mcp_servers", admin, %{
                "action" => "get",
                "name" => "described"
@@ -1043,7 +1054,8 @@ defmodule Opus.ProgramsTest do
 
     config = fn command ->
       %{
-        "transport" => "stdio",
+        "transport" => "program",
+        "mark" => "mcp",
         "backends" => [
           %{
             "name" => "github",
@@ -1118,7 +1130,8 @@ defmodule Opus.ProgramsTest do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: "stored",
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
         config_json:
           Jason.encode!(%{
@@ -1165,7 +1178,7 @@ defmodule Opus.ProgramsTest do
     end
   end
 
-  defp pipe_row(ctx, name, over \\ %{}) do
+  defp driven_row(ctx, name, over \\ %{}) do
     {:ok, row} =
       Arca.McpServerStorage.insert(
         Sanctum.Context.actor(ctx),
@@ -1173,7 +1186,8 @@ defmodule Opus.ProgramsTest do
           %{
             cap: 0,
             name: name,
-            transport: "pipe",
+            transport: "program",
+            mark: "driven",
             url: nil,
             home: "kept",
             memory_bytes: 1_073_741_824,
@@ -1284,7 +1298,7 @@ defmodule Opus.ProgramsTest do
     # The scripted service keys, ends and idles sessions as Locus does.
     defp held(ctx, fake, name) do
       start_controller(fake)
-      row = stdio_row(ctx, name, %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, name, %{"NODE_ENV" => "production"})
 
       {:ok, grant} =
         Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch})
@@ -1338,10 +1352,10 @@ defmodule Opus.ProgramsTest do
       assert System.monotonic_time(:millisecond) - started < 2_500
     end
 
-    test "a stdio session is read only while a call is outstanding, so idle ends it and the next call initializes it again",
+    test "an mcp program's session is read only while a call is outstanding, so idle ends it and the next call initializes it again",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
-      row = stdio_row(ctx, "idling", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "idling", %{"NODE_ENV" => "production"})
       pid = connect(ctx, row)
       assert {:ok, _} = Emissary.External.Server.call_tool(pid, "github__search", %{})
       assert_receive {:invoke, "tools/call", _fields}, 2_000
@@ -1369,7 +1383,7 @@ defmodule Opus.ProgramsTest do
     test "a session that ends fails the call awaiting it, and the next call opens it again",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
-      row = stdio_row(ctx, "ending", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "ending", %{"NODE_ENV" => "production"})
       pid = connect(ctx, row)
       Scripted.set(fake, :silent, ["tools/call"])
 
@@ -1385,10 +1399,10 @@ defmodule Opus.ProgramsTest do
       assert_receive {:invoke, "initialize", _fields}, 2_000
     end
 
-    test "a pipe row syncs its program with its settings and has no MCP process",
+    test "a driven program syncs its program with its settings and has no MCP process",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
-      row = pipe_row(ctx, "claude")
+      row = driven_row(ctx, "claude")
       owner = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch}
 
       assert {:ok, %{epoch: 1, url: url}} = Programs.hold(owner)
@@ -1410,7 +1424,7 @@ defmodule Opus.ProgramsTest do
                      2_000
 
       assert {:error, {:invalid_argument, sentence}} = Servers.ensure_started(row, ctx)
-      assert sentence =~ "pipe program"
+      assert sentence =~ "is a driven program: a person or a brain runs it, not MCP"
       Programs.release(owner)
       assert_released(row, 1)
     end
@@ -1418,7 +1432,7 @@ defmodule Opus.ProgramsTest do
     test "a row's hosts go with its sync, and a stored list that does not read syncs nothing",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
-      listed = pipe_row(ctx, "listed", %{hosts: Jason.encode!(["api.anthropic.com"])})
+      listed = driven_row(ctx, "listed", %{hosts: Jason.encode!(["api.anthropic.com"])})
       owner = %{athanor_id: ctx.athanor_id, server_id: listed.id, epoch: listed.epoch}
 
       assert {:ok, _held} = Programs.hold(owner)
@@ -1432,7 +1446,7 @@ defmodule Opus.ProgramsTest do
 
       # A list that does not read is never read as no list, which would
       # open the program to every public host.
-      broken = pipe_row(ctx, "broken", %{hosts: ~s(["API.example.com"])})
+      broken = driven_row(ctx, "broken", %{hosts: ~s(["API.example.com"])})
 
       assert {:error, {:invalid_argument, sentence}} =
                Programs.hold(%{athanor_id: ctx.athanor_id, server_id: broken.id, epoch: 1})
@@ -1449,7 +1463,8 @@ defmodule Opus.ProgramsTest do
 
       config = fn hosts ->
         %{
-          "transport" => "pipe",
+          "transport" => "program",
+          "mark" => "driven",
           "home" => "kept",
           "backends" => [%{"name" => "claude", "command" => "npx -y @anthropic-ai/claude-code"}]
         }
@@ -1504,7 +1519,7 @@ defmodule Opus.ProgramsTest do
       assert {:ok, %{hosts: nil}} = Arca.McpServerStorage.get(actor, "claude")
     end
 
-    test "a kept stdio row runs its sessions in its login entry's home, and connects to none without it",
+    test "a kept mcp program runs its sessions in its login entry's home, and connects to none without it",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
 
@@ -1512,7 +1527,8 @@ defmodule Opus.ProgramsTest do
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
           cap: 0,
           name: "gh",
-          transport: "stdio",
+          transport: "program",
+          mark: "mcp",
           url: nil,
           home: "kept",
           login_entry_id: "vlt_missing",
@@ -1556,10 +1572,85 @@ defmodule Opus.ProgramsTest do
   describe "sign-in and homes" do
     setup %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
-      row = pipe_row(ctx, "claude")
+      row = driven_row(ctx, "claude")
       entry = login_entry(ctx, "claude-login", "claude")
       admin = %{ctx | permissions: MapSet.new([:*])}
       {:ok, controller: controller, row: row, admin: admin, entry: entry}
+    end
+
+    test "replacing a definition is refused whatever adding the same definition is refused",
+         %{ctx: ctx, admin: admin, entry: entry} do
+      vault_entry(ctx, %{name: "attached", disclose: false})
+      vault_entry(ctx)
+      actor = Sanctum.Context.actor(ctx)
+
+      program = fn over ->
+        Map.merge(
+          %{
+            "transport" => "program",
+            "mark" => "mcp",
+            "backends" => [
+              %{"name" => "editable", "command" => "npx -y editable", "env" => %{}}
+            ]
+          },
+          over
+        )
+      end
+
+      with_env = fn env ->
+        program.(%{
+          "backends" => [
+            %{"name" => "editable", "command" => "npx -y editable", "env" => env}
+          ]
+        })
+      end
+
+      assert {:ok, _} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "create",
+                 "name" => "editable",
+                 "config" => program.(%{})
+               })
+
+      {:ok, before} = Arca.McpServerStorage.get(actor, "editable")
+
+      for config <- [
+            with_env.(%{"GITHUB_TOKEN" => "vault:absent"}),
+            with_env.(%{"GITHUB_TOKEN" => "vault:attached"}),
+            with_env.(%{"MODE" => "a literal where a credential belongs"}),
+            program.(%{"home" => "kept"}),
+            program.(%{"home" => "kept", "login_entry_id" => entry}),
+            program.(%{
+              "mark" => "driven",
+              "backends" => [
+                %{"name" => "a", "command" => "a", "env" => %{}},
+                %{"name" => "b", "command" => "b", "env" => %{}}
+              ]
+            }),
+            program.(%{"mark" => "driven", "home" => "kept", "login_entry_id" => entry}),
+            program.(%{"hosts" => ["*.example.com"]}),
+            program.(%{"backends" => [%{"name" => "x", "command" => "run vault:gh-token"}]})
+          ] do
+        # A create of the same name validates the definition before it
+        # meets the row that exists, so the two refusals are comparable.
+        assert {:error, {:invalid_argument, added}} =
+                 Provider.handle("mcp_servers", admin, %{
+                   "action" => "create",
+                   "name" => "editable",
+                   "config" => config
+                 })
+
+        assert {:error, {:invalid_argument, ^added}} =
+                 Provider.handle("mcp_servers", admin, %{
+                   "action" => "update",
+                   "name" => "editable",
+                   "epoch" => before.epoch,
+                   "config" => config
+                 }),
+               "an update took what a create refuses: #{added}"
+      end
+
+      assert {:ok, ^before} = Arca.McpServerStorage.get(actor, "editable")
     end
 
     test "a sign-in runs the login command in the entry's home and relays its lines both ways",
@@ -1663,7 +1754,7 @@ defmodule Opus.ProgramsTest do
       assert refusal =~ "no active login entry"
       refute_received {:session, "open", _message, _fields}
 
-      pipe_row(ctx, "scratchy", %{home: "scratch", home_max_bytes: nil})
+      driven_row(ctx, "scratchy", %{home: "scratch", home_max_bytes: nil})
 
       assert {:error, {:invalid_argument, refusal}} =
                Provider.handle("mcp_servers", admin, %{
@@ -1834,7 +1925,7 @@ defmodule Opus.ProgramsTest do
 
   describe "pipes" do
     setup %{ctx: ctx} do
-      row = pipe_row(ctx, "claude")
+      row = driven_row(ctx, "claude")
       entry = login_entry(ctx, "claude-login", "claude")
       {:ok, row: row, entry: entry}
     end
@@ -2260,7 +2351,7 @@ defmodule Opus.ProgramsTest do
       assert {:ok, nil} = Programs.status(ctx.athanor_id, "mcp_nothing")
       assert_receive {:control, "status", %{"owners" => [%{"server" => "mcp_nothing"}]}, _}, 2_000
 
-      row = stdio_row(ctx, "running", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "running", %{"NODE_ENV" => "production"})
       connect(ctx, row)
 
       assert {:ok, %{"e" => 1, "programs" => [%{"name" => "github", "home" => "scratch"}]}} =
@@ -2273,7 +2364,7 @@ defmodule Opus.ProgramsTest do
     test "each refusal of the service is its typed result, and a service that cannot be reached is unavailable",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
-      row = stdio_row(ctx, "bounded", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "bounded", %{"NODE_ENV" => "production"})
       connect(ctx, row)
 
       Scripted.refuse_once(fake, "status", "too_many_owners", 400)
@@ -2292,7 +2383,7 @@ defmodule Opus.ProgramsTest do
     test "an answer the service did not bound is stopped at the answer bound and is status_too_large as well: neither read whole, emptied nor unavailable",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
-      row = stdio_row(ctx, "verbose", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "verbose", %{"NODE_ENV" => "production"})
       connect(ctx, row)
       Scripted.set(fake, :stderr_bytes, LocusBackends.max_status_answer_bytes() + 1)
       assert {:error, :status_too_large} = Programs.status(ctx.athanor_id, row.id)
@@ -2318,7 +2409,7 @@ defmodule Opus.ProgramsTest do
     test "a refused signature, and a refusal or an answer at another protocol version, are their own typed results",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
-      row = stdio_row(ctx, "versioned", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "versioned", %{"NODE_ENV" => "production"})
       connect(ctx, row)
 
       Scripted.refuse_once(fake, "status", "unauthorized")
@@ -2343,7 +2434,7 @@ defmodule Opus.ProgramsTest do
     test "the controller's, with a sync in flight", %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
       vault_entry(ctx)
-      row = stdio_row(ctx, "held")
+      row = mcp_row(ctx, "held")
       Scripted.hold(fake, "sync")
       Task.start(fn -> Servers.ensure_started(row, ctx) end)
       assert_receive {:held, "sync", held}, 2_000
@@ -2389,7 +2480,7 @@ defmodule Opus.ProgramsTest do
     test "a server process's, with its grant and resolved headers", %{ctx: ctx, fake: fake} do
       start_controller(fake)
       vault_entry(ctx)
-      pid = connect(ctx, stdio_row(ctx, "granted"))
+      pid = connect(ctx, mcp_row(ctx, "granted"))
       owner_key = :sys.get_state(pid).grant.owner_key
 
       {:status, _pid, _module, items} = :sys.get_status(pid)
@@ -2517,7 +2608,7 @@ defmodule Opus.ProgramsTest do
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 536_870_912)
     controller = start_controller(fake)
     vault_entry(ctx)
-    connect(ctx, stdio_row(ctx, "ceiling-refresh"))
+    connect(ctx, mcp_row(ctx, "ceiling-refresh"))
     assert_receive {:control, "sync", %{"athanor_memory_bytes" => 536_870_912}, _}, 2_000
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 268_435_456)
     tick(controller)
@@ -2529,7 +2620,7 @@ defmodule Opus.ProgramsTest do
   test "a pipe open waits for the sync that carries a changed ceiling", %{ctx: ctx, fake: fake} do
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 2_147_483_648)
     controller = start_controller(fake)
-    row = pipe_row(ctx, "ceiling-pipe")
+    row = driven_row(ctx, "ceiling-pipe")
     entry = login_entry(ctx, "ceiling-login", "ceiling-pipe")
     assert {:ok, _} = Programs.pipe_open(row, entry, "before", [], "att_before", soon())
     assert_receive {:session, "open", %{"key" => "before"}, _}, 2_000
@@ -2561,7 +2652,7 @@ defmodule Opus.ProgramsTest do
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 536_870_912)
     controller = start_controller(fake)
     vault_entry(ctx)
-    connect(ctx, stdio_row(ctx, "ceiling-lost-slot"))
+    connect(ctx, mcp_row(ctx, "ceiling-lost-slot"))
     assert_receive {:control, "sync", %{"athanor_memory_bytes" => 536_870_912}, _}, 2_000
     Arca.ControlPlane.record(:lost)
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 268_435_456)

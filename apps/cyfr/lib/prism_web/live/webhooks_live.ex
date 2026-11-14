@@ -18,12 +18,10 @@ defmodule PrismWeb.WebhooksLive do
   own, and the page repeats the change once its record is confirmed,
   wherever the person proved it.
 
-  A delivery starts a run with the `webhook` origin. Creating a webhook
-  for a profile whose grant does not admit that origin raises the grant
-  prompt for that profile first, in the same layer: once the grant is
-  confirmed the page reads the profile's grant again and creates the
-  webhook only if it now admits webhooks. A grant dismissed, or confirmed
-  without that origin, creates nothing.
+  A delivery's run stands on the grant of the profile the webhook names:
+  creating the webhook on this page is the person's decision that
+  deliveries start it, so no grant asks again who may start it. The run
+  records the `webhook` origin.
   """
 
   use PrismWeb, :live_view
@@ -67,8 +65,7 @@ defmodule PrismWeb.WebhooksLive do
      |> assign(:form_rate_limit, "")
      |> assign(:form_input_template, "{}")
      |> assign(:form_error, nil)
-     |> assign(:new_secret, nil)
-     |> assign(:origin_grant, nil)}
+     |> assign(:new_secret, nil)}
   end
 
   @impl true
@@ -84,26 +81,6 @@ defmodule PrismWeb.WebhooksLive do
   # The grant prompt a webhook waited for. A refused commit leaves the
   # prompt open for the person to try again or dismiss; any other end
   # makes no webhook.
-  @impl PrismWeb.SystemLayer.Hook
-  def system_layer_report(id, outcome, %{assigns: %{origin_grant: {id, args}}} = socket) do
-    case outcome do
-      :confirmed ->
-        socket |> assign(:origin_grant, nil) |> origin_granted(args)
-
-      {:refused, reason} when reason != :invalid_prompt ->
-        {:noreply, socket}
-
-      _ended ->
-        {:noreply,
-         socket
-         |> assign(:origin_grant, nil)
-         |> assign(:form_error, "No webhook was made: the grant was not changed.")}
-    end
-  end
-
-  def system_layer_report(_id, _outcome, _socket), do: :pass
-
-  # A change this page asked for was confirmed: made again, once.
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_repeat(:webhook_create, _tool, args, socket), do: create(socket, args)
   def system_layer_repeat({:webhook_rotate, name}, _tool, _args, socket), do: rotate(socket, name)
@@ -257,60 +234,8 @@ defmodule PrismWeb.WebhooksLive do
   # Submission helpers
   # ============================================================================
 
-  # A webhook is made only under a grant that admits its deliveries: one
-  # whose profile's grant lacks the `webhook` origin raises the grant
-  # prompt for that profile first, and the webhook waits for its outcome.
-  defp submit_create(socket, params, template_map) do
-    args = build_args(params, template_map)
-
-    case admitted(socket, args) do
-      {:missing, label} -> {:noreply, ask_origin(socket, args, label)}
-      _admitted_or_unknown -> create(socket, args)
-    end
-  end
-
-  defp admitted(socket, %{"target_ref" => ref, "profile_id" => profile_id})
-       when is_binary(ref) and is_binary(profile_id),
-       do: SystemLayer.admits_origin(socket, ref, profile_id, :webhook)
-
-  defp admitted(_socket, _args), do: :unknown
-
-  defp ask_origin(socket, %{"target_ref" => ref} = args, label) do
-    id = "grant-webhook-#{System.unique_integer([:positive])}"
-
-    case SystemLayer.grant_prompt(socket, id, ref, label: label) do
-      {:ok, prompt} ->
-        SystemLayer.show(prompt)
-
-        socket
-        |> assign(:origin_grant, {id, args})
-        |> assign(
-          :form_error,
-          "This profile's grant does not let webhooks start it. " <>
-            "Grant it \"Also from webhooks\" to make this webhook."
-        )
-
-      {:error, reason} ->
-        assign(socket, :form_error, "No webhook was made: #{error_message(reason)}")
-    end
-  end
-
-  # The grant the webhook waited for, confirmed: its profile's grant is
-  # read again, and the webhook made only if it now admits webhooks.
-  defp origin_granted(socket, args) do
-    case admitted(socket, args) do
-      {:missing, _label} ->
-        {:noreply,
-         assign(
-           socket,
-           :form_error,
-           "No webhook was made: the grant does not let webhooks start this profile."
-         )}
-
-      _admitted_or_unknown ->
-        create(socket, args)
-    end
-  end
+  defp submit_create(socket, params, template_map),
+    do: create(socket, build_args(params, template_map))
 
   # Minting a webhook's secret needs a fresh confirmation: asked for
   # through the system layer, and repeated from `system_layer_repeat/4`

@@ -738,14 +738,15 @@ defmodule Emissary.External.ServerTest do
       assert state.headers == %{}
     end
 
-    test "a stdio connect records every backend env reference before the backends service resolves it",
+    test "a program connect records every backend env reference before the backends service resolves it",
          %{name: name, ctx: ctx} do
       vault!(ctx, "rev-env")
       vault!(ctx, "rev-env-other")
 
       pid =
         start_server(name, ctx.athanor_id,
-          transport: :stdio,
+          transport: :program,
+          mark: :mcp,
           id: "srv_rev_#{System.unique_integer([:positive])}",
           epoch: 1,
           backends: [

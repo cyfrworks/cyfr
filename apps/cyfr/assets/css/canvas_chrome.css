@@ -318,6 +318,17 @@
 .canvas-shelf-app[data-canvas-minimised="true"] { opacity: 0.5; }
 .canvas-shelf-app:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
 
+/* At a phone's width the shelf keeps room for the open apps, a minimised
+ * one included, so each comes back with a tap: the chips' room narrows to
+ * the Devices chip, and an open app shows as its icon, its name in its
+ * title and label. */
+@media (width < 768px) {
+  .canvas-shelf { gap: 6px; }
+  .canvas-shelf-chips { width: 5.25rem; }
+  .canvas-shelf-app { gap: 0; padding: 0 8px; }
+  .canvas-shelf-app-name { display: none; }
+}
+
 /* The shell's own chips stand on the shelf's left end, centred in it and
  * above it; they stay the shell's markup (PrismWeb.ShellLive). So does the
  * fallback's line after them (PrismWeb.SystemLayer), and while it stands

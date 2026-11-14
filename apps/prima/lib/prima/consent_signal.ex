@@ -89,13 +89,7 @@ defmodule Prima.ConsentSignal do
   end
 
   def message({:consent_required, payload}) do
-    case payload do
-      %{"detail" => detail} when is_binary(detail) ->
-        "Consent required: #{detail}"
-
-      _ ->
-        "Consent required: permissions changed since they were approved — review and re-grant"
-    end
+    consent_required(field(payload, :cause), field(payload, :ref))
   end
 
   def message({:consent_conflict, _payload}),
@@ -113,6 +107,28 @@ defmodule Prima.ConsentSignal do
 
     "Confirmation required: #{change} needs a fresh confirmation — confirm it in Prism"
   end
+
+  # A `consent_required` payload's cause, said for the component it names
+  # (`Sanctum.Consent`'s errors).
+  defp consent_required(cause, ref) when is_binary(ref) and ref != "" do
+    case to_string(cause) do
+      "no_grant" ->
+        "Consent required: #{ref} has not been granted — grant it to run it"
+
+      "revoked" ->
+        "Consent required: the grant for #{ref} was revoked — grant it again to run it"
+
+      _moved ->
+        "Consent required: #{ref} asks for more than its grant holds — review and grant again"
+    end
+  end
+
+  defp consent_required(_cause, _ref),
+    do: "Consent required: this component has no grant to run under — grant it to run it"
+
+  # A payload's field as a producer builds it (an atom key) or as it reads
+  # back from JSON (a string key).
+  defp field(payload, key), do: Map.get(payload, key) || Map.get(payload, Atom.to_string(key))
 
   @doc ~S"""
   The `error.data` object: `{"tag": tag, "payload": payload}`. A

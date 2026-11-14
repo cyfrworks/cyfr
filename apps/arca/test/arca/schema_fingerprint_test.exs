@@ -280,8 +280,7 @@ defmodule Arca.SchemaFingerprintTest do
                activation: "{}",
                granted_by: "t",
                granted_via: "t",
-               granted_at: now,
-               admitted_origins: ~s(["interactive"])
+               granted_at: now
              })
 
     ref = %{

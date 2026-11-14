@@ -7,22 +7,22 @@ defmodule Emissary.External.Provider do
   create, update, delete, list, get, test, refresh, enable, disable,
   restart.
 
-  A server has a transport:
+  A row is one of two kinds, named by its transport:
 
-    * `http` — a URL and a header map that may name vault entries;
-    * `stdio` — a program: backends (`Opus.Programs.Definition`) the
-      backends service runs, each a command and an env map whose
-      credentials are vault templates, which Emissary drives as MCP
-      servers over their sessions;
-    * `pipe` — a program with one backend, which a catalyst drives over
-      its session, never MCP.
+    * `http` — a tool server elsewhere: a URL and a header map that may
+      name vault entries;
+    * `program` — a program CYFR runs: backends (`Opus.Programs.Definition`)
+      the backends service runs, each a command and an env map whose
+      credentials are vault templates. Its mark says how it is spoken to:
+      `mcp`, Emissary speaking MCP over its sessions and offering its
+      tools, or `driven`, one backend a person or a brain runs, never MCP.
 
   A program also carries its settings, stored as columns of its row
-  (`Opus.Programs.Definition.validate_row/1`): its home (`scratch`, or
+  (`Opus.Programs.Definition.validate_row/1`): its mark, its home (`scratch`, or
   `kept`: one home per login entry that survives retirement), its memory
   bound, a kept home's disk bound, the login command a sign-in runs, the
   hosts it may reach (none named: every public host), and, for a kept
-  `stdio` row, the login entry its sessions run in, which must
+  `mcp` program, the login entry its sessions run in, which must
   be an active login entry of this athanor naming the row
   (`Sanctum.Mount.login_entry/3`). A program is refused when this server
   runs no programs controller (`Opus.Programs`) or runs as a cluster.
@@ -64,7 +64,7 @@ defmodule Emissary.External.Provider do
   Every write raises the row's epoch. `update` names the epoch it read and
   is refused when the row has moved on. A write that changes what runs —
   update, delete, disable, restart — stops the server's process, which
-  releases a stdio server's backends on the backends service; the next use
+  releases a program's backends on the backends service; the next use
   starts it again at the new epoch.
 
   A literal credential in a credential-shaped header is refused rather than
@@ -144,7 +144,7 @@ defmodule Emissary.External.Provider do
                  ]}
               )},
              description:
-               "The stdio backends, at most #{BackendDefinition.max_backends()}: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals."
+               "A program's backends, at most #{BackendDefinition.max_backends()}: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals."
            ),
            Arg.new("console", :boolean,
              description:
@@ -162,8 +162,13 @@ defmodule Emissary.External.Provider do
            ),
            Arg.new("transport", :string,
              description:
-               "http (default): a URL. stdio: a program whose backends Emissary drives as MCP servers. pipe: a program with one backend a catalyst drives.",
-             enum: ["http", "stdio", "pipe"]
+               "http (default): a tool server elsewhere, at a URL. program: a program CYFR runs on the backends service.",
+             enum: ["http", "program"]
+           ),
+           Arg.new("mark", :string,
+             description:
+               "How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).",
+             enum: ["mcp", "driven"]
            ),
            Arg.new("home", :string,
              description:
@@ -184,7 +189,7 @@ defmodule Emissary.External.Provider do
            ),
            Arg.new("login_entry_id", :string,
              description:
-               "A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own)."
+               "A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own)."
            ),
            Arg.new("hosts", {:array, Arg.new(nil, :string)},
              description:
@@ -354,7 +359,7 @@ defmodule Emissary.External.Provider do
             Arg.new("entry", :string,
               required: true,
               description:
-                "The id of the login entry whose kept home the sign-in runs in; a kept stdio server's own entry"
+                "The id of the login entry whose kept home the sign-in runs in; a kept mcp program's own entry"
             )
           ],
           kind: :execute,
@@ -380,7 +385,7 @@ defmodule Emissary.External.Provider do
         )
       ],
       description:
-        "Manage external MCP server connections and programs: HTTP servers (Notion, GitHub, custom servers), stdio servers the backends service runs (npx packages) and pipe programs catalysts drive. Create, update, delete, enable/disable, restart and test them; sign in to a kept program and reset its home. External server tools appear in tools/list as server_name:tool_name.",
+        "Manage programs and tool servers: tool servers elsewhere over HTTP (Notion, GitHub, custom servers) and programs CYFR runs on the backends service (npx packages), each marked mcp (CYFR offers its tools) or driven (a person or a brain runs it). Create, update, delete, enable/disable, restart and test them; sign in to a kept program and reset its home. A tool server's and an mcp program's tools appear in tools/list as server_name:tool_name.",
       title: "Programs"
     )
   end
@@ -491,12 +496,12 @@ defmodule Emissary.External.Provider do
         {:error, {:invalid_argument, "Missing required parameter: config.url"}}
 
       Map.has_key?(config, "backends") ->
-        {:error, {:invalid_argument, "An http server has no backends — use transport stdio"}}
+        {:error, {:invalid_argument, "An http server has no backends — use transport program"}}
 
       Enum.any?(BackendDefinition.program_keys(), &Map.has_key?(config, &1)) ->
         {:error,
          {:invalid_argument,
-          "An http server is no program: it has no home, bounds, login command or hosts"}}
+          "An http server is no program: it has no mark, home, bounds, login command or hosts"}}
 
       true ->
         with :ok <- validate_header_credentials(config["headers"]),
@@ -514,28 +519,26 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  defp transport_args(ctx, name, transport, config) when transport in ["stdio", "pipe"] do
+  defp transport_args(ctx, name, "program", config) do
     cond do
       Map.has_key?(config, "url") ->
         {:error,
-         {:invalid_argument,
-          "A #{transport} server has no url — its backends run on the backends service"}}
+         {:invalid_argument, "A program has no url — its backends run on the backends service"}}
 
       Map.has_key?(config, "headers") ->
-        {:error, {:invalid_argument, "A #{transport} server has no headers — use backend env"}}
+        {:error, {:invalid_argument, "A program has no headers — use backend env"}}
 
       true ->
-        with :ok <- stdio_available(),
+        with :ok <- programs_available(),
              {:ok, backends} <- BackendDefinition.validate(config["backends"]),
              :ok <- env_disclosures(ctx, backends),
-             {:ok, columns} <-
-               BackendDefinition.validate_row(Map.put(config, "transport", transport)),
+             {:ok, columns} <- BackendDefinition.validate_row(config),
              :ok <- login_entry(ctx, name, columns.login_entry_id) do
           base = %{"backends" => backends}
 
           {:ok,
            Map.merge(columns, %{
-             transport: transport,
+             transport: "program",
              url: nil,
              config_json: stored_config(base, config)
            })}
@@ -550,6 +553,7 @@ defmodule Emissary.External.Provider do
   # clears what a program row held.
   defp no_program,
     do: %{
+      mark: nil,
       home: "scratch",
       memory_bytes: nil,
       home_max_bytes: nil,
@@ -558,7 +562,7 @@ defmodule Emissary.External.Provider do
       hosts: nil
     }
 
-  # A kept stdio row names its login entry, which must be a login entry of
+  # A kept mcp program names its login entry, which must be a login entry of
   # this athanor naming the row, active or its program not signed in yet:
   # the row is how its program signs in. The refusal names neither the
   # entry's material nor why beyond that.
@@ -576,7 +580,7 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  defp stdio_available do
+  defp programs_available do
     cond do
       Application.get_env(:cyfr, :cluster, false) == true ->
         {:error, {:invalid_argument, "programs are not available while CYFR_CLUSTER is on"}}
@@ -716,7 +720,7 @@ defmodule Emissary.External.Provider do
 
   # The stored server started (or restarted, when its row moved) and its
   # tools discovered, as the answer to a write that leaves it enabled.
-  defp connect(ctx, %{transport: "pipe"} = server) do
+  defp connect(ctx, %{mark: "driven"} = server) do
     changed(ctx)
     summary(server, %{status: "ready"})
   end
@@ -751,7 +755,7 @@ defmodule Emissary.External.Provider do
   # to a create or update and `get` carry it, empty when there is none.
   defp with_warnings(result, server), do: Map.put(result, :warnings, warnings(server))
 
-  defp warnings(%{transport: transport} = server) when transport in ["stdio", "pipe"],
+  defp warnings(%{transport: "program"} = server),
     do: BackendDefinition.warnings(Arca.McpServerStorage.config(server)["backends"])
 
   defp warnings(_server), do: []
@@ -762,6 +766,7 @@ defmodule Emissary.External.Provider do
         id: server.id,
         name: server.name,
         transport: server.transport,
+        mark: server.mark,
         url: server.url,
         home: server.home,
         epoch: server.epoch
@@ -811,8 +816,8 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  # A stdio server's backends are released and the server started again at
-  # a new epoch.
+  # A program's backends are released and the program started again at a
+  # new epoch.
   defp handle_restart(ctx, args) do
     with {:ok, name} <- name_arg(args) do
       case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
@@ -856,7 +861,8 @@ defmodule Emissary.External.Provider do
   end
 
   # A sign-in runs a kept program's login command in a login entry's home:
-  # a pipe row's any login entry naming it, a kept stdio row's own entry.
+  # a driven program's any login entry naming it, a kept mcp program's own
+  # entry.
   defp handle_sign_in(ctx, args) do
     with {:ok, name} <- name_arg(args),
          {:ok, entry} <- entry_arg(args),
@@ -903,8 +909,8 @@ defmodule Emissary.External.Provider do
 
   defp signs_in(%{enabled: false, name: name}), do: {:error, disabled(name)}
 
-  defp signs_in(%{transport: transport, home: "kept", login_command: command})
-       when transport in ["stdio", "pipe"] and is_binary(command),
+  defp signs_in(%{transport: "program", home: "kept", login_command: command})
+       when is_binary(command),
        do: :ok
 
   defp signs_in(%{name: name}),
@@ -918,12 +924,11 @@ defmodule Emissary.External.Provider do
     # a new entry, or one a restore left) becomes active, so it is admitted
     # here; a row may name one (`login_entry/3`), and nothing else does.
     case Sanctum.Mount.login_entry(ctx, entry, server.name, for: :sign_in) do
-      {:ok, %{id: id}} = found when server.transport == "pipe" or id == server.login_entry_id ->
+      {:ok, %{id: id}} = found when server.mark == "driven" or id == server.login_entry_id ->
         found
 
       {:ok, _other} ->
-        {:error,
-         {:invalid_argument, "A kept stdio server signs in with its own login entry only"}}
+        {:error, {:invalid_argument, "A kept mcp program signs in with its own login entry only"}}
 
       {:error, _reason} ->
         {:error,
@@ -940,11 +945,12 @@ defmodule Emissary.External.Provider do
             # Listing reads; it does not connect. A server that has never
             # been used reports :disconnected here — invocation (and get,
             # which reports the live tool catalogue) starts it on demand.
-            status = Emissary.External.Server.status(server.name, ctx.athanor_id)
+            status = live_status(server, ctx)
 
             %{
               name: server.name,
               transport: server.transport,
+              mark: server.mark,
               url: server.url,
               home: server.home,
               enabled: server.enabled,
@@ -975,7 +981,7 @@ defmodule Emissary.External.Provider do
             Emissary.External.ServerSupervisor.ensure_started(server_config)
           end
 
-          status = Emissary.External.Server.status(name, ctx.athanor_id)
+          status = live_status(server, ctx)
 
           tools =
             with %{status: :ready} <- status,
@@ -1011,9 +1017,11 @@ defmodule Emissary.External.Provider do
   # kept one's stderr length alone (a kept home's contents are the
   # person's), its home, the bytes its kept homes hold, whether one is over
   # its cap and its running sessions.
-  # Nil for an http server, or when the service runs nothing for it.
-  defp program_status(ctx, %{transport: transport} = server)
-       when transport in ["stdio", "pipe"] do
+  # Nil for an http server, a disabled program, which nothing runs (the
+  # box's fence refuses it), or when the service runs nothing for it.
+  defp program_status(_ctx, %{enabled: false}), do: nil
+
+  defp program_status(ctx, %{transport: "program"} = server) do
     case Opus.Programs.status(ctx.athanor_id, server.id) do
       {:ok, %{"programs" => programs}} -> programs
       _ -> nil
@@ -1247,6 +1255,12 @@ defmodule Emissary.External.Provider do
     |> Enum.sort()
   end
 
+  # A disabled row is stopped whatever a process stopping for it last
+  # said: nothing starts it again until it is enabled.
+  defp live_status(%{enabled: false}, _ctx), do: :stopped
+  defp live_status(server, ctx), do: Emissary.External.Server.status(server.name, ctx.athanor_id)
+
+  defp format_status(:stopped), do: "stopped"
   defp format_status(%{status: status}), do: to_string(status)
   defp format_status(:disconnected), do: "disconnected"
   defp format_status(_), do: "unknown"

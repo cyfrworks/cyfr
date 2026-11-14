@@ -366,7 +366,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
       assert {:ok, moved.shape_diff} == ShapeDiff.compute(ctx, @user, head.resolved_policy)
 
-      # A run the head's origins admit, so what refuses it is the moved shape.
+      # A run of the person's, standing on the head: the moved shape refuses it.
       assert {:error, {:consent_required, payload}} =
                Opus.Admission.authority_for(
                  %{ctx | origin: :interactive},
