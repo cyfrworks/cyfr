@@ -160,9 +160,46 @@ defmodule CyfrWeb.ContextGuardTest do
       # …and the delete takes every row while the announcement names only
       # the hashes it collected.
       {:ok, _} = Arca.SessionStorage.delete_by_user(user.user_id)
-      :ok = Sanctum.Session.announce_revoked(user.user_id, collected)
+      :ok = Sanctum.Session.announce_revoked(user.user_id, collected, :signed_out)
 
       assert_redirect(view, "/login", 2_000)
+    end
+  end
+
+  # A retirement's announcement says why; a page whose own session it
+  # ended sends its person to sign in and says so there, and a page whose
+  # session stands says nothing.
+  describe "a page whose session a retirement ended" do
+    for {why, sentence} <- [
+          denied: "Your access to this CYFR was removed, so you were signed out.",
+          device_removed: "This device was removed from your account, so its sign-in ended.",
+          signed_out: "This sign-in was ended. Sign in again to go on."
+        ] do
+      test "is sent to sign in and told why: #{why}", %{conn: conn} do
+        user = test_user()
+        {conn, _token, hash} = signed_in(conn, user)
+        {view, _html} = mount_athanor(conn, "/settings")
+
+        delete_session!(hash)
+        :ok = Sanctum.Session.announce_revoked(user.user_id, [hash], unquote(why))
+
+        assert assert_redirect(view, "/login", 2_000) == %{"error" => unquote(sentence)}
+      end
+    end
+
+    test "a page whose own session stands is told nothing", %{conn: conn} do
+      user = test_user()
+      {gone_conn, _token, gone} = signed_in(conn, user)
+      {stays_conn, _token, _stays} = signed_in(build_conn(), user)
+      {gone_view, _html} = mount_athanor(gone_conn, "/settings")
+      {stays_view, _html} = mount_athanor(stays_conn, "/settings")
+
+      delete_session!(gone)
+      :ok = Sanctum.Session.announce_revoked(user.user_id, [gone], :device_removed)
+
+      assert_redirect(gone_view, "/login", 2_000)
+      assert render(stays_view) =~ "Settings"
+      assert :sys.get_state(stays_view.pid).socket.assigns.flash == %{}
     end
   end
 

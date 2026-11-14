@@ -463,8 +463,9 @@ defmodule Emissary.Web.FrameSocketTest do
         from(s in Arca.Schemas.Session, where: s.token_hash == ^source.session_token_hash)
       )
 
-    {{Cyfr.Bus.sessions(), Cyfr.Bus.Session.new(:revoked, "local|local|sock-someone-else")},
-     {Cyfr.Bus.sessions(), Cyfr.Bus.Session.new(:revoked, source.user_id)}}
+    {{Cyfr.Bus.sessions(),
+      Cyfr.Bus.Session.new(:revoked, "local|local|sock-someone-else", :signed_out)},
+     {Cyfr.Bus.sessions(), Cyfr.Bus.Session.new(:revoked, source.user_id, :signed_out)}}
   end
 
   defp standing_moved!(:athanor_archived, source) do

@@ -847,9 +847,27 @@ defmodule Prima.Refusal do
   defp row({:cap_unverifiable, key}) when is_atom(key),
     do: {:unavailable, "A limit on this account could not be checked — retry shortly"}
 
-  # A presented credential that does not open anything.
+  # A presented session credential that opens nothing. A revocation
+  # deletes the session it ended, so what ended it is unknown here: the
+  # sentence names every case, the same for every caller, and confirms
+  # nothing about who is let in.
   defp row(:invalid_bearer),
-    do: {:unauthenticated, "The presented credential is not valid. If it expired, sign in again."}
+    do:
+      {:unauthenticated,
+       "This sign-in no longer stands: it expired or was signed out, or this device or " <>
+         "your access was removed. Sign in again; if you are refused, ask the person who " <>
+         "runs this CYFR."}
+
+  # A page whose own session a retirement ended, told why
+  # (`Cyfr.Bus.Session.reasons/0`).
+  defp row({:session_ended, :denied}),
+    do: {:unauthenticated, "Your access to this CYFR was removed, so you were signed out."}
+
+  defp row({:session_ended, :device_removed}),
+    do: {:unauthenticated, "This device was removed from your account, so its sign-in ended."}
+
+  defp row({:session_ended, :signed_out}),
+    do: {:unauthenticated, "This sign-in was ended. Sign in again to go on."}
 
   defp row(:invalid_api_key), do: {:unauthenticated, "Invalid API key"}
   defp row(:api_key_revoked), do: {:unauthenticated, "API key has been revoked"}

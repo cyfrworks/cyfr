@@ -1213,16 +1213,19 @@ defmodule Sanctum.Caller do
   Let go of the sessions a refreshed account head retired: the head's
   walk deleted every session bound to a key it removed, and a recovery's
   every session of the person, in its own transaction
-  (`Arca.DirectoryHeads`), and once that committed
-  each one's memo is dropped on this member and announced to the rest
-  (`invalidate_hash/1`), and the revocation is announced for each person
-  in `user_ids`, so their mounted views let go. Called by
+  (`Arca.DirectoryHeads`), and once that committed the revocation is
+  announced for each person in `user_ids`, so their mounted views let go,
+  and then each session's memo is dropped on this member and announced to
+  the rest (`invalidate_hash/1`). Called by
   `Sanctum.IdentityFreshness` after every refresh that retired sessions.
   """
   @spec drop_retired([String.t()], [binary()]) :: :ok
   def drop_retired(user_ids, hashes) when is_list(user_ids) and is_list(hashes) do
+    # A key removed from the account, or a recovery replacing them all,
+    # announced before each memo's drop so a page whose session went hears
+    # why first (`Sanctum.Session.announce_revoked/3`).
+    Enum.each(user_ids, &Sanctum.Telemetry.sessions_revoked(&1, :device_removed))
     Enum.each(hashes, &invalidate_hash/1)
-    Enum.each(user_ids, &Sanctum.Telemetry.sessions_revoked/1)
   end
 
   @doc """

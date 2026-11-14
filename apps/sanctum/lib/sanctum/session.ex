@@ -541,19 +541,21 @@ defmodule Sanctum.Session do
 
   @doc """
   Revoke every session of a person (server-denied, or removed as an
-  operator). Announces the revocation (`Sanctum.Telemetry.sessions_revoked/1`)
-  so mounted LiveViews let go.
+  operator). Announces the revocation as a denial
+  (`Sanctum.Telemetry.sessions_revoked/2`), so mounted LiveViews let go
+  and tell their person why.
   """
   @spec revoke_all_for_user(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def revoke_all_for_user(user_id) when is_binary(user_id) do
     # The memo is keyed by token hash, so a user-wide revocation collects
     # the hashes first, deletes the rows, then drops each memo — a session
-    # racing in between misses the row and cannot re-cache.
+    # racing in between misses the row and cannot re-cache. The revocation
+    # is announced before the memos go (`announce_revoked/3`).
     hashes = Arca.SessionStorage.hashes_by_user(user_id)
 
     with {:ok, count} <- Arca.SessionStorage.delete_by_user(user_id) do
+      broadcast_sessions_revoked(user_id, :denied)
       Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
-      broadcast_sessions_revoked(user_id)
       {:ok, count}
     end
   end
@@ -561,14 +563,19 @@ defmodule Sanctum.Session do
   @doc """
   Announce sessions a committed transaction already removed: drop the
   established-context memo of each token hash that transaction's DELETE
-  returned, then announce the revocation as `revoke_all_for_user/1`
-  does. Called only after the commit, so a
-  context re-established in between finds no row to cache.
+  returned, then announce the revocation for `reason`
+  (`Cyfr.Bus.Session.reasons/0`) as `revoke_all_for_user/1` does. Called
+  only after the commit, so a context re-established in between finds no
+  row to cache.
   """
-  @spec announce_revoked(String.t(), [binary()]) :: :ok
-  def announce_revoked(user_id, hashes) when is_binary(user_id) and is_list(hashes) do
+  @spec announce_revoked(String.t(), [binary()], :denied | :device_removed | :signed_out) :: :ok
+  def announce_revoked(user_id, hashes, reason) when is_binary(user_id) and is_list(hashes) do
+    # The revocation, which says why, goes before each memo's drop, which
+    # makes a holder of that session revalidate too: a page whose session
+    # went hears the reason first, so it can tell its person. The rows are
+    # gone already, so a holder that revalidates on either is refused.
+    broadcast_sessions_revoked(user_id, reason)
     Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
-    broadcast_sessions_revoked(user_id)
     :ok
   end
 
@@ -624,7 +631,7 @@ defmodule Sanctum.Session do
   person signs one session of theirs here out, whichever browser or
   device holds it, their own included (`session.end`). The row goes, then
   its memo, and the revocation is announced, so a page or stream under it
-  lets go (`announce_revoked/2`). Another person's session, a protected
+  lets go (`announce_revoked/3`). Another person's session, a protected
   device's reservation or an unknown id is `{:error, :not_found}`; no
   person is `{:error, :unauthenticated}`.
   """
@@ -634,7 +641,7 @@ defmodule Sanctum.Session do
       when plane != :guest and is_binary(user_id) and is_binary(id) do
     if Prima.PersonId.person?(user_id) do
       case Arca.SessionStorage.delete_own(user_id, id) do
-        {:ok, hash} -> announce_revoked(user_id, [hash])
+        {:ok, hash} -> announce_revoked(user_id, [hash], :signed_out)
         {:error, :not_found} -> {:error, :not_found}
         {:error, :database_error} -> {:error, :unavailable}
       end
@@ -772,5 +779,6 @@ defmodule Sanctum.Session do
   # announces; the host's bridge is what broadcasts.
   defp broadcast_session_created(_session), do: Sanctum.Telemetry.session_created()
 
-  defp broadcast_sessions_revoked(user_id), do: Sanctum.Telemetry.sessions_revoked(user_id)
+  defp broadcast_sessions_revoked(user_id, reason),
+    do: Sanctum.Telemetry.sessions_revoked(user_id, reason)
 end
