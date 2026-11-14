@@ -25,7 +25,7 @@ if [ -z "$VERSION" ] || [ -z "$NOTES" ]; then
   echo "Example: $0 0.9.0 --notes notes.md --push"
   echo "         $0 0.9.0-rc.1 --notes notes.md --push"
   echo "         $0 0.9.0 --notes notes.md --push --gate   # proves HEAD green here, offline, instead of by its run on GitHub"
-  echo "The notes file holds the release's written note: what the release changes for a running CYFR, and what a person must do before they update."
+  echo "The notes file holds the release's written note, at most 64 KiB: what the release changes for a running CYFR, and what a person must do before they update."
   exit 1
 fi
 
@@ -42,12 +42,20 @@ fi
 
 # The release's written note goes into the annotated tag's message beneath
 # its subject, which the tag's workflow publishes as the release's notes
-# (scripts/ci/release-note.sh); it is read now, before anything is made.
+# (scripts/ci/release-note.sh). It is read and held to NOTE_LIMIT bytes now,
+# before anything is made, and reaches git by a file, never as an argument.
+NOTE_LIMIT=65536
 if ! NOTE="$(cat -- "$NOTES" 2>/dev/null)" || ! grep -q '[^[:space:]]' <<<"$NOTE"; then
   echo "Error: the notes file '$NOTES' cannot be read or holds no note; it is the release's written note, published with the release"
   exit 1
 fi
-TAG_MESSAGE="$(printf 'Release %s\n\n%s\n' "$VERSION" "$NOTE")"
+if [ "$(wc -c <"$NOTES")" -gt "$NOTE_LIMIT" ]; then
+  echo "Error: the notes file '$NOTES' holds $(wc -c <"$NOTES") bytes, more than a release note's $NOTE_LIMIT; nothing was made"
+  exit 1
+fi
+TAG_MESSAGE="$(mktemp)"
+trap 'rm -f "$TAG_MESSAGE"' EXIT
+printf 'Release %s\n\n%s\n' "$VERSION" "$NOTE" >"$TAG_MESSAGE"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -289,7 +297,7 @@ if all_declare "$HEAD_SHA"; then
   # no commit is made.
   echo "Every mix.exs declares $VERSION already:"
   grep -nF "version: \"$VERSION\"" "${MIXFILES[@]}"
-  git tag -a --cleanup=verbatim "$VERSION" "$HEAD_SHA" -m "$TAG_MESSAGE"
+  git tag -a --cleanup=verbatim "$VERSION" "$HEAD_SHA" -F "$TAG_MESSAGE"
   TAGGED="$HEAD_SHA"
   echo ""
   echo "Done! Version $VERSION tagged at $(git rev-parse --short "$HEAD_SHA")."
@@ -344,7 +352,7 @@ else
     fi
     exit 1
   fi
-  git tag -a --cleanup=verbatim "$VERSION" "$BUMP" -m "$TAG_MESSAGE"
+  git tag -a --cleanup=verbatim "$VERSION" "$BUMP" -F "$TAG_MESSAGE"
   TAGGED="$BUMP"
 
   echo ""

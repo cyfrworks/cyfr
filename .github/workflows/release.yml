@@ -99,7 +99,7 @@ jobs:
       # The release's written note, which GoReleaser publishes as its notes:
       # a tag that carries none publishes nothing.
       - name: The tag carries its release note
-        run: scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-note.md"
+        run: scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release-note.md"
 
   # The app image and the Locus image, which serves the runtime, the builds
   # and the backends service: every deploy pulls both, and a project
@@ -391,9 +391,9 @@ jobs:
         run: scripts/ci/retry.sh cosign sign-blob --yes --new-bundle-format --bundle "$RUNNER_TEMP/release/release.json.sigstore.json" "$RUNNER_TEMP/release/release.json"
 
       # The tag's written note, published as the release's notes in place of
-      # a list of commits (.goreleaser.yml's changelog is off).
+      # a list of commits: GoReleaser's changelog step reads --release-notes.
       - name: Write the release note
-        run: scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release/notes.md"
+        run: scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release/notes.md"
 
       - name: Run GoReleaser
         id: goreleaser

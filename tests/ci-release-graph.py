@@ -213,8 +213,8 @@ MANIFEST_DIR_ENV = {"RELEASE_MANIFEST_DIR": "${{ runner.temp }}/release"}
 # refuses a tag that carries none, and the release job writes it beside
 # release.json for GoReleaser to publish as the release's notes.
 RELEASE_NOTE_SH = os.path.join(ROOT, "scripts", "ci", "release-note.sh")
-NOTE_CHECK_RUN = 'scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-note.md"'
-NOTE_WRITE_RUN = 'scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release/notes.md"'
+NOTE_CHECK_RUN = 'scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release-note.md"'
+NOTE_WRITE_RUN = 'scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release/notes.md"'
 GORELEASER_ARGS = "release --clean --release-notes ${{ runner.temp }}/release/notes.md"
 # .goreleaser.yml's release attaches the scaffold from its workdir,
 # apps/codex, and the manifest and its bundle from RELEASE_MANIFEST_DIR
@@ -876,9 +876,10 @@ def check_homebrew(wf, release):
 
 
 def check_goreleaser(config):
-    # The notes are the tag's written note, never a list of commits.
-    if config.get("changelog") != {"disable": True}:
-        return f".goreleaser.yml's changelog is {config.get('changelog')!r}, not disabled"
+    # The changelog step is what reads --release-notes (GoReleaser's
+    # changelog pipe): disabled, it publishes an empty body.
+    if "disable" in (config.get("changelog") or {}):
+        return f".goreleaser.yml's changelog sets disable ({config.get('changelog')!r}), so the release note is never read"
     release = config.get("release") or {}
     # A tag with a pre-release publishes a GitHub pre-release, and
     # GoReleaser marks no release the repository's latest.
@@ -1557,6 +1558,7 @@ def helper_failure(script):
         ("an empty notes file", "", ()),
         ("a notes file of blank lines", " \n\t\n", ()),
         ("a notes file that is not there", None, ("--notes", os.path.join(scratch(), "no-such-notes.md"))),
+        ("a note one byte over 64 KiB", "x" * 65537, ()),
     ):
         status, output = run_helper(repo, "0.1.0", args=args, notes=notes)
         if status == 0 or helper_state(repo) != before:
@@ -1904,7 +1906,8 @@ RELEASE_SH_MUTANTS = [
     ("main's head unread before the proof", lambda t: t.replace("main_is_head || exit 1", ":", 1)),
     ("main's head unread after the proof", lambda t: t.replace("if ! main_is_head; then", "if false; then", 1)),
     ("an empty note let through", lambda t: t.replace(""" || ! grep -q '[^[:space:]]' <<<"$NOTE"; then""", "; then", 1)),
-    ("the tag without the note", lambda t: t.replace('-m "$TAG_MESSAGE"', '-m "Release $VERSION"')),
+    ("the tag without the note", lambda t: t.replace('-F "$TAG_MESSAGE"', '-m "Release $VERSION"')),
+    ("the note's size unbounded", lambda t: t.replace('if [ "$(wc -c <"$NOTES")" -gt "$NOTE_LIMIT" ]; then', "if false; then", 1)),
     ("the note's lines cleaned up by git", lambda t: t.replace("git tag -a --cleanup=verbatim", "git tag -a")),
 ]
 
@@ -1912,14 +1915,17 @@ RELEASE_SH_MUTANTS = [
 # --- scripts/ci/release-note.sh: the tag's written note ---
 
 # Tags on the note repository's origin: an annotated tag with the note, a
-# lightweight tag and an annotated tag whose message is its subject alone.
-NOTE_TAGS = {"1.0.0": "note", "1.0.1": "lightweight", "1.0.2": "subject only"}
+# lightweight tag and an annotated tag whose message is its subject alone,
+# each on the run's commit, and an annotated tag with the note moved to the
+# commit after it.
+NOTE_TAGS = {"1.0.0": "note", "1.0.1": "lightweight", "1.0.2": "subject only", "1.0.3": "moved"}
 
 
 def note_repo():
     """A repository whose origin holds NOTE_TAGS, holding each of them
-    itself as a lightweight tag of its commit, as a checkout of a tag push
-    may: the script must fetch the tag to read its note."""
+    itself as a lightweight tag of the run's commit, as a checkout of a tag
+    push may: the script must fetch the tag to read its note. Answers the
+    repository and the run's commit."""
     repo = os.path.join(scratch(), "note-%d" % len(_HELPER_REPOS))
     _HELPER_REPOS.append(repo)
     os.makedirs(repo)
@@ -1927,34 +1933,38 @@ def note_repo():
     # The commit's message has a body, which a lightweight tag reads as its
     # contents: only the annotation tells it from a note.
     helper_git(repo, "commit", "-q", "--allow-empty", "-m", "release\n\nA commit's body, not a release note.")
+    run = helper_git(repo, "rev-parse", "HEAD")
+    helper_git(repo, "commit", "-q", "--allow-empty", "-m", "after the release")
     for tag, kind in NOTE_TAGS.items():
-        if kind == "note":
-            helper_git(repo, "tag", "-a", "--cleanup=verbatim", tag, "-m", f"Release {tag}\n\n{HELPER_NOTE}")
+        if kind == "moved":
+            helper_git(repo, "tag", "-a", "--cleanup=verbatim", tag, "HEAD", "-m", f"Release {tag}\n\n{HELPER_NOTE}")
+        elif kind == "note":
+            helper_git(repo, "tag", "-a", "--cleanup=verbatim", tag, run, "-m", f"Release {tag}\n\n{HELPER_NOTE}")
         elif kind == "subject only":
-            helper_git(repo, "tag", "-a", tag, "-m", f"Release {tag}")
+            helper_git(repo, "tag", "-a", tag, run, "-m", f"Release {tag}")
         else:
-            helper_git(repo, "tag", tag)
+            helper_git(repo, "tag", tag, run)
     helper_git(repo, "init", "-q", "--bare", helper_origin(repo))
     helper_git(repo, "remote", "add", "origin", helper_origin(repo))
     helper_git(repo, "push", "-q", "origin", "HEAD:refs/heads/main", "--tags")
     for tag in NOTE_TAGS:
-        helper_git(repo, "tag", "-f", tag, "HEAD")
-    return repo
+        helper_git(repo, "tag", "-f", tag, run)
+    return repo, run
 
 
 def release_note_failure(script):
-    """release-note.sh against note_repo's tags: the annotated tag's note
-    written to OUT as written, and the lightweight and subject-only tags
-    refused with an ::error:: line and OUT unwritten. The first failure, or
-    None."""
-    repo = note_repo()
+    """release-note.sh against note_repo's tags for the run's commit: the
+    annotated tag's note written to OUT as written, and the lightweight,
+    subject-only and moved tags refused with an ::error:: line and OUT
+    unwritten. The first failure, or None."""
+    repo, run = note_repo()
     path = os.path.join(scratch(), "release-note-%d.sh" % len(_HELPER_REPOS))
     with open(path, "w") as f:
         f.write(script)
     for tag, kind in NOTE_TAGS.items():
         out = os.path.join(scratch(), f"note-{len(_HELPER_REPOS)}-{tag}.md")
         result = subprocess.run(
-            ["bash", "--noprofile", "--norc", path, tag, out],
+            ["bash", "--noprofile", "--norc", path, tag, run, out],
             cwd=repo, env=helper_env(repo), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60,
         )
         output = result.stdout.decode(errors="replace")
@@ -1971,6 +1981,7 @@ RELEASE_NOTE_MUTANTS = [
     ("a lightweight tag let through", lambda t: t.replace('!= tag ]; then', '= nothing ]; then', 1)),
     ("an empty note let through", lambda t: t.replace("""if ! grep -q '[^[:space:]]' <<<"$note"; then""", "if false; then", 1)),
     ("the tag not fetched", lambda t: t.replace('git fetch --quiet --force --no-tags origin "refs/tags/$tag:refs/tags/$tag"', ":", 1)),
+    ("the tag not bound to the run's commit", lambda t: t.replace('if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$commit" ]; then', "if false; then", 1)),
     ("the note not written", lambda t: t.replace(""">"$out"\n""", """>/dev/null\n""", 1)),
 ]
 
@@ -2744,8 +2755,8 @@ def replace_glob(old, new):
 
 
 GORELEASER_MUTANTS = [
-    ("the changelog on", lambda c: c.pop("changelog")),
-    ("the changelog's commit list on", lambda c: c["changelog"].update(disable=False)),
+    ("the changelog disabled", lambda c: c.update(changelog={"disable": True})),
+    ("the changelog disabled by a template", lambda c: c.update(changelog={"disable": "{{ true }}"})),
     ("release.json not attached", drop_glob(MANIFEST_GLOBS[0])),
     ("release.json's bundle not attached", drop_glob(MANIFEST_GLOBS[1])),
     ("the scaffold not attached", drop_glob(SCAFFOLD_GLOB)),

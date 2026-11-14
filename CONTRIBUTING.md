@@ -252,7 +252,9 @@ same worktree refuses, naming the run that holds it.
   release's written note (what the release changes for a running CYFR and
   what a person does before updating), which goes into the annotated tag's
   message and which the tag's workflow publishes as the release's notes,
-  refusing a tag that carries none (`scripts/ci/release-note.sh`);
+  refusing a tag that carries none or that no longer names the commit its
+  push started the run for (`scripts/ci/release-note.sh`). A note is at
+  most 64 KiB, and a longer one is refused before anything is made;
   `--push` pushes main and the tag together,
   by full refs, in one atomic push. `--gate` is the fallback for a HEAD with no
   run: it runs the release stage, the gate's close, here first. Right

@@ -74,10 +74,9 @@ homebrew_casks:
     skip_upload: true
 
 # The release's notes are the tag's written note, which the release
-# workflow hands GoReleaser (--release-notes), never a list of commits.
-changelog:
-  disable: true
-
+# workflow hands GoReleaser (--release-notes) in place of a list of
+# commits. The changelog step is what reads that file, so it is never
+# disabled: a disabled changelog publishes an empty body.
 release:
   github:
     owner: cyfrworks
