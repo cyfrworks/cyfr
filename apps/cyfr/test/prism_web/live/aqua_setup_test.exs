@@ -141,8 +141,8 @@ defmodule PrismWeb.AquaSetupTest do
     refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
     # The soul's brain is connected through the key it was shared.
-    assert %{"aqua" => {:ready, _}} =
-             Aqua.model_status(ctx, [%{"name" => "aqua", "catalyst_ref" => Fixture.ref()}])
+    status = Aqua.model_status(ctx, [%{"name" => "aqua", "catalyst_ref" => Fixture.ref()}])
+    assert %{"aqua" => {:ready, _}} = status, consent_state(ctx, status)
 
     # Aqua answers.
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
@@ -171,5 +171,30 @@ defmodule PrismWeb.AquaSetupTest do
              )
 
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  # What the soul's consent holds against what it is now, for a failure's
+  # message.
+  defp consent_state(ctx, status) do
+    soul = "agent:local.aqua"
+    {:ok, [profile | _]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), soul)
+    {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
+
+    fresh =
+      with {:ok, input} <- Sanctum.Consent.ShapeDerivation.shape_input(ctx, soul),
+           do: Sanctum.Consent.ShapeDigest.compute(input)
+
+    inspect(
+      %{
+        status: status,
+        head: Map.take(head, [:revision, :scope, :shape_digest, :granted_via, :activation]),
+        live: Sanctum.Consent.ShapeDerivation.live_digest(ctx, soul),
+        fresh: fresh,
+        loaded: Opus.authority_for(ctx, :default, soul) |> elem(0),
+        refused: Opus.authority_for(ctx, :default, soul)
+      },
+      limit: :infinity,
+      printable_limit: 4000
+    )
   end
 end

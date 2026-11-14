@@ -947,16 +947,15 @@ defmodule PrismWeb.AquaLiveTest do
 
       refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
-      # What the provider answered, in its words: the brain's one `models`
-      # call, as the setup makes it.
-      assert {:error, sentence} = Aqua.models(ctx, ref)
-
+      # What the brain answered its one `models` call, in its words: the
+      # test catalyst answers every input `{"ran":true}`, no model list.
       assert view
              |> element(~s(#aqua-setup-brain-keyed [data-test="setup-answer"]))
              |> render()
              |> LazyHTML.from_fragment()
              |> LazyHTML.text()
-             |> String.trim() == "keyed answered: #{sentence}"
+             |> String.trim() ==
+               ~s(keyed answered: the catalyst answered something that is not the envelope: %{"ran" => true})
 
       {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
