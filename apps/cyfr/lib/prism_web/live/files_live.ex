@@ -33,6 +33,8 @@ defmodule PrismWeb.FilesLive do
   answer names unless the person names another, or declined; the files
   accepted here that are still landing, or that could not be delivered;
   and the offers sent from this athanor, each withdrawn while it waits.
+  An offer accepted here stays listed while the page is open, with the
+  folder its files landed in and a way there.
   Nothing of an offered file's bytes reaches the page before it lands.
   The page reads the offers again whenever the person's own topic
   (`Cyfr.Bus.file_offers/1`) says one of theirs moved.
@@ -71,6 +73,7 @@ defmodule PrismWeb.FilesLive do
      |> assign(:new_folders, MapSet.new())
      |> assign(:naming, nil)
      |> assign(:relocating, nil)
+     |> assign(:accepted, [])
      |> allow_upload(:files,
        accept: :any,
        max_entries: 10,
@@ -360,7 +363,11 @@ defmodule PrismWeb.FilesLive do
     case Ops.call_tool(socket, "file/accept", args) do
       {:ok, %{folder: folder}} ->
         {:noreply,
-         socket |> put_flash(:info, "Accepted into #{folder}") |> load_offers() |> load()}
+         socket
+         |> update(:accepted, &[accepted(socket.assigns, offer_id, folder) | &1])
+         |> put_flash(:info, "Accepted into #{folder}")
+         |> load_offers()
+         |> load()}
 
       {:error, reason} ->
         {:noreply, socket |> put_flash(:error, Ops.error_message(reason)) |> load_offers()}
@@ -378,6 +385,20 @@ defmodule PrismWeb.FilesLive do
       {:ok, _} -> socket |> put_flash(:info, done) |> load_offers()
       {:error, reason} -> socket |> put_flash(:error, Ops.error_message(reason)) |> load_offers()
     end
+  end
+
+  # What the Inbox keeps of an offer accepted here: its files, who sent
+  # it, by the name the page showed, and the folder they landed in.
+  defp accepted(%{offers: offers, people: people}, offer_id, folder) do
+    offer =
+      if is_map(offers), do: Enum.find(offers.awaiting, &(&1.offer_id == offer_id)), else: nil
+
+    %{
+      offer_id: offer_id,
+      folder: folder,
+      from: person(people, offer && offer.sender),
+      files: if(offer, do: offer.files, else: [])
+    }
   end
 
   # Only a file under `data/` is offered; the operation holds to it too.
@@ -1052,6 +1073,32 @@ defmodule PrismWeb.FilesLive do
                   Decline
                 </.button>
               </div>
+            </div>
+
+            <div
+              :for={offer <- @accepted}
+              id={"accepted-#{offer.offer_id}"}
+              class="space-y-2 rounded-lg border border-gray-800 p-3"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span class="text-gray-200">
+                  From {offer.from}, accepted into <span class="font-mono">{offer.folder}</span>
+                </span>
+                <.button
+                  variant="ghost"
+                  size="sm"
+                  phx-click="navigate"
+                  phx-value-path={String.trim_trailing(offer.folder, "/")}
+                >
+                  Open
+                </.button>
+              </div>
+              <ul class="space-y-0.5 text-xs text-gray-400">
+                <li :for={file <- offer.files} class="flex justify-between gap-2">
+                  <span class="font-mono">{file.filename}</span>
+                  <span>{size_label(file.size)}</span>
+                </li>
+              </ul>
             </div>
 
             <ul

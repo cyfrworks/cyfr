@@ -354,6 +354,14 @@ defmodule PrismWeb.FilesLiveTest do
       settled(view)
       refute has_element?(view, "#offer-#{offer_id}")
 
+      # The accepted offer stays listed with where it landed, and opens there.
+      shown = Enum.join(landed, "/") <> "/"
+      assert has_element?(view, "#accepted-#{offer_id}", "Sam Sender")
+      assert has_element?(view, "#accepted-#{offer_id}", shown)
+      assert has_element?(view, "#accepted-#{offer_id}", "q3.csv")
+      view |> element("#accepted-#{offer_id} button", "Open") |> render_click()
+      assert has_element?(view, "#files-entries button[phx-value-path='#{shown}q3.csv']")
+
       # Another offer, declined from the page.
       {:ok, %{offer_id: second}} =
         call(sender.ctx, "offer", %{"paths" => ["data/notes.txt"], "to" => ctx.user_id})
