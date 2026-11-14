@@ -405,24 +405,8 @@ defmodule Sanctum.ApiKey do
         {:error, :suspended}
 
       {:ok, row} ->
-        new_key = generate_key()
-        now = DateTime.utc_now() |> DateTime.to_iso8601()
-        {scope_list, tools} = split_stored(row.scope)
-
-        case Arca.ApiKeyStorage.rotate_key(
-               actor,
-               name,
-               hash_key(new_key),
-               String.slice(new_key, 0, 12),
-               lock: Sanctum.Issuance.lock(expectation),
-               verify: Sanctum.Issuance.verify(expectation)
-             ) do
-          :ok ->
-            {:ok,
-             %{api_key: new_key, name: name, scope: scope_list, tools: tools, rotated_at: now}}
-
-          error ->
-            error
+        with {:ok, {scope_list, tools}} <- stored_scope(row.scope) do
+          rotate_row(expectation, actor, name, scope_list, tools)
         end
 
       {:error, :not_found} ->
@@ -430,6 +414,26 @@ defmodule Sanctum.ApiKey do
 
       {:error, :database_error} ->
         {:error, :database_error}
+    end
+  end
+
+  defp rotate_row(expectation, actor, name, scope_list, tools) do
+    new_key = generate_key()
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    case Arca.ApiKeyStorage.rotate_key(
+           actor,
+           name,
+           hash_key(new_key),
+           String.slice(new_key, 0, 12),
+           lock: Sanctum.Issuance.lock(expectation),
+           verify: Sanctum.Issuance.verify(expectation)
+         ) do
+      :ok ->
+        {:ok, %{api_key: new_key, name: name, scope: scope_list, tools: tools, rotated_at: now}}
+
+      error ->
+        error
     end
   end
 
@@ -522,9 +526,11 @@ defmodule Sanctum.ApiKey do
     end
   end
 
+  # A stored scope no rule admits makes the key authenticate nothing.
   defp key_metadata(row) do
-    with {:ok, binding} <- key_binding(row) do
-      {:ok, row |> build_key_metadata() |> Map.put(:credential_binding, binding)}
+    with {:ok, {scope_list, _tools}} <- stored_scope(row.scope),
+         {:ok, binding} <- key_binding(row) do
+      {:ok, row |> build_key_metadata(scope_list) |> Map.put(:credential_binding, binding)}
     end
   end
 
@@ -606,9 +612,7 @@ defmodule Sanctum.ApiKey do
     )
   end
 
-  defp build_key_metadata(row) do
-    {scope_list, _tools} = split_stored(row.scope)
-
+  defp build_key_metadata(row, scope_list) do
     %{
       id: row.id,
       name: row.name,
@@ -689,9 +693,10 @@ defmodule Sanctum.ApiKey do
       when is_binary(api_key_id) and is_binary(reference) do
     case Arca.ApiKeyStorage.get_key_by_id(actor!(ctx), api_key_id) do
       {:ok, row} ->
-        case split_stored(row.scope) do
-          {_scope_list, []} -> :ok
-          {_scope_list, tools} -> named(tools, reference)
+        case stored_scope(row.scope) do
+          {:ok, {_scope_list, []}} -> :ok
+          {:ok, {_scope_list, tools}} -> named(tools, reference)
+          {:error, :invalid_key} -> {:error, :invalid_api_key}
         end
 
       {:error, :database_error} ->
@@ -713,16 +718,18 @@ defmodule Sanctum.ApiKey do
   # Permissions and tools
   # ============================================================================
 
-  # Anything but a list of known permission names is refused, never read
-  # as the default: a caller's mistake must not become permissions it did
-  # not ask for.
+  # Anything but a list of known permission names is refused whole,
+  # naming its first other entry, never read as the default: a caller's
+  # mistake must not become permissions it did not ask for. The entries
+  # outside the vocabulary are collected rather than searched for, so an
+  # entry that is itself nil cannot read as none found.
   defp permissions_of(absent) when absent in [nil, []],
     do: {:ok, @presets |> hd() |> elem(1)}
 
   defp permissions_of(scope) when is_list(scope) do
-    case Enum.find(scope, &(&1 not in @permission_names)) do
-      nil -> {:ok, Enum.uniq(scope)}
-      unknown -> {:error, {:unknown_permission, unknown}}
+    case Enum.reject(scope, &(&1 in @permission_names)) do
+      [] -> {:ok, Enum.uniq(scope)}
+      [unknown | _] -> {:error, {:unknown_permission, unknown}}
     end
   end
 
@@ -767,14 +774,26 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  # The stored list split into its permissions and its tools: a tool's
-  # name holds a `:`, which no permission does.
-  defp split_stored(json) do
-    json
-    |> decode_stored([], "scope")
-    |> List.wrap()
-    |> Enum.filter(&is_binary/1)
-    |> Enum.split_with(&(not String.contains?(&1, ":")))
+  # The stored list split into its permissions and its tools. Every entry
+  # is exactly a known permission or a tool's name as `tools_of/1` stores
+  # it; any other entry, or a column that is no list, makes the key
+  # invalid rather than being dropped, since a dropped entry could have
+  # been the one that narrowed it. The line names the column's size,
+  # never its bytes.
+  defp stored_scope(json) do
+    with {:ok, list} when is_list(list) <- Prima.Json.decode_stored(json, []),
+         {permissions, tools} = Enum.split_with(list, &(&1 in @permission_names)),
+         true <- Enum.all?(tools, &(versionless(&1) == {:ok, &1})) do
+      {:ok, {permissions, tools}}
+    else
+      _ ->
+        Logger.warning(
+          "[Sanctum.ApiKey] stored scope holds an entry no rule admits " <>
+            "(#{byte_size(json || "")} bytes)"
+        )
+
+        {:error, :invalid_key}
+    end
   end
 
   # ============================================================================
@@ -785,8 +804,15 @@ defmodule Sanctum.ApiKey do
 
   defp hash_key(key), do: :crypto.hash(:sha256, key)
 
+  # A key whose stored scope no rule admits authenticates nothing
+  # (`key_metadata/1`); it is still listed, so its person can revoke it,
+  # holding nothing.
   defp redact_key(row) do
-    {scope_list, tools} = split_stored(row.scope)
+    {scope_list, tools} =
+      case stored_scope(row.scope) do
+        {:ok, split} -> split
+        {:error, :invalid_key} -> {[], []}
+      end
 
     %{
       id: row.id,

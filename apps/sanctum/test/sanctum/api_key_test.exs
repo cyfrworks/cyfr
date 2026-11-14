@@ -43,14 +43,61 @@ defmodule Sanctum.ApiKeyTest do
       end
     end
 
-    test "a permission outside the key's own, the wildcard among them, makes no key",
+    test "an entry outside the key's permissions refuses the whole list, naming the entry",
          %{ctx: ctx} do
-      for scope <- [["*"], ["execute", "storage"], "execute"] do
-        assert {:error, {:unknown_permission, _}} =
+      for {scope, entry} <- [
+            {[nil, "*"], nil},
+            {[nil], nil},
+            {["*"], "*"},
+            {["execute", "*"], "*"},
+            {["execute", 7], 7},
+            {["execute", "storage"], "storage"},
+            {["execute", "catalyst:local.ship"], "catalyst:local.ship"},
+            {"execute", "execute"}
+          ] do
+        assert {:error, {:unknown_permission, ^entry}} =
                  create_key(ctx, %{name: "wide", scope: scope})
       end
 
       assert {:ok, []} = ApiKey.list(ctx)
+    end
+
+    test "a stored entry no rule admits makes the key invalid, never a narrower or wider one",
+         %{ctx: ctx} do
+      for {stored, n} <-
+            Enum.with_index([
+              ~s(["execute", "*"]),
+              ~s([null, "*"]),
+              ~s(["execute", 7]),
+              ~s(["execute", "c:local.ship"]),
+              ~s(["execute", "catalyst:local.ship:1.0.0"]),
+              ~s({"execute": true}),
+              "not json"
+            ]) do
+        name = "stored-#{n}"
+        {:ok, %{api_key: raw}} = create_key(ctx, %{name: name, tools: ["c:local.ship"]})
+        {:ok, %{id: id}} = ApiKey.get(ctx, name)
+
+        Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.id == ^id),
+          set: [scope: stored]
+        )
+
+        log = capture_log(fn -> assert {:error, :invalid_key} = ApiKey.validate(raw) end)
+        assert log =~ "stored scope holds an entry no rule admits"
+        refute log =~ stored
+
+        key_ctx = %{ctx | api_key_id: id}
+
+        capture_log(fn ->
+          assert {:error, :invalid_api_key} =
+                   ApiKey.admit_tool(key_ctx, "catalyst:local.ship:1.0.0")
+        end)
+
+        capture_log(fn ->
+          assert {:ok, %{scope: [], tools: []}} = ApiKey.get(ctx, name)
+          assert {:error, :invalid_key} = rotate_key(ctx, name)
+        end)
+      end
     end
 
     test "tools are kept by name without a version; a versioned or bare name makes no key",

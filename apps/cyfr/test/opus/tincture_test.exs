@@ -105,7 +105,7 @@ defmodule Opus.TinctureTest do
 
   # A profile of `kind` for the tincture `node`, with a head consent that
   # binds its edge to the dependency.
-  defp profile!(ctx, node, kind, status \\ :active) do
+  defp profile!(ctx, node, kind, status \\ :active, origins \\ [:interactive]) do
     id = "prof_#{kind}_#{System.unique_integer([:positive])}"
     {:ok, component, _ref} = Compendium.Component.resolve_component(ctx, node)
     {:ok, %{graph: activation}} = Compendium.Activation.resolve_verified(ctx, component)
@@ -120,6 +120,7 @@ defmodule Opus.TinctureTest do
           scope: :versionless,
           pinned_version: "",
           invoke_mode: if(kind == :public, do: :edge_only, else: :open_inert),
+          admitted_origins: origins,
           shape_digest: "sha256:shape-#{id}",
           commit_digest: "sha256:commit-#{id}",
           resolved_policy:
@@ -535,7 +536,7 @@ defmodule Opus.TinctureTest do
         Sanctum.TestContext.create_key(issuer, %{name: name, tools: tools})
 
       {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
-      key_ctx
+      Sanctum.TestContext.via(key_ctx, :mcp)
     end
 
     test "opens another tincture's route refused in the run's own words, and nothing runs",
@@ -556,20 +557,25 @@ defmodule Opus.TinctureTest do
       assert ScriptedWorker.calls() == []
     end
 
-    test "opens a listed tincture's route, which answers it as it answers the person",
+    test "opens a listed tincture's route, whose dependency runs on the person's grant",
          %{issuer: issuer} do
       node = tincture!(issuer, "tinc-listed")
-      _owner = profile!(issuer, node, :owner)
-      worker!()
+      # The grant admits the person's own calls and their keys' alike.
+      _owner = profile!(issuer, node, :owner, :active, [:interactive, :programmatic])
+      worker!([%{"answer" => 1}, %{"answer" => 2}])
+      ScriptedWorker.fresh_limits!(issuer, [@dep_ref])
       narrowed = key_ctx!(issuer, "listed", ["t:local.tinc-listed"])
 
-      # The key passes; what the route then answers stands on the person's
-      # grant of the tincture, so it is the person's own answer.
-      as_key = Opus.Tincture.invoke(narrowed, args("tinc-listed", :protected), :protected)
-      as_person = Opus.Tincture.invoke(issuer, args("tinc-listed", :protected), :protected)
+      # The person's own call runs, so the key's run below is the key's
+      # own success under the same grant, not a refusal both share.
+      assert {:ok, %{status: :completed}} =
+               Opus.Tincture.invoke(issuer, args("tinc-listed", :protected), :protected)
 
-      refute match?({:error, %Prima.Refusal{reason: :key_tool_not_named}}, as_key)
-      assert as_key == as_person
+      assert {:ok, %{status: :completed}} =
+               Opus.Tincture.invoke(narrowed, args("tinc-listed", :protected), :protected)
+
+      assert [%{authority: %{profile_kind: :owner}}, %{authority: %{profile_kind: :owner}}] =
+               ScriptedWorker.calls()
     end
   end
 
