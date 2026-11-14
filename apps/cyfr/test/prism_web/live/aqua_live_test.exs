@@ -134,6 +134,16 @@ defmodule PrismWeb.AquaLiveTest do
     :ok
   end
 
+  # The `models` calls traced for the brain `ref`, any version of it.
+  defp models_calls(ref, n \\ 0) do
+    receive do
+      {:trace, _pid, :call, {Aqua.Models, :ask_models, [_ctx, asked]}} ->
+        models_calls(ref, if(String.starts_with?(asked, ref), do: n + 1, else: n))
+    after
+      0 -> n
+    end
+  end
+
   # The id of each brain the setup lists, in its order.
   defp setup_rows(view) do
     view
@@ -933,6 +943,12 @@ defmodule PrismWeb.AquaLiveTest do
       |> render_click()
 
       render(view)
+
+      # Every `models` call the page makes from here on, counted where each
+      # one is made (`Aqua.Models`), for whichever path asks.
+      :erlang.trace(:all, true, [:call, {:tracer, self()}])
+      :erlang.trace_pattern({Aqua.Models, :ask_models, 2}, true, [:local])
+
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
 
       # The layer asks its sheet for the walk, then commits; the page then
@@ -956,6 +972,13 @@ defmodule PrismWeb.AquaLiveTest do
              |> LazyHTML.text()
              |> String.trim() ==
                ~s(keyed answered: the catalyst answered something that is not the envelope: %{"ran" => true})
+
+      # Connecting asked the brain once, and nothing asked it again: the
+      # page's mailbox is served before the count is read.
+      _ = :sys.get_state(view.pid)
+      :erlang.trace(:all, false, [:call])
+      :erlang.trace_pattern({Aqua.Models, :ask_models, 2}, false, [:local])
+      assert models_calls(ref) == 1
 
       {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)

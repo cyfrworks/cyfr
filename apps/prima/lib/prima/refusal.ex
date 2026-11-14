@@ -605,6 +605,12 @@ defmodule Prima.Refusal do
        "#{member}'s program is not signed in — sign it in on the Programs page, then connect " <>
          "it from its card on the AQUA page"}
 
+  defp row({:crew_unready, member, :consent_stale}) when is_binary(member),
+    do:
+      {:consent_required,
+       "#{member}'s brain changed since it was consented to — confirm the change from its " <>
+         "card on the AQUA page"}
+
   defp row({:crew_unready, member, :consent_damaged}) when is_binary(member),
     do:
       {:corrupt,

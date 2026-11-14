@@ -292,7 +292,13 @@ defmodule Aqua.Crew do
   under damaged, or the reads that would tell unavailable.
   """
   @type unready ::
-          :no_brain | :not_installed | :no_key | :not_signed_in | :consent_damaged | :unavailable
+          :no_brain
+          | :not_installed
+          | :no_key
+          | :not_signed_in
+          | :consent_stale
+          | :consent_damaged
+          | :unavailable
 
   @doc """
   Whether crew member `member` can take a job now: `:ok` when its brain
@@ -337,6 +343,7 @@ defmodule Aqua.Crew do
   defp unready({:missing, _}), do: :not_installed
   defp unready({:needs_key, _}), do: :no_key
   defp unready({:needs_sign_in, _}), do: :not_signed_in
+  defp unready({:consent_stale, _}), do: :consent_stale
   defp unready({:consent_damaged, _}), do: :consent_damaged
   defp unready({_unread, _}), do: :unavailable
 

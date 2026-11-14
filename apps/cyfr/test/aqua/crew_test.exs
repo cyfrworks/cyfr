@@ -293,6 +293,30 @@ defmodule Aqua.CrewTest do
     assert pending_records(ctx) == []
   end
 
+  test "a member whose brain changed and was not confirmed is refused with what to do: confirm it",
+       %{ctx: ctx, room: room} do
+    # The planner's brain moves to another model; its consent is not given
+    # again.
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("planner"),
+        "---\ntitle: planner\ndescription: Plans.\navoid: Building.\n" <>
+          "catalyst_ref: #{@model}\nmodel: claude-opus-5-5\n---\n\nYou are the planner.\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+    assert {:error, {:crew_unready, "planner", :consent_stale} = refusal} =
+             Runner.send_message(ctx, room.id, "@planner look into this")
+
+    assert Aqua.Ops.render_refusal(refusal) ==
+             "planner's brain changed since it was consented to — confirm the change from its " <>
+               "card on the AQUA page"
+
+    assert rows(ctx, room.id) == []
+  end
+
   test "the soul's crew.ask of a member that is not ready is refused with why, and asks nobody",
        %{ctx: ctx, room: room} do
     asks =

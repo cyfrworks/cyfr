@@ -235,21 +235,26 @@ defmodule PrismWeb.AquaLive do
     {:noreply, socket}
   end
 
+  # A brain's grant is answered by its one `models` call, which also fills
+  # the picker for that brain (`answered/3`): the catalogue is not asked
+  # again, which would ask the same brain a second time.
   defp granted(socket, ref) do
     PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
 
     socket =
       case ref do
-        "formula:local." <> name -> put_flash(socket, :info, "#{name} consented again.")
-        "agent:local." <> name -> put_flash(socket, :info, "#{name} consented again.")
+        "formula:local." <> name -> consented(socket, name)
+        "agent:local." <> name -> consented(socket, name)
         brain -> ask_models(socket, brain)
       end
 
     socket
     |> load_section(:agents)
     |> load_section(:setup)
-    |> load_models()
   end
+
+  defp consented(socket, name),
+    do: socket |> put_flash(:info, "#{name} consented again.") |> load_models()
 
   # Connecting a brain makes one `models` call, run off the page's process,
   # and shows what the provider answered: a key that is bound is not yet a
@@ -274,13 +279,29 @@ defmodule PrismWeb.AquaLive do
     socket =
       case result do
         {:ok, ids} ->
-          put_flash(socket, :info, "#{brain_name(ref)} answered with #{count(ids)}.")
+          provider = provider_of(socket, ref)
+
+          socket
+          |> put_flash(:info, "#{brain_name(ref)} answered with #{count(ids)}.")
+          |> update(:models_by_provider, &Map.put(&1, provider, ids))
+          |> update(:catalyst_refs, &Map.put(&1, provider, ref))
 
         {:error, sentence} ->
           put_flash(socket, :error, "#{brain_name(ref)} answered: #{sentence}")
       end
 
     {:noreply, update(socket, :answers, &Map.put(&1, ref, result))}
+  end
+
+  # The picker's name for the brain `ref`: the provider the setup lists it
+  # under, else the catalyst's name.
+  defp provider_of(socket, ref) do
+    with {:ok, providers} <- socket.assigns.providers,
+         %{provider: provider} <- Enum.find(providers, &(&1.ref == ref)) do
+      provider
+    else
+      _unlisted -> brain_name(ref)
+    end
   end
 
   defp count([_one]), do: "one model"
