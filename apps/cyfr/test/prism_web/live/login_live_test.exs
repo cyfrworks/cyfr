@@ -632,9 +632,41 @@ defmodule PrismWeb.LoginLiveTest do
       view |> element("[data-test=terms-changed]") |> render()
     end
 
-    defp continued!(view) do
-      view |> element("[data-test=terms-continue]") |> render_click()
+    defp continued!(view, params \\ %{}) do
+      view |> element("[data-test=terms-continue]") |> render_click(params)
       assert {"/", _flash} = assert_redirect(view, @answered_ms)
+    end
+
+    # A registry whose terms' version read is held until the test sends
+    # the stub `:release`; the test is told `{:legal_held, stub}`.
+    defp held_terms(asked, version) do
+      test = self()
+
+      terms_registry(asked.account, fn ->
+        send(test, {:legal_held, self()})
+
+        receive do
+          :release -> :ok
+        end
+
+        legal_answer(version)
+      end)
+    end
+
+    # The task reading the terms for a check: the child of the page's task
+    # supervisor called by another of its children.
+    defp read_task do
+      children = Task.Supervisor.children(Prism.TaskSupervisor)
+
+      Enum.find(children, fn pid ->
+        case Process.info(pid, :dictionary) do
+          {:dictionary, dictionary} ->
+            Enum.any?(Keyword.get(dictionary, :"$callers", []), &(&1 in children))
+
+          nil ->
+            false
+        end
+      end)
     end
 
     defp text(html),
@@ -794,7 +826,8 @@ defmodule PrismWeb.LoginLiveTest do
       assert seen(asked.ctx.user_id) == "2026-09"
     end
 
-    test "another person's recorded version is untouched", %{conn: conn, dir: dir} do
+    test "Continue records the held version for the held person and goes where the request said, whatever it is sent",
+         %{conn: conn, dir: dir} do
       asked = asked!(conn, dir, %{"action" => "sync"})
       other = Sanctum.Test.RegistryStub.person!()
 
@@ -806,9 +839,84 @@ defmodule PrismWeb.LoginLiveTest do
 
       view = synced!(asked)
       assert text(notice!(view)) =~ "They are now version 2026-11,"
-      continued!(view)
+
+      continued!(view, %{
+        "user_id" => other.id,
+        "version" => "forged",
+        "back" => "https://elsewhere.example/"
+      })
+
       assert seen(asked.ctx.user_id) == "2026-11"
       assert seen(other.id) == "2026-01"
+    end
+
+    test "Continue after the session ended elsewhere records nothing and goes to the sign-in",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-11,"
+      assert {:ok, count} = Sanctum.Session.revoke_all_for_user(asked.ctx.user_id)
+      assert count > 0
+
+      view |> element("[data-test=terms-continue]") |> render_click()
+      assert {"/login", _flash} = assert_redirect(view, @answered_ms)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "a person with no version recorded is given no version the rule refuses",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answers = answering(asked)
+
+      for version <- ["", "<b>2026-11</b>", String.duplicate("a", 65)] do
+        Agent.update(answers, fn _ -> legal_answer(version) end)
+        went_back!(synced!(asked))
+        assert seen(asked.ctx.user_id) == nil, "recorded #{inspect(version)}"
+      end
+    end
+
+    test "a read that fails while it is held leaves the act's success and records nothing",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_terms(asked, "2026-11")
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert_receive {:legal_held, stub}, @answered_ms
+      reader = read_task()
+      assert is_pid(reader)
+
+      try do
+        ExUnit.CaptureLog.capture_log(fn -> Process.exit(reader, :read_failed) end)
+        went_back!(view)
+      after
+        send(stub, :release)
+      end
+
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "a version answered past the read's bound shows the act's success and records nothing",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_terms(asked, "2026-11")
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert_receive {:legal_held, stub}, @answered_ms
+
+      try do
+        went_back!(view)
+      after
+        send(stub, :release)
+      end
+
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
     end
   end
 

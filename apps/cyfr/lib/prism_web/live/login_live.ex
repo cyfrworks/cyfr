@@ -53,7 +53,12 @@ defmodule PrismWeb.LoginLive do
   digits, `.`, `_` and `-`, starting with a letter or digit, and
   `updated_at` an RFC 3339 time in UTC. Any other answer, or none, is
   unreadable: nothing is said or recorded, and nothing in the read can
-  change what the act did.
+  change what the act did. The read runs in a task of its own bounded
+  at 3 seconds; one that fails in any way or answers late says and records
+  nothing, and the act's success shows. Continue records only for the
+  person whose session still stands, checked again as an answer is
+  (`session_caller/1`); a session ended meanwhile records nothing and
+  goes to the sign-in.
 
   A CYFR with no person yet offers nothing but the way to set up.
   """
@@ -76,6 +81,9 @@ defmodule PrismWeb.LoginLive do
   @unavailable "The server could not sign you in just now. Try again."
   @rate_limited "Too many sign-ins from here. Try again in a minute."
   # A terms version the account service names: the module doc's rule.
+  # How long the act's success waits for the terms' read before it shows
+  # without a notice.
+  @terms_read_ms 3_000
   @terms_version ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/
 
   @impl true
@@ -118,9 +126,16 @@ defmodule PrismWeb.LoginLive do
   end
 
   @impl true
+  # Only what the page holds is used; the event's parameters are not read.
   def handle_event("terms_seen", _params, %{assigns: %{terms_changed: %{} = notice}} = socket) do
-    record_seen(notice.user_id, notice.version)
-    {:noreply, redirect(socket, to: notice.back)}
+    case session_caller(socket.assigns.bindings) do
+      {:ok, %{user_id: user_id}} when user_id == notice.user_id ->
+        record_seen(user_id, notice.version)
+        {:noreply, redirect(socket, to: notice.back)}
+
+      _ended ->
+        {:noreply, redirect(socket, to: ~p"/login")}
+    end
   end
 
   def handle_event("terms_seen", _params, socket), do: {:noreply, socket}
@@ -243,10 +258,30 @@ defmodule PrismWeb.LoginLive do
   # The account service's current terms held to the version this person
   # was last shown (the module doc): `%{user_id, version, changed_on,
   # read}` when it is one they were not shown, or nil. The act is done by
-  # now, so this answers only "show this" or "show nothing": an answer it
-  # cannot read, a store that does not answer, or anything raised in the
-  # read shows nothing.
+  # now, so this answers only "show this" or "show nothing": the read runs
+  # in its own task, and a task that raises, throws, exits or outlives
+  # `@terms_read_ms` shows nothing.
   defp terms_notice(ctx) do
+    # Not linked to this process or the page: the task's end reaches here
+    # only as its monitor's message. Past the bound it is killed, and the
+    # shutdown takes its reply and monitor message from the mailbox, so a
+    # late answer is dropped, never read as anything else.
+    task = Task.Supervisor.async_nolink(Prism.TaskSupervisor, fn -> read_terms(ctx) end)
+
+    case Task.yield(task, @terms_read_ms) do
+      {:ok, notice} ->
+        notice
+
+      {:exit, _reason} ->
+        nil
+
+      nil ->
+        Task.shutdown(task, :brutal_kill)
+        nil
+    end
+  end
+
+  defp read_terms(ctx) do
     with {:ok, answer} <- Ops.call_tool(ctx, "registry/legal_version", %{}),
          {:ok, version, changed} <- terms(answer),
          {:ok, user} <- Sanctum.Tenancy.Users.get(ctx.user_id) do
@@ -264,16 +299,6 @@ defmodule PrismWeb.LoginLive do
     else
       _unread -> nil
     end
-  rescue
-    exception ->
-      Logger.warning(
-        "[LoginLive] the account service's terms could not be read: " <>
-          Prima.LoggerContext.shape(exception)
-      )
-
-      nil
-  catch
-    :exit, _reason -> nil
   end
 
   defp terms(%{"policy_version" => version, "updated_at" => at})
