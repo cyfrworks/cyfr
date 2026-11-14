@@ -267,24 +267,31 @@ defmodule Arca.Users do
   # The person's row. One that meets the namespace's unique index, a name
   # taken since it was read free, is written without it: the named insert
   # does nothing on that index alone (`namespace_taken/0`), which neither
-  # raises nor aborts the mint's transaction on either adapter, and a row
-  # it did not write is written again unnamed. Any other constraint, the
-  # id's among them, still refuses the insert.
+  # raises nor aborts the mint's transaction on either adapter, and answers
+  # how many rows it wrote, so a row it did not write is written again
+  # unnamed. An id already held, read under the mints' order, goes to the
+  # plain insert, whose unique index answers the conflict it always was.
   defp person_row(admitted, %{namespace: name} = user_attrs) when is_binary(name) do
-    named =
-      admitted
-      |> born()
-      |> User.changeset(user_attrs)
-      |> Arca.Repo.insert(on_conflict: :nothing, conflict_target: namespace_taken())
+    changeset = admitted |> born() |> User.changeset(user_attrs)
+    unnamed = Map.delete(user_attrs, :namespace)
 
-    case named do
-      {:ok, %User{id: id} = user} ->
-        if Arca.Repo.exists?(from(u in User, where: u.id == ^id)),
-          do: {:ok, user},
-          else: person_row(admitted, Map.delete(user_attrs, :namespace))
+    with {:ok, person} <- Ecto.Changeset.apply_action(changeset, :insert) do
+      if Arca.Repo.exists?(from(u in User, where: u.id == ^person.id)) do
+        person_row(admitted, unnamed)
+      else
+        fields = person |> Map.from_struct() |> Map.take(User.__schema__(:fields))
 
-      {:error, changeset} ->
-        {:error, refusal(changeset)}
+        case Arca.Repo.insert_all(User, [fields],
+               on_conflict: :nothing,
+               conflict_target: namespace_taken(),
+               returning: true
+             ) do
+          {1, [user]} -> {:ok, user}
+          {0, _none} -> person_row(admitted, unnamed)
+        end
+      end
+    else
+      {:error, changeset} -> {:error, refusal(changeset)}
     end
   end
 
