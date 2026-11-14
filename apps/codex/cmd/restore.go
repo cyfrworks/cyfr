@@ -868,25 +868,14 @@ func (r *restorer) probeRestoredPostgres() error {
 }
 
 // refuseUnwritableProject refuses, before anything stops, a restore this
-// process could not write the project's own places for: the project
-// directory, each scaffold file's directory and every directory of the
-// shipped storage root, ./data, which the image's entrypoint hands to the
-// image's user at every start. On native Linux a person who is not root
-// learns there that the restore needs sudo. refuseUnwritableParts checks
-// again, once the restored configuration names every place.
+// process could not write the places of: putBackPlaces for the layout the
+// shipped docker-compose.yml gives the snapshot (shippedLayout), whose
+// storage root the image's entrypoint hands to the image's user at every
+// start. On native Linux a person who is not root learns there that the
+// restore needs sudo. refuseUnwritableParts asks again, of the same list
+// for the layout the restored configuration gives.
 func refuseUnwritableProject(snap *snapshotFiles) error {
-	dirs := snap.projectPlaces()
-	err := filepath.WalkDir(storageRoot, func(p string, d fs.DirEntry, err error) error {
-		switch {
-		case errors.Is(err, fs.ErrNotExist) && p == storageRoot:
-			return nil
-		case err != nil:
-			return err
-		case d.IsDir():
-			dirs = append(dirs, p)
-		}
-		return nil
-	})
+	dirs, err := putBackPlaces(snap, shippedLayout(snap))
 	if err == nil {
 		err = firstUnwritable(dirs)
 	}
@@ -896,23 +885,76 @@ func refuseUnwritableProject(snap *snapshotFiles) error {
 	return nil
 }
 
-// storageRoot is the storage root the shipped docker-compose.yml binds.
+// putBackLayout is where the put-back writes besides the project's own
+// places: the storage root's mounts, shallower first, for a snapshot with
+// local storage, and the SQLite file for a SQLite snapshot ("" for none).
+type putBackLayout struct {
+	mounts     []storageMount
+	sqliteFile string
+}
+
+// storageRoot is the storage root the shipped docker-compose.yml binds,
+// and the SQLite file's directory there.
 const storageRoot = "data"
 
-// projectPlaces are the directories the put-back writes in that the
-// snapshot alone names: the project directory (publishCompose and the
-// barrier's lowering) and each scaffold file's directory, where the
-// snapshot or the project holds the file.
-func (s *snapshotFiles) projectPlaces() []string {
+// shippedLayout is the layout the shipped docker-compose.yml gives the
+// snapshot: ./data the one storage mount for local storage, and
+// data/cyfr.db the SQLite file.
+func shippedLayout(snap *snapshotFiles) putBackLayout {
+	var l putBackLayout
+	if snap.manifest.StorageAdapter == "local" {
+		l.mounts = []storageMount{{host: storageRoot, dir: true}}
+	}
+	if snap.database == "sqlite" {
+		l.sqliteFile = filepath.Join(storageRoot, "cyfr.db")
+	}
+	return l
+}
+
+// putBackPlaces are the directories putParts writes or removes in for the
+// layout l, in its order: the project directory (publishCompose and the
+// barrier's lowering), each scaffold file's directory where the snapshot
+// or the project holds the file, each storage mount's directory and every
+// directory clearDir removes or empties under it, and the SQLite file's
+// directory.
+func putBackPlaces(snap *snapshotFiles, l putBackLayout) ([]string, error) {
 	dirs := []string{"."}
-	for _, name := range s.manifest.Scaffold {
-		_, err := os.Lstat(filepath.Join(s.dir, "scaffold", name))
+	for _, name := range snap.manifest.Scaffold {
+		_, err := os.Lstat(filepath.Join(snap.dir, "scaffold", name))
 		if _, held := os.Lstat(name); errors.Is(err, fs.ErrNotExist) && errors.Is(held, fs.ErrNotExist) {
 			continue
 		}
 		dirs = append(dirs, filepath.Dir(name))
 	}
-	return dirs
+	keep := sqliteKeep(l.sqliteFile)
+	for i, m := range l.mounts {
+		if !m.dir {
+			dirs = append(dirs, filepath.Dir(m.host))
+			continue
+		}
+		covered, _ := mountCover(l.mounts, i, snap.path("storage"), keep)
+		err := filepath.WalkDir(m.host, func(p string, d fs.DirEntry, err error) error {
+			switch {
+			case errors.Is(err, fs.ErrNotExist) && p == m.host:
+				dirs = append(dirs, m.host)
+				return nil
+			case err != nil:
+				return err
+			case covered[p] && d.IsDir():
+				return fs.SkipDir
+			case d.IsDir():
+				dirs = append(dirs, p)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if l.sqliteFile != "" {
+		dirs = append(dirs, filepath.Dir(l.sqliteFile))
+	}
+	return dirs, nil
 }
 
 // firstUnwritable answers the first of dirs this process cannot create,
@@ -934,47 +976,25 @@ func firstUnwritable(dirs []string) error {
 }
 
 // refuseUnwritableParts refuses, before any part is put back, a place
-// the put-back writes or removes in that this process cannot: the image's
-// entrypoint hands the storage root to the image's user at every start,
-// so on native Linux a person who is not root cannot clear or rename what
-// it holds. The places are putParts's, in its order, so that once this
-// passes no later step fails for a permission: the snapshot's own
-// (projectPlaces), each storage mount's directory and every directory
-// clearDir removes or empties under it, and the SQLite file's directory.
+// the put-back writes or removes in that this process cannot (putBackPlaces
+// for the restored configuration's layout): the image's entrypoint hands
+// the storage root to the image's user at every start, so on native Linux
+// a person who is not root cannot clear or rename what it holds. Once this
+// passes no later step fails for a permission.
 func (r *restorer) refuseUnwritableParts() error {
 	c := r.config
-	dirs := r.snap.projectPlaces()
+	var l putBackLayout
 	if c.storage == "local" {
-		keep := sqliteKeep(c.sqliteFile)
-		for i, m := range c.storageMounts {
-			if !m.dir {
-				dirs = append(dirs, filepath.Dir(m.host))
-				continue
-			}
-			covered, _ := mountCover(c.storageMounts, i, r.snap.path("storage"), keep)
-			err := filepath.WalkDir(m.host, func(p string, d fs.DirEntry, err error) error {
-				switch {
-				case errors.Is(err, fs.ErrNotExist) && p == m.host:
-					dirs = append(dirs, m.host)
-					return nil
-				case err != nil:
-					return err
-				case covered[p] && d.IsDir():
-					return fs.SkipDir
-				case d.IsDir():
-					dirs = append(dirs, p)
-				}
-				return nil
-			})
-			if err != nil {
-				return unwritable(err)
-			}
-		}
+		l.mounts = c.storageMounts
 	}
 	if c.adapter == "sqlite" {
-		dirs = append(dirs, filepath.Dir(c.sqliteFile))
+		l.sqliteFile = c.sqliteFile
 	}
-	if err := firstUnwritable(dirs); err != nil {
+	dirs, err := putBackPlaces(r.snap, l)
+	if err == nil {
+		err = firstUnwritable(dirs)
+	}
+	if err != nil {
 		return unwritable(err)
 	}
 	return nil

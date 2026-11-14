@@ -467,6 +467,24 @@ func TestRestoreRefusesAScaffoldDirectoryItCannotWrite(t *testing.T) {
 	}
 }
 
+// A PostgreSQL restore with S3 storage writes nothing under ./data, so a
+// ./data this person cannot write refuses nothing: the check at the start
+// asks only the places this restore writes.
+func TestRestoreAsksOnlyThePlacesItWrites(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("every directory is writable to root, and Windows has no such mode")
+	}
+	r := newRestoreScenario(t, shippedCompose(t), map[string]string{"CYFR_STORAGE": "s3", "CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL}, nil)
+	data := filepath.Join(r.project, "data")
+	if err := os.Chmod(data, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(data, 0o755) })
+	if out, err := r.restore(true); err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+}
+
 // refusedAtTheStart fails unless the restore refuses as this person, for
 // the place dir, with nothing changed: no docker call or engine step, and
 // docker-compose.yml and .env as they were.
