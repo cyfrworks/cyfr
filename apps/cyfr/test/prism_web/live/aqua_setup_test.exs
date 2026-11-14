@@ -142,7 +142,7 @@ defmodule PrismWeb.AquaSetupTest do
 
     # The soul's brain is connected through the key it was shared.
     status = Aqua.model_status(ctx, [%{"name" => "aqua", "catalyst_ref" => Fixture.ref()}])
-    assert %{"aqua" => {:ready, _}} = status, consent_state(ctx, status)
+    assert match?(%{"aqua" => {:ready, _}}, status), consent_state(ctx, status)
 
     # Aqua answers.
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
