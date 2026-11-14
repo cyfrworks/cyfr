@@ -229,7 +229,9 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       Prima.Test.Wait.wait_until(
         fn ->
           render(view) =~
-            "A copyright claim needs the report sheet's three acknowledgements ticked before it is sent."
+            html_escape(
+              "A copyright claim needs the report sheet's three acknowledgements ticked before it is sent."
+            )
         end,
         @answered_ms,
         "the refusal to reach the page"

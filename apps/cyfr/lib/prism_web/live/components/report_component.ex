@@ -202,6 +202,7 @@ defmodule PrismWeb.ReportComponent do
           </div>
 
           <form
+            id={"#{@id}-form"}
             phx-change="edit_report"
             phx-submit="submit_report"
             phx-target={@myself}
