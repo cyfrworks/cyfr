@@ -20,7 +20,7 @@ defmodule Emissary.External.InChainProbeTest do
 
   alias Emissary.External.Proxy
 
-  @tool "leak:probe__echo_env"
+  @tool "leak:echo_env"
   @arguments %{"name" => "PROBE_SECRET", "stderr" => true}
 
   # The server process an mcp program's calls reach, registered where the
@@ -73,13 +73,8 @@ defmodule Emissary.External.InChainProbeTest do
             "transport" => "program",
             "mark" => "mcp",
             "console" => true,
-            "backends" => [
-              %{
-                "name" => "probe",
-                "command" => "node /probe/probe-backend.mjs",
-                "env" => %{"PROBE_SECRET" => "vault:probe-canary"}
-              }
-            ]
+            "command" => "node /probe/probe-backend.mjs",
+            "env" => %{"PROBE_SECRET" => "vault:probe-canary"}
           })
       })
 
@@ -94,7 +89,7 @@ defmodule Emissary.External.InChainProbeTest do
 
     assert %{"ok" => %{"content" => [%{"text" => text}]}} = answer
     assert Jason.decode!(text) == %{"value" => "[REDACTED]"}
-    assert_received {:called, "probe__echo_env", %{"name" => "PROBE_SECRET"}}
+    assert_received {:called, "echo_env", %{"name" => "PROBE_SECRET"}}
 
     stored = stored(token)
 
@@ -134,7 +129,7 @@ defmodule Emissary.External.InChainProbeTest do
     assert {:error, %Prima.Refusal{reason: :missing_grant, message: message}} =
              Proxy.dispatch(target, ctx, @arguments, :in_chain)
 
-    assert message =~ "Call to probe__echo_env on server 'leak' not admitted: "
+    assert message =~ "Call to echo_env on server 'leak' not admitted: "
     refute_received {:called, _, _}
     assert %{"executions" => [], "payloads" => []} = stored(token)
   end

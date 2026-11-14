@@ -18,9 +18,10 @@ defmodule Arca.McpServerStorage do
   - transport: `"http"` or `"program"`
   - mark: a program's `"mcp"` or `"driven"`; nil for http
   - url: MCP server endpoint URL (http); nil for a program
-  - home, memory_bytes, home_max_bytes, login_command, login_entry_id,
-    hosts: a program's settings (`Arca.Schemas.McpServer`)
-  - config_json: JSON text with headers, timeout_ms, backends, etc.
+  - home, memory_bytes, home_max_bytes, login_command, hosts: a program's
+    settings (`Arca.Schemas.McpServer`)
+  - config_json: JSON text with headers (http), command and env (program),
+    timeout_ms, etc.
   - enabled: Whether the server is active
   - epoch: 1 on insert, one higher after every write to the row
   - revision: 0 on insert, one higher after every write to the row — the
@@ -53,13 +54,12 @@ defmodule Arca.McpServerStorage do
     :memory_bytes,
     :home_max_bytes,
     :login_command,
-    :login_entry_id,
     :hosts
   ]
 
   @doc """
-  The decoded `config_json` of a stored row — headers, `timeout_ms`,
-  `tool_patterns`, `backends`.
+  The decoded `config_json` of a stored row — headers, `command`, `env`,
+  `timeout_ms`, `tool_patterns`.
 
   `insert/2` stores the string verbatim; this is the other half of that, and
   the one place it is read. A row whose JSON is absent or malformed reads as
@@ -360,6 +360,48 @@ defmodule Arca.McpServerStorage do
       {:ok, fenced}
     end)
     |> Arca.Data.project()
+  end
+
+  @doc """
+  Where the rows `ids` stand, whatever athanor holds each, for the
+  programs controller's sweep of the kept homes a box holds: each id that
+  names a row maps to its athanor, whether it is a program with a kept
+  home, and whether its athanor is archived. An id that names no row is
+  absent. Nothing of a row's definition is read.
+  """
+  @spec standing([String.t()]) ::
+          {:ok,
+           %{
+             String.t() => %{
+               athanor_id: String.t(),
+               kept: boolean(),
+               athanor_archived: boolean()
+             }
+           }}
+          | {:error, :database_error}
+  # arca:unscoped-ok a box names its kept homes by row id alone, so the sweep reads each id's own athanor back and answers no definition.
+  def standing(ids) when is_list(ids) do
+    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.standing", fn ->
+      rows =
+        Arca.Repo.all(
+          from(s in McpServer,
+            left_join: a in Athanor,
+            on: a.id == s.athanor_id,
+            where: s.id in ^Enum.uniq(ids),
+            select: {s.id, s.athanor_id, s.transport, s.home, a.status}
+          )
+        )
+
+      {:ok,
+       Map.new(rows, fn {id, athanor_id, transport, home, athanor_status} ->
+         {id,
+          %{
+            athanor_id: athanor_id,
+            kept: transport == "program" and home == "kept",
+            athanor_archived: athanor_status == "archived"
+          }}
+       end)}
+    end)
   end
 
   # arca:unscoped-ok every caller hands in a query already scoped with where_tenant/2.

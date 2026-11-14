@@ -5,8 +5,8 @@ defmodule Sanctum.ToolServerDigest do
   @moduledoc """
   External MCP configuration digest pinned by a consent tool_server resource.
 
-  `JCS({id, transport, mark, url, enabled, header_templates, backends,
-  program})` over what decides where the server's calls go and which
+  `JCS({id, transport, mark, url, enabled, header_templates, command,
+  env_templates, program})` over what decides where the server's calls go and which
   credentials ride along, never resolved values: rotating a referenced
   vault entry must not move the digest, while each of these must, so a
   definition that reaches more no longer matches a grant made for the old
@@ -19,18 +19,19 @@ defmodule Sanctum.ToolServerDigest do
       its credentials elsewhere). A header added, removed, pointed at
       another entry or given another literal moves the digest; a vault
       entry rotated in place does not;
-    * a program's backends (each one's name, command and env templates)
-      and its `program` member, everything else that decides what it is
-      and what it reaches, each setting it holds: its hosts (the set of
-      names, in one order; absent, every public host), its folder's
-      identity (its home and the login entry a kept home is), its memory
-      and disk bounds and its sign-in command;
+    * a program's command and its env, every name with its template
+      (`env_templates`), a literal by its value as a header's is, and its
+      `program` member, everything else that decides what it is and what
+      it reaches, each setting it holds: its hosts (the set of names, in
+      one order; absent, every public host), its home (a kept home is the
+      row's own folder, named by the row's id), its memory and disk bounds
+      and its sign-in command;
     * the row's id, so a row deleted and made again under its name does.
 
   The server's tool patterns and its timeout are left out: a grant
   carries its own patterns and only ever reaches their intersection with
-  the server's (`tool_patterns/1`). An http row
-  has neither a mark nor a program; a program's `url` is the empty string.
+  the server's (`tool_patterns/1`). An http row has no mark, command, env
+  or program; a program's `url` is the empty string.
   Only a tool server has a digest: an `http` row or a program marked
   `mcp`; a `driven` program offers no tools.
 
@@ -56,31 +57,32 @@ defmodule Sanctum.ToolServerDigest do
           url: url,
           enabled: enabled,
           headers: headers,
-          backends: backends,
+          command: command,
+          env: env,
           program: program
         } = server
       )
       when is_binary(id) and
-             ((transport == "http" and is_nil(mark)) or (transport == "program" and mark == "mcp")) and
-             (is_binary(url) or is_nil(url)) and is_boolean(enabled) and is_map(headers) and
-             is_list(backends) and
-             ((transport == "http" and is_nil(program)) or
-                (transport == "program" and is_map(program))) do
-    with {:ok, backends} <- backend_templates(backends),
-         :ok <- readable_hosts(program) do
-      JCS.hash(
-        %{
-          "id" => id,
-          "transport" => transport,
-          "url" => url || "",
-          "enabled" => enabled,
-          "header_templates" => templates(headers),
-          "backends" => backends
-        }
-        |> with_program(mark, program)
-      )
-    else
-      :error -> {:error, {:invalid_server_config, server}}
+             ((transport == "http" and is_nil(mark) and is_nil(command) and is_nil(env) and
+                 is_nil(program)) or
+                (transport == "program" and mark == "mcp" and is_binary(command) and is_map(env) and
+                   is_map(program))) and
+             (is_binary(url) or is_nil(url)) and is_boolean(enabled) and is_map(headers) do
+    case readable_hosts(program) do
+      :ok ->
+        JCS.hash(
+          %{
+            "id" => id,
+            "transport" => transport,
+            "url" => url || "",
+            "enabled" => enabled,
+            "header_templates" => templates(headers)
+          }
+          |> with_program(mark, command, env, program)
+        )
+
+      :error ->
+        {:error, {:invalid_server_config, server}}
     end
   end
 
@@ -92,17 +94,23 @@ defmodule Sanctum.ToolServerDigest do
 
   defp readable_hosts(_program), do: :ok
 
-  # JCS takes no null, so an absent member is left out: a program's mark and
-  # program members are present, each setting it has not left absent.
-  defp with_program(document, nil, nil), do: document
+  # JCS takes no null, so an absent member is left out: a program's mark,
+  # command, env and program members are present, each setting it has not
+  # left absent.
+  defp with_program(document, nil, nil, nil, nil), do: document
 
-  defp with_program(document, mark, program) do
+  defp with_program(document, mark, command, env, program) do
     program =
       program
       |> Map.update("hosts", nil, &host_set/1)
       |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
-    Map.merge(document, %{"mark" => mark, "program" => program})
+    Map.merge(document, %{
+      "mark" => mark,
+      "command" => command,
+      "env_templates" => templates(env),
+      "program" => program
+    })
   end
 
   # What a program may reach is a set: its hosts in one order, each once.
@@ -116,25 +124,6 @@ defmodule Sanctum.ToolServerDigest do
       %{"name" => to_string(name), "template" => to_string(template)}
     end)
     |> Enum.sort_by(& &1["name"])
-  end
-
-  defp backend_templates(backends) do
-    backends
-    |> Enum.reduce_while({:ok, []}, fn
-      %{"name" => name, "command" => command} = backend, {:ok, acc}
-      when is_binary(name) and is_binary(command) ->
-        env = if is_map(backend["env"]), do: backend["env"], else: %{}
-
-        entry = %{"name" => name, "command" => command, "env_templates" => templates(env)}
-        {:cont, {:ok, [entry | acc]}}
-
-      _other, _acc ->
-        {:halt, :error}
-    end)
-    |> case do
-      {:ok, entries} -> {:ok, Enum.sort_by(entries, & &1["name"])}
-      :error -> :error
-    end
   end
 
   @doc """
@@ -161,7 +150,8 @@ defmodule Sanctum.ToolServerDigest do
       url: server.url,
       enabled: server.enabled == true,
       headers: config["headers"] || %{},
-      backends: config["backends"] || [],
+      command: if(server.transport == "program", do: config["command"]),
+      env: if(server.transport == "program", do: config["env"] || %{}),
       program: program(server)
     })
   end
@@ -173,7 +163,6 @@ defmodule Sanctum.ToolServerDigest do
     %{
       "hosts" => stored_hosts(Map.get(server, :hosts)),
       "home" => Map.get(server, :home),
-      "login_entry" => Map.get(server, :login_entry_id),
       "memory_bytes" => Map.get(server, :memory_bytes),
       "home_max_bytes" => Map.get(server, :home_max_bytes),
       "login_command" => Map.get(server, :login_command)

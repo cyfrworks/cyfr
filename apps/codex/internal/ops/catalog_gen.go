@@ -2121,8 +2121,10 @@ func (args McpServersCreateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersCreateArgsConfig struct {
-	// A program's backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
-	Backends Field[[]McpServersCreateArgsConfigBackendsItem] `json:"backends,omitzero"`
+	// A program's command, run by a shell on the backends service. It never names a vault entry.
+	Command Field[string] `json:"command,omitzero"`
+	// A program's environment. Every value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	Env Field[map[string]string] `json:"env,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
 	// HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry whose destination covers this server's URL.
@@ -2133,9 +2135,9 @@ type McpServersCreateArgsConfig struct {
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
 	// http (default): a tool server elsewhere, at a URL. program: a program CYFR runs on the backends service.
 	Transport Field[string] `json:"transport,omitzero"`
-	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).
+	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it.
 	Mark Field[string] `json:"mark,omitzero"`
-	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
+	// A program's home: scratch (default), scrubbed at retirement, or kept, the program's own folder, kept until the program is deleted.
 	Home Field[string] `json:"home,omitzero"`
 	// A program's memory bound in bytes (default: the backends service's own bound).
 	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
@@ -2143,8 +2145,6 @@ type McpServersCreateArgsConfig struct {
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
 	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
 	LoginCommand Field[string] `json:"login_command,omitzero"`
-	// A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own).
-	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`
 	// MCP server endpoint URL (http)
@@ -2159,23 +2159,6 @@ func (args *McpServersCreateArgsConfig) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*args = McpServersCreateArgsConfig(value)
-	return nil
-}
-
-type McpServersCreateArgsConfigBackendsItem struct {
-	Command string                   `json:"command"`
-	Env     Field[map[string]string] `json:"env,omitzero"`
-	Name    string                   `json:"name"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *McpServersCreateArgsConfigBackendsItem) UnmarshalJSON(data []byte) error {
-	type fields McpServersCreateArgsConfigBackendsItem
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = McpServersCreateArgsConfigBackendsItem(value)
 	return nil
 }
 
@@ -2269,8 +2252,8 @@ func (args McpServersRefreshArgs) MarshalJSON() ([]byte, error) {
 
 // McpServersResetHomeArgs carries arguments for mcp_servers.reset_home.
 type McpServersResetHomeArgs struct {
-	// The id of the login entry whose kept home is emptied, under the same uid
-	Entry string `json:"entry"`
+	// The program's server name; its kept home is emptied, under the same uid
+	Name string `json:"name"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2299,10 +2282,8 @@ func (args McpServersRestartArgs) MarshalJSON() ([]byte, error) {
 
 // McpServersSignInArgs carries arguments for mcp_servers.sign_in.
 type McpServersSignInArgs struct {
-	// The program's server name
+	// The program's server name; the sign-in runs in its kept home
 	Name string `json:"name"`
-	// The id of the login entry whose kept home the sign-in runs in; a kept mcp program's own entry
-	Entry string `json:"entry"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2351,8 +2332,10 @@ func (args McpServersUpdateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersUpdateArgsConfig struct {
-	// A program's backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
-	Backends Field[[]McpServersUpdateArgsConfigBackendsItem] `json:"backends,omitzero"`
+	// A program's command, run by a shell on the backends service. It never names a vault entry.
+	Command Field[string] `json:"command,omitzero"`
+	// A program's environment. Every value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	Env Field[map[string]string] `json:"env,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
 	// HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry whose destination covers this server's URL.
@@ -2363,9 +2346,9 @@ type McpServersUpdateArgsConfig struct {
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
 	// http (default): a tool server elsewhere, at a URL. program: a program CYFR runs on the backends service.
 	Transport Field[string] `json:"transport,omitzero"`
-	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).
+	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it.
 	Mark Field[string] `json:"mark,omitzero"`
-	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
+	// A program's home: scratch (default), scrubbed at retirement, or kept, the program's own folder, kept until the program is deleted.
 	Home Field[string] `json:"home,omitzero"`
 	// A program's memory bound in bytes (default: the backends service's own bound).
 	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
@@ -2373,8 +2356,6 @@ type McpServersUpdateArgsConfig struct {
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
 	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
 	LoginCommand Field[string] `json:"login_command,omitzero"`
-	// A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own).
-	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`
 	// MCP server endpoint URL (http)
@@ -2389,23 +2370,6 @@ func (args *McpServersUpdateArgsConfig) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*args = McpServersUpdateArgsConfig(value)
-	return nil
-}
-
-type McpServersUpdateArgsConfigBackendsItem struct {
-	Command string                   `json:"command"`
-	Env     Field[map[string]string] `json:"env,omitzero"`
-	Name    string                   `json:"name"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *McpServersUpdateArgsConfigBackendsItem) UnmarshalJSON(data []byte) error {
-	type fields McpServersUpdateArgsConfigBackendsItem
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = McpServersUpdateArgsConfigBackendsItem(value)
 	return nil
 }
 

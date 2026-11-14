@@ -671,7 +671,7 @@ defmodule Emissary.External.Proxy do
     end
   end
 
-  # The arguments a backend sees: the guest's own, without the action the
+  # The arguments a server sees: the guest's own, without the action the
   # gate routed on or the lineage the host stamped for its own records.
   # The lineage names internal executions, attempts, threads and calls,
   # and a third-party server is told none of them.

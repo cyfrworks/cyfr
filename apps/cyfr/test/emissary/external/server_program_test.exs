@@ -17,7 +17,7 @@ defmodule Emissary.External.ServerProgramTest do
   @root :crypto.strong_rand_bytes(32)
   @secret "ghp_program-test-secret-0123456789"
   @generation_key {Arca.ControlPlane, :generation}
-  @tools ~w(github__search github__issues github__pulls)
+  @tools ~w(search issues pulls)
 
   setup do
     Cyfr.Test.Sandbox.setup!()
@@ -53,13 +53,8 @@ defmodule Emissary.External.ServerProgramTest do
         url: nil,
         config_json:
           Jason.encode!(%{
-            "backends" => [
-              %{
-                "name" => "github",
-                "command" => "npx -y @modelcontextprotocol/server-github",
-                "env" => %{"GITHUB_TOKEN" => "vault:gh-token"}
-              }
-            ],
+            "command" => "npx -y @modelcontextprotocol/server-github",
+            "env" => %{"GITHUB_TOKEN" => "vault:gh-token"},
             "timeout_ms" => 5_000
           })
       })
@@ -89,13 +84,13 @@ defmodule Emissary.External.ServerProgramTest do
     pid = server_pid(ctx, row)
 
     # The program no longer serves `pulls`, as one upgraded underneath.
-    Scripted.set(fake, :tools, %{row.id => ["github__search"]})
+    Scripted.set(fake, :tools, %{row.id => ["search"]})
 
     assert {:ok, %{"content" => [%{"text" => "found"}]}} =
-             Emissary.External.Server.call_tool(pid, "github__search", %{})
+             Emissary.External.Server.call_tool(pid, "search", %{})
 
     # The program's own message, not a result read as success.
     assert {:error, "Unknown tool: pulls"} =
-             Emissary.External.Server.call_tool(pid, "github__pulls", %{})
+             Emissary.External.Server.call_tool(pid, "pulls", %{})
   end
 end

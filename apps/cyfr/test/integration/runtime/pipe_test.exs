@@ -125,7 +125,8 @@ defmodule Locus.Runtime.PipeTest do
         home: "kept",
         config_json:
           Jason.encode!(%{
-            "backends" => [%{"name" => "cat", "command" => @command, "env" => %{}}]
+            "command" => @command,
+            "env" => %{}
           })
       })
 
@@ -140,6 +141,14 @@ defmodule Locus.Runtime.PipeTest do
       })
 
     entry
+  end
+
+  # The pipe holders running on this member.
+  defp pipe_holders do
+    for {_id, pid, _type, [Opus.Programs.Pipe]} <-
+          DynamicSupervisor.which_children(Opus.Programs.Relays),
+        is_pid(pid),
+        do: pid
   end
 
   # The probe, published as a component of the person's own with `needs`.
@@ -196,9 +205,9 @@ defmodule Locus.Runtime.PipeTest do
   # Cases
   # ---------------------------------------------------------------------------
 
-  test "a catalyst bound to a login entry round-trips a line through cat in the entry's home",
+  test "a catalyst bound to a login entry round-trips a line through cat in the row's home",
        %{ctx: ctx, kept: kept} do
-    row!(ctx)
+    row = row!(ctx)
     entry = login!(ctx)
     ref = publish_probe!(ctx, %{"coder" => login_need(@program)})
     consent!(ctx, ref, [%{need: "coder", entry_id: entry.id}])
@@ -217,10 +226,10 @@ defmodule Locus.Runtime.PipeTest do
            } = run!(ctx, ref, "hello through the pipe")
 
     assert is_binary(session)
-    assert File.dir?(Path.join(kept, entry.id)), "the program ran in the entry's kept home"
+    assert File.dir?(Path.join(kept, row.id)), "the program ran in the row's kept home"
 
     # Closed by the guest: nothing of it is held, and its owner let go.
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
 
     # The next run opens its key afresh.
     assert %{"open" => "ok", "resumed" => false, "line" => "again"} = run!(ctx, ref, "again")
@@ -238,7 +247,7 @@ defmodule Locus.Runtime.PipeTest do
 
     assert %{"open" => "busy"} = data = run!(ctx, ref, "hello")
     refute Map.has_key?(data, "send")
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
   end
 
   test "a catalyst declaring no login need is refused denied, and opens nothing", %{ctx: ctx} do
@@ -248,7 +257,7 @@ defmodule Locus.Runtime.PipeTest do
 
     assert %{"open" => "denied"} = data = run!(ctx, ref, "hello")
     refute Map.has_key?(data, "send")
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
   end
 
   test "a need whose binding mounts another program is refused denied", %{ctx: ctx} do
@@ -266,7 +275,7 @@ defmodule Locus.Runtime.PipeTest do
     consent!(ctx, ref, [%{need: "aux", entry_id: entry.id}])
 
     assert %{"open" => "denied"} = run!(ctx, ref, "hello")
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
   end
 
   test "an open that does not read consumes no once binding", %{ctx: ctx} do
@@ -335,6 +344,6 @@ defmodule Locus.Runtime.PipeTest do
     assert {:ok, _} = Sanctum.Vault.revoke(ctx, entry.id)
 
     assert %{"open" => "setup_required"} = run!(ctx, ref, "after")
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
   end
 end

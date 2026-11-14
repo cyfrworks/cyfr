@@ -545,7 +545,7 @@ defmodule Sanctum.VaultTest do
     test "a login entry is never dispensed, disclosed or attached", %{ctx: ctx} do
       {:ok, view} = create(ctx, %{name: "claude", kind: "login", program: "claude"})
       # Signed in, so its status refuses nothing and its kind is what does.
-      :ok = Sanctum.Mount.signed_in(ctx, view.id)
+      :ok = Sanctum.TestContext.activate_login(ctx, view.id)
       row = row!(ctx, view.id)
       resource = %{entry_id: view.id, binding_digest: row.binding_digest}
 

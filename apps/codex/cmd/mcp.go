@@ -46,15 +46,15 @@ server_name:tool_name.
 A tool server's config uses the same JSON format as mcp.json entries.
 Header values can reference a stored vault entry with the vault: prefix.
 
-A program ({"transport":"program","mark":...,"backends":[...]}) runs its
-backends on the backends service: each backend is a command and an env
-whose credentials are vault: templates. Its mark says how it is spoken to:
-"mcp", CYFR speaks MCP to it and offers its tools, or "driven", one backend
-a person or a brain runs. A program may keep its home ("home":"kept"),
-bound its memory ("memory_bytes") and a kept home's disk
-("home_max_bytes"), and name the command a sign-in runs ("login_command");
-a kept MCP program names its login entry ("login_entry_id"). Signing a
-program in runs on a terminal, which the console's Programs page shows.`,
+A program ({"transport":"program","mark":...,"command":...,"env":{...}})
+runs one command on the backends service, with an env whose credentials
+are vault: templates. Its mark says how it is spoken to: "mcp", CYFR speaks
+MCP to it and offers its tools, or "driven", a person or a brain runs it.
+A program may keep its home ("home":"kept"), its own folder until it is
+deleted, bound its memory ("memory_bytes") and a kept home's disk
+("home_max_bytes"), and name the command a sign-in runs ("login_command").
+Signing a program in runs on a terminal, which the console's Programs page
+shows.`,
 }
 
 var mcpAddCmd = &cobra.Command{
@@ -65,14 +65,14 @@ format as an mcp.json server entry. A tool server or an MCP program is
 initialized immediately and its tools are discovered.
 
 Header values can reference a stored vault entry with the vault: prefix.
-A program names "transport":"program", its "mark" and its backends instead
-of a url; an env value is a vault: template, except NODE_ENV, LOG_LEVEL, TZ,
+A program names "transport":"program", its "mark", its "command" and its
+"env" instead of a url; an env value is a vault: template, except NODE_ENV, LOG_LEVEL, TZ,
 LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
 
 Adding a server takes a signed-in session (cyfr login); an API key cannot.`,
 	Example: `  cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key"}}'
   cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'
-  cyfr mcp add gh '{"transport":"program","mark":"mcp","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:gh-token"}}]}'`,
+  cyfr mcp add gh '{"transport":"program","mark":"mcp","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:gh-token"}}'`,
 	Args: cobra.RangeArgs(0, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
@@ -418,8 +418,8 @@ var mcpRefreshCmd = &cobra.Command{
 
 var mcpRestartCmd = &cobra.Command{
 	Use:     "restart <name>",
-	Short:   "Restart a program's backends",
-	Long:    "Release a program's backends on the backends service and start them again at the server's next epoch.",
+	Short:   "Restart a program",
+	Long:    "Release a program on the backends service and start it again at the server's next epoch.",
 	Example: "  cyfr mcp restart gh",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -448,14 +448,14 @@ var mcpRestartCmd = &cobra.Command{
 }
 
 var mcpResetHomeCmd = &cobra.Command{
-	Use:     "reset-home <login-entry-id>",
-	Short:   "Empty a login entry's kept home",
-	Long:    "End every program session in a login entry's kept home and make it again empty, under the same uid: the program signs in afresh.",
-	Example: "  cyfr mcp reset-home vlt_01a1ab7d-6f24-7dce-b322-419062c54cb2",
+	Use:     "reset-home <name>",
+	Short:   "Empty a program's kept home",
+	Long:    "End every session in a kept program's home and make it again empty, under the same uid: the program signs in afresh.",
+	Example: "  cyfr mcp reset-home claude",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersResetHomeArgs{Entry: args[0]})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersResetHomeArgs{Name: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}

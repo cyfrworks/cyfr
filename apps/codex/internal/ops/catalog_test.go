@@ -66,10 +66,10 @@ func TestGeneratedNestedRecordRejectsUnknownAndInvalidPresence(t *testing.T) {
 		`{"console":null}`,
 		`{"headers":{"Authorization":null}}`,
 		`{"tool_patterns":[null]}`,
-		`{"backends":null}`,
-		`{"backends":[{"name":"test"}]}`,
-		`{"backends":[{"name":"test","command":null}]}`,
-		`{"backends":[{"name":"test","command":"run","extra":true}]}`,
+		`{"backends":[]}`,
+		`{"command":null}`,
+		`{"env":null}`,
+		`{"env":{"MODE":null}}`,
 	} {
 		var config McpServersCreateArgsConfig
 		if err := json.Unmarshal([]byte(raw), &config); err == nil {
@@ -77,7 +77,7 @@ func TestGeneratedNestedRecordRejectsUnknownAndInvalidPresence(t *testing.T) {
 		}
 	}
 	var config McpServersCreateArgsConfig
-	raw := `{"console":false,"backends":[{"name":"test","command":"run","env":{"MODE":""}}]}`
+	raw := `{"console":false,"command":"run","env":{"MODE":""}}`
 	if err := json.Unmarshal([]byte(raw), &config); err != nil {
 		t.Fatal(err)
 	}

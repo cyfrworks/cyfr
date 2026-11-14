@@ -298,7 +298,7 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-card-harness", "Model connected")
 
       # The sign-in whose command exited 0.
-      :ok = Sanctum.Mount.signed_in(ctx, entry.id)
+      :ok = Sanctum.TestContext.activate_login(ctx, entry.id)
       send_update_agents(view, load: true)
 
       assert has_element?(view, "#aqua-card-harness", "Model connected")

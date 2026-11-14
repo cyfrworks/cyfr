@@ -10,18 +10,19 @@ import (
 // The warnings a program's definition carries, as mcp_servers create
 // and update answer them.
 const (
-	mcpWarningOne = "Backend 'github' expands GITHUB_TOKEN, a vault-bound env name, in its command: " +
+	mcpWarningOne = "The command expands GITHUB_TOKEN, a vault-bound env name: " +
 		"the value is placed on the command line, where every process on the backends service, " +
-		"other athanors' backends included, can read it; the safe route is to let the program " +
+		"other athanors' programs included, can read it; the safe route is to let the program " +
 		"read it from its environment."
-	mcpWarningTwo = "Backend 'search' expands SEARCH_KEY, a vault-bound env name, in its command: " +
+	mcpWarningTwo = "The command expands SEARCH_KEY, a vault-bound env name: " +
 		"the value is placed on the command line, where every process on the backends service, " +
-		"other athanors' backends included, can read it; the safe route is to let the program " +
+		"other athanors' programs included, can read it; the safe route is to let the program " +
 		"read it from its environment."
 )
 
-const mcpProgramConfig = `{"transport":"program","mark":"mcp","backends":[{"name":"github",` +
-	`"command":"npx server --token $GITHUB_TOKEN","env":{"GITHUB_TOKEN":"vault:gh-token"}}]}`
+const mcpProgramConfig = `{"transport":"program","mark":"mcp",` +
+	`"command":"npx server --token $GITHUB_TOKEN --key $SEARCH_KEY",` +
+	`"env":{"GITHUB_TOKEN":"vault:gh-token","SEARCH_KEY":"vault:search-key"}}`
 
 // `cyfr mcp add` prints each warning the create answered after its
 // confirmation, one per line, and nothing more when the list is empty.
@@ -36,18 +37,18 @@ func TestMcpAdd_PrintsEachWarning(t *testing.T) {
 		{
 			"two warnings", `["` + mcpWarningOne + `","` + mcpWarningTwo + `"]`,
 			"Server 'gh' added (ready, 1 tools discovered).\n" +
-				"  Tools: github__search\n" +
+				"  Tools: search\n" +
 				"  Warning: " + mcpWarningOne + "\n" +
 				"  Warning: " + mcpWarningTwo + "\n",
 		},
 		{
 			"no warning", `[]`,
-			"Server 'gh' added (ready, 1 tools discovered).\n  Tools: github__search\n",
+			"Server 'gh' added (ready, 1 tools discovered).\n  Tools: search\n",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newCLIServer(t, "", `{"name":"gh","status":"ready","tools_discovered":1,`+
-				`"tool_names":["github__search"],"epoch":1,"warnings":`+tc.warnings+`}`)
+				`"tool_names":["search"],"epoch":1,"warnings":`+tc.warnings+`}`)
 
 			out, err := runCLI(t, srv, "mcp", "add", "gh", mcpProgramConfig)
 			if err != nil {

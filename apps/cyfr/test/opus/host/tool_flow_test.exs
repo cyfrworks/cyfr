@@ -29,7 +29,7 @@ defmodule Opus.Host.ToolFlowTest do
   @formula "formula:local.tool-flow-formula"
   @target "reagent:local.tool-flow-target"
   @server "leak"
-  @tool "leak:probe__echo"
+  @tool "leak:echo"
 
   # The server process the row's calls reach, registered where the
   # supervisor finds one: under the row's configuration digest. Each call
@@ -130,7 +130,8 @@ defmodule Opus.Host.ToolFlowTest do
           Jason.encode!(%{
             "transport" => "program",
             "mark" => "mcp",
-            "backends" => [%{"name" => "probe", "command" => "node /probe/probe-backend.mjs"}]
+            "command" => "node /probe/probe-backend.mjs",
+            "env" => %{}
           })
       })
 
@@ -155,7 +156,7 @@ defmodule Opus.Host.ToolFlowTest do
     %{
       "tools" => ["execution.logs", "notes.read", "component.categories", "component.search"],
       "tool_servers" => [
-        %{"server_digest" => digest, "server_name" => @server, "tool_patterns" => ["probe__echo"]}
+        %{"server_digest" => digest, "server_name" => @server, "tool_patterns" => ["echo"]}
       ],
       "storage" => %{"paths" => ["data/"], "actions" => ["read"]},
       "egress" => %{
@@ -280,7 +281,7 @@ defmodule Opus.Host.ToolFlowTest do
 
     # While the call was in flight, before any answer existed, the caller
     # already held the server's provenance.
-    assert_received {:called, "probe__echo", _args, ledgers}
+    assert_received {:called, "echo", _args, ledgers}
     assert {:ok, call} = ledgers["call"]
     assert Source.outside(@server) in call
     assert {:ok, during} = ledgers["parent_execution_id"]
@@ -327,7 +328,7 @@ defmodule Opus.Host.ToolFlowTest do
              })
 
     assert %{"ok" => _} = tool(fixture, @tool, %{"q" => "restricted"})
-    assert_received {:called, "probe__echo", _args, _ledgers}
+    assert_received {:called, "echo", _args, _ledgers}
   end
 
   test "a sibling that reads a server call's record joins its provenance, and its next send is decided on it",
@@ -340,7 +341,7 @@ defmodule Opus.Host.ToolFlowTest do
     caller = admit_child!(fixture)
 
     assert %{"error" => "guest_error"} = tool(caller, @tool, %{"q" => "x"})
-    assert_received {:called, "probe__echo", _args, _ledgers}
+    assert_received {:called, "echo", _args, _ledgers}
     assert Source.outside(@server) in ledger(caller)
     assert ledger(reader) == []
 

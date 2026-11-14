@@ -251,7 +251,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
         hosts: Jason.encode!(["api.example.com"]),
         config_json:
           Jason.encode!(%{
-            "backends" => [%{"name" => "fetch", "command" => "npx -y fetch", "env" => %{}}],
+            "command" => "npx -y fetch",
+            "env" => %{},
             "timeout_ms" => 1_000
           })
       })

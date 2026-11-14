@@ -253,7 +253,7 @@ defmodule Aqua.ModelsTest do
     assert Aqua.Crew.ready(ctx, "harness") == {:error, {:crew_unready, "harness", :not_signed_in}}
 
     # The sign-in whose command exited 0.
-    :ok = Sanctum.Mount.signed_in(ctx, entry.id)
+    :ok = Sanctum.TestContext.activate_login(ctx, entry.id)
 
     assert Aqua.model_status(ctx, member) == %{"harness" => {:ready, resolved}}
     assert Aqua.Crew.ready(ctx, "harness") == :ok

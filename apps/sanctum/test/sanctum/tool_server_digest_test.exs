@@ -13,7 +13,8 @@ defmodule Sanctum.ToolServerDigestTest do
     url: "https://mcp.example/sse",
     enabled: true,
     headers: %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr"},
-    backends: [],
+    command: nil,
+    env: nil,
     program: nil
   }
 
@@ -24,20 +25,14 @@ defmodule Sanctum.ToolServerDigestTest do
       program: %{
         "hosts" => ["api.github.com", "github.com"],
         "home" => "kept",
-        "login_entry" => "ent_1",
         "memory_bytes" => 268_435_456,
         "home_max_bytes" => 1_073_741_824,
         "login_command" => "gh auth login"
       },
       url: nil,
       headers: %{},
-      backends: [
-        %{
-          "name" => "github",
-          "command" => "npx -y @modelcontextprotocol/server-github",
-          "env" => %{"GITHUB_TOKEN" => "vault:gh", "NODE_ENV" => "production"}
-        }
-      ]
+      command: "npx -y @modelcontextprotocol/server-github",
+      env: %{"GITHUB_TOKEN" => "vault:gh", "NODE_ENV" => "production"}
   }
 
   describe "compute/1" do
@@ -66,7 +61,15 @@ defmodule Sanctum.ToolServerDigestTest do
         %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN", "user-agent" => "cyfr"}},
         %{@base | headers: %{"user-agent" => "cyfr"}},
         %{@base | headers: Map.put(@base.headers, "x-extra", "Bearer vault:EXTRA")},
-        %{@base | transport: "program", mark: "mcp", url: nil, program: %{}}
+        %{
+          @base
+          | transport: "program",
+            mark: "mcp",
+            url: nil,
+            command: "npx server",
+            env: %{},
+            program: %{}
+        }
       ]
 
       for variant <- variants do
@@ -105,28 +108,26 @@ defmodule Sanctum.ToolServerDigestTest do
       assert {:ok, ^base} = ToolServerDigest.from_server(row.(["issues.*"]))
     end
 
-    test "every backend axis of an mcp program moves the digest, and its env order does not" do
+    test "an mcp program's command and every env name and template move the digest, a " <>
+           "literal by its value, and its env order does not" do
       {:ok, base} = ToolServerDigest.compute(@program)
-      [backend] = @program.backends
 
       variants = [
-        [%{backend | "command" => "npx -y @modelcontextprotocol/server-github@2"}],
-        [%{backend | "name" => "gh"}],
-        [put_in(backend, ["env", "GITHUB_TOKEN"], "vault:other")],
-        [backend, %{"name" => "fs", "command" => "npx -y fs", "env" => %{}}]
+        %{@program | command: "npx -y @modelcontextprotocol/server-github@2"},
+        put_in(@program, [:env, "GITHUB_TOKEN"], "vault:other"),
+        put_in(@program, [:env, "GITHUB_TOKEN"], "Bearer vault:gh"),
+        put_in(@program, [:env, "NODE_ENV"], "development"),
+        put_in(@program, [:env, "GH_HOST"], "vault:gh"),
+        %{@program | env: Map.delete(@program.env, "NODE_ENV")}
       ]
 
-      for backends <- variants do
-        {:ok, digest} = ToolServerDigest.compute(%{@program | backends: backends})
-        refute digest == base, inspect(backends)
+      for variant <- variants do
+        {:ok, digest} = ToolServerDigest.compute(variant)
+        refute digest == base, inspect({variant.command, variant.env})
       end
 
-      reordered = %{
-        backend
-        | "env" => %{"NODE_ENV" => "production", "GITHUB_TOKEN" => "vault:gh"}
-      }
-
-      assert {:ok, ^base} = ToolServerDigest.compute(%{@program | backends: [reordered]})
+      reordered = %{"NODE_ENV" => "production", "GITHUB_TOKEN" => "vault:gh"}
+      assert {:ok, ^base} = ToolServerDigest.compute(%{@program | env: reordered})
     end
 
     test "everything that decides what a program is and reaches moves its digest" do
@@ -138,7 +139,6 @@ defmodule Sanctum.ToolServerDigestTest do
             {"hosts", ["api.github.com"]},
             {"hosts", []},
             {"home", "scratch"},
-            {"login_entry", "ent_2"},
             {"memory_bytes", nil},
             {"home_max_bytes", 2_147_483_648},
             {"login_command", "gh auth login --web"}
@@ -175,11 +175,10 @@ defmodule Sanctum.ToolServerDigestTest do
           enabled: true,
           hosts: hosts,
           home: "kept",
-          login_entry_id: "ent_1",
           memory_bytes: 268_435_456,
           home_max_bytes: 1_073_741_824,
           login_command: "gh auth login",
-          config_json: Jason.encode!(%{"backends" => @program.backends})
+          config_json: Jason.encode!(%{"command" => @program.command, "env" => @program.env})
         }
       end
 
@@ -203,7 +202,10 @@ defmodule Sanctum.ToolServerDigestTest do
             %{@program | transport: "stdio", mark: nil},
             %{@program | transport: "pipe", mark: nil},
             %{@program | program: nil},
-            %{@base | program: %{}}
+            %{@program | command: nil},
+            %{@program | env: nil},
+            %{@base | program: %{}},
+            %{@base | command: "npx server", env: %{}}
           ] do
         assert {:error, {:invalid_server_config, ^row}} = ToolServerDigest.compute(row)
       end

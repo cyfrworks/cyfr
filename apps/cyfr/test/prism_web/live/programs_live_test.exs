@@ -868,7 +868,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     # The login entry is a sensitive change: it is made once the person
     # confirms it, and the sign-in opens on it.
-    assert {:ok, []} = Sanctum.Mount.login_entries(athanor.id)
+    assert {:ok, []} = login_entries(athanor.id)
     refute has_element?(view, ~s([data-test="sign-in-terminal"]))
     person = person(user, athanor)
 
@@ -878,7 +878,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     Sanctum.TestContext.prove!(person, ref)
     assert eventually(fn -> has_element?(view, ~s([data-test="sign-in-terminal"])) end)
 
-    assert {:ok, [entry]} = Sanctum.Mount.login_entries(athanor.id)
+    assert {:ok, [entry]} = login_entries(athanor.id)
     assert {:ok, %{name: "claude-login"}} = Arca.VaultStorage.get(ctx(athanor), entry)
 
     assert_receive {:session, "open", %{"mode" => "sign_in"}, _fields}, 2_000
@@ -1039,7 +1039,7 @@ defmodule PrismWeb.ProgramsLiveTest do
              Arca.McpServerStorage.config(saved)["backends"]
 
     # The folder is its login entry's, untouched: no reset or retire sent.
-    assert {:ok, [^entry]} = Sanctum.Mount.login_entries(athanor.id)
+    assert {:ok, [^entry]} = login_entries(athanor.id)
     refute_received {:control, "home", _home, _fields}
   end
 
@@ -1289,6 +1289,12 @@ defmodule PrismWeb.ProgramsLiveTest do
 
   # A tool server elsewhere holding a literal header, a vault-bound one and
   # members the form does not show.
+  # The ids of the athanor's living login entries.
+  defp login_entries(athanor_id) do
+    with {:ok, entries} <- Arca.VaultStorage.list(Prima.Actor.in_athanor(athanor_id)),
+         do: {:ok, for(%{kind: "login", id: id} <- entries, do: id)}
+  end
+
   defp tool_server!(user, athanor) do
     entry!(user, athanor, "local-key", %{"hosts" => ["127.0.0.1"], "port" => 9})
 

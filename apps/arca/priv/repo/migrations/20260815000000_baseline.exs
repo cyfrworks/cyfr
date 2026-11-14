@@ -2182,8 +2182,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :transport, :string, null: false, check: if(sqlite?, do: transport_check)
       # A program's mark: `mcp`, spoken to in MCP, or `driven`.
       add :mark, :string
-      # A program's home: `scratch` is scrubbed at retirement, `kept`
-      # survives it under a uid of its own.
+      # A program's home: `scratch` is scrubbed at retirement, `kept` is the
+      # row's own folder, named by its id, under a uid of its own.
       add :home, :string, null: false, default: "scratch", check: if(sqlite?, do: home_known)
       # A program's memory bound; null means the backends service's total.
       add :memory_bytes, :bigint
@@ -2191,10 +2191,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :home_max_bytes, :bigint
       # The command a sign-in session runs on a pseudo-terminal.
       add :login_command, :text
-      # A kept `mcp` program's login entry, whose home its sessions run in;
-      # a `driven` program's catalyst names its own entry and leaves this
-      # null.
-      add :login_entry_id, :string
       # A program's network list (JSON).
       add :hosts, :text
       add :url, :string

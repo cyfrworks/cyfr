@@ -1983,16 +1983,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.IdentityFreshness" => [sweep: 1],
     "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
-    "Sanctum.Mount" => [
-      agents_mounting: 2,
-      home_of: 2,
-      login_entries: 1,
-      login_entry: 3,
-      login_entry: 4,
-      orphaned_homes: 1,
-      resolve: 4,
-      signed_in: 2
-    ],
+    "Sanctum.Mount" => [agents_mounting: 2, orphaned_homes: 1, resolve: 5],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],

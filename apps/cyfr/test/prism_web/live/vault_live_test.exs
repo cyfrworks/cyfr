@@ -225,7 +225,7 @@ defmodule PrismWeb.VaultLiveTest do
     assert view |> element(~s([data-test="entry-status"])) |> render() =~ "not signed in"
 
     # The sign-in whose command exited 0.
-    :ok = Sanctum.Mount.signed_in(ctx, id)
+    :ok = Sanctum.TestContext.activate_login(ctx, id)
     {view, _html} = mount_athanor(conn, "/vault", own)
     status = view |> element(~s([data-test="entry-status"])) |> render()
     assert status =~ "active"

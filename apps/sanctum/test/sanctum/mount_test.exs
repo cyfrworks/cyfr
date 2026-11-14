@@ -3,13 +3,13 @@
 
 defmodule Sanctum.MountTest do
   @moduledoc """
-  `Sanctum.Mount.resolve/4` answers the kept home and the program row a
-  run's binding of a login need mounts, never material, in order: the
-  binding live (read, a `once` not consumed), a share refused as not
-  built, the entry active at the consented digest and a login entry, the
-  destination naming a program row that stands with a kept home, and only
-  then the binding used, so a refused mount consumes nothing. Beside it,
-  the reads the programs controller makes of login entries.
+  `Sanctum.Mount.resolve/5` answers the program row a run's binding of a
+  login need names, whose id is its kept home's, never material, in
+  order: the binding live (read, a `once` not consumed), a share refused,
+  the row the athanor's own enabled, kept, driven program named as the
+  manifest names the need's program, and only then the binding used, so a
+  refused mount consumes nothing. Beside it, the reads the programs
+  controller makes of program rows.
   """
 
   use ExUnit.Case, async: false
@@ -19,7 +19,6 @@ defmodule Sanctum.MountTest do
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Prima.Authority.Blob.Edge
-  alias Sanctum.Context
   alias Sanctum.Mount
   alias Sanctum.Test.ConsentFixtures
   alias Sanctum.TestContext
@@ -32,17 +31,6 @@ defmodule Sanctum.MountTest do
 
     {person, _user} = TestContext.person!(TestContext.local())
     {:ok, ctx: person}
-  end
-
-  defp login!(ctx, program \\ "claude", name \\ nil) do
-    {:ok, view} =
-      TestContext.create_signed_in_login(ctx, %{
-        name: name || "login-#{System.unique_integer([:positive])}",
-        program: program
-      })
-
-    {:ok, entry} = Arca.VaultStorage.get(Context.actor(ctx), view.id)
-    entry
   end
 
   # A program row of the athanor, written as the row store writes one.
@@ -58,7 +46,7 @@ defmodule Sanctum.MountTest do
           enabled: true,
           epoch: 1,
           revision: 0,
-          config_json: ~s({"backends":[{"name":"claude","command":"claude"}]}),
+          config_json: ~s({"command":"claude"}),
           athanor_id: ctx.athanor_id,
           created_by: ctx.user_id
         },
@@ -68,28 +56,27 @@ defmodule Sanctum.MountTest do
     Arca.Repo.insert!(struct(Arca.Schemas.McpServer, attrs))
   end
 
-  # A head binding `entry` at a key on the edge for `need`, and the
-  # authority a run under it carries.
-  defp bound!(ctx, entry, opts \\ []) do
-    {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
+  # A head whose row at the binding's key holds its lifetime, and the
+  # authority a run under it carries, binding `row_id` at that key on the
+  # edge for the need. The head's row is read by its key alone
+  # (`Sanctum.Attach`), so it is written as a binding through a label.
+  defp bound!(ctx, row_id, opts \\ []) do
     edge_key = Keyword.get(opts, :edge_key, Blob.edge_key("catalyst:local.dep", "claude"))
     key = Blob.binding_key(@source, edge_key, nil)
-    {:ok, destination} = entry.destination |> Jason.decode!() |> Prima.Destination.from_map()
 
     ref =
       Map.merge(
-        %{binding_key: key, vault_entry_id: entry.id, binding_digest: digest},
+        %{binding_key: key, via_label: "folder", binding_digest: nil},
         Keyword.get(opts, :lifetime, %{})
       )
 
     {profile_id, consent_id} = head!(ctx, [ref])
 
     vault = %{
-      entry_id: entry.id,
-      binding_digest: digest,
+      entry_id: row_id,
+      binding_digest: nil,
       scope: Keyword.get(opts, :scope, "athanor"),
       binding_key: key,
-      destination: Keyword.get(opts, :destination, destination),
       attach: nil,
       projection: %{fields: %{}, scopes: []}
     }
@@ -138,292 +125,144 @@ defmodule Sanctum.MountTest do
 
   @once %{lifetime: %{lifetime_kind: "once"}}
 
-  describe "resolve/4" do
-    test "answers the kept home and the program row, and nothing of the entry", %{ctx: ctx} do
-      entry = login!(ctx)
+  describe "resolve/5" do
+    test "answers the program row the binding names, whose id is the kept home's", %{ctx: ctx} do
       row = row!(ctx)
-      {authority, _consent} = bound!(ctx, entry)
+      {authority, _consent} = bound!(ctx, row.id)
 
-      assert {:ok, {:mount, home_id, mounted}} = Mount.resolve(ctx, authority, "claude", @root)
-      assert home_id == entry.id
+      assert {:ok, mounted} = Mount.resolve(ctx, authority, "claude", "claude", @root)
       assert mounted.id == row.id
       assert mounted.home == "kept"
     end
 
-    test "an mcp program with a kept home is mounted too", %{ctx: ctx} do
-      entry = login!(ctx)
-      row!(ctx, %{transport: "program", mark: "mcp"})
-      {authority, _consent} = bound!(ctx, entry)
-
-      assert {:ok, {:mount, _home, %{transport: "program", mark: "mcp"}}} =
-               Mount.resolve(ctx, authority, "claude", @root)
-    end
-
     test "a once binding is consumed by the mount that is made, and only by it", %{ctx: ctx} do
-      entry = login!(ctx)
-      row!(ctx)
-      {authority, consent_id} = bound!(ctx, entry, Map.to_list(@once))
+      row = row!(ctx)
+      {authority, consent_id} = bound!(ctx, row.id, Map.to_list(@once))
 
       assert consumed_by(consent_id) == nil
-      assert {:ok, {:mount, _, _}} = Mount.resolve(ctx, authority, "claude", @root)
+      assert {:ok, _} = Mount.resolve(ctx, authority, "claude", "claude", @root)
       assert consumed_by(consent_id) == @root
 
       # Its own root mounts again; another root is refused.
-      assert {:ok, {:mount, _, _}} = Mount.resolve(ctx, authority, "claude", @root)
-      assert {:error, :grant_expired} = Mount.resolve(ctx, authority, "claude", "exec_other")
+      assert {:ok, _} = Mount.resolve(ctx, authority, "claude", "claude", @root)
+
+      assert {:error, :grant_expired} =
+               Mount.resolve(ctx, authority, "claude", "claude", "exec_other")
     end
 
     test "a binding of another need is not this need's", %{ctx: ctx} do
-      entry = login!(ctx)
-      row!(ctx)
+      row = row!(ctx)
 
       {authority, consent_id} =
         bound!(
           ctx,
-          entry,
+          row.id,
           [edge_key: Blob.edge_key("catalyst:local.dep", "gemini")] ++ Map.to_list(@once)
         )
 
-      assert {:error, :connection_not_granted} = Mount.resolve(ctx, authority, "claude", @root)
+      assert {:error, :connection_not_granted} =
+               Mount.resolve(ctx, authority, "claude", "claude", @root)
+
       assert consumed_by(consent_id) == nil
     end
 
-    test "an expired binding is refused before the entry is read", %{ctx: ctx} do
-      entry = login!(ctx)
-      row!(ctx)
+    test "an expired binding is refused before the row is read", %{ctx: ctx} do
+      row = row!(ctx)
       past = DateTime.add(DateTime.utc_now(), -60, :second)
 
       {authority, _consent} =
-        bound!(ctx, entry, lifetime: %{lifetime_kind: "until", expires_at: past})
+        bound!(ctx, row.id, lifetime: %{lifetime_kind: "until", expires_at: past})
 
-      assert {:error, :grant_expired} = Mount.resolve(ctx, authority, "claude", @root)
+      assert {:error, :grant_expired} = Mount.resolve(ctx, authority, "claude", "claude", @root)
     end
 
-    test "a share is refused as not built, consuming nothing", %{ctx: ctx} do
-      entry = login!(ctx)
-      row!(ctx)
-      {authority, consent_id} = bound!(ctx, entry, [scope: "share"] ++ Map.to_list(@once))
-
-      assert {:error, {:not_built, :shared_login}} =
-               Mount.resolve(ctx, authority, "claude", @root)
-
-      assert consumed_by(consent_id) == nil
-    end
-
-    test "an entry no longer active is refused, consuming nothing", %{ctx: ctx} do
-      entry = login!(ctx)
-      row!(ctx)
-      {authority, consent_id} = bound!(ctx, entry, Map.to_list(@once))
-      {:ok, _} = Sanctum.Vault.revoke(ctx, entry.id)
-
-      assert {:error, {:entry_unavailable, _name, "revoked"}} =
-               Mount.resolve(ctx, authority, "claude", @root)
-
-      assert consumed_by(consent_id) == nil
-    end
-
-    test "an entry of another kind is not mounted, consuming nothing", %{ctx: ctx} do
-      {:ok, view} =
-        TestContext.create_vault(ctx, %{
-          name: "key",
-          kind: "api_key",
-          fields: %{"K" => "secret-material"},
-          destination: %{"hosts" => ["api.example.com"]}
-        })
-
-      {:ok, entry} = Arca.VaultStorage.get(Context.actor(ctx), view.id)
-      row!(ctx)
-      {:ok, program} = Prima.Destination.from_map(%{"program" => "claude"})
-
-      {authority, consent_id} =
-        bound!(ctx, entry, [destination: program] ++ Map.to_list(@once))
-
-      assert {:error, :not_mountable} = Mount.resolve(ctx, authority, "claude", @root)
-      assert consumed_by(consent_id) == nil
-    end
-
-    test "a program row that does not stand as a kept program is refused, consuming nothing",
+    test "a program's folder is never shared: a binding through a share is not granted, " <>
+           "consuming nothing",
          %{ctx: ctx} do
-      entry = login!(ctx)
-      {authority, consent_id} = bound!(ctx, entry, Map.to_list(@once))
+      row = row!(ctx)
+      {authority, consent_id} = bound!(ctx, row.id, [scope: "share"] ++ Map.to_list(@once))
 
+      assert {:error, :connection_not_granted} =
+               Mount.resolve(ctx, authority, "claude", "claude", @root)
+
+      assert consumed_by(consent_id) == nil
+    end
+
+    test "a row that does not stand as the athanor's enabled, kept, driven program the " <>
+           "manifest names is refused, consuming nothing",
+         %{ctx: ctx} do
       # No row at all.
+      {authority, consent_id} = bound!(ctx, "mcp_no-such-row", Map.to_list(@once))
+
       assert {:error, {:program_unavailable, "claude"}} =
-               Mount.resolve(ctx, authority, "claude", @root)
+               Mount.resolve(ctx, authority, "claude", "claude", @root)
 
-      for over <- [%{enabled: false}, %{home: "scratch"}] do
+      assert consumed_by(consent_id) == nil
+
+      other = %{ctx | athanor_id: "ath_other_#{System.unique_integer([:positive])}"}
+
+      for {over, program} <- [
+            {%{enabled: false}, "claude"},
+            {%{home: "scratch"}, "claude"},
+            {%{mark: "mcp"}, "claude"},
+            {%{transport: "http", mark: nil, url: "https://x.example/mcp"}, "claude"},
+            {%{athanor_id: other.athanor_id}, "claude"}
+          ] do
         row = row!(ctx, over)
+        {authority, consent_id} = bound!(ctx, row.id, Map.to_list(@once))
 
-        assert {:error, {:program_unavailable, "claude"}} =
-                 Mount.resolve(ctx, authority, "claude", @root),
+        assert {:error, {:program_unavailable, ^program}} =
+                 Mount.resolve(ctx, authority, "claude", program, @root),
                inspect(over)
 
+        assert consumed_by(consent_id) == nil
         Arca.Repo.delete!(row)
       end
-
-      assert consumed_by(consent_id) == nil
     end
 
-    test "a consent that approved another program does not mount this entry", %{ctx: ctx} do
-      entry = login!(ctx)
-      row!(ctx, %{name: "codex"})
-      {:ok, codex} = Prima.Destination.from_map(%{"program" => "codex"})
-      {authority, consent_id} = bound!(ctx, entry, [destination: codex] ++ Map.to_list(@once))
+    test "a row the manifest does not name for the need is another program's, consuming nothing",
+         %{ctx: ctx} do
+      row = row!(ctx)
+      {authority, consent_id} = bound!(ctx, row.id, Map.to_list(@once))
 
-      assert {:error, {:program_unavailable, "codex"}} =
-               Mount.resolve(ctx, authority, "claude", @root)
+      assert {:error, {:another_program, "claude"}} =
+               Mount.resolve(ctx, authority, "claude", "codex", @root)
 
       assert consumed_by(consent_id) == nil
     end
 
     test "an anonymous caller is refused", %{ctx: ctx} do
-      entry = login!(ctx)
-      {authority, _consent} = bound!(ctx, entry)
+      row = row!(ctx)
+      {authority, _consent} = bound!(ctx, row.id)
 
       assert {:error, :anonymous_denied} =
-               Mount.resolve(%{ctx | anonymous: true}, authority, "claude", @root)
+               Mount.resolve(%{ctx | anonymous: true}, authority, "claude", "claude", @root)
     end
   end
 
-  describe "the reads of login entries" do
-    test "login_entry/3 answers the active login entry naming the program, by id or name",
+  describe "the reads of program rows" do
+    test "orphaned_homes/1 names each home no kept row of a live athanor holds, with its athanor",
          %{ctx: ctx} do
-      entry = login!(ctx, "claude", "my-claude")
+      kept = row!(ctx)
+      scratch = row!(ctx, %{name: "scratchy", home: "scratch"})
+      gone = row!(ctx, %{name: "gone"})
+      Arca.Repo.delete!(gone)
 
-      assert {:ok, %{id: id, name: "my-claude"}} = Mount.login_entry(ctx, entry.id, "claude")
-      assert id == entry.id
-      assert {:ok, %{id: ^id}} = Mount.login_entry(ctx, "my-claude", "claude")
+      assert {:ok, orphans} = Mount.orphaned_homes([kept.id, scratch.id, gone.id])
+      assert Enum.sort(orphans) == Enum.sort([{scratch.id, ctx.athanor_id}, {gone.id, nil}])
 
-      assert {:error, {:another_program, "claude"}} = Mount.login_entry(ctx, entry.id, "codex")
-      assert {:error, :not_found} = Mount.login_entry(ctx, "nobody", "claude")
-
-      {:ok, key} =
-        TestContext.create_vault(ctx, %{
-          name: "key",
-          kind: "api_key",
-          fields: %{"K" => "v"},
-          destination: %{"hosts" => ["api.example.com"]}
-        })
-
-      assert {:error, :not_a_login_entry} = Mount.login_entry(ctx, key.id, "claude")
-
-      {:ok, _} = Sanctum.Vault.revoke(ctx, entry.id)
-
-      assert {:error, {:entry_unavailable, "revoked"}} =
-               Mount.login_entry(ctx, entry.id, "claude")
-
-      :ok = Sanctum.Vault.delete(ctx, entry.id)
-      assert {:error, :not_found} = Mount.login_entry(ctx, entry.id, "claude")
+      Arca.Test.Actor.archive!(ctx.athanor_id)
+      assert {:ok, orphans} = Mount.orphaned_homes([kept.id])
+      assert orphans == [{kept.id, ctx.athanor_id}]
     end
 
-    test "a new login entry waits on its program's sign-in, which admits it, and its exit 0 " <>
-           "makes it active",
-         %{ctx: ctx} do
-      {:ok, view} =
-        TestContext.create_vault(ctx, %{name: "fresh", kind: "login", program: "claude"})
-
-      assert view.status == "needs_reauth"
-
-      # Nothing but a sign-in reaches it: a mount and a plain pick refuse it.
-      assert {:error, {:entry_unavailable, "needs_reauth"}} =
-               Mount.login_entry(ctx, view.id, "claude")
-
-      assert {:ok, %{status: "needs_reauth"}} =
-               Mount.login_entry(ctx, view.id, "claude", for: :sign_in)
-
-      assert :ok = Mount.signed_in(ctx, view.id)
-      assert {:ok, %{status: "active"}} = Mount.login_entry(ctx, view.id, "claude")
-    end
-
-    test "a sign-in admits an entry a restore left needs_reauth, and its exit 0 makes it active",
-         %{ctx: ctx} do
-      entry = login!(ctx, "claude", "after-restore")
-      actor = Sanctum.Context.actor(ctx)
-      {:ok, _} = Arca.VaultStorage.set_status(actor, entry.id, "needs_reauth")
-
-      # Nothing but a sign-in reaches it: a mount and a plain pick refuse it.
-      assert {:error, {:entry_unavailable, "needs_reauth"}} =
-               Mount.login_entry(ctx, entry.id, "claude")
-
-      assert {:ok, %{id: id, status: "needs_reauth"}} =
-               Mount.login_entry(ctx, entry.id, "claude", for: :sign_in)
-
-      assert id == entry.id
-
-      assert :ok = Mount.signed_in(ctx, entry.id)
-      assert {:ok, %{status: "active"}} = Mount.login_entry(ctx, entry.id, "claude")
-
-      # An active entry stays active, a revoked one is never brought back, and
-      # an entry of another kind is no login entry.
-      assert :ok = Mount.signed_in(ctx, entry.id)
-      {:ok, _} = Sanctum.Vault.revoke(ctx, entry.id)
-      assert {:error, {:entry_unavailable, "revoked"}} = Mount.signed_in(ctx, entry.id)
-
-      assert {:error, {:entry_unavailable, "revoked"}} =
-               Mount.login_entry(ctx, entry.id, "claude", for: :sign_in)
-
-      {:ok, key} =
-        TestContext.create_vault(ctx, %{
-          name: "a-key",
-          kind: "api_key",
-          fields: %{"K" => "v"},
-          destination: %{"hosts" => ["api.example.com"]}
-        })
-
-      assert {:error, :not_a_login_entry} = Mount.signed_in(ctx, key.id)
-    end
-
-    test "login_entry/3 reads the context's athanor alone", %{ctx: ctx} do
-      entry = login!(ctx)
-      other = %{ctx | athanor_id: Prima.UUID7.generate_id("ath")}
-      assert {:error, :not_found} = Mount.login_entry(other, entry.id, "claude")
-    end
-
-    test "home_of/2 names a login entry's home, a deleted one's included", %{ctx: ctx} do
-      entry = login!(ctx)
-      assert {:ok, home} = Mount.home_of(ctx.athanor_id, entry.id)
-      assert home == entry.id
-
-      :ok = Sanctum.Vault.delete(ctx, entry.id)
-      assert {:ok, ^home} = Mount.home_of(ctx.athanor_id, entry.id)
-
-      {:ok, key} =
-        TestContext.create_vault(ctx, %{
-          name: "key",
-          kind: "api_key",
-          fields: %{"K" => "v"},
-          destination: %{"hosts" => ["api.example.com"]}
-        })
-
-      assert :none = Mount.home_of(ctx.athanor_id, key.id)
-      assert :none = Mount.home_of(ctx.athanor_id, "vlt_missing")
-    end
-
-    test "login_entries/1 lists the athanor's living login entries", %{ctx: ctx} do
-      a = login!(ctx)
-      b = login!(ctx, "codex")
-      gone = login!(ctx)
-      :ok = Sanctum.Vault.delete(ctx, gone.id)
-
-      {:ok, _key} =
-        TestContext.create_vault(ctx, %{
-          name: "key",
-          kind: "api_key",
-          fields: %{"K" => "v"},
-          destination: %{"hosts" => ["api.example.com"]}
-        })
-
-      assert {:ok, ids} = Mount.login_entries(ctx.athanor_id)
-      assert Enum.sort(ids) == Enum.sort([a.id, b.id])
-    end
-
-    # An agent whose brain edge binds the entry, or selects a profile of
-    # its brain whose own ingress binds it, runs its brain in the home; one
+    # An agent whose brain edge binds the row, or selects a profile of its
+    # brain whose own ingress binds it, runs its brain in the home; one
     # whose edge to a hand binds it, or whose brain's profile binds it only
     # on an edge of the brain's own, does not.
-    test "agents_mounting/2 names the agents whose brain edge reaches the entry", %{ctx: ctx} do
-      entry = login!(ctx)
-      elsewhere = login!(ctx)
+    test "agents_mounting/2 names the agents whose brain edge reaches the binding", %{ctx: ctx} do
+      entry = binding_target!(ctx)
+      elsewhere = binding_target!(ctx)
 
       bound = fn key, id ->
         %{binding_key: key, vault_entry_id: id, binding_digest: "sha256:b"}
@@ -462,6 +301,19 @@ defmodule Sanctum.MountTest do
       assert Enum.sort(names) == ["bare", "borrower", "member"]
       assert {:ok, ["lent"]} = Mount.agents_mounting(ctx.athanor_id, elsewhere.id)
     end
+  end
+
+  # What a head's row names as its bound value: the consent store's rows
+  # reference a vault entry, so the read of the edges binding one is shown
+  # on an entry's id; `agents_mounting/2` passes the id through whole.
+  defp binding_target!(ctx) do
+    {:ok, view} =
+      TestContext.create_signed_in_login(ctx, %{
+        name: "login-#{System.unique_integer([:positive])}",
+        program: "claude"
+      })
+
+    view
   end
 
   # The agent `name`'s index row, its brain `catalyst_ref`.
@@ -510,30 +362,5 @@ defmodule Sanctum.MountTest do
         refs,
         nil
       )
-  end
-
-  describe "an attach" do
-    test "never attaches a login entry", %{ctx: ctx} do
-      entry = login!(ctx)
-      {authority, _consent} = bound!(ctx, entry)
-
-      vault = %{
-        authority.resources.vault
-        | attach: %{in: "header", name: "x", template: "{value}"}
-      }
-
-      assert {:error, :connection_not_granted} =
-               Sanctum.Attach.resolve(
-                 ctx,
-                 %{vault | projection: %{fields: %{"K" => "K"}, scopes: []}},
-                 "claude",
-                 %{uri: URI.parse("https://api.example.com/"), method: "POST"},
-                 %{
-                   root_execution_id: @root,
-                   profile_id: authority.profile_id,
-                   consent_id: authority.consent_id
-                 }
-               )
-    end
   end
 end
