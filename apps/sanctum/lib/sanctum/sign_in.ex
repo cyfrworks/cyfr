@@ -459,7 +459,12 @@ defmodule Sanctum.SignIn do
   which the setup and invitation pages name before they send it there.
   """
   @spec directory_host() :: String.t()
-  def directory_host, do: URI.parse(directory()).host
+  def directory_host do
+    # The boot refused a directory URL with no host (`directory/0`).
+    case URI.parse(directory()) do
+      %URI{host: host} when is_binary(host) -> host
+    end
+  end
 
   # The directory's origin: its account pages are served at its root. The
   # boot refused a deployment naming none, or one that is no directory URL
