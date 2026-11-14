@@ -178,38 +178,26 @@ defmodule Emissary.MCP.Router do
         arguments
       )
     else
-      # Check tool existence first — unknown tools are protocol errors per spec
+      # Unknown tools are protocol errors per spec. A `server:tool` name is
+      # an outside server's, which the catalogue does not hold: the gate
+      # resolves it (the server, the tool, its `console` setting) as part
+      # of its admission and refuses one no server answers.
       case Sanctum.Catalog.get_tool(name) do
-        {:error, :not_found} ->
-          refused(
-            ctx,
-            :invalid_params,
-            {:not_found, "tool", name},
-            "Unknown tool: #{name}",
-            name,
-            arguments
-          )
-
         {:ok, tool_def} ->
-          has_output_schema = Map.has_key?(tool_def, "outputSchema")
+          call_tool(ctx, name, arguments, Map.has_key?(tool_def, "outputSchema"))
 
-          case Sanctum.Gate.call_external(name, ctx, arguments,
-                 runner: :supervised,
-                 call_id: ctx.call_id
-               ) do
-            {:ok, result} ->
-              {:ok, call_result(name, result, has_output_schema)}
-
-            {:error, reason} ->
-              if protocol_refusal?(reason) do
-                protocol_error(ctx, reason, :tools_call)
-              else
-                {:ok,
-                 %{
-                   "content" => [%{"type" => "text", "text" => Sanctum.Refusals.render(reason)}],
-                   "isError" => true
-                 }}
-              end
+        {:error, :not_found} ->
+          if String.contains?(name, ":") do
+            call_tool(ctx, name, arguments, false)
+          else
+            refused(
+              ctx,
+              :invalid_params,
+              {:not_found, "tool", name},
+              "Unknown tool: #{name}",
+              name,
+              arguments
+            )
           end
       end
     end
@@ -343,6 +331,27 @@ defmodule Emissary.MCP.Router do
       # as the MCP resource error.
       {:error, reason} ->
         protocol_error(ctx, reason, :resources_read)
+    end
+  end
+
+  defp call_tool(ctx, name, arguments, has_output_schema) do
+    case Sanctum.Gate.call_external(name, ctx, arguments,
+           runner: :supervised,
+           call_id: ctx.call_id
+         ) do
+      {:ok, result} ->
+        {:ok, call_result(name, result, has_output_schema)}
+
+      {:error, reason} ->
+        if protocol_refusal?(reason) do
+          protocol_error(ctx, reason, :tools_call)
+        else
+          {:ok,
+           %{
+             "content" => [%{"type" => "text", "text" => Sanctum.Refusals.render(reason)}],
+             "isError" => true
+           }}
+        end
     end
   end
 

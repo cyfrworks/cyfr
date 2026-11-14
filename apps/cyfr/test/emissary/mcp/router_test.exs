@@ -330,6 +330,103 @@ defmodule Emissary.MCP.RouterTest do
     end
   end
 
+  # An outside server's tools are called by the names `tools list` gives
+  # them, `server:tool`, which the catalogue does not hold: the gate
+  # resolves the name, and the server's `console` setting decides whether
+  # a call from outside a chain reaches it.
+  describe "dispatch/2 with tools/call by an outside server's name" do
+    setup do
+      stub = Cyfr.Test.HTTPStub.open()
+      test = self()
+
+      Cyfr.Test.HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        body = Jason.decode!(raw)
+
+        result =
+          case body["method"] do
+            "tools/list" ->
+              %{"tools" => [%{"name" => "hello", "inputSchema" => %{"type" => "object"}}]}
+
+            "tools/call" ->
+              send(test, {:tools_call, body["params"]})
+              %{"content" => [%{"type" => "text", "text" => "hello back"}]}
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end)
+
+      {:ok, url: "http://127.0.0.1:#{stub.port}/mcp"}
+    end
+
+    defp outside_server(ctx, name, url, config) do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: name,
+          url: url,
+          config_json: Jason.encode!(config)
+        })
+
+      # `tools list` caches the athanor's outside tools: the entry goes with
+      # the server, so no later test reads this one.
+      on_exit(fn ->
+        Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id)
+        Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+      end)
+    end
+
+    test "a listed name of a server with console on is called", %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+
+      {:ok, %{tools: tools}} =
+        Sanctum.Providers.System.handle("tools", ctx, %{"action" => "list"})
+
+      assert "greeter:hello" in Enum.map(tools, & &1["name"])
+
+      assert call(ctx, "greeter:hello", %{"who" => "Oren"}) ==
+               {:ok,
+                %{
+                  "content" => [
+                    %{
+                      "type" => "text",
+                      "text" =>
+                        Jason.encode!(%{
+                          "content" => [%{"type" => "text", "text" => "hello back"}]
+                        })
+                    }
+                  ],
+                  "isError" => false
+                }}
+
+      assert_received {:tools_call, %{"name" => "hello", "arguments" => %{"who" => "Oren"}}}
+    end
+
+    test "a server without console is refused with the setting to turn on", %{
+      context: ctx,
+      url: url
+    } do
+      outside_server(ctx, "inside-only", url, %{})
+
+      assert call(ctx, "inside-only:hello", %{}) ==
+               {:error, :invalid_params,
+                "Tool 'hello' on server 'inside-only' is reachable only from inside a " <>
+                  "chain — set \"console\": true in the server's config to call it from the console"}
+
+      refute_received {:tools_call, _}
+    end
+
+    test "a name no server answers is an unknown tool", %{context: ctx} do
+      assert call(ctx, "nobody:hello", %{}) ==
+               {:error, :invalid_params, "Unknown tool: nobody:hello"}
+    end
+  end
+
   describe "dispatch/2 with resources/list" do
     test "delegates to Sanctum.Resources and returns resources list", %{context: ctx} do
       msg = %Message{

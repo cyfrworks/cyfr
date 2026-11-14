@@ -916,9 +916,8 @@ defmodule Sanctum.Dispatch do
   defp proxied(name, ctx, args, opts, in_chain?) do
     if String.contains?(name, ":") and not ctx.authenticated do
       # External tools carry no per-tool requires_auth metadata; all of
-      # them require authentication. The HTTP router never routes unknown
-      # names here, so this guards the in-process callers (FormulaHandler,
-      # LiveViews). Bare unknown names fall through so they still produce
+      # them require authentication, whichever entry the call came by.
+      # Bare unknown names fall through so they still produce
       # "Unknown tool".
       refused(opts, args, Refusals.admission({:tool_auth_required, name}))
     else

@@ -373,6 +373,8 @@ cyfr mcp list
 # Server tools appear as github:tool_name in your tool list
 ```
 
+A component's chain calls a server's tools by those names once its grant covers the server. From outside a chain, by `cyfr call github:tool_name`, the API or `/mcp`, a server's tools are reached only when its config sets `"console": true`; without it the call is refused and names the setting.
+
 Header values support vault references (`vault:ENTRY_NAME`, or with a scheme,
 `Bearer vault:ENTRY_NAME`) — the named vault entry's single field is resolved at request
 time, after the scheme when there is one, so credentials stay encrypted at rest and never
