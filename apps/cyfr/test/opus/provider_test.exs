@@ -773,7 +773,12 @@ defmodule Opus.ProviderTest do
 
       assert {answer["result"]["isError"], answer["result"]["content"]} ==
                {true,
-                [%{"type" => "text", "text" => "This athanor is still being prepared — retry shortly"}]}
+                [
+                  %{
+                    "type" => "text",
+                    "text" => "This athanor is still being prepared — retry shortly"
+                  }
+                ]}
 
       assert {started(ctx), slots(ctx)} == before
     end
