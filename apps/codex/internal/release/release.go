@@ -35,19 +35,28 @@ func IsVersion(v string) bool { return versionPattern.MatchString(v) }
 func IsPrerelease(v string) bool { return IsVersion(v) && strings.Contains(v, "-") }
 
 // ErrNoRelease is Latest's answer when GitHub lists no published release
-// that is not a pre-release.
-var ErrNoRelease = errors.New("no CYFR release is published yet apart from pre-releases")
+// to take.
+var ErrNoRelease = errors.New("no CYFR release is published yet")
 
 // apiURL is the GitHub releases endpoint for the CYFR repo. It is a package
 // variable so tests can point it at an httptest server.
 var apiURL = "https://api.github.com/repos/cyfrworks/cyfr/releases?per_page=20"
 
-// Latest returns the newest published CYFR release that is not a
-// pre-release (e.g. "0.6.0"): the greatest such tag by Compare, so the
-// order the API lists releases in never picks an older line's later patch.
-// Drafts, releases GitHub marks as pre-releases, tags with a pre-release
-// and tags outside the release-version grammar are skipped; none left
-// is ErrNoRelease.
+// listedRelease is a release as the GitHub releases API lists it.
+type listedRelease struct {
+	TagName    string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+}
+
+// Latest returns the release an install or an update takes when no version
+// is named: the newest published release that is not a pre-release and,
+// while none is published, the newest pre-release. A pre-release is one
+// GitHub marks as such or whose tag carries a pre-release; drafts and tags
+// outside the release-version grammar are skipped, and newest is the
+// greatest by Compare, whatever order the API lists them in. None left is
+// ErrNoRelease. tests/fixtures/release_manifest.json's selection holds the
+// rule, which scripts/install.sh and Cyfr.ReleaseChannel keep too.
 func Latest(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
@@ -63,28 +72,35 @@ func Latest(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
 	}
 
-	var releases []struct {
-		TagName    string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
-	}
+	var releases []listedRelease
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		return "", err
 	}
+	if latest := pick(releases); latest != "" {
+		return latest, nil
+	}
+	return "", ErrNoRelease
+}
 
-	latest := ""
+// pick is Latest's choice from a listing, "" when it holds none to take.
+func pick(releases []listedRelease) string {
+	release, prerelease := "", ""
 	for _, r := range releases {
-		if r.Draft || r.Prerelease || !IsVersion(r.TagName) || IsPrerelease(r.TagName) {
+		if r.Draft || !IsVersion(r.TagName) {
 			continue
 		}
-		if latest == "" || IsNewer(r.TagName, latest) {
-			latest = r.TagName
+		newest := &release
+		if r.Prerelease || IsPrerelease(r.TagName) {
+			newest = &prerelease
+		}
+		if *newest == "" || IsNewer(r.TagName, *newest) {
+			*newest = r.TagName
 		}
 	}
-	if latest == "" {
-		return "", ErrNoRelease
+	if release != "" {
+		return release
 	}
-	return latest, nil
+	return prerelease
 }
 
 // IsNewer reports whether latest is a release version of strictly higher

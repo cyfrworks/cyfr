@@ -6,8 +6,8 @@ defmodule Cyfr.ReleaseChannelTest do
   The release channel `cyfr update` reads, as the status a canvas reads
   asks it: the CLI's version grammar and precedence, held to
   tests/fixtures/release_manifest.json's `versions`; the CLI's choice of
-  the newest release over listings with drafts, pre-releases and
-  malformed tags; and the process, on a read and a clock of the test's
+  the newest release, held to its `selection`, and over malformed
+  entries; and the process, on a read and a clock of the test's
   own, which serves its answer without waiting, reads a stale one once in
   the background, keeps the last answer through a failure and tries again
   no sooner than an hour later, and ends its read when it stops or dies.
@@ -20,10 +20,11 @@ defmodule Cyfr.ReleaseChannelTest do
 
   alias Cyfr.ReleaseChannel
 
-  @versions Path.expand("../../../../tests/fixtures/release_manifest.json", __DIR__)
-            |> File.read!()
-            |> Jason.decode!()
-            |> Map.fetch!("versions")
+  @vectors Path.expand("../../../../tests/fixtures/release_manifest.json", __DIR__)
+           |> File.read!()
+           |> Jason.decode!()
+  @versions Map.fetch!(@vectors, "versions")
+  @selection Map.fetch!(@vectors, "selection")
 
   @day :timer.hours(24)
   @hour :timer.hours(1)
@@ -68,7 +69,15 @@ defmodule Cyfr.ReleaseChannelTest do
       assert ReleaseChannel.newest(releases) == "99999999999999.0.0"
     end
 
-    test "skips drafts, GitHub pre-releases, tags outside the grammar and tags with a pre-release" do
+    test "takes from each listing the release the shared selection rows name" do
+      assert @selection != []
+
+      for %{"name" => name, "releases" => releases, "picks" => picks} <- @selection do
+        assert ReleaseChannel.newest(releases) == picks, name
+      end
+    end
+
+    test "skips drafts and entries that are no release, and newer pre-releases beside a release" do
       releases = [
         %{"tag_name" => "9.0.0", "draft" => true, "prerelease" => false},
         %{"tag_name" => "8.0.0", "draft" => false, "prerelease" => true},
@@ -83,14 +92,6 @@ defmodule Cyfr.ReleaseChannelTest do
       ]
 
       assert ReleaseChannel.newest(releases) == "1.10.0"
-    end
-
-    test "is none when nothing is left" do
-      assert ReleaseChannel.newest([]) == nil
-
-      assert ReleaseChannel.newest([
-               %{"tag_name" => "0.6.0-alpha.13", "draft" => false, "prerelease" => true}
-             ]) == nil
     end
   end
 

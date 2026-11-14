@@ -602,9 +602,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},
       {"apps/codex/internal/release/manifest_test.go",
        ~w(valid valid_prerelease refused versions signature)},
+      {"apps/codex/internal/release/release_test.go", ~w(selection)},
       {"apps/codex/internal/scaffold/scaffold_test.go", ~w(signature)},
-      {"apps/cyfr/test/cyfr/release_channel_test.exs", ~w(versions)},
+      {"apps/cyfr/test/cyfr/release_channel_test.exs", ~w(versions selection)},
       {"tests/ci-release-graph.py", ~w(valid valid_prerelease refused versions signature)},
+      {"tests/install-verify-test.sh", ~w(selection)},
       {"tests/release-boot-test.sh", ~w(versions)}
     ],
     "restore_barrier.json" => [

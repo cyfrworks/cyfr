@@ -81,10 +81,11 @@ func (h handedOver) Error() string {
 // over to the new program, answering finished once that program has run
 // it (a child, on Windows); on Unix a handover that succeeds never
 // returns. The target is --version's exact release, older or a
-// pre-release included, else release.Latest's, installed only when
-// release.IsNewer says it is newer than this one, so a plain update never
-// moves to a pre-release, an older line's later patch never downgrades and
-// a development build is never replaced. Outside Homebrew nothing is
+// pre-release included, else release.Latest's (the newest release that is
+// not a pre-release, or while none is published the newest pre-release),
+// installed only when release.IsNewer says it is newer than this one, so
+// an older line's later patch never downgrades and a development build is
+// never replaced. Outside Homebrew nothing is
 // written before the archive verifies, and the program is replaced by a
 // rename, so a failure leaves the running one in place.
 func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, error) {
@@ -103,7 +104,7 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 		cancel()
 		switch {
 		case errors.Is(err, release.ErrNoRelease):
-			fmt.Fprintf(out, "No release of CYFR is published yet apart from pre-releases, so this cyfr (%s) stays; name one with 'cyfr update --version <version>' (%s lists them).\n", current, releasesPage)
+			fmt.Fprintf(out, "No release of CYFR is published yet, so this cyfr (%s) stays.\n", current)
 			return false, nil
 		case err != nil:
 			return false, fmt.Errorf("cyfr update could not look up the newest release (%v); nothing was changed", err)

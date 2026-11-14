@@ -83,10 +83,11 @@ missing() {
 . "$HERE/lib.sh" || missing
 proof_traps
 
-# The published release the guests install. This tree's server image runs
+# The published release the guests install, INSTALL_VERSION, is the one
+# the bare install line takes, read below by the installer's own
+# resolve_version before anything starts. This tree's server image runs
 # under its docker-compose.yml and beside its locus images, so its stack
 # files are this tree's.
-INSTALL_VERSION=0.6.0-alpha.6
 
 usage() { echo "usage: $0 [--out DIR] [--no-tpm]"; }
 # The guest's TPM: an isolated swtpm of its own, or none (--no-tpm).
@@ -135,6 +136,11 @@ OUT=$(cd "$OUT" && pwd)
 PROOF_WORK=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_PREFIX}install-screen.XXXXXX") || exit 1
 WORK=$PROOF_WORK
 echo "install proof: prefix $PROOF_PREFIX, evidence in $OUT"
+
+sed '$d' "$ROOT/scripts/install.sh" >"$WORK/install-functions.sh" || exit 1
+INSTALL_VERSION=$(sh -c '. "$1"; unset CYFR_VERSION; resolve_version' sh "$WORK/install-functions.sh") ||
+  { echo "install proof: the release the install line takes could not be read from GitHub's listing" >&2; exit 69; }
+echo "install proof: the install line takes release $INSTALL_VERSION"
 
 transcript_has() { grep -qE -- "$2" "$GUEST_DIR/transcript-$1.txt"; }
 
@@ -233,14 +239,16 @@ box_install() {
   guest_copy_in "$ROOT/scripts/install.sh" install.sh || fail "the install script was not copied into the guest"
 
   step "the install script, typed into tty1's terminal"
-  pane_step script "cat install.sh | CYFR_VERSION=$INSTALL_VERSION sh" 900 'Install cosign\? \[y/N\]' y "$SUDO_PROMPT" @password
+  pane_step script "cat install.sh | sh" 900 'Install cosign\? \[y/N\]' y "$SUDO_PROMPT" @password
   check "the install script exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "the bare install line takes release $INSTALL_VERSION and says which it took" transcript_has script "^Installing cyfr v${INSTALL_VERSION//./\\.}, the newest (release|pre-release, since no release that is not a pre-release is published yet) \\(linux/amd64\\)"
   check "it asks to install cosign once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
   check "it shows the commands before it asks" sh -c 'sed "/Install cosign/q" "$1" | grep -qx "  sudo apt-get update" && sed "/Install cosign/q" "$1" | grep -qx "  sudo apt-get install -y cosign"' sh "$GUEST_DIR/transcript-script.txt"
   check "the release's signature is verified" transcript_has script 'Signature verified'
   guest_ssh 'stat -c "%U %a" ~/.local/bin/cyfr' >"$GUEST_DIR/cyfr.txt" 2>&1
   check "cyfr is in ~/.local/bin, the person's" grep -qE '^proof 7[0-9]{2}$' "$GUEST_DIR/cyfr.txt"
   check "the install script linked cyfr onto PATH" transcript_has script 'sudo ln -sf /home/proof/.local/bin/cyfr /usr/local/bin/cyfr'
+  check "it says it linked cyfr" transcript_has script '^Linked /usr/local/bin/cyfr to /home/proof/\.local/bin/cyfr, so cyfr is on your PATH\.'
   pane_step_end script
 
   step "cyfr init on a machine without Docker, its screen question answered 1"

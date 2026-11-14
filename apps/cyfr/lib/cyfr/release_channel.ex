@@ -9,14 +9,16 @@ defmodule Cyfr.ReleaseChannel do
   The channel is the CYFR repository's releases on GitHub, read through
   the control plane's pinned transport (`Sanctum.Egress`) with a bounded
   answer. The newest release is chosen by the CLI's rule
-  (`apps/codex/internal/release`): drafts, releases GitHub marks as
-  pre-releases, tags outside the release-version grammar (`version?/1`)
-  and tags carrying a pre-release are skipped, and the rest's greatest by
-  SemVer precedence is it (`newest/1`). An update is available when it is
+  (`apps/codex/internal/release`, `newest/1`): the greatest by SemVer
+  precedence of the releases that are not pre-releases and, while none is
+  listed, of the pre-releases, a pre-release being one GitHub marks as such
+  or whose tag carries one; drafts and tags outside the release-version
+  grammar (`version?/1`) are skipped. An update is available when it is
   strictly higher than `Prima.Version.current/0` and both are release
   versions (`newer?/2`), so a listing with no release, or a build that is
   none, is told of no update. `tests/fixtures/release_manifest.json`'s
-  `versions` hold the grammar and the precedence to the CLI's.
+  `versions` hold the grammar and the precedence to the CLI's, and its
+  `selection` the choice.
 
   The channel is read only when asked: at most once a day, and after a
   failed read no sooner than an hour later, keeping the last answer. A
@@ -76,17 +78,25 @@ defmodule Cyfr.ReleaseChannel do
   """
   @spec newest(list()) :: String.t() | nil
   def newest(releases) when is_list(releases) do
-    releases
-    |> Enum.flat_map(fn
-      %{"tag_name" => tag} = release ->
-        if release["draft"] == true or release["prerelease"] == true or not version?(tag) or
-             String.contains?(tag, "-"),
-           do: [],
-           else: [tag]
+    {prereleases, releases} =
+      releases
+      |> Enum.flat_map(fn
+        %{"tag_name" => tag} = release ->
+          if release["draft"] == true or not version?(tag),
+            do: [],
+            else: [{release["prerelease"] == true or String.contains?(tag, "-"), tag}]
 
-      _other ->
-        []
-    end)
+        _other ->
+          []
+      end)
+      |> Enum.split_with(fn {prerelease?, _tag} -> prerelease? end)
+
+    greatest(releases) || greatest(prereleases)
+  end
+
+  defp greatest(tagged) do
+    tagged
+    |> Enum.map(fn {_prerelease?, tag} -> tag end)
     |> Enum.max(&(Version.compare(&1, &2) != :lt), fn -> nil end)
   end
 
