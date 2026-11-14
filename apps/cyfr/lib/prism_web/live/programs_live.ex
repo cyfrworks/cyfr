@@ -616,8 +616,25 @@ defmodule PrismWeb.ProgramsLive do
   defp form_name(%{assigns: %{editing: %{name: name}}}, _params), do: name
   defp form_name(_socket, params), do: trimmed(params, "name")
 
-  # The form an edit opens and what it holds: the program form for one
-  # backend, the config form, as JSON, for more.
+  # A row's whole definition as an update takes it: its config, and a tool
+  # server's address, which the row holds beside it.
+  defp definition(%{transport: "http", url: url} = detail),
+    do: Map.put(config(detail), "url", url)
+
+  defp definition(detail), do: config(detail)
+
+  # The form an edit opens and what it holds: a tool server's own
+  # form, the program form for one backend, the config form, as JSON, for
+  # more.
+  defp edit_prefill(%{"transport" => "http"} = config) do
+    {"server",
+     %{
+       "url" => config["url"],
+       "headers" =>
+         Enum.map_join(Enum.sort(config["headers"] || %{}), "\n", fn {k, v} -> "#{k}: #{v}" end)
+     }}
+  end
+
   defp edit_prefill(%{"backends" => [backend]} = config) do
     {"program",
      %{
@@ -631,22 +648,6 @@ defmodule PrismWeb.ProgramsLive do
        "login_command" => config["login_command"],
        "login_entry_id" => config["login_entry_id"],
        "hosts" => config["hosts"]
-     }}
-  end
-
-  # A row's whole definition as an update takes it: its config, and a tool
-  # server's address, which the row holds beside it.
-  defp definition(%{transport: "http", url: url} = detail),
-    do: Map.put(config(detail), "url", url)
-
-  defp definition(detail), do: config(detail)
-
-  defp edit_prefill(%{"transport" => "http"} = config) do
-    {"server",
-     %{
-       "url" => config["url"],
-       "headers" =>
-         Enum.map_join(Enum.sort(config["headers"] || %{}), "\n", fn {k, v} -> "#{k}: #{v}" end)
      }}
   end
 
