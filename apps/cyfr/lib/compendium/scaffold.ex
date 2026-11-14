@@ -189,7 +189,9 @@ defmodule Compendium.Scaffold do
              status: "created",
              reference: reference,
              files: file_list,
-             next_steps: next_steps(type, reference, template && template.name)
+             next_steps: [
+               where_to_edit(base_path) | next_steps(type, reference, template && template.name)
+             ]
            }}
 
         # A commit's typed refusals are the vocabulary the surfaces
@@ -510,8 +512,7 @@ defmodule Compendium.Scaffold do
         "cyfr:http/fetch requests. CYFR attaches the credential in the control plane " <>
         "without handing it to the component",
       "Edit src/src/lib.rs to implement your catalyst logic",
-      "Compile: use build.compile with reference '#{reference}'",
-      "Register: use component.register to index the compiled binary"
+      compile_step(reference)
     ]
   end
 
@@ -523,16 +524,14 @@ defmodule Compendium.Scaffold do
         "is the component-private scope — grant 'components/' only when the component " <>
         "genuinely manages component trees)",
       "Edit src/src/lib.rs to implement your formula logic",
-      "Compile: use build.compile with reference '#{reference}'",
-      "Register: use component.register to index the compiled binary"
+      compile_step(reference)
     ]
   end
 
   defp next_steps("reagent", reference, _template) do
     [
       "Edit src/src/lib.rs to implement your compute logic",
-      "Compile: use build.compile with reference '#{reference}'",
-      "Register: use component.register to index the compiled binary"
+      compile_step(reference)
     ]
   end
 
@@ -549,12 +548,11 @@ defmodule Compendium.Scaffold do
       "Replace #{Path.join(Compendium.Tincture.default_icon())} and " <>
         "#{Path.join(Compendium.Tincture.default_preview())} to brand the picker card " <>
         "(add up to #{Compendium.Tincture.preview_count()} previews)",
-      "Compile: use build.compile with reference '#{reference}'",
-      "Register: use component.register to index the built tincture"
+      compile_step(reference)
     ]
   end
 
-  defp next_steps("tincture", reference, _template) do
+  defp next_steps("tincture", _reference, _template) do
     [
       "Edit index.html, app.js, and style.css to build your UI",
       "The cyfr SDK (window.cyfr) is injected into the page — use " <>
@@ -563,9 +561,33 @@ defmodule Compendium.Scaffold do
       "Replace #{Path.join(Compendium.Tincture.default_icon())} and " <>
         "#{Path.join(Compendium.Tincture.default_preview())} to brand the picker card " <>
         "(add up to #{Compendium.Tincture.preview_count()} previews)",
-      "Register: use component.register with reference '#{reference}'"
+      register_step()
     ]
   end
+
+  # The steps name what a person types and what a tool call sends, each
+  # as it exists: a compile registers what it built, and a vanilla
+  # tincture, which has nothing to compile, is registered by the scan
+  # every local component takes.
+  @doc false
+  def where_to_edit(base_path),
+    do:
+      "The files are under #{Path.join(base_path)}/ in the athanor's storage: edit them " <>
+        "through Files, the console's Files page or the files tool"
+
+  @doc false
+  def compile_step(reference),
+    do:
+      "Compile: cyfr build compile #{reference}, or the build tool's compile action with " <>
+        "reference '#{reference}'; a compile registers what it built"
+
+  @doc false
+  def register_step, do: "Register: " <> register_how()
+
+  @doc false
+  def register_how,
+    do:
+      "cyfr register, or the component tool's register action, which registers every local component"
 
   # ============================================================================
   # Tincture Templates
