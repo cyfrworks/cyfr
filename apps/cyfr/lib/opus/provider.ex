@@ -230,10 +230,10 @@ defmodule Opus.Provider do
       "Completed: #{Prima.Time.iso8601(record.completed_at) || "N/A"}",
       "Duration: #{record.duration_ms || 0}ms",
       "",
-      "Reference: #{inspect(record.reference)}",
+      "Reference: #{record.reference}",
       "",
       "Input:",
-      inspect(record.input, pretty: true),
+      Prima.Json.safe_encode(record.input),
       ""
     ]
 
@@ -242,7 +242,7 @@ defmodule Opus.Provider do
         lines ++
           [
             "Output:",
-            inspect(record.output, pretty: true),
+            Prima.Json.safe_encode(record.output),
             ""
           ]
       else
@@ -737,48 +737,30 @@ defmodule Opus.Provider do
     {:error, {:invalid_argument, "Missing required argument: profile_id"}}
   end
 
-  # Start the execution in the background and answer its id and stream URL;
-  # the caller follows the SSE endpoint for intermediate events.
+  # Admit the run, then answer its id and stream URL while it goes on in
+  # the background (`Opus.start_root/5`); the caller follows the SSE
+  # endpoint for its events. A run admission refuses answers that refusal
+  # here, in the words and code a plain run answers with, and leaves no
+  # stream behind.
   defp start_root("run_stream", ctx, args) do
     reference = args["reference"]
-    input = args["input"] || %{}
-
+    selector = profile_selector(args)
     execution_id = Record.generate_id()
 
-    opts = build_run_opts(args)
-    opts = [{:execution_id, execution_id} | opts]
-    # This execution IS the root — its emit target is itself
-    opts = [{:root_execution_id, execution_id} | opts]
+    # This execution IS the root: its emit target, where a setup_required
+    # event is streamed, is itself.
+    opts = [execution_id: execution_id, root_execution_id: execution_id] ++ build_run_opts(args)
 
-    # Spawn execution in background, registering PID for cancellation
-    logger_metadata = Prima.LoggerContext.capture()
-
-    case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
-           Prima.LoggerContext.restore(logger_metadata)
-
-           case Registry.register(Opus.Registry, execution_id, :running) do
-             {:ok, _} ->
-               run_root_formatted(ctx, reference, input, opts, args)
-
-             {:error, reason} ->
-               Logger.error(
-                 "[Opus.Provider] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
-               )
-           end
-         end) do
-      {:ok, _pid} ->
+    case Opus.start_root(ctx, selector, reference, args["input"] || %{}, opts) do
+      {:ok, ^execution_id} ->
         {:ok,
          %{
            execution_id: execution_id,
            stream_url: "/api/executions/#{execution_id}/events"
          }}
 
-      {:error, reason} ->
-        Logger.error(
-          "[Opus.Provider] Failed to spawn execution #{execution_id}: #{inspect(reason)}"
-        )
-
-        {:error, "execution_spawn_failed"}
+      refused ->
+        format_admission(refused, ctx, selector, reference)
     end
   end
 
@@ -876,14 +858,21 @@ defmodule Opus.Provider do
 
   defp rooted_at(_ctx, %Record{}), do: {:error, :retry_grant_moved}
 
+  defp run_root_formatted(ctx, reference, input, opts, args) do
+    selector = profile_selector(args)
+
+    ctx
+    |> Opus.run_root(selector, reference, input, opts)
+    |> format_admission(ctx, selector, reference)
+  end
+
+  # A run's answer, or its refusal in the words a run and a stream share.
   # A run stands on its person's grant. With none to stand on, the refusal
   # names its cause: a reference that names no component is not found,
   # whatever profiles exist, and otherwise the component was never granted
   # or its grant was revoked (`Sanctum.Consent.ungranted/2`).
-  defp run_root_formatted(ctx, reference, input, opts, args) do
-    selector = profile_selector(args)
-
-    case Opus.run_root(ctx, selector, reference, input, opts) do
+  defp format_admission(result, ctx, selector, reference) do
+    case result do
       {:error, :no_profile} when selector == :default ->
         ungranted(ctx, reference)
 

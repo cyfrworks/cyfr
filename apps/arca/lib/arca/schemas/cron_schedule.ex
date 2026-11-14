@@ -53,9 +53,14 @@ defmodule Arca.Schemas.CronSchedule do
     field :athanor_id, :string
     field :last_run_at, :utc_datetime_usec
     field :next_run_at, :utc_datetime_usec
+    # The run of the last fire, failed or not: none when that fire failed
+    # before a run started.
     field :last_execution_id, :string
     field :run_count, :integer, default: 0
     field :error_count, :integer, default: 0
+    # Why the last fire failed, in words a person reads; cleared by the
+    # next fire that succeeds.
+    field :last_error, :string
     # Whether a due occurrence is claimed while another of this schedule
     # is still open: `forbid` or `allow` (`Arca.ScheduleOccurrences`).
     field :concurrency, :string, default: "forbid"

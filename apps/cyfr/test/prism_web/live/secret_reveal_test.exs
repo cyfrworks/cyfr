@@ -51,7 +51,7 @@ defmodule PrismWeb.SecretRevealTest do
     {view, _html} = conn |> log_in_user(user) |> mount_athanor("/api-keys")
 
     render_click(view, "toggle_create")
-    render_submit(view, "create", %{"name" => "reveal-probe", "type" => "application"})
+    render_submit(view, "create", %{"name" => "reveal-probe"})
 
     # Nothing minted until the record is confirmed.
     refute assigns(view).new_key

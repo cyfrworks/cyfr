@@ -794,6 +794,7 @@ defmodule Opus.Schedules.Provider do
       last_execution_id: schedule.last_execution_id,
       run_count: schedule.run_count,
       error_count: schedule.error_count,
+      last_error: schedule.last_error,
       created_at: DateTime.to_iso8601(schedule.created_at),
       updated_at: DateTime.to_iso8601(schedule.updated_at)
     }

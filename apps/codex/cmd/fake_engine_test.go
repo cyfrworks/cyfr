@@ -46,6 +46,7 @@ type fakeStack struct {
 	checkErr             error
 	status               access.Status
 	cancelErr, forgetErr error
+	holdErr, releaseErr  error
 	startReceipt         access.Receipt
 	startErr             error
 	stopReceipt          access.Receipt
@@ -452,6 +453,16 @@ func (e *fakeEngine) CancelWaitingJoin(ctx context.Context) error {
 	e.s.cancels++
 	e.s.mu.Unlock()
 	return e.s.cancelErr
+}
+
+func (e *fakeEngine) Hold(cause string) error {
+	e.s.logLine("hold %s", cause)
+	return e.s.holdErr
+}
+
+func (e *fakeEngine) Release() error {
+	e.s.logLine("release")
+	return e.s.releaseErr
 }
 
 func (e *fakeEngine) ForgetJoin() error {
