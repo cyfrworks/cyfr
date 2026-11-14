@@ -153,7 +153,6 @@ defmodule PrismWeb.AquaSetupTest do
     # key: its request goes to the upstream with the key CYFR attaches.
     said = "Hello from your brain."
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-    trace_setup_refusals!()
 
     script = [
       %{
@@ -178,7 +177,6 @@ defmodule PrismWeb.AquaSetupTest do
       "the turn"
     )
 
-    print_setup_refusals!()
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn_id)
 
     assert [%{kind: "text", content: ^said}] =
@@ -194,45 +192,4 @@ defmodule PrismWeb.AquaSetupTest do
 
     Cyfr.Test.Sandbox.end_views()
   end
-
-  # Diagnostic for one run: where the loop turns a brain's refusal into
-  # setup (`needs_setup/1` for a refusal before the turn ran, `refused/3`
-  # for one a step answered), printed with the refusal it was given.
-  @refusal_traces [{Aqua.Loop, :needs_setup, 1}, {Aqua.Loop, :refused, 3}]
-
-  defp trace_setup_refusals! do
-    :erlang.trace(:all, true, [:call, {:tracer, self()}])
-
-    for mfa <- @refusal_traces,
-        do: :erlang.trace_pattern(mfa, [{:_, [], [{:return_trace}]}], [:local])
-  end
-
-  defp print_setup_refusals! do
-    :erlang.trace(:all, false, [:call])
-    for mfa <- @refusal_traces, do: :erlang.trace_pattern(mfa, false, [:local])
-    drain_refusal_traces()
-  end
-
-  defp drain_refusal_traces do
-    receive do
-      {:trace, pid, :call, {m, f, args}} ->
-        IO.puts("TRACE| #{inspect(pid)} CALL #{inspect(m)}.#{f} #{refusal_args(f, args)}")
-        drain_refusal_traces()
-
-      {:trace, pid, :return_from, {m, f, a}, value} ->
-        IO.puts(
-          "TRACE| #{inspect(pid)} RETURN #{inspect(m)}.#{f}/#{a} #{inspect(value, limit: :infinity)}"
-        )
-
-        drain_refusal_traces()
-    after
-      0 -> :ok
-    end
-  end
-
-  # The refusal itself, never the turn's state.
-  defp refusal_args(:refused, [_state, error, message]),
-    do: inspect({error, message}, limit: :infinity)
-
-  defp refusal_args(_f, args), do: inspect(args, limit: :infinity)
 end
