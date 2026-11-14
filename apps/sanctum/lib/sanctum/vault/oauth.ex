@@ -107,6 +107,10 @@ defmodule Sanctum.Vault.OAuth do
 
   def preset(_provider_hint), do: nil
 
+  @doc "The providers this instance ships a preset for, sorted."
+  @spec preset_providers() :: [String.t()]
+  def preset_providers, do: @presets |> Map.keys() |> Enum.sort()
+
   @doc """
   Hold explicit endpoints to the endpoint rule: an `authorize_url` and a
   `token_url`, both https, and no `extra_params` naming a parameter this

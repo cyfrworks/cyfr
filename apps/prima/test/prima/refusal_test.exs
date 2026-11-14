@@ -170,6 +170,7 @@ defmodule Prima.RefusalTest do
     {{:invalid_reference, :empty}, :invalid_argument},
     {{:not_built, :shared_login}, :invalid_argument},
     {{:program_unavailable, "claude"}, :setup_required},
+    {{:oauth_client_required, "google"}, :setup_required},
     {:not_mountable, :invalid_argument},
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},

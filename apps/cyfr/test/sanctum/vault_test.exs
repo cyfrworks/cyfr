@@ -235,20 +235,46 @@ defmodule Sanctum.VaultTest do
                VaultReader.fetch(person, resource_for(person, view.id), @dispense)
     end
 
-    test "a grant started, or client credentials stored, from a session with no proof ask first",
+    test "a grant started, or client credentials stored, from a session with no proof ask first; " <>
+           "a grant for a provider with no client is refused for it before anything is asked",
          %{person: person} do
-      assert {:error, {:confirmation_required, %{operation: "vault.authorize"}}} =
-               Sanctum.Vault.OAuthGrant.authorize_url(person, %{
-                 name: "Mail",
-                 provider: "google",
-                 scopes: ["mail"],
-                 destination: %{"hosts" => ["gmail.googleapis.com"]}
-               })
+      grant = %{
+        name: "Mail",
+        provider: "google",
+        scopes: ["mail"],
+        destination: %{"hosts" => ["gmail.googleapis.com"]}
+      }
 
-      assert {:error, {:confirmation_required, %{operation: "oauth.set_client"}}} =
+      open = fn ->
+        {:ok, rows} = Arca.PendingConfirmations.list_open(actor(person), person.user_id)
+        Enum.map(rows, & &1.operation)
+      end
+
+      # No client is stored: the grant cannot go on, so nothing is asked and
+      # nothing is written.
+      assert Sanctum.Vault.OAuthGrant.authorize_url(person, grant) ==
+               {:error, {:oauth_client_required, "google"}}
+
+      assert open.() == []
+      assert {:ok, []} = Vault.list(person)
+
+      # Storing the client from a session with no proof asks first.
+      assert {:error, {:confirmation_required, %{operation: "oauth.set_client"} = asked}} =
                Sanctum.ProviderCredentials.put(person, "google", "cid", "csec")
 
+      assert asked |> Map.keys() |> Enum.sort() == [:expires_at, :id, :operation]
       assert {:ok, []} = Sanctum.ProviderCredentials.list(person)
+      assert open.() == ["oauth.set_client"]
+
+      # With a client stored, a grant from a session with no proof asks first.
+      :ok = Sanctum.TestContext.put_provider_credentials(person, "google", "cid", "csec")
+
+      assert {:error, {:confirmation_required, %{operation: "vault.authorize"} = asked}} =
+               Sanctum.Vault.OAuthGrant.authorize_url(person, grant)
+
+      assert asked |> Map.keys() |> Enum.sort() == [:expires_at, :id, :operation]
+      assert "vault.authorize" in open.()
+      assert {:ok, []} = Vault.list(person)
     end
 
     test "a confirmation enters its one credential: another name or other material asks again",

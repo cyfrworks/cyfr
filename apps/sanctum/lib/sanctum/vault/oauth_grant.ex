@@ -90,22 +90,26 @@ defmodule Sanctum.Vault.OAuthGrant do
       `disclose` is true. Both are the entry's once the grant completes.
 
   Starting one is a sensitive change (`credential_entry`): the grant it
-  completes seals a credential into the vault.
+  completes seals a credential into the vault. A provider the athanor
+  holds no OAuth client for is refused `{:oauth_client_required,
+  provider}` before any confirmation is asked.
 
   Returns `{:ok, %{url, state, redirect_uri}}`.
   """
   @spec authorize_url(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def authorize_url(%Context{} = ctx, params) when is_map(params) do
+    # The client is read before the fresh confirmation: a grant that cannot
+    # start without one is refused for it, never confirmed first.
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, target} <- resolve_target(ctx, params),
+         {:ok, creds} <- provider_creds(ctx.athanor_id, target.provider),
          :ok <-
            Authz.confirm(ctx, :credential_entry, %{
              operation: "vault.authorize",
              arguments: params,
              resource: target.name
            }),
-         {:ok, endpoints} <- VaultOAuth.validate_endpoints(target.endpoints),
-         {:ok, creds} <- provider_creds(ctx.athanor_id, target.provider) do
+         {:ok, endpoints} <- VaultOAuth.validate_endpoints(target.endpoints) do
       state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       code_verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
@@ -337,8 +341,8 @@ defmodule Sanctum.Vault.OAuthGrant do
     end
   end
 
-  # `fetch_for_oauth` speaks operator-facing string errors, including the
-  # not-configured message that names oauth.set_client.
+  # `{:oauth_client_required, provider}` when the athanor holds no client
+  # for the provider.
   defp provider_creds(athanor_id, provider) do
     Sanctum.ProviderCredentials.fetch_for_oauth(athanor_id, provider)
   end
