@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseInputTemplate_Inline(t *testing.T) {
@@ -155,33 +156,60 @@ func TestRenderWebhookCreated_FallsBackToSlug_WhenNoURL(t *testing.T) {
 	}
 }
 
-// A rotation says the old secret keeps working for the server's grace and
-// how to end it now.
+// A rotation says until when the old secret keeps working, the time the
+// answer carries and the span from now to it, and how to end it now; an
+// answer that names no such time claims none.
 func TestRenderWebhookRotated(t *testing.T) {
+	saved := webhookNow
+	t.Cleanup(func() { webhookNow = saved })
+	webhookNow = func() time.Time { return time.Date(2026, 11, 14, 6, 0, 0, 0, time.UTC) }
 	result := map[string]any{
-		"name":   "github-push",
-		"url":    "https://cyfr.example.com/hooks/wh_abc",
-		"secret": "whsec_newvalue",
+		"name":                "github-push",
+		"url":                 "https://cyfr.example.com/hooks/wh_abc",
+		"secret":              "whsec_newvalue",
+		"previous_expires_at": "2026-11-15T06:00:00.123456Z",
 	}
 
 	out := captureStdout(t, func() { renderWebhookRotated(result) })
 
-	want := "Webhook 'github-push' rotated.\n\n" +
+	head := "Webhook 'github-push' rotated.\n\n" +
 		"  URL:    https://cyfr.example.com/hooks/wh_abc\n" +
 		"\n  New secret: whsec_newvalue\n\n" +
-		"  Copy this secret now. It will not be shown again.\n" +
-		"  The old secret keeps working for 24 hours. To end it now, revoke the webhook: cyfr webhook revoke github-push\n"
+		"  Copy this secret now. It will not be shown again.\n"
+	want := head + "  The old secret keeps working until 2026-11-15 06:00:00 UTC, 24 hours from now. To end it now, revoke the webhook: cyfr webhook revoke github-push\n"
 	if out != want {
 		t.Errorf("rotate printed:\n%s\nwant:\n%s", out, want)
 	}
+
+	delete(result, "previous_expires_at")
+	if out := captureStdout(t, func() { renderWebhookRotated(result) }); out != head {
+		t.Errorf("rotate with no end time printed:\n%s\nwant:\n%s", out, head)
+	}
 }
 
-// The help says what a rotation and a revocation do to the old secret, and
-// that a webhook answers before its run ends.
+// A span reads to the nearest minute, in hours and minutes.
+func TestHoursAndMinutes(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		24*time.Hour + 20*time.Second: "24 hours",
+		time.Hour:                     "1 hour",
+		23*time.Hour + 59*time.Minute: "23 hours 59 minutes",
+		61 * time.Minute:              "1 hour 1 minute",
+		90 * time.Second:              "2 minutes",
+		-time.Minute:                  "0 minutes",
+	} {
+		if got := hoursAndMinutes(d); got != want {
+			t.Errorf("%v reads %q, want %q", d, got, want)
+		}
+	}
+}
+
+// The help says the old secret keeps working for a while after a rotation,
+// that the answer says until when, and that revoking ends it now; and that
+// a webhook answers before its run ends.
 func TestWebhookHelpSaysWhenTheOldSecretEnds(t *testing.T) {
 	for _, c := range []struct{ got, want string }{
-		{webhookRotateCmd.Long, "Generate a new HMAC secret. The old secret keeps working for 24 hours, while the sender's configuration moves to the new one; 'cyfr webhook revoke' ends the webhook now. Run without arguments for interactive selection."},
-		{webhookRevokeCmd.Long, "Disable a webhook: its URL stops accepting POSTs now, whichever secret signs them, so revoking ends an old secret before the 24 hours a rotation leaves it. The audit trail is preserved. Run without arguments for interactive selection."},
+		{webhookRotateCmd.Long, "Generate a new HMAC secret. The old secret keeps working for a while after a rotation, so the sender's configuration can move to the new one; the answer says until when. 'cyfr webhook revoke' ends the webhook now. Run without arguments for interactive selection."},
+		{webhookRevokeCmd.Long, "Disable a webhook: its URL stops accepting POSTs now, whichever secret signs them, so revoking ends an old secret before the time a rotation leaves it is up. The audit trail is preserved. Run without arguments for interactive selection."},
 		{webhookCmd.Long, "Manage inbound webhook receivers.\n\nEach webhook is a stable URL at /hooks/<slug> that verifies an HMAC-SHA256\nsignature against a stored secret, answers as soon as it accepts the\ndelivery, and then runs a target component: the answer does not say how\nthe run ends. The webhook can carry a static \"input_template\" (JSON object)\nthat gets merged into the invocation payload alongside the request envelope\n(headers, body, metadata) under the reserved key '_webhook'."},
 	} {
 		if c.got != c.want {

@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"github.com/cyfr/codex/internal/ops"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -57,11 +59,6 @@ the run ends. The webhook can carry a static "input_template" (JSON object)
 that gets merged into the invocation payload alongside the request envelope
 (headers, body, metadata) under the reserved key '_webhook'.`,
 }
-
-// rotationGrace is how long a rotated-out secret still verifies, as the
-// server's verification keeps it (Sanctum.Webhook's previous secret grace,
-// 86,400 seconds).
-const rotationGrace = "24 hours"
 
 var webhookCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -268,7 +265,7 @@ use 'cyfr webhook rotate' to replace it.`,
 var webhookRevokeCmd = &cobra.Command{
 	Use:     "revoke [name]",
 	Short:   "Revoke (disable) a webhook",
-	Long:    "Disable a webhook: its URL stops accepting POSTs now, whichever secret signs them, so revoking ends an old secret before the " + rotationGrace + " a rotation leaves it. The audit trail is preserved. Run without arguments for interactive selection.",
+	Long:    "Disable a webhook: its URL stops accepting POSTs now, whichever secret signs them, so revoking ends an old secret before the time a rotation leaves it is up. The audit trail is preserved. Run without arguments for interactive selection.",
 	Example: "  cyfr webhook revoke github-push",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -294,11 +291,11 @@ var webhookRevokeCmd = &cobra.Command{
 var webhookRotateCmd = &cobra.Command{
 	Use:     "rotate [name]",
 	Short:   "Rotate the HMAC secret for a webhook",
-	Long:    "Generate a new HMAC secret. The old secret keeps working for " + rotationGrace + ", while the sender's configuration moves to the new one; 'cyfr webhook revoke' ends the webhook now. Run without arguments for interactive selection.",
+	Long:    "Generate a new HMAC secret. The old secret keeps working for a while after a rotation, so the sender's configuration can move to the new one; the answer says until when. 'cyfr webhook revoke' ends the webhook now. Run without arguments for interactive selection.",
 	Example: "  cyfr webhook rotate github-push",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name, err := selectWebhookName(cmd.Context(), args, "Select a webhook to rotate", "Rotate webhook '%s'? The old secret keeps working for "+rotationGrace+".")
+		name, err := selectWebhookName(cmd.Context(), args, "Select a webhook to rotate", "Rotate webhook '%s'? The old secret keeps working for a while; the answer says until when.")
 		if err != nil || name == "" {
 			return err
 		}
@@ -401,8 +398,35 @@ func renderWebhookRotated(result map[string]any) {
 	fmt.Printf("Webhook '%s' rotated.\n\n", name)
 	renderWebhookEndpoint(result)
 	renderWebhookSecret(result, "New secret")
-	if _, ok := result["secret"].(string); ok {
-		fmt.Printf("  The old secret keeps working for %s. To end it now, revoke the webhook: cyfr webhook revoke %s\n", rotationGrace, name)
+	if until, err := time.Parse(time.RFC3339Nano, fmt.Sprint(result["previous_expires_at"])); err == nil {
+		fmt.Printf("  The old secret keeps working until %s, %s from now. To end it now, revoke the webhook: cyfr webhook revoke %s\n",
+			until.UTC().Format("2006-01-02 15:04:05 UTC"), hoursAndMinutes(until.Sub(webhookNow())), name)
+	}
+}
+
+// webhookNow is the clock a rotation's span is read against; tests stand
+// in for it.
+var webhookNow = time.Now
+
+// hoursAndMinutes is d to the nearest minute, in hours and minutes.
+func hoursAndMinutes(d time.Duration) string {
+	minutes := int(d.Round(time.Minute) / time.Minute)
+	if minutes < 0 {
+		minutes = 0
+	}
+	unit := func(n int, one string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return strconv.Itoa(n) + " " + one + "s"
+	}
+	switch h, m := minutes/60, minutes%60; {
+	case h == 0:
+		return unit(m, "minute")
+	case m == 0:
+		return unit(h, "hour")
+	default:
+		return unit(h, "hour") + " " + unit(m, "minute")
 	}
 }
 
