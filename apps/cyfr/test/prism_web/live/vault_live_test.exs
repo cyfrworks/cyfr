@@ -1583,6 +1583,138 @@ defmodule PrismWeb.VaultLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # An entry labelled for `provider`, made under its confirmation.
+    defp labelled!(%{ctx: ctx}, name, provider) do
+      {:ok, %{entry: entry}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Gate.call_external("vault", &1, %{
+            "action" => "create",
+            "name" => name,
+            "kind" => "api_key",
+            "provider_hint" => provider,
+            "fields" => %{"KEY" => "k-#{name}"},
+            "destination" => @market
+          })
+        )
+
+      entry
+    end
+
+    defp names_of(%{ctx: ctx}) do
+      {:ok, %{entries: entries}} = Sanctum.Gate.call_external("vault", ctx, %{"action" => "list"})
+      entries |> Enum.map(& &1.name) |> Enum.sort()
+    end
+
+    test "Rename changes an entry's name alone, and a name another entry holds is refused " <>
+           "with nothing changed" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+      _other = key!(terry, "other key", @market)
+      {view, _} = vault!(terry)
+
+      rename = ~s([data-test="entry-rename"][phx-value-id="#{market.id}"])
+      form = ~s(form[data-test="rename-form"])
+
+      view |> element(rename) |> render_click()
+      assert has_element?(view, form <> ~s( input[name="name"][value="market key"]))
+
+      view
+      |> element(form)
+      |> render_submit(%{"entry_id" => market.id, "name" => "other key"})
+
+      assert render(view) =~ "Not renamed: name_taken: a living entry already holds that name"
+      assert names_of(terry) == ["market key", "other key"]
+      assert has_element?(view, form)
+
+      view
+      |> element(form)
+      |> render_submit(%{"entry_id" => market.id, "name" => " quotes key "})
+
+      assert names_of(terry) == ["other key", "quotes key"]
+      refute has_element?(view, form)
+
+      assert texts(view, ~s([data-test="entry-name"][data-id="#{market.id}"] span.font-medium)) ==
+               ["quotes key"]
+
+      assert render(view) =~ "Renamed."
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the rename form names the MCP servers that read the entry by its name" do
+      %{terry: terry} = traders!()
+      token = key!(terry, "bridge-token", %{"hosts" => ["example.com"]})
+
+      {:ok, _} =
+        Sanctum.Gate.call_external("mcp_servers", terry.ctx, %{
+          "action" => "create",
+          "name" => "bridge",
+          "config" => %{
+            "url" => "https://example.com/mcp",
+            "headers" => %{"Authorization" => "vault:bridge-token"}
+          }
+        })
+
+      {view, _} = vault!(terry)
+      refute has_element?(view, ~s([data-test="rename-readers"]))
+
+      view
+      |> element(~s([data-test="entry-rename"][phx-value-id="#{token.id}"]))
+      |> render_click()
+
+      assert texts(view, ~s([data-test="rename-readers"])) ==
+               ["MCP server bridge reads this entry by its name; renamed, it no longer finds it."]
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "Make default moves a provider's default to another active entry, offered on every " <>
+           "entry of a provider but its default, and never on an entry naming none" do
+      %{terry: terry} = traders!()
+      first = labelled!(terry, "first", "market.example")
+      second = labelled!(terry, "second", "market.example")
+      unlabelled = key!(terry, "plain", @market)
+
+      defaults = fn ->
+        {:ok, %{defaults: defaults}} =
+          Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "list"})
+
+        defaults
+      end
+
+      # The provider's first entry is its default when it is made.
+      assert defaults.() == %{"market.example" => %{vault_entry_id: first.id}}
+      {view, _} = vault!(terry)
+
+      make = &~s([data-test="entry-make-default"][phx-value-id="#{&1.id}"])
+      refute has_element?(view, make.(first))
+      assert has_element?(view, make.(second), "Make default")
+      refute has_element?(view, make.(unlabelled))
+
+      view |> element(make.(second)) |> render_click()
+
+      assert defaults.() == %{"market.example" => %{vault_entry_id: second.id}}
+      assert render(view) =~ "Now the default for market.example."
+      refute has_element?(view, make.(second))
+      assert has_element?(view, make.(first), "Make default")
+
+      assert texts(view, ~s([data-test="entry-default"])) == ["default for market.example"]
+
+      assert has_element?(
+               view,
+               ~s([data-test="entry-default"]),
+               "default for market.example"
+             )
+
+      # A revoked entry is offered none.
+      {:ok, _} =
+        Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "revoke", "id" => first.id})
+
+      {view, _} = vault!(terry)
+      refute has_element?(view, make.(first))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "after a declared restore the share reads revoked, and Share is offered again once " <>
            "the entry is rotated" do
       %{terry: terry, traders: traders} = traders!()
