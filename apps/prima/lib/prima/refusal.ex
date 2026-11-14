@@ -1067,6 +1067,13 @@ defmodule Prima.Refusal do
        "The grant this launch was approved under has changed since it was approved, so nothing " <>
          "ran: ask again to approve it as it stands now."}
 
+  # A run an API key narrowed to named tools may not start
+  # (`Sanctum.ApiKey.admit_tool/2`).
+  defp row(:key_tool_not_named),
+    do:
+      {:forbidden,
+       "This API key may run only the tools named when it was made, and this is not one of them."}
+
   # A retry of a failed run whose grant has a new revision since it ran
   # (`execution.retry`): nothing ran under a grant the person did not run
   # it under.

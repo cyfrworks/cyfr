@@ -156,10 +156,10 @@ defmodule MultiTenantIsolationTest do
       {ctx_a, ctx_b} = issuers(ctx_a, ctx_b)
 
       {:ok, _} =
-        Sanctum.TestContext.create_key(ctx_a, %{name: "key_a", type: :application, scope: []})
+        Sanctum.TestContext.create_key(ctx_a, %{name: "key_a", scope: []})
 
       {:ok, _} =
-        Sanctum.TestContext.create_key(ctx_b, %{name: "key_b", type: :application, scope: []})
+        Sanctum.TestContext.create_key(ctx_b, %{name: "key_b", scope: []})
 
       {:ok, list_a} = Sanctum.ApiKey.list(ctx_a)
       {:ok, list_b} = Sanctum.ApiKey.list(ctx_b)
@@ -176,7 +176,7 @@ defmodule MultiTenantIsolationTest do
 
     test "the same key name is allowed in both athanors", %{a: ctx_a, b: ctx_b} do
       {ctx_a, ctx_b} = issuers(ctx_a, ctx_b)
-      attrs = %{name: "same", type: :application, scope: []}
+      attrs = %{name: "same", scope: []}
       assert {:ok, _} = Sanctum.TestContext.create_key(ctx_a, attrs)
       assert {:ok, _} = Sanctum.TestContext.create_key(ctx_b, attrs)
     end

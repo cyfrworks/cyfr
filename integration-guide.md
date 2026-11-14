@@ -37,18 +37,14 @@ CYFR supports two authentication methods. Choose the one that fits your use case
 
 | Method | When to Use | How It Works |
 |--------|-------------|--------------|
-| **API Keys** | Apps and service-to-service callers (frontend, backend, CI/CD) | `Authorization: Bearer cyfr_pk_...` header |
+| **API Keys** | Scripts, backends and CI/CD acting as you | `Authorization: Bearer cyfr_sk_...` header |
 | **Session Tokens** | Human devs using the CLI (`cyfr login`) | The command line is a protected device: its shell unlocks its key and holds the session in memory while it runs |
 
 ### API Keys
 
-API keys are the primary way applications authenticate with CYFR. There are three types:
+An API key is how a script, a backend or CI/CD acts as you in your athanor. There is one kind, `cyfr_sk_`: what it may do is fixed when you make it, its permissions ticked from a preset and, if you like, the only tools it may run. Left without tools, it runs any tool you granted. Keep it out of browser code and out of source: anyone holding it acts as you within what it may do, until you revoke it.
 
-| Type | Prefix | Use Case | Security Considerations |
-|------|--------|----------|------------------------|
-| **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
-| **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. Of the registry's, claiming a name or a publisher namespace, verifying a publisher namespace, minting push tokens, accepting the registry's policies and filing an appeal are requests a key of the person's account signs; the registry's other requests, for a namespace's tokens, members and components and for reports, go under the person's stored push token. |
+A key carries out what you approved and never approves anything itself. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. Of the registry's, claiming a name or a publisher namespace, verifying a publisher namespace, minting push tokens, accepting the registry's policies and filing an appeal are requests a key of the person's account signs; the registry's other requests, for a namespace's tokens, members and components and for reports, go under the person's stored push token.
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -70,9 +66,9 @@ exit                          # Leave the shell: its session ends
 
 ### Service-to-service
 
-Backend services and automation authenticate with API keys — a service key
-(`cyfr_sk_`) for backends, an admin key (`cyfr_ak_`, ideally IP-allowlisted) for
-CI/CD and infrastructure. See **API Key Lifecycle** below.
+Backend services and automation authenticate with an API key (`cyfr_sk_`),
+narrowed to the tools they run and, for CI/CD, IP-allowlisted. See **API Key
+Lifecycle** below.
 
 ---
 
@@ -81,18 +77,20 @@ CI/CD and infrastructure. See **API Key Lifecycle** below.
 ### Create
 
 ```bash
-# Application key (frontend) — defaults to execute, component_read, storage_read
-cyfr key create --name "react-app" --type application
+# Runs tools and reads their runs (the first preset, when --scope is omitted)
+cyfr key create --name "node-backend"
 
-# Service key (backend) — defaults to execute, vault_read, component_read, storage_read/write
-cyfr key create --name "node-backend" --type service
+# Runs one tool and nothing else, whatever its version
+cyfr key create --name "weather-script" --tool "c:local.weather"
 
-# Service key with extra scope
-cyfr key create --name "node-backend-rw" --type service --scope "vault_read,component_manage"
+# Builds components
+cyfr key create --name "builder" --scope "execute,component_read,storage_read,component_manage,storage_write"
 
-# Admin key (CI/CD) with IP allowlist — defaults to * (all scopes)
-cyfr key create --name "github-actions" --type admin --ip-allowlist "140.82.112.0/20"
+# Manages keys and webhooks, from CI/CD's addresses only
+cyfr key create --name "github-actions" --scope "admin" --ip-allowlist "140.82.112.0/20"
 ```
+
+The API Keys page offers the same presets, in both modes.
 
 Or via MCP:
 
@@ -103,8 +101,8 @@ Or via MCP:
     "name": "key",
     "arguments": {
       "action": "create",
-      "name": "react-app",
-      "type": "application"
+      "name": "weather-script",
+      "tools": ["c:local.weather"]
     }
   }
 }
@@ -114,45 +112,50 @@ Response (the raw key is shown **only once**):
 
 ```json
 {
-  "api_key": "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
-  "name": "react-app",
-  "type": "application",
+  "api_key": "cyfr_sk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
+  "name": "weather-script",
   "scope": ["execute", "component_read", "storage_read"],
+  "tools": ["catalyst:local.weather"],
   "created_at": "2025-02-13T..."
 }
 ```
 
 ### Available Scopes
 
-Scopes control what operations an API key can perform. Each scope maps to a category of actions:
+A key's permissions control what operations it can perform. Each is shown on the API Keys page by what it lets a key do:
 
-| Scope | What It Allows |
-|-------|----------------|
-| `execute` | Run components, manage schedules, compile builds |
-| `vault_read` | `oauth.list`: the names of the OAuth providers the athanor has client credentials for, who stored them and when; never the secret |
-| `component_read` | Get component blobs, discover components |
-| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, mint and manage registry push tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
-| `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
-| `storage_write` | Set retention policies; write, edit and delete component source; write, delete, offer, accept, decline and withdraw files |
-| `admin` | API key management, retention cleanup, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
-| `*` | Wildcard — all permissions |
+| Scope | On the Page | What It Allows |
+|-------|-------------|----------------|
+| `execute` | Run tools | Run components, manage schedules, compile builds |
+| `component_read` | Read components | Get component blobs, discover components |
+| `storage_read` | Read files, runs and logs | View execution records, a run's events and logs, MCP logs, enforcement logs, retention config; a key's own runs need it |
+| `component_manage` | Build and publish components | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, mint and manage registry push tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
+| `storage_write` | Write files | Set retention policies; write, edit and delete component source; write, delete, offer, accept, decline and withdraw files |
+| `admin` | Manage keys, webhooks and programs | API key management, webhooks, retention cleanup, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
+| `vault_read` | List OAuth clients | `oauth.list`: the names of the OAuth providers the athanor has client credentials for, who stored them and when; never the secret |
 
-#### Key Type Defaults and Ceilings
+A name outside this table is refused when the key is made.
 
-Each key type has default scopes (applied when none are specified) and a ceiling (the maximum scopes it can be granted):
+#### Presets
 
-| Type | Default Scopes | Allowed Scopes (Ceiling) |
-|------|---------------|--------------------------|
-| **Application** | `["execute", "component_read", "storage_read"]` | `["execute", "vault_read", "component_read", "storage_read"]` |
-| **Service** | `["execute", "vault_read", "component_read", "storage_read", "storage_write"]` | `["execute", "vault_read", "component_read", "component_manage", "storage_read", "storage_write"]` |
-| **Admin** | `["*"]` (all) | `["vault_read", "admin", "*"]` |
+A key's permissions are ticked from a preset; the first is what a key made without permissions holds:
+
+| Preset | Permissions |
+|--------|-------------|
+| Run tools and read their runs | `["execute", "component_read", "storage_read"]` |
+| Build components | `["execute", "component_read", "storage_read", "component_manage", "storage_write"]` |
+| Manage keys and webhooks | `["admin"]` |
+
+#### Tools
+
+`tools` names the only tools a key may run: each a component reference without its version (`c:local.weather`), so the key keeps running it across updates, or an outside server's tool by the name `tools/list` gives it (`greeter:hello`). What a named tool runs as its own dependencies stands on your grant of it. A run of any other tool (started, streamed or retried with the key), the route of a tincture not named, and a call to an outside tool not named are refused, and `tools/list` shows the key only the outside tools it names: "This API key may run only the tools named when it was made, and this is not one of them." Left empty, the key runs any tool you granted.
 
 ### IP Allowlist
 
-Restrict which IPs can use a key (recommended for admin keys):
+Restrict which IPs can use a key (recommended for CI/CD):
 
 ```bash
-cyfr key create --name "ci" --type admin --ip-allowlist "140.82.112.0/20,10.0.0.1"
+cyfr key create --name "ci" --ip-allowlist "140.82.112.0/20,10.0.0.1"
 ```
 
 Supports exact IPs and CIDR notation. Both IPv4 and IPv6 are supported.
@@ -163,7 +166,7 @@ Supports exact IPs and CIDR notation. Both IPv4 and IPv6 are supported.
 cyfr key rotate react-app
 ```
 
-Returns a new key and invalidates the old one.
+Returns a new key with the same permissions and tools, and invalidates the old one. Nothing changes what a key may do: to change it, make a new key and revoke this one.
 
 ### Revoke
 
@@ -177,7 +180,7 @@ cyfr key revoke react-app
 cyfr key list
 ```
 
-Lists all keys with their name, type, scope, and creation date. Raw key values are never shown — only the 12-character prefix (e.g., `cyfr_pk_aBcD...`).
+Lists all keys with their name, permissions (`scope`), tools and creation date. Raw key values are never shown — only the 12-character prefix (e.g., `cyfr_sk_aBcD...`).
 
 ---
 
@@ -300,7 +303,7 @@ finished.
 | `MCP-Protocol-Version` | `2026-07-28` | Always — must equal the `_meta` version |
 | `Mcp-Method` | the request's `method` | Always |
 | `Mcp-Name` | `params.name`, or `params.uri` for `resources/read` | Methods that name a subject |
-| `Authorization` | `Bearer cyfr_pk_...`, `Bearer cyfr_sk_...`, `Bearer cyfr_ak_...`, or a session token | Always, unless calling a public action |
+| `Authorization` | `Bearer cyfr_sk_...` or a session token | Always, unless calling a public action |
 
 A value that is not plain visible ASCII travels Base64-encoded in the
 specification's sentinel form, `=?base64?<encoded>?=`, and the server decodes it
@@ -477,13 +480,13 @@ Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`
 
 ## Example Scenarios
 
-### React Frontend with an Application Key
+### A Script with a Key Narrowed to One Tool
 
-An application key is safe to embed in client-side code. It can execute and search components but cannot access secrets or admin operations.
+A key acts as you, so it never goes into browser code. Narrowed to the one tool a script calls, a leaked key runs that tool and nothing else.
 
 ```javascript
 const CYFR_URL = "https://your-cyfr-server.example.com/mcp";
-const CYFR_KEY = "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345";
+const CYFR_KEY = process.env.CYFR_TOKEN; // cyfr_sk_..., made with --tool c:local.claude
 const PROTOCOL_VERSION = "2026-07-28";
 
 async function runComponent(reference, input, type = "catalyst") {
@@ -522,9 +525,9 @@ const result = await runComponent(
 );
 ```
 
-### Node.js Backend with a Service Key
+### Node.js Backend with a Key
 
-Service keys should live in environment variables, never in source code.
+Keys live in environment variables, never in source code.
 
 ```javascript
 const CYFR_URL = process.env.CYFR_URL || "http://localhost:4000/mcp";
@@ -594,7 +597,7 @@ jobs:
 
       - name: Build and test component
         env:
-          CYFR_TOKEN: ${{ secrets.CYFR_ADMIN_KEY }}
+          CYFR_TOKEN: ${{ secrets.CYFR_KEY }}
         run: |
           cyfr --url https://your-cyfr-server.example.com build compile reagent:local.my-tool:0.1.0
           cyfr --url https://your-cyfr-server.example.com run reagent:local.my-tool:0.1.0 --input '{"test": true}'
@@ -613,7 +616,7 @@ jobs:
       - name: Compile and register component
         env:
           CYFR_URL: ${{ secrets.CYFR_URL }}
-          CYFR_ADMIN_KEY: ${{ secrets.CYFR_ADMIN_KEY }}  # cyfr_ak_...
+          CYFR_KEY: ${{ secrets.CYFR_KEY }}  # cyfr_sk_..., made from "Build components"
         run: |
           curl -X POST "$CYFR_URL/mcp" \
             -H "Content-Type: application/json" \
@@ -621,7 +624,7 @@ jobs:
             -H "MCP-Protocol-Version: 2026-07-28" \
             -H "Mcp-Method: tools/call" \
             -H "Mcp-Name: build" \
-            -H "Authorization: Bearer $CYFR_ADMIN_KEY" \
+            -H "Authorization: Bearer $CYFR_KEY" \
             -d '{
               "jsonrpc": "2.0",
               "id": 1,
@@ -960,7 +963,7 @@ const result = await runComponent(
 
 **Option A: One Formula per resource** — simpler. Input includes `"action": "create|read|update|delete"`. Good for small apps (e.g., `f:local.users-api:0.1.0`).
 
-**Option B: One Formula per operation** — finer-grained policy, rate limits, and audit per operation. Use when different operations need different security postures (e.g., `f:local.users-delete:0.1.0` requires an admin key, `f:local.users-list:0.1.0` allows an application key).
+**Option B: One Formula per operation** — finer-grained policy, rate limits, and audit per operation. Use when different operations need different security postures (e.g., a key narrowed to `f:local.users-list` cannot run `f:local.users-delete`).
 
 ### Where Application Data Lives
 
@@ -1493,7 +1496,7 @@ cyfr build compile catalyst:local.my-api:0.1.0
 cyfr profile grant catalyst:local.my-api
 
 # 3. Create an API key for your app
-cyfr key create --name "my-app" --type service
+cyfr key create --name "my-app"
 
 # 4. Use the returned key in your app's Authorization header
 #    Authorization: Bearer cyfr_sk_...

@@ -104,7 +104,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
 
     {view, html} = mount_athanor(conn, "/settings")
     refute html =~ "nav-executions"
-    refute html =~ "nav-api-keys"
+    assert html =~ "drawer-nav-api-keys"
     assert html =~ "drawer-nav-aqua"
     refute html =~ "nav-chat"
     refute has_element?(view, "#drawer", "Executions")
@@ -136,11 +136,11 @@ defmodule PrismWeb.AuthenticatedMountTest do
     refute html =~ ~s(id="nav-webhooks")
 
     for key <-
-          ~w(aqua vault schedules webhooks programs settings) do
+          ~w(aqua vault schedules webhooks api-keys programs settings) do
       assert has_element?(view, "#drawer #drawer-nav-#{key}"), "lite drawer lacks #{key}"
     end
 
-    for key <- ~w(executions api-keys enforcements builds registry) do
+    for key <- ~w(executions enforcements builds registry) do
       refute has_element?(view, "#drawer #drawer-nav-#{key}"), "lite drawer shows #{key}"
     end
 

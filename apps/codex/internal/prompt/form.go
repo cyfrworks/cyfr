@@ -12,16 +12,14 @@ import (
 // KeyCreateForm holds the collected values for key creation.
 type KeyCreateForm struct {
 	Name        string
-	Type        string
 	Scopes      []string
+	Tools       string
 	IPAllowlist string
 }
 
 // RunKeyCreateForm presents a multi-field form for creating an API key.
 func RunKeyCreateForm(ctx context.Context) (*KeyCreateForm, error) {
-	f := &KeyCreateForm{
-		Type: "application",
-	}
+	f := &KeyCreateForm{}
 
 	err := run(ctx, newForm(
 		huh.NewGroup(
@@ -31,28 +29,25 @@ func RunKeyCreateForm(ctx context.Context) (*KeyCreateForm, error) {
 				Value(&f.Name).
 				Validate(huh.ValidateNotEmpty()),
 
-			huh.NewSelect[string]().
-				Title("Key type").
-				Options(
-					huh.NewOption("Application (cyfr_pk_)", "application"),
-					huh.NewOption("Service (cyfr_sk_)", "service"),
-					huh.NewOption("Admin (cyfr_ak_)", "admin"),
-				).
-				Value(&f.Type),
-
 			huh.NewMultiSelect[string]().
-				Title("Permission scopes").
-				Description("Leave empty for type defaults (application: execute, component_read, storage_read)").
+				Title("What it may do").
+				Description("Leave empty to run tools and read their runs").
 				Options(
-					huh.NewOption("execute", "execute"),
-					huh.NewOption("vault_read", "vault_read"),
-					huh.NewOption("component_read", "component_read"),
-					huh.NewOption("component_manage", "component_manage"),
-					huh.NewOption("storage_read", "storage_read"),
-					huh.NewOption("storage_write", "storage_write"),
-					huh.NewOption("admin", "admin"),
+					huh.NewOption("Run tools", "execute"),
+					huh.NewOption("Read components", "component_read"),
+					huh.NewOption("Read files, runs and logs", "storage_read"),
+					huh.NewOption("Build and publish components", "component_manage"),
+					huh.NewOption("Write files", "storage_write"),
+					huh.NewOption("Manage keys, webhooks and programs", "admin"),
+					huh.NewOption("List OAuth clients", "vault_read"),
 				).
 				Value(&f.Scopes),
+
+			huh.NewInput().
+				Title("Only these tools").
+				Description("Comma-separated, each without a version; leave empty for any tool you granted").
+				Placeholder("c:local.my-tool").
+				Value(&f.Tools),
 
 			huh.NewInput().
 				Title("IP allowlist").

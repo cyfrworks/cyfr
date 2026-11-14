@@ -5,6 +5,8 @@ defmodule PrismWeb.ApiKeysLive do
   @moduledoc """
   The athanor's API keys: list, create, rotate, revoke, through the `key`
   tool. A minted key is shown once, in its reveal card, until dismissed.
+  A key's permissions are ticked from a preset and may be narrowed to
+  named tools; both are fixed once it is made (`Sanctum.ApiKey`).
 
   Creating and rotating a key are sensitive changes: the page asks for a
   fresh confirmation through its system layer (`PrismWeb.SystemLayer.call/5`),
@@ -21,17 +23,7 @@ defmodule PrismWeb.ApiKeysLive do
   alias PrismWeb.SystemLayer
   require Logger
 
-  # `type` arrives from form params — match it against the three key types
-  # instead of String.to_existing_atom, which crashes the LiveView on any
-  # other value.
-  defp key_type("application"), do: :application
-  defp key_type("service"), do: :service
-  defp key_type("admin"), do: :admin
-  defp key_type(_), do: :application
-
-  defp valid_scopes_for(type), do: Sanctum.ApiKey.valid_scopes(key_type(type))
-
-  defp default_scopes_for(type), do: Sanctum.ApiKey.default_scopes(key_type(type))
+  defp first_preset, do: Sanctum.ApiKey.presets() |> hd() |> elem(1)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -50,11 +42,11 @@ defmodule PrismWeb.ApiKeysLive do
       |> assign(:show_create, false)
       |> assign(:new_key, nil)
       |> assign(:loading, true)
-      |> assign(:selected_type, "application")
-      |> assign(:available_scopes, valid_scopes_for("application"))
-      |> assign(:checked_scopes, default_scopes_for("application"))
+      |> assign(:permissions, Sanctum.ApiKey.permissions())
+      |> assign(:presets, Sanctum.ApiKey.presets())
+      |> assign(:checked_scopes, first_preset())
       |> assign(:key_name, "")
-      |> assign(:grant_all, false)
+      |> assign(:key_tools, "")
 
     {:ok, socket}
   end
@@ -74,29 +66,24 @@ defmodule PrismWeb.ApiKeysLive do
      |> assign(:show_create, !socket.assigns.show_create)
      |> assign(:new_key, nil)
      |> assign(:key_name, "")
-     |> assign(:selected_type, "application")
-     |> assign(:available_scopes, valid_scopes_for("application"))
-     |> assign(:checked_scopes, default_scopes_for("application"))
-     |> assign(:grant_all, false)}
+     |> assign(:key_tools, "")
+     |> assign(:checked_scopes, first_preset())}
   end
 
   def handle_event("form_changed", params, socket) do
-    socket = assign(socket, :key_name, params["name"] || socket.assigns.key_name)
+    {:noreply,
+     socket
+     |> assign(:key_name, params["name"] || socket.assigns.key_name)
+     |> assign(:key_tools, params["tools"] || socket.assigns.key_tools)}
+  end
 
-    type = params["type"] || socket.assigns.selected_type
-
-    socket =
-      if type != socket.assigns.selected_type do
-        socket
-        |> assign(:selected_type, type)
-        |> assign(:available_scopes, valid_scopes_for(type))
-        |> assign(:checked_scopes, default_scopes_for(type))
-        |> assign(:grant_all, type == "admin")
-      else
-        socket
-      end
-
-    {:noreply, socket}
+  # A preset ticks its permissions in place of what was ticked; the person
+  # may still tick or untick each one.
+  def handle_event("preset", %{"preset" => name}, socket) do
+    case List.keyfind(socket.assigns.presets, name, 0) do
+      {^name, scopes} -> {:noreply, assign(socket, :checked_scopes, scopes)}
+      nil -> {:noreply, socket}
+    end
   end
 
   def handle_event("toggle_scope", %{"scope" => scope}, socket) do
@@ -110,29 +97,14 @@ defmodule PrismWeb.ApiKeysLive do
     {:noreply, assign(socket, :checked_scopes, checked)}
   end
 
-  def handle_event("toggle_grant_all", _params, socket) do
-    grant_all = !socket.assigns.grant_all
-
-    checked =
-      if grant_all,
-        do: socket.assigns.available_scopes,
-        else: default_scopes_for(socket.assigns.selected_type)
-
-    {:noreply,
-     socket
-     |> assign(:grant_all, grant_all)
-     |> assign(:checked_scopes, checked)}
-  end
-
-  def handle_event("create", %{"name" => name, "type" => type}, socket) do
+  def handle_event("create", %{"name" => name} = params, socket) do
+    # Sent in reading order; the server refuses a name it does not know.
     scope =
-      if socket.assigns.grant_all do
-        ["*"]
-      else
-        socket.assigns.checked_scopes
-      end
+      for {scope, _what} <- socket.assigns.permissions,
+          scope in socket.assigns.checked_scopes,
+          do: scope
 
-    create(socket, %{"name" => name, "type" => type, "scope" => scope})
+    create(socket, %{"name" => name, "scope" => scope, "tools" => tools(params["tools"])})
   end
 
   def handle_event("revoke", %{"id" => id}, socket) do
@@ -265,66 +237,56 @@ defmodule PrismWeb.ApiKeysLive do
       <!-- Create form -->
       <.card :if={@show_create}>
         <form id="api-key-form" phx-submit="create" phx-change="form_changed" class="space-y-4">
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
-              <.input name="name" value={@key_name} required placeholder="my-api-key" />
-            </div>
-            <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Type</label>
-              <select
-                name="type"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="application" selected={@selected_type == "application"}>
-                  Application
-                </option>
-                <option value="service" selected={@selected_type == "service"}>Service</option>
-                <option value="admin" selected={@selected_type == "admin"}>Admin</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Scope selection -->
+          <p class="text-sm text-gray-400">
+            A key acts as you in this athanor, within what you give it here. What it may do
+            is fixed once it is made: to change it, make a new key and revoke this one.
+          </p>
           <div>
-            <label class="block text-xs text-gray-500 uppercase mb-2">Scopes</label>
-            <div class="space-y-2">
-              <div :if={@selected_type == "admin"} class="flex items-center gap-2 mb-3">
-                <button
-                  type="button"
-                  phx-click="toggle_grant_all"
-                  class={[
-                    "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out",
-                    if(@grant_all, do: "bg-blue-500", else: "bg-gray-600")
-                  ]}
-                >
-                  <span class={[
-                    "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
-                    if(@grant_all, do: "translate-x-4", else: "translate-x-0")
-                  ]} />
-                </button>
-                <span class="text-sm text-gray-300">Grant all (<code class="text-xs">*</code>)</span>
-              </div>
-              <div class="grid grid-cols-2 gap-2">
-                <label
-                  :for={scope <- @available_scopes}
-                  class="flex items-center gap-2 rounded-lg bg-gray-800/50 px-3 py-2 text-sm cursor-pointer hover:bg-gray-800"
-                >
-                  <input
-                    type="checkbox"
-                    checked={scope in @checked_scopes}
-                    phx-click="toggle_scope"
-                    phx-value-scope={scope}
-                    disabled={@grant_all}
-                    class="rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
-                  />
-                  <span class={"text-gray-300 #{if @grant_all, do: "opacity-50"}"}>{scope}</span>
-                </label>
-              </div>
+            <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
+            <.input name="name" value={@key_name} required placeholder="my-api-key" />
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-2">What it may do</label>
+            <div class="flex flex-wrap gap-2 mb-3">
+              <.button
+                :for={{name, _scopes} <- @presets}
+                type="button"
+                variant="secondary"
+                size="sm"
+                phx-click="preset"
+                phx-value-preset={name}
+              >
+                {name}
+              </.button>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <label
+                :for={{scope, what} <- @permissions}
+                class="flex items-center gap-2 rounded-lg bg-gray-800/50 px-3 py-2 text-sm cursor-pointer hover:bg-gray-800"
+              >
+                <input
+                  type="checkbox"
+                  checked={scope in @checked_scopes}
+                  phx-click="toggle_scope"
+                  phx-value-scope={scope}
+                  class="rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                />
+                <span class="text-gray-300">{what}</span>
+              </label>
             </div>
           </div>
 
-          <.button type="submit">Create API Key</.button>
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-1">Only these tools</label>
+            <.input name="tools" value={@key_tools} placeholder="c:local.my-tool, c:local.other" />
+            <p class="mt-1 text-xs text-gray-500">
+              Leave empty and the key runs any tool you granted.
+            </p>
+          </div>
+
+          <%!-- A key with nothing ticked would hold the first preset's permissions. --%>
+          <.button type="submit" disabled={@checked_scopes == []}>Create API Key</.button>
         </form>
       </.card>
 
@@ -336,12 +298,13 @@ defmodule PrismWeb.ApiKeysLive do
         </div>
         <.table :if={!@loading && @keys != []} id="api-keys" rows={@keys}>
           <:col :let={key} label="Name">{key[:name] || "-"}</:col>
-          <:col :let={key} label="Type">
-            <.badge color={key_type_color(key[:type])}>
-              {key[:type] || "-"}
-            </.badge>
+          <:col :let={key} label="What it may do">
+            <span :if={key[:scope_unreadable]} class="text-red-400">
+              Cannot be used: what this key may do could not be read. Revoke it and make a new key.
+            </span>
+            <span :if={!key[:scope_unreadable]}>{format_scope(key[:scope], @permissions)}</span>
           </:col>
-          <:col :let={key} label="Scope">{format_scope(key[:scope])}</:col>
+          <:col :let={key} label="Tools">{format_tools(key[:tools])}</:col>
           <:col :let={key} label="Created">{key[:created_at] || "-"}</:col>
           <:col :let={key} label="Actions">
             <div class="flex gap-2">
@@ -381,14 +344,17 @@ defmodule PrismWeb.ApiKeysLive do
     end
   end
 
-  defp key_type_color(:admin), do: "red"
-  defp key_type_color(:service), do: "yellow"
-  defp key_type_color(:application), do: "green"
-  defp key_type_color(_), do: "gray"
+  # The tools field as the person typed it: names split on commas and
+  # white space; the server checks each one.
+  defp tools(nil), do: []
+  defp tools(text), do: String.split(text, [",", " ", "\n", "\t"], trim: true)
 
-  defp format_scope(nil), do: "-"
-  defp format_scope([]), do: "none"
-  defp format_scope(["*"]), do: "* (all)"
-  defp format_scope(scopes) when is_list(scopes), do: Enum.join(scopes, ", ")
-  defp format_scope(other), do: to_string(other)
+  defp format_scope(scopes, permissions) when is_list(scopes) and scopes != [] do
+    Enum.join(for({scope, what} <- permissions, scope in scopes, do: what), ", ")
+  end
+
+  defp format_scope(_scopes, _permissions), do: "nothing"
+
+  defp format_tools(tools) when is_list(tools) and tools != [], do: Enum.join(tools, ", ")
+  defp format_tools(_tools), do: "any tool you granted"
 end

@@ -22,7 +22,6 @@ defmodule Arca.ApiKeyStorageTest do
         name: name,
         key_hash: hash,
         key_prefix: "cyfr_sk_test",
-        type: "secret",
         scope: "[]",
         athanor_id: athanor_id,
         created_by: "test_user"
@@ -38,7 +37,7 @@ defmodule Arca.ApiKeyStorageTest do
 
       assert {:ok, key} = ApiKeyStorage.get_key(Prima.Actor.in_athanor(athanor_id), "test-key")
       assert key.name == "test-key"
-      assert key.type == "secret"
+      refute Map.has_key?(key, :type)
       assert key.revoked == false
     end
 

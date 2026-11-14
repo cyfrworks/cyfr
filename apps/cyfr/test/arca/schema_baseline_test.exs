@@ -216,9 +216,10 @@ defmodule Arca.SchemaBaselineTest do
     assert "schedule_occurrences_state_claimed_at_index" in index_names("schedule_occurrences")
   end
 
-  test "api_keys and webhooks have no scope-type column; vault_entries has no system column" do
+  test "api_keys has no type or scope-type column, webhooks no scope-type; vault_entries has no system column" do
     fossil = "scope" <> "_type"
     refute fossil in Enum.map(columns("api_keys"), & &1.name)
+    refute "type" in Enum.map(columns("api_keys"), & &1.name)
     refute fossil in Enum.map(columns("webhooks"), & &1.name)
     refute "system" in Enum.map(columns("vault_entries"), & &1.name)
   end

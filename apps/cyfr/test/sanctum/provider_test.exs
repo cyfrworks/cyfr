@@ -317,12 +317,18 @@ defmodule Sanctum.ProviderTest do
           "name" => "test-key"
         })
 
-      assert String.starts_with?(result.api_key, "cyfr_pk_")
-      assert result.name == "test-key"
+      assert %{
+               api_key: "cyfr_sk_" <> _,
+               name: "test-key",
+               scope: ["execute", "component_read", "storage_read"],
+               tools: []
+             } = result
+
+      refute Map.has_key?(result, :type)
 
       {:ok, result} = key_tool(ctx, %{"action" => "get", "name" => "test-key"})
-      assert result.name == "test-key"
-      assert result.key_prefix =~ "cyfr_pk_"
+      assert %{name: "test-key", key_prefix: "cyfr_sk_" <> _, tools: []} = result
+      refute Map.has_key?(result, :type)
     end
 
     test "create duplicate key returns error", %{ctx: ctx} do
@@ -355,7 +361,7 @@ defmodule Sanctum.ProviderTest do
         key_tool(ctx, %{"action" => "rotate", "name" => "rotate-key"})
 
       assert rotated.name == "rotate-key"
-      assert String.starts_with?(rotated.api_key, "cyfr_pk_")
+      assert String.starts_with?(rotated.api_key, "cyfr_sk_")
       assert rotated.api_key != original.api_key
     end
 
@@ -400,49 +406,43 @@ defmodule Sanctum.ProviderTest do
       assert err_msg(msg) =~ "Invalid key action"
     end
 
-    test "rejects invalid key type", %{ctx: ctx} do
-      {:error, msg} =
-        key_tool(ctx, %{
-          "action" => "create",
-          "name" => "invalid-type-key",
-          "type" => "INVALID"
-        })
+    test "a key's permissions are among the key's own, the wildcard none of them", %{ctx: ctx} do
+      for scope <- [["*"], ["execute", "bogus"]] do
+        assert {:error,
+                %Prima.Refusal{
+                  class: :invalid_argument,
+                  reason: :unknown_permission,
+                  message: "A key's permissions are among these: execute (Run tools), " <> _
+                }} =
+                 key_tool(ctx, %{"action" => "create", "name" => "wide", "scope" => scope})
+      end
 
-      assert err_msg(msg) =~ "Invalid key type"
-      assert err_msg(msg) =~ "INVALID"
-      assert err_msg(msg) =~ "application, service, or admin"
+      assert {:error, :not_found} = Sanctum.ApiKey.get(ctx, "wide")
     end
 
-    test "accepts valid key types", %{ctx: ctx} do
-      # Application key type
-      {:ok, result} =
-        key_tool(ctx, %{
-          "action" => "create",
-          "name" => "application-key",
-          "type" => "application"
-        })
+    test "a key's tools are named without a version, and kept as named", %{ctx: ctx} do
+      for tool <- ["c:local.ship:1.0.0", "ship", "agent:local.aqua"] do
+        assert {:error,
+                %Prima.Refusal{
+                  class: :invalid_argument,
+                  reason: :invalid_tool,
+                  message:
+                    "Name each tool as its type, namespace and name without a version, " <>
+                      "such as c:local.my-tool, or an outside server's tool as server:tool"
+                }} =
+                 key_tool(ctx, %{"action" => "create", "name" => "narrow", "tools" => [tool]})
+      end
 
-      assert String.starts_with?(result.api_key, "cyfr_pk_")
+      assert {:ok, %{scope: ["admin"], tools: ["catalyst:local.ship", "formula:local.flow"]}} =
+               key_tool(ctx, %{
+                 "action" => "create",
+                 "name" => "narrow",
+                 "scope" => ["admin"],
+                 "tools" => ["c:local.ship", "formula:local.flow", "catalyst:local.ship"]
+               })
 
-      # Service key type
-      {:ok, result} =
-        key_tool(ctx, %{
-          "action" => "create",
-          "name" => "service-key",
-          "type" => "service"
-        })
-
-      assert String.starts_with?(result.api_key, "cyfr_sk_")
-
-      # Admin key type
-      {:ok, result} =
-        key_tool(ctx, %{
-          "action" => "create",
-          "name" => "admin-key",
-          "type" => "admin"
-        })
-
-      assert String.starts_with?(result.api_key, "cyfr_ak_")
+      assert {:ok, %{scope: ["admin"], tools: ["catalyst:local.ship", "formula:local.flow"]}} =
+               key_tool(ctx, %{"action" => "get", "name" => "narrow"})
     end
 
     test "a key create refused for ownership answers the ownership refusal and mints nothing",

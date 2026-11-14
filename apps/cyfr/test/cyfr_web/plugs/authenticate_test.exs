@@ -281,8 +281,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
 
       {:ok, key_result} =
         Sanctum.TestContext.create_key(ctx, %{
-          name: "test-mcp-key",
-          type: :application
+          name: "test-mcp-key"
         })
 
       on_exit(fn ->
@@ -339,7 +338,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     test "returns 401 for invalid API key", %{conn: conn} do
       conn =
         conn
-        |> put_req_header("authorization", "Bearer cyfr_pk_invalid123456789012345678")
+        |> put_req_header("authorization", "Bearer cyfr_sk_invalid123456789012345678")
         |> authenticate(errors: Emissary.Web.MCPError)
 
       assert conn.halted
@@ -351,7 +350,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     # Every HTTP 401 must include an authentication challenge (RFC 9110).
     test "every 401 carries a WWW-Authenticate challenge", %{conn: conn} do
       for authorization <- [
-            "Bearer cyfr_pk_invalid123456789012345678",
+            "Bearer cyfr_sk_invalid123456789012345678",
             "Bearer not-a-real-session-token"
           ] do
         conn =

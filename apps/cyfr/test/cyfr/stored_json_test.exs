@@ -134,7 +134,7 @@ defmodule Cyfr.StoredJsonTest do
     assert_logged(log, "Opus.Schedules.Scheduler", "metadata")
   end
 
-  test "Sanctum.ApiKey lists a corrupt scope as none and a corrupt allowlist as absent" do
+  test "Sanctum.ApiKey lists a corrupt scope as none, marked unreadable, and a corrupt allowlist as absent" do
     ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     name = "stored-json-#{System.unique_integer([:positive])}"
 
@@ -150,6 +150,7 @@ defmodule Cyfr.StoredJsonTest do
         {:ok, keys} = Sanctum.ApiKey.list(ctx)
         key = Enum.find(keys, &(&1.name == name))
         assert key.scope == []
+        assert key.scope_unreadable
         assert key.ip_allowlist == nil
       end)
 
@@ -164,7 +165,6 @@ defmodule Cyfr.StoredJsonTest do
     {:ok, %{api_key: raw}} =
       Sanctum.TestContext.create_key(ctx, %{
         name: name,
-        type: :service,
         ip_allowlist: ["127.0.0.1"]
       })
 

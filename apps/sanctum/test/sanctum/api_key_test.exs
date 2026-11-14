@@ -10,9 +10,7 @@ defmodule Sanctum.ApiKeyTest do
   alias Sanctum.ApiKey
   alias Sanctum.Context
 
-  @public_prefix "cyfr_pk_"
-  @secret_prefix "cyfr_sk_"
-  @admin_prefix "cyfr_ak_"
+  @prefix "cyfr_sk_"
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -21,40 +19,142 @@ defmodule Sanctum.ApiKeyTest do
   end
 
   describe "create/2" do
-    test "creates a new API key with proper format (default public type)", %{ctx: ctx} do
+    test "a key made without permissions holds the first preset's, and runs any tool",
+         %{ctx: ctx} do
       {:ok, result} = create_key(ctx, %{name: "test-key"})
 
-      assert result.name == "test-key"
-      assert result.type == :application
-      assert String.starts_with?(result.api_key, @public_prefix)
-      assert result.scope == ["execute", "component_read", "storage_read"]
-      assert result.created_at != nil
+      assert %{
+               api_key: @prefix <> _,
+               name: "test-key",
+               scope: ["execute", "component_read", "storage_read"],
+               tools: [],
+               created_at: created_at
+             } = result
+
+      assert Map.keys(result) |> Enum.sort() == [:api_key, :created_at, :name, :scope, :tools]
+      assert is_binary(created_at)
+      assert {"Run tools and read their runs", result.scope} == hd(ApiKey.presets())
     end
 
-    test "creates public key with explicit type", %{ctx: ctx} do
-      {:ok, result} = create_key(ctx, %{name: "public-key", type: :application, scope: []})
-
-      assert result.type == :application
-      assert String.starts_with?(result.api_key, @public_prefix)
+    test "each preset makes a key holding exactly its permissions", %{ctx: ctx} do
+      for {{_preset, scope}, n} <- Enum.with_index(ApiKey.presets()) do
+        assert {:ok, %{scope: ^scope, tools: []}} =
+                 create_key(ctx, %{name: "preset-#{n}", scope: scope})
+      end
     end
 
-    test "creates secret key", %{ctx: ctx} do
-      {:ok, result} = create_key(ctx, %{name: "secret-key", type: :service, scope: []})
+    test "an entry outside the key's permissions refuses the whole list, naming the entry",
+         %{ctx: ctx} do
+      for {scope, entry} <- [
+            {[nil, "*"], nil},
+            {[nil], nil},
+            {["*"], "*"},
+            {["execute", "*"], "*"},
+            {["execute", 7], 7},
+            {["execute", "storage"], "storage"},
+            {["execute", "catalyst:local.ship"], "catalyst:local.ship"},
+            {"execute", "execute"}
+          ] do
+        assert {:error, {:unknown_permission, ^entry}} =
+                 create_key(ctx, %{name: "wide", scope: scope})
+      end
 
-      assert result.type == :service
-      assert String.starts_with?(result.api_key, @secret_prefix)
+      assert {:ok, []} = ApiKey.list(ctx)
     end
 
-    test "creates admin key", %{ctx: ctx} do
-      {:ok, result} = create_key(ctx, %{name: "admin-key", type: :admin, scope: []})
+    # Every value the column can hold that is not a JSON list of permission
+    # and tool names. The column is NOT NULL, so an absent value cannot be
+    # stored.
+    test "a stored scope no rule admits makes the key invalid, never a narrower or wider one",
+         %{ctx: ctx} do
+      for {stored, n} <-
+            Enum.with_index([
+              ~s(["execute", "*"]),
+              ~s([null, "*"]),
+              ~s(["execute", 7]),
+              ~s(["execute", "c:local.ship"]),
+              ~s(["execute", "catalyst:local.ship:1.0.0"]),
+              ~s({"execute": true}),
+              ~s("execute"),
+              "null",
+              "",
+              "   ",
+              "not json"
+            ]) do
+        name = "stored-#{n}"
+        {:ok, %{api_key: raw}} = create_key(ctx, %{name: name, tools: ["c:local.ship"]})
+        {:ok, %{id: id}} = ApiKey.get(ctx, name)
 
-      assert result.type == :admin
-      assert String.starts_with?(result.api_key, @admin_prefix)
+        Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.id == ^id),
+          set: [scope: stored]
+        )
+
+        log = capture_log(fn -> assert {:error, :invalid_key} = ApiKey.validate(raw) end)
+
+        assert log =~
+                 ~r/stored scope (holds an entry no rule admits|is not valid JSON) \(\d+ bytes\)/
+
+        # The line names the column's size, never its bytes (a blank value
+        # has no bytes to look for).
+        if String.trim(stored) != "", do: refute(log =~ stored)
+
+        key_ctx = %{ctx | api_key_id: id}
+
+        capture_log(fn ->
+          for target <- [
+                {:component, "catalyst:local.ship:1.0.0"},
+                {:component, "catalyst:local.other:1.0.0"},
+                {:outside, "greeter:hello"}
+              ] do
+            assert {:error, :invalid_api_key} = ApiKey.admit_tool(key_ctx, target)
+          end
+        end)
+
+        capture_log(fn ->
+          assert {:ok, %{scope: [], tools: [], scope_unreadable: true}} = ApiKey.get(ctx, name)
+          assert {:error, :invalid_key} = rotate_key(ctx, name)
+        end)
+      end
     end
 
-    test "returns error for invalid key type", %{ctx: ctx} do
-      assert {:error, {:invalid_key_type, :invalid}} =
-               create_key(ctx, %{name: "bad-key", type: :invalid, scope: []})
+    test "tools are kept by name without a version; a versioned or bare name makes no key",
+         %{ctx: ctx} do
+      for tool <- [
+            "c:local.ship:1.0.0",
+            "c:ship",
+            "ship",
+            "agent:local.aqua",
+            "greeter: hello",
+            7
+          ] do
+        assert {:error, {:invalid_tool, ^tool}} =
+                 create_key(ctx, %{name: "narrow", tools: [tool]})
+      end
+
+      # A component by its canonical name; an outside server's tool as
+      # written.
+      named = ["catalyst:local.ship", "reagent:acme.io.fetch", "greeter:hello"]
+
+      assert {:ok, %{scope: ["execute"], tools: ^named}} =
+               create_key(ctx, %{
+                 name: "narrow",
+                 scope: ["execute"],
+                 tools: [
+                   "c:local.ship",
+                   "r:acme.io.fetch",
+                   "catalyst:local.ship",
+                   "greeter:hello"
+                 ]
+               })
+
+      assert {:ok, %{scope: ["execute"], tools: ^named}} = ApiKey.get(ctx, "narrow")
+
+      # The tools never reach the key's permissions.
+      {:ok, key} = ApiKey.list(ctx)
+      [%{id: id}] = key
+      [row] = Arca.Repo.all(from(k in Arca.Schemas.ApiKey, where: k.id == ^id, select: k.scope))
+
+      assert Jason.decode!(row) == ["execute" | named]
     end
 
     test "generates unique keys", %{ctx: ctx} do
@@ -80,19 +180,11 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, retrieved} = ApiKey.get(ctx, "test-key")
 
       assert retrieved.name == "test-key"
-      assert retrieved.type == :application
+      refute Map.has_key?(retrieved, :type)
       assert String.ends_with?(retrieved.key_prefix, "...")
-      assert String.starts_with?(retrieved.key_prefix, @public_prefix)
+      assert String.starts_with?(retrieved.key_prefix, @prefix)
       # Full key should not be returned
       refute retrieved.key_prefix == created.api_key
-    end
-
-    test "retrieves secret key with correct type", %{ctx: ctx} do
-      {:ok, _created} = create_key(ctx, %{name: "secret-key", type: :service, scope: []})
-      {:ok, retrieved} = ApiKey.get(ctx, "secret-key")
-
-      assert retrieved.type == :service
-      assert String.starts_with?(retrieved.key_prefix, @secret_prefix)
     end
 
     test "returns error for non-existent key", %{ctx: ctx} do
@@ -223,31 +315,22 @@ defmodule Sanctum.ApiKeyTest do
   end
 
   describe "rotate/2" do
-    test "generates new key value preserving type", %{ctx: ctx} do
-      {:ok, original} = create_key(ctx, %{name: "rotating"})
+    test "issues a new secret keeping the key's permissions and tools", %{ctx: ctx} do
+      {:ok, original} =
+        create_key(ctx, %{name: "rotating", scope: ["execute"], tools: ["c:local.ship"]})
+
       {:ok, rotated} = rotate_key(ctx, "rotating")
 
-      assert rotated.name == "rotating"
-      assert rotated.type == :application
+      assert %{
+               api_key: @prefix <> _,
+               name: "rotating",
+               scope: ["execute"],
+               tools: ["catalyst:local.ship"],
+               rotated_at: rotated_at
+             } = rotated
+
+      assert is_binary(rotated_at)
       assert rotated.api_key != original.api_key
-      assert String.starts_with?(rotated.api_key, @public_prefix)
-      assert rotated.rotated_at != nil
-    end
-
-    test "preserves secret key type on rotation", %{ctx: ctx} do
-      {:ok, _original} = create_key(ctx, %{name: "secret-rotating", type: :service, scope: []})
-      {:ok, rotated} = rotate_key(ctx, "secret-rotating")
-
-      assert rotated.type == :service
-      assert String.starts_with?(rotated.api_key, @secret_prefix)
-    end
-
-    test "preserves admin key type on rotation", %{ctx: ctx} do
-      {:ok, _original} = create_key(ctx, %{name: "admin-rotating", type: :admin, scope: []})
-      {:ok, rotated} = rotate_key(ctx, "admin-rotating")
-
-      assert rotated.type == :admin
-      assert String.starts_with?(rotated.api_key, @admin_prefix)
     end
 
     test "old key no longer works after rotation", %{ctx: ctx} do
@@ -259,7 +342,7 @@ defmodule Sanctum.ApiKeyTest do
 
     test "new key works after rotation", %{ctx: ctx} do
       {:ok, _original} =
-        create_key(ctx, %{name: "rotating", type: :service, scope: ["vault_read"]})
+        create_key(ctx, %{name: "rotating", scope: ["vault_read"]})
 
       {:ok, rotated} = rotate_key(ctx, "rotating")
 
@@ -274,62 +357,44 @@ defmodule Sanctum.ApiKeyTest do
   end
 
   describe "validate/1" do
-    test "validates active key and returns metadata with type", %{ctx: ctx} do
+    test "validates active key and returns its metadata", %{ctx: ctx} do
       {:ok, created} =
         create_key(ctx, %{
           name: "valid-key",
-          type: :service,
           scope: ["vault_read", "component_manage"]
         })
 
       {:ok, validated} = ApiKey.validate(created.api_key)
 
       assert validated.name == "valid-key"
-      assert validated.type == :service
+      refute Map.has_key?(validated, :type)
       assert validated.scope == ["vault_read", "component_manage"]
       refute Map.has_key?(validated, :rate_limit)
     end
 
-    test "validates secret key and returns correct type", %{ctx: ctx} do
-      {:ok, created} = create_key(ctx, %{name: "secret-valid", type: :service, scope: []})
+    test "a key's tools stay out of its metadata and its context", %{ctx: ctx} do
+      {:ok, created} =
+        create_key(ctx, %{name: "narrow-valid", scope: ["execute"], tools: ["c:local.ship"]})
 
       {:ok, validated} = ApiKey.validate(created.api_key)
 
-      assert validated.type == :service
-    end
-
-    test "validates admin key and returns correct type", %{ctx: ctx} do
-      {:ok, created} = create_key(ctx, %{name: "admin-valid", type: :admin, scope: []})
-
-      {:ok, validated} = ApiKey.validate(created.api_key)
-
-      assert validated.type == :admin
-    end
-
-    test "detects key type from prefix", %{ctx: ctx} do
-      {:ok, pk} = create_key(ctx, %{name: "pk", type: :application, scope: []})
-      {:ok, sk} = create_key(ctx, %{name: "sk", type: :service, scope: []})
-      {:ok, ak} = create_key(ctx, %{name: "ak", type: :admin, scope: []})
-
-      {:ok, pk_val} = ApiKey.validate(pk.api_key)
-      {:ok, sk_val} = ApiKey.validate(sk.api_key)
-      {:ok, ak_val} = ApiKey.validate(ak.api_key)
-
-      assert pk_val.type == :application
-      assert sk_val.type == :service
-      assert ak_val.type == :admin
+      assert validated.scope == ["execute"]
+      assert ApiKey.context_from_metadata(validated).permissions == MapSet.new([:execute])
     end
 
     test "returns error for invalid key format", %{ctx: _ctx} do
       assert {:error, :invalid_key_format} = ApiKey.validate("invalid_key")
     end
 
-    test "returns error for key with unknown prefix", %{ctx: _ctx} do
-      assert {:error, :invalid_key_format} = ApiKey.validate("cyfr_zz_abc123456789012345678901")
+    test "a string with another prefix is no key", %{ctx: _ctx} do
+      for prefix <- ["cyfr_zz_", "cyfr_pk_", "cyfr_ak_"] do
+        assert {:error, :invalid_key_format} =
+                 ApiKey.validate(prefix <> "abc123456789012345678901")
+      end
     end
 
     test "returns error for non-existent key", %{ctx: _ctx} do
-      fake_key = @public_prefix <> "nonexistent12345678901234"
+      fake_key = @prefix <> "nonexistent12345678901234"
       assert {:error, :invalid_key} = ApiKey.validate(fake_key)
     end
 
@@ -346,13 +411,11 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, result} =
         create_key(ctx, %{
           name: "admin-with-ip",
-          type: :admin,
           scope: [],
           ip_allowlist: ["192.168.1.0/24", "10.0.0.1"]
         })
 
       assert result.name == "admin-with-ip"
-      assert result.type == :admin
     end
 
     test "validate allows key without IP check when no allowlist", %{ctx: ctx} do
@@ -370,7 +433,6 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, created} =
         create_key(ctx, %{
           name: "ip-allowed-key",
-          type: :admin,
           scope: [],
           ip_allowlist: ["192.168.1.10", "10.0.0.0/8"]
         })
@@ -388,7 +450,6 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, created} =
         create_key(ctx, %{
           name: "ip-restricted-key",
-          type: :admin,
           scope: [],
           ip_allowlist: ["192.168.1.0/24"]
         })
@@ -400,7 +461,6 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, created} =
         create_key(ctx, %{
           name: "ip-key-no-check",
-          type: :admin,
           scope: [],
           ip_allowlist: ["192.168.1.0/24"]
         })
@@ -778,6 +838,13 @@ defmodule Sanctum.ApiKeyTest do
 
       assert is_binary(id)
       assert {:ok, []} = ApiKey.list(ctx)
+
+      # A request that could make no key asks for no confirmation.
+      assert {:error, {:unknown_permission, nil}} =
+               ApiKey.create(ctx, %{name: "unproven", scope: [nil, "*"]})
+
+      assert {:error, {:invalid_tool, "ship"}} =
+               ApiKey.create(ctx, %{name: "unproven", tools: ["ship"]})
 
       {:ok, _} = create_key(ctx, %{name: "proven", scope: []})
 

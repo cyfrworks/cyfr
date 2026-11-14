@@ -121,7 +121,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
           name: "k#{n}",
           key_hash: hash,
           key_prefix: "cyfr_sk_st",
-          type: "service",
           created_by: created_by,
           athanor_id: athanor_id
         },

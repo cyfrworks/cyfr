@@ -16,7 +16,6 @@ defmodule Arca.Schemas.ApiKey do
     field :name, :string
     field :key_hash, :binary
     field :key_prefix, :string
-    field :type, :string
     field :scope, :string
     field :ip_allowlist, :string
     field :capability, :string

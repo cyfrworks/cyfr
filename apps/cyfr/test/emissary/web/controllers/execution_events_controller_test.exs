@@ -83,7 +83,6 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
       {:ok, key} =
         Sanctum.TestContext.create_key(ctx, %{
           name: "events-execute-only",
-          type: :application,
           scope: ["execute"]
         })
 
@@ -119,7 +118,7 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
     test "a bad credential is a plain HTTP error, not a JSON-RPC envelope", %{conn: conn} do
       conn =
         conn
-        |> put_req_header("authorization", "Bearer cyfr_pk_invalid123456789012345678")
+        |> put_req_header("authorization", "Bearer cyfr_sk_invalid123456789012345678")
         |> get("/api/executions/exec_whatever/events")
 
       assert conn.status == 401
