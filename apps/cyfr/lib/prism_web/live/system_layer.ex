@@ -2675,7 +2675,7 @@ defmodule PrismWeb.SystemLayer do
         walk={@prompt.subject}
         context={@context}
         athanor_route={@athanor_route}
-        athanor_name={@athanor_name}
+        athanor_name={grant_place(@athanor_name, @context)}
         layer={@id}
         prompt_id={@prompt.id}
       />
@@ -3065,7 +3065,7 @@ defmodule PrismWeb.SystemLayer do
     ]
   end
 
-  defp title(%{kind: :grant, subject: %{ref: ref}}), do: "Grant #{ref}"
+  defp title(%{kind: :grant, subject: %{ref: ref}}), do: "Grant #{component_name(ref)}"
 
   defp title(%{kind: :credential_entry, subject: %{return: _return, provider: provider}}),
     do: "Connect your #{provider} account"
@@ -3075,10 +3075,44 @@ defmodule PrismWeb.SystemLayer do
 
   defp title(%{kind: :share, subject: %{name: name}}), do: "Share #{name}"
   defp title(%{kind: :pairing}), do: "Your devices"
-  defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
+
+  defp title(%{kind: :confirmation, subject: %{operation: operation}}),
+    do: operation_title(operation)
 
   defp title(%{kind: :request, subject: %{asker: %{name: name}, operation: operation}}),
     do: "#{name} asks you to approve #{operation}"
+
+  # Where a grant lands, as the person reads it: their own athanor as
+  # theirs, any other by its name.
+  defp grant_place(name, %Sanctum.Context{athanor_id: id} = ctx) when is_binary(name) do
+    if PrismWeb.Athanors.own?(%{id: id}, ctx), do: "your athanor", else: name
+  end
+
+  defp grant_place(name, _context), do: name
+
+  # A component by its name, as a person calls it; the sheet below names
+  # its whole reference.
+  defp component_name(ref) do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %{name: name}} -> name
+      {:error, _unparsed} -> ref
+    end
+  end
+
+  # A change by the words its operation is declared with (`Prima.Operation`),
+  # never its `tool.action` name.
+  defp operation_title(operation) when is_binary(operation) do
+    with [tool, action] <- String.split(operation, ".", parts: 2),
+         {:ok, {_module, %{operations: operations}}} <-
+           Map.fetch(Sanctum.Catalog.operations(), tool),
+         %Prima.Operation{description: words} <- Enum.find(operations, &(&1.action == action)) do
+      words
+    else
+      _undeclared -> "Confirm a change"
+    end
+  end
+
+  defp operation_title(_operation), do: "Confirm a change"
 
   defp description(%{kind: :grant}),
     do:

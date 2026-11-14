@@ -812,13 +812,63 @@ defmodule Prism.ConsentChoicesTest do
              {:error, "Timeout must be a duration, like 30s or 5m."}
 
     assert ConsentChoices.lowered(%{"max_memory_bytes" => "1.5"}, asked, %{}) ==
-             {:error, "Memory (bytes) must be a whole number."}
+             {:error, "Memory (MiB) must be a whole number."}
+
+    # Memory is typed in MiB and granted in bytes; an ask that is no whole
+    # number of MiB is named to one place.
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "1"}, asked, %{}) ==
+             {:error, "Memory (MiB) can be at most 0.0."}
+
+    assert ConsentChoices.lowered(
+             %{"max_memory_bytes" => "2"},
+             %{"max_memory_bytes" => 4_194_304},
+             %{}
+           ) ==
+             {:ok, %{"max_memory_bytes" => 2_097_152}}
 
     assert ConsentChoices.lowered(%{"rate_requests" => "11"}, asked, %{}) ==
              {:error, "The rate can be at most 10 requests."}
 
     assert ConsentChoices.lowered(%{"rate_requests" => "x"}, asked, %{}) ==
              {:error, "The rate must be a whole number of requests."}
+  end
+
+  # The form shows memory in MiB, rounded; the value it shows, sent back
+  # unchanged, keeps the bytes it stood for, so no shown value is refused
+  # and none loses bytes. Only a new number is read, in whole MiB.
+  test "memory shown and sent back unchanged keeps its bytes" do
+    for {ask, shown} <- [{1_572_864, "1.5"}, {1_048_577, "1.0"}] do
+      asked = %{"max_memory_bytes" => ask, "timeout" => "30s"}
+
+      assert ConsentChoices.lowered(%{"max_memory_bytes" => shown}, asked, %{}) == {:ok, %{}}
+
+      # The form sends every field: lowering another limit beside it works.
+      assert ConsentChoices.lowered(
+               %{"max_memory_bytes" => shown, "timeout" => "10s"},
+               asked,
+               %{}
+             ) == {:ok, %{"timeout" => "10s"}}
+    end
+
+    # A narrowing the node holds is shown and kept the same way.
+    held = %{"max_memory_bytes" => 1_572_864}
+    four = %{"max_memory_bytes" => 4_194_304}
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "1.5"}, four, held) == {:ok, held}
+
+    asked = %{"max_memory_bytes" => 1_572_864}
+
+    # A typed fraction that is not the shown value is no whole number;
+    # empty keeps what it held; zero and a huge value read as whole MiB.
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "1.25"}, asked, %{}) ==
+             {:error, "Memory (MiB) must be a whole number."}
+
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => ""}, four, held) == {:ok, held}
+
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "0"}, asked, %{}) ==
+             {:ok, %{"max_memory_bytes" => 0}}
+
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "999999"}, asked, %{}) ==
+             {:error, "Memory (MiB) can be at most 1.5."}
   end
 
   describe "an exit's flows" do

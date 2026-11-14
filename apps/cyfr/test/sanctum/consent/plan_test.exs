@@ -298,8 +298,7 @@ defmodule Sanctum.Consent.PlanTest do
       assert {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-mount"})
       assert [%{need: "claude", candidates: []}] = plan.needs
 
-      assert ("need 'claude' wants login entry for the program claude, and none can yet. " <>
-                "Create one first.") in plan.warnings
+      assert "The claude credential needs a login for the program claude, and the vault has none yet." in plan.warnings
     end
 
     test "commits to a login entry, attach-only and projecting nothing", %{ctx: ctx} do
@@ -919,7 +918,7 @@ defmodule Sanctum.Consent.PlanTest do
       view
     end
 
-    defp mail_warnings(plan), do: Enum.filter(plan.warnings, &(&1 =~ "need 'mail'"))
+    defp mail_warnings(plan), do: Enum.filter(plan.warnings, &(&1 =~ "The mail credential"))
 
     test "a need is met by an OAuth candidate holding exactly its scopes", %{ctx: ctx} do
       oauth_entry!(ctx, ["gmail.readonly"])
@@ -1142,9 +1141,9 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.candidates == [] and row.suggested == nil
       refute row.choice_required
 
-      assert Enum.filter(plan.warnings, &(&1 =~ "need 'api_key'")) == [
-               "need 'api_key' wants api_key entry for api.openai.com, uploads.openai.com, " <>
-                 "and none can yet. Create one first."
+      assert Enum.filter(plan.warnings, &(&1 =~ "The api_key credential")) == [
+               "The api_key credential needs an API key for api.openai.com, uploads.openai.com, " <>
+                 "and the vault has none yet."
              ]
 
       both = own!(ctx, "", %{destination: %{"hosts" => hosts}})
@@ -1157,7 +1156,7 @@ defmodule Sanctum.Consent.PlanTest do
                {wildcard.id, "wildcard"}
              ]
 
-      refute Enum.any?(plan.warnings, &(&1 =~ "need 'api_key'"))
+      refute Enum.any?(plan.warnings, &(&1 =~ "The api_key credential"))
     end
 
     test "a label equal to the qualifier ranks first, then exact, then wildcard, then own, " <>
@@ -1391,10 +1390,10 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.newer_shipped == "1.1.0"
       assert row.attach_only_held
 
-      assert Enum.filter(plan.warnings, &(&1 =~ "need 'api_key'")) == [
-               "need 'api_key' wants a disclosed api_key entry for api.openai.com: the " <>
-                 "component reads the value itself, and no disclosed entry can yet — create " <>
-                 "one first, or update to version 1.1.0, which the release ships"
+      assert Enum.filter(plan.warnings, &(&1 =~ "The api_key credential")) == [
+               "The api_key credential needs a disclosed API key for api.openai.com: the " <>
+                 "component reads the value itself, and the vault has no disclosed one yet, " <>
+                 "or update to version 1.1.0, which the release ships."
              ]
 
       disclosed = own!(ctx, "openai.com", %{disclose: true})
@@ -1403,7 +1402,7 @@ defmodule Sanctum.Consent.PlanTest do
       assert [%{entry_id: id, disclosed: true}] = row.candidates
       assert id == disclosed.id
       assert row.suggested == %{entry_id: disclosed.id}
-      refute Enum.any?(plan.warnings, &(&1 =~ "need 'api_key'"))
+      refute Enum.any?(plan.warnings, &(&1 =~ "The api_key credential"))
     end
 
     test "a dependency's need the app provides is answered by the app, and what it cannot " <>

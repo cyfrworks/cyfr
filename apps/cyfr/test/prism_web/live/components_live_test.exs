@@ -106,7 +106,9 @@ defmodule PrismWeb.ComponentsLiveTest do
     html = render(view)
 
     assert html =~ ~s(data-kind="grant")
-    assert html =~ "Grant reagent:local.shelf-tool:1.0.0"
+    assert has_element?(view, "#system-layer-title", "Grant shelf-tool")
+    # The person's own athanor is named as theirs.
+    assert has_element?(view, ".consent-sheet__subtitle", "in your athanor")
     assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-sheet"]))
     refute has_element?(view, "#consent-sheet-dialog")
 
