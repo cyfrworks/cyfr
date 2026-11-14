@@ -555,14 +555,12 @@ defmodule Sanctum.Dispatch do
   # A declared action is authorized before its remaining fields are
   # validated. Missing or unknown action identity stays a cast error so
   # every ingress reports the same refusal. Remote `server:tool` names
-  # take the proxied authorization, and while the storage
-  # reserve is depleted an authenticated caller's are refused here, before
-  # any budget is taken, as every operation that is no read and takes no
-  # authority away is (`Sanctum.Catalog.undeclared_write_admission/0`); an
-  # unauthenticated caller is still refused for that first.
+  # take the access every outside tool is declared with, then the storage
+  # reserve's admission, before any budget is taken
+  # (`Sanctum.Catalog.authorize_proxied/3`).
   defp authorize_declared_action(name, ctx, args, in_chain?) do
     if String.contains?(name, ":") do
-      if ctx.authenticated, do: Catalog.undeclared_write_admission(), else: :ok
+      Catalog.authorize_proxied(name, ctx, in_chain?)
     else
       case Catalog.lookup(name) do
         {:ok, {_module, meta}} -> authorize_declared_action(name, meta, ctx, args, in_chain?)
@@ -913,43 +911,37 @@ defmodule Sanctum.Dispatch do
   # A namespaced name (e.g. "notion:create_page") is asked of the proxy
   # port: resolved first — the server, the tool, the plane — as part of
   # the admission, then run.
+  # The caller was authorized for an outside tool before this
+  # (`authorize_declared_action/4`). The caller's plane rides along:
+  # proxied tools are in-chain by declaration, and an external-plane call
+  # reaches one only when the server row opts in — enforced where the row
+  # is in hand, not left to the wiring. A bare unknown name resolves to
+  # nothing and is refused as an unknown tool.
   defp proxied(name, ctx, args, opts, in_chain?) do
-    if String.contains?(name, ":") and not ctx.authenticated do
-      # External tools carry no per-tool requires_auth metadata; all of
-      # them require authentication, whichever entry the call came by.
-      # Bare unknown names fall through so they still produce
-      # "Unknown tool".
-      refused(opts, args, Refusals.admission({:tool_auth_required, name}))
-    else
-      # The caller's plane rides along: proxied tools are in-chain by
-      # declaration, and an external-plane call reaches one only when the
-      # server row opts in — enforced where the row is in hand, not left to
-      # the wiring.
-      plane = if in_chain?, do: :in_chain, else: :external
-      proxy = Sanctum.Proxy.impl!()
+    plane = if in_chain?, do: :in_chain, else: :external
+    proxy = Sanctum.Proxy.impl!()
 
-      case proxy.resolve(name, ctx, plane, server: Keyword.get(opts, :server)) do
-        {:ok, target} ->
-          admitted(opts, args, fn ->
-            result =
-              execute_tool_call(name, ctx, opts, fn ->
-                proxy.dispatch(target, ctx, args, plane,
-                  execution_id: Keyword.get(opts, :execution_id),
-                  step: Keyword.get(opts, :step),
-                  hold: Keyword.get(opts, :hold),
-                  retention_class: Keyword.get(opts, :retention_class)
-                )
-              end)
+    case proxy.resolve(name, ctx, plane, server: Keyword.get(opts, :server)) do
+      {:ok, target} ->
+        admitted(opts, args, fn ->
+          result =
+            execute_tool_call(name, ctx, opts, fn ->
+              proxy.dispatch(target, ctx, args, plane,
+                execution_id: Keyword.get(opts, :execution_id),
+                step: Keyword.get(opts, :step),
+                hold: Keyword.get(opts, :hold),
+                retention_class: Keyword.get(opts, :retention_class)
+              )
+            end)
 
-            {result, %{routed_to: "external:#{name}"}}
-          end)
+          {result, %{routed_to: "external:#{name}"}}
+        end)
 
-        {:error, :not_external} ->
-          refused(opts, args, Refusals.admission({:unknown_tool, name}))
+      {:error, :not_external} ->
+        refused(opts, args, Refusals.admission({:unknown_tool, name}))
 
-        {:error, reason} ->
-          refused(opts, args, Refusals.admission(reason))
-      end
+      {:error, reason} ->
+        refused(opts, args, Refusals.admission(reason))
     end
   end
 

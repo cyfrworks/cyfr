@@ -31,10 +31,10 @@ defmodule Sanctum.Visibility do
   asserted `:ok` in CI) guarantees every registered action carries a full
   declaration, so nothing falls through to an accidental default.
 
-  External tools (namespaced with `:`, no action enum) carry no per-action
-  classification: the dispatcher refuses every one of them to a caller with
-  no credential, so anonymous callers are shown none and authenticated
-  callers pass them through unchanged.
+  An outside server's tools (namespaced with `:`, no action enum) carry no
+  per-action classification: outside a running chain a caller is shown
+  those `external_tools/1` answers, the ones a call is admitted for now,
+  and `filter_for_context/2` hides them from a caller with no credential.
   """
 
   alias Sanctum.Annotations
@@ -121,6 +121,41 @@ defmodule Sanctum.Visibility do
         end
     end
   end
+
+  @doc """
+  The outside servers' tools a caller outside a running chain can call
+  now, as discovery lists them: of those the proxy port lists for the
+  caller's athanor (`c:Sanctum.Proxy.list_external_tools/1`), each the
+  gate admits this caller to (`Sanctum.Catalog.authorize_proxied/3`) and
+  that resolves on the external plane (`c:Sanctum.Proxy.resolve/4`: its
+  server enabled, the tool one the server exposes, the server's `console`
+  setting on). A caller with no athanor, or not admitted to outside tools
+  at all, is shown none and starts no server.
+  """
+  @spec external_tools(Context.t()) :: [map()]
+  def external_tools(%Context{athanor_id: athanor_id} = ctx)
+      when is_binary(athanor_id) and athanor_id != "" do
+    # The admission reads no tool name but for its refusal's sentence,
+    # which discovery does not show.
+    with :ok <- Sanctum.Catalog.authorize_proxied("tools/list", ctx, false),
+         {:ok, rows} <- Arca.McpServerStorage.list(Context.actor(ctx)) do
+      proxy = Sanctum.Proxy.impl!()
+      servers = Map.new(rows, &{&1.name, &1})
+
+      ctx
+      |> proxy.list_external_tools()
+      |> Enum.filter(fn %{"name" => name} ->
+        [server, _tool] = String.split(name, ":", parts: 2)
+
+        Sanctum.Catalog.authorize_proxied(name, ctx, false) == :ok and
+          match?({:ok, _}, proxy.resolve(name, ctx, :external, server: Map.get(servers, server)))
+      end)
+    else
+      _refused -> []
+    end
+  end
+
+  def external_tools(%Context{}), do: []
 
   @doc """
   Filter tool definitions to only include tools/actions the caller can see.

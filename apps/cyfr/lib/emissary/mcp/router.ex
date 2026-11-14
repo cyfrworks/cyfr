@@ -158,9 +158,13 @@ defmodule Emissary.MCP.Router do
   # Tool Methods
   # ============================================================================
 
+  # The catalogue's tools this caller may see, then the outside servers'
+  # tools it can call now: the names a call is admitted for, no more and
+  # no fewer.
   defp dispatch_method(ctx, "tools/list", params, _id) do
     Sanctum.Catalog.list_tools()
     |> Sanctum.Visibility.filter_for_context(ctx)
+    |> Kernel.++(Sanctum.Visibility.external_tools(ctx))
     |> paginate("tools", params)
   end
 

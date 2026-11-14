@@ -210,13 +210,16 @@ defmodule Sanctum.Providers.System do
 
   @impl true
   def handle("tools", %Context{} = ctx, %{"action" => "list"} = args) do
-    tools = Sanctum.Catalog.list_tools()
+    # The athanor's outside tools: inside a running chain every one its
+    # servers answer, which the gate prunes to the chain's grant after
+    # this handler; outside one, those a call is admitted for now.
+    external_tools =
+      if ctx.plane == :guest,
+        do: Sanctum.Proxy.impl!().list_external_tools(ctx),
+        else: Sanctum.Visibility.external_tools(ctx)
 
-    # Augment with tenant-specific external MCP server tools
-    external_tools = Sanctum.Proxy.impl!().list_external_tools(ctx)
-
-    all_tools = tools ++ external_tools
-    all_tools = Sanctum.Visibility.filter_for_context(all_tools, ctx)
+    all_tools =
+      Sanctum.Visibility.filter_for_context(Sanctum.Catalog.list_tools() ++ external_tools, ctx)
 
     case args["component_ref"] do
       nil ->

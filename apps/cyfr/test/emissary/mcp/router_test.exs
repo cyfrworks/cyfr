@@ -373,38 +373,85 @@ defmodule Emissary.MCP.RouterTest do
           config_json: Jason.encode!(config)
         })
 
-      # `tools list` caches the athanor's outside tools: the entry goes with
-      # the server, so no later test reads this one.
+      # The athanor's outside tools are cached: a server made here drops
+      # the entry as one made through its operation does, so no earlier
+      # test's list is read, and the entry goes with the server, so no
+      # later test reads this one.
+      Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+
       on_exit(fn ->
         Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id)
         Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
       end)
     end
 
+    # Every tools/list page, as a client reads it, following each cursor.
+    defp listed(ctx, cursor \\ nil) do
+      params = if cursor, do: %{"cursor" => cursor}, else: %{}
+
+      {:ok, page} =
+        Router.dispatch(ctx, %Message{type: :request, id: 3, method: "tools/list", params: params})
+
+      names = Enum.map(page["tools"], & &1["name"])
+      if page["nextCursor"], do: names ++ listed(ctx, page["nextCursor"]), else: names
+    end
+
+    defp outside_names(ctx), do: Enum.filter(listed(ctx), &String.contains?(&1, ":"))
+
+    @hello_back {:ok,
+                 %{
+                   "content" => [
+                     %{
+                       "type" => "text",
+                       "text" =>
+                         Jason.encode!(%{
+                           "content" => [%{"type" => "text", "text" => "hello back"}]
+                         })
+                     }
+                   ],
+                   "isError" => false
+                 }}
+
     test "a listed name of a server with console on is called", %{context: ctx, url: url} do
       outside_server(ctx, "greeter", url, %{"console" => true})
 
-      {:ok, %{tools: tools}} =
-        Sanctum.Providers.System.handle("tools", ctx, %{"action" => "list"})
-
-      assert "greeter:hello" in Enum.map(tools, & &1["name"])
-
-      assert call(ctx, "greeter:hello", %{"who" => "Oren"}) ==
-               {:ok,
-                %{
-                  "content" => [
-                    %{
-                      "type" => "text",
-                      "text" =>
-                        Jason.encode!(%{
-                          "content" => [%{"type" => "text", "text" => "hello back"}]
-                        })
-                    }
-                  ],
-                  "isError" => false
-                }}
-
+      # Listed and called through the MCP method, as a client does.
+      assert outside_names(ctx) == ["greeter:hello"]
+      assert call(ctx, "greeter:hello", %{"who" => "Oren"}) == @hello_back
       assert_received {:tools_call, %{"name" => "hello", "arguments" => %{"who" => "Oren"}}}
+    end
+
+    # An outside tool's call is a run like any other: it takes the
+    # permission a run needs, decided at the gate's admission.
+    test "a key without execute is neither shown nor let call an outside tool, and the server hears nothing",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+      key = %{ctx | auth_method: :api_key, permissions: MapSet.new([:storage_read])}
+
+      assert outside_names(key) == []
+
+      assert call(key, "greeter:hello", %{}) ==
+               {:error, :insufficient_permissions,
+                Sanctum.Unauthorized.message({:missing_permission, :execute}, :api_key)}
+
+      refute_received {:tools_call, _}
+    end
+
+    test "a key with execute, a browser session and a paired box are each shown and admitted",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+
+      callers = [
+        key: %{ctx | auth_method: :api_key, permissions: MapSet.new([:execute])},
+        session: Sanctum.TestContext.local(:prism),
+        box: %{Sanctum.TestContext.local(:device) | auth_method: :device}
+      ]
+
+      for {who, caller} <- callers do
+        assert {who, outside_names(caller)} == {who, ["greeter:hello"]}
+        assert {who, call(caller, "greeter:hello", %{})} == {who, @hello_back}
+        assert_received {:tools_call, %{"name" => "hello"}}
+      end
     end
 
     test "a server without console is refused with the setting to turn on", %{
@@ -412,6 +459,9 @@ defmodule Emissary.MCP.RouterTest do
       url: url
     } do
       outside_server(ctx, "inside-only", url, %{})
+
+      # Nothing a call is refused is listed.
+      assert outside_names(ctx) == []
 
       assert call(ctx, "inside-only:hello", %{}) ==
                {:error, :invalid_params,
