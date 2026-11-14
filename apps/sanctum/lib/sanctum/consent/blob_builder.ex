@@ -796,7 +796,7 @@ defmodule Sanctum.Consent.BlobBuilder do
         "paths" => caps.storage.paths,
         "actions" => caps.storage.actions
       },
-      "tools" => Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
+      "tools" => Sanctum.Consent.ShapeDerivation.granted_tools(caps.tools)
     }
     |> put_flows(caps.flows)
   end

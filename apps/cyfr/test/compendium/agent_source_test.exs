@@ -129,7 +129,9 @@ defmodule Compendium.AgentSourceTest do
 
     tools = manifest["caps"]["tools"]
     assert "files.read" in tools and "component.list" in tools
-    refute "native_search" in tools
+    # The provider's own search, which the shipped soul turns on, is one
+    # of its tools by its name.
+    assert "native_search" in tools
     assert tools == Enum.sort(tools)
     assert manifest["agent"]["model"] == agent.model
     assert manifest["agent"]["catalyst"] == agent.catalyst_ref

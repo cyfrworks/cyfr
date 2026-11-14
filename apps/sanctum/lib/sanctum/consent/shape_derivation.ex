@@ -438,8 +438,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
   name one (`Prima.Manifest.Caps`), so no other component's grant holds
   one; an agent that names one exactly keeps it, and its tool policy and
   the assistant's kind ceiling decide when the person is asked first.
-  The provider's own search, `#{@provider_search}`, is kept by its name
-  when an agent names it, since no catalog action is it.
   """
   @spec expand_tools([String.t()]) :: [String.t()]
   def expand_tools(patterns) when is_list(patterns) do
@@ -449,7 +447,18 @@ defmodule Sanctum.Consent.ShapeDerivation do
     # `Sanctum.Catalog.NotLoadedError` rather than answer none.
     |> ToolPattern.expand(Sanctum.Catalog.tool_actions())
     |> Enum.reject(&(&1 in @exact_only and &1 not in patterns))
-    |> Kernel.++(if @provider_search in patterns, do: [@provider_search], else: [])
+  end
+
+  @doc """
+  What a node's grant holds of the tools `patterns` names: their catalog
+  actions (`expand_tools/1`), and the provider's own search,
+  `#{@provider_search}`, by its name when an agent names it. A shape takes
+  the actions alone, its `caps` keeping the search; the grant's edge
+  carries both, so a comparison reads the search on either side.
+  """
+  @spec granted_tools([String.t()]) :: [String.t()]
+  def granted_tools(patterns) when is_list(patterns) do
+    expand_tools(patterns) ++ if(@provider_search in patterns, do: [@provider_search], else: [])
   end
 
   # ---------------------------------------------------------------------------

@@ -378,6 +378,8 @@ defmodule Aqua.SeedContractTest do
       |> Map.fetch!(:tools)
     end)
     |> Enum.uniq()
+    # The provider's own search is a tool by its name, no catalog action.
+    |> Enum.reject(&(&1 == "native_search"))
     |> Enum.reject(fn key -> key |> split() |> elem(0) |> Hands.hand?() end)
   end
 
