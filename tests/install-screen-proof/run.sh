@@ -809,15 +809,27 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
       if [ -e /home/proof/.cyfr ]; then tree /home/proof/.cyfr; else echo absent; fi
       rm -r "$t"'
   }
-  # The volume command names exactly the volumes the first listing found,
-  # and is absent when it found none.
-  volume_command_names_the_volumes() {
-    local want got line
-    want=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort)
+  # The names the uninstall's volume command gives, one a line, sorted;
+  # none when it prints no such command.
+  uninstall_volume_names() {
+    local line
     line=$(grep '^    docker volume rm ' "$GUEST_DIR/transcript-uninstall.txt" || true)
     # shellcheck disable=SC2086 # the line's quoted names, split into words
-    got=$(printf '%s\n' ${line#    docker volume rm } | tr -d "'" | sed '/^$/d' | sort)
-    [ "$got" = "$want" ]
+    printf '%s\n' ${line#    docker volume rm } | tr -d "'" | sed '/^$/d' | sort
+  }
+  # The volume command names exactly the volumes of the stack it
+  # uninstalls, those labelled with its compose project (cyfr, the
+  # folder's name, every engine call's -p), and is absent when that stack
+  # has none. The setup pages' CYFR, taken down with cyfr down earlier,
+  # keeps volumes of its own project on the guest.
+  volume_command_names_the_volumes() {
+    [ "$(uninstall_volume_names)" = "$(sort "$GUEST_DIR/stack-volumes.txt")" ]
+  }
+  # No volume the first listing found outside that project is named.
+  volume_command_names_no_other_project() {
+    local others
+    others=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort | comm -23 - <(sort "$GUEST_DIR/stack-volumes.txt"))
+    [ -z "$(comm -12 <(uninstall_volume_names) <(printf '%s\n' "$others" | sed '/^$/d'))" ]
   }
   check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
   # The screen's browser writes its profile in the folder until the screen
@@ -830,6 +842,8 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
     fail "the screen's browser did not stop ($GUEST_DIR/root.txt)"
   volumes_seen after-the-reboot-and-cyfr-down
   left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
+  guest_ssh 'docker volume ls -q --filter label=com.docker.compose.project=cyfr' >"$GUEST_DIR/stack-volumes.txt" 2>&1 ||
+    fail "the stack's volumes could not be listed ($GUEST_DIR/stack-volumes.txt)"
   # The screen holds tty1 since the reboot, which ended tty1's tmux
   # session: the step types into a detached one, which gives sudo its
   # terminal all the same.
@@ -843,6 +857,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
     "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-uninstall.txt" "$SUDO_PROMPT"
   check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
   check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
+  check "it names no volume of another project" volume_command_names_no_other_project
   check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
   left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
