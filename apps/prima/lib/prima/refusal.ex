@@ -608,6 +608,11 @@ defmodule Prima.Refusal do
       {:setup_required,
        "#{member}'s brain has no key bound yet — connect one from its card on the AQUA page"}
 
+  defp row({:crew_unready, member, :no_grant}) when is_binary(member),
+    do:
+      {:setup_required,
+       "#{member}'s brain needs only your grant — connect it from its card on the AQUA page"}
+
   defp row({:crew_unready, member, :no_program}) when is_binary(member),
     do:
       {:setup_required,

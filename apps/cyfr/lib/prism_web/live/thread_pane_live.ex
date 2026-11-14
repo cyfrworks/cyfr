@@ -1388,7 +1388,8 @@ defmodule PrismWeb.ThreadPaneLive do
   # state is where someone finds that out. A model whose consent
   # exists but is damaged, could not be read, or no longer covers what the
   # soul runs on, is said as such: no model is offered to connect over a
-  # consent that exists.
+  # consent that exists. One that waits on the person's grant alone says
+  # so.
   # An agents list that could not be read is not a room with no model.
   defp model_ready(_ctx, :unread), do: :agents_unavailable
 
@@ -1427,6 +1428,7 @@ defmodule PrismWeb.ThreadPaneLive do
       Enum.any?(statuses, &match?({:consent_damaged, _}, &1)) -> :consent_damaged
       Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
       Enum.any?(statuses, &match?({:model_unavailable, _}, &1)) -> :model_unavailable
+      Enum.any?(statuses, &match?({:needs_grant, _}, &1)) -> :needs_grant
       true -> :no_key
     end
   end
@@ -1717,6 +1719,18 @@ defmodule PrismWeb.ThreadPaneLive do
                   class="text-blue-400 hover:underline"
                 >
                   Connect one on your AQUA page.
+                </.link>
+              <% @model_ready == :needs_grant -> %>
+                <%!-- A model with nothing left to set up waits on the
+                     person's grant alone, given in AQUA's setup. --%>
+                <span data-test="model-grant">
+                  {athanor_label(@athanor, @context)}'s model needs only your grant.
+                </span>
+                <.link
+                  navigate={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
+                  class="text-blue-400 hover:underline"
+                >
+                  Grant it on your AQUA page.
                 </.link>
               <% @model_ready == :consent_stale -> %>
                 <%!-- The soul's shape moved since its consent: consenting

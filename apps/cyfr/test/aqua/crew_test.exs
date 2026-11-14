@@ -290,6 +290,41 @@ defmodule Aqua.CrewTest do
     assert pending_records(ctx) == []
   end
 
+  # A harness whose program row is set up waits on the person's grant
+  # alone: its refusal asks for that, never for the program it has, while
+  # one whose program has no row still asks for its program.
+  test "a member whose program is set up and not granted is refused for the grant alone",
+       %{ctx: ctx, room: room} do
+    {:ok, _row} =
+      Arca.McpServerStorage.insert(actor(ctx), %{
+        cap: 0,
+        name: "claude",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
+      })
+
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+    status = Aqua.Models.model_status(ctx, roster)
+    assert status["claude-code"] == {:needs_grant, "catalyst:local.claude-code:0.1.4"}
+    assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.2"}
+
+    for {member, reason, words} <- [
+          {"claude-code", :no_grant, "claude-code's brain needs only your grant"},
+          {"openai-codex", :no_program, "program is not set up"}
+        ] do
+      assert {:error, {:crew_unready, ^member, ^reason} = refusal} =
+               Runner.send_message(ctx, room.id, "@#{member} look into this")
+
+      assert Aqua.Ops.render_refusal(refusal) =~ words
+    end
+
+    refute Aqua.Ops.render_refusal({:crew_unready, "claude-code", :no_grant}) =~ "Programs page"
+    assert rows(ctx, room.id) == []
+  end
+
   test "a member whose brain changed and was not confirmed is refused with what to do: confirm it",
        %{ctx: ctx, room: room} do
     # The planner's brain moves to another model; its consent is not given

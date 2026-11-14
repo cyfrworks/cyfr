@@ -188,8 +188,9 @@ defmodule Aqua.ModelsTest do
   # A brain that runs a program on its own sign-in reads ready once the
   # program's row is bound on the catalyst's own consent and on the crew
   # member's edge into it: the program is signed in when it says so.
-  # Before the binding it waits on its program, and the readiness every
-  # hand-off applies refuses the member.
+  # Before the row is set up it waits on its program; once it is, on the
+  # person's grant alone, as Aqua's setup reads it; and the readiness
+  # every hand-off applies refuses the member with each.
   test "a crew member whose brain runs a program reads ready once the program's row is bound" do
     ctx = storage_root!("models_login")
     ref = "catalyst:local.loginbrain"
@@ -247,7 +248,17 @@ defmodule Aqua.ModelsTest do
         config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
       })
 
+    # Set up and not bound: the grant is all it waits on, the brain's and
+    # then the member's own.
+    assert Aqua.model_status(ctx, member) == %{"harness" => {:needs_grant, resolved}}
+
+    assert {:error, {:crew_unready, "harness", :no_grant} = refusal} =
+             Aqua.Crew.ready(ctx, "harness")
+
+    assert Aqua.Ops.render_refusal(refusal) =~ "harness's brain needs only your grant"
+
     commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: row.id}]})
+    assert Aqua.model_status(ctx, member) == %{"harness" => {:needs_grant, resolved}}
 
     commit!(ctx, Prima.AgentRef.ref("harness"), %{
       selections: [%{dep: ref, need: "claude", entry_id: row.id}]

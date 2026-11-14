@@ -238,11 +238,13 @@ defmodule PrismWeb.AquaLiveTest do
                URI.decode_query(URI.parse(href).query)
     end
 
-    # A brain that runs a program on its own sign-in: unbound, its program
-    # is to set up and grant; bound to the program row, it is connected,
-    # the program signed in when it says so.
-    test "a crew member whose brain runs a program reads its program to set up until the row " <>
-           "is bound, then Model connected",
+    # A brain that runs a program on its own sign-in: with no row, its
+    # program is to set up and grant; with its row set up and not bound,
+    # its grant is all it needs, the brain's and then the member's own;
+    # bound to the program row, it is connected, the program signed in
+    # when it says so.
+    test "a crew member whose brain runs a program reads its program to set up, then its " <>
+           "grant, until the row is bound, then Model connected",
          %{conn: conn, ctx: ctx} do
       ctx = %{ctx | origin: :interactive}
       actor = Sanctum.Context.actor(ctx)
@@ -286,7 +288,12 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-card-harness", "Model connected")
 
       row = program_row!(ctx, "claude")
+      send_update_agents(view, load: true)
+      card_needs_grant!(view, "harness")
+
       grant!(ctx, ref, %{bindings: [%{need: "claude", entry_id: row.id}]})
+      send_update_agents(view, load: true)
+      card_needs_grant!(view, "harness")
 
       grant!(ctx, Prima.AgentRef.ref("harness"), %{
         selections: [%{dep: ref, need: "claude", entry_id: row.id}]
@@ -1669,6 +1676,17 @@ defmodule PrismWeb.AquaLiveTest do
   # A section re-reads itself on a message the write sends after it
   # answers, so a card's new state is awaited rather than read at once.
   defp settled(fun, label), do: Prima.Test.Wait.wait_until(fun, 2_000, label)
+
+  # A card whose brain waits on the person's grant alone: it says so, and
+  # its Connect opens the setup, whose step for the brain is the grant,
+  # never the Programs page.
+  defp card_needs_grant!(view, name) do
+    card = "#aqua-card-" <> name
+    assert has_element?(view, card, "Not connected — it needs only your grant")
+    refute has_element?(view, card, "set up its program")
+    refute has_element?(view, card, "Model connected")
+    assert has_element?(view, card <> ~s( a[data-test="connect"]), "Connect")
+  end
 
   # A person's grant of `ref`, walked as their own page walks it.
   # The athanor's kept driven program row `name`, as an install confirmed

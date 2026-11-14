@@ -1092,6 +1092,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet
         </span>
+        <span :if={match?({:needs_grant, _}, @model_status)} class="text-amber-300">
+          Not connected — it needs only your grant
+        </span>
         <span :if={match?({:needs_program, _}, @model_status)} class="text-amber-300">
           Not connected — set up its program on the Programs page, then grant it
         </span>
@@ -1123,7 +1126,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {if @installing, do: "Installing…", else: "Install"}
         </button>
         <.link
-          :if={match?({status, _} when status in [:needs_key, :needs_program], @model_status)}
+          :if={
+            match?(
+              {status, _} when status in [:needs_key, :needs_grant, :needs_program],
+              @model_status
+            )
+          }
           patch={setup_path(@athanor, @agent, @is_soul)}
           data-test="connect"
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
