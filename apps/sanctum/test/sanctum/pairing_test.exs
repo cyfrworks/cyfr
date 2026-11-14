@@ -287,6 +287,34 @@ defmodule Sanctum.PairingTest do
              }
     end
 
+    # A name the preview cannot hold names nothing, and the revocation is
+    # asked all the same.
+    test "names nothing for a client whose name the preview cannot hold", %{
+      device: device,
+      session_ctx: session_ctx
+    } do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.PairedClient, where: c.id == ^device.client_id),
+          set: [display_name: "Phone\n2"]
+        )
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Pairing.revoke(session_ctx, device.client_id)
+
+      {:ok, record} =
+        Arca.PendingConfirmations.get(Context.actor(session_ctx), Prima.Confirmation.ref(id))
+
+      {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(session_ctx.athanor_id)
+
+      assert Jason.decode!(record.preview) == %{
+               "home" => home,
+               "athanor" => athanor.name,
+               "operation" => "pairing.revoke"
+             }
+    end
+
     test "cannot reach a client that is not the person's", %{session_ctx: session_ctx} do
       assert {:error, {:not_found, "paired client", "pcl_nobody"}} =
                Pairing.revoke(session_ctx, "pcl_nobody")

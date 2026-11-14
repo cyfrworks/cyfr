@@ -294,13 +294,14 @@ defmodule Sanctum.Pairing do
   end
 
   # The confirmation names the client by the name the person sees for it;
-  # a client with none is named by nothing rather than by its id.
+  # a client with none, or with one the preview cannot hold, is named by
+  # nothing rather than by its id, and the revocation goes on.
   defp revoke_client(ctx, %{id: client_id} = client) do
     with :ok <-
            Authz.confirm(ctx, :pairing_revocation, %{
              operation: "pairing.revoke",
              arguments: %{"client_id" => client_id},
-             resource: Map.get(client, :display_name)
+             resource: previewable(Map.get(client, :display_name))
            }) do
       case Arca.PairedClients.revoke(Context.actor(ctx), client_id) do
         {:ok, row} ->
@@ -317,6 +318,12 @@ defmodule Sanctum.Pairing do
           {:error, reason}
       end
     end
+  end
+
+  defp previewable(name) do
+    if Prima.Identity.Encoding.text?(name, Prima.Confirmation.Preview.max_text()),
+      do: name,
+      else: nil
   end
 
   defp own_client(ctx, client_id) do

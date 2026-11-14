@@ -1087,6 +1087,32 @@ defmodule Sanctum.SharesTest do
                })
     end
 
+    test "a widening whose entry's name the preview cannot hold names nothing, and is asked",
+         %{terry: terry, alice: alice} do
+      to_traders = %{audience: "thread", thread_id: thread!(terry, [alice]).id}
+      entry = key!(terry)
+      share = share!(terry, entry, to_traders)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(v in Arca.Schemas.VaultEntry, where: v.id == ^entry.id),
+          set: [name: "Work\nkey"]
+        )
+
+      assert {:error, {:confirmation_required, %{id: widened}}} =
+               Shares.set_audience(terry, %{
+                 share_id: share.id,
+                 audience: "everyone",
+                 thread_id: nil,
+                 expected: to_traders
+               })
+
+      assert Jason.decode!(confirmation!(terry, widened).preview) ==
+               Map.put(preview_frame(terry, "share.set_audience"), "details", %{
+                 "audience" => "everyone"
+               })
+    end
+
     test "a widening proven over one audience is a conflict at its repeat once the audience " <>
            "moved, with nothing more written and the proof not spent",
          %{terry: terry, alice: alice} do

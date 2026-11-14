@@ -416,7 +416,12 @@ defmodule Sanctum.TestContext do
     %{
       operation: "pairing.revoke",
       arguments: %{"client_id" => client_id},
-      resource: Enum.find_value(rows, &(&1.id == client_id and &1.display_name))
+      resource:
+        Enum.find_value(rows, fn row ->
+          row.id == client_id and
+            Prima.Identity.Encoding.text?(row.display_name, Prima.Confirmation.Preview.max_text()) and
+            row.display_name
+        end)
     }
   end
 

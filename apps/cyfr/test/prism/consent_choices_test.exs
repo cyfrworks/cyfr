@@ -825,6 +825,44 @@ defmodule Prism.ConsentChoicesTest do
              %{}
            ) ==
              {:ok, %{"max_memory_bytes" => 2_097_152}}
+  end
+
+  # The form shows memory in MiB, rounded; the value it shows, sent back
+  # unchanged, keeps the bytes it stood for, so no shown value is refused
+  # and none loses bytes. Only a new number is read, in whole MiB.
+  test "memory shown and sent back unchanged keeps its bytes" do
+    for {ask, shown} <- [{1_572_864, "1.5"}, {1_048_577, "1.0"}] do
+      asked = %{"max_memory_bytes" => ask, "timeout" => "30s"}
+
+      assert ConsentChoices.lowered(%{"max_memory_bytes" => shown}, asked, %{}) == {:ok, %{}}
+
+      # The form sends every field: lowering another limit beside it works.
+      assert ConsentChoices.lowered(
+               %{"max_memory_bytes" => shown, "timeout" => "10s"},
+               asked,
+               %{}
+             ) == {:ok, %{"timeout" => "10s"}}
+    end
+
+    # A narrowing the node holds is shown and kept the same way.
+    held = %{"max_memory_bytes" => 1_572_864}
+    four = %{"max_memory_bytes" => 4_194_304}
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "1.5"}, four, held) == {:ok, held}
+
+    asked = %{"max_memory_bytes" => 1_572_864}
+
+    # A typed fraction that is not the shown value is no whole number;
+    # empty keeps what it held; zero and a huge value read as whole MiB.
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "1.25"}, asked, %{}) ==
+             {:error, "Memory (MiB) must be a whole number."}
+
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => ""}, four, held) == {:ok, held}
+
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "0"}, asked, %{}) ==
+             {:ok, %{"max_memory_bytes" => 0}}
+
+    assert ConsentChoices.lowered(%{"max_memory_bytes" => "999999"}, asked, %{}) ==
+             {:error, "Memory (MiB) can be at most 1.5."}
 
     assert ConsentChoices.lowered(%{"rate_requests" => "11"}, asked, %{}) ==
              {:error, "The rate can be at most 10 requests."}

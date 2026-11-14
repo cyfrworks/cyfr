@@ -1036,9 +1036,15 @@ defmodule Prism.ConsentChoices do
 
   defp lower(_field, "", _asked, _current), do: :unchanged
 
-  # Memory is read and typed in MiB, and granted in bytes.
-  defp lower("max_memory_bytes" = field, raw, asked, _current) do
-    with {mib, ""} <- Integer.parse(raw),
+  # Memory is shown and typed in MiB, and granted in bytes. The form shows
+  # what the node holds now; that value sent back unchanged keeps the bytes
+  # it stood for, however the MiB rounded them, and only a new number is
+  # read, in whole MiB.
+  defp lower("max_memory_bytes" = field, raw, asked, current) do
+    held = Map.get(current, field, asked[field])
+
+    with false <- is_integer(held) and raw == mib(held),
+         {mib, ""} <- Integer.parse(raw),
          ask when is_integer(ask) <- asked[field] do
       value = mib * @mib
 
@@ -1048,6 +1054,7 @@ defmodule Prism.ConsentChoices do
         true -> {:ok, {field, value}}
       end
     else
+      true -> :unchanged
       _ -> {:error, "#{limit_label(field)} must be a whole number."}
     end
   end

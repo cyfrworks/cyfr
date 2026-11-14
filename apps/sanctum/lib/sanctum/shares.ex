@@ -741,12 +741,15 @@ defmodule Sanctum.Shares do
   # The entry of the person's own athanor a creation names, read for the
   # confirmation's preview; the store reads it again under its lock.
   # The shared entry by the name its person sees it under, for a
-  # confirmation's preview: an entry that cannot be read names nothing,
-  # never the share's id, and changes nothing else about the change.
+  # confirmation's preview: an entry that cannot be read, or a name the
+  # preview cannot hold, names nothing, never the share's id, and changes
+  # nothing else about the change.
   defp entry_name(ctx, entry_id) do
-    case own_entry(ctx, entry_id) do
-      {:ok, %{name: name}} -> name
-      {:error, _unread} -> nil
+    with {:ok, %{name: name}} <- own_entry(ctx, entry_id),
+         true <- Prima.Identity.Encoding.text?(name, Prima.Confirmation.Preview.max_text()) do
+      name
+    else
+      _unnamed -> nil
     end
   end
 

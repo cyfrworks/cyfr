@@ -5357,6 +5357,7 @@ defmodule PrismWeb.SystemLayerTest do
       html = render(view)
       assert html =~ ~s(data-kind="grant")
       assert html =~ "Grant markets"
+      assert html =~ "tincture:local.markets:1.0.0"
       no_outcome("fallback-1")
       grant = open_prompt(view)
 
