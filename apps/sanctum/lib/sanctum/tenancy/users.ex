@@ -127,6 +127,24 @@ defmodule Sanctum.Tenancy.Users do
     do: Arca.Users.get_by_namespace(server(), namespace)
 
   @doc """
+  Whether the account `identifier` may be closed at this CYFR's directory:
+  `:ok`, or `{:error, :only_admin}` while the person it names is this
+  CYFR's only platform administrator who can still act
+  (`Arca.Users.closable/2`), or `{:error, :unavailable}` when that cannot
+  be read, which refuses. `Sanctum.Directory.tombstone/1` asks it inside
+  the closing transaction; `directory.tombstone` asks it again before its
+  confirmation, so a refused closure asks nothing.
+  """
+  @spec closable(String.t()) :: :ok | {:error, :only_admin | :unavailable}
+  def closable(identifier) when is_binary(identifier) do
+    case Arca.Users.closable(server(), identifier) do
+      :ok -> :ok
+      {:error, :only_admin} -> {:error, :only_admin}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
   Everyone the server knows, newest first. A platform view, paged with
   `limit:` (default and ceiling `Arca.Users.max_page/0`) and `offset:`.
   """
