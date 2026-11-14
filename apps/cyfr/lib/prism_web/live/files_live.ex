@@ -33,8 +33,9 @@ defmodule PrismWeb.FilesLive do
   answer names unless the person names another, or declined; the files
   accepted here that are still landing, or that could not be delivered;
   and the offers sent from this athanor, each withdrawn while it waits.
-  An offer accepted here stays listed while the page is open, with the
-  folder its files landed in and a way there.
+  An offer accepted here stays listed while the page is open, saying what
+  its receipts say: still landing, not delivered, or landed, with the
+  folder and a way there only once it has landed.
   Nothing of an offered file's bytes reaches the page before it lands.
   The page reads the offers again whenever the person's own topic
   (`Cyfr.Bus.file_offers/1`) says one of theirs moved.
@@ -361,11 +362,13 @@ defmodule PrismWeb.FilesLive do
       end
 
     case Ops.call_tool(socket, "file/accept", args) do
-      {:ok, %{folder: folder}} ->
+      {:ok, %{folder: folder, receipts: receipts}} ->
+        card = accepted(socket.assigns, offer_id, folder, receipts)
+
         {:noreply,
          socket
-         |> update(:accepted, &[accepted(socket.assigns, offer_id, folder) | &1])
-         |> put_flash(:info, "Accepted into #{folder}")
+         |> update(:accepted, &[card | &1])
+         |> put_flash(:info, accepted_flash(card))
          |> load_offers()
          |> load()}
 
@@ -388,17 +391,54 @@ defmodule PrismWeb.FilesLive do
   end
 
   # What the Inbox keeps of an offer accepted here: its files, who sent
-  # it, by the name the page showed, and the folder they landed in.
-  defp accepted(%{offers: offers, people: people}, offer_id, folder) do
+  # it, by the name the page showed, the folder it was accepted into, and
+  # its delivery as the acceptance's receipts say. The folder an answer
+  # names, `<into>/<offer>[-<n>]/`, is where the files are only once every
+  # receipt is published; its parent is the folder accepted into.
+  defp accepted(%{offers: offers, people: people}, offer_id, folder, receipts) do
     offer =
       if is_map(offers), do: Enum.find(offers.awaiting, &(&1.offer_id == offer_id)), else: nil
 
     %{
       offer_id: offer_id,
-      folder: folder,
+      into: folder |> String.trim_trailing("/") |> Path.dirname(),
       from: person(people, offer && offer.sender),
-      files: if(offer, do: offer.files, else: [])
+      files: if(offer, do: offer.files, else: []),
+      delivery: delivery(Enum.map(receipts, & &1.status), folder)
     }
+  end
+
+  defp delivery([_ | _] = statuses, folder) do
+    cond do
+      "failed" in statuses -> :failed
+      Enum.all?(statuses, &(&1 in ~w(published completed))) -> {:landed, folder}
+      true -> :landing
+    end
+  end
+
+  defp delivery([], _folder), do: :landing
+
+  defp accepted_flash(%{delivery: {:landed, folder}}), do: "Accepted into #{folder}"
+  defp accepted_flash(%{delivery: :failed}), do: "Accepted, but it could not be delivered"
+  defp accepted_flash(%{delivery: :landing}), do: "Accepted; it is still landing"
+
+  # A card still landing takes what `file/offers` now lists of its
+  # receipts: a failed one fails it, one still received keeps it landing,
+  # and none listed means every file has landed.
+  defp redelivered(cards, receipts) do
+    Enum.map(cards, fn
+      %{delivery: :landing, offer_id: id} = card ->
+        statuses = for %{offer_id: ^id, status: status} <- receipts, do: status
+
+        cond do
+          "failed" in statuses -> %{card | delivery: :failed}
+          statuses != [] -> card
+          true -> %{card | delivery: {:landed_under, card.into}}
+        end
+
+      card ->
+        card
+    end)
   end
 
   # Only a file under `data/` is offered; the operation holds to it too.
@@ -518,6 +558,7 @@ defmodule PrismWeb.FilesLive do
         socket
         |> assign(:offers, %{awaiting: waiting, receipts: receipts, sent: sent})
         |> assign(:people, people)
+        |> update(:accepted, &redelivered(&1, receipts))
 
       {:error, reason} ->
         Logger.debug("[PrismWeb.FilesLive] offers not read: #{inspect(reason)}")
@@ -839,7 +880,7 @@ defmodule PrismWeb.FilesLive do
                     class="flex items-center gap-2 text-gray-200 hover:text-white"
                   >
                     <.icon name="folder" class="h-4 w-4 shrink-0 text-gray-500" />
-                    <span class="font-mono break-all text-left">{entry.name}/</span>
+                    <span class="font-mono break-all text-left sm:break-normal">{entry.name}/</span>
                   </button>
                   <button
                     :if={entry.kind == :file}
@@ -849,7 +890,7 @@ defmodule PrismWeb.FilesLive do
                     class="flex items-center gap-2 text-gray-300 hover:text-white"
                   >
                     <.icon name="document" class="h-4 w-4 shrink-0 text-gray-600" />
-                    <span class="font-mono break-all text-left">{entry.name}</span>
+                    <span class="font-mono break-all text-left sm:break-normal">{entry.name}</span>
                   </button>
                 </td>
                 <td class="px-3 py-2 text-xs text-gray-500 text-right whitespace-nowrap sm:table-cell">
@@ -1085,14 +1126,26 @@ defmodule PrismWeb.FilesLive do
               class="space-y-2 rounded-lg border border-gray-800 p-3"
             >
               <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
-                <span class="text-gray-200">
-                  From {offer.from}, accepted into <span class="font-mono">{offer.folder}</span>
+                <span :if={offer.delivery == :landing} class="text-gray-200">
+                  From {offer.from}, accepted. It is still landing: it waits for space in this athanor, or for the next retry.
+                </span>
+                <span :if={offer.delivery == :failed} class="text-red-300">
+                  From {offer.from}, accepted, but it could not be delivered. Ask them to send it again.
+                </span>
+                <span :if={match?({:landed, _}, offer.delivery)} class="text-gray-200">
+                  From {offer.from}, landed in
+                  <span class="font-mono">{elem(offer.delivery, 1)}</span>
+                </span>
+                <span :if={match?({:landed_under, _}, offer.delivery)} class="text-gray-200">
+                  From {offer.from}, landed in a folder under
+                  <span class="font-mono">{elem(offer.delivery, 1)}/</span>
                 </span>
                 <.button
+                  :if={is_tuple(offer.delivery)}
                   variant="ghost"
                   size="sm"
                   phx-click="navigate"
-                  phx-value-path={String.trim_trailing(offer.folder, "/")}
+                  phx-value-path={String.trim_trailing(elem(offer.delivery, 1), "/")}
                 >
                   Open
                 </.button>

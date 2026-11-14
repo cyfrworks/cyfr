@@ -288,6 +288,12 @@ defmodule PrismWeb.FilesLiveTest do
                  "sm:whitespace-nowrap"
              ]
 
+    # A name breaks anywhere only below sm, as the row's own classes change.
+    assert page
+           |> LazyHTML.query("#files-entries td span.font-mono")
+           |> LazyHTML.attribute("class") ==
+             ["font-mono break-all text-left sm:break-normal"]
+
     actions = page |> LazyHTML.query("#files-entries td[data-row-actions] :is(a, button)")
 
     assert actions |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim())) ==
@@ -385,6 +391,7 @@ defmodule PrismWeb.FilesLiveTest do
       # The accepted offer stays listed with where it landed, and opens there.
       shown = Enum.join(landed, "/") <> "/"
       assert has_element?(view, "#accepted-#{offer_id}", "Sam Sender")
+      assert has_element?(view, "#accepted-#{offer_id}", "landed in")
       assert has_element?(view, "#accepted-#{offer_id}", shown)
       assert has_element?(view, "#accepted-#{offer_id}", "q3.csv")
       view |> element("#accepted-#{offer_id} button", "Open") |> render_click()
@@ -487,6 +494,82 @@ defmodule PrismWeb.FilesLiveTest do
       assert has_element?(view, ~s([data-receipt="#{offer_id}"]), "could not be delivered")
       assert has_element?(view, ~s([data-receipt="#{offer_id}"]), "Sam Sender")
       refute has_element?(view, ~s([data-receipt="#{offer_id}"]), "still landing")
+    end
+
+    test "an acceptance still landing says so with no Open, then opens where it landed once " <>
+           "the sweep lands it beside a folder of the same name",
+         %{conn: conn, ctx: ctx, route: route} do
+      sender = sharing_person!(ctx, name: "Sam Sender")
+      put!(sender, "late.csv", "landed on the sweep")
+
+      {:ok, %{offer_id: offer_id}} =
+        call(sender.ctx, "offer", %{"paths" => ["data/late.csv"], "to" => ctx.user_id})
+
+      assert {:ok, %{inbox: [%{folder: into}]}} = call(ctx, "offers")
+
+      # The offer's own folder is taken already, so the delivery lands
+      # beside it.
+      :ok = Arca.put(actor(ctx), String.split(into, "/") ++ [offer_id, "mine.txt"], "mine")
+
+      {view, _html} = mount_athanor(conn, "/files")
+      stall_publication!()
+      settled(view)
+
+      view |> form("#accept-#{offer_id}") |> render_submit()
+      card = "#accepted-#{offer_id}"
+      assert has_element?(view, card, "still landing")
+      refute has_element?(view, "#{card} button", "Open")
+
+      StalledStore.reset()
+      assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper(ctx), 7, false)
+
+      assert {:ok, "landed on the sweep"} =
+               Arca.get(actor(ctx), String.split(into, "/") ++ ["#{offer_id}-2", "late.csv"])
+
+      settled(view)
+      refute has_element?(view, card, "still landing")
+      assert has_element?(view, card, "landed in a folder under")
+      assert has_element?(view, card, into <> "/")
+
+      view |> element("#{card} button", "Open") |> render_click()
+      assert_patch(view, "/a/#{route}/files?" <> URI.encode_query(%{"p" => into}))
+
+      assert has_element?(
+               view,
+               "#files-entries button[phx-value-path='#{into}/#{offer_id}-2']"
+             )
+    end
+
+    test "an acceptance whose delivery fails says it failed, with no Open",
+         %{conn: conn, ctx: ctx} do
+      sender = sharing_person!(ctx, name: "Sam Sender")
+      put!(sender, "lost.csv", "never landed")
+
+      {:ok, %{offer_id: offer_id}} =
+        call(sender.ctx, "offer", %{"paths" => ["data/lost.csv"], "to" => ctx.user_id})
+
+      {view, _html} = mount_athanor(conn, "/files")
+      stall_publication!()
+      settled(view)
+
+      view |> form("#accept-#{offer_id}") |> render_submit()
+      card = "#accepted-#{offer_id}"
+      assert has_element?(view, card, "still landing")
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.FileReceipt, where: r.offer_id == ^offer_id),
+          set: [inserted_at: DateTime.add(DateTime.utc_now(), -10 * 86_400, :second)]
+        )
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, _} = Arca.Retention.FileReceipts.prune(sweeper(ctx), 7, false)
+      end)
+
+      settled(view)
+      assert has_element?(view, card, "could not be delivered")
+      refute has_element?(view, card, "still landing")
+      refute has_element?(view, "#{card} button", "Open")
     end
 
     test "a transfer the sweep lands later leaves the Inbox as it lands", %{conn: conn, ctx: ctx} do
