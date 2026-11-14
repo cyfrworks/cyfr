@@ -592,7 +592,7 @@ defmodule PrismWeb.ShellPromptsTest do
 
       html = render(view)
       assert html =~ ~s(data-kind="grant")
-      assert html =~ "Grant tincture:local.blocked-dash"
+      assert html =~ "Grant blocked-dash"
 
       view
       |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))

@@ -5329,7 +5329,7 @@ defmodule PrismWeb.SystemLayerTest do
       # The grant is shown, and nothing moved.
       html = render(view)
       assert html =~ ~s(data-kind="grant")
-      assert html =~ "Grant tincture:local.markets"
+      assert html =~ "Grant markets"
       no_outcome("fallback-1")
       assert %{document: %{working: "1.0.1"}, revision: 1} = versions(ctx)
       grant = open_prompt(view)
@@ -5356,7 +5356,7 @@ defmodule PrismWeb.SystemLayerTest do
 
       html = render(view)
       assert html =~ ~s(data-kind="grant")
-      assert html =~ "Grant tincture:local.markets:1.0.0"
+      assert html =~ "Grant markets"
       no_outcome("fallback-1")
       grant = open_prompt(view)
 

@@ -3103,7 +3103,8 @@ defmodule PrismWeb.SystemLayer do
   # never its `tool.action` name.
   defp operation_title(operation) when is_binary(operation) do
     with [tool, action] <- String.split(operation, ".", parts: 2),
-         {:ok, {_module, %{operations: operations}}} <- Sanctum.Catalog.lookup(tool),
+         {:ok, {_module, %{operations: operations}}} <-
+           Map.fetch(Sanctum.Catalog.operations(), tool),
          %Prima.Operation{description: words} <- Enum.find(operations, &(&1.action == action)) do
       words
     else

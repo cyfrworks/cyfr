@@ -1871,7 +1871,7 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
       assert validation(view) == nil
       refute Enum.any?(rows(), &(&1.version == "1.0.1"))
-      assert render(view) =~ "Grant tincture:local.markets"
+      assert render(view) =~ "Grant markets"
 
       view
       |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
@@ -1903,7 +1903,8 @@ defmodule PrismWeb.ShellCanvasTest do
       # 1.0.1's trial asks for 1.0.1's grant; granted, it is trialled, and
       # it fails.
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
-      assert render(view) =~ "Grant tincture:local.markets:1.0.1"
+      assert render(view) =~ "Grant markets"
+      assert render(view) =~ "tincture:local.markets:1.0.1"
 
       view
       |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
@@ -1918,7 +1919,8 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
       assert validation(view) == nil
       assert %{working: "1.0.0", failed: %{version: "1.0.1"}} = versions(ctx, "markets")
-      assert render(view) =~ "Grant tincture:local.markets:1.0.0"
+      assert render(view) =~ "Grant markets"
+      assert render(view) =~ "tincture:local.markets:1.0.0"
 
       view
       |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
@@ -2321,7 +2323,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert [{markets, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      assert render(view) =~ "Grant tincture:local.markets"
+      assert render(view) =~ "Grant markets"
 
       layout!(user, athanor, [entry("main", "tincture:local.notes-canvas")])
       settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
@@ -2339,8 +2341,8 @@ defmodule PrismWeb.ShellCanvasTest do
       html = render(view)
       assert html =~ ~s(data-prompt-id="#{notes}")
       refute html =~ ~s(data-prompt-id="#{markets}")
-      assert html =~ "Grant tincture:local.notes-canvas"
-      refute html =~ "Grant tincture:local.markets"
+      assert html =~ "Grant notes-canvas"
+      refute html =~ "Grant markets"
 
       # Dismissing the prompt drawn answers notes-canvas's own: the canvas
       # keeps its refusal, and nothing more is asked.
@@ -3668,8 +3670,8 @@ defmodule PrismWeb.ShellCanvasTest do
       {view, revision, refused} = shipped_ungranted!(conn, ctx, user, athanor)
 
       html = render(view)
-      assert html =~ "Grant tincture:local.canvas"
-      refute html =~ "Grant tincture:local.markets"
+      assert html =~ "Grant canvas"
+      refute html =~ "Grant markets"
 
       assert [{_prompt, {{:activation, "main"}, "iframe_canvas"}}] =
                Map.to_list(assigns(view).grant_prompts)

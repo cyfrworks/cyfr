@@ -236,12 +236,10 @@ defmodule Sanctum.SharesTest do
     :ok
   end
 
-  # A store that cannot answer the entry: dropped inside the test's own
-  # sandbox transaction, so it rolls back with the test.
-  @drop_vault_entries (case Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3) do
-                         Ecto.Adapters.Postgres -> "DROP TABLE vault_entries CASCADE"
-                         _sqlite -> "DROP TABLE vault_entries"
-                       end)
+  # A store that cannot answer the entry: its table renamed inside the
+  # test's own sandbox transaction, so it rolls back with the test. A
+  # rename, unlike a drop, is let past the shares' foreign key.
+  @hide_vault_entries "ALTER TABLE vault_entries RENAME TO vault_entries_hidden"
 
   # What every preview of `ctx`'s change names besides its resource and
   # details: this home, the athanor by name and the operation.
@@ -1073,7 +1071,7 @@ defmodule Sanctum.SharesTest do
          %{terry: terry, alice: alice} do
       to_traders = %{audience: "thread", thread_id: thread!(terry, [alice]).id}
       share = share!(terry, key!(terry), to_traders)
-      Arca.Repo.query!(@drop_vault_entries)
+      Arca.Repo.query!(@hide_vault_entries)
 
       assert {:error, {:confirmation_required, %{id: widened}}} =
                Shares.set_audience(terry, %{
