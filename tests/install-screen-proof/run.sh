@@ -13,14 +13,17 @@
 # second CYFR beside it, taken down again. After a reboot labwc and Chrome run on tty1 and show the screen's
 # own setup page (screen-setup.png): with the guest's isolated swtpm it asks
 # for a six-digit PIN and seals the key in the chip; with --no-tpm it
-# refuses six digits and takes the six-word passphrase it shows.
+# shows its six-word passphrase on the screen alone, never to a local
+# read, refuses six digits and takes the passphrase drawn last.
 #
 # The setup page makes the person's account, the box its first device:
 # typed on the guest's keyboard through QMP, a name and the PIN (or
 # passphrase) twice make the box's key and show the account's recovery
-# code before anything reaches the box's account service; "I saved it"
-# makes the account there, lists the box's key in it, claims the name and
-# opens Prism with the box's hello under the setup token. Then, reading
+# code before anything reaches the box's account service, to the page that
+# typed the PIN alone, never to another local program reading it; "I saved
+# it" makes the account there, lists the box's key in it, claims the name
+# and opens Prism with the box's hello under the setup token. A local
+# program naming the shell's Host and Origin gets no ticket. Then, reading
 # what the box holds over SSH: the lock after five minutes without input,
 # a wrong PIN, the unlock; Prism's Lock; an API key made in Prism, which
 # asks a fresh confirmation, confirmed on this device after a Cancel and
@@ -47,9 +50,9 @@
 # /tmp/cyfr-evidence.install-screen.XXXXXX, printed, which scripts/janitor.sh
 # removes a week later, its rule 5), the guest's in clean/. The run's
 # scratch directory, <run prefix>install-screen.XXXXXX under
-# ${TMPDIR:-/tmp}, holds the guest's SSH key and password and the box's
-# recovery code: the teardown
-# removes it, and scripts/janitor.sh's rule 1 removes a killed run's. The
+# ${TMPDIR:-/tmp}, holds the guest's SSH key and password and the setup
+# token: the teardown removes it, and scripts/janitor.sh's rule 1 removes
+# a killed run's. The
 # base image is the host's cache and the proof image is shared, each made
 # by tests/install-screen-proof/prepare.sh, and this tree's server image
 # is shared too, made by scripts/image.sh --undated app, all outside the
@@ -359,12 +362,14 @@ box_install() {
 # as the screen reads it, from the guest.
 screen_signed_in() {
   local id
-  check "the recovery code is shown with its QR" grep -q '<svg' "$GUEST_DIR/shell-recovery.html"
-  sed -n 's/.*<p class="code">\(CYFR-[^<]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-recovery.html" | head -n 1 | tr -d '\n' >"$WORK/recovery-code"
-  check "the code is CYFR- and fourteen groups of eight letters and digits" grep -qE '^CYFR-[A-Z0-9]{8}([- ]?[A-Z0-9]{8}){13}$' "$WORK/recovery-code"
+  check "a local program reading the page is shown neither the recovery code nor its QR, only the form the screen's page asks for it with" \
+    sh -c '! grep -qE "CYFR-|<svg" "$1" && grep -qF "<form id=\"reveal\" method=\"post\" action=\"/recovery\">" "$1"' sh "$GUEST_DIR/shell-recovery.html"
+  # A local program naming the shell's Host and Origin asks the recovery
+  # page's "I saved it", without the proof: the check below holds after it.
+  guest_ssh "curl -s -o /dev/null --max-time 30 -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/saved" >/dev/null 2>&1
   guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/v1/handles/alice" >"$GUEST_DIR/handle-shown.json" 2>&1
   guest_ssh 'cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder-shown.json" 2>&1
-  check "nothing reached the account service while the code is shown: no one holds alice, and the box's key names no account" \
+  check "nothing reached the account service while the code is shown, a local program's I saved it included: no one holds alice, and the box's key names no account" \
     python3 -I -c '
 import json, sys
 handle, holder = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
@@ -392,6 +397,8 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/cyfr/.cyfr/screen/client.json'
   check "Chrome holds the session cookie Prism opened with" screen_cookie prism
   check "the home serves that cookie on a page that needs a session" cookie_is in prism
+  guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/open" >"$GUEST_DIR/open-forged.txt" 2>&1
+  check "a local program naming the shell's Host and Origin is sent back to the page, with no ticket" grep -qx '303 http://127.0.0.1:7340/' "$GUEST_DIR/open-forged.txt"
   check "Chrome's profile is copied while Prism is open" guest_ssh "cp -a $SCREEN_PROFILE ~/chrome-copy"
 
   step "five minutes without input lock the screen"
@@ -451,13 +458,17 @@ screen_confirms() {
   printf '\tproof-key\n' | guest_keys || fail "QMP did not type the key's name"
   sleep 6
   check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
+  since=$(guest_ssh 'date +%s')
   screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
-  shell_page_until confirm-drawn 'Confirm on this screen' 20
+  confirm_page_until confirm-drawn "$since" 60
   check "Confirm on this device opened the screen's own page, which draws the key CYFR is asked to make" \
     sh -c 'grep -q "Confirm on this screen" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
   check "screenshot screen-confirm-drawn.png" guest_screenshot screen-confirm-drawn.png
-  ref=$(sed -n 's/.*name="ref" value="\([^"]*\)".*/\1/p' "$GUEST_DIR/shell-confirm-drawn.html" | head -n 1)
+  ref=$CONFIRM_REF
   [ -n "$ref" ] || return 0
+  shell_page confirm-plain
+  check "a local program's plain read of the page is shown neither the change nor its reference" \
+    sh -c '! grep -q key.create "$1" && ! grep -qF "$2" "$1" && grep -q "A confirmation is open" "$1"' sh "$GUEST_DIR/shell-confirm-plain.html" "$ref"
 
   step "Cancel signs nothing"
   # The PIN's field, Confirm, then Cancel.
@@ -473,12 +484,13 @@ screen_confirms() {
   # Back to Prism's tab, which still asks.
   guest_chord ctrl 1 || fail "QMP did not send the keys"
   sleep 2
+  since=$(guest_ssh 'date +%s')
   screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
-  shell_page_until confirm-again 'Confirm on this screen' 20
+  confirm_page_until confirm-again "$since" 60
   check "Confirm on this device draws it again" grep -q key.create "$GUEST_DIR/shell-confirm-again.html"
   printf '\t000000\n' | guest_keys || fail "QMP did not type"
   sleep 6
-  shell_page confirm-wrong
+  confirm_page confirm-wrong
   check "a wrong PIN confirms nothing: the screen says so and still asks" \
     sh -c 'grep -q "That is not this screen" "$1" && grep -q "Confirm on this screen" "$1"' sh "$GUEST_DIR/shell-confirm-wrong.html"
   confirmation_state wrong "$ref"
@@ -495,6 +507,33 @@ screen_confirms() {
   check "the home records it confirmed by this screen's own client ($client) and consumed by the key's making" \
     json_is "$GUEST_DIR/confirmation-confirmed.json" "{\"state\": \"consumed\", \"confirmed_client_id\": \"$client\"}"
 }
+
+# confirm_page_until NAME SINCE SECONDS: the confirmation as the window
+# Prism opened shows it, in GUEST_DIR/shell-NAME.html: the reference that
+# window's address names, read from the screen's Chrome history after
+# SINCE (the guest's Unix seconds) into CONFIRM_REF, asked of the shell's
+# page, which shows a drawn confirmation only to a request naming it; read
+# each 3 s until the page draws it, within SECONDS.
+CONFIRM_REF=""
+confirm_page_until() {
+  local closes
+  budget "$3" || return 1
+  closes=$((SECONDS + BUDGET))
+  while :; do
+    CONFIRM_REF=$(guest_ssh "python3 -I ~/box.py visits $SCREEN_PROFILE $2 '/confirm?ref='" 2>/dev/null |
+      sed -n 's/.*[?&]ref=\([A-Za-z0-9_-]*\).*/\1/p' | tail -n 1)
+    if [ -n "$CONFIRM_REF" ]; then
+      confirm_page "$1"
+      grep -q 'Confirm on this screen' "$GUEST_DIR/shell-$1.html" && return 0
+    fi
+    [ "$SECONDS" -lt "$closes" ] || return 1
+    sleep 3
+  done
+}
+
+# confirm_page NAME: the shell's page asked for the confirmation
+# CONFIRM_REF names, in GUEST_DIR/shell-NAME.html.
+confirm_page() { guest_ssh "curl -s 'http://127.0.0.1:7340/confirm?ref=$CONFIRM_REF'" >"$GUEST_DIR/shell-$1.html" 2>&1; }
 
 # confirmation_state NAME REF: the home's record of the confirmation REF,
 # read from its SQLite database as root, in GUEST_DIR/confirmation-NAME.json.
@@ -617,13 +656,26 @@ clean_install() {
 
   step "setup on the screen, typed: a name and the PIN (or passphrase) twice"
   if [ "$GUEST_TPM" = none ]; then
+    shell_page no-chip
+    check "a local program reading the setup page is shown no passphrase, only Show the passphrase" \
+      sh -c '! grep -q "<p class=\"code\">" "$1" && grep -qF ">Show the passphrase</button>" "$1"' sh "$GUEST_DIR/shell-no-chip.html"
+    printf '\n' | guest_keys || fail "QMP did not press Show the passphrase"
+    sleep 5
+    check "screenshot screen-passphrase.png" guest_screenshot screen-passphrase.png
+    shell_page shown
+    check "once the screen shows it, a local read still shows no passphrase" \
+      sh -c '! grep -q "<p class=\"code\">" "$1" && grep -qF ">Show a new passphrase</button>" "$1"' sh "$GUEST_DIR/shell-shown.html"
+    # The screen's passphrase reaches no local reader, this proof
+    # included: the proof draws one of its own as a local program, which
+    # replaces the screen's, and types that one.
+    guest_ssh "curl -s --max-time 10 -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/passphrase" >"$GUEST_DIR/shell-drawn.html" 2>&1
+    SECRET=$(sed -n 's/.*<p class="code">\([a-z ]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-drawn.html" | head -n 1)
+    check "a draw answers its own request a six-word passphrase" sh -c '[ "$(printf %s "$1" | wc -w)" = 6 ]' sh "$SECRET"
     printf 'alice\t123456\t123456\n' | guest_keys || fail "QMP did not type"
     sleep 5
     shell_page six-digits
     check "without a chip six digits are refused" grep -q 'needs the six-word passphrase' "$GUEST_DIR/shell-six-digits.html"
     check "a refused PIN made no key" guest_ssh '! test -e ~/cyfr/.cyfr/screen/holder.json'
-    SECRET=$(sed -n 's/.*<p class="code">\([a-z ]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-six-digits.html" | head -n 1)
-    check "the page shows a six-word passphrase" sh -c '[ "$(printf %s "$1" | wc -w)" = 6 ]' sh "$SECRET"
     KIND=software
   else
     SECRET=$(printf '%06d' $((RANDOM % 1000000)))

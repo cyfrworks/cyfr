@@ -10,9 +10,9 @@ defmodule Opus.Programs.Box do
   (`CYFR_LOCUS_BACKENDS_URL`, `CYFR_LOCUS_BACKENDS_KEY`), is the only one.
 
   An **owner** is one `mcp_servers` row of one athanor whose transport is
-  `stdio` or `pipe` — the pair `(athanor_id, mcp_servers.id)` — held by one
-  or more **holders**: the processes that speak over its sessions (an
-  `Emissary.External.Server` for a stdio row, a sign-in relay, a pipe
+  `program` — the pair `(athanor_id, mcp_servers.id)` — held by one or
+  more **holders**: the processes that speak over its sessions (an
+  `Emissary.External.Server` for an `mcp` program, a sign-in relay, a pipe
   holder, `Opus.Programs.Pipe`, whose session the box records and closes
   should the holder die). The service
   runs an owner's programs at a version `(g, e)`: `g` is this member's
@@ -61,7 +61,7 @@ defmodule Opus.Programs.Box do
       service runs that is not kept here at its version, and a `sync` of
       every owner still registered here;
     * `sync` when a holder asks for its owner: the row is read again
-      (fenced: the same epoch, enabled, `stdio` or `pipe`, its athanor
+      (fenced: the same epoch, enabled, a program, its athanor
       active), its programs read from its backends and its program columns
       (`Opus.Programs.Definition.programs/2`), its env templates resolved
       through `Sanctum.VaultReader.unseal_disclosed/2` and sealed for the
@@ -1304,12 +1304,12 @@ defmodule Opus.Programs.Box do
   defp fence_verdict(%{row: %{enabled: false}}, _epoch), do: {:error, :disabled}
   defp fence_verdict(_fenced, _epoch), do: {:error, :stale_epoch}
 
-  defp program(%{transport: transport} = row) when transport in ["stdio", "pipe"], do: {:ok, row}
+  defp program(%{transport: "program"} = row), do: {:ok, row}
   defp program(_row), do: {:error, :not_a_program}
 
   defp passes_fence?(fenced, epoch), do: match?({:ok, _row}, fence_verdict(fenced, epoch))
 
-  # A kept stdio row runs in the home of the login entry it names, so each
+  # A kept mcp program runs in the home of the login entry it names, so each
   # renewal asks again that the entry is an active login entry of the
   # row's athanor naming the row: one revoked, suspended by a restore or
   # deleted releases the owner. A vault that cannot answer releases it too:
@@ -1318,9 +1318,9 @@ defmodule Opus.Programs.Box do
   # left) is admitted for a sign-in alone, as
   # `Sanctum.Mount.login_entry/4` with `for: :sign_in` admits it: an owner
   # held by a sign-in keeps it (`:sign_in_only`), and its other holders, an
-  # MCP server's sessions, stand down. A pipe row's entry is its catalyst's
+  # MCP server's sessions, stand down. A driven program's entry is its catalyst's
   # need's, checked where the need is resolved.
-  defp mount(%{row: %{transport: "stdio", home: "kept"} = row}, signing?) do
+  defp mount(%{row: %{transport: "program", mark: "mcp", home: "kept"} = row}, signing?) do
     ctx = Sanctum.Context.internal(athanor_id: row.athanor_id, scope: :athanor)
 
     with true <- is_binary(row.login_entry_id) || :out,

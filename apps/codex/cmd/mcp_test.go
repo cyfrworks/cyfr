@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The warnings a stdio server's definition carries, as mcp_servers create
+// The warnings a program's definition carries, as mcp_servers create
 // and update answer them.
 const (
 	mcpWarningOne = "Backend 'github' expands GITHUB_TOKEN, a vault-bound env name, in its command: " +
@@ -20,7 +20,7 @@ const (
 		"read it from its environment."
 )
 
-const mcpStdioConfig = `{"transport":"stdio","backends":[{"name":"github",` +
+const mcpProgramConfig = `{"transport":"program","mark":"mcp","backends":[{"name":"github",` +
 	`"command":"npx server --token $GITHUB_TOKEN","env":{"GITHUB_TOKEN":"vault:gh-token"}}]}`
 
 // `cyfr mcp add` prints each warning the create answered after its
@@ -49,7 +49,7 @@ func TestMcpAdd_PrintsEachWarning(t *testing.T) {
 			srv := newCLIServer(t, "", `{"name":"gh","status":"ready","tools_discovered":1,`+
 				`"tool_names":["github__search"],"epoch":1,"warnings":`+tc.warnings+`}`)
 
-			out, err := runCLI(t, srv, "mcp", "add", "gh", mcpStdioConfig)
+			out, err := runCLI(t, srv, "mcp", "add", "gh", mcpProgramConfig)
 			if err != nil {
 				t.Fatalf("cyfr mcp add failed: %v\n%s", err, out)
 			}
@@ -85,7 +85,7 @@ func TestMcpUpdate_PrintsEachWarning(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newCLIServer(t, "", `{"name":"gh","status":"ready","epoch":4,"warnings":`+tc.warnings+`}`)
 
-			out, err := runCLI(t, srv, "mcp", "update", "gh", "--epoch", "3", mcpStdioConfig)
+			out, err := runCLI(t, srv, "mcp", "update", "gh", "--epoch", "3", mcpProgramConfig)
 			if err != nil {
 				t.Fatalf("cyfr mcp update failed: %v\n%s", err, out)
 			}

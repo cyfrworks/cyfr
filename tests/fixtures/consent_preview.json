@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map; accepts each origin spelling and refuses each invalid one; and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools, limits and exits can be narrowed. Origins are answered in the enum's order: interactive, programmatic, schedule, webhook. A row is one per kind and node; a credential one per binding, keyed by its binding_key: the row's node, the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need) and its slot (default, or name:<connection> for a named account); a stream one per name and subject; a tool server one per name; an exit one per node and exit. So one entry lent on two edges is two rows, and so is one stream under two subjects. A credential row names its fields as a map from each field the component reads to the entry field that answers it, the entry's provider hint (absent when it has none), its destination in Prima.Destination's canonical spelling, its source (own, share or provided), whether it is disclosed, suggested and a choice the person must make, and its lifetime: standing, until an RFC 3339 UTC time, or once. A controls row is one per desktop that offers any control: its controls in the order of their ids, each its label (at most 32 code points), its operation as tool.action and, for a control with a pick, the pick's stream, the feed's name as its subject for a feed's results, and the RFC 6901 pointer field into that stream's shape; at most 32. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask. An exits row names one exit of its node (an egress domain or connect origin as declared, need:<name> or server:<name>) and flows, the source classes (pinned, filed, files_by_grant, vault_disclosed, outside; never unsettled) its flows let reach it, each once, empty for an exit no flow names; one node's several exits are several rows. A preview names the bindings of the profile's head the revision removes, as removed: a list, empty when it removes none, sorted by binding_key, each key once. Each removal is one binding as the head's row holds it: its binding_key, node, edge and connection (absent for a default) spelled as a credential row's, the need it was bound for (null when it cannot be told), exactly one of entry_id, share_id and via (the lender's label), and the entry's name and source (own or share), each absent when the entry cannot be read.",
+  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map, and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools, limits and exits can be narrowed. A row is one per kind and node; a credential one per binding, keyed by its binding_key: the row's node, the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need) and its slot (default, or name:<connection> for a named account); a stream one per name and subject; a tool server one per name; an exit one per node and exit. So one entry lent on two edges is two rows, and so is one stream under two subjects. A credential row names its fields as a map from each field the component reads to the entry field that answers it, the entry's provider hint (absent when it has none), its destination in Prima.Destination's canonical spelling, its source (own, share or provided), whether it is disclosed, suggested and a choice the person must make, and its lifetime: standing, until an RFC 3339 UTC time, or once. A controls row is one per desktop that offers any control: its controls in the order of their ids, each its label (at most 32 code points), its operation as tool.action and, for a control with a pick, the pick's stream, the feed's name as its subject for a feed's results, and the RFC 6901 pointer field into that stream's shape; at most 32. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask. An exits row names one exit of its node (an egress domain or connect origin as declared, need:<name> or server:<name>) and flows, the source classes (pinned, filed, files_by_grant, vault_disclosed, outside; never unsettled) its flows let reach it, each once, empty for an exit no flow names; one node's several exits are several rows. A preview names the bindings of the profile's head the revision removes, as removed: a list, empty when it removes none, sorted by binding_key, each key once. Each removal is one binding as the head's row holds it: its binding_key, node, edge and connection (absent for a default) spelled as a credential row's, the need it was bound for (null when it cannot be told), exactly one of entry_id, share_id and via (the lender's label), and the entry's name and source (own or share), each absent when the entry cannot be read.",
   "kinds": [
     "credential",
     "egress",
@@ -20,27 +20,8 @@
     "limits",
     "exits"
   ],
-  "origins": {
-    "invalid": [
-      "cli",
-      "Interactive",
-      "",
-      "any",
-      "api"
-    ],
-    "spellings": [
-      "interactive",
-      "programmatic",
-      "schedule",
-      "webhook"
-    ]
-  },
   "preview": {
     "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-    "origins": [
-      "interactive",
-      "programmatic"
-    ],
     "removed": [
       {
         "binding_key": "reagent:local.weather|@ingress|default",
@@ -518,9 +499,6 @@
       "name": "a row of an unknown kind",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -545,9 +523,6 @@
       "name": "a row carrying a sentence",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -588,9 +563,6 @@
       "name": "a preview carrying a sentence",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -618,13 +590,490 @@
       }
     },
     {
+      "name": "a preview naming who may start the component",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [
+          {
+            "binding_key": "reagent:local.weather|@ingress|default",
+            "edge": "@ingress",
+            "entry_id": "vlt_weather_old",
+            "name": "weather-old",
+            "need": "api_key",
+            "node": "reagent:local.weather",
+            "source": "own"
+          },
+          {
+            "binding_key": "reagent:local.weather|@ingress|name:Work",
+            "connection": "Work",
+            "edge": "@ingress",
+            "entry_id": "vlt_weather_work",
+            "name": "weather-work",
+            "need": "api_key",
+            "node": "reagent:local.weather",
+            "source": "own"
+          },
+          {
+            "binding_key": "reagent:local.weather|reagent:local.geo|name:Old geo",
+            "connection": "Old geo",
+            "edge": "reagent:local.geo",
+            "entry_id": "vlt_old_geo",
+            "need": null,
+            "node": "reagent:local.weather",
+            "source": "own"
+          },
+          {
+            "binding_key": "reagent:local.weather|reagent:local.geo|name:Old share",
+            "connection": "Old share",
+            "edge": "reagent:local.geo",
+            "name": "Shared by Terry",
+            "need": null,
+            "node": "reagent:local.weather",
+            "share_id": "shr_old_market",
+            "source": "share"
+          },
+          {
+            "binding_key": "reagent:local.weather|reagent:local.maps|default",
+            "edge": "reagent:local.maps",
+            "need": null,
+            "node": "reagent:local.weather",
+            "via": "old-maps"
+          }
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": {
+                "api_key": "api_key"
+              },
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          },
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|reagent:local.maps|tiles|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "tiles.maps.example"
+                ],
+                "methods": [
+                  "GET"
+                ],
+                "paths": [
+                  "/v1/tiles"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": true,
+              "edge": "reagent:local.maps|tiles",
+              "fields": {
+                "token": "token"
+              },
+              "label": "shared-maps",
+              "lifetime": {
+                "kind": "until",
+                "until": "2026-10-04T13:00:00Z"
+              },
+              "name": "maps",
+              "scopes": [
+                "read"
+              ],
+              "source": "own",
+              "suggested": false
+            }
+          },
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|reagent:local.geo|name:Geo account",
+              "choice_required": false,
+              "connection": "Geo account",
+              "destination": {
+                "hosts": [
+                  "*.weather.example"
+                ],
+                "methods": [
+                  "GET",
+                  "POST"
+                ],
+                "paths": [
+                  "/v2"
+                ],
+                "port": 8443,
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "reagent:local.geo",
+              "fields": {
+                "api_key": "API key"
+              },
+              "lifetime": {
+                "kind": "once",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [
+                "read"
+              ],
+              "source": "own",
+              "suggested": true
+            }
+          },
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|reagent:local.quotes|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.market.example"
+                ],
+                "methods": [
+                  "GET"
+                ],
+                "paths": [
+                  "/v1/"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "reagent:local.quotes",
+              "fields": {
+                "api_key": "api_key"
+              },
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "Shared by Terry",
+              "provider": "market.example",
+              "scopes": [],
+              "source": "share",
+              "suggested": true
+            }
+          },
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|reagent:local.maps|geocode|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "geo.maps.example"
+                ],
+                "paths": [
+                  "/geocode"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": true,
+              "edge": "reagent:local.maps|geocode",
+              "fields": {
+                "anon_key": "anon_key"
+              },
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "maps public key",
+              "scopes": [],
+              "source": "provided",
+              "suggested": false
+            }
+          },
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|catalyst:local.coder|claude|default",
+              "choice_required": false,
+              "destination": {
+                "program": "claude"
+              },
+              "disclosed": false,
+              "edge": "catalyst:local.coder|claude",
+              "fields": {},
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "claude-login",
+              "scopes": [],
+              "source": "own",
+              "suggested": true
+            }
+          },
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          },
+          {
+            "kind": "storage",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "actions": [
+                "read",
+                "list"
+              ],
+              "paths": [
+                "data/weather/"
+              ]
+            }
+          },
+          {
+            "kind": "tools",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "tools": [
+                "file.read",
+                "file.list"
+              ]
+            }
+          },
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:e0cc26f8514695ce7696d7660aac368a3f9a7b99dd1056650518b3c8296c28b6",
+              "name": "forecasts",
+              "tool_patterns": [
+                "forecast_*"
+              ]
+            }
+          },
+          {
+            "kind": "limits",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "batch_timeout": "5m",
+              "max_concurrent_tasks": 4,
+              "max_memory_bytes": 67108864,
+              "max_request_size": 1048576,
+              "max_response_size": 5242880,
+              "rate_limit": {
+                "requests": 60,
+                "window": "1m"
+              },
+              "timeout": "30s"
+            }
+          },
+          {
+            "kind": "exits",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "exit": "api.weather.example",
+              "flows": [
+                "pinned",
+                "filed",
+                "files_by_grant"
+              ]
+            }
+          },
+          {
+            "kind": "exits",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "exit": "need:api_key",
+              "flows": [
+                "vault_disclosed"
+              ]
+            }
+          },
+          {
+            "kind": "exits",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "exit": "server:forecasts",
+              "flows": [
+                "outside"
+              ]
+            }
+          },
+          {
+            "kind": "exits",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "exit": "eu.api.weather.example",
+              "flows": [
+                "outside"
+              ]
+            }
+          },
+          {
+            "kind": "tools",
+            "narrowed": false,
+            "node": "reagent:local.geo",
+            "values": {
+              "tools": [
+                "*"
+              ]
+            }
+          },
+          {
+            "kind": "frame",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "background": true,
+              "capabilities": [
+                "clipboard-write"
+              ],
+              "placement": "panel"
+            }
+          },
+          {
+            "kind": "streams",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "name": "executions.deltas",
+              "subject": "*"
+            }
+          },
+          {
+            "kind": "streams",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "name": "executions.deltas",
+              "subject": "exe_1"
+            }
+          },
+          {
+            "kind": "streams",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "name": "threads.messages"
+            }
+          },
+          {
+            "kind": "system_actions",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "actions": [
+                "execution.list"
+              ]
+            }
+          },
+          {
+            "kind": "exits",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "exit": "api.dashboard.example",
+              "flows": []
+            }
+          },
+          {
+            "kind": "frame",
+            "narrowed": false,
+            "node": "tincture:local.desk",
+            "values": {
+              "background": false,
+              "capabilities": [],
+              "placement": "canvas"
+            }
+          },
+          {
+            "kind": "streams",
+            "narrowed": false,
+            "node": "tincture:local.desk",
+            "values": {
+              "name": "feed.results",
+              "subject": "vpn"
+            }
+          },
+          {
+            "kind": "controls",
+            "narrowed": false,
+            "node": "tincture:local.desk",
+            "values": {
+              "controls": [
+                {
+                  "label": "Connect",
+                  "operation": "feed.press",
+                  "pick": {
+                    "field": "/result/servers",
+                    "stream": "feed.results",
+                    "subject": "vpn"
+                  }
+                },
+                {
+                  "label": "Pause digest",
+                  "operation": "schedule.pause"
+                }
+              ]
+            }
+          }
+        ],
+        "v": 1,
+        "origins": [
+          "interactive"
+        ]
+      },
+      "error": "unknown_field"
+    },
+    {
       "error": "not_narrowable",
       "name": "a credential marked narrowed",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -664,9 +1113,6 @@
       "name": "a credential naming no edge",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -705,9 +1151,6 @@
       "name": "a credential edge in the reserved namespace",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -747,9 +1190,6 @@
       "name": "a credential edge naming a version",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -791,9 +1231,6 @@
       "name": "a credential edge naming an empty need",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -835,9 +1272,6 @@
       "name": "a frame marked narrowed",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -857,136 +1291,9 @@
       }
     },
     {
-      "error": "empty_origins",
-      "name": "no origins",
-      "preview": {
-        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [],
-        "removed": [],
-        "rows": [
-          {
-            "kind": "egress",
-            "narrowed": true,
-            "node": "reagent:local.weather",
-            "values": {
-              "domains": [
-                "api.weather.example"
-              ],
-              "methods": [
-                "GET"
-              ],
-              "private_ips": [],
-              "schemes": [
-                "https"
-              ]
-            }
-          }
-        ],
-        "v": 1
-      }
-    },
-    {
-      "error": "unknown_origin",
-      "name": "an origin outside the enum",
-      "preview": {
-        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "cli"
-        ],
-        "removed": [],
-        "rows": [
-          {
-            "kind": "egress",
-            "narrowed": true,
-            "node": "reagent:local.weather",
-            "values": {
-              "domains": [
-                "api.weather.example"
-              ],
-              "methods": [
-                "GET"
-              ],
-              "private_ips": [],
-              "schemes": [
-                "https"
-              ]
-            }
-          }
-        ],
-        "v": 1
-      }
-    },
-    {
-      "error": "unknown_origin",
-      "name": "an origin spelled in capitals",
-      "preview": {
-        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "Interactive"
-        ],
-        "removed": [],
-        "rows": [
-          {
-            "kind": "egress",
-            "narrowed": true,
-            "node": "reagent:local.weather",
-            "values": {
-              "domains": [
-                "api.weather.example"
-              ],
-              "methods": [
-                "GET"
-              ],
-              "private_ips": [],
-              "schemes": [
-                "https"
-              ]
-            }
-          }
-        ],
-        "v": 1
-      }
-    },
-    {
-      "error": "duplicate_origin",
-      "name": "an origin named twice",
-      "preview": {
-        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "schedule",
-          "schedule"
-        ],
-        "removed": [],
-        "rows": [
-          {
-            "kind": "egress",
-            "narrowed": true,
-            "node": "reagent:local.weather",
-            "values": {
-              "domains": [
-                "api.weather.example"
-              ],
-              "methods": [
-                "GET"
-              ],
-              "private_ips": [],
-              "schemes": [
-                "https"
-              ]
-            }
-          }
-        ],
-        "v": 1
-      }
-    },
-    {
       "error": "missing_field",
       "name": "no commit digest",
       "preview": {
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1015,9 +1322,6 @@
       "name": "a commit digest that is not a digest",
       "preview": {
         "commit_digest": "abc",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1046,9 +1350,6 @@
       "name": "egress values with a field egress does not carry",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1080,9 +1381,6 @@
       "name": "a domain named twice",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1112,9 +1410,6 @@
       "name": "a wildcard beside another tool",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1137,9 +1432,6 @@
       "name": "a wildcard marked narrowed",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1161,9 +1453,6 @@
       "name": "limits missing a limit",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1191,9 +1480,6 @@
       "name": "a limit that does not parse",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1222,9 +1508,6 @@
       "name": "two egress rows for one node",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1270,9 +1553,6 @@
       "name": "two rows for one credential on one edge",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1340,9 +1620,6 @@
       "name": "two rows for one stream under one subject",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1372,9 +1649,6 @@
       "name": "another version",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1403,9 +1677,6 @@
       "name": "a system action that is not tool.action",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1427,9 +1698,6 @@
       "name": "a credential whose fields are a list",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1470,9 +1738,6 @@
       "name": "a credential whose field map names an empty field",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1513,9 +1778,6 @@
       "name": "a credential naming no source",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1555,9 +1817,6 @@
       "name": "a credential naming no binding key",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1597,9 +1856,6 @@
       "name": "a credential naming no lifetime",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1636,9 +1892,6 @@
       "name": "a credential of an unknown source",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1679,9 +1932,6 @@
       "name": "a credential whose binding key names another edge",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1722,9 +1972,6 @@
       "name": "a credential whose binding key names a slot its connection does not",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1766,9 +2013,6 @@
       "name": "a named slot on a credential naming no connection",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1809,9 +2053,6 @@
       "name": "a destination not in its canonical spelling",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1852,9 +2093,6 @@
       "name": "a destination with a bare wildcard",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1895,9 +2133,6 @@
       "name": "an until lifetime naming no time",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1938,9 +2173,6 @@
       "name": "a standing lifetime naming a time",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -1981,9 +2213,6 @@
       "name": "an until lifetime naming a time outside UTC",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2024,9 +2253,6 @@
       "name": "a disclosure that is no boolean",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2067,9 +2293,6 @@
       "name": "an empty provider",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2110,9 +2333,6 @@
       "name": "a preview naming no removals",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "rows": [
           {
             "kind": "credential",
@@ -2152,9 +2372,6 @@
       "name": "removals that are no list",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": {},
         "rows": [
           {
@@ -2195,9 +2412,6 @@
       "name": "a removal whose binding key names another edge",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|reagent:local.geo|default",
@@ -2248,9 +2462,6 @@
       "name": "a removal whose binding key names a slot its connection does not",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|@ingress|name:Work",
@@ -2302,9 +2513,6 @@
       "name": "a removal whose edge names a version",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|reagent:local.geo:1.0.0|default",
@@ -2355,9 +2563,6 @@
       "name": "a removal naming no need",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|@ingress|default",
@@ -2407,9 +2612,6 @@
       "name": "a removal of an unknown source",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|@ingress|default",
@@ -2460,9 +2662,6 @@
       "name": "a removal naming both an entry and a label",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|@ingress|default",
@@ -2514,9 +2713,6 @@
       "name": "a removal naming both an entry and a share",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|@ingress|default",
@@ -2568,9 +2764,6 @@
       "name": "a removal naming neither an entry nor a label",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|@ingress|default",
@@ -2620,9 +2813,6 @@
       "name": "removals out of order",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|@ingress|name:Work",
@@ -2683,9 +2873,6 @@
       "name": "a removal listed twice",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|@ingress|default",
@@ -2745,9 +2932,6 @@
       "name": "a removal carrying a sentence",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [
           {
             "binding_key": "reagent:local.weather|@ingress|default",
@@ -2799,9 +2983,6 @@
       "name": "an exits row naming no exit",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2823,9 +3004,6 @@
       "name": "an exits row naming unsettled, which is no class",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2848,9 +3026,6 @@
       "name": "an exits row naming a class that is not one",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2873,9 +3048,6 @@
       "name": "an exits row naming a class twice",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2899,9 +3071,6 @@
       "name": "an exits row whose need exit names no need",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2924,9 +3093,6 @@
       "name": "an exits row whose exit is empty",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2949,9 +3115,6 @@
       "name": "an exits row carrying a field exits does not carry",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -2977,9 +3140,6 @@
       "name": "two exits rows for one exit of one node",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3013,10 +3173,6 @@
       "name": "a controls row marked narrowed",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3050,10 +3206,6 @@
       "name": "a controls row naming no control",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3073,10 +3225,6 @@
       "name": "a control whose operation is not tool.action",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3101,10 +3249,6 @@
       "name": "a control naming no label",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3128,10 +3272,6 @@
       "name": "a control whose label is over 32 code points",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3156,10 +3296,6 @@
       "name": "a control whose label is 17 letters but 34 code points",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3184,10 +3320,6 @@
       "name": "a control carrying its args",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3215,10 +3347,6 @@
       "name": "a pick whose field is no RFC 6901 pointer",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3248,10 +3376,6 @@
       "name": "a pick naming no stream",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3279,10 +3403,6 @@
       "name": "a pick carrying the argument it fills",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {
@@ -3312,10 +3432,6 @@
       "name": "two controls rows for one node",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive",
-          "programmatic"
-        ],
         "removed": [],
         "rows": [
           {

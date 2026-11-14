@@ -378,17 +378,19 @@ defmodule Locus.Runtime.SecurityTest do
       end
     end
 
-    test "unregistered component is refused by the consent gate", %{ctx: ctx} do
-      # No profile exists for a component that was never published, so the
-      # run is refused before resolution — and never as a signature error.
-      {:error, msg} =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => "reagent:local.nonexistent:0.1.0",
-          "input" => %{}
-        })
+    test "an unregistered component is not found, never a signature error", %{ctx: ctx} do
+      # A component that was never published reads as itself, before any
+      # signature is looked at.
+      ref = "reagent:local.nonexistent:0.1.0"
 
-      assert {:consent_required, %{}} = msg
+      assert {:error, msg} =
+               Provider.handle("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => ref,
+                 "input" => %{}
+               })
+
+      assert msg == {:not_found, {:component, ref}}
       refute Sanctum.Refusals.render(msg) =~ "Signature verification"
     end
   end

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The backends image runs a stdio MCP program end to end, as docker-compose.yml's locus-backends service.
+"""The backends image runs an MCP program end to end, as docker-compose.yml's locus-backends service.
 
 First driven only by requests signed as CYFR signs them (harness.py), the
 MCP client speaking JSON-RPC over a session's lines as CYFR's does:
@@ -26,7 +26,7 @@ app image (CYFR_IMAGE, `cyfr:push` as the workflow builds it), beside the
 same locus-backends service, both with every setting compose gives them.
 A person signed in on the server (tests/release-boot/fixture.exs) has a
 canary credential, a random token, in the vault under a name this suite
-owns, seeded by the release's fixture (`vault`), defines a stdio server
+owns, seeded by the release's fixture (`vault`), defines an mcp program
 whose probe program reads it from the vault over `/mcp` with the person's
 session, and calls the program's tools as the console calls them (`/mcp`
 dispatches declared tools only); cyfr's MCP client drives the program over
@@ -379,7 +379,7 @@ def cyfr_controller(image):
         seeded = stack.fixture("vault", signed_in["token"], entry, "api_key", canary)
         expect(seeded.get("name") == entry, "the release's fixture seeds the canary's entry", seeded)
         created = person.tool("mcp_servers", {"action": "create", "name": "e2e-probe", "config": {
-            "transport": "stdio",
+            "transport": "program", "mark": "mcp",
             "console": True,
             "backends": [{"name": "probe", "command": "node /probe/probe-backend.mjs",
                           "env": {"PROBE_SECRET": f"vault:{entry}", "LOG_LEVEL": LITERAL}}],

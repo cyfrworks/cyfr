@@ -117,8 +117,8 @@ defmodule Emissary.Web.FrameAdmission do
     end
   end
 
-  # The context carries the frame path's origin from here on, so the grant
-  # the frame is held to (`frame_grant/1`) is read for that origin.
+  # The context carries the frame path's origin from here on, which the
+  # runs it starts record.
   defp establish(bearer, client_ip, opts) do
     case Sanctum.Caller.establish({:frame_credential, bearer}, [client_ip: client_ip] ++ opts) do
       {:ok, %Context{frame: %{}} = ctx} -> {:ok, interactive(ctx)}

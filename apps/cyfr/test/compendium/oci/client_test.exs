@@ -639,7 +639,7 @@ defmodule Compendium.OCI.ClientTest do
     # as they make it, admitting runs over `/mcp`.
     defp consent!(ctx) do
       person = Sanctum.TestContext.via(ctx.a, :prism)
-      decisions = %{ref: @run_ref, origins: [:interactive, :programmatic]}
+      decisions = %{ref: @run_ref}
       {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: @run_ref})
       {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
 

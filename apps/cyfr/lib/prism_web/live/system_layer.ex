@@ -85,9 +85,8 @@ defmodule PrismWeb.SystemLayer do
       opens it with the plan's suggestions bound for the required needs)
       and draws the preview's typed rows itself: the vault entry each need
       of the app and of its dependencies is bound to, the named accounts
-      beside each edge's default, and how long each binding lives, the
-      narrowing and the origins the person chooses,
-      each previewed again after each choice, the warnings and what
+      beside each edge's default, how long each binding lives and the
+      narrowing the person chooses, each previewed again after each choice, the warnings and what
       changed. It hands the layer the walk as it stands. Confirming asks
       the sheet for its walk at that moment, after every choice that came
       before the confirm, and commits exactly that walk, its decisions,
@@ -295,14 +294,12 @@ defmodule PrismWeb.SystemLayer do
   The `:grant` prompt `id` for the component `ref`, read under `ctx` (a
   context, or a socket holding one, as `PrismWeb.Ops.call_tool/3` takes
   it): the consent walk's plan as `profile.plan` answers it, with what its
-  head holds (`head_origins`, `head_bindings`, and `shape_diff` when the
+  head holds (`head_bindings`, and `shape_diff` when the
   shape moved), its preview of what the grant opens with
   (`Prism.ConsentChoices.initial_choices/2`: on a re-grant, what
   the head binds with its lifetime, never wider, and elsewhere the plan's
   suggestions bound for the required needs of the app and of each
-  dependency) under the origins
-  the head admits (`interactive` alone on a first grant) and the
-  narrowing it holds (`head_narrowing`: a method the head narrowed off,
+  dependency) under the narrowing it holds (`head_narrowing`: a method the head narrowed off,
   or one newly asked for, opens off; a first grant opens on the ask),
   when the
   person's session ends (`session.whoami`'s `session_expires_at`, which
@@ -373,9 +370,8 @@ defmodule PrismWeb.SystemLayer do
 
   # The decisions the grant opens with, their preview, and why the
   # suggestions were not bound, if they were not: the plan's suggestions
-  # bound for the required needs, under the origins the head admits
-  # (`interactive` alone on a first grant), and the account it is opened
-  # for beside its edge's default; with nothing bound when the home
+  # bound for the required needs, and the account it is opened for beside
+  # its edge's default; with nothing bound when the home
   # refuses to preview the suggestions, so the person chooses, and the
   # home's sentence for that refusal, which the sheet shows.
   defp first_walk(_ctx_or_socket, {ref, label, _account}, %{unresolved: %{}} = plan),
@@ -423,7 +419,6 @@ defmodule PrismWeb.SystemLayer do
     Prism.ConsentChoices.decisions(
       ref,
       label,
-      plan[:head_origins] || ["interactive"],
       head_narrowing(plan),
       choices
     )
@@ -443,40 +438,6 @@ defmodule PrismWeb.SystemLayer do
       _none -> nil
     end
   end
-
-  @doc """
-  Whether the grant a run would start under admits `origin`: the profile
-  `profile_id` of the component `ref`, read under `ctx` (a context, or a
-  socket holding one) through `Sanctum.Consent.profiles/2` and its head
-  through `Sanctum.Consent.head_consent/2`. `:admitted` when its head
-  admits it; `{:missing, label}` when an owner profile's head does not,
-  `label` the profile's, for the grant prompt that asks for it
-  (`grant_prompt/4`'s `label:`); `:unknown` when the profile is not one of
-  `ref`'s owner profiles with a head, or cannot be read, which leaves the
-  decision to the operation itself.
-  """
-  @spec admits_origin(
-          Context.t() | Phoenix.LiveView.Socket.t(),
-          String.t(),
-          String.t(),
-          Prima.Origin.t()
-        ) :: :admitted | {:missing, String.t()} | :unknown
-  def admits_origin(ctx_or_socket, ref, profile_id, origin)
-      when is_binary(ref) and is_binary(profile_id) do
-    with %Context{} = ctx <- context_of(ctx_or_socket),
-         {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(ref),
-         {:ok, entries} <- Sanctum.Consent.profiles(ctx, name_ref),
-         %{kind: :owner, label: label} <- Enum.find(entries, &(&1.id == profile_id)),
-         {:ok, head} <- Sanctum.Consent.head_consent(ctx, profile_id) do
-      if origin in head.admitted_origins,
-        do: :admitted,
-        else: {:missing, label}
-    else
-      _unknown -> :unknown
-    end
-  end
-
-  def admits_origin(_ctx_or_socket, _ref, _profile_id, _origin), do: :unknown
 
   defp context_of(%Context{} = ctx), do: ctx
   defp context_of(%Phoenix.LiveView.Socket{assigns: %{context: ctx}}), do: ctx

@@ -86,9 +86,6 @@ defmodule Sanctum.Consent.Commit do
 
   ## What a decision may name beyond bindings
 
-    * `:origins` — the `Prima.Origin` values the revision admits, a
-      non-empty list; `[:interactive]` when absent. The revision is written
-      with them as its `admitted_origins`, and the commit digest binds them.
     * `:subset` — a narrowing: per consent-graph node, the part of the ask
       granted for each kind its enforcement point can narrow, in the wire's
       string-keyed form (`Sanctum.Consent.Normalize.subset/3`), the flows
@@ -102,8 +99,8 @@ defmodule Sanctum.Consent.Commit do
   ## What preview answers
 
   A `Prima.ConsentPreview` (`t:Sanctum.Consent.preview/0`): the typed
-  rows of what the revision would grant, the origins it would admit, the
-  bindings of the profile's head it would remove and the commit digest
+  rows of what the revision would grant, the bindings of the profile's
+  head it would remove and the commit digest
   binding them all, with the proof and the expected revision beside
   them. Every surface renders the rows and the removals itself.
 
@@ -147,7 +144,6 @@ defmodule Sanctum.Consent.Commit do
           optional(:publish_from) => String.t(),
           optional(:need_ids) => [String.t()],
           optional(:durable_storage) => boolean(),
-          optional(:origins) => [Prima.Origin.t(), ...],
           optional(:subset) => CommitDigest.subset()
         }
 
@@ -194,7 +190,6 @@ defmodule Sanctum.Consent.Commit do
        %{
          v: document["v"],
          rows: document["rows"],
-         origins: document["origins"],
          commit_digest: document["commit_digest"],
          removed: document["removed"],
          proof: proof,
@@ -246,8 +241,8 @@ defmodule Sanctum.Consent.Commit do
   without a fresh plan, preview and proof.
 
   It reuses the commit's binding resolution, its compare-and-set on the
-  consent revision and its digests, and re-issues the head's scope, invoke
-  mode and admitted origins, and the narrowing the head holds: every field
+  consent revision and its digests, and re-issues the head's scope and
+  invoke mode, and the narrowing the head holds: every field
   whose grant differs from the ask is named again, so binding a key never
   widens a narrowed consent. It refuses when the revision is stale, or
   moves while the head is re-issued (a consent conflict), when the
@@ -299,8 +294,8 @@ defmodule Sanctum.Consent.Commit do
   # The head whose decisions a grant re-issues must be the revision the
   # caller presented and the one its walk read: a revision landing between
   # the head's read and a walk, or between the two walks a narrowed head
-  # takes, would otherwise be written over with the older head's origins
-  # and narrowing, a write nobody decided that can widen the grant.
+  # takes, would otherwise be written over with the older head's
+  # narrowing, a write nobody decided that can widen the grant.
   defp check_head_read(%{revision: revision}, %{expected_revision: revision}), do: :ok
 
   defp check_head_read(%{revision: head}, %{expected_revision: walked}),
@@ -313,8 +308,8 @@ defmodule Sanctum.Consent.Commit do
   defp check_grantable_profile(_profile), do: {:error, :grant_requires_owner_profile}
 
   # The head's decisions, with the new bindings in place of its own: an
-  # owner profile, the label it carries, and the scope, invoke mode and
-  # origins the head was committed under.
+  # owner profile, the label it carries, and the scope and invoke mode
+  # the head was committed under.
   defp grant_decisions(profile, head, bindings) do
     %{
       ref: profile.source_ref,
@@ -322,7 +317,6 @@ defmodule Sanctum.Consent.Commit do
       kind: :owner,
       scope: head.scope,
       invoke_mode: head.invoke_mode,
-      origins: head.admitted_origins,
       bindings: bindings,
       selections: head_selections(head, profile.source_ref),
       tool_servers: []
@@ -431,7 +425,7 @@ defmodule Sanctum.Consent.Commit do
   Stages `profile.publish` from an owner profile with public, edge-only,
   pinned decisions. Retains credentials only for `need_ids` and returns a
   plan token for preview and commit, with what the public profile would
-  grant as preview rows and the origins it would admit.
+  grant as preview rows.
 
   A canvas has no public profile, so its staging is refused as an invalid
   argument, as is every public preview and commit of one, and so is a
@@ -460,8 +454,7 @@ defmodule Sanctum.Consent.Commit do
          shape_digest: prep.shape_digest,
          expected_consent_revision: prep.expected_revision,
          source_ref: prep.source_ref,
-         rows: rows,
-         origins: Prima.Origin.to_wire_list(prep.origins)
+         rows: rows
        }}
     end
   end
@@ -577,7 +570,6 @@ defmodule Sanctum.Consent.Commit do
     invoke_mode = Map.get(decisions, :invoke_mode, default_invoke_mode(kind))
 
     with :ok <- RootSelect.check_label(label),
-         {:ok, origins} <- decided_origins(decisions),
          {:ok, subset} <- decided_subset(decisions),
          {:ok, source_ref, version} <- Plan.planned_source(Map.get(decisions, :ref, "")),
          {:ok, component} <- Plan.fetch_component(ctx, source_ref, version),
@@ -628,7 +620,7 @@ defmodule Sanctum.Consent.Commit do
              shape_digest,
              blob_digest,
              {label, kind, invoke_mode},
-             {origins, subset, removed},
+             {subset, removed},
              bindings,
              selections,
              tool_servers,
@@ -656,7 +648,6 @@ defmodule Sanctum.Consent.Commit do
          provided: provided,
          entries: Map.merge(entries, lent),
          tool_servers: tool_servers,
-         origins: origins,
          subset: subset,
          removed: removed,
          narrowed: narrowed,
@@ -665,24 +656,6 @@ defmodule Sanctum.Consent.Commit do
          override: Map.get(decisions, :override, false),
          publish_nodes: published && published.nodes
        }}
-    end
-  end
-
-  # The origins a decision names, in the enum's order; interactive alone
-  # when it names none.
-  defp decided_origins(decisions) do
-    case Map.get(decisions, :origins) do
-      nil ->
-        {:ok, Plan.default_origins()}
-
-      origins ->
-        case Normalize.origins(%{origins: origins}, :origins, :invalid_decision) do
-          {:ok, spellings} ->
-            {:ok, Enum.map(spellings, &(&1 |> Prima.Origin.from_wire() |> elem(1)))}
-
-          {:error, {:invalid_decision, :origins, why}} ->
-            {:error, {:invalid_argument, "The origins a grant admits #{why}"}}
-        end
     end
   end
 
@@ -2132,7 +2105,7 @@ defmodule Sanctum.Consent.Commit do
          shape_digest,
          blob_digest,
          {label, kind, invoke_mode},
-         {origins, subset, removed},
+         {subset, removed},
          bindings,
          selections,
          tool_servers,
@@ -2152,7 +2125,6 @@ defmodule Sanctum.Consent.Commit do
        label: label,
        kind: kind,
        invoke_mode: invoke_mode,
-       origins: origins,
        # A binding's scope, destination and attach rule are the blob's,
        # which the blob digest above covers; the decision is what the
        # person chose: the entry or share, the account it rides under, its
@@ -2751,7 +2723,6 @@ defmodule Sanctum.Consent.Commit do
       blob_digest: prep.blob_digest,
       resolved_policy: blob_json,
       activation: activation_json,
-      admitted_origins: prep.origins,
       granted_by: ctx.user_id,
       granted_via: Atom.to_string(granted_via)
     }
@@ -2886,7 +2857,6 @@ defmodule Sanctum.Consent.Commit do
     document = %{
       "v" => Prima.ConsentPreview.version(),
       "rows" => rows,
-      "origins" => Prima.Origin.to_wire_list(prep.origins),
       "commit_digest" => prep.commit_digest,
       "removed" => prep.removed
     }

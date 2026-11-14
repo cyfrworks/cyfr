@@ -28,12 +28,10 @@ defmodule Sanctum.Consent.Plan do
   The ask is answered as `rows`, the typed rows of `Prima.ConsentPreview`
   in their JSON form, one per resource each node of the closure asks for,
   its limits, and a tincture's frame, streams and system actions:
-  what a narrowing is chosen from, none of it narrowed yet. `origins` is
-  the default a decision that names none admits, `interactive` alone.
+  what a narrowing is chosen from, none of it narrowed yet.
 
   A plan for a profile with a head says what the head holds:
-  `head_origins`, the origins it admits, so a re-grant starts from them
-  rather than quietly dropping one; `head_bindings`, each binding the head
+  `head_bindings`, each binding the head
   holds as `%{binding_key, lifetime: %{kind, until}, consumed}`, the
   field map its blob holds at that key (`fields`, absent for a lent
   binding and for one the blob does not hold), what it binds (`entry_id`,
@@ -53,8 +51,8 @@ defmodule Sanctum.Consent.Plan do
   the person narrowed it against the live ask, every node of the closure,
   each entry naming its node and whether the head never held it or the
   ask no longer names it (`Sanctum.Consent.ShapeDiff`, read against the
-  ask the narrowing is). With no head, `head_origins` is nil and
-  `head_bindings`, `head_narrowing` and `shape_diff` are empty. A plan
+  ask the narrowing is). With no head, `head_bindings`, `head_narrowing`
+  and `shape_diff` are empty. A plan
   reads the head once, so all it says of the head and the revision it
   expects are of one read. A head row that does not decode, or whose
   policy fails its digest or does not parse, refuses the plan
@@ -151,9 +149,6 @@ defmodule Sanctum.Consent.Plan do
   # proof (120s) is the short-lived one; the plan token only pins facts.
   @plan_ttl_ms 600_000
 
-  # What a grant admits when its decision names no origin.
-  @default_origins [:interactive]
-
   # The needs an entry meets; the others name a component.
   @credential_kinds Prima.CredentialKinds.all()
 
@@ -169,8 +164,6 @@ defmodule Sanctum.Consent.Plan do
           limits: map(),
           rows: [BlobBuilder.row()],
           unresolved: %{reason: String.t(), missing: String.t() | nil} | nil,
-          origins: [String.t(), ...],
-          head_origins: [String.t(), ...] | nil,
           head_bindings: [head_binding()],
           head_narrowing: map(),
           shape_diff: [Sanctum.Consent.ShapeDiff.entry()],
@@ -204,10 +197,6 @@ defmodule Sanctum.Consent.Plan do
           optional(:connection) => String.t(),
           optional(:need) => String.t()
         }
-
-  @doc "The origins a grant admits when its decision names none: `interactive` alone."
-  @spec default_origins() :: [Prima.Origin.t(), ...]
-  def default_origins, do: @default_origins
 
   @doc """
   Stage a consent: facts, candidates, and the plan token.
@@ -320,8 +309,6 @@ defmodule Sanctum.Consent.Plan do
          limits: limits,
          rows: rows,
          unresolved: unresolved(closure),
-         origins: Prima.Origin.to_wire_list(@default_origins),
-         head_origins: head.origins,
          head_bindings: head.bindings,
          head_narrowing: head_narrowing,
          shape_diff: shape_diff,
@@ -899,17 +886,13 @@ defmodule Sanctum.Consent.Plan do
   defp identity(%{source: "own", entry_id: id}), do: %{entry_id: id}
   defp identity(%{source: "share", share_id: id}), do: %{share_id: id}
 
-  # What the profile's head holds: the origins it admits and its bindings.
-  # A first grant, or a profile with no head, holds none.
-  defp head_facts(:none, _reads), do: %{origins: nil, bindings: []}
+  # What the profile's head binds. A first grant, or a profile with no
+  # head, binds none.
+  defp head_facts(:none, _reads), do: %{bindings: []}
 
   defp head_facts({:ok, head, _profile_id}, reads) do
     held = held_field_maps(head)
-
-    %{
-      origins: Prima.Origin.to_wire_list(head.admitted_origins),
-      bindings: Enum.map(head.vault_refs, &head_binding(&1, held, reads))
-    }
+    %{bindings: Enum.map(head.vault_refs, &head_binding(&1, held, reads))}
   end
 
   # The field map each bound entry of the head's blob holds, by its

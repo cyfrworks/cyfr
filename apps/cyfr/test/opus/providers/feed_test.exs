@@ -291,19 +291,6 @@ defmodule Opus.Providers.FeedTest do
                Enum.find(feeds, &(&1.binding_id == answer.binding))
     end
 
-    test "bind refuses a consent that does not admit schedule", %{ctx: ctx, actor: actor} do
-      head = ConsentFixtures.regrant_origins!(ctx, @profile_id, [:interactive])
-
-      assert %Prima.Refusal{class: :consent_required, reason: reason} =
-               refused(call(ctx, bind_args("btc")))
-
-      assert reason ==
-               {:consent_required,
-                %{profile_id: @profile_id, current_revision: head.revision, shape_diff: []}}
-
-      assert {:ok, []} = CronSchedule.list_feeds(actor)
-    end
-
     test "an in-chain bind is never admitted without an approval" do
       # External in kind: no policy makes it automatic, and no standing
       # allow is ever taken for it, so each in-chain bind waits on a
@@ -1179,7 +1166,6 @@ defmodule Opus.Providers.FeedTest do
             }
           }),
         activation: %{@reference => release_digest},
-        admitted_origins: [:interactive, :schedule],
         vault_refs: []
       })
   end

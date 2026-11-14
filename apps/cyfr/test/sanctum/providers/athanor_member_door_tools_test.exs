@@ -315,7 +315,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     identifier = "per_" <> Prima.Digest.sha256_hex("door-tools-#{n}")
 
     # An unadmitted remote newcomer waits for the operator as an identifier.
-    assert {:error, {:door, :not_allowed}} = Sanctum.Door.sign_in_identifier(identifier)
+    assert {:error, {:door, :not_allowed}} = Sanctum.Door.sign_in_identifier(identifier, nil)
 
     assert {:ok, %{requests: requests}} = call(admin, "door", %{"action" => "requests"})
 

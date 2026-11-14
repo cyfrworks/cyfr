@@ -153,10 +153,9 @@ defmodule Prism.ConsentChoicesTest do
           plan <- plan(),
           choices <- choices(plan),
           label <- one_of([constant(nil), constant("work")]),
-          origins <- member_of([["interactive"], ["interactive", "schedule"]]),
           subset <- member_of([%{}, %{@ref => %{"egress" => %{"methods" => ["GET"]}}}])
         ) do
-      {plan, choices, label, origins, subset}
+      {plan, choices, label, subset}
     end
   end
 
@@ -165,24 +164,24 @@ defmodule Prism.ConsentChoicesTest do
   # ---------------------------------------------------------------------------
 
   property "the choices a walk's decisions reconstruct to serialize to those decisions" do
-    check all({plan, choices, label, origins, subset} <- walk()) do
-      decisions = ConsentChoices.decisions(@ref, label, origins, subset, choices)
+    check all({plan, choices, label, subset} <- walk()) do
+      decisions = ConsentChoices.decisions(@ref, label, subset, choices)
       reconstructed = ConsentChoices.choices_of(decisions, plan)
 
-      assert ConsentChoices.decisions(@ref, label, origins, subset, reconstructed) == decisions
+      assert ConsentChoices.decisions(@ref, label, subset, reconstructed) == decisions
     end
   end
 
   property "a walk drawn again from the choices the sheet held serializes as it did" do
-    check all({plan, choices, label, origins, subset} <- walk()) do
-      decisions = ConsentChoices.decisions(@ref, label, origins, subset, choices)
+    check all({plan, choices, label, subset} <- walk()) do
+      decisions = ConsentChoices.decisions(@ref, label, subset, choices)
 
       again =
         decisions
         |> ConsentChoices.choices_of(plan)
         |> ConsentChoices.held_choices(choices, plan, @now)
 
-      assert ConsentChoices.decisions(@ref, label, origins, subset, again) == decisions
+      assert ConsentChoices.decisions(@ref, label, subset, again) == decisions
 
       # Every choice the sheet held is held again: the decided ones as
       # decided, an until-lifetime by the button that made it.
@@ -191,11 +190,11 @@ defmodule Prism.ConsentChoicesTest do
   end
 
   property "every decision names exactly one binding's entry and its lifetime" do
-    check all({_plan, choices, label, origins, subset} <- walk()) do
-      decisions = ConsentChoices.decisions(@ref, label, origins, subset, choices)
+    check all({_plan, choices, label, subset} <- walk()) do
+      decisions = ConsentChoices.decisions(@ref, label, subset, choices)
 
       assert decisions["ref"] == @ref
-      assert decisions["origins"] == origins
+      assert Map.keys(decisions) -- ~w(ref bindings selections label subset) == []
       assert Map.get(decisions, "subset", %{}) == subset
       assert Map.get(decisions, "label") == label
 
@@ -253,9 +252,8 @@ defmodule Prism.ConsentChoicesTest do
       }
     }
 
-    assert ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices) == %{
+    assert ConsentChoices.decisions(@ref, nil, %{}, choices) == %{
              "ref" => @ref,
-             "origins" => ["interactive"],
              "bindings" => [
                %{
                  "need" => "key_1",
@@ -348,7 +346,7 @@ defmodule Prism.ConsentChoicesTest do
     assert ConsentChoices.initial_choices(plan, @now) == %{{:need, "key_1", nil} => standing}
 
     decisions =
-      ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, %{
+      ConsentChoices.decisions(@ref, nil, %{}, %{
         {:need, "key_1", nil} => standing
       })
 
@@ -489,7 +487,6 @@ defmodule Prism.ConsentChoicesTest do
       assert ConsentChoices.decisions(
                @ref,
                nil,
-               ["interactive"],
                %{},
                ConsentChoices.initial_choices(plan, now)
              )["bindings"] == []
@@ -542,9 +539,7 @@ defmodule Prism.ConsentChoicesTest do
       assert %{fields: %{"ORG" => "ORG"}, unmapped: ["KEY"]} = opened[slot]
     end
 
-    decisions = fn choices ->
-      ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices)
-    end
+    decisions = fn choices -> ConsentChoices.decisions(@ref, nil, %{}, choices) end
 
     assert decisions.(opened)["bindings"] == []
     refute Map.has_key?(decisions.(opened), "selections")
@@ -614,7 +609,7 @@ defmodule Prism.ConsentChoicesTest do
     choices = ConsentChoices.initial_choices(plan, @now)
     refute Map.has_key?(choices[{:need, "key_1", nil}], :unmapped)
 
-    assert ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices)["bindings"] == [
+    assert ConsentChoices.decisions(@ref, nil, %{}, choices)["bindings"] == [
              %{
                "need" => "key_1",
                "entry_id" => "vlt_m",
@@ -633,7 +628,6 @@ defmodule Prism.ConsentChoicesTest do
              ConsentChoices.decisions(
                @ref,
                nil,
-               ["interactive"],
                %{},
                ConsentChoices.initial_choices(automatic, @now)
              )["bindings"]
@@ -654,12 +648,12 @@ defmodule Prism.ConsentChoicesTest do
     assert %{fields: %{"ORG" => "secret"}, unmapped: ["KEY"]} =
              choices[{:need, "key_1", nil}]
 
-    assert ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices)["bindings"] == []
+    assert ConsentChoices.decisions(@ref, nil, %{}, choices)["bindings"] == []
 
     # The walk the grant opens with holds it still, to be asked.
     opened =
       @ref
-      |> ConsentChoices.decisions(nil, ["interactive"], %{}, choices)
+      |> ConsentChoices.decisions(nil, %{}, choices)
       |> ConsentChoices.choices_of(stale)
       |> ConsentChoices.held_choices(nil, stale, @now)
 
@@ -696,14 +690,14 @@ defmodule Prism.ConsentChoicesTest do
     slot = {:need, "key_1", nil}
 
     assert %{fields: %{"ORG" => "secret"}, unmapped: ["KEY"]} = choices[slot]
-    assert ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices)["bindings"] == []
+    assert ConsentChoices.decisions(@ref, nil, %{}, choices)["bindings"] == []
 
     # Answered, the valid answer the head held is still sent beside it.
     assert {:ok, answered} = ConsentChoices.answer_map(choices, plan, slot, "KEY", "KEY")
     refute ConsentChoices.map_pending?(answered[slot])
 
     assert [%{"fields" => %{"KEY" => "KEY", "ORG" => "secret"}}] =
-             ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, answered)["bindings"]
+             ConsentChoices.decisions(@ref, nil, %{}, answered)["bindings"]
   end
 
   # ---------------------------------------------------------------------------
@@ -880,8 +874,7 @@ defmodule Prism.ConsentChoicesTest do
       assert ConsentChoices.toggle_flow(back, @ref, asked, pinned) == held
 
       # The decisions carry the narrowing exactly as held.
-      assert ConsentChoices.decisions(@ref, nil, ["interactive"], removed, %{})["subset"] ==
-               removed
+      assert ConsentChoices.decisions(@ref, nil, removed, %{})["subset"] == removed
     end
 
     test "a flow the ask does not name is never added" do
