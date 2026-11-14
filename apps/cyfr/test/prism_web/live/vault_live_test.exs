@@ -132,7 +132,7 @@ defmodule PrismWeb.VaultLiveTest do
     end
   end
 
-  test "a vault entry shows the MCP servers that read it through vault: headers", %{conn: conn} do
+  test "a vault entry shows the tool servers that read it through vault: headers", %{conn: conn} do
     user = test_user()
     own = Sanctum.Test.People.athanor!(user.user_id)
 
@@ -173,7 +173,7 @@ defmodule PrismWeb.VaultLiveTest do
     conn = log_in_user(conn, user, athanor_id: own.id)
     {_view, html} = mount_athanor(conn, "/vault", own)
     assert html =~ "bridge-token"
-    assert html =~ "used by MCP server bridge"
+    assert html =~ "used by the tool server bridge"
 
     # the list verb carries the names — never the header values
     assert {:ok, %{servers: [server]}} =
@@ -1580,6 +1580,425 @@ defmodule PrismWeb.VaultLiveTest do
              |> LazyHTML.query("table td.sticky [data-test=entry-name] span.font-medium")
              |> Enum.map(&LazyHTML.text/1) == ["market key"]
 
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # An entry labelled for `provider`, made under its confirmation.
+    defp labelled!(%{ctx: ctx}, name, provider) do
+      {:ok, %{entry: entry}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Gate.call_external("vault", &1, %{
+            "action" => "create",
+            "name" => name,
+            "kind" => "api_key",
+            "provider_hint" => provider,
+            "fields" => %{"KEY" => "k-#{name}"},
+            "destination" => @market
+          })
+        )
+
+      entry
+    end
+
+    defp names_of(%{ctx: ctx}) do
+      {:ok, %{entries: entries}} = Sanctum.Gate.call_external("vault", ctx, %{"action" => "list"})
+      entries |> Enum.map(& &1.name) |> Enum.sort()
+    end
+
+    test "Rename changes an entry's name alone, and a name another entry holds is refused " <>
+           "with nothing changed" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+      _other = key!(terry, "other key", @market)
+      {view, _} = vault!(terry)
+
+      rename = ~s([data-test="entry-rename"][phx-value-id="#{market.id}"])
+      form = ~s(form[data-test="rename-form"])
+
+      view |> element(rename) |> render_click()
+      assert has_element?(view, form <> ~s( input[name="name"][value="market key"]))
+
+      view
+      |> element(form)
+      |> render_submit(%{"entry_id" => market.id, "name" => "other key"})
+
+      assert render(view) =~ "Not renamed: name_taken: a living entry already holds that name"
+      assert names_of(terry) == ["market key", "other key"]
+      assert has_element?(view, form)
+
+      view
+      |> element(form)
+      |> render_submit(%{"entry_id" => market.id, "name" => "quotes key"})
+
+      assert names_of(terry) == ["other key", "quotes key"]
+      refute has_element?(view, form)
+
+      assert texts(view, ~s([data-test="entry-name"][data-id="#{market.id}"] span.font-medium)) ==
+               ["quotes key"]
+
+      assert render(view) =~ "Renamed."
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    defp tool_server!(%{ctx: ctx}, name, entry_name) do
+      {:ok, _} =
+        Sanctum.Gate.call_external("mcp_servers", ctx, %{
+          "action" => "create",
+          "name" => name,
+          "config" => %{
+            "url" => "https://example.com/mcp",
+            "headers" => %{"Authorization" => "vault:" <> entry_name}
+          }
+        })
+    end
+
+    # A driven program reading the entry from its environment, stored as a
+    # row is (no backends service runs in the suite), and disabled, so the
+    # listing starts nothing.
+    defp driven_program!(%{ctx: ctx}, name, entry_name) do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: name,
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          enabled: false,
+          config_json:
+            Jason.encode!(%{
+              "home" => "scratch",
+              "backends" => [
+                %{
+                  "name" => name,
+                  "command" => "npx -y some-harness",
+                  "env" => %{"TOKEN" => "vault:" <> entry_name}
+                }
+              ]
+            })
+        })
+    end
+
+    defp readers_line(view), do: texts(view, ~s([data-test="rename-readers"]))
+
+    test "the rename form names, as it opens, each program and tool server that reads the " <>
+           "entry by its name, one made after the page loaded included, each by its kind" do
+      %{terry: terry} = traders!()
+      token = key!(terry, "bridge-token", %{"hosts" => ["example.com"]})
+      {view, _} = vault!(terry)
+      rename = ~s([data-test="entry-rename"][phx-value-id="#{token.id}"])
+
+      # Made after the page loaded, as in another tab.
+      tool_server!(terry, "bridge", "bridge-token")
+
+      view |> element(rename) |> render_click()
+
+      assert readers_line(view) ==
+               [
+                 "The tool server bridge reads this entry by its name; renamed, it no longer finds it."
+               ]
+
+      view |> element(rename) |> render_click()
+      driven_program!(terry, "harness", "bridge-token")
+      view |> element(rename) |> render_click()
+
+      assert readers_line(view) ==
+               [
+                 "The tool server bridge and the program harness read this entry by its name; " <>
+                   "renamed, they no longer find it."
+               ]
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a program reading the entry from its environment is named as a program" do
+      %{terry: terry} = traders!()
+      token = key!(terry, "bridge-token", %{"hosts" => ["example.com"]})
+      driven_program!(terry, "harness", "bridge-token")
+      {view, _} = vault!(terry)
+
+      assert render(view) =~ "used by the program harness"
+
+      view
+      |> element(~s([data-test="entry-rename"][phx-value-id="#{token.id}"]))
+      |> render_click()
+
+      assert readers_line(view) ==
+               [
+                 "The program harness reads this entry by its name; renamed, it no longer finds it."
+               ]
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a save whose readers changed since the form opened shows the new list and renames " <>
+           "nothing; saved over the list shown, it renames" do
+      %{terry: terry} = traders!()
+      token = key!(terry, "bridge-token", %{"hosts" => ["example.com"]})
+      {view, _} = vault!(terry)
+      form = ~s(form[data-test="rename-form"])
+
+      view
+      |> element(~s([data-test="entry-rename"][phx-value-id="#{token.id}"]))
+      |> render_click()
+
+      assert readers_line(view) == []
+      tool_server!(terry, "bridge", "bridge-token")
+
+      view |> element(form) |> render_submit(%{"entry_id" => token.id, "name" => "renamed"})
+
+      assert render(view) =~
+               "Not renamed: who reads this entry changed. Check the list and save again."
+
+      assert names_of(terry) == ["bridge-token"]
+      assert has_element?(view, form)
+
+      assert readers_line(view) ==
+               [
+                 "The tool server bridge reads this entry by its name; renamed, it no longer finds it."
+               ]
+
+      view |> element(form) |> render_submit(%{"entry_id" => token.id, "name" => "renamed"})
+      assert names_of(terry) == ["renamed"]
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a rename to a name with a control character is refused in the vault's words, and " <>
+           "the entry still rotates" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+      {view, _} = vault!(terry)
+      form = ~s(form[data-test="rename-form"])
+
+      view
+      |> element(~s([data-test="entry-rename"][phx-value-id="#{market.id}"]))
+      |> render_click()
+
+      view |> element(form) |> render_submit(%{"entry_id" => market.id, "name" => "Work\nkey"})
+
+      assert render(view) =~
+               "Not renamed: A name is text of at most 1024 bytes with no line break, tab or " <>
+                 "other control character."
+
+      assert names_of(terry) == ["market key"]
+
+      # The rotation the stored name would have blocked asks its confirmation
+      # and rotates.
+      assert {:ok, %{status: "rotated"}} =
+               Sanctum.TestContext.confirming(
+                 terry.ctx,
+                 &Sanctum.Gate.call_external("vault", &1, %{
+                   "action" => "rotate",
+                   "id" => market.id,
+                   "fields" => %{"MARKET_KEY" => "mk-rotated"},
+                   "expected_payload_rev" => market.payload_rev
+                 })
+               )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "while who reads an entry cannot be read, the rename form says so and saves nothing; " <>
+           "once it can, the form names the reader" do
+      %{terry: terry} = traders!()
+      token = key!(terry, "bridge-token", %{"hosts" => ["example.com"]})
+      tool_server!(terry, "bridge", "bridge-token")
+      {view, _} = vault!(terry)
+      form = ~s(form[data-test="rename-form"])
+
+      unread =
+        "Who reads this entry by its name could not be read, so nothing is renamed until it " <>
+          "can be. Try again shortly."
+
+      {_html, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          hide_table!("mcp_servers")
+
+          view
+          |> element(~s([data-test="entry-rename"][phx-value-id="#{token.id}"]))
+          |> render_click()
+
+          assert texts(view, ~s([data-test="rename-readers-unread"])) == [unread]
+          assert readers_line(view) == []
+
+          view |> element(form) |> render_submit(%{"entry_id" => token.id, "name" => "renamed"})
+          restore_table!("mcp_servers")
+        end)
+
+      assert render(view) =~
+               "Not renamed: who reads this entry by its name could not be read. Try again shortly."
+
+      assert names_of(terry) == ["bridge-token"]
+
+      # The listing answers again: the save shows the reader it now names,
+      # and renames nothing until saved over it.
+      view |> element(form) |> render_submit(%{"entry_id" => token.id, "name" => "renamed"})
+
+      assert readers_line(view) ==
+               [
+                 "The tool server bridge reads this entry by its name; renamed, it no longer finds it."
+               ]
+
+      refute has_element?(view, ~s([data-test="rename-readers-unread"]))
+      assert names_of(terry) == ["bridge-token"]
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "while who reads an entry cannot be read, Revoke's warning and the row say so, " <>
+           "and Revoke stays offered" do
+      %{terry: terry} = traders!()
+      token = key!(terry, "bridge-token", %{"hosts" => ["example.com"]})
+      tool_server!(terry, "bridge", "bridge-token")
+      unknown = "Which programs and tool servers read this entry by its name could not be read."
+      revoke = ~s(button[phx-click="revoke"][phx-value-id="#{token.id}"])
+
+      {view, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          hide_table!("mcp_servers")
+          {view, _html} = vault!(terry)
+          render(view)
+          restore_table!("mcp_servers")
+          view
+        end)
+
+      assert [confirm] =
+               view
+               |> element(revoke)
+               |> render()
+               |> LazyHTML.from_fragment()
+               |> LazyHTML.attribute("data-confirm")
+
+      assert confirm ==
+               "Profiles bound to this entry stop receiving it at their next run. " <>
+                 unknown <> " Revoke?"
+
+      assert texts(view, ~s([data-test="entry-readers-unread"])) == [unknown]
+      refute render(view) =~ "used by the tool server bridge"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "Rename is not offered on a revoked entry" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+
+      {:ok, _} =
+        Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "revoke", "id" => market.id})
+
+      {view, _} = vault!(terry)
+      refute has_element?(view, ~s([data-test="entry-rename"][phx-value-id="#{market.id}"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "by hand-made events, Rename of another person's entry or of one shared with the " <>
+           "person, and Make default of a revoked entry, one naming no provider or another " <>
+           "person's, are refused, and nothing changes" do
+      %{terry: terry, alice: alice} = traders!()
+      alices = labelled!(alice, "alice key", "market.example")
+      _share = share!(alice, alices, %{"audience" => "everyone"})
+      revoked = labelled!(terry, "old key", "market.example")
+      plain = key!(terry, "plain", @market)
+
+      {:ok, _} =
+        Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "revoke", "id" => revoked.id})
+
+      defaults = fn who ->
+        {:ok, %{defaults: defaults}} =
+          Sanctum.Gate.call_external("vault", who.ctx, %{"action" => "list"})
+
+        defaults
+      end
+
+      terry_defaults = defaults.(terry)
+      alice_defaults = defaults.(alice)
+      {view, _} = vault!(terry)
+
+      flash = fn ->
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#flash-error span:first-child")
+        |> Enum.map(&LazyHTML.text/1)
+      end
+
+      # Another person's entry, shared with everyone or not, is no entry of
+      # this person's athanor.
+      render_click(view, "show_rename", %{"id" => alices.id})
+      render_click(view, "rename", %{"entry_id" => alices.id, "name" => "mine now"})
+      assert flash.() == ["Not renamed: not_found"]
+      assert names_of(alice) == ["alice key"]
+
+      # A save the form was never opened for renames nothing.
+      render_click(view, "rename", %{"entry_id" => plain.id, "name" => "unasked"})
+
+      assert flash.() == [
+               "Not renamed: who reads this entry changed. Check the list and save again."
+             ]
+
+      assert names_of(terry) == ["old key", "plain"]
+
+      refusals =
+        for entry <- [revoked, plain, alices] do
+          render_click(view, "set_default", %{"id" => entry.id, "provider" => "market.example"})
+          flash.()
+        end
+
+      assert refusals == [
+               ["Not made the default: entry_unavailable: the entry is revoked"],
+               [
+                 "Not made the default: provider_mismatch: the entry is not of the provider market.example"
+               ],
+               ["Not made the default: not_found"]
+             ]
+
+      assert defaults.(terry) == terry_defaults
+      assert defaults.(alice) == alice_defaults
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "Make default moves a provider's default to another active entry, offered on every " <>
+           "entry of a provider but its default, and never on an entry naming none" do
+      %{terry: terry} = traders!()
+      first = labelled!(terry, "first", "market.example")
+      second = labelled!(terry, "second", "market.example")
+      unlabelled = key!(terry, "plain", @market)
+
+      defaults = fn ->
+        {:ok, %{defaults: defaults}} =
+          Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "list"})
+
+        defaults
+      end
+
+      # The provider's first entry is its default when it is made.
+      assert defaults.() == %{"market.example" => %{vault_entry_id: first.id}}
+      {view, _} = vault!(terry)
+
+      make = &~s([data-test="entry-make-default"][phx-value-id="#{&1.id}"])
+      refute has_element?(view, make.(first))
+      assert has_element?(view, make.(second), "Make default")
+      refute has_element?(view, make.(unlabelled))
+
+      view |> element(make.(second)) |> render_click()
+
+      assert defaults.() == %{"market.example" => %{vault_entry_id: second.id}}
+      assert render(view) =~ "Now the default for market.example."
+      refute has_element?(view, make.(second))
+      assert has_element?(view, make.(first), "Make default")
+
+      assert texts(view, ~s([data-test="entry-default"])) == ["default for market.example"]
+
+      assert has_element?(
+               view,
+               ~s([data-test="entry-default"]),
+               "default for market.example"
+             )
+
+      # A revoked entry is offered none.
+      {:ok, _} =
+        Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "revoke", "id" => first.id})
+
+      {view, _} = vault!(terry)
+      refute has_element?(view, make.(first))
       Cyfr.Test.Sandbox.end_views()
     end
 

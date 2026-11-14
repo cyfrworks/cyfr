@@ -3,10 +3,10 @@
 
 defmodule PrismWeb.VaultLive do
   @moduledoc """
-  The operator's vault entries: list, create, rotate, re-authorize,
-  change where an entry may go, revoke, delete — all through the vault
-  MCP verbs (rename exists as a vault verb but has no control here yet),
-  so this surface holds no rules of its own. Material flows one way: forms
+  The operator's vault entries: list, create, rename, rotate,
+  re-authorize, change where an entry may go, make one its provider's
+  default, revoke, delete — all through the vault MCP verbs, so this
+  surface holds no rules of its own. Material flows one way: forms
   accept field values; nothing here ever displays them.
 
   OAuth entries start a browser grant via `vault.authorize`; the
@@ -43,13 +43,24 @@ defmodule PrismWeb.VaultLive do
   confirmation when it widens what the entry admits: an attach-only
   entry's value is never handed to a component, and CYFR attaches it to
   requests bound for the entry's destination. Each entry the athanor uses
-  by default for its provider (`vault.list`'s `defaults`) says so. Each
+  by default for its provider (`vault.list`'s `defaults`) says so, and
+  any other active entry naming a provider offers Make default
+  (`vault.set_default`), which moves no consent. Rename (`vault.rename`),
+  offered on every entry but a revoked one, changes an entry's name
+  alone. A program or tool server that reads the entry by its name finds
+  it by that name, so the rename form names each, read when the form
+  opens and again at save: a list that changed meanwhile is shown in the
+  form again, and nothing is renamed until the person saves over the
+  list they saw. A list that cannot be read is no empty list: the form
+  says it cannot tell who reads the entry, and nothing is renamed until a
+  read succeeds. Each
   row names the grants that use it, `Used by <component>` for each active
   grant whose head binds it (`vault.list`'s `used_by`), with the grant's
   label when it is not `default`, or `Nothing uses it yet.`; when those
   grants cannot be read the page says so once above the rows and says
-  neither. The MCP servers that read an entry through a `vault:` header
-  are named on its row too.
+  neither. The programs and tool servers that read an entry by its name
+  (a `vault:` header or environment value) are named on its row too, each
+  as the Programs page names its kind.
 
   Share, on an entry the store would share (`Arca.Shares.eligible/1`'s
   rule: active, attach-only, of a kind in
@@ -97,6 +108,11 @@ defmodule PrismWeb.VaultLive do
   alias PrismWeb.SystemLayer.Share
   require Logger
 
+  # Said in the rename form, and when a save is refused, while who reads
+  # the entry cannot be read.
+  @readers_unread "Who reads this entry by its name could not be read, so nothing is " <>
+                    "renamed until it can be. Try again shortly."
+
   @share_kinds Prima.ShareKinds.all()
 
   @impl true
@@ -131,6 +147,7 @@ defmodule PrismWeb.VaultLive do
       |> assign(:client_needed, nil)
       |> assign(:client_provider, nil)
       |> assign(:rebinding, nil)
+      |> assign(:renaming, nil)
       |> assign(:show_add, nil)
       |> assign(:labels, [])
       |> assign(:pending_grant, nil)
@@ -346,6 +363,61 @@ defmodule PrismWeb.VaultLive do
 
       _ ->
         {:noreply, unreadable(socket, {:rotate, id}, "Rotate failed: bad payload revision")}
+    end
+  end
+
+  # The readers named in the form are read as it opens, so a program or
+  # tool server made since the page loaded is named.
+  def handle_event("show_rename", %{"id" => id}, socket) do
+    case socket.assigns.renaming do
+      %{id: ^id} ->
+        {:noreply, assign(socket, :renaming, nil)}
+
+      _other ->
+        socket = fetch_used_by(socket)
+        {:noreply, assign(socket, :renaming, %{id: id, readers: readers_of(socket, id)})}
+    end
+  end
+
+  # Saved only over the readers the form showed: when they changed since,
+  # the form shows the new list and nothing is renamed.
+  def handle_event("rename", %{"entry_id" => id, "name" => name}, socket) do
+    socket = fetch_used_by(socket)
+    readers = readers_of(socket, id)
+
+    case socket.assigns.renaming do
+      _any when readers == :unread ->
+        {:noreply,
+         socket
+         |> assign(:renaming, %{id: id, readers: :unread})
+         |> put_flash(
+           :error,
+           "Not renamed: who reads this entry by its name could not be read. Try again shortly."
+         )}
+
+      %{id: ^id, readers: ^readers} ->
+        rename(socket, id, name)
+
+      _changed_or_unopened ->
+        {:noreply,
+         socket
+         |> assign(:renaming, %{id: id, readers: readers})
+         |> put_flash(
+           :error,
+           "Not renamed: who reads this entry changed. Check the list and save again."
+         )}
+    end
+  end
+
+  # The default a grant suggests for the entry's provider. It binds nothing.
+  def handle_event("set_default", %{"id" => id, "provider" => provider}, socket) do
+    case call_tool(socket, "vault/set_default", %{"provider_hint" => provider, "entry_id" => id}) do
+      {:ok, _} ->
+        {:noreply,
+         socket |> fetch_entries() |> put_flash(:info, "Now the default for #{provider}.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Not made the default: #{fmt(reason)}")}
     end
   end
 
@@ -823,23 +895,76 @@ defmodule PrismWeb.VaultLive do
         do: provider
   end
 
-  # Which MCP servers draw on each entry (headers referencing it) —
-  # shown on the row, so revoking one is done knowing what it breaks.
+  # Which programs and tool servers draw on each entry by its name (a
+  # tool server's headers, a program's environment), each with its kind
+  # as the Programs page says it — shown on the row, so revoking one is
+  # done knowing what it breaks.
   defp fetch_used_by(socket) do
     used_by =
       case call_tool(socket, "mcp_servers/list", %{}) do
         {:ok, %{servers: servers}} when is_list(servers) ->
           Enum.reduce(servers, %{}, fn server, acc ->
+            reader = %{name: server[:name], kind: reader_kind(server[:transport])}
+
             Enum.reduce(server[:vault_refs] || [], acc, fn ref, acc ->
-              Map.update(acc, ref, [server[:name]], &[server[:name] | &1])
+              Map.update(acc, ref, [reader], &[reader | &1])
             end)
           end)
 
-        _ ->
-          %{}
+        {:ok, other} ->
+          Logger.warning(
+            "[VaultLive] mcp_servers/list failed: #{fmt({:unexpected_shape, other})}"
+          )
+
+          :unread
+
+        {:error, reason} ->
+          Logger.warning("[VaultLive] mcp_servers/list failed: #{fmt(reason)}")
+          :unread
       end
 
-    assign(socket, :used_by, used_by)
+    assign(socket, :used_by, sorted_readers(used_by))
+  end
+
+  # A listing that failed stays `:unread`: it is never no readers.
+  defp sorted_readers(:unread), do: :unread
+
+  defp sorted_readers(used_by),
+    do:
+      Map.new(used_by, fn {ref, readers} -> {ref, Enum.sort_by(readers, &{&1.name, &1.kind})} end)
+
+  # The readers of `name`, or `:unread` when the listing failed, which the
+  # row and Revoke's warning say rather than naming none.
+  defp readers_named(:unread, _name), do: :unread
+  defp readers_named(used_by, name), do: Map.get(used_by, name, [])
+
+  defp reader_kind("program"), do: :program
+  defp reader_kind(_http), do: :tool_server
+
+  # The readers of the entry `id` names, by the name it holds now, or
+  # `:unread` when the listing failed.
+  defp readers_of(%{assigns: %{used_by: :unread}}, _id), do: :unread
+
+  defp readers_of(socket, id) do
+    case Enum.find(socket.assigns.entries, &(&1.id == id)) do
+      %{name: name} -> Map.get(socket.assigns.used_by, name, [])
+      nil -> []
+    end
+  end
+
+  defp rename(socket, id, name) do
+    case call_tool(socket, "vault/rename", %{"id" => id, "name" => name}) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> fetch_entries()
+         |> fetch_used_by()
+         |> assign(:renaming, nil)
+         |> put_flash(:info, "Renamed.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Not renamed: #{fmt(reason)}")}
+    end
   end
 
   # The stored clients, the return address a client registers and the
@@ -1133,7 +1258,41 @@ defmodule PrismWeb.VaultLive do
         <.table :if={!@loading && @entries != []} id="vault-entries" rows={@entries}>
           <:col :let={entry} label="Name" sticky>
             <div class="space-y-1" data-test="entry-name" data-id={entry.id}>
-              <span class="font-medium">{entry.name}</span>
+              <span :if={!renaming?(@renaming, entry)} class="font-medium">{entry.name}</span>
+              <form
+                :if={renaming?(@renaming, entry)}
+                id={"vault-rename-form-" <> entry.id}
+                phx-submit="rename"
+                class="flex items-center gap-2"
+                data-test="rename-form"
+              >
+                <input type="hidden" name="entry_id" value={entry.id} />
+                <.input name="name" required value={entry.name} />
+                <.button type="submit">Save</.button>
+                <.button
+                  type="button"
+                  variant="ghost"
+                  phx-click="show_rename"
+                  phx-value-id={entry.id}
+                >
+                  Cancel
+                </.button>
+              </form>
+              <div
+                :if={renaming?(@renaming, entry) and @renaming.readers not in [[], :unread]}
+                class="text-xs text-amber-400/90"
+                data-test="rename-readers"
+              >
+                {rename_readers(@renaming.readers)}
+              </div>
+              <div
+                :if={renaming?(@renaming, entry) and @renaming.readers == :unread}
+                role="alert"
+                class="text-xs text-amber-400/90"
+                data-test="rename-readers-unread"
+              >
+                {readers_unread()}
+              </div>
               <div class="text-xs text-gray-500 font-mono">{entry.id}</div>
               <div
                 :for={use <- entry.used_by || []}
@@ -1145,8 +1304,18 @@ defmodule PrismWeb.VaultLive do
               <div :if={entry.used_by == []} class="text-xs text-gray-500" data-test="entry-unused">
                 Nothing uses it yet.
               </div>
-              <div :if={Map.get(@used_by, entry.name, []) != []} class="text-xs text-amber-400/90">
-                {used_by_line(@used_by[entry.name])}
+              <div
+                :if={readers_named(@used_by, entry.name) not in [[], :unread]}
+                class="text-xs text-amber-400/90"
+              >
+                {used_by_line(readers_named(@used_by, entry.name))}
+              </div>
+              <div
+                :if={readers_named(@used_by, entry.name) == :unread}
+                class="text-xs text-amber-400/90"
+                data-test="entry-readers-unread"
+              >
+                {readers_unknown()}
               </div>
             </div>
           </:col>
@@ -1162,6 +1331,19 @@ defmodule PrismWeb.VaultLive do
             >
               default for {entry.provider_hint}
             </div>
+            <.button
+              :if={
+                entry.status == "active" and entry.provider_hint not in [nil, ""] and
+                  not default?(@defaults, entry.provider_hint, %{vault_entry_id: entry.id})
+              }
+              variant="ghost"
+              phx-click="set_default"
+              phx-value-id={entry.id}
+              phx-value-provider={entry.provider_hint}
+              data-test="entry-make-default"
+            >
+              Make default
+            </.button>
           </:col>
           <:col :let={entry} label="Holds">
             <span class="font-mono text-xs text-gray-400">
@@ -1229,6 +1411,15 @@ defmodule PrismWeb.VaultLive do
                 phx-value-id={entry.id}
               >
                 Re-authorize
+              </.button>
+              <.button
+                :if={entry.status != "revoked"}
+                variant="ghost"
+                phx-click="show_rename"
+                phx-value-id={entry.id}
+                data-test="entry-rename"
+              >
+                Rename
               </.button>
               <.button
                 :if={entry.kind != "login"}
@@ -1657,15 +1848,52 @@ defmodule PrismWeb.VaultLive do
   # Grants that could not be read leave every entry's `used_by` nil.
   defp uses_unread?(entries), do: Enum.any?(entries, &is_nil(&1.used_by))
 
-  defp used_by_line([server]), do: "used by MCP server #{server}"
-  defp used_by_line(servers), do: "used by MCP servers #{Enum.join(Enum.sort(servers), ", ")}"
+  defp readers_unread, do: @readers_unread
+
+  defp readers_unknown,
+    do: "Which programs and tool servers read this entry by its name could not be read."
+
+  defp renaming?(%{id: id}, %{id: id}), do: true
+  defp renaming?(_renaming, _entry), do: false
+
+  # Each reader in the Programs page's words: a program, a tool server.
+  defp readers_words(readers), do: readers |> Enum.map(&reader_words/1) |> join_words()
+
+  defp reader_words(%{kind: :program, name: name}), do: "the program #{name}"
+  defp reader_words(%{kind: :tool_server, name: name}), do: "the tool server #{name}"
+
+  defp join_words([one]), do: one
+  defp join_words(words), do: Enum.join(Enum.drop(words, -1), ", ") <> " and " <> List.last(words)
+
+  defp rename_readers([_one] = readers),
+    do:
+      capitalize(readers_words(readers)) <>
+        " reads this entry by its name; renamed, it no longer finds it."
+
+  defp rename_readers(readers),
+    do:
+      capitalize(readers_words(readers)) <>
+        " read this entry by its name; renamed, they no longer find it."
+
+  defp capitalize("the " <> rest), do: "The " <> rest
+
+  defp used_by_line(readers), do: "used by " <> readers_words(readers)
 
   defp revoke_confirm(entry, used_by) do
     base = "Profiles bound to this entry stop receiving it at their next run."
 
-    case Map.get(used_by, entry.name, []) do
-      [] -> base <> " Revoke?"
-      servers -> base <> " MCP server(s) #{Enum.join(servers, ", ")} read it too. Revoke?"
+    case readers_named(used_by, entry.name) do
+      :unread ->
+        base <> " " <> readers_unknown() <> " Revoke?"
+
+      [] ->
+        base <> " Revoke?"
+
+      [_one] = readers ->
+        base <> " " <> capitalize(readers_words(readers)) <> " reads it too. Revoke?"
+
+      readers ->
+        base <> " " <> capitalize(readers_words(readers)) <> " read it too. Revoke?"
     end
   end
 end
