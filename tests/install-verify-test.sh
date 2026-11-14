@@ -295,23 +295,39 @@ CURL
     done
 done
 
-# A later page that answered with something other than a list refuses,
-# as release.Latest and Cyfr.ReleaseChannel refuse it: the first page's
-# releases are never taken alone.
+# A page is held to the release tags it yields: a later page that yields
+# none and is not the empty list refuses, garbled or cut short, and the
+# first page's releases are never taken alone; the empty list ends the
+# listing.
 python3 -I -c 'import json; print(json.dumps([{"tag_name": "2.0.0-alpha.%d" % i, "draft": False, "prerelease": True} for i in range(100)]))' > "$fixture/full-page.json"
-cat > "$api_bin/curl" <<CURL
+later_page_case() {
+    printf '%s' "$2" > "$fixture/later-page.json"
+    cat > "$api_bin/curl" <<CURL
 #!/bin/sh
 case "\$*" in
   *page=1) cat "$fixture/full-page.json" ;;
-  *) printf '{' ;;
+  *) cat "$fixture/later-page.json" ;;
 esac
 CURL
-chmod +x "$api_bin/curl"
-run_case "a malformed later page refuses" fail \
+    chmod +x "$api_bin/curl"
+    run_case "$1 on page 2 refuses" fail \
+        "PATH='$api_bin:$PATH'
+         unset CYFR_VERSION
+         resolve_version" \
+        "Error: the release listing could not be read whole: page 2 holds no release"
+}
+later_page_case "[garbage]" '[garbage]'
+later_page_case "[{]" '[{]'
+later_page_case "an object" '{'
+later_page_case "a page cut short before its first release" '[{"url": "https://api.github.com/repos/cyfrworks/cyfr/releases/1", "author": {"lo'
+printf '[]' > "$fixture/later-page.json"
+run_case "the empty list on page 2 ends the listing" ok \
     "PATH='$api_bin:$PATH'
      unset CYFR_VERSION
-     resolve_version" \
-    "Error: page 2 of the release listing is not a list of releases"
+     version=\$(resolve_version) || exit 1
+     printf 'resolved %s\n' \"\$version\"
+     [ \"\$version\" = 2.0.0-alpha.99 ]" \
+    "resolved 2.0.0-alpha.99"
 
 # The install says which release it took.
 run_case "a release taken from the listing is the newest release" ok \

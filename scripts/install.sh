@@ -159,8 +159,8 @@ resolve_version() {
     # order are ASCII's.
     # The listing is read from page 1, 100 releases a page, until a page
     # holds fewer, so a release past the first page still counts; a full
-    # tenth page refuses rather than miss a release past it, and so does a
-    # page that is not a JSON list (as release.Latest reads it).
+    # tenth page refuses rather than miss a release past it (as
+    # release.Latest reads it).
     response=""
     page=1
     while :; do
@@ -173,16 +173,22 @@ resolve_version() {
             printf "Error: curl or wget is required\n" >&2
             exit 1
         fi
-        case "$(printf '%s' "$listed" | tr -d ' \t\r\n' | cut -c1)$(printf '%s' "$listed" | tr -d ' \t\r\n' | tail -c 1)" in
-            "[]") ;;
-            *)
-                printf "Error: page %s of the release listing is not a list of releases, so the newest release cannot be known; nothing was installed. Try again, or set CYFR_VERSION to the version to install (https://github.com/%s/releases lists them)\n" "$page" "$GITHUB_REPO" >&2
-                exit 1
-                ;;
-        esac
+        # A shell cannot parse JSON, so a page is held to what is taken
+        # from it: release tags. It is the empty list, which ends the
+        # listing, or it yields at least one tag; a page with fewer than
+        # 100 is the last. Anything else could hide a release, and refuses.
+        # A malformed page that still carries well-formed tags is read for
+        # them: the listing only chooses a version, and the release chosen
+        # is verified by its signature before anything is installed.
+        tags="$(printf '%s\n' "$listed" | tr -d '\n' | grep -oE '"tag_name":[[:space:]]*"[^"]*"' | wc -l | tr -d ' ')"
+        if [ "$tags" -eq 0 ]; then
+            [ "$(printf '%s' "$listed" | tr -d ' \t\r\n')" = "[]" ] && break
+            printf "Error: the release listing could not be read whole: page %s holds no release, so the newest release cannot be known; nothing was installed. Try again, or set CYFR_VERSION to the version to install (https://github.com/%s/releases lists them)\n" "$page" "$GITHUB_REPO" >&2
+            exit 1
+        fi
         response="$response
 $listed"
-        [ "$(printf '%s\n' "$listed" | grep -oE '"tag_name":' | wc -l)" -ge 100 ] || break
+        [ "$tags" -ge 100 ] || break
         if [ "$page" -eq 10 ]; then
             printf "Error: the release listing could not be read whole: it holds more than 1000 releases, so the newest release cannot be known; nothing was installed. Set CYFR_VERSION to the version to install (https://github.com/%s/releases lists them)\n" "$GITHUB_REPO" >&2
             exit 1
