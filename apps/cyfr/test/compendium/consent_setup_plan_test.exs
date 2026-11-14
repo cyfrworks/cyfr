@@ -91,6 +91,12 @@ defmodule Compendium.ConsentSetupPlanTest do
   defp seed!(ctx, ref, edges, refs) do
     nodes = %{ref => %{"limits" => @limits, "edges" => Map.put(edges, "@ingress", %{})}}
 
+    # The installed release's own verified activation, so the head stands
+    # for the release a run starts: a plan reads ready only where a run is
+    # admitted.
+    {:ok, component, _ref} = Compendium.Component.resolve_component(ctx, ref)
+    {:ok, %{graph: activation}} = Compendium.resolve_verified_activation(ctx, component)
+
     nodes =
       if edges == %{},
         do: nodes,
@@ -107,8 +113,7 @@ defmodule Compendium.ConsentSetupPlanTest do
           shape_digest: "sha256:shape",
           commit_digest: "sha256:commit",
           resolved_policy: Jason.encode!(%{"canonical" => "jcs-1", "nodes" => nodes}),
-          activation: %{ref => "sha256:act"},
-          admitted_origins: [:interactive],
+          activation: activation,
           vault_refs: refs
         }
       )
@@ -311,14 +316,159 @@ defmodule Compendium.ConsentSetupPlanTest do
            } = section.()
   end
 
-  test "a component with no profile and no needs is ready", %{ctx: ctx} do
+  # A run of a component with no grant to stand on is refused, so its plan
+  # is not ready, needs or none, and says whether it was ever granted.
+  test "a component never granted, and one whose grant was revoked, is not ready and says so",
+       %{ctx: ctx} do
     publish!(ctx, "plan-no-profile")
+    ref = "reagent:local.plan-no-profile"
 
-    {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-no-profile")
+    unset = fn state, reason ->
+      %{
+        profile_id: nil,
+        profile_kind: nil,
+        profile_status: nil,
+        head_state: state,
+        reason: reason,
+        revision: nil,
+        scope: nil,
+        needs: [],
+        ready: false
+      }
+    end
 
-    assert plan.consent == nil
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert plan.consent ==
+             unset.("missing", "this component has not been granted yet — grant it to run it")
+
     assert plan.needs == []
-    assert plan.ready == true
+    assert plan.ready == false
+
+    grant!(ctx, ref, [])
+    assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(ctx, ref)
+
+    {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, ref)
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert plan.consent ==
+             unset.("revoked", "this component's grant was revoked — grant it again to run it")
+
+    assert plan.ready == false
+  end
+
+  # A run stands on the one active owner profile its default selection
+  # picks, so the plan describes that profile and no other: a public twin
+  # left after the owner is revoked is no grant of the person's runs.
+  test "a revoked owner beside a public twin is not ready, as its run has no grant",
+       %{ctx: ctx} do
+    publish!(ctx, "plan-twin")
+    ref = "reagent:local.plan-twin"
+    %{profile_id: owner} = grant!(ctx, ref, [])
+
+    {:ok, staged} = Commit.stage_publish(ctx, %{profile_id: owner})
+    {:ok, preview} = Commit.preview(ctx, staged.decisions)
+
+    {:ok, %{profile_id: twin}} =
+      Commit.commit(ctx, %{
+        decisions: staged.decisions,
+        plan_token: staged.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: staged.expected_consent_revision
+      })
+
+    revoke!(ctx, owner)
+
+    assert {:ok, [%{id: ^twin, kind: :public, status: :active}]} =
+             Sanctum.Consent.profiles(ctx, ref)
+
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert plan.consent == %{
+             profile_id: nil,
+             profile_kind: nil,
+             profile_status: nil,
+             head_state: "revoked",
+             reason: "this component's grant was revoked — grant it again to run it",
+             revision: nil,
+             scope: nil,
+             needs: [],
+             ready: false
+           }
+
+    assert plan.ready == false
+    assert Opus.Admission.authority_for(ctx, :default, ref) == {:error, :no_profile}
+  end
+
+  test "two active owner grants under different labels are not ready, as a run refuses the ambiguity",
+       %{ctx: ctx} do
+    publish!(ctx, "plan-two")
+    ref = "reagent:local.plan-two"
+    %{profile_id: first} = walk!(ctx, %{ref: ref})
+    %{profile_id: second} = walk!(ctx, %{ref: ref, label: "second"})
+    ids = Enum.sort([first, second])
+
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert plan.consent == %{
+             profile_id: nil,
+             profile_kind: nil,
+             profile_status: nil,
+             head_state: "ambiguous",
+             reason:
+               "this component has several active grants (#{Enum.join(ids, ", ")}) — " <>
+                 "name one to run it, or revoke the others",
+             revision: nil,
+             scope: nil,
+             needs: [],
+             ready: false
+           }
+
+    assert plan.ready == false
+    assert Opus.Admission.authority_for(ctx, :default, ref) == {:error, {:ambiguous, ids}}
+  end
+
+  # A release asking for more than the grant holds is refused at its run,
+  # so its plan is not ready either, whatever its bindings.
+  test "a release whose shape moved since the grant is not ready, as its run is refused",
+       %{ctx: ctx} do
+    ref = "reagent:local.plan-moved"
+
+    asking = fn version, domains ->
+      manifest = %{
+        "name" => "plan-moved",
+        "version" => version,
+        "type" => "reagent",
+        "caps" => %{"egress" => %{"domains" => domains}}
+      }
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "plan-moved",
+          version: version,
+          type: "reagent",
+          manifest: Jason.encode!(manifest)
+        })
+    end
+
+    asking.("1.0.0", ["a.example"])
+    grant!(ctx, ref, [])
+    assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(ctx, ref)
+
+    asking.("1.1.0", ["a.example", "b.example"])
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert %{
+             head_state: "present",
+             revision: 1,
+             needs: [],
+             reason:
+               "this component asks for more than its grant holds — grant it again to run it",
+             ready: false
+           } = plan.consent
+
+    assert plan.ready == false
   end
 
   test "a granted profile reports ready from its consent", %{ctx: ctx} do
@@ -669,9 +819,8 @@ defmodule Compendium.ConsentSetupPlanTest do
 
   describe "a borrowed key" do
     # The dependency declares one key and its own profile binds an entry;
-    # each source depends on it and selects that profile. A selection
-    # resolves under the origin a run carries: here the console's
-    # `interactive`, which the lender's grant admits.
+    # each source depends on it and selects that profile, which lends its
+    # key to every run of the person's.
     setup %{ctx: ctx} do
       ctx = Sanctum.TestContext.via(ctx, :prism)
 
@@ -972,7 +1121,6 @@ defmodule Compendium.ConsentSetupPlanTest do
               }
             }),
           activation: %{ref => "sha256:act"},
-          admitted_origins: [:interactive],
           vault_refs: [
             %{
               binding_key: key,

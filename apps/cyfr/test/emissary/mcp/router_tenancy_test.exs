@@ -105,7 +105,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
           authenticated: false
         )
 
-      for action <- ~w(legal_page legal_version legal_accept) do
+      for action <- ~w(legal_page legal_version) do
         refute auth_refused?(Router.dispatch(ctx, tool_call_msg("registry", action))),
                "registry.#{action} refused a signed-in person ahead of the claim"
       end

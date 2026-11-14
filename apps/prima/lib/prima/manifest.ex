@@ -198,7 +198,7 @@ defmodule Prima.Manifest do
   defp validate_contracts_block(_), do: :ok
 
   # The `agent` block is the projected consent shape of an AQUA agent:
-  # catalyst, model, and the auto/ask policy sets. It is refused on every
+  # its catalyst and model; its tools are its caps. It is refused on every
   # other type.
   defp validate_agent_block(%{"type" => "agent", "agent" => agent}),
     do: validate_agent_value(agent)
@@ -213,7 +213,7 @@ defmodule Prima.Manifest do
     extras =
       agent
       |> Map.keys()
-      |> Enum.filter(&(is_binary(&1) and &1 not in ~w(catalyst model policy)))
+      |> Enum.filter(&(is_binary(&1) and &1 not in ~w(catalyst model)))
 
     cond do
       extras != [] ->
@@ -226,7 +226,7 @@ defmodule Prima.Manifest do
         {:error, {:invalid_agent, "agent.model must be a non-empty string"}}
 
       true ->
-        validate_agent_policy(agent["policy"])
+        :ok
     end
   end
 
@@ -245,54 +245,6 @@ defmodule Prima.Manifest do
   defp valid_agent_model?(nil), do: true
   defp valid_agent_model?(model) when is_binary(model) and model != "", do: true
   defp valid_agent_model?(_), do: false
-
-  defp validate_agent_policy(nil), do: :ok
-
-  defp validate_agent_policy(policy) when is_map(policy) do
-    extras =
-      policy
-      |> Map.keys()
-      |> Enum.filter(&(is_binary(&1) and &1 not in ~w(auto ask)))
-
-    auto = policy["auto"]
-    ask = policy["ask"]
-
-    cond do
-      extras != [] ->
-        {:error,
-         {:invalid_agent, "agent.policy unknown key(s): #{Enum.join(Enum.sort(extras), ", ")}"}}
-
-      not (is_nil(auto) or string_list?(auto)) ->
-        {:error, {:invalid_agent, "agent.policy.auto must be a list of strings"}}
-
-      not (is_nil(ask) or string_list?(ask)) ->
-        {:error, {:invalid_agent, "agent.policy.ask must be a list of strings"}}
-
-      overlap?(auto, ask) ->
-        {:error, {:invalid_agent, "agent.policy auto and ask must be disjoint"}}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_agent_policy(_other) do
-    {:error, {:invalid_agent, "agent.policy must be an object"}}
-  end
-
-  defp string_list?(list) when is_list(list),
-    do: Enum.all?(list, &(is_binary(&1) and &1 != ""))
-
-  defp string_list?(_), do: false
-
-  defp overlap?(auto, ask) when is_list(auto) and is_list(ask) do
-    auto
-    |> MapSet.new()
-    |> MapSet.intersection(MapSet.new(ask))
-    |> MapSet.size() > 0
-  end
-
-  defp overlap?(_, _), do: false
 
   # The tincture block is presentation metadata, one capability grant —
   # `connect` feeds the served page's CSP connect-src — and the frame

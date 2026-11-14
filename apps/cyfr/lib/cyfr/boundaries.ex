@@ -455,7 +455,7 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller
+        Sanctum Sanctum.ApiKey Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.IdentityFreshness
         Sanctum.Mount
@@ -494,6 +494,9 @@ defmodule Cyfr.Boundaries do
           "one read beside an event's metadata: what each person a shared thread's " <>
           "change names now lists of it (`listings/2`), since the thread is no " <>
           "athanor's and its event names only who to tell. " <>
+          "`Sanctum.ApiKey` is the root admission's one question of the key a run is " <>
+          "started with (`admit_tool/2`): a key narrowed to named tools starts no other " <>
+          "root, a run's or a tincture route's. " <>
           "`Sanctum.Provisioning` is the run gate's readiness question: `Opus.run_root/5` " <>
           "asks whether the athanor is filled before it admits a run, as a turn does, " <>
           "and the fill is asked for when it is not. The settings roster reads the " <>
@@ -817,7 +820,7 @@ defmodule Cyfr.Boundaries do
         "Emissary follows executions, serves webhooks, keeps an outbound call's " <>
           "lease, reports health and reads an athanor's feeds for a canvas's " <>
           "validation answers (`Opus.feeds/1`) through the execution domain's " <>
-          "root facade; a stdio server holds its row's owner and speaks MCP over its " <>
+          "root facade; an mcp program holds its row's owner and speaks MCP over its " <>
           "sessions through the programs controller (`Opus.Programs`, its session " <>
           "client and the row definition it syncs), and the provider asks it for a " <>
           "row's status, a sign-in and a kept home's reset. " <>
@@ -1844,7 +1847,7 @@ defmodule Cyfr.Boundaries do
       standing: 2,
       standing_to_wire: 1
     ],
-    "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
+    "Sanctum.ApiKey" => [admit_tool: 2, looks_like_key?: 1, permissions: 0, presets: 0],
     "Sanctum.Attach" => [resolve: 5],
     "Sanctum.Auth.OIDC" => [issuer: 0],
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
@@ -1892,15 +1895,20 @@ defmodule Cyfr.Boundaries do
     # A person's attention stream lists their open confirmations by ref,
     # operation and opening alone. A frame's request is shown the person
     # on the preview the identity domain builds of exactly the call that
-    # runs once they approve it (`request_preview/4`).
+    # runs once they approve it (`request_preview/4`). A run with no grant
+    # to stand on, and a setup plan, say why: never granted or revoked
+    # (`ungranted/2`), and a setup plan reads ready only where the head
+    # stands for the release a run would start (`head_stands/4`).
     "Sanctum.Consent" => [
       binding_live: 4,
       head_consent: 2,
+      head_stands: 4,
       profiles: 2,
       request_preview: 4,
       revoke_source: 2,
       row_binding: 3,
       tincture_grant: 2,
+      ungranted: 2,
       waiting_confirmations: 1
     ],
     # The assistant reads which named accounts an app's own ingress binds
@@ -2040,8 +2048,8 @@ defmodule Cyfr.Boundaries do
     "Sanctum.SignIn" => [
       answer: 3,
       binding: 1,
+      directory_host: 0,
       record_namespace: 2,
-      request: 2,
       request: 3
     ],
     "Sanctum.Tenancy" => [channel_active?: 2, continuation: 3, revalidate: 1],
@@ -2114,7 +2122,7 @@ defmodule Cyfr.Boundaries do
       table: 0,
       tool?: 1
     ],
-    "Sanctum.Visibility" => [filter_for_context: 2],
+    "Sanctum.Visibility" => [external_tools: 1, filter_for_context: 2],
     "Sanctum.Webhook" => [
       decode_input_template: 1,
       disable_for_component: 2,

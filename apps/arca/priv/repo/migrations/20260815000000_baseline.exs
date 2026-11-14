@@ -353,7 +353,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :name, :string, null: false
       add :key_hash, :binary, null: false
       add :key_prefix, :string, null: false
-      add :type, :string, null: false
       add :scope, :text, null: false, default: "[]"
       add :ip_allowlist, :text
       add :revoked, :boolean, null: false, default: false
@@ -1938,9 +1937,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :granted_by, :string, null: false
       add :granted_via, :string, null: false
       add :granted_at, :utc_datetime_usec, null: false
-      # The origins the revision admits (`Prima.Origin`), a non-empty JSON
-      # array of their wire spellings in the enum's order.
-      add :admitted_origins, :text, null: false
     end
 
     create index(:consents, [:athanor_id, :profile_id])
@@ -2160,16 +2156,18 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp registrations do
-    # An `http` server has a url; a `stdio` or `pipe` server (a program) has
-    # none and runs on the backends service. `epoch` is 1 on
-    # insert and rises in the same statement as every change to the row.
-    # SQLite takes a check only inside CREATE TABLE and Postgres only as a
-    # table constraint, so the one rule is spelled once per adapter.
+    # An `http` server has a url and no mark; a `program` has no url, runs
+    # on the backends service and is marked by how it is spoken to
+    # (`Arca.Schemas.McpServer.marks/0`). `epoch` is 1 on insert and rises
+    # in the same statement as every change to the row. SQLite takes a
+    # check only inside CREATE TABLE and Postgres only as a table
+    # constraint, so the one rule is spelled once per adapter.
     transport_check = %{
-      name: "mcp_servers_transport_url",
+      name: "mcp_servers_kind",
       expr:
-        "(transport = 'http' AND url IS NOT NULL) OR " <>
-          "(transport IN ('stdio', 'pipe') AND url IS NULL)"
+        "(transport = 'http' AND url IS NOT NULL AND mark IS NULL) OR " <>
+          "(transport = 'program' AND url IS NULL AND mark IS NOT NULL AND " <>
+          "mark IN ('mcp', 'driven'))"
     }
 
     # `Arca.Schemas.McpServer.homes/0`.
@@ -2181,6 +2179,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :id, :string, primary_key: true, null: false
       add :name, :string, null: false
       add :transport, :string, null: false, check: if(sqlite?, do: transport_check)
+      # A program's mark: `mcp`, spoken to in MCP, or `driven`.
+      add :mark, :string
       # A program's home: `scratch` is scrubbed at retirement, `kept`
       # survives it under a uid of its own.
       add :home, :string, null: false, default: "scratch", check: if(sqlite?, do: home_known)
@@ -2190,8 +2190,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :home_max_bytes, :bigint
       # The command a sign-in session runs on a pseudo-terminal.
       add :login_command, :text
-      # A kept `stdio` row's login entry, whose home its sessions run in; a
-      # `pipe` row's catalyst names its own entry and leaves this null.
+      # A kept `mcp` program's login entry, whose home its sessions run in;
+      # a `driven` program's catalyst names its own entry and leaves this
+      # null.
       add :login_entry_id, :string
       # A program's network list (JSON).
       add :hosts, :text
@@ -2202,7 +2203,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       # The per-row counter a fenced publication compares and raises
       # (`Arca.FencedPublication`); every write to the row raises it.
       add :revision, :bigint, null: false, default: 0
-      # The person who created the row; their stdio servers share one quota
+      # The person who created the row; their programs share one quota
       # of the backends service across every athanor.
       add :created_by, :string, null: false
       add :athanor_id, :string, null: false
@@ -2342,6 +2343,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :last_execution_id, :string
       add :run_count, :integer, null: false, default: 0
       add :error_count, :integer, null: false, default: 0
+      # Why the last fire failed, until a fire succeeds again.
+      add :last_error, :text
       # The pinned version a fire runs, resolved when the row is written.
       add :resolved_reference, :string, null: false
       add :athanor_id, :string, null: false

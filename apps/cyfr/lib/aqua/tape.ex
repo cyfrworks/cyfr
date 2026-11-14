@@ -26,10 +26,9 @@ defmodule Aqua.Tape do
   ## The thread's claim
 
   Which turn may run at all is `threads.active_turn_id`, not a process on
-  any member. `start_turn/3` takes it, `finish/4` and `suspend/3` give it
-  up, `bump_recovery/2` and `recover/3` take it from a turn whose holder
-  is not a live member, and `claim_holder/2` reads it. An approval pause
-  keeps it.
+  any member. `start_turn/3` takes it, `finish/4` gives it up,
+  `bump_recovery/2` takes it from a turn whose holder is not a live
+  member, and `claim_holder/2` reads it. An approval pause keeps it.
   """
 
   alias Aqua.Crew.Activity
@@ -242,41 +241,6 @@ defmodule Aqua.Tape do
       other -> other
     end
   end
-
-  @doc """
-  Set a running or paused turn down, its rows kept and the thread's claim
-  given up, so any member may pick it up (`TurnStorage.suspend/3`). The
-  caller stops the turn's runtime; this is the durable half.
-  """
-  @spec suspend(Context.t(), turn(), String.t() | nil) :: {:ok, turn()} | {:error, term()}
-  def suspend(%Context{} = ctx, turn, reason \\ nil) do
-    with {:ok, suspended} <-
-           TurnStorage.suspend(Sanctum.Context.actor(ctx), turn.id, %{
-             fence: turn.fence,
-             reason: reason
-           }) do
-      broadcast(ctx, turn.thread_id, :turn_suspended, turn.id)
-      {:ok, suspended}
-    end
-  end
-
-  @doc """
-  Take the thread's claim for an open turn no live member runs and count
-  the recovery, in one transaction (`TurnStorage.recover/3`), from the
-  fence `turn` was read with. An accepted turn's recovery is its first
-  claim, which stores `recovery_limit` — the caller's policy — and spends
-  none; any other turn is held to the limit it stores. Refused once that
-  limit is spent, and `{:error, :held_elsewhere}` for a thread a live
-  peer holds.
-  """
-  @spec recover(Context.t(), turn(), pos_integer()) :: {:ok, turn()} | {:error, term()}
-  def recover(%Context{} = ctx, turn, recovery_limit),
-    do:
-      TurnStorage.recover(
-        Sanctum.Context.actor(ctx),
-        turn.id,
-        standing(%{fence: turn.fence, recovery_limit: recovery_limit}, :current)
-      )
 
   @doc """
   Which turn holds the thread, and whether a live peer runs it

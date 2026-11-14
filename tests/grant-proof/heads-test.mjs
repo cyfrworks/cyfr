@@ -28,14 +28,14 @@ const digest = (hex) => `sha256:${hex.repeat(64)}`;
 const id = (prefix, n) => `${prefix}_0000000${n}-0000-7000-8000-000000000000`;
 
 const regranted = {
-  revision: 2, consent_id: id("cons", 2), profile_id: id("prof", 1), admitted_origins: ["interactive"],
+  revision: 2, consent_id: id("cons", 2), profile_id: id("prof", 1),
   domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`],
   shape_digest: digest("1"), commit_digest: digest("2"),
 };
 const shape = digest("3");
 const previewed = digest("4");
 const flowHead = {
-  revision: 3, consent_id: id("cons", 3), profile_id: id("prof", 1), admitted_origins: ["interactive"],
+  revision: 3, consent_id: id("cons", 3), profile_id: id("prof", 1),
   domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`, `outside to ${KEPT}`],
   shape_digest: shape, commit_digest: previewed,
 };
@@ -118,12 +118,12 @@ test("a head that keeps the regranted head's consent is refused", () => {
 
 const basePlan = digest("5");
 const first = {
-  revision: 1, consent_id: id("cons", 1), profile_id: id("prof", 1), admitted_origins: ["interactive"],
+  revision: 1, consent_id: id("cons", 1), profile_id: id("prof", 1),
   domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`],
   shape_digest: basePlan, commit_digest: digest("6"),
 };
 const firstGrant = {
-  shape: basePlan, digest: first.commit_digest, origins: ["interactive"], domains: [KEPT], paths: ["data/probe/notes/"],
+  shape: basePlan, digest: first.commit_digest, domains: [KEPT], paths: ["data/probe/notes/"],
   flows: [`files_by_grant to ${KEPT}`],
 };
 
@@ -137,7 +137,6 @@ test("a first head with a field changed, missing or added is refused", () => {
     ...changedCopies(first, DROPPED),
     ...digestCopies(first),
     { ...first, shape_digest: digest("7") },
-    { ...first, admitted_origins: ["interactive", "programmatic"] },
     { ...first, paths: ["data/probe/"] },
     { ...first, commit_digest: "sha256:wrong" },
     { ...first, commit_digest: null },
@@ -169,7 +168,7 @@ test("a first grant asked under a malformed shape, or with no digest to bind it,
 // `Sanctum.Consent.Commit.preview/2` answers it.
 const PROOF_TOKEN = "Tq3xY0b_5Zr-8Kp2mW9vLc4HdJ7sFa1NoE6uRgViBkQ";
 const preview = {
-  v: 1, commit_digest: first.commit_digest, expected_consent_revision: 1, origins: ["interactive"], removed: [],
+  v: 1, commit_digest: first.commit_digest, expected_consent_revision: 1, removed: [],
   proof: PROOF_TOKEN,
   rows: [
     { kind: "egress", node: "tincture:local.grant-probe", narrowed: true,
@@ -180,9 +179,9 @@ const preview = {
       values: { exit: KEPT, flows: ["files_by_grant"] } },
   ],
 };
-const previewWant = { digest: first.commit_digest, revision: 1, origins: ["interactive"], domains: [KEPT], paths: ["data/probe/notes/"] };
+const previewWant = { digest: first.commit_digest, revision: 1, domains: [KEPT], paths: ["data/probe/notes/"] };
 
-test("the command line's preview is held whole: version 1, the digest and revision, the origins, nothing removed, a proof of the home's form, the narrowed rows", () => {
+test("the command line's preview is held whole: version 1, the digest and revision, nothing removed, a proof of the home's form, the narrowed rows", () => {
   assert.equal(PROOF_TOKEN.length, 43);
   assert.equal(previewHeld(preview, previewWant), true);
 });
@@ -196,7 +195,7 @@ test("a preview with version 2, expected revision 99 and an empty proof is refus
 
 test("each copy of a preview changes it and is refused", () => {
   const copies = previewCopies(preview, DROPPED);
-  assert.equal(copies.length, 17);
+  assert.equal(copies.length, 16);
   for (const copy of copies) {
     assert.equal(sameHead(copy, preview), false, JSON.stringify(copy));
     assert.equal(previewHeld(copy, previewWant), false, JSON.stringify(copy));
@@ -234,7 +233,6 @@ test("the head a re-grant commits is the head before it one revision on, under a
     { ...head, consent_id: "cons_new" },
     { ...head, profile_id: id("prof", 2) },
     { ...head, shape_digest: first.shape_digest },
-    { ...head, admitted_origins: ["interactive", "programmatic"] },
     { ...head, paths: [] },
     { ...head, background: true },
   ];

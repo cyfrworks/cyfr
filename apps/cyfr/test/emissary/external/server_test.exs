@@ -512,7 +512,7 @@ defmodule Emissary.External.ServerTest do
       assert echo == ["debug: got header [REDACTED] from you", "token was [REDACTED]"]
     end
 
-    test "masks credential-shaped literal headers but not innocuous ones", %{
+    test "masks every literal header value it sent, whatever the header is named", %{
       name: name,
       ctx: ctx,
       stub: stub
@@ -526,7 +526,9 @@ defmodule Emissary.External.ServerTest do
           fn headers -> [headers["x-custom-key"], headers["x-trace"]] end
         )
 
-      assert echo == ["[REDACTED]", "innocuous-value"]
+      # A name says nothing of what a literal holds, and the page that edits
+      # a kept literal never sees it: each is masked, eight bytes or more.
+      assert echo == ["[REDACTED]", "[REDACTED]"]
     end
 
     test "masks the literal value of every header Prima names a credential carrier", %{
@@ -738,14 +740,15 @@ defmodule Emissary.External.ServerTest do
       assert state.headers == %{}
     end
 
-    test "a stdio connect records every backend env reference before the backends service resolves it",
+    test "a program connect records every backend env reference before the backends service resolves it",
          %{name: name, ctx: ctx} do
       vault!(ctx, "rev-env")
       vault!(ctx, "rev-env-other")
 
       pid =
         start_server(name, ctx.athanor_id,
-          transport: :stdio,
+          transport: :program,
+          mark: :mcp,
           id: "srv_rev_#{System.unique_integer([:positive])}",
           epoch: 1,
           backends: [

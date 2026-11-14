@@ -710,7 +710,8 @@ defmodule Arca.SchemaVocabularyTest do
       %{
         id: id("mcp"),
         name: id("server"),
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         config_json: "{}",
         epoch: 1,
         created_by: "user_vocab",

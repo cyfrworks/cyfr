@@ -194,6 +194,29 @@ export async function usePasskey(page, keys, { timeoutMs = STEP_MS } = {}) {
   return { what, ...outcome };
 }
 
+// A sign-in at `home` from a browser whose passkey the browser refuses, as
+// one holding none for the account does: the sentence the sign page says,
+// whether it shows its ways on, whether "Add a passkey with your recovery
+// code" carries the sign page's request, and the recovery page it opens.
+export async function refusedPasskey(page, keys, home, { timeoutMs = STEP_MS } = {}) {
+  await page.goto(`${home.origin}/login`);
+  await page.waitForSelector(".phx-connected", { timeout: timeoutMs });
+  await page.locator('[data-test="sign-in"]').click();
+  await page.waitForURL((url) => url.pathname === "/account/sign", { timeout: timeoutMs });
+  await keys.attach(page);
+  const asked = await settle(page, ["ask"], { timeoutMs });
+  if (asked.section !== "ask") return { error: asked.error, ways: false, carries: false, recover: null };
+  const request = new URL(page.url()).hash.slice(1);
+  await page.locator("#use-passkey").click();
+  const said = await settle(page, [], { timeoutMs });
+  const ways = await page.locator("#ways").isVisible();
+  const carries = (await page.locator("#recover-link").getAttribute("href")) === `recover#request=${request}`;
+  await page.locator("#recover-link").click();
+  await page.waitForURL((url) => url.pathname === "/account/recover", { timeout: timeoutMs });
+  const opened = await settle(page, ["enter"], { timeoutMs });
+  return { error: said.error, ways, carries: carries && new URL(page.url()).hash === `#request=${request}`, recover: opened.section };
+}
+
 // A device added to the account of the passkey the person picks, at
 // `directory`'s `/account/add` with the device's key and short code in the
 // fragment, as the device's QR code names it: the code the page shows, and
@@ -217,7 +240,10 @@ const listed = (page) => page.$$eval("#keys li > span", (els) => els.map((e) => 
 async function removeRow(page, kid) {
   const row = page.locator("#keys li", { hasText: shortCode(kid) });
   if ((await row.count()) !== 1) throw new Error(`the page lists ${await row.count()} rows for the key ${shortCode(kid)}`);
-  await row.locator("button").click();
+  // Remove asks first: the row then holds the question, its own Remove
+  // (the one that acts) and Keep.
+  await row.locator("button", { hasText: "Remove" }).click();
+  await row.locator("button.danger", { hasText: "Remove" }).click();
 }
 
 // The recovery code's page at `directory`, opened with `code`: `opened`
@@ -348,19 +374,52 @@ export async function sessionCookie(page, home) {
 
 // A confirmation given with the passkey: `click` makes the page ask (the
 // system layer's "Confirm with a passkey", which opens the sign page in a
-// new tab), the tab's request is signed, and the tab returns to the CYFR,
-// which confirms the record and sends the tab on. Answers what the sign
-// page asked and where the tab landed; the tab is closed.
+// new tab), the tab's request is signed, and the tab returns to the CYFR's
+// return page, which confirms the record and only then says so and closes
+// its tab, the page that asked going on by itself. Answers what the sign
+// page asked and whether the return page `confirmed` it, or the error it
+// shows, and `by` which sign it was: `closed` (the tab closed itself),
+// `said` ("Confirmed", the tab left open) or `went` (to the page the
+// request named); a tab left open is closed.
 export async function confirmInTab(page, keys, home, click, { timeoutMs = STEP_MS } = {}) {
   const [tab] = await Promise.all([page.context().waitForEvent("page", { timeout: timeoutMs }), click()]);
+  // Whether the tab came back to `home`, seen as it navigates: the return
+  // page may close the tab before any reading of its address.
+  let back = false;
+  tab.on("framenavigated", (frame) => {
+    if (frame === tab.mainFrame() && new URL(frame.url()).origin === home.origin) back = true;
+  });
   try {
     const asked = await usePasskey(tab, keys, { timeoutMs });
-    if (!asked.returned) return { ...asked, landed: false };
-    return { what: asked.what, ...(await landing(tab, home, { timeoutMs })) };
+    if (!asked.returned) return { ...asked, confirmed: false };
+    return { what: asked.what, ...(await confirmed(tab, home, () => back, { timeoutMs })) };
   } finally {
     await keys.sync();
     await tab.close().catch(() => {});
   }
+}
+
+// Whether the return page took the confirmation the tab brought back. It
+// closes its tab (`account:close`) only once the record is confirmed,
+// showing "Confirmed" meanwhile, and shows its error otherwise; a request
+// that named a page to go back to sends the tab there once confirmed. A
+// tab that closed before it came back to `home` confirmed nothing.
+async function confirmed(tab, home, cameBack, { timeoutMs = STEP_MS } = {}) {
+  const error = tab.locator('[data-test="sign-in-error"]');
+  return waitFor(async () => {
+    if (tab.isClosed()) {
+      return cameBack()
+        ? { confirmed: true, by: "closed", error: null }
+        : { confirmed: false, by: null, error: `the tab closed before it came back to ${home.host}` };
+    }
+    const url = new URL(tab.url());
+    if (url.origin !== home.origin || url.pathname.startsWith("/auth/")) return null;
+    if (url.pathname !== "/login") return { confirmed: true, by: "went", at: url.pathname, error: null };
+    if (await tab.locator('[data-test="confirmed"]').count().catch(() => 0))
+      return { confirmed: true, by: "said", error: null };
+    const said = (await error.first().innerText().catch(() => "")).trim();
+    return said ? { confirmed: false, by: null, error: said } : null;
+  }, { timeoutMs, stepMs: 100, what: `the return page at ${home.host} to confirm` });
 }
 
 // ---------------------------------------------------------------------------

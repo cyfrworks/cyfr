@@ -70,6 +70,10 @@ defmodule Sanctum.Vault do
 
   require Logger
 
+  # The words a name the preview cannot hold is refused in.
+  @name_rule "A name is text of at most #{Prima.Confirmation.Preview.max_text()} bytes " <>
+               "with no line break, tab or other control character."
+
   @kinds Prima.CredentialKinds.all()
   @rebind_attempts 3
 
@@ -391,6 +395,10 @@ defmodule Sanctum.Vault do
 
   @doc """
   Rename the mutable label. Identity, bindings and consents are untouched.
+  The name is held to the rule create's confirmation holds it to: a name
+  a confirmation preview cannot hold (empty, longer than its text, or with
+  a control character) is refused `{:invalid_argument, sentence}`, and
+  nothing changes.
 
   It is announced like every other mutation even so. Consents bind an entry
   *id*, but an external MCP server's headers and backend env bind a
@@ -400,9 +408,10 @@ defmodule Sanctum.Vault do
   entry's material changing. That is a resolution change, and the
   reconciler is what acts on those.
   """
-  @spec rename(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def rename(%Context{} = ctx, id, new_name) when is_binary(new_name) and new_name != "" do
+  @spec rename(Context.t(), String.t(), term()) :: :ok | {:error, term()}
+  def rename(%Context{} = ctx, id, new_name) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
+         :ok <- previewable_name(new_name),
          {:ok, entry} <- get_living(ctx, id),
          :ok <- check_name_free(ctx, new_name),
          :ok <- Arca.VaultStorage.update_meta(Context.actor(ctx), id, %{name: new_name}) do
@@ -745,6 +754,17 @@ defmodule Sanctum.Vault do
 
   defp default_view(%{provider_hint: hint, vault_entry_id: id}) when is_binary(id),
     do: {hint, %{vault_entry_id: id}}
+
+  # A name is the resource every confirmation about its entry previews
+  # (`Prima.Confirmation.Preview`): create's confirmation holds it to the
+  # preview's text rule before anything is stored, and a rename is held to
+  # the same rule, so no entry carries a name its later rotation, rebind or
+  # grant could not ask about.
+  defp previewable_name(name) do
+    if Prima.Identity.Encoding.text?(name, Prima.Confirmation.Preview.max_text()),
+      do: :ok,
+      else: {:error, {:invalid_argument, @name_rule}}
+  end
 
   defp required_name(%{name: name}) when is_binary(name) and name != "", do: {:ok, name}
   defp required_name(_), do: {:error, :name_required}

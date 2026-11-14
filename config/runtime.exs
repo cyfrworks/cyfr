@@ -238,7 +238,7 @@ if config_env() != :test do
   # of its listener (compose: http://locus-backends:4101), and
   # CYFR_LOCUS_BACKENDS_KEY, the service key as 64 hexadecimal digits, the
   # value the service holds as LOCUS_BACKENDS_KEY (`cyfr init` generates
-  # it). With either unset, no stdio server can be created or started; a
+  # it). With either unset, no program can be created or started; a
   # malformed value refuses the boot naming the variable and never the key.
   locus_backends_setting = fn read ->
     case read do

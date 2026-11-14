@@ -114,7 +114,6 @@ defmodule PrismWeb.SystemLayerRestoreTest do
       name: "key-#{uniq()}",
       key_hash: :crypto.strong_rand_bytes(32),
       key_prefix: "cyfr_sk_rs",
-      type: "service",
       scope: "[]",
       revoked: false,
       suspended: false,

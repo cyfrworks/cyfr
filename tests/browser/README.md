@@ -158,7 +158,8 @@ makes an account at `/account/new` and reads the recovery code it shows
 `continueToCyfr` answers the request a CYFR's "Create your account" sent
 along; `usePasskey` signs the request the sign page holds; `signIn` is a
 CYFR's sign-in, `confirmInTab` a confirmation the system layer opens in a
-new tab, and `landing` where a CYFR's page leaves the browser; `addDevice`
+new tab and whether the CYFR's return page confirmed it before closing
+the tab, and `landing` where a CYFR's page leaves the browser; `addDevice`
 adds a device at `/account/add` from its key and short code;
 `recoveryPage` and `devicesPage` change the account with a recovery code
 or a passkey, each step settling once the directory's log changed; and

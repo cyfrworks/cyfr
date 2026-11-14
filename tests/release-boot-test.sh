@@ -77,8 +77,11 @@ until_true() {
 }
 accepts() { python3 -c 'import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 1).close()' "$1" "$2"; }
 
-# Run each proof's actual version read on every accepted release version,
-# so its live-slot comparison and snapshot manifest keep pre-release suffixes.
+# Run the release boot proof's actual version read on every accepted
+# release version, so its live-slot comparison keeps pre-release suffixes.
+# The compose proof reads no version: its snapshots are cyfr backup's,
+# whose snapshot.json carries the release the image answers
+# (TestBackupKeepsTheReleaseVersionWhole).
 python3 -I - "$root" "$scratch" <<'PY'
 import json, pathlib, subprocess, sys
 root, scratch = map(pathlib.Path, sys.argv[1:])
@@ -86,7 +89,7 @@ versions = json.loads((root / "tests/fixtures/release_manifest.json").read_text(
 tree = scratch / "versions"
 mix = tree / "apps/prima/mix.exs"
 mix.parent.mkdir(parents=True)
-for proof in ("tests/release-boot/boot.sh", "tests/compose-proof/run.sh"):
+for proof in ("tests/release-boot/boot.sh",):
     reads = [line.strip() for line in (root / proof).read_text().splitlines()
              if line.lstrip().startswith(("VERSION=", "version=")) and '"$ROOT/apps/prima/mix.exs"' in line]
     if len(reads) != 1:
@@ -100,7 +103,7 @@ for proof in ("tests/release-boot/boot.sh", "tests/compose-proof/run.sh"):
                                 capture_output=True, text=True, timeout=5)
         if result.returncode != 0 or result.stdout != version:
             sys.exit(f"FAIL: {proof} read {result.stdout!r} from version {version!r}: {result.stderr}")
-print(f"ok: both proofs read all {len(versions)} accepted release versions intact")
+print(f"ok: the release boot proof reads all {len(versions)} accepted release versions intact")
 PY
 
 # The stand-in listeners: `hang ADDR PORT` accepts every connection and

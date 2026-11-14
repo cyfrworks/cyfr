@@ -44,16 +44,35 @@ defmodule Prima.RemediationTest do
   end
 
   describe "consent_required" do
-    test "renders as an approve-to-continue remediation" do
-      payload = %{profile_id: "prof-z", current_revision: 3, shape_diff: []}
+    test "renders a grant to make for the component, saying why" do
+      ref = "reagent:local.weather"
 
-      assert {:setup_required, remediation} =
-               Remediation.analyze({:consent_required, payload})
-
-      assert remediation["profile_id"] == "prof-z"
-      assert remediation["message"] =~ "permissions changed"
-      assert [%{"type" => "consent_required", "fix" => fix}] = remediation["issues"]
-      assert fix["action"] == "plan"
+      for {cause, message} <- [
+            {:no_grant, "This app has not been granted yet"},
+            {:revoked, "This app's grant was revoked; grant it again to continue"},
+            {:shape_moved,
+             "This app asks for more than its grant holds; review and grant it again to continue"}
+          ] do
+        assert Remediation.analyze({:consent_required, %{cause: cause, ref: ref}}) ==
+                 {:setup_required,
+                  %{
+                    "component_ref" => ref,
+                    "profile_id" => nil,
+                    "message" => message,
+                    "setup_command" => "cyfr profile grant #{ref}",
+                    "issues" => [
+                      %{
+                        "type" => "consent_required",
+                        "message" => message,
+                        "fix" => %{
+                          "tool" => "profile",
+                          "action" => "plan",
+                          "args" => %{"ref" => ref}
+                        }
+                      }
+                    ]
+                  }}
+      end
     end
   end
 
@@ -67,7 +86,14 @@ defmodule Prima.RemediationTest do
     test "every typed remediation carries the keys the surfaces read" do
       for term <- [
             {:setup_required, %{profile_id: "p", node_ref: "r", need: "n", reason: :x}},
-            {:consent_required, %{profile_id: "p", current_revision: 1, shape_diff: []}}
+            {:consent_required,
+             %{
+               cause: :shape_moved,
+               ref: "r",
+               profile_id: "p",
+               current_revision: 1,
+               shape_diff: []
+             }}
           ] do
         assert {:setup_required, remediation} = Remediation.analyze(term)
 

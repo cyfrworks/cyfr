@@ -103,10 +103,10 @@ func ExitStatus(err error) int {
 	return exitFailure
 }
 
-// interruption is a command the person interrupted at a question (Ctrl-C,
-// or the terminal closing), which Execute prints as its sentence alone and
-// which exits 130 (prompt.ErrAborted): the sentence says what was left as
-// it was.
+// interruption is a command the person interrupted at a question or a
+// wait (Ctrl-C, or the terminal closing), which Execute prints as its
+// sentence alone and which exits 130 (prompt.ErrAborted): the sentence
+// says what was left as it was.
 type interruption struct{ err error }
 
 func (i interruption) Error() string   { return i.err.Error() }
@@ -294,8 +294,18 @@ func formatConsentError(tag string, payload map[string]any) string {
 		return fmt.Sprintf("Setup required: %s is not ready.\n  Run: cyfr profile grant %s", ref, ref)
 
 	case "consent_required":
-		rev, _ := payload["current_revision"].(float64)
-		return fmt.Sprintf("This app's permissions changed since you approved them (consent rev %.0f).\n  Run: cyfr profile grant <ref> to review and approve.", rev)
+		// The payload names its cause and the component (Sanctum.Consent's
+		// errors), so each refusal reads as itself.
+		ref, _ := payload["ref"].(string)
+		switch cause, _ := payload["cause"].(string); cause {
+		case "no_grant":
+			return fmt.Sprintf("%s has not been granted.\n  Grant it in CYFR, or run: cyfr profile grant %s", ref, ref)
+		case "revoked":
+			return fmt.Sprintf("Your grant for %s was revoked.\n  Grant it again in CYFR, or run: cyfr profile grant %s", ref, ref)
+		default:
+			rev, _ := payload["current_revision"].(float64)
+			return fmt.Sprintf("%s asks for more than your grant holds (consent rev %.0f).\n  Review and grant it again in CYFR, or run: cyfr profile grant %s", ref, rev, ref)
+		}
 
 	case "consent_conflict":
 		cause, _ := payload["cause"].(string)

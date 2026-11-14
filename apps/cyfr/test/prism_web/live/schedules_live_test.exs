@@ -37,11 +37,12 @@ defmodule PrismWeb.SchedulesLiveTest do
     {:ok, conn: conn, view: view, ctx: ctx, params: params}
   end
 
-  # The profile's grant, made again through the walk with `origins`.
-  defp grant_origins!(ctx, origins) do
+  # The profile's grant, made again through the walk as the grant sheet
+  # commits it.
+  defp grant!(ctx) do
     ref = "reagent:local.schedule-target"
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    decisions = %{ref: ref, origins: origins}
+    decisions = %{ref: ref}
     {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
 
     {:ok, _} =
@@ -64,7 +65,6 @@ defmodule PrismWeb.SchedulesLiveTest do
     ctx: ctx,
     params: params
   } do
-    grant_origins!(ctx, [:interactive, :schedule])
     assert has_element?(view, "input[name=profile_id][required]")
     render_submit(view, "create", params)
 
@@ -131,7 +131,6 @@ defmodule PrismWeb.SchedulesLiveTest do
     ctx: ctx,
     params: params
   } do
-    grant_origins!(ctx, [:interactive, :schedule])
     render_submit(view, "create", params)
     assert {:ok, %{id: id}} = schedule(ctx, params)
 
@@ -145,11 +144,67 @@ defmodule PrismWeb.SchedulesLiveTest do
     refute has_element?(unfocused, marked)
   end
 
+  describe "a run that did not succeed" do
+    test "the row says what its schedule says of it and links its run, until a good run clears it",
+         %{conn: conn, view: view, ctx: ctx, params: params} do
+      render_submit(view, "create", params)
+      assert {:ok, %{id: id} = schedule} = schedule(ctx, params)
+      actor = Sanctum.Context.actor(ctx)
+      failed = "Last run failed: The upstream closed the connection."
+      unknown = "Last run did not report its end, so whether it had its effect is not known."
+      run = athanor_path("/executions?id=exec_failed")
+
+      {:ok, _} = Arca.CronSchedule.record_error(actor, id, failed, occurrence!(ctx, schedule))
+      {page, _html} = mount_athanor(conn, "/schedules")
+      assert has_element?(page, "p", failed)
+      assert has_element?(page, ~s(a[href="#{run}"]), "Open the run")
+
+      # A run whose end was never recorded is never called a failure.
+      {:ok, _} = Arca.CronSchedule.record_error(actor, id, unknown, occurrence!(ctx, schedule))
+      {page, _html} = mount_athanor(conn, "/schedules")
+      assert has_element?(page, "p", unknown)
+      refute has_element?(page, "p", "Last run failed")
+      assert has_element?(page, ~s(a[href="#{run}"]), "Open the run")
+
+      # A run that never started names no run.
+      {:ok, _} =
+        Arca.CronSchedule.record_error(
+          actor,
+          id,
+          "Last run did not start: Invalid JSON input",
+          nil
+        )
+
+      {page, _html} = mount_athanor(conn, "/schedules")
+      assert has_element?(page, "p", "Last run did not start: Invalid JSON input")
+      refute has_element?(page, "a", "Open the run")
+
+      {:ok, _} = Arca.CronSchedule.record_run(actor, id, "exec_good")
+      {page, _html} = mount_athanor(conn, "/schedules")
+      refute has_element?(page, "p", "Last run")
+      refute has_element?(page, "a", "Open the run")
+    end
+  end
+
+  # An ended occurrence of `schedule` whose run is `exec_failed`, each due
+  # at a time of its own.
+  defp occurrence!(ctx, schedule) do
+    n = System.unique_integer([:positive, :monotonic])
+
+    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+      id: "occ_" <> Integer.to_string(n),
+      athanor_id: ctx.athanor_id,
+      schedule_id: schedule.id,
+      scheduled_for: DateTime.add(DateTime.utc_now(), -n, :second),
+      state: "failed",
+      execution_id: "exec_failed",
+      claimed_at: DateTime.utc_now()
+    }).id
+  end
+
   describe "missed runs" do
     test "a schedule is made with the policy chosen, its row shows it, and the row saves a change",
          %{view: view, ctx: ctx, params: params} do
-      grant_origins!(ctx, [:interactive, :schedule])
-
       render_submit(
         view,
         "create",
@@ -176,8 +231,6 @@ defmodule PrismWeb.SchedulesLiveTest do
 
     test "a catch-up without a whole limit, or with 0, is refused and the schedule stands",
          %{view: view, ctx: ctx, params: params} do
-      grant_origins!(ctx, [:interactive, :schedule])
-
       render_submit(
         view,
         "create",
@@ -201,74 +254,21 @@ defmodule PrismWeb.SchedulesLiveTest do
     end
   end
 
-  describe "a profile whose grant does not admit schedules" do
-    test "raises the grant prompt first, and a dismissal makes no schedule", %{
+  describe "a profile whose grant was made through the walk" do
+    test "making a schedule for it creates the schedule at once, with no grant prompt", %{
       view: view,
       ctx: ctx,
       params: params
     } do
+      grant!(ctx)
       render_submit(view, "create", params)
       render(view)
 
-      assert grant_open?(view)
-      assert {:error, :not_found} = schedule(ctx, params)
-      refute has_element?(view, ~s(input[data-origin="schedule"][checked]))
-
-      view |> element(~s(#system-layer button[phx-click="dismiss"])) |> render_click()
-      render(view)
-
-      assert {:error, :not_found} = schedule(ctx, params)
-      assert :sys.get_state(view.pid).socket.assigns.flash["error"] =~ "No schedule was made"
-    end
-
-    test "granted with the schedule origin, the schedule is made", %{
-      view: view,
-      ctx: ctx,
-      params: params
-    } do
-      render_submit(view, "create", params)
-      render(view)
-      assert grant_open?(view)
-
-      view
-      |> element(~s(input[phx-click="toggle_origin"][phx-value-origin="schedule"]))
-      |> render_click()
-
-      render(view)
-      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
-
-      Prima.Test.Wait.wait_until(
-        fn -> render(view) && match?({:ok, _}, schedule(ctx, params)) end,
-        2_000,
-        "the schedule"
-      )
-
-      {:ok, made} = schedule(ctx, params)
+      refute grant_open?(view)
+      assert {:ok, %{id: id} = made} = schedule(ctx, params)
       assert made.profile_id == params["profile_id"]
-
-      {:ok, head} = Sanctum.Consent.head_consent(ctx, params["profile_id"])
-      assert :schedule in head.admitted_origins
-    end
-
-    test "granted without the schedule origin, no schedule is made", %{
-      view: view,
-      ctx: ctx,
-      params: params
-    } do
-      render_submit(view, "create", params)
-      render(view)
-      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
-
-      Prima.Test.Wait.wait_until(
-        fn ->
-          render(view)
-          (:sys.get_state(view.pid).socket.assigns.flash["error"] || "") =~ "No schedule was made"
-        end,
-        2_000,
-        "the refusal"
-      )
-
-      assert {:error, :not_found} = schedule(ctx, params)
+      assert has_element?(view, "#missed-#{id}")
+      assert :sys.get_state(view.pid).socket.assigns.flash == %{"info" => "Schedule created"}
     end
   end
 

@@ -116,13 +116,14 @@ defmodule Arca.McpServerStorageTest do
       assert {:ok, ^server} = McpServerStorage.get(actor, "plain")
     end
 
-    test "a pipe program and a kept home are stored with their settings, and update writes them",
+    test "a driven program and a kept home are stored with their settings, and update writes them",
          %{actor: actor} do
       assert {:ok, %{epoch: 1} = piped} =
                McpServerStorage.insert(actor, %{
                  cap: 0,
                  name: "claude",
-                 transport: "pipe",
+                 transport: "program",
+                 mark: "driven",
                  url: nil,
                  home: "kept",
                  memory_bytes: 1_073_741_824,
@@ -130,14 +131,15 @@ defmodule Arca.McpServerStorageTest do
                  login_command: "claude auth login"
                })
 
-      assert %{transport: "pipe", home: "kept", login_entry_id: nil} = piped
+      assert %{transport: "program", mark: "driven", home: "kept", login_entry_id: nil} = piped
       assert {:ok, ^piped} = McpServerStorage.get(actor, "claude")
 
       assert {:ok, %{epoch: 1}} =
                McpServerStorage.insert(actor, %{
                  cap: 0,
                  name: "gh",
-                 transport: "stdio",
+                 transport: "program",
+                 mark: "mcp",
                  url: nil,
                  home: "kept",
                  login_entry_id: "vlt_gh",
@@ -171,7 +173,8 @@ defmodule Arca.McpServerStorageTest do
                McpServerStorage.insert(actor, %{
                  cap: 0,
                  name: "bad",
-                 transport: "pipe",
+                 transport: "program",
+                 mark: "driven",
                  url: "https://x"
                })
     end
@@ -419,21 +422,28 @@ defmodule Arca.McpServerStorageTest do
       assert {:error, :not_found} = McpServerStorage.update(actor, "absent", %{enabled: true}, 1)
     end
 
-    test "an http row has a url and a stdio row has none", %{actor: actor} do
-      stdio = Jason.encode!(%{"backends" => []})
+    test "an http row has a url and a program has none", %{actor: actor} do
+      program = Jason.encode!(%{"backends" => []})
 
-      assert {:ok, %{transport: "stdio", url: nil}} =
+      assert {:ok, %{transport: "program", mark: "mcp", url: nil}} =
                McpServerStorage.insert(actor, %{
                  cap: 0,
                  name: "piped",
-                 transport: "stdio",
+                 transport: "program",
+                 mark: "mcp",
                  url: nil,
-                 config_json: stdio
+                 config_json: program
                })
 
       for attrs <- [
             %{cap: 0, name: "bad-http", transport: "http", url: nil},
-            %{cap: 0, name: "bad-stdio", transport: "stdio", url: "https://x.com/mcp"}
+            %{
+              cap: 0,
+              name: "bad-program",
+              transport: "program",
+              mark: "mcp",
+              url: "https://x.com/mcp"
+            }
           ] do
         assert {:error, _} = McpServerStorage.insert(actor, attrs)
       end

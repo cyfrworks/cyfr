@@ -146,14 +146,17 @@ defmodule Opus.FeedsTest do
       watch_outcomes(actor)
       {:ok, feed} = bind(actor, feed_binding("btc"))
 
-      log =
-        capture_log(fn ->
+      # The failure is logged, then announced, after the occurrence's end
+      # committed: the capture holds until the announcement.
+      {reason, log} =
+        with_log(fn ->
           scheduler!()
           wait_until(fn -> match?([%{state: "failed"}], occurrences(actor, feed.id)) end)
 
-          wait_until(fn ->
-            match?({:ok, %{error_count: 1}}, CronSchedule.get_feed(actor, feed.id))
-          end)
+          assert_receive {:schedule_outcome, [:cyfr, :schedules, :failed], %{reason: reason}},
+                         10_000
+
+          reason
         end)
 
       assert {:ok,
@@ -165,7 +168,6 @@ defmodule Opus.FeedsTest do
                 error_count: 1
               }} = CronSchedule.get_feed(actor, feed.id)
 
-      assert_receive {:schedule_outcome, [:cyfr, :schedules, :failed], %{reason: reason}}, 10_000
       assert {:invalid_argument, sentence} = reason
       assert sentence =~ ~s(type at "/price")
       refute inspect(reason) =~ "a secret quote"
@@ -220,27 +222,33 @@ defmodule Opus.FeedsTest do
         watch_outcomes(actor)
         {:ok, feed} = bind(actor, feed_binding("btc"))
 
-        log =
-          capture_log(fn ->
+        # The refusal is logged, then announced, after the occurrence's end
+        # committed: the capture holds until the announcement.
+        {reason, log} =
+          with_log(fn ->
             scheduler!()
             wait_until(fn -> match?([%{state: "failed"}], occurrences(actor, feed.id)) end)
 
-            wait_until(fn ->
-              match?({:ok, %{error_count: 1}}, CronSchedule.get_feed(actor, feed.id))
-            end)
+            assert_receive {:schedule_outcome, [:cyfr, :schedules, :failed], %{reason: reason}},
+                           10_000
+
+            reason
           end)
 
-        assert {:ok, %{feed_fire_seq: 1, feed_result_seq: 0, feed_result: nil, run_count: 0}} =
-                 CronSchedule.get_feed(actor, feed.id)
+        assert {:ok,
+                %{
+                  feed_fire_seq: 1,
+                  feed_result_seq: 0,
+                  feed_result: nil,
+                  run_count: 0,
+                  error_count: 1
+                }} = CronSchedule.get_feed(actor, feed.id)
 
         # The run itself completed: the refusal is the feed's.
         [%{execution_id: execution_id}] = occurrences(actor, feed.id)
 
         assert [%{status: "completed"}] =
                  Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.id == ^execution_id))
-
-        assert_receive {:schedule_outcome, [:cyfr, :schedules, :failed], %{reason: reason}},
-                       10_000
 
         assert {:invalid_argument, "feed result refused: " <> named} = reason
         assert named == unquote(named)
@@ -630,7 +638,11 @@ defmodule Opus.FeedsTest do
                CronSchedule.get_for_daemon(feed.id)
 
       assert ScriptedWorker.calls() == []
-      assert_received {:schedule_outcome, [:cyfr, :schedules, :failed], %{reason: :not_found}}
+
+      # Announced after the end committed, so it may still be on its way.
+      assert_receive {:schedule_outcome, [:cyfr, :schedules, :failed], %{reason: :not_found}},
+                     10_000
+
       refute_received %FeedPublished{}
     end
   end
@@ -1067,7 +1079,6 @@ defmodule Opus.FeedsTest do
             }
           }),
         activation: %{@reference => component.release_digest},
-        admitted_origins: [:interactive, :schedule],
         vault_refs: []
       })
   end

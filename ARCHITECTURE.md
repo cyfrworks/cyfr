@@ -105,7 +105,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 
 ### Emissary: external application protocols
 
-- MCP in both directions, the HTTP API, webhooks and the OAuth callback, carrying declared operations through the gate but at the entries that admit for themselves. An external MCP server is reached over HTTP, or, for a `stdio` server, driven over a program's session.
+- MCP in both directions, the HTTP API, webhooks and the OAuth callback, carrying declared operations through the gate but at the entries that admit for themselves. A row of the Programs page is a tool server elsewhere, reached over HTTP, or a program CYFR runs, marked by how it is spoken to: `mcp`, Emissary speaking MCP over its sessions, or `driven`, run by a person or a brain.
 - Tinctures' files and data routes (§7), the device channel (§9.3), and the directory's endpoints and account pages a home that serves a directory serves (§9.1).
 
 ### Prism: the screen
@@ -116,7 +116,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Codex: the command line
 
 - The `cyfr` binary, speaking MCP to Emissary with an API key or the session its own shell unlocks; its operation catalog is generated from the gate's table. On a person's terminal it is a protected device like the box's screen: `cyfr login` keeps one key per machine, has it added to the person's account from the account pages or by another unlocked terminal of theirs (`cyfr device approve`), or makes the account itself, and at each home opens the device channel with its first hello and unlocks into a session that lasts while its shell holds the channel. It never signs in by another device's approval, and an API key is the unattended path.
-- The access engine (`apps/codex/internal/access`), which `cyfr init`, `setup`, `access`, `up`, `update` and `restore` run on the machine: the one owner of the deployment file's access settings and the stack's access services, which it changes under the stack's lock and journals, so the next command to take the lock recovers a change an interruption left.
+- The access engine (`apps/codex/internal/access`), which `cyfr init`, `setup`, `access`, `up`, `update`, `backup` and `restore` run on the machine: the one owner of the deployment file's access settings and the stack's access services, which it changes under the stack's lock and journals, so the next command to take the lock recovers a change an interruption left. A command that stops the running stack itself (`update` before its switch, `backup`) journals that stop first as a hold naming the command, which the command's own start closes; the next command to take the lock after one that died holding it starts the stack and says which command stopped it.
 - Two faces of the one program on the machine: the terminal, and the setup pages `cyfr setup` serves on the machine's loopback before the stack runs, for a device's own screen. The pages drive `cyfr init`'s sequence and `cyfr up`'s start, no second setup, and only the machine reaches them; Prism is never a setup surface.
 - The machine's own requirements: on Ubuntu 26.04, at a terminal, `cyfr init` installs Docker when this account cannot reach it, through one `sudo` of the commands it shows; `cyfr` itself never runs as root. `init` prepares and `up` starts, on every system.
 - The machine's own screen: `cyfr screen on` installs a service that runs a browser on tty1 at the access engine's address, through one `sudo` of the commands it shows. The launcher is embedded in `cyfr`, the system's package manager supplies the browser, compositor and keyboard, and it never starts or stops the stack.
@@ -322,7 +322,7 @@ Consented work runs unattended under its grant; a person is asked only about wha
 
 - Component grants and standing approvals are the two kinds of grant, under one set of rules.
 - A preview is typed rows bound by a digest; narrowing is validated by its owner, and widening is interactive. *Not built yet:* a share's caps on the preview's credential row.
-- Every run carries the origin its admission path set, and a grant names the origins it admits.
+- A grant says what a component may reach and use, never who may start it: a run carries the origin its admission path set for the record, and stands on the grant of the person it acts as, whether a screen, a key, a schedule or a webhook started it.
 - **A standing approval is bounded.** It ends with its lifecycle or deadline and holds to its resource constraint, and an external or destructive action never takes a standing allow.
 - Every turn records the source classes it read (`Prima.Source`), and every send to an exit is held to the flows its grant declares, which `Prima.Flow` decides.
 - A standing grant never stands in for a fresh confirmation. *Not built yet:* declared reads of standing approvals.

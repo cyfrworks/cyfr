@@ -35,56 +35,104 @@ func IsVersion(v string) bool { return versionPattern.MatchString(v) }
 func IsPrerelease(v string) bool { return IsVersion(v) && strings.Contains(v, "-") }
 
 // ErrNoRelease is Latest's answer when GitHub lists no published release
-// that is not a pre-release.
-var ErrNoRelease = errors.New("no CYFR release is published yet apart from pre-releases")
+// to take.
+var ErrNoRelease = errors.New("no CYFR release is published yet")
 
-// apiURL is the GitHub releases endpoint for the CYFR repo. It is a package
-// variable so tests can point it at an httptest server.
-var apiURL = "https://api.github.com/repos/cyfrworks/cyfr/releases?per_page=20"
+// ErrIncomplete is Latest's answer when the listing's last page it may read
+// is full: a release past it could be the one to take, so none is taken.
+var ErrIncomplete = errors.New("the release listing could not be read whole: it holds more than 1000 releases")
 
-// Latest returns the newest published CYFR release that is not a
-// pre-release (e.g. "0.6.0"): the greatest such tag by Compare, so the
-// order the API lists releases in never picks an older line's later patch.
-// Drafts, releases GitHub marks as pre-releases, tags with a pre-release
-// and tags outside the release-version grammar are skipped; none left
-// is ErrNoRelease.
+// apiURL is the GitHub releases endpoint for the CYFR repo, read a page
+// at a time. It is a package variable so tests can point it at an
+// httptest server.
+var apiURL = "https://api.github.com/repos/cyfrworks/cyfr/releases"
+
+// The listing is read from page 1, perPage releases a page, until a page
+// holds fewer: a release past the first page still counts. A full page
+// maxPages refuses (ErrIncomplete) rather than miss a release past it. tests/fixtures/release_manifest.json's selection rows are
+// pages of this size.
+const (
+	perPage  = 100
+	maxPages = 10
+)
+
+// listedRelease is a release as the GitHub releases API lists it.
+type listedRelease struct {
+	TagName    string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+}
+
+// Latest returns the release an install or an update takes when no version
+// is named: the newest published release that is not a pre-release and,
+// while none is published, the newest pre-release. A pre-release is one
+// GitHub marks as such or whose tag carries a pre-release; drafts and tags
+// outside the release-version grammar are skipped, and newest is the
+// greatest by Compare, whatever order or page the API lists them in. None
+// left is ErrNoRelease. tests/fixtures/release_manifest.json's selection holds the
+// rule, which scripts/install.sh and Cyfr.ReleaseChannel keep too.
 func Latest(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	var releases []listedRelease
+	for page := 1; ; page++ {
+		listed, err := listPage(ctx, page)
+		if err != nil {
+			return "", err
+		}
+		releases = append(releases, listed...)
+		if len(listed) < perPage {
+			break
+		}
+		if page == maxPages {
+			return "", ErrIncomplete
+		}
+	}
+	if latest := pick(releases); latest != "" {
+		return latest, nil
+	}
+	return "", ErrNoRelease
+}
+
+// listPage reads one page of the releases listing.
+func listPage(ctx context.Context, page int) ([]listedRelease, error) {
+	url := fmt.Sprintf("%s?per_page=%d&page=%d", apiURL, perPage, page)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
 	}
-
-	var releases []struct {
-		TagName    string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
-	}
+	var releases []listedRelease
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return "", err
+		return nil, err
 	}
+	return releases, nil
+}
 
-	latest := ""
+// pick is Latest's choice from a listing, "" when it holds none to take.
+func pick(releases []listedRelease) string {
+	release, prerelease := "", ""
 	for _, r := range releases {
-		if r.Draft || r.Prerelease || !IsVersion(r.TagName) || IsPrerelease(r.TagName) {
+		if r.Draft || !IsVersion(r.TagName) {
 			continue
 		}
-		if latest == "" || IsNewer(r.TagName, latest) {
-			latest = r.TagName
+		newest := &release
+		if r.Prerelease || IsPrerelease(r.TagName) {
+			newest = &prerelease
+		}
+		if *newest == "" || IsNewer(r.TagName, *newest) {
+			*newest = r.TagName
 		}
 	}
-	if latest == "" {
-		return "", ErrNoRelease
+	if release != "" {
+		return release
 	}
-	return latest, nil
+	return prerelease
 }
 
 // IsNewer reports whether latest is a release version of strictly higher

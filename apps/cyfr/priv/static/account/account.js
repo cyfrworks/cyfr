@@ -444,6 +444,7 @@
 
   // account/ceremony.js
   var ES256 = -7;
+  var LIMIT_MS = 2 * 60 * 1e3;
   var P256_SPKI = [
     48,
     89,
@@ -487,7 +488,25 @@
     if (!buffer) return null;
     return buffer instanceof ArrayBuffer ? new Uint8Array(buffer.slice(0)) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength).slice();
   }
-  function passkeys(credentials, rpId) {
+  async function within(limit, timers, ask) {
+    const controller = new AbortController();
+    let timer;
+    const gaveUp = new Promise((_resolve, reject) => {
+      timer = timers.setTimeout(() => {
+        controller.abort();
+        reject(new Refusal("timed_out"));
+      }, limit);
+    });
+    try {
+      return await Promise.race([ask(controller.signal), gaveUp]);
+    } catch (error) {
+      if (controller.signal.aborted) refuse("timed_out");
+      throw error;
+    } finally {
+      timers.clearTimeout(timer);
+    }
+  }
+  function passkeys(credentials, rpId, { limit = LIMIT_MS, timers = globalThis } = {}) {
     return {
       rpId,
       /**
@@ -499,7 +518,7 @@
       async assert({ challenge: challenge2, allow }) {
         const publicKey = { challenge: challenge2, rpId, userVerification: "required" };
         if (allow) publicKey.allowCredentials = allow.map((id) => ({ type: "public-key", id }));
-        const credential = await credentials.get({ publicKey });
+        const credential = await within(limit, timers, (signal) => credentials.get({ publicKey, signal }));
         const response = credential.response;
         const userHandle = bytes(response.userHandle);
         return {
@@ -517,7 +536,8 @@
        * maker's `aaguid`; rejects for any other algorithm.
        */
       async create({ userId: userId2, name, challenge: challenge2 }) {
-        const credential = await credentials.create({
+        const credential = await within(limit, timers, (signal) => credentials.create({
+          signal,
           publicKey: {
             challenge: challenge2,
             rp: { id: rpId, name: "CYFR" },
@@ -526,7 +546,7 @@
             authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
             attestation: "none"
           }
-        });
+        }));
         const response = credential.response;
         const spki = bytes(response.getPublicKey());
         const p256 = response.getPublicKeyAlgorithm() === ES256 && spki?.length === P256_SPKI.length + 65 && P256_SPKI.every((byte, i) => spki[i] === byte);
@@ -837,7 +857,7 @@
   var KINDS2 = { passkey: "Passkey", device: "Device" };
   function keyLabel({ kind, code, added, current }) {
     const date = added === void 0 ? "" : `, added ${new Date(added).toLocaleDateString()}`;
-    return `${KINDS2[kind]} ${code}${current ? " (this passkey)" : ""}${date}`;
+    return `${KINDS2[kind]} ${code}${current ? " (the passkey in use)" : ""}${date}`;
   }
 
   // account/view.js
@@ -864,6 +884,7 @@
     stale_head: "Your account changed while this page was open. Start again.",
     duplicate_key: "That is already on your account.",
     cancelled: "The passkey was not used. Try again when you are ready.",
+    timed_out: "Your browser did not answer within two minutes, so this page stopped waiting. Try again.",
     no_public_key: "This browser made a passkey but did not hand over its key. Use Safari, Chrome or Firefox.",
     rate_limited: "Too many requests from your network just now. Wait a minute and try again."
   };
@@ -882,16 +903,46 @@
     element2.textContent = text2;
     element2.hidden = text2 === "";
   }
+  var refusedPasskey = (error) => error?.name === "NotAllowedError";
   async function attempt(doc, button, errorId, action) {
     button.disabled = true;
     say(doc, errorId, "");
+    const ways = $(doc, "ways");
+    if (ways) ways.hidden = true;
     try {
       await action();
     } catch (error) {
       say(doc, errorId, words(error));
+      if (ways) ways.hidden = !refusedPasskey(error);
     } finally {
       button.disabled = false;
     }
+  }
+  function keyRow(doc, label, { current, remove }) {
+    const row = doc.createElement("li");
+    const text2 = doc.createElement("span");
+    text2.textContent = label;
+    row.append(text2);
+    if (current) return row;
+    const ask = doc.createElement("button");
+    ask.type = "button";
+    ask.textContent = "Remove";
+    ask.addEventListener("click", () => {
+      const question = doc.createElement("span");
+      question.textContent = `Remove ${label}? It stops working at every CYFR.`;
+      const yes = doc.createElement("button");
+      yes.type = "button";
+      yes.className = "danger";
+      yes.textContent = "Remove";
+      yes.addEventListener("click", () => remove(yes));
+      const keep = doc.createElement("button");
+      keep.type = "button";
+      keep.textContent = "Keep";
+      keep.addEventListener("click", () => row.replaceChildren(text2, ask));
+      row.replaceChildren(text2, question, yes, keep);
+    });
+    row.append(ask);
+    return row;
   }
   function drawCode(doc, slot, code) {
     const groups = code.split("-");
@@ -993,29 +1044,18 @@
     let session = null;
     let pending = null;
     const draw = () => {
-      const rows = listing(session).map((key) => {
-        const row = doc.createElement("li");
-        const label = doc.createElement("span");
-        label.textContent = keyLabel(key);
-        row.append(label);
-        if (!key.current) {
-          const remove = doc.createElement("button");
-          remove.type = "button";
-          remove.textContent = "Remove";
-          remove.addEventListener(
-            "click",
-            () => attempt(doc, remove, "list-error", async () => {
-              const retry = pending?.kid === key.kid;
-              if (!retry) pending = { kid: key.kid, entry: await removal(env2, session, key.kid) };
-              session = { ...session, ...await appendOnce(place.directory, session.identifier, pending.entry, retry) };
-              pending = null;
-              draw();
-            })
-          );
-          row.append(remove);
-        }
-        return row;
-      });
+      const rows = listing(session).map(
+        (key) => keyRow(doc, keyLabel(key), {
+          current: key.current,
+          remove: (button) => attempt(doc, button, "list-error", async () => {
+            const retry = pending?.kid === key.kid;
+            if (!retry) pending = { kid: key.kid, entry: await removal(env2, session, key.kid) };
+            session = { ...session, ...await appendOnce(place.directory, session.identifier, pending.entry, retry) };
+            pending = null;
+            draw();
+          })
+        })
+      );
       $(doc, "keys").replaceChildren(...rows);
       only(doc, "list");
     };
@@ -1295,6 +1335,7 @@
       return;
     }
     $(doc, "what").textContent = describe(request);
+    $(doc, "recover-link").setAttribute("href", `recover#request=${env2.location.hash.slice(1)}`);
     only(doc, "ask");
     const button = $(doc, "use-passkey");
     button.addEventListener(
@@ -1699,7 +1740,7 @@
       return new _Recovery(env2, place, identifier2, key, read2);
     }
     constructor(env2, place, identifier2, key, { state, entries }) {
-      Object.assign(this, { env: env2, place, identifier: identifier2, key, state, entries, fresh: null, pending: null });
+      Object.assign(this, { env: env2, place, identifier: identifier2, key, state, entries, fresh: null, pending: null, passkeyAdded: false });
     }
     /** A new passkey for the account, labelled with its name, which must be this account's. */
     async addPasskey(name) {
@@ -1737,9 +1778,11 @@
     async submit(entry) {
       const retry = entry === void 0;
       if (!retry) this.pending = entry;
-      const { kind } = this.pending;
-      const read2 = await appendOnce(this.place.directory, this.identifier, this.pending, retry);
+      const landed = this.pending;
+      const { kind } = landed;
+      const read2 = await appendOnce(this.place.directory, this.identifier, landed, retry);
       this.pending = null;
+      if (kind === "add_key" && landed.key.kind === "passkey") this.passkeyAdded = true;
       if (kind === "recover") this.key = this.fresh.key;
       if (kind === "recover" || kind === "add_recovery") this.fresh = null;
       Object.assign(this, read2);
@@ -1760,22 +1803,24 @@
       return;
     }
     only(doc, "enter");
+    let sent2 = null;
+    const text2 = new URLSearchParams((env2.location?.hash ?? "").slice(1)).get("request");
+    if (text2) {
+      try {
+        sent2 = { text: text2, request: readSigned(text2, env2.now()) };
+        $(doc, "return-link").textContent = `Continue to ${sent2.request.audience}`;
+        $(doc, "return-link").setAttribute("href", `sign#${sent2.text}`);
+      } catch (_error) {
+        sent2 = null;
+      }
+    }
     let recovery2 = null;
     let afterSaved = null;
     const draw = () => {
-      const rows = recovery2.keys().map((key) => {
-        const row = doc.createElement("li");
-        const label = doc.createElement("span");
-        label.textContent = keyLabel(key);
-        const remove = doc.createElement("button");
-        remove.type = "button";
-        remove.textContent = "Remove";
-        remove.addEventListener("click", () => act(remove, () => recovery2.removeKey(key.kid)));
-        row.append(label, remove);
-        return row;
-      });
+      const rows = recovery2.keys().map((key) => keyRow(doc, keyLabel(key), { current: false, remove: (button) => act(button, () => recovery2.removeKey(key.kid)) }));
       $(doc, "keys").replaceChildren(...rows);
       $(doc, "no-keys").hidden = rows.length > 0;
+      $(doc, "return").hidden = !(sent2 && recovery2.passkeyAdded && env2.now() < sent2.request.expires_at);
       only(doc, "account");
     };
     const act = (button, action) => attempt(doc, button, "account-error", async () => {

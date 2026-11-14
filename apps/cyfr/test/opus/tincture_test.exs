@@ -209,31 +209,24 @@ defmodule Opus.TinctureTest do
          %{ctx: ctx} do
       node = tincture!(ctx, "tinc-public")
       _public = profile!(ctx, node, :public)
-      worker!([%{"answer" => 7}])
+      worker!([%{"answer" => 7}, %{"answer" => 7}])
       ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
-      # A person at the public page: the tincture data routes admit the
-      # page's call as interactive, which the public profile admits alone.
+      # A person at the public page, and a call over the API: each runs on
+      # the public profile, whatever path admitted it.
       anonymous =
         Sanctum.Context.build(authenticated: false, client_ip: "198.51.100.7")
         |> Sanctum.TestContext.via(:prism)
 
       assert anonymous.athanor_id == nil
 
-      # A public path that is not a person at a page is programmatic, and
-      # a public profile that names it not is asked to grant again.
-      assert {:error, %Prima.Refusal{class: :consent_required}} =
-               Opus.Tincture.invoke(
-                 Sanctum.TestContext.via(anonymous, :api),
-                 args("tinc-public", :public),
-                 :public
-               )
+      for caller <- [anonymous, Sanctum.TestContext.via(anonymous, :api)] do
+        assert {:ok, %{status: :completed}} =
+                 Opus.Tincture.invoke(caller, args("tinc-public", :public), :public)
+      end
 
-      assert {:ok, %{status: :completed}} =
-               Opus.Tincture.invoke(anonymous, args("tinc-public", :public), :public)
-
-      # The run is the public identity's, in the tincture's own athanor.
-      assert [%{authority: authority}] = ScriptedWorker.calls()
-      assert authority.profile_kind == :public
+      # Each run is the public identity's, in the tincture's own athanor.
+      assert [%{authority: first}, %{authority: second}] = ScriptedWorker.calls()
+      assert first.profile_kind == :public and second.profile_kind == :public
     end
 
     test "the caller's own athanor is not consulted", %{ctx: ctx} do
@@ -513,6 +506,67 @@ defmodule Opus.TinctureTest do
 
       assert {:error, %Prima.Refusal{class: :unavailable, reason: :execution_unavailable}} =
                Opus.Tincture.invoke(ctx, args("tinc-no-engine", :protected), :protected)
+    end
+  end
+
+  describe "a key narrowed to named tools" do
+    # A key is minted in its person's own athanor: the fixture athanor's
+    # owner mints it, so the tincture and its dependency are theirs.
+    setup %{ctx: ctx} do
+      _owner = Sanctum.TestContext.owner!()
+
+      issuer =
+        Sanctum.TestContext.issuer!(%{ctx | user_id: Arca.Test.Actor.owner_id()})
+
+      {:ok, issuer: issuer}
+    end
+
+    # A key of `issuer`, narrowed to `tools`, and the context it
+    # authenticates as.
+    defp key_ctx!(issuer, name, tools) do
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(issuer, %{name: name, tools: tools})
+
+      {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      Sanctum.TestContext.via(key_ctx, :mcp)
+    end
+
+    test "opens another tincture's route refused in the run's own words, and nothing runs",
+         %{issuer: issuer} do
+      node = tincture!(issuer, "tinc-unlisted")
+      _owner = profile!(issuer, node, :owner)
+      worker!([%{"answer" => 1}])
+      narrowed = key_ctx!(issuer, "listed-elsewhere", ["t:local.tinc-listed"])
+
+      assert {:error,
+              %Prima.Refusal{
+                class: :forbidden,
+                reason: :key_tool_not_named,
+                message:
+                  "This API key may run only the tools named when it was made, and this is not one of them."
+              }} = Opus.Tincture.invoke(narrowed, args("tinc-unlisted", :protected), :protected)
+
+      assert ScriptedWorker.calls() == []
+    end
+
+    test "opens a listed tincture's route, whose dependency runs on the person's grant",
+         %{issuer: issuer} do
+      node = tincture!(issuer, "tinc-listed")
+      _owner = profile!(issuer, node, :owner)
+      worker!([%{"answer" => 1}, %{"answer" => 2}])
+      ScriptedWorker.fresh_limits!(issuer, [@dep_ref])
+      narrowed = key_ctx!(issuer, "listed", ["t:local.tinc-listed"])
+
+      # The person's own call runs, so the key's run below is the key's
+      # own success under the same grant, not a refusal both share.
+      assert {:ok, %{status: :completed}} =
+               Opus.Tincture.invoke(issuer, args("tinc-listed", :protected), :protected)
+
+      assert {:ok, %{status: :completed}} =
+               Opus.Tincture.invoke(narrowed, args("tinc-listed", :protected), :protected)
+
+      assert [%{authority: %{profile_kind: :owner}}, %{authority: %{profile_kind: :owner}}] =
+               ScriptedWorker.calls()
     end
   end
 

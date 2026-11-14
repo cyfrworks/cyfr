@@ -315,7 +315,7 @@ def cyfr_controller(image):
         expect(signed_in["athanor_id"], "a person is signed in on cyfr, in an athanor of their own", signed_in)
 
         created = person.tool("mcp_servers", {"action": "create", "name": ROW, "config": {
-            "transport": "pipe", "home": "kept", "backends": [{"name": "cat", "command": COMMAND}],
+            "transport": "program", "mark": "driven", "home": "kept", "backends": [{"name": "cat", "command": COMMAND}],
         }})
         print(f"created: {json.dumps(created)[:400]}", flush=True)
         made = step(stack, token, MAKE_ENTRY, name=f"pipe-login-{secrets.token_hex(4)}", program=ROW)
@@ -326,7 +326,7 @@ def cyfr_controller(image):
         names = {"program": ROW, "entry": entry, "key": "pipe-e2e", "argv": ARGV, "opener": opener}
         opened = step(stack, token, OPEN, **names)
         expect(opened.get("ok", {}).get("resumed") is False and opened["ok"]["session"],
-               "cyfr opens a session on the pipe row in the login entry's home", opened)
+               "cyfr opens a session on the driven program in the login entry's home", opened)
         session = opened["ok"]["session"]
         cat = one_cat(stack, "cyfr's session to run the row's command with the opener's argv")
         expect(kept_uid(cat), "it runs under a uid of the kept range", cat)
