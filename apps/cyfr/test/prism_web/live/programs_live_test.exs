@@ -1381,4 +1381,59 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert saved.epoch == unchanged.epoch + 1
     assert Arca.McpServerStorage.config(saved)["headers"]["X-Hub"] == "hub-literal-new"
   end
+
+  test "a kept literal an upstream echoes after an Edit reaches neither the answer, the flash nor the log",
+       %{conn: conn, athanor: athanor} do
+    stub = HTTPStub.open()
+
+    HTTPStub.stub(stub, "POST", "/v2", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      request = Jason.decode!(body)
+      [hub] = Plug.Conn.get_req_header(conn, "x-hub")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => request["id"],
+          "error" => %{"code" => -32001, "message" => "rejected header #{hub}"}
+        })
+      )
+    end)
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "relay",
+        url: "http://127.0.0.1:#{stub.port}/mcp",
+        enabled: false,
+        config_json: Jason.encode!(%{"headers" => %{"X-Hub" => "hub-literal-0123"}})
+      })
+
+    {:ok, _} = Arca.McpServerStorage.update(ctx(athanor), "relay", %{enabled: true})
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("relay", athanor.id) end)
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=relay]") |> render_click()
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        view
+        |> form("form#edit-server", %{"url" => "http://127.0.0.1:#{stub.port}/v2"})
+        |> render_submit()
+
+        html = answered(view)
+        refute html =~ "hub-literal-0123"
+      end)
+
+    assert flash(view, "error") == "'relay' saved — rejected header [REDACTED]"
+    refute log =~ "hub-literal-0123"
+    assert log =~ "[REDACTED]"
+
+    {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+    assert Arca.McpServerStorage.config(saved)["headers"] == %{"X-Hub" => "hub-literal-0123"}
+  end
 end

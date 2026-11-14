@@ -5,7 +5,7 @@ defmodule Sanctum.ToolServerDigest do
   @moduledoc """
   External MCP configuration digest pinned by a consent tool_server resource.
 
-  `JCS({id, transport, mark, url, enabled, header_entries, backends,
+  `JCS({id, transport, mark, url, enabled, header_templates, backends,
   program})` over what decides where the server's calls go and which
   credentials ride along, never resolved values: rotating a referenced
   vault entry must not move the digest, while each of these must, so a
@@ -13,11 +13,12 @@ defmodule Sanctum.ToolServerDigest do
   one and the person is asked again at use:
 
     * the address whole (scheme, host, port and path);
-    * each header that names a vault entry, by its name and its template
-      (`header_entries`): one added, removed or pointed at another entry.
-      A header holding a literal is the person's own value for the same
-      address and is left out, so changing it, or a timeout, keeps the
-      grants;
+    * every header, by its name and its template (`header_templates`): a
+      vault-bound one by the entry it names, a literal by its value, since
+      a peer may route on any header (a literal `Host` sends the call and
+      its credentials elsewhere). A header added, removed, pointed at
+      another entry or given another literal moves the digest; a vault
+      entry rotated in place does not;
     * a program's backends (each one's name, command and env templates)
       and its `program` member, everything else that decides what it is
       and what it reaches, each setting it holds: its hosts (the set of
@@ -26,8 +27,9 @@ defmodule Sanctum.ToolServerDigest do
       and disk bounds and its sign-in command;
     * the row's id, so a row deleted and made again under its name does.
 
-  The server's tool patterns are left out: a grant carries its own and
-  only ever reaches their intersection (`tool_patterns/1`). An http row
+  The server's tool patterns and its timeout are left out: a grant
+  carries its own patterns and only ever reaches their intersection with
+  the server's (`tool_patterns/1`). An http row
   has neither a mark nor a program; a program's `url` is the empty string.
   Only a tool server has a digest: an `http` row or a program marked
   `mcp`; a `driven` program offers no tools.
@@ -72,7 +74,7 @@ defmodule Sanctum.ToolServerDigest do
           "transport" => transport,
           "url" => url || "",
           "enabled" => enabled,
-          "header_entries" => headers |> Enum.filter(&vault_bound?/1) |> templates(),
+          "header_templates" => templates(headers),
           "backends" => backends
         }
         |> with_program(mark, program)
@@ -107,8 +109,6 @@ defmodule Sanctum.ToolServerDigest do
   # Absent is no restriction, which a list, even an empty one, never reads as.
   defp host_set(hosts) when is_list(hosts), do: hosts |> Enum.uniq() |> Enum.sort()
   defp host_set(nil), do: nil
-
-  defp vault_bound?({_name, template}), do: Prima.VaultRef.vault_ref?(template)
 
   defp templates(map) do
     map

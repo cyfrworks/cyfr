@@ -75,16 +75,20 @@ defmodule Sanctum.ToolServerDigestTest do
       end
     end
 
-    test "a literal header's value and the server's tool patterns keep the digest" do
+    test "every header moves the digest, a literal by its value; tool patterns keep it" do
       {:ok, base} = ToolServerDigest.compute(@base)
 
       for headers <- [
             %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr/2"},
             %{"authorization" => "vault:GH_TOKEN"},
-            %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr", "x-team" => "blue"}
+            %{
+              "authorization" => "vault:GH_TOKEN",
+              "user-agent" => "cyfr",
+              "host" => "other.example"
+            }
           ] do
-        assert {:ok, ^base} = ToolServerDigest.compute(%{@base | headers: headers}),
-               inspect(headers)
+        {:ok, digest} = ToolServerDigest.compute(%{@base | headers: headers})
+        refute digest == base, inspect(headers)
       end
 
       row = fn patterns ->
