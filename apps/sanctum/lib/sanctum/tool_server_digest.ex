@@ -5,13 +5,22 @@ defmodule Sanctum.ToolServerDigest do
   @moduledoc """
   External MCP configuration digest pinned by a consent tool_server resource.
 
-  `JCS({id, transport, url, enabled, header_templates, backends,
-  tool_patterns})` over the server row's id and its stored header and env
-  **templates** (vault references and non-credential literals), never
-  resolved values: rotating a referenced vault entry must not move the
-  digest, while re-pointing the URL, swapping a header or env reference,
-  changing a backend's command, or deleting the row and creating another
-  under the same name must. A stdio server's `url` is the empty string. There is
+  `JCS({id, transport, mark, url, enabled, header_templates, backends,
+  tool_patterns, program})` over the server row's id and its stored header
+  and env **templates** (vault references and non-credential literals),
+  never resolved values: rotating a referenced vault entry must not move
+  the digest, while re-pointing the URL, swapping a header or env
+  reference, changing a backend's command, or deleting the row and
+  creating another under the same name must. A program's `program` member
+  is everything else that decides what it is and what it reaches, each
+  setting it holds: its hosts (the set of names, in one order; absent, every
+  public host), its folder's
+  identity (its home and the login entry a kept home is), its memory and
+  disk bounds and its sign-in command, so a definition replaced with
+  wider hosts, another folder or other bounds no longer matches a grant
+  made for the old one. An http row has neither a mark nor a program. A program's `url` is the empty string. Only a
+  tool server has a digest: an `http` row or a program marked `mcp`; a
+  `driven` program offers no tools. There is
   deliberately no stored digest column — a stored digest is a cache someone
   forgets to recompute; deriving at read makes "changed config ⇒ mismatch ⇒
   deny" true by construction.
@@ -30,31 +39,65 @@ defmodule Sanctum.ToolServerDigest do
         %{
           id: id,
           transport: transport,
+          mark: mark,
           url: url,
           enabled: enabled,
           headers: headers,
           backends: backends,
-          tool_patterns: patterns
+          tool_patterns: patterns,
+          program: program
         } = server
       )
-      when is_binary(id) and transport in ["http", "stdio"] and (is_binary(url) or is_nil(url)) and
-             is_boolean(enabled) and is_map(headers) and is_list(backends) and is_list(patterns) do
-    with {:ok, backends} <- backend_templates(backends) do
-      JCS.hash(%{
-        "id" => id,
-        "transport" => transport,
-        "url" => url || "",
-        "enabled" => enabled,
-        "header_templates" => templates(headers),
-        "backends" => backends,
-        "tool_patterns" => Enum.sort(patterns)
-      })
+      when is_binary(id) and
+             ((transport == "http" and is_nil(mark)) or (transport == "program" and mark == "mcp")) and
+             (is_binary(url) or is_nil(url)) and is_boolean(enabled) and is_map(headers) and
+             is_list(backends) and is_list(patterns) and
+             ((transport == "http" and is_nil(program)) or
+                (transport == "program" and is_map(program))) do
+    with {:ok, backends} <- backend_templates(backends),
+         :ok <- readable_hosts(program) do
+      JCS.hash(
+        %{
+          "id" => id,
+          "transport" => transport,
+          "url" => url || "",
+          "enabled" => enabled,
+          "header_templates" => templates(headers),
+          "backends" => backends,
+          "tool_patterns" => Enum.sort(patterns)
+        }
+        |> with_program(mark, program)
+      )
     else
       :error -> {:error, {:invalid_server_config, server}}
     end
   end
 
   def compute(other), do: {:error, {:invalid_server_config, other}}
+
+  defp readable_hosts(%{"hosts" => hosts}) when not is_nil(hosts) do
+    if is_list(hosts) and Enum.all?(hosts, &is_binary/1), do: :ok, else: :error
+  end
+
+  defp readable_hosts(_program), do: :ok
+
+  # JCS takes no null, so an absent member is left out: a program's mark and
+  # program members are present, each setting it has not left absent.
+  defp with_program(document, nil, nil), do: document
+
+  defp with_program(document, mark, program) do
+    program =
+      program
+      |> Map.update("hosts", nil, &host_set/1)
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    Map.merge(document, %{"mark" => mark, "program" => program})
+  end
+
+  # What a program may reach is a set: its hosts in one order, each once.
+  # Absent is no restriction, which a list, even an empty one, never reads as.
+  defp host_set(hosts) when is_list(hosts), do: hosts |> Enum.uniq() |> Enum.sort()
+  defp host_set(nil), do: nil
 
   defp templates(map) do
     map
@@ -103,13 +146,42 @@ defmodule Sanctum.ToolServerDigest do
     compute(%{
       id: server.id,
       transport: server.transport,
+      mark: Map.get(server, :mark),
       url: server.url,
       enabled: server.enabled == true,
       headers: config["headers"] || %{},
       backends: config["backends"] || [],
-      tool_patterns: tool_patterns(server)
+      tool_patterns: tool_patterns(server),
+      program: program(server)
     })
   end
+
+  # What else decides what a program is and reaches, as its row stores it.
+  # A stored host list that does not read leaves the row without a digest,
+  # never with one that reads it as no restriction.
+  defp program(%{transport: "program"} = server) do
+    %{
+      "hosts" => stored_hosts(Map.get(server, :hosts)),
+      "home" => Map.get(server, :home),
+      "login_entry" => Map.get(server, :login_entry_id),
+      "memory_bytes" => Map.get(server, :memory_bytes),
+      "home_max_bytes" => Map.get(server, :home_max_bytes),
+      "login_command" => Map.get(server, :login_command)
+    }
+  end
+
+  defp program(_server), do: nil
+
+  defp stored_hosts(nil), do: nil
+
+  defp stored_hosts(text) when is_binary(text) do
+    case Jason.decode(text) do
+      {:ok, hosts} when is_list(hosts) -> hosts
+      _ -> :unreadable
+    end
+  end
+
+  defp stored_hosts(_other), do: :unreadable
 
   @doc """
   A server's exposure patterns: what the operator allowed this server to

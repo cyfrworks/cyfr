@@ -123,11 +123,13 @@ defmodule Opus.Host.ToolFlowTest do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: @server,
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
         config_json:
           Jason.encode!(%{
-            "transport" => "stdio",
+            "transport" => "program",
+            "mark" => "mcp",
             "backends" => [%{"name" => "probe", "command" => "node /probe/probe-backend.mjs"}]
           })
       })

@@ -817,7 +817,7 @@ defmodule Cyfr.Boundaries do
         "Emissary follows executions, serves webhooks, keeps an outbound call's " <>
           "lease, reports health and reads an athanor's feeds for a canvas's " <>
           "validation answers (`Opus.feeds/1`) through the execution domain's " <>
-          "root facade; a stdio server holds its row's owner and speaks MCP over its " <>
+          "root facade; an mcp program holds its row's owner and speaks MCP over its " <>
           "sessions through the programs controller (`Opus.Programs`, its session " <>
           "client and the row definition it syncs), and the provider asks it for a " <>
           "row's status, a sign-in and a kept home's reset. " <>

@@ -105,7 +105,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 
 ### Emissary: external application protocols
 
-- MCP in both directions, the HTTP API, webhooks and the OAuth callback, carrying declared operations through the gate but at the entries that admit for themselves. An external MCP server is reached over HTTP, or, for a `stdio` server, driven over a program's session.
+- MCP in both directions, the HTTP API, webhooks and the OAuth callback, carrying declared operations through the gate but at the entries that admit for themselves. A row of the Programs page is a tool server elsewhere, reached over HTTP, or a program CYFR runs, marked by how it is spoken to: `mcp`, Emissary speaking MCP over its sessions, or `driven`, run by a person or a brain.
 - Tinctures' files and data routes (§7), the device channel (§9.3), and the directory's endpoints and account pages a home that serves a directory serves (§9.1).
 
 ### Prism: the screen
