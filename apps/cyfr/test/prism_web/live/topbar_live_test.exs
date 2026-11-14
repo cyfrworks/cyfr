@@ -43,6 +43,35 @@ defmodule PrismWeb.TopbarLiveTest do
     refute has_element?(bar, ~s([phx-value-name="athanors"]))
   end
 
+  test "each counter of the bar says what it counts, on hover and to a screen reader", %{
+    conn: conn
+  } do
+    # The platform administrator starts in dev, where the counters show.
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("")
+    bar = topbar(view)
+
+    # The counts move as the page itself is served; the words do not.
+    for {name, title, words} <- [
+          {"rate", "Requests in your athanor in the last hour: ", ~r/\d+ requests\/h/},
+          {"executions", "Executions running now: ", ~r/\d+ running/},
+          {"activity", "Requests in flight now: ", ~r/\d+ in flight/},
+          {"health", "CYFR's version and the health of its services", nil},
+          {"user", "Your account", nil}
+        ] do
+      button = ~s(button[phx-value-name="#{name}"][title^="#{title}"])
+      assert has_element?(bar, button <> " .sr-only", title), name
+      if words, do: assert(has_element?(bar, button, words), name)
+    end
+
+    # Every counter of the bar carries a title.
+    html = bar |> element("#live-indicators") |> render()
+    buttons = Regex.scan(~r/<button[^>]*phx-value-name="[^"]+"[^>]*>/, html)
+    assert buttons != []
+    assert Enum.all?(buttons, fn [tag] -> tag =~ ~s(title=") end)
+  end
+
   test "the bar names the person as people are named, never by their id", %{conn: conn} do
     # No name, no email and no name at cyfr.run yet.
     unnamed = test_user(email: nil)
