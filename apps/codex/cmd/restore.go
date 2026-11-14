@@ -39,7 +39,7 @@ var restoreCmd = &cobra.Command{
 	Short: "Put a snapshot from backups/ back with the whole cluster stopped, and declare the restore",
 	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential the backup carried until its owner re-enables it.
 
-1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops. So does a project directory, scaffold directory or directory of ./data this account cannot write: on native Linux the server's container owns the storage root once the stack has run, so the restore runs as root, with sudo.
+1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops. So does a project directory, scaffold directory or directory of ./data this account cannot write: on native Linux the server's container owns the storage root once the stack has run, so the restore runs as root, with sudo. So does a scaffold file whose path crosses a link: nothing is written, removed or given back through one, so a restore run as root changes nothing outside the project.
 2. Take the stack's lock, finishing a change an interrupted command left; cancel a tailnet join that waits for approval; then stop this host's stack, timing each service.
 3. Bar CYFR from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
 4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, so the compose file in place delivers the setting at every step. A refusal here puts the two files back as they were, which lifts the bar.
@@ -272,23 +272,23 @@ func checkScaffoldPart(s *snapshotFiles) error {
 // putScaffoldBack puts each of the scaffold files names back as the
 // snapshot at dir holds it, as it stood before the update: the snapshot's
 // bytes where scaffold/ holds the file, and no file where the update
-// created it.
+// created it. Nothing is written or removed through a link at any level of
+// a name's path (putProjectFile, removeProjectFile), so a restore run as
+// root writes nothing outside the project; a name whose path crosses one
+// is refused, naming it.
 func putScaffoldBack(dir string, names []string) error {
 	for _, name := range names {
 		data, err := os.ReadFile(filepath.Join(dir, "scaffold", name))
 		if errors.Is(err, fs.ErrNotExist) {
-			if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
+			if err := removeProjectFile(name); err != nil {
+				return fmt.Errorf("remove %s: %w", name, err)
 			}
 			continue
 		}
 		if err != nil {
 			return err
 		}
-		if err := scaffold.MakeDir(filepath.Dir(name)); err != nil {
-			return err
-		}
-		if err := scaffold.ReplaceFile(name, data, 0644); err != nil {
+		if err := putProjectFile(name, data, 0644); err != nil {
 			return fmt.Errorf("put %s back: %w", name, err)
 		}
 	}
@@ -875,6 +875,11 @@ func (r *restorer) probeRestoredPostgres() error {
 // restore needs sudo. refuseUnwritableParts asks again, of the same list
 // for the layout the restored configuration gives.
 func refuseUnwritableProject(snap *snapshotFiles) error {
+	for _, name := range snap.manifest.Scaffold {
+		if err := noLinkIn(filepath.Dir(name)); err != nil {
+			return fmt.Errorf("%s cannot be restored: the path of its scaffold file %s %v; nothing was changed", snap.dir, name, err)
+		}
+	}
 	dirs, err := putBackPlaces(snap, shippedLayout(snap))
 	if err == nil {
 		err = firstUnwritable(dirs)

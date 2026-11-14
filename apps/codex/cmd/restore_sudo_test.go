@@ -135,8 +135,8 @@ func TestRestoreGivesNothingBackThroughALink(t *testing.T) {
 	if want := map[string][2]int{"wit": {4242, 4343}}; !maps.Equal(changed, want) {
 		t.Errorf("the restore gave back %v, want %v", changed, want)
 	}
-	want := "Warning: wit/cyfr/added.wit was not given back to the account that ran sudo: its path crosses a link, and nothing is given back through one.\n" +
-		"Warning: wit/cyfr was not given back to the account that ran sudo: its path crosses a link, and nothing is given back through one.\n"
+	want := "Warning: wit/cyfr/added.wit was not given back to the account that ran sudo: its path crosses a link, which nothing is written or given back through.\n" +
+		"Warning: wit/cyfr was not given back to the account that ran sudo: its path crosses a link, which nothing is written or given back through.\n"
 	if out.String() != want {
 		t.Errorf("the restore said:\n%s\nwant:\n%s", out.String(), want)
 	}
@@ -157,6 +157,66 @@ func TestRestoreRefusesASudoAccountNotInSudosForm(t *testing.T) {
 			want := "Warning: SUDO_UID and SUDO_GID must each be a plain decimal number, and they are \"" + ids[0] + "\" and \"" + ids[1] + "\", so nothing the restore wrote was given back to the account that ran sudo.\n"
 			if out.String() != want || len(changed) != 0 {
 				t.Errorf("the restore said %q and gave back %v; want %q and nothing", out.String(), changed, want)
+			}
+		})
+	}
+}
+
+// linkOutOfProject makes the working directory a new project whose wit is
+// a link to a directory outside it holding cyfr/added.wit, and answers
+// that file's path.
+func linkOutOfProject(t *testing.T) string {
+	t.Helper()
+	t.Chdir(t.TempDir())
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outside, "cyfr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(outside, "cyfr", "added.wit")
+	if err := os.WriteFile(file, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, "wit"); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// The scaffold's put-back writes and removes nothing through a link at
+// any level of a file's path: with wit a link out of the project, putting
+// wit/cyfr/added.wit back, or removing it, is refused, naming it, and
+// nothing behind the link changes.
+func TestScaffoldPutBackWritesNothingThroughALink(t *testing.T) {
+	for name, held := range map[string]bool{"put back": true, "removed": false} {
+		t.Run(name, func(t *testing.T) {
+			outside := linkOutOfProject(t)
+			snapshot := t.TempDir()
+			if held {
+				if err := os.MkdirAll(filepath.Join(snapshot, "scaffold", "wit", "cyfr"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(snapshot, "scaffold", "wit", "cyfr", "added.wit"), []byte("snapshot"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := putScaffoldBack(snapshot, []string{"wit/cyfr/added.wit"})
+			verb := "remove"
+			if held {
+				verb = "put"
+			}
+			want := verb + " wit/cyfr/added.wit"
+			if held {
+				want += " back"
+			}
+			want += ": crosses a link, which nothing is written or given back through"
+			if err == nil || err.Error() != want {
+				t.Fatalf("the put-back answered %v, want %q", err, want)
+			}
+			if got, _ := os.ReadFile(outside); string(got) != "outside" {
+				t.Errorf("the file behind the link holds %q", got)
+			}
+			if entries, _ := os.ReadDir(filepath.Dir(outside)); len(entries) != 1 {
+				t.Errorf("the directory behind the link holds %v", entries)
 			}
 		})
 	}

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -482,6 +483,61 @@ func TestRestoreAsksOnlyThePlacesItWrites(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(data, 0o755) })
 	if out, err := r.restore(true); err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
+	}
+}
+
+// A scaffold file whose path crosses a link is refused at the start,
+// naming it, before anything stops, and nothing behind the link changes.
+func TestRestoreRefusesAScaffoldPathThroughALink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no restore runs as another account on Windows")
+	}
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	outside := t.TempDir()
+	wit := filepath.Join(r.project, "wit")
+	if err := os.Rename(wit, filepath.Join(outside, "wit")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "wit"), wit); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]string{}
+	filepath.WalkDir(outside, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			before[p] = read(t, p)
+		}
+		return nil
+	})
+	snap, err := readSnapshot(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := ""
+	for _, name := range snap.manifest.Scaffold {
+		if strings.HasPrefix(name, "wit/") {
+			first = name
+			break
+		}
+	}
+	compose := read(t, filepath.Join(r.project, "docker-compose.yml"))
+	out, err := r.restore(true)
+	want := r.dir + " cannot be restored: the path of its scaffold file " + first + " crosses a link, which nothing is written or given back through; nothing was changed"
+	if first == "" || err == nil || err.Error() != want || out != "" {
+		t.Fatalf("restore answered %v and printed %q, want %q", err, out, want)
+	}
+	if log := r.log(); log != nil {
+		t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
+	}
+	r.configAsBefore(compose, string(r.env))
+	after := map[string]string{}
+	filepath.WalkDir(outside, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			after[p] = read(t, p)
+		}
+		return nil
+	})
+	if !maps.Equal(before, after) {
+		t.Errorf("behind the link %v became %v", before, after)
 	}
 }
 
