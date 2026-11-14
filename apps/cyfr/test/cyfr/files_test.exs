@@ -8,8 +8,9 @@ defmodule Arca.FilesTest.Store do
   # commits and its publication waits for the next sweep. And, while
   # armed, the store of a guest object named `last.txt` answers `{:error,
   # :eio}` (`:refuse`), kills its caller once its bytes landed (`:kill`),
-  # or runs a function once they landed (`{:run, fun}`): a move's store,
-  # between its read and its publish.
+  # or runs a function once they landed and answers `:ok` (`{:run, fun}`)
+  # or `{:error, :eio}` (`{:run_and_refuse, fun}`): a move's store, between
+  # its read and its publish.
   use Arca.Storage.TestDouble
 
   @held {__MODULE__, :held}
@@ -37,11 +38,11 @@ defmodule Arca.FilesTest.Store do
         :ok = super(actor, key, content)
         Process.exit(self(), :kill)
 
-      {:run, fun} ->
+      {run, fun} when run in [:run, :run_and_refuse] ->
         :ok = super(actor, key, content)
         :persistent_term.erase(@armed)
         fun.()
-        :ok
+        if run == :run, do: :ok, else: {:error, :eio}
 
       _unarmed ->
         super(actor, key, content)
@@ -357,6 +358,22 @@ defmodule Arca.FilesTest do
 
       assert {:ok, %{content: "theirs"}} = Files.read(actor, "data/dest/last.txt")
       assert {:ok, %{content: "mine"}} = Files.read(actor, "data/src/last.txt")
+
+      # A file written at the destination meanwhile, then a store that
+      # fails: nothing of the move is published, and nothing is taken back
+      # by path, so that writer's file stays.
+      {:ok, _} = Files.write(actor, "data/two/a.txt", "a")
+      {:ok, _} = Files.write(actor, "data/two/last.txt", "l")
+
+      Arca.FilesTest.Store.arm(
+        {:run_and_refuse, fn -> {:ok, _} = Files.write(actor, "data/there/a.txt", "theirs") end}
+      )
+
+      assert Files.move(actor, "data/two", "data/there") == {:error, {:unavailable, "Storage"}}
+      assert {:ok, %{content: "theirs"}} = Files.read(actor, "data/there/a.txt")
+      refute Arca.exists?(actor, ["data", "there", "last.txt"])
+      assert {:ok, %{content: "a"}} = Files.read(actor, "data/two/a.txt")
+      assert {:ok, %{content: "l"}} = Files.read(actor, "data/two/last.txt")
     end
 
     test "stopped by a failed store or its process's death leaves the source whole and the " <>
