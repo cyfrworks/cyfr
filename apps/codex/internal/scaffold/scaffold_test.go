@@ -87,33 +87,6 @@ func TestIsManaged(t *testing.T) {
 // and one managed but not shipped would name nothing. Every guide at the
 // repository's root ships, so a new root guide fails here until it is
 // listed.
-// Items is the tarball's list: every item scripts/scaffold-tarball.sh
-// ships at the root, in its order, and the seccomp profile beside them.
-func TestScaffoldItemsAreTheTarballs(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "scripts", "scaffold-tarball.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	items := regexp.MustCompile(`(?s)\nITEMS=\((.*?)\n\)`).FindStringSubmatch(string(raw))
-	name := regexp.MustCompile(`(?m)^PROFILE_NAME=(\S+)$`).FindStringSubmatch(string(raw))
-	if items == nil || name == nil {
-		t.Fatal("scaffold-tarball.sh has no ITEMS list or PROFILE_NAME")
-	}
-	var shipped []string
-	for _, line := range strings.Split(items[1], "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		for _, item := range strings.Fields(line) {
-			shipped = append(shipped, strings.TrimSuffix(item, "/"))
-		}
-	}
-	shipped = append(shipped, name[1])
-	if !slices.Equal(Items, shipped) {
-		t.Errorf("Items is %q, and the tarball ships %q", Items, shipped)
-	}
-}
-
 func TestShippedGuidesAreManaged(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "..")
 	raw, err := os.ReadFile(filepath.Join(root, "scripts", "scaffold-tarball.sh"))
@@ -525,6 +498,17 @@ func TestFetchWritesNothingUntilWrite(t *testing.T) {
 	}
 	if got := r.Managed(); !slices.Equal(got, []string{"configuration-guide.md"}) {
 		t.Errorf("Managed() = %v", got)
+	}
+	// Names are the release's files, each one File answers, and no
+	// directory.
+	names := r.Names()
+	if !slices.Contains(names, "configuration-guide.md") || !slices.Contains(names, "docker-compose.yml") {
+		t.Errorf("Names() = %v", names)
+	}
+	for _, name := range names {
+		if _, ok := r.File(name); !ok {
+			t.Errorf("Names() names %s, which is no file of the release", name)
+		}
 	}
 	// File answers the release's own bytes, never the project's.
 	if got, ok := r.File("docker-compose.yml"); !ok || len(got) == 0 || string(got) == "services: {mine: {}}\n" {

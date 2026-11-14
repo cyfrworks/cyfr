@@ -19,7 +19,9 @@ import (
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/config"
+	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
+	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -40,10 +42,10 @@ Before anything is removed it shows what it removes and what it keeps, then asks
 It removes:
 - the stack: its containers and networks, and the images its compose file names (one another container still uses stays, and is said);
 - this machine's screen service, when 'cyfr screen on' installed it, giving the screen back to its login prompt;
-- the files cyfr init laid down from the release (the compose file, Caddyfile, guides, licences, WIT definitions, the keeper's seccomp profile and the env examples), .env, the shipped AQUA files, the .gitignore cyfr init wrote unless it was changed, and .cyfr/, the stack's own state; then the directory, once nothing else is in it;
+- each file CYFR shipped or wrote in the directory, by name: the files of the release's scaffold, which cyfr init laid down (it reads their names from that release, so it needs network access to it), .env, the .gitignore cyfr init wrote unless it was changed, and the stack's own state in .cyfr/; then each of their directories, and the directory itself, once nothing is left in it. Nothing is read or removed through a symbolic link, and a link stays as it was;
 - this program and its link in /usr/local/bin, and its settings and update check in ~/.cyfr. A Homebrew install is left to 'brew uninstall --cask cyfr'.
 
-It keeps every other file in the directory, and CYFR's data unless the second question says yes: data/ and backups/, the stack's volumes (the programs' kept files among them) and this machine's device key in ~/.cyfr/device. data/ and backups/ belong to CYFR's container, so they are removed as root, through sudo. Docker and every package other software uses stay.
+It keeps every other file in the directory, a file of your own beside CYFR's included, and CYFR's data unless the second question says yes: data/ and backups/, the stack's volumes (the programs' kept files among them) and this machine's device key in ~/.cyfr/device. data/ and backups/ belong to CYFR's container, so they are removed as root, through sudo. Docker and every package other software uses stay.
 
 Each step is said as it is done, the data's last; when one fails, the command says what is already gone and what is still here.`,
 	Example: "  cyfr uninstall\n  cyfr uninstall --yes",
@@ -80,24 +82,52 @@ func isCYFRProject() bool {
 	return err == nil && values["CYFR_ACCESS"] != "" && access.HasComposeFile(".") && fileExists(stateMarker)
 }
 
+// uninstallScaffold names the files the scaffold of release version lays
+// down, the list cyfr init writes from (scaffold.Release.Names); a
+// variable so a test names them.
+var uninstallScaffold = func(version string) ([]string, error) {
+	r, err := scaffold.Fetch(version)
+	if err != nil {
+		return nil, err
+	}
+	return r.Names(), nil
+}
+
+// installedRelease is the release the CYFR in the working directory runs,
+// by its compose file's cyfr image tag, else this program's.
+func installedRelease() string {
+	for _, name := range access.ComposeMainFiles {
+		for _, ref := range imagesFromCompose(name, nil) {
+			repository, tag, _ := splitImageReference(ref)
+			if normalizeRepository(repository) == release.RepoCyfr && release.IsVersion(tag) {
+				return tag
+			}
+		}
+	}
+	return version.Version
+}
+
 // uninstallPlan is what cyfr uninstall removes and keeps, read before
 // anything is removed.
 type uninstallPlan struct {
 	dir     string
 	project string
+	release string
 	images  []string
-	// files are the directory's entries CYFR put there, removed whole;
-	// aqua are the shipped AQUA files, removed one by one.
-	files, aqua []string
-	// data are the directory's data entries, removed as root when the
-	// data goes, with the stack's volumes.
+	// files are the files CYFR shipped or wrote in the directory, by name:
+	// each a regular file reached through no symbolic link. Nothing else
+	// in the directory is removed.
+	files []string
+	// data are the directory's data folders, each a real directory,
+	// removed as root when the data goes, with the stack's volumes.
 	data []string
-	// others are the directory's entries CYFR did not put there.
-	others []string
-	screen bool
-	self   string
-	cask   bool
-	link   bool
+	// linkedData are data entries that are symbolic links: kept, the link
+	// as it was found, whatever is asked.
+	linkedData []string
+	screen     bool
+	self       string
+	cask       bool
+	link       bool
 	// settings are ~/.cyfr's files of this program; deviceKey is the
 	// device key there, which goes with the data.
 	settings  []string
@@ -106,44 +136,72 @@ type uninstallPlan struct {
 	deleteData bool
 }
 
+// regularFile reports whether rel, under dir, is a regular file reached
+// through no symbolic link: every directory on the way is a real one.
+func regularFile(dir, rel string) bool {
+	path := dir
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+		path = filepath.Join(path, part)
+		info, err := os.Lstat(path)
+		switch {
+		case err != nil:
+			return false
+		case i < len(parts)-1 && !info.IsDir():
+			return false
+		case i == len(parts)-1:
+			return info.Mode().IsRegular()
+		}
+	}
+	return false
+}
+
 // readUninstallPlan reads what an uninstall of the CYFR in the working
 // directory removes and keeps; it changes nothing.
-func readUninstallPlan() (*uninstallPlan, error) {
+func readUninstallPlan(shipped []string) (*uninstallPlan, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
 	p := &uninstallPlan{dir: dir, project: access.ProjectName(dir), screen: screenInstalled(), cask: caskInstalled()}
 	for _, name := range access.ComposeMainFiles {
-		if fileExists(name) {
+		if regularFile(dir, name) {
 			p.images = imagesFromCompose(name, []string{buildsProfile, access.ModePublic, access.ModeTailnet})
 			break
 		}
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
+	named := slices.Clone(shipped)
+	named = append(named, ".env")
+	if gitignore, err := os.ReadFile(".gitignore"); err == nil && bytes.Equal(gitignore, []byte(projectGitignore)) {
+		named = append(named, ".gitignore")
 	}
-	gitignore, _ := os.ReadFile(".gitignore")
-	for _, entry := range entries {
-		name := entry.Name()
-		switch {
-		case slices.Contains(scaffold.Items, name), name == ".env", name == stateMarker,
-			name == ".gitignore" && bytes.Equal(gitignore, []byte(projectGitignore)):
-			p.files = append(p.files, name)
-		case slices.Contains(projectData, name):
-			p.data = append(p.data, name)
-		case name == "aqua" && entry.IsDir():
-			if err := filepath.WalkDir("aqua", func(path string, d fs.DirEntry, err error) error {
-				if err == nil && !d.IsDir() && scaffold.IsManaged(filepath.ToSlash(path)) {
-					p.aqua = append(p.aqua, path)
-				}
-				return err
-			}); err != nil {
-				return nil, err
+	// The stack's own state: every file under .cyfr/ is the engine's.
+	// WalkDir descends into no symbolic link, and regularFile skips one.
+	if info, err := os.Lstat(stateMarker); err == nil && info.IsDir() {
+		_ = filepath.WalkDir(stateMarker, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && d.Type().IsRegular() {
+				named = append(named, filepath.ToSlash(path))
 			}
+			return nil
+		})
+	}
+	for _, name := range named {
+		if regularFile(dir, name) && !slices.Contains(p.files, name) {
+			p.files = append(p.files, name)
+		}
+	}
+	slices.Sort(p.files)
+	for _, name := range projectData {
+		info, err := os.Lstat(name)
+		switch {
+		case err != nil:
+		case info.IsDir():
+			p.data = append(p.data, name)
 		default:
-			p.others = append(p.others, name)
+			p.linkedData = append(p.linkedData, name)
 		}
 	}
 	if !p.cask {
@@ -158,18 +216,18 @@ func readUninstallPlan() (*uninstallPlan, error) {
 		}
 	}
 	for _, path := range []func() (string, error){config.DefaultConfigPath, versionCheckPath} {
-		if path, err := path(); err == nil && fileExists(path) {
+		if path, err := path(); err == nil && regularFile(filepath.Dir(path), filepath.Base(path)) {
 			p.settings = append(p.settings, path)
 		}
 	}
-	if path, err := deviceKey(); err == nil && fileExists(path) {
+	if path, err := deviceKey(); err == nil && regularFile(filepath.Dir(filepath.Dir(path)), filepath.Join("device", filepath.Base(path))) {
 		p.deviceKey = path
 	}
 	return p, nil
 }
 
 // dataNames names CYFR's data as it is shown: the directory's data
-// entries, the stack's volumes and the device key.
+// folders, the stack's volumes and the device key.
 func (p *uninstallPlan) dataNames() string {
 	var names []string
 	for _, name := range p.data {
@@ -193,8 +251,8 @@ func (p *uninstallPlan) show(out io.Writer) {
 	if p.screen {
 		fmt.Fprintln(out, "  this machine's screen service, which gives the screen back to its login prompt")
 	}
-	if names := append(slices.Clone(p.files), p.aqua...); len(names) > 0 {
-		fmt.Fprintf(out, "  the files CYFR put in %s: %s\n", p.dir, strings.Join(names, ", "))
+	if len(p.files) > 0 {
+		fmt.Fprintf(out, "  the files CYFR shipped or wrote in %s, each by name: %s\n", p.dir, strings.Join(p.files, ", "))
 	}
 	if p.self != "" {
 		program := "  this program, " + p.self
@@ -208,9 +266,10 @@ func (p *uninstallPlan) show(out io.Writer) {
 	}
 	fmt.Fprintln(out, "It keeps:")
 	fmt.Fprintf(out, "  CYFR's data, unless you say next to delete it: %s\n", p.dataNames())
-	if len(p.others) > 0 {
-		fmt.Fprintf(out, "  the other files in %s: %s\n", p.dir, strings.Join(p.others, ", "))
+	for _, name := range p.linkedData {
+		fmt.Fprintf(out, "  %s, a link, as it is\n", filepath.Join(p.dir, name))
 	}
+	fmt.Fprintf(out, "  every other file in %s, and every link, as it is\n", p.dir)
 	if p.cask {
 		fmt.Fprintln(out, "  this program, which Homebrew installed: remove it with 'brew uninstall --cask cyfr'")
 	}
@@ -224,10 +283,16 @@ func runUninstall(ctx context.Context, out io.Writer, yes, deleteData bool) erro
 	if !isCYFRProject() {
 		return errors.New("This directory is not a CYFR that cyfr init made, so nothing was removed: it lacks a compose file, .cyfr/ or a .env that names CYFR_ACCESS. Run 'cyfr uninstall' in CYFR's directory")
 	}
-	p, err := readUninstallPlan()
+	installed := installedRelease()
+	shipped, err := uninstallScaffold(installed)
+	if err != nil {
+		return fmt.Errorf("cyfr uninstall could not read which files release %s shipped (%v), so it cannot name them; nothing was removed. Run it again with network access to the release", installed, err)
+	}
+	p, err := readUninstallPlan(shipped)
 	if err != nil {
 		return fmt.Errorf("cyfr uninstall could not read this directory (%v); nothing was removed", err)
 	}
+	p.release = installed
 	p.show(out)
 	reader := bufio.NewReader(askInput)
 	if !yes {
@@ -399,17 +464,12 @@ func (r *uninstallRun) run(ctx context.Context) error {
 	locked = false
 
 	r.filesGone = true
-	for _, path := range p.aqua {
-		if err := os.Remove(filepath.Join(p.dir, path)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return r.failed("removing "+path, err)
-		}
-	}
-	removeEmptyDirs(filepath.Join(p.dir, "aqua"))
 	for _, name := range p.files {
-		if err := os.RemoveAll(filepath.Join(p.dir, name)); err != nil {
+		if err := os.Remove(filepath.Join(p.dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return r.failed("removing "+name, err)
 		}
 	}
+	removeEmptyParents(p.dir, p.files)
 	r.done("the files CYFR put in " + p.dir)
 	for _, path := range p.settings {
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -456,27 +516,42 @@ func (r *uninstallRun) run(ctx context.Context) error {
 	// Each directory goes only when nothing is left in it: a person's own
 	// file, or the data kept, keeps it.
 	if p.deviceKey != "" {
-		_ = os.Remove(filepath.Dir(p.deviceKey))
+		removeEmptyDir(filepath.Dir(p.deviceKey))
 	}
 	if dir, err := config.DefaultConfigDir(); err == nil {
-		_ = os.Remove(dir)
+		removeEmptyDir(dir)
 	}
-	_ = os.Remove(p.dir)
+	removeEmptyDir(p.dir)
 	return nil
 }
 
-// removeEmptyDirs removes dir and the directories under it that hold
-// nothing, deepest first, and leaves every one that holds a file: the
-// shipped AQUA directories, once their files are gone.
-func removeEmptyDirs(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
+// removeEmptyDir removes path when it is a real directory, not a link,
+// and nothing is in it.
+func removeEmptyDir(path string) {
+	if info, err := os.Lstat(path); err == nil && info.IsDir() {
+		_ = os.Remove(path)
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			removeEmptyDirs(filepath.Join(dir, entry.Name()))
+}
+
+// removeEmptyParents removes, deepest first, each directory under dir that
+// holds one of files and is a real directory, not a link, once it is
+// empty; a directory that still holds anything stays.
+func removeEmptyParents(dir string, files []string) {
+	var dirs []string
+	for _, name := range files {
+		for parent := filepath.Dir(filepath.FromSlash(name)); parent != "."; parent = filepath.Dir(parent) {
+			if !slices.Contains(dirs, parent) {
+				dirs = append(dirs, parent)
+			}
 		}
 	}
-	_ = os.Remove(dir)
+	slices.SortFunc(dirs, func(a, b string) int {
+		return strings.Count(b, string(filepath.Separator)) - strings.Count(a, string(filepath.Separator))
+	})
+	for _, parent := range dirs {
+		path := filepath.Join(dir, parent)
+		if info, err := os.Lstat(path); err == nil && info.IsDir() {
+			_ = os.Remove(path)
+		}
+	}
 }

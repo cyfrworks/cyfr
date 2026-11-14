@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,26 +55,30 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 	bin := t.TempDir()
 	s.self, s.link = filepath.Join(bin, "cyfr"), filepath.Join(bin, "link", "cyfr")
 	files := map[string]string{
-		"docker-compose.yml":      string(s.compose),
-		"Caddyfile":               "",
-		".env":                    "CYFR_ACCESS=local\n",
-		".env.example":            "CYFR_ACCESS=\n",
-		".env.locus.example":      "",
-		"keeper.seccomp.json":     "{}",
-		"configuration-guide.md":  "# guide\n",
-		"LICENSE":                 "",
-		"LICENSES/Apache-2.0.txt": "",
-		"FAIR_SOURCE.md":          "",
-		"wit/cyfr/a.wit":          "package cyfr:a;\n",
-		".gitignore":              projectGitignore,
-		".cyfr/lock":              "",
-		"aqua/aqua.md":            "# soul\n",
-		"aqua/crew/explorer.md":   "# shipped\n",
-		"aqua/crew/mine.md":       "# the person's own crew member\n",
-		"data/cyfr.db":            "db",
-		"backups/x/db":            "db",
-		"store/cyfr.db":           "the person's own data root",
-		"personal-document.txt":   "not CYFR's",
+		"docker-compose.yml":       string(s.compose),
+		"Caddyfile":                "",
+		".env":                     "CYFR_ACCESS=local\n",
+		".env.example":             "CYFR_ACCESS=\n",
+		".env.locus.example":       "",
+		"keeper.seccomp.json":      "{}",
+		"configuration-guide.md":   "# guide\n",
+		"LICENSE":                  "",
+		"LICENSES/Apache-2.0.txt":  "",
+		"FAIR_SOURCE.md":           "",
+		"wit/cyfr/a.wit":           "package cyfr:a;\n",
+		".gitignore":               projectGitignore,
+		".cyfr/lock":               "",
+		"aqua/aqua.md":             "# soul\n",
+		"aqua/crew/explorer.md":    "# shipped\n",
+		"aqua/skills/web/SKILL.md": "# shipped\n",
+		"aqua/crew/mine.md":        "# the person's own crew member\n",
+		"aqua/skills/web/mine.md":  "# the person's own, beside a shipped scroll\n",
+		"wit/cyfr/mine.wit":        "package mine:own;\n",
+		"LICENSES/mine.txt":        "the person's own\n",
+		"data/cyfr.db":             "db",
+		"backups/x/db":             "db",
+		"store/cyfr.db":            "the person's own data root",
+		"personal-document.txt":    "not CYFR's",
 	}
 	for name, data := range files {
 		s.write(filepath.Join(s.dir, name), data)
@@ -95,6 +100,9 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 	t.Setenv("FAKE_DOCKER_DIR", s.fake)
 	s.engine = useFakeEngine(t)
 
+	savedScaffold := uninstallScaffold
+	uninstallScaffold = func(string) ([]string, error) { return slices.Clone(shippedNames), nil }
+	t.Cleanup(func() { uninstallScaffold = savedScaffold })
 	savedSelf, savedCask, savedLink, savedScreen := selfExecutable, caskInstalled, usrLocalLink, screenInstalled
 	savedApply, savedForget := machine.apply, machine.forget
 	t.Cleanup(func() {
@@ -187,10 +195,20 @@ func exists(path string) bool {
 	return err == nil
 }
 
+// shippedNames are the files the scenarios' release scaffold lays down.
+var shippedNames = []string{
+	"docker-compose.yml", "Caddyfile", ".env.example", ".env.locus.example", "keeper.seccomp.json",
+	"configuration-guide.md", "LICENSE", "LICENSES/Apache-2.0.txt", "FAIR_SOURCE.md", "wit/cyfr/a.wit",
+	"aqua/aqua.md", "aqua/crew/explorer.md", "aqua/skills/web/SKILL.md",
+}
+
 // kept is what an uninstall that keeps the data leaves in the directory:
-// the data, the person's own files and AQUA crew member, and the data
-// root they configured themselves.
-var kept = []string{"aqua/crew/mine.md", "backups/x/db", "data/cyfr.db", "personal-document.txt", "store/cyfr.db"}
+// the data, the person's own files, beside CYFR's in wit/, LICENSES/ and
+// AQUA's folders among them, and the data root they configured.
+var kept = []string{
+	"LICENSES/mine.txt", "aqua/crew/mine.md", "aqua/skills/web/mine.md", "backups/x/db", "data/cyfr.db",
+	"personal-document.txt", "store/cyfr.db", "wit/cyfr/mine.wit",
+}
 
 func (s *uninstallScenario) images() []string {
 	path := filepath.Join(s.t.TempDir(), "docker-compose.yml")
@@ -242,8 +260,8 @@ func TestUninstallRemovesWhatCYFRPutThereAndKeepsTheData(t *testing.T) {
 		}
 	}
 	for _, line := range []string{
-		"It keeps:\n  CYFR's data, unless you say next to delete it: " + filepath.Join(s.dir, "backups") + ", " + filepath.Join(s.dir, "data") + ", the stack's volumes (the programs' kept files among them), " + filepath.Join(s.home, ".cyfr", "device", "key.json") + " (this machine's device key)\n",
-		"  the other files in " + s.dir + ": personal-document.txt, store\n",
+		"It keeps:\n  CYFR's data, unless you say next to delete it: " + filepath.Join(s.dir, "data") + ", " + filepath.Join(s.dir, "backups") + ", the stack's volumes (the programs' kept files among them), " + filepath.Join(s.home, ".cyfr", "device", "key.json") + " (this machine's device key)\n",
+		"  every other file in " + s.dir + ", and every link, as it is\n",
 		"CYFR's data stays.\n",
 		"CYFR is uninstalled. Its data stays: ",
 	} {
@@ -277,7 +295,7 @@ func TestUninstallAsksAboutTheDataApart(t *testing.T) {
 	if err != nil || !strings.HasSuffix(out, "Removed this machine's device key.\nCYFR is uninstalled, its data with it.\n") {
 		t.Fatalf("cyfr uninstall answered yes twice answered %v\n%s", err, out)
 	}
-	if got, want := left(t, s.dir), []string{"aqua/crew/mine.md", "personal-document.txt", "store/cyfr.db"}; !slices.Equal(got, want) {
+	if got, want := left(t, s.dir), []string{"LICENSES/mine.txt", "aqua/crew/mine.md", "aqua/skills/web/mine.md", "personal-document.txt", "store/cyfr.db", "wit/cyfr/mine.wit"}; !slices.Equal(got, want) {
 		t.Errorf("the directory holds %q, want %q", got, want)
 	}
 	if got := s.log(); !slices.Equal(got, s.removalLog(true)) {
@@ -286,7 +304,7 @@ func TestUninstallAsksAboutTheDataApart(t *testing.T) {
 	if got := left(t, s.home); len(got) != 0 {
 		t.Errorf("the home holds %q", got)
 	}
-	data := shellQuote([]string{"rm", "-rf", "--", filepath.Join(s.dir, "backups"), filepath.Join(s.dir, "data")})
+	data := shellQuote([]string{"rm", "-rf", "--", filepath.Join(s.dir, "data"), filepath.Join(s.dir, "backups")})
 	if want := []string{shellQuote([]string{"rm", "-f", "--", s.link}), data}; !slices.Equal(s.root, want) {
 		t.Errorf("sudo ran %q, want %q", s.root, want)
 	}
@@ -360,7 +378,7 @@ func TestUninstallInTheSettingsDirectoryKeepsTheData(t *testing.T) {
 	if _, err := s.run(true, false); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := left(t, project), []string{"aqua/crew/mine.md", "backups/x/db", "data/cyfr.db", "device/key.json"}; !slices.Equal(got, want) {
+	if got, want := left(t, project), []string{"aqua/crew/mine.md", "aqua/skills/web/mine.md", "backups/x/db", "data/cyfr.db", "device/key.json", "wit/cyfr/mine.wit"}; !slices.Equal(got, want) {
 		t.Errorf("~/.cyfr holds %q, want %q", got, want)
 	}
 }
@@ -382,7 +400,7 @@ func TestUninstallSaysWhatIsGoneWhenAStepFails(t *testing.T) {
 	s = newUninstallScenario(t)
 	s.refuseRoot = "'-rf'"
 	_, err = s.run(true, true)
-	if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall stopped: removing "+filepath.Join(s.dir, "backups")+" and "+filepath.Join(s.dir, "data")+" as root failed") || strings.Contains(err.Error(), "cyfr up") || !strings.Contains(err.Error(), "Already removed: the stack's containers; the link "+s.link+"; the stack's networks; the stack's images; the files CYFR put in "+s.dir+"; its settings; this program.") {
+	if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall stopped: removing "+filepath.Join(s.dir, "data")+" and "+filepath.Join(s.dir, "backups")+" as root failed") || strings.Contains(err.Error(), "cyfr up") || !strings.Contains(err.Error(), "Already removed: the stack's containers; the link "+s.link+"; the stack's networks; the stack's images; the files CYFR put in "+s.dir+"; its settings; this program.") {
 		t.Fatalf("a refused data removal answered %v", err)
 	}
 	if log := s.log(); log[len(log)-1] == "volume rm cyfr_homes cyfr_tailscale" {
@@ -439,4 +457,76 @@ func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T)
 	if !exists(s.self) {
 		t.Error("a Homebrew install's program was removed")
 	}
+}
+
+// An AQUA folder that is a link out of the project is neither read nor
+// removed through: nothing behind it changes, its empty folders included,
+// and the link stays as it was found.
+func TestUninstallLeavesALinkAndWhatIsBehindIt(t *testing.T) {
+	s := newUninstallScenario(t)
+	outside := t.TempDir()
+	s.write(filepath.Join(outside, "aqua.md"), "# soul\n")
+	s.write(filepath.Join(outside, "crew", "explorer.md"), "# shipped\n")
+	if err := os.MkdirAll(filepath.Join(outside, "skills", "empty"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(s.dir, "aqua")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(s.dir, "aqua")); err != nil {
+		t.Fatal(err)
+	}
+	before := entriesOf(t, outside)
+	if _, err := s.run(true, false); err != nil {
+		t.Fatal(err)
+	}
+	if after := entriesOf(t, outside); !maps.Equal(after, before) {
+		t.Errorf("what the link leads to changed:\nbefore %v\nafter  %v", before, after)
+	}
+	if target, err := os.Readlink(filepath.Join(s.dir, "aqua")); err != nil || target != outside {
+		t.Errorf("the aqua link is %q (%v), want it as it was, to %s", target, err, outside)
+	}
+}
+
+// Without the release's list of its files, nothing is named, so nothing
+// is removed or stopped.
+func TestUninstallRemovesNothingWithoutTheReleasesFileNames(t *testing.T) {
+	s := newUninstallScenario(t)
+	uninstallScaffold = func(string) ([]string, error) { return nil, errors.New("download: no network") }
+	before := left(t, s.dir)
+	_, err := s.run(true, true)
+	if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall could not read which files release ") || !strings.Contains(err.Error(), "shipped (download: no network), so it cannot name them; nothing was removed.") {
+		t.Fatalf("cyfr uninstall answered %v", err)
+	}
+	s.nothingRemoved(before)
+}
+
+// entriesOf is every path under dir with its mode and, for a file, its
+// bytes, read through no link, so a test sees any change beneath dir.
+func entriesOf(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		entry := info.Mode().String()
+		if info.Mode().IsRegular() {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			entry += " " + string(data)
+		}
+		entries[path] = entry
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
 }

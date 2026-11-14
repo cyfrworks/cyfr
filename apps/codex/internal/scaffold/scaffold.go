@@ -64,6 +64,19 @@ type entry struct {
 	data []byte
 }
 
+// Names answers every file the scaffold lays down, by its path in the
+// project as Write writes it; directories are not named. They are the
+// files `cyfr uninstall` removes.
+func (r *Release) Names() []string {
+	var names []string
+	for _, e := range r.entries {
+		if !e.dir {
+			names = append(names, e.name)
+		}
+	}
+	return names
+}
+
 // Managed answers the managed files Write(true) overwrites or creates, in
 // the tarball's order.
 func (r *Release) Managed() []string {
@@ -238,16 +251,6 @@ var Guides = []string{
 	"identity-guide.md",
 	"devices-guide.md",
 }
-
-// Items are the scaffold tarball's entries at a project's root besides
-// aqua/: scripts/scaffold-tarball.sh's ITEMS, a directory without its
-// slash, and the seccomp profile shipped beside them. They are what
-// `cyfr init` lays down from the tarball and `cyfr uninstall` removes;
-// TestScaffoldItemsAreTheTarballs binds this list to the script's.
-var Items = append(slices.Clone(Guides),
-	"LICENSE", "LICENSES", "FAIR_SOURCE.md", "wit",
-	"docker-compose.yml", "Caddyfile", ".env.example", ".env.locus.example",
-	SeccompProfile)
 
 // IsManaged returns true for files that are maintained by cyfr and should be
 // overwritten during an update (guides, WIT interface definitions, the
