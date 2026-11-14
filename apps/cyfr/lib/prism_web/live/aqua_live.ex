@@ -34,7 +34,8 @@ defmodule PrismWeb.AquaLive do
   the person first, a checklist of what each needs, then one step for
   each brain ticked — its grant, asked in the page's system layer
   (`PrismWeb.SystemLayer`), whose sheet takes the key in CYFR's own
-  credential prompt, or the Programs page for a plan — reachable in
+  credential prompt, the grant alone for a brain that needs nothing else
+  of the person, or the Programs page for a plan — reachable in
   `lite`, so a box that never opens `dev` still gets its key in. A grant
   for a brain ends in one `models` call (`Aqua.models/2`) whose answer the
   page shows, so a key the provider refuses reads as the provider says.
@@ -604,7 +605,7 @@ defmodule PrismWeb.AquaLive do
                   class="rounded bg-gray-900 border-gray-600"
                 />
                 <span class="font-medium text-gray-100">{brain.provider}</span>
-                <span class="text-gray-400">{need_line(brain.need)}</span>
+                <span class="text-gray-400">{row_line(brain)}</span>
               </label>
             <% end %>
             <span :if={brain.state == :ready} class="text-emerald-400">connected</span>
@@ -634,24 +635,35 @@ defmodule PrismWeb.AquaLive do
 
         <ol :if={@steps != []} id="aqua-setup-steps" class="space-y-1.5 list-decimal pl-5">
           <li :for={brain <- @steps} id={"aqua-setup-step-" <> brain.provider}>
-            <%= if brain.need && brain.need.kind == "login" do %>
-              {brain.provider}: sign in to {brain.need.program || "its program"} on the Programs page.
-              <.link
-                navigate={programs_path(@athanor, brain)}
-                class="text-blue-400 hover:underline"
-              >
-                Open Programs
-              </.link>
-            <% else %>
-              {brain.provider}: enter your key.
-              <button
-                type="button"
-                phx-click="open_consent"
-                phx-value-ref={brain.ref}
-                class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
-              >
-                Enter the key
-              </button>
+            <%= cond do %>
+              <% brain.state == :needs_grant -> %>
+                {brain.provider}: grant it to connect.
+                <button
+                  type="button"
+                  phx-click="open_consent"
+                  phx-value-ref={brain.ref}
+                  class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
+                >
+                  Grant
+                </button>
+              <% brain.need && brain.need.kind == "login" -> %>
+                {brain.provider}: sign in to {brain.need.program || "its program"} on the Programs page.
+                <.link
+                  navigate={programs_path(@athanor, brain)}
+                  class="text-blue-400 hover:underline"
+                >
+                  Open Programs
+                </.link>
+              <% true -> %>
+                {brain.provider}: enter your key.
+                <button
+                  type="button"
+                  phx-click="open_consent"
+                  phx-value-ref={brain.ref}
+                  class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
+                >
+                  Enter the key
+                </button>
             <% end %>
           </li>
         </ol>
@@ -701,12 +713,17 @@ defmodule PrismWeb.AquaLive do
   # A brain ticked that is not yet connected is a step; a damaged or
   # unreadable consent is no step the person can take here.
   defp step?(%{state: state, provider: provider}, ticked),
-    do: state in [:needs_key, :needs_sign_in] and MapSet.member?(ticked, provider)
+    do: state in [:needs_grant, :needs_key, :needs_sign_in] and MapSet.member?(ticked, provider)
 
   defp shared_line(%{owner: owner, person_daily: cap}) when is_integer(cap),
     do: "#{owner}'s key, shared with you, up to #{cap} requests a day"
 
   defp shared_line(%{owner: owner}), do: "#{owner}'s key, shared with you"
+
+  # A brain whose grant is all it asks says so; any other row says what
+  # connecting it needs.
+  defp row_line(%{state: :needs_grant}), do: "needs only your grant"
+  defp row_line(%{need: need}), do: need_line(need)
 
   defp need_line(nil), do: "needs nothing to connect"
 
