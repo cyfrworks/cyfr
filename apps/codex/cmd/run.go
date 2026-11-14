@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/cyfr/codex/internal/ops"
 	"strings"
@@ -76,7 +77,8 @@ var runCmd = &cobra.Command{
 (catalyst:, c:, reagent:, r:, formula:, f:) or as a separate first argument.
 
 Pass --input to supply a JSON object as execution input. Use --list to see
-running executions, --logs to stream output, and --cancel to abort.
+running executions, --logs to read a run's record, and --cancel to abort.
+Ctrl-C stops waiting; the run goes on until it ends or is cancelled.
 
 Run without arguments for interactive selection.`,
 	Example: `  cyfr run c:local.openai
@@ -90,105 +92,188 @@ Run without arguments for interactive selection.`,
   cyfr run --logs exec_abc123
   cyfr run --cancel exec_abc123`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client := newClient()
-
-		if listFlag, _ := cmd.Flags().GetBool("list"); listFlag {
-			result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionListArgs{})
-			if err != nil {
-				return handleToolError(err)
-			}
-			return renderResult(result)
+		reached := nothingSent
+		err := runWork(cmd, args, &reached)
+		// One rule for the whole command: Ctrl-C (or the terminal closing)
+		// wherever it arrives, at a request or at a question, is the
+		// person's interruption, said as it stands where it arrived.
+		if err != nil && (cmd.Context().Err() != nil || prompt.IsAborted(err)) {
+			return interruption{reached.interrupted()}
 		}
+		return err
+	},
+}
 
-		if logsID, _ := cmd.Flags().GetString("logs"); logsID != "" {
-			result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionLogsArgs{ExecutionId: logsID})
-			if err != nil {
-				return handleToolError(err)
-			}
-			return renderResult(result)
-		}
+// How far cyfr run got: what an interruption there leaves.
+type runReached struct {
+	run    bool
+	cancel string
+}
 
-		if cancelID, _ := cmd.Flags().GetString("cancel"); cancelID != "" {
-			result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionCancelArgs{ExecutionId: cancelID})
-			if err != nil {
-				return handleToolError(err)
-			}
-			if flagJSON {
-				output.JSON(result)
-			} else {
-				fmt.Println("Execution cancelled.")
-			}
-			return nil
-		}
+var nothingSent = runReached{}
 
-		// CLI shorthand: "cyfr run c local.claude:0.1.0" → join as "c:local.claude:0.1.0"
-		args = joinTypeShorthand(args)
-		compType, _ := cmd.Flags().GetString("type")
-		refString, err := pickTarget(cmd.Context(), args, selector{
-			Title: "Select a component to run",
-			Empty: "No components found. Register one first.",
-			Usage: "Usage: cyfr run <reference>",
-			Fetch: func(ctx context.Context) ([]prompt.Option, error) {
-				return prompt.FetchComponents(ctx, client)
-			},
-			Normalize: func(ctx context.Context, arg string) (string, error) {
-				// Inject --type, then resolve a missing version for
-				// registry refs.
-				withType := parseReference(arg, compType)
-				return resolveComponentRef(ctx, client, withType)
-			},
-		})
-		if err != nil {
+func (r runReached) interrupted() error {
+	switch {
+	case r.cancel != "":
+		return fmt.Errorf("Interrupted; whether run %s was stopped is not known: cyfr run --logs %s shows it.", r.cancel, r.cancel)
+	case r.run:
+		return errRunGoesOn
+	default:
+		return errNothingStarted
+	}
+}
+
+var errRunGoesOn = errors.New("Stopped waiting. A run CYFR already started goes on: cyfr run --list shows it, and cyfr run --cancel <id> stops it.")
+
+var errNothingStarted = errors.New("Interrupted; nothing was started.")
+
+// runWork is cyfr run's work, noting in reached what it has asked for
+// that an interruption leaves standing.
+func runWork(cmd *cobra.Command, args []string, reached *runReached) error {
+	// The input is read before anything is asked of the server, whatever
+	// else the line names, so a malformed one sends nothing.
+	var execInput map[string]any
+	inputStr, _ := cmd.Flags().GetString("input")
+	if inputStr != "" {
+		var err error
+		if execInput, err = runInput(inputStr); err != nil {
 			return err
 		}
+	}
 
-		var execInput map[string]any
-		if len(args) >= 1 {
-			if inputStr, _ := cmd.Flags().GetString("input"); inputStr != "" {
-				if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
-					return fmt.Errorf("Invalid JSON input: %w", err)
-				}
-			}
-		} else {
-			// The ref came from the picker — offer to collect input the
-			// same way.
-			supplyInput, err := prompt.Confirm(cmd.Context(), "Supply JSON input?")
-			if err != nil {
-				if prompt.IsAborted(err) {
-					return prompt.ErrAborted
-				}
-				return fmt.Errorf("Prompt failed: %w", err)
-			}
-			if supplyInput {
-				inputStr, err := prompt.InputText(cmd.Context(), "JSON input", `{"key":"value"}`)
-				if err != nil {
-					if prompt.IsAborted(err) {
-						return prompt.ErrAborted
-					}
-					return fmt.Errorf("Prompt failed: %w", err)
-				}
-				if inputStr != "" {
-					if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
-						return fmt.Errorf("Invalid JSON input: %w", err)
-					}
-				}
-			}
-		}
+	client := newClient()
 
-		toolArgs := ops.ExecutionRunArgs{Reference: refString}
-		if execInput != nil {
-			toolArgs.Input = ops.Value(execInput)
+	if listFlag, _ := cmd.Flags().GetBool("list"); listFlag {
+		result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionListArgs{Status: ops.Value("running")})
+		if err != nil {
+			return handleToolError(err)
 		}
-		// Which profile's consent this runs under. With several profiles
-		// and no selector the server refuses rather than guessing.
-		if profile, _ := cmd.Flags().GetString("profile"); profile != "" {
-			toolArgs.Profile = ops.Value(profile)
+		if flagJSON {
+			output.JSON(result)
+			return nil
 		}
+		rows := runRows(result)
+		if len(rows) == 0 {
+			fmt.Println("Nothing is running.")
+			return nil
+		}
+		output.Table(runHeaders, rows)
+		return nil
+	}
 
-		result, err := client.CallTool(cmd.Context(), ops.Execution, toolArgs)
+	if logsID, _ := cmd.Flags().GetString("logs"); logsID != "" {
+		result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionLogsArgs{ExecutionId: logsID})
 		if err != nil {
 			return handleToolError(err)
 		}
 		return renderResult(result)
-	},
+	}
+
+	if cancelID, _ := cmd.Flags().GetString("cancel"); cancelID != "" {
+		reached.cancel = cancelID
+		result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionCancelArgs{ExecutionId: cancelID})
+		if err != nil {
+			return handleToolError(err)
+		}
+		if flagJSON {
+			output.JSON(result)
+		} else {
+			fmt.Println("Execution cancelled.")
+		}
+		return nil
+	}
+
+	// CLI shorthand: "cyfr run c local.claude:0.1.0" → join as "c:local.claude:0.1.0"
+	args = joinTypeShorthand(args)
+	compType, _ := cmd.Flags().GetString("type")
+	refString, err := pickTarget(cmd.Context(), args, selector{
+		Title: "Select a component to run",
+		Empty: "No components found. Register one first.",
+		Usage: "Usage: cyfr run <reference>",
+		Fetch: func(ctx context.Context) ([]prompt.Option, error) {
+			return prompt.FetchComponents(ctx, client)
+		},
+		Normalize: func(ctx context.Context, arg string) (string, error) {
+			// Inject --type, then resolve a missing version for
+			// registry refs.
+			withType := parseReference(arg, compType)
+			return resolveComponentRef(ctx, client, withType)
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	if len(args) == 0 && inputStr == "" {
+		// The ref came from the picker — offer to collect input the
+		// same way.
+		supplyInput, err := prompt.Confirm(cmd.Context(), "Supply JSON input?")
+		if err != nil {
+			return fmt.Errorf("Prompt failed: %w", err)
+		}
+		if supplyInput {
+			typed, err := prompt.InputText(cmd.Context(), "JSON input", `{"key":"value"}`)
+			if err != nil {
+				return fmt.Errorf("Prompt failed: %w", err)
+			}
+			if typed != "" {
+				if execInput, err = runInput(typed); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	toolArgs := ops.ExecutionRunArgs{Reference: refString}
+	if execInput != nil {
+		toolArgs.Input = ops.Value(execInput)
+	}
+	// Which profile's consent this runs under. With several profiles
+	// and no selector the server refuses rather than guessing.
+	if profile, _ := cmd.Flags().GetString("profile"); profile != "" {
+		toolArgs.Profile = ops.Value(profile)
+	}
+
+	// Ctrl-C from here ends the wait, not the run: a run the server
+	// already started goes on there.
+	reached.run = true
+	result, err := client.CallTool(cmd.Context(), ops.Execution, toolArgs)
+	if err != nil {
+		return handleToolError(err)
+	}
+	return renderResult(result)
+}
+
+// runHeaders are the columns of `cyfr run --list`.
+var runHeaders = []string{"execution_id", "reference", "status", "started_at"}
+
+// runRows are the listed executions as table rows.
+func runRows(result map[string]any) []map[string]string {
+	listed, _ := result["executions"].([]any)
+	rows := make([]map[string]string, 0, len(listed))
+	for _, item := range listed {
+		run, _ := item.(map[string]any)
+		row := map[string]string{}
+		for _, h := range runHeaders {
+			if v, ok := run[h].(string); ok {
+				row[h] = v
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// runInput is a run's --input: a JSON object, the one shape a run's input
+// takes.
+func runInput(text string) (map[string]any, error) {
+	var value any
+	if err := json.Unmarshal([]byte(text), &value); err != nil {
+		return nil, fmt.Errorf("Invalid JSON input: %w", err)
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, errors.New(`The input must be a JSON object, such as '{"text":"hello"}'.`)
+	}
+	return object, nil
 }
