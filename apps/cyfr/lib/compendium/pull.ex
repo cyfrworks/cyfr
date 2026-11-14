@@ -6,8 +6,9 @@ defmodule Compendium.Pull do
   Pull published components — and what they depend on — into an athanor.
 
   A component ref (`catalyst:moonmoon69.claude`, with or without a version)
-  becomes an OCI reference on the canonical registry (`oci_reference_for/1`,
-  resolving the latest semver tag when no version is given) and is pulled
+  becomes an OCI reference on the canonical registry (`oci_reference_for/2`,
+  taking the newest release the registry holds eligible when no version is
+  given) and is pulled
   through `Compendium.OCI.Client.pull/2`, which registers the component in
   the caller's athanor. `ensure_published_deps/2` walks a set of refs and
   every static dependency of what it pulled, so a seeded athanor holds the
@@ -22,7 +23,7 @@ defmodule Compendium.Pull do
   require Logger
 
   alias Compendium.DependencyResolver
-  alias Compendium.OCI.{Client, Reference, Transport}
+  alias Compendium.OCI.{Client, Reference}
   alias Sanctum.Context
 
   @type outcome :: %{pulled: [String.t()], failed: [{String.t(), term()}], present: [String.t()]}
@@ -144,14 +145,17 @@ defmodule Compendium.Pull do
 
   @doc """
   The OCI reference (as a string) a component ref pulls from: the canonical
-  registry, and the latest semver tag when the ref names no version.
+  registry, and when the ref names no version the newest release the
+  registry holds eligible, asked under `ctx`'s credential so a private
+  component's own releases are counted.
   """
-  @spec oci_reference_for(String.t()) :: {:ok, String.t()} | {:error, String.t()}
-  def oci_reference_for(reference) when is_binary(reference) do
+  @spec oci_reference_for(Context.t(), String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def oci_reference_for(%Context{} = ctx, reference) when is_binary(reference) do
     case Prima.ComponentRef.parse(reference) do
       {:ok, %Prima.ComponentRef{namespace: ns} = cref} ->
         case Compendium.NamespacePolicy.refuse_remote_ingress(ns) do
-          :ok -> to_oci_ref(cref)
+          :ok -> to_oci_ref(ctx, cref)
           {:error, _message} = refused -> refused
         end
 
@@ -219,7 +223,7 @@ defmodule Compendium.Pull do
   end
 
   defp pull(ctx, ref, claim) do
-    with {:ok, oci_ref} <- oci_reference_for(ref),
+    with {:ok, oci_ref} <- oci_reference_for(ctx, ref),
          {:ok, %{component_ref: pulled_ref}} <- Client.pull(ctx, oci_ref, claim),
          {:ok, component, _} <- Compendium.Component.resolve_component(ctx, pulled_ref) do
       {:ok, component}
@@ -229,18 +233,13 @@ defmodule Compendium.Pull do
   defp component_id(%{id: id}) when is_binary(id), do: id
   defp component_id(component), do: to_string(component[:name] || "component")
 
-  defp to_oci_ref(%Prima.ComponentRef{version: nil} = cref) do
-    registry = Compendium.RegistryHost.canonical_host()
-
-    with {:ok, oci_ref} <- Reference.from_component_ref(cref, registry) do
-      case resolve_latest_oci_tag(oci_ref) do
-        {:ok, tag} -> {:ok, Reference.to_string(%{oci_ref | tag: tag})}
-        {:error, _} -> {:ok, Reference.to_string(oci_ref)}
-      end
+  defp to_oci_ref(ctx, %Prima.ComponentRef{version: nil} = cref) do
+    with {:ok, version} <- latest_release(ctx, cref) do
+      to_oci_ref(ctx, %{cref | version: version})
     end
   end
 
-  defp to_oci_ref(%Prima.ComponentRef{} = cref) do
+  defp to_oci_ref(_ctx, %Prima.ComponentRef{} = cref) do
     registry = Compendium.RegistryHost.canonical_host()
 
     with {:ok, oci_ref} <- Reference.from_component_ref(cref, registry) do
@@ -248,35 +247,42 @@ defmodule Compendium.Pull do
     end
   end
 
-  # Resolve the latest semver tag from an OCI repository (for versionless pulls).
-  # Public `/tags/list` read (anonymous on cyfr.run) — passes `nil` ctx.
-  defp resolve_latest_oci_tag(%Reference{} = ref) do
-    path = "/v2/#{ref.repository}/tags/list"
+  # The registry's own answer for a ref with no version: the newest
+  # release it holds eligible, never a yanked one, whose tag the OCI
+  # store keeps for pinned pulls. No answer pulls nothing: a guess from
+  # the tag list could take a yanked release.
+  defp latest_release(ctx, %Prima.ComponentRef{} = cref) do
+    answer =
+      Compendium.Registry.Client.get_latest_component(ctx, cref.type, cref.namespace, cref.name)
 
-    case Transport.request(nil, :get, path, ref) do
-      {:ok, 200, _headers, body} ->
-        case Jason.decode(body) do
-          {:ok, %{"tags" => tags}} when is_list(tags) ->
-            # Descending Version-aware sort (prereleases order correctly:
-            # 1.0.0-rc1 < 1.0.0), so the head is the latest release.
-            # Non-semver tags drop entirely — a remote's "latest" or
-            # "1.2.3.4" is never a release candidate.
-            semver_tags =
-              tags
-              |> Enum.filter(&Compendium.Semver.semver?/1)
-              |> Compendium.Semver.sort_desc()
-
-            case semver_tags do
-              [latest | _] -> {:ok, latest}
-              [] -> {:error, :no_semver_tags}
-            end
-
-          _ ->
-            {:error, :unexpected_response}
+    case answer do
+      {:ok, %{"version" => version} = component} ->
+        case Prima.ComponentRef.validate_version(version) do
+          :ok -> {:ok, version}
+          {:error, _} -> unreadable(component)
         end
 
-      _ ->
-        {:error, :tags_fetch_failed}
+      {:ok, component} ->
+        unreadable(component)
+
+      {:error, %Compendium.OCI.Errors{reason: :not_found}} ->
+        {:error, {:not_found, "Release", Prima.ComponentRef.to_string(cref)}}
+
+      {:error, %Compendium.OCI.Errors{} = err} ->
+        {:error, Compendium.Providers.Shared.refusal(err)}
+
+      {:error, {:corrupt, :registry_credential}} = corrupt ->
+        corrupt
     end
+  end
+
+  # An answer that names no version is a registry answer this CYFR cannot
+  # read, refused as one (`Compendium.OCI.Errors.parse_error/2`), never a
+  # tag to ask for.
+  defp unreadable(component) do
+    {:error,
+     Compendium.Providers.Shared.refusal(
+       Compendium.OCI.Errors.parse_error("get_latest_component", component)
+     )}
   end
 end

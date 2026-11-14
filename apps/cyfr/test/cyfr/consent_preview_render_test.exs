@@ -37,11 +37,11 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   them (`tests/fixtures/consent_preview.json`) — is rendered by Prism's
   consent sheet and by the system layer's grant prompt, and every row's
   every value is found in each output, in the row drawn for it. The
-  admitted origins are the preview's top-level list, not a row, and
+  head's bindings the preview removes are no row, and
   `Prima.ConsentPreview.kinds/0` omits them, so each output is held to
-  them explicitly, as it is to the head's bindings the preview removes,
-  each a line of its own. The command line's rendering is held to the
-  same vectors by `apps/codex/cmd/profile_test.go`.
+  them explicitly, each a line of its own. The sheet asks nothing about
+  who may start the component. The command line's rendering is held to
+  the same vectors by `apps/codex/cmd/profile_test.go`.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -102,7 +102,6 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     %{
       v: document["v"],
       rows: document["rows"],
-      origins: document["origins"],
       commit_digest: document["commit_digest"],
       removed: document["removed"],
       proof: "not-a-proof"
@@ -114,7 +113,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
       ref: @ref,
       plan: %{plan_token: "not-read", expected_consent_revision: 0, needs: [], candidates: []},
       preview: preview,
-      decisions: %{"ref" => @ref, "bindings" => [], "origins" => preview.origins}
+      decisions: %{"ref" => @ref, "bindings" => []}
     }
   end
 
@@ -152,23 +151,6 @@ defmodule Cyfr.ConsentPreviewRenderTest do
         if row["values"]["connection"] == "Geo account",
           do: assert(text =~ "Fields: api_key from API key", text)
       end
-    end
-
-    # The admitted origins, which are no row: each named, by its spelling.
-    admits = doc |> LazyHTML.query(~s([data-test="grant-admits"])) |> LazyHTML.text()
-
-    for origin <- preview.origins do
-      assert admits =~ "(#{origin})", "origin #{origin} not in #{admits}"
-
-      if origin != "interactive" do
-        assert doc
-               |> LazyHTML.query(~s(input[data-origin="#{origin}"][checked]))
-               |> Enum.count() == 1
-      end
-    end
-
-    for origin <- Prima.Origin.spellings() -- preview.origins do
-      refute admits =~ "(#{origin})"
     end
 
     # The head's bindings the grant removes, which are no row: each a line
@@ -325,7 +307,8 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     assert kinds == ConsentPreview.kinds() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
   end
 
-  test "Prism's consent sheet draws every row of every kind, each value, and the origins" do
+  test "Prism's consent sheet draws every row of every kind and each value, and never asks " <>
+         "who may start the component" do
     ctx =
       Context.build(
         user_id: "render_test_user",
@@ -348,6 +331,16 @@ defmodule Cyfr.ConsentPreviewRenderTest do
       )
 
     assert_every_row(html, preview)
+
+    doc = LazyHTML.from_fragment(html)
+
+    for selector <- [
+          "input[data-origin]",
+          ~s([data-test="grant-origins"]),
+          ~s([data-test="grant-admits"])
+        ] do
+      assert doc |> LazyHTML.query(selector) |> Enum.count() == 0, selector
+    end
   end
 
   test "the system layer's grant prompt draws the same rows", %{conn: conn} do

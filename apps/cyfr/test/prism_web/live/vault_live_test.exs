@@ -598,7 +598,6 @@ defmodule PrismWeb.VaultLiveTest do
             blob_digest: Prima.Digest.sha256("{}"),
             resolved_policy: "{}",
             activation: "{}",
-            admitted_origins: [:interactive],
             granted_by: "test",
             granted_via: "interactive"
           },
@@ -847,6 +846,111 @@ defmodule PrismWeb.VaultLiveTest do
              })
 
     assert msg =~ "No client credentials"
+  end
+
+  describe "an OAuth grant for a provider with no client" do
+    @client_needed "No OAuth client is set for google. Create one in google's developer " <>
+                     "console, register this return address with it, then set its client id " <>
+                     "and secret here."
+
+    test "Start authorization says a client is needed, offers Set client for that provider " <>
+           "with the return address to register, and asks nothing",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      {view, _html} = mount_athanor(conn, "/vault")
+      ctx = seated_ctx(user)
+      return_address = Sanctum.Vault.OAuthGrant.redirect_uri()
+
+      render_click(view, "show_add", %{"mode" => "oauth"})
+
+      # The presets are named where the endpoints are asked.
+      assert texts(view, ~s([data-test="oauth-endpoints"])) ==
+               ["Endpoints — preset for google; any other provider names its own"]
+
+      view
+      |> form("form[phx-submit=authorize_new]", %{
+        "name" => "My Google",
+        "provider" => "google",
+        "scopes" => "openid",
+        "destination_hosts" => "www.googleapis.com"
+      })
+      |> render_submit()
+
+      assert texts(view, ~s([data-test="oauth-client-needed"] p)) ==
+               [@client_needed, return_address]
+
+      refute render(view) =~ "unavailable"
+      assert open_records(ctx) == []
+
+      view |> element(~s([data-test="oauth-set-client"])) |> render_click()
+
+      assert has_element?(view, ~s(#vault-client-form input[name="provider"][value="google"]))
+
+      assert texts(view, ~s([data-test="client-redirect-uri"])) ==
+               ["Register this return address with the provider's OAuth app: #{return_address}"]
+
+      # Stored under its confirmation, the grant that waited on it is
+      # offered again.
+      typed = %{"provider" => "google", "client_id" => "cid", "client_secret" => @client_secret}
+      view |> form("form[phx-submit=set_client]", typed) |> render_submit()
+      [%{ref: ref, operation: "oauth.set_client"}] = open_records(ctx)
+      Sanctum.TestContext.prove!(ctx, ref)
+      assert_push_event(view, "system_layer:resubmit", %{form: "vault-client-form"}, 2_000)
+      view |> form("form[phx-submit=set_client]", typed) |> render_submit()
+
+      assert has_element?(view, "form[phx-submit=authorize_new]")
+      refute has_element?(view, ~s([data-test="oauth-client-needed"]))
+
+      assert render(view) =~ "Client credentials stored for google. Start authorization again."
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "Re-authorize on an entry whose provider's client was removed says a client is " <>
+           "needed and offers Set client with the return address, and asks nothing",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      ctx = seated_ctx(user)
+      return_address = Sanctum.Vault.OAuthGrant.redirect_uri()
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "My Google",
+          kind: "oauth",
+          provider_hint: "google",
+          oauth_scopes: ["openid"],
+          destination: %{"hosts" => ["www.googleapis.com"]}
+        })
+
+      {view, _html} = mount_athanor(conn, "/vault")
+
+      view
+      |> element(~s(button[phx-click="reauthorize"][phx-value-id="#{entry.id}"]))
+      |> render_click()
+
+      assert texts(view, ~s([data-test="oauth-client-needed"] p)) ==
+               [@client_needed, return_address]
+
+      refute render(view) =~ "unavailable"
+      assert open_records(ctx) == []
+
+      view |> element(~s([data-test="oauth-set-client"])) |> render_click()
+      assert has_element?(view, ~s(#vault-client-form input[name="provider"][value="google"]))
+
+      # Stored under its confirmation, the person is told to re-authorize.
+      typed = %{"provider" => "google", "client_id" => "cid", "client_secret" => @client_secret}
+      view |> form("form[phx-submit=set_client]", typed) |> render_submit()
+      [%{ref: ref, operation: "oauth.set_client"}] = open_records(ctx)
+      Sanctum.TestContext.prove!(ctx, ref)
+      assert_push_event(view, "system_layer:resubmit", %{form: "vault-client-form"}, 2_000)
+      view |> form("form[phx-submit=set_client]", typed) |> render_submit()
+
+      refute has_element?(view, ~s([data-test="oauth-client-needed"]))
+      refute has_element?(view, "form[phx-submit=authorize_new]")
+      assert render(view) =~ "Client credentials stored for google. Re-authorize the entry again."
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 
   test "a request dismissed before its proof is cancelled, and its typed form emptied",
@@ -1349,6 +1453,132 @@ defmodule PrismWeb.VaultLiveTest do
         2_000,
         "the widened audience"
       )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the create form asks methods and paths as what sharing needs, and Change " <>
+           "destination moves a key there, after which Share is offered" do
+      %{terry: terry} = traders!()
+      open_ended = key!(terry, "open key", %{"hosts" => ["api.market.example"]})
+      {view, _} = vault!(terry)
+
+      render_click(view, "show_add", %{"mode" => "fields"})
+
+      assert texts(view, ~s([data-test="create-destination"] label)) |> Enum.take(5) == [
+               "Hosts — for example api.example.com, or *.example.com",
+               "Scheme",
+               "Port (optional)",
+               "Methods — needed to share it",
+               "Path prefixes — needed to share it"
+             ]
+
+      # An OAuth entry is never shared: its form keeps them optional.
+      render_click(view, "show_add", %{"mode" => "oauth"})
+
+      assert texts(view, ~s([data-test="oauth-destination"] label)) |> Enum.slice(3, 2) ==
+               ["Methods (optional)", "Path prefixes (optional)"]
+
+      refute has_element?(view, share_button(open_ended))
+
+      view
+      |> element(~s([data-test="entry-rebind"][phx-value-id="#{open_ended.id}"]))
+      |> render_click()
+
+      # The form holds what the entry holds.
+      form = ~s(form[data-test="rebind-form"])
+
+      assert has_element?(
+               view,
+               form <> ~s( input[name="destination_hosts"][value="api.market.example"])
+             )
+
+      refute has_element?(view, form <> ~s( input[name="disclose"][checked]))
+
+      # Narrowing the entry to methods and paths needs the session alone.
+      view
+      |> element(form)
+      |> render_submit(%{
+        "entry_id" => open_ended.id,
+        "destination_hosts" => "api.market.example",
+        "destination_scheme" => "https",
+        "destination_methods" => "get",
+        "destination_paths" => "/v1/quotes"
+      })
+
+      assert {:ok, %{entries: entries}} =
+               Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "list"})
+
+      assert %{
+               destination: %{
+                 "hosts" => ["api.market.example"],
+                 "methods" => ["GET"],
+                 "paths" => ["/v1/quotes"],
+                 "scheme" => "https"
+               },
+               attach_only: true
+             } = Enum.find(entries, &(&1.id == open_ended.id))
+
+      assert render(view) =~ "Destination changed."
+      refute has_element?(view, form)
+      assert has_element?(view, share_button(open_ended), "Share")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a change of destination that widens what a key admits asks a fresh confirmation, " <>
+           "and the page makes it once given" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+      {view, _} = vault!(terry)
+
+      view
+      |> element(~s([data-test="entry-rebind"][phx-value-id="#{market.id}"]))
+      |> render_click()
+
+      view
+      |> element(~s(form[data-test="rebind-form"]))
+      |> render_submit(%{
+        "entry_id" => market.id,
+        "destination_hosts" => "api.market.example",
+        "destination_scheme" => "https",
+        "destination_methods" => "GET",
+        "destination_paths" => "/v1/quotes",
+        "disclose" => "true"
+      })
+
+      assert {:ok, [%{ref: ref, operation: "vault.rebind"}]} =
+               Arca.PendingConfirmations.list_open(
+                 Sanctum.Context.actor(terry.ctx),
+                 terry.user.user_id
+               )
+
+      Sanctum.TestContext.prove!(terry.ctx, ref)
+
+      wait_until(
+        fn -> render(view) =~ "Destination changed." end,
+        2_000,
+        "the confirmed change of destination"
+      )
+
+      assert {:ok, %{entries: entries}} =
+               Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "list"})
+
+      assert %{attach_only: false} = Enum.find(entries, &(&1.id == market.id))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the entries' Name column stays in view while the table scrolls sideways" do
+      %{terry: terry} = traders!()
+      _market = key!(terry, "market key", @market)
+      {view, _} = vault!(terry)
+
+      assert texts(view, "table th.sticky") == ["Name"]
+
+      assert view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("table td.sticky [data-test=entry-name] span.font-medium")
+             |> Enum.map(&LazyHTML.text/1) == ["market key"]
 
       Cyfr.Test.Sandbox.end_views()
     end

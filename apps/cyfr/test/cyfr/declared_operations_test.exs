@@ -90,17 +90,26 @@ defmodule Cyfr.DeclaredOperationsTest do
   end
 
   describe "an argument that names, narrows or bounds" do
-    test "a grant's origins and narrowing are decided", %{ctx: ctx} do
-      for extra <- [
-            %{"origins" => ["interactive", "programmatic"]},
-            %{"subset" => %{"reagent:local.x" => %{"egress" => %{"domains" => []}}}}
-          ] do
-        decisions = Map.merge(%{"ref" => "reagent:local.no-such-component"}, extra)
+    test "a grant's narrowing is decided, and a grant names no origins", %{ctx: ctx} do
+      decisions = %{
+        "ref" => "reagent:local.no-such-component",
+        "subset" => %{"reagent:local.x" => %{"egress" => %{"domains" => []}}}
+      }
 
-        # Decoded and carried into the walk, which finds no such component.
-        assert call(ctx, "profile", "preview", %{"decisions" => decisions}) ==
-                 {:error, "component_not_found"}
-      end
+      # Decoded and carried into the walk, which finds no such component.
+      assert call(ctx, "profile", "preview", %{"decisions" => decisions}) ==
+               {:error, "component_not_found"}
+
+      origins = Map.put(decisions, "origins", ["interactive"])
+
+      assert call(ctx, "profile", "preview", %{"decisions" => origins}) ==
+               {:error,
+                %Prima.Refusal{
+                  class: :invalid_argument,
+                  reason: {:invalid_argument, "Unknown field: decisions.origins"},
+                  message: "Unknown field: decisions.origins",
+                  stage: :admission
+                }}
     end
 
     test "the grant and run reads are answered", %{ctx: ctx} do
@@ -135,15 +144,12 @@ defmodule Cyfr.DeclaredOperationsTest do
       end
     end
 
-    test "a narrowing names the limits in their own vocabulary, and the origins in theirs" do
+    test "a narrowing names the limits in their own vocabulary, and the decisions no origins" do
       decisions =
         Enum.find(operation("profile", "preview").args, &(&1.name == "decisions"))
 
       {:record, fields} = decisions.type
-      origins = Enum.find(fields, &(&1.name == "origins"))
-      assert {:array, %{enum: spellings}} = origins.type
-      assert spellings == Prima.Origin.spellings()
-      assert origins.min == 1
+      refute Enum.any?(fields, &(&1.name == "origins"))
 
       subset = Enum.find(fields, &(&1.name == "subset"))
       assert {:map, %{type: {:record, kinds}}} = subset.type

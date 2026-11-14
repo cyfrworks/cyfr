@@ -29,7 +29,7 @@ defmodule Sanctum.Mount do
        (`:not_mountable` otherwise);
     4. the entry's destination names the program the consent approved,
        and that program's row stands in the athanor, enabled, a program
-       (`stdio` or `pipe`) with a kept home
+       with a kept home
        (`{:program_unavailable, name}` otherwise);
     5. only then is the binding used (`Sanctum.Attach.lifetime/3`), which
        consumes a `once` binding for this root, so a mount refused by any
@@ -161,9 +161,7 @@ defmodule Sanctum.Mount do
     end
   end
 
-  defp mountable_row?(%{enabled: true, transport: transport, home: "kept"})
-       when transport in ["stdio", "pipe"],
-       do: true
+  defp mountable_row?(%{enabled: true, transport: "program", home: "kept"}), do: true
 
   defp mountable_row?(_row), do: false
 

@@ -272,6 +272,22 @@ defmodule Compendium.ScaffoldTest do
       assert lib_rs =~ "cyfr::reagent::compute::Guest"
       assert lib_rs =~ "fn compute"
     end
+
+    # Each step names where the files are and a command and a tool call
+    # that exist; a compile registers, so no register step follows it.
+    test "the next steps name where to edit and the real compile", %{ctx: ctx} do
+      assert {:ok, result} = Scaffold.create(ctx, "steps-transform", "reagent", "0.1.0")
+
+      assert result.next_steps == [
+               "The files are under components/reagents/local/steps-transform/0.1.0/ in the " <>
+                 "athanor's storage: edit them through Files, the console's Files page or " <>
+                 "the files tool",
+               "Edit src/src/lib.rs to implement your compute logic",
+               "Compile: cyfr build compile reagent:local.steps-transform:0.1.0, or the build " <>
+                 "tool's compile action with reference 'reagent:local.steps-transform:0.1.0'; " <>
+                 "a compile registers what it built"
+             ]
+    end
   end
 
   # ============================================================================
@@ -397,7 +413,7 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, result} =
                Scaffold.create(ctx, "steps-dash", "tincture", "0.1.0", template: "react")
 
-      assert Enum.any?(result.next_steps, &(&1 =~ "build.compile"))
+      assert Enum.any?(result.next_steps, &(&1 =~ "cyfr build compile tincture:local.steps-dash"))
       assert Enum.any?(result.next_steps, &(&1 =~ "src/App.tsx"))
     end
   end
@@ -431,7 +447,7 @@ defmodule Compendium.ScaffoldTest do
       assert get_in(manifest, ["tincture", "entry"]) == "dist/index.html"
 
       assert Arca.Test.UnitFixtures.unit_file!(ctx, base, "vite.config.js") =~ ~s(base: "./")
-      assert Enum.any?(result.next_steps, &(&1 =~ "build.compile"))
+      assert Enum.any?(result.next_steps, &(&1 =~ "cyfr build compile tincture:local."))
       assert Enum.any?(result.next_steps, &(&1 =~ "package-lock.json"))
     end
 
@@ -553,6 +569,12 @@ defmodule Compendium.ScaffoldTest do
       # What the scaffold writes passes the publish check as it stands.
       {:ok, pairs} = Arca.read_subtree(Sanctum.Context.actor(ctx), base)
       assert {:ok, _} = Compendium.TinctureValidator.validate_from_pairs(pairs)
+
+      # Nothing to compile: it is registered by the scan, which takes no
+      # reference.
+      assert List.last(result.next_steps) ==
+               "Register: cyfr register, or the component tool's register action, which " <>
+                 "registers every local component"
     end
   end
 

@@ -105,7 +105,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 
 ### Emissary: external application protocols
 
-- MCP in both directions, the HTTP API, webhooks and the OAuth callback, carrying declared operations through the gate but at the entries that admit for themselves. An external MCP server is reached over HTTP, or, for a `stdio` server, driven over a program's session.
+- MCP in both directions, the HTTP API, webhooks and the OAuth callback, carrying declared operations through the gate but at the entries that admit for themselves. A row of the Programs page is a tool server elsewhere, reached over HTTP, or a program CYFR runs, marked by how it is spoken to: `mcp`, Emissary speaking MCP over its sessions, or `driven`, run by a person or a brain.
 - Tinctures' files and data routes (§7), the device channel (§9.3), and the directory's endpoints and account pages a home that serves a directory serves (§9.1).
 
 ### Prism: the screen
@@ -322,7 +322,7 @@ Consented work runs unattended under its grant; a person is asked only about wha
 
 - Component grants and standing approvals are the two kinds of grant, under one set of rules.
 - A preview is typed rows bound by a digest; narrowing is validated by its owner, and widening is interactive. *Not built yet:* a share's caps on the preview's credential row.
-- Every run carries the origin its admission path set, and a grant names the origins it admits.
+- A grant says what a component may reach and use, never who may start it: a run carries the origin its admission path set for the record, and stands on the grant of the person it acts as, whether a screen, a key, a schedule or a webhook started it.
 - **A standing approval is bounded.** It ends with its lifecycle or deadline and holds to its resource constraint, and an external or destructive action never takes a standing allow.
 - Every turn records the source classes it read (`Prima.Source`), and every send to an exit is held to the flows its grant declares, which `Prima.Flow` decides.
 - A standing grant never stands in for a fresh confirmation. *Not built yet:* declared reads of standing approvals.

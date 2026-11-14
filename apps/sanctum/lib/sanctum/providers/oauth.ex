@@ -7,7 +7,9 @@ defmodule Sanctum.Providers.OAuth do
 
   `set_client` stores an OAuth app's client credentials for a provider in
   the athanor's provider-credential store, `list` names the providers that
-  have them (never the secret), `delete_client` removes one. Grants
+  have them (never the secret) with the return address a client registers
+  and the providers whose endpoints are preset, `delete_client` removes
+  one. Grants
   themselves are connection-keyed — `vault.authorize` starts them, and the
   callback route completes them into a vault entry.
   """
@@ -84,10 +86,22 @@ defmodule Sanctum.Providers.OAuth do
     )
   end
 
+  # Beside the stored clients, what setting one needs: the return address
+  # to register with the provider, and the providers whose endpoints are
+  # preset, so an OAuth entry for any other names its own.
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     case Sanctum.ProviderCredentials.list(ctx) do
-      {:ok, rows} -> {:ok, %{providers: rows, count: length(rows)}}
-      {:error, reason} -> {:error, format_reason(reason)}
+      {:ok, rows} ->
+        {:ok,
+         %{
+           providers: rows,
+           count: length(rows),
+           redirect_uri: Sanctum.Vault.OAuthGrant.redirect_uri(),
+           presets: Sanctum.Vault.OAuth.preset_providers()
+         }}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 

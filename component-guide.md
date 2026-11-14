@@ -528,7 +528,7 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `category` | string | Optional | Registry category for browsing |
 | `forked_from` | string | Optional | The ref this component was forked from (`component.fork` stamps it) |
 | `contracts` | string[] | Catalysts (if they answer one) | Named operation sets the component answers on its `run` export, as `family/name@major` — `model/chat@1` is the one the host reads (see [Model catalysts](#model-catalysts-the-modelchat1-contract)) |
-| `agent` | object | Agents | The agent's catalyst, model, and policy (`auto` / `ask` sets). Only valid on `type` `"agent"` |
+| `agent` | object | Agents | The agent's catalyst and model; its tools, and the provider's own search as `native_search`, are in `caps.tools`. Only valid on `type` `"agent"` |
 | `provides` | object | Optional | Public configuration for a need of a dependency: keyed by a `dependencies.static` reference, then the dependency's need name, each a `destination` and string `values` (at most 4 KiB). The consent shows that need as satisfied by the publisher |
 | `results` | object | Optional | The shape of what each operation answers, keyed by operation name (at most 64, each 1 to 64 characters), in the shape grammar: `string`, `number`, `integer`, `boolean`, `time`, `enum`, `list`, `object` and `json`, any of them `nullable`. `results[operation]` describes the `data` of the operation's `{"status", "data"}` envelope, and a feed accepts only a 2xx envelope whose data matches. An error envelope, a non-2xx status or an output that is not an envelope is refused, for catalysts and formulas alike, so a formula feeding a canvas returns the same envelope. A feed's binding copies the shape when it is bound; it decides nothing a consent covers and is not part of the release digest |
 
@@ -1268,7 +1268,7 @@ A consent covers every release of the component line unless the operator pins a 
 > `session.*`, `key.*`, `vault.*`, `profile.*`,
 > `mcp_log.*`, `policy_log.*`, `retention.*`, `record.*` except `record.payload`, `component.push/delete`,
 > registry identity mutation, webhook/schedule mutation, `profile.publish`,
-> `execution.force_release`, `system.notify`, and MCP-server management.
+> `system.notify`, and MCP-server management.
 > Formulas cannot touch auth, credentials, or the consent plane.
 
 ---
@@ -1314,8 +1314,12 @@ The console's Files page is the tree above, browsed like a phone's files
 rather than a desktop's disk: you see the athanor's folders and nothing of
 the server's, and each folder is one of three tiers.
 
-- **Open** — `data/`. Upload, download, edit and delete anything. Every
-  component with a `data/` grant reads and writes the same space.
+- **Open** — `data/`. Upload, download, edit, rename, move and delete
+  anything, and make folders. Every component with a `data/` grant reads
+  and writes the same space. A picture (PNG, JPEG, GIF or WebP) opens on
+  the page; anything else that is not text is downloaded. A new folder
+  stays on the page until a file lands in it, since storage keeps no empty
+  folder.
 - **Shaped** — `components/` and `aqua/`. Files are edited in place, but only
   inside a unit the folder's grammar knows: a `local` component's version
   directory, the soul, a role, a scroll. A write outside one is refused with
@@ -1326,9 +1330,16 @@ the server's, and each folder is one of three tiers.
 - **Read-only** — `notes/` and `threads/`. Shown and downloaded here,
   written by their own surfaces.
 
-The `file` tool (`list`, `read`, `write`, `delete`, and `offer`, `offers`,
-`accept`, `decline`, `withdraw` to send a person a copy) is the same
-surface on the wire; reads take `storage_read`, changes `storage_write`.
+The `file` tool (`list`, `read`, `write`, `delete`, `move`, and `offer`,
+`offers`, `accept`, `decline`, `withdraw` to send a person a copy) is the
+same surface on the wire; reads take `storage_read`, changes
+`storage_write`. `move` takes a file or folder from `path` to `to`, a
+place that holds nothing yet, both under `data/`; a rename is a move
+within one folder. A move lands each file as a write would and keeps the
+sources it was written with, and it happens at once: the files are at
+`path` or at `to`, never both. A source that changes while it moves, or
+a file that lands at `to` first, refuses the move and loses nothing. A
+move takes no standing approval: each one is approved on its own.
 
 Pick files under `data/` and choose **Send a copy**. The recipient picker
 lists the people who share a shared thread with you. The offer snapshots the

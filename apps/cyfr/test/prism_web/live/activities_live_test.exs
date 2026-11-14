@@ -167,6 +167,14 @@ defmodule PrismWeb.ActivitiesLiveTest do
     {view, _html} = mount_athanor(conn, "/activities")
 
     assert has_element?(view, ~s(tr[data-call-id="#{refused.call_id}"]), "refused: forbidden")
+
+    # A refusal's row says why, in the stored reason's own words.
+    assert has_element?(
+             view,
+             ~s(tr[data-call-id="#{refused.call_id}"] td span.truncate),
+             "Not allowed here."
+           )
+
     assert has_element?(view, ~s(tr[data-call-id="#{admitted.call_id}"]), "failed: not_found")
     refute has_element?(view, ~s(tr[data-call-id="#{host.call_id}"]))
 

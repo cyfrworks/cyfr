@@ -68,7 +68,7 @@ defmodule Compendium.Fork do
              reference: target_ref_str,
              forked_from: source_ref_str,
              files: files,
-             next_steps: next_steps(source_ref.type, target_ref_str)
+             next_steps: next_steps(source_ref.type, target_base, target_ref_str, files)
            }}
 
         {:error, :not_owner} = refused ->
@@ -140,8 +140,9 @@ defmodule Compendium.Fork do
 
       _ ->
         {:error,
-         "No source code available for #{source_ref_str}. " <>
-           "The publisher did not include source when publishing this component."}
+         "No source code available for #{source_ref_str}: it was published without a " <>
+           "src/ folder, which is the source a fork copies and the only source a push " <>
+           "publishes."}
     end
   end
 
@@ -202,18 +203,27 @@ defmodule Compendium.Fork do
   # Next Steps
   # ============================================================================
 
-  defp next_steps("tincture", reference) do
+  # A tincture's last step is the one Builds takes for its files: compile
+  # one with a package manifest, register a vanilla one
+  # (`Compendium.Builds.package_manifest/1`).
+  defp next_steps("tincture", base, reference, files) do
+    last =
+      if Path.join(Compendium.Builds.package_manifest(base)) in files,
+        do: Compendium.Scaffold.compile_step(reference),
+        else: Compendium.Scaffold.register_step()
+
     [
-      "Edit the source files to customize the tincture",
-      "Register: use component.register with reference '#{reference}'"
+      Compendium.Scaffold.where_to_edit(base),
+      "Edit the files under src/ to customize the tincture",
+      last
     ]
   end
 
-  defp next_steps(type, reference) do
+  defp next_steps(type, base, reference, _files) do
     [
+      Compendium.Scaffold.where_to_edit(base),
       "Edit src/src/lib.rs to modify the #{type} logic",
-      "Compile: use build.compile with reference '#{reference}'",
-      "Register: use component.register to index the compiled binary"
+      Compendium.Scaffold.compile_step(reference)
     ]
   end
 

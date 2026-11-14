@@ -402,6 +402,15 @@ defmodule Prima.Refusal do
 
   defp row(:not_mountable), do: {:invalid_argument, "This entry is not a login entry."}
 
+  # An OAuth grant or refresh for a provider this athanor holds no OAuth
+  # client for (`Sanctum.ProviderCredentials`): the client is set on the
+  # Vault page, which shows the return address to register with it.
+  defp row({:oauth_client_required, provider}) when is_binary(provider),
+    do:
+      {:setup_required,
+       "No OAuth client is set for #{provider}. Set one with Set client on the Vault page, " <>
+         "which shows the return address to register with #{provider}."}
+
   defp row({:conflict, message}) when is_binary(message), do: {:conflict, message}
 
   defp row({:unavailable, what}) when is_binary(what),
@@ -879,7 +888,49 @@ defmodule Prima.Refusal do
   defp row(:stale_generation),
     do: {:unauthenticated, "Your standing changed since this session was read — sign in again"}
 
-  defp row(:signature_invalid), do: {:unauthenticated, "Signature verification failed"}
+  # A webhook delivery whose signature was not verified, by its reason.
+  # `header` is the header the reason concerns, as the webhook names it:
+  # for a mismatch, the timestamp header when the time is signed with the
+  # body, else nil. Each sentence gives the format a sender signs in and
+  # never anything of the secret.
+  defp row({:webhook_signature, :missing_signature, header}),
+    do:
+      {:unauthenticated,
+       "This delivery carries no #{header} header: send sha256=<hex>, the HMAC-SHA256 " <>
+         "of the body under the webhook's secret, in lowercase hex"}
+
+  defp row({:webhook_signature, :malformed_signature, header}),
+    do:
+      {:unauthenticated,
+       "The #{header} header is not sha256=<hex>, the HMAC-SHA256 of the body under the " <>
+         "webhook's secret, in lowercase hex"}
+
+  defp row({:webhook_signature, :missing_timestamp, header}),
+    do:
+      {:unauthenticated,
+       "This webhook requires the #{header} header: the time the delivery is sent, in " <>
+         "Unix seconds, signed with the body as <time>.<body>"}
+
+  defp row({:webhook_signature, :malformed_timestamp, header}),
+    do: {:unauthenticated, "The #{header} header is not a time in whole Unix seconds"}
+
+  defp row({:webhook_signature, :timestamp_skew, header}),
+    do:
+      {:unauthenticated,
+       "The #{header} header's time is too far from now to accept: sign each delivery " <>
+         "with the time it is sent"}
+
+  defp row({:webhook_signature, :signature_mismatch, nil}),
+    do:
+      {:unauthenticated,
+       "The signature does not match: sign the exact body with the webhook's current secret"}
+
+  defp row({:webhook_signature, :signature_mismatch, header}),
+    do:
+      {:unauthenticated,
+       "The signature does not match: sign <time>.<body>, the #{header} header's value, " <>
+         "a dot and the exact body, with the webhook's current secret"}
+
   defp row(:invalid_session), do: {:unauthenticated, "Invalid session token"}
 
   defp row(:denied), do: {:forbidden, "This account is not admitted on this server"}

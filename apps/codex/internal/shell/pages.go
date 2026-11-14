@@ -20,7 +20,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 {{if .Waiting}}<meta http-equiv="refresh" content="2">{{end}}
 <title>CYFR</title><style>` + style + `</style>
-<main>
+<main{{if .Proof}} data-proof="{{.Proof}}"{{end}}{{if .To}} data-to="{{.To}}"{{end}}>
 {{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
 {{if .Waiting}}
 <h1>CYFR is starting</h1>
@@ -30,9 +30,13 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{else if eq .Page "setup"}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 <h1>Set up CYFR</h1>
-{{if not .Digits}}<p>This box has no chip to keep a short PIN safe, so it uses this passphrase. Write it down:</p>
-<p class="code">{{.Passphrase}}</p>{{end}}
-<form method="post" action="/setup">
+{{if .Passphrase}}<p>This box has no chip to keep a short PIN safe, so it uses this passphrase. Write it down now: this screen shows it this once.</p>
+<p class="code">{{.Passphrase}}</p>
+{{else if not .Digits}}{{if .Drawn}}<p>Type the passphrase this screen showed you. If you did not write it down, show a new one: the one shown before stops working.</p>
+{{else}}<p>This box has no chip to keep a short PIN safe, so it uses a passphrase, which this screen shows once. Have something to write it down on.</p>{{end}}
+<form method="post" action="/passphrase">{{template "proof"}}<button{{if not .Drawn}} autofocus{{end}}>Show {{if .Drawn}}a new{{else}}the{{end}} passphrase</button></form>
+{{end}}
+{{if or .Digits .Drawn}}<form method="post" action="/setup">{{template "proof"}}
 <label>Your name, yours for life<input name="name" autocomplete="off" autofocus required></label>
 {{template "secret" .}}
 {{template "terms" .}}
@@ -40,10 +44,10 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 </form>
 <h1>Already have an account?</h1>
 <p>Add this box to it instead, then approve it on a device of yours.</p>
-<form method="post" action="/make">
+<form method="post" action="/make">{{template "proof"}}
 {{template "secret" .}}
 <button class="quiet">Add this box to my account</button>
-</form>
+</form>{{end}}
 {{else if eq .Page "enroll"}}
 <h1>Add this box to your account</h1>
 <p>On a device of yours, scan this code or open the address below, and check that it shows <b>{{.Code}}</b>.</p>
@@ -51,41 +55,47 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <p class="code">{{.AddURL}}</p>
 <p>Or run this on a terminal of yours that is unlocked:</p>
 <p class="code">cyfr device approve {{.Key}}</p>
-<form method="post" action="/enroll"><label>Your name: @<input name="name" autocomplete="off" required></label><button>I approved it</button></form>
+<form method="post" action="/enroll">{{template "proof"}}<label>Your name: @<input name="name" autocomplete="off" required></label><button>I approved it</button></form>
 <h1>No account yet?</h1>
-<form method="post" action="/create">
+<form method="post" action="/create">{{template "proof"}}
 <label>Your name, yours for life<input name="name" autocomplete="off" required></label>
+{{template "typed" .}}
 {{template "terms" .}}
 <button class="quiet">Make my account</button></form>
 {{else if eq .Page "recovery"}}
 <h1>Your recovery code</h1>
 <p>If you ever lose your devices, this code brings your account @{{.Name}} back. Keep it off this box: scan it, or print it.</p>
-<div class="qr">{{.QR}}</div>
+{{if .RecoveryCode}}<div class="qr">{{.QR}}</div>
 <p class="code">{{.RecoveryCode}}</p>
 <button id="print" type="button" class="quiet">Print</button><script>{{.Print}}</script>
-<form method="post" action="/saved"><button autofocus>I saved it</button></form>
+{{else}}<p>The code shows only on the page the {{if .Digits}}PIN{{else}}passphrase{{end}} was typed on.</p>
+{{if .Reveal}}<form id="reveal" method="post" action="/recovery">{{template "proof"}}</form>{{end}}{{end}}
+<form method="post" action="/saved">{{template "proof"}}<button autofocus>I saved it</button></form>
 {{else if eq .Page "account"}}
 <h1>Your account is not finished</h1>
 <p>Nothing is lost: try again.</p>
-<form method="post" action="/saved">{{if .Accept}}{{template "terms" .}}{{end}}<button autofocus>Try again</button></form>
+<form method="post" action="/saved">{{template "proof"}}{{if .Accept}}{{template "terms" .}}{{end}}<button autofocus>Try again</button></form>
 {{else if eq .Page "resume"}}
 <h1>Finish your account</h1>
 <p>This box began making the account @{{.Name}}. Type its recovery code to finish it.</p>
-<form method="post" action="/resume"><label>Recovery code<input name="code" type="password" autocomplete="off" autofocus required></label><button>Finish</button></form>
+<form method="post" action="/resume">{{template "proof"}}<label>Recovery code<input name="code" type="password" autocomplete="off" autofocus required></label><button>Finish</button></form>
 {{else if eq .Page "locked"}}
 <h1>CYFR is locked</h1>
-<form method="post" action="/unlock">
-<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" autofocus required></label>
+<form method="post" action="/unlock">{{template "proof"}}
+{{template "typed" .}}
 <button>Unlock</button></form>
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 {{else if eq .Page "name"}}
 <h1>Your name</h1>
-<form method="post" action="/name"><label>A name for life<input name="name" value="{{.Name}}" autocomplete="off" required></label><button>Take it</button></form>
+<form method="post" action="/name">{{template "proof"}}<label>A name for life<input name="name" value="{{.Name}}" autocomplete="off" required></label><button>Take it</button></form>
+{{else if and (eq .Page "confirm") (not .Confirm)}}
+<h1>A confirmation is open</h1>
+<p>It is shown in the window that asked for it.</p>
 {{else if eq .Page "confirm"}}
 <h1>Confirm on this screen</h1>
 <p>CYFR asks to confirm <b>{{.Confirm.Operation}}</b>:</p>
 <dl>{{range .Fields}}<dt>{{index . 0}}</dt><dd>{{index . 1}}</dd>{{end}}</dl>
-<form method="post" action="/confirm/decide">
+<form method="post" action="/confirm/decide">{{template "proof"}}
 <input type="hidden" name="ref" value="{{.Confirm.Ref}}">
 <label>{{if .Digits}}PIN{{else}}Passphrase{{end}}, again<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off"></label>
 <button name="decision" value="confirm">Confirm</button>
@@ -93,10 +103,10 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 </form>
 {{else}}
 <h1>CYFR is unlocked</h1>
-<form method="post" action="/open"><button autofocus>Open CYFR</button></form>
-<form method="post" action="/lock"><button class="quiet">Lock</button></form>
+<form method="post" action="/open">{{template "proof"}}<button autofocus>Open CYFR</button></form>
+<form method="post" action="/lock">{{template "proof"}}<button class="quiet">Lock</button></form>
 {{end}}
-</main></html>
+</main><script>{{.Keep}}</script></html>
 {{define "secret"}}{{if .Digits}}
 <label>Choose a six-digit PIN<input name="secret" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
 <label>The same PIN again<input name="again" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
@@ -105,4 +115,6 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <label>The passphrase<input name="secret" type="password" autocomplete="off" required></label>
 <label>The passphrase again<input name="again" type="password" autocomplete="off" required></label>
 {{end}}{{end}}
+{{define "proof"}}<input type="hidden" name="proof">{{end}}
+{{define "typed"}}<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" autofocus required></label>{{end}}
 {{define "terms"}}{{if .Terms}}<label><input type="checkbox" name="accept" value="yes"> I accept the terms at {{.Terms}}</label>{{end}}{{end}}`))

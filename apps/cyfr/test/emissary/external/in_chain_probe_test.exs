@@ -3,10 +3,10 @@
 
 defmodule Emissary.External.InChainProbeTest do
   @moduledoc """
-  The in-chain call of a stdio server's tool (`callTool/3` on the
+  The in-chain call of an mcp program's tool (`callTool/3` on the
   `in_chain` plane, and the stored rows it reads back), run step for step
   against this application: the caller established from a session token,
-  a root execution admitted under the grant its athanor stands at, a stdio
+  a root execution admitted under the grant its athanor stands at, an mcp
   server's tool called in-chain under the root's lineage, the root closed
   with the call's outcome, and the execution rows and payloads read back.
   The server process is a stub that answers as the
@@ -23,7 +23,7 @@ defmodule Emissary.External.InChainProbeTest do
   @tool "leak:probe__echo_env"
   @arguments %{"name" => "PROBE_SECRET", "stderr" => true}
 
-  # The server process a stdio row's calls reach, registered where the
+  # The server process an mcp program's calls reach, registered where the
   # supervisor finds one: under the row's configuration digest. It answers
   # every call with the backends service's masked `echo_env` and tells the test.
   defmodule BackendStub do
@@ -65,11 +65,13 @@ defmodule Emissary.External.InChainProbeTest do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(issuer), %{
         cap: 0,
         name: "leak",
-        transport: "stdio",
+        transport: "program",
+        mark: "mcp",
         url: nil,
         config_json:
           Jason.encode!(%{
-            "transport" => "stdio",
+            "transport" => "program",
+            "mark" => "mcp",
             "console" => true,
             "backends" => [
               %{

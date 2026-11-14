@@ -80,6 +80,7 @@ export function run(doc, env) {
     return
   }
   $(doc, "what").textContent = describe(request)
+  $(doc, "recover-link").setAttribute("href", `recover#request=${env.location.hash.slice(1)}`)
   only(doc, "ask")
   const button = $(doc, "use-passkey")
   button.addEventListener("click", () =>

@@ -13,7 +13,6 @@ defmodule Opus.Provider do
   - `cancel` - Cancel a running execution
   - `retry` - Run a schedule's or a feed's failed run again, as it ran
   - `status` - Execution slot diagnostics
-  - `force_release` - Release every athanor's execution slots (operator only)
   - `read_resource` - Read an `opus://executions/…` resource
   - `usage` - The runs one profile admitted, each with its origin, root
     and time
@@ -194,6 +193,15 @@ defmodule Opus.Provider do
         refused
     end
   end
+
+  # Logs, cancel and retry are `:execute` operations that read the run's
+  # record, and reading a record needs `:storage_read` too
+  # (`Opus.Record.get/3`). A caller who may not use it, for want of the
+  # permission or from inside a running component, is told so before any
+  # row is read, so the answer is the same whether the id names a run or
+  # not; a caller who may reads a missing run and another athanor's alike,
+  # as not found.
+  defp may_read_runs(ctx), do: Context.require_permission(ctx, :storage_read)
 
   # An in-chain cancel reads its row in the chain before anything is
   # cancelled; an external-plane cancel leaves the read to the cancel.
@@ -446,15 +454,6 @@ defmodule Opus.Provider do
             planes: [:external],
             permission: :execute
           ),
-          # Releasing every athanor's slots is the operator's lever
-          # alone. Until the in-flight executions it released drain, the
-          # node runs OVER-admitted by that many slots — the recovery
-          # trades wedged slots for a temporary over-cap.
-          Operation.new("execution", "force_release", "Force release execution", [],
-            scope: :platform,
-            kind: :destructive,
-            planes: [:external]
-          ),
           # The admission of an MCP `resources/read` of an opus:// URI
           # (`resource_templates/0`).
           Operation.new(
@@ -609,7 +608,8 @@ defmodule Opus.Provider do
         %Context{} = ctx,
         %{"action" => "logs", "execution_id" => execution_id} = args
       ) do
-    with {:ok, record} <- read_in_chain(ctx, execution_id, args) do
+    with :ok <- may_read_runs(ctx),
+         {:ok, record} <- read_in_chain(ctx, execution_id, args) do
       logs = format_execution_logs(record)
 
       {:ok,
@@ -641,7 +641,8 @@ defmodule Opus.Provider do
           "execution_id" => execution_id
         } = args
       ) do
-    with :ok <- check_chain_scope(ctx, execution_id, args) do
+    with :ok <- may_read_runs(ctx),
+         :ok <- check_chain_scope(ctx, execution_id, args) do
       case Opus.cancel(ctx, execution_id) do
         {:ok, result} ->
           {:ok, result}
@@ -673,14 +674,15 @@ defmodule Opus.Provider do
   # its row: its seed was empty and it named no account, while a run
   # started anywhere else may have carried a launch's sources or an
   # account the row does not record. The retry starts as the caller's own
-  # run, under the caller's origin, which the grant admits or refuses. It
+  # run, recording the caller's origin. It
   # answers `accepted` with the new run's id once the run is admitted
   # (`Opus.start_root/5`), and the run goes on as a fired run does: its
   # outcome is the run's own, on its row and `runs.changes`, never the
   # retry's answer.
   def handle("execution", %Context{} = ctx, %{"action" => "retry", "execution_id" => id})
       when is_binary(id) do
-    with {:ok, record} <- retriable(ctx, id),
+    with :ok <- may_read_runs(ctx),
+         {:ok, record} <- retriable(ctx, id),
          :ok <- known_failed(record),
          {:ok, consent_id} <- rooted_at(ctx, record),
          {:ok, input} <- Record.input(ctx, record) do
@@ -707,27 +709,6 @@ defmodule Opus.Provider do
   # Status action - execution slot diagnostics
   def handle("execution", %Context{} = ctx, %{"action" => "status"}) do
     {:ok, scoped_slot_status(ctx, slot_status())}
-  end
-
-  # Force release action - emergency slot recovery. Releasing EVERY
-  # athanor's slots is a server-wide side effect; the `scope: :platform`
-  # annotation admits operators alone before this arm is reached.
-  def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
-    Logger.warning("[Opus.Provider] Force release triggered by user=#{ctx.user_id}")
-
-    :telemetry.execute(
-      [:cyfr, :opus, :force_release],
-      %{system_time: System.system_time()},
-      %{user_id: ctx.user_id, auth_method: ctx.auth_method}
-    )
-
-    case Prima.Slots.force_release_all(@slots) do
-      {:error, :unavailable} ->
-        {:error, "Execution slots are not running — nothing was released"}
-
-      {:ok, _released} ->
-        {:ok, Map.put(scoped_slot_status(ctx, slot_status()), :force_released, true)}
-    end
   end
 
   def handle("execution", %Context{} = ctx, %{"action" => "read_resource", "uri" => uri})
@@ -895,21 +876,30 @@ defmodule Opus.Provider do
 
   defp rooted_at(_ctx, %Record{}), do: {:error, :retry_grant_moved}
 
-  # Execution requires a profile; return a typed setup error when none is selected.
+  # A run stands on its person's grant. With none to stand on, the refusal
+  # names its cause: a reference that names no component is not found,
+  # whatever profiles exist, and otherwise the component was never granted
+  # or its grant was revoked (`Sanctum.Consent.ungranted/2`).
   defp run_root_formatted(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
     case Opus.run_root(ctx, selector, reference, input, opts) do
       {:error, :no_profile} when selector == :default ->
-        {:error,
-         {:consent_required,
-          %{
-            "ref" => reference,
-            "detail" => "no profile — grant it first (profile.plan, or cyfr profile grant)"
-          }}}
+        ungranted(ctx, reference)
 
       other ->
         format_root_result(other)
+    end
+  end
+
+  defp ungranted(ctx, reference) do
+    with {:ok, component_ref, _type, _component} <-
+           Opus.Admission.inspect_component(ctx, reference),
+         {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(component_ref) do
+      case Sanctum.Consent.ungranted(ctx, name_ref) do
+        {:ok, cause} -> {:error, {:consent_required, %{cause: cause, ref: name_ref}}}
+        {:error, _unanswered} -> {:error, {:unavailable, "Profiles"}}
+      end
     end
   end
 

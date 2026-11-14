@@ -69,7 +69,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # What is wrong with the values offered (an empty field, a cron
     # expression, a reference that does not resolve) and the cap reached.
     "apps/cyfr/lib/opus/schedules/provider.ex" => 3,
-    "apps/cyfr/lib/opus/provider.ex" => 11,
+    "apps/cyfr/lib/opus/provider.ex" => 10,
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 10,

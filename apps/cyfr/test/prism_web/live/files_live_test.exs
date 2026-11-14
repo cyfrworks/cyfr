@@ -109,6 +109,163 @@ defmodule PrismWeb.FilesLiveTest do
     refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "hello.txt"])
   end
 
+  # A whole 1x1 PNG: its header, one pixel's compressed data and its end.
+  @png Base.decode16!(
+         "89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C489" <>
+           "0000000D49444154789C636068F8FF1F000482027FE7D85A6C0000000049454E44AE426082"
+       )
+
+  test "a picture opens in the panel; other bytes and markup, whatever their name, are not drawn",
+       %{
+         conn: conn,
+         ctx: ctx
+       } do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.put(actor, ["data", "dot.png"], @png)
+    :ok = Arca.put(actor, ["data", "fake.png"], <<0, 1, 2, 3, 255>>)
+
+    {view, _html} = mount_athanor(conn, "/files?p=data")
+
+    view |> element("#files-entries button", "dot.png") |> render_click()
+
+    assert view |> element("#files-picture") |> render() =~
+             ~s(src="data:image/png;base64,#{Base.encode64(@png)}")
+
+    refute render(view) =~ "Binary content"
+
+    view |> element("#files-entries button", "fake.png") |> render_click()
+    refute has_element?(view, "#files-picture")
+    assert render(view) =~ "Binary content — download it to open."
+
+    # Markup named as a picture is text, shown as text and never drawn.
+    svg = ~s[<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>]
+    html = ~s[<html><body><script>alert(2)</script></body></html>]
+    :ok = Arca.put(actor, ["data", "vector.png"], svg)
+    :ok = Arca.put(actor, ["data", "page.gif"], html)
+    {view, _html} = mount_athanor(conn, "/files?p=data")
+
+    for {name, markup} <- [{"vector.png", svg}, {"page.gif", html}] do
+      view |> element("#files-entries button", name) |> render_click()
+      refute has_element?(view, "#files-picture")
+      refute render(view) =~ "data:image"
+
+      assert view |> element("#files-open pre") |> render() =~
+               Phoenix.HTML.html_escape(markup) |> Phoenix.HTML.safe_to_string()
+    end
+  end
+
+  test "a new folder is held until a file lands there, and Rename and Move relocate a file", %{
+    conn: conn,
+    ctx: ctx,
+    route: route
+  } do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.put(actor, ["data", "q3.csv"], "a,b\n")
+
+    {view, _html} = mount_athanor(conn, "/files?p=data")
+
+    view |> element("#files-new-folder") |> render_click()
+    view |> form("#files-folder-form", %{"name" => "../up"}) |> render_submit()
+    assert render(view) =~ "cannot name a folder"
+
+    view |> form("#files-folder-form", %{"name" => "reports"}) |> render_submit()
+    assert_patch(view, "/a/#{route}/files?p=data%2Freports")
+    assert render(view) =~ "Nothing here yet"
+
+    # Storage holds no empty folder; the page lists the one it holds.
+    refute Arca.exists?(actor, ["data", "reports"])
+    view |> element("#files-crumbs button", "data") |> render_click()
+    assert has_element?(view, "#files-entries button[phx-value-path='data/reports']")
+
+    view
+    |> element("#files-entries button[phx-value-path='data/q3.csv']", "Rename")
+    |> render_click()
+
+    view |> form("#files-move", %{"name" => "q4.csv"}) |> render_submit()
+    assert render(view) =~ "Moved data/q3.csv to data/q4.csv"
+    refute Arca.exists?(actor, ["data", "q3.csv"])
+
+    view
+    |> element("#files-entries button[phx-value-path='data/q4.csv']", "Move")
+    |> render_click()
+
+    view |> form("#files-move", %{"folder" => "data/reports"}) |> render_submit()
+    assert render(view) =~ "Moved data/q4.csv to data/reports/q4.csv"
+    assert {:ok, "a,b\n"} = Arca.get(actor, ["data", "reports", "q4.csv"])
+    refute Arca.exists?(actor, ["data", "q4.csv"])
+
+    # A move onto a name that is taken, or under a file, is refused in words.
+    :ok = Arca.put(actor, ["data", "taken.csv"], "t")
+    :ok = Arca.put(actor, ["data", "reports", "taken.csv"], "r")
+    view |> element("#files-crumbs button", "data") |> render_click()
+
+    view
+    |> element("#files-entries button[phx-value-path='data/taken.csv']", "Move")
+    |> render_click()
+
+    view |> form("#files-move", %{"folder" => "data/reports"}) |> render_submit()
+    assert render(view) =~ "already exists"
+    assert {:ok, "t"} = Arca.get(actor, ["data", "taken.csv"])
+
+    # Once a file lands in it, the folder is a stored one: renamed and
+    # deleted through storage, leaving nothing of its old name behind.
+    view
+    |> element("#files-entries button[phx-value-path='data/reports']", "Rename")
+    |> render_click()
+
+    view |> form("#files-move", %{"name" => "archive"}) |> render_submit()
+    assert render(view) =~ "Moved data/reports to data/archive"
+    refute has_element?(view, "#files-entries button[phx-value-path='data/reports']")
+    assert {:ok, "r"} = Arca.get(actor, ["data", "archive", "taken.csv"])
+
+    view
+    |> element("#files-entries button[phx-value-path='data/archive']", "Delete")
+    |> render_click()
+
+    assert render(view) =~ "Deleted data/archive"
+    refute has_element?(view, "#files-entries button[phx-value-path='data/archive']")
+    refute Arca.exists?(actor, ["data", "archive", "taken.csv"])
+    refute Arca.exists?(actor, ["data", "archive", "q4.csv"])
+
+    # A held folder offers Remove alone, which lets it go with the held
+    # folders under it.
+    view |> element("#files-new-folder") |> render_click()
+    view |> form("#files-folder-form", %{"name" => "outer"}) |> render_submit()
+    view |> element("#files-new-folder") |> render_click()
+    view |> form("#files-folder-form", %{"name" => "inner"}) |> render_submit()
+    assert_patch(view, "/a/#{route}/files?p=data%2Fouter%2Finner")
+
+    view |> element("#files-crumbs button", "data") |> render_click()
+    outer = "#files-entries button[phx-value-path='data/outer']"
+    assert has_element?(view, outer, "Remove")
+
+    for action <- ~w(Rename Move Delete) do
+      refute has_element?(view, outer, action)
+    end
+
+    view |> element(outer, "Remove") |> render_click()
+    assert render(view) =~ "Removed the empty folder data/outer"
+    refute has_element?(view, outer)
+    view |> element("#files-new-folder") |> render_click()
+    view |> form("#files-folder-form", %{"name" => "outer"}) |> render_submit()
+    refute has_element?(view, "#files-entries button[phx-value-path='data/outer/inner']")
+
+    # New folder refuses a name already there, stored or held.
+    :ok = Arca.put(actor, ["data", "stored", "f.txt"], "f")
+    view |> element("#files-crumbs button", "data") |> render_click()
+
+    for name <- ~w(stored outer) do
+      unless has_element?(view, "#files-folder-form"),
+        do: view |> element("#files-new-folder") |> render_click()
+
+      view |> form("#files-folder-form", %{"name" => name}) |> render_submit()
+      assert render(view) =~ "&#39;#{name}&#39; already exists here — choose another name"
+      assert has_element?(view, "#files-folder-form")
+    end
+
+    assert {:ok, "f"} = Arca.get(actor, ["data", "stored", "f.txt"])
+  end
+
   test "the download route knows no folder the page does not show", %{conn: conn, route: route} do
     assert get(conn, "/a/#{route}/files/download/payloads/sha256/abc").status == 404
     assert get(conn, "/a/#{route}/files/download/data/missing.txt").status == 404

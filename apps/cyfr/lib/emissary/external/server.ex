@@ -37,9 +37,9 @@ defmodule Emissary.External.Server do
   answers its caller with the sentence it keeps as its status error, the
   injected credentials masked out of it.
 
-  ## Stdio transport
+  ## A program
 
-  A stdio server's backends are programs the backends service runs, and this
+  A program's backends are programs the backends service runs, and this
   process is their MCP client. Connecting asks the programs controller for
   the row's owner (`Opus.Programs.hold/1`), which answers a grant, then opens
   one session per backend under the key `"mcp"` (`Opus.Programs.Session`):
@@ -60,7 +60,7 @@ defmodule Emissary.External.Server do
   awaiting that backend fails, and the next call opens the session again,
   initializing the backend afresh. The tools listed stay listed meanwhile.
 
-  A kept stdio row runs its backends in its login entry's home
+  A kept mcp program runs its backends in its login entry's home
   (`login_entry_id`): a connect checks the entry first
   (`Sanctum.Mount.login_entry/3`, active, of this athanor, naming this row)
   and refuses with `{:login_entry, reason}` when it is not, before anything
@@ -103,13 +103,13 @@ defmodule Emissary.External.Server do
   alias Sanctum.Refusals
 
   @initialize_timeout_ms 15_000
-  # How long a caller waits for a connect, which for a stdio server includes
+  # How long a caller waits for a connect, which for a program includes
   # the service starting its backends.
   @connect_call_timeout_ms 60_000
   @retried_refusals [:stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
   # A reader's wait on one recv; the service answers sooner on a line.
   @recv_wait_ms 25_000
-  # The key every stdio session of a row opens under.
+  # The key every program session of a row opens under.
   @session_key "mcp"
   # Client-side deadline for a call_tool round-trip. The upstream timeout is
   # operator-settable per server (config timeout_ms), so the caller's wait
@@ -268,7 +268,7 @@ defmodule Emissary.External.Server do
     # `headers` holds RESOLVED credential values (vault references already
     # unsealed to plaintext) and the session id a legacy peer issued,
     # `raw_headers` may carry inline ones and
-    # `grant` holds a stdio owner's key. OTP prints `inspect(state)` in
+    # `grant` holds a program owner's key. OTP prints `inspect(state)` in
     # every GenServer crash/exit report, so all three are excluded from
     # Inspect — a crashed call must not write credentials into the log.
     @derive {Inspect, except: [:headers, :raw_headers, :grant]}
@@ -279,11 +279,11 @@ defmodule Emissary.External.Server do
       :athanor_id,
       :server_id,
       :epoch,
-      # The grant `Opus.Programs.hold/1` answered (stdio only).
+      # The grant `Opus.Programs.hold/1` answered (a program only).
       :grant,
       # This process, which a call's task hands its reply back through.
       :server,
-      # A kept stdio row's login entry, whose home its sessions run in.
+      # A kept mcp program's login entry, whose home its sessions run in.
       :login_entry_id,
       # The backend a call's task sends to (a task's snapshot only).
       :call_backend,
@@ -312,7 +312,7 @@ defmodule Emissary.External.Server do
       # What each running call asked, so a refused one can be sent again:
       # %{task_pid => {tool_name, arguments, attempt}}.
       calls: %{},
-      # A stdio server's backends, the session each runs in and its reader:
+      # A program's backends, the session each runs in and its reader:
       # %{backend => %{session: id, reader: pid}}.
       backends: [],
       sessions: %{},
@@ -324,7 +324,7 @@ defmodule Emissary.External.Server do
   # Exits are trapped so a stop — a vault change, a deleted row, an archived
   # athanor — runs `terminate/2`, which ends every upstream call still in
   # flight with the credentials this process resolved, and releases a
-  # stdio server's owner on the service.
+  # program's owner on the service.
   @impl true
   def init(config) do
     Process.flag(:trap_exit, true)
@@ -436,8 +436,8 @@ defmodule Emissary.External.Server do
           "Server #{state.name} is busy (#{@max_in_flight} calls in flight) — retry shortly"},
          state}
 
-      state.transport == :stdio ->
-        case stdio_route(state, tool_name) do
+      state.transport == :program ->
+        case program_route(state, tool_name) do
           {:ok, backend, tool} ->
             case ensure_session(state, backend) do
               {:ok, state} ->
@@ -475,14 +475,14 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # Runs one call's upstream round trip in a detached task. A stdio call's
+  # Runs one call's upstream round trip in a detached task. A program call's
   # task awaits its answer by `request_id`, which this process hands it
   # from the backend's session.
   defp start_call(state, from, call, body, tool_name, backend, request_id) do
     # The upstream HTTP round-trip runs OUTSIDE this process so one slow
     # server never head-of-line-blocks every other caller of the same
     # server for up to their full call timeout. The task gets a snapshot
-    # of state (resolved headers, masking material, a stdio grant) and
+    # of state (resolved headers, masking material, a program grant) and
     # replies directly; config (re)resolution stays serialized in the
     # GenServer above. The tool catalogue is dropped from the snapshot —
     # the call doesn't read it, and it would otherwise be copied into
@@ -683,7 +683,7 @@ defmodule Emissary.External.Server do
   # once more.
   defp after_refusal(state, from, {tool, arguments, 0}, :session_ended) do
     state =
-      case stdio_route(state, tool) do
+      case program_route(state, tool) do
         {:ok, backend, _tool} -> session_ended(state, backend, :ended)
         :error -> state
       end
@@ -729,7 +729,7 @@ defmodule Emissary.External.Server do
 
   # A backend that said its tools changed is listed again; a refused or
   # failed listing leaves the catalogue as it was.
-  defp relist_tools(%State{transport: :stdio, status: :ready} = state, backend) do
+  defp relist_tools(%State{transport: :program, status: :ready} = state, backend) do
     case list_backend_tools(state, backend) do
       {:ok, listed, state} ->
         tools = replace_backend_tools(state.tools, backend, listed)
@@ -832,7 +832,7 @@ defmodule Emissary.External.Server do
 
   # OTP crash reports and :sys.get_status print the state, the last message
   # and the exit reason — which can hold resolved credential header values
-  # and a stdio owner's key.
+  # and a program owner's key.
   @impl true
   def format_status(status), do: Opus.Programs.StatusRedaction.format_status(status)
 
@@ -849,7 +849,7 @@ defmodule Emissary.External.Server do
       GenServer.reply(from, {:error, {:uncertain, "Server #{state.name} stopped mid-call"}})
     end
 
-    if state.transport == :stdio do
+    if state.transport == :program do
       drop_sessions(state, :stopped)
       Opus.Programs.release(owner(state))
     end
@@ -864,10 +864,10 @@ defmodule Emissary.External.Server do
   # MCP Handshake
   # ============================================================================
 
-  # A stdio server connects through the programs controller: its login
+  # A program connects through the programs controller: its login
   # entry checked when it keeps a home, its owner held, then a session per
   # backend opened and its tools listed.
-  defp do_initialize(%State{transport: :stdio} = state) do
+  defp do_initialize(%State{transport: :program} = state) do
     Logger.info(
       "[Emissary.External.Server] Connecting to #{state.name} through the backends service"
     )
@@ -875,7 +875,7 @@ defmodule Emissary.External.Server do
     state = %{state | last_init_attempt: System.monotonic_time(:millisecond), era: :legacy}
 
     case record_revisions(state) do
-      {:ok, state} -> stdio_connect(state, 0)
+      {:ok, state} -> program_connect(state, 0)
       {:error, reason, state} -> fail_initialize(state, reason)
     end
   end
@@ -964,7 +964,7 @@ defmodule Emissary.External.Server do
     end
   end
 
-  defp stdio_connect(state, attempt) do
+  defp program_connect(state, attempt) do
     with :ok <- login_entry(state),
          {:ok, grant} <- Opus.Programs.hold(owner(state)),
          {:ok, tools, listed} <- list_all_tools(%{state | grant: grant}) do
@@ -975,7 +975,7 @@ defmodule Emissary.External.Server do
       {:ok, %{listed | status: :ready, tools: tools, error: nil}}
     else
       {:error, {:refused, code, _boot}, state} when code in @retried_refusals and attempt == 0 ->
-        stdio_connect(drop_sessions(%{state | grant: nil}, :refused), 1)
+        program_connect(drop_sessions(%{state | grant: nil}, :refused), 1)
 
       {:error, reason, state} ->
         fail_initialize(drop_sessions(%{state | grant: nil}, :failed), backends_reason(reason))
@@ -985,7 +985,7 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # A kept stdio row's sessions run in its login entry's home, so the entry
+  # A kept mcp program's sessions run in its login entry's home, so the entry
   # must be an active login entry of this athanor that names this row; a
   # scratch row names none.
   defp login_entry(%State{login_entry_id: nil}), do: :ok
@@ -1016,7 +1016,7 @@ defmodule Emissary.External.Server do
   end
 
   # ============================================================================
-  # Stdio sessions
+  # A program's sessions
   # ============================================================================
 
   # A backend's session, opened when it has none: the service attaches to
@@ -1331,7 +1331,7 @@ defmodule Emissary.External.Server do
   end
 
   # A tool name as this server lists it, `<backend>__<tool>`, split.
-  defp stdio_route(state, name) do
+  defp program_route(state, name) do
     case String.split(name, "__", parts: 2) do
       [backend, tool] when tool != "" ->
         if backend in state.backends, do: {:ok, backend, tool}, else: :error
@@ -1364,7 +1364,7 @@ defmodule Emissary.External.Server do
 
   # A call's round trip, from its task: its line sent on the backend's
   # session, then the answer this server hands back by its id.
-  defp upstream(%State{transport: :stdio} = state, body) do
+  defp upstream(%State{transport: :program} = state, body) do
     %{session: session} = Map.fetch!(state.sessions, state.call_backend)
     id = body["id"]
 

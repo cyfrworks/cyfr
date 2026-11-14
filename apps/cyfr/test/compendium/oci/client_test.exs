@@ -198,14 +198,42 @@ defmodule Compendium.OCI.ClientTest do
 
     defp serve(conn, state) do
       case conn.path_info do
-        ["v2", "alice", "reagents", "pinned", "manifests", _ref]
-        when state.manifest_status == 200 ->
+        # The OCI store's tag list keeps every published tag, a yanked
+        # release's among them.
+        ["v2", "alice", "reagents", "pinned", "tags", "list"] ->
           conn
-          |> Plug.Conn.put_resp_header(
-            "docker-content-digest",
-            Prima.Digest.sha256(state.manifest)
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(%{
+              "name" => "alice/reagents/pinned",
+              "tags" => ["1.0.0" | Map.keys(state.manifests)]
+            })
           )
-          |> Plug.Conn.send_resp(200, state.manifest)
+
+        # The registry's answer for the component with no version: the
+        # newest release it holds eligible, or 404 when none is.
+        ["v1", "components", "reagent", "alice", "pinned"] when is_binary(state.latest) ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(%{
+              "component_type" => "reagent",
+              "namespace_slug" => "alice",
+              "name" => "pinned",
+              "version" => state.latest,
+              "status" => "active"
+            })
+          )
+
+        ["v2", "alice", "reagents", "pinned", "manifests", ref]
+        when state.manifest_status == 200 ->
+          manifest = Map.get(state.manifests, ref, state.manifest)
+
+          conn
+          |> Plug.Conn.put_resp_header("docker-content-digest", Prima.Digest.sha256(manifest))
+          |> Plug.Conn.send_resp(200, manifest)
 
         ["v2", "alice", "reagents", "pinned", "manifests", _ref] ->
           Plug.Conn.send_resp(conn, state.manifest_status, "")
@@ -452,6 +480,140 @@ defmodule Compendium.OCI.ClientTest do
     end
   end
 
+  # A reference with no version takes the newest release the registry
+  # holds eligible, whatever version is already installed, and never a
+  # yanked one: the registry's REST answer names it, served here by the
+  # same stub as the OCI store.
+  describe "a pull that names no version" do
+    @repo "alice/reagents/pinned"
+
+    setup :start_registry
+
+    setup %{registry: registry} do
+      port = registry |> String.split(":") |> List.last()
+      Prima.Test.Env.put_app_env(:cyfr, :registry_url, "127.0.0.1:#{port}")
+      :ok
+    end
+
+    defp port_of(ctx), do: ctx.registry |> String.split(":") |> List.last()
+
+    defp pull_ref(ctx, reference) do
+      Compendium.Provider.handle("component", ctx, %{
+        "action" => "pull",
+        "reference" => reference
+      })
+    end
+
+    # The answer a pull of `version` gives an anonymous caller: the
+    # fixture's own WASM layer and the manifest served under that tag.
+    defp pulled(ctx, version) do
+      %{
+        status: "pulled",
+        component_ref: "reagent:alice.pinned:#{version}",
+        digest: ctx.wasm_digest,
+        manifest_digest: Prima.Digest.sha256(manifest_of(ctx.agent, version)),
+        size: byte_size(ctx.wasm),
+        type: "reagent",
+        source: Compendium.Source.oci(),
+        auth_note:
+          "You are pulling anonymously from #{ctx.registry}. Private components will not " <>
+            "be accessible. Run `cyfr registry sync` to mint your push tokens."
+      }
+    end
+
+    test "takes the newest release the registry holds eligible, not the version installed",
+         ctx do
+      allow(ctx.agent, [:anonymous])
+      anonymous = caller("oci_newest")
+
+      assert pull_ref(anonymous, "reagent:alice.pinned:1.0.0") == {:ok, pulled(ctx, "1.0.0")}
+
+      publish(ctx.agent, "1.1.0")
+      newest_eligible(ctx.agent, "1.1.0")
+      _ = requests(ctx.agent)
+
+      assert pull_ref(anonymous, "reagent:alice.pinned") == {:ok, pulled(ctx, "1.1.0")}
+
+      assert [
+               {"GET", "/v1/components/reagent/alice/pinned", nil},
+               {"GET", "/v2/alice/reagents/pinned/manifests/1.1.0", nil} | _
+             ] = requests(ctx.agent)
+    end
+
+    # 1.1.0 is published and yanked: its tag still serves a pinned pull,
+    # and the registry names 1.0.0 the newest eligible release.
+    test "never takes a yanked release, though its tag is still served", ctx do
+      allow(ctx.agent, [:anonymous])
+      anonymous = caller("oci_yanked")
+
+      publish(ctx.agent, "1.1.0")
+      newest_eligible(ctx.agent, "1.0.0")
+
+      assert pull_ref(anonymous, "reagent:alice.pinned") == {:ok, pulled(ctx, "1.0.0")}
+
+      refute Enum.any?(requests(ctx.agent), fn {_method, path, _auth} ->
+               String.ends_with?(path, "/manifests/1.1.0")
+             end)
+    end
+
+    # The person holds a personal token the registry no longer accepts and
+    # a token for the publisher's namespace: the registry's answer is read
+    # under the publisher's token, as the pull itself is.
+    test "the registry's answer is read under the token of the namespace pulled from", ctx do
+      member = caller("oci_member")
+
+      :ok =
+        CredentialStore.put_push_token(member, ctx.registry, "member", "tok_revoked", "personal")
+
+      :ok = CredentialStore.put_push_token(member, ctx.registry, "alice", "tok_alice", "member")
+      allow(ctx.agent, ["Bearer tok_alice"])
+      newest_eligible(ctx.agent, "1.0.0")
+
+      assert pull_ref(member, "reagent:alice.pinned") ==
+               {:ok, Map.delete(pulled(ctx, "1.0.0"), :auth_note)}
+
+      assert [
+               {"GET", "/v1/components/reagent/alice/pinned", "Bearer tok_alice"},
+               {"GET", "/v2/alice/reagents/pinned/manifests/1.0.0", "Bearer tok_alice"} | _
+             ] = requests(ctx.agent)
+    end
+
+    test "an answer that names no version pulls nothing", ctx do
+      allow(ctx.agent, [:anonymous])
+
+      for named <- ["latest", "1.2.3.4"] do
+        newest_eligible(ctx.agent, named)
+
+        assert {:error, refusal} = pull_ref(caller("oci_not_a_version"), "reagent:alice.pinned")
+
+        assert refusal == %Prima.Refusal{
+                 class: :unavailable,
+                 reason: {:registry, :parse_error},
+                 message:
+                   "Unexpected response format from 127.0.0.1:#{port_of(ctx)} during " <>
+                     "get_latest_component. This may indicate a registry API version " <>
+                     "mismatch. Check for updates."
+               }
+
+        assert [{"GET", "/v1/components/reagent/alice/pinned", nil}] = requests(ctx.agent)
+      end
+    end
+
+    test "a component with no eligible release pulls nothing", ctx do
+      allow(ctx.agent, [:anonymous])
+
+      assert {:error, reason} = pull_ref(caller("oci_none"), "reagent:alice.pinned")
+
+      assert Prima.Refusal.classify(reason) == %Prima.Refusal{
+               class: :not_found,
+               reason: {:not_found, "Release", "reagent:alice.pinned"},
+               message: "Release not found: reagent:alice.pinned"
+             }
+
+      assert [{"GET", "/v1/components/reagent/alice/pinned", nil}] = requests(ctx.agent)
+    end
+  end
+
   # ============================================================================
   # Signed pulls
   # ============================================================================
@@ -639,7 +801,7 @@ defmodule Compendium.OCI.ClientTest do
     # as they make it, admitting runs over `/mcp`.
     defp consent!(ctx) do
       person = Sanctum.TestContext.via(ctx.a, :prism)
-      decisions = %{ref: @run_ref, origins: [:interactive, :programmatic]}
+      decisions = %{ref: @run_ref}
       {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: @run_ref})
       {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
 
@@ -954,6 +1116,10 @@ defmodule Compendium.OCI.ClientTest do
     %{
       allowed: [],
       manifest: manifest_json,
+      # A tag's own manifest, where one is published under it, and the
+      # release the registry names newest eligible (none: 404).
+      manifests: %{},
+      latest: nil,
       manifest_status: 200,
       blobs: blobs,
       requests: []
@@ -1020,8 +1186,41 @@ defmodule Compendium.OCI.ClientTest do
     end)
   end
 
-  defp config_fixture,
-    do: Jason.encode!(%{"name" => "pinned", "version" => "1.0.0", "type" => "reagent"})
+  defp config_fixture(version \\ "1.0.0"),
+    do: Jason.encode!(%{"name" => "pinned", "version" => version, "type" => "reagent"})
+
+  # Publishes `version` beside 1.0.0: its own manifest under its tag and
+  # the same WASM layer under its own config. The OCI store keeps the tag
+  # whatever the registry later says of the release.
+  defp publish(agent, version) do
+    config = config_fixture(version)
+
+    Agent.update(agent, fn state ->
+      manifest =
+        state.manifest
+        |> Jason.decode!()
+        |> put_in(["config"], %{
+          "mediaType" => "application/vnd.cyfr.manifest.v1+json",
+          "size" => byte_size(config),
+          "digest" => Prima.Digest.sha256(config)
+        })
+        |> Jason.encode!()
+
+      %{
+        state
+        | manifests: Map.put(state.manifests, version, manifest),
+          blobs: Map.put(state.blobs, Prima.Digest.sha256(config), config)
+      }
+    end)
+  end
+
+  # The release the registry names newest eligible for a pull with no
+  # version: a yanked release is never it.
+  defp newest_eligible(agent, version), do: Agent.update(agent, &%{&1 | latest: version})
+
+  # A tag's manifest as the registry serves it.
+  defp manifest_of(agent, tag),
+    do: Agent.get(agent, &Map.get(&1.manifests, tag, &1.manifest))
 
   # The reagent guest, told apart from another by a custom section named
   # `tag` after its last section.

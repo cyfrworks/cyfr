@@ -493,7 +493,6 @@ fn args ->
           label: "default",
           kind: :owner,
           invoke_mode: :open_inert,
-          origins: [:interactive, :programmatic],
           bindings: [
             %{
               need: need.name,

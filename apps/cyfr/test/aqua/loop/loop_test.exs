@@ -1462,6 +1462,78 @@ defmodule Aqua.LoopTest do
     assert ref =~ @model and user == ctx.user_id
   end
 
+  test "a turn offers the provider's search, and records the open web, only when its grant " <>
+         "carries it",
+       %{ctx: ctx, thread: thread} do
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model, script: [reply("searched"), reply("kept")], provider_tools: ["web_search"]}
+    )
+
+    # The shipped soul turns search on, and its first fill's grant carries it.
+    searched = accept!(ctx, thread, "@aqua look it up")
+    assert :completed = Task.await(run(ctx, searched), 30_000)
+    assert chat_provider_tools() == [["web_search"]]
+    assert web_source?(ctx, searched)
+
+    # The person narrows the soul's grant to every tool but the search; its
+    # policy still says auto.
+    {_, head, _} = consent_head!(ctx, @soul)
+    {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
+    {:ok, ingress} = Prima.Authority.Blob.ingress(blob, @soul)
+    assert "native_search" in ingress.tools
+    commit_soul!(ctx, ingress.tools -- ["native_search"])
+
+    # A thread of its own, so nothing the first turn read is carried in.
+    {:ok, fresh} = Threads.create(Sanctum.Context.actor(ctx))
+    kept = accept!(ctx, fresh, "@aqua again")
+    assert :completed = Task.await(run(ctx, kept), 30_000)
+    assert chat_provider_tools() == [["web_search"], []]
+    refute web_source?(ctx, kept)
+  end
+
+  defp chat_provider_tools do
+    for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+        do: params["provider_tools"]
+  end
+
+  defp web_source?(ctx, turn) do
+    {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
+
+    Prima.Source.outside("web_search") in Enum.map(
+      Jason.decode!(sources),
+      &Prima.Source.from_json/1
+    )
+  end
+
+  defp consent_head!(ctx, ref) do
+    {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    {:ok, row, refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
+    {profile, row, refs}
+  end
+
+  # The soul's grant committed again, its ingress narrowed to `tools`, its
+  # edge into the model still lending the model's default profile.
+  defp commit_soul!(ctx, tools) do
+    decisions = %{
+      ref: @soul,
+      selections: [%{dep: @model, label: "default"}],
+      subset: %{@soul => %{"tools" => tools}}
+    }
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @soul})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
   test "the step cap ends a turn that never stops calling", %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua loop forever")
     script!(List.duplicate(calls([{"u", "ui", %{"kind" => "ui.overlay.close"}}]), 40))

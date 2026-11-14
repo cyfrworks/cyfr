@@ -155,35 +155,54 @@ defmodule Opus.ProviderTest do
   # started and then completed or failed, which is what these cases inspect.
   # ============================================================================
 
-  describe "the origin a run over the API runs under" do
-    test "a grant naming interactive alone refuses it, recording nothing; naming programmatic admits it",
+  describe "a run over the API" do
+    defp run(ctx, ref) do
+      Provider.handle("execution", ctx, %{
+        "action" => "run",
+        "reference" => ref,
+        "input" => %{"a" => 1, "b" => 2}
+      })
+    end
+
+    test "stands on its person's grant, and records that the API started it",
          %{ctx: ctx, ref: ref} do
       {:ok, %{profile_id: profile_id}} = Opus.authority_for(ctx, :default, ref)
 
-      run = fn ->
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => ref,
-          "input" => %{"a" => 1, "b" => 2}
-        })
-      end
-
-      # The person's grant, as a first grant leaves it: interactive alone.
-      Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile_id, [:interactive])
-
-      assert {:error, {:consent_required, %{profile_id: ^profile_id}}} = run.()
-      assert {:ok, %{count: 0}} = Provider.handle("execution", ctx, %{"action" => "list"})
-
-      # Granted again naming programmatic: the run is admitted as one.
-      Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile_id, [:interactive, :programmatic])
-
-      _ = run.()
+      _ = run(ctx, ref)
 
       assert {:ok, %{executions: [%{execution_id: id}]}} =
                Provider.handle("execution", ctx, %{"action" => "list"})
 
       assert %{origin: "programmatic", profile_id: ^profile_id} =
                Arca.Repo.get!(Arca.Schemas.Execution, id)
+    end
+
+    test "a reference naming no component is not found, recording nothing", %{ctx: ctx} do
+      missing = "reagent:local.test-mat"
+
+      assert run(ctx, missing) == {:error, {:not_found, {:component, missing}}}
+      assert {:ok, %{count: 0}} = Provider.handle("execution", ctx, %{"action" => "list"})
+    end
+
+    test "a component never granted, and one whose grant was revoked, each say so",
+         %{ctx: ctx, ref: ref} do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "never-granted",
+          version: "0.1.0",
+          type: "reagent"
+        })
+
+      assert run(ctx, "reagent:local.never-granted:0.1.0") ==
+               {:error,
+                {:consent_required, %{cause: :no_grant, ref: "reagent:local.never-granted"}}}
+
+      {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "reagent:local.test-math")
+
+      assert run(ctx, ref) ==
+               {:error, {:consent_required, %{cause: :revoked, ref: "reagent:local.test-math"}}}
+
+      assert {:ok, %{count: 0}} = Provider.handle("execution", ctx, %{"action" => "list"})
     end
   end
 
@@ -229,17 +248,15 @@ defmodule Opus.ProviderTest do
     end
 
     test "returns error for unregistered component", %{ctx: ctx} do
-      # An unregistered component has no profile, so the consent gate
-      # refuses before resolution is attempted.
-      {:error, msg} =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => "reagent:local.nonexistent:0.1.0",
-          "input" => %{"a" => 1, "b" => 2}
-        })
+      # A reference naming nothing installed in the caller's athanor is not
+      # found, before any grant is asked about.
+      ref = "reagent:local.nonexistent:0.1.0"
 
-      assert {:consent_required, %{}} = msg
-      assert err_msg(msg) =~ "Consent required"
+      assert Provider.handle("execution", ctx, %{
+               "action" => "run",
+               "reference" => ref,
+               "input" => %{"a" => 1, "b" => 2}
+             }) == {:error, {:not_found, {:component, ref}}}
     end
 
     test "a connection roots the run under the account its profile's ingress binds by that " <>
@@ -787,14 +804,14 @@ defmodule Opus.ProviderTest do
   # The execution slots the context's athanor holds.
   defp slots(ctx), do: Map.get(Prima.Slots.status(Opus.Slots).keys, ctx.athanor_id, 0)
 
-  # What an MCP client receives for `tools/call` of `execution.run` with
-  # `args`: the JSON-RPC body the transport writes for the router's answer.
+  # What an MCP client receives for `tools/call` of `execution.run`, or the
+  # action `args` names, with `args`: the JSON-RPC body the transport writes for the router's answer.
   defp over_mcp(ctx, args) do
     message = %Prima.MCP.Message{
       type: :request,
       id: 1,
       method: "tools/call",
-      params: %{"name" => "execution", "arguments" => Map.put(args, "action", "run")}
+      params: %{"name" => "execution", "arguments" => Map.put_new(args, "action", "run")}
     }
 
     case Emissary.MCP.Router.dispatch(ctx, message) do
@@ -938,7 +955,6 @@ defmodule Opus.ProviderTest do
 
     root = "reagent:local.lent-root"
     limits = Prima.Test.AuthorityFixtures.limits_map()
-    origins = [:interactive, :programmatic]
     lender_key = Prima.Authority.Blob.binding_key(@lender, "@ingress", nil)
 
     lender_policy =
@@ -984,7 +1000,6 @@ defmodule Opus.ProviderTest do
           commit_digest: "sha256:commit-lend-key",
           resolved_policy: lender_policy,
           activation: %{@lender => "sha256:act-lend-key"},
-          admitted_origins: origins,
           vault_refs: [
             %{
               binding_key: lender_key,
@@ -1030,7 +1045,6 @@ defmodule Opus.ProviderTest do
           commit_digest: "sha256:commit-lent-root",
           resolved_policy: root_policy,
           activation: %{root => component.release_digest},
-          admitted_origins: origins,
           vault_refs: [
             %{
               binding_key: Prima.Authority.Blob.binding_key(root, @lender, nil),
@@ -1107,7 +1121,6 @@ defmodule Opus.ProviderTest do
           commit_digest: "sha256:commit-twice-root",
           resolved_policy: policy,
           activation: %{root => component.release_digest},
-          admitted_origins: [:interactive, :programmatic],
           vault_refs:
             for {key, digest} <- [
                   {ingress_key, "sha256:twice-one"},
@@ -1328,6 +1341,71 @@ defmodule Opus.ProviderTest do
     end
   end
 
+  # Logs, cancel and retry read the run's record, which needs
+  # `:storage_read` beside the operations' `:execute`. A caller without
+  # it, and a caller inside a running component, is told so before any row
+  # is read, the same for its own run, an unknown id and another athanor's
+  # run, and nothing is cancelled.
+  describe "execution tool - reading a run without storage_read" do
+    test "logs, cancel and retry name the permission whatever the id", %{ctx: ctx} do
+      own = Opus.Record.new(ctx, "reagent:local.reader:1.0.0", %{})
+      :ok = Opus.Record.write_started(ctx, own)
+
+      other = %{ctx | athanor_id: ctx.athanor_id <> "_other", user_id: ctx.user_id <> "_other"}
+      Arca.Test.Actor.athanor!(other.athanor_id)
+      foreign = Opus.Record.new(other, "reagent:local.reader:1.0.0", %{})
+      :ok = Opus.Record.write_started(other, foreign)
+
+      execute_only = %{ctx | permissions: MapSet.new([:execute])}
+      guest = Context.enter_guest(execute_only)
+      ids = [own.id, "exec_nonexistent", foreign.id]
+
+      for {caller, refusal} <- [
+            {execute_only, {:missing_permission, :storage_read}},
+            {guest, {:guest_plane, :storage_read}}
+          ],
+          action <- ["logs", "cancel", "retry"],
+          id <- ids do
+        assert Provider.handle("execution", caller, %{
+                 "action" => action,
+                 "execution_id" => id
+               }) == {:error, refusal},
+               "#{caller.plane} #{action} #{id}"
+      end
+
+      # What an outside caller reads: the gate answers the refusal as a
+      # JSON-RPC error in the permission's words.
+      for id <- ids do
+        answer = over_mcp(execute_only, %{"action" => "logs", "execution_id" => id})
+
+        assert {answer["error"], answer["result"]} ==
+                 {%{
+                    "code" => -33004,
+                    "message" => "Unauthorized: missing required permission 'storage_read'"
+                  }, nil},
+               id
+      end
+
+      assert %Prima.Refusal{
+               class: :forbidden,
+               message:
+                 "Unauthorized: missing required permission 'storage_read' " <>
+                   "(API key does not include this scope — recreate with --scope storage_read)"
+             } = Sanctum.Refusals.classify({:missing_permission, :storage_read}, :api_key)
+
+      assert ["running", "running"] =
+               Arca.Repo.all(
+                 from(e in "executions", where: e.id in ^[own.id, foreign.id], select: e.status)
+               )
+
+      # With the permission, another athanor's run reads as an unknown one.
+      for id <- ["exec_nonexistent", foreign.id] do
+        assert Provider.handle("execution", ctx, %{"action" => "logs", "execution_id" => id}) ==
+                 {:error, {:not_found, "Execution", id}}
+      end
+    end
+  end
+
   # ============================================================================
   # Execution Tool - Cancel Action
   # ============================================================================
@@ -1474,34 +1552,21 @@ defmodule Opus.ProviderTest do
   end
 
   # ============================================================================
-  # Force Release Action
+  # Slot status
   # ============================================================================
 
-  describe "execution tool - force_release action" do
-    test "the handler releases when reached; the operator gate is the annotation" do
-      # Releasing every athanor's slots is a server-wide side effect. The
-      # `scope: :platform` annotation admits platform admins alone at
-      # dispatch (the gate); the handler itself does not
-      # re-check, so a direct call releases.
+  describe "execution tool - slot status" do
+    test "a platform administrator's status names no athanor: the instance's totals and the focused athanor's count alone" do
       admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
 
-      {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => "force_release"})
-      assert result.force_released == true
-    end
+      {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => "status"})
 
-    test "a platform administrator's status and release name no athanor: the instance's totals and the focused athanor's count alone" do
-      admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
-
-      for action <- ["status", "force_release"] do
-        {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => action})
-
-        refute Map.has_key?(result, :keys), "execution.#{action} named the executing athanors"
-        refute Map.has_key?(result, :holders), "execution.#{action} named the slots' holders"
-        refute Map.has_key?(result, :unreaped), "execution.#{action} named the penalised athanors"
-        assert is_integer(result.key_active)
-        assert is_integer(result.key_unreaped)
-        assert is_integer(result.key_max)
-      end
+      refute Map.has_key?(result, :keys), "execution.status named the executing athanors"
+      refute Map.has_key?(result, :holders), "execution.status named the slots' holders"
+      refute Map.has_key?(result, :unreaped), "execution.status named the penalised athanors"
+      assert is_integer(result.key_active)
+      assert is_integer(result.key_unreaped)
+      assert is_integer(result.key_max)
     end
 
     test "a member's status names no other athanor's unreaped kills, only its own count", %{
@@ -1517,11 +1582,18 @@ defmodule Opus.ProviderTest do
       assert result.key_unreaped == 0
     end
 
-    test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
-      assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
-               Sanctum.Gate.call_external("execution", ctx, %{
-                 "action" => "force_release"
-               })
+    test "no one releases every athanor's slots: the action is unknown, and offered to no one",
+         %{ctx: ctx} do
+      admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
+
+      for caller <- [ctx, admin_ctx] do
+        assert {:error,
+                %Prima.Refusal{
+                  stage: :admission,
+                  reason: {:unknown_action, "execution.force_release"}
+                }} =
+                 Sanctum.Gate.call_external("execution", caller, %{"action" => "force_release"})
+      end
 
       [tool] =
         Sanctum.Visibility.filter_for_context(
@@ -1720,18 +1792,15 @@ defmodule Opus.ProviderTest do
 
   describe "execution tool - error handling" do
     test "handles unregistered component gracefully", %{ctx: ctx} do
-      # Unregistered component should return a clear error — no profile
-      # exists for it, so the consent gate names the fix.
-      result =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => "reagent:local.nonexistent-component:0.1.0",
-          "input" => %{}
-        })
+      # A reference naming nothing installed reads as itself, not as a
+      # grant to make.
+      ref = "reagent:local.nonexistent-component:0.1.0"
 
-      assert {:error, msg} = result
-      assert {:consent_required, %{}} = msg
-      assert err_msg(msg) =~ "Consent required"
+      result =
+        Provider.handle("execution", ctx, %{"action" => "run", "reference" => ref, "input" => %{}})
+
+      assert result == {:error, {:not_found, {:component, ref}}}
+      assert err_msg(elem(result, 1)) == "Component not found: #{ref}"
     end
 
     test "handles empty reference gracefully", %{ctx: ctx} do
@@ -1793,14 +1862,15 @@ defmodule Opus.ProviderTest do
     end
 
     test "an unregistered component is refused before any record is written", %{ctx: ctx} do
-      # No profile exists for it, so the consent gate refuses before a record
-      # could be written; a failed record is the trapping run's, above.
-      assert {:error, {:consent_required, %{}}} =
-               Provider.handle("execution", ctx, %{
-                 "action" => "run",
-                 "reference" => "reagent:local.unregistered-crash:0.1.0",
-                 "input" => %{}
-               })
+      # It is not found before a record could be written; a failed record is
+      # the trapping run's, above.
+      ref = "reagent:local.unregistered-crash:0.1.0"
+
+      assert Provider.handle("execution", ctx, %{
+               "action" => "run",
+               "reference" => ref,
+               "input" => %{}
+             }) == {:error, {:not_found, {:component, ref}}}
 
       assert Arca.Execution.list(Prima.Actor.in_athanor(ctx.athanor_id),
                user_id: ctx.user_id,
@@ -1860,16 +1930,15 @@ defmodule Opus.ProviderTest do
     end
 
     test "a component that never resolves opens no execution span", %{ctx: ctx} do
-      # The gate comes first: an unregistered reference has no consent
-      # profile, so the call is refused before the executor is reached.
-      assert {:error, {:consent_required, %{"ref" => ref}}} =
-               Provider.handle("execution", ctx, %{
-                 "action" => "run",
-                 "reference" => "reagent:local.unregistered-telemetry:0.1.0",
-                 "input" => %{}
-               })
+      # A reference naming nothing installed is not found before the
+      # executor is reached.
+      ref = "reagent:local.unregistered-telemetry:0.1.0"
 
-      assert ref == "reagent:local.unregistered-telemetry:0.1.0"
+      assert Provider.handle("execution", ctx, %{
+               "action" => "run",
+               "reference" => ref,
+               "input" => %{}
+             }) == {:error, {:not_found, {:component, ref}}}
 
       # And no span is opened for it. A `:start` with no `:stop` or
       # `:exception` is an execution that leaks — every consumer counting
@@ -2050,7 +2119,6 @@ defmodule Opus.ProviderTest do
 
     decisions = %{
       ref: ref,
-      origins: [:interactive, :programmatic],
       bindings: [
         %{need: "api_key", entry_id: entry.("default").id},
         %{need: "api_key", name: "Work", entry_id: entry.("work").id}

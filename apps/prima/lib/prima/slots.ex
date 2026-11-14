@@ -48,8 +48,7 @@ defmodule Prima.Slots do
   is bounded (`4 * max` waiters in all, `4 * key_max` background waiters per
   key) and `wait_ms: 0` never queues, both answered `{:error, :capacity}`.
   `:reject` answers `{:error, :capacity}` at once. A waiter that dies leaves
-  the queue; one a force-release ends is answered `{:error, :cancelled}`; a
-  caller that stopped waiting has any slot handed to it meanwhile given
+  the queue; a caller that stopped waiting has any slot handed to it meanwhile given
   straight back. No waiter leaves a slot behind.
 
   ## Release
@@ -60,8 +59,8 @@ defmodule Prima.Slots do
   for a `:DOWN` that never arrived, not a time limit on work. A live holder
   keeps its slot however long it has held it: reclaiming a running holder's
   slot admits a second beside it, a silent capacity breach; the sweep warns
-  about it instead. `force_release_all/1` is the operator's recovery
-  gesture: every holding is dropped and every waiter cancelled.
+  about it instead. A wedged holding is freed by ending its holder, which
+  a restart of the server's work does.
 
   ## Unreaped kills
 
@@ -71,8 +70,7 @@ defmodule Prima.Slots do
   `unreaped_threshold/1` of its key cap in live notes is in a penalty box and refused
   `{:error, :key_unreaped}` for roots and background work; children pass,
   since their parent already holds a slot. Notes decay after
-  `unreaped_ttl_ms`, because native completion is not observable, and a
-  force-release keeps them.
+  `unreaped_ttl_ms`, because native completion is not observable.
 
   ## Configuration
 
@@ -116,7 +114,7 @@ defmodule Prima.Slots do
   @type class :: :root | :child | :background
   @type key :: term()
   @type policy :: :wait | :reject
-  @type refusal :: :capacity | :key_cap | :key_unreaped | :timeout | :cancelled | :unavailable
+  @type refusal :: :capacity | :key_cap | :key_unreaped | :timeout | :unavailable
   @type server :: GenServer.server()
   @type option ::
           {:name, GenServer.name()}
@@ -249,8 +247,7 @@ defmodule Prima.Slots do
   `:capacity` (the total cap or the queue is full, the class rejects, or
   `wait_ms` was 0), `:key_cap` (a root at its key's cap), `:key_unreaped`
   (the key is in the penalty box), `:timeout` (waited `wait_ms` and nothing
-  was freed), `:cancelled` (a force-release ended the wait),
-  or `:unavailable` (the server is not running). `refusal/1` gives each
+  was freed), or `:unavailable` (the server is not running). `refusal/1` gives each
   its sentence.
 
   ## Options
@@ -318,17 +315,6 @@ defmodule Prima.Slots do
   end
 
   @doc """
-  Emergency recovery: drop every holding and cancel every waiter, answering
-  how many of each. The penalty box stays. A server
-  that is not running has nothing to release, and says so rather than
-  reporting a recovery that did not happen.
-  """
-  @spec force_release_all(server()) ::
-          {:ok, %{released: non_neg_integer(), cancelled: non_neg_integer()}}
-          | {:error, :unavailable}
-  def force_release_all(server), do: call(server, :force_release_all)
-
-  @doc """
   Run the stale sweep now: reclaim the holdings of holders that are dead
   past the hold, count the live ones past it as wedged, and drop decayed
   unreaped notes. The periodic sweep does the same on its interval.
@@ -345,7 +331,6 @@ defmodule Prima.Slots do
   def refusal(:timeout),
     do: "Server at maximum concurrent executions, and none freed in time. Retry later."
 
-  def refusal(:cancelled), do: "The wait for an execution slot was cancelled."
   def refusal(:key_cap), do: "Athanor at maximum concurrent executions. Retry later."
 
   def refusal(:key_unreaped),
@@ -576,40 +561,6 @@ defmodule Prima.Slots do
     }
 
     {:reply, reply, state}
-  end
-
-  def handle_call(:force_release_all, _from, state) do
-    released = map_size(state.holdings)
-    cancelled = map_size(state.waits)
-
-    if released > 0 or cancelled > 0 do
-      Logger.warning(
-        "#{prefix(state)} force-releasing #{released} held slot(s) and cancelling #{cancelled} waiter(s)"
-      )
-    end
-
-    Enum.each(state.waits, fn {_ref, wait} ->
-      cancel_timer(wait.timer)
-      GenServer.reply(wait.from, {:error, :cancelled})
-    end)
-
-    Enum.each(state.pids, fn {_pid, %{monitor: monitor}} ->
-      Process.demonitor(monitor, [:flush])
-    end)
-
-    # The penalty box stays: the spinning work a force-release cannot stop
-    # is still charged to the keys that left it.
-    {:reply, {:ok, %{released: released, cancelled: cancelled}},
-     %{
-       state
-       | count: 0,
-         holdings: %{},
-         waits: %{},
-         pids: %{},
-         queues: new_queues(),
-         key_counts: %{},
-         background_waiting: %{}
-     }}
   end
 
   def handle_call(:sweep, _from, state) do

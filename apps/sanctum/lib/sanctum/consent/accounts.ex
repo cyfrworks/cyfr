@@ -25,8 +25,8 @@ defmodule Sanctum.Consent.Accounts do
   The entry the account `name` resolves to on the ingress of the profile
   `selector` picks for `source_ref` (`Prima.Authority.RootSelect`; any
   version of the reference names its line): the profile's stored head,
-  carried as a run carries it (`Sanctum.Consent.Loader.admitted_blob/3`,
-  under the context's origin), its ingress (`Prima.Authority.Blob.ingress/2`)
+  carried as a run carries it (`Sanctum.Consent.Loader.admitted_blob/3`),
+  its ingress (`Prima.Authority.Blob.ingress/2`)
   and the named binding there (`Prima.Authority.Blob.vault_for/2`). This
   is the one resolution of a launch's account: what an assistant's policy
   decides on, what its card binds and what its dispatch checks again.

@@ -365,4 +365,155 @@ defmodule PrismWeb.CanvasChromeTest do
     assert %{placement: {:window, %{x: 100, y: 100, w: 4000, h: 4000}}} =
              app_frame(view, "slot-dash")
   end
+
+  describe "a full app's More options" do
+    # The canvas with `apps` in `posture`, published over the layout.
+    defp lay_out!(ctx, user, canvas_tincture, posture, apps) do
+      canvases = [
+        %{
+          "id" => "main",
+          "tincture" => canvas_tincture,
+          "postures" => %{posture => %{"apps" => apps}}
+        }
+      ]
+
+      {:ok, layout} = Prima.Layout.validate(%{"version" => 3, "canvases" => canvases})
+      {:ok, _revision} = Arca.Layouts.publish(Sanctum.Context.actor(ctx), user.user_id, layout, 0)
+
+      :ok
+    end
+
+    defp full(tincture, order),
+      do: %{
+        "tincture" => "tincture:local.#{tincture}",
+        "placement" => "full",
+        "order" => order,
+        "minimised" => false
+      }
+
+    defp menu(view, frame, item),
+      do: element(view, ~s(#capsule-menu-#{frame.id} [data-canvas-menu="#{item}"]))
+
+    # More options pressed: the page shows the menu, which no push does, so
+    # the press is read as the browser runs it. The menu starts hidden by
+    # its class, which the toggle's inline display overrides (a `hidden`
+    # attribute it could not), and the button toggles exactly that menu.
+    defp open_menu!(view, frame) do
+      menu = "capsule-menu-#{frame.id}"
+      html = view |> render() |> LazyHTML.from_fragment()
+
+      [button] =
+        html
+        |> LazyHTML.query(~s(#canvas-frame-#{frame.id} button[data-canvas-action="more"]))
+        |> Enum.to_list()
+
+      assert LazyHTML.attribute(button, "aria-controls") == [menu]
+      assert LazyHTML.attribute(button, "aria-expanded") == ["false"]
+      [click] = LazyHTML.attribute(button, "phx-click")
+
+      assert ["toggle", %{"to" => "#" <> ^menu}] =
+               click |> Jason.decode!() |> Enum.find(&match?(["toggle", _], &1))
+
+      [list] = html |> LazyHTML.query("#" <> menu) |> Enum.to_list()
+      assert LazyHTML.attribute(list, "hidden") == []
+      assert "hidden" in (list |> LazyHTML.attribute("class") |> hd() |> String.split())
+      :ok
+    end
+
+    defp settled!(view, check),
+      do: Prima.Test.Wait.wait_until(fn -> render(view) && check.() end, 2_000, "the shell")
+
+    test "at a phone's width, the only open app minimised from it is restored from the shelf",
+         %{conn: conn, ctx: ctx, user: user} do
+      installed!(ctx)
+      lay_out!(ctx, user, "tincture:local.markets", "hand", [full("slot-dash", 0)])
+      {view, _html} = mount_desktop(conn)
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
+      settled!(view, fn -> match?(%{visible: true}, app_frame(view, "slot-dash")) end)
+      app = app_frame(view, "slot-dash")
+
+      assert has_element?(
+               view,
+               ~s(#canvas-frame-#{app.id} button[data-canvas-action="more"][aria-controls="capsule-menu-#{app.id}"])
+             )
+
+      assert has_element?(menu(view, app, "close"))
+
+      :ok = open_menu!(view, app)
+      menu(view, app, "minimise") |> render_click()
+
+      assert %{minimised: true, visible: false} = app_frame(view, "slot-dash")
+      shelf = ~s(#canvas-shelf-apps [data-canvas-shelf-app="tincture:local.slot-dash"])
+      assert has_element?(view, shelf <> ~s([data-canvas-minimised="true"]))
+
+      view |> element(shelf) |> render_click()
+
+      assert %{id: id, minimised: false, visible: true} = app_frame(view, "slot-dash")
+      assert id == app.id
+    end
+
+    test "lists the canvas's other open apps, and one chosen there is raised",
+         %{conn: conn, ctx: ctx, user: user} do
+      installed!(ctx)
+
+      lay_out!(ctx, user, "tincture:local.markets", "desk", [
+        app("tile-dash", "window", 0),
+        full("slot-dash", 1)
+      ])
+
+      {view, _html} = mount_desktop(conn)
+      settled!(view, fn -> match?(%{visible: true}, app_frame(view, "slot-dash")) end)
+      full = app_frame(view, "slot-dash")
+
+      other = ~s(#capsule-menu-#{full.id} [data-canvas-menu-app="tincture:local.tile-dash"])
+      assert has_element?(view, other, "tile-dash")
+
+      refute has_element?(
+               view,
+               ~s(#capsule-menu-#{full.id} [data-canvas-menu-app="tincture:local.slot-dash"])
+             )
+
+      :ok = open_menu!(view, full)
+      view |> element(other) |> render_click()
+
+      window = app_frame(view, "tile-dash")
+      assert has_element?(view, ~s(#canvas-frame-#{window.id}[data-canvas-active="true"]))
+    end
+
+    test "minimises a launch from the picker, which shows the picker and comes back launched again",
+         %{conn: conn, ctx: ctx, user: user} do
+      installed!(ctx)
+      lay_out!(ctx, user, "tincture:local.ghost", "desk", [])
+      {view, _html} = mount_desktop(conn)
+      settled!(view, fn -> has_element?(view, "#shell-picker") end)
+
+      render_click(view, "select_tincture", %{"tincture" => "iframe_slot-dash"})
+      launch = Frames.get(frames(view), {:full, "iframe_slot-dash"})
+      assert %{visible: true} = launch
+      refute has_element?(view, "#shell-picker")
+
+      :ok = open_menu!(view, launch)
+      menu(view, launch, "minimise") |> render_click()
+
+      assert %{id: id, visible: false, state: :frozen} =
+               Frames.get(frames(view), {:full, "iframe_slot-dash"})
+
+      assert id == launch.id
+      assert has_element?(view, "#shell-picker")
+
+      render_click(view, "select_tincture", %{"tincture" => "iframe_slot-dash"})
+      assert %{id: ^id, visible: true} = Frames.get(frames(view), {:full, "iframe_slot-dash"})
+    end
+  end
+
+  test "the minimise control says its key works while the page has the focus",
+       %{conn: conn, ctx: ctx, user: user} do
+    view = shell!(conn, ctx, user)
+    window = app_frame(view, "slot-dash")
+
+    assert has_element?(
+             view,
+             ~s|#canvas-frame-#{window.id} [data-canvas-action="minimise"][title="Minimise (Ctrl+Alt+M while the page has the focus)"]|
+           )
+  end
 end

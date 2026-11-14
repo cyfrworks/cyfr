@@ -76,7 +76,7 @@ defmodule Emissary.Web.WebhookControllerTest do
     Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
     # A webhook's runs are webhook runs: the grant names them.
     profile =
-      Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}", origins: [:webhook])
+      Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}")
 
     {:ok, result} =
       Sanctum.TestContext.create_webhook(
@@ -200,9 +200,7 @@ defmodule Emissary.Web.WebhookControllerTest do
       )
 
       profile =
-        Sanctum.Test.ConsentFixtures.bindable_profile(in_athanor, "f:local.#{comp}",
-          origins: [:webhook]
-        )
+        Sanctum.Test.ConsentFixtures.bindable_profile(in_athanor, "f:local.#{comp}")
 
       {:ok, %{slug: slug, secret: secret}} =
         Sanctum.TestContext.create_webhook(in_athanor, %{
@@ -499,7 +497,6 @@ defmodule Emissary.Web.WebhookControllerTest do
               }),
             activation: %{reference => component.release_digest},
             # A delivery's run is a webhook run: the grant names it.
-            admitted_origins: [:webhook],
             vault_refs: []
           }
         )

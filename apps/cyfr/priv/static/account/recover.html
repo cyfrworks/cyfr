@@ -38,12 +38,13 @@
 <div class="actions"><button type="button" id="add-code">Add another recovery code</button></div>
 <p class="hint">Replacing everything removes every passkey, device and recovery code, and gives you one new recovery code.</p>
 <div class="actions"><button type="button" class="danger" id="replace">Replace everything</button></div>
+<div class="actions" id="return" hidden><a class="button primary" id="return-link"></a></div>
 <p class="error" id="account-error" role="alert" hidden></p>
 <div class="actions"><button type="button" class="primary" id="retry" hidden>Try again</button></div>
 </section>
 <section id="show-code" hidden>
 <h1>Save your recovery code</h1>
-<p>This code is the only way back into your account if you lose your passkeys. Keep it somewhere safe and private. Nobody else holds it, and nobody can make you another.</p>
+<p>This code is the only way back into your account if you lose your passkeys. Keep it somewhere safe and private. Nobody else holds it.</p>
 <p class="code" id="code"></p>
 <div class="actions">
 <button type="button" id="copy">Copy</button>

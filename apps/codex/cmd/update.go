@@ -1554,7 +1554,7 @@ func (u *updater) readSchema() error {
 		return fmt.Errorf("cyfr update could not read which schema this CYFR's database was built from (%v), and release %s runs only on a database built from its own schema; nothing was stopped or changed. Fix the cause and run 'cyfr update' again", err, u.version)
 	}
 	if schema != u.manifest.SchemaFingerprint {
-		return fmt.Errorf("This CYFR's database was built from schema %s, and release %s runs only on a database built from schema %s: there is no upgrade path between them, so nothing was stopped or changed.\nTo start over on release %s, keeping nothing of this CYFR: run 'cyfr down' here, remove this directory (with sudo: CYFR's container owns data/), then run 'cyfr init' and 'cyfr up' in a new directory", shortFingerprint(schema), u.version, shortFingerprint(u.manifest.SchemaFingerprint), u.version)
+		return fmt.Errorf("This CYFR's database was built from schema %s, and release %s runs only on a database built from schema %s: there is no upgrade path between them, so nothing was stopped or changed.\nTo start over on release %s, keeping nothing of this CYFR: run 'cyfr uninstall' here, then delete this directory by hand (with sudo: CYFR's container owns data/) and remove the volumes it names, then install release %s with: %s | CYFR_VERSION=%s sh", shortFingerprint(schema), u.version, shortFingerprint(u.manifest.SchemaFingerprint), u.version, u.version, installScript, u.version)
 	}
 	return nil
 }

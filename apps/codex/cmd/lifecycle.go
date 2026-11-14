@@ -1218,16 +1218,28 @@ func runDown(ctx context.Context, out io.Writer) error {
 	if !access.HasComposeFile(".") {
 		return fmt.Errorf("There is no stack in this directory, so nothing was stopped: it holds no compose file (%s). Run 'cyfr down' in CYFR's directory, the one that holds its docker-compose.yml", strings.Join(access.ComposeMainFiles, ", "))
 	}
-	e, unlock, _, err := openLocked(ctx, "down", out)
+	_, unlock, err := stopStack(ctx, "down", out)
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	if err := answerFailure(e.Stop(context.WithoutCancel(ctx), "down", true)); err != nil {
-		return err
-	}
+	unlock()
 	fmt.Fprintln(out, "CYFR server stopped.")
 	return nil
+}
+
+// stopStack is cyfr down's stop, for command: the stack's lock, its
+// recovery, then every service stopped, removed and checked stopped, Serve
+// closed first. It answers the engine and the lock's release, still held.
+func stopStack(ctx context.Context, command string, out io.Writer) (stackEngine, func(), error) {
+	e, unlock, _, err := openLocked(ctx, command, out)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := answerFailure(e.Stop(context.WithoutCancel(ctx), command, true)); err != nil {
+		unlock()
+		return nil, nil, err
+	}
+	return e, unlock, nil
 }
 
 // restoreBarred reports whether the dotenv file at path sets

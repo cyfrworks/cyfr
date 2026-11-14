@@ -383,9 +383,10 @@ defmodule Aqua.Approvals do
     end
   end
 
-  # The consent is loaded under the origin the turn's row records, not the
-  # approver's: the question is whether the run's own grant still stands,
-  # and the run continues under that origin. Whether this approver may
+  # The consent is loaded in a context carrying the origin the turn's row
+  # records, not the approver's, since the run continues as it was; the
+  # origin decides nothing in the load, which asks only whether the run's
+  # own grant still stands. Whether this approver may
   # decide is the approval's own check, made before this one. It is the
   # consent of the agent the turn runs, the soul's or a crew member's own.
   defp consent_holds(ctx, turn) do
