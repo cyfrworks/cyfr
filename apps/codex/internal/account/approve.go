@@ -6,6 +6,7 @@ package account
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // ErrListed is a key the account lists already.
@@ -14,12 +15,18 @@ var ErrListed = errors.New("listed")
 // ErrNotListed is a signer the account does not list (any more).
 var ErrNotListed = errors.New("not listed")
 
+// ErrUnanswered is an add_key sent whose answer did not arrive, even once
+// sent again: the directory may hold it. It is also ErrUnreachable.
+var ErrUnanswered = errors.New("the account's answer did not arrive")
+
 // Approve adds key, a device key or a passkey as ReadKey reads one, to the
 // account identifier names at d, signed by the listed device key signer
 // (its public half) through sign: add_key after the log's head, appended.
-// A lost answer sends the same bytes again once, and exists is success; a
-// head that moved meanwhile is read again and the entry composed after
-// it, once.
+// A lost answer sends the same bytes again once, and exists is success;
+// a second lost answer is ErrUnanswered, since the entry may have landed.
+// A head that moved meanwhile is read again and the entry composed after
+// it, once. Any other error is answered before an entry was sent, or is
+// the directory's refusal of it: nothing was added.
 func Approve(ctx context.Context, d Directory, identifier string, signer []byte, sign func([]byte) []byte, key Key, now int64) error {
 	for range 2 {
 		state, err := d.Read(ctx, identifier)
@@ -39,6 +46,9 @@ func Approve(ctx context.Context, d Directory, identifier string, signer []byte,
 		_, err = d.Append(ctx, identifier, entry)
 		if errors.Is(err, ErrUnreachable) {
 			_, err = d.Append(ctx, identifier, entry)
+		}
+		if errors.Is(err, ErrUnreachable) {
+			return fmt.Errorf("%w: %w", ErrUnanswered, err)
 		}
 		var ref *DirectoryRefusal
 		switch {

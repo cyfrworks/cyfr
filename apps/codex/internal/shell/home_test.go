@@ -56,15 +56,18 @@ type fakeHome struct {
 	confirmed      []map[string]any
 	pending        map[string]map[string]any // ref -> record
 	waiting        map[string]map[string]any // ref -> a passkey a browser asks to add
-	asked          map[string]map[string]any // challenge -> the confirm request answered
-	capabilities   [][]string
-	unlockSeq      int
-	conns          []*websocket.Conn
-	closeWith      websocket.StatusCode
-	stalled        chan struct{}
-	sessions       map[string]string // spent ticket -> the session's bearer
-	sessionFields  []string
-	shapes         []string
+	// onWaiting runs once a pairing.waiting read has taken its answer,
+	// under the home's lock, as a change the CYFR makes right after it.
+	onWaiting     func(ref string)
+	asked         map[string]map[string]any // challenge -> the confirm request answered
+	capabilities  [][]string
+	unlockSeq     int
+	conns         []*websocket.Conn
+	closeWith     websocket.StatusCode
+	stalled       chan struct{}
+	sessions      map[string]string // spent ticket -> the session's bearer
+	sessionFields []string
+	shapes        []string
 	// stale is a certificate this CYFR will not take any more (4408).
 	stale func(cert map[string]any) bool
 }
@@ -528,7 +531,11 @@ func (h *fakeHome) intent(op string, args, binding map[string]any) (any, any) {
 		return map[string]any{"confirmations": []any{entry}}, nil
 	case "pairing.waiting":
 		ref, _ := args["ref"].(string)
-		if rec := h.waiting[ref]; rec != nil {
+		rec := h.waiting[ref]
+		if h.onWaiting != nil {
+			h.onWaiting(ref)
+		}
+		if rec != nil {
 			return map[string]any{"waiting": []any{rec}}, nil
 		}
 		return map[string]any{"waiting": []any{}}, nil

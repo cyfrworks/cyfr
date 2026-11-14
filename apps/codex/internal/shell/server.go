@@ -277,7 +277,7 @@ var actions = map[string]action{
 	// the person reads why nothing was added.
 	"/passkey/decide": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		ref := string(f.get("ref"))
-		settled := srv.Shell.DecidePasskey(ctx, ref, string(f.get("decision")) == "approve", f.get("secret"))
+		settled := srv.Shell.DecidePasskey(ctx, ref, string(f.get("key")), string(f.get("decision")) == "approve", f.get("secret"))
 		v := srv.Shell.passkeyView(ref)
 		switch {
 		case v.Passkey != nil:

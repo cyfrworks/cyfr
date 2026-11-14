@@ -1785,14 +1785,18 @@ func (s *Shell) waitingSentence(err error) string {
 	return s.sentence(err) + " Nothing was added."
 }
 
-// DecidePasskey answers the drawn passkey request: cancelled, timed out or
-// changed at the CYFR since it was drawn (read again by its ref, the same
-// key), nothing is signed. Otherwise the PIN opens the key afresh, never
-// the key this unlock holds, and that key signs the add_key entry adding
-// the passkey to the account's log at its directory. The page says what
-// happened. It answers whether the request is settled: the account lists
-// the passkey now, or the person cancelled it.
-func (s *Shell) DecidePasskey(ctx context.Context, ref string, approve bool, secret []byte) bool {
+// DecidePasskey answers the drawn passkey request from the page that
+// showed the key kid names: a page whose key is no longer the one drawn
+// under ref (drawn again since, with another key), cancelled, timed out
+// or changed at the CYFR since it was drawn (read again by its ref, the
+// same key), signs nothing, and each is decided before the PIN is opened.
+// Otherwise the PIN opens the key afresh, never the key this unlock holds,
+// and that key signs the add_key entry adding the key the page showed to
+// the account's log at its directory. The shell's one lock is held from
+// the check to the signature, so no draw lands between them. The page
+// says what happened. It answers whether the request is settled: the
+// account lists the passkey now, or the person cancelled it.
+func (s *Shell) DecidePasskey(ctx context.Context, ref, kid string, approve bool, secret []byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret)
@@ -1805,6 +1809,9 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref string, approve bool, sec
 		return false
 	}
 	switch {
+	case drawn.Key.Kid != kid:
+		s.say("That request changed since this window showed its code, so nothing was added. Approve it again from Your devices.")
+		return false
 	case !approve:
 		s.passkey = nil
 		s.say("Nothing was added.")
@@ -1845,6 +1852,9 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref string, approve bool, sec
 		return true
 	case errors.Is(err, account.ErrNotListed):
 		s.say("Your account does not list this %s any more, so it cannot add a passkey.", s.cfg.Noun)
+	case errors.Is(err, account.ErrUnanswered):
+		s.say("Your account's answer did not arrive, so this %s does not know whether the passkey was added. "+
+			"Sign in with it in the browser that asked, or look at your account's devices page, which lists every key.", s.cfg.Noun)
 	case errors.Is(err, account.ErrUnreachable):
 		s.say("Your account could not be reached just now. Nothing was added; approve it again from Your devices.")
 	default:

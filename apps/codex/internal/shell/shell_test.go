@@ -9,6 +9,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -902,7 +903,10 @@ func TestPasskey_TheBoxAddsTheWaitingPasskeyToItsAccount(t *testing.T) {
 		!strings.Contains(page, `<p class="code">`+account.ShortCode(key.Kid)+`</p>`) || !strings.Contains(page, `name="ref" value="pkw_1"`) {
 		t.Fatalf("the passkey page:\n%s", page)
 	}
-	page = body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "decision": {"approve"}, "secret": {p}}))
+	if !strings.Contains(page, `name="key" value="`+key.Kid+`"`) {
+		t.Fatalf("the form does not carry the key it shows:\n%s", page)
+	}
+	page = body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {key.Kid}, "decision": {"approve"}, "secret": {p}}))
 	if !strings.Contains(page, "Added to your account. The browser that asked signs in with its passkey now.") || !strings.Contains(page, "<h1>Done</h1>") {
 		t.Fatalf("the answer:\n%s", page)
 	}
@@ -930,7 +934,7 @@ func TestPasskey_AnUnapprovedRequestAddsNothing(t *testing.T) {
 	entries := len(home.accounts.Log(rec.Identifier))
 	decide := func(decision, secret string) string {
 		t.Helper()
-		page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "decision": {decision}, "secret": {secret}}))
+		page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {key.Kid}, "decision": {decision}, "secret": {secret}}))
 		if n := len(home.accounts.Log(rec.Identifier)); n != entries {
 			t.Fatalf("the log holds %d entries, %d before:\n%s", n, entries, page)
 		}
@@ -984,7 +988,7 @@ func TestPasskey_AnUnapprovedRequestAddsNothing(t *testing.T) {
 		!strings.Contains(page, `<p class="code">`+account.ShortCode(key.Kid)+`</p>`) {
 		t.Fatalf("a wrong passphrase:\n%s", page)
 	}
-	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "decision": {"approve"}, "secret": {p}}))
+	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {key.Kid}, "decision": {"approve"}, "secret": {p}}))
 	if _, listed := home.accounts.State(t, rec.Identifier).Key(key.Kid); !listed || len(home.accounts.Log(rec.Identifier)) != entries+1 ||
 		!strings.Contains(page, "<h1>Done</h1>") {
 		t.Fatalf("the right passphrase after a wrong one:\n%s", page)
@@ -1004,5 +1008,115 @@ func TestPasskey_ALockedBoxAddsNothing(t *testing.T) {
 	if !strings.Contains(drawn, says) || !strings.Contains(decided, says) || len(home.opsSeen()) != ops ||
 		len(home.accounts.Log(rec.Identifier)) != entries {
 		t.Fatalf("a locked box: the draw\n%s\nthe decision\n%s", drawn, decided)
+	}
+}
+
+// A page approves only the key it showed. Drawn again under the same ref
+// with another key, as a second window opened from Your devices does, the
+// first window's approval adds nothing, says the request changed, and
+// opens no key: even a wrong passphrase there is not tried. The window
+// showing the new key then adds that one.
+func TestPasskey_AnEarlierPageApprovesOnlyTheKeyItShowed(t *testing.T) {
+	home, b, p, rec, first := passkeyAsked(t)
+	shown := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil))
+	if !strings.Contains(shown, account.ShortCode(first.Kid)) {
+		t.Fatalf("the first key is not drawn:\n%s", shown)
+	}
+	entries := len(home.accounts.Log(rec.Identifier))
+	second := newPasskey(t)
+	home.mu.Lock()
+	home.waiting["pkw_1"] = waitingPasskey("pkw_1", second)
+	home.mu.Unlock()
+	if again := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)); !strings.Contains(again, account.ShortCode(second.Kid)) {
+		t.Fatalf("the second key is not drawn:\n%s", again)
+	}
+
+	changed := "That request changed since this window showed its code, so nothing was added. Approve it again from Your devices."
+	for _, secret := range []string{otherPassphrase(t, p), p} {
+		page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {first.Kid}, "decision": {"approve"}, "secret": {secret}}))
+		if !strings.Contains(page, changed) || strings.Contains(page, "That is not this screen's PIN or passphrase.") ||
+			len(home.accounts.Log(rec.Identifier)) != entries {
+			t.Fatalf("the earlier page's approval:\n%s", page)
+		}
+	}
+
+	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {second.Kid}, "decision": {"approve"}, "secret": {p}}))
+	st := home.accounts.State(t, rec.Identifier)
+	_, firstListed := st.Key(first.Kid)
+	_, secondListed := st.Key(second.Kid)
+	if firstListed || !secondListed || len(home.accounts.Log(rec.Identifier)) != entries+1 || !strings.Contains(page, "<h1>Done</h1>") {
+		t.Fatalf("the second page's approval lists the first %v, the second %v:\n%s", firstListed, secondListed, page)
+	}
+}
+
+// From the decision's last read of the request to its signature the shell
+// holds its one lock: a draw of another key under the same ref that
+// arrives meanwhile waits, and the key signed is the one the page showed.
+func TestPasskey_ARedrawDuringTheDecisionWaitsForIt(t *testing.T) {
+	home, b, p, rec, first := passkeyAsked(t)
+	b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
+	second := newPasskey(t)
+	redrawn := make(chan string, 1)
+	home.onWaiting = func(ref string) {
+		home.onWaiting = nil
+		home.waiting[ref] = waitingPasskey(ref, second)
+		go func() { redrawn <- body(b.do(http.MethodGet, "/passkey?ref="+ref, "", nil)) }()
+	}
+	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {first.Kid}, "decision": {"approve"}, "secret": {p}}))
+	st := home.accounts.State(t, rec.Identifier)
+	_, firstListed := st.Key(first.Kid)
+	_, secondListed := st.Key(second.Kid)
+	if !firstListed || secondListed || !strings.Contains(page, "Added to your account.") {
+		t.Fatalf("the decision lists the shown key %v, the redrawn %v:\n%s", firstListed, secondListed, page)
+	}
+	if again := <-redrawn; !strings.Contains(again, account.ShortCode(second.Kid)) {
+		t.Fatalf("the redraw, once the decision ended:\n%s", again)
+	}
+}
+
+// dropAppendAnswers keeps every request's effect and loses the answer to
+// each append, as a link that fails on the way back does.
+type dropAppendAnswers struct{ base http.RoundTripper }
+
+func (d dropAppendAnswers) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := d.base.RoundTrip(r)
+	if err == nil && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/append") {
+		resp.Body.Close()
+		return nil, errors.New("the answer was lost")
+	}
+	return resp, err
+}
+
+// An approval whose answers were lost does not know whether the passkey
+// was added, and says so with where to look; one whose account could not
+// be read sent nothing, and says nothing was added.
+func TestPasskey_ALostAnswerIsNotSaidToAddNothing(t *testing.T) {
+	home, b, p, rec, key := passkeyAsked(t)
+	b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
+	client := http.Client{Transport: dropAppendAnswers{base: http.DefaultTransport}}
+	if b.shell.cfg.Client != nil && b.shell.cfg.Client.Transport != nil {
+		client.Transport = dropAppendAnswers{base: b.shell.cfg.Client.Transport}
+	}
+	b.shell.cfg.Client = &client
+	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {key.Kid}, "decision": {"approve"}, "secret": {p}}))
+	_, listed := home.accounts.State(t, rec.Identifier).Key(key.Kid)
+	if !listed || strings.Contains(page, "Nothing was added") || strings.Contains(page, "was not added") ||
+		!strings.Contains(page, "Your account's answer did not arrive, so this screen does not know whether the passkey was added. "+
+			"Sign in with it in the browser that asked, or look at your account's devices page, which lists every key.") {
+		t.Fatalf("listed %v:\n%s", listed, page)
+	}
+
+	second := newPasskey(t)
+	home.mu.Lock()
+	home.waiting["pkw_2"] = waitingPasskey("pkw_2", second)
+	home.mu.Unlock()
+	b.do(http.MethodGet, "/passkey?ref=pkw_2", "", nil)
+	entries := len(home.accounts.Log(rec.Identifier))
+	home.accounts.Down = true
+	page = body(b.post("/passkey/decide", url.Values{"ref": {"pkw_2"}, "key": {second.Kid}, "decision": {"approve"}, "secret": {p}}))
+	home.accounts.Down = false
+	if !strings.Contains(page, "Your account could not be reached just now. Nothing was added; approve it again from Your devices.") ||
+		len(home.accounts.Log(rec.Identifier)) != entries {
+		t.Fatalf("an account that could not be read:\n%s", page)
 	}
 }
