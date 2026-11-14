@@ -259,8 +259,10 @@ defmodule PrismWeb.LoginLive do
   # was last shown (the module doc): `%{user_id, version, changed_on,
   # read}` when it is one they were not shown, or nil. The act is done by
   # now, so this answers only "show this" or "show nothing": the read runs
-  # in its own task, and a task that raises, throws, exits or outlives
-  # `@terms_read_ms` shows nothing.
+  # in its own task, which reads and decides and writes nothing, and a
+  # task that raises, throws, exits or outlives `@terms_read_ms` shows and
+  # records nothing. Only a decision that arrived inside the bound is
+  # acted on here: a silent first record is written by this process.
   defp terms_notice(ctx) do
     # Not linked to this process or the page: the task's end reaches here
     # only as its monitor's message. Past the bound it is killed, and the
@@ -269,8 +271,15 @@ defmodule PrismWeb.LoginLive do
     task = Task.Supervisor.async_nolink(Prism.TaskSupervisor, fn -> read_terms(ctx) end)
 
     case Task.yield(task, @terms_read_ms) do
-      {:ok, notice} ->
+      {:ok, {:show, notice}} ->
         notice
+
+      {:ok, {:record, user_id, version}} ->
+        record_seen(user_id, version)
+        nil
+
+      {:ok, :nothing} ->
+        nil
 
       {:exit, _reason} ->
         nil
@@ -281,23 +290,19 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
+  # What the terms call for: `{:show, notice}`, `{:record, user_id,
+  # version}` for a person with no version recorded, or `:nothing`.
   defp read_terms(ctx) do
     with {:ok, answer} <- Ops.call_tool(ctx, "registry/legal_version", %{}),
          {:ok, version, changed} <- terms(answer),
          {:ok, user} <- Sanctum.Tenancy.Users.get(ctx.user_id) do
       case Sanctum.Tenancy.Users.prefs(user)["registry_terms_seen"] do
-        ^version ->
-          nil
-
-        nil ->
-          record_seen(user.id, version)
-          nil
-
-        _older ->
-          notice(ctx, version, changed)
+        ^version -> :nothing
+        nil -> {:record, user.id, version}
+        _older -> {:show, notice(ctx, version, changed)}
       end
     else
-      _unread -> nil
+      _unread -> :nothing
     end
   end
 

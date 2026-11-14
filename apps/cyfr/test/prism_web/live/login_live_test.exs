@@ -637,20 +637,34 @@ defmodule PrismWeb.LoginLiveTest do
       assert {"/", _flash} = assert_redirect(view, @answered_ms)
     end
 
-    # A registry whose terms' version read is held until the test sends
-    # the stub `:release`; the test is told `{:legal_held, stub}`.
+    # A registry whose first terms' version read is held until the test
+    # sends the stub `:release`, the test told `{:legal_held, stub}`; later
+    # reads answer at once.
     defp held_terms(asked, version) do
       test = self()
+      first = :atomics.new(1, [])
+      :atomics.put(first, 1, 1)
 
       terms_registry(asked.account, fn ->
-        send(test, {:legal_held, self()})
+        if :atomics.exchange(first, 1, 0) == 1 do
+          send(test, {:legal_held, self()})
 
-        receive do
-          :release -> :ok
+          receive do
+            :release -> :ok
+          end
         end
 
         legal_answer(version)
       end)
+    end
+
+    # The check that outlived its read has ended.
+    defp settled! do
+      Prima.Test.Wait.wait_until(
+        fn -> Task.Supervisor.children(Prism.TaskSupervisor) == [] end,
+        @answered_ms,
+        "the check to end"
+      )
     end
 
     # The task reading the terms for a check: the child of the page's task
@@ -898,6 +912,33 @@ defmodule PrismWeb.LoginLiveTest do
 
       assert synced?(asked)
       assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "for a person with nothing recorded, a read killed or held past its bound records nothing, and the next act records silently",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+
+      for ending <- [:killed, :late] do
+        held_terms(asked, "2026-11")
+        view = synced!(asked)
+        assert_receive {:legal_held, stub}, @answered_ms
+
+        try do
+          if ending == :killed do
+            ExUnit.CaptureLog.capture_log(fn -> Process.exit(read_task(), :read_failed) end)
+          end
+
+          went_back!(view)
+        after
+          send(stub, :release)
+        end
+
+        settled!()
+        assert seen(asked.ctx.user_id) == nil, "recorded after a read #{ending}"
+      end
+
+      went_back!(synced!(asked))
+      assert seen(asked.ctx.user_id) == "2026-11"
     end
 
     test "a version answered past the read's bound shows the act's success and records nothing",
