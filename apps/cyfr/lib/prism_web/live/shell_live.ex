@@ -247,7 +247,8 @@ defmodule PrismWeb.ShellLive do
   has not granted what its tincture declares now is offered the grant
   prompt, built from the consent walk's own plan and preview, and opened
   again once it is confirmed. The shell's `Devices` control opens the
-  pairing prompt, where the person pairs or revokes a device.
+  pairing prompt, where the person pairs or revokes a device, drawn over a
+  Dashboard page that covers the desktop as well.
 
   ## Requests
 
@@ -2680,12 +2681,13 @@ defmodule PrismWeb.ShellLive do
   end
 
   # A Dashboard page drawn over the desktop covers it (`covered`, told by
-  # the desktop's hook as `page_shown`): its layer then draws none of its
-  # prompts, a grant, a frame's credential entry, the devices or any other,
-  # so nothing of the desktop's stands modal over the page's own asks. An
-  # app keeps running under the page and its bridge forwards a verb
-  # without the person's input, so the rule is the layer's, for every
-  # prompt alike, and none of the desktop's handlers decides it.
+  # the desktop's hook as `page_shown`): its layer then draws none of the
+  # prompts a frame can raise, a grant, a frame's credential entry or
+  # request, so nothing of a frame's stands modal over the page's own asks.
+  # An app keeps running under the page and its bridge forwards a verb
+  # without the person's input, so the rule is the layer's, and none of
+  # the desktop's handlers decides it. The devices' prompt, which only the
+  # person's press raises, is drawn over the page, which stays as it is.
   # Whether the page's address at the desktop's join is a Dashboard page's:
   # anything but the desktop's own addresses, `/`, `/a` and `/a/<athanor>`.
   # A join that names none, as a test's, is the desktop's own.
@@ -3426,8 +3428,9 @@ defmodule PrismWeb.ShellLive do
            outcomes of the confirmations its own changes asked for. The
            person's confirmations are the page's layer's to draw, the
            desktop page's included (`PrismWeb.DesktopLive`). While a
-           Dashboard page covers the desktop it draws none of its prompts,
-           whatever raised them, and keeps each as it stands. --%>
+           Dashboard page covers the desktop it draws none of the prompts
+           a frame can raise and keeps each as it stands; the devices'
+           prompt it draws over the page. --%>
       <.live_component
         module={PrismWeb.SystemLayer}
         id={PrismWeb.SystemLayer.desktop_layer_id()}

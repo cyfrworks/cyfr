@@ -32,11 +32,15 @@ defmodule PrismWeb.SystemLayer do
   in either clears both. `athanor_route` and
   `athanor_name` name the athanor a grant lands in. `covered` (false by
   default) is the desktop's while a Dashboard page covers it: the layer
-  then draws none of its prompts and nothing of it is modal, whatever
-  raised the prompt, while each keeps its place and what it holds (a
-  grant's walk, a credential entry's waiting record) and the facts of its
-  records are still taken, so it is drawn again as it stands once the
-  layer is uncovered. The browser clears a prompt's forms as it closes, so
+  then draws none of the prompts a frame can raise and nothing of them is
+  modal, while each keeps its place and what it holds (a grant's walk, a
+  credential entry's waiting record) and the facts of its records are
+  still taken, so it is drawn again as it stands once the layer is
+  uncovered. The pairing prompt alone is drawn over the page: only the
+  person's press on the desktop's own chrome raises it, never a frame.
+  When it waits behind a prompt hidden under the page, it stays there and
+  the layer says, in a line over the page, that something on the desktop
+  waits for an answer. The browser clears a prompt's forms as it closes, so
   a typed value is typed again. A prompt
   (`PrismWeb.SystemLayer.Prompt`) arrives by `show/2`, which is
   `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`. A prompt that arrives while another is open
@@ -2465,6 +2469,15 @@ defmodule PrismWeb.SystemLayer do
   defp can_prove?(%Sanctum.Context{} = context), do: Sanctum.Pairing.can_confirm?(context)
   defp can_prove?(_context), do: false
 
+  # What a covered layer still draws over the page. An app keeps running
+  # under a page and its bridge forwards a verb without the person's input,
+  # so no prompt a frame can raise stands modal over the page's own asks.
+  # The pairing prompt carries nothing of a frame's and only the person's
+  # press on the desktop's own Devices control raises it, which no frame
+  # draws or reaches.
+  defp over_page?(%{kind: :pairing}), do: true
+  defp over_page?(_prompt), do: false
+
   # ---------------------------------------------------------------------------
   # Render
   # ---------------------------------------------------------------------------
@@ -2472,11 +2485,21 @@ defmodule PrismWeb.SystemLayer do
   @impl true
   def render(assigns) do
     # The prompt drawn, `shown`: the open one, or none while the layer is
-    # covered, when it keeps its place and state and is drawn again as it
-    # stands. Derived on every render from `covered` and `current`
-    # together, so the browser sees the dialog open again once the layer is
-    # uncovered, though `current` itself never moved.
-    shown = if assigns.covered, do: nil, else: assigns.current
+    # covered and the open one is not drawn over a page, when it keeps its
+    # place and state and is drawn again as it stands. Derived on every
+    # render from `covered` and `current` together, so the browser sees the
+    # dialog open again once the layer is uncovered, though `current`
+    # itself never moved.
+    shown =
+      if assigns.covered and not over_page?(assigns.current),
+        do: nil,
+        else: assigns.current
+
+    # A prompt drawn over a page that waits behind one hidden there (the
+    # devices', behind a frame's) is not put in front of it, which may hold
+    # an approved change waiting for its proof; the person is told instead
+    # where the hidden one is.
+    held_back = assigns.covered and is_nil(shown) and Enum.any?(assigns.queue, &over_page?/1)
     may = shown && may_confirm?(assigns[:context], shown)
 
     panel =
@@ -2488,6 +2511,7 @@ defmodule PrismWeb.SystemLayer do
     assigns =
       assign(assigns,
         shown: shown,
+        held_back: held_back,
         may: may,
         # A record is proven here only by a client with a person behind it;
         # one with none waits for another client of the person.
@@ -2555,6 +2579,18 @@ defmodule PrismWeb.SystemLayer do
           </p>
         </div>
       </dialog>
+
+      <%!-- Above the Devices chip, at the chips' level, so it stands over
+           the page that covers the desktop. --%>
+      <p
+        :if={@held_back}
+        id={"#{@id}-held-back"}
+        data-test="held-back"
+        role="status"
+        class="pointer-events-none absolute bottom-10 left-2 z-[67] max-w-xs rounded-md bg-black/70 px-2 py-1 text-xs text-white/90"
+      >
+        Something on your desktop is waiting for your answer. Go back to the desktop to see it.
+      </p>
 
       <.notice :if={@notice} id={@id} notice={@notice} error={@notice_error} myself={@myself} />
 
