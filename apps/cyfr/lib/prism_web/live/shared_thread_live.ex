@@ -14,8 +14,9 @@ defmodule PrismWeb.SharedThreadLive do
   (`PrismWeb.Ops.call_tool/3`), the read included, under the person's
   own seat: any of a thread's people renames it, adds someone by name,
   removes someone, withdraws an invitation, makes an invitation link to
-  this CYFR naming the thread (`invitation.create`), archives it or
-  leaves it. A pair is a thread of two that gains and loses no one, so
+  this CYFR naming the thread (`invitation.create`), offering an optional
+  name and saying when the link opens only on this computer
+  (`local_only`), archives it or leaves it. A pair is a thread of two that gains and loses no one, so
   its only control is leave.
 
   The pane listens on the person's own `Cyfr.Bus.shared_threads/1`: a
@@ -63,6 +64,8 @@ defmodule PrismWeb.SharedThreadLive do
       # Someone being added by name, until the answer comes.
       |> assign(:adding?, false)
       |> assign(:invite_link, nil)
+      |> assign(:invite_local, false)
+      |> assign(:inviting?, false)
       |> stream_configure(:messages, dom_id: &("shared-m-" <> &1.id))
       |> stream(:messages, [])
       |> allow_upload(:files,
@@ -135,12 +138,23 @@ defmodule PrismWeb.SharedThreadLive do
     end)
   end
 
-  def handle_event("invite_link", _params, socket) do
-    args = %{"thread_id" => socket.assigns.thread_id}
+  def handle_event("toggle_invite", _params, socket),
+    do: {:noreply, update(socket, :inviting?, &(not &1))}
+
+  def handle_event("invite_link", params, socket) do
+    args =
+      case String.trim(Map.get(params, "name", "")) do
+        "" -> %{"thread_id" => socket.assigns.thread_id}
+        name -> %{"thread_id" => socket.assigns.thread_id, "name" => name}
+      end
 
     case call_tool(socket, "invitation/create", args) do
-      {:ok, %{invitation_url: link}} ->
-        {:noreply, assign(socket, :invite_link, link)}
+      {:ok, %{invitation_url: link} = answer} ->
+        {:noreply,
+         socket
+         |> assign(:invite_link, link)
+         |> assign(:invite_local, Map.get(answer, :local_only, false))
+         |> assign(:inviting?, false)}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "No link was made: #{error_message(reason)}")}
@@ -392,7 +406,7 @@ defmodule PrismWeb.SharedThreadLive do
               :if={not pair?(@thread)}
               type="button"
               id="shared-invite"
-              phx-click="invite_link"
+              phx-click="toggle_invite"
               class="rounded px-2 py-1 text-xs text-gray-400 hover:bg-gray-800 hover:text-gray-200"
             >
               Invitation link
@@ -443,9 +457,38 @@ defmodule PrismWeb.SharedThreadLive do
           </button>
         </form>
 
+        <form
+          :if={@inviting? and @thread != nil and is_nil(@gone)}
+          id="shared-invite-form"
+          phx-submit="invite_link"
+          class="flex gap-2"
+        >
+          <input
+            type="text"
+            name="name"
+            value=""
+            maxlength="39"
+            placeholder="Their name (optional)"
+            aria-label="Their name (optional)"
+            class="flex-1 rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white"
+          />
+          <button type="submit" class="rounded bg-blue-600 px-2 py-1 text-xs text-white">
+            Make the link
+          </button>
+        </form>
+
         <p :if={@invite_link} id="shared-invite-link" class="text-xs text-gray-400">
-          Give this link to the person you invite; it admits one person, once, for seven days:
+          Give this link to the person you invite; it admits one person, once, for seven days,
+          and Settings lists it until then, where you can revoke it:
           <span class="select-all break-all text-gray-200">{@invite_link}</span>
+        </p>
+        <p
+          :if={@invite_link && @invite_local}
+          id="shared-invite-local"
+          class="text-xs text-yellow-400"
+        >
+          This address opens only on this computer. To invite someone on another computer, make
+          CYFR reachable there first with <code>cyfr access</code>.
         </p>
 
         <ul :if={@people != []} id="shared-people" class="flex flex-wrap gap-1" aria-label="People">

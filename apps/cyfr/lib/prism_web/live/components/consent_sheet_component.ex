@@ -110,7 +110,9 @@ defmodule PrismWeb.ConsentSheetComponent do
       named account of the edge under its `name`;
     * narrowing, per node, for each kind its enforcement point can check:
       the egress domains, methods, schemes and private ranges and the
-      storage actions as exact values, the storage paths through a picker
+      storage actions as exact values, a host the person names under a
+      wildcard host the ask carries (the preview says whether it lies
+      inside the ask, as the commit does), the storage paths through a picker
       over `file.list` inside each asked folder, the tools per action (a
       wildcard ask whole or none), the limits, each capped at the ask
       and sent only when lowered, and the flows to each exit, one class at
@@ -619,6 +621,30 @@ defmodule PrismWeb.ConsentSheetComponent do
         {:noreply, socket |> assign(:subset, subset) |> walk_again({kind, node})}
       else
         {:noreply, socket}
+      end
+    end)
+  end
+
+  # A host the person names under a wildcard host the ask carries, added
+  # to the hosts it may talk to. Whether it lies inside the ask is the
+  # home's to say: the preview answers it, or refuses it beside the row.
+  # A node whose ask names no wildcard host offers no such box, and the
+  # event is refused there as the box is absent, the walk left as it was.
+  def handle_event("add_host", %{"node" => node, "host" => host}, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      host = String.trim(host)
+      granted = granted_values(socket, node, "egress", "domains")
+      offered? = wildcard_host?(ask_row(socket.assigns.plan, "egress", node))
+
+      if not offered? or host == "" or host in granted do
+        {:noreply, socket}
+      else
+        asked = asked_values(socket.assigns.plan, node, "egress", "domains")
+
+        subset =
+          put_set(socket.assigns.subset, node, "egress", "domains", granted ++ [host], asked)
+
+        {:noreply, socket |> assign(:subset, subset) |> walk_again({"egress", node})}
       end
     end)
   end
@@ -1350,10 +1376,10 @@ defmodule PrismWeb.ConsentSheetComponent do
               <li :for={entry <- group.entries}>
                 <strong>{capability_label(entry.capability)}</strong>
                 <span :if={entry.added != []}>
-                  asks for {Enum.join(entry.added, ", ")}, which your grant does not give
+                  asks for {delta_values(entry.capability, entry.added)}, which your grant does not give
                 </span>
                 <span :if={entry.removed != []}>
-                  no longer asks for {Enum.join(entry.removed, ", ")}
+                  no longer asks for {delta_values(entry.capability, entry.removed)}
                 </span>
               </li>
             </ul>
@@ -2124,6 +2150,24 @@ defmodule PrismWeb.ConsentSheetComponent do
           />
           <span class="font-mono">{value}</span>
         </label>
+        <form
+          :if={@controls? and field == "domains" and wildcard_host?(@ask)}
+          phx-submit="add_host"
+          phx-target={@myself}
+          class="consent-sheet__add-host flex flex-wrap items-center gap-2"
+          data-test="grant-add-host"
+        >
+          <input type="hidden" name="node" value={@row["node"]} />
+          <input
+            type="text"
+            name="host"
+            placeholder="a host under the wildcard"
+            aria-label="A host it may talk to, under the wildcard"
+            autocomplete="off"
+            class="font-mono text-xs"
+          />
+          <button type="submit" class="consent-sheet__choice">Add host</button>
+        </form>
         <span :if={@controls? and field == "paths"}>
           <button
             :for={folder <- folders(@ask)}
@@ -2472,6 +2516,11 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp asked_methods(%{"values" => %{"methods" => methods}}) when is_list(methods), do: methods
   defp asked_methods(_ask), do: []
 
+  # Whether the ask names a wildcard host, under which the person may name
+  # hosts of their own.
+  defp wildcard_host?(ask),
+    do: Enum.any?((ask && ask["values"]["domains"]) || [], &String.contains?(&1, "*"))
+
   defp folders(ask), do: Enum.filter(ask["values"]["paths"] || [], &String.ends_with?(&1, "/"))
 
   # What kind of place an exit is, in the person's words.
@@ -2733,8 +2782,13 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp capability_label("tools"), do: "Tools:"
   defp capability_label("egress." <> field), do: "Network #{field}:"
   defp capability_label("storage." <> field), do: "Files #{field}:"
-  defp capability_label("policy." <> mode), do: "Agent policy #{mode}:"
+  defp capability_label("native_search"), do: "Web search:"
   defp capability_label(capability), do: "#{capability}:"
+
+  # A change's values as the person reads them: an agent's provider search
+  # is the one value of its row, named by what it is.
+  defp delta_values("native_search", _values), do: "its provider's own web search"
+  defp delta_values(_capability, values), do: Enum.join(values, ", ")
 
   # Each field the component reads and the entry field that answers it.
   defp field_map_label(fields, _none) when is_map(fields) and map_size(fields) > 0 do

@@ -302,6 +302,53 @@ defmodule Sanctum.VaultTest do
     end
   end
 
+  describe "an entry's name" do
+    @name_rule "A name is text of at most 1024 bytes with no line break, tab or other control character."
+
+    test "a rename to a name a confirmation preview cannot hold is refused as create's would be, " <>
+           "and nothing changes",
+         %{ctx: ctx} do
+      view = create!(ctx, %{name: "work key"})
+
+      for name <- ["Work\nkey", "tab\tkey", String.duplicate("k", 1025), ""] do
+        assert Vault.rename(ctx, view.id, name) == {:error, {:invalid_argument, @name_rule}},
+               inspect(name)
+      end
+
+      assert Vault.rename(ctx, view.id, nil) == {:error, {:invalid_argument, @name_rule}}
+      assert {:ok, [%{id: id, name: "work key"}]} = Vault.list(ctx)
+      assert id == view.id
+
+      # Through the vault tool, the same refusal in the same words.
+      assert Sanctum.Gate.call_external("vault", ctx, %{
+               "action" => "rename",
+               "id" => view.id,
+               "name" => "Work\nkey"
+             }) == {:error, {:invalid_argument, @name_rule}}
+
+      # A name the preview holds is taken.
+      assert :ok = Vault.rename(ctx, view.id, "Work key")
+      assert {:ok, [%{name: "Work key"}]} = Vault.list(ctx)
+    end
+
+    test "create refuses the same names, before anything is stored", %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+
+      for name <- ["Work\nkey", String.duplicate("k", 1025)] do
+        params = %{
+          name: name,
+          kind: "api_key",
+          fields: %{"KEY" => "k"},
+          destination: @destination
+        }
+
+        assert Vault.create(person, params) == {:error, :invalid_request}
+      end
+
+      assert {:ok, []} = Vault.list(person)
+    end
+  end
+
   describe "a create refused for ownership" do
     test "answers the ownership refusal through the vault tool and seals nothing", %{ctx: ctx} do
       on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)

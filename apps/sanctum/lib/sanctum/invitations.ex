@@ -31,8 +31,9 @@ defmodule Sanctum.Invitations do
   is still open. The administrator lists every invitation, anyone else the
   ones they issued; to anyone else another's invitation answers as a
   missing one does. Each shows its state (`pending`, `redeemed`, `revoked`
-  or `expired`), its expiry, and the thread it names when it names one,
-  whose title only a viewer seated there reads.
+  or `expired`), its expiry, the name it offers when it offers one, and
+  the thread it names when it names one, whose title only a viewer seated
+  there reads.
 
   ## Redeeming
 
@@ -53,7 +54,8 @@ defmodule Sanctum.Invitations do
 
   `redeem_hash/2` redeems it for a new person, in the admission's
   transaction (`Sanctum.Newcomer`), and `redeem_for/2` for a person this
-  CYFR already knows, in a transaction of its own. Each marks the
+  CYFR already knows, in a transaction of its own, which leaves one
+  naming no thread unspent when the door admits that person already. Each marks the
   invitation redeemed by one conditional write that lands only while the
   row is open and unexpired, then writes, in that transaction, the seat
   the invitation names, under the thread's lock with its issuer's
@@ -83,7 +85,8 @@ defmodule Sanctum.Invitations do
           required(:issued_by) => String.t(),
           required(:expires_at) => DateTime.t(),
           optional(:thread_id) => String.t(),
-          optional(:thread_title) => String.t()
+          optional(:thread_title) => String.t(),
+          optional(:name) => String.t()
         }
 
   @typedoc """
@@ -217,12 +220,18 @@ defmodule Sanctum.Invitations do
   invitation. One closed meanwhile, or by another redemption first, is
   `:invitation_invalid`; a deny is `{:door, :denied}`; either writes
   nothing.
+
+  An invitation naming no thread admits a person and seats no one, so a
+  person the door already admits gains nothing by it: it is left unspent
+  for the one it was meant for, and the answer is `{:ok, :unspent}`.
   """
   @spec redeem_for(term(), String.t()) ::
-          {:ok, map()} | {:error, :invitation_invalid | {:door, :denied} | :unavailable | term()}
+          {:ok, map() | :unspent}
+          | {:error, :invitation_invalid | {:door, :denied} | :unavailable | term()}
   def redeem_for(code_hash, user_id) when is_binary(user_id) do
     with :ok <- redeemable_hash(code_hash),
-         {:ok, person} <- known(user_id) do
+         {:ok, person} <- known(user_id),
+         :spend <- spent_by(code_hash, person) do
       case Arca.Invitations.redeem_for(server(), code_hash, user_id,
              also: &seat_and_allow(&1, person)
            ) do
@@ -236,6 +245,29 @@ defmodule Sanctum.Invitations do
         {:error, reason} ->
           {:error, unavailable(reason)}
       end
+    end
+  end
+
+  # Whether the redemption spends the invitation: one naming a thread
+  # seats the person there; one naming none is left for whom it was meant
+  # when the door admits the person already.
+  defp spent_by(code_hash, %{user_id: user_id}) do
+    case Arca.Invitations.by_code_hash(server(), code_hash) do
+      {:ok, %{thread_id: thread_id}} when is_binary(thread_id) ->
+        :spend
+
+      {:ok, _no_thread} ->
+        case Sanctum.Door.admit_person(%{id: user_id}) do
+          {:ok, :allowed} -> {:ok, :unspent}
+          {:error, :unavailable} -> {:error, :unavailable}
+          {:error, _not_admitted} -> :spend
+        end
+
+      {:error, :not_found} ->
+        invalid()
+
+      {:error, reason} ->
+        {:error, unavailable(reason)}
     end
   end
 
@@ -390,12 +422,16 @@ defmodule Sanctum.Invitations do
       issued_by: row.issued_by,
       expires_at: row.expires_at
     }
-    |> named(row.thread_id, seats)
+    |> offered(row.name)
+    |> titled(row.thread_id, seats)
   end
 
-  defp named(view, nil, _seats), do: view
+  defp offered(view, name) when is_binary(name), do: Map.put(view, :name, name)
+  defp offered(view, _none), do: view
 
-  defp named(view, thread_id, seats) do
+  defp titled(view, nil, _seats), do: view
+
+  defp titled(view, thread_id, seats) do
     view = Map.put(view, :thread_id, thread_id)
 
     case Map.get(seats, thread_id) do

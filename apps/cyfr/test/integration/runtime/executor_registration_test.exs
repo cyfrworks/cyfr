@@ -71,13 +71,13 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
     assert Registry.lookup(Opus.Registry, execution_id) == []
   end
 
-  test "a pre-registered owner (the run_stream shape) keeps its entry", %{ctx: ctx} do
+  test "a pre-registered owner (a turn root's shape) keeps its entry", %{ctx: ctx} do
     execution_id = "exec_reg_owned_#{System.unique_integer([:positive])}"
     parent = self()
 
     owner =
       spawn_link(fn ->
-        # Mirrors Opus.Provider run_stream / cron: the task registers itself,
+        # Mirrors a turn's root (Opus.TurnRoot): the task registers itself,
         # then dispatches the run from the same process.
         {:ok, _} = Registry.register(Opus.Registry, execution_id, :running)
         send(parent, :registered)

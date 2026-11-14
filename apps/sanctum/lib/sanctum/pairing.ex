@@ -275,7 +275,7 @@ defmodule Sanctum.Pairing do
   confirmed (`Arca.PairedClients.revoke/2`). A sensitive change
   (`pairing_revocation`, `Sanctum.Consent.Authz.confirm/3`). Once the
   revocation commits it is announced as a standing change of the person
-  (`Sanctum.Telemetry.sessions_revoked/1`), so every holder of their
+  (`Sanctum.Telemetry.sessions_revoked/3`), so every holder of their
   context, the client's device channel among them, reads the standing
   again at once rather than at its next ping, and the channel refuses the
   client and closes. Answers the client's row as revoked.
@@ -305,7 +305,13 @@ defmodule Sanctum.Pairing do
           # The announcement makes each listener revalidate, never drop
           # unread: a holder of the person's context whose own credential
           # still stands keeps it, and only the revoked client's goes.
-          :ok = Sanctum.Telemetry.sessions_revoked(row.user_id)
+          :ok =
+            Sanctum.Telemetry.sessions_revoked(
+              row.user_id,
+              :device_removed,
+              row.revoked_session_hashes
+            )
+
           {:ok, row}
 
         {:error, :database_error} ->

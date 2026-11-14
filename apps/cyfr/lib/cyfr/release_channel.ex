@@ -9,14 +9,16 @@ defmodule Cyfr.ReleaseChannel do
   The channel is the CYFR repository's releases on GitHub, read through
   the control plane's pinned transport (`Sanctum.Egress`) with a bounded
   answer. The newest release is chosen by the CLI's rule
-  (`apps/codex/internal/release`): drafts, releases GitHub marks as
-  pre-releases, tags outside the release-version grammar (`version?/1`)
-  and tags carrying a pre-release are skipped, and the rest's greatest by
-  SemVer precedence is it (`newest/1`). An update is available when it is
+  (`apps/codex/internal/release`, `newest/1`): the greatest by SemVer
+  precedence of the releases that are not pre-releases and, while none is
+  listed, of the pre-releases, a pre-release being one GitHub marks as such
+  or whose tag carries one; drafts and tags outside the release-version
+  grammar (`version?/1`) are skipped. An update is available when it is
   strictly higher than `Prima.Version.current/0` and both are release
   versions (`newer?/2`), so a listing with no release, or a build that is
   none, is told of no update. `tests/fixtures/release_manifest.json`'s
-  `versions` hold the grammar and the precedence to the CLI's.
+  `versions` hold the grammar and the precedence to the CLI's, and its
+  `selection` the choice.
 
   The channel is read only when asked: at most once a day, and after a
   failed read no sooner than an hour later, keeping the last answer. A
@@ -24,8 +26,13 @@ defmodule Cyfr.ReleaseChannel do
   with the last answer, nil before a read has succeeded, and a stale
   answer only asks for a read.
 
-  Options: `:name`; `:fetch`, the read, a function answering as
-  `Sanctum.Egress.pinned_request/5` does, or `false` for an instance that
+  The listing is read a page at a time, from page 1, 100 releases a page,
+  until a page holds fewer, as the CLI reads it, so a release past the
+  first page still counts; a full tenth page is a failed read
+  (`:incomplete`), never a choice that might miss a release past it.
+
+  Options: `:name`; `:fetch`, the read of one page, a function of the page
+  number answering as `Sanctum.Egress.pinned_request/5` does, or `false` for an instance that
   never reads (`:release_channel_enabled` false: the suite's, and a
   server's whose `CYFR_NO_UPDATE_CHECK` holds a value, as the terminal's
   check is off then, `Cyfr.RuntimeConfig.release_check?/1`); and `:clock`,
@@ -36,10 +43,12 @@ defmodule Cyfr.ReleaseChannel do
 
   require Logger
 
-  @url "https://api.github.com/repos/cyfrworks/cyfr/releases?per_page=20"
+  @url "https://api.github.com/repos/cyfrworks/cyfr/releases"
+  @per_page 100
+  @max_pages 10
 
-  # Twenty releases with their assets and notes, with room to spare.
-  @max_response_bytes 4 * 1024 * 1024
+  # A page of releases with their assets and notes, with room to spare.
+  @max_response_bytes 8 * 1024 * 1024
   @receive_timeout_ms 10_000
 
   @fresh_ms :timer.hours(24)
@@ -76,17 +85,25 @@ defmodule Cyfr.ReleaseChannel do
   """
   @spec newest(list()) :: String.t() | nil
   def newest(releases) when is_list(releases) do
-    releases
-    |> Enum.flat_map(fn
-      %{"tag_name" => tag} = release ->
-        if release["draft"] == true or release["prerelease"] == true or not version?(tag) or
-             String.contains?(tag, "-"),
-           do: [],
-           else: [tag]
+    {prereleases, releases} =
+      releases
+      |> Enum.flat_map(fn
+        %{"tag_name" => tag} = release ->
+          if release["draft"] == true or not version?(tag),
+            do: [],
+            else: [{release["prerelease"] == true or String.contains?(tag, "-"), tag}]
 
-      _other ->
-        []
-    end)
+        _other ->
+          []
+      end)
+      |> Enum.split_with(fn {prerelease?, _tag} -> prerelease? end)
+
+    greatest(releases) || greatest(prereleases)
+  end
+
+  defp greatest(tagged) do
+    tagged
+    |> Enum.map(fn {_prerelease?, tag} -> tag end)
     |> Enum.max(&(Version.compare(&1, &2) != :lt), fn -> nil end)
   end
 
@@ -110,7 +127,7 @@ defmodule Cyfr.ReleaseChannel do
 
     {:ok,
      %{
-       fetch: Keyword.get(opts, :fetch, &fetch/0),
+       fetch: Keyword.get(opts, :fetch, &fetch/1),
        clock: Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end),
        answer: nil,
        read_at: nil,
@@ -165,7 +182,7 @@ defmodule Cyfr.ReleaseChannel do
       tag = make_ref()
       # The read's answer comes as a message, and its exit tells of a read
       # that ended without one.
-      reader = spawn_link(fn -> send(channel, {tag, answer(fetch.())}) end)
+      reader = spawn_link(fn -> send(channel, {tag, answer(listing(fetch))}) end)
       %{state | reading: {tag, reader}}
     end
   end
@@ -181,10 +198,35 @@ defmodule Cyfr.ReleaseChannel do
   defp within?(nil, _now, _ms), do: false
   defp within?(at, now, ms), do: now - at < ms
 
-  defp fetch do
+  @doc """
+  The listing as `fetch` reads it page by page, from page 1 until a page
+  holds fewer than #{@per_page} releases: `{:ok, releases}`, the first
+  failure of a page, its reason a class, or `{:error, :incomplete}` when
+  page #{@max_pages} is full.
+  """
+  @spec listing((pos_integer() -> term())) :: {:ok, list()} | {:error, term()}
+  def listing(fetch), do: read(fetch, 1, [])
+
+  defp read(fetch, page, releases) do
+    case listed(fetch.(page)) do
+      {:ok, listed} when length(listed) < @per_page ->
+        {:ok, releases ++ listed}
+
+      {:ok, _listed} when page >= @max_pages ->
+        {:error, :incomplete}
+
+      {:ok, listed} ->
+        read(fetch, page + 1, releases ++ listed)
+
+      {:error, _why} = failure ->
+        failure
+    end
+  end
+
+  defp fetch(page) do
     Sanctum.Egress.pinned_request(
       :get,
-      @url,
+      "#{@url}?per_page=#{@per_page}&page=#{page}",
       [
         {"accept", "application/vnd.github+json"},
         {"user-agent", "cyfr/" <> Prima.Version.current()}
@@ -195,20 +237,21 @@ defmodule Cyfr.ReleaseChannel do
     )
   end
 
-  # The read's answer, its reason reduced to a class: a body is never
+  # One page's answer, its reason reduced to a class: a body is never
   # carried into the log.
-  defp answer({:ok, 200, _headers, body}) when is_binary(body) do
+  defp listed({:ok, 200, _headers, body}) when is_binary(body) do
     case Jason.decode(body) do
-      {:ok, releases} when is_list(releases) ->
-        {:ok, newer?(newest(releases), Prima.Version.current())}
-
-      _malformed ->
-        {:error, :malformed}
+      {:ok, releases} when is_list(releases) -> {:ok, releases}
+      _malformed -> {:error, :malformed}
     end
   end
 
-  defp answer({:ok, status, _headers, _body}) when is_integer(status),
+  defp listed({:ok, status, _headers, _body}) when is_integer(status),
     do: {:error, {:status, status}}
 
-  defp answer(_unreachable), do: {:error, :unreachable}
+  defp listed(_unreachable), do: {:error, :unreachable}
+
+  # The read's answer: whether its newest release is newer than this one.
+  defp answer({:ok, releases}), do: {:ok, newer?(newest(releases), Prima.Version.current())}
+  defp answer({:error, _why} = failure), do: failure
 end

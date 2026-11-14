@@ -254,6 +254,17 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
   end
 
+  test "the CLI's key form offers Sanctum.ApiKey's permissions, each by what it lets a key do" do
+    form = read!("apps/codex/internal/prompt/form.go")
+
+    offered =
+      ~r/huh\.NewOption\("([^"]+)", "([a-z_]+)"\)/
+      |> Regex.scan(form, capture: :all_but_first)
+      |> Enum.map(fn [what, name] -> {name, what} end)
+
+    assert offered == Sanctum.ApiKey.permissions()
+  end
+
   # Authority error tags must agree across language boundaries.
 
   test "the consent-tag vocabulary agrees across Sanctum, the MCP boundary and the CLI" do
@@ -598,12 +609,15 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/registry-stand-in/standin_test.py", ~w(answers requests)}
     ],
     "release_manifest.json" => [
+      {"apps/codex/cmd/backup_test.go", ~w(versions)},
       {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},
       {"apps/codex/internal/release/manifest_test.go",
        ~w(valid valid_prerelease refused versions signature)},
+      {"apps/codex/internal/release/release_test.go", ~w(selection)},
       {"apps/codex/internal/scaffold/scaffold_test.go", ~w(signature)},
-      {"apps/cyfr/test/cyfr/release_channel_test.exs", ~w(versions)},
+      {"apps/cyfr/test/cyfr/release_channel_test.exs", ~w(versions selection)},
       {"tests/ci-release-graph.py", ~w(valid valid_prerelease refused versions signature)},
+      {"tests/install-verify-test.sh", ~w(selection)},
       {"tests/release-boot-test.sh", ~w(versions)}
     ],
     "restore_barrier.json" => [

@@ -171,7 +171,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
     refute html =~ "Adding…"
 
     assert :sys.get_state(pane.pid).socket.assigns.flash["error"] ==
-             "No one holds that handle at the registry."
+             "No account with that name yet: check the spelling, or ask them to make one."
 
     refute_receive {:held, _second}, 500
 
@@ -224,12 +224,16 @@ defmodule PrismWeb.SharedThreadLiveTest do
     )
 
     pane |> element("#shared-invite") |> render_click()
+    pane |> form("#shared-invite-form", %{"name" => "uj-wren"}) |> render_submit()
     assert render(pane) =~ "/invite#"
+
+    # A test CYFR's address is this computer's loopback: the link says so.
+    assert has_element?(pane, "#shared-invite-local", "opens only on this computer")
 
     {:ok, %{invitations: invitations}} =
       PrismWeb.Ops.call_tool(alice_ctx(alice), "invitation/list", %{})
 
-    assert Enum.any?(invitations, &(&1[:thread_id] == thread.id))
+    assert Enum.any?(invitations, &(&1[:thread_id] == thread.id and &1[:name] == "uj-wren"))
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -314,7 +318,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
       |> MapSet.new()
 
     allowed =
-      MapSet.new(~w(toggle_rename invite_link archive leave withdraw remove
+      MapSet.new(~w(toggle_rename toggle_invite invite_link archive leave withdraw remove
                     cancel_upload post validate update_input add rename))
 
     assert MapSet.subset?(events, allowed),

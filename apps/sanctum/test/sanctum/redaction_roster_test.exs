@@ -56,7 +56,7 @@ defmodule Sanctum.RedactionRosterTest do
   test "a key handed to key.validate is a credential, and bare session or t is not" do
     assert Sanitizer.sensitive_key?("key")
 
-    assert Sanitizer.sanitize(%{"action" => "validate", "key" => "cyfr_pk_LIVE"}) ==
+    assert Sanitizer.sanitize(%{"action" => "validate", "key" => "cyfr_sk_LIVE"}) ==
              %{"action" => "validate", "key" => "[REDACTED]"}
 
     # A session object in an error term is worth reading.

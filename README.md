@@ -68,14 +68,14 @@ On other systems, install Docker first. The install script and Homebrew cask ins
   ```
 
 ```bash
-# Install the cyfr CLI via shell script (Linux, macOS, WSL). Every release so
-# far is a pre-release, so CYFR_VERSION names the one to install; without it
-# the installer takes the newest release that is not a pre-release. The
-# installer needs cosign to verify the release's signature: on Ubuntu 26.04
+# Install the cyfr CLI via shell script (Linux, macOS, WSL). It takes the
+# newest release that is not a pre-release and, while none is published,
+# the newest pre-release, and says which it took; CYFR_VERSION=<version>
+# names an exact one instead. The installer needs cosign to verify the release's signature: on Ubuntu 26.04
 # LTS it offers to install it, elsewhere install it yourself
 # (`brew install cosign`); without it, CYFR_ALLOW_UNVERIFIED=1 verifies the
 # archive's checksum alone.
-curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.6 sh
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
 
 # Or via Homebrew (macOS), which installs the newest release that is not a pre-release
 brew tap cyfrworks/cyfr
@@ -128,7 +128,7 @@ Around the desktop:
 - **The crew** — who AQUA hands a job to. A crew member is a file under `aqua/crew/`: a brain (a model's catalyst, or a coding harness such as Claude Code, which runs as itself in its program's folder on your own plan), what it is good at and what to avoid, and the brain's options from what the brain itself declares. AQUA's prompt lists the members whose brain is ready, and `crew.ask` hands one a job: the member works it in a thread of its own under yours, holding every tool AQUA holds unless the ask narrows them, and its reply lands on your thread whether it finished, failed or was stopped; `@name` in your thread asks one yourself. How a job is done is a scroll any of them reads — `builder`, `artisan`, `planner` and `web` ship beside `canvas` and `capability-acquisition`. The shipped crew is `explorer` (Gemini, with the provider's own search) and `claude-code`, which shows once its harness is installed and signed in. The **AQUA** page edits the soul's capabilities, which the crew runs under too, and each member's brain, options and lines.
 - **The gear** — on the shelf: the settings, the Dashboard's pages, opened over the desktop while its apps keep running, with the drawer (the top bar's menu, on every screen size) listing them: **AQUA**, **Files**, **Vault**, **Schedules**, **Webhooks**, **Programs**, **Settings**, **Legal**. The × goes back to the desktop. Connect a model to AQUA from **AQUA** — the system layer's grant sheet binds an entry to the model's catalyst. The shipped model catalysts name their connection on each request; CYFR attaches the key in the host, and the catalyst receives no key.
 - **Canvases** — the desktop (`/a/<athanor>`) shows your canvases, each your own page, written in HTML, CSS and JavaScript like any app and showing what it reads, with the apps you open over them, each a window, a tile at an edge or full, arranged as you leave it. Move between canvases with the dots on the shelf along the bottom, Ctrl+Alt+1 to 8, Ctrl+Alt+←/→ while no app is active, or a swipe on the shelf; only the canvas you are looking at reads and acts. A canvas changes nothing in CYFR, and what it reads can leave your browser as any app's can. Ask AQUA for a canvas and it writes one (`canvas.write`) as a new version once you approve it, on a card that names what the canvas reads; your browser validates the version before it shows it, keeping the version it replaces. A **feed** runs one operation of an installed component on an interval, and a canvas reads its results by the feed's name; AQUA always asks before it binds one, and the **Schedules** page lists and removes them. A canvas that does not start, or whose page stops, is replaced by the standard canvas while your windows and AQUA stay as they are, with one line offering to try it again or restore its last working version.
-- **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has an auth provider; operators and private boxes start in `dev`.
+- **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has an auth provider; operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
 Tinctures can stay private inside Prism, or be made public and shared at CYFR's address, `<address>/t/@<namespace>/<publisher>/<name>`: `http://localhost:4000` with local access, which only its own computer reaches; `https://<machine>.<tailnet>.ts.net` with tailnet access, which your tailnet's devices reach through Tailscale Serve; and `https://<your domain>` with public access, through Caddy under a certificate it obtains over ACME. See [Deploy to a Server](#deploy-to-a-server). A canvas is never public: it is your own data page, so no public profile is staged for one and the public route serves none.
@@ -422,7 +422,7 @@ Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `
 ```bash
 # Install the CLI (on Ubuntu 26.04 LTS the installer offers to install
 # cosign to verify it; elsewhere it installs the CLI only):
-curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.6 sh
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
 #   …or:  brew tap cyfrworks/cyfr && brew install --cask cyfr
 
 mkdir my-cyfr && cd my-cyfr
@@ -484,7 +484,7 @@ With `--no-interactive` it asks nothing and the screen keeps its login prompt. T
 
 **Upgrading.** `cyfr update` is the one command for it: it brings the `cyfr` program to the newest release, then the CYFR in the current directory to the program's release, and two releases never run side by side on one database.
 
-- **The program.** When a release newer than this `cyfr` is published, `cyfr update` installs it, through `brew` for a Homebrew cask install; any other install downloads the release's archive for this platform, verifies it against the release's `checksums.txt` signed by the release workflow for that tag, and only then replaces its own file. It then goes on as the new program, so the one command finishes the job. Pre-releases (`0.6.0-alpha.1`, `1.0.0-rc.2`) are never chosen this way: `cyfr update --version <version>` installs exactly the release it names, a pre-release or an older release included, and the install script does the same with `CYFR_VERSION=<version>`. A Homebrew install takes only its tap's release, the newest that is not a pre-release. In a directory that holds no CYFR, `cyfr update` stops after the program.
+- **The program.** When the newest release is newer than this `cyfr`, `cyfr update` installs it: the newest published release that is not a pre-release and, while none is published, the newest pre-release, the rule the install script and the server's update notice follow too. It installs it through `brew` for a Homebrew cask install; any other install downloads the release's archive for this platform, verifies it against the release's `checksums.txt` signed by the release workflow for that tag, and only then replaces its own file. It then goes on as the new program, so the one command finishes the job. Once a release that is not a pre-release is published, pre-releases (`0.6.0-alpha.1`, `1.0.0-rc.2`) are no longer chosen this way: `cyfr update --version <version>` installs exactly the release it names, a pre-release or an older release included, and the install script does the same with `CYFR_VERSION=<version>`. A Homebrew install takes only its tap's release, the newest that is not a pre-release. In a directory that holds no CYFR, `cyfr update` stops after the program.
 - **CYFR.** In CYFR's directory it then fetches the release's `release.json` and its signature and verifies them: signed keyless by the release workflow of that version's tag, naming that version. Without network access to the release, or with a manifest that does not verify, it refuses and changes nothing, as it refuses a `docker-compose.yml` that lacks a service of the bundled stack (`cyfr init --force` regenerates the file and keeps `.env`). It then shows the release CYFR is on, each image line that changes and where the release notes are, and asks before changing anything (`--yes` makes the change without asking; with no terminal and no `--yes` it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR already on the program's release is left alone, with no stop and no snapshot. A CYFR on a newer release than the program, by its compose file's tags or by the release its running cyfr reports, is refused before anything stops, since older code never starts over a database a newer release migrated: restore a snapshot of the older release instead. A CYFR whose database was built from another schema than the release's, which its manifest names by fingerprint, is refused before it asks and before it takes the stack's lock, so the refusal changes nothing: the fingerprint is read through the running cyfr, or offline from its image while cyfr is stopped, in a one-off container that mounts nothing and never pulls, and the refusal says how to start over, since there is no upgrade path between schemas. An answer that does not read refuses as well. Once confirmed, in order, it:
 
 1. pulls every image the manifest names by its digest while the stack still runs; a failed pull changes nothing. It names the storage root it will snapshot as compose resolves it. On PostgreSQL it first reads the server's major through a client image the CLI pins by digest, one for each of PostgreSQL 14 to 18, and pulls the pin of that major for the dump; a server of another major refuses the update before anything changes;
@@ -545,7 +545,7 @@ From the CLI or MCP, the same program is `cyfr mcp add github '{"transport":"pro
 
 **Bounds.** A program's row may set its memory bound (`memory_bytes`; without one each process gets the service's own, `LOCUS_BACKENDS_MEMORY_BYTES` in `.env.locus`, 512 MiB) and a kept folder's disk bound (`home_max_bytes`; without one the `homes` volume is the only bound). The service starts a program only while the memory bounds of the programs it runs, the new one with them, fit its budget, `LOCUS_BACKENDS_MEMORY_BUDGET` in `.env.locus` (1792 MiB by default, three programs at the default bound, times `LOCUS_BACKENDS_MEMORY_OVERCOMMIT`, 1), and one athanor's fit the `athanor_program_memory_bytes` setting (unset, the whole budget); past either the program is refused as busy and asked for again later, never left for the kernel to end. The container's limit, `LOCUS_BACKENDS_MEMORY_LIMIT` in `.env` (2G), is the budget plus 256 MiB for the service: raise the two together. A kept folder is measured every 10 s while its program runs: at its bound, or when it cannot be measured whole, its processes are ended and the folder refuses to start a program until it is reset.
 
-Defining or changing a program — `mcp_servers.create` and `update` — takes a signed-in session: Prism, or the CLI in the shell `cyfr login` starts. A definition decides what runs and where it sends the vault entries it names, which is a person's decision like granting a vault entry to a component. An admin API key can list, inspect, test, refresh, restart, enable, disable and delete programs and tool servers, but defines none, and only a person signs a program in.
+Defining or changing a program — `mcp_servers.create` and `update` — takes a signed-in session: Prism, or the CLI in the shell `cyfr login` starts. A definition decides what runs and where it sends the vault entries it names, which is a person's decision like granting a vault entry to a component. An API key holding `admin` can list, inspect, test, refresh, restart, enable, disable and delete programs and tool servers, but defines none, and only a person signs a program in.
 
 How it holds together:
 
@@ -1036,9 +1036,9 @@ What to back up depends on the backends you configured:
 
 | Backend | What holds state | Backup |
 |---|---|---|
-| SQLite (default) | `./data` (database, encrypted secrets, every athanor's components and files, caches) | Stop the stack (`cyfr down`), copy `./data`, restart. Copying while running risks a torn SQLite snapshot. |
-| Postgres | your database + `./data` for files | `pg_dump` on your schedule + the `./data` copy above |
-| S3 | the bucket + the database | enable bucket versioning/replication; back the database up as above |
+| SQLite (default) | `./data` (database, encrypted secrets, every athanor's components and files, caches) | `cyfr backup`, which stops a running stack for the snapshot and starts it again. Copying `./data` while the stack runs risks a torn SQLite snapshot. |
+| Postgres | your database + `./data` for files | `cyfr backup`, which dumps the database with `pg_dump` beside the `./data` copy |
+| S3 | the bucket + the database | enable bucket versioning/replication; `cyfr backup` holds the database but not the bucket |
 
 A restore needs the **same `CYFR_SECRET_KEY_BASE`** — secrets are encrypted
 with a key derived from it, so a restored data directory is unreadable under
@@ -1049,15 +1049,28 @@ separately from the data backup if you can, and exclude `erl_crash.dump` and
 `tmp/` from backup jobs — a crash dump can contain decrypted key material
 from process memory.
 
+**`cyfr backup`** takes the snapshot `cyfr update` takes before it changes
+anything, into `backups/<UTC timestamp>/`: the database (the SQLite file, or
+a `pg_dump` of PostgreSQL), the local storage root, the managed scaffold
+files the directory holds, the keyring, `.env` and `docker-compose.yml`, with
+`snapshot.json` written last. It takes the stack's lock first. A running
+CYFR is stopped for it as an update stops it and started again afterwards,
+also when the snapshot fails; a stopped one stays stopped. It refuses while
+a server outside this stack still holds a slot of the cluster. A snapshot
+holds the keyring and the database: keep it as you keep the data. Once the
+stack has run, the server's container owns some of the files a snapshot
+puts back, so a backup taken as yourself is restored with sudo; `cyfr
+backup`'s last line names the restore command in the form that works.
+
 **Restore is declared.** `cyfr restore backups/<timestamp>` puts a snapshot
-`cyfr update` took back: it refuses an incomplete snapshot or one whose
+`cyfr backup` or `cyfr update` took back: it refuses an incomplete snapshot or one whose
 layout it cannot put back, stops the stack and bars the cluster from starting
 before anything lands: it sets `CYFR_RESTORE_INCOMPLETE` in `.env`, which
 the image's entrypoint, `cyfr up` and `cyfr update` refuse, and removes the
 stopped `cyfr` container. It refuses while any server of the cluster still
 runs, on any host and of any release, or while the PostgreSQL server is of
 a major the CLI pins no client image for, and otherwise puts back the managed
-scaffold files as they stood before the update, the database, the storage
+scaffold files as they stood when the snapshot was taken, the database, the storage
 root (each nested mount's bytes at its own source), the keyring, `.env`
 and `docker-compose.yml`, and declares the restore before anything starts,
 in a one-off container that sets the bar empty for itself alone:
@@ -1139,6 +1152,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr access status` | Show how CYFR is reached, what runs and the last change, without the lock and changing nothing |
 | `cyfr up` / `cyfr down` | Start / stop the stack under its lock: cyfr, locus-runtime and locus-backends, plus locus-builds when `CYFR_LOCUS_BUILDS_URL` in `.env` names it (as `cyfr init` writes it) and the proxy `CYFR_ACCESS` selects (tailscale for tailnet, caddy for public); `up` refuses a `.env` that contradicts its access settings with the server's own sentence, and on a first start, with no one set up yet, ends on how the first person is set up: the setup link (from a phone or laptop with Tailscale on for tailnet access, through the ssh command for local access on a machine with no display) or `cyfr login --setup` at this terminal, this machine's screen (a reboot away until it runs), or on a headless install `cyfr login --setup` alone; `down` stops and removes every container of the project and keeps its networks, and refuses a directory that holds no compose file, since the stack it stops is the directory's own |
 | `cyfr update` | Update this program to the newest release (through brew for a Homebrew install), then the CYFR in this directory to it: shows what changes and asks (`--yes`), verifies the release's signed manifest, pulls every image by digest, stops the stack, snapshots it into `backups/`, rewrites `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy and tailscale) to the release's digests and starts it (see **Upgrading**); `--version <version>` installs exactly that release, a pre-release or an older one included; removes from `.env` each setting the release this CYFR ran shipped in its `.env.example` that the new release's `.env.example` does not declare, naming them (a setting the old `.env.example` never shipped is yours and stays), and leaves the rest of `.env`, `Caddyfile` and every other image line alone, a CYFR already on the release untouched, refuses a CYFR on a newer release and a `docker-compose.yml` that lacks a service of the bundled stack |
+| `cyfr backup` | Take a snapshot of the CYFR in this directory into `backups/`, the one `cyfr update` takes, which `cyfr restore` puts back; a running stack is stopped for it and started again; see **Backup and restore** |
 | `cyfr restore <snapshot>` | Put a snapshot from `backups/` back with the whole cluster stopped (refused while any server of the cluster runs), declare the restore and start the stack (`--no-start` leaves it stopped); see **Backup and restore** |
 | `cyfr uninstall` | Take CYFR's stack and this program off this machine (see **Uninstalling**): stops CYFR as `cyfr down` does and removes nothing else from your folder; shows what it removes and leaves, asks once (`--yes`), removes the stack's networks and images, the screen service, the link in `/usr/local/bin` and this program, keeping either when the folder holds it or its target; leaves the folder, the volumes, the settings files and the device key, naming each by its path and the volumes' `docker volume rm` |
 

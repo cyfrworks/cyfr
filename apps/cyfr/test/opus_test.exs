@@ -79,6 +79,63 @@ defmodule OpusTest do
     assert Arca.Repo.all(Arca.Schemas.PolicyLog) == []
   end
 
+  test "a key narrowed to named tools starts no other, before anything else about the run is asked",
+       %{ctx: ctx} do
+    Prima.Test.Env.put_app_env(:cyfr, :locus_runtime_workers, [])
+    issuer = Sanctum.TestContext.issuer!(ctx)
+    Sanctum.TestContext.ready!(issuer.athanor_id)
+
+    key_ctx = fn name, attrs ->
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(issuer, Map.put(attrs, :name, name))
+
+      {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      key_ctx
+    end
+
+    narrowed = key_ctx.("one-tool", %{tools: ["r:local.named"]})
+    open = key_ctx.("any-tool", %{})
+
+    for ref <- ["reagent:local.off-graph:1.0.0", "catalyst:local.named:1.0.0", "not a ref"] do
+      assert {:error, :key_tool_not_named} = Opus.run_root(narrowed, :default, ref, %{}, [])
+      assert {:error, :key_tool_not_named} = Opus.start_root(narrowed, :default, ref, %{}, [])
+    end
+
+    # The named tool at any version, and any tool under a key with no
+    # tools or under no key, passes the key and meets the next question.
+    for {run_ctx, ref} <- [
+          {narrowed, "reagent:local.named:1.0.0"},
+          {narrowed, "reagent:local.named:2.1.0"},
+          {open, "reagent:local.off-graph:1.0.0"},
+          {issuer, "reagent:local.off-graph:1.0.0"}
+        ] do
+      assert {:error, :execution_unavailable} = Opus.run_root(run_ctx, :default, ref, %{}, [])
+    end
+
+    assert Arca.Repo.all(Arca.Schemas.Execution) == []
+
+    assert %Prima.Refusal{
+             class: :forbidden,
+             reason: :key_tool_not_named,
+             message:
+               "This API key may run only the tools named when it was made, and this is not one of them."
+           } = Prima.Refusal.classify(:key_tool_not_named)
+  end
+
+  test "a key revoked after its context was made starts nothing", %{ctx: ctx} do
+    Prima.Test.Env.put_app_env(:cyfr, :locus_runtime_workers, [])
+    issuer = Sanctum.TestContext.issuer!(ctx)
+
+    {:ok, %{api_key: raw}} =
+      Sanctum.TestContext.create_key(issuer, %{name: "gone", tools: ["r:local.named"]})
+
+    {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+    :ok = Sanctum.ApiKey.revoke(issuer, "gone")
+
+    assert {:error, :invalid_api_key} =
+             Opus.run_root(key_ctx, :default, "reagent:local.named:1.0.0", %{}, [])
+  end
+
   test "a configured worker service that does not answer leaves execution unavailable", %{
     ctx: ctx
   } do

@@ -864,9 +864,31 @@ defmodule Prima.Refusal do
   defp row({:cap_unverifiable, key}) when is_atom(key),
     do: {:unavailable, "A limit on this account could not be checked — retry shortly"}
 
-  # A presented credential that does not open anything.
+  # A presented session credential that opens nothing. A revocation
+  # deletes the session it ended, so what ended it is unknown here: the
+  # sentence names every case, the same for every caller, and confirms
+  # nothing about who is let in.
   defp row(:invalid_bearer),
-    do: {:unauthenticated, "The presented credential is not valid. If it expired, sign in again."}
+    do:
+      {:unauthenticated,
+       "This sign-in no longer stands: it expired or was signed out, or this device or " <>
+         "your access was removed. Sign in again; if you are refused, ask the person who " <>
+         "runs this CYFR."}
+
+  # A page whose own session a retirement ended, told why
+  # (`Cyfr.Bus.Session.reasons/0`), or only that it ended.
+  defp row({:session_ended, :denied}),
+    do: {:unauthenticated, "Your access to this CYFR was removed, so you were signed out."}
+
+  defp row({:session_ended, :device_removed}),
+    do: {:unauthenticated, "This device was removed from your account, so its sign-in ended."}
+
+  defp row({:session_ended, :signed_out}),
+    do: {:unauthenticated, "This sign-in was ended. Sign in again to go on."}
+
+  # A page whose session is gone, which no announcement named.
+  defp row({:session_ended, :ended}),
+    do: {:unauthenticated, "Your sign-in ended. Sign in again to go on."}
 
   defp row(:invalid_api_key), do: {:unauthenticated, "Invalid API key"}
   defp row(:api_key_revoked), do: {:unauthenticated, "API key has been revoked"}
@@ -989,7 +1011,7 @@ defmodule Prima.Refusal do
   defp row({:door, :unavailable}), do: row(:unavailable)
 
   defp row({:door, reason}) when reason in [:denied, :not_allowed],
-    do: {:forbidden, "not allowed on this server — ask the operator"}
+    do: {:forbidden, "This CYFR has not let you in. Whoever runs it can let you in."}
 
   # An answer to a sign-in request this CYFR refused: spent, expired, for
   # another browser or channel, or not signed by a key the account lists.
@@ -1026,7 +1048,9 @@ defmodule Prima.Refusal do
        "This invitation can no longer be used. Ask whoever invited you for a new one."}
 
   # A handle the registry answers no one for, a reserved one included.
-  defp row(:handle_not_found), do: {:not_found, "No one holds that handle at the registry."}
+  defp row(:handle_not_found),
+    do:
+      {:not_found, "No account with that name yet: check the spelling, or ask them to make one."}
 
   # A person at a CYFR that requires a company sign-in, whose sign-in with
   # it is missing, past its days, or given under another company
@@ -1117,6 +1141,13 @@ defmodule Prima.Refusal do
       {:conflict,
        "The grant this launch was approved under has changed since it was approved, so nothing " <>
          "ran: ask again to approve it as it stands now."}
+
+  # A run an API key narrowed to named tools may not start
+  # (`Sanctum.ApiKey.admit_tool/2`).
+  defp row(:key_tool_not_named),
+    do:
+      {:forbidden,
+       "This API key may run only the tools named when it was made, and this is not one of them."}
 
   # A retry of a failed run whose grant has a new revision since it ran
   # (`execution.retry`): nothing ran under a grant the person did not run

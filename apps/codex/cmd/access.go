@@ -40,6 +40,8 @@ type stackEngine interface {
 	Switch(ctx context.Context, r access.SwitchRequest) (access.Receipt, error)
 	Join(ctx context.Context, r access.JoinRequest) (access.Receipt, error)
 	CancelWaitingJoin(ctx context.Context) error
+	Hold(cause string) error
+	Release() error
 	ForgetJoin() error
 	Start(ctx context.Context, cause string) (access.Receipt, error)
 	StartWithin(ctx context.Context, cause string, health time.Duration) (access.Receipt, error)
@@ -168,10 +170,9 @@ func refuseUnfinished(receipts []access.Receipt) error {
 
 // operationNames are what each operation a receipt answers is called.
 var operationNames = map[string]string{
-	"switch":  "The change of how CYFR is reached",
-	"join":    "Joining the tailnet",
-	"cancel":  "Cancelling a tailnet join",
-	"restart": "The restart",
+	"switch": "The change of how CYFR is reached",
+	"join":   "Joining the tailnet",
+	"cancel": "Cancelling a tailnet join",
 }
 
 // outcomeWords are how a completed operation ended.
@@ -186,6 +187,9 @@ var outcomeWords = map[string]string{
 // describeReceipt is a receipt as a person reads it: the operation and its
 // request id, how it stands, and the sentence of the refusal it answers.
 func describeReceipt(r access.Receipt) string {
+	if r.Op == "hold" {
+		return describeHold(r)
+	}
 	name, ok := operationNames[r.Op]
 	if !ok {
 		name = "The operation " + r.Op
@@ -208,6 +212,39 @@ func describeReceipt(r access.Receipt) string {
 	line := fmt.Sprintf("%s (request %s) %s.", name, r.RequestID, how)
 	if ref := r.Refusal(); ref != nil {
 		line += " " + ref.Message()
+	}
+	return line
+}
+
+// describeHold is a hold's receipt (access.Engine.Hold) as a person reads
+// it: the command that stopped CYFR, and whether the start it owed has
+// been paid.
+func describeHold(r access.Receipt) string {
+	if r.State != "completed" {
+		// Unfinished, the receipt records no start: one may have run, as
+		// when recovery's start worked and its receipt was not written.
+		line := fmt.Sprintf("cyfr %s stopped CYFR, and whether it runs again is not recorded (request %s); `cyfr access status` shows whether it runs.", r.Cause, r.RequestID)
+		if ref := r.Refusal(); ref != nil {
+			line += " " + ref.Message()
+		}
+		return line
+	}
+	line := fmt.Sprintf("CYFR was stopped by an interrupted cyfr %s and has been started again", r.Cause)
+	switch r.Outcome {
+	case "ok":
+	case outcomeStartedLocal:
+		line += ", on this machine alone"
+	default:
+		line = fmt.Sprintf("CYFR was stopped by an interrupted cyfr %s and did not start again", r.Cause)
+	}
+	line += " (request " + r.RequestID + ")."
+	if ref := r.Refusal(); ref != nil {
+		line += " " + ref.Message()
+	} else if reason := r.Payload["reason"]; reason != "" {
+		line += " " + reason + "."
+	}
+	if r.Outcome == "failed" {
+		line += " 'cyfr up' starts it once that is fixed."
 	}
 	return line
 }

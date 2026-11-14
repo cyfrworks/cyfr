@@ -353,7 +353,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :name, :string, null: false
       add :key_hash, :binary, null: false
       add :key_prefix, :string, null: false
-      add :type, :string, null: false
       add :scope, :text, null: false, default: "[]"
       add :ip_allowlist, :text
       add :revoked, :boolean, null: false, default: false
