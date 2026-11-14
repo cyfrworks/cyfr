@@ -61,6 +61,23 @@ defmodule Prima.NetworkTest do
     end
   end
 
+  # The connect's limit is set, never the HTTP client's own default, so
+  # the limit a timed-out connect is reported against is the one in force.
+  test "a pinned connection opens within the connect limit, or the receive timeout if shorter" do
+    {uri, pin} = pinned("https://api.example.test/v1", "203.0.113.10", 4)
+    address = PinnedTarget.address(pin)
+
+    assert {:ok, %{req_opts: opts}} = Network.pin(uri, address, private_policy: :allow_all)
+    assert opts[:connect_options][:timeout] == Network.connect_timeout_ms()
+    assert opts[:receive_timeout] == 30_000
+
+    assert {:ok, %{req_opts: short}} =
+             Network.pin(uri, address, private_policy: :allow_all, receive_timeout: 1_200)
+
+    assert short[:connect_options][:timeout] == 1_200
+    assert short[:receive_timeout] == 1_200
+  end
+
   test "the credential roster is what an attached request refuses, and no more" do
     request = %{
       "call_id" => "AAECAwQFBgcICQoLDA0ODw",
