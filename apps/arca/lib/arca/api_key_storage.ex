@@ -26,7 +26,7 @@ defmodule Arca.ApiKeyStorage do
   suspended.
 
   Keys are stored as SHA-256 hashes for indexed lookups.
-  Key metadata (name, type, scope, ip_allowlist) is stored as plaintext.
+  Key metadata (name, scope, ip_allowlist) is stored as plaintext.
 
   API keys belong to an athanor. All queries filter by `athanor_id` via
   `where_athanor/2` to enforce tenant isolation. The key hash serves as the
@@ -48,7 +48,6 @@ defmodule Arca.ApiKeyStorage do
     :id,
     :name,
     :key_prefix,
-    :type,
     :scope,
     :ip_allowlist,
     :revoked,
@@ -97,7 +96,6 @@ defmodule Arca.ApiKeyStorage do
       name: attrs.name,
       key_hash: attrs.key_hash,
       key_prefix: attrs.key_prefix,
-      type: attrs.type,
       scope: attrs[:scope] || "[]",
       ip_allowlist: attrs[:ip_allowlist],
       capability: attrs[:capability],
@@ -382,7 +380,6 @@ defmodule Arca.ApiKeyStorage do
             name: old.name,
             key_hash: new_key_hash,
             key_prefix: new_key_prefix,
-            type: old.type,
             scope: old.scope,
             ip_allowlist: old.ip_allowlist,
             capability: old.capability,

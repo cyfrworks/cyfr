@@ -355,7 +355,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :name, :string, null: false
       add :key_hash, :binary, null: false
       add :key_prefix, :string, null: false
-      add :type, :string, null: false
       add :scope, :text, null: false, default: "[]"
       add :ip_allowlist, :text
       add :revoked, :boolean, null: false, default: false
@@ -2361,6 +2360,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :last_execution_id, :string
       add :run_count, :integer, null: false, default: 0
       add :error_count, :integer, null: false, default: 0
+      # Why the last fire failed, until a fire succeeds again.
+      add :last_error, :text
       # The pinned version a fire runs, resolved when the row is written.
       add :resolved_reference, :string, null: false
       add :athanor_id, :string, null: false

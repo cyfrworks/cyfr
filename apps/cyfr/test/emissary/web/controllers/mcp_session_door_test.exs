@@ -107,7 +107,7 @@ defmodule Emissary.Web.MCPSessionDoorTest do
         |> confirmed_call(seat, "key", %{
           "action" => "create",
           "name" => "laptop",
-          "type" => "admin"
+          "scope" => ["admin"]
         })
         |> result!()
 
