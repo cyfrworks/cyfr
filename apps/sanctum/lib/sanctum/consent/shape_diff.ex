@@ -63,7 +63,7 @@ defmodule Sanctum.Consent.ShapeDiff do
   One capability of one node that changed since the head: `node` the
   node's ref; `capability` `"tools"`, `"egress.<field>"`,
   `"storage.<field>"`, `"flows"` (each a source class and the exit it may
-  reach, `"<class> to <exit>"`), `"policy.<mode>"` or `"provided.<dep>"`; `change`
+  reach, `"<class> to <exit>"`) or `"provided.<dep>"`; `change`
   `:widened`, `:narrowed` or `:changed`; `added` and `removed` the values;
   `new` a dependency the head never held, `dropped` one the ask no longer
   names; and, on a `provided.<dep>` entry, `need`.
@@ -173,8 +173,7 @@ defmodule Sanctum.Consent.ShapeDiff do
          "egress" => Map.take(resources["egress"] || %{}, @egress),
          "storage" => Map.take(resources["storage"] || %{}, @storage),
          "flows" => flow_tokens(resources["flows"])
-       }
-       |> Map.merge(policy_caps(manifest))}
+       }}
     end
   end
 
@@ -298,22 +297,8 @@ defmodule Sanctum.Consent.ShapeDiff do
 
     flows = entry("flows", granted["flows"], live["flows"])
 
-    policy =
-      Enum.map(~w(policy.auto policy.ask), fn key ->
-        entry(key, granted[key], live[key])
-      end)
-
-    ([tools] ++ egress ++ storage ++ [flows] ++ policy) |> Enum.reject(&is_nil/1)
+    ([tools] ++ egress ++ storage ++ [flows]) |> Enum.reject(&is_nil/1)
   end
-
-  defp policy_caps(%{"agent" => %{"policy" => policy}}) when is_map(policy) do
-    %{
-      "policy.auto" => policy["auto"] || [],
-      "policy.ask" => policy["ask"] || []
-    }
-  end
-
-  defp policy_caps(_), do: %{}
 
   defp entry(capability, granted, live) do
     granted = normalize(granted)

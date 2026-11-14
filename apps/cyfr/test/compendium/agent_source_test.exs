@@ -147,6 +147,10 @@ defmodule Compendium.AgentSourceTest do
     {:ok, explorer} = AgentSource.latest_row(ctx, "explorer")
     assert explorer.manifest["caps"] == manifest["caps"]
     assert explorer.manifest["agent"]["policy"] == manifest["agent"]["policy"]
+
+    # Of the policy, only the provider's own search, on, is in the agent
+    # block: every other key is a tool either way.
+    assert manifest["agent"]["policy"] == %{"auto" => ["native_search"], "ask" => []}
     assert explorer.manifest["agent"]["catalyst"] == "catalyst:local.gemini"
 
     hands = deps |> Enum.map(& &1["ref"]) |> List.delete(agent.catalyst_ref)
@@ -224,7 +228,7 @@ defmodule Compendium.AgentSourceTest do
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
 
     assert "explorer.*" in soul.manifest["caps"]["tools"]
-    assert "explorer.*" in soul.manifest["agent"]["policy"]["auto"]
+    refute "explorer.*" in soul.manifest["agent"]["policy"]["auto"]
 
     refute "agent:local.explorer" in Enum.map(
              soul.manifest["dependencies"]["static"],

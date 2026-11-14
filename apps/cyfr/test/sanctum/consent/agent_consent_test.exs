@@ -18,7 +18,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
   alias Compendium.{AquaAgent, AquaPath}
   alias Prima.Authority.Blob
-  alias Sanctum.Consent.{Bootstrap, Commit, Plan, ShapeDerivation}
+  alias Sanctum.Consent.{Bootstrap, Commit, Plan, ShapeDerivation, ShapeDiff}
 
   @soul "agent:local.aqua"
 
@@ -185,29 +185,67 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
   end
 
-  test "ask-to-auto and native_search on the soul move the crew's shape; a gemini member with files names gemini",
+  test "marking a tool auto or ask moves no shape; native search and a tool gained move the " <>
+         "crew's with the soul's, and one tool gained compares as one row",
        %{ctx: ctx} do
-    # The explorer runs under the soul's policy, so an edit of the soul's
-    # is an edit of the explorer's shape.
-    {:ok, before} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
+    {:ok, _} = Bootstrap.run(ctx)
+    {_, head, _} = head!(ctx, @soul)
+    assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+    {:ok, explorer} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
 
+    # Whether a tool asks first grants nothing the consent does not: the
+    # soul's and the crew's shapes stand, and nothing compares as changed.
     write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "ask")})
-    {:ok, asked} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
-    refute asked == before
+    assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+    assert ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, explorer}
+    assert {:ok, []} = ShapeDiff.compute(ctx, @soul, head.resolved_policy)
 
-    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "auto")})
-    {:ok, restored} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
-    assert restored == before
-
+    # The provider's own search is what no tool grants: turning it off
+    # moves both, and turning it back on restores them.
     write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.delete(&1.tool_policy, "native_search")})
-    {:ok, unsearched} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
-    refute unsearched == before
+    refute ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+    refute ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, explorer}
 
-    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "files.read", "ask")})
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "native_search", "auto")})
+    assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+
+    # One tool gained is one edit and one row of the comparison.
+    gained = ungranted_action(ctx)
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, gained, "ask")})
+    refute ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+    refute ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, explorer}
+
+    assert ShapeDiff.compute(ctx, @soul, head.resolved_policy) ==
+             {:ok,
+              [
+                %{
+                  node: @soul,
+                  capability: "tools",
+                  change: :widened,
+                  added: [gained],
+                  removed: [],
+                  new: false,
+                  dropped: false
+                }
+              ]}
 
     {:ok, input} = ShapeDerivation.shape_input(ctx, "agent:local.explorer")
     assert input.model_target == "catalyst:local.gemini#gemini-pro-latest"
-    assert "files.read" in input.tool_policy.ask
+    assert input.tool_policy == %{auto: ["native_search"], ask: []}
+  end
+
+  # A catalog action the soul's policy does not reach, of a tool no
+  # bundled catalyst serves, so granting it adds no dependency.
+  defp ungranted_action(ctx) do
+    {:ok, soul} = AquaAgent.get(ctx, "aqua")
+    held = ShapeDerivation.expand_tools(Map.keys(soul.tool_policy) -- ["native_search"])
+
+    Enum.find(Sanctum.Catalog.tool_actions(), fn key ->
+      [tool, _action] = String.split(key, ".", parts: 2)
+
+      key not in held and key not in Prima.Manifest.Caps.agent_only_tools() and
+        Sanctum.VirtualTools.catalyst_for(tool) == nil
+    end)
   end
 
   test "the shape reads the model target and never the prompt", %{ctx: ctx} do

@@ -192,7 +192,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @doc """
   The `ShapeDigest.compute/1` input derived from live state. An agent
   source's shape also carries its model target (`catalyst#model`): the
-  model an agent runs on is what it may do, so changing it re-asks.
+  model an agent runs on is what it may do, so changing it re-asks. Its
+  `tool_policy` is the part of the agent's policy that admits what its
+  tools do not, the provider's own search (`Compendium.AgentSource`):
+  whether a tool asks first grants nothing the consent does not
+  (`ARCHITECTURE.md` §5.4), so marking one `auto` or `ask` re-asks
+  nothing.
 
   A login need (`Prima.Manifest.Needs.mount_only?/1`) enters the shape
   with the program it mounts into and the row it suggests, so a change to

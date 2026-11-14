@@ -17,8 +17,8 @@ defmodule Compendium.AgentSource do
     * The artifact digest is the agent's **capability** digest
       (`Compendium.AquaAgent.capability_digest/1`): type, catalyst, model,
       options, tool policy, disabled. A crew member's tool policy is the
-      soul's (`Compendium.AquaAgent.under_soul/2`), so an edit of the
-      soul's policy moves every member's consent with the soul's. The
+      soul's (`Compendium.AquaAgent.under_soul/2`), so a tool the soul
+      gains or loses moves every member's consent with the soul's. The
       prompt is not in it, so editing what an agent says never moves a
       consent; the file's bytes are its **revision**, kept by
       `Arca.AgentRevisions` for a turn to pin.
@@ -32,9 +32,14 @@ defmodule Compendium.AgentSource do
       agent has no edge into another agent: a crew member consents and
       runs as its own source, so a member whose brain is not installed
       leaves the soul's consent whole.
-    * `agent` is the model target and the policy modes (`auto` / `ask`
-      sets), which the shape digest reads. The flat `"model"` key is not
-      written.
+    * `agent` is the model target and, under `policy`, the part of the
+      tool policy that admits what the tools do not — `native_search`
+      when it is `auto`, which turns on the provider's own search — both
+      of which the shape digest reads. Every other key the policy names
+      is in `caps.tools` whether it is `auto` or `ask`, and whether the
+      person is asked first grants nothing the consent does not
+      (`ARCHITECTURE.md` §5.4), so marking a tool `auto` or `ask` moves no
+      consent. The flat `"model"` key is not written.
 
   A disabled agent has no row: it is out of the roster.
   """
@@ -90,17 +95,9 @@ defmodule Compendium.AgentSource do
       |> Enum.sort()
       |> Enum.map(&%{"ref" => &1})
 
-    {auto, ask} =
-      (agent.tool_policy || %{})
-      |> Enum.split_with(fn {_key, mode} -> mode == "auto" end)
-
     agent_block =
-      %{
-        "policy" => %{
-          "auto" => auto |> Enum.map(&elem(&1, 0)) |> Enum.sort(),
-          "ask" => ask |> Enum.map(&elem(&1, 0)) |> Enum.sort()
-        }
-      }
+      %{}
+      |> Prima.MapUtil.put_present("policy", beyond_tools(agent.tool_policy))
       |> Prima.MapUtil.put_present("catalyst", agent.catalyst_ref)
       |> Prima.MapUtil.put_present("model", agent.model)
 
@@ -115,6 +112,13 @@ defmodule Compendium.AgentSource do
       "agent" => agent_block
     }
   end
+
+  # The provider's own search is the one policy key that admits what no
+  # tool grants, and only `auto` turns it on.
+  defp beyond_tools(%{"native_search" => "auto"}),
+    do: %{"auto" => ["native_search"], "ask" => []}
+
+  defp beyond_tools(_policy), do: nil
 
   @doc "The consent row of an agent file — the soul or a crew member."
   @spec row(AquaAgent.t()) :: map()
