@@ -164,7 +164,7 @@ defmodule PrismWeb.AquaSetupTest do
     )
 
     {:ok, turn} = Tape.turn(ctx, turn_id)
-    assert turn.status == "completed", edges_state(person)
+    assert turn.status == "completed", edges_state(person, turn)
 
     assert [%{kind: "text", content: "The fixture answers."}] =
              for(
@@ -178,9 +178,10 @@ defmodule PrismWeb.AquaSetupTest do
 
   # The soul's edge into its brain as its head stores it and as the loader
   # resolves it, for a failure's message.
-  defp edges_state(ctx) do
+  defp edges_state(ctx, turn) do
     soul = "agent:local.aqua"
     {:ok, [profile | _]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), soul)
+    {:ok, row} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile.id)
     {:ok, head, refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
 
     stored =
@@ -189,8 +190,17 @@ defmodule PrismWeb.AquaSetupTest do
         edge.vault
       end
 
+    loaded =
+      case Opus.authority_for(ctx, :default, soul) do
+        {:ok, authority} -> authority.consent_id
+        refused -> refused
+      end
+
     inspect(
       %{
+        turn: Map.take(turn, [:consent_id, :error, :origin, :agent_capability_digest]),
+        profile: Map.take(row, [:status, :head_consent_id]),
+        loaded_consent: loaded,
         granted_via: head.granted_via,
         stored: stored,
         refs: refs,
