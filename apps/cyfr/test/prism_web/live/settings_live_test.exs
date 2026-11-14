@@ -196,6 +196,42 @@ defmodule PrismWeb.SettingsLiveTest do
     # again shows it.
     {again, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
     assert has_element?(again, ~s(#approval-hours[value="6"]))
+
+    # Cleared, the stored wait is gone and AQUA's own default holds again.
+    again |> form("#approvals-form", %{"hours" => ""}) |> render_submit()
+    assert render(again) =~ "Approvals wait AQUA&#39;s default time again."
+    refute has_element?(again, ~s(#approval-hours[value]))
+    assert has_element?(again, "#approvals", "Left empty, AQUA's own default")
+
+    athanor = seated_athanor()
+    {:ok, row} = Sanctum.Tenancy.Athanors.get(athanor.id)
+
+    refute Map.has_key?(
+             Sanctum.Tenancy.Athanors.settings(row)["approvals"] || %{},
+             "expiry_hours"
+           )
+  end
+
+  test "the request card names the page where a failed request with no execution is read", %{
+    conn: conn
+  } do
+    person = test_user()
+    {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+
+    assert has_element?(
+             view,
+             ~s(#request-stats [data-test="activities-link"][href$="/activities"]),
+             "Activities"
+           )
+
+    refute view |> element("#request-stats") |> render() =~ "Executions"
+
+    # A failed call that starts no execution: revoking an invitation that
+    # does not exist.
+    render_click(view, "invitation_revoke", %{"id" => "inv_missing"})
+
+    {activities, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/activities")
+    assert has_element?(activities, "tr", ~r/invitation\.revoke.*failed/s)
   end
 
   test "the administrator reads the host's decisions, opens one, and closing an account asks a confirmation",

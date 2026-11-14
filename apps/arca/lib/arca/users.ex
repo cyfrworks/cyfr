@@ -137,6 +137,21 @@ defmodule Arca.Users do
 
   def set_namespace(%Prima.Actor{}, _user_id, _namespace), do: {:error, :cross_tenant}
 
+  @doc "The active people carrying the platform administrator's mark, oldest mark first."
+  @spec platform_admins(Prima.Actor.t()) :: {:ok, [map()]} | refusal()
+  # arca:unscoped-ok the platform administrators are the instance's, held by no athanor.
+  def platform_admins(%Prima.Actor{scope: :platform}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Users.platform_admins", fn ->
+      {:ok, Arca.Repo.all(from(u in admins(), order_by: [asc: u.platform_admin_at, asc: u.id]))}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def platform_admins(%Prima.Actor{}), do: {:error, :cross_tenant}
+
+  defp admins,
+    do: from(u in User, where: not is_nil(u.platform_admin_at) and u.status == "active")
+
   @doc """
   Write `attrs` over the person `user_id` names, as the row reads now.
   `updated_at` is stamped here. The standing columns (`status`,

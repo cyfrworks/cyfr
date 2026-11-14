@@ -13,7 +13,9 @@ defmodule Sanctum.Providers.Directory do
   `identifier`, and it is a sensitive change (`directory_tombstone`): the
   administrator's fresh confirmation names the identifier
   (`Sanctum.Consent.Authz.confirm/3`). Every CYFR that reads the account
-  then retires what it bound to it (`Sanctum.IdentityFreshness`).
+  then retires what it bound to it (`Sanctum.IdentityFreshness`). The
+  account of this CYFR's only platform administrator is refused before
+  anything is asked or written; a read that cannot tell refuses too.
   """
 
   require Logger
@@ -53,6 +55,7 @@ defmodule Sanctum.Providers.Directory do
   def handle(%Context{} = ctx, %{"action" => "tombstone", "identifier" => identifier})
       when is_binary(identifier) do
     with :ok <- spelled(identifier),
+         :ok <- not_the_only_admin(identifier),
          :ok <-
            Authz.confirm(ctx, :directory_tombstone, %{
              operation: "directory.tombstone",
@@ -88,6 +91,23 @@ defmodule Sanctum.Providers.Directory do
     do: {:error, {:unknown_action, "directory.#{action}"}}
 
   def handle(_ctx, _args), do: {:error, :action_missing}
+
+  # The only platform administrator of this CYFR keeps their account: closing
+  # it would leave no one to run the place. A read that cannot tell refuses.
+  defp not_the_only_admin(identifier) do
+    case Sanctum.Tenancy.Users.sole_platform_admin?(identifier) do
+      {:ok, false} ->
+        :ok
+
+      {:ok, true} ->
+        {:error,
+         {:invalid_argument,
+          "This is the only administrator of this CYFR. Make someone else an administrator first."}}
+
+      {:error, :unavailable} ->
+        {:error, {:unavailable, "The people of this CYFR"}}
+    end
+  end
 
   defp spelled(identifier) do
     if Prima.Identity.Encoding.identifier?(identifier),

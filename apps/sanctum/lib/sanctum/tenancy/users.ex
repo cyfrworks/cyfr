@@ -127,6 +127,34 @@ defmodule Sanctum.Tenancy.Users do
     do: Arca.Users.get_by_namespace(server(), namespace)
 
   @doc """
+  Whether the account `identifier` names is this CYFR's only platform
+  administrator: their person carries the mark and no other active person
+  does. `{:error, :unavailable}` when either read fails, which refuses
+  what it guards.
+  """
+  @spec sole_platform_admin?(String.t()) :: {:ok, boolean()} | {:error, :unavailable}
+  def sole_platform_admin?(identifier) when is_binary(identifier) do
+    case get_by_identifier(identifier) do
+      {:ok, %{id: user_id} = user} ->
+        if Sanctum.Tenancy.platform_admin?(user) do
+          case Arca.Users.platform_admins(server()) do
+            {:ok, [%{id: ^user_id}]} -> {:ok, true}
+            {:ok, _others} -> {:ok, false}
+            {:error, _unanswered} -> {:error, :unavailable}
+          end
+        else
+          {:ok, false}
+        end
+
+      {:error, :not_found} ->
+        {:ok, false}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  @doc """
   Everyone the server knows, newest first. A platform view, paged with
   `limit:` (default and ceiling `Arca.Users.max_page/0`) and `offset:`.
   """

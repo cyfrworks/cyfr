@@ -182,22 +182,23 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
+  # A whole number of hours is stored; an empty field removes the stored
+  # wait (a `nil` in the patch deletes the key), so AQUA's own default
+  # holds again.
   def handle_event("approvals_save", %{"hours" => hours}, socket) do
-    case Integer.parse(String.trim(hours)) do
-      {n, ""} when n > 0 ->
-        args = %{"settings" => %{"approvals" => %{"expiry_hours" => n}}}
+    case String.trim(hours) do
+      "" ->
+        approvals_save(socket, nil, "Approvals wait AQUA's default time again.")
 
-        case call_tool(socket, "athanor/settings", args) do
-          {:ok, _athanor} ->
+      typed ->
+        case Integer.parse(typed) do
+          {n, ""} when n > 0 ->
+            approvals_save(socket, n, "Approvals now wait #{n} hours.")
+
+          _not_hours ->
             {:noreply,
-             socket |> load_approvals() |> put_flash(:info, "Approvals now wait #{n} hours.")}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Not saved: #{error_message(reason)}")}
+             put_flash(socket, :error, "Not saved: the wait is a whole number of hours.")}
         end
-
-      _not_hours ->
-        {:noreply, put_flash(socket, :error, "Not saved: the wait is a whole number of hours.")}
     end
   end
 
@@ -260,6 +261,18 @@ defmodule PrismWeb.SettingsLive do
 
       _ ->
         {:noreply, put_flash(socket, :error, "Could not save the preference.")}
+    end
+  end
+
+  defp approvals_save(socket, hours, saved) do
+    args = %{"settings" => %{"approvals" => %{"expiry_hours" => hours}}}
+
+    case call_tool(socket, "athanor/settings", args) do
+      {:ok, _athanor} ->
+        {:noreply, socket |> load_approvals() |> put_flash(:info, saved)}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Not saved: #{error_message(reason)}")}
     end
   end
 
@@ -705,7 +718,12 @@ defmodule PrismWeb.SettingsLive do
             <h3 class="text-sm font-medium text-gray-400 mb-1">Your requests, last hour</h3>
             <p class="text-xs text-gray-500 mb-4">
               The calls made in your own athanor in the last hour, by you, your apps, schedules
-              and API keys, and how many failed. Each failure's reason is on the Executions page
+              and API keys, and how many failed. Each call, a failed one with its reason, is on
+              <.link
+                navigate={PrismWeb.Focus.path(assigns[:athanor_route], "/activities")}
+                class="underline"
+                data-test="activities-link"
+              >Activities</.link>
               (dev mode). Nobody's athanor but yours is counted here.
             </p>
             <div class="grid grid-cols-3 gap-4">

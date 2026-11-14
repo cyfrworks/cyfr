@@ -117,39 +117,25 @@ defmodule Sanctum.Door.Store do
   Write a deny entry (or turn an existing allow / request into one).
   `kind` is `"person"` or `"identifier"`; `opts` and the label as
   `allow/4` writes them. Refuses a platform administrator
-  (`:platform_admin`), named by their person id or their identifier.
+  (`:platform_admin`), named by their person id or their identifier, and
+  writes nothing when the person cannot be read (`:unavailable`).
   """
   @spec deny(String.t(), String.t(), String.t() | nil, write_opts()) ::
-          {:ok, entry()} | {:error, :platform_admin | term()}
+          {:ok, entry()} | {:error, :platform_admin | :unavailable | term()}
   def deny(kind, value, added_by, opts \\ []) when kind in @deny_kinds do
     opts = Keyword.validate!(opts, [:note, :label])
 
-    cond do
-      names_platform_admin?(kind, value) ->
-        {:error, :platform_admin}
-
-      true ->
-        # A deny answers whatever request produced the row: the member who
-        # asked is no longer who this entry is about.
-        upsert(kind, value, %{
-          effect: "deny",
-          status: "allowed",
-          added_by: added_by,
-          note: opts[:note],
-          label: opts[:label],
-          requested_by: nil
-        })
-    end
-  end
-
-  # The person an entry names, by their id or by the identifier their
-  # identity row holds, read for their platform administrator's mark.
-  defp names_platform_admin?("person", value), do: Sanctum.Tenancy.platform_admin?(value)
-
-  defp names_platform_admin?("identifier", value) do
-    case Sanctum.Tenancy.Users.get_by_identifier(value) do
-      {:ok, %{id: user_id}} -> Sanctum.Tenancy.platform_admin?(user_id)
-      _ -> false
+    with :ok <- not_an_admin(kind, value) do
+      # A deny answers whatever request produced the row: the member who
+      # asked is no longer who this entry is about.
+      upsert(kind, value, %{
+        effect: "deny",
+        status: "allowed",
+        added_by: added_by,
+        note: opts[:note],
+        label: opts[:label],
+        requested_by: nil
+      })
     end
   end
 
@@ -157,19 +143,36 @@ defmodule Sanctum.Door.Store do
   Delete an entry by id. Refuses the allow of a platform administrator's
   identifier (`:platform_admin`), as `deny/4` refuses a deny of them: the
   door has no exception for the administrator, so removing it would shut
-  them out of their own CYFR.
+  them out of their own CYFR. When the person it names cannot be read it
+  removes nothing (`:unavailable`).
   """
-  @spec remove(String.t()) :: :ok | {:error, :not_found | :platform_admin | :database_error}
+  @spec remove(String.t()) ::
+          :ok | {:error, :not_found | :platform_admin | :unavailable | :database_error}
   def remove(id) when is_binary(id) do
-    with {:ok, entry} <- get(id) do
-      if admins_allow?(entry), do: {:error, :platform_admin}, else: Doors.delete(actor(), id)
-    end
+    with {:ok, entry} <- get(id),
+         :ok <- removable(entry),
+         do: Doors.delete(actor(), id)
   end
 
-  defp admins_allow?(%{effect: "allow", kind: "identifier", value: value}),
-    do: names_platform_admin?("identifier", value)
+  defp removable(%{effect: "allow", kind: "identifier", value: value}),
+    do: not_an_admin("identifier", value)
 
-  defp admins_allow?(_entry), do: false
+  defp removable(_entry), do: :ok
+
+  # Whether the person an entry names, by their id or by the identifier
+  # their identity row holds, carries the platform administrator's mark.
+  # A read that fails cannot tell, and what it guards is refused
+  # (`:unavailable`), never let through.
+  defp not_an_admin("person", user_id), do: marked(Sanctum.Tenancy.Users.get(user_id))
+
+  defp not_an_admin("identifier", identifier),
+    do: marked(Sanctum.Tenancy.Users.get_by_identifier(identifier))
+
+  defp marked({:ok, user}),
+    do: if(Sanctum.Tenancy.platform_admin?(user), do: {:error, :platform_admin}, else: :ok)
+
+  defp marked({:error, :not_found}), do: :ok
+  defp marked({:error, _unanswered}), do: {:error, :unavailable}
 
   @doc """
   Record that someone wants the person identifier `value` let in — one a
