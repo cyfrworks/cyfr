@@ -14,7 +14,7 @@ import {here} from "../../account/pages/common.js"
 import {listing, removal, run as devicesRun} from "../../account/pages/devices.js"
 import {Creation, run as createdRun} from "../../account/pages/new.js"
 import {Recovery, run as recoveryRun} from "../../account/pages/recover.js"
-import {describe as describeRequest, readSigned, sign} from "../../account/pages/sign.js"
+import {describe as describeRequest, readSigned, run as run_sign, sign} from "../../account/pages/sign.js"
 import {digest, fragment, parseFragment} from "../../account/sign_in.js"
 import {words} from "../../account/view.js"
 
@@ -597,7 +597,10 @@ function documentFor(page) {
     }
   }
   const html = readFileSync(new URL(`../../account/${page}.html`, import.meta.url), "utf8")
-  const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => [id, new Element(id)]))
+  // An element starts hidden as its tag says, as a browser draws it.
+  const elements = new Map(
+    [...html.matchAll(/<[^>]*\bid="([^"]+)"[^>]*>/g)].map(([tag, id]) => [id, Object.assign(new Element(id), {hidden: /\shidden[\s>]/.test(tag)})])
+  )
   const sections = [...html.matchAll(/<section id="([^"]+)"/g)].map(([, id]) => elements.get(id))
   return {
     getElementById: (id) => elements.get(id),
@@ -719,7 +722,9 @@ describe("review regressions", () => {
     const doc = documentFor("devices")
     await devicesRun(doc, failingReadAfterWrite(account.env))
     await doc.getElementById("open").click()
-    const remove = doc.getElementById("keys").children[1].children[1]
+    const row = doc.getElementById("keys").children[1]
+    row.children[1].click()
+    const remove = row.children[2]
     await remove.click()
     assert.match(doc.getElementById("list-error").textContent, /could not be reached/)
     const prompts = account.passkey.calls.length
@@ -737,7 +742,8 @@ describe("review regressions", () => {
     await recoveryRun(doc, failingReadAfterWrite(env))
     doc.getElementById("code-input").value = code
     await doc.getElementById("enter-code").click()
-    await doc.getElementById("keys").children[0].children[1].click()
+    doc.getElementById("keys").children[0].children[1].click()
+    await doc.getElementById("keys").children[0].children[2].click()
     assert.equal(net.logs.get(identifier).length, 3)
     assert.match(doc.getElementById("account-error").textContent, /could not be reached/)
     assert.equal(doc.getElementById("retry").hidden, false)
@@ -822,5 +828,106 @@ describe("/account/new terms", () => {
     assert.deepEqual(box.children.flatMap(tags), ["h2", "p"])
     assert.equal(doc.getElementById("policy-again-link").textContent, "Terms of Service")
     assert.equal(doc.getElementById("policy-again-version").textContent, ", version v1")
+  })
+})
+
+describe("ways on", () => {
+  const refused = () => Object.assign(new Error("The operation either timed out or was not allowed."), {name: "NotAllowedError"})
+
+  test("a refused passkey on the sign page offers adding one with the recovery code, carrying the request", async () => {
+    const now = signIn.verify.find((c) => c.name === "a passkey signs in").now_ms
+    const text = signIn.fragments.requests.sign_in
+    const doc = documentFor("sign")
+    let refuse = true
+    const passkey = {
+      async assert() {
+        if (refuse) throw refused()
+        throw new Unreachable()
+      }
+    }
+    run_sign(doc, {location: {hash: `#${text}`}, now: () => now, passkeys: passkey, navigate: () => assert.fail("navigated")})
+    assert.equal(doc.getElementById("ways").hidden, true)
+    assert.equal(doc.getElementById("recover-link").href, `recover#request=${text}`)
+    await doc.getElementById("use-passkey").click()
+    assert.equal(doc.getElementById("ask-error").textContent, "The passkey was not used. Try again when you are ready.")
+    assert.equal(doc.getElementById("ways").hidden, false)
+    refuse = false
+    await doc.getElementById("use-passkey").click()
+    assert.match(doc.getElementById("ask-error").textContent, /could not be reached/)
+    assert.equal(doc.getElementById("ways").hidden, true)
+  })
+
+  test("the recovery page sent a request offers to continue there once a passkey is added, and not before", async () => {
+    const now = signIn.verify.find((c) => c.name === "a passkey signs in").now_ms
+    const text = signIn.fragments.requests.sign_in
+    const net = world()
+    const {env, code, identifier} = await accountWithPasskey(net)
+    const second = await authenticator(identity.keys.passkey_2, identifier)
+    const doc = documentFor("recover")
+    await recoveryRun(doc, {...env, passkeys: second, now: () => now, location: {hash: `#request=${text}`}})
+    doc.getElementById("code-input").value = code
+    await doc.getElementById("enter-code").click()
+    assert.equal(doc.getElementById("return").hidden, true)
+    doc.getElementById("passkey-name").value = "alice"
+    await doc.getElementById("add-passkey").click()
+    assert.equal(doc.getElementById("account-error").textContent, "")
+    assert.equal(doc.getElementById("return").hidden, false)
+    assert.equal(doc.getElementById("return-link").textContent, `Continue to ${signIn.requests.sign_in.request.audience}`)
+    assert.equal(doc.getElementById("return-link").href, `sign#${text}`)
+  })
+
+  test("the recovery page drops a request past its expiry and offers no way back", async () => {
+    const expired = signIn.requests.sign_in.request.expires_at
+    const net = world()
+    const {env, code, identifier} = await accountWithPasskey(net)
+    const second = await authenticator(identity.keys.passkey_2, identifier)
+    const doc = documentFor("recover")
+    await recoveryRun(doc, {...env, passkeys: second, now: () => expired, location: {hash: `#request=${signIn.fragments.requests.sign_in}`}})
+    doc.getElementById("code-input").value = code
+    await doc.getElementById("enter-code").click()
+    doc.getElementById("passkey-name").value = "alice"
+    await doc.getElementById("add-passkey").click()
+    assert.equal(doc.getElementById("return").hidden, true)
+  })
+
+  test("Remove asks first: Keep sends nothing, and the row's own Remove removes", async () => {
+    const net = world()
+    const account = await accountWithPasskey(net)
+    const doc = documentFor("recover")
+    await recoveryRun(doc, account.env)
+    doc.getElementById("code-input").value = account.code
+    await doc.getElementById("enter-code").click()
+    const row = doc.getElementById("keys").children[0]
+    const [label, ask] = row.children
+    ask.click()
+    assert.deepEqual(row.children.map((child) => child.textContent), [label.textContent, `Remove ${label.textContent}? It stops working at every CYFR.`, "Remove", "Keep"])
+    row.children[3].click()
+    assert.deepEqual(row.children, [label, ask])
+    assert.equal(net.logs.get(account.identifier).length, 2)
+    ask.click()
+    await row.children[2].click()
+    assert.equal(net.logs.get(account.identifier).length, 3)
+    assert.equal(doc.getElementById("keys").children.length, 0)
+  })
+
+  test("a ceremony the browser leaves unanswered is given up after its limit, with a sentence", async () => {
+    let fire = null
+    const timers = {setTimeout: (f) => ((fire = f), 1), clearTimeout: () => {}}
+    const hanging = {get: ({signal}) => new Promise((_, reject) => signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), {name: "AbortError"}))))}
+    const pending = passkeys(hanging, RP_ID, {limit: 5, timers}).assert({challenge: new Uint8Array(32)})
+    fire()
+    const error = await pending.then(() => assert.fail("answered"), (e) => e)
+    assert.equal(error.reason, "timed_out")
+    assert.equal(words(error), "Your browser did not answer within two minutes, so this page stopped waiting. Try again.")
+    const refusing = {get: async () => { throw refused() }}
+    const cancelled = await passkeys(refusing, RP_ID, {limit: 5, timers}).assert({challenge: new Uint8Array(32)}).catch((e) => e)
+    assert.equal(cancelled.name, "NotAllowedError")
+  })
+
+  test("the finished and recovery-code pages link on, and promise no code that cannot be had", () => {
+    const html = (page) => readFileSync(new URL(`../../account/${page}.html`, import.meta.url), "utf8")
+    assert.match(html("new").match(/<section id="done"[\s\S]*?<\/section>/)[0], /<a href="devices">/)
+    for (const page of ["new", "recover"]) assert.doesNotMatch(html(page), /nobody can make you another/i)
+    for (const page of ["sign", "devices", "add"]) assert.match(html(page), /<div id="ways" hidden>[\s\S]*?href="recover"[\s\S]*?Add a passkey with your recovery code/)
   })
 })

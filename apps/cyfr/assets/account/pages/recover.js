@@ -15,7 +15,8 @@ import {next, passkeyAdded, signWith, userId} from "../identity.js"
 import {codeFor, drawRecovery, readCode} from "../recovery.js"
 import {isHandle} from "../registry.js"
 import {addedAt, appendOnce, here, keyLabel, shortCode} from "./common.js"
-import {$, attempt, copyCode, drawCode, only, say, words} from "../view.js"
+import {readSigned} from "./sign.js"
+import {$, attempt, copyCode, drawCode, keyRow, only, say, words} from "../view.js"
 
 export class Recovery {
   /** The account a typed code recovers; throws `not_a_code`, `typo` or `code_replaced`. */
@@ -97,22 +98,23 @@ export async function run(doc, env) {
     return
   }
   only(doc, "enter")
+  // A CYFR's request the sign page sent along (`#request=`), whose passkey
+  // the browser refused; one that does not read is dropped.
+  let sent = null
+  const text = new URLSearchParams((env.location?.hash ?? "").slice(1)).get("request")
+  if (text) {
+    try {
+      sent = {text, request: readSigned(text, env.now())}
+    } catch (_error) {
+      sent = null
+    }
+  }
   let recovery = null
   // What "I saved it" submits once a new code is shown.
   let afterSaved = null
 
   const draw = () => {
-    const rows = recovery.keys().map((key) => {
-      const row = doc.createElement("li")
-      const label = doc.createElement("span")
-      label.textContent = keyLabel(key)
-      const remove = doc.createElement("button")
-      remove.type = "button"
-      remove.textContent = "Remove"
-      remove.addEventListener("click", () => act(remove, () => recovery.removeKey(key.kid)))
-      row.append(label, remove)
-      return row
-    })
+    const rows = recovery.keys().map((key) => keyRow(doc, keyLabel(key), {current: false, remove: (button) => act(button, () => recovery.removeKey(key.kid))}))
     $(doc, "keys").replaceChildren(...rows)
     $(doc, "no-keys").hidden = rows.length > 0
     only(doc, "account")
@@ -140,7 +142,18 @@ export async function run(doc, env) {
   )
 
   const addPasskey = $(doc, "add-passkey")
-  addPasskey.addEventListener("click", () => act(addPasskey, () => recovery.addPasskey($(doc, "passkey-name").value.trim().toLowerCase())))
+  addPasskey.addEventListener("click", () =>
+    act(addPasskey, async () => {
+      await recovery.addPasskey($(doc, "passkey-name").value.trim().toLowerCase())
+      // The request a CYFR's sign page sent along, while it holds: the new
+      // passkey signs it there.
+      if (sent && env.now() < sent.request.expires_at) {
+        $(doc, "return-link").textContent = `Continue to ${sent.request.audience}`
+        $(doc, "return-link").setAttribute("href", `sign#${sent.text}`)
+        $(doc, "return").hidden = false
+      }
+    })
+  )
 
   const showCode = async (then) => {
     const code = await recovery.drawCode()
