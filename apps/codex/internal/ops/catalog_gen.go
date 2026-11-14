@@ -135,6 +135,7 @@ const (
 	FileDecline             = "decline"
 	FileDelete              = "delete"
 	FileList                = "list"
+	FileMove                = "move"
 	FileOffer               = "offer"
 	FileOffers              = "offers"
 	FileRead                = "read"
@@ -313,7 +314,7 @@ var Actions = map[string][]string{
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
-	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
+	"file":                {"accept", "decline", "delete", "list", "move", "offer", "offers", "read", "withdraw", "write"},
 	"invitation":          {"create", "list", "revoke"},
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
@@ -1779,6 +1780,23 @@ func (args FileListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: FileList, fields: fields(args)})
+}
+
+// FileMoveArgs carries arguments for file.move.
+type FileMoveArgs struct {
+	// A folder-relative path, like data/reports/q3.csv
+	Path string `json:"path"`
+	// Its new folder-relative path, like data/archive/q3.csv
+	To string `json:"to"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FileMoveArgs) MarshalJSON() ([]byte, error) {
+	type fields FileMoveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FileMove, fields: fields(args)})
 }
 
 // FileOfferArgs carries arguments for file.offer.

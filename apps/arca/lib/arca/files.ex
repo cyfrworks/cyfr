@@ -267,6 +267,177 @@ defmodule Arca.Files do
     end
   end
 
+  @doc """
+  Move a file, or a folder with everything in it, to `to`, a path no file
+  or folder holds yet; a rename is a move within one folder. The source
+  must be one `delete/2` would remove and every file landing at `to` one
+  `write/4` would accept, so a move reaches only what those reach. A file
+  under `data/` keeps the sources its settled generation carries: the
+  move adds none, since its bytes are the ones it read. Each file lands
+  by an exclusive create, so a writer reaching `to` first is never
+  overwritten.
+
+  The files are copied first and the source removed after. A copy that
+  fails takes back the files it already landed and leaves the source as
+  it was; a removal that fails after every copy landed answers its
+  refusal with both in place, and nothing is lost either way.
+  """
+  @spec move(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, %{moved: String.t(), to: String.t()}} | {:error, term()}
+  def move(%Prima.Actor{} = actor, path, to) when is_binary(path) and is_binary(to) do
+    with :ok <- tenant(actor),
+         {:ok, segments, physical, tier} <- resolve_file(path),
+         {:ok, to_segments, to_physical, to_tier} <- resolve_file(to),
+         :ok <- elsewhere(segments, to_segments),
+         :ok <- deletable(tier, physical, segments),
+         {:ok, leaves} <- leaves(actor, physical, path),
+         moves = Enum.map(leaves, &landing(&1, physical, to_physical, to_segments)),
+         :ok <- all_writable(to_tier, moves),
+         :ok <- vacant(actor, to_physical, to),
+         :ok <- copy_all(actor, moves, path),
+         :ok <- remove(actor, physical, path) do
+      {:ok, %{moved: join(segments), to: join(to_segments)}}
+    end
+  end
+
+  defp elsewhere(same, same),
+    do: {:error, {:invalid_argument, "'#{join(same)}' is already there"}}
+
+  defp elsewhere(segments, to_segments) do
+    if List.starts_with?(to_segments, segments),
+      do: {:error, {:invalid_argument, "'#{join(segments)}' cannot move inside itself"}},
+      else: :ok
+  end
+
+  # The files a move carries: the file itself, or every file under the
+  # folder.
+  defp leaves(actor, physical, path) do
+    case Arca.list_typed(actor, physical) do
+      {:error, :enotdir} ->
+        {:ok, [physical]}
+
+      {:ok, _entries} ->
+        case Arca.list_recursive(actor, physical) do
+          {:ok, []} -> {:error, {:not_found, "File", path}}
+          {:ok, leaves} -> {:ok, Enum.sort(leaves)}
+          {:error, reason} -> storage_error("move", path, reason)
+        end
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "File", path}}
+
+      {:error, reason} ->
+        storage_error("move", path, reason)
+    end
+  end
+
+  # Where one file of the move lands: its place below the source, under
+  # the destination, physically and in the console's words.
+  defp landing(leaf, physical, to_physical, to_segments) do
+    relative = Enum.drop(leaf, length(physical))
+    {leaf, to_physical ++ relative, to_segments ++ relative}
+  end
+
+  defp all_writable(tier, moves) do
+    Enum.reduce_while(moves, :ok, fn {_leaf, dest, dest_segments}, :ok ->
+      case writable(tier, dest, dest_segments) do
+        :ok -> {:cont, :ok}
+        refused -> {:halt, refused}
+      end
+    end)
+  end
+
+  # Nothing at `to`, neither a file nor a folder holding one.
+  defp vacant(actor, to_physical, to) do
+    taken =
+      {:error, {:conflict, "'#{String.trim(to, "/")}' already exists — choose another name"}}
+
+    case Arca.list_typed(actor, to_physical) do
+      {:ok, [_ | _]} -> taken
+      {:ok, []} -> if Arca.exists?(actor, to_physical), do: taken, else: :ok
+      {:error, :enotdir} -> taken
+      {:error, :not_found} -> :ok
+      {:error, reason} -> storage_error("move", to, reason)
+    end
+  end
+
+  defp copy_all(actor, moves, path) do
+    moves
+    |> Enum.reduce_while({:ok, []}, fn {leaf, dest, dest_segments} = move, {:ok, landed} ->
+      case copy_one(actor, leaf, dest, join(dest_segments)) do
+        :ok -> {:cont, {:ok, [move | landed]}}
+        {:error, _} = refused -> {:halt, {refused, landed}}
+      end
+    end)
+    |> case do
+      {:ok, _landed} ->
+        :ok
+
+      {refused, landed} ->
+        take_back(actor, landed, path)
+        refused
+    end
+  end
+
+  defp copy_one(actor, leaf, dest, dest_path) do
+    with {:ok, bytes, opts} <- moved_bytes(actor, leaf, dest_path),
+         :ok <- valid_content(dest, bytes) do
+      case Arca.put_if_none_match(actor, dest, bytes, opts) do
+        :ok ->
+          :ok
+
+        {:error, :exists} ->
+          {:error, {:conflict, "'#{dest_path}' already exists"}}
+
+        {:error, reason} when reason in [:eisdir, :enotdir] ->
+          {:error, {:conflict, crossed(dest_path)}}
+
+        {:error, reason} ->
+          write_error(dest_path, reason)
+      end
+    end
+  end
+
+  defp crossed(dest_path),
+    do: "'#{dest_path}' cannot go there: a file and a folder would share a name"
+
+  # A guest object's bytes with the sources its settled generation
+  # carries, which its new place keeps; any other file's bytes alone, so
+  # under `data/` they read as a write that names no sources does.
+  defp moved_bytes(actor, ["data" | _] = leaf, dest_path) do
+    case Arca.ObjectRevisions.read(actor, leaf) do
+      {:ok, bytes, sources} -> {:ok, bytes, [sources: sources]}
+      {:error, :not_found} -> {:error, {:not_found, "File", dest_path}}
+      {:error, reason} -> storage_error("move", dest_path, reason)
+    end
+  end
+
+  defp moved_bytes(actor, leaf, dest_path) do
+    case Arca.get(actor, leaf) do
+      {:ok, bytes} -> {:ok, bytes, []}
+      {:error, :not_found} -> {:error, {:not_found, "File", dest_path}}
+      {:error, reason} -> storage_error("move", dest_path, reason)
+    end
+  end
+
+  # Only files this move created are removed: each landed by an exclusive
+  # create at a path that held nothing.
+  defp take_back(actor, landed, path) do
+    for {_leaf, dest, dest_segments} <- landed do
+      case Arca.delete(actor, dest) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error(
+            "[Arca.Files] move #{path}: #{join(dest_segments)} not taken back: #{inspect(reason)}"
+          )
+      end
+    end
+
+    :ok
+  end
+
   # The tree is the actor's athanor's; with none resolved there is no tree
   # to name, and nothing is read or written.
   defp tenant(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok

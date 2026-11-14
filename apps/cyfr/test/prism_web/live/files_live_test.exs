@@ -109,6 +109,94 @@ defmodule PrismWeb.FilesLiveTest do
     refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "hello.txt"])
   end
 
+  @png <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, "IHDR", 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+         0, 0, 0>>
+
+  test "a picture opens in the panel; other bytes, whatever their name, are downloaded", %{
+    conn: conn,
+    ctx: ctx
+  } do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.put(actor, ["data", "dot.png"], @png)
+    :ok = Arca.put(actor, ["data", "fake.png"], <<0, 1, 2, 3, 255>>)
+
+    {view, _html} = mount_athanor(conn, "/files?p=data")
+
+    view |> element("#files-entries button", "dot.png") |> render_click()
+
+    assert view |> element("#files-picture") |> render() =~
+             ~s(src="data:image/png;base64,#{Base.encode64(@png)}")
+
+    refute render(view) =~ "Binary content"
+
+    view |> element("#files-entries button", "fake.png") |> render_click()
+    refute has_element?(view, "#files-picture")
+    assert render(view) =~ "Binary content — download it to open."
+  end
+
+  test "a new folder is held until a file lands there, and Rename and Move relocate a file", %{
+    conn: conn,
+    ctx: ctx,
+    route: route
+  } do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.put(actor, ["data", "q3.csv"], "a,b\n")
+
+    {view, _html} = mount_athanor(conn, "/files?p=data")
+
+    view |> element("#files-new-folder") |> render_click()
+    view |> form("#files-folder-form", %{"name" => "../up"}) |> render_submit()
+    assert render(view) =~ "cannot name a folder"
+
+    view |> form("#files-folder-form", %{"name" => "reports"}) |> render_submit()
+    assert_patch(view, "/a/#{route}/files?p=data%2Freports")
+    assert render(view) =~ "Nothing here yet"
+
+    # Storage holds no empty folder; the page lists the one it holds.
+    refute Arca.exists?(actor, ["data", "reports"])
+    view |> element("#files-crumbs button", "data") |> render_click()
+    assert has_element?(view, "#files-entries button[phx-value-path='data/reports']")
+
+    view
+    |> element("#files-entries button[phx-value-path='data/q3.csv']", "Rename")
+    |> render_click()
+
+    view |> form("#files-move", %{"name" => "q4.csv"}) |> render_submit()
+    assert render(view) =~ "Moved data/q3.csv to data/q4.csv"
+    refute Arca.exists?(actor, ["data", "q3.csv"])
+
+    view
+    |> element("#files-entries button[phx-value-path='data/q4.csv']", "Move")
+    |> render_click()
+
+    view |> form("#files-move", %{"folder" => "data/reports"}) |> render_submit()
+    assert render(view) =~ "Moved data/q4.csv to data/reports/q4.csv"
+    assert {:ok, "a,b\n"} = Arca.get(actor, ["data", "reports", "q4.csv"])
+    refute Arca.exists?(actor, ["data", "q4.csv"])
+
+    # A move onto a name that is taken, or under a file, is refused in words.
+    :ok = Arca.put(actor, ["data", "taken.csv"], "t")
+    :ok = Arca.put(actor, ["data", "reports", "taken.csv"], "r")
+    view |> element("#files-crumbs button", "data") |> render_click()
+
+    view
+    |> element("#files-entries button[phx-value-path='data/taken.csv']", "Move")
+    |> render_click()
+
+    view |> form("#files-move", %{"folder" => "data/reports"}) |> render_submit()
+    assert render(view) =~ "already exists"
+    assert {:ok, "t"} = Arca.get(actor, ["data", "taken.csv"])
+
+    # A held folder, with nothing stored, is let go by Delete.
+    view |> element("#files-new-folder") |> render_click()
+    view |> form("#files-folder-form", %{"name" => "empty"}) |> render_submit()
+    view |> element("#files-crumbs button", "data") |> render_click()
+    held = "#files-entries button[phx-value-path='data/empty']"
+    assert has_element?(view, held)
+    view |> element(held, "Delete") |> render_click()
+    refute has_element?(view, held)
+  end
+
   test "the download route knows no folder the page does not show", %{conn: conn, route: route} do
     assert get(conn, "/a/#{route}/files/download/payloads/sha256/abc").status == 404
     assert get(conn, "/a/#{route}/files/download/data/missing.txt").status == 404

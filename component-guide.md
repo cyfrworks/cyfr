@@ -1314,8 +1314,12 @@ The console's Files page is the tree above, browsed like a phone's files
 rather than a desktop's disk: you see the athanor's folders and nothing of
 the server's, and each folder is one of three tiers.
 
-- **Open** — `data/`. Upload, download, edit and delete anything. Every
-  component with a `data/` grant reads and writes the same space.
+- **Open** — `data/`. Upload, download, edit, rename, move and delete
+  anything, and make folders. Every component with a `data/` grant reads
+  and writes the same space. A picture (PNG, JPEG, GIF or WebP) opens on
+  the page; anything else that is not text is downloaded. A new folder
+  stays on the page until a file lands in it, since storage keeps no empty
+  folder.
 - **Shaped** — `components/` and `aqua/`. Files are edited in place, but only
   inside a unit the folder's grammar knows: a `local` component's version
   directory, the soul, a role, a scroll. A write outside one is refused with
@@ -1326,9 +1330,14 @@ the server's, and each folder is one of three tiers.
 - **Read-only** — `notes/` and `threads/`. Shown and downloaded here,
   written by their own surfaces.
 
-The `file` tool (`list`, `read`, `write`, `delete`, and `offer`, `offers`,
-`accept`, `decline`, `withdraw` to send a person a copy) is the same
-surface on the wire; reads take `storage_read`, changes `storage_write`.
+The `file` tool (`list`, `read`, `write`, `delete`, `move`, and `offer`,
+`offers`, `accept`, `decline`, `withdraw` to send a person a copy) is the
+same surface on the wire; reads take `storage_read`, changes
+`storage_write`. `move` takes a file or folder from `path` to `to`, a
+place that holds nothing yet, wherever a delete may take it and a write
+may land it; a rename is a move within one folder, and a file under
+`data/` keeps the sources it was written with. A move takes no standing
+approval: each one is approved on its own.
 
 Pick files under `data/` and choose **Send a copy**. The recipient picker
 lists the people who share a shared thread with you. The offer snapshots the

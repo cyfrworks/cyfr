@@ -5,13 +5,18 @@ defmodule Arca.FilesTest.Store do
   @moduledoc false
   # The Local adapter, with the read of a custody copy a publication
   # starts from answering `{:error, :eio}` while held: an acceptance
-  # commits and its publication waits for the next sweep.
+  # commits and its publication waits for the next sweep. And, while
+  # refusing, the store of a guest object named `refused.txt` answers
+  # `{:error, :eio}`.
   use Arca.Storage.TestDouble
 
   @held {__MODULE__, :held}
+  @refusing {__MODULE__, :refusing}
 
   def hold, do: :persistent_term.put(@held, true)
   def release, do: :persistent_term.erase(@held)
+  def refuse, do: :persistent_term.put(@refusing, true)
+  def admit, do: :persistent_term.erase(@refusing)
 
   def last_modified(actor, path), do: Arca.Adapters.Local.last_modified(actor, path)
 
@@ -20,6 +25,14 @@ defmodule Arca.FilesTest.Store do
   end
 
   def get(actor, path), do: super(actor, path)
+
+  def put(actor, ["objects", _generation, "data" | _] = key, content) do
+    if List.last(key) == "refused.txt" and :persistent_term.get(@refusing, false),
+      do: {:error, :eio},
+      else: super(actor, key, content)
+  end
+
+  def put(actor, path, content), do: super(actor, path, content)
 end
 
 defmodule Arca.FilesTest do
@@ -142,6 +155,141 @@ defmodule Arca.FilesTest do
     assert msg =~ "is a folder"
     assert {:error, {:invalid_argument, msg}} = Files.read(actor, "")
     assert msg =~ "inside a folder"
+  end
+
+  describe "a move" do
+    test "lands a file in its new folder and not its old one, with the sources it was written with",
+         %{actor: actor} do
+      vault = Prima.Source.new(:vault_disclosed)
+      :ok = Arca.put(actor, ["data", "inbox", "q3.csv"], "a,b\n", sources: [vault])
+
+      assert Files.move(actor, "data/inbox/q3.csv", "data/reports/q3.csv") ==
+               {:ok, %{moved: "data/inbox/q3.csv", to: "data/reports/q3.csv"}}
+
+      assert Files.read(actor, "data/reports/q3.csv") ==
+               {:ok,
+                %{
+                  path: "data/reports/q3.csv",
+                  size: 4,
+                  content: "a,b\n",
+                  encoding: "utf8",
+                  sources: Prima.Source.to_json_list([vault])
+                }}
+
+      assert Files.read(actor, "data/inbox/q3.csv") ==
+               {:error, {:not_found, "File", "data/inbox/q3.csv"}}
+
+      assert Files.list(actor, "data") ==
+               {:ok,
+                %{
+                  path: "data",
+                  tier: :open,
+                  entries: [%{name: "reports", kind: :dir, size: nil}],
+                  truncated: false
+                }}
+
+      # A rename is a move within one folder.
+      assert Files.move(actor, "data/reports/q3.csv", "data/reports/q4.csv") ==
+               {:ok, %{moved: "data/reports/q3.csv", to: "data/reports/q4.csv"}}
+
+      assert {:ok, %{entries: [%{name: "q4.csv", kind: :file, size: 4}]}} =
+               Files.list(actor, "data/reports")
+    end
+
+    test "takes a folder with everything in it", %{actor: actor} do
+      {:ok, _} = Files.write(actor, "data/a/one.txt", "1")
+      {:ok, _} = Files.write(actor, "data/a/deep/two.txt", "22")
+
+      assert Files.move(actor, "data/a", "data/b") ==
+               {:ok, %{moved: "data/a", to: "data/b"}}
+
+      assert {:ok, %{content: "1"}} = Files.read(actor, "data/b/one.txt")
+      assert {:ok, %{content: "22"}} = Files.read(actor, "data/b/deep/two.txt")
+
+      assert {:ok, %{entries: [%{name: "b", kind: :dir, size: nil}]}} =
+               Files.list(actor, "data")
+    end
+
+    test "is refused onto anything that exists, into itself, or out of what a delete may take, " <>
+           "with both places as they were",
+         %{actor: actor} do
+      {:ok, _} = Files.write(actor, "data/a.txt", "a")
+      {:ok, _} = Files.write(actor, "data/b.txt", "b")
+      {:ok, _} = Files.write(actor, "data/f/c.txt", "c")
+
+      assert Files.move(actor, "data/a.txt", "data/b.txt") ==
+               {:error, {:conflict, "'data/b.txt' already exists — choose another name"}}
+
+      assert Files.move(actor, "data/a.txt", "data/f") ==
+               {:error, {:conflict, "'data/f' already exists — choose another name"}}
+
+      assert Files.move(actor, "data/a.txt", "data/b.txt/a.txt") ==
+               {:error,
+                {:conflict,
+                 "'data/b.txt/a.txt' cannot go there: a file and a folder would share a name"}}
+
+      assert Files.move(actor, "data/f", "data/f/g") ==
+               {:error, {:invalid_argument, "'data/f' cannot move inside itself"}}
+
+      assert Files.move(actor, "data/a.txt", "data/a.txt/") ==
+               {:error, {:invalid_argument, "'data/a.txt' is already there"}}
+
+      assert Files.move(actor, "data/none.txt", "data/some.txt") ==
+               {:error, {:not_found, "File", "data/none.txt"}}
+
+      assert Files.move(actor, "data/a.txt", "notes/a.txt") ==
+               {:error, {:invalid_argument, "'notes/' is read here and written on its own page"}}
+
+      assert {:error, {:invalid_argument, msg}} =
+               Files.move(actor, "data/a.txt", "components/a.txt")
+
+      assert msg =~ "outside any component"
+
+      assert Files.move(actor, "threads/t/x.bin", "data/x.bin") ==
+               {:error,
+                {:invalid_argument, "'threads/' is read here and written on its own page"}}
+
+      assert {:error, {:invalid_argument, msg}} =
+               Files.move(actor, "components/reagents/local/shelf/1.0.0", "data/shelf")
+
+      assert msg =~ "ships with the server"
+
+      assert {:error, {:invalid_argument, _}} = Files.move(actor, "data/a.txt", "data/../a")
+
+      assert {:ok, %{content: "a"}} = Files.read(actor, "data/a.txt")
+      assert {:ok, %{content: "b"}} = Files.read(actor, "data/b.txt")
+      assert {:ok, %{content: "c"}} = Files.read(actor, "data/f/c.txt")
+      refute Arca.exists?(actor, ["data", "shelf"])
+
+      tenantless = %{actor | athanor_id: nil}
+      assert Files.move(tenantless, "data/a.txt", "data/z.txt") == {:error, :missing_tenant}
+    end
+
+    test "that fails partway takes back what it landed and leaves the source whole",
+         %{actor: actor} do
+      previous_adapter = Application.get_env(:arca, :storage_adapter)
+
+      on_exit(fn ->
+        Arca.FilesTest.Store.admit()
+
+        if previous_adapter,
+          do: Application.put_env(:arca, :storage_adapter, previous_adapter),
+          else: Application.delete_env(:arca, :storage_adapter)
+      end)
+
+      Application.put_env(:arca, :storage_adapter, Arca.FilesTest.Store)
+
+      {:ok, _} = Files.write(actor, "data/batch/a.txt", "a")
+      {:ok, _} = Files.write(actor, "data/batch/refused.txt", "r")
+      Arca.FilesTest.Store.refuse()
+
+      assert Files.move(actor, "data/batch", "data/moved") ==
+               {:error, {:unavailable, "Storage"}}
+
+      refute Arca.exists?(actor, ["data", "moved"])
+      assert {:ok, %{content: "a"}} = Files.read(actor, "data/batch/a.txt")
+      assert {:ok, %{content: "r"}} = Files.read(actor, "data/batch/refused.txt")
+    end
   end
 
   test "a path is checked before it is looked at", %{actor: actor} do
