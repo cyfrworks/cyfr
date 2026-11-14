@@ -48,7 +48,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
 | **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. Of the registry's, claiming a name or a publisher namespace, verifying a publisher namespace, minting push tokens, accepting the registry's policies and filing an appeal are requests a key of the person's account signs; the registry's other requests, for a namespace's tokens, members and components and for reports, go under the person's stored push token. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, filing a report or an appeal — take a signed-in session instead. Of the registry's, claiming a name or a publisher namespace, verifying a publisher namespace, minting push tokens and filing an appeal are requests a key of the person's account signs; the registry's other requests, for a namespace's tokens, members and components and for reports, go under the person's stored push token. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -466,10 +466,9 @@ params); and any other refusal the code of its class in the table above.
 
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that
-has not yet claimed a namespace: the registry's policy reads and
-acceptance (`registry.legal_version`, `registry.legal_page`,
-`registry.legal_accept`). Those are not public — they need the session —
-but they do not need a claimed identity.
+has not yet claimed a namespace: the registry's policy reads
+(`registry.legal_version`, `registry.legal_page`). Those are not public —
+they need the session — but they do not need a claimed identity.
 
 Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `decision.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 

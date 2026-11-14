@@ -93,7 +93,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/prima/lib/prima/decision.ex" => 13,
     "apps/cyfr/lib/aqua/approvals.ex" => 4,
     "apps/cyfr/lib/compendium/component.ex" => 3,
-    "apps/cyfr/lib/compendium/providers/shared.ex" => 4,
+    "apps/cyfr/lib/compendium/providers/shared.ex" => 3,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
     # The build orchestration behind `Compendium.Builds.Provider`, which
     # the scan reaches by following a tool module into what it calls.

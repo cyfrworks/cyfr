@@ -2502,7 +2502,8 @@ defmodule Compendium.ProviderTest do
                    "reason" => "superseded"
                  })
 
-        assert Sanctum.Refusals.render(reason) =~ "no push token for namespace 'alice'"
+        assert Sanctum.Refusals.render(reason) ==
+                 "This CYFR holds no push token for alice: sync your push tokens on the Registry page."
       end
     end
 
@@ -2562,7 +2563,7 @@ defmodule Compendium.ProviderTest do
 
       for action <-
             ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add
-               members_update members_remove report appeal legal_accept) do
+               members_update members_remove report appeal) do
         assert action in visible
       end
     end

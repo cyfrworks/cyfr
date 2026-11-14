@@ -1028,8 +1028,7 @@ defmodule Compendium.Tincture.RulesTest do
             "vault.create",
             "thread.archive",
             "execution.run",
-            "schedule.delete",
-            "registry.legal_accept"
+            "schedule.delete"
           ] do
         assert control_check([control(operation)]) == :ok, operation
         assert Rules.control_runs(operation) == {:ok, :asks}, operation

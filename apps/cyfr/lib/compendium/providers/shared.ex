@@ -23,6 +23,15 @@ defmodule Compendium.Providers.Shared do
   gate to classify.
   """
   @spec refusal(term()) :: Prima.Refusal.t() | term()
+  # The registry refused the caller's role, which nothing here mends: its
+  # sentence is the whole refusal.
+  def refusal(%Compendium.OCI.Errors{reason: :admin_required} = err),
+    do: %Prima.Refusal{
+      class: :forbidden,
+      reason: {:registry, :admin_required},
+      message: err.message
+    }
+
   def refusal(%Compendium.OCI.Errors{} = err) do
     msg = Compendium.OCI.Errors.to_string(err)
     hint = Compendium.OCI.Errors.actionable_hint(err)
@@ -62,7 +71,13 @@ defmodule Compendium.Providers.Shared do
         {:error, {:corrupt, :registry_credential}}
 
       _ ->
-        {:error, "no push token for namespace '#{slug}' — run `cyfr registry sync`"}
+        {:error,
+         %Prima.Refusal{
+           class: :setup_required,
+           reason: :no_push_token,
+           message:
+             "This CYFR holds no push token for #{slug}: sync your push tokens on the Registry page."
+         }}
     end
   end
 

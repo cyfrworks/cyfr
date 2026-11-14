@@ -6,6 +6,36 @@ defmodule Compendium.OCI.ErrorsTest do
 
   alias Compendium.OCI.Errors
 
+  # A member change goes under the namespace's own push token, so a 403
+  # to one is the caller's role there; any other 403 keeps its class.
+  describe "from_api_response/3's 403" do
+    @forbidden ~s({"errors":[{"code":"FORBIDDEN","message":"admin role required for this namespace"}]})
+
+    test "to a member change is the administrator's role the change needs" do
+      for operation <- ~w(add_member update_member remove_member) do
+        err = Errors.from_api_response(403, @forbidden, operation)
+        assert err.reason == :admin_required, operation
+
+        assert Compendium.Providers.Shared.refusal(err) == %Prima.Refusal{
+                 class: :forbidden,
+                 reason: {:registry, :admin_required},
+                 message:
+                   "Only an administrator of this namespace can add, change or remove its members."
+               }
+      end
+    end
+
+    test "to anything else stays access denied" do
+      for operation <- ~w(list_members list_tokens issue_additional_token revoke_token deprecate) do
+        err = Errors.from_api_response(403, @forbidden, operation)
+        assert err.reason == :unauthorized, operation
+
+        assert %Prima.Refusal{reason: {:registry, :unauthorized}} =
+                 Compendium.Providers.Shared.refusal(err)
+      end
+    end
+  end
+
   describe "from_response/3" do
     test "410 maps to :taken_down with status 410" do
       err = Errors.from_response(410, "", "registry.cyfr.run")

@@ -20,6 +20,7 @@ defmodule Compendium.OCI.Errors do
           | :parse_error
           | :ssrf_blocked
           | :policy_acceptance_required
+          | :admin_required
           | :taken_down
           | :registry_host_mismatch
 
@@ -215,6 +216,23 @@ defmodule Compendium.OCI.Errors do
   (`Compendium.RegistryHost.canonical_rest_host/0`).
   """
   @spec from_api_response(integer(), binary(), String.t()) :: t()
+  def from_api_response(status, body, operation)
+
+  # A member change goes under the namespace's own push token
+  # (`Compendium.Providers.Shared.namespace_bearer/2`), so the registry's
+  # 403 to one is the caller's role in the namespace: only its
+  # administrators change its members, and no sync grants that.
+  def from_api_response(403, body, operation)
+      when operation in ~w(add_member update_member remove_member) do
+    %__MODULE__{
+      reason: :admin_required,
+      message: "Only an administrator of this namespace can add, change or remove its members.",
+      registry: Compendium.RegistryHost.canonical_rest_host(),
+      status: 403,
+      detail: %{operation: operation, original_detail: parse_errors(body)}
+    }
+  end
+
   def from_api_response(status, body, operation) do
     err = from_response(status, body, Compendium.RegistryHost.canonical_rest_host())
     %{err | detail: %{operation: operation, original_detail: err.detail}}
