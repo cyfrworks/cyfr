@@ -499,17 +499,6 @@ func TestFetchWritesNothingUntilWrite(t *testing.T) {
 	if got := r.Managed(); !slices.Equal(got, []string{"configuration-guide.md"}) {
 		t.Errorf("Managed() = %v", got)
 	}
-	// Names are the release's files, each one File answers, and no
-	// directory.
-	names := r.Names()
-	if !slices.Contains(names, "configuration-guide.md") || !slices.Contains(names, "docker-compose.yml") {
-		t.Errorf("Names() = %v", names)
-	}
-	for _, name := range names {
-		if _, ok := r.File(name); !ok {
-			t.Errorf("Names() names %s, which is no file of the release", name)
-		}
-	}
 	// File answers the release's own bytes, never the project's.
 	if got, ok := r.File("docker-compose.yml"); !ok || len(got) == 0 || string(got) == "services: {mine: {}}\n" {
 		t.Errorf("File(docker-compose.yml) = %q, %v", got, ok)
@@ -517,14 +506,8 @@ func TestFetchWritesNothingUntilWrite(t *testing.T) {
 	if _, ok := r.File("absent.txt"); ok {
 		t.Error("File answers a file the release does not ship")
 	}
-	// Write answers the files it wrote: the managed guide it replaced,
-	// never the member's docker-compose.yml it left as it was.
-	written, err := r.Write(true)
-	if err != nil {
+	if err := r.Write(true); err != nil {
 		t.Fatalf("Write: %v", err)
-	}
-	if !slices.Contains(written, "configuration-guide.md") || slices.Contains(written, "docker-compose.yml") {
-		t.Errorf("Write answered %v", written)
 	}
 	if got, _ := os.ReadFile("configuration-guide.md"); string(got) != "# Configuration\n" {
 		t.Errorf("Write(true) left the guide %q", got)

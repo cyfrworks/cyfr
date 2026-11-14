@@ -441,8 +441,6 @@ func (f fakeScaffold) File(name string) ([]byte, bool) {
 	return []byte(example), true
 }
 
-func (f fakeScaffold) Names() []string { return f.Managed() }
-
 func (f fakeScaffold) Managed() []string {
 	var names []string
 	for _, file := range newScaffold {
@@ -451,22 +449,20 @@ func (f fakeScaffold) Managed() []string {
 	return names
 }
 
-func (f fakeScaffold) Write(overwriteManaged bool) ([]string, error) {
+func (f fakeScaffold) Write(overwriteManaged bool) error {
 	f.s.logLine("SCAFFOLD WRITE")
-	var written []string
 	for _, file := range newScaffold {
 		if file.name == f.s.scaffoldFail {
-			return written, errors.New("no space left on device")
+			return errors.New("no space left on device")
 		}
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(f.s.project, file.name)), 0755); err != nil {
-			return written, err
+			return err
 		}
 		if err := os.WriteFile(filepath.Join(f.s.project, file.name), []byte(file.content), 0644); err != nil {
-			return written, err
+			return err
 		}
-		written = append(written, file.name)
 	}
-	return written, nil
+	return nil
 }
 
 // logLine appends line to the fake docker's log.
@@ -885,9 +881,8 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		"taken_at":        "2026-10-16T12:00:00Z",
 		"parts":           []any{"database", "database-wal", "storage", "scaffold", "keyring", ".env", "compose"},
 		"storage_adapter": "local",
-		// The install record is deployment state, held with the files it names.
-		"scaffold": []any{"keeper.seccomp.json", "configuration-guide.md", "wit/cyfr/added.wit", ".cyfr/files"},
-		"complete": true,
+		"scaffold":        []any{"keeper.seccomp.json", "configuration-guide.md", "wit/cyfr/added.wit"},
+		"complete":        true,
 	}
 	if !reflect.DeepEqual(snapshot, wantSnapshot) {
 		t.Errorf("snapshot.json is %v, want %v", snapshot, wantSnapshot)
@@ -2039,13 +2034,13 @@ type unreadableSnapshot struct {
 	s *updateScenario
 }
 
-func (u unreadableSnapshot) Write(overwriteManaged bool) ([]string, error) {
+func (u unreadableSnapshot) Write(overwriteManaged bool) error {
 	held := filepath.Join(u.s.snapshotDir(), "scaffold", "keeper.seccomp.json")
 	if err := os.Remove(held); err != nil {
-		return nil, err
+		return err
 	}
 	if err := os.Mkdir(held, 0700); err != nil {
-		return nil, err
+		return err
 	}
 	return u.scaffoldRelease.Write(overwriteManaged)
 }
@@ -2883,47 +2878,4 @@ func TestUpdateQuestionEndsOnAnInterrupt(t *testing.T) {
 		t.Errorf("the update did not ask:\n%s", out.String())
 	}
 	s.nothingRan()
-}
-
-// An update adds the files it wrote to the record init left: a file
-// init wrote stays named, and the release's new files join it.
-func TestUpdateAddsTheFilesItWroteToTheRecord(t *testing.T) {
-	s := newUpdateScenario(t, shippedCompose(t), nil)
-	if err := recordInstall([]string{".env", "docker-compose.yml"}); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := s.run(context.Background()); err != nil {
-		t.Fatalf("update: %v\n%s", err, out)
-	}
-	want := []string{".env", "docker-compose.yml"}
-	for _, file := range newScaffold {
-		want = append(want, file.name)
-	}
-	slices.Sort(want)
-	if got, _, err := readInstallRecord(); err != nil || !slices.Equal(got, want) {
-		t.Errorf("the update recorded %q (%v), want %q", got, err, want)
-	}
-}
-
-// The record is deployment state: an update whose switch fails puts it
-// back from the snapshot with the scaffold files, never leaving the new
-// release's record beside the old CYFR.
-func TestUpdatePutsTheRecordBackWithTheScaffold(t *testing.T) {
-	s := newUpdateScenario(t, shippedCompose(t), nil)
-	if err := recordInstall([]string{"configuration-guide.md", "old-release-only.md"}); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(installRecord)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A compose file edited while the update ran makes the switch refuse,
-	// after the release's files and the record were written.
-	s.answer("stop-cyfr.edit", "# edited while the update ran\n")
-	if _, err := s.run(context.Background()); err == nil || !strings.Contains(err.Error(), "the scaffold files were put back from the snapshot") {
-		t.Fatalf("the update answered %v, want the switch refused and the scaffold put back", err)
-	}
-	if after, err := os.ReadFile(installRecord); err != nil || !bytes.Equal(after, before) {
-		t.Errorf("the revert left the record %q (%v), want it as it was, %q", after, err, before)
-	}
 }

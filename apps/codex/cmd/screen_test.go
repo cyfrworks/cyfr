@@ -334,9 +334,9 @@ func TestInitScreenQuestionEndsOnAnInterrupt(t *testing.T) {
 			savedVersion, savedDownload := version.Version, downloadScaffold
 			t.Cleanup(func() { version.Version, downloadScaffold = savedVersion, savedDownload })
 			version.Version = "0.6.0-alpha.1"
-			downloadScaffold = func(string) ([]string, error) {
+			downloadScaffold = func(string) error {
 				t.Error("init downloaded the scaffold before its question was answered")
-				return nil, nil
+				return nil
 			}
 			o.force = true
 		}

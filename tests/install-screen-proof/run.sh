@@ -604,7 +604,12 @@ clean_install() {
 active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "screenshot screen-terminal.png" guest_screenshot screen-terminal.png
 
-  step "cyfr uninstall --yes: the stack, the screen, CYFR's files and the program go, and the data stays"
+  step "cyfr uninstall --yes: the stack, the screen, the link, the settings and the program go; the folder, the volumes and the device key stay as they were"
+  # What stays is read before and after and compared whole.
+  left_as_it_was() {
+    guest_ssh 'cd ~/cyfr && find . -printf "%p %y %s %m %l\n" | sort; echo volumes:; docker volume ls -q | sort; echo device:; sha256sum ~/.cyfr/device/key.json 2>/dev/null || echo none'
+  }
+  left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read before it ($GUEST_DIR/left-before.txt)"
   # The screen holds tty1 since the reboot, which ended tty1's tmux
   # session: the step types into a detached one, which gives sudo its
   # terminal all the same.
@@ -614,17 +619,13 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   pane_step uninstall 'cd ~/cyfr && cyfr uninstall --yes' 600 "$SUDO_PROMPT" @password
   check "cyfr uninstall exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "sudo asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
-  check "it says the data stays" transcript_has uninstall '^CYFR is uninstalled\. Its data stays: /home/proof/cyfr/'
+  check "it names the folder and how to remove it by hand" transcript_has uninstall "^    sudo rm -rf -- '/home/proof/cyfr'\$"
   pane_step_end uninstall
-  # What remains, against the list install-b verified by hand: the data
-  # (data/, the stack's volumes, a device key), Docker and the packages
-  # other software uses, and nothing else of CYFR.
+  left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
+  check "the folder's listing, the volumes and the device key are as they were" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
   check "no container and no custom network of CYFR is left" guest_ssh '[ -z "$(docker ps -aq)$(docker network ls -q --filter type=custom)" ]'
-  check "the stack's volumes stay, as the data" guest_ssh '[ -n "$(docker volume ls -q)" ]'
   check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
   check "the program, its link onto PATH and its settings are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr ~/.cyfr/config.json ~/.cyfr/version-check.json 2>/dev/null'
-  check "~/.cyfr holds at most the device key" guest_ssh '[ ! -e ~/.cyfr ] || [ -z "$(find ~/.cyfr -type f ! -path "*/device/key.json")" ]'
-  check "the directory holds CYFR's data alone" guest_ssh '[ -z "$(ls -A ~/cyfr | grep -vx -e data -e backups)" ] && [ -d ~/cyfr/data ]'
   check "the screen is given back to tty1's login prompt" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-enabled --quiet cyfr-screen && [ ! -e /etc/systemd/system/cyfr-screen.service ]'
   check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
