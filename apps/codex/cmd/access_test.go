@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,13 +35,9 @@ func TestAccessPublicSaysADomainThatDoesNotResolve(t *testing.T) {
 	saved := lookupDomain
 	t.Cleanup(func() { lookupDomain = saved })
 	var asked []string
-	resolves := false
 	lookupDomain = func(_ context.Context, domain string) error {
 		asked = append(asked, domain)
-		if resolves {
-			return nil
-		}
-		return errors.New("lookup cyfr.example.com: no such host")
+		return &net.DNSError{Err: "no such host", Name: "cyfr.example.com", IsNotFound: true}
 	}
 	var out bytes.Buffer
 	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, &out); err != nil {
@@ -53,6 +51,28 @@ func TestAccessPublicSaysADomainThatDoesNotResolve(t *testing.T) {
 	if !slices.Equal(asked, []string{"cyfr.example.com"}) || len(s.switches) != 1 || accessOf(t) != access.ModePublic {
 		t.Errorf("resolved %v, %d switches, CYFR reached as %s; want cyfr.example.com resolved once after one switch to public", asked, len(s.switches), accessOf(t))
 	}
+
+	// A lookup that times out, or fails short of an answer, is a check
+	// this machine could not make, never a name that does not resolve.
+	for i, failed := range []error{
+		context.DeadlineExceeded,
+		&net.DNSError{Err: "i/o timeout", Name: "cyfr.example.com", IsTimeout: true},
+		&net.DNSError{Err: "server misbehaving", Name: "cyfr.example.com", IsTemporary: true},
+	} {
+		domain := fmt.Sprintf("c%d.example.com", i)
+		lookupDomain = func(context.Context, string) error { return failed }
+		out.Reset()
+		if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: domain}, true, &out); err != nil {
+			t.Fatalf("cyfr access public: %v\n%s", err, out.String())
+		}
+		reached := "by anyone on the internet, who still has to sign in, at https://" + domain + ", through ports 80 and 443 on this machine"
+		want := "CYFR will be reached " + reached + ".\n" +
+			"CYFR is set to be reached " + reached + ", but this machine could not check whether " + domain + " resolves (" + failed.Error() + "). CYFR takes its certificate once the domain's DNS names this machine's public address; cyfr access status shows whether it has one.\n"
+		if out.String() != want {
+			t.Errorf("after %v cyfr access printed:\n%s\nwant:\n%s", failed, out.String(), want)
+		}
+	}
+	lookupDomain = func(_ context.Context, domain string) error { asked = append(asked, domain); return nil }
 
 	// Local and tailnet access name no domain to resolve.
 	asked = nil

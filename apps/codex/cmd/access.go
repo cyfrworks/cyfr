@@ -750,15 +750,21 @@ var lookupDomain = func(ctx context.Context, domain string) error {
 	return err
 }
 
-// switchedSentence is the sentence a change that took ends on: Done, with how CYFR
-// is reached at head, once a public domain resolves; a public domain that
-// does not resolve from this machine is said instead, since no one reaches
-// CYFR there and no certificate can be issued until its DNS names this
-// machine.
+// switchedSentence is the sentence a change that took ends on: Done, with
+// how CYFR is reached at head, once a public domain resolves. A public
+// domain the resolver answers does not exist is said instead, since no one
+// reaches CYFR there and no certificate can be issued until its DNS names
+// this machine; a lookup that times out or fails otherwise proves neither,
+// and is said as a check this machine could not make.
 func switchedSentence(ctx context.Context, head access.Head) string {
 	if head.Mode == access.ModePublic {
-		if err := lookupDomain(ctx, head.Host); err != nil {
+		err := lookupDomain(ctx, head.Host)
+		var dns *net.DNSError
+		switch {
+		case errors.As(err, &dns) && dns.IsNotFound:
 			return fmt.Sprintf("CYFR is set to be reached %s, but %s does not resolve from this machine (%v). No one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine's public address; CYFR takes its certificate once it does, and cyfr access status shows it.", reachedBy(head), head.Host, err)
+		case err != nil:
+			return fmt.Sprintf("CYFR is set to be reached %s, but this machine could not check whether %s resolves (%v). CYFR takes its certificate once the domain's DNS names this machine's public address; cyfr access status shows whether it has one.", reachedBy(head), head.Host, err)
 		}
 	}
 	return "Done. CYFR is reached " + reachedBy(head) + "."
