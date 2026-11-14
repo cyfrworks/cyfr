@@ -55,7 +55,8 @@ import {initial, transition} from "./state.js"
  *     page with the answer in the fragment, which no server receives. An
  *     element with `data-account="return"` reads it on mount, removes it
  *     from the address (`history.replaceState`) and hands it to its page
- *     (`account_answer`, `{answer}`), once.
+ *     (`account_answer`, `{answer}`), once. A confirmation answered there
+ *     closes its tab when the page says it is done (`account:close`).
  *   * The setup and invitation pages, an element with `data-account`
  *     `"setup"` or `"invite"`, hand their page the setup token or the
  *     invitation code the address carries in its fragment
@@ -240,8 +241,12 @@ export default {
   // An element of the account pages' hop and return: the browser sent there
   // when its page asks, and the fragment the address carries handed over.
   mountAccount(mode) {
-    if (typeof this.handleEvent === "function")
+    if (typeof this.handleEvent === "function") {
       this.handleEvent("account:hop", ({url}) => hop(globalThis.location, url))
+      // A confirmation answered in the tab the system layer opened: the
+      // tab is done. A browser that keeps it open shows that it is.
+      this.handleEvent("account:close", () => globalThis.close())
+    }
     if (mode === "return") return this.pushAnswer()
     this.pushToken()
   },

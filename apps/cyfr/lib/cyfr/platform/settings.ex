@@ -114,6 +114,7 @@ defmodule Cyfr.Platform.Settings do
           scope: String.t(),
           stale: String.t(),
           variable: String.t(),
+          doc: String.t() | nil,
           value: Store.value(),
           default: Store.value(),
           desired: Store.value(),
@@ -360,7 +361,7 @@ defmodule Cyfr.Platform.Settings do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Every rostered setting: its active `value` on this member (for a
+  Every rostered setting: its sentence (`doc`), its active `value` on this member (for a
   restart-scoped key, the one applied at this member's boot), `default`,
   `desired` (what the store and the pins ask for), `source`
   (`deployment | operator | default`), `pending` (a restart-scoped key
@@ -404,6 +405,7 @@ defmodule Cyfr.Platform.Settings do
       scope: Atom.to_string(entry.scope),
       stale: Atom.to_string(entry.stale),
       variable: entry.variable,
+      doc: entry.doc,
       value: value,
       default: plain(entry.default),
       desired: desired,

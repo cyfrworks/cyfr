@@ -3584,6 +3584,111 @@ defmodule PrismWeb.SystemLayerTest do
     end
   end
 
+  # A wildcard host is narrowed by naming hosts under it: the preview
+  # answers whether a named host lies inside the ask, as the commit does,
+  # and refuses one outside it beside the network row.
+  describe "a host named under a wildcard host" do
+    setup [:signed_in]
+
+    setup %{ctx: ctx} do
+      local = %{Sanctum.TestContext.local() | user_id: ctx.user_id, athanor_id: ctx.athanor_id}
+      name = "layer-wild-#{System.unique_integer([:positive])}"
+      publish_asking!(local, name, "0.1.0", ["*.layer.example"])
+
+      # The same ask under another name, granted whole: what the narrowed
+      # grant is compared with, every resource but the hosts unchanged.
+      twin = "#{name}-whole"
+      publish_asking!(local, twin, "0.1.0", ["*.layer.example"])
+      {:ok, _} = commit_with!(local, "catalyst:local.#{twin}", %{})
+
+      %{local: local, node: "catalyst:local.#{name}", twin: "catalyst:local.#{twin}"}
+    end
+
+    test "is granted in the wildcard's place, and one outside the ask is refused",
+         %{view: view, node: node, twin: twin, local: local} do
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-host", node)
+      prompt(view, grant)
+      %{current: %{subject: %{preview: before}}} = layer_assigns(view)
+
+      add_host(view, "evil.example")
+
+      assert has_element?(
+               view,
+               ~s([data-row="egress"] [data-test="grant-refusal"][role="alert"]),
+               "The narrowing of #{node} names egress domain evil.example, which it does not ask for"
+             )
+
+      %{current: %{subject: %{decisions: decisions, preview: after_refusal}}} =
+        layer_assigns(view)
+
+      assert decisions == %{"ref" => node, "bindings" => []}
+      assert after_refusal == before
+
+      add_host(view, "api.layer.example")
+      refute has_element?(view, ~s([data-test="grant-refusal"]))
+
+      click(
+        view,
+        ~s(input[phx-click="toggle_value"][phx-value-field="domains"][phx-value-choice="*.layer.example"])
+      )
+
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+
+      assert decisions == %{
+               "ref" => node,
+               "bindings" => [],
+               "subset" => %{node => %{"egress" => %{"domains" => ["api.layer.example"]}}}
+             }
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-host") == :confirmed
+      {_head, ingress, limits} = head!(local, node)
+      {_twin_head, whole, whole_limits} = head!(local, twin)
+
+      assert {ingress, limits} ==
+               {%{whole | egress: %{whole.egress | domains: ["api.layer.example"]}}, whole_limits}
+    end
+
+    # The box is absent where the ask names no wildcard host, and an event
+    # sent anyway is refused there: the walk stays exactly as it was.
+    test "is refused where the ask names no wildcard host", %{view: view, ctx: ctx} do
+      %{ref: ref, name_ref: node} = asking_more(%{ctx: ctx})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-exact", ref)
+      prompt(view, grant)
+
+      assert has_element?(view, ~s([data-row="egress"]))
+      refute has_element?(view, ~s([data-test="grant-add-host"]))
+
+      click(
+        view,
+        ~s(input[phx-click="toggle_value"][phx-value-field="domains"][phx-value-choice="b.layer.example"])
+      )
+
+      %{current: %{subject: %{decisions: narrowed, preview: previewed}}} = layer_assigns(view)
+
+      assert narrowed["subset"] == %{
+               node => %{"egress" => %{"domains" => ["a.layer.example"]}}
+             }
+
+      view
+      |> with_target("#consent-sheet-system-layer-grant-g-exact")
+      |> render_click("add_host", %{"node" => node, "host" => "b.layer.example"})
+
+      render(view)
+
+      assert %{current: %{subject: %{decisions: ^narrowed, preview: ^previewed}}} =
+               layer_assigns(view)
+    end
+
+    defp add_host(view, host) do
+      view
+      |> form(~s([data-row="egress"] form[data-test="grant-add-host"]), %{"host" => host})
+      |> render_submit()
+
+      render(view)
+    end
+  end
+
   describe "the person's exact choices" do
     setup [:signed_in, :asking_more]
 

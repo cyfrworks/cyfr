@@ -744,7 +744,7 @@ For long-running formula executions (e.g., agentic loops), CYFR supports real-ti
 
 **Starting a streaming execution:**
 
-Use `execution.run_stream` instead of `execution.run`. It returns immediately with an `execution_id` and `stream_url`:
+Use `execution.run_stream` instead of `execution.run`. It returns as soon as the run is admitted, with an `execution_id` and `stream_url`; a run that admission refuses is answered with that refusal and leaves what `execution.run` leaves when it is refused, and no stream is opened:
 
 ```json
 {
@@ -1295,8 +1295,8 @@ after seven days, and its code is shown only when it is made.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `create` | optional `thread_id`, `name` | Make an invitation. With `thread_id`, a shared thread you sit in while it is active (never a pair), it seats its newcomer there; without, it names no thread, and only the platform administrator makes one (Settings, **Invite to this CYFR**). `name` is the name the new account page fills in. Answers the invitation and `invitation_url`, once |
-| `list` | — | The invitations you made, or every one for the platform administrator, newest first: each with its `state` (`pending`, `redeemed`, `revoked`, `expired`), its expiry, and the `thread_id` and, to a viewer seated there, `thread_title` it names |
+| `create` | optional `thread_id`, `name` | Make an invitation. With `thread_id`, a shared thread you sit in while it is active (never a pair), it seats its newcomer there; without, it names no thread, and only the platform administrator makes one (Settings, **Invite to this CYFR**). `name` is the name the new account page fills in. Answers the invitation and `invitation_url`, once, and `local_only: true` while CYFR's address is this computer's alone, so the link opens nowhere else |
+| `list` | — | The invitations you made, or every one for the platform administrator, newest first: each with its `state` (`pending`, `redeemed`, `revoked`, `expired`), its expiry, the `name` it offers, and the `thread_id` and, to a viewer seated there, `thread_title` it names |
 | `revoke` | `invitation_id` | Close a pending invitation, as its issuer or the platform administrator |
 
 An operator keeps their keys in their own vault, as everyone does, and offers one to the people here by sharing it with everyone: such a share is what a new person's first sign-in binds when it fits ([Shares](#shares-share-tool)). The people it is offered to grant it through the same consent walk as their own entries; no share bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.

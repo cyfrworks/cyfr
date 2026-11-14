@@ -1009,7 +1009,7 @@ defmodule Prima.Refusal do
   defp row({:door, :unavailable}), do: row(:unavailable)
 
   defp row({:door, reason}) when reason in [:denied, :not_allowed],
-    do: {:forbidden, "not allowed on this server — ask the operator"}
+    do: {:forbidden, "This CYFR has not let you in. Whoever runs it can let you in."}
 
   # An answer to a sign-in request this CYFR refused: spent, expired, for
   # another browser or channel, or not signed by a key the account lists.
@@ -1046,7 +1046,9 @@ defmodule Prima.Refusal do
        "This invitation can no longer be used. Ask whoever invited you for a new one."}
 
   # A handle the registry answers no one for, a reserved one included.
-  defp row(:handle_not_found), do: {:not_found, "No one holds that handle at the registry."}
+  defp row(:handle_not_found),
+    do:
+      {:not_found, "No account with that name yet: check the spelling, or ask them to make one."}
 
   # A person at a CYFR that requires a company sign-in, whose sign-in with
   # it is missing, past its days, or given under another company
