@@ -603,6 +603,19 @@ clean_install() {
   check "Ctrl+Alt+F2 reaches a terminal on tty2" sh -c '[ "$(cat "$1")" = "tty2
 active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "screenshot screen-terminal.png" guest_screenshot screen-terminal.png
+
+  step "cyfr uninstall: the stack, the screen, the program and its settings go, and the data stays"
+  pane_step uninstall 'cd ~/cyfr && cyfr uninstall --yes' 600 "$SUDO_PROMPT" @password
+  check "cyfr uninstall exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "sudo asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
+  check "it says the data stays" transcript_has uninstall '^CYFR is uninstalled\. Its data stays in /home/proof/cyfr; '
+  pane_step_end uninstall
+  check "no container, volume or network of CYFR is left" guest_ssh '[ -z "$(docker ps -aq)$(docker volume ls -q)$(docker network ls -q --filter type=custom)" ]'
+  check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
+  check "the program, its link onto PATH and its settings are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr ~/.cyfr 2>/dev/null'
+  check "the directory holds CYFR's data alone" guest_ssh '[ -z "$(ls -A ~/cyfr | grep -vx -e data -e backups)" ] && [ -d ~/cyfr/data ]'
+  check "the screen is given back to tty1's login prompt" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-enabled --quiet cyfr-screen && [ ! -e /etc/systemd/system/cyfr-screen.service ]'
+  check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"
