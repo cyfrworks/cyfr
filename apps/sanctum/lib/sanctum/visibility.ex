@@ -31,10 +31,11 @@ defmodule Sanctum.Visibility do
   asserted `:ok` in CI) guarantees every registered action carries a full
   declaration, so nothing falls through to an accidental default.
 
-  An outside server's tools (namespaced with `:`, no action enum) carry no
-  per-action classification: outside a running chain a caller is shown
-  those `external_tools/1` answers, the ones a call is admitted for now,
-  and `filter_for_context/2` hides them from a caller with no credential.
+  An outside server's tools (namespaced with `:`) carry no CYFR
+  classification, and an `action` in an upstream schema is not a CYFR
+  action: they never pass `filter_for_context/2`. Outside a running chain
+  a caller is shown those `external_tools/1` answers, the ones a call is
+  admitted for now.
   """
 
   alias Sanctum.Annotations
@@ -162,8 +163,9 @@ defmodule Sanctum.Visibility do
 
   - For each tool: prunes the action enum to actions `authorize/4` admits
     this caller to, drops tools with none remaining.
-  - Tools with no action enum (external `server:tool` proxies) pass through
-    unchanged for authenticated callers and are hidden from anonymous ones.
+  - Tools with no action enum pass through unchanged for authenticated
+    callers and are hidden from anonymous ones. An outside server's tools
+    are not given here (`external_tools/1`).
   """
   @spec filter_for_context([map()], Context.t()) :: [map()]
   def filter_for_context(tools, %Context{} = ctx) do

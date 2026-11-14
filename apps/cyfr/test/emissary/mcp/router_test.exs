@@ -345,8 +345,20 @@ defmodule Emissary.MCP.RouterTest do
 
         result =
           case body["method"] do
+            # An upstream schema with an `action` enum of its own, which
+            # is not a CYFR action.
             "tools/list" ->
-              %{"tools" => [%{"name" => "hello", "inputSchema" => %{"type" => "object"}}]}
+              %{
+                "tools" => [
+                  %{
+                    "name" => "hello",
+                    "inputSchema" => %{
+                      "type" => "object",
+                      "properties" => %{"action" => %{"type" => "string", "enum" => ["read"]}}
+                    }
+                  }
+                ]
+              }
 
             "tools/call" ->
               send(test, {:tools_call, body["params"]})
@@ -397,6 +409,18 @@ defmodule Emissary.MCP.RouterTest do
     end
 
     defp outside_names(ctx), do: Enum.filter(listed(ctx), &String.contains?(&1, ":"))
+
+    # The outside tools the tools tool lists, called as a client calls it.
+    defp tools_tool_outside_names(ctx) do
+      {:ok, %{"content" => [%{"text" => text}], "isError" => false}} =
+        call(ctx, "tools", %{"action" => "list"})
+
+      text
+      |> Jason.decode!()
+      |> Map.fetch!("tools")
+      |> Enum.map(& &1["name"])
+      |> Enum.filter(&String.contains?(&1, ":"))
+    end
 
     @hello_back {:ok,
                  %{
@@ -451,6 +475,21 @@ defmodule Emissary.MCP.RouterTest do
         assert {who, outside_names(caller)} == {who, ["greeter:hello"]}
         assert {who, call(caller, "greeter:hello", %{})} == {who, @hello_back}
         assert_received {:tools_call, %{"name" => "hello"}}
+      end
+    end
+
+    # One admission decides both lists; an upstream schema's `action` enum
+    # is not read as CYFR's actions by either.
+    test "the tools tool's list and tools/list name the same outside tools, with or without execute",
+         %{context: ctx, url: url} do
+      outside_server(ctx, "greeter", url, %{"console" => true})
+
+      for {caller, expected} <- [
+            {%{ctx | auth_method: :api_key, permissions: MapSet.new([:execute])},
+             ["greeter:hello"]},
+            {%{ctx | auth_method: :api_key, permissions: MapSet.new([:storage_read])}, []}
+          ] do
+        assert {tools_tool_outside_names(caller), outside_names(caller)} == {expected, expected}
       end
     end
 

@@ -2114,7 +2114,7 @@ defmodule Cyfr.Boundaries do
       table: 0,
       tool?: 1
     ],
-    "Sanctum.Visibility" => [filter_for_context: 2],
+    "Sanctum.Visibility" => [external_tools: 1, filter_for_context: 2],
     "Sanctum.Webhook" => [
       decode_input_template: 1,
       disable_for_component: 2,
