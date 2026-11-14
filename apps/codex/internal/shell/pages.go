@@ -27,6 +27,8 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <p>This screen opens CYFR once it answers. If it does not, run <code>cyfr up</code> in CYFR's directory; Ctrl+Alt+F2 opens a terminal.</p>
 {{else if eq .Answer "answered"}}
 <h1>Done</h1><p>This window closes by itself.</p><script>{{.Close}}</script>
+{{else if eq .Answer "ended"}}
+<h1>Add a passkey to your account</h1>
 {{else if eq .Page "setup"}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 <h1>Set up CYFR</h1>
@@ -97,8 +99,21 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <dl>{{range .Fields}}<dt>{{index . 0}}</dt><dd>{{index . 1}}</dd>{{end}}</dl>
 <form method="post" action="/confirm/decide">{{template "proof"}}
 <input type="hidden" name="ref" value="{{.Confirm.Ref}}">
-<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}, again<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off"></label>
+{{template "again" .}}
 <button name="decision" value="confirm">Confirm</button>
+<button name="decision" value="cancel" class="quiet" formnovalidate>Cancel</button>
+</form>
+{{else if and (eq .Page "passkey") (not .Passkey)}}
+<h1>A passkey request is open</h1>
+<p>It is shown in the window that asked for it.</p>
+{{else if eq .Page "passkey"}}
+<h1>Add a passkey to your account</h1>
+<p>A browser asks to add a passkey to your account. Approve it only if that browser shows this same code:</p>
+<p class="code">{{.Passkey.Code}}</p>
+<form method="post" action="/passkey/decide">{{template "proof"}}
+<input type="hidden" name="ref" value="{{.Passkey.Ref}}">
+{{template "again" .}}
+<button name="decision" value="approve">Approve</button>
 <button name="decision" value="cancel" class="quiet" formnovalidate>Cancel</button>
 </form>
 {{else}}
@@ -115,6 +130,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <label>The passphrase<input name="secret" type="password" autocomplete="off" required></label>
 <label>The passphrase again<input name="again" type="password" autocomplete="off" required></label>
 {{end}}{{end}}
+{{define "again"}}<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}, again<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off"></label>{{end}}
 {{define "proof"}}<input type="hidden" name="proof">{{end}}
 {{define "typed"}}<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" autofocus required></label>{{end}}
 {{define "terms"}}{{if .Terms}}<label><input type="checkbox" name="accept" value="yes"> I accept the terms at {{.Terms}}</label>{{end}}{{end}}`))

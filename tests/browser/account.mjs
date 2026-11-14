@@ -196,8 +196,10 @@ export async function usePasskey(page, keys, { timeoutMs = STEP_MS } = {}) {
 
 // A sign-in at `home` from a browser whose passkey the browser refuses, as
 // one holding none for the account does: the sentence the sign page says,
-// whether it shows its ways on, whether "Add a passkey with your recovery
-// code" carries the sign page's request, and the recovery page it opens.
+// whether it shows its ways on, whether it offers "No passkey in this
+// browser?" and that opens the page asking the account's name, whether
+// "Add a passkey with your recovery code" carries the sign page's request,
+// and the recovery page it opens.
 export async function refusedPasskey(page, keys, home, { timeoutMs = STEP_MS } = {}) {
   await page.goto(`${home.origin}/login`);
   await page.waitForSelector(".phx-connected", { timeout: timeoutMs });
@@ -205,16 +207,26 @@ export async function refusedPasskey(page, keys, home, { timeoutMs = STEP_MS } =
   await page.waitForURL((url) => url.pathname === "/account/sign", { timeout: timeoutMs });
   await keys.attach(page);
   const asked = await settle(page, ["ask"], { timeoutMs });
-  if (asked.section !== "ask") return { error: asked.error, ways: false, carries: false, recover: null };
+  if (asked.section !== "ask") return { error: asked.error, ways: false, offered: false, carries: false, recover: null };
   const request = new URL(page.url()).hash.slice(1);
   await page.locator("#use-passkey").click();
   const said = await settle(page, [], { timeoutMs });
   const ways = await page.locator("#ways").isVisible();
+  let offered = await page.locator("#offer-start").isVisible();
+  if (offered) {
+    await page.locator("#offer-start").click();
+    offered = (await settle(page, ["offer"], { timeoutMs })).section === "offer" && (await page.locator("#offer-name").isVisible());
+    // The same request again, read from the address, to follow the other way on.
+    await page.reload();
+    await settle(page, ["ask"], { timeoutMs });
+    await page.locator("#use-passkey").click();
+    await settle(page, [], { timeoutMs });
+  }
   const carries = (await page.locator("#recover-link").getAttribute("href")) === `recover#request=${request}`;
   await page.locator("#recover-link").click();
   await page.waitForURL((url) => url.pathname === "/account/recover", { timeout: timeoutMs });
   const opened = await settle(page, ["enter"], { timeoutMs });
-  return { error: said.error, ways, carries: carries && new URL(page.url()).hash === `#request=${request}`, recover: opened.section };
+  return { error: said.error, ways, offered, carries: carries && new URL(page.url()).hash === `#request=${request}`, recover: opened.section };
 }
 
 // A device added to the account of the passkey the person picks, at

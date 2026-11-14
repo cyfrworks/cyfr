@@ -3,8 +3,9 @@
 
 // Package shell is a device of a person's account: the pages that make its
 // key, make the account or add the key to one, unlock it with the person's
-// PIN (or passphrase) and lock it again, and confirm a sensitive change
-// freshly, served on literal loopback to a box's screen; the same states
+// PIN (or passphrase) and lock it again, confirm a sensitive change
+// freshly and add a passkey a browser asks for to the account, served on
+// literal loopback to a box's screen; the same states
 // drive cyfr login in a terminal. Through the device channel the device
 // proves the person to a CYFR.
 //
@@ -180,6 +181,16 @@ type PendingConfirm struct {
 	drawn     time.Time
 }
 
+// PendingPasskey is a passkey a browser asks to add to the account, as the
+// shell drew it from the CYFR: its ref, the key read as the log reads one,
+// the short code derived here from its kid, and when it was drawn.
+type PendingPasskey struct {
+	Ref   string
+	Key   account.Key
+	Code  string
+	drawn time.Time
+}
+
 // making is an account being made from this device: the attempt, the
 // recovery key (in memory alone), the recovery code shown until it is said
 // saved, and whether its name was taken meanwhile.
@@ -217,6 +228,7 @@ type Shell struct {
 	terms      *account.Policy
 	configured bool
 	confirm    *PendingConfirm
+	passkey    *PendingPasskey
 	// proof is what the page that typed the PIN holds: 32 random bytes,
 	// drawn when a typed PIN opens the key (issueProof) and replaced by the
 	// next one or a lock. The ticket and the recovery code go only to a
@@ -428,6 +440,7 @@ const (
 	PageLocked   Page = "locked"
 	PageUnlocked Page = "unlocked"
 	PageConfirm  Page = "confirm"
+	PagePasskey  Page = "passkey"
 )
 
 // View is what a page draws.
@@ -452,6 +465,7 @@ type View struct {
 	Terms   string
 	Accept  bool
 	Confirm *PendingConfirm
+	Passkey *PendingPasskey
 	// Code is the key's short code while no account lists it, AddURL the
 	// account page that adds it (a QR code's text), and Key its public
 	// half as cyfr device approve takes it.
@@ -483,7 +497,7 @@ func (s *Shell) pageView(proof []byte) View {
 	if !s.holds(proof) {
 		v.RecoveryCode = ""
 	}
-	v.Passphrase, v.Confirm = "", nil
+	v.Passphrase, v.Confirm, v.Passkey = "", nil, nil
 	return v
 }
 
@@ -494,9 +508,23 @@ func (s *Shell) confirmView(ref string) View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := s.view()
-	v.RecoveryCode, v.Passphrase, v.Confirm = "", "", nil
+	v.RecoveryCode, v.Passphrase, v.Confirm, v.Passkey = "", "", nil, nil
 	if s.confirm != nil && ref != "" && s.confirm.Ref == ref {
 		v.Confirm = s.confirm
+	}
+	return v
+}
+
+// passkeyView is pageView for the request that names ref: a drawn
+// passkey request and its code go only to a request naming its reference,
+// the one Prism opened the window with, never to a plain read.
+func (s *Shell) passkeyView(ref string) View {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.view()
+	v.RecoveryCode, v.Passphrase, v.Confirm, v.Passkey = "", "", nil, nil
+	if s.passkey != nil && ref != "" && s.passkey.Ref == ref {
+		v.Page, v.Passkey = PagePasskey, s.passkey
 	}
 	return v
 }
@@ -566,6 +594,8 @@ func (s *Shell) view() View {
 		v.Page = PageLocked
 	case s.confirm != nil:
 		v.Page, v.Confirm = PageConfirm, s.confirm
+	case s.passkey != nil:
+		v.Page, v.Passkey = PagePasskey, s.passkey
 	default:
 		v.Page = PageUnlocked
 	}
@@ -1509,7 +1539,7 @@ func (s *Shell) lock(why string) {
 	}
 	clear(s.proof)
 	wasOpen := s.ch != nil
-	s.ch, s.key, s.locks, s.making, s.confirm, s.passphrase, s.proof = nil, nil, nil, nil, nil, "", nil
+	s.ch, s.key, s.locks, s.making, s.confirm, s.passkey, s.passphrase, s.proof = nil, nil, nil, nil, nil, nil, "", nil
 	if wasOpen {
 		if why != "" {
 			s.notice = why
@@ -1525,7 +1555,8 @@ func (s *Shell) Unlocked() bool {
 	return s.ch != nil
 }
 
-// confirmWindow is how long a drawn confirmation may wait for the PIN.
+// confirmWindow is how long a drawn confirmation or passkey request may
+// wait for the PIN.
 const confirmWindow = 60 * time.Second
 
 // Draw fetches the confirmation ref names from the CYFR over the channel
@@ -1688,6 +1719,138 @@ func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret [
 		return
 	}
 	notice = "Confirmed on this " + s.cfg.Noun + "."
+}
+
+// errNotWaiting is a passkey request the CYFR does not hold: none by that
+// ref, or one whose key is not a passkey as the log reads one.
+var errNotWaiting = errors.New("CYFR holds no passkey request by that name")
+
+// DrawPasskey fetches the passkey request ref names from the CYFR over the
+// channel (pairing.waiting) and shows it on this device's own page, with
+// the short code derived here from its key. Nothing a browser sent is
+// drawn but the ref, and the code the CYFR names is not read: the person
+// compares the one this device derives with the one the asking browser
+// shows.
+func (s *Shell) DrawPasskey(ctx context.Context, ref string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ch == nil {
+		s.say("Unlock this %s first, then approve the passkey again from Your devices.", s.cfg.Noun)
+		return
+	}
+	p, err := s.waiting(ctx, ref)
+	if err != nil {
+		if s.passkey != nil && s.passkey.Ref == ref {
+			s.passkey = nil
+		}
+		s.say("%s", s.waitingSentence(err))
+		return
+	}
+	s.passkey = p
+}
+
+// waiting reads ref's passkey request from the CYFR: what this device
+// draws before it signs. The key is read as the log reads one and must be
+// a passkey.
+func (s *Shell) waiting(ctx context.Context, ref string) (*PendingPasskey, error) {
+	if ref == "" {
+		return nil, errNotWaiting
+	}
+	raw, err := s.ch.Call(ctx, "pairing.waiting", map[string]any{"ref": ref})
+	if err != nil {
+		return nil, err
+	}
+	var got struct {
+		Waiting []struct {
+			Ref string `json:"ref"`
+			Key any    `json:"key"`
+		} `json:"waiting"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil || len(got.Waiting) != 1 || got.Waiting[0].Ref != ref {
+		return nil, errNotWaiting
+	}
+	key, ok := account.ReadKey(got.Waiting[0].Key)
+	if !ok || key.Kind != "passkey" {
+		return nil, errNotWaiting
+	}
+	return &PendingPasskey{Ref: ref, Key: key, Code: account.ShortCode(key.Kid), drawn: s.cfg.Now()}, nil
+}
+
+// waitingSentence is what the person reads when a passkey request could
+// not be read from the CYFR.
+func (s *Shell) waitingSentence(err error) string {
+	if errors.Is(err, errNotWaiting) {
+		return "CYFR no longer holds that request, so nothing was added."
+	}
+	return s.sentence(err) + " Nothing was added."
+}
+
+// DecidePasskey answers the drawn passkey request: cancelled, timed out or
+// changed at the CYFR since it was drawn (read again by its ref, the same
+// key), nothing is signed. Otherwise the PIN opens the key afresh, never
+// the key this unlock holds, and that key signs the add_key entry adding
+// the passkey to the account's log at its directory. The page says what
+// happened. It answers whether the request is settled: the account lists
+// the passkey now, or the person cancelled it.
+func (s *Shell) DecidePasskey(ctx context.Context, ref string, approve bool, secret []byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(secret)
+	if s.ch == nil {
+		s.say("Unlock this %s first, then approve the passkey again from Your devices.", s.cfg.Noun)
+		return false
+	}
+	drawn := s.passkey
+	if drawn == nil || drawn.Ref != ref {
+		return false
+	}
+	switch {
+	case !approve:
+		s.passkey = nil
+		s.say("Nothing was added.")
+		return true
+	case s.cfg.Now().Sub(drawn.drawn) >= confirmWindow:
+		s.passkey = nil
+		s.say("That request waited too long, so nothing was added. Approve it again from Your devices.")
+		return false
+	}
+	now, err := s.waiting(ctx, ref)
+	if err == nil && now.Key.Kid != drawn.Key.Kid {
+		err = errNotWaiting
+	}
+	if err != nil {
+		s.passkey = nil
+		s.say("%s", s.waitingSentence(err))
+		return false
+	}
+	fresh, err := s.rec.Open(secret)
+	if err != nil {
+		s.say("%s", s.sentence(err))
+		return false
+	}
+	directory := s.rec.Directory
+	if directory == "" {
+		directory = s.cfg.Directory
+	}
+	d := account.Directory{URL: directory, Client: s.cfg.Client}
+	err = account.Approve(ctx, d, s.rec.Identifier, s.rec.PublicKey, fresh.Sign, drawn.Key, s.cfg.Now().UnixMilli())
+	fresh.Erase()
+	s.passkey = nil
+	switch {
+	case err == nil:
+		s.say("Added to your account. The browser that asked signs in with its passkey now.")
+		return true
+	case errors.Is(err, account.ErrListed):
+		s.say("Your account lists that passkey already.")
+		return true
+	case errors.Is(err, account.ErrNotListed):
+		s.say("Your account does not list this %s any more, so it cannot add a passkey.", s.cfg.Noun)
+	case errors.Is(err, account.ErrUnreachable):
+		s.say("Your account could not be reached just now. Nothing was added; approve it again from Your devices.")
+	default:
+		s.say("The passkey was not added: %s", s.sentence(err))
+	}
+	return false
 }
 
 // same is whether the confirmation at the CYFR is still the one drawn:

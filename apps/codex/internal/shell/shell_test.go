@@ -5,7 +5,9 @@ package shell
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"html"
 	"net/http"
@@ -188,7 +190,8 @@ func TestSetup_MakesTheAccountAndOpensPrism(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
 
-	if !strings.Contains(b.page(), "This box keeps its data unencrypted, whoever takes it reads everything: its CYFR data volume is not encrypted.") {
+	if !strings.Contains(b.page(), "This box keeps its data unencrypted, whoever takes it reads everything: its CYFR data volume is not encrypted. "+
+		"Keep the box where only people you trust can reach it, or install Ubuntu again with disk encryption turned on.") {
 		t.Fatal("setup does not warn about the unencrypted data volume")
 	}
 	home.accounts.Down = true
@@ -832,5 +835,174 @@ func TestConfirm_ALockedBoxFetchesNothing(t *testing.T) {
 	w := b.do(http.MethodGet, "/confirm?ref=cnr_1", "", nil)
 	if len(home.opsSeen()) != ops || !strings.Contains(body(w), "Unlock this screen first") {
 		t.Fatal("a locked box fetched a confirmation")
+	}
+}
+
+// newPasskey is a passkey as a browser makes one: a P-256 point,
+// uncompressed, and a random credential id.
+func newPasskey(t *testing.T) account.Key {
+	t.Helper()
+	priv, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := priv.PublicKey().Bytes()
+	cid := make([]byte, 16)
+	_, _ = rand.Read(cid)
+	return account.Key{Kid: account.Kid(pub), Alg: "es256", Kind: "passkey", Pub: pub, CredentialID: cid}
+}
+
+// waitingPasskey is the record pairing.waiting lists for key under ref.
+func waitingPasskey(ref string, key account.Key) map[string]any {
+	return map[string]any{"ref": ref, "code": account.ShortCode(key.Kid), "key": key.Map(), "asked_at": "2026-11-14T12:00:00Z"}
+}
+
+// passkeyAsked sets a box up through to Prism, its account's only key the
+// box's own, and has the CYFR hold one passkey a browser asks to add under
+// pkw_1. It answers the box's passphrase, its key record and the passkey.
+func passkeyAsked(t *testing.T) (*fakeHome, *box, string, *holder.Record, account.Key) {
+	t.Helper()
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := setUpAndOpen(t, home, b)
+	rec, err := holder.Load(b.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := home.accounts.State(t, rec.Identifier); len(st.Keys) != 1 || st.Keys[0].Kid != account.Kid(rec.PublicKey) {
+		t.Fatalf("the account's keys are not the box's alone: %+v", st.Keys)
+	}
+	key := newPasskey(t)
+	home.mu.Lock()
+	home.waiting["pkw_1"] = waitingPasskey("pkw_1", key)
+	home.mu.Unlock()
+	return home, b, p, rec, key
+}
+
+func keysOf(keys []account.Key) string {
+	maps := make([]any, len(keys))
+	for i, k := range keys {
+		maps[i] = k.Map()
+	}
+	return jcsString(maps)
+}
+
+// A browser asks to add a passkey to an account whose only key is the
+// box's: the box draws the request from CYFR and shows the code it derives
+// from the key, and its passphrase, typed again, adds the passkey to the
+// account's log by an add_key the box's key signs. The window says so and
+// closes, and CYFR never hears the passphrase.
+func TestPasskey_TheBoxAddsTheWaitingPasskeyToItsAccount(t *testing.T) {
+	home, b, p, rec, key := passkeyAsked(t)
+	before := home.accounts.State(t, rec.Identifier)
+
+	page := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil))
+	if !strings.Contains(page, "<h1>Add a passkey to your account</h1>") ||
+		!strings.Contains(page, "A browser asks to add a passkey to your account. Approve it only if that browser shows this same code:") ||
+		!strings.Contains(page, `<p class="code">`+account.ShortCode(key.Kid)+`</p>`) || !strings.Contains(page, `name="ref" value="pkw_1"`) {
+		t.Fatalf("the passkey page:\n%s", page)
+	}
+	page = body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "decision": {"approve"}, "secret": {p}}))
+	if !strings.Contains(page, "Added to your account. The browser that asked signs in with its passkey now.") || !strings.Contains(page, "<h1>Done</h1>") {
+		t.Fatalf("the answer:\n%s", page)
+	}
+	after := home.accounts.State(t, rec.Identifier)
+	if got, want := keysOf(after.Keys), keysOf([]account.Key{before.Keys[0], key}); got != want {
+		t.Fatalf("the account lists\n %s\nwant %s", got, want)
+	}
+	log := home.accounts.Log(rec.Identifier)
+	last := log[len(log)-1].(map[string]any)
+	if last["kind"] != "add_key" || last["signer"] != account.Kid(rec.PublicKey) || after.Seq != before.Seq+1 {
+		t.Fatalf("the last entry %v", last)
+	}
+	if home.heard(p) || home.heard(strings.ReplaceAll(p, " ", "+")) {
+		t.Fatal("CYFR heard the passphrase")
+	}
+}
+
+// A request the person did not approve adds nothing: a decision with no
+// request drawn, a cancel, a request that waited past its minute, one CYFR
+// no longer holds or holds with another key under the same ref, and a
+// wrong passphrase, which leaves the request drawn: the right one then
+// adds it, once.
+func TestPasskey_AnUnapprovedRequestAddsNothing(t *testing.T) {
+	home, b, p, rec, key := passkeyAsked(t)
+	entries := len(home.accounts.Log(rec.Identifier))
+	decide := func(decision, secret string) string {
+		t.Helper()
+		page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "decision": {decision}, "secret": {secret}}))
+		if n := len(home.accounts.Log(rec.Identifier)); n != entries {
+			t.Fatalf("the log holds %d entries, %d before:\n%s", n, entries, page)
+		}
+		return page
+	}
+	draw := func() {
+		t.Helper()
+		if page := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)); !strings.Contains(page, account.ShortCode(key.Kid)) {
+			t.Fatalf("not drawn:\n%s", page)
+		}
+	}
+	hold := func(k account.Key) {
+		home.mu.Lock()
+		home.waiting["pkw_1"] = waitingPasskey("pkw_1", k)
+		home.mu.Unlock()
+	}
+
+	if page := decide("approve", p); strings.Contains(page, "Added") || strings.Contains(page, account.ShortCode(key.Kid)) {
+		t.Fatalf("a decision with nothing drawn:\n%s", page)
+	}
+
+	draw()
+	if page := decide("cancel", p); !strings.Contains(page, "Nothing was added.") || !strings.Contains(page, "<h1>Done</h1>") {
+		t.Fatalf("a cancel:\n%s", page)
+	}
+
+	draw()
+	b.now.Add(int64(61 * time.Second))
+	if page := decide("approve", p); !strings.Contains(page, "That request waited too long, so nothing was added. Approve it again from Your devices.") {
+		t.Fatalf("a request past its minute:\n%s", page)
+	}
+
+	draw()
+	home.mu.Lock()
+	delete(home.waiting, "pkw_1")
+	home.mu.Unlock()
+	if page := decide("approve", p); !strings.Contains(page, "CYFR no longer holds that request, so nothing was added.") {
+		t.Fatalf("a request CYFR no longer holds:\n%s", page)
+	}
+
+	hold(key)
+	draw()
+	hold(newPasskey(t))
+	if page := decide("approve", p); !strings.Contains(page, "CYFR no longer holds that request, so nothing was added.") {
+		t.Fatalf("a request whose key changed at CYFR:\n%s", page)
+	}
+
+	hold(key)
+	draw()
+	if page := decide("approve", otherPassphrase(t, p)); !strings.Contains(page, "That is not this screen's PIN or passphrase.") ||
+		!strings.Contains(page, `<p class="code">`+account.ShortCode(key.Kid)+`</p>`) {
+		t.Fatalf("a wrong passphrase:\n%s", page)
+	}
+	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "decision": {"approve"}, "secret": {p}}))
+	if _, listed := home.accounts.State(t, rec.Identifier).Key(key.Kid); !listed || len(home.accounts.Log(rec.Identifier)) != entries+1 ||
+		!strings.Contains(page, "<h1>Done</h1>") {
+		t.Fatalf("the right passphrase after a wrong one:\n%s", page)
+	}
+}
+
+// A box locked since the draw asks CYFR for nothing and adds nothing: it
+// says to unlock first.
+func TestPasskey_ALockedBoxAddsNothing(t *testing.T) {
+	home, b, p, rec, _ := passkeyAsked(t)
+	b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
+	b.post("/lock", nil)
+	entries, ops := len(home.accounts.Log(rec.Identifier)), len(home.opsSeen())
+	says := "Unlock this screen first, then approve the passkey again from Your devices."
+	drawn := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil))
+	decided := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "decision": {"approve"}, "secret": {p}}))
+	if !strings.Contains(drawn, says) || !strings.Contains(decided, says) || len(home.opsSeen()) != ops ||
+		len(home.accounts.Log(rec.Identifier)) != entries {
+		t.Fatalf("a locked box: the draw\n%s\nthe decision\n%s", drawn, decided)
 	}
 }

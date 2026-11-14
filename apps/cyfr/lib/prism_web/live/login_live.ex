@@ -21,9 +21,14 @@ defmodule PrismWeb.LoginLive do
   browser's session cookie holds: its forgery token, and its session when
   it has one (`Sanctum.SignIn.answer/3`). A sign-in hands a one-time
   ticket bound to this browser to `GET /auth/passkey/complete/:ticket`,
-  which sets the session's cookie (`PrismWeb.PasskeyController`). A
-  confirmation or a registry signature, answered in the tab the system
-  layer opened, sends the browser back where its request named, or to `/`.
+  which sets the session's cookie (`PrismWeb.PasskeyController`). A new
+  passkey, which the account pages answer for a browser holding none of
+  the account's, is held for a device of the account to add, and the page
+  shows its short code with the way on: approve it in Your devices on the
+  box, then sign in with it. The page says the same for any account, so
+  it tells nobody who has one here. A confirmation or a registry
+  signature, answered in the tab the system layer opened, sends the
+  browser back where its request named, or to `/`.
   A registry signature is completed here first, under the session it was
   bound to (`Compendium.complete_registry/2`): the signed request sent to
   the registry and what its success does done, as the `registry` tool
@@ -75,6 +80,9 @@ defmodule PrismWeb.LoginLive do
      # True while an answer handed here is checked, and a registry
      # signature it carries sent.
      |> assign(:checking, false)
+     # The short code of a new passkey this browser offered, while it
+     # waits for a device of the account to add it.
+     |> assign(:waiting, nil)
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
@@ -131,6 +139,9 @@ defmodule PrismWeb.LoginLive do
     ticket = mint_ticket(token, socket.assigns.browser_binding)
     redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")
   end
+
+  defp answered(socket, {:ok, %{purpose: :sign_in, waiting: code}}),
+    do: socket |> assign(:waiting, code) |> assign(:error, nil)
 
   defp answered(socket, {:ok, %{back: back}}) when is_binary(back),
     do: redirect(socket, to: back)
@@ -244,6 +255,12 @@ defmodule PrismWeb.LoginLive do
   # What each refusal reads as. A refusal of the answer itself says only
   # that this browser holds no sign-in to finish.
   defp sentence(:answer_refused), do: @lost
+
+  defp sentence(:too_many_waiting),
+    do:
+      "Too many browsers already ask to add a passkey to this account. Each is forgotten " <>
+        "five minutes after it was asked: try again then."
+
   defp sentence({:door, _reason}), do: Sanctum.Door.refusal_message()
   defp sentence(:unavailable), do: @unavailable
 
@@ -359,6 +376,21 @@ defmodule PrismWeb.LoginLive do
               class="rounded-lg bg-red-900/50 border border-red-800 px-4 py-3 text-sm text-red-300"
             >
               {@error}
+            </div>
+
+            <div
+              :if={@waiting}
+              role="status"
+              data-test="passkey-waiting"
+              class="rounded-lg border border-indigo-700 px-4 py-3 text-sm text-gray-300 space-y-2"
+            >
+              <p class="font-medium text-white">Approve this browser's passkey on your box</p>
+              <p>
+                On your CYFR box's screen, open Your devices, check that it shows the code
+                <span class="font-mono text-white" data-test="passkey-code">{@waiting}</span>
+                and approve it. Then sign in below with your passkey. If nobody approves it
+                within five minutes it is forgotten, and nothing is added.
+              </p>
             </div>
 
             <h2 class="text-lg font-medium text-white text-center">Sign in to continue</h2>

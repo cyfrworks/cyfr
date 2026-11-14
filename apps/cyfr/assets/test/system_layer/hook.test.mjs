@@ -4,7 +4,7 @@
 import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import SystemLayer, {clearAllMarked, clearForms, clearMarked, hop, markForm, openTab, resubmit, takeFragment} from "../../js/system_layer/index.js"
+import SystemLayer, {clearAllMarked, clearForms, clearMarked, hop, localTimes, markForm, openTab, resubmit, takeFragment} from "../../js/system_layer/index.js"
 
 // A document with a frame in fullscreen and pointer lock. Every call the
 // hook makes on it, and on the dialog, is recorded in `calls`, in order.
@@ -65,7 +65,8 @@ function fakeDialog(doc, calls, controls) {
       calls.push("close")
       dialog.open = false
     },
-    querySelectorAll: () => controls
+    // The prompt's controls; it holds no time to show in local time.
+    querySelectorAll: (selector) => (selector === "time[data-local]" ? [] : controls)
   })
   return dialog
 }
@@ -860,5 +861,18 @@ describe("a page's typed form, marked with its prompt", () => {
     assert.equal(marks.size, 0)
 
     SystemLayer.reconnected.call({marks: undefined})
+  })
+})
+
+describe("times", () => {
+  test("each time the layer marks local is shown in the browser's own zone, and any other text is left", () => {
+    const at = "2026-11-14T09:00:00Z"
+    const marked = {attrs: {datetime: at}, textContent: at, getAttribute(name) { return this.attrs[name] }}
+    const unreadable = {attrs: {datetime: "soon"}, textContent: "soon", getAttribute(name) { return this.attrs[name] }}
+    const asked = []
+    localTimes({querySelectorAll: (selector) => (asked.push(selector), [marked, unreadable])}, "en-GB")
+    assert.deepEqual(asked, ["time[data-local]"])
+    assert.equal(marked.textContent, new Date(at).toLocaleString("en-GB"))
+    assert.equal(unreadable.textContent, "soon")
   })
 })

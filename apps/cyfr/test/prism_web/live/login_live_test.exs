@@ -111,6 +111,92 @@ defmodule PrismWeb.LoginLiveTest do
     assert "/auth/passkey/complete/" <> _ticket = path
   end
 
+  test "a new passkey from a browser that holds none shows its code and the way on, for any account",
+       %{conn: conn, dir: dir} do
+    %{account: account} = first!(dir)
+    stranger = DirectoryServer.account!(dir.dir, dir.url)
+
+    for named <- [account, stranger] do
+      {:ok, view, _html} = live(conn, ~p"/login")
+      view |> element(~s([data-test="sign-in"])) |> render_click()
+      assert_push_event(view, "account:hop", %{url: url})
+      [_page, fragment] = String.split(url, "#", parts: 2)
+      {:ok, map} = Prima.SignIn.parse_fragment(fragment)
+      {:ok, request} = Prima.SignIn.decode(map)
+      {pub, _priv} = :crypto.generate_key(:ecdh, :secp256r1)
+
+      {:ok, key} =
+        Prima.Identity.Key.new(
+          alg: :es256,
+          kind: :passkey,
+          pub: pub,
+          credential_id: :crypto.strong_rand_bytes(16)
+        )
+
+      answer = %Prima.SignIn.NewPasskey{
+        challenge: request.challenge,
+        identifier: named.identifier,
+        key: key
+      }
+
+      render_hook(view, "account_answer", %{"answer" => Prima.SignIn.fragment(answer)})
+      html = render_async(view, @answered_ms)
+
+      assert view |> element(~s([data-test="passkey-code"])) |> render() =~
+               binary_part(key.kid, 7, 16)
+
+      assert html =~ "open Your devices"
+
+      assert String.replace(html, ~r/\s+/, " ") =~
+               "If nobody approves it within five minutes it is forgotten, and nothing is added."
+
+      assert has_element?(view, ~s([data-test="sign-in"]))
+      refute has_element?(view, ~s([data-test="sign-in-error"]))
+      refute_vocabulary(html)
+    end
+
+    # Past the bound the page says so, as it would for any account.
+    for _n <- 1..(Sanctum.SignIn.max_waiting() - 1) do
+      binding = {:browser, "csrf-#{System.unique_integer([:positive])}"}
+      {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, binding)
+      {pub, _priv} = :crypto.generate_key(:ecdh, :secp256r1)
+
+      {:ok, key} =
+        Prima.Identity.Key.new(alg: :es256, kind: :passkey, pub: pub, credential_id: "c")
+
+      answer = %Prima.SignIn.NewPasskey{
+        challenge: request.challenge,
+        identifier: stranger.identifier,
+        key: key
+      }
+
+      {:ok, %{waiting: _code}} = Sanctum.SignIn.answer(answer, binding)
+    end
+
+    {:ok, view, _html} = live(conn, ~p"/login")
+    view |> element(~s([data-test="sign-in"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    [_page, fragment] = String.split(url, "#", parts: 2)
+    {:ok, request} = fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+    {pub, _priv} = :crypto.generate_key(:ecdh, :secp256r1)
+    {:ok, key} = Prima.Identity.Key.new(alg: :es256, kind: :passkey, pub: pub, credential_id: "c")
+
+    answer = %Prima.SignIn.NewPasskey{
+      challenge: request.challenge,
+      identifier: stranger.identifier,
+      key: key
+    }
+
+    render_hook(view, "account_answer", %{"answer" => Prima.SignIn.fragment(answer)})
+    html = render_async(view, @answered_ms)
+
+    assert view |> element(~s([data-test="sign-in-error"])) |> render() =~
+             "Too many browsers already ask to add a passkey to this account."
+
+    refute has_element?(view, ~s([data-test="passkey-waiting"]))
+    refute_vocabulary(html)
+  end
+
   # The account's directory, read for an account this CYFR has not read
   # yet, holds the read here until the test releases it, past the
   # browser's 30 s wait on the event (stood in for by `@push_timeout_ms`).
