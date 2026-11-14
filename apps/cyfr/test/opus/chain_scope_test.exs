@@ -167,8 +167,9 @@ defmodule Opus.ChainScopeTest do
     test "a guest-planed context cannot read execution records at all", %{ctx: ctx} do
       stranger = record!(ctx, component_type: :formula)
 
-      # Belt to the chain scope's braces: the record read gate refuses the
-      # guest plane outright, before any lineage question arises.
+      # Belt to the chain scope's braces: reading a record needs
+      # `storage_read`, which the guest plane may not use, so the read is
+      # refused before any row or lineage question arises.
       {:error, message} =
         Sanctum.Gate.call_in_chain(
           "execution",
@@ -182,7 +183,7 @@ defmodule Opus.ChainScopeTest do
           }
         )
 
-      assert {:not_found, "Execution", _} = message
+      assert message == {:guest_plane, :storage_read}
     end
   end
 
@@ -244,15 +245,14 @@ defmodule Opus.ChainScopeTest do
       end
     end
 
-    test "guest-plane read actions are unaffected", %{guest: guest} do
-      # The guard is scoped to the two authority-rooting actions; a chain-scoped
-      # read still resolves normally (here: no such execution).
-      assert {:error, _} =
-               Opus.Provider.handle(
-                 "execution",
-                 guest,
-                 %{"action" => "logs", "execution_id" => "exec_missing"}
-               )
+    test "guest-plane read actions answer their own refusal", %{guest: guest} do
+      # The guard is scoped to the two authority-rooting actions; a read is
+      # refused by the permission reading a record needs, not by it.
+      assert Opus.Provider.handle(
+               "execution",
+               guest,
+               %{"action" => "logs", "execution_id" => "exec_missing"}
+             ) == {:error, {:guest_plane, :storage_read}}
     end
   end
 end

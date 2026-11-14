@@ -195,6 +195,15 @@ defmodule Opus.Provider do
     end
   end
 
+  # Logs, cancel and retry are `:execute` operations that read the run's
+  # record, and reading a record needs `:storage_read` too
+  # (`Opus.Record.get/3`). A caller who may not use it, for want of the
+  # permission or from inside a running component, is told so before any
+  # row is read, so the answer is the same whether the id names a run or
+  # not; a caller who may reads a missing run and another athanor's alike,
+  # as not found.
+  defp may_read_runs(ctx), do: Context.require_permission(ctx, :storage_read)
+
   # An in-chain cancel reads its row in the chain before anything is
   # cancelled; an external-plane cancel leaves the read to the cancel.
   defp check_chain_scope(ctx, execution_id, args) do
@@ -609,7 +618,8 @@ defmodule Opus.Provider do
         %Context{} = ctx,
         %{"action" => "logs", "execution_id" => execution_id} = args
       ) do
-    with {:ok, record} <- read_in_chain(ctx, execution_id, args) do
+    with :ok <- may_read_runs(ctx),
+         {:ok, record} <- read_in_chain(ctx, execution_id, args) do
       logs = format_execution_logs(record)
 
       {:ok,
@@ -641,7 +651,8 @@ defmodule Opus.Provider do
           "execution_id" => execution_id
         } = args
       ) do
-    with :ok <- check_chain_scope(ctx, execution_id, args) do
+    with :ok <- may_read_runs(ctx),
+         :ok <- check_chain_scope(ctx, execution_id, args) do
       case Opus.cancel(ctx, execution_id) do
         {:ok, result} ->
           {:ok, result}
@@ -680,7 +691,8 @@ defmodule Opus.Provider do
   # retry's answer.
   def handle("execution", %Context{} = ctx, %{"action" => "retry", "execution_id" => id})
       when is_binary(id) do
-    with {:ok, record} <- retriable(ctx, id),
+    with :ok <- may_read_runs(ctx),
+         {:ok, record} <- retriable(ctx, id),
          :ok <- known_failed(record),
          {:ok, consent_id} <- rooted_at(ctx, record),
          {:ok, input} <- Record.input(ctx, record) do

@@ -804,14 +804,14 @@ defmodule Opus.ProviderTest do
   # The execution slots the context's athanor holds.
   defp slots(ctx), do: Map.get(Prima.Slots.status(Opus.Slots).keys, ctx.athanor_id, 0)
 
-  # What an MCP client receives for `tools/call` of `execution.run` with
-  # `args`: the JSON-RPC body the transport writes for the router's answer.
+  # What an MCP client receives for `tools/call` of `execution.run`, or the
+  # action `args` names, with `args`: the JSON-RPC body the transport writes for the router's answer.
   defp over_mcp(ctx, args) do
     message = %Prima.MCP.Message{
       type: :request,
       id: 1,
       method: "tools/call",
-      params: %{"name" => "execution", "arguments" => Map.put(args, "action", "run")}
+      params: %{"name" => "execution", "arguments" => Map.put_new(args, "action", "run")}
     }
 
     case Emissary.MCP.Router.dispatch(ctx, message) do
@@ -1338,6 +1338,71 @@ defmodule Opus.ProviderTest do
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
       assert Prima.Refusal.message(reason) =~ "not found"
+    end
+  end
+
+  # Logs, cancel and retry read the run's record, which needs
+  # `:storage_read` beside the operations' `:execute`. A caller without
+  # it, and a caller inside a running component, is told so before any row
+  # is read, the same for its own run, an unknown id and another athanor's
+  # run, and nothing is cancelled.
+  describe "execution tool - reading a run without storage_read" do
+    test "logs, cancel and retry name the permission whatever the id", %{ctx: ctx} do
+      own = Opus.Record.new(ctx, "reagent:local.reader:1.0.0", %{})
+      :ok = Opus.Record.write_started(ctx, own)
+
+      other = %{ctx | athanor_id: ctx.athanor_id <> "_other", user_id: ctx.user_id <> "_other"}
+      Arca.Test.Actor.athanor!(other.athanor_id)
+      foreign = Opus.Record.new(other, "reagent:local.reader:1.0.0", %{})
+      :ok = Opus.Record.write_started(other, foreign)
+
+      execute_only = %{ctx | permissions: MapSet.new([:execute])}
+      guest = Context.enter_guest(execute_only)
+      ids = [own.id, "exec_nonexistent", foreign.id]
+
+      for {caller, refusal} <- [
+            {execute_only, {:missing_permission, :storage_read}},
+            {guest, {:guest_plane, :storage_read}}
+          ],
+          action <- ["logs", "cancel", "retry"],
+          id <- ids do
+        assert Provider.handle("execution", caller, %{
+                 "action" => action,
+                 "execution_id" => id
+               }) == {:error, refusal},
+               "#{caller.plane} #{action} #{id}"
+      end
+
+      # What an outside caller reads: the gate answers the refusal as a
+      # JSON-RPC error in the permission's words.
+      for id <- ids do
+        answer = over_mcp(execute_only, %{"action" => "logs", "execution_id" => id})
+
+        assert {answer["error"], answer["result"]} ==
+                 {%{
+                    "code" => -33004,
+                    "message" => "Unauthorized: missing required permission 'storage_read'"
+                  }, nil},
+               id
+      end
+
+      assert %Prima.Refusal{
+               class: :forbidden,
+               message:
+                 "Unauthorized: missing required permission 'storage_read' " <>
+                   "(API key does not include this scope — recreate with --scope storage_read)"
+             } = Sanctum.Refusals.classify({:missing_permission, :storage_read}, :api_key)
+
+      assert ["running", "running"] =
+               Arca.Repo.all(
+                 from(e in "executions", where: e.id in ^[own.id, foreign.id], select: e.status)
+               )
+
+      # With the permission, another athanor's run reads as an unknown one.
+      for id <- ["exec_nonexistent", foreign.id] do
+        assert Provider.handle("execution", ctx, %{"action" => "logs", "execution_id" => id}) ==
+                 {:error, {:not_found, "Execution", id}}
+      end
     end
   end
 

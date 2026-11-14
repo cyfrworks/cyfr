@@ -6,9 +6,9 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
 
   @moduletag auth: :person
 
-  # Execution-event access requires authentication, a tenant-scoped read and
-  # `storage_read` on the execution. Unknown and inaccessible ids return the
-  # same 404.
+  # Execution-event access requires authentication, `storage_read`, and a
+  # tenant-scoped read of the execution. Unknown and another athanor's ids
+  # return the same 404.
   describe "GET /api/executions/:id/events" do
     # The controller returns 503 when no worker service answers; the test
     # boot's runtime does (`Cyfr.Test.RuntimeService`).
@@ -61,13 +61,15 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
       assert json_response(conn, 404)["code"] == "not_found"
     end
 
-    # The read is gated by the credential's `storage_read`: the person who
-    # started the execution, in their own athanor, reads nothing of it
-    # under a key without it. An application key defaults to `execute`,
-    # `component_read` and `storage_read`; this one is narrowed to
-    # `execute`. The terminal row makes a controller that skipped the check
-    # end its stream at once rather than hang the test.
-    test "a key without storage_read in the execution's own athanor is a 404", %{conn: conn} do
+    # The read is gated by the credential's `storage_read`: under a key
+    # without it the person who started the execution, in their own
+    # athanor, reads nothing of it, and is told which scope the key lacks.
+    # The refusal comes before the id is looked up, so an unknown id and
+    # another athanor's run answer the same. An application key defaults
+    # to `execute`, `component_read` and `storage_read`; this one is
+    # narrowed to `execute`. The terminal row makes a controller that
+    # skipped the check end its stream at once rather than hang the test.
+    test "a key without storage_read is told so, whatever the id names", %{conn: conn} do
       # A namespace of their own: the test athanor's person holds `testns`.
       {ctx, user} =
         Sanctum.TestContext.person!(
@@ -80,6 +82,10 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
       exec = admit!(ctx)
       terminal!(exec)
 
+      {_ctx_a, ctx_b} = Sanctum.TestContext.two_contexts()
+      foreign = admit!(ctx_b)
+      terminal!(foreign)
+
       {:ok, key} =
         Sanctum.TestContext.create_key(ctx, %{
           name: "events-execute-only",
@@ -87,12 +93,20 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
           scope: ["execute"]
         })
 
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer " <> key.api_key)
-        |> get("/api/executions/#{exec.id}/events")
+      for id <- [exec.id, "exec_does_not_exist", foreign.id] do
+        conn =
+          conn
+          |> put_req_header("authorization", "Bearer " <> key.api_key)
+          |> get("/api/executions/#{id}/events")
 
-      assert json_response(conn, 404)["code"] == "not_found"
+        assert json_response(conn, 403) == %{
+                 "code" => "forbidden",
+                 "message" =>
+                   "Unauthorized: missing required permission 'storage_read' " <>
+                     "(API key does not include this scope — recreate with --scope storage_read)"
+               },
+               id
+      end
     end
   end
 
