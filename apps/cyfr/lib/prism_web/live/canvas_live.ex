@@ -55,6 +55,13 @@ defmodule PrismWeb.CanvasLive do
   shell's arrangement events (`PrismWeb.ShellLive`), one per settled
   gesture.
 
+  A full app wears the capsule instead, inside its wrapper: More options,
+  which opens a menu of minimise (`frame_minimise`), close
+  (`close_active_tincture`) and the other open apps, each pushing what its
+  shelf entry pushes (a launch from the picker, `select_tincture`), and
+  close. At a phone's width the shelf keeps room for the open apps, each
+  drawn as its icon, so an app minimised there comes back with a tap.
+
   The shelf (`#canvas-shelf`, along the bottom, its height
   `--canvas-shelf-height` in `canvas_chrome.css`, drawn with the
   visible canvas, and like the canvas's other
@@ -322,7 +329,11 @@ defmodule PrismWeb.CanvasLive do
             {refusal_sentence(frame.refusal)}
           </div>
           <.chrome :if={chrome?(frame)} frame={frame} card={Map.get(@cards, frame.tincture_id)} />
-          <.iframe_capsule :if={frame.placement == :full} />
+          <.iframe_capsule
+            :if={frame.placement == :full}
+            frame={frame}
+            others={capsule_others(frame, @shelf_apps, @frames, @cards)}
+          />
         </div>
       </div>
 
@@ -379,11 +390,12 @@ defmodule PrismWeb.CanvasLive do
             data-canvas-active={to_string(app.active)}
             data-canvas-minimised={to_string(app.minimised)}
             aria-pressed={to_string(app.active)}
+            aria-label={app.title}
             title={app.title}
             class="canvas-shelf-app"
           >
             <span class="canvas-app-icon" aria-hidden="true">{app.icon}</span>
-            <span class="truncate">{app.name}</span>
+            <span class="canvas-shelf-app-name truncate">{app.name}</span>
           </button>
         </div>
       </nav>
@@ -419,7 +431,7 @@ defmodule PrismWeb.CanvasLive do
           data-canvas-action="minimise"
           phx-click={JS.push("frame_minimise", value: %{frame: @frame.id})}
           aria-label="Minimise"
-          title="Minimise (Ctrl+Alt+M)"
+          title="Minimise (Ctrl+Alt+M while the page has the focus)"
         >
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 11h8" /></svg>
         </button>
@@ -476,7 +488,16 @@ defmodule PrismWeb.CanvasLive do
     """
   end
 
+  attr :frame, :map, required: true
+  attr :others, :list, required: true
+
+  # A full app's capsule: More options, which opens a menu of minimise,
+  # close and the other open apps, each a push to the shell, and close. The
+  # menu is shown and hidden in the page alone (`JS.toggle`), which a patch
+  # keeps.
   defp iframe_capsule(assigns) do
+    assigns = assign(assigns, :menu, "capsule-menu-#{assigns.frame.id}")
+
     ~H"""
     <div
       class="absolute right-4 top-4 z-30 flex items-center rounded-full border border-white/10 bg-black/55 shadow-lg backdrop-blur-md"
@@ -484,9 +505,14 @@ defmodule PrismWeb.CanvasLive do
       aria-label="Tincture controls"
     >
       <button
+        type="button"
         class="flex h-8 w-10 items-center justify-center rounded-l-full text-text-secondary transition-colors hover:bg-white/5 hover:text-text-primary"
         title="More"
         aria-label="More options"
+        aria-haspopup="menu"
+        aria-controls={@menu}
+        data-canvas-action="more"
+        phx-click={JS.toggle(to: "##{@menu}")}
       >
         <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <circle cx="5" cy="12" r="1" fill="currentColor" />
@@ -505,6 +531,46 @@ defmodule PrismWeb.CanvasLive do
           <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
         </svg>
       </button>
+      <div
+        id={@menu}
+        role="menu"
+        aria-label="More options"
+        hidden
+        class="absolute right-0 top-10 min-w-[12rem] overflow-hidden rounded-lg border border-white/10 bg-black/85 py-1 text-sm text-text-secondary shadow-xl backdrop-blur-md"
+      >
+        <button
+          type="button"
+          role="menuitem"
+          data-canvas-menu="minimise"
+          phx-click={
+            JS.hide(to: "##{@menu}") |> JS.push("frame_minimise", value: %{frame: @frame.id})
+          }
+          class="block w-full px-3 py-2 text-left hover:bg-white/10 hover:text-text-primary"
+        >
+          Minimise
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          data-canvas-menu="close"
+          phx-click={JS.hide(to: "##{@menu}") |> JS.push("close_active_tincture")}
+          class="block w-full px-3 py-2 text-left hover:bg-white/10 hover:text-text-primary"
+        >
+          Close
+        </button>
+        <div :if={@others != []} class="my-1 border-t border-white/10" role="separator"></div>
+        <button
+          :for={other <- @others}
+          type="button"
+          role="menuitem"
+          data-canvas-menu-app={other.ref}
+          phx-click={JS.hide(other.push, to: "##{@menu}")}
+          class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10 hover:text-text-primary"
+        >
+          <span class="canvas-app-icon" aria-hidden="true">{other.icon}</span>
+          <span class="truncate">{other.name}</span>
+        </button>
+      </div>
     </div>
     """
   end
@@ -587,6 +653,28 @@ defmodule PrismWeb.CanvasLive do
 
     held ++ waiting
   end
+
+  # The apps a full app's menu goes to: for an app over the canvas, the
+  # canvas's other apps as the shelf lists them; for a launch from the
+  # picker, the other launches held, each shown by launching it again.
+  defp capsule_others(%{key: {:app, _canvas, ref}}, shelf_apps, _frames, _cards),
+    do: Enum.reject(shelf_apps, &(&1.ref == ref))
+
+  defp capsule_others(%{key: {:full, id}}, _shelf_apps, frames, cards) do
+    for %{key: {:full, other}} <- Frames.list(frames),
+        other != id,
+        card = Map.get(cards, other),
+        card != nil do
+      %{
+        ref: Frames.ref_of(card),
+        name: app_name(card, nil),
+        icon: app_icon(card, nil),
+        push: JS.push("select_tincture", value: %{tincture: other})
+      }
+    end
+  end
+
+  defp capsule_others(_frame, _shelf_apps, _frames, _cards), do: []
 
   defp shelf_entry(card, ref, push, active, minimised) do
     name = app_name(card, nil) || ref
