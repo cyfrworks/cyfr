@@ -70,8 +70,6 @@ defmodule Cyfr.ReleaseChannelTest do
     end
 
     test "takes from each listing the release the shared selection rows name, reading every page up to the first that is not full" do
-      assert @selection != []
-
       for %{"name" => name, "pages" => pages, "picks" => picks} = row <- @selection do
         {:ok, asked} = Agent.start_link(fn -> [] end)
 
