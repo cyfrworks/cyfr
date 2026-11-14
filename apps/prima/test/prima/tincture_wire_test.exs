@@ -629,6 +629,27 @@ defmodule Prima.TinctureWireTest do
                  args
       end
 
+      opened =
+        for %{"message" => %{"verb" => "opened", "args" => args}} <- rows["valid"], do: args
+
+      assert opened |> Enum.map(& &1["outcome"]) |> Enum.uniq() |> Enum.sort() ==
+               Enum.sort(TinctureWire.open_outcomes())
+
+      for args <- opened do
+        assert TinctureWire.opened(args["call"], args["outcome"], args["reason"]) == args
+      end
+
+      for %{"why" => why, "message" => %{"verb" => "opened", "args" => args}} <- rows["invalid"] do
+        built =
+          try do
+            TinctureWire.opened(args["call"], args["outcome"], args["reason"])
+          rescue
+            ArgumentError -> :raised
+          end
+
+        refute built == args, why
+      end
+
       for %{"message" => %{"verb" => "prefs", "args" => args}} <- rows["valid"] do
         assert TinctureWire.prefs_answer(
                  args["call"],

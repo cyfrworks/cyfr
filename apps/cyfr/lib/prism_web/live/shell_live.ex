@@ -141,14 +141,15 @@ defmodule PrismWeb.ShellLive do
   that asked keeps running under it; `chat` opens the chat overlay and
   `aqua` AQUA's panel in place, each at the thread a `ref` names when
   the person's own seat reads it there (a shared thread they sit in, a
-  thread of their own), and a Dashboard page ignores a `ref`. A
-  control's press and a write
-  are answered over the frame's port (`canvas_answer`) with their typed
-  outcome, `cancelled` when this view did not act on them. Its bridge
-  (`iframe_bridge.js`) forwards those verbs only while the page holds
-  activation that no input in the shell's chrome and no earlier verb has
-  spent, and drops one sent within the activation's lifespan of the last
-  spend at once, a press or a write told `cancelled` naming `too_soon`.
+  thread of their own), and a Dashboard page ignores a `ref` but
+  Executions, which opens at the run it names in either UI mode. An open, a control's press
+  and a write are answered over the frame's port (`canvas_answer`) with
+  their typed outcome, `cancelled` when this view did not act on them
+  (an app's open too, `opened`). Its bridge (`iframe_bridge.js`) forwards
+  those verbs only while the page holds activation that no input in the
+  shell's chrome and no earlier verb has spent, and drops one sent within
+  the activation's lifespan of the last spend at once, an open, a press
+  or a write told `cancelled` naming `too_soon`.
   Each carries the ordinal of the person's input its bridge forwarded it
   with, and one input is honoured once.
 
@@ -1005,16 +1006,18 @@ defmodule PrismWeb.ShellLive do
   end
 
   # `open` names a tincture this shell lists, versionless or at the
-  # version it lists; anything else opens nothing.
-  defp tincture_verb(socket, _frame, %{verb: :open, args: %{"ref" => ref} = args}) do
+  # version it lists; anything else opens nothing. Either way the frame is
+  # answered under the open's call.
+  defp tincture_verb(socket, frame, %{verb: :open, args: %{"ref" => ref} = args}) do
     subject = Map.get(args, "subject")
 
     with %{id: id} = card <- listed(socket, ref),
          :ok <- accepts(card, subject) do
       socket = launch_tincture(socket, id)
-      if subject, do: give_subject(socket, {:full, id}, subject), else: socket
+      socket = if subject, do: give_subject(socket, {:full, id}, subject), else: socket
+      opened(socket, frame, args["call"], "opened")
     else
-      _refused -> drop_message(socket)
+      refused -> socket |> drop_message() |> open_refused(frame, args["call"], refused)
     end
   end
 
@@ -1118,11 +1121,11 @@ defmodule PrismWeb.ShellLive do
     if ready?(socket, frame), do: socket, else: enter_fallback(socket, :not_ready)
   end
 
-  defp live_canvas_verb(socket, %{key: {:canvas, canvas_id}}, %{
+  defp live_canvas_verb(socket, %{key: {:canvas, canvas_id}} = frame, %{
          verb: :open,
          args: %{"ref" => ref} = args
        }),
-       do: open_from_canvas(socket, canvas_id, ref, Map.get(args, "subject"))
+       do: open_from_canvas(socket, frame, canvas_id, ref, args)
 
   defp live_canvas_verb(socket, frame, %{verb: :press, args: %{"control" => _} = args}),
     do: press_control(socket, frame, args)
@@ -1148,8 +1151,11 @@ defmodule PrismWeb.ShellLive do
 
   defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
 
-  # A press of a control or a write of the preferences the shell did not
-  # act on is answered so, never left waiting: it did not run.
+  # An open, a press of a control or a write of the preferences the shell
+  # did not act on is answered so, never left waiting: it did not run.
+  defp not_run(socket, frame, %{verb: :open, args: %{"call" => call}}),
+    do: opened(socket, frame, call, "cancelled")
+
   defp not_run(socket, frame, %{verb: :press, args: %{"control" => control, "call" => call}}),
     do: answer(socket, frame, "pressed", Prima.TinctureWire.pressed(control, call, "cancelled"))
 
@@ -1165,6 +1171,19 @@ defmodule PrismWeb.ShellLive do
   # its bridge, once and never held for a later handshake.
   defp answer(socket, %{id: frame_id}, verb, args),
     do: push_event(socket, "canvas_answer", %{frame: frame_id, verb: verb, args: args})
+
+  defp opened(socket, frame, call, outcome, reason \\ nil),
+    do: answer(socket, frame, "opened", Prima.TinctureWire.opened(call, outcome, reason))
+
+  # An open the shell does not act on: a tincture it does not list, a
+  # subject the app does not take, or the person rearranging the desktop.
+  defp open_refused(socket, frame, call, nil),
+    do: opened(socket, frame, call, "refused", "not_found")
+
+  defp open_refused(socket, frame, call, :refused),
+    do: opened(socket, frame, call, "refused", "invalid_argument")
+
+  defp open_refused(socket, frame, call, _not_now), do: opened(socket, frame, call, "cancelled")
 
   # ---- a desktop's controls ---------------------------------------------------
 
@@ -1567,10 +1586,25 @@ defmodule PrismWeb.ShellLive do
     })
   end
 
+  # A run's page, Executions at the run `ref` names, as its address focuses
+  # one, where its sentence is: in either UI mode, since the run's sentence
+  # is read nowhere else. What the page shows of it is the page's, under
+  # the person's own reads.
+  defp settings(socket, "executions", ref) when is_binary(ref) do
+    push_event(socket, "navigate", %{
+      to:
+        PrismWeb.Nav.href(
+          "/executions?" <> URI.encode_query(%{"id" => ref}),
+          socket.assigns.athanor_route
+        )
+    })
+  end
+
   # One of Prism's own pages, by its key in the Dashboard's list for the
   # person's UI mode: it opens as the overlay over the desktop, the page's
   # LiveView moved there by this view's hook, so the canvas keeps running.
-  # A page opens at its top: no Dashboard page takes a record to open at.
+  # A page opens at its top: no other Dashboard page takes a record to
+  # open at.
   defp settings(socket, page, _ref) do
     mode = Prism.Labels.mode(socket.assigns[:ui_mode])
 
@@ -1623,16 +1657,21 @@ defmodule PrismWeb.ShellLive do
   # A listed tincture the canvas opens is the person's open: placed where
   # the layout has it, or opened as `Prism.Arrangement.open/4` places it,
   # and written to the layout with the next write.
-  defp open_from_canvas(socket, canvas_id, ref, subject) do
+  defp open_from_canvas(socket, frame, canvas_id, ref, args) do
+    subject = Map.get(args, "subject")
+
     with :ok <- arranging(socket),
          %{} = card <- listed(socket, ref),
          :ok <- accepts(card, subject),
-         {:ok, opened} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
-      if subject,
-        do: give_subject(opened, {:app, canvas_id, Frames.ref_of(card)}, subject),
-        else: opened
+         {:ok, socket} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
+      socket =
+        if subject,
+          do: give_subject(socket, {:app, canvas_id, Frames.ref_of(card)}, subject),
+          else: socket
+
+      opened(socket, frame, args["call"], "opened")
     else
-      _refused -> drop_message(socket)
+      refused -> socket |> drop_message() |> open_refused(frame, args["call"], refused)
     end
   end
 

@@ -251,7 +251,9 @@ defmodule Opus.TelemetryTest do
                error_class: :cancelled,
                started_at: @started,
                ended_at: @ended,
-               duration_ms: 12
+               duration_ms: 12,
+               origin: nil,
+               retryable: false
              }
     end
 

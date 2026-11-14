@@ -43,6 +43,9 @@ defmodule Opus.Telemetry do
   - `started_at` - When the row was admitted (UTC)
   - `ended_at` - When the row ended (UTC; stop/exception only)
   - `outcome` - :success or :failure (stop/exception only)
+  - `origin` - Who started a root (`Prima.Origin`); nil for a child
+  - `retryable` - Whether `execution.retry` runs it again
+    (`Opus.Record.retriable/1`); true only on a failure
   """
 
   alias Opus.Record
@@ -53,7 +56,7 @@ defmodule Opus.Telemetry do
 
   Measurements: `system_time`. Metadata: `execution_id`, `request_id`,
   `component`, `reference`, `component_type`, `user_id`, `athanor_id`,
-  `started_at`.
+  `started_at`, `origin`, and `retryable: false`.
   """
   @spec execute_start(Record.t()) :: :ok
   def execute_start(%Record{} = record) do
@@ -68,7 +71,9 @@ defmodule Opus.Telemetry do
         component_type: record.component_type,
         user_id: record.user_id,
         athanor_id: record.athanor_id,
-        started_at: record.started_at
+        started_at: record.started_at,
+        origin: record.admitted.origin,
+        retryable: false
       }
     )
   end
@@ -99,7 +104,9 @@ defmodule Opus.Telemetry do
         outcome: :success,
         started_at: record.started_at,
         ended_at: record.completed_at,
-        duration_ms: record.duration_ms
+        duration_ms: record.duration_ms,
+        origin: record.admitted.origin,
+        retryable: false
       }
     )
   end
@@ -111,7 +118,9 @@ defmodule Opus.Telemetry do
   `parent_execution_id` (nil for a root), `outcome: :failure`, `error`
   (`reason` itself when a string, else its rendered sentence),
   `error_class` (the class the record keeps it under, `Opus.Record.fail/3`),
-  `ended_at` and `duration_ms`.
+  `ended_at`, `duration_ms`, and `retryable` as retry's rule reads the
+  failed record (`Opus.Record.retryable?/1`), after the write that closed
+  its attempt.
   """
   @spec execute_exception(Record.t(), term()) :: :ok
   def execute_exception(%Record{} = record, reason) do
@@ -134,7 +143,9 @@ defmodule Opus.Telemetry do
         error_class: record.error_class,
         started_at: record.started_at,
         ended_at: record.completed_at,
-        duration_ms: record.duration_ms
+        duration_ms: record.duration_ms,
+        origin: record.admitted.origin,
+        retryable: Record.retryable?(record)
       }
     )
   end
@@ -167,7 +178,9 @@ defmodule Opus.Telemetry do
         status: :cancelled,
         started_at: record.started_at,
         ended_at: record.completed_at,
-        duration_ms: record.duration_ms
+        duration_ms: record.duration_ms,
+        origin: record.admitted.origin,
+        retryable: false
       }
     )
   end
@@ -215,7 +228,11 @@ defmodule Opus.Telemetry do
         error_class: failure.error_class,
         started_at: row.started_at,
         ended_at: failure.ended_at,
-        duration_ms: duration_ms
+        duration_ms: duration_ms,
+        origin: row_origin(row),
+        # A row failed from outside its runner is a cascaded child or a
+        # lapse, uncertain: retry's rule runs neither again.
+        retryable: false
       }
     )
   end
@@ -236,6 +253,19 @@ defmodule Opus.Telemetry do
   end
 
   defp native_duration(%Record{duration_ms: duration_ms}), do: duration_ms * 1_000_000
+
+  # A row's origin as its reader holds it: a record's, as it was admitted,
+  # or a stored row's spelling; one the read did not select is nil.
+  defp row_origin(%Record{admitted: %{origin: origin}}), do: origin
+
+  defp row_origin(%{origin: spelling}) when is_binary(spelling) do
+    case Prima.Origin.from_wire(spelling) do
+      {:ok, origin} -> origin
+      {:error, _none} -> nil
+    end
+  end
+
+  defp row_origin(_row), do: nil
 
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: Sanctum.Refusals.render(reason)

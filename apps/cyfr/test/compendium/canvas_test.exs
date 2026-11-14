@@ -1129,7 +1129,7 @@ defmodule Compendium.CanvasTest do
                ~w(at destination id kind label outcome revision since)
 
       assert Enum.sort(Map.keys(run_fields)) ==
-               ~w(at component_type duration_ms ended_at error execution_id kind parent_execution_id reference revision started_at)
+               ~w(at component_type duration_ms ended_at error execution_id kind origin parent_execution_id reference retryable revision started_at)
 
       assert length(Sanctum.Catalog.streams()) > length(streams)
     end

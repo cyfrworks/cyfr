@@ -56,9 +56,11 @@ import {
 } from "../../../../../seed/components/tinctures/local/canvas/0.5.0/src/model.ts"
 
 import * as V6 from "../../../../../seed/components/tinctures/local/canvas/0.6.0/src/model.ts"
+import * as V61 from "../../../../../seed/components/tinctures/local/canvas/0.6.1/src/model.ts"
 
 const VERSION = new URL("../../../../../seed/components/tinctures/local/canvas/0.5.0/", import.meta.url)
 const VERSION_6 = new URL("../../../../../seed/components/tinctures/local/canvas/0.6.0/", import.meta.url)
+const VERSION_61 = new URL("../../../../../seed/components/tinctures/local/canvas/0.6.1/", import.meta.url)
 const SCAFFOLD = new URL("../../../lib/compendium/scaffold.ex", import.meta.url)
 
 // Every pending reaction runs: a promise's handlers, then theirs.
@@ -1196,6 +1198,293 @@ describe("the shipped canvas 0.6.0", () => {
     assert.match(model, /export type StreamState = "live" \| "unavailable" \| "suspended" \| "stale" \| "denied" \| "ended"/)
     assert.match(model, /revision\?: number \| null;\s*at\?: string \| null;/)
     assert.match(readFileSync(new URL("src/cyfr.d.ts", VERSION_6), "utf8"), /declare const cyfr: import\("\.\/model"\)\.Sdk;/)
+  })
+})
+
+// The canvas's 0.6.1: each failure by the cause it reads as and who started
+// it, Retry only where the run's change says a retry runs it, the first
+// steps on an empty desktop, and an open the shell dropped as too soon.
+describe("the shipped canvas 0.6.1", () => {
+  const folded = (...items) => items.reduce((state, item) => V61.fold(state, "runs.changes", item, 1), V61.EMPTY)
+  // The wire's failed run (tests/fixtures/tincture_wire.json, stream_events
+  // runs.changes, exec_vector_failed), as each run here is built from it,
+  // without who started it or whether a retry runs it, which each test says.
+  const failed = (id, extra = {}) => {
+    const wire = fixture.stream_events["runs.changes"].map(({event}) => event).find((e) => e.kind === "failed")
+    const {origin: _origin, retryable: _retryable, revision: _revision, at: _at, ...run} = wire
+    return {...run, execution_id: id, ...extra}
+  }
+  // The schedules stream's first picture heard whole, as after its snapshot.
+  const heard = (state = V61.EMPTY) => V61.snapshotted(V61.resynced(state, "schedules.changes"), "schedules.changes")
+  const sources = () => files(new URL("src/", VERSION_61)).map((file) => readFileSync(file, "utf8"))
+  const app = () => readFileSync(new URL("src/App.tsx", VERSION_61), "utf8")
+
+  // window.cyfr as the model's taps meet it: each call kept, and each
+  // answer the next of its queue.
+  function shell() {
+    const calls = {open: [], settings: [], prefs: [], press: []}
+    const answers = {open: [], prefs: [], press: []}
+    const cyfr = {
+      open(ref) {
+        calls.open.push(ref)
+        return Promise.resolve(answers.open.shift())
+      },
+      settings(page, ref = null) {
+        calls.settings.push([page, ref])
+      },
+      prefs(document) {
+        calls.prefs.push(document)
+        return Promise.resolve(answers.prefs.shift())
+      },
+      press(control, value) {
+        calls.press.push([control, value])
+        return Promise.resolve(answers.press.shift())
+      }
+    }
+    return {cyfr, calls, answers}
+  }
+
+  test("Retry is offered only on a failed run whose change says a retry runs it", () => {
+    const {rows} = V61.recentRows(
+      folded(
+        failed("manual", {origin: "interactive", retryable: false}),
+        failed("scheduled", {origin: "schedule", retryable: true}),
+        failed("child", {origin: null, parent_execution_id: "scheduled", retryable: false}),
+        failed("unsaid", {origin: "schedule"}),
+        failed("not-true", {origin: "schedule", retryable: "true"}),
+        run("done", "completed", {origin: "schedule", retryable: false})
+      ),
+      8
+    )
+    assert.deepEqual(Object.fromEntries(rows.map((row) => [row.id, row.retry])), {
+      done: false,
+      "not-true": false,
+      unsaid: false,
+      child: false,
+      scheduled: true,
+      manual: false
+    })
+  })
+
+  test("the wire's runs fold into rows: the failed one a schedule started names it and offers Retry, the running one neither", () => {
+    const events = fixture.stream_events["runs.changes"].map(({event}) => event)
+    assert.deepEqual(events.map((e) => [e.execution_id, e.origin, e.retryable]), [
+      ["exec_vector_running", "interactive", false],
+      ["exec_vector_failed", "schedule", true]
+    ])
+    const {rows} = V61.recentRows(folded(...events), 8)
+    assert.deepEqual(rows.map((row) => [row.id, row.starter, row.retry]), [
+      ["exec_vector_failed", "by a schedule", true],
+      ["exec_vector_running", null, false]
+    ])
+  })
+
+  test("a failure names who started it in the canvas's four words, and an origin it has no words for names no one", () => {
+    const origins = {interactive: "by you", programmatic: "by an agent or script", schedule: "by a schedule", webhook: "by a webhook"}
+    for (const [origin, words] of Object.entries(origins)) {
+      assert.equal(V61.starter(origin), words)
+      const [row] = V61.recentRows(folded(failed("ex-1", {origin})), 8).rows
+      assert.equal(row.starter, words)
+    }
+    for (const origin of [null, undefined, "", "cron", "Interactive", "constructor", 7, {}]) {
+      assert.equal(V61.starter(origin), null, String(origin))
+    }
+    const unknown = V61.recentRows(folded(failed("a", {origin: "a later origin"}), failed("b", {origin: null}), failed("c")), 8).rows
+    assert.deepEqual(unknown.map((row) => row.starter), [null, null, null])
+    // A run that did not fail names no one.
+    assert.equal(V61.recentRows(folded(run("ok", "completed", {origin: "interactive"})), 8).rows[0].starter, null)
+    // The words are held in one place.
+    for (const words of Object.values(origins)) {
+      assert.equal(sources().join("\n").split(`"${words}"`).length - 1, 1, words)
+    }
+  })
+
+  test("failures group by the cause they read as, its words shown, whatever classes it came from", () => {
+    const state = folded(
+      failed("a", {reference: "catalyst:local.x:1.0.0", error: {class: "forbidden", cause: "refused"}}),
+      failed("b", {reference: "catalyst:local.x:1.0.0", error: {class: "not_owner", cause: "refused"}}),
+      failed("c", {reference: "catalyst:local.y:1.0.0", error: {class: "not_owner", cause: "refused"}}),
+      failed("d", {reference: "catalyst:local.openai:1.0.0", error: {class: "setup_required", cause: "needs_setup"}}),
+      failed("e", {reference: "catalyst:local.openai:1.0.0", error: {class: "consent_required", cause: "needs_setup"}}),
+      failed("f", {reference: "catalyst:local.z:1.0.0", error: {class: "internal", cause: "failed"}}),
+      failed("g", {reference: "catalyst:local.z:1.0.0", error: null}),
+      failed("h", {reference: "catalyst:local.z:1.0.0", error: {class: "internal", cause: "a later cause"}}),
+      failed("i", {reference: "catalyst:local.z:1.0.0", error: {class: "uncertain", cause: "uncertain"}})
+    )
+    assert.deepEqual(
+      V61.causes(state).map((c) => [c.cause, c.short, c.count, c.grantable, c.components.map((x) => [x.name, x.count])]),
+      [
+        ["failed", "Failed", 3, false, [["z", 3]]],
+        ["refused", "Refused", 3, false, [["x", 2], ["y", 1]]],
+        ["needs_setup", "Needs setup", 2, true, [["openai", 2]]],
+        ["uncertain", "Outcome uncertain", 1, false, [["z", 1]]]
+      ]
+    )
+  })
+
+  test("the class is never shown: not \"internal\", nor any other", () => {
+    const classes = ["internal", "forbidden", "not_owner", "setup_required", "timeout", "unavailable", "corrupt"]
+    const state = folded(
+      ...classes.map((cls, i) => failed(`r${i}`, {origin: "interactive", error: {class: cls, cause: "failed"}})),
+      failed("bare", {error: null}),
+      run("plain", "failed", {error: {class: "internal"}})
+    )
+    const shown = JSON.stringify([
+      V61.causes(state).map(({short, components}) => [short, components.map((c) => c.name)]),
+      V61.recentRows(state, 20).rows.map(({name, detail, reason, starter}) => [name, detail, reason, starter]),
+      V61.today(state, new Date("2026-11-15T09:00:00Z")).sentence
+    ])
+    for (const cls of classes) assert.ok(!shown.includes(cls), cls)
+    assert.equal(V61.causes(state)[0].class, undefined)
+    const page = app()
+    assert.doesNotMatch(page, /\.class\b|cause\.shown|\.error\b/)
+  })
+
+  test("a failure opens its run's page, the Executions page at that run, from a tap", () => {
+    const {cyfr, calls} = shell()
+    const [row] = V61.recentRows(folded(failed("exec_42", {origin: "schedule", retryable: true})), 8).rows
+    V61.showRun(cyfr, row)
+    assert.deepEqual(calls.settings, [["executions", "exec_42"]])
+    assert.match(app(), /row\.status === "bad" \? \(\s*<button className="link"[^>]*onClick=\{\(\) => showRun\(cyfr, row\)\}/)
+  })
+
+  test("Retry's answers, in the canvas's words; no words remain for the conflict a retry no longer meets", async () => {
+    const {cyfr, calls, answers} = shell()
+    const [row] = V61.recentRows(folded(failed("ex-1", {origin: "schedule", retryable: true})), 8).rows
+    const said = (answer) => {
+      answers.press.push(answer)
+      return V61.retryRun(cyfr, row)
+    }
+    assert.equal(await said({outcome: "accepted"}), "Running again")
+    assert.equal(await said({outcome: "refused", reason: "conflict"}), "It could not run again")
+    assert.equal(await said({outcome: "refused", reason: "forbidden"}), "This run is not yours to run again")
+    assert.equal(await said({outcome: "refused", reason: "not_found"}), "This run is gone")
+    assert.equal(await said({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
+    assert.deepEqual(calls.press[0], ["retry-run", "ex-1"])
+    assert.doesNotMatch(sources().join("\n"), /\["conflict",/)
+  })
+
+  test("an open the shell dropped as too soon says so where the person tapped, as Retry does; any other answer says nothing", async () => {
+    const {cyfr, calls, answers} = shell()
+    const notes = {ref: "tincture:local.notes", name: "Notes", icon: null, open: false}
+    const said = (answer) => {
+      answers.open.push(answer)
+      return V61.openApp(cyfr, notes)
+    }
+    assert.equal(await said({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
+    assert.equal(V61.TOO_SOON, "Tap again in a moment")
+    assert.equal(await said({outcome: "opened"}), null)
+    assert.equal(await said({outcome: "refused", reason: "not_found"}), null)
+    assert.equal(await said({outcome: "cancelled"}), null)
+    assert.deepEqual(calls.open, Array(4).fill("tincture:local.notes"))
+    assert.match(app(), /onClick=\{\(\) => openApp\(cyfr, app\)\.then\(say\)\}/)
+    assert.match(app(), /\{said !== null && <span className="said">\{said\}<\/span>\}/)
+    assert.match(readFileSync(new URL("src/model.ts", VERSION_61), "utf8"), /open\(ref: string, on\?: \{ kind: string; id: string \} \| null\): Promise<Opened>;/)
+  })
+
+  test("the first steps are offered at first, both, in order, whatever the desktop holds", () => {
+    const [aqua, desktops] = V61.STEPS
+    assert.deepEqual([aqua.page, aqua.title, desktops.page, desktops.title], ["aqua_setup", "Set up AQUA", "desktops", "Choose a desktop"])
+    assert.deepEqual(V61.firstSteps(V61.EMPTY), {offered: [aqua, desktops], hidden: []})
+
+    // Apps, runs and a schedule change nothing: only the person hides a step.
+    const busy = V61.fold(
+      V61.fold(
+        V61.installed(heard(), [{ref: "tincture:local.vault", name: "Vault"}]),
+        "runs.changes",
+        run("models", "completed", {origin: "interactive"}),
+        1
+      ),
+      "schedules.changes",
+      {kind: "changed", schedule_id: "s1", name: "Morning", status: "active"},
+      1
+    )
+    assert.deepEqual(V61.firstSteps(busy), {offered: [aqua, desktops], hidden: []})
+  })
+
+  test("opening a step opens its page and hides nothing: the tap carries one verb", () => {
+    const {cyfr, calls} = shell()
+    const state = V61.desktop(V61.EMPTY, {prefs: {document: {desktop: {}}, revision: 1}})
+    for (const step of V61.firstSteps(state).offered) V61.takeStep(cyfr, step)
+    assert.deepEqual(calls.settings, [["aqua_setup", null], ["desktops", null]])
+    assert.deepEqual(calls.prefs, [])
+    assert.deepEqual(V61.firstSteps(state).offered, V61.STEPS)
+  })
+
+  test("a hidden step is kept in the preferences' desktop, stays hidden when the page opens again, and Getting started offers it again", async () => {
+    const {cyfr, calls, answers} = shell()
+    const told = (document, revision) => V61.desktop(V61.EMPTY, {prefs: {document, revision}})
+    let state = told({widgets: {runs: {on: false}}, desktop: {}}, 1)
+    const [aqua, desktops] = V61.STEPS
+
+    const first = {widgets: {runs: {on: false}}, desktop: {hide_aqua_setup: true}}
+    answers.prefs.push({outcome: "saved", document: first, revision: 2})
+    assert.equal((await V61.hideStep(cyfr, state, aqua)).outcome, "saved")
+    state = told(first, 2)
+    assert.deepEqual(V61.firstSteps(state), {offered: [desktops], hidden: [aqua]})
+
+    const both = {widgets: {runs: {on: false}}, desktop: {hide_aqua_setup: true, hide_desktops: true}}
+    answers.prefs.push({outcome: "saved", document: both, revision: 3})
+    await V61.hideStep(cyfr, state, desktops)
+    state = told(both, 3)
+    assert.deepEqual(V61.firstSteps(state), {offered: [], hidden: [aqua, desktops]})
+
+    // The page opened again, its open carrying that document, keeps both hidden.
+    const reload = {
+      desktop: {prefs: {document: both, revision: 3}},
+      on: () => () => {},
+      ready() {},
+      stream() {
+        return Promise.resolve({close() {}, closed: new Promise(() => {}), state: "live"})
+      }
+    }
+    const states = []
+    const stop = V61.start(reload, (s) => states.push(s))
+    await settle()
+    assert.deepEqual(V61.firstSteps(states.at(-1)), {offered: [], hidden: [aqua, desktops]})
+    stop()
+
+    // Getting started: the desktop without the steps' fields, so both are offered again.
+    answers.prefs.push({outcome: "saved", document: {widgets: {runs: {on: false}}, desktop: {}}, revision: 4})
+    await V61.showSteps(cyfr, state)
+    state = told({widgets: {runs: {on: false}}, desktop: {}}, 4)
+    assert.deepEqual(V61.firstSteps(state), {offered: [aqua, desktops], hidden: []})
+
+    // Each write named the whole desktop, never a widget.
+    assert.deepEqual(calls.prefs, [
+      {desktop: {hide_aqua_setup: true}},
+      {desktop: {hide_aqua_setup: true, hide_desktops: true}},
+      {desktop: {}}
+    ])
+
+    // The page draws Getting started from the hidden steps, and every step
+    // control is a tap's.
+    const page2 = app()
+    assert.match(page2, /steps\.hidden\.length > 0 && \(/)
+    assert.match(page2, /onClick=\{\(\) => showSteps\(cyfr, state\)\}>\s*<b>Getting started<\/b>/)
+    assert.match(page2, /onClick=\{\(\) => hideStep\(cyfr, state, step\)\}>\s*Hide\s*<\/button>/)
+    assert.match(page2, /onClick=\{\(\) => takeStep\(cyfr, step\)\}/)
+  })
+
+  test("the manifest declares each step's field on the desktop as a boolean, beside the four widgets", () => {
+    const {tincture, version} = JSON.parse(readFileSync(new URL("cyfr-manifest.json", VERSION_61), "utf8"))
+    assert.equal(version, "0.6.1")
+    assert.deepEqual(tincture.desktop.prefs, {
+      widgets: Object.fromEntries(V61.WIDGETS.map((widget) => [widget, {}])),
+      desktop: {fields: Object.fromEntries(V61.STEPS.map((step) => [step.field, {type: "boolean"}]))}
+    })
+  })
+
+  test("the page calls the SDK only from a tap's handler, and uses none of the words a person never reads", () => {
+    const page = app()
+    const taps = [...page.matchAll(/(pressSchedule|showWidget|hideStep|showSteps|takeStep|openApp|showRun|grantComponent)\(cyfr/g)]
+    assert.equal(taps.length, 9)
+    for (const tap of taps) assert.match(page.slice(0, tap.index), /onClick=\{\(\) => $/)
+    assert.doesNotMatch(page, /cyfr\.(press|prefs|open|settings|grant)\(/)
+    const manifest = readFileSync(new URL("cyfr-manifest.json", VERSION_61), "utf8")
+    for (const body of [manifest, ...sources()]) {
+      assert.doesNotMatch(body, /\b(homes?|glass(es)?|hubs?|cells?|nodes?|doors?)\b/i)
+    }
   })
 })
 

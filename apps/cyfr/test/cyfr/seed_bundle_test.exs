@@ -169,7 +169,10 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert declaration.desktop.prefs == %{
              widgets: Map.new(~w(attention runs apps schedules), &{&1, %{}}),
-             desktop: %{}
+             desktop: %{
+               "hide_aqua_setup" => %{"type" => "boolean"},
+               "hide_desktops" => %{"type" => "boolean"}
+             }
            }
 
     assert declaration.desktop.chrome == "chrome.css"

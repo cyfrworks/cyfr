@@ -224,6 +224,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
   # A press of a control and a write carry the call number their answer
   # carries back, as the SDK sends them.
+  defp with_call(:open, args), do: Map.put_new(args, "call", next_call())
   defp with_call(:press, %{"control" => _} = args), do: Map.put_new(args, "call", next_call())
   defp with_call(:prefs, args), do: Map.put_new(args, "call", next_call())
   defp with_call(:request, args), do: Map.put_new(args, "call", next_call())
@@ -1138,6 +1139,21 @@ defmodule PrismWeb.ShellDesktopTest do
       assert %{id: ^main, state: :live} = canvas(view)
     end
 
+    test "settings of executions with a run opens the page at that run; another page opens at its top",
+         %{conn: conn, athanor: athanor} do
+      view = shell!(conn)
+      main = canvas(view).id
+      slug = Sanctum.Tenancy.Athanors.route_slug(athanor)
+
+      verb!(view, main, :settings, %{"page" => "executions", "ref" => "exec_0190f3a2"})
+      to = "/a/#{slug}/executions?id=exec_0190f3a2"
+      assert_push_event(view, "navigate", %{to: ^to})
+
+      verb!(view, main, :settings, %{"page" => "schedules", "ref" => "sched_1"})
+      to = "/a/#{slug}/schedules"
+      assert_push_event(view, "navigate", %{to: ^to})
+    end
+
     test "settings of aqua_setup opens Aqua's setup over the desktop, the canvas still held",
          %{conn: conn, athanor: athanor} do
       view = shell!(conn)
@@ -1242,14 +1258,27 @@ defmodule PrismWeb.ShellDesktopTest do
       main = canvas(view).id
       subject = %{"kind" => "run", "id" => "exec_0190f3a2"}
 
-      verb!(view, main, :open, %{"ref" => "tincture:local.plain-view", "subject" => subject})
+      verb!(view, main, :open, %{
+        "ref" => "tincture:local.plain-view",
+        "subject" => subject,
+        "call" => 7
+      })
+
       assert dropped(view) == 1
       refute Frames.get(frames(view), {:app, "main", "tincture:local.plain-view"})
+
+      assert answer!(view, main, "opened") ==
+               %{"call" => 7, "outcome" => "refused", "reason" => "invalid_argument"}
 
       verb!(view, main, :open, %{"ref" => "tincture:local.run-view", "subject" => subject})
       app = Frames.get(frames(view), {:app, "main", "tincture:local.run-view"})
       assert app.subject == subject
       assert handshake!(view, app.id)["subject"] == subject
+
+      # An app's own open is answered too, under its call.
+      verb!(view, app.id, :open, %{"ref" => "tincture:local.plain-view", "call" => 8}, nil)
+      app_id = app.id
+      assert answer!(view, app_id, "opened") == %{"call" => 8, "outcome" => "opened"}
     end
 
     test "opening an existing app on another subject delivers the new subject", %{conn: conn} do

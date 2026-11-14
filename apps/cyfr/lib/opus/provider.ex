@@ -683,7 +683,7 @@ defmodule Opus.Provider do
       when is_binary(id) do
     with :ok <- may_read_runs(ctx),
          {:ok, record} <- retriable(ctx, id),
-         :ok <- known_failed(record),
+         :ok <- Record.retriable(record),
          {:ok, consent_id} <- rooted_at(ctx, record),
          {:ok, input} <- Record.input(ctx, record) do
       case Opus.start_root(ctx, {:id, record.profile_id}, record.reference, input,
@@ -786,14 +786,13 @@ defmodule Opus.Provider do
   # Private Helpers
   # ============================================================================
 
-  # The run a retry repeats: the caller's athanor's own, failed, and a
-  # component root the scheduler fired for a schedule or a feed (its
-  # `schedule_id`), with the profile it rooted at. Another athanor's run
-  # reads as one that does not exist.
+  # The run a retry repeats is the caller's athanor's own, and repeated
+  # only as retry's rule admits it (`Opus.Record.retriable/1`). Another
+  # athanor's run reads as one that does not exist.
   defp retriable(ctx, id) do
     case Record.get(ctx, id) do
       {:ok, %Record{athanor_id: athanor_id} = record} when athanor_id == ctx.athanor_id ->
-        retriable(record)
+        {:ok, record}
 
       {:ok, _another_athanors} ->
         {:error, {:not_found, "Execution", id}}
@@ -805,44 +804,6 @@ defmodule Opus.Provider do
         refused
     end
   end
-
-  defp retriable(%Record{status: status}) when status != :failed,
-    do: {:error, {:conflict, "Only a failed run can be retried."}}
-
-  defp retriable(
-         %Record{parent_execution_id: nil, kind: "component", schedule_id: schedule} = run
-       )
-       when is_binary(schedule),
-       do: {:ok, run}
-
-  defp retriable(%Record{}),
-    do: {:error, {:conflict, "Only a run a schedule or a feed started can be retried."}}
-
-  # A run is run again only once it is known to have failed: its attempt
-  # closed `error`, the run's own failure. An `uncertain` or `result_lost`
-  # outcome (a lapse, a lost result, a restore, an attempt that ended
-  # before it closed the run) may have completed what it did, and no
-  # contract proves running it again safe (ARCHITECTURE.md §6.5).
-  defp known_failed(%Record{} = record) do
-    case Record.ended_outcome(record) do
-      {:ok, "error"} ->
-        :ok
-
-      {:ok, _uncertain} ->
-        {:error, uncertain_outcome()}
-
-      {:error, :not_found} ->
-        {:error, uncertain_outcome()}
-
-      {:error, _unread} ->
-        {:error, {:unavailable, "Executions"}}
-    end
-  end
-
-  defp uncertain_outcome,
-    do:
-      {:conflict,
-       "This run's outcome is uncertain: it is not known to have failed, so it is not run again."}
 
   # The consent revision the run rooted at, which its retry must root at
   # too; a run that records no profile or no revision has no grant to be

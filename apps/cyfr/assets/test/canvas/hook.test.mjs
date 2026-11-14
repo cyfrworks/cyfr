@@ -574,7 +574,7 @@ describe("a canvas frame's bridge", () => {
   const [{frame: CANVAS, reply: LIVE}] = HANDSHAKES.valid
   const VALIDATION = HANDSHAKES.valid.find(({reply}) => reply.canvas.mode === "validation").reply
   const PRESS = fixture.shell.find((vector) => vector.verb === "press").message.args
-  const OPEN = {ref: "tincture:local.vault"}
+  const OPEN = {ref: "tincture:local.vault", call: 1}
   const GRANT = fixture.shell.find((vector) => vector.verb === "grant").message.args
 
   const connect = ({reply = LIVE, state = "live", frame = CANVAS} = {}) => connectBridge({reply, state, frame})
@@ -672,12 +672,17 @@ describe("a canvas frame's bridge", () => {
       {v: 1, verb: "press", frame: CANVAS, args: PRESS},
       {v: 1, verb: "grant", frame: CANVAS, args: GRANT}
     ]
+    // An open's call is used once: each one sent carries the next.
+    let call = 0
+    const fresh = (message) => (message.verb === "open" ? {...message, args: {...message.args, call: ++call}} : message)
+    const sent = []
 
     try {
       for (const state of ["active", "inactive", "absent"]) {
         for (const focused of ["frame", "other"]) {
           for (const standing of ["live", "hidden", "disconnected"]) {
-            for (const message of asks) {
+            for (const ask of asks) {
+              const message = fresh(ask)
               activation(state)
               focus(focused === "frame" ? bridge.el : other)
               stand(bridge.el, standing)
@@ -690,12 +695,13 @@ describe("a canvas frame's bridge", () => {
                 expected,
                 `${message.verb}: activation ${state}, ${focused} focused, ${standing}`
               )
+              if (expected === 1) sent.push(message)
             }
           }
         }
       }
       // The one combination that forwards, for each verb, and nothing else.
-      assert.deepEqual(forwarded(bridge.events), asks)
+      assert.deepEqual(forwarded(bridge.events), sent)
       // Each carries the ordinal of the input it came with, rising.
       const inputs = bridge.events.filter(({event}) => event === "frame_verb").map(({payload}) => payload.input)
       assert.deepEqual(inputs, [1, 2, 3])
@@ -722,29 +728,31 @@ describe("a canvas frame's bridge", () => {
       await send(bridge, port, control(1))
       assert.deepEqual(forwarded(bridge.events), [control(1)])
 
-      // A press and a write inside the lifespan of the first's spend, the
-      // page still holding activation: each dropped at once and told so,
-      // and nothing goes later on its own.
+      // A press, a write and an open inside the lifespan of the first's
+      // spend, the page still holding activation: each dropped at once and
+      // told so, and nothing goes later on its own.
       await send(bridge, port, control(2))
       await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {}, call: 3}})
-      assert.equal(bridge.hook.dropped, 2)
-      await eventually(() => answered().length === 2)
+      await send(bridge, port, {v: 1, verb: "open", frame: CANVAS, args: {ref: "tincture:local.vault", call: 5}})
+      assert.equal(bridge.hook.dropped, 3)
+      await eventually(() => answered().length === 3)
       assert.deepEqual(answered(), [
         {v: 1, verb: "pressed", frame: CANVAS, args: {control: "pause-digest", call: 2, outcome: "cancelled", reason: "too_soon"}},
-        {v: 1, verb: "prefs", frame: CANVAS, args: {call: 3, outcome: "cancelled", reason: "too_soon", ...LIVE.canvas.prefs}}
+        {v: 1, verb: "prefs", frame: CANVAS, args: {call: 3, outcome: "cancelled", reason: "too_soon", ...LIVE.canvas.prefs}},
+        {v: 1, verb: "opened", frame: CANVAS, args: {call: 5, outcome: "cancelled", reason: "too_soon"}}
       ])
       await new Promise((resolve) => setTimeout(resolve, 260))
       assert.deepEqual(forwarded(bridge.events), [control(1)])
 
       // Past the lifespan, the next input's verb goes, as the next input.
       input(bridge.el)
-      await send(bridge, port, control(4))
-      assert.deepEqual(forwarded(bridge.events), [control(1), control(4)])
+      await send(bridge, port, control(6))
+      assert.deepEqual(forwarded(bridge.events), [control(1), control(6)])
       assert.deepEqual(
         bridge.events.filter(({event}) => event === "frame_verb").map(({payload}) => payload.input),
         [1, 2]
       )
-      assert.equal(answered().length, 2)
+      assert.equal(answered().length, 3)
     } finally {
       bridge.close()
       port.close()
@@ -1245,7 +1253,7 @@ describe("a request, from an app's frame as from a canvas's", () => {
     const verbs = [
       {v: 1, verb: "ready", frame: FRAME, args: {}},
       {v: 1, verb: "title", frame: FRAME, args: {title: "Lisbon"}},
-      {v: 1, verb: "open", frame: FRAME, args: {ref: "t:local.weather"}}
+      {v: 1, verb: "open", frame: FRAME, args: {ref: "t:local.weather", call: 1}}
     ]
 
     try {
@@ -1254,10 +1262,17 @@ describe("a request, from an app's frame as from a canvas's", () => {
       assert.deepEqual(forwarded(bridge.events), verbs)
       assert.deepEqual(inputs(bridge.events), [undefined, undefined, undefined])
 
+      // Frozen, it reaches nothing; an open is told it did not run.
       bridge.el.dispatchEvent(stateEvent("frozen"))
       await send(bridge, port, verbs[0])
+      await send(bridge, port, {v: 1, verb: "open", frame: FRAME, args: {ref: "t:local.weather", call: 2}})
       assert.equal(forwarded(bridge.events).length, verbs.length)
-      assert.equal(bridge.hook.dropped, 1)
+      assert.equal(bridge.hook.dropped, 2)
+      await eventually(() => bridge.heard.some(({verb}) => verb === "opened"))
+      assert.deepEqual(
+        bridge.heard.filter(({verb}) => verb === "opened"),
+        [{v: 1, verb: "opened", frame: FRAME, args: {call: 2, outcome: "cancelled"}}]
+      )
     } finally {
       bridge.close()
     }

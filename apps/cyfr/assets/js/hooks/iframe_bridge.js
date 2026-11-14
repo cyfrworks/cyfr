@@ -40,6 +40,9 @@ const TOLD = TOLD_VERBS
 // canvas's are; an app's other verbs reach the view while it acts.
 const FROM_APP_PERSON = Object.freeze(["request"])
 
+// The answers an app hears: its open's and its request's.
+const APP_ANSWERS = Object.freeze([...ANSWER_OF.open, ...ANSWER_OF.request])
+
 /**
  * IframeBridge hook — the shell's end of a tincture frame's MessagePort.
  *
@@ -96,9 +99,9 @@ const FROM_APP_PERSON = Object.freeze(["request"])
  * lifespan; one sent within that lifespan is dropped at once, never held,
  * and the verb forwarded carries the ordinal of the input it came with
  * (`input`), by which the view honours one verb per input too. A person's
- * verb dropped is counted, and a press of a control, a write of the
- * preferences or a request is answered `cancelled` over the port (as
- * `pressed`, `prefs` or `decided`), under its call number, naming
+ * verb dropped is counted, and an open, a press of a control, a write of
+ * the preferences or a request is answered `cancelled` over the port (as
+ * `opened`, `pressed`, `prefs` or `decided`), under its call number, naming
  * `too_soon` when it came within that lifespan; one whose call number is
  * no higher than the last the frame used is a replay or a forgery of
  * another call's, and is dropped first, unanswered and never forwarded.
@@ -213,7 +216,7 @@ const IframeBridge = {
   // to an app once its port is open. One the wire refuses is neither.
   _tell(verb, args) {
     if (!this._canvas && verb === "subject") return this._retell(args)
-    const takes = this._canvas ? TOLD.includes(verb) || ANSWER_VERBS.includes(verb) : ANSWER_OF.request.includes(verb)
+    const takes = this._canvas ? TOLD.includes(verb) || ANSWER_VERBS.includes(verb) : APP_ANSWERS.includes(verb)
     if (!takes) return
     let message
     try {
@@ -237,13 +240,15 @@ const IframeBridge = {
     }
   },
 
-  // A person's verb the bridge dropped: a press of a control, a write of
-  // the preferences and a request are told they did not run, and why when
-  // `reason` names it (`too_soon`).
+  // A verb the bridge dropped that waits for an answer: an open, a press of
+  // a control, a write of the preferences and a request are told they did
+  // not run, and why when `reason` names it (`too_soon`).
   _cancelled(message, reason = null) {
     const {verb, args} = message
     const why = reason === null ? {} : {reason}
-    if (verb === "request") {
+    if (verb === "open") {
+      this._tell("opened", {call: args.call, outcome: "cancelled", ...why})
+    } else if (verb === "request") {
       this._tell("decided", {call: args.call, outcome: "cancelled", ...why})
     } else if (verb === "press" && "control" in args) {
       this._tell("pressed", {control: args.control, call: args.call, outcome: "cancelled", ...why})
@@ -336,7 +341,7 @@ const IframeBridge = {
 
     if (!this._forwards(message.verb, person)) {
       this._drop()
-      if (person) this._cancelled(message)
+      if (person || message.verb === "open") this._cancelled(message)
       return
     }
 

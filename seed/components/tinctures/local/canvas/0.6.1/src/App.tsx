@@ -4,6 +4,7 @@ import {
   attentionColumn,
   causes,
   deliveryNote,
+  firstSteps,
   grantComponent,
   hidden,
   isShown,
@@ -13,9 +14,13 @@ import {
   recentRows,
   retryRun,
   scheduleRows,
+  showRun,
+  showSteps,
   showWidget,
+  hideStep,
   start,
   strip,
+  takeStep,
   today,
   week,
   type Cause,
@@ -31,7 +36,7 @@ const ROWS = 8;
 // The narrowest page the desk's two columns fit, below which it stacks
 // them as the hand does.
 const TWO_COLUMNS_PX = 860;
-// How long a refused press says why.
+// How long a tap's answer is said where the person tapped.
 const REFUSED_MS = 4_000;
 
 // Each section's heading, by its widget.
@@ -71,6 +76,7 @@ export default function App() {
         <p>{day.sentence}</p>
       </header>
       <Hidden state={state} />
+      <FirstSteps state={state} />
       {stacked ? (
         <div className="column">
           {attention}
@@ -159,6 +165,42 @@ function Hidden({ state }: { state: State }) {
   );
 }
 
+// The first steps, each to open or hide, and the way back to the hidden
+// ones.
+function FirstSteps({ state }: { state: State }) {
+  const steps = firstSteps(state);
+  return (
+    <>
+      {steps.offered.length > 0 && (
+        <section className="card steps" aria-label="First steps">
+          <h2>First steps</h2>
+          {steps.offered.map((step) => (
+            <div key={step.page} className="step">
+              <div className="body">
+                <div className="title">{step.title}</div>
+                <p className="why">{step.text}</p>
+              </div>
+              <button className="chip action" onClick={() => takeStep(cyfr, step)}>
+                <b>{step.title}</b>
+              </button>
+              <button className="chip" title="Hide this step" onClick={() => hideStep(cyfr, state, step)}>
+                Hide
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+      {steps.hidden.length > 0 && (
+        <nav className="hidden" aria-label="Hidden steps">
+          <button className="chip action" title="Show the steps you hid" onClick={() => showSteps(cyfr, state)}>
+            <b>Getting started</b>
+          </button>
+        </nav>
+      )}
+    </>
+  );
+}
+
 function Attention({ state }: { state: State }) {
   const list = causes(state);
   if (list.length === 0) return null;
@@ -171,7 +213,7 @@ function Attention({ state }: { state: State }) {
       streams={["runs.changes"]}
     >
       {list.map((cause) => (
-        <CauseRow key={cause.key} cause={cause} />
+        <CauseRow key={cause.cause} cause={cause} />
       ))}
     </Section>
   );
@@ -186,7 +228,6 @@ function CauseRow({ cause }: { cause: Cause }) {
           {cause.count} {cause.count === 1 ? "run" : "runs"} failed
           {cause.short !== "Failed" && <span className="muted"> · {cause.short.toLowerCase()}</span>}
         </div>
-        <p className="why">{cause.shown}</p>
         <div className="chips">
           {cause.components.map((component) =>
             cause.grantable ? (
@@ -262,13 +303,15 @@ function Apps({ state }: { state: State }) {
   );
 }
 
+// An app's tile; a tap the shell dropped says so under it for a moment.
 function AppTile({ app }: { app: InstalledApp }) {
   const mark = monogram(app.name);
+  const [said, say] = useSaid();
   return (
     <button
       className={app.open ? "app open" : "app"}
       title={app.open ? `${app.name} is open` : `Open ${app.name}`}
-      onClick={() => openApp(cyfr, app)}
+      onClick={() => openApp(cyfr, app).then(say)}
     >
       {app.icon ? (
         <span className="icon">{app.icon}</span>
@@ -278,6 +321,7 @@ function AppTile({ app }: { app: InstalledApp }) {
         </span>
       )}
       <span className="label">{app.name}</span>
+      {said !== null && <span className="said">{said}</span>}
     </button>
   );
 }
@@ -326,17 +370,12 @@ function Schedules({ state, now }: { state: State; now: Date }) {
   );
 }
 
-// A run's row; a failed run no other run started offers Retry, which says
-// its answer for a moment, the new run showing as its own row.
+// A run's row. A failed one names who started it and opens its run's page;
+// one a retry runs offers Retry, which says its answer for a moment, the
+// new run showing as its own row.
 function Run({ row }: { row: RunRow }) {
-  const [said, setSaid] = useState<string | null>(null);
+  const [said, setSaid] = useSaid();
   const [waiting, setWaiting] = useState(false);
-
-  useEffect(() => {
-    if (said === null) return;
-    const timer = setTimeout(() => setSaid(null), REFUSED_MS);
-    return () => clearTimeout(timer);
-  }, [said]);
 
   const retry = () => {
     setWaiting(true);
@@ -345,11 +384,19 @@ function Run({ row }: { row: RunRow }) {
       .finally(() => setWaiting(false));
   };
 
+  const detail = [row.detail, row.starter].filter(Boolean).join(" · ");
   return (
     <div className="run">
       <Dot status={row.status} />
       <span className="name">
-        <b>{row.name}</b> <span className="muted">{row.detail}</span>
+        {row.status === "bad" ? (
+          <button className="link" title={`See why ${row.name} failed`} onClick={() => showRun(cyfr, row)}>
+            <b>{row.name}</b>
+          </button>
+        ) : (
+          <b>{row.name}</b>
+        )}{" "}
+        <span className="muted">{detail}</span>
       </span>
       <span className={`reason ${said === null ? row.status : ""}`}>{said ?? row.reason}</span>
       <span className="muted tabular">{row.duration}</span>
@@ -372,13 +419,7 @@ function Run({ row }: { row: RunRow }) {
 // A schedule's row, with Pause or Resume; a refused press says why for a
 // moment, and an accepted one shows as the schedule's next change.
 function Schedule({ row }: { row: ScheduleRow }) {
-  const [refused, setRefused] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (refused === null) return;
-    const timer = setTimeout(() => setRefused(null), REFUSED_MS);
-    return () => clearTimeout(timer);
-  }, [refused]);
+  const [refused, setRefused] = useSaid();
 
   return (
     <div className="schedule">
@@ -442,6 +483,17 @@ function Section({
       )}
     </section>
   );
+}
+
+// What a tap's answer says, held for a moment and then gone.
+function useSaid(): [string | null, (said: string | null) => void] {
+  const [said, setSaid] = useState<string | null>(null);
+  useEffect(() => {
+    if (said === null) return;
+    const timer = setTimeout(() => setSaid(null), REFUSED_MS);
+    return () => clearTimeout(timer);
+  }, [said]);
+  return [said, setSaid];
 }
 
 function Dot({ status }: { status: Status }) {
