@@ -18,7 +18,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
   alias Compendium.{AquaAgent, AquaPath}
   alias Prima.Authority.Blob
-  alias Sanctum.Consent.{Bootstrap, Commit, Plan, ShapeDerivation}
+  alias Sanctum.Consent.{Bootstrap, Commit, Plan, ShapeDerivation, ShapeDiff}
 
   @soul "agent:local.aqua"
 
@@ -185,29 +185,127 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
   end
 
-  test "ask-to-auto and native_search on the soul move the crew's shape; a gemini member with files names gemini",
+  test "marking a tool auto or ask asks no consent; native search switched, or a tool gained, " <>
+         "is one edit and one row of the comparison",
        %{ctx: ctx} do
-    # The explorer runs under the soul's policy, so an edit of the soul's
-    # is an edit of the explorer's shape.
-    {:ok, before} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
+    {:ok, _} = Bootstrap.run(ctx)
+    {_, head, _} = head!(ctx, @soul)
+    assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+    {:ok, explorer} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
 
+    # Whether a tool asks first grants nothing the consent does not: the
+    # soul's and the crew's shapes stand, and nothing compares as changed.
     write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "ask")})
-    {:ok, asked} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
-    refute asked == before
+    assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+    assert ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, explorer}
+    assert {:ok, []} = ShapeDiff.compute(ctx, @soul, head.resolved_policy)
 
-    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "auto")})
-    {:ok, restored} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
-    assert restored == before
+    # The provider's own search is what no tool grants: the head carries
+    # it on the soul's ingress, so switching it off moves both shapes and
+    # compares as the one row that says so.
+    assert "native_search" in edge!(head.resolved_policy, @soul, "@ingress").tools
 
-    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.delete(&1.tool_policy, "native_search")})
-    {:ok, unsearched} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
-    refute unsearched == before
+    write_agent!(
+      ctx,
+      "aqua",
+      &%{&1 | tool_policy: Map.put(&1.tool_policy, "native_search", "ask")}
+    )
 
-    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "files.read", "ask")})
+    refute ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+    refute ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, explorer}
+
+    assert ShapeDiff.compute(ctx, @soul, head.resolved_policy) ==
+             {:ok,
+              [
+                %{
+                  node: @soul,
+                  capability: "native_search",
+                  change: :narrowed,
+                  added: [],
+                  removed: ["native_search"],
+                  new: false,
+                  dropped: false
+                }
+              ]}
+
+    write_agent!(
+      ctx,
+      "aqua",
+      &%{&1 | tool_policy: Map.put(&1.tool_policy, "native_search", "auto")}
+    )
+
+    assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+
+    # One tool gained is one edit and one row of the comparison.
+    gained = ungranted_action(ctx)
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, gained, "ask")})
+    refute ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
+    refute ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, explorer}
+
+    assert ShapeDiff.compute(ctx, @soul, head.resolved_policy) ==
+             {:ok,
+              [
+                %{
+                  node: @soul,
+                  capability: "tools",
+                  change: :widened,
+                  added: [gained],
+                  removed: [],
+                  new: false,
+                  dropped: false
+                }
+              ]}
 
     {:ok, input} = ShapeDerivation.shape_input(ctx, "agent:local.explorer")
     assert input.model_target == "catalyst:local.gemini#gemini-pro-latest"
-    assert "files.read" in input.tool_policy.ask
+    refute Map.has_key?(input, :tool_policy)
+  end
+
+  test "a grant narrowed to fewer tools keeps the provider's search it does not untick",
+       %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+    # The soul's edge into its model lends the model's own profile, which
+    # holds the key.
+    _entry = bind_claude!(ctx)
+    {_, head, _} = head!(ctx, @soul)
+    tools = edge!(head.resolved_policy, @soul, "@ingress").tools
+    assert "native_search" in tools and "aqua.list" in tools
+    kept = tools -- ["aqua.list"]
+
+    decisions = %{
+      ref: @soul,
+      selections: [%{dep: "catalyst:local.claude", label: "default"}],
+      subset: %{@soul => %{"tools" => kept}}
+    }
+
+    {:ok, plan} = Plan.plan(ctx, %{ref: @soul})
+    assert {:ok, preview} = Commit.preview(ctx, decisions)
+
+    assert {:ok, _} =
+             Commit.commit(ctx, %{
+               decisions: decisions,
+               plan_token: plan.plan_token,
+               proof: preview.proof,
+               commit_digest: preview.commit_digest,
+               expected_consent_revision: plan.expected_consent_revision
+             })
+
+    {_, narrowed, _} = head!(ctx, @soul)
+    assert Enum.sort(edge!(narrowed.resolved_policy, @soul, "@ingress").tools) == Enum.sort(kept)
+  end
+
+  # A catalog action the soul's policy does not reach, of a tool no
+  # bundled catalyst serves, so granting it adds no dependency.
+  defp ungranted_action(ctx) do
+    {:ok, soul} = AquaAgent.get(ctx, "aqua")
+    held = ShapeDerivation.expand_tools(Map.keys(soul.tool_policy))
+
+    Enum.find(Sanctum.Catalog.tool_actions(), fn key ->
+      [tool, _action] = String.split(key, ".", parts: 2)
+
+      key not in held and key not in Prima.Manifest.Caps.agent_only_tools() and
+        Sanctum.VirtualTools.catalyst_for(tool) == nil
+    end)
   end
 
   test "the shape reads the model target and never the prompt", %{ctx: ctx} do
@@ -307,12 +405,13 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {_, still, _} = head!(ctx, "agent:local.explorer")
     assert still.revision == first.revision
 
-    # Back to the shipped model, an edit of the soul's policy moves the
-    # member's shape with the soul's: neither is re-minted.
+    # Back to the shipped model, a tool the soul gains moves the member's
+    # shape with the soul's: neither is re-minted.
     write_agent!(ctx, "explorer", &%{&1 | model: "gemini-pro-latest"})
+    gained = ungranted_action(ctx)
 
     write_agent!(ctx, "aqua", fn agent ->
-      %{agent | tool_policy: Map.put(agent.tool_policy, "storage.write", "ask")}
+      %{agent | tool_policy: Map.put(agent.tool_policy, gained, "ask")}
     end)
 
     {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)

@@ -55,13 +55,46 @@ defmodule PrismWeb.SecretRevealTest do
 
     # Nothing minted until the record is confirmed.
     refute assigns(view).new_key
-    confirm!(view, person(user), "key.create")
+    ref = confirm!(view, person(user), "key.create")
 
     wait_until(fn -> is_map(assigns(view).new_key) end, 2_000, "the repeated create")
     key = assigns(view).new_key
     assert is_binary(key[:api_key])
     assert render(view) =~ "not be shown again"
-    assert render(view) =~ ~s(data-status="completed")
+    # Completed, the page's prompt closes: nothing sits over the card.
+    wait_until(fn -> not (render(view) =~ ~s(data-ref="#{ref}")) end, 2_000, "the closed prompt")
+    refute flash(view) =~ "cnf_"
+
+    render_click(view, "dismiss_key")
+
+    refute assigns(view).new_key
+    refute settled_render(view) =~ "not be shown again"
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a rotated API key is revealed once its prompt closes, and dismissible",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    ctx = person(user)
+    name = "reveal-rotate-#{System.unique_integer([:positive])}"
+
+    {:ok, %{api_key: first}} =
+      Sanctum.TestContext.create_key(ctx, %{name: name, type: :application, scope: ["execute"]})
+
+    {view, _html} = mount_athanor(conn, "/api-keys")
+
+    # Rotating asks first, then reveals the new key the way creating does.
+    render_click(view, "rotate", %{"id" => name})
+    refute assigns(view).new_key
+    ref = confirm!(view, ctx, "key.rotate")
+
+    wait_until(fn -> is_map(assigns(view).new_key) end, 2_000, "the repeated rotation")
+    key = assigns(view).new_key
+    assert is_binary(key[:api_key])
+    refute key[:api_key] == first
+    assert render(view) =~ "not be shown again"
+    wait_until(fn -> not (render(view) =~ ~s(data-ref="#{ref}")) end, 2_000, "the closed prompt")
     refute flash(view) =~ "cnf_"
 
     render_click(view, "dismiss_key")
@@ -105,13 +138,35 @@ defmodule PrismWeb.SecretRevealTest do
     # Rotating asks first, then reveals the new secret the way creating does.
     render_click(view, "rotate", %{"id" => name})
     refute assigns(view).new_secret
-    confirm!(view, ctx, "webhook.rotate")
+    ref = confirm!(view, ctx, "webhook.rotate")
 
     wait_until(fn -> is_map(assigns(view).new_secret) end, 2_000, "the repeated rotation")
     secret = assigns(view).new_secret
     assert is_binary(secret[:secret])
     refute secret[:secret] == first
     refute flash(view) =~ "cnf_"
+    wait_until(fn -> not (render(view) =~ ~s(data-ref="#{ref}")) end, 2_000, "the closed prompt")
+
+    # The card says until when the old secret keeps working, the stored
+    # moment the rotation answered, and that revoking ends it now.
+    {:ok, %{previous_secret_expires_at: %DateTime{} = until}} =
+      Arca.WebhookStorage.get_by_name(Sanctum.Context.actor(ctx), name)
+
+    assert secret[:previous_expires_at] == Prima.Time.iso8601(until)
+
+    old =
+      view
+      |> element(~s([data-test="old-secret"]))
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.text()
+      |> String.split()
+      |> Enum.join(" ")
+
+    assert old ==
+             "The old secret keeps working until " <>
+               Calendar.strftime(until, "%Y-%m-%d %H:%M UTC") <>
+               ". To end it now, revoke the webhook."
 
     render_click(view, "dismiss_secret")
 

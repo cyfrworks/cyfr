@@ -5,9 +5,14 @@ package release
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -39,13 +44,27 @@ func TestIsNewer(t *testing.T) {
 	}
 }
 
-// withAPIURL points apiURL at a test server for the duration of the test.
+// withAPIURL points apiURL at a test server answering body for page 1.
 func withAPIURL(t *testing.T, body string, status int) {
 	t.Helper()
+	withAPIPages(t, []string{body}, status)
+}
+
+// withAPIPages points apiURL at a test server answering pages[n-1] for
+// page n, and an empty page past them, and answers the queries it was
+// asked, in order.
+func withAPIPages(t *testing.T, pages []string, status int) *[]string {
+	t.Helper()
+	var asked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.RawQuery)
 		if status != http.StatusOK {
 			w.WriteHeader(status)
 			return
+		}
+		body := "[]"
+		if n, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && n >= 1 && n <= len(pages) {
+			body = pages[n-1]
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
@@ -56,35 +75,7 @@ func withAPIURL(t *testing.T, body string, status int) {
 		apiURL = old
 		srv.Close()
 	})
-}
-
-func TestLatestPicksNewestBareTag(t *testing.T) {
-	// A tag outside the release grammar is skipped before selecting the newest.
-	withAPIURL(t, `[
-		{"tag_name": "prefix-1.2.0"},
-		{"tag_name": "0.5.4"},
-		{"tag_name": "0.5.3"}
-	]`, http.StatusOK)
-
-	got, err := Latest(context.Background())
-	if err != nil {
-		t.Fatalf("Latest returned error: %v", err)
-	}
-	if got != "0.5.4" {
-		t.Errorf("Latest = %q, want %q", got, "0.5.4")
-	}
-}
-
-func TestLatestSkipsPrefixedTags(t *testing.T) {
-	withAPIURL(t, `[{"tag_name": "prefix-0.4.0"}, {"tag_name": "0.5.4"}]`, http.StatusOK)
-
-	got, err := Latest(context.Background())
-	if err != nil {
-		t.Fatalf("Latest returned error: %v", err)
-	}
-	if got != "0.5.4" {
-		t.Errorf("Latest = %q, want %q (prefixed tag should be skipped)", got, "0.5.4")
-	}
+	return &asked
 }
 
 func TestLatestNon200(t *testing.T) {
@@ -92,42 +83,6 @@ func TestLatestNon200(t *testing.T) {
 
 	if _, err := Latest(context.Background()); err == nil {
 		t.Error("Latest should return an error on a non-200 response")
-	}
-}
-
-// No release that is not a pre-release answers ErrNoRelease, whether the
-// list is empty, holds only other tags or only pre-releases, flagged by
-// GitHub or by their tag alone.
-func TestLatestNoReleases(t *testing.T) {
-	for name, body := range map[string]string{
-		"none":                 `[]`,
-		"an invalid prefix":    `[{"tag_name": "prefix-1.0.0"}]`,
-		"flagged pre-releases": `[{"tag_name": "0.6.0-alpha.1", "prerelease": true}, {"tag_name": "0.6.0", "prerelease": true}]`,
-		"pre-release tags":     `[{"tag_name": "0.6.0-alpha.1"}, {"tag_name": "0.6.0-beta.1"}]`,
-		"a draft":              `[{"tag_name": "0.6.0", "draft": true}]`,
-	} {
-		withAPIURL(t, body, http.StatusOK)
-		if _, err := Latest(context.Background()); !errors.Is(err, ErrNoRelease) {
-			t.Errorf("%s: Latest = %v, want ErrNoRelease", name, err)
-		}
-	}
-}
-
-// A pre-release tag GitHub does not flag is skipped all the same, and a
-// later release outranks it.
-func TestLatestSkipsPrereleaseTags(t *testing.T) {
-	withAPIURL(t, `[
-		{"tag_name": "0.7.0-rc.1"},
-		{"tag_name": "0.6.0"},
-		{"tag_name": "0.6.0-alpha.1", "prerelease": true}
-	]`, http.StatusOK)
-
-	got, err := Latest(context.Background())
-	if err != nil {
-		t.Fatalf("Latest returned error: %v", err)
-	}
-	if got != "0.6.0" {
-		t.Errorf("Latest = %q, want %q", got, "0.6.0")
 	}
 }
 
@@ -150,23 +105,59 @@ func TestLatestRejectsShellMetacharacters(t *testing.T) {
 	}
 }
 
-// The greatest version wins whatever order the API lists releases in: a
-// later-published patch of an older line is not the latest, versions
-// compare numerically, and drafts and pre-releases are skipped.
-func TestLatestPicksTheGreatestVersion(t *testing.T) {
-	withAPIURL(t, `[
-		{"tag_name": "0.5.12"},
-		{"tag_name": "0.11.0", "draft": true},
-		{"tag_name": "0.10.0", "prerelease": true},
-		{"tag_name": "0.9.1"},
-		{"tag_name": "0.6.3"}
-	]`, http.StatusOK)
+// selectionCase is one of tests/fixtures/release_manifest.json's selection
+// rows: a listing as the GitHub releases API answers it, page by page, and
+// the release taken from it, null for none.
+type selectionCase struct {
+	Name       string            `json:"name"`
+	Pages      []json.RawMessage `json:"pages"`
+	Picks      *string           `json:"picks"`
+	Incomplete bool              `json:"incomplete"`
+}
 
-	got, err := Latest(context.Background())
+// Latest takes from each listing the release the shared selection rows
+// name, and answers ErrNoRelease where they name none, reading every page
+// up to the first that is not full.
+func TestLatestFollowsTheSelectionRows(t *testing.T) {
+	raw, err := os.ReadFile(fixturePath)
 	if err != nil {
-		t.Fatalf("Latest returned error: %v", err)
+		t.Fatal(err)
 	}
-	if got != "0.9.1" {
-		t.Errorf("Latest = %q, want %q", got, "0.9.1")
+	var vectors struct {
+		Selection []selectionCase `json:"selection"`
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	if len(vectors.Selection) == 0 {
+		t.Fatal("the vector file has no selection rows")
+	}
+	for _, c := range vectors.Selection {
+		var pages []string
+		var want []string
+		for i, page := range c.Pages {
+			pages = append(pages, string(page))
+			if i < maxPages {
+				want = append(want, fmt.Sprintf("per_page=%d&page=%d", perPage, i+1))
+			}
+		}
+		var last []json.RawMessage
+		if json.Unmarshal(c.Pages[len(c.Pages)-1], &last) == nil && len(last) == perPage && len(c.Pages) < maxPages {
+			want = append(want, fmt.Sprintf("per_page=%d&page=%d", perPage, len(c.Pages)+1))
+		}
+		asked := withAPIPages(t, pages, http.StatusOK)
+		got, err := Latest(context.Background())
+		if !slices.Equal(*asked, want) {
+			t.Errorf("%s: Latest asked %q, want %q", c.Name, *asked, want)
+		}
+		switch {
+		case c.Incomplete && !errors.Is(err, ErrIncomplete):
+			t.Errorf("%s: Latest = %q, %v; want ErrIncomplete", c.Name, got, err)
+		case c.Incomplete:
+		case c.Picks == nil && !errors.Is(err, ErrNoRelease):
+			t.Errorf("%s: Latest = %q, %v; want ErrNoRelease", c.Name, got, err)
+		case c.Picks != nil && (err != nil || got != *c.Picks):
+			t.Errorf("%s: Latest = %q, %v; want %q", c.Name, got, err, *c.Picks)
+		}
 	}
 }

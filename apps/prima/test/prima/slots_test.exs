@@ -649,7 +649,7 @@ defmodule Prima.SlotsTest do
   # ---------------------------------------------------------------------------
 
   describe "unreaped kills" do
-    test "a key past the threshold is refused for roots and background; children and other keys pass; a force-release keeps the penalty" do
+    test "a key past the threshold is refused for roots and background; children and other keys pass" do
       server = start_slots(max: 16, key_max: 4)
       key = "ath_unreaped"
       threshold = Slots.unreaped_threshold(4)
@@ -673,10 +673,6 @@ defmodule Prima.SlotsTest do
       # Children pass: their parent already holds a slot.
       assert {:ok, child} = Slots.acquire(server, key, :child, wait_ms: 1_000)
       Slots.release(server, child)
-
-      # The operator's recovery gesture frees the slots, not the penalty.
-      assert {:ok, _} = Slots.force_release_all(server)
-      assert {:error, :key_unreaped} = Slots.acquire(server, key, :root, wait_ms: 1_000)
     end
 
     test "a note charges the key without the noter holding a slot" do
@@ -802,34 +798,6 @@ defmodule Prima.SlotsTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Force release
-  # ---------------------------------------------------------------------------
-
-  describe "force_release_all/1" do
-    test "drops every holding, cancels every waiter and answers what it did" do
-      server = start_slots(max: 3, child_reserve: 0)
-      holders = for _ <- 1..3, do: hold(server, "ath_a", :root)
-      waiter = wait_for(server, "ath_b", :root)
-      wait_until(fn -> Slots.status(server).queued == 1 end)
-
-      assert {:ok, %{released: 3, cancelled: 1}} = Slots.force_release_all(server)
-      assert_receive {:waited, ^waiter, {:error, :cancelled}}, 2_000
-      assert %{active: 0, queued: 0, holders: [], keys: %{}} = Slots.status(server)
-
-      # The old holders' own releases find nothing to give back; new work
-      # is admitted.
-      Enum.each(holders, &release_holder/1)
-      assert {:ok, _} = Slots.acquire(server, "ath_a", :root)
-      assert {:ok, _} = Slots.acquire(server, "ath_a", :root)
-      assert {:ok, _} = Slots.acquire(server, "ath_a", :root)
-      assert %{active: 3} = Slots.status(server)
-
-      assert {:ok, %{released: 3, cancelled: 0}} = Slots.force_release_all(server)
-      assert {:ok, %{released: 0, cancelled: 0}} = Slots.force_release_all(server)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # Status
   # ---------------------------------------------------------------------------
 
@@ -893,7 +861,6 @@ defmodule Prima.SlotsTest do
       assert :ok = Slots.release(server, make_ref())
       assert {:error, :unavailable} = Slots.note_unreaped(server, "ath_a", "exec")
       assert {:ok, 0} = Slots.note_unreaped(server, nil, "exec")
-      assert {:error, :unavailable} = Slots.force_release_all(server)
       assert {:error, :unavailable} = Slots.sweep(server)
     end
 
@@ -901,7 +868,6 @@ defmodule Prima.SlotsTest do
       name = :slots_test_nobody_registered
       assert {:error, :unavailable} = Slots.acquire(name, nil, :root)
       assert :ok = Slots.release(name, make_ref())
-      assert {:error, :unavailable} = Slots.force_release_all(name)
       assert %{error: :unavailable} = Slots.status(name)
     end
 
@@ -922,7 +888,7 @@ defmodule Prima.SlotsTest do
 
   describe "refusal/1" do
     test "every refusal has a sentence, and the execution ones have their own wording" do
-      for reason <- [:capacity, :key_cap, :key_unreaped, :timeout, :cancelled, :unavailable] do
+      for reason <- [:capacity, :key_cap, :key_unreaped, :timeout, :unavailable] do
         sentence = Slots.refusal(reason)
         assert byte_size(sentence) > 0
       end

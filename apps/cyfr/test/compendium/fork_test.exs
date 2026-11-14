@@ -114,7 +114,16 @@ defmodule Compendium.ForkTest do
       assert result.reference == "catalyst:local.my-tool:1.0.0"
       assert result.forked_from == "catalyst:acme.my-tool:1.0.0"
       assert is_list(result.files)
-      assert is_list(result.next_steps)
+
+      assert result.next_steps == [
+               "The files are under components/catalysts/local/my-tool/1.0.0/ in the " <>
+                 "athanor's storage: edit them through Files, the console's Files page or " <>
+                 "the files tool",
+               "Edit src/src/lib.rs to modify the catalyst logic",
+               "Compile: cyfr build compile catalyst:local.my-tool:1.0.0, or the build tool's " <>
+                 "compile action with reference 'catalyst:local.my-tool:1.0.0'; a compile " <>
+                 "registers what it built"
+             ]
 
       # Verify files at target path
       target_base = [
@@ -265,9 +274,12 @@ defmodule Compendium.ForkTest do
       create_source_component("catalyst", "acme", "no-src", "1.0.0", with_source: false)
 
       source_ref = parse_ref!("c:acme.no-src:1.0.0")
-      assert {:error, msg} = Fork.fork(ctx, source_ref)
-      assert msg =~ "No source code available"
-      assert msg =~ "acme.no-src"
+
+      assert Fork.fork(ctx, source_ref) ==
+               {:error,
+                "No source code available for catalyst:acme.no-src:1.0.0: it was published without " <>
+                  "a src/ folder, which is the source a fork copies and the only source a " <>
+                  "push publishes."}
     end
   end
 

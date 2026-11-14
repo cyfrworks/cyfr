@@ -4,15 +4,20 @@
 defmodule PrismWeb.RegistryLiveTest do
   @moduledoc """
   The registry page's acts are requests a passkey of the person's account
-  signs: an appeal of a takedown, the acceptance of the registry's
-  policies, and a sync of their push tokens. Each asks the registry tool
+  signs: an appeal of a takedown and a sync of their push tokens. Each asks the registry tool
   for its request, bound to the person's session, and opens the account
   pages' sign page with it in a new tab; nothing reaches the registry
   until the answer returns to the sign-in page (`PrismWeb.LoginLiveTest`).
   No identity provider is asked for any of them.
 
+  A publisher claim and its verification are signed the same way. A
+  namespace's push tokens and members are managed under the push token
+  this CYFR holds for it: a revoke and a removal are asked before they
+  are sent, and issuing a token waits on a fresh confirmation, its secret
+  shown once. A namespace is reported through the report sheet.
+
   The registry is `Sanctum.Test.RegistryStub`, which answers the page's
-  policy read and fails the case on any signed request.
+  terms read and fails the case on any signed request.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -29,6 +34,7 @@ defmodule PrismWeb.RegistryLiveTest do
         {200,
          RegistryStub.answer(%{
            "policy_version" => "2026-09",
+           "updated_at" => "2026-09-14T08:30:00Z",
            "policies" => [%{"name" => "terms", "title" => "Terms of Service", "sha256" => "x"}]
          })}
 
@@ -209,26 +215,84 @@ defmodule PrismWeb.RegistryLiveTest do
     render_async(view, 5_000)
     html = render(view)
     assert html =~ "Components you&#39;ve published to the registry."
-    assert html =~ "The registry&#39;s policies, version"
+    assert terms_line(view) =~ "The account service's terms: version"
     refute html =~ "cyfr.run"
   end
 
-  test "the registry's policies are shown, and accepting asks a passkey to sign their version",
-       %{conn: conn, user: user} do
-    {view, _html} = mount_athanor(conn, "/registry")
-    render_async(view, 5_000)
-    html = render(view)
-    assert html =~ "Terms of Service"
-    assert html =~ "Accept version 2026-09"
+  # The registry answering `answer` for its terms, and nothing else.
+  defp terms!(answer) do
+    RegistryStub.start!(fn
+      %{method: "GET", path: "/v1/legal/version"} -> {200, RegistryStub.answer(answer)}
+      %{method: "GET"} -> {404, ""}
+    end)
+  end
 
-    html = render_click(view, "accept-policy", %{"version" => "2026-09"})
+  # The terms line as a person reads it.
+  defp terms_line(view) do
+    view
+    |> element("#registry-terms")
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.text()
+    |> String.split()
+    |> Enum.join(" ")
+    |> String.replace(" :", ":")
+    |> String.replace(" ,", ",")
+  end
 
-    assert %Prima.RegistryRequest{
-             operation: "policy.accept",
-             body: %{"policy_version" => "2026-09"}
-           } = hopped(view, user)
+  # The terms are accepted once, when the account is made; a later
+  # version asks nobody to accept again. The page names the version in
+  # force and when it was published, and asks for nothing.
+  describe "the account service's terms" do
+    test "the page names the version in force and its date, linked to where the terms are read",
+         %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
 
-    assert html =~ "Sign your acceptance of version 2026-09"
+      assert terms_line(view) ==
+               "The account service's terms: version 2026-09, updated 14 September 2026"
+
+      assert has_element?(view, ~s(#registry-terms a[href$="/legal"]))
+    end
+
+    test "with no date from the registry, the page names the version alone", %{conn: conn} do
+      terms!(%{"policy_version" => "2026-09", "policies" => []})
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+
+      assert terms_line(view) == "The account service's terms: version 2026-09"
+    end
+
+    # A version is 1 to 64 letters, digits, `.`, `_` and `-`, starting with
+    # a letter or digit; the line names no other.
+    test "a version spelled otherwise is left out of the line", %{conn: conn} do
+      for version <- ["", "-2026", "v 1", "<b>1</b>", String.duplicate("a", 65), 7] do
+        terms!(%{"policy_version" => version, "updated_at" => "2026-09-14T08:30:00Z"})
+        {view, _html} = mount_athanor(conn, "/registry")
+        render_async(view, 5_000)
+
+        assert terms_line(view) == "The account service's terms, updated 14 September 2026",
+               inspect(version)
+      end
+
+      terms!(%{"policy_version" => String.duplicate("a", 64)})
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+
+      assert terms_line(view) ==
+               "The account service's terms: version #{String.duplicate("a", 64)}"
+    end
+
+    test "nothing on the page asks to accept the terms", %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+      html = render(view)
+
+      refute html =~ "Registry policies"
+      refute html =~ "asks you to accept its current version"
+      refute html =~ "Accept version"
+      refute has_element?(view, ~s([phx-click="accept-policy"]))
+    end
   end
 
   describe "a yank sent to the registry" do
@@ -353,5 +417,451 @@ defmodule PrismWeb.RegistryLiveTest do
     assert label == Compendium.Registry.CredentialStore.wire_label()
     assert html =~ "Sign the sync"
     refute_received {:registry_request, %{method: "POST"}}
+  end
+
+  describe "a publisher namespace" do
+    test "a claim asks a passkey to sign the claim of the domain and sends nothing until it is signed",
+         %{conn: conn, user: user} do
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+      html = view |> form("#claim-publisher", %{"slug" => " acme.dev "}) |> render_submit()
+
+      assert %Prima.RegistryRequest{operation: "publisher.claim", body: %{"slug" => "acme.dev"}} =
+               hopped(view, user)
+
+      assert html =~ "Sign the claim of acme.dev with your passkey in the new tab."
+      refute_received {:registry_request, %{method: "POST"}}
+    end
+
+    test "a verification asks a passkey to sign it, under the label this CYFR's tokens carry",
+         %{conn: conn, user: user} do
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+      html = view |> form("#verify-publisher", %{"slug" => "acme.dev"}) |> render_submit()
+
+      assert %Prima.RegistryRequest{
+               operation: "publisher.verify",
+               body: %{"slug" => "acme.dev", "label" => label}
+             } = hopped(view, user)
+
+      assert label == Compendium.Registry.CredentialStore.wire_label()
+      assert html =~ "Sign the verification of acme.dev"
+      refute_received {:registry_request, %{method: "POST"}}
+    end
+
+    test "a claim with no domain is refused on the page and asks nothing", %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+      html = render_submit(view, "claim-publisher", %{"slug" => "  "})
+
+      assert html =~ "Name the domain of the publisher namespace."
+      refute_push_event(view, "system_layer:hop", %{})
+    end
+  end
+
+  describe "a namespace's push tokens and members" do
+    @token %{
+      "id" => "6a1b0e1e-0000-4000-8000-000000000001",
+      "label" => "build server",
+      "created_at" => "2026-11-01T10:00:00Z",
+      "handle" => "alice"
+    }
+    @revoked %{
+      "id" => "6a1b0e1e-0000-4000-8000-000000000002",
+      "label" => "old laptop",
+      "created_at" => "2026-10-01T10:00:00Z",
+      "revoked_at" => "2026-10-20T10:00:00Z"
+    }
+    @members [
+      %{"handle" => "alice", "role" => "admin", "member_identifier" => "id_alice"},
+      %{"handle" => "bob", "role" => "member", "member_identifier" => "id_bob"}
+    ]
+
+    # The registry, answering the namespace's tokens and members and
+    # `changes.(request)` for every other request; the person's push
+    # token for `acme.dev` and for their personal namespace.
+    defp managed!(user, changes) do
+      RegistryStub.start!(fn
+        %{method: "GET", path: "/v1/namespaces/acme.dev/tokens"} ->
+          {200, Jason.encode!(%{"tokens" => [@token, @revoked]})}
+
+        %{method: "GET", path: "/v1/namespaces/acme.dev/members"} ->
+          {200, Jason.encode!(%{"members" => @members})}
+
+        %{method: "GET", path: "/v1/namespaces/" <> _personal} ->
+          {200, Jason.encode!(%{"tokens" => []})}
+
+        %{method: "GET"} = request ->
+          changes.(request) || {404, ""}
+
+        request ->
+          changes.(request)
+      end)
+
+      ctx = %{
+        Sanctum.TestContext.local()
+        | user_id: user.user_id,
+          athanor_id: seated_athanor().id
+      }
+
+      for {slug, token, role} <- [
+            {"acme.dev", "cyfr_pt_acme", "admin"},
+            {user.namespace, "cyfr_pt_personal", "personal"}
+          ] do
+        :ok =
+          Compendium.Registry.CredentialStore.put_push_token(
+            ctx,
+            Compendium.RegistryHost.canonical_host(),
+            slug,
+            token,
+            role
+          )
+      end
+
+      ctx
+    end
+
+    defp no_change(%{method: "GET"}), do: nil
+
+    defp no_change(%{method: method, path: path}),
+      do: flunk("the page sent #{method} #{path} unasked")
+
+    defp manage!(conn, slug) do
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+      render_async(view, 5_000)
+      render_click(view, "manage", %{"slug" => slug})
+      render_async(view, 5_000)
+      view
+    end
+
+    defp sent(method) do
+      receive do
+        {:registry_request, %{method: ^method} = request} -> request
+      after
+        5_000 -> flunk("no #{method} reached the registry")
+      end
+    end
+
+    defp registry_paths do
+      receive do
+        {:registry_request, %{path: path}} -> [path | registry_paths()]
+      after
+        0 -> []
+      end
+    end
+
+    defp bearer?(%{headers: headers}, token),
+      do: Enum.any?(headers, &(String.downcase(&1) == "authorization: bearer #{token}"))
+
+    test "a publisher namespace lists its push tokens and members, read under its own push token",
+         %{conn: conn, user: user} do
+      managed!(user, &no_change/1)
+      view = manage!(conn, "acme.dev")
+
+      assert_received {:registry_request,
+                       %{method: "GET", path: "/v1/namespaces/acme.dev/tokens"} = tokens}
+
+      assert bearer?(tokens, "cyfr_pt_acme")
+
+      assert_received {:registry_request,
+                       %{method: "GET", path: "/v1/namespaces/acme.dev/members"}}
+
+      html = render(view)
+      assert html =~ "Manage <span class=\"font-mono\">acme.dev</span>"
+      assert html =~ "build server"
+      assert html =~ "made by alice · issued 2026-11-01T10:00:00Z · never used"
+      assert html =~ "revoked 2026-10-20T10:00:00Z"
+      # Only a standing token offers Revoke.
+      assert has_element?(
+               view,
+               ~s(button[phx-click="ask-revoke"][phx-value-id="#{@token["id"]}"])
+             )
+
+      refute has_element?(
+               view,
+               ~s(button[phx-click="ask-revoke"][phx-value-id="#{@revoked["id"]}"])
+             )
+
+      assert has_element?(view, "form#member-alice select option[value=admin][selected]")
+      assert has_element?(view, "form#member-bob select option[value=member][selected]")
+    end
+
+    test "the personal namespace lists its push tokens and has no members", %{
+      conn: conn,
+      user: user
+    } do
+      managed!(user, &no_change/1)
+      view = manage!(conn, user.namespace)
+
+      assert has_element?(view, "form#issue-token")
+      refute has_element?(view, "form#add-member")
+      refute Enum.any?(registry_paths(), &String.ends_with?(&1, "/members"))
+    end
+
+    test "a namespace this CYFR holds no push token for says to sync", %{conn: conn, user: user} do
+      view = manage!(conn, user.namespace)
+
+      assert render(view) =~
+               "This CYFR holds no push token for #{user.namespace}: sync your push tokens on the Registry page."
+
+      refute_received {:registry_request, %{path: "/v1/namespaces/" <> _}}
+    end
+
+    test "a namespace the person does not hold is not managed", %{conn: conn, user: user} do
+      managed!(user, &no_change/1)
+      view = manage!(conn, "zeta.dev")
+
+      refute has_element?(view, "form#issue-token")
+      refute_received {:registry_request, %{path: "/v1/namespaces/zeta.dev/" <> _}}
+    end
+
+    test "a revoke is asked before it is sent, and then revokes that token under the namespace's push token",
+         %{conn: conn, user: user} do
+      managed!(user, fn
+        %{method: "DELETE", path: "/v1/namespaces/acme.dev/tokens/" <> _} -> {204, ""}
+        request -> no_change(request)
+      end)
+
+      view = manage!(conn, "acme.dev")
+      html = render_click(view, "ask-revoke", %{"id" => @token["id"]})
+      assert html =~ "Revoke this push token?"
+      refute_received {:registry_request, %{method: "DELETE"}}
+
+      render_click(view, "revoke-token", %{})
+      delete = sent("DELETE")
+      assert delete.path == "/v1/namespaces/acme.dev/tokens/#{@token["id"]}"
+      assert bearer?(delete, "cyfr_pt_acme")
+
+      Prima.Test.Wait.wait_until(
+        fn -> render(view) =~ "Push token revoked." end,
+        5_000,
+        "the revoke's answer"
+      )
+
+      assert :sys.get_state(view.pid).socket.assigns.revoke_pending == nil
+    end
+
+    test "a revoke the person cancels sends nothing", %{conn: conn, user: user} do
+      managed!(user, &no_change/1)
+      view = manage!(conn, "acme.dev")
+      render_click(view, "ask-revoke", %{"id" => @token["id"]})
+      render_click(view, "close-revoke", %{})
+      render_click(view, "revoke-token", %{})
+
+      refute_received {:registry_request, %{method: "DELETE"}}
+    end
+
+    test "issuing a push token waits on a fresh confirmation, then issues it once and shows its secret once",
+         %{conn: conn, user: user} do
+      ctx =
+        managed!(user, fn
+          %{method: "POST", path: "/v1/namespaces/acme.dev/tokens"} ->
+            {201, Jason.encode!(%{"id" => "tok_new", "token" => "cyfr_pt_issued_once"})}
+
+          request ->
+            no_change(request)
+        end)
+
+      view = manage!(conn, "acme.dev")
+      view |> form("#issue-token", %{"label" => "ci runner"}) |> render_submit()
+
+      assert {:ok, [%{ref: ref, operation: "registry.tokens_issue"}]} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      refute_received {:registry_request, %{method: "POST"}}
+      refute render(view) =~ "cyfr_pt_issued_once"
+
+      Sanctum.TestContext.prove!(ctx, ref)
+      post = sent("POST")
+      assert post.path == "/v1/namespaces/acme.dev/tokens"
+      assert bearer?(post, "cyfr_pt_acme")
+      assert Jason.decode!(post.body) == %{"label" => "ci runner"}
+
+      Prima.Test.Wait.wait_until(
+        fn -> render(view) =~ "cyfr_pt_issued_once" end,
+        5_000,
+        "the issued token"
+      )
+
+      assert render(view) =~ "Copy it now — it won&#39;t be shown again."
+      render_click(view, "dismiss-issued", %{})
+      refute render(view) =~ "cyfr_pt_issued_once"
+      refute_received {:registry_request, %{method: "POST"}}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "adding a member sends their handle and role", %{conn: conn, user: user} do
+      managed!(user, fn
+        %{method: "POST", path: "/v1/namespaces/acme.dev/members"} -> {201, ""}
+        request -> no_change(request)
+      end)
+
+      view = manage!(conn, "acme.dev")
+      view |> form("#add-member", %{"handle" => " carol ", "role" => "admin"}) |> render_submit()
+
+      post = sent("POST")
+      assert bearer?(post, "cyfr_pt_acme")
+      assert Jason.decode!(post.body) == %{"target_personal_slug" => "carol", "role" => "admin"}
+
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Added carol." end, 5_000, "the add")
+    end
+
+    test "changing a member's role sends the new role for that member", %{conn: conn, user: user} do
+      managed!(user, fn
+        %{method: "PATCH", path: "/v1/namespaces/acme.dev/members/bob"} -> {204, ""}
+        request -> no_change(request)
+      end)
+
+      view = manage!(conn, "acme.dev")
+      view |> form("#member-bob", %{"role" => "admin"}) |> render_submit()
+
+      patch = sent("PATCH")
+      assert Jason.decode!(patch.body) == %{"role" => "admin"}
+
+      Prima.Test.Wait.wait_until(
+        fn -> render(view) =~ "Changed bob&#39;s role." end,
+        5_000,
+        "the change"
+      )
+    end
+
+    test "a removal is asked before it is sent, and then removes that member",
+         %{conn: conn, user: user} do
+      managed!(user, fn
+        %{method: "DELETE", path: "/v1/namespaces/acme.dev/members/bob"} -> {204, ""}
+        request -> no_change(request)
+      end)
+
+      view = manage!(conn, "acme.dev")
+      html = render_click(view, "ask-remove", %{"handle" => "bob"})
+      assert html =~ "every push token they made for it is revoked"
+      refute_received {:registry_request, %{method: "DELETE"}}
+
+      render_click(view, "remove-member", %{})
+      assert sent("DELETE").path == "/v1/namespaces/acme.dev/members/bob"
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Removed bob." end, 5_000, "the removal")
+    end
+
+    test "a change the registry refuses says why, and the members stay as read",
+         %{conn: conn, user: user} do
+      managed!(user, fn
+        %{method: "POST", path: "/v1/namespaces/acme.dev/members"} ->
+          {403,
+           Jason.encode!(%{
+             "errors" => [
+               %{"code" => "FORBIDDEN", "message" => "admin role required for this namespace"}
+             ]
+           })}
+
+        request ->
+          no_change(request)
+      end)
+
+      view = manage!(conn, "acme.dev")
+      members = :sys.get_state(view.pid).socket.assigns.members
+      view |> form("#add-member", %{"handle" => "carol", "role" => "member"}) |> render_submit()
+      sent("POST")
+
+      # The role is what was refused, which no sync of push tokens gives.
+      Prima.Test.Wait.wait_until(
+        fn ->
+          render(view) =~
+            "Adding failed: Only an administrator of this namespace can add, change or remove its members."
+        end,
+        5_000,
+        "the refusal"
+      )
+
+      refute render(view) =~ "registry sync"
+
+      assert :sys.get_state(view.pid).socket.assigns.members == members
+      assert :sys.get_state(view.pid).socket.assigns.acting == nil
+    end
+  end
+
+  describe "reporting a namespace" do
+    test "the report sheet opens on the namespace and sends it as the report's target",
+         %{conn: conn, user: user} do
+      RegistryStub.start!(fn
+        %{method: "POST", path: "/v1/abuse-reports"} -> {201, Jason.encode!(%{"id" => "rpt_1"})}
+        %{method: "GET"} -> {404, ""}
+      end)
+
+      ctx = %{
+        Sanctum.TestContext.local()
+        | user_id: user.user_id,
+          athanor_id: seated_athanor().id
+      }
+
+      :ok =
+        Compendium.Registry.CredentialStore.put_push_token(
+          ctx,
+          Compendium.RegistryHost.canonical_host(),
+          user.namespace,
+          "cyfr_pt_personal",
+          "personal"
+        )
+
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+      view |> form("#report-namespace", %{"slug" => "spam.example"}) |> render_submit()
+
+      html = render(view)
+      assert html =~ "Report this namespace"
+      assert html =~ "spam.example"
+
+      view
+      |> form("#report-form", %{"category" => "spam", "details" => "Floods search."})
+      |> render_submit()
+
+      receive do
+        {:registry_request, %{method: "POST", path: "/v1/abuse-reports", body: body} = report} ->
+          assert Jason.decode!(body) == %{
+                   "category" => "spam",
+                   "target_namespace" => "spam.example",
+                   "target_component_id" => nil,
+                   "details" => "Floods search.",
+                   "attestations_signed" => false
+                 }
+
+          assert Enum.any?(
+                   report.headers,
+                   &(String.downcase(&1) == "authorization: bearer cyfr_pt_personal")
+                 )
+      after
+        5_000 -> flunk("the report did not reach the registry")
+      end
+
+      Prima.Test.Wait.wait_until(
+        fn -> render(view) =~ "Report sent to the registry&#39;s moderators." end,
+        5_000,
+        "the report's answer"
+      )
+    end
+
+    # The sheet's submit, sent as a crafted event while no target is open.
+    test "a report sent before the sheet is opened on a target is refused and sends nothing",
+         %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+
+      view
+      |> with_target("#report-modal")
+      |> render_submit("submit_report", %{"category" => "spam", "details" => "probe"})
+
+      assert Process.alive?(view.pid)
+      refute render(view) =~ "Report this"
+      refute_received {:registry_request, %{method: "POST"}}
+    end
+
+    test "a report with no namespace named opens nothing", %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/registry")
+      render_async(view, 5_000)
+      html = render_submit(view, "report-namespace", %{"slug" => " "})
+
+      assert html =~ "Name the namespace to report."
+      refute html =~ "Report this namespace"
+    end
   end
 end

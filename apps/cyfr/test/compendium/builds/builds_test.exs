@@ -458,6 +458,99 @@ defmodule Compendium.BuildsTest do
     end
   end
 
+  # A fork's last step is the one Builds takes for the fork's own files,
+  # followed here to its end: a tincture with a package manifest compiles,
+  # and a vanilla one, which a compile refuses, is registered.
+  describe "a forked tincture's last step" do
+    # A published copy under another publisher of what the vite scaffold
+    # writes, or of a vanilla tincture that keeps a src/ folder.
+    defp published!(ctx, name, :package) do
+      {:ok, _} =
+        Compendium.Scaffold.create(ctx, "#{name}-src", "tincture", "0.1.0", template: "vite")
+
+      base = ComponentPath.version_dir("tincture", "local", "#{name}-src", "0.1.0")
+      {:ok, pairs} = Arca.read_subtree(Sanctum.Context.actor(ctx), base)
+      files = for {rel, bytes} <- pairs, do: {Path.join(List.wrap(rel)), bytes}
+      {manifest, files} = Enum.split_with(files, &(elem(&1, 0) == ComponentPath.manifest_name()))
+      [{_, manifest}] = manifest
+
+      manifest =
+        manifest |> Jason.decode!() |> Map.merge(%{"publisher" => "acme", "name" => name})
+
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "acme", name, "0.1.0",
+        manifest: manifest,
+        files: files
+      )
+    end
+
+    defp published!(ctx, name, :vanilla) do
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "acme", name, "0.1.0",
+        manifest: %{
+          "name" => name,
+          "type" => "tincture",
+          "version" => "0.1.0",
+          "publisher" => "acme",
+          "description" => "A vanilla tincture",
+          "tincture" => %{"entry" => "index.html"}
+        },
+        files: [
+          {"index.html", "<html><body>Hello</body></html>"},
+          {"src/main.js", "export default function() {}"}
+        ]
+      )
+    end
+
+    defp forked!(ctx, name) do
+      {:ok, source} = Prima.ComponentRef.parse("tincture:acme.#{name}:0.1.0")
+      {:ok, result} = Compendium.Fork.fork(ctx, source)
+      result
+    end
+
+    test "one with a package manifest is told to compile, and compiles", %{ctx: ctx} do
+      published!(ctx, "packaged", :package)
+      fork = forked!(ctx, "packaged")
+
+      assert List.last(fork.next_steps) == Compendium.Scaffold.compile_step(fork.reference)
+
+      ScriptedBuilder.script([
+        {:stream,
+         [
+           {:result,
+            %{
+              language: :javascript,
+              target_type: :tincture,
+              outputs: %{"index.html" => "<html><head></head><body></body></html>"},
+              diagnostics: []
+            }}
+         ]}
+      ])
+
+      assert {:ok, %{status: "compiled"}} = Builds.compile(ctx, fork.reference)
+      ScriptedBuilder.await_builds()
+    end
+
+    test "a vanilla one is told to register, which a compile would refuse, and the register succeeds",
+         %{ctx: ctx} do
+      published!(ctx, "plain", :vanilla)
+      fork = forked!(ctx, "plain")
+
+      assert List.last(fork.next_steps) == Compendium.Scaffold.register_step()
+
+      assert {:error, refusal} = Builds.compile(ctx, fork.reference)
+      assert refusal =~ "Vanilla tinctures don't need compilation"
+
+      # The register the step names succeeds, and the forked tincture is
+      # then a component inspect answers.
+      assert {:ok, _} = Sanctum.Gate.call_external("component", ctx, %{"action" => "register"})
+
+      assert {:ok, %{"component_ref" => "tincture:local.plain:0.1.0"}} =
+               Sanctum.Gate.call_external("component", ctx, %{
+                 "action" => "inspect",
+                 "reference" => fork.reference
+               })
+    end
+  end
+
   describe "a tincture build" do
     @tincture "tincture:local.board:0.1.0"
     @tincture_unit ComponentPath.version_dir("tincture", "local", "board", "0.1.0")

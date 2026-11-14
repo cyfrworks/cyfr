@@ -48,6 +48,7 @@ defmodule PrismWeb.SetupLive do
       |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
       |> assign(:step, :reading)
       |> assign(:token, nil)
+      |> assign(:directory_host, Sanctum.SignIn.directory_host())
       |> assign(:error, nil)
 
     {:ok, signed_in(socket, params, session), layout: false}
@@ -136,6 +137,9 @@ defmodule PrismWeb.SetupLive do
           <div :if={@step == :open} class="space-y-4">
             <p class="text-sm text-gray-300 leading-relaxed">
               You are the first person on this CYFR, and you run it.
+            </p>
+            <p data-test="account-host" class="text-sm text-gray-400 leading-relaxed">
+              Your account lives at {@directory_host}. These buttons take you there and bring you back here.
             </p>
             <button
               type="button"

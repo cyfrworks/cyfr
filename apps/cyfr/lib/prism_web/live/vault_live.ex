@@ -3,15 +3,21 @@
 
 defmodule PrismWeb.VaultLive do
   @moduledoc """
-  The operator's vault entries: list, create, rotate, re-authorize,
-  revoke, delete — all through the vault MCP verbs (rename exists as a
-  vault verb but has no control here yet), so this
+  The operator's vault entries: list, create, rename, rotate,
+  re-authorize, change where an entry may go, make one its provider's
+  default, revoke, delete — all through the vault MCP verbs, so this
   surface holds no rules of its own. Material flows one way: forms
   accept field values; nothing here ever displays them.
 
   OAuth entries start a browser grant via `vault.authorize`; the
   callback completes it server-side and the vault PubSub topic refreshes
-  this view when the entry lands.
+  this view when the entry lands. A grant for a provider with no OAuth
+  client set is refused for it before anything is confirmed, and the page
+  says a client is needed, offers Set client for that provider and shows
+  the return address to register with it. The return address and the
+  providers whose endpoints are preset are what `oauth.list` answers
+  beside the stored clients; an entry for any other provider names its
+  endpoints.
 
   The create form makes an entry of whatever the person names, whether
   or not a component is installed: a name, its kind (`API key` or `Bundle
@@ -32,21 +38,35 @@ defmodule PrismWeb.VaultLive do
   a component may read it. Neither is prefilled: the person types the
   destination, and disclosure is off until they turn it on
   (`PrismWeb.SystemLayer.destination_params/1`). Each entry's row shows
-  where it goes and whether components may read it: an attach-only
+  where it goes and whether components may read it, and Change
+  destination moves both through `vault.rebind`, which asks a fresh
+  confirmation when it widens what the entry admits: an attach-only
   entry's value is never handed to a component, and CYFR attaches it to
   requests bound for the entry's destination. Each entry the athanor uses
-  by default for its provider (`vault.list`'s `defaults`) says so. Each
+  by default for its provider (`vault.list`'s `defaults`) says so, and
+  any other active entry naming a provider offers Make default
+  (`vault.set_default`), which moves no consent. Rename (`vault.rename`),
+  offered on every entry but a revoked one, changes an entry's name
+  alone. A program or tool server that reads the entry by its name finds
+  it by that name, so the rename form names each, read when the form
+  opens and again at save: a list that changed meanwhile is shown in the
+  form again, and nothing is renamed until the person saves over the
+  list they saw. A list that cannot be read is no empty list: the form
+  says it cannot tell who reads the entry, and nothing is renamed until a
+  read succeeds. Each
   row names the grants that use it, `Used by <component>` for each active
   grant whose head binds it (`vault.list`'s `used_by`), with the grant's
   label when it is not `default`, or `Nothing uses it yet.`; when those
   grants cannot be read the page says so once above the rows and says
-  neither. The MCP servers that read an entry through a `vault:` header
-  are named on its row too.
+  neither. The programs and tool servers that read an entry by its name
+  (a `vault:` header or environment value) are named on its row too, each
+  as the Programs page names its kind.
 
   Share, on an entry the store would share (`Arca.Shares.eligible/1`'s
   rule: active, attach-only, of a kind in
   `Prima.CredentialKinds.shareable/0`, with a destination naming its
-  methods and paths), opens the system layer's sharing sheet
+  methods and paths, which the create form asks for as what sharing
+  needs), opens the system layer's sharing sheet
   (`PrismWeb.SystemLayer.Share`) for it, offering everyone and the
   shared threads the person sits in (`shared_thread.list`, each named by
   its title, a pair as the other person), which makes the
@@ -88,6 +108,11 @@ defmodule PrismWeb.VaultLive do
   alias PrismWeb.SystemLayer.Share
   require Logger
 
+  # Said in the rename form, and when a save is refused, while who reads
+  # the entry cannot be read.
+  @readers_unread "Who reads this entry by its name could not be read, so nothing is " <>
+                    "renamed until it can be. Try again shortly."
+
   @share_kinds Prima.ShareKinds.all()
 
   @impl true
@@ -117,6 +142,12 @@ defmodule PrismWeb.VaultLive do
       |> assign(:own, own_vault?(socket.assigns[:context]))
       |> assign(:used_by, %{})
       |> assign(:clients, [])
+      |> assign(:redirect_uri, nil)
+      |> assign(:presets, [])
+      |> assign(:client_needed, nil)
+      |> assign(:client_provider, nil)
+      |> assign(:rebinding, nil)
+      |> assign(:renaming, nil)
       |> assign(:show_add, nil)
       |> assign(:labels, [])
       |> assign(:pending_grant, nil)
@@ -140,9 +171,16 @@ defmodule PrismWeb.VaultLive do
   # The create form reads the labels it suggests each time it opens, so a
   # component installed since is suggested and one removed is not.
   @impl true
-  def handle_event("show_add", %{"mode" => mode}, socket) do
+  def handle_event("show_add", %{"mode" => mode} = params, socket) do
     shown = if socket.assigns.show_add == mode, do: nil, else: mode
-    socket = assign(socket, :show_add, shown)
+
+    socket =
+      assign(socket,
+        show_add: shown,
+        client_provider: if(shown == "client", do: params["provider"]),
+        client_needed: if(shown == "client", do: socket.assigns.client_needed)
+      )
+
     {:noreply, if(shown == "fields", do: fetch_labels(socket), else: assign(socket, :labels, []))}
   end
 
@@ -162,11 +200,25 @@ defmodule PrismWeb.VaultLive do
 
     case SystemLayer.call(socket, :set_client, "oauth/set_client", args, form: client_form()) do
       {:ok, _, socket} ->
+        # A grant that was refused for want of this client is offered again:
+        # a new entry's form opens again, a re-authorization is asked again.
+        stored = args["provider"]
+
+        waited =
+          case socket.assigns.client_needed do
+            %{provider: ^stored, new: new?} -> new?
+            _other -> nil
+          end
+
         {:noreply,
          socket
          |> fetch_clients()
-         |> assign(:show_add, nil)
-         |> put_flash(:info, "Client credentials stored for #{args["provider"]}.")}
+         |> assign(
+           show_add: if(waited, do: "oauth"),
+           client_needed: nil,
+           client_provider: nil
+         )
+         |> put_flash(:info, client_stored(args["provider"], waited))}
 
       {:asked, socket} ->
         {:noreply, socket}
@@ -252,6 +304,23 @@ defmodule PrismWeb.VaultLive do
     {:noreply, assign(socket, :pending_grant, nil)}
   end
 
+  # Where an entry's material may go and whether components may read it,
+  # moved by `vault.rebind`. It carries no typed secret, so a rebind that
+  # asks a fresh confirmation is started again here once it is given.
+  def handle_event("show_rebind", %{"id" => id}, socket) do
+    {:noreply, assign(socket, :rebinding, if(socket.assigns.rebinding == id, do: nil, else: id))}
+  end
+
+  def handle_event("rebind", %{"entry_id" => id} = params, socket) do
+    args = %{
+      "id" => id,
+      "destination" => SystemLayer.destination_params(params),
+      "disclose" => SystemLayer.disclose_param(params)
+    }
+
+    rebind(socket, args)
+  end
+
   # ---------------------------------------------------------------------------
   # Events — per-entry
   # ---------------------------------------------------------------------------
@@ -294,6 +363,61 @@ defmodule PrismWeb.VaultLive do
 
       _ ->
         {:noreply, unreadable(socket, {:rotate, id}, "Rotate failed: bad payload revision")}
+    end
+  end
+
+  # The readers named in the form are read as it opens, so a program or
+  # tool server made since the page loaded is named.
+  def handle_event("show_rename", %{"id" => id}, socket) do
+    case socket.assigns.renaming do
+      %{id: ^id} ->
+        {:noreply, assign(socket, :renaming, nil)}
+
+      _other ->
+        socket = fetch_used_by(socket)
+        {:noreply, assign(socket, :renaming, %{id: id, readers: readers_of(socket, id)})}
+    end
+  end
+
+  # Saved only over the readers the form showed: when they changed since,
+  # the form shows the new list and nothing is renamed.
+  def handle_event("rename", %{"entry_id" => id, "name" => name}, socket) do
+    socket = fetch_used_by(socket)
+    readers = readers_of(socket, id)
+
+    case socket.assigns.renaming do
+      _any when readers == :unread ->
+        {:noreply,
+         socket
+         |> assign(:renaming, %{id: id, readers: :unread})
+         |> put_flash(
+           :error,
+           "Not renamed: who reads this entry by its name could not be read. Try again shortly."
+         )}
+
+      %{id: ^id, readers: ^readers} ->
+        rename(socket, id, name)
+
+      _changed_or_unopened ->
+        {:noreply,
+         socket
+         |> assign(:renaming, %{id: id, readers: readers})
+         |> put_flash(
+           :error,
+           "Not renamed: who reads this entry changed. Check the list and save again."
+         )}
+    end
+  end
+
+  # The default a grant suggests for the entry's provider. It binds nothing.
+  def handle_event("set_default", %{"id" => id, "provider" => provider}, socket) do
+    case call_tool(socket, "vault/set_default", %{"provider_hint" => provider, "entry_id" => id}) do
+      {:ok, _} ->
+        {:noreply,
+         socket |> fetch_entries() |> put_flash(:info, "Now the default for #{provider}.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Not made the default: #{fmt(reason)}")}
     end
   end
 
@@ -396,6 +520,7 @@ defmodule PrismWeb.VaultLive do
   # here, once; a typed form is submitted again by the browser.
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_repeat(:authorize, _tool, args, socket), do: start_grant(socket, args)
+  def system_layer_repeat({:rebind, _id}, _tool, args, socket), do: rebind(socket, args)
 
   def system_layer_repeat({kind, _id} = tag, tool, args, socket)
       when kind in [:share_revoke, :share_audience, :share_caps],
@@ -458,16 +583,49 @@ defmodule PrismWeb.VaultLive do
 
         {:noreply,
          socket
-         |> assign(:pending_grant, url)
-         |> assign(:show_add, nil)}
+         |> assign(pending_grant: url, show_add: nil, client_needed: nil)}
 
       {:asked, socket} ->
         {:noreply, socket}
+
+      {:error, {:oauth_client_required, provider}, socket} ->
+        new? = not Map.has_key?(args, "id")
+        {:noreply, assign(socket, :client_needed, %{provider: provider, new: new?})}
 
       {:error, reason, socket} ->
         {:noreply, put_flash(socket, :error, "Authorization failed: #{fmt(reason)}")}
     end
   end
+
+  defp rebind(socket, %{"id" => id} = args) do
+    case SystemLayer.call(socket, {:rebind, id}, "vault/rebind", args) do
+      {:ok, result, socket} ->
+        {:noreply,
+         socket
+         |> fetch_entries()
+         |> assign(:rebinding, nil)
+         |> put_flash(:info, rebound(result[:affected] || []))}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply, put_flash(socket, :error, "Not changed: #{fmt(reason)}")}
+    end
+  end
+
+  defp rebound([]), do: "Destination changed."
+
+  defp rebound(affected),
+    do: "Destination changed — #{length(affected)} grant(s) must be given again."
+
+  defp client_stored(provider, true),
+    do: "Client credentials stored for #{provider}. Start authorization again."
+
+  defp client_stored(provider, false),
+    do: "Client credentials stored for #{provider}. Re-authorize the entry again."
+
+  defp client_stored(provider, nil), do: "Client credentials stored for #{provider}."
 
   # The forms that carry typed material, each kept as typed by the browser
   # (`phx-update="ignore"`) so it can be submitted again once its
@@ -737,33 +895,92 @@ defmodule PrismWeb.VaultLive do
         do: provider
   end
 
-  # Which MCP servers draw on each entry (headers referencing it) —
-  # shown on the row, so revoking one is done knowing what it breaks.
+  # Which programs and tool servers draw on each entry by its name (a
+  # tool server's headers, a program's environment), each with its kind
+  # as the Programs page says it — shown on the row, so revoking one is
+  # done knowing what it breaks.
   defp fetch_used_by(socket) do
     used_by =
       case call_tool(socket, "mcp_servers/list", %{}) do
         {:ok, %{servers: servers}} when is_list(servers) ->
           Enum.reduce(servers, %{}, fn server, acc ->
+            reader = %{name: server[:name], kind: reader_kind(server[:transport])}
+
             Enum.reduce(server[:vault_refs] || [], acc, fn ref, acc ->
-              Map.update(acc, ref, [server[:name]], &[server[:name] | &1])
+              Map.update(acc, ref, [reader], &[reader | &1])
             end)
           end)
 
-        _ ->
-          %{}
+        {:ok, other} ->
+          Logger.warning(
+            "[VaultLive] mcp_servers/list failed: #{fmt({:unexpected_shape, other})}"
+          )
+
+          :unread
+
+        {:error, reason} ->
+          Logger.warning("[VaultLive] mcp_servers/list failed: #{fmt(reason)}")
+          :unread
       end
 
-    assign(socket, :used_by, used_by)
+    assign(socket, :used_by, sorted_readers(used_by))
   end
 
-  defp fetch_clients(socket) do
-    clients =
-      case call_tool(socket, "oauth/list", %{}) do
-        {:ok, %{providers: rows}} when is_list(rows) -> rows
-        _ -> []
-      end
+  # A listing that failed stays `:unread`: it is never no readers.
+  defp sorted_readers(:unread), do: :unread
 
-    assign(socket, :clients, clients)
+  defp sorted_readers(used_by),
+    do:
+      Map.new(used_by, fn {ref, readers} -> {ref, Enum.sort_by(readers, &{&1.name, &1.kind})} end)
+
+  # The readers of `name`, or `:unread` when the listing failed, which the
+  # row and Revoke's warning say rather than naming none.
+  defp readers_named(:unread, _name), do: :unread
+  defp readers_named(used_by, name), do: Map.get(used_by, name, [])
+
+  defp reader_kind("program"), do: :program
+  defp reader_kind(_http), do: :tool_server
+
+  # The readers of the entry `id` names, by the name it holds now, or
+  # `:unread` when the listing failed.
+  defp readers_of(%{assigns: %{used_by: :unread}}, _id), do: :unread
+
+  defp readers_of(socket, id) do
+    case Enum.find(socket.assigns.entries, &(&1.id == id)) do
+      %{name: name} -> Map.get(socket.assigns.used_by, name, [])
+      nil -> []
+    end
+  end
+
+  defp rename(socket, id, name) do
+    case call_tool(socket, "vault/rename", %{"id" => id, "name" => name}) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> fetch_entries()
+         |> fetch_used_by()
+         |> assign(:renaming, nil)
+         |> put_flash(:info, "Renamed.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Not renamed: #{fmt(reason)}")}
+    end
+  end
+
+  # The stored clients, the return address a client registers and the
+  # providers whose endpoints are preset, read together.
+  defp fetch_clients(socket) do
+    case call_tool(socket, "oauth/list", %{}) do
+      {:ok, %{providers: rows} = listing} when is_list(rows) ->
+        assign(socket,
+          clients: rows,
+          redirect_uri: listing[:redirect_uri],
+          presets: listing[:presets] || []
+        )
+
+      _ ->
+        assign(socket, clients: [], redirect_uri: nil, presets: [])
+    end
   end
 
   defp blank_to_nil(nil), do: nil
@@ -804,6 +1021,12 @@ defmodule PrismWeb.VaultLive do
   end
 
   defp maybe_endpoints(args, _params), do: args
+
+  # The custom endpoints are for a provider with no preset.
+  defp endpoints_words([]), do: "Endpoints"
+
+  defp endpoints_words(presets),
+    do: "Endpoints — preset for #{Enum.join(presets, ", ")}; any other provider names its own"
 
   # Renders through the console's one refusal seam — never `inspect/1`,
   # which put internal terms on the page.
@@ -891,6 +1114,29 @@ defmodule PrismWeb.VaultLive do
         </div>
       </.card>
 
+      <!-- A grant refused for want of an OAuth client, new or re-authorized -->
+      <.card :if={@client_needed}>
+        <div role="alert" class="space-y-2 text-sm" data-test="oauth-client-needed">
+          <p>
+            No OAuth client is set for {@client_needed.provider}. Create one in {@client_needed.provider}'s developer console, register this return address with it,
+            then set its client id and secret here.
+          </p>
+          <p :if={@redirect_uri} class="font-mono text-xs" data-test="oauth-redirect-uri">
+            {@redirect_uri}
+          </p>
+          <.button
+            type="button"
+            variant="ghost"
+            phx-click="show_add"
+            phx-value-mode="client"
+            phx-value-provider={@client_needed.provider}
+            data-test="oauth-set-client"
+          >
+            Set client
+          </.button>
+        </div>
+      </.card>
+
       <!-- Add: sealed fields -->
       <.card :if={@show_add == "fields"}>
         <datalist id="vault-create-labels">
@@ -940,7 +1186,7 @@ defmodule PrismWeb.VaultLive do
               class="w-full rounded-md border-gray-600 bg-transparent font-mono text-sm"
             ></textarea>
           </div>
-          <.destination_inputs prefix="create" />
+          <.destination_inputs prefix="create" share />
           <.button type="submit">Create entry</.button>
         </form>
       </.card>
@@ -955,7 +1201,10 @@ defmodule PrismWeb.VaultLive do
             </div>
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
-              <.input name="provider" required placeholder="google" />
+              <.input name="provider" required list="vault-oauth-presets" placeholder="google" />
+              <datalist id="vault-oauth-presets">
+                <option :for={preset <- @presets} value={preset}></option>
+              </datalist>
             </div>
           </div>
           <div>
@@ -969,8 +1218,8 @@ defmodule PrismWeb.VaultLive do
             ></textarea>
           </div>
           <details>
-            <summary class="text-xs text-gray-500 cursor-pointer">
-              Custom endpoints (unknown providers)
+            <summary class="text-xs text-gray-500 cursor-pointer" data-test="oauth-endpoints">
+              {endpoints_words(@presets)}
             </summary>
             <div class="grid grid-cols-2 gap-4 mt-2">
               <div>
@@ -985,7 +1234,8 @@ defmodule PrismWeb.VaultLive do
           </details>
           <.destination_inputs prefix="oauth" />
           <p class="text-xs text-gray-500">
-            The provider's client credentials must be configured first (oauth.set_client).
+            An OAuth entry is authorized through the provider's OAuth client, set under OAuth
+            client credentials below.
           </p>
           <.button type="submit">Start authorization</.button>
         </form>
@@ -1006,9 +1256,43 @@ defmodule PrismWeb.VaultLive do
           Which grants use these entries could not be read right now.
         </p>
         <.table :if={!@loading && @entries != []} id="vault-entries" rows={@entries}>
-          <:col :let={entry} label="Name">
+          <:col :let={entry} label="Name" sticky>
             <div class="space-y-1" data-test="entry-name" data-id={entry.id}>
-              <span class="font-medium">{entry.name}</span>
+              <span :if={!renaming?(@renaming, entry)} class="font-medium">{entry.name}</span>
+              <form
+                :if={renaming?(@renaming, entry)}
+                id={"vault-rename-form-" <> entry.id}
+                phx-submit="rename"
+                class="flex items-center gap-2"
+                data-test="rename-form"
+              >
+                <input type="hidden" name="entry_id" value={entry.id} />
+                <.input name="name" required value={entry.name} />
+                <.button type="submit">Save</.button>
+                <.button
+                  type="button"
+                  variant="ghost"
+                  phx-click="show_rename"
+                  phx-value-id={entry.id}
+                >
+                  Cancel
+                </.button>
+              </form>
+              <div
+                :if={renaming?(@renaming, entry) and @renaming.readers not in [[], :unread]}
+                class="text-xs text-amber-400/90"
+                data-test="rename-readers"
+              >
+                {rename_readers(@renaming.readers)}
+              </div>
+              <div
+                :if={renaming?(@renaming, entry) and @renaming.readers == :unread}
+                role="alert"
+                class="text-xs text-amber-400/90"
+                data-test="rename-readers-unread"
+              >
+                {readers_unread()}
+              </div>
               <div class="text-xs text-gray-500 font-mono">{entry.id}</div>
               <div
                 :for={use <- entry.used_by || []}
@@ -1020,8 +1304,18 @@ defmodule PrismWeb.VaultLive do
               <div :if={entry.used_by == []} class="text-xs text-gray-500" data-test="entry-unused">
                 Nothing uses it yet.
               </div>
-              <div :if={Map.get(@used_by, entry.name, []) != []} class="text-xs text-amber-400/90">
-                {used_by_line(@used_by[entry.name])}
+              <div
+                :if={readers_named(@used_by, entry.name) not in [[], :unread]}
+                class="text-xs text-amber-400/90"
+              >
+                {used_by_line(readers_named(@used_by, entry.name))}
+              </div>
+              <div
+                :if={readers_named(@used_by, entry.name) == :unread}
+                class="text-xs text-amber-400/90"
+                data-test="entry-readers-unread"
+              >
+                {readers_unknown()}
               </div>
             </div>
           </:col>
@@ -1037,6 +1331,19 @@ defmodule PrismWeb.VaultLive do
             >
               default for {entry.provider_hint}
             </div>
+            <.button
+              :if={
+                entry.status == "active" and entry.provider_hint not in [nil, ""] and
+                  not default?(@defaults, entry.provider_hint, %{vault_entry_id: entry.id})
+              }
+              variant="ghost"
+              phx-click="set_default"
+              phx-value-id={entry.id}
+              phx-value-provider={entry.provider_hint}
+              data-test="entry-make-default"
+            >
+              Make default
+            </.button>
           </:col>
           <:col :let={entry} label="Holds">
             <span class="font-mono text-xs text-gray-400">
@@ -1104,6 +1411,24 @@ defmodule PrismWeb.VaultLive do
                 phx-value-id={entry.id}
               >
                 Re-authorize
+              </.button>
+              <.button
+                :if={entry.status != "revoked"}
+                variant="ghost"
+                phx-click="show_rename"
+                phx-value-id={entry.id}
+                data-test="entry-rename"
+              >
+                Rename
+              </.button>
+              <.button
+                :if={entry.kind != "login"}
+                variant="ghost"
+                phx-click="show_rebind"
+                phx-value-id={entry.id}
+                data-test="entry-rebind"
+              >
+                Change destination
               </.button>
               <.button
                 variant="ghost"
@@ -1321,6 +1646,31 @@ defmodule PrismWeb.VaultLive do
         </form>
       </.card>
 
+      <!-- Rebind form: where an entry may go, and whether components read it -->
+      <.card :if={@rebinding}>
+        <% entry = Enum.find(@entries, &(&1.id == @rebinding)) %>
+        <form
+          :if={entry}
+          id={"vault-rebind-form-" <> entry.id}
+          phx-submit="rebind"
+          class="space-y-4"
+          data-test="rebind-form"
+        >
+          <input type="hidden" name="entry_id" value={entry.id} />
+          <p class="text-sm">
+            Where {entry.name} may go. Every grant that uses it must be given again after the
+            change.
+          </p>
+          <.destination_inputs
+            prefix="rebind"
+            share={entry.kind in Prima.CredentialKinds.shareable()}
+            destination={entry.destination}
+            disclosed={entry.attach_only == false}
+          />
+          <.button type="submit">Change destination</.button>
+        </form>
+      </.card>
+
       <!-- OAuth client credentials: the operator's app per provider -->
       <.card>
         <div class="flex items-center justify-between mb-2">
@@ -1333,6 +1683,10 @@ defmodule PrismWeb.VaultLive do
           The OAuth app (client id and secret) an OAuth vault entry is authorized through, one
           per provider. Stored sealed in this athanor; only the provider name is ever shown.
         </p>
+        <p :if={@redirect_uri} class="text-xs text-gray-500 mb-3" data-test="client-redirect-uri">
+          Register this return address with the provider's OAuth app:
+          <span class="font-mono text-gray-300">{@redirect_uri}</span>
+        </p>
 
         <form
           :if={@show_add == "client"}
@@ -1344,7 +1698,13 @@ defmodule PrismWeb.VaultLive do
           <div class="grid grid-cols-3 gap-3">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
-              <.input name="provider" required placeholder="google" />
+              <.input
+                name="provider"
+                required
+                placeholder="google"
+                value={@client_provider}
+                list="vault-oauth-presets"
+              />
             </div>
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Client id</label>
@@ -1387,11 +1747,23 @@ defmodule PrismWeb.VaultLive do
     """
   end
 
-  # The destination and disclosure a new entry names, asked of the person:
-  # nothing is prefilled, and disclosure is off until it is turned on.
+  # The destination and disclosure an entry names, asked of the person: a
+  # new entry's prefilled with nothing and disclosure off until it is
+  # turned on; a rebind's with what the entry holds. Methods and paths are
+  # what sharing needs (`shareable?/1`), so a kind that can be shared asks
+  # them as that.
   attr :prefix, :string, required: true
+  attr :share, :boolean, default: false
+  attr :destination, :map, default: %{}
+  attr :disclosed, :boolean, default: false
 
   defp destination_inputs(assigns) do
+    assigns =
+      assign(assigns,
+        to: if(is_map(assigns.destination), do: assigns.destination, else: %{}),
+        extra: if(assigns.share, do: " — needed to share it", else: " (optional)")
+      )
+
     ~H"""
     <fieldset class="space-y-2" data-test={"#{@prefix}-destination"}>
       <legend class="text-xs text-gray-500 uppercase">Where its material may go</legend>
@@ -1399,7 +1771,12 @@ defmodule PrismWeb.VaultLive do
         <label class="block text-xs text-gray-500 mb-1">
           Hosts — for example api.example.com, or *.example.com
         </label>
-        <.input name="destination_hosts" required placeholder="api.example.com" />
+        <.input
+          name="destination_hosts"
+          required
+          placeholder="api.example.com"
+          value={Enum.join(Map.get(@to, "hosts", []), " ")}
+        />
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div>
@@ -1409,26 +1786,40 @@ defmodule PrismWeb.VaultLive do
             class="w-full rounded-md border-gray-600 bg-transparent text-sm"
           >
             <option value="https">https</option>
-            <option value="http">http</option>
+            <option value="http" selected={Map.get(@to, "scheme") == "http"}>http</option>
           </select>
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">Port (optional)</label>
-          <.input name="destination_port" placeholder="443" />
+          <.input name="destination_port" placeholder="443" value={Map.get(@to, "port")} />
         </div>
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Methods (optional)</label>
-          <.input name="destination_methods" placeholder="GET POST" />
+          <label class="block text-xs text-gray-500 mb-1">Methods{@extra}</label>
+          <.input
+            name="destination_methods"
+            placeholder="GET POST"
+            value={Enum.join(Map.get(@to, "methods", []), " ")}
+          />
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Path prefixes (optional)</label>
-          <.input name="destination_paths" placeholder="/v1/" />
+          <label class="block text-xs text-gray-500 mb-1">Path prefixes{@extra}</label>
+          <.input
+            name="destination_paths"
+            placeholder="/v1/"
+            value={Enum.join(Map.get(@to, "paths", []), " ")}
+          />
         </div>
       </div>
       <label class="flex items-start gap-2 text-sm">
-        <input type="checkbox" name="disclose" value="true" data-test={"#{@prefix}-disclose"} />
+        <input
+          type="checkbox"
+          name="disclose"
+          value="true"
+          checked={@disclosed}
+          data-test={"#{@prefix}-disclose"}
+        />
         <span>
           Let components read the value itself. Left off, the value is never handed to a
           component: CYFR attaches it to requests bound for the entry's destination, and a
@@ -1457,15 +1848,52 @@ defmodule PrismWeb.VaultLive do
   # Grants that could not be read leave every entry's `used_by` nil.
   defp uses_unread?(entries), do: Enum.any?(entries, &is_nil(&1.used_by))
 
-  defp used_by_line([server]), do: "used by MCP server #{server}"
-  defp used_by_line(servers), do: "used by MCP servers #{Enum.join(Enum.sort(servers), ", ")}"
+  defp readers_unread, do: @readers_unread
+
+  defp readers_unknown,
+    do: "Which programs and tool servers read this entry by its name could not be read."
+
+  defp renaming?(%{id: id}, %{id: id}), do: true
+  defp renaming?(_renaming, _entry), do: false
+
+  # Each reader in the Programs page's words: a program, a tool server.
+  defp readers_words(readers), do: readers |> Enum.map(&reader_words/1) |> join_words()
+
+  defp reader_words(%{kind: :program, name: name}), do: "the program #{name}"
+  defp reader_words(%{kind: :tool_server, name: name}), do: "the tool server #{name}"
+
+  defp join_words([one]), do: one
+  defp join_words(words), do: Enum.join(Enum.drop(words, -1), ", ") <> " and " <> List.last(words)
+
+  defp rename_readers([_one] = readers),
+    do:
+      capitalize(readers_words(readers)) <>
+        " reads this entry by its name; renamed, it no longer finds it."
+
+  defp rename_readers(readers),
+    do:
+      capitalize(readers_words(readers)) <>
+        " read this entry by its name; renamed, they no longer find it."
+
+  defp capitalize("the " <> rest), do: "The " <> rest
+
+  defp used_by_line(readers), do: "used by " <> readers_words(readers)
 
   defp revoke_confirm(entry, used_by) do
     base = "Profiles bound to this entry stop receiving it at their next run."
 
-    case Map.get(used_by, entry.name, []) do
-      [] -> base <> " Revoke?"
-      servers -> base <> " MCP server(s) #{Enum.join(servers, ", ")} read it too. Revoke?"
+    case readers_named(used_by, entry.name) do
+      :unread ->
+        base <> " " <> readers_unknown() <> " Revoke?"
+
+      [] ->
+        base <> " Revoke?"
+
+      [_one] = readers ->
+        base <> " " <> capitalize(readers_words(readers)) <> " reads it too. Revoke?"
+
+      readers ->
+        base <> " " <> capitalize(readers_words(readers)) <> " read it too. Revoke?"
     end
   end
 end
