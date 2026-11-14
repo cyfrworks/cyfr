@@ -54,6 +54,16 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
     :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode16(case: :lower)
   end
 
+  # A signature refusal as the sender reads it: a 401 whose body names the
+  # reason, the header it concerns and the format a sender signs in.
+  defp refused_401(result) do
+    assert result.halted
+    assert result.status == 401
+    Jason.decode!(result.resp_body)
+  end
+
+  defp unauthenticated(message), do: %{"code" => "unauthenticated", "message" => message}
+
   test "200/passthrough on valid signature, assigns :webhook", %{ctx: ctx} do
     %{slug: slug, secret: secret} = create_hook!(ctx, "valid")
     body = ~s({"event":"x"})
@@ -183,9 +193,11 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
 
     result = VerifyWebhookSignature.call(conn, [])
 
-    assert result.halted
-    assert result.status == 401
-    assert result.resp_body =~ "unauthenticated"
+    assert refused_401(result) ==
+             unauthenticated(
+               "This delivery carries no x-cyfr-signature header: send sha256=<hex>, the " <>
+                 "HMAC-SHA256 of the body under the webhook's secret, in lowercase hex"
+             )
   end
 
   test "401 on malformed signature header", %{ctx: ctx} do
@@ -195,8 +207,11 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
 
     result = VerifyWebhookSignature.call(conn, [])
 
-    assert result.halted
-    assert result.status == 401
+    assert refused_401(result) ==
+             unauthenticated(
+               "The x-cyfr-signature header is not sha256=<hex>, the HMAC-SHA256 of the " <>
+                 "body under the webhook's secret, in lowercase hex"
+             )
   end
 
   test "401 on signature mismatch", %{ctx: ctx} do
@@ -205,8 +220,10 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
 
     result = VerifyWebhookSignature.call(conn, [])
 
-    assert result.halted
-    assert result.status == 401
+    assert refused_401(result) ==
+             unauthenticated(
+               "The signature does not match: sign the exact body with the webhook's current secret"
+             )
   end
 
   test "401 when signature signed against different body (tamper detection)", %{ctx: ctx} do
@@ -219,8 +236,10 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
 
     result = VerifyWebhookSignature.call(conn, [])
 
-    assert result.halted
-    assert result.status == 401
+    assert refused_401(result) ==
+             unauthenticated(
+               "The signature does not match: sign the exact body with the webhook's current secret"
+             )
   end
 
   test "400 when raw_body assign is missing — a malformed request, not a server fault",
@@ -256,8 +275,11 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
       conn = build_request(slug, body, [{"x-cyfr-signature", sig}])
       result = VerifyWebhookSignature.call(conn, [])
 
-      assert result.halted
-      assert result.status == 401
+      assert refused_401(result) ==
+               unauthenticated(
+                 "This webhook requires the x-cyfr-timestamp header: the time the delivery " <>
+                   "is sent, in Unix seconds, signed with the body as <time>.<body>"
+               )
     end
 
     test "200 when valid timestamp + signed payload arrive together", %{ctx: ctx} do
@@ -296,8 +318,50 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
 
       result = VerifyWebhookSignature.call(conn, [])
 
-      assert result.halted
-      assert result.status == 401
+      # Told apart from a wrong signature: the signature over the stale
+      # time is right.
+      assert refused_401(result) ==
+               unauthenticated(
+                 "The x-cyfr-timestamp header's time is too far from now to accept: sign " <>
+                   "each delivery with the time it is sent"
+               )
+    end
+
+    test "401 naming the header when the timestamp is not whole Unix seconds", %{ctx: ctx} do
+      %{slug: slug, secret: secret} =
+        create_hook!(ctx, "ts-malformed", timestamp_header: "X-Cyfr-Timestamp")
+
+      body = "{}"
+      sig = "sha256=" <> hmac_hex(secret, "2026-11-14T12:00:00Z." <> body)
+
+      conn =
+        build_request(slug, body, [
+          {"x-cyfr-signature", sig},
+          {"x-cyfr-timestamp", "2026-11-14T12:00:00Z"}
+        ])
+
+      assert refused_401(VerifyWebhookSignature.call(conn, [])) ==
+               unauthenticated("The x-cyfr-timestamp header is not a time in whole Unix seconds")
+    end
+
+    test "401 naming the signed form when the body alone was signed", %{ctx: ctx} do
+      %{slug: slug, secret: secret} =
+        create_hook!(ctx, "ts-unsigned-time", timestamp_header: "X-Cyfr-Timestamp")
+
+      body = "{}"
+      ts = System.system_time(:second) |> Integer.to_string()
+
+      conn =
+        build_request(slug, body, [
+          {"x-cyfr-signature", "sha256=" <> hmac_hex(secret, body)},
+          {"x-cyfr-timestamp", ts}
+        ])
+
+      assert refused_401(VerifyWebhookSignature.call(conn, [])) ==
+               unauthenticated(
+                 "The signature does not match: sign <time>.<body>, the x-cyfr-timestamp " <>
+                   "header's value, a dot and the exact body, with the webhook's current secret"
+               )
     end
 
     @tag :capture_log
