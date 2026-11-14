@@ -301,6 +301,7 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 // it written (scaffold.Release).
 type scaffoldRelease interface {
 	Managed() []string
+	Names() []string
 	Write(overwriteManaged bool) error
 	File(name string) ([]byte, bool)
 }
@@ -411,6 +412,11 @@ func (u *updater) run() error {
 	// files back, so the old stack starts again under its own.
 	if err := u.writeScaffold(); err != nil {
 		return u.revertScaffold(err)
+	}
+	// The release's files, recorded whole in place of the record the
+	// project kept, so `cyfr uninstall` names this release's files.
+	if err := writeInstallRecord(u.scaffold.Names()); err != nil {
+		return u.revertScaffold(fmt.Errorf("the record of CYFR's files (%s) could not be written (%v)", installRecord, err))
 	}
 	if err := u.switchImages(); err != nil {
 		if errors.Is(err, errComposeLeftSwitched) {

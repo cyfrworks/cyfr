@@ -127,18 +127,19 @@ func TestUpdateRefusesRestartUnderAnUnreadComposeFile(t *testing.T) {
 func TestInitForceDescribesFilesMissingAfterDownloadFailure(t *testing.T) {
 	for _, c := range []struct {
 		name     string
-		download func(string) error
+		download func(string) ([]string, error)
 		want     string
 		missing  bool
 	}{
 		{"the download fails", nil, "docker-compose.yml and keeper.seccomp.json were removed and are missing: the download did not lay them down again", true},
-		{"the download lays them down", func(string) error {
-			for _, name := range []string{"docker-compose.yml", "keeper.seccomp.json"} {
+		{"the download lays them down", func(string) ([]string, error) {
+			names := []string{"docker-compose.yml", "keeper.seccomp.json"}
+			for _, name := range names {
 				if err := os.WriteFile(name, []byte("fetched\n"), 0644); err != nil {
-					return err
+					return nil, err
 				}
 			}
-			return nil
+			return names, nil
 		}, "docker-compose.yml and keeper.seccomp.json were laid down again", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -245,7 +246,9 @@ func TestInitForceReportsItsRemovalsWhenVerificationFails(t *testing.T) {
 			}
 			savedDownload := downloadScaffold
 			t.Cleanup(func() { downloadScaffold = savedDownload })
-			downloadScaffold = func(string) error { return fmt.Errorf("signature refused: %w", release.ErrUnverified) }
+			downloadScaffold = func(string) ([]string, error) {
+				return nil, fmt.Errorf("signature refused: %w", release.ErrUnverified)
+			}
 			savedForce, _ := initCmd.Flags().GetBool("force")
 			t.Cleanup(func() { _ = initCmd.Flags().Set("force", fmt.Sprint(savedForce)) })
 			if err := initCmd.Flags().Set("force", "true"); err != nil {

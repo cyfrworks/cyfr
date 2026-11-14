@@ -488,14 +488,15 @@ func TestUninstallLeavesALinkAndWhatIsBehindIt(t *testing.T) {
 	}
 }
 
-// Without the release's list of its files, nothing is named, so nothing
-// is removed or stopped.
+// With no record and without the release's list of its files, nothing is
+// named, so nothing is removed or stopped, and the way to remove CYFR by
+// hand is said.
 func TestUninstallRemovesNothingWithoutTheReleasesFileNames(t *testing.T) {
 	s := newUninstallScenario(t)
 	uninstallScaffold = func(string) ([]string, error) { return nil, errors.New("download: no network") }
 	before := left(t, s.dir)
 	_, err := s.run(true, true)
-	if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall could not read which files release ") || !strings.Contains(err.Error(), "shipped (download: no network), so it cannot name them; nothing was removed.") {
+	if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall cannot name the files CYFR put here: this CYFR keeps no record of the files it put here (.cyfr/files.json), and release ") || !strings.Contains(err.Error(), "'s list of them could not be read (download: no network). Nothing was removed. To remove CYFR by hand: run 'cyfr down' here, then remove this directory (with sudo: CYFR's container owns data/), the program "+s.self+" and ~/.cyfr") {
 		t.Fatalf("cyfr uninstall answered %v", err)
 	}
 	s.nothingRemoved(before)
@@ -529,4 +530,75 @@ func entriesOf(t *testing.T, dir string) map[string]string {
 		t.Fatal(err)
 	}
 	return entries
+}
+
+// With the record init and update keep, nothing is asked of the release:
+// an uninstall with no network removes exactly the recorded files, and
+// the stack's state.
+func TestUninstallRemovesExactlyTheRecordedFilesWithoutTheNetwork(t *testing.T) {
+	s := newUninstallScenario(t)
+	uninstallScaffold = func(string) ([]string, error) { return nil, errors.New("download: no network") }
+	if err := writeInstallRecord([]string{"docker-compose.yml", "wit/cyfr/a.wit", "aqua/aqua.md"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.run(true, false); err != nil {
+		t.Fatal(err)
+	}
+	want := append(slices.Clone(kept), ".env.example", ".env.locus.example", "Caddyfile", "FAIR_SOURCE.md", "LICENSE",
+		"LICENSES/Apache-2.0.txt", "aqua/crew/explorer.md", "aqua/skills/web/SKILL.md", "configuration-guide.md", "keeper.seccomp.json")
+	slices.Sort(want)
+	if got := left(t, s.dir); !slices.Equal(got, want) {
+		t.Errorf("the directory holds %q, want %q", got, want)
+	}
+}
+
+// A record that names a path outside the project is refused, never
+// followed: nothing is removed, and the file outside is as it was.
+func TestUninstallRefusesARecordNamingAPathOutside(t *testing.T) {
+	for _, name := range []string{"../outside.txt", "/etc/hostname", "wit/../../outside.txt"} {
+		t.Run(name, func(t *testing.T) {
+			s := newUninstallScenario(t)
+			outside := filepath.Join(filepath.Dir(s.dir), "outside.txt")
+			s.write(outside, "the person's own")
+			if err := writeInstallRecord([]string{"docker-compose.yml", name}); err != nil {
+				t.Fatal(err)
+			}
+			before := left(t, s.dir)
+			_, err := s.run(true, true)
+			if err == nil || !strings.HasPrefix(err.Error(), "cyfr uninstall cannot name the files CYFR put here: its record of the files CYFR put here cannot be used (.cyfr/files.json names \""+name+"\", which is not a path inside this directory). Nothing was removed. To remove CYFR by hand: run 'cyfr down' here,") {
+				t.Fatalf("cyfr uninstall answered %v", err)
+			}
+			s.nothingRemoved(before)
+			if !exists(outside) {
+				t.Error("the file outside the project is gone")
+			}
+		})
+	}
+}
+
+// A recorded file reached through a link is not followed: what the link
+// leads to is as it was, and the link stays.
+func TestUninstallFollowsNoRecordedPathThroughALink(t *testing.T) {
+	s := newUninstallScenario(t)
+	outside := t.TempDir()
+	s.write(filepath.Join(outside, "aqua.md"), "# soul\n")
+	if err := os.RemoveAll(filepath.Join(s.dir, "aqua")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(s.dir, "aqua")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeInstallRecord([]string{"docker-compose.yml", "aqua/aqua.md"}); err != nil {
+		t.Fatal(err)
+	}
+	before := entriesOf(t, outside)
+	if _, err := s.run(true, false); err != nil {
+		t.Fatal(err)
+	}
+	if after := entriesOf(t, outside); !maps.Equal(after, before) {
+		t.Errorf("what the link leads to changed:\nbefore %v\nafter  %v", before, after)
+	}
+	if target, err := os.Readlink(filepath.Join(s.dir, "aqua")); err != nil || target != outside {
+		t.Errorf("the aqua link is %q (%v)", target, err)
+	}
 }

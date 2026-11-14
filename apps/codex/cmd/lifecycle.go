@@ -333,8 +333,16 @@ func forceRefetched(releaseBuild bool) []string {
 }
 
 // downloadScaffold lays the release's scaffold files down, keeping every
-// file that exists; a variable so a test substitutes the download.
-var downloadScaffold = scaffold.Download
+// file that exists, and answers the scaffold's file names, which init
+// records (writeInstallRecord); a variable so a test substitutes the
+// download.
+var downloadScaffold = func(version string) ([]string, error) {
+	r, err := scaffold.Fetch(version)
+	if err != nil {
+		return nil, err
+	}
+	return r.Names(), r.Write(false)
+}
 
 // forceRemovalRefusal is init --force's refusal when files it re-fetches
 // could not be removed (forceRemovalState).
@@ -587,7 +595,8 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	// warns and init goes on; a release that fails verification stops
 	// it (scaffoldDownloadFailure).
 	begin(initStepFiles)
-	if err := downloadScaffold(version.Version); err != nil {
+	scaffoldFiles, err := downloadScaffold(version.Version)
+	if err != nil {
 		if stop := scaffoldDownloadFailure(version.Version, err, errOut); stop != nil {
 			// What --force removed is named here too: the refusal
 			// extracts nothing, so it is missing until init runs again.
@@ -634,6 +643,12 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	// from /app/aqua-defaults on first start if it's empty.
 	_ = os.MkdirAll("data", 0755)
 	_ = scaffold.MakeDir("aqua")
+
+	// The files init laid down, recorded whole, so `cyfr uninstall`
+	// removes exactly them without asking the release again.
+	if err := writeInstallRecord(scaffoldFiles); err != nil {
+		return fmt.Errorf("cyfr init could not record the files it wrote in %s (%v). Fix the cause and run 'cyfr init' again", installRecord, err)
+	}
 
 	// Warm-pull the images docker-compose.yml starts with the head's
 	// profiles (cyfr, and cyfr-locus for locus-runtime and locus-backends,

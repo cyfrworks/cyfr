@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -82,6 +83,111 @@ func isCYFRProject() bool {
 	return err == nil && values["CYFR_ACCESS"] != "" && access.HasComposeFile(".") && fileExists(stateMarker)
 }
 
+// installRecord is where cyfr init and cyfr update record the files they
+// lay down in a project: the scaffold's, .env, and the .gitignore init
+// wrote. Each records the whole list, replacing the one before.
+const installRecord = ".cyfr/files.json"
+
+// writeInstallRecord records scaffold, the names of the scaffold's files
+// the command laid down, with the project's own files beside them, in the
+// working directory's installRecord, whole and durably.
+func writeInstallRecord(scaffold []string) error {
+	names := append(slices.Clone(scaffold), ".env")
+	if gitignore, err := os.ReadFile(".gitignore"); err == nil && bytes.Equal(gitignore, []byte(projectGitignore)) {
+		names = append(names, ".gitignore")
+	}
+	slices.Sort(names)
+	names = slices.Compact(names)
+	data, err := json.MarshalIndent(struct {
+		Files []string `json:"files"`
+	}{names}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(installRecord), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(installRecord), ".files.json.*")
+	if err != nil {
+		return err
+	}
+	_, err = tmp.Write(append(data, '\n'))
+	err = errors.Join(err, tmp.Sync(), tmp.Close())
+	if err == nil {
+		err = os.Rename(tmp.Name(), installRecord)
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return err
+}
+
+// readInstallRecord answers the working directory's install record, false
+// when it keeps none. A record that does not read, or that names a path
+// outside the project, refuses: it is never followed.
+func readInstallRecord() ([]string, bool, error) {
+	if info, err := os.Lstat(installRecord); err != nil || !info.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	data, err := os.ReadFile(installRecord)
+	if err != nil {
+		return nil, true, err
+	}
+	var record struct {
+		Files *[]string `json:"files"`
+	}
+	if err := json.Unmarshal(data, &record); err != nil || record.Files == nil {
+		return nil, true, fmt.Errorf("%s does not read as a list of files", installRecord)
+	}
+	for _, name := range *record.Files {
+		if !insideProject(name) {
+			return nil, true, fmt.Errorf("%s names %q, which is not a path inside this directory", installRecord, name)
+		}
+	}
+	return *record.Files, true, nil
+}
+
+// insideProject reports whether name is a clean relative path that stays
+// inside the directory it is read in.
+func insideProject(name string) bool {
+	return name != "" && filepath.IsLocal(name) && filepath.Clean(name) == name && !strings.Contains(name, `\`)
+}
+
+// installedFiles answers which files CYFR put in the working directory:
+// the record init and update keep, else, for a project that keeps none,
+// the names of the scaffold of the release it runs; and with either, the
+// stack's own state under .cyfr/. source names where the list came from.
+func installedFiles() (names []string, source string, err error) {
+	recorded, kept, err := readInstallRecord()
+	switch {
+	case err != nil:
+		return nil, "", fmt.Errorf("its record of the files CYFR put here cannot be used (%v)", err)
+	case kept:
+		names, source = recorded, installRecord
+	default:
+		installed := installedRelease()
+		shipped, err := uninstallScaffold(installed)
+		if err != nil {
+			return nil, "", fmt.Errorf("this CYFR keeps no record of the files it put here (%s), and release %s's list of them could not be read (%v)", installRecord, installed, err)
+		}
+		names, source = append(shipped, ".env"), "release "+installed
+		if gitignore, err := os.ReadFile(".gitignore"); err == nil && bytes.Equal(gitignore, []byte(projectGitignore)) {
+			names = append(names, ".gitignore")
+		}
+	}
+	// The stack's own state: every file under .cyfr/ is the engine's, the
+	// record among them. WalkDir descends into no symbolic link.
+	if info, err := os.Lstat(stateMarker); err == nil && info.IsDir() {
+		_ = filepath.WalkDir(stateMarker, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && d.Type().IsRegular() {
+				names = append(names, filepath.ToSlash(path))
+			}
+			return nil
+		})
+	}
+	return names, source, nil
+}
+
 // uninstallScaffold names the files the scaffold of release version lays
 // down, the list cyfr init writes from (scaffold.Release.Names); a
 // variable so a test names them.
@@ -112,7 +218,6 @@ func installedRelease() string {
 type uninstallPlan struct {
 	dir     string
 	project string
-	release string
 	images  []string
 	// files are the files CYFR shipped or wrote in the directory, by name:
 	// each a regular file reached through no symbolic link. Nothing else
@@ -161,7 +266,7 @@ func regularFile(dir, rel string) bool {
 
 // readUninstallPlan reads what an uninstall of the CYFR in the working
 // directory removes and keeps; it changes nothing.
-func readUninstallPlan(shipped []string) (*uninstallPlan, error) {
+func readUninstallPlan(named []string) (*uninstallPlan, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -172,21 +277,6 @@ func readUninstallPlan(shipped []string) (*uninstallPlan, error) {
 			p.images = imagesFromCompose(name, []string{buildsProfile, access.ModePublic, access.ModeTailnet})
 			break
 		}
-	}
-	named := slices.Clone(shipped)
-	named = append(named, ".env")
-	if gitignore, err := os.ReadFile(".gitignore"); err == nil && bytes.Equal(gitignore, []byte(projectGitignore)) {
-		named = append(named, ".gitignore")
-	}
-	// The stack's own state: every file under .cyfr/ is the engine's.
-	// WalkDir descends into no symbolic link, and regularFile skips one.
-	if info, err := os.Lstat(stateMarker); err == nil && info.IsDir() {
-		_ = filepath.WalkDir(stateMarker, func(path string, d fs.DirEntry, err error) error {
-			if err == nil && d.Type().IsRegular() {
-				named = append(named, filepath.ToSlash(path))
-			}
-			return nil
-		})
 	}
 	for _, name := range named {
 		if regularFile(dir, name) && !slices.Contains(p.files, name) {
@@ -283,16 +373,15 @@ func runUninstall(ctx context.Context, out io.Writer, yes, deleteData bool) erro
 	if !isCYFRProject() {
 		return errors.New("This directory is not a CYFR that cyfr init made, so nothing was removed: it lacks a compose file, .cyfr/ or a .env that names CYFR_ACCESS. Run 'cyfr uninstall' in CYFR's directory")
 	}
-	installed := installedRelease()
-	shipped, err := uninstallScaffold(installed)
+	named, _, err := installedFiles()
 	if err != nil {
-		return fmt.Errorf("cyfr uninstall could not read which files release %s shipped (%v), so it cannot name them; nothing was removed. Run it again with network access to the release", installed, err)
+		self, _ := selfExecutable()
+		return fmt.Errorf("cyfr uninstall cannot name the files CYFR put here: %v. Nothing was removed. To remove CYFR by hand: run 'cyfr down' here, then remove this directory (with sudo: CYFR's container owns data/), the program %s and ~/.cyfr", err, self)
 	}
-	p, err := readUninstallPlan(shipped)
+	p, err := readUninstallPlan(named)
 	if err != nil {
 		return fmt.Errorf("cyfr uninstall could not read this directory (%v); nothing was removed", err)
 	}
-	p.release = installed
 	p.show(out)
 	reader := bufio.NewReader(askInput)
 	if !yes {

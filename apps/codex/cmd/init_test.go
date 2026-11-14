@@ -383,3 +383,42 @@ func TestInitPrintsLoginSetupForAHeadlessCYFR(t *testing.T) {
 		})
 	}
 }
+
+// recordedFiles is the working directory's install record.
+func recordedFiles(t *testing.T) []string {
+	t.Helper()
+	names, kept, err := readInstallRecord()
+	if err != nil || !kept {
+		t.Fatalf("the install record reads %v, %v", kept, err)
+	}
+	return names
+}
+
+// init records, whole, the files it laid down: the scaffold's, .env and
+// the .gitignore it wrote.
+func TestInitRecordsTheFilesItLaysDown(t *testing.T) {
+	saved, savedDownload := machine.supported, downloadScaffold
+	t.Cleanup(func() { machine.supported, downloadScaffold = saved, savedDownload })
+	machine.supported = func() bool { return false }
+	newInitProject(t)
+	useFakeEngine(t)
+	scaffoldNames := []string{"Caddyfile", "wit/cyfr/a.wit"}
+	downloadScaffold = func(string) ([]string, error) {
+		for _, name := range scaffoldNames {
+			if err := os.MkdirAll(filepath.Dir(name), 0755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(name, []byte("shipped\n"), 0644); err != nil {
+				return nil, err
+			}
+		}
+		return scaffoldNames, nil
+	}
+	var out bytes.Buffer
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("init: %v\n%s", err, out.String())
+	}
+	if got, want := recordedFiles(t), []string{".env", ".gitignore", "Caddyfile", "wit/cyfr/a.wit"}; !slices.Equal(got, want) {
+		t.Errorf("init recorded %q, want %q", got, want)
+	}
+}

@@ -441,6 +441,8 @@ func (f fakeScaffold) File(name string) ([]byte, bool) {
 	return []byte(example), true
 }
 
+func (f fakeScaffold) Names() []string { return f.Managed() }
+
 func (f fakeScaffold) Managed() []string {
 	var names []string
 	for _, file := range newScaffold {
@@ -2878,4 +2880,25 @@ func TestUpdateQuestionEndsOnAnInterrupt(t *testing.T) {
 		t.Errorf("the update did not ask:\n%s", out.String())
 	}
 	s.nothingRan()
+}
+
+// An update records the release's files in place of the record init left,
+// whole: a file only the older record named is no longer named.
+func TestUpdateRecordsItsReleasesFilesInPlaceOfInits(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	if err := writeInstallRecord([]string{"configuration-guide.md", "a-guide-the-release-dropped.md"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.run(context.Background()); err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	var want []string
+	for _, file := range newScaffold {
+		want = append(want, file.name)
+	}
+	want = append(want, ".env")
+	slices.Sort(want)
+	if got, _, err := readInstallRecord(); err != nil || !slices.Equal(got, want) {
+		t.Errorf("the update recorded %q (%v), want %q", got, err, want)
+	}
 }
