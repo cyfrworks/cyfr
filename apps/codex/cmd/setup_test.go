@@ -23,11 +23,13 @@ import (
 )
 
 // newSetupRun makes a new project with the fake engine and a session of
-// cyfr setup over them, its images not pulled, ended with the test.
+// cyfr setup over them, on a machine whose Docker answers, its images not
+// pulled, ended with the test.
 func newSetupRun(t *testing.T) (*fakeStack, *setupSession, *bytes.Buffer) {
 	t.Helper()
 	newInitProject(t)
 	s := useFakeEngine(t)
+	standInMachine(t).reachable = true
 	ctx, cancel := context.WithCancel(context.Background())
 	out := &bytes.Buffer{}
 	sess := newSetupSession(ctx, setupOptions{noPull: true}, &syncWriter{w: out})
@@ -249,6 +251,55 @@ func TestSetupRefusesAStartOnceSetUpMeanwhile(t *testing.T) {
 	}
 }
 
+// With no Docker this account can use, the start is refused with the way
+// on, at a terminal, and writes nothing: no .env, so cyfr setup and cyfr
+// init both still find a new project, and no step begins.
+func TestSetupWithoutDockerWritesNothing(t *testing.T) {
+	s, sess, out := newSetupRun(t)
+	standInMachine(t).reachable = false
+	if err := sess.Start(); !errors.Is(err, errNoDocker) {
+		t.Fatalf("a start without Docker answered %v", err)
+	}
+	if want := "Docker is not ready for CYFR on this machine, so nothing was written. Run cyfr init, then cyfr up, at a terminal"; errNoDocker.Error() != want {
+		t.Errorf("the refusal says %q, want %q", errNoDocker, want)
+	}
+	if st := sess.State(); !reflect.DeepEqual(st, setup.State{Phase: setup.PhaseReady}) || s.locks != 0 || s.starts != 0 {
+		t.Errorf("the refused start began %+v, with %d locks and %d starts", st, s.locks, s.starts)
+	}
+	if out.Len() != 0 {
+		t.Errorf("the refused start printed %q", out.String())
+	}
+	nothingWritten(t, ".env.example")
+}
+
+// The pages show the refusal as the start's own answer and stay at their
+// welcome; cyfr setup leaves nothing but its lock's file when it stops.
+func TestSetupPagesWithoutDockerWriteNothing(t *testing.T) {
+	newInitProject(t)
+	useFakeEngine(t)
+	standInMachine(t).reachable = false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runSetup(ctx, setupOptions{noPull: true, noOpen: true}, io.Discard) }()
+	c := openPages(t)
+	st, status := c.do(http.MethodPost, "/api/start", struct{}{})
+	if status != http.StatusUnprocessableEntity || !reflect.DeepEqual(st, setup.State{Sentence: errNoDocker.Error()}) {
+		t.Errorf("the start answered %d %+v, want %d and the refusal alone", status, st, http.StatusUnprocessableEntity)
+	}
+	if st, _ := c.do(http.MethodGet, "/api/state", nil); !reflect.DeepEqual(st, setup.State{Phase: setup.PhaseReady}) {
+		t.Errorf("the pages read %+v after the refusal, want the welcome", st)
+	}
+	cancel()
+	if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted before the start; nothing of the new CYFR was written" {
+		t.Errorf("cyfr setup answered %v", err)
+	}
+	nothingWritten(t, ".cyfr", ".env.example")
+	if entries, _ := os.ReadDir(".cyfr"); len(entries) != 1 || entries[0].Name() != "setup.lock" {
+		t.Errorf(".cyfr holds %v, want the setup's lock alone", entries)
+	}
+}
+
 // pagesClient drives a running cyfr setup over HTTP as its pages do.
 type pagesClient struct {
 	t     *testing.T
@@ -319,8 +370,11 @@ func (c *pagesClient) await(phase string) setup.State {
 	}
 }
 
-// runSetupInBackground runs cyfr setup under ctx, answering its end.
-func runSetupInBackground(ctx context.Context, out io.Writer) <-chan error {
+// runSetupInBackground runs cyfr setup under ctx, on a machine whose
+// Docker answers, answering its end.
+func runSetupInBackground(t *testing.T, ctx context.Context, out io.Writer) <-chan error {
+	t.Helper()
+	standInMachine(t).reachable = true
 	done := make(chan error, 1)
 	go func() { done <- runSetup(ctx, setupOptions{noPull: true, noOpen: true}, out) }()
 	return done
@@ -345,7 +399,7 @@ func TestSetupServesThePagesUntilTheyReadCYFRUp(t *testing.T) {
 	newInitProject(t)
 	useFakeEngine(t)
 	var out bytes.Buffer
-	done := runSetupInBackground(context.Background(), &syncWriter{w: &out})
+	done := runSetupInBackground(t, context.Background(), &syncWriter{w: &out})
 	c := openPages(t)
 	if !strings.HasPrefix(c.base, "http://127.0.0.1:") || len(c.token) != 64 {
 		t.Fatalf("the address is %s#%s", c.base, c.token)
@@ -381,7 +435,7 @@ func TestSetupStopsAWhileAfterAnEndNoPageReads(t *testing.T) {
 	saved := setupLinger
 	t.Cleanup(func() { setupLinger = saved })
 	setupLinger = 50 * time.Millisecond
-	done := runSetupInBackground(context.Background(), io.Discard)
+	done := runSetupInBackground(t, context.Background(), io.Discard)
 	c := openPages(t)
 	c.do(http.MethodPost, "/api/start", struct{}{})
 	if err := awaitEnd(t, done); err != nil {
@@ -400,7 +454,7 @@ func TestSetupInterrupted(t *testing.T) {
 		newInitProject(t)
 		useFakeEngine(t)
 		ctx, cancel := context.WithCancel(context.Background())
-		done := runSetupInBackground(ctx, io.Discard)
+		done := runSetupInBackground(t, ctx, io.Discard)
 		openPages(t)
 		cancel()
 		if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted before the start; nothing of the new CYFR was written" {
@@ -418,7 +472,7 @@ func TestSetupInterrupted(t *testing.T) {
 		s.composeErr = errors.New("no compose here")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		done := runSetupInBackground(ctx, io.Discard)
+		done := runSetupInBackground(t, ctx, io.Discard)
 		c := openPages(t)
 		c.do(http.MethodPost, "/api/start", struct{}{})
 		c.await(setup.PhaseProblem)
@@ -440,7 +494,7 @@ func TestSetupRefusesASecondSetupInTheProject(t *testing.T) {
 	useFakeEngine(t)
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
-	first := runSetupInBackground(ctx, io.Discard)
+	first := runSetupInBackground(t, ctx, io.Discard)
 	c := openPages(t)
 	published, err := os.ReadFile(setupURLFile)
 	if err != nil {
@@ -476,7 +530,7 @@ func TestSetupRefusesASecondSetupInTheProject(t *testing.T) {
 	}
 	// The lock goes with the setup that held it.
 	again, stopAgain := context.WithCancel(context.Background())
-	third := runSetupInBackground(again, io.Discard)
+	third := runSetupInBackground(t, again, io.Discard)
 	openPages(t)
 	stopAgain()
 	awaitEnd(t, third)
