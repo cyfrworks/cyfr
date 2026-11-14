@@ -141,17 +141,13 @@ defmodule Aqua.Providers.StatusTest do
 
     test "reads the soul connected once its brain's key is bound, and a member ready once its is",
          %{ctx: ctx} do
-      ConsentFixtures.bind_key!(ctx, @soul_brain, %{"ANTHROPIC_API_KEY" => "sk-test"},
-        origins: [:interactive, :programmatic]
-      )
+      ConsentFixtures.bind_key!(ctx, @soul_brain, %{"ANTHROPIC_API_KEY" => "sk-test"})
 
       assert [%{"model_connected" => true, "crew_ready" => 0, "crew_total" => 3}] =
                refreshed(ctx)
 
       # The explorer's brain.
-      ConsentFixtures.bind_key!(ctx, "catalyst:local.gemini", %{"GEMINI_API_KEY" => "g-test"},
-        origins: [:interactive, :programmatic]
-      )
+      ConsentFixtures.bind_key!(ctx, "catalyst:local.gemini", %{"GEMINI_API_KEY" => "g-test"})
 
       assert [%{"model_connected" => true, "crew_ready" => 1, "crew_total" => 3}] =
                refreshed(ctx)

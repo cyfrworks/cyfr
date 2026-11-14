@@ -106,7 +106,6 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       ConsentPreview.decode(%{
         "v" => preview.v,
         "rows" => preview.rows,
-        "origins" => preview.origins,
         "commit_digest" => preview.commit_digest,
         "removed" => preview.removed
       })

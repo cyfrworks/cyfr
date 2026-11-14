@@ -180,4 +180,27 @@ defmodule Prima.Authority.RootSelectTest do
                RootSelect.select_for_route(two, :protected, true)
     end
   end
+
+  describe "candidates/2" do
+    @damaged %{id: "prof_damaged", status: :corrupt}
+
+    test "entries that all decode are the candidates, as they are" do
+      assert RootSelect.candidates([@owner, @public], nil) == {:ok, [@owner, @public]}
+    end
+
+    test "a damaged row refuses every selection, naming the first, but a pin to another id" do
+      second = %{id: "prof_damaged_too", status: :corrupt}
+      entries = [@owner, @damaged, second, @public]
+
+      for pinned <- [nil, "prof_damaged"] do
+        assert RootSelect.candidates(entries, pinned) ==
+                 {:error, {:corrupt, {:profile, "prof_damaged"}}}
+      end
+
+      assert RootSelect.candidates(entries, "prof_damaged_too") ==
+               {:error, {:corrupt, {:profile, "prof_damaged_too"}}}
+
+      assert RootSelect.candidates(entries, "prof_owner") == {:ok, [@owner, @public]}
+    end
+  end
 end

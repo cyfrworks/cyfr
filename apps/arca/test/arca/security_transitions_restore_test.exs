@@ -337,8 +337,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       activation: "{}",
       granted_by: "usr_x",
       granted_via: "console",
-      granted_at: now(),
-      admitted_origins: ~s(["interactive"])
+      granted_at: now()
     })
 
     id

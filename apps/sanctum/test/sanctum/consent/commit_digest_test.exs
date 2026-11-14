@@ -12,8 +12,7 @@ defmodule Sanctum.Consent.CommitDigestTest do
     blob_digest: "sha256:blob",
     label: "default",
     kind: :owner,
-    invoke_mode: :open_inert,
-    origins: [:interactive]
+    invoke_mode: :open_inert
   }
 
   @node "reagent:local.weather"
@@ -56,7 +55,6 @@ defmodule Sanctum.Consent.CommitDigestTest do
         %{label: "staging"},
         %{override: true},
         # What the grant admits, and how the ask was narrowed.
-        %{origins: [:interactive, :programmatic]},
         %{subset: %{@node => %{"egress" => %{"domains" => ["api.weather.example"]}}}}
       ]
 
@@ -395,33 +393,9 @@ defmodule Sanctum.Consent.CommitDigestTest do
   end
 
   describe "origins" do
-    test "are required: a digest that binds no origins cannot be computed" do
-      assert {:error, {:invalid_commit, :origins, "is required"}} =
-               CommitDigest.compute(Map.delete(@base, :origins))
-    end
-
-    test "an empty list, an unknown origin, a spelling and a duplicate are refused" do
-      for origins <- [[], [:cli], ["interactive"], [:interactive, :interactive], :interactive] do
-        assert {:error, {:invalid_commit, :origins, _why}} =
-                 CommitDigest.compute(%{@base | origins: origins}),
-               "#{inspect(origins)} was accepted"
-      end
-    end
-
-    test "are a set: order does not change the digest, and they bind as wire spellings" do
-      assert digest!(%{@base | origins: [:webhook, :interactive]}) ==
-               digest!(%{@base | origins: [:interactive, :webhook]})
-
-      {:ok, canonical} = CommitDigest.normalize(%{@base | origins: [:schedule, :interactive]})
-      assert canonical["origins"] == ["interactive", "schedule"]
-    end
-
-    test "each origin changes the digest" do
-      digests =
-        for origin <- Prima.Origin.values(),
-            do: digest!(%{@base | origins: [origin]})
-
-      assert length(Enum.uniq(digests)) == length(Prima.Origin.values())
+    test "a commit naming who may start the component has no digest" do
+      assert CommitDigest.compute(Map.put(@base, :origins, [:interactive])) ==
+               {:error, {:invalid_commit, :unknown_field, ":origins"}}
     end
   end
 
@@ -606,7 +580,7 @@ defmodule Sanctum.Consent.CommitDigestTest do
 
       refute Map.has_key?(binding, "name")
       assert canonical["override"] == false
-      assert canonical["origins"] == ["interactive"]
+      refute Map.has_key?(canonical, "origins")
       assert canonical["subset"] == %{}
     end
   end

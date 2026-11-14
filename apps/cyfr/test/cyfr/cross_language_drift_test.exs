@@ -430,10 +430,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "consent_preview.json" => [
       {"apps/codex/cmd/profile_test.go", ~w(kinds preview)},
-      {"apps/cyfr/test/cyfr/consent_preview_render_test.exs", ~w(origins preview)},
+      {"apps/cyfr/test/cyfr/consent_preview_render_test.exs", ~w(preview)},
       {"apps/prima/test/prima/consent_preview_test.exs",
-       ~w(kinds narrowable_kinds origins preview refusals version)},
-      {"apps/prima/test/prima/origin_test.exs", ~w(origins)}
+       ~w(kinds narrowable_kinds preview refusals version)}
     ],
     "device.json" => [
       {"apps/codex/internal/shell/device_test.go", ~w(keys messages refusals)},

@@ -2803,18 +2803,31 @@ defmodule PrismWeb.ShellCanvasTest do
     end
 
     test "a reference that names nothing installed, or a component granted with nothing its grant needs missing, is dropped and offers nothing",
-         %{conn: conn, ctx: ctx, catalyst: catalyst} do
+         %{conn: conn, catalyst: catalyst} do
       view = shell!(conn)
       main = canvas(view).id
 
       canvas_verb!(view, main, :grant, %{"ref" => "catalyst:local.nobody"})
       canvas_verb!(view, main, :grant, %{"ref" => catalyst <> ":9.9.9"})
 
-      # Granted, and needing nothing more: its setup plan reads ready.
-      _profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, catalyst)
+      # Granted through the walk, and needing nothing more: its setup plan
+      # reads ready, as its run stands on the grant.
+      person = person_of(view)
+      decisions = %{ref: catalyst}
+      {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: catalyst})
+      {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
 
-      assert {:ok, %{consent: %{ready: true}}} =
-               Compendium.Component.setup_plan(person_of(view), catalyst)
+      {:ok, _} =
+        Sanctum.Consent.Commit.commit(person, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+
+      assert {:ok, %{consent: %{ready: true}}} = Compendium.Component.setup_plan(person, catalyst)
+      assert {:ok, _authority} = Opus.Admission.authority_for(person, :default, catalyst)
 
       canvas_verb!(view, main, :grant, %{"ref" => catalyst})
 

@@ -1002,7 +1002,7 @@ defmodule Opus.Admission do
   defp load(ctx, reference, select, pinned, opts) do
     with {:ok, name_ref} <- name_level(reference),
          {:ok, entries} <- read_profiles(ctx, name_ref),
-         {:ok, candidates} <- decoded(entries, pinned),
+         {:ok, candidates} <- RootSelect.candidates(entries, pinned),
          {:ok, profile} <- select.(candidates),
          {:ok, _ref, _type, component} <- inspect_component(ctx, reference),
          {:ok, authority, stamp} <-
@@ -1071,27 +1071,6 @@ defmodule Opus.Admission do
       {:ok, entries} -> {:ok, entries}
       {:error, :unavailable} -> {:error, {:unavailable, "Consent profiles"}}
       {:error, _no_tenant} = refusal -> refusal
-    end
-  end
-
-  # A profile row that cannot be decoded is unavailable, never skipped: a
-  # selection by kind or label could be the one it would have answered, so
-  # it refuses every selection but a pinned id that names another profile.
-  defp decoded(entries, pinned) do
-    case Enum.filter(entries, &(&1.status == :corrupt)) do
-      [] ->
-        {:ok, entries}
-
-      damaged ->
-        bearing =
-          if is_binary(pinned),
-            do: Enum.find(damaged, &(&1.id == pinned)),
-            else: hd(damaged)
-
-        case bearing do
-          nil -> {:ok, entries -- damaged}
-          %{id: id} -> {:error, {:corrupt, {:profile, id}}}
-        end
     end
   end
 

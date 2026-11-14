@@ -210,31 +210,24 @@ defmodule Opus.TinctureTest do
          %{ctx: ctx} do
       node = tincture!(ctx, "tinc-public")
       _public = profile!(ctx, node, :public)
-      worker!([%{"answer" => 7}])
+      worker!([%{"answer" => 7}, %{"answer" => 7}])
       ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
-      # A person at the public page: the tincture data routes admit the
-      # page's call as interactive, which the public profile admits alone.
+      # A person at the public page, and a call over the API: each runs on
+      # the public profile, whatever path admitted it.
       anonymous =
         Sanctum.Context.build(authenticated: false, client_ip: "198.51.100.7")
         |> Sanctum.TestContext.via(:prism)
 
       assert anonymous.athanor_id == nil
 
-      # A public path that is not a person at a page is programmatic, and
-      # a public profile that names it not is asked to grant again.
-      assert {:error, %Prima.Refusal{class: :consent_required}} =
-               Opus.Tincture.invoke(
-                 Sanctum.TestContext.via(anonymous, :api),
-                 args("tinc-public", :public),
-                 :public
-               )
+      for caller <- [anonymous, Sanctum.TestContext.via(anonymous, :api)] do
+        assert {:ok, %{status: :completed}} =
+                 Opus.Tincture.invoke(caller, args("tinc-public", :public), :public)
+      end
 
-      assert {:ok, %{status: :completed}} =
-               Opus.Tincture.invoke(anonymous, args("tinc-public", :public), :public)
-
-      # The run is the public identity's, in the tincture's own athanor.
-      assert [%{authority: authority}] = ScriptedWorker.calls()
-      assert authority.profile_kind == :public
+      # Each run is the public identity's, in the tincture's own athanor.
+      assert [%{authority: first}, %{authority: second}] = ScriptedWorker.calls()
+      assert first.profile_kind == :public and second.profile_kind == :public
     end
 
     test "the caller's own athanor is not consulted", %{ctx: ctx} do

@@ -6,8 +6,9 @@ defmodule Prima.ConsentPreviewTest do
   The consent preview as data (`tests/fixtures/consent_preview.json`): the
   preview holding a row of every kind, one node's several exits among
   them, reads and writes back to itself; a
-  row of an unknown kind, a sentence, a narrowed kind that cannot narrow,
-  an origin outside the enum and every other malformed row are refused. A
+  row of an unknown kind, a sentence, a narrowed kind that cannot narrow
+  and every other malformed row are refused, and so is a preview naming
+  who may start the component, which no grant says. A
   credential row is one binding: its source, destination, disclosure,
   suggestion, choice, account, key and lifetime travel with it, and a row
   missing its source, its key or its lifetime is refused. A preview names
@@ -111,7 +112,7 @@ defmodule Prima.ConsentPreviewTest do
   test "the preview holds a row of every kind and writes back to itself" do
     preview = vectors()["preview"]
 
-    assert {:ok, %ConsentPreview{rows: rows, origins: origins} = decoded} =
+    assert {:ok, %ConsentPreview{rows: rows} = decoded} =
              ConsentPreview.decode(preview)
 
     assert ConsentPreview.encode(decoded) == preview
@@ -119,12 +120,10 @@ defmodule Prima.ConsentPreviewTest do
     assert rows |> Enum.map(& &1.kind) |> Enum.uniq() |> Enum.sort() ==
              Enum.sort(ConsentPreview.kinds())
 
-    assert origins == [:interactive, :programmatic]
-
     for %Row{kind: kind, narrowed: true} <- rows,
         do: assert(kind in ConsentPreview.narrowable_kinds())
 
-    assert ConsentPreview.new(rows, origins, decoded.commit_digest, preview["removed"]) ==
+    assert ConsentPreview.new(rows, decoded.commit_digest, preview["removed"]) ==
              {:ok, decoded}
   end
 
@@ -206,30 +205,6 @@ defmodule Prima.ConsentPreviewTest do
     for spelled <- [["file.read", "*"], ["*", "*"]] do
       assert Row.decode(Row.encode(%{tools | values: %{"tools" => spelled}})) ==
                {:error, {:invalid_field, "tools"}}
-    end
-  end
-
-  test "origins are answered in the enum's order" do
-    preview = Map.put(vectors()["preview"], "origins", ["webhook", "interactive"])
-
-    assert {:ok, %ConsentPreview{origins: [:interactive, :webhook]} = decoded} =
-             ConsentPreview.decode(preview)
-
-    assert ConsentPreview.encode(decoded)["origins"] == ["interactive", "webhook"]
-  end
-
-  test "every origin spelling is admitted, and every other refused" do
-    v = vectors()
-    preview = v["preview"]
-
-    for spelling <- v["origins"]["spellings"] do
-      assert {:ok, _preview} = ConsentPreview.decode(Map.put(preview, "origins", [spelling])),
-             spelling
-    end
-
-    for spelling <- v["origins"]["invalid"] do
-      assert {:error, {:unknown_origin, ^spelling}} =
-               ConsentPreview.decode(Map.put(preview, "origins", [spelling]))
     end
   end
 
