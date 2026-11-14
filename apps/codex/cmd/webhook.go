@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"github.com/cyfr/codex/internal/ops"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -51,8 +53,9 @@ var webhookCmd = &cobra.Command{
 	Long: `Manage inbound webhook receivers.
 
 Each webhook is a stable URL at /hooks/<slug> that verifies an HMAC-SHA256
-signature against a stored secret and invokes a target component
-synchronously. The webhook can carry a static "input_template" (JSON object)
+signature against a stored secret, answers as soon as it accepts the
+delivery, and then runs a target component: the answer does not say how
+the run ends. The webhook can carry a static "input_template" (JSON object)
 that gets merged into the invocation payload alongside the request envelope
 (headers, body, metadata) under the reserved key '_webhook'.`,
 }
@@ -158,7 +161,7 @@ Run without --name for an interactive form.`,
 var webhookGetCmd = &cobra.Command{
 	Use:     "get <name>",
 	Short:   "Get webhook info",
-	Long:    "Show metadata for a webhook including target component, signature header, and input template. The HMAC secret is never returned.",
+	Long:    "Show metadata for a webhook including target component, the headers it reads (signature, and the timestamp and idempotency headers when set), and input template. The HMAC secret is never returned.",
 	Example: "  cyfr webhook get github-push",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -262,7 +265,7 @@ use 'cyfr webhook rotate' to replace it.`,
 var webhookRevokeCmd = &cobra.Command{
 	Use:     "revoke [name]",
 	Short:   "Revoke (disable) a webhook",
-	Long:    "Disable a webhook so its URL stops accepting POSTs. The audit trail is preserved. Run without arguments for interactive selection.",
+	Long:    "Disable a webhook: its URL stops accepting POSTs now, whichever secret signs them, so revoking ends an old secret before the time a rotation leaves it is up. The audit trail is preserved. Run without arguments for interactive selection.",
 	Example: "  cyfr webhook revoke github-push",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -288,11 +291,11 @@ var webhookRevokeCmd = &cobra.Command{
 var webhookRotateCmd = &cobra.Command{
 	Use:     "rotate [name]",
 	Short:   "Rotate the HMAC secret for a webhook",
-	Long:    "Generate a new HMAC secret. The old secret stops working immediately. Update the sender's configuration with the new secret. Run without arguments for interactive selection.",
+	Long:    "Generate a new HMAC secret. The old secret keeps working for a while after a rotation, so the sender's configuration can move to the new one; the answer says until when. 'cyfr webhook revoke' ends the webhook now. Run without arguments for interactive selection.",
 	Example: "  cyfr webhook rotate github-push",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name, err := selectWebhookName(cmd.Context(), args, "Select a webhook to rotate", "Rotate webhook '%s'? The old secret stops working immediately.")
+		name, err := selectWebhookName(cmd.Context(), args, "Select a webhook to rotate", "Rotate webhook '%s'? The old secret keeps working for a while; the answer says until when.")
 		if err != nil || name == "" {
 			return err
 		}
@@ -395,8 +398,35 @@ func renderWebhookRotated(result map[string]any) {
 	fmt.Printf("Webhook '%s' rotated.\n\n", name)
 	renderWebhookEndpoint(result)
 	renderWebhookSecret(result, "New secret")
-	if _, ok := result["secret"].(string); ok {
-		fmt.Println("  The old secret is now invalid.")
+	if until, err := time.Parse(time.RFC3339Nano, fmt.Sprint(result["previous_expires_at"])); err == nil {
+		fmt.Printf("  The old secret keeps working until %s, %s from now. To end it now, revoke the webhook: cyfr webhook revoke %s\n",
+			until.UTC().Format("2006-01-02 15:04:05 UTC"), hoursAndMinutes(until.Sub(webhookNow())), name)
+	}
+}
+
+// webhookNow is the clock a rotation's span is read against; tests stand
+// in for it.
+var webhookNow = time.Now
+
+// hoursAndMinutes is d to the nearest minute, in hours and minutes.
+func hoursAndMinutes(d time.Duration) string {
+	minutes := int(d.Round(time.Minute) / time.Minute)
+	if minutes < 0 {
+		minutes = 0
+	}
+	unit := func(n int, one string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return strconv.Itoa(n) + " " + one + "s"
+	}
+	switch h, m := minutes/60, minutes%60; {
+	case h == 0:
+		return unit(m, "minute")
+	case m == 0:
+		return unit(h, "hour")
+	default:
+		return unit(h, "hour") + " " + unit(m, "minute")
 	}
 }
 
@@ -411,6 +441,12 @@ func renderWebhookDetail(result map[string]any) {
 	}
 	if v, ok := result["signature_header"].(string); ok && v != "" {
 		fmt.Printf("  Signature header: %s\n", v)
+	}
+	if v, ok := result["timestamp_header"].(string); ok && v != "" {
+		fmt.Printf("  Timestamp header: %s\n", v)
+	}
+	if v, ok := result["idempotency_key_header"].(string); ok && v != "" {
+		fmt.Printf("  Idempotency key:  %s\n", v)
 	}
 	if v, ok := result["rate_limit"].(string); ok && v != "" {
 		fmt.Printf("  Rate limit:       %s\n", v)
