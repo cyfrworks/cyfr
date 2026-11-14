@@ -1061,7 +1061,12 @@ docker compose run --rm --no-deps -T -e CYFR_RESTORE_INCOMPLETE= cyfr bin/cyfr e
 ```
 
 and only then takes the bar out of `.env` and starts the stack
-(`--no-start` leaves it stopped). A restore cut short anywhere leaves the
+(`--no-start` leaves it stopped). On native Linux the server's container
+owns the storage root once the stack has run, so `cyfr restore` says at its
+start, before anything stops, that it needs root: run it as
+`sudo cyfr restore backups/<timestamp>`. Run through sudo, it gives `.env`,
+`docker-compose.yml`, the scaffold files and `.cyfr/` back to the account
+that ran sudo. A restore cut short anywhere leaves the
 bar up; `cyfr restore <backup>` run again puts every part back and
 declares it. A backup put back by hand, with no bar in `.env`, is declared
 by the same command, with the whole cluster stopped, before its first start.
