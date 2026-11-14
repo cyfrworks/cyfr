@@ -1006,6 +1006,9 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
       assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
+
+      # The brain's models call runs beside the page; it ends before the test does.
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "reconnecting a third-party brain by its versioned reference fills its own picker " <>
@@ -1053,6 +1056,9 @@ defmodule PrismWeb.AquaLiveTest do
       # acme's entry is replaced whole; the local brain's is untouched.
       assert picker(view) ==
                {%{"acme.brain" => ["chat-fixture"], "brain" => ["local-model"]}, refs}
+
+      # The brain's models call runs beside the page; it ends before the test does.
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "Aqua's setup lists every installed brain with what it needs, offers one step per " <>
@@ -1250,6 +1256,9 @@ defmodule PrismWeb.AquaLiveTest do
       )
 
       assert has_element?(view, "#aqua-setup-pick", "Which connected brain is Aqua's own?")
+
+      # The brain's models call runs beside the page; it ends before the test does.
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "picking a connected brain for Aqua asks for its consent again at once",
@@ -1281,6 +1290,8 @@ defmodule PrismWeb.AquaLiveTest do
         end,
         "the soul's consent asked again"
       )
+
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "an unrelated reload does not re-enable Install while its fetch is running",
@@ -1337,6 +1348,10 @@ defmodule PrismWeb.AquaLiveTest do
       # whatever a fresh run answers.
       PrismWeb.ModelCatalog.load(ctx)
       refute_received {:list_models_result, _tag, {:ok, %{"models" => %{"kept" => _}}}}
+
+      # The page's models call and this load's run both run beside the test;
+      # each ends before it does.
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "the prompt editor is a dialog with a sibling backdrop and an Escape of its own",
