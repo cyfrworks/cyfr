@@ -147,22 +147,28 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   # The component domain matches a name or a description. Text shaped as a
   # reference, the label a component is shown by (`catalyst:local.http:0.1.0`)
   # or any start of one, asks it for the name part, narrowed to the kind
-  # when one is named, and keeps the answers whose reference holds the text.
+  # when one is named, and keeps the answers whose reference holds the text;
+  # when none does, the text is searched as it was typed, so a name or a
+  # description with a dot in it (`v1.2`) is still found.
   defp matching_components(ctx, typed) do
-    case reference_parts(typed) do
-      nil ->
+    with {type, name} <- reference_parts(typed),
+         [_ | _] = found <- by_reference(ctx, typed, type, name) do
+      found
+    else
+      _plain_or_none ->
         args = %{"query" => typed, "source" => "local", "limit" => @max_matches}
         component_items(ctx, "component/search", args)
-
-      {type, name} ->
-        args = %{"query" => name, "source" => "local", "limit" => @max_matches}
-        args = if type, do: Map.put(args, "type", type), else: args
-        needle = String.downcase(typed)
-
-        ctx
-        |> component_items("component/search", args)
-        |> Enum.filter(&String.contains?(String.downcase(&1.label), needle))
     end
+  end
+
+  defp by_reference(ctx, typed, type, name) do
+    args = %{"query" => name, "source" => "local", "limit" => @max_matches}
+    args = if type, do: Map.put(args, "type", type), else: args
+    needle = String.downcase(typed)
+
+    ctx
+    |> component_items("component/search", args)
+    |> Enum.filter(&String.contains?(String.downcase(&1.label), needle))
   end
 
   # `{kind or nil, name part}` of text shaped as a reference: a kind before

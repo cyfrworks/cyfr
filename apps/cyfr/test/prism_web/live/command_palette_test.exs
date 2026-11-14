@@ -89,14 +89,14 @@ defmodule PrismWeb.CommandPaletteTest do
 
   # A component row as the registry writes one, `inserted_at` naming how new
   # it is.
-  defp component_row!(ctx, name, inserted_at) do
+  defp component_row!(ctx, name, inserted_at, description \\ nil) do
     {:ok, _} =
       Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
         id: "cmp_#{name}",
         name: name,
         version: "0.1.0",
         component_type: "catalyst",
-        description: name,
+        description: description || name,
         tags: "[]",
         digest: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower),
         release_digest: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower),
@@ -124,7 +124,8 @@ defmodule PrismWeb.CommandPaletteTest do
     # `http` first, and the 1,000 a list answers at most newer than it.
     start = DateTime.utc_now() |> DateTime.add(-3_600) |> DateTime.truncate(:microsecond)
     component_row!(ctx, "http", start)
-    for n <- 1..1_000, do: component_row!(ctx, "newer-#{n}", DateTime.add(start, n))
+    component_row!(ctx, "fetcher", DateTime.add(start, 1), "Fetches pages, v1.2 and later")
+    for n <- 1..1_000, do: component_row!(ctx, "newer-#{n}", DateTime.add(start, n + 1))
 
     actor = Sanctum.Context.actor(ctx)
     {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
@@ -148,6 +149,15 @@ defmodule PrismWeb.CommandPaletteTest do
 
       refute has_element?(view, ~s(#command-palette [phx-value-to*="newer-"])), typed
     end
+
+    # Text with a dot that no reference holds is searched as typed: a
+    # description's words are still found.
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "v1.2"})
+
+    assert has_element?(
+             view,
+             ~s(#command-palette [phx-value-to="/components/catalyst:local.fetcher:0.1.0"])
+           )
 
     # A reference of another kind finds nothing of this one.
     view |> element("#command-palette input") |> render_keyup(%{"value" => "reagent:local.http"})

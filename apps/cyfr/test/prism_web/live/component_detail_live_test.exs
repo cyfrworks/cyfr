@@ -23,6 +23,23 @@ defmodule PrismWeb.ComponentDetailLiveTest do
     %{conn: conn, ctx: ctx, user: user}
   end
 
+  # `fun` run while the store cannot read `table`: the table renamed inside
+  # a savepoint, and the savepoint rolled back on every exit, which puts the
+  # table back and clears the transaction postgres aborts at the failed
+  # read. This file is synchronous (`async: false`) because of it: the
+  # rename is seen by every process on the test's connection.
+  defp while_unreadable(table, fun) do
+    Arca.Repo.query!("SAVEPOINT store_unreadable")
+
+    try do
+      Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unreadable")
+      fun.()
+    after
+      Arca.Repo.query!("ROLLBACK TO SAVEPOINT store_unreadable")
+      Arca.Repo.query!("RELEASE SAVEPOINT store_unreadable")
+    end
+  end
+
   defp publish_reportable!(ctx) do
     {:ok, _} =
       Compendium.Registry.publish_bytes(
@@ -342,6 +359,23 @@ defmodule PrismWeb.ComponentDetailLiveTest do
 
       refute has_element?(view, "#run-result")
       assert runs(ctx) == before
+    end
+
+    @tag :capture_log
+    test "a grant whose head the store cannot answer says so and offers to read it again",
+         %{conn: conn} do
+      path = "/components/reagent:local.run-probe:0.1.0"
+
+      while_unreadable("consents", fn ->
+        {view, _html} = mount_athanor(conn, path)
+        assert has_element?(view, "#grants li", "Could not be read just now.")
+        assert has_element?(view, "#grants li button", "Try again")
+        refute has_element?(view, "#grants li", "Granted")
+        Cyfr.Test.Sandbox.end_views()
+      end)
+
+      {view, _html} = mount_athanor(conn, path)
+      assert has_element?(view, "#grants li", "Granted · revision")
     end
 
     test "lists the component's grants, each with Revoke", %{conn: conn} do
