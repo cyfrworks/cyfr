@@ -235,6 +235,10 @@ defmodule Emissary.External.Provider do
               required: true,
               description:
                 "The epoch the caller read with get (required for update; refused when the server has changed since)"
+            ),
+            Arg.new("keep_headers", {:array, Arg.new(nil, :string)},
+              description:
+                "Headers of a tool server that keep the value stored at that epoch, which get shows as [set] and never answers; a name kept is not also given in config.headers"
             )
           ],
           kind: :write,
@@ -436,10 +440,14 @@ defmodule Emissary.External.Provider do
   end
 
   # The connection config is replaced whole, at the epoch the caller read;
-  # whether the server is enabled is kept.
+  # whether the server is enabled is kept. A header named in
+  # `keep_headers` takes the value the row stores at that epoch, so a
+  # literal the caller was never shown survives the replacement; the
+  # update's own epoch check refuses it should the row move meanwhile.
   defp handle_update(ctx, args) do
-    with {:ok, name, attrs} <- server_args(ctx, args),
-         {:ok, epoch} <- epoch_arg(args) do
+    with {:ok, epoch} <- epoch_arg(args),
+         {:ok, args} <- kept_headers(ctx, args, epoch),
+         {:ok, name, attrs} <- server_args(ctx, args) do
       case Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), name, attrs, epoch) do
         {:ok, %{enabled: true} = server} ->
           stop_process(ctx, name)
@@ -465,6 +473,59 @@ defmodule Emissary.External.Provider do
 
           {:error, {:unavailable, "The server store"}}
       end
+    end
+  end
+
+  defp kept_headers(_ctx, %{"keep_headers" => []} = args, _epoch), do: {:ok, args}
+
+  defp kept_headers(ctx, %{"keep_headers" => names, "name" => name} = args, epoch)
+       when is_list(names) and is_binary(name) do
+    config = args["config"] || %{}
+    given = Map.get(config, "headers") || %{}
+
+    with {:ok, %{transport: "http", epoch: ^epoch} = server} <- stored_for_keep(ctx, name),
+         stored = Arca.McpServerStorage.config(server)["headers"] || %{},
+         :ok <- keepable(names, stored, given) do
+      kept = Map.take(stored, names)
+      {:ok, put_in(args, ["config", "headers"], Map.merge(given, kept))}
+    else
+      {:ok, %{transport: "http"}} ->
+        {:error,
+         {:conflict,
+          "Server '#{name}' changed since epoch #{epoch} — read it again with get and retry"}}
+
+      {:ok, _program} ->
+        {:error, {:invalid_argument, "Only a tool server's headers are kept: a program has none"}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp kept_headers(_ctx, args, _epoch), do: {:ok, args}
+
+  defp stored_for_keep(ctx, name) do
+    case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
+      {:ok, server} -> {:ok, server}
+      {:error, :not_found} -> {:error, {:not_found, "Server", name}}
+      {:error, _reason} -> {:error, {:unavailable, "The server store"}}
+    end
+  end
+
+  # A kept header is one the row stores, and not one the caller also sets.
+  defp keepable(names, stored, given) do
+    cond do
+      (missing = Enum.reject(names, &Map.has_key?(stored, &1))) != [] ->
+        {:error,
+         {:invalid_argument,
+          "keep_headers names a header this server does not store: #{Enum.join(missing, ", ")}"}}
+
+      (both = Enum.filter(names, &Map.has_key?(given, &1))) != [] ->
+        {:error,
+         {:invalid_argument, "A header is kept or given, not both: #{Enum.join(both, ", ")}"}}
+
+      true ->
+        :ok
     end
   end
 

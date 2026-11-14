@@ -1286,4 +1286,99 @@ defmodule PrismWeb.ProgramsLiveTest do
              "console" => true
            }
   end
+
+  # A tool server elsewhere holding a literal header, a vault-bound one and
+  # members the form does not show.
+  defp tool_server!(user, athanor) do
+    entry!(user, athanor, "local-key", %{"hosts" => ["127.0.0.1"], "port" => 9})
+
+    {:ok, row} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "relay",
+        url: "https://127.0.0.1:9/mcp",
+        enabled: false,
+        config_json:
+          Jason.encode!(%{
+            "headers" => %{"X-Hub" => "hub-literal-0123", "Authorization" => "vault:local-key"},
+            "timeout_ms" => 45_000,
+            "tool_patterns" => ["search"],
+            "console" => true
+          })
+      })
+
+    row
+  end
+
+  defp edit_relay(view) do
+    view |> element("tr[phx-value-name=relay]") |> render_click()
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+  end
+
+  test "Edit on a tool server shows its address and headers, a literal as [set] and never its value",
+       %{conn: conn, athanor: athanor, user: user} do
+    tool_server!(user, athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    html = edit_relay(view)
+
+    assert has_element?(
+             view,
+             ~s(form#edit-server input[name="url"][value="https://127.0.0.1:9/mcp"])
+           )
+
+    assert view |> element("form#edit-server textarea[name=headers]") |> render() =~
+             "Authorization: vault:local-key\nX-Hub: [set]"
+
+    refute html =~ "hub-literal-0123"
+    refute render(view) =~ "hub-literal-0123"
+  end
+
+  test "an Edit of a tool server keeps a [set] header's stored value and every unshown member",
+       %{conn: conn, athanor: athanor, user: user} do
+    before = tool_server!(user, athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    edit_relay(view)
+
+    view |> form("form#edit-server", %{"url" => "https://127.0.0.1:9/mcp/v2"}) |> render_submit()
+    answered(view)
+
+    assert flash(view, "info") =~ "'relay' saved"
+    assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+
+    assert {saved.id, saved.url, saved.epoch} ==
+             {before.id, "https://127.0.0.1:9/mcp/v2", before.epoch + 1}
+
+    assert Arca.McpServerStorage.config(saved) == %{
+             "headers" => %{"X-Hub" => "hub-literal-0123", "Authorization" => "vault:local-key"},
+             "timeout_ms" => 45_000,
+             "tool_patterns" => ["search"],
+             "console" => true
+           }
+  end
+
+  test "an Edit of a tool server takes a typed value in place of [set], and one saved as read writes nothing",
+       %{conn: conn, athanor: athanor, user: user} do
+    tool_server!(user, athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    edit_relay(view)
+
+    view |> form("form#edit-server", %{}) |> render_submit()
+    assert flash(view, "info") == "Nothing changed in 'relay'."
+    {:ok, unchanged} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+
+    # The row stays open; Edit opens the form again.
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+
+    view
+    |> form("form#edit-server", %{
+      "headers" => "Authorization: vault:local-key\nX-Hub: hub-literal-new"
+    })
+    |> render_submit()
+
+    answered(view)
+
+    assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+    assert saved.epoch == unchanged.epoch + 1
+    assert Arca.McpServerStorage.config(saved)["headers"]["X-Hub"] == "hub-literal-new"
+  end
 end
