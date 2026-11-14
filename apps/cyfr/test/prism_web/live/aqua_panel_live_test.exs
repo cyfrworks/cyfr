@@ -220,7 +220,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     read = request_text(read)
     assert read =~ "(unread) #{them}: ship friday"
-    assert read =~ "\n#{mine}: noted"
+    assert read =~ "#{mine}: noted"
+    refute read =~ "(unread) #{mine}: noted"
     assert read =~ "(unread) #{them}: and bring the deck"
 
     assert Enum.any?(

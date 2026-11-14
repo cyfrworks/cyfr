@@ -84,13 +84,13 @@ defmodule Aqua.RoomExcerpt do
   # The ids of the messages here that are unread to the person: the newest
   # `unread` someone else wrote, all of them when the unread run back past
   # what was read.
-  defp unread_ids(_messages, _user_id, unread) when unread <= 0, do: MapSet.new()
+  defp unread_ids(_messages, _user_id, unread) when unread <= 0, do: []
 
   defp unread_ids(messages, user_id, unread) do
     messages
     |> Enum.reject(&(&1.author == user_id))
     |> Enum.take(-unread)
-    |> MapSet.new(& &1.id)
+    |> Enum.map(& &1.id)
   end
 
   # What people said, each named once per author; a message with no words
@@ -113,7 +113,7 @@ defmodule Aqua.RoomExcerpt do
     lines
   end
 
-  defp mark(%{id: id}, unread), do: if(MapSet.member?(unread, id), do: "(unread) ", else: "")
+  defp mark(%{id: id}, unread), do: if(id in unread, do: "(unread) ", else: "")
 
   defp name_of(names, user_id) do
     case names do
