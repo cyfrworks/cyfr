@@ -182,10 +182,10 @@ defmodule Sanctum.TelemetryTest do
       assert_receive {:announced, [:cyfr, :sanctum, :session, :created], %{count: 1}, meta}
       assert meta == %{}
 
-      :ok = Telemetry.sessions_revoked("user_1", :device_removed)
+      :ok = Telemetry.sessions_revoked("user_1", :device_removed, ["key_1"])
 
       assert_receive {:announced, [:cyfr, :sanctum, :sessions, :revoked], %{count: 1},
-                      %{user_id: "user_1", reason: :device_removed}}
+                      %{user_id: "user_1", reason: :device_removed, session_keys: ["key_1"]}}
     end
 
     test "a dropped caller memo names the session row key, never a token" do

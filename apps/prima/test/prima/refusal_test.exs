@@ -275,6 +275,7 @@ defmodule Prima.RefusalTest do
     {{:session_ended, :denied}, :unauthenticated},
     {{:session_ended, :device_removed}, :unauthenticated},
     {{:session_ended, :signed_out}, :unauthenticated},
+    {{:session_ended, :ended}, :unauthenticated},
     {:invalid_api_key, :unauthenticated},
     {:api_key_revoked, :unauthenticated},
     {:invalid_credential, :unauthenticated},

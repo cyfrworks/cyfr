@@ -542,7 +542,7 @@ defmodule Sanctum.Session do
   @doc """
   Revoke every session of a person (server-denied, or removed as an
   operator). Announces the revocation as a denial
-  (`Sanctum.Telemetry.sessions_revoked/2`), so mounted LiveViews let go
+  (`Sanctum.Telemetry.sessions_revoked/3`), so mounted LiveViews let go
   and tell their person why.
   """
   @spec revoke_all_for_user(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
@@ -554,7 +554,7 @@ defmodule Sanctum.Session do
     hashes = Arca.SessionStorage.hashes_by_user(user_id)
 
     with {:ok, count} <- Arca.SessionStorage.delete_by_user(user_id) do
-      broadcast_sessions_revoked(user_id, :denied)
+      broadcast_sessions_revoked(user_id, :denied, hashes)
       Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
       {:ok, count}
     end
@@ -574,7 +574,7 @@ defmodule Sanctum.Session do
     # makes a holder of that session revalidate too: a page whose session
     # went hears the reason first, so it can tell its person. The rows are
     # gone already, so a holder that revalidates on either is refused.
-    broadcast_sessions_revoked(user_id, reason)
+    broadcast_sessions_revoked(user_id, reason, hashes)
     Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
     :ok
   end
@@ -779,6 +779,6 @@ defmodule Sanctum.Session do
   # announces; the host's bridge is what broadcasts.
   defp broadcast_session_created(_session), do: Sanctum.Telemetry.session_created()
 
-  defp broadcast_sessions_revoked(user_id, reason),
-    do: Sanctum.Telemetry.sessions_revoked(user_id, reason)
+  defp broadcast_sessions_revoked(user_id, reason, hashes),
+    do: Sanctum.Telemetry.sessions_revoked(user_id, reason, hashes)
 end

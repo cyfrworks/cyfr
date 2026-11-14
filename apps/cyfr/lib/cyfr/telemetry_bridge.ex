@@ -306,10 +306,11 @@ defmodule Cyfr.TelemetryBridge do
 
   defp messages([:cyfr, :sanctum, :sessions, :revoked], _measurements, %{
          user_id: user_id,
-         reason: reason
+         reason: reason,
+         session_keys: keys
        })
        when is_binary(user_id),
-       do: [{:global, Bus.sessions(), Session.new(:revoked, user_id, reason)}]
+       do: [{:global, Bus.sessions(), Session.new(:revoked, user_id, reason, keys)}]
 
   defp messages(
          [:cyfr, :sanctum, :frame_credential, :changed],

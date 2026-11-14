@@ -107,7 +107,7 @@ defmodule Cyfr.BusPayloadTest do
         operation: "vault.create",
         expires_at: ~U[2026-09-30 12:05:00Z]
       ),
-      Session.new(:revoked, "u", :denied),
+      Session.new(:revoked, "u", :denied, ["key_1"]),
       SettingsChanged.new(:changed, setting: "log_level", revision: 3, op: :put, value: "debug"),
       CallerInvalidated.new(:crypto.hash(:sha256, "session")),
       AthanorArchived.new("ath_payload"),

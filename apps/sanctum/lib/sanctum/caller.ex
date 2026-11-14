@@ -1224,7 +1224,7 @@ defmodule Sanctum.Caller do
     # A key removed from the account, or a recovery replacing them all,
     # announced before each memo's drop so a page whose session went hears
     # why first (`Sanctum.Session.announce_revoked/3`).
-    Enum.each(user_ids, &Sanctum.Telemetry.sessions_revoked(&1, :device_removed))
+    Enum.each(user_ids, &Sanctum.Telemetry.sessions_revoked(&1, :device_removed, hashes))
     Enum.each(hashes, &invalidate_hash/1)
   end
 

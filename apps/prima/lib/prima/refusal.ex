@@ -859,7 +859,7 @@ defmodule Prima.Refusal do
          "runs this CYFR."}
 
   # A page whose own session a retirement ended, told why
-  # (`Cyfr.Bus.Session.reasons/0`).
+  # (`Cyfr.Bus.Session.reasons/0`), or only that it ended.
   defp row({:session_ended, :denied}),
     do: {:unauthenticated, "Your access to this CYFR was removed, so you were signed out."}
 
@@ -868,6 +868,10 @@ defmodule Prima.Refusal do
 
   defp row({:session_ended, :signed_out}),
     do: {:unauthenticated, "This sign-in was ended. Sign in again to go on."}
+
+  # A page whose session is gone, which no announcement named.
+  defp row({:session_ended, :ended}),
+    do: {:unauthenticated, "Your sign-in ended. Sign in again to go on."}
 
   defp row(:invalid_api_key), do: {:unauthenticated, "Invalid API key"}
   defp row(:api_key_revoked), do: {:unauthenticated, "API key has been revoked"}

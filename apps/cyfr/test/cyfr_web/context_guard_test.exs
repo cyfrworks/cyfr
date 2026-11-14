@@ -187,6 +187,23 @@ defmodule CyfrWeb.ContextGuardTest do
       end
     end
 
+    # The notice names the sessions it retired: a page whose session went
+    # another way, here expired unannounced, does not take that reason.
+    test "a page whose session expired unannounced, when another is removed, is told only that it ended",
+         %{conn: conn} do
+      user = test_user()
+      {a_conn, _token, a} = signed_in(conn, user)
+      {_b_conn, _token, b} = signed_in(build_conn(), user)
+      {view, _html} = mount_athanor(a_conn, "/settings")
+
+      expire_session!(a)
+      delete_session!(b)
+      :ok = Sanctum.Session.announce_revoked(user.user_id, [b], :device_removed)
+
+      assert assert_redirect(view, "/login", 2_000) ==
+               %{"error" => "Your sign-in ended. Sign in again to go on."}
+    end
+
     test "a page whose own session stands is told nothing", %{conn: conn} do
       user = test_user()
       {gone_conn, _token, gone} = signed_in(conn, user)

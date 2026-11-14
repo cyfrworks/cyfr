@@ -464,8 +464,8 @@ defmodule Emissary.Web.FrameSocketTest do
       )
 
     {{Cyfr.Bus.sessions(),
-      Cyfr.Bus.Session.new(:revoked, "local|local|sock-someone-else", :signed_out)},
-     {Cyfr.Bus.sessions(), Cyfr.Bus.Session.new(:revoked, source.user_id, :signed_out)}}
+      Cyfr.Bus.Session.new(:revoked, "local|local|sock-someone-else", :signed_out, [])},
+     {Cyfr.Bus.sessions(), Cyfr.Bus.Session.new(:revoked, source.user_id, :signed_out, [])}}
   end
 
   defp standing_moved!(:athanor_archived, source) do

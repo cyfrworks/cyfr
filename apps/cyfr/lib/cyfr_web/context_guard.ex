@@ -36,8 +36,9 @@ defmodule CyfrWeb.ContextGuard do
 
   Refusals: a session that no longer stands (`:unauthenticated`,
   `:not_standing`) sends the person to sign in, told why when a
-  retirement's announcement said (`Cyfr.Bus.Session.reasons/0`: denied, a
-  device removed, signed out), a focus that no longer
+  retirement's announcement named this page's session
+  (`Cyfr.Bus.Session.reasons/0`: denied, a device removed, signed out), and
+  told only that the sign-in ended when it was another of the person's, a focus that no longer
   stands (`:not_member`) sends them to the root, and a store that cannot
   answer (`:unavailable`) halts the action with "try again shortly" —
   never a success and never a sign-out. A remote person whose identity
@@ -191,10 +192,11 @@ defmodule CyfrWeb.ContextGuard do
 
   # Announcements about this caller revalidate now; announcements about
   # anyone else are consumed here, as the gate's own traffic.
-  defp on_info(%Session{kind: :revoked, user_id: user_id, reason: why}, socket) do
-    if caller?(socket, &(&1.user_id == user_id)),
-      do: settle(socket, :halt, why),
-      else: {:halt, socket}
+  defp on_info(%Session{kind: :revoked, user_id: user_id} = notice, socket) do
+    case socket.assigns[:context] do
+      %Context{user_id: ^user_id} = ctx -> settle(socket, :halt, why(notice, ctx))
+      _ -> {:halt, socket}
+    end
   end
 
   defp on_info(%CallerInvalidated{session_key: key}, socket) do
@@ -216,6 +218,12 @@ defmodule CyfrWeb.ContextGuard do
     do: {:halt, LiveView.put_flash(socket, :error, sentence)}
 
   defp on_info(_message, socket), do: proceed(socket)
+
+  # A retirement's reason belongs to the sessions it names: a page whose
+  # own session is among them is told it; any other that finds its session
+  # gone, which expired or ended unannounced, says only that it ended.
+  defp why(%Session{reason: reason, session_keys: keys}, %Context{session_token_hash: key}),
+    do: if(is_binary(key) and key in keys, do: reason, else: :ended)
 
   defp caller?(socket, fun) do
     case socket.assigns[:context] do

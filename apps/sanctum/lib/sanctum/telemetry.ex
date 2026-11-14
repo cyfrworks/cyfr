@@ -158,17 +158,20 @@ defmodule Sanctum.Telemetry do
   @doc """
   Sessions of `user_id` were retired, every one or only some (those a
   refreshed identity head retired, `Sanctum.Caller.drop_retired/2`), for
-  `reason` (`Cyfr.Bus.Session.reasons/0`): whatever holds a context of
-  theirs establishes it again and lets go of one that no longer stands,
-  telling its person why.
+  `reason` (`Cyfr.Bus.Session.reasons/0`), naming the retired sessions'
+  row keys: whatever holds a context of theirs establishes it again and
+  lets go of one that no longer stands, telling its person why when its
+  own session is among them.
   """
-  @spec sessions_revoked(String.t(), :denied | :device_removed | :signed_out) :: :ok
-  def sessions_revoked(user_id, reason) when reason in [:denied, :device_removed, :signed_out],
-    do:
-      :telemetry.execute(@sessions_revoked_event, %{count: 1}, %{
-        user_id: user_id,
-        reason: reason
-      })
+  @spec sessions_revoked(String.t(), :denied | :device_removed | :signed_out, [binary()]) :: :ok
+  def sessions_revoked(user_id, reason, session_keys)
+      when reason in [:denied, :device_removed, :signed_out] and is_list(session_keys),
+      do:
+        :telemetry.execute(@sessions_revoked_event, %{count: 1}, %{
+          user_id: user_id,
+          reason: reason,
+          session_keys: session_keys
+        })
 
   @doc """
   The shared thread `thread_id` changed (`:changed`: its title, status or
