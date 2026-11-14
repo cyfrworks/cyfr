@@ -75,13 +75,14 @@ defmodule PrismWeb.SecretRevealTest do
   test "a rotated API key is revealed once its prompt closes, and dismissible",
        %{conn: conn} do
     user = test_user()
+    conn = log_in_user(conn, user)
     ctx = person(user)
     name = "reveal-rotate-#{System.unique_integer([:positive])}"
 
     {:ok, %{api_key: first}} =
       Sanctum.TestContext.create_key(ctx, %{name: name, type: :application, scope: ["execute"]})
 
-    {view, _html} = conn |> log_in_user(user) |> mount_athanor("/api-keys")
+    {view, _html} = mount_athanor(conn, "/api-keys")
 
     # Rotating asks first, then reveals the new key the way creating does.
     render_click(view, "rotate", %{"id" => name})
