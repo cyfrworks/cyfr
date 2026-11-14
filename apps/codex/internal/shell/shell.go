@@ -613,7 +613,7 @@ func sentence(err error, noun string) string {
 	case errors.Is(err, holder.ErrLockedOut):
 		return "Too many wrong PINs: this " + noun + "'s chip takes one more try every ten minutes."
 	case errors.Is(err, ErrRevoked):
-		return "CYFR does not take this " + noun + " now: it was removed, or CYFR does not admit your account. Unlocking it again asks CYFR again."
+		return "CYFR does not take this " + noun + " now: it was removed, CYFR does not admit your account, or CYFR was restored from a backup, which suspends every device. Unlocking it again asks CYFR again."
 	case errors.Is(err, ErrUnavailable):
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):
