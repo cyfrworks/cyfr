@@ -106,8 +106,25 @@ defmodule Compendium.Registry.Client do
   @spec get_component(Context.t(), String.t(), String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, Errors.t() | corrupt()}
   def get_component(%Context{} = ctx, type, publisher, name, version) do
-    path = "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
+    component_at(
+      ctx,
+      "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
+    )
+  end
 
+  @doc """
+  The newest release the registry holds eligible for a pull that names no
+  version: GET /v1/components/:type/:publisher/:name. The registry decides
+  eligibility (active or deprecated, never yanked or taken down) and
+  answers 404 when no release is eligible.
+  """
+  @spec get_latest_component(Context.t(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Errors.t() | corrupt()}
+  def get_latest_component(%Context{} = ctx, type, publisher, name) do
+    component_at(ctx, "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}")
+  end
+
+  defp component_at(ctx, path) do
     case request(:get, path, [], nil, ctx) do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do

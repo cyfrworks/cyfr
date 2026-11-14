@@ -520,7 +520,7 @@ defmodule Compendium.Providers.Component do
       cond do
         Compendium.OCI.Reference.oci_ref?(reference) -> {:ok, reference}
         shipped_ref?(reference) -> :shipped
-        true -> convert_to_oci_ref(reference)
+        true -> Compendium.Pull.oci_reference_for(ctx, reference)
       end
 
     case oci_reference do
@@ -1485,8 +1485,6 @@ defmodule Compendium.Providers.Component do
   # Convert a component-ref style reference to an OCI reference for pulling.
   # A ref carrying a registry host skips this branch entirely, so the
   # binding refusal lives in `OCI.Client.pull/2`.
-  defp convert_to_oci_ref(reference), do: Compendium.Pull.oci_reference_for(reference)
-
   defp shipped_pull_error(reference, :not_shipped),
     do:
       "#{reference} is not a version the server ships — a local component is " <>
