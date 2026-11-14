@@ -275,34 +275,66 @@ defmodule PrismWeb.AquaLive do
     |> update(:answers, &Map.put(&1, ref, :asking))
   end
 
+  # The one answer fills the picker for the brain it came from, found by
+  # its identity, publisher kept and version aside: a models list replaces
+  # what the picker held for it, and a refusal takes its models away, since
+  # a key the provider refused offers none of them.
   defp answered(socket, ref, result) do
+    provider = provider_of(socket, ref)
+
     socket =
       case result do
         {:ok, ids} ->
-          provider = provider_of(socket, ref)
-
           socket
           |> put_flash(:info, "#{brain_name(ref)} answered with #{count(ids)}.")
-          |> update(:models_by_provider, &Map.put(&1, provider, ids))
-          |> update(:catalyst_refs, &Map.put(&1, provider, ref))
+          |> picked(provider, ids, ref)
 
         {:error, sentence} ->
-          put_flash(socket, :error, "#{brain_name(ref)} answered: #{sentence}")
+          socket
+          |> put_flash(:error, "#{brain_name(ref)} answered: #{sentence}")
+          |> picked(provider, nil, ref)
       end
 
     {:noreply, update(socket, :answers, &Map.put(&1, ref, result))}
   end
 
-  # The picker's name for the brain `ref`: the provider the setup lists it
-  # under, else the catalyst's name.
+  defp picked(socket, nil, _ids, _ref), do: socket
+
+  defp picked(socket, provider, nil, _ref),
+    do: update(socket, :models_by_provider, &Map.delete(&1, provider))
+
+  defp picked(socket, provider, ids, ref) do
+    socket
+    |> update(:models_by_provider, &Map.put(&1, provider, ids))
+    |> update(:catalyst_refs, &Map.put(&1, provider, identity(ref)))
+  end
+
+  # The picker's name for the brain `ref`: the provider the setup lists, or
+  # the catalogue last named, for the same component. nil when neither
+  # names it, and then the picker is left as it is.
   defp provider_of(socket, ref) do
-    with {:ok, providers} <- socket.assigns.providers,
-         %{provider: provider} <- Enum.find(providers, &(&1.ref == ref)) do
-      provider
-    else
-      _unlisted -> brain_name(ref)
+    id = identity(ref)
+
+    listed =
+      case socket.assigns.providers do
+        {:ok, providers} -> Enum.map(providers, &{&1.provider, &1.ref})
+        _unread -> []
+      end
+
+    Enum.find_value(listed ++ Map.to_list(socket.assigns.catalyst_refs), fn {provider, named} ->
+      if id != nil and identity(named) == id, do: provider
+    end)
+  end
+
+  # A component's identity: its reference without a version.
+  defp identity(ref) when is_binary(ref) do
+    case Prima.ComponentRef.to_name_ref(ref) do
+      {:ok, name_ref} -> name_ref
+      {:error, _} -> nil
     end
   end
+
+  defp identity(_none), do: nil
 
   defp count([_one]), do: "one model"
   defp count(ids), do: "#{length(ids)} models"

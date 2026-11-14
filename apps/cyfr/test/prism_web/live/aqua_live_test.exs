@@ -134,13 +134,27 @@ defmodule PrismWeb.AquaLiveTest do
     :ok
   end
 
-  # The `models` calls traced for the brain `ref`, any version of it.
-  defp models_calls(ref, n \\ 0) do
+  # The catalogue this athanor's pages read, as a load left it, forgotten
+  # when the test ends.
+  defp remember_catalogue!(models, refs) do
+    athanor = seated_athanor()
+    :ok = PrismWeb.ModelCatalog.remember(athanor.id, %{"models" => models, "refs" => refs})
+    on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor.id) end)
+  end
+
+  # What the page's picker offers, and the reference each provider names.
+  defp picker(view) do
+    assigns = :sys.get_state(view.pid).socket.assigns
+    {assigns.models_by_provider, assigns.catalyst_refs}
+  end
+
+  # The reference of every `models` call traced, in the order made.
+  defp models_asked(asked \\ []) do
     receive do
-      {:trace, _pid, :call, {Aqua.Models, :ask_models, [_ctx, asked]}} ->
-        models_calls(ref, if(String.starts_with?(asked, ref), do: n + 1, else: n))
+      {:trace, _pid, :call, {Aqua.Models, :ask_models, [_ctx, ref]}} ->
+        models_asked([ref | asked])
     after
-      0 -> n
+      0 -> Enum.reverse(asked)
     end
   end
 
@@ -879,11 +893,17 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "connecting a brain in the setup binds the key in the system layer, and the page " <>
-           "shows what the provider answered",
+    test "connecting a brain in the setup binds the key in the system layer, shows what the " <>
+           "provider answered, and a refused key takes that brain's models off the picker",
          %{conn: conn, ctx: ctx} do
       ref = "catalyst:local.keyed"
       :ok = soul_names_catalyst!(ctx, ref)
+
+      # The picker as the catalogue left it: models the brain answered
+      # under its previous key, beside another brain's.
+      picker = %{"keyed" => ["keyed-old-1"], "other" => ["other-1"]}
+      refs = %{"keyed" => ref, "other" => "catalyst:local.other"}
+      remember_catalogue!(picker, refs)
 
       {:ok, _} =
         Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
@@ -978,11 +998,65 @@ defmodule PrismWeb.AquaLiveTest do
       _ = :sys.get_state(view.pid)
       :erlang.trace(:all, false, [:call])
       :erlang.trace_pattern({Aqua.Models, :ask_models, 2}, false, [:local])
-      assert models_calls(ref) == 1
+      assert models_asked() == [ref]
+
+      # The refused key offers none of the old models; nothing else moved.
+      assert picker(view) == {%{"other" => ["other-1"]}, refs}
 
       {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
       assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
+    end
+
+    test "reconnecting a third-party brain by its versioned reference fills its own picker " <>
+           "entry, never a local brain's of the same name",
+         %{conn: conn, ctx: ctx} do
+      # acme's brain answers its models with the fixture's one model.
+      manifest = %{
+        "name" => "brain",
+        "type" => "catalyst",
+        "version" => "1.0.0",
+        "publisher" => "acme",
+        "contracts" => [Prima.Model.chat_contract()]
+      }
+
+      unit =
+        Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "acme", "brain", "1.0.0",
+          manifest: manifest,
+          wasm: File.read!(Cyfr.Test.ChatFixture.wasm_path())
+        )
+
+      {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+      publish_brain!(ctx, "brain", %{})
+
+      refs = %{"acme.brain" => "catalyst:acme.brain", "brain" => "catalyst:local.brain"}
+      remember_catalogue!(%{"acme.brain" => ["old-model"], "brain" => ["local-model"]}, refs)
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      # A ready card's "Change the key" names the resolved, versioned
+      # release.
+      render_click(view, "open_consent", %{"ref" => "catalyst:acme.brain:1.0.0"})
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+      :erlang.trace(:all, true, [:call, {:tracer, self()}])
+      :erlang.trace_pattern({Aqua.Models, :ask_models, 2}, true, [:local])
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+      Prima.Test.Wait.wait_until(
+        fn -> render(view) =~ "brain answered with one model." end,
+        10_000,
+        "acme's brain's answer"
+      )
+
+      _ = :sys.get_state(view.pid)
+      :erlang.trace(:all, false, [:call])
+      :erlang.trace_pattern({Aqua.Models, :ask_models, 2}, false, [:local])
+      assert models_asked() == ["catalyst:acme.brain:1.0.0"]
+
+      # acme's entry is replaced whole; the local brain's is untouched.
+      assert picker(view) ==
+               {%{"acme.brain" => ["chat-fixture"], "brain" => ["local-model"]}, refs}
     end
 
     test "Aqua's setup lists every installed brain with what it needs, offers one step per " <>
