@@ -263,8 +263,8 @@ defmodule Sanctum.Providers.Door do
 
         # The deny is decided under this member's slot: a member whose slot
         # a successor took writes no entry.
-        {:error, :not_owner} = refused ->
-          refused
+        {:error, :not_owner} ->
+          {:error, Sanctum.Refusals.classify(:not_owner)}
 
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Door] door.deny failed: #{inspect(reason)}")
@@ -321,8 +321,8 @@ defmodule Sanctum.Providers.Door do
          {:invalid_argument,
           "That allow lets this server's platform administrator sign in, so it is never removed"}}
 
-      {:error, :not_owner} = refused ->
-        refused
+      {:error, :not_owner} ->
+        {:error, Sanctum.Refusals.classify(:not_owner)}
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Door] door.remove failed: #{inspect(reason)}")
