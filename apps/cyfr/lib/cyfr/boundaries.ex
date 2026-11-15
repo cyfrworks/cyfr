@@ -2447,6 +2447,11 @@ defmodule Cyfr.Boundaries do
     # pin's names never reach the network; only a test build reads it
     # (`Prima.TestSeam.value/2`), so a release's names resolve through `:inet`.
     egress_resolver: :seam,
+    # How long a program's terminal runs with nothing attached and nothing
+    # printed (`Opus.Programs.Terminal`), a day in every release; only a
+    # test build reads it (`Prima.TestSeam.value/2`), and a test sets it so
+    # the real timer ends a session in it.
+    program_idle_ms: :seam,
     # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
     # a hint no shipped preset holds and that preset's token endpoint, which
     # a code exchange and a refresh both reach, never replacing a shipped

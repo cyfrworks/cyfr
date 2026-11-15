@@ -58,6 +58,7 @@ defmodule Cyfr.TestSeamsTest do
       :cron_scheduler_enabled,
       :database_checks_enabled,
       :egress_resolver,
+      :program_idle_ms,
       :execution_archive_watch_enabled,
       :execution_sweeper_enabled,
       :external_server_reconciler_enabled,

@@ -51,6 +51,8 @@ defmodule Opus.Programs.Terminal do
 
   use GenServer, restart: :temporary
 
+  require Prima.TestSeam
+
   alias Opus.Programs.{Output, Session}
 
   @tail_bytes 256 * 1024
@@ -247,7 +249,7 @@ defmodule Opus.Programs.Terminal do
       else: {:noreply, state}
   end
 
-  def handle_info({:idle, ref}, %{idle: ref} = state),
+  def handle_info({:idle, token}, %{idle: {_timer, token}} = state),
     do: {:stop, :normal, ended(state, :idle)}
 
   def handle_info({:idle, _stale}, state), do: {:noreply, state}
@@ -383,18 +385,26 @@ defmodule Opus.Programs.Terminal do
   end
 
   # The day's clock runs while nothing is attached and the session is not
-  # kept, from the last detach or the last output, whichever came later.
+  # kept, from the last detach or the last output, whichever came later:
+  # one timer at a time, the one before it cancelled, and its message
+  # carries a token of its own, so one already sent ends nothing.
   defp idle(state) do
-    if state.idle, do: Process.cancel_timer(state.idle)
+    with {timer, _token} <- state.idle, do: Process.cancel_timer(timer)
 
     if state.subscribers == %{} and not state.kept and state.session != nil do
-      ref = make_ref()
-      Process.send_after(self(), {:idle, ref}, @idle_ms)
-      %{state | idle: ref}
+      token = make_ref()
+      timer = Process.send_after(self(), {:idle, token}, idle_ms())
+      %{state | idle: {timer, token}}
     else
       %{state | idle: nil}
     end
   end
+
+  defp idle_ms,
+    do:
+      Prima.TestSeam.value(@idle_ms, fn ->
+        Application.get_env(:cyfr, :program_idle_ms, @idle_ms)
+      end)
 
   defp recheck(state) do
     case stands(state.athanor_id, state.user_id) do

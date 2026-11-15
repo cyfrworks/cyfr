@@ -374,21 +374,34 @@ defmodule Opus.Programs.TerminalTest do
     test "an attach cancels only an unwatched session's cleanup, never an accepted close",
          %{ctx: ctx, row: row, fake: fake} do
       {id, session} = start!(ctx, row)
-      %{idle: unwatched} = :sys.get_state(terminal(id))
-      assert unwatched != nil
+      pid = terminal(id)
+      %{idle: {day, token}} = :sys.get_state(pid)
 
+      # An attach stops the clock of a session no one watched.
       assert {:ok, _} = Programs.attach(ctx, id)
-      assert %{idle: nil} = :sys.get_state(terminal(id))
-      # The day's clock that was running when it attached ends nothing.
-      send(terminal(id), {:idle, unwatched})
+      assert %{idle: nil} = :sys.get_state(pid)
+      assert Process.read_timer(day) == false
+      # A message of that clock already sent ends nothing.
+      send(pid, {:idle, token})
       assert :ok = Programs.detach(ctx, id)
       refute gone?(id)
 
+      # An attach that reaches the session while its accepted close is
+      # carried out finds it gone, and the close is carried out.
       Scripted.hold(fake, "close")
       closing = Task.async(fn -> Programs.close(ctx, id) end)
       assert_receive {:held, "close", backend}, 2_000
 
       attaching = Task.async(fn -> Programs.attach(ctx, id) end)
+
+      eventually(
+        fn ->
+          {:messages, messages} = Process.info(pid, :messages)
+          Enum.any?(messages, &match?({:"$gen_call", _from, {:attach, _person, _pid}}, &1))
+        end,
+        "the attach to reach the session during its close"
+      )
+
       send(backend, :go)
 
       assert {:ok, :closed} = Task.await(closing)
@@ -539,19 +552,32 @@ defmodule Opus.Programs.TerminalTest do
       assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
     end
 
-    test "after a day with nothing attached and nothing printed, unless kept", %{
+    # The real clock, at a short period: what a program prints starts it
+    # again, the one before it cancelled, so one timer runs at a time; a
+    # kept session has none. The clock's timer was never cancelled before,
+    # every print leaving another running for a day.
+    test "after its period with nothing attached and nothing printed, unless kept", %{
       ctx: ctx,
-      row: row
+      row: row,
+      fake: fake
     } do
       {kept, _} = start!(ctx, row)
       assert :ok = Programs.keep(ctx, kept, true)
       assert %{idle: nil, kept: true} = :sys.get_state(terminal(kept))
       assert_receive %Cyfr.Bus.Program{kind: :changed, session: ^kept, kept: true}, 2_000
 
+      Prima.Test.Env.put_app_env(:cyfr, :program_idle_ms, 600)
       {id, session} = start!(ctx, row)
-      %{idle: day} = :sys.get_state(terminal(id))
-      send(terminal(id), {:idle, day})
-      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      %{idle: {first, _token}} = :sys.get_state(terminal(id))
+      Scripted.write(fake, row.id, "printed")
+
+      eventually(
+        fn -> match?(%{idle: {timer, _}} when timer != first, :sys.get_state(terminal(id))) end,
+        "the print to start the clock again"
+      )
+
+      assert Process.read_timer(first) == false
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 3_000
       assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: :idle}, 2_000
       assert {:ok, [%{session: ^kept}]} = Programs.running(ctx)
     end
