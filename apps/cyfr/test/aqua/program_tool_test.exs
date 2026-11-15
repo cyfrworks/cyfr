@@ -210,10 +210,14 @@ defmodule Aqua.ProgramToolTest do
       turn = accept!(ctx, thread, "@aqua run gh")
       long = String.duplicate("a", 257)
       many = Enum.map(1..33, &"w#{&1}")
+      # Within the count and size, but not text a person reads whole.
+      control = String.duplicate("a", 250) <> <<1>> <> "TAIL"
 
       script!([
         calls([start("c1", gh, [long])]),
         calls([start("c2", gh, many)]),
+        calls([start("c4", gh, ["ok", control])]),
+        calls([start("c5", gh, ["ok", <<0xC2, 0x85>>])]),
         calls([
           {"c3", "program",
            %{
@@ -228,10 +232,13 @@ defmodule Aqua.ProgramToolTest do
 
       assert :completed = run(ctx, turn)
 
-      for id <- ~w(c1 c2 c3) do
+      for id <- ~w(c1 c2 c3 c4 c5) do
         assert %{outcome: outcome, approval_id: nil} = step(ctx, turn, id)
         assert outcome in ["error", "denied"], id
       end
+
+      for id <- ~w(c4 c5),
+          do: assert(step(ctx, turn, id).error =~ "each word must be readable text", id)
 
       assert {:ok, ended} = Tape.turn(ctx, turn.id)
       assert {:ok, []} = Tape.pending_approvals(ctx, ended)

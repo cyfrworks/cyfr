@@ -368,15 +368,23 @@ defmodule Opus.Programs do
   end
 
   @doc """
-  What a start of the program row `row_id` of the caller's athanor shows
-  on its card, read from the row now: its id, name, pinned command and
-  epoch, the folder it runs in and the hosts it may reach. Refused
-  `:row_changed` for a row no longer at `epoch` (the one the call names),
-  `:not_found` for a row that is gone or is no program, `:unavailable`
-  when the store cannot answer.
+  What a start of the program row `row_id` of the caller's athanor with
+  `words` after its command shows on its card, read from the row now: its
+  id, name, pinned command and epoch, the folder it runs in and the hosts
+  it may reach. Refused `:unreadable_words` for words that are not each
+  readable text (`Opus.Programs.Words.readable?/1`), `:row_changed` for a
+  row no longer at `epoch` (the one the call names), `:not_found` for a
+  row that is gone or is no program, `:unavailable` when the store cannot
+  answer.
   """
-  @spec card(Sanctum.Context.t(), String.t(), term()) :: {:ok, map()} | {:error, term()}
-  def card(%Sanctum.Context{} = ctx, row_id, epoch) when is_binary(row_id) do
+  @spec card(Sanctum.Context.t(), String.t(), term(), term()) :: {:ok, map()} | {:error, term()}
+  def card(%Sanctum.Context{} = ctx, row_id, epoch, words) when is_binary(row_id) do
+    if is_list(words) and Enum.all?(words, &Opus.Programs.Words.readable?/1),
+      do: card_row(ctx, row_id, epoch),
+      else: {:error, :unreadable_words}
+  end
+
+  defp card_row(ctx, row_id, epoch) do
     case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row_id) do
       {:ok, %{transport: "program", epoch: ^epoch} = row} ->
         {:ok,
@@ -424,8 +432,8 @@ defmodule Opus.Programs do
   that belongs to the caller (`Opus.Programs.Terminal`): a person's to
   that person, started `by: :person`, a turn's to that turn, started
   `by: :aqua`. The row must be an enabled program; `args` are at most
-  #{Prima.LocusBackends.max_argv()} words, each a string of at most 4096
-  bytes without a NUL, as an `Opus.Programs.Words` (a plain list is
+  #{Prima.LocusBackends.max_argv()} words, each readable text
+  (`Opus.Programs.Words.readable?/1`) of at most 4096 bytes, as an `Opus.Programs.Words` (a plain list is
   wrapped here), which the session holds wrapped: a person's words are
   what that person typed; a turn's are its own, which the card its
   person approved showed whole, or which a standing answer for this row
@@ -904,9 +912,7 @@ defmodule Opus.Programs do
   end
 
   defp arg?(arg),
-    do:
-      is_binary(arg) and byte_size(arg) <= 4096 and String.valid?(arg) and
-        not String.contains?(arg, <<0>>)
+    do: is_binary(arg) and byte_size(arg) <= 4096 and Opus.Programs.Words.readable?(arg)
 
   # What a write to a terminal answered.
   defp typed({:ok, :running}), do: :ok

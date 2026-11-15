@@ -197,9 +197,14 @@ defmodule Aqua.Loop.Policy do
           {:ok, map() | nil} | {:refuse, String.t()}
   def program_shown(%Sanctum.Context{} = ctx, %Call{args: %{"program" => row_id} = args})
       when is_binary(row_id) do
-    case Opus.program_card(ctx, row_id, args["epoch"]) do
+    case Opus.program_card(ctx, row_id, args["epoch"], Map.get(args, "terminal_args") || []) do
       {:ok, shown} ->
         {:ok, shown}
+
+      {:error, :unreadable_words} ->
+        {:refuse,
+         "program.start: each word must be readable text, with no control character, " <>
+           "so the person sees every word before it runs"}
 
       {:error, :row_changed} ->
         {:refuse, "program.start: the program changed since it was listed; list it again"}

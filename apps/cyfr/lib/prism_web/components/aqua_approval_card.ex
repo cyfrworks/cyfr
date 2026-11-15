@@ -443,8 +443,39 @@ defmodule PrismWeb.AquaApprovalCard do
   defp program_words(%{"args" => %{"terminal_args" => words}}) when is_list(words), do: words
   defp program_words(_proposal), do: []
 
-  defp quoted(word) when is_binary(word), do: inspect(word, printable_limit: :infinity)
-  defp quoted(word), do: inspect(word)
+  # A word, whole, in double quotes: a quote and a backslash escaped, and
+  # every character a reader could not see or that would move the text
+  # around it (controls, format and bidirectional controls, line and
+  # paragraph separators) spelled as its code point. Nothing is cut: the
+  # word is drawn as long as it is. Bytes that are not text are spelled in
+  # hex, all of them.
+  defp quoted(word) when is_binary(word) do
+    if String.valid?(word),
+      do: ~s(") <> (word |> String.codepoints() |> Enum.map_join(&escaped/1)) <> ~s("),
+      else: "0x" <> Base.encode16(word)
+  end
+
+  defp quoted(word), do: quoted(to_string(word))
+
+  defp escaped("\\"), do: "\\\\"
+  defp escaped(~s(")), do: ~s(\\")
+
+  defp escaped(<<cp::utf8>> = char) do
+    if unseen?(cp),
+      do: "\\u{" <> Integer.to_string(cp, 16) <> "}",
+      else: char
+  end
+
+  defp escaped(other), do: other
+
+  defp unseen?(cp)
+       when cp in 0x00..0x1F or cp in 0x7F..0x9F or cp == 0xAD or cp == 0x061C or
+              cp == 0x180E or cp in 0x200B..0x200F or cp in 0x2028..0x202E or
+              cp in 0x2060..0x2064 or cp in 0x2066..0x206F or cp == 0xFEFF or
+              cp in 0xFFF9..0xFFFB or cp in 0xE0000..0xE007F,
+       do: true
+
+  defp unseen?(_cp), do: false
 
   # What a standing answer may be limited to: the path the call names, in
   # the storage door's spelling, when the action declares which of its

@@ -12,6 +12,7 @@ defmodule Opus.Programs.Words do
   a status, a debug log or a crash report that prints one prints how many
   words there are and none of them. They are unwrapped in one place, where
   the open is encoded for the wire (`Opus.Programs.Session.open/2`).
+  Each is readable text (`readable?/1`).
   """
 
   @enforce_keys [:list]
@@ -23,6 +24,17 @@ defmodule Opus.Programs.Words do
   @spec new(t() | [String.t()]) :: t()
   def new(%__MODULE__{} = words), do: words
   def new(words) when is_list(words), do: %__MODULE__{list: words}
+
+  @doc """
+  Whether `word` is text a person can read whole: valid UTF-8 holding no
+  control character (C0, DEL or C1). Every word a program is started
+  with is one, so the card a start asks on shows each as it will run.
+  """
+  @spec readable?(term()) :: boolean()
+  def readable?(word) when is_binary(word),
+    do: String.valid?(word) and not Regex.match?(~r/[\x{0}-\x{1F}\x{7F}-\x{9F}]/u, word)
+
+  def readable?(_word), do: false
 
   @doc "The words, for the wire."
   @spec list(t()) :: [String.t()]

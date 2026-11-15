@@ -499,6 +499,22 @@ defmodule Opus.Programs.TurnSessionTest do
   end
 
   describe "a start" do
+    test "takes words that are readable text, from a turn or a person",
+         %{ctx: ctx, row: row, lineage: lineage} do
+      for word <- [
+            String.duplicate("a", 250) <> <<1>> <> "TAIL",
+            "tab\there",
+            <<0xC2, 0x85>>,
+            "del\x7F"
+          ] do
+        opts = %{rows: 2, cols: 2, args: ["ok", word], epoch: row.epoch}
+        assert {:error, :invalid_args} = Programs.start(turn_caller(ctx, lineage), row.id, opts)
+        assert {:error, :invalid_args} = Programs.start(ctx, row.id, opts)
+      end
+
+      refute_received {:session, "open", _message, _fields}
+    end
+
     test "names the row's epoch: a row changed since is not started",
          %{ctx: ctx, row: row, lineage: lineage} do
       assert {:error, {:invalid_argument, message}} =

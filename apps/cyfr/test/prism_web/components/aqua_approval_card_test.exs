@@ -221,13 +221,97 @@ defmodule PrismWeb.AquaApprovalCardTest do
       command = LazyHTML.query(doc, ~s([data-test="approval-program-command"]))
 
       assert LazyHTML.text(command) ==
-               ~s(gh --hostname github.com "repo" "view" "a b" "it's" "x\\ey")
+               ~S(gh --hostname github.com "repo" "view" "a b" "it's" "x\u{1B}y")
 
       assert doc |> LazyHTML.query(~s([data-test="approval-program-word"])) |> Enum.count() == 5
 
       # Not inside the folded details: shown as the card opens.
       assert doc |> LazyHTML.query(~s(details [data-test="approval-program"])) |> Enum.count() ==
                0
+    end
+
+    test "draws every word whole, however long, quoted and escaped, with nothing cut" do
+      # 32 words of 256 characters each, multi-byte, with quotes and
+      # backslashes: the most a start's bounds let through.
+      words =
+        for i <- 1..32 do
+          word = String.slice(String.duplicate(~s(é"\\#{i}), 100), 0, 256)
+          assert String.length(word) == 256
+          word
+        end
+
+      html =
+        card(%{
+          "action_kind" => "execute",
+          "program" => %{
+            "row" => "mcp_gh",
+            "name" => "gh",
+            "command" => "gh",
+            "epoch" => 3,
+            "folder" => "its own folder",
+            "hosts" => "every public host"
+          },
+          "proposal" => %{
+            "tool" => "program",
+            "action" => "start",
+            "args" => %{"program" => "mcp_gh", "epoch" => 3, "terminal_args" => words}
+          }
+        })
+
+      shown =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-test="approval-program-word"]))
+        |> Enum.map(&LazyHTML.text/1)
+
+      expected =
+        for word <- words,
+            do:
+              ~s(") <>
+                (word |> String.replace("\\", "\\\\") |> String.replace(~s("), ~s(\\"))) <>
+                ~s(")
+
+      assert shown == expected
+    end
+
+    test "a character a reader could not see is drawn as its code point" do
+      for {char, spelled} <- [
+            {<<0x202E::utf8>>, ~S(\u{202E})},
+            {<<0x200B::utf8>>, ~S(\u{200B})},
+            {<<0x2028::utf8>>, ~S(\u{2028})},
+            {<<1>>, ~S(\u{1})}
+          ] do
+        html =
+          card(%{
+            "action_kind" => "execute",
+            "program" => %{
+              "row" => "mcp_gh",
+              "name" => "gh",
+              "command" => "gh",
+              "epoch" => 3,
+              "folder" => "its own folder",
+              "hosts" => "every public host"
+            },
+            "proposal" => %{
+              "tool" => "program",
+              "action" => "start",
+              "args" => %{
+                "program" => "mcp_gh",
+                "epoch" => 3,
+                "terminal_args" => ["first" <> char <> "last"]
+              }
+            }
+          })
+
+        [word] =
+          html
+          |> LazyHTML.from_fragment()
+          |> LazyHTML.query(~s([data-test="approval-program-word"]))
+          |> Enum.map(&LazyHTML.text/1)
+
+        assert word == ~s("first) <> spelled <> ~s(last")
+        refute String.contains?(word, char)
+      end
     end
 
     test "one that does not carry what it runs is shown, never approved" do
