@@ -217,7 +217,11 @@ defmodule Sanctum.Mount do
   of the row asks again, which its confirmation names before it is
   given. `{:error, :unavailable}` when the store cannot answer.
   """
-  @spec granted_to(String.t(), %{id: String.t(), name: String.t()}) ::
+  @spec granted_to(String.t(), %{
+          required(:id) => String.t(),
+          required(:name) => String.t(),
+          optional(atom()) => term()
+        }) ::
           {:ok, [String.t()]} | {:error, :unavailable}
   def granted_to(athanor_id, %{id: id, name: name} = row)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_binary(name) do

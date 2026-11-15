@@ -878,7 +878,11 @@ defmodule Arca.ConsentStorage do
   (`Sanctum.Mount.granted_to/2`), and the row's delete blocks them in its
   transaction (`block_dependents/4`), from this one answer.
   """
-  @spec head_profiles_on_row(Prima.Actor.t(), %{id: String.t(), name: String.t()}) ::
+  @spec head_profiles_on_row(Prima.Actor.t(), %{
+          required(:id) => String.t(),
+          required(:name) => String.t(),
+          optional(atom()) => term()
+        }) ::
           {:ok, [String.t()]} | {:error, term()}
   def head_profiles_on_row(%Prima.Actor{athanor_id: athanor_id}, %{id: id, name: name})
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_binary(name) do
