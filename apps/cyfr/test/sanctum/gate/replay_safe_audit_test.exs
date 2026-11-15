@@ -89,6 +89,11 @@ defmodule Sanctum.Gate.ReplaySafeAuditTest do
              "notes.list",
              "notes.read",
              "notes.search",
+             # A turn's programs, and what its session printed past an
+             # offset, read again: what stands now, and nothing moved.
+             "program.list",
+             "program.read",
+             "program.wait",
              "resource.read",
              "session.read_resource",
              # A component's own source, read: re-reading it after an unknown

@@ -75,8 +75,8 @@ there alone, and nothing the loop does reaches the public cyfr.run. A
 unless `.env` names others: the loop is how a developer stays on this
 machine.
 Nothing is seeded: a new athanor's components ship with CYFR, so a fresh
-sign-in pulls nothing, and `cyfr push` publishes into the local registry
-when that is what you test. Its admin pages are at
+sign-in pulls nothing, and the Components page pushes into the local
+registry when that is what you test. Its admin pages are at
 https://cyfr.test/admin; the first administrator is made once at
 `https://cyfr.test/admin/bootstrap?token=<ADMIN_TOKEN>`, the token the
 loop mints into the machine's dev-stack directory,
@@ -158,8 +158,8 @@ worktree's loop takes the next free slot, Prism on 4010 and so on, and
 prints its address, which the worktree remembers in
 `data/dev-stack.slot` for its next run. A `.env` that sets `CYFR_PORT` or
 another address of the stack refuses a slot it disagrees with, by name.
-With an API key from Prism's API Keys page, or the session token of a
-`cyfr login`, `CYFR_TOKEN=<key> scripts/dev-stack.sh check` runs a
+With an API key made on Prism's API Keys page,
+`CYFR_TOKEN=<key> scripts/dev-stack.sh check` runs a
 component through the worktree's running loop and asserts its answer.
 
 AQUA answers in its panel once a model provider's key is in the vault, as on

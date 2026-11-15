@@ -12,7 +12,8 @@ defmodule Locus.Backends.ServiceTest do
   (`fence_rejected`) replayed against a fresh service, a held message's
   body sent only once the messages after it are answered; the session
   route's round trips through the vectors, its refusals before and after
-  the body, and, through the test environment's `Locus.DirectLauncher`, a
+  the body, a message of one mode to a session of the other refused, and,
+  through the test environment's `Locus.DirectLauncher`, a
   session end to end: lines sent and received, the owner's secrets masked
   in every line, a recv replayed by its `after`, a close.
 
@@ -73,6 +74,7 @@ defmodule Locus.Backends.ServiceTest do
 
     def send(_handle, _data), do: :ok
     def signal(_handle, _sig), do: :ok
+    def resize(_handle, _rows, _cols), do: :ok
     def release(_agent, _handle, _grace_ms), do: :ok
     # A process it starts is never released: a fence finds it held, and
     # an adoption, at a table's start, finds none held yet.
@@ -270,7 +272,6 @@ defmodule Locus.Backends.ServiceTest do
     do: %{
       name: name,
       command: command,
-      login_command: nil,
       env_names: ["API_TOKEN"],
       home: :scratch,
       memory_bytes: nil,
@@ -323,9 +324,10 @@ defmodule Locus.Backends.ServiceTest do
       program: "fetch",
       home_id: nil,
       key: Keyword.get(opts, :key, "mcp"),
-      mode: :run,
+      mode: Keyword.get(opts, :mode, :run),
       argv: Keyword.get(opts, :argv, [])
     }
+    |> Map.merge(Map.new(Keyword.take(opts, [:rows, :cols])))
   end
 
   defp json(%{body: body}), do: Jason.decode!(body)
@@ -345,11 +347,12 @@ defmodule Locus.Backends.ServiceTest do
       answer = post(ctx.port, route("health"), LB.health_body())
       assert answer.status == 200
       assert answer.headers["x-cyfr-boot"] == @boot
-      assert json(answer) == %{"version" => 2, "release" => Prima.Version.current()}
+      assert json(answer) == %{"version" => 3, "release" => Prima.Version.current()}
 
       assert_refused(post(ctx.port, route("health"), ~s({"version":1})), "version")
+      assert_refused(post(ctx.port, route("health"), ~s({"version":2})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({})), "version")
-      assert_refused(post(ctx.port, route("health"), ~s({"version":2,"x":1})), "bad_request")
+      assert_refused(post(ctx.port, route("health"), ~s({"version":3,"x":1})), "bad_request")
       assert_refused(post(ctx.port, route("health"), "nope"), "bad_request")
 
       too_large = post(ctx.port, route("health"), String.duplicate(" ", 4097))
@@ -418,7 +421,7 @@ defmodule Locus.Backends.ServiceTest do
       for vector <- @vectors["invalid_messages"] do
         answer =
           case Jason.decode(vector["body"]) do
-            {:ok, %{"type" => type}} when type in ~w(open send recv close) ->
+            {:ok, %{"type" => type}} when type in ~w(open send recv input output resize close) ->
               invoke(ctx, vector["body"])
 
             _ ->
@@ -458,7 +461,7 @@ defmodule Locus.Backends.ServiceTest do
 
     test "a body past its bound is refused unread, one not the one signed is unauthorized", ctx do
       max = LB.max_control_bytes()
-      body = ~s({"version":2,"type":"status","owners":[]})
+      body = ~s({"version":3,"type":"status","owners":[]})
 
       fields = %{generation: @g, seq: seq(), cyfr_boot: @cyfr_boot, boot: @boot, ts: @instant}
       {:ok, header} = LB.control_header(LB.control_key(@key), fields, body)
@@ -640,17 +643,90 @@ defmodule Locus.Backends.ServiceTest do
       answer = post(ctx.port, route("session"), v["body"], [{"x-cyfr-auth", v["header"]}])
       assert answer.status == 200, answer.body
 
-      assert {:ok, %{status: :running, resumed: false, pty: false}} =
+      assert {:ok, %{status: :running, resumed: false}} =
                LB.read_session_answer(:open, answer.body)
 
-      # The vectors' send, recv and close name a session this service never
+      # The vectors' other messages name a session this service never
       # opened: read and verified, they are refused as unknown.
-      for type <- ~w(send recv close) do
+      for type <- ~w(send recv input output resize close) do
         v = @vectors[type]
         at(ctx, v["fields"]["ts"])
         answer = post(ctx.port, route("session"), v["body"], [{"x-cyfr-auth", v["header"]}])
         assert_refused(answer, "unknown_session")
       end
+    end
+
+    test "the vectors' terminal open reads and verifies, in its program's scratch home", ctx do
+      answer =
+        control(
+          ctx,
+          sync_message([program("fetch", "exec cat")], %{
+            "fetch" => %{"API_TOKEN" => @canary}
+          })
+        )
+
+      assert answer.status == 200
+
+      v = @vectors["open_terminal"]
+      at(ctx, v["fields"]["ts"])
+      answer = post(ctx.port, route("session"), v["body"], [{"x-cyfr-auth", v["header"]}])
+      assert answer.status == 200, answer.body
+      assert {:ok, %{session: id} = opened} = LB.read_session_answer(:open, answer.body)
+      assert opened == %{status: :running, session: id, resumed: false}
+    end
+
+    test "a message of one mode to a session of the other is refused, and a run names no size",
+         ctx do
+      fetch_sync(ctx)
+
+      run = invoke(ctx, open_message())
+      assert {:ok, %{session: run}} = LB.read_session_answer(:open, run.body)
+
+      # A terminal on a scratch program, under the same key: a session of
+      # its own.
+      terminal = invoke(ctx, open_message(mode: :terminal, rows: 24, cols: 80))
+      assert terminal.status == 200, terminal.body
+      assert {:ok, %{session: terminal} = opened} = LB.read_session_answer(:open, terminal.body)
+      assert opened == %{status: :running, session: terminal, resumed: false}
+      assert terminal != run
+
+      bytes = %{type: :input, bytes: "y\r"}
+      output = %{type: :output, after: 0, max_wait_ms: 0}
+      resize = %{type: :resize, rows: 50, cols: 132}
+      send = %{type: :send, lines: ["x"]}
+      recv = %{type: :recv, after: 0, max_wait_ms: 0}
+
+      for message <- [bytes, output, resize],
+          do: assert_refused(invoke(ctx, Map.put(message, :session, run)), "bad_request")
+
+      for message <- [send, recv],
+          do: assert_refused(invoke(ctx, Map.put(message, :session, terminal)), "bad_request")
+
+      # Each mode's own messages reach its session.
+      for {message, type, expected} <- [
+            {Map.put(send, :session, run), :send, %{status: :running}},
+            {Map.put(recv, :session, run), :recv, %{lines: [], dropped: 0, running: true}},
+            {Map.put(bytes, :session, terminal), :input, %{status: :running}},
+            {Map.put(resize, :session, terminal), :resize, %{status: :running}},
+            {Map.put(output, :session, terminal), :output,
+             %{chunks: [], dropped: 0, running: true}},
+            {%{type: :close, session: run}, :close, %{status: :closed}},
+            {%{type: :close, session: terminal}, :close, %{status: :closed}}
+          ] do
+        answer = invoke(ctx, message)
+        assert answer.status == 200, answer.body
+        assert {:ok, read} = LB.read_session_answer(type, answer.body)
+        assert Map.reject(read, fn {_k, v} -> v == nil end) == expected, inspect(type)
+      end
+
+      # A run open naming a size is refused as it is read.
+      {:ok, body} =
+        open_message()
+        |> Map.merge(%{owner: %{athanor: @athanor, server: @server}, e: @e})
+        |> LB.encode_session()
+
+      sized = body |> Jason.decode!() |> Map.merge(%{"rows" => 24, "cols" => 80})
+      assert_refused(invoke(ctx, Jason.encode!(sized)), "bad_request")
     end
 
     @tag launcher: :direct

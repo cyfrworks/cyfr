@@ -7,7 +7,7 @@ defmodule Sanctum.DeviceHelloTest do
   the CYFR answers a `sign_in` request bound to the channel and held for
   the hello's key, the device signs it, and the answer, verified against
   the account's log at a scripted directory, admits the person under the
-  setup token, an invitation or the door, and pairs the device with its
+  setup token or the door, and pairs the device with its
   first certificate under this CYFR's installation key
   (`Sanctum.DeviceCerts`). A capability that admits nobody writes
   nothing; a hello asked again pairs nothing twice. The certificate then
@@ -165,8 +165,11 @@ defmodule Sanctum.DeviceHelloTest do
       assert {:error, :setup_closed} =
                DeviceUnlock.hello(client_id, Map.put(hello, :admission, {:setup, "not-it"}))
 
-      assert {:error, :invitation_invalid} =
-               DeviceUnlock.hello(client_id, Map.put(hello, :admission, {:invitation, "nope"}))
+      # An invitation's code is no capability a hello brings.
+      code = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+      assert {:error, {:invalid_argument, _sentence}} =
+               DeviceUnlock.hello(client_id, Map.put(hello, :admission, {:invitation, code}))
 
       # The open admission without the door's * admits nobody: nothing is
       # written for the answer either.

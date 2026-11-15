@@ -31,7 +31,8 @@ defmodule Aqua do
     brain options and whether each agent's brain is ready; `Aqua.ConsentStatus` — whether what the
     athanor consented to still covers its sources.
   - `Aqua.ScheduleNotes` — a schedule's outcome kept as a note when the
-    schedule asked for it.
+    schedule asked for it; `Aqua.ScheduleTurns` — a schedule's line for
+    Aqua, each fire a turn in the schedule's own thread.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into a
     shared thread you sit in.
   - `Aqua.Notes` — what somebody chose to keep out of a thread: the
@@ -150,6 +151,19 @@ defmodule Aqua do
   @doc "A thread's runner state as viewers see it (`Aqua.Runner.state/2`)."
   @spec thread_state(String.t(), String.t()) :: map() | {:error, term()}
   defdelegate thread_state(thread_id, athanor_id), to: Aqua.Runner, as: :state
+
+  @doc "Whether a card offers an answer of `scope` for its intent. See `Aqua.Standing.offered?/2`."
+  @spec standing_offered?(map(), :thread | :always) :: boolean()
+  defdelegate standing_offered?(intent, scope), to: Aqua.Standing, as: :offered?
+
+  @doc """
+  Whether `thread_id` is the thread a schedule's line for Aqua runs in, in
+  the context's athanor: where a card offers an answer for this thread
+  ending with that schedule (`Aqua.Standing`).
+  """
+  @spec schedule_thread?(Context.t(), String.t()) :: boolean()
+  def schedule_thread?(%Context{} = ctx, thread_id) when is_binary(thread_id),
+    do: match?({:ok, _}, Arca.CronSchedule.of_thread(Context.actor(ctx), thread_id))
 
   @doc "An empty stream of a running turn's answers (`Aqua.Loop.Stream.new/0`)."
   @spec stream_new() :: Aqua.Loop.Stream.t()

@@ -7,89 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
 
-	"github.com/cyfr/codex/internal/config"
-	"github.com/cyfr/codex/internal/shell"
-	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
-
-func init() {
-	rootCmd.AddCommand(openCmd)
-}
-
-var openCmd = &cobra.Command{
-	Use:     "open",
-	Short:   "Open Aqua in your browser",
-	GroupID: "identity",
-	Long: `Open Aqua in your default browser, at CYFR's address: the --url, the
---context's address, the CYFR of the shell cyfr login started, or the
-current context's.
-
-In the shell cyfr login started for that CYFR, it opens this command
-line's own page, where Open CYFR signs the browser in through this
-unlock: CYFR answers a ticket that works once, within a minute, and the
-browser spends it for a session of its own, which lives as long as this
-command line stays unlocked. No session of the command line's travels to
-the browser, and the ticket is in no address this program hands on.
-
-Anywhere else it opens the address and nothing more: sign in there as you
-always do. The loopback address cyfr init saves for this machine
-(http://127.0.0.1:<port>) opens as http://localhost:<port>, the address
-CYFR on this computer serves itself under.`,
-	Example: `  cyfr open
-  cyfr open --context work`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
-		if err != nil {
-			cfg = config.DefaultForLocal()
-		}
-		address := serverURL(cfg)
-
-		parsed, err := url.Parse(address)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return fmt.Errorf("%q is not a web address to open: give CYFR's https:// or http:// address", address)
-		}
-		if _, held := shellSession(address); held && os.Getenv(shellPagesEnv) != "" {
-			// The page is the shell's own, on literal loopback: the
-			// ticket is answered to its form's POST, in a redirect's
-			// fragment, never in this command's arguments.
-			if err := openBrowser(shell.Origin + "/"); err != nil {
-				fmt.Printf("Open %s/ in your browser on this machine.\n", shell.Origin)
-				return fmt.Errorf("Could not open a browser here: %w", err)
-			}
-			fmt.Printf("Opened this command line's page: press Open CYFR there.\n")
-			return nil
-		}
-		address = browserAddress(parsed)
-
-		if err := openBrowser(address); err != nil {
-			fmt.Printf("Open %s in your browser.\n", address)
-			return fmt.Errorf("Could not open a browser here: %w", err)
-		}
-		fmt.Printf("Opened %s\n", address)
-		return nil
-	},
-}
-
-// openBrowser hands address to this system's opener and waits for it,
-// which returns once the browser has it. A test stands in for it.
-var openBrowser = func(address string) error {
-	name, args := browserCommand(runtime.GOOS, address)
-	if _, err := exec.LookPath(name); err != nil {
-		return errors.New("no " + name + " to open it with")
-	}
-	opener := exec.Command(name, args...)
-	// An opener that falls back to a browser in the terminal needs it.
-	opener.Stdin, opener.Stdout, opener.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return opener.Run()
-}
 
 // launchBrowser hands address to this system's opener (browserCommand)
 // without waiting for it, since an opener may wait for the browser to
@@ -122,7 +45,7 @@ func displayed(goos string, getenv func(string) string) bool {
 	return getenv("DISPLAY") != "" || getenv("WAYLAND_DISPLAY") != ""
 }
 
-// openOnDisplay opens address in the default browser, as cyfr open does,
+// openOnDisplay opens address in the default browser,
 // unless noOpen or there is no display, and answers whether it did; one
 // that cannot be opened is said on out. The address is printed before it
 // either way.
@@ -158,22 +81,6 @@ func hyperlinkFor(address string, terminal bool, goos string, getenv func(string
 		return address
 	}
 	return "\x1b]8;;" + address + "\x1b\\" + address + "\x1b]8;;\x1b\\"
-}
-
-// browserAddress is the address as a browser should open it: a loopback
-// IP spelled localhost, the host a home on this computer serves itself
-// under, and the one the passkeys of an account service it serves itself
-// are registered for, which an IP address never is.
-func browserAddress(u *url.URL) string {
-	if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLoopback() {
-		opened := *u
-		opened.Host = "localhost"
-		if port := u.Port(); port != "" {
-			opened.Host = "localhost:" + port
-		}
-		return opened.String()
-	}
-	return u.String()
 }
 
 // browserCommand is the command that opens address on the system goos:

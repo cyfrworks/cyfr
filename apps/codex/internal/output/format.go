@@ -26,7 +26,11 @@ func JSON(v any) {
 func Table(headers []string, rows []map[string]string) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, strings.Join(headers, "\t"))
-	fmt.Fprintln(w, strings.Repeat("-\t", len(headers)))
+	rules := make([]string, len(headers))
+	for i, h := range headers {
+		rules[i] = strings.Repeat("-", len(h))
+	}
+	fmt.Fprintln(w, strings.Join(rules, "\t"))
 
 	for _, row := range rows {
 		vals := make([]string, len(headers))

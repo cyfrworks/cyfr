@@ -133,6 +133,12 @@ defmodule Emissary.External.Proxy do
         _ -> nil
       end
 
+    record =
+      case Sanctum.ToolServerDigest.recorded(server) do
+        {:ok, record} -> record
+        _ -> nil
+      end
+
     {tool_names, descriptions_digest} =
       case server.enabled && Servers.ensure_started(server, ctx) do
         {:ok, tools} ->
@@ -158,6 +164,7 @@ defmodule Emissary.External.Proxy do
       url: server.url,
       enabled: server.enabled,
       server_digest: digest,
+      record: record,
       tool_patterns: patterns,
       tool_names: tool_names,
       descriptions_digest: descriptions_digest
@@ -671,7 +678,7 @@ defmodule Emissary.External.Proxy do
     end
   end
 
-  # The arguments a backend sees: the guest's own, without the action the
+  # The arguments a server sees: the guest's own, without the action the
   # gate routed on or the lineage the host stamped for its own records.
   # The lineage names internal executions, attempts, threads and calls,
   # and a third-party server is told none of them.

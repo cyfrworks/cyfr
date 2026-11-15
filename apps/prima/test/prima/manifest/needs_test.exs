@@ -403,10 +403,7 @@ defmodule Prima.Manifest.NeedsTest do
 
   describe "login" do
     test "is read with its program and install, mounted and never disclosed" do
-      install = %{
-        "command" => "npx -y @anthropic-ai/claude-code",
-        "login_command" => "claude login"
-      }
+      install = %{"command" => "npx -y @anthropic-ai/claude-code"}
 
       read = normalized(login(%{"install" => install, "required" => false}))
 
@@ -415,10 +412,7 @@ defmodule Prima.Manifest.NeedsTest do
                kind: "login",
                qualifier: nil,
                program: "claude",
-               install: %{
-                 command: "npx -y @anthropic-ai/claude-code",
-                 login_command: "claude login"
-               },
+               install: %{command: "npx -y @anthropic-ai/claude-code"},
                reason: "to run Claude Code",
                fields: [],
                scopes: [],
@@ -435,15 +429,11 @@ defmodule Prima.Manifest.NeedsTest do
       bare = normalized(login())
       assert bare.install == nil and bare.required
 
-      # Each suggested command is optional.
+      # The suggested command is optional.
       assert normalized(login(%{"install" => %{"command" => "claude"}})).install ==
-               %{command: "claude", login_command: nil}
+               %{command: "claude"}
 
-      assert normalized(login(%{"install" => %{"login_command" => "claude login"}})).install ==
-               %{command: nil, login_command: "claude login"}
-
-      assert normalized(login(%{"install" => %{}})).install ==
-               %{command: nil, login_command: nil}
+      assert normalized(login(%{"install" => %{}})).install == %{command: nil}
 
       # Every other need is attached or disclosed, never mounted.
       refute Needs.mount_only?(normalized(need()))
@@ -489,10 +479,8 @@ defmodule Prima.Manifest.NeedsTest do
             {%{"command" => long}, {:command, :too_long}},
             {%{"command" => "claude\0"}, {:command, :nul}},
             {%{"command" => "claude --key VAULT:anthropic"}, {:command, :vault_reference}},
-            {%{"command" => "claude", "login_command" => nil}, {:login_command, :not_a_string}},
-            {%{"command" => "claude", "login_command" => ""}, {:login_command, :empty}},
-            {%{"command" => "claude", "login_command" => "login vault:x"},
-             {:login_command, :vault_reference}},
+            {%{"command" => "claude", "login_command" => "claude login"},
+             {:unknown_keys, ["login_command"]}},
             {%{"command" => "claude", "env" => %{}}, {:unknown_keys, ["env"]}}
           ] do
         assert {:invalid_install, "api_key", ^reason} =
@@ -510,15 +498,35 @@ defmodule Prima.Manifest.NeedsTest do
       end
     end
 
-    test "fits the destination naming its program, and nothing else does" do
+    test "fits a driven program row of its program with a kept home, and nothing else" do
+      row = %{transport: "program", mark: "driven", home: "kept", name: "claude"}
       {:ok, claude} = Prima.Destination.from_map(%{"program" => "claude"})
-      {:ok, codex} = Prima.Destination.from_map(%{"program" => "codex"})
       {:ok, hosts} = Prima.Destination.from_map(%{"hosts" => ["api.anthropic.com"]})
 
-      assert Needs.fit(normalized(login()), claude) == :exact
-      assert Needs.fit(normalized(login()), codex) == :none
+      assert Needs.fit(normalized(login()), row) == :exact
+
+      for unfit <- [
+            %{row | name: "codex"},
+            %{row | mark: "mcp"},
+            %{row | home: "scratch"},
+            %{row | transport: "http"}
+          ] do
+        assert Needs.fit(normalized(login()), unfit) == :none, inspect(unfit)
+      end
+
+      # No destination meets it, a program's included, and no vault entry
+      # carries one.
+      assert Needs.fit(normalized(login()), claude) == :none
       assert Needs.fit(normalized(login()), hosts) == :none
       assert Needs.fit(normalized(need(%{"hosts" => ["api.anthropic.com"]})), claude) == :none
+      assert Needs.fit(normalized(need(%{"hosts" => ["api.anthropic.com"]})), row) == :none
+    end
+
+    test "is bound as a credential need is, and mounted, never attached or disclosed" do
+      assert "login" in Needs.binding_kinds()
+      refute "login" in Prima.CredentialKinds.all()
+      assert Needs.mount_only?(normalized(login()))
+      refute Needs.disclose_only?(normalized(login()))
     end
   end
 end

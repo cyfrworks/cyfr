@@ -4,28 +4,32 @@
 defmodule Locus.Backends.Relay do
   @moduledoc """
   The stdio of one session's process, as data: the sequence-numbered
-  buffer of the lines its stdout writes and the tail of its stderr. State
-  in, state out; no process, and no protocol: what the lines mean is the
+  buffer of what its stdout writes and the tail of its stderr. State in,
+  state out; no process, and no protocol: what the bytes mean is the
   owner's.
 
-  Stdout is split on newlines; a line's trailing carriage return is
-  dropped (a pseudo-terminal ends its lines with one), and its bytes that
-  are not UTF-8 are replaced, so every line is text. A line, or the part
-  of one that has no newline yet, longer than
+  A relay of mode `:run` buffers lines. Stdout is split on newlines, a
+  line's trailing carriage return is dropped, and its bytes that are not
+  UTF-8 are replaced, so every line is text.
+  A line, or the part of one that has no newline yet, longer than
   `Prima.LocusBackends.max_line_bytes/0` is `:line_too_long`, and the
   session's process is killed for it. `flush/1` makes the part with no
-  newline a line of its own, as a session on a pseudo-terminal does with a
-  prompt that waits for its answer.
+  newline a line of its own, once the process is gone.
 
-  Each line is numbered from 1. The buffer keeps a line until `take/4`
-  names an `after` at or above its number, and holds at most
-  `Prima.LocusBackends.max_buffer_bytes/0` bytes of lines, each line
-  charged its text and `line_charge_bytes/0` of framing, and at most
-  `max_buffer_lines/0` lines: past either the oldest are dropped and
-  counted, so empty lines cannot grow it without end. `take/4` answers the lines past `after`
-  that fit its byte budget (one at least) and how many lines between
-  `after` and the first it answers were dropped; asked twice with the same
-  `after`, it answers the same lines, so a lost answer is replayed.
+  A relay of mode `:terminal` buffers chunks: what `output/2` is given,
+  already masked, in pieces of at most
+  `Prima.LocusBackends.max_chunk_bytes/0` bytes, as they are.
+
+  Each line or chunk is numbered from 1. The buffer keeps one until
+  `take/3` names an `after` at or above its number, and holds at most
+  `Prima.LocusBackends.max_buffer_bytes/0` bytes of them, each charged its
+  bytes and `line_charge_bytes/0` of framing, and at most
+  `max_buffer_lines/0` of them: past either the oldest are dropped and
+  counted, so empty lines cannot grow it without end. `take/3` answers
+  those past `after` that fit its byte budget (one at least) and how many
+  between `after` and the first it answers were dropped; asked twice with
+  the same `after`, it answers the same ones, so a lost answer is
+  replayed.
 
   Stderr is never parsed: the last `Prima.LocusBackends.stderr_tail_bytes/0`
   bytes are what a status reports for a scratch program, and
@@ -38,7 +42,8 @@ defmodule Locus.Backends.Relay do
 
   # `lines` is made by `new/1`: a queue is opaque, so no struct literal
   # holds one.
-  defstruct partial: "",
+  defstruct mode: :run,
+            partial: "",
             lines: nil,
             count: 0,
             bytes: 0,
@@ -54,8 +59,9 @@ defmodule Locus.Backends.Relay do
             slack_bytes: nil
 
   @type t :: %__MODULE__{
+          mode: :run | :terminal,
           partial: binary(),
-          lines: :queue.queue({pos_integer(), String.t()}),
+          lines: :queue.queue({pos_integer(), binary()}),
           count: non_neg_integer(),
           bytes: non_neg_integer(),
           next_seq: pos_integer(),
@@ -75,7 +81,8 @@ defmodule Locus.Backends.Relay do
   @line_overhead 32
 
   @doc """
-  A relay with no bytes seen. Options, each defaulting to
+  A relay with no bytes seen, of `:mode` `:run` (the default) or
+  `:terminal`. Other options, each defaulting to
   `Prima.LocusBackends`' bound of the same name: `:max_line_bytes`,
   `:max_buffer_bytes`, `:max_buffer_lines`, `:line_charge_bytes`,
   `:stderr_tail_bytes`, `:stderr_tail_slack_bytes`.
@@ -85,6 +92,7 @@ defmodule Locus.Backends.Relay do
     opts = Map.new(opts)
 
     %__MODULE__{
+      mode: Map.get(opts, :mode, :run),
       lines: :queue.new(),
       max_line_bytes: Map.get(opts, :max_line_bytes, LocusBackends.max_line_bytes()),
       max_buffer_bytes: Map.get(opts, :max_buffer_bytes, LocusBackends.max_buffer_bytes()),
@@ -98,9 +106,9 @@ defmodule Locus.Backends.Relay do
 
   # ————— stdout —————
 
-  @doc "Bytes of the process's stdout: every line they complete is buffered."
+  @doc "Bytes of a run's stdout: every line they complete is buffered."
   @spec stdout(t(), binary()) :: {:ok, t()} | {:error, :line_too_long}
-  def stdout(%__MODULE__{} = relay, data) when is_binary(data) do
+  def stdout(%__MODULE__{mode: :run} = relay, data) when is_binary(data) do
     [partial | complete] =
       (relay.partial <> data) |> :binary.split("\n", [:global]) |> Enum.reverse()
 
@@ -114,17 +122,30 @@ defmodule Locus.Backends.Relay do
     end
   end
 
-  @doc "Whether part of a line waits for its newline."
-  @spec partial?(t()) :: boolean()
-  def partial?(%__MODULE__{partial: partial}), do: partial != ""
-
   @doc "The part of a line with no newline yet, made a line of its own."
   @spec flush(t()) :: t()
   def flush(%__MODULE__{partial: ""} = relay), do: relay
   def flush(%__MODULE__{} = relay), do: push(%{relay | partial: ""}, relay.partial)
 
-  defp push(relay, raw) do
-    text = raw |> String.trim_trailing("\r") |> String.replace_invalid()
+  @doc "Bytes of a terminal's output, masked already, buffered as chunks of at most the bound."
+  @spec output(t(), binary()) :: t()
+  def output(%__MODULE__{mode: :terminal} = relay, ""), do: relay
+
+  def output(%__MODULE__{mode: :terminal} = relay, data) when is_binary(data) do
+    max = LocusBackends.max_chunk_bytes()
+
+    if byte_size(data) > max do
+      <<chunk::binary-size(^max), rest::binary>> = data
+      relay |> append(chunk) |> output(rest)
+    else
+      append(relay, data)
+    end
+  end
+
+  defp push(relay, raw),
+    do: append(relay, raw |> String.trim_trailing("\r") |> String.replace_invalid())
+
+  defp append(relay, text) do
     seq = relay.next_seq
 
     %{
@@ -161,7 +182,7 @@ defmodule Locus.Backends.Relay do
   @spec dropped(t()) :: non_neg_integer()
   def dropped(%__MODULE__{dropped: dropped}), do: dropped
 
-  @doc "Whether a line past `after` is buffered."
+  @doc "Whether a line or a chunk past `after` is buffered."
   @spec past?(t(), non_neg_integer()) :: boolean()
   def past?(%__MODULE__{} = relay, after_seq) do
     case :queue.peek_r(relay.lines) do
@@ -171,12 +192,13 @@ defmodule Locus.Backends.Relay do
   end
 
   @doc """
-  Every line at or below `after` let go, then the lines past it that fit
-  `budget` bytes of an answer (the first always), each `%{seq, text}`, and
-  how many lines between `after` and the first of them were dropped.
+  Every line or chunk at or below `after` let go, then those past it that
+  fit `budget` bytes of an answer (the first always), each `%{seq, text}`
+  of a run or `%{seq, bytes}` of a terminal, and how many between `after`
+  and the first of them were dropped.
   """
   @spec take(t(), non_neg_integer(), pos_integer()) ::
-          {[LocusBackends.line()], non_neg_integer(), t()}
+          {[LocusBackends.line() | LocusBackends.chunk()], non_neg_integer(), t()}
   def take(%__MODULE__{} = relay, after_seq, budget) do
     relay = acknowledge(relay, after_seq)
 
@@ -186,7 +208,7 @@ defmodule Locus.Backends.Relay do
         :empty -> relay.next_seq
       end
 
-    lines = collect(:queue.to_list(relay.lines), budget, [])
+    lines = collect(relay.mode, :queue.to_list(relay.lines), budget, [])
     {lines, max(first - after_seq - 1, 0), relay}
   end
 
@@ -206,15 +228,23 @@ defmodule Locus.Backends.Relay do
     end
   end
 
-  defp collect([], _budget, taken), do: Enum.reverse(taken)
+  defp collect(_mode, [], _budget, taken), do: Enum.reverse(taken)
 
-  defp collect([{seq, text} | rest], budget, taken) do
-    cost = byte_size(Jason.encode!(text)) + @line_overhead
+  defp collect(mode, [{seq, data} | rest], budget, taken) do
+    cost = encoded_bytes(mode, data) + @line_overhead
 
     if taken != [] and cost > budget,
       do: Enum.reverse(taken),
-      else: collect(rest, budget - cost, [%{seq: seq, text: text} | taken])
+      else: collect(mode, rest, budget - cost, [entry(mode, seq, data) | taken])
   end
+
+  # What an entry costs an answer: a line as JSON escapes it, a chunk in
+  # base64.
+  defp encoded_bytes(:run, text), do: byte_size(Jason.encode!(text))
+  defp encoded_bytes(:terminal, bytes), do: div(byte_size(bytes) + 2, 3) * 4
+
+  defp entry(:run, seq, text), do: %{seq: seq, text: text}
+  defp entry(:terminal, seq, bytes), do: %{seq: seq, bytes: bytes}
 
   # ————— stderr —————
 

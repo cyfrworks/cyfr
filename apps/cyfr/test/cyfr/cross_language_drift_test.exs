@@ -406,7 +406,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # row, which the scan asks for.
   @vector_readers %{
     "account_names.json" => [
-      {"apps/codex/cmd/profile_test.go", ~w(unicode keys same different)},
       {"apps/prima/test/prima/authority/blob_test.exs", ~w(unicode keys same different)}
     ],
     "canvas_shape.json" => [
@@ -429,7 +428,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/mcp/message_test.exs", ~w(signal)}
     ],
     "consent_preview.json" => [
-      {"apps/codex/cmd/profile_test.go", ~w(kinds preview)},
       {"apps/cyfr/test/cyfr/consent_preview_render_test.exs", ~w(preview)},
       {"apps/prima/test/prima/consent_preview_test.exs",
        ~w(kinds narrowable_kinds preview refusals version)}
@@ -446,13 +444,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(certificate_protocol certificates challenge_refusals challenges issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals verify)}
     ],
     "device_unlock.json" => [
-      {"apps/codex/internal/shell/home_test.go", ~w(exchange)},
       {"apps/codex/internal/shell/proof_test.go",
        ~w(protocol common_fields purpose_fields keys proofs verify)},
       {"apps/codex/internal/shell/server_test.go", ~w(exchange)},
       {"apps/cyfr/assets/test/device_unlock/complete.test.mjs", ~w(exchange)},
-      {"apps/cyfr/test/emissary/web/controllers/device_session_controller_test.exs",
-       ~w(exchange)},
       {"apps/cyfr/test/prism_web/controllers/device_unlock_controller_test.exs", ~w(exchange)},
       {"apps/prima/test/prima/device_cert_test.exs", ~w(keys proofs purpose_fields verify)},
       {"apps/prima/test/prima/device_unlock_test.exs",
@@ -504,7 +499,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # beside internal/identity/testdata/SOURCE, which names this file's
     # SHA-256), outside this roster's reach.
     "identity.json" => [
-      {"apps/codex/cmd/thread_test.go", ~w(identifiers)},
       {"apps/codex/internal/account/approve_test.go", ~w(chains entries keys)},
       {"apps/codex/internal/account/identity_test.go",
        ~w(chains entries identifiers keys kits user_ids webauthn)},
@@ -516,7 +510,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/registry-stand-in/standin_test.py", ~w(chains directory entries)}
     ],
     "keeper_protocol.json" => [
-      {"apps/cyfr/test/opus/programs/definition_test.exs", ~w(reserved_env_prefixes)},
+      {"apps/cyfr/test/opus/programs/definition_test.exs",
+       ~w(reserved_env_prefixes request_bounds)},
       {"apps/locus/keeper/internal/protocol/protocol_test.go",
        ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames valid_requests invalid_requests home_requests replies home_replies)},
       {"apps/locus/keeper/internal/relay/relay_test.go", ~w(relay_streams)},
@@ -544,9 +539,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version routes key_hex owner hello sync release status open invalid_messages fence_rejected refusals)},
       {"apps/locus/test/locus/listener_test.exs", ~w(version service key_hex owner hello sync)},
       {"apps/prima/test/prima/locus_backends_test.exs",
-       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status open recv seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking)},
+       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status open recv open_terminal input output resize seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking masking_stream terminal_type)},
       {"tests/locus-backends-image/harness.py",
-       ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status home seal refusals)}
+       ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status home seal refusals open_terminal input output resize)}
     ],
     "locus_builds.json" => [
       {"apps/cyfr/test/support/scripted_builder.ex", ~w(key_hex request_key_hex lines)},
@@ -575,9 +570,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "model_chat.json" => [
       {"apps/prima/test/prima/model_test.exs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)},
-      {"seed/components/catalysts/local/claude-code/0.1.4/src/src/chat.rs",
+      {"seed/components/catalysts/local/claude-code/0.1.5/src/src/chat.rs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)},
-      {"seed/components/catalysts/local/openai-codex/0.1.2/src/src/chat.rs",
+      {"seed/components/catalysts/local/openai-codex/0.1.3/src/src/chat.rs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)}
     ],
     "access_modes.json" => [
@@ -641,7 +636,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
     ],
     "sign_in.json" => [
-      {"apps/codex/cmd/registry_sign_test.go", ~w(requests)},
       {"apps/codex/internal/account/wire_test.go",
        ~w(answer_refusals answers keys request_refusals requests)},
       {"apps/cyfr/assets/test/account/pages.test.mjs",
@@ -868,8 +862,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     refute test_path?("apps/codex/internal/shell/device.go")
     assert test_path?("apps/cyfr/assets/test/account/pages.test.mjs")
     assert test_path?("tests/compose-proof/predicates.sh")
-    assert test_path?("seed/components/catalysts/local/claude-code/0.1.4/src/src/chat.rs")
-    assert "seed/components/catalysts/local/claude-code/0.1.4/src/src/chat.rs" in files
+    assert test_path?("seed/components/catalysts/local/claude-code/0.1.5/src/src/chat.rs")
+    assert "seed/components/catalysts/local/claude-code/0.1.5/src/src/chat.rs" in files
   end
 
   # ==========================================================================

@@ -88,7 +88,11 @@ defmodule Prima.Test.AuthorityFixtures do
                 %{
                   "server_digest" => @server_digest,
                   "server_name" => "github",
-                  "tool_patterns" => ["issues.*", "repo_get"]
+                  "tool_patterns" => ["issues.*", "repo_get"],
+                  "record" => %{
+                    "address" => "https://api.github.example/mcp",
+                    "headers" => [%{"name" => "authorization", "entry" => "github"}]
+                  }
                 }
               ]
             },

@@ -35,7 +35,8 @@ defmodule PrismWeb.AquaLive do
   each brain ticked — its grant, asked in the page's system layer
   (`PrismWeb.SystemLayer`), whose sheet takes the key in CYFR's own
   credential prompt, the grant alone for a brain that needs nothing else
-  of the person, or the Programs page for a plan — reachable in
+  of the person, or, for a plan whose program is not set up yet, the
+  Programs page's form for that program first — reachable in
   `lite`, so a box that never opens `dev` still gets its key in. A grant
   for a brain ends in one `models` call (`Aqua.models/2`) whose answer the
   page shows, so a key the provider refuses reads as the provider says.
@@ -646,8 +647,8 @@ defmodule PrismWeb.AquaLive do
                 >
                   Grant
                 </button>
-              <% brain.need && brain.need.kind == "login" -> %>
-                {brain.provider}: sign in to {brain.need.program || "its program"} on the Programs page.
+              <% brain.state == :needs_program -> %>
+                {brain.provider}: set up {brain.need.program} on the Programs page, then grant it here.
                 <.link
                   navigate={programs_path(@athanor, brain)}
                   class="text-blue-400 hover:underline"
@@ -713,7 +714,7 @@ defmodule PrismWeb.AquaLive do
   # A brain ticked that is not yet connected is a step; a damaged or
   # unreadable consent is no step the person can take here.
   defp step?(%{state: state, provider: provider}, ticked),
-    do: state in [:needs_grant, :needs_key, :needs_sign_in] and MapSet.member?(ticked, provider)
+    do: state in [:needs_grant, :needs_key, :needs_program] and MapSet.member?(ticked, provider)
 
   defp shared_line(%{owner: owner, person_daily: cap}) when is_integer(cap),
     do: "#{owner}'s key, shared with you, up to #{cap} requests a day"

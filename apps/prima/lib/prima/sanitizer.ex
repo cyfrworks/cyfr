@@ -25,9 +25,12 @@ defmodule Prima.Sanitizer do
   # `encryption_key`, `hmac_key`, `derived_key` and `key_material` are the
   # material itself.
   #
-  # `sign_in_line` is what a person types into a program's sign-in
-  # terminal (`PrismWeb.SignInTerminalComponent`): a pasted code or a
-  # password, whatever the program asks.
+  # `terminal_input` is what a person types into a program's terminal
+  # (`PrismWeb.TerminalComponent`): a pasted code or a password, whatever
+  # the program asks. `terminal_args` are the words a person types after a
+  # program's command to start it (`mcp_servers.open`), which can be such a
+  # password too; the name is the open action's own, so listing it hides
+  # no other `args`.
   #
   # `confirmation_id` and `confirmationId` are a pending confirmation's
   # secret, which only the asking client holds, under the names it travels
@@ -47,21 +50,19 @@ defmodule Prima.Sanitizer do
     device_code stripe basic_auth cookie signature code_verifier
     proof ticket confirmation_id confirmationId recovery_code
     keyring crypto_keyring master_key encryption_key hmac_key
-    derived_key key_material keystore passphrase sign_in_line
+    derived_key key_material keystore passphrase terminal_input terminal_args
   )
 
-  # Match code, state, key, fields, invitation_url, fragment and the
-  # `x-cyfr-invitation` header only as whole keys after stripping
-  # separators. These can carry credentials — `fields` is a vault entry's
-  # material, name → value, whatever the names are; `invitation_url` is a
-  # pairing link whose fragment is the bearer invitation; `fragment` is a
-  # sign-in carry's URL fragment as a page hands it to its LiveView or
-  # posts it (a carry, a challenge, an assertion); and `x-cyfr-invitation`
-  # is the header an invitation's bearer code travels in to a protected
-  # device's enrollment. Longer names such as error_code, keyboard,
+  # Match code, state, key, fields, invitation_url and fragment only as
+  # whole keys after stripping separators. These can carry credentials —
+  # `fields` is a vault entry's material, name → value, whatever the names
+  # are; `invitation_url` is a pairing link whose fragment is the bearer
+  # invitation; and `fragment` is a sign-in carry's URL fragment as a page
+  # hands it to its LiveView or posts it (a carry, a challenge, an
+  # assertion). Longer names such as error_code, keyboard,
   # connection_state, field_names and fragment_id, and a plain `url`, must
   # remain readable.
-  @exact_sensitive_keys ~w(code state key fields invitation_url fragment x-cyfr-invitation)
+  @exact_sensitive_keys ~w(code state key fields invitation_url fragment)
   @exact_sensitive_normalized Enum.map(@exact_sensitive_keys, &String.replace(&1, ["-", "_"], ""))
 
   # Compared against the key as written, separators and all. `_t` and

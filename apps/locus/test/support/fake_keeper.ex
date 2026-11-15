@@ -46,7 +46,8 @@ defmodule Locus.Test.FakeKeeper do
   acts on its path as the test's own user: `home_make` makes the folder
   0700, `home_measure` answers the bytes of the files under it, and
   `home_retire` removes it. A spawn's kept-home and `pty` members are
-  recorded among the requests and run as any other spawn.
+  recorded among the requests and run as any other spawn; a `resize` is
+  recorded and changes nothing, since no spawn here runs on a terminal.
   """
 
   use GenServer

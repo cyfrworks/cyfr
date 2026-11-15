@@ -80,14 +80,16 @@ defmodule Sanctum.Proxy do
 
   @typedoc """
   An external tool server as a grant may name it: its `name`, the
-  `server_digest` a grant binds to (`nil` when its configuration cannot be
-  digested), the `tool_patterns` the operator exposes and, when the server
+  `server_digest` a grant binds to and the `record` it records
+  (`Sanctum.ToolServerDigest`'s, each `nil` when its configuration cannot
+  be digested), the `tool_patterns` the operator exposes and, when the server
   answered, the `tool_names` matched and a `descriptions_digest` over
   their descriptions.
   """
   @type tool_server_candidate :: %{
           required(:name) => String.t(),
           required(:server_digest) => String.t() | nil,
+          required(:record) => Sanctum.ToolServerDigest.server_record() | nil,
           required(:tool_patterns) => [String.t()],
           optional(atom()) => term()
         }

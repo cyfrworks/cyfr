@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/cyfr/codex/internal/ops"
@@ -62,12 +63,33 @@ func TestScheduleMissedRunsFlags_UnsetSendsNothing(t *testing.T) {
 	}
 }
 
-func TestScheduleMissedRunsFlags_OnCreateAndUpdate(t *testing.T) {
-	for _, cmd := range []*cobra.Command{scheduleCreateCmd, scheduleUpdateCmd} {
-		for _, flag := range []string{"missed-runs", "catch-up-limit"} {
-			if cmd.Flags().Lookup(flag) == nil {
-				t.Errorf("schedule %s has no --%s", cmd.Name(), flag)
-			}
+// What a schedule runs and the profile it fires under are a person's to
+// bind, on the Schedules page: update offers no flag for either, and keeps
+// the ones a key may use.
+func TestScheduleUpdate_NoRepointFlags(t *testing.T) {
+	for _, name := range []string{"ref", "profile"} {
+		if scheduleUpdateCmd.Flags().Lookup(name) != nil {
+			t.Errorf("cyfr schedule update still declares --%s", name)
+		}
+	}
+	for _, name := range []string{"name", "cron", "input", "missed-runs", "catch-up-limit"} {
+		if scheduleUpdateCmd.Flags().Lookup(name) == nil {
+			t.Errorf("cyfr schedule update lost --%s", name)
+		}
+	}
+
+	help := scheduleUpdateCmd.UsageString() + scheduleUpdateCmd.Long + scheduleUpdateCmd.Example
+	for _, flag := range []string{"--ref", "--profile"} {
+		if strings.Contains(help, flag) {
+			t.Errorf("cyfr schedule update's help names %s:\n%s", flag, help)
+		}
+	}
+
+	cmd := &cobra.Command{Use: "probe"}
+	cmd.Flags().AddFlagSet(scheduleUpdateCmd.Flags())
+	for _, flag := range []string{"--ref=c:local.x", "--profile=prof_x"} {
+		if err := cmd.ParseFlags([]string{flag}); err == nil {
+			t.Errorf("%s was accepted", flag)
 		}
 	}
 }

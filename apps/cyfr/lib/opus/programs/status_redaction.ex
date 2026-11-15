@@ -3,7 +3,8 @@
 
 defmodule Opus.Programs.StatusRedaction do
   @moduledoc """
-  What a programs controller (`Opus.Programs.Box`), a sign-in relay and a
+  What a programs controller (`Opus.Programs.Box`), a terminal session
+  (`Opus.Programs.Terminal`) and a
   server process (`Emissary.External.Server`) show of themselves in
   `:sys.get_status/1` and in crash reports.
 

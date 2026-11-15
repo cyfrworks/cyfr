@@ -9,7 +9,7 @@ defmodule CyfrWeb.Plugs.CallIdentity do
   The first plug of every pipeline that admits work — `/mcp`, the
   authenticated API, the tincture routes, the webhook route, and the
   entries that admit for themselves: the identity directory and its handle
-  registry, a command line's session, the vault's OAuth callback and the
+  registry, the vault's OAuth callback and the
   browser's sign-in (a passkey's sign-in ticket, a device's unlock ticket
   and the company sign-in) — mints the request's correlation id (`req_…`,
   `Prima.UUID7.request_id/0`) and the admission's call id (`call_…`,

@@ -42,6 +42,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:program_offers, %{})
      |> assign(:signs_in, MapSet.new())
      |> assign(:installing, nil)
+     |> assign(:setting_up, nil)
+     |> assign(:set_up_refused, %{})
      |> assign(:editor_editing_prompt, nil)
      |> assign(:editor_prompt_content, "")
      |> assign(:editor_prompt_digest, nil)}
@@ -404,7 +406,47 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
+  # Set up on the card is the person's start of the program: it opens
+  # through the gate like the Programs page's Open, at a default size the
+  # frame corrects when it attaches, and shows the running terminal with
+  # the way back here. A refusal stays on the card in the gate's words.
+  def handle_event("set_up_program", %{"program" => program}, socket)
+      when is_binary(program) do
+    CyfrWeb.ContextGuard.guard(socket, fn
+      %{assigns: %{setting_up: nil}} = socket ->
+        ctx = socket.assigns.context
+        tag = CyfrWeb.ContextGuard.capture(ctx)
+        params = %{"name" => program, "rows" => 24, "cols" => 80}
+
+        {:noreply,
+         socket
+         |> assign(:setting_up, program)
+         |> assign(:set_up_refused, Map.delete(socket.assigns.set_up_refused, program))
+         |> start_async(
+           :set_up_program,
+           fn ->
+             {tag, program,
+              PrismWeb.Ops.run_to_end(fn ->
+                PrismWeb.Ops.call_tool(ctx, "mcp_servers/open", params)
+              end)}
+           end,
+           supervisor: Prism.TaskSupervisor
+         )}
+
+      socket ->
+        {:noreply, socket}
+    end)
+  end
+
   @impl true
+  def handle_async(:set_up_program, {:ok, {tag, program, result}}, socket) do
+    socket = assign(socket, :setting_up, nil)
+    CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, set_up(&1, program, result)})
+  end
+
+  # Only the node's shutdown stops a start (`PrismWeb.Ops.run_to_end/1`).
+  def handle_async(:set_up_program, {:exit, _reason}, socket), do: {:noreply, socket}
+
   def handle_async(:brain_options, {:ok, {tag, options}}, socket) do
     CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, assign(&1, :brain_options, options)})
   end
@@ -515,8 +557,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # Each agent's catalyst, read once through its setup plan: the programs
   # its login needs offer to install, and whether it runs on a program's
-  # own sign-in (`Aqua.brain_signs_in?/1`), so its card offers to change
-  # the entry, not a key. A plan that cannot be read offers nothing.
+  # own sign-in (`Aqua.brain_signs_in?/1`), whose binding is the one row
+  # named as its program, so its card offers no other to change to. A
+  # plan that cannot be read offers nothing.
   defp assign_plans(socket, ctx, agents) do
     plans =
       for ref <- agents |> Enum.map(& &1["catalyst_ref"]) |> Enum.uniq(),
@@ -537,11 +580,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     )
   end
 
-  # For each catalyst, the programs its login needs suggest and the
-  # athanor has no row for: each the query of the Programs page's install
-  # form.
+  # For each catalyst, the programs its login needs name: one the athanor
+  # has no row for is offered to install (the Programs page's install
+  # form), and one it has is offered to set up: its press starts it in a
+  # terminal (`set_up_program`), where the person signs it in; either
+  # comes back to Aqua.
   defp program_offers(ctx, plans) do
-    plans = for {ref, plan} <- plans, do: {ref, installable(plan)}
+    plans = for {ref, plan} <- plans, do: {ref, login_programs(plan)}
 
     names =
       if Enum.any?(plans, fn {_ref, needs} -> needs != [] end) do
@@ -555,15 +600,28 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
     for {ref, needs} <- plans, into: %{} do
       offers =
-        for need <- needs, need.program not in names do
+        for need <- needs, need.program in names or need.install? do
+          query = %{"install" => ref, "need" => need.name, "from" => "aqua"}
+
           %{
             program: need.program,
-            query: URI.encode_query(%{"install" => ref, "need" => need.name})
+            installed?: need.program in names,
+            query: URI.encode_query(query)
           }
         end
 
       {ref, offers}
     end
+  end
+
+  defp set_up(socket, _program, {:ok, %{session: session}}) do
+    query = URI.encode_query(%{"terminal" => session, "from" => "aqua"})
+    push_navigate(socket, to: PrismWeb.Focus.path(socket.assigns.athanor, "/programs?" <> query))
+  end
+
+  defp set_up(socket, program, {:error, reason}) do
+    refused = Map.put(socket.assigns.set_up_refused, program, error_message(reason))
+    assign(socket, :set_up_refused, refused)
   end
 
   # Aqua's setup, for the agent whose card links to it: the soul's by
@@ -577,18 +635,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         "/aqua?" <> URI.encode_query(%{"setup" => "1", "agent" => agent["name"]})
       )
 
-  # A ready brain's action changes what it is bound to: a key, or the login
-  # entry its program signs in with, which holds no key.
-  defp change_label({:ready, _}, true), do: "Change the entry"
-  defp change_label({:ready, _}, false), do: "Change the key"
-  defp change_label(_unready, _signs_in?), do: "Connect a model"
-
-  defp installable(plan) do
+  defp login_programs(plan) do
     for need <- plan[:needs] || [],
         need[:kind] == "login",
-        is_map(need[:install]),
         is_binary(need[:program]),
-        do: %{name: need[:name], program: need[:program]}
+        do: %{name: need[:name], program: need[:program], install?: is_map(need[:install])}
   end
 
   # Enumerate `(tool, [actions...])` from the live MCP registry — populated
@@ -845,6 +896,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         model_status={Map.get(@model_status, @soul["name"])}
         brain_options={Map.get(@brain_options, @soul["name"], [])}
         installing={@installing}
+        setting_up={@setting_up}
+        set_up_refused={@set_up_refused}
         athanor={@athanor}
         offers={Map.get(@program_offers, @soul["catalyst_ref"], [])}
         signs_in?={MapSet.member?(@signs_in, @soul["catalyst_ref"])}
@@ -861,6 +914,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           model_status={Map.get(@model_status, member["name"])}
           brain_options={Map.get(@brain_options, member["name"], [])}
           installing={@installing}
+          setting_up={@setting_up}
+          set_up_refused={@set_up_refused}
           athanor={@athanor}
           offers={Map.get(@program_offers, member["catalyst_ref"], [])}
           signs_in?={MapSet.member?(@signs_in, member["catalyst_ref"])}
@@ -928,6 +983,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :model_status, :any, default: nil
   attr :brain_options, :list, default: []
   attr :installing, :any, default: nil
+  attr :setting_up, :any, default: nil
+  attr :set_up_refused, :map, default: %{}
   attr :athanor, :any, default: nil
   attr :offers, :list, default: []
   attr :signs_in?, :boolean, default: false
@@ -1050,16 +1107,49 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         />
       </form>
 
-      <div :if={@offers != []} class="flex flex-wrap items-center gap-2 text-[11px]">
+      <div
+        :if={Enum.any?(@offers, &(!&1.installed?))}
+        class="flex flex-wrap items-center gap-2 text-[11px]"
+      >
         <span class="text-amber-300">Its brain runs a program you have not installed:</span>
         <.link
           :for={offer <- @offers}
+          :if={!offer.installed?}
           navigate={PrismWeb.Focus.path(@athanor, "/programs?" <> offer.query)}
           class="text-blue-400 hover:underline"
           data-test="install-program"
         >
           install {offer.program}
         </.link>
+      </div>
+      <div
+        :if={Enum.any?(@offers, & &1.installed?)}
+        class="flex flex-wrap items-center gap-2 text-[11px]"
+      >
+        <span class="text-gray-400">Its brain runs in a program's own folder; sign it in there:</span>
+        <button
+          :for={offer <- @offers}
+          :if={offer.installed?}
+          type="button"
+          phx-click="set_up_program"
+          phx-value-program={offer.program}
+          phx-target={@myself}
+          disabled={@setting_up != nil}
+          class="text-blue-400 hover:underline disabled:opacity-50"
+          data-test="set-up-program"
+        >
+          {if @setting_up == offer.program,
+            do: "Opening #{offer.program}…",
+            else: "Set up #{offer.program}"}
+        </button>
+        <span
+          :for={offer <- @offers}
+          :if={offer.installed? and Map.has_key?(@set_up_refused, offer.program)}
+          class="text-red-400"
+          data-test="set-up-refused"
+        >
+          {Map.fetch!(@set_up_refused, offer.program)}
+        </span>
       </div>
 
       <%!-- A member with no brain yet is connected through the setup like
@@ -1097,8 +1187,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet
         </span>
-        <span :if={match?({:needs_sign_in, _}, @model_status)} class="text-amber-300">
-          Program not signed in — it signs in on the Programs page
+        <span :if={match?({:needs_grant, _}, @model_status)} class="text-amber-300">
+          Not connected — it needs only your grant
+        </span>
+        <span :if={match?({:needs_program, _}, @model_status)} class="text-amber-300">
+          Not connected — set up its program on the Programs page, then grant it
         </span>
         <%!-- A consent that exists but is damaged, or could not be read, is
              no key to connect: no Connect button is offered over it. --%>
@@ -1128,21 +1221,29 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {if @installing, do: "Installing…", else: "Install"}
         </button>
         <.link
-          :if={match?({status, _} when status in [:needs_key, :needs_sign_in], @model_status)}
+          :if={
+            match?(
+              {status, _} when status in [:needs_key, :needs_grant, :needs_program],
+              @model_status
+            )
+          }
           patch={setup_path(@athanor, @agent, @is_soul)}
           data-test="connect"
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
         >
           Connect
         </.link>
+        <%!-- A ready brain changes its key here; one that runs a program is
+             bound to the one row named as its program, changed on the
+             Programs page. --%>
         <button
-          :if={match?({:ready, _}, @model_status)}
+          :if={match?({:ready, _}, @model_status) and not @signs_in?}
           type="button"
           phx-click="open_consent"
           phx-value-ref={elem(@model_status, 1)}
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
         >
-          {change_label(@model_status, @signs_in?)}
+          Change the key
         </button>
       </div>
 

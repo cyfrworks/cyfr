@@ -185,7 +185,10 @@ defmodule Sanctum.Test.ConsentFixtures do
 
   Each vault entry a ref names is minted first if it does not exist: a
   reference row carries a foreign key to the entry, so a case that spells
-  a binding spells an entry that is there, as a commit's would be.
+  a binding spells an entry that is there, as a commit's would be. So is
+  each tool server the policy grants the tools of, a tool server
+  elsewhere under the name the grant gives: a revision refuses a grant of
+  a row that is not there (`Arca.ConsentStorage`).
 
   `shape_digest: :live` is the shape of the source's newest installed
   version, derived as `Sanctum.Consent.ShapeDerivation.live_digest/2`
@@ -203,6 +206,7 @@ defmodule Sanctum.Test.ConsentFixtures do
     forget!(ctx, profile.id)
     vault_refs = Map.get(consent, :vault_refs, [])
     Enum.each(vault_refs, &ensure_entry!(ctx, &1))
+    ensure_servers!(ctx, consent.resolved_policy)
 
     {:ok, _} =
       Arca.ConsentStorage.mint_profile_with_revision(
@@ -349,6 +353,39 @@ defmodule Sanctum.Test.ConsentFixtures do
   end
 
   def ensure_entry!(%Context{}, _ref), do: nil
+
+  # Each server the policy grants the tools of, as a tool server elsewhere
+  # under that name, when the athanor holds none by it.
+  defp ensure_servers!(%Context{} = ctx, policy) do
+    with {:ok, %Prima.Authority.Blob{nodes: nodes}} <- Prima.Authority.Blob.parse(policy) do
+      for {_ref, node} <- nodes,
+          {_key, edge} <- node.edges,
+          %{server_name: name} <- edge.tool_servers,
+          uniq: true,
+          do: ensure_server!(ctx, name)
+    end
+  end
+
+  defp ensure_server!(ctx, name) do
+    case Arca.McpServerStorage.get(Context.actor(ctx), name) do
+      {:ok, server} ->
+        server
+
+      {:error, :not_found} ->
+        Arca.Repo.insert!(%Arca.Schemas.McpServer{
+          id: Prima.UUID7.generate_id("mcp"),
+          name: name,
+          transport: "http",
+          url: "https://#{name}.fixture.test/mcp",
+          enabled: true,
+          epoch: 1,
+          revision: 0,
+          config_json: ~s({"headers":{}}),
+          athanor_id: ctx.athanor_id,
+          created_by: ctx.user_id
+        })
+    end
+  end
 
   @doc """
   Write `changes` straight onto the profile's head revision, past every

@@ -1633,22 +1633,18 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert_refused(DeviceChannel.handle_info({DeviceChannel, :deadline, token}, state), 4401)
     end
 
-    test "a capability that admits nobody is told so, closes 4401, recorded, with nothing held",
+    test "a setup token that admits nobody is told so, closes 4401, recorded, with nothing held",
          %{account: account, key: key} do
-      for {admission, reason} <- [
-            {{:setup, String.duplicate("0f", 32)}, :setup_closed},
-            {{:invitation, b64(32)}, :invitation_invalid}
-          ] do
-        state =
-          assert_told(
-            send_frame(channel(), hello_message(account, key, admission)),
-            4401,
-            "unauthenticated",
-            Prima.Refusal.message(reason)
-          )
+      result =
+        send_frame(channel(), hello_message(account, key, {:setup, String.duplicate("0f", 32)}))
 
-        assert is_nil(state.hello)
-      end
+      state = assert_told(result, 4401, "unauthenticated", Prima.Refusal.message(:setup_closed))
+      assert is_nil(state.hello)
+
+      # What it is told is the protocol's refused vector, byte for byte once read.
+      {:stop, :normal, _close, [{:text, json}], _state} = result
+      vector = Enum.find(vectors()["messages"], &(&1["message"]["type"] == "refused"))
+      assert Jason.decode!(json) == vector["message"]
 
       assert Arca.Repo.all(Arca.Schemas.PairedClient) == []
     end
@@ -1723,7 +1719,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
     test "no value of a hello's exchange reaches a log line, a decision or a request-log row",
          %{account: account, key: key} do
-      code = b64(32)
+      closed_token = String.duplicate("0f", 32)
       hello = hello_message(account, key, {:setup, @token})
 
       {{answer, refused, closed}, log} =
@@ -1731,10 +1727,10 @@ defmodule Emissary.Web.DeviceChannelTest do
           with_log([level: :debug], fn ->
             refused =
               assert_told(
-                send_frame(channel(), hello_message(account, key, {:invitation, code})),
+                send_frame(channel(), hello_message(account, key, {:setup, closed_token})),
                 4401,
                 "unauthenticated",
-                Prima.Refusal.message(:invitation_invalid)
+                Prima.Refusal.message(:setup_closed)
               )
 
             {asked, request} = asked(hello)
@@ -1754,7 +1750,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         end)
 
       %{"answer" => %{"sig" => sig, "challenge" => challenge}} = answer
-      secrets = [@token, code, sig, challenge]
+      secrets = [@token, closed_token, sig, challenge]
       values = secrets ++ ["Kitchen box", DirectoryServer.kid(key)]
 
       # Read at debug. The store's own query lines carry the parameters of
@@ -2363,8 +2359,6 @@ defmodule Emissary.Web.DeviceChannelTest do
       "fields" => %{"KEY" => "sk-device-channel"},
       "destination" => %{"hosts" => ["api.example.com"]}
     }
-
-  defp b64(bytes), do: Base.url_encode64(:crypto.strong_rand_bytes(bytes), padding: false)
 
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 

@@ -23,6 +23,13 @@ defmodule Arca.Schemas.CronSchedule do
   policy here closes it. The upper bound of the limit is the scheduler's
   (`Opus.Schedules.Scheduler.max_catch_up/0`), held on each adapter by the
   table's CHECK, which this changeset reads back as a validation error.
+
+  A schedule whose reference is Aqua's (`aqua_line/0`) holds a line for
+  Aqua instead of a component: the line is its `input`, it binds no
+  profile (its turn runs under Aqua's own consent), and `thread_id` names
+  the person's thread its turns run in, written only by
+  `Arca.CronSchedule.thread/3`. Every other row binds a profile; the
+  table's CHECK holds both.
   """
 
   use Ecto.Schema
@@ -32,6 +39,9 @@ defmodule Arca.Schemas.CronSchedule do
   @concurrency ~w(forbid allow)
   @missed_runs ~w(skip catch_up)
   @kinds ~w(schedule feed)
+  @aqua_line "agent:local.aqua"
+  # What every row's id begins with (`Prima.UUID7.generate_id/1`).
+  @id_prefixes ["sched_", "feed_"]
 
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
@@ -50,6 +60,7 @@ defmodule Arca.Schemas.CronSchedule do
     field :metadata, :string
     field :status, :string, default: "active"
     field :profile_id, :string
+    field :thread_id, :string
     field :athanor_id, :string
     field :last_run_at, :utc_datetime_usec
     field :next_run_at, :utc_datetime_usec
@@ -77,6 +88,10 @@ defmodule Arca.Schemas.CronSchedule do
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end
+
+  @doc "The reference of a schedule that holds a line for Aqua rather than a component."
+  @spec aqua_line() :: String.t()
+  def aqua_line, do: @aqua_line
 
   @doc "The status vocabulary this table's rows may hold."
   @spec statuses() :: [String.t()]
@@ -120,14 +135,15 @@ defmodule Arca.Schemas.CronSchedule do
       :cron_expression,
       :reference,
       :resolved_reference,
-      :profile_id,
       :athanor_id,
       :created_at,
       :updated_at
     ])
+    |> validate_profile_bound()
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:concurrency, @concurrency)
     |> validate_missed_runs()
+    |> validate_name()
     |> unique_constraint(:name, name: :cron_schedules_athanor_kind_name_active)
     |> unique_constraint(:name, name: :cron_schedules_athanor_id_kind_name_index)
   end
@@ -176,6 +192,7 @@ defmodule Arca.Schemas.CronSchedule do
       :updated_at
     ])
     |> validate_inclusion(:concurrency, @concurrency)
+    |> validate_name()
     |> unique_constraint(:name, name: :cron_schedules_athanor_kind_name_active)
     |> unique_constraint(:name, name: :cron_schedules_athanor_id_kind_name_index)
   end
@@ -204,10 +221,37 @@ defmodule Arca.Schemas.CronSchedule do
       :updated_at
     ])
     |> validate_required([:resolved_reference])
+    |> validate_name()
+    |> validate_profile_bound()
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:concurrency, @concurrency)
     |> validate_missed_runs()
     |> close_episode()
+  end
+
+  # A row is named by its id or its name in one lookup
+  # (`Arca.CronSchedule.get_by_id_or_name/3`), so no name may begin as an
+  # id does: an identifier then never means two rows, not even after the
+  # row an id named is deleted.
+  defp validate_name(changeset) do
+    validate_change(changeset, :name, fn :name, name ->
+      if String.starts_with?(name, @id_prefixes),
+        do: [name: "may not begin with sched_ or feed_, as only an id does"],
+        else: []
+    end)
+  end
+
+  # A component's schedule binds a profile and an Aqua line binds none,
+  # as the table's CHECK holds; the CHECK's refusal reads back here too.
+  defp validate_profile_bound(changeset) do
+    changeset = check_constraint(changeset, :profile_id, name: :cron_schedules_profile_bound)
+
+    case {get_field(changeset, :reference), get_field(changeset, :profile_id)} do
+      {@aqua_line, nil} -> changeset
+      {@aqua_line, _bound} -> add_error(changeset, :profile_id, "must be empty for Aqua")
+      {_component, nil} -> add_error(changeset, :profile_id, "can't be blank")
+      {_component, _bound} -> changeset
+    end
   end
 
   # The policy and its limit agree: `catch_up` names a limit of at least

@@ -884,7 +884,7 @@ func TestAccessReadsWhetherAnyoneIsSetUpFromTheLog(t *testing.T) {
 	for _, c := range []struct {
 		name, log, exit, want string
 	}{
-		{"no one set up", "booting\n" + notSetUp, "0", lead + done + "Open http://localhost:4000/setup#" + token + " to set up its first person, or run cyfr login --setup here.\n"},
+		{"no one set up", "booting\n" + notSetUp, "0", lead + done + "Open http://localhost:4000/setup#" + token + " to set up its first person.\n"},
 		{"set up since the boot", notSetUp + setUp, "0", lead + list + done},
 		{"set up at the boot", "booting\n", "0", lead + list + done},
 		{"a log unread", notSetUp, "1", lead + list + done},

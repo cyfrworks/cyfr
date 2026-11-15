@@ -15,6 +15,9 @@ defmodule Compendium.Providers.Component do
   alias Compendium.Registry
   alias Compendium.Providers.Shared
 
+  # Where a person without push tokens gets them.
+  @sync "Sync your push tokens on the Registry page."
+
   # ============================================================================
   # Tool Handlers - Action-based dispatch
   # ============================================================================
@@ -1553,8 +1556,7 @@ defmodule Compendium.Providers.Component do
     if anonymous? do
       Logger.warning(
         "[Compendium.Providers.Component] No credentials for #{Compendium.RegistryHost.canonical_host()} — " <>
-          "pull may fail for non-public components. Run `cyfr registry sync` to mint your " <>
-          "push tokens."
+          "pull may fail for non-public components. #{@sync}"
       )
     end
 
@@ -1569,8 +1571,7 @@ defmodule Compendium.Providers.Component do
               result,
               :auth_note,
               "You are pulling anonymously from #{Compendium.RegistryHost.canonical_host()}. " <>
-                "Private components will not be accessible. Run `cyfr registry sync` to mint " <>
-                "your push tokens."
+                "Private components will not be accessible. #{@sync}"
             )
           else
             result
@@ -1588,7 +1589,7 @@ defmodule Compendium.Providers.Component do
           {:error,
            pull_failure_text(reason) <>
              " — No credentials configured for #{Compendium.RegistryHost.canonical_host()}. " <>
-             "Run `cyfr registry sync` to mint your push tokens."}
+             @sync}
         else
           {:error, reason}
         end

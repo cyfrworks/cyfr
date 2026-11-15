@@ -4,10 +4,8 @@
 package cmd
 
 import (
-	"errors"
 	"testing"
 
-	"github.com/cyfr/codex/internal/prompt"
 	"github.com/spf13/cobra"
 )
 
@@ -40,10 +38,6 @@ func runCLI(t *testing.T, srv *cliServer, args ...string) (string, error) {
 	out := captureStdout(t, func() { err = Execute(t.Context()) })
 	return out, err
 }
-
-// exitsOne is whether main exits 1 for err: an error that is not the
-// person's own Ctrl-C.
-func exitsOne(err error) bool { return err != nil && !errors.Is(err, prompt.ErrAborted) }
 
 func (s *cliServer) call(i int) (string, map[string]any) {
 	s.mu.Lock()

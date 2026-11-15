@@ -27,7 +27,17 @@ defmodule Prima.LocusBackendsTest do
            |> Jason.decode!()
 
   @control_types ~w(hello reconcile sync renew release status home homes)
-  @session_types ~w(open send recv close)
+  # Each signed session vector and the type of its message.
+  @session_vectors [
+    {"open", :open},
+    {"send", :send},
+    {"recv", :recv},
+    {"open_terminal", :open},
+    {"input", :input},
+    {"output", :output},
+    {"resize", :resize},
+    {"close", :close}
+  ]
 
   defp hex(bytes), do: Base.encode16(bytes, case: :lower)
   defp unhex(text), do: Base.decode16!(text, case: :lower)
@@ -49,7 +59,7 @@ defmodule Prima.LocusBackendsTest do
   # by the control reader.
   defp read_message(body) do
     case Jason.decode(body) do
-      {:ok, %{"type" => type}} when type in ~w(open send recv close) ->
+      {:ok, %{"type" => type}} when type in ~w(open send recv input output resize close) ->
         LocusBackends.read_session(body)
 
       _ ->
@@ -104,6 +114,7 @@ defmodule Prima.LocusBackendsTest do
       assert LocusBackends.reserved_env_names() == KeeperProtocol.reserved_env_names()
       assert LocusBackends.reserved_env_prefixes() == KeeperProtocol.reserved_env_prefixes()
       assert LocusBackends.reserved_env_prefixes() == @vectors["reserved_env_prefixes"]
+      assert LocusBackends.terminal_type() == @vectors["terminal_type"]
     end
 
     test "the health probe's body is the version alone, and another version is refused" do
@@ -111,7 +122,7 @@ defmodule Prima.LocusBackendsTest do
       assert :ok = LocusBackends.read_health(LocusBackends.health_body())
       assert {:error, {:version, 1}} = LocusBackends.read_health(~s({"version":1}))
       assert {:error, {:version, nil}} = LocusBackends.read_health("{}")
-      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":2,"x":1}))
+      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":3,"x":1}))
       assert {:error, :not_json} = LocusBackends.read_health("[]")
     end
 
@@ -187,10 +198,9 @@ defmodule Prima.LocusBackendsTest do
     test "each session message signs under the owner's key, reads and writes back as the vectors say" do
       {:ok, owner_key} = LocusBackends.owner_key(key(), owner())
 
-      for type <- @session_types do
+      for {type, session_type} <- @session_vectors do
         v = @vectors[type]
         fields = atom_keys(v["fields"])
-        session_type = String.to_existing_atom(type)
 
         assert Map.take(fields, Map.keys(owner())) == owner(), type
         assert {:ok, v["canonical"]} == LocusBackends.canonical(:invoke, fields, v["body"]), type
@@ -360,7 +370,9 @@ defmodule Prima.LocusBackendsTest do
 
       for name <- ~w(wrong_version no_version unknown_type bad_owner_ref too_many_owners
                      oversize_lease oversize_idle bad_program_definition vault_command
-                     env_name_form reserved_env_name scratch_disk_bound sign_in_with_argv
+                     env_name_form reserved_env_name scratch_disk_bound open_sign_in_mode
+                     program_login_command open_run_with_size open_terminal_without_cols
+                     input_not_base64 input_unpadded input_too_large resize_zero_rows
                      open_bad_home_id recv_wait_too_long send_line_with_newline
                      home_without_id) do
         assert name in names, name
@@ -495,6 +507,56 @@ defmodule Prima.LocusBackendsTest do
       m = @vectors["masking"]
       assert LocusBackends.mask(m["input"], m["secrets"]) == m["output"]
     end
+
+    test "a terminal's output is masked as a stream: each chunk releases what the vectors say" do
+      m = @vectors["masking_stream"]
+
+      {released, masker} =
+        Enum.map_reduce(m["chunks"], LocusBackends.masker(m["secrets"]), fn chunk, masker ->
+          LocusBackends.mask_chunk(masker, chunk)
+        end)
+
+      assert released == m["released"]
+      assert LocusBackends.mask_end(masker) == m["end"]
+    end
+
+    test "an output answers chunks in rising sequence, each within the chunk bound, as base64" do
+      {:ok, answer} = LocusBackends.read_session_answer(:output, @vectors["output"]["answer"])
+      [first, second] = answer.chunks
+
+      # Raw bytes, not text: what a terminal writes need not be UTF-8.
+      refute String.valid?(second.bytes)
+
+      assert {:error, {:invalid_field, "chunks[1].seq"}} =
+               LocusBackends.encode_session_answer(:output, %{answer | chunks: [second, first]})
+
+      long = %{first | bytes: :binary.copy("x", LocusBackends.max_chunk_bytes() + 1)}
+
+      assert {:error, {:invalid_field, "chunks[0].bytes"}} =
+               LocusBackends.encode_session_answer(:output, %{answer | chunks: [long]})
+
+      assert {:error, {:invalid_field, "chunks[0].bytes"}} =
+               LocusBackends.encode_session_answer(:output, %{
+                 answer
+                 | chunks: [%{first | bytes: ""}]
+               })
+
+      body = @vectors["output"]["answer_ended"]
+
+      assert {:ok, %{running: false, exit_code: 0, chunks: []} = ended} =
+               LocusBackends.read_session_answer(:output, body)
+
+      assert {:ok, ^body} = LocusBackends.encode_session_answer(:output, ended)
+
+      assert {:error, {:invalid_field, "exit_code"}} =
+               LocusBackends.encode_session_answer(:output, %{ended | running: true})
+    end
+
+    test "each mode takes its own messages beside open and close" do
+      assert LocusBackends.modes() == [:run, :terminal]
+      assert LocusBackends.mode_types(:run) == [:send, :recv]
+      assert LocusBackends.mode_types(:terminal) == [:input, :output, :resize]
+    end
   end
 
   describe "beyond the vectors" do
@@ -576,13 +638,13 @@ defmodule Prima.LocusBackendsTest do
       assert {:error, {:version, 1}} = LocusBackends.read_control(~s({"version":1,"type":"nope"}))
       assert {:error, {:version, nil}} = LocusBackends.read_control(~s({"type":"hello"}))
       assert {:error, {:version, 1}} = LocusBackends.read_session(~s({"version":1,"type":"open"}))
-      assert {:protocol_mismatch, 2, 1} = LocusBackends.refusal_for({:version, 1})
-      assert {:protocol_mismatch, 2, nil} = LocusBackends.refusal_for({:version, "2"})
+      assert {:protocol_mismatch, 3, 2} = LocusBackends.refusal_for({:version, 2})
+      assert {:protocol_mismatch, 3, nil} = LocusBackends.refusal_for({:version, "3"})
 
-      assert LocusBackends.encode_refusal({:protocol_mismatch, 2, 1}) ==
-               ~s({"error":"version","version":2})
+      assert LocusBackends.encode_refusal({:protocol_mismatch, 3, 2}) ==
+               ~s({"error":"version","version":3})
 
-      assert LocusBackends.status({:protocol_mismatch, 2, nil}) == 409
+      assert LocusBackends.status({:protocol_mismatch, 3, nil}) == 409
 
       assert {:error, {:version, 1}} =
                LocusBackends.read_answer(
@@ -702,11 +764,30 @@ defmodule Prima.LocusBackendsTest do
       assert LocusBackends.line_charge_bytes() > 0
     end
 
-    test "a sign-in takes no arguments of the opener's, and a disk bound is a kept home's alone" do
+    test "a terminal open names its size and a run open none, and a disk bound is a kept home's alone" do
       {:ok, open} = LocusBackends.read_session(@vectors["open"]["body"])
+      {:ok, terminal} = LocusBackends.read_session(@vectors["open_terminal"]["body"])
 
-      assert {:ok, _body} =
-               LocusBackends.encode_session(%{open | mode: :sign_in, argv: [], home_id: "vlt_x"})
+      assert %{mode: :terminal, rows: 40, cols: 120, argv: ["auth", "login"]} = terminal
+
+      # A resize names the size alone, under the same bound.
+      assert {:ok, %{type: :resize, rows: 50, cols: 132}} =
+               LocusBackends.read_session(@vectors["resize"]["body"])
+
+      assert %{mode: :run, rows: nil, cols: nil} = open
+
+      assert {:error, {:unknown_field, "rows"}} =
+               LocusBackends.encode_session(%{open | rows: 40, cols: 120})
+
+      assert {:error, {:missing_field, "rows"}} =
+               LocusBackends.encode_session(%{terminal | rows: nil})
+
+      max = LocusBackends.max_pty_size()
+
+      assert {:ok, _body} = LocusBackends.encode_session(%{terminal | rows: max, cols: 1})
+
+      assert {:error, {:invalid_field, "cols"}} =
+               LocusBackends.encode_session(%{terminal | cols: max + 1})
 
       {:ok, sync} = LocusBackends.read_control(@vectors["sync"]["body"])
       [program] = sync.programs
@@ -746,6 +827,33 @@ defmodule Prima.LocusBackendsTest do
         assert {:ok, ^code} =
                  code |> LocusBackends.encode_refusal() |> LocusBackends.read_refusal()
       end
+    end
+
+    test "a credential split anywhere across two chunks of a terminal's output never passes" do
+      secret = "ghp_0123456789abcdefghij"
+      text = "before " <> secret <> " after, and Bearer " <> secret <> "\r\n"
+
+      for cut <- 0..byte_size(text), cut2 <- [cut, div(cut + byte_size(text), 2)] do
+        between = cut2 - cut
+        <<a::binary-size(^cut), rest::binary>> = text
+        <<b::binary-size(^between), c::binary>> = rest
+
+        {released, masker} =
+          Enum.map_reduce([a, b, c], LocusBackends.masker(["Bearer " <> secret]), fn chunk, m ->
+            LocusBackends.mask_chunk(m, chunk)
+          end)
+
+        output = IO.iodata_to_binary([released, LocusBackends.mask_end(masker)])
+        assert output == "before [REDACTED] after, and [REDACTED]\r\n", "cut at #{cut}, #{cut2}"
+      end
+
+      # Nothing to mask: every byte passes at once, none held.
+      assert {"sk-", masker} = LocusBackends.mask_chunk(LocusBackends.masker([]), "sk-")
+      assert LocusBackends.mask_end(masker) == ""
+
+      # A value's beginning held when the output ends is never released in part.
+      {"key: ", masker} = LocusBackends.mask_chunk(LocusBackends.masker([secret]), "key: ghp_01")
+      assert LocusBackends.mask_end(masker) == "[REDACTED]"
     end
 
     test "masking leaves every value alone when there is nothing to mask" do

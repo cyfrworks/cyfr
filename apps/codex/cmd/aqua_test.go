@@ -21,7 +21,7 @@ import (
 // CLI's other sub-resources do (`skills list` / `skills get`).
 func TestAquaCommandTree(t *testing.T) {
 	want := map[string][]string{
-		"aqua":        {"list", "get", "status", "reset", "skills"},
+		"aqua":        {"list", "get", "status", "skills"},
 		"aqua skills": {"list", "get"},
 	}
 	for path, names := range want {
@@ -33,10 +33,6 @@ func TestAquaCommandTree(t *testing.T) {
 		}
 	}
 
-	reset := findCommand(t, "aqua reset")
-	if reset.Flags().Lookup("all") == nil {
-		t.Errorf("aqua reset has no --all flag")
-	}
 	if !findCommand(t, "aqua skills").Runnable() {
 		t.Errorf("a bare `cyfr aqua skills` should list the scrolls")
 	}
@@ -266,66 +262,6 @@ func TestRenderAquaStatus_Empty(t *testing.T) {
 	out := captureStdout(t, func() { renderAquaStatus(map[string]any{"files": []any{}}) })
 	if !strings.Contains(out, "No files.") {
 		t.Errorf("expected empty-state message, got:\n%s", out)
-	}
-}
-
-func TestRenderAquaReset(t *testing.T) {
-	result := map[string]any{
-		"reset":    true,
-		"reverted": []any{"aqua/aqua.md"},
-		"kept":     []any{"aqua/crew/mine.md", "aqua/skills/release-notes"},
-	}
-
-	out := captureStdout(t, func() { renderAquaReset(result, false) })
-
-	for _, want := range []string{
-		"Reverted to shipped:\n  aqua/aqua.md",
-		"Kept (yours",
-		"  aqua/crew/mine.md\n  aqua/skills/release-notes",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("expected %q in output, got:\n%s", want, out)
-		}
-	}
-}
-
-// TestRenderAquaReset_All: with --all the server's "reverted" list also
-// holds what it deleted, so the heading must not call it all reverted.
-func TestRenderAquaReset_All(t *testing.T) {
-	result := map[string]any{
-		"reset":    true,
-		"reverted": []any{"aqua/aqua.md", "aqua/crew/mine.md", "aqua/skills/release-notes"},
-		"kept":     []any{},
-	}
-
-	out := captureStdout(t, func() { renderAquaReset(result, true) })
-
-	want := "Reverted or deleted:\n  aqua/aqua.md\n  aqua/crew/mine.md\n  aqua/skills/release-notes\n"
-	if !strings.Contains(out, want) {
-		t.Errorf("expected %q in output, got:\n%s", want, out)
-	}
-	for _, stray := range []string{"Reverted to shipped", "Kept"} {
-		if strings.Contains(out, stray) {
-			t.Errorf("--all should print neither %q nor a kept section, got:\n%s", stray, out)
-		}
-	}
-}
-
-func TestRenderAquaReset_NothingToRevert(t *testing.T) {
-	result := map[string]any{"reset": true, "reverted": []any{}, "kept": []any{}}
-
-	out := captureStdout(t, func() { renderAquaReset(result, false) })
-
-	if !strings.Contains(out, "Nothing to revert") {
-		t.Errorf("expected nothing-to-revert message, got:\n%s", out)
-	}
-	if strings.Contains(out, "Kept") {
-		t.Errorf("an empty kept list should print no section, got:\n%s", out)
-	}
-
-	all := captureStdout(t, func() { renderAquaReset(result, true) })
-	if !strings.Contains(all, "Nothing to revert or delete") {
-		t.Errorf("expected the --all nothing-to-do message, got:\n%s", all)
 	}
 }
 

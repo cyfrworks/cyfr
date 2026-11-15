@@ -980,6 +980,55 @@ defmodule Sanctum.Consent.AuthzTest do
       refute again == confirmed.confirmation_id
     end
 
+    test "a program's definition goes ahead on its own confirmation alone, and once",
+         %{session_ctx: session_ctx} do
+      # Another action's confirmed change, on the resource the program
+      # definition names, is not the program's.
+      entry = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+
+      program = %{
+        operation: "mcp_servers.create",
+        arguments: %{name: "prod-key", transport: "program", command: "prod-key serve"},
+        resource: "prod-key"
+      }
+
+      assert {:error, {:confirmation_required, %{id: fresh}}} =
+               Sanctum.Consent.confirm_program_definition(entry, program)
+
+      refute fresh == entry.confirmation_id
+      assert record(session_ctx, entry.confirmation_id).state == "confirmed"
+
+      confirmed = Sanctum.TestContext.confirmed(session_ctx, :program_definition, program)
+      assert record(session_ctx, confirmed.confirmation_id).action == "program_definition"
+      assert Sanctum.Consent.confirm_program_definition(confirmed, program) == :ok
+      assert record(session_ctx, confirmed.confirmation_id).state == "consumed"
+
+      assert {:error, {:confirmation_required, %{id: again}}} =
+               Sanctum.Consent.confirm_program_definition(confirmed, program)
+
+      refute again == confirmed.confirmation_id
+    end
+
+    # The program action is as narrow as its name: a change of any other
+    # operation is refused before a record is opened or read, even one
+    # confirmed under the program action.
+    test "a program's definition is confirmed for the three program operations alone",
+         %{session_ctx: session_ctx} do
+      for operation <- ["vault.create", "profile.grant", "mcp_servers.enable"] do
+        change = %{operation: operation, arguments: %{name: "prod-key"}, resource: "prod-key"}
+        confirmed = Sanctum.TestContext.confirmed(session_ctx, :program_definition, change)
+
+        assert {:error, :invalid_request} =
+                 Sanctum.Consent.confirm_program_definition(confirmed, change),
+               operation
+
+        assert record(session_ctx, confirmed.confirmation_id).state == "confirmed"
+      end
+
+      assert {:error, :invalid_request} =
+               Sanctum.Consent.confirm_program_definition(session_ctx, %{arguments: %{}})
+    end
+
     test "check/3 consumes nothing, and consume/2 consumes inside the caller's transaction",
          %{session_ctx: session_ctx} do
       confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())

@@ -363,17 +363,35 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   # A card of its own in a thread of its own: deciding a card settles it.
   # A scheduled card's run row names the schedule it was started by.
-  defp offer!(conn, athanor, here, scheduled?) do
+  defp offer!(conn, athanor, here) do
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
+    card = card!(here, thread, @write, %{"standing" => nil})
+    {open_pane(conn, athanor, thread), card}
+  end
+
+  # A card in the thread a schedule's line for Aqua runs in.
+  defp offer_in_schedule_thread!(conn, athanor, here) do
     {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
     card = card!(here, thread, @write, %{"standing" => nil})
 
-    if scheduled? do
-      {1, _} =
-        Arca.Repo.update_all(
-          from(e in Arca.Schemas.Execution, where: e.id == ^card.execution_id),
-          set: [schedule_id: "sched_offer_#{System.unique_integer([:positive])}"]
-        )
-    end
+    {:ok, schedule} =
+      Arca.CronSchedule.create(Sanctum.Context.actor(here), %{
+        user_id: here.user_id,
+        name: "line-#{System.unique_integer([:positive])}",
+        cron_expression: "0 0 1 1 *",
+        reference: Arca.CronSchedule.aqua_line(),
+        resolved_reference: Arca.CronSchedule.aqua_line(),
+        input: Jason.encode!(%{"line" => "summarise"}),
+        cap: 0,
+        by_person: true
+      })
+
+    # The schedule's thread, as its first fire names it.
+    {1, _} =
+      Arca.Repo.update_all(
+        from(s in Arca.Schemas.CronSchedule, where: s.id == ^schedule.id),
+        set: [thread_id: thread.id]
+      )
 
     {open_pane(conn, athanor, thread), card}
   end
@@ -409,7 +427,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
             {~s(button[phx-value-lifecycle="execution"]), "thread", "execution"},
             {~s|button[phx-value-scope="always"]:not([phx-value-lifecycle])|, "always", nil}
           ] do
-        {pane, card} = offer!(conn, athanor, here, false)
+        {pane, card} = offer!(conn, athanor, here)
         click_offer(pane, card, selector)
         input = resolved(card)
 
@@ -424,7 +442,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     test "for this thread until ends 1, 8 or 24 hours from the click",
          %{conn: conn, athanor: athanor, here: here} do
       for hours <- [1, 8, 24] do
-        {pane, card} = offer!(conn, athanor, here, false)
+        {pane, card} = offer!(conn, athanor, here)
         before = DateTime.utc_now()
         click_offer(pane, card, ~s(button[phx-value-hours="#{hours}"]))
         later = DateTime.utc_now()
@@ -442,21 +460,23 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                "#{hours}h: #{input["until"]}"
       end
     end
+  end
 
-    test "for this schedule is offered only for a scheduled run, and ends with its schedule",
+  describe "a schedule's own thread" do
+    test "its card offers for this schedule as this thread's answer ending with the schedule; no other thread's does",
          %{conn: conn, athanor: athanor, here: here} do
-      {unscheduled, plain} = offer!(conn, athanor, here, false)
+      {plain_pane, plain} = offer!(conn, athanor, here)
 
       refute has_element?(
-               unscheduled,
-               ~s([id$="-card-#{plain.id}"] [phx-value-lifecycle="schedule"])
+               plain_pane,
+               ~s([id$="-card-#{plain.id}"] [data-test="approval-for-schedule"])
              )
 
-      {pane, card} = offer!(conn, athanor, here, true)
-      click_offer(pane, card, ~s(button[phx-value-lifecycle="schedule"]))
+      {pane, card} = offer_in_schedule_thread!(conn, athanor, here)
+      click_offer(pane, card, ~s(button[data-test="approval-for-schedule"]))
       input = resolved(card)
 
-      assert input["scope"] == "always"
+      assert input["scope"] == "thread"
       assert input["lifecycle"] == "schedule"
       refute Map.has_key?(input, "until")
     end
@@ -470,7 +490,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       athanor_id: thread.athanor_id,
       thread_id: thread.id,
       kind: :grants,
-      data: MapSet.new([{"aqua", "files", "write"}])
+      data: MapSet.new([{"aqua", "files", "write", nil}])
     })
 
     render(pane)
@@ -480,6 +500,69 @@ defmodule PrismWeb.ThreadPaneLiveTest do
              pane,
              ~s([data-test="standing-answers"] button[phx-click="revoke_grant"][phx-value-tool="files"][phx-value-action="write"])
            )
+  end
+
+  test "a program's standing answer is listed by the program's name, and withdrawing it withdraws that program's alone",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    rows =
+      for name <- ["gh", "jq"] do
+        {:ok, row} =
+          Arca.McpServerStorage.insert(actor, %{
+            cap: 0,
+            name: name,
+            transport: "program",
+            mark: "driven",
+            url: nil,
+            config_json: Jason.encode!(%{"command" => name, "env" => %{}})
+          })
+
+        {:ok, _} =
+          Sanctum.ToolGrants.put(here, %{
+            scope: "thread",
+            effect: "allow",
+            thread_id: thread.id,
+            agent_name: "aqua",
+            tool: "program",
+            action: "start",
+            constraint: %{kind: "program_row", patterns: [row.id]}
+          })
+
+        row
+      end
+
+    [gh, jq] = rows
+    {:ok, grants} = Aqua.ToolGrants.allowed_by_agent(here, thread.id)
+    pane = open_pane(conn, athanor, thread)
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :grants,
+      data: grants
+    })
+
+    render(pane)
+    assert has_element?(pane, ~s([data-test="standing-answer"]), "every start of gh")
+    assert has_element?(pane, ~s([data-test="standing-answer"]), "every start of jq")
+
+    pane
+    |> element(~s([data-test="standing-answer"] button[phx-value-program="#{gh.id}"]))
+    |> render_click()
+
+    withdrawn = fn ->
+      match?(
+        {:ok, left} when is_struct(left, MapSet),
+        Aqua.ToolGrants.allowed_by_agent(here, thread.id)
+      ) and
+        MapSet.size(elem(Aqua.ToolGrants.allowed_by_agent(here, thread.id), 1)) == 1
+    end
+
+    assert Enum.any?(1..300, fn _ -> withdrawn.() or (Process.sleep(10) && false) end)
+
+    assert {:ok, left} = Aqua.ToolGrants.allowed_by_agent(here, thread.id)
+    assert left == MapSet.new([{"aqua", "program", "start", %{id: jq.id, name: "jq"}}])
   end
 
   test "what the pane pushes names the pane it is for, and a page it points at is a link, never pushed",
@@ -678,7 +761,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     event.(:turn_starting, user.user_id)
     event.(:queued, 2)
     event.(:tool_activity, [%{tool: "files.read", status: :running, preview: "notes.md"}])
-    event.(:grants, MapSet.new([{"aqua", "files", "read"}, {"aqua", "notes", "write"}]))
+    event.(:grants, MapSet.new([{"aqua", "files", "read", nil}, {"aqua", "notes", "write", nil}]))
     event.(:restart_prompt, %{text: "two files", user_id: user.user_id})
 
     # A file on its way up.
@@ -1220,6 +1303,72 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
+  describe "the pane's empty state over a model that runs a program" do
+    # The athanor is ready, and its soul's model runs a program on its own
+    # sign-in, never granted.
+    setup %{athanor: athanor, here: here} do
+      {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(here, Cyfr.Test.Guests.wasm(:catalyst), %{
+          name: "claude",
+          version: "0.1.0",
+          type: "catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "claude" => %{
+                  "type" => "login",
+                  "program" => "claude",
+                  "reason" => "to run Claude Code on your own plan",
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      :ok
+    end
+
+    test "with its program's row set up, it says it needs only the grant, given on the AQUA page",
+         %{conn: conn, athanor: athanor, here: here} do
+      pane = empty_pane(conn, athanor)
+      assert render(pane) =~ "has no model yet"
+      refute has_element?(pane, ~s([data-test="model-grant"]))
+      Cyfr.Test.Sandbox.end_views()
+
+      {:ok, _row} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(here), %{
+          cap: 0,
+          name: "claude",
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          home: "kept",
+          config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
+        })
+
+      pane = empty_pane(conn, athanor)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="model-grant"]),
+               "your AQUA's model needs only your grant."
+             )
+
+      assert has_element?(
+               pane,
+               ~s(a[href="#{athanor_path("/aqua?setup=1", athanor)}"]),
+               "Grant it on your AQUA page."
+             )
+
+      refute render(pane) =~ "has no model yet"
+      refute render(pane) =~ @connect
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
   # The athanor as a fill leaves it, its soul's model connected
   # (`ready_athanor!/2`): the shipped AQUA tree and the components the
   # soul depends on (the suite's own seed tree ships the AQUA template
@@ -1296,11 +1445,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute has_element?(panel, "#aqua-card-aqua", "Model connected")
     refute has_element?(panel, "#aqua-card-aqua", "the model has no key yet")
 
-    refute has_element?(
-             panel,
-             "#aqua-card-aqua button[phx-click=open_consent]",
-             "Connect a model"
-           )
+    refute has_element?(panel, ~s(#aqua-card-aqua a[data-test="connect"]))
 
     refute has_element?(panel, "#aqua-card-aqua button[phx-click=open_consent]", "Change the key")
 

@@ -7,8 +7,7 @@ defmodule CyfrWeb.SignInCeilingsTest do
   (`CyfrWeb.Plugs.AuthRateLimit` as the routers mount it), run up to at
   its route and refused one past it: a company sign-in's start (30), the
   sign-in callbacks with the vault's OAuth grant callback (60, one
-  bucket), a sign-in's ticket (30), a protected device's unlock (30) and
-  a protected command line's session (30).
+  bucket), a sign-in's ticket (30) and a protected device's unlock (30).
 
   Each test comes from an address of its own, so no other test's
   requests count against it.
@@ -59,15 +58,5 @@ defmodule CyfrWeb.SignInCeilingsTest do
   test "a protected device's unlock: 30 a minute", %{conn: conn} do
     conn = from(conn, 4)
     run_up(30, fn -> get(conn, "/auth/device/complete") end)
-  end
-
-  test "a protected command line's session: 30 a minute", %{conn: conn} do
-    conn = from(conn, 5)
-
-    run_up(30, fn ->
-      conn
-      |> put_req_header("content-type", "application/json")
-      |> post("/device/session", ~s({"ticket":"not-issued"}))
-    end)
   end
 end

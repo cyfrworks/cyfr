@@ -5,7 +5,7 @@ defmodule Cyfr.Providers.Settings do
   @moduledoc """
   The `settings` tool: the platform settings, for the server's operators
   only (`scope: :platform` on every action). The console's card, the CLI
-  and a headless node's remote shell are adapters over the same three
+  and the release's remote shell are adapters over the same three
   actions of `Cyfr.Platform.Settings`.
 
   `list` shows every setting with its value, default, source (`deployment

@@ -9,7 +9,7 @@
 #   person SUB
 #       The person of the account SUB names, made as the product makes a
 #       device-first person, and signed in again by the same door. The
-#       account is built here as `cyfr login --setup` builds one: a genesis
+#       account is built here as the box's Set up CYFR builds one: a genesis
 #       signed by a recovery key SUB derives, at this deployment's
 #       directory (`Sanctum.directory_url/0`), and one device key added;
 #       published there as it publishes one (`Sanctum.Directory.Client`:

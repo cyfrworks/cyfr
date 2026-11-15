@@ -476,7 +476,7 @@ defmodule Prism.CanvasValidationTest do
       view = shell!(conn)
       trial = trial(view)
 
-      verb!(view, trial.id, :open, %{"ref" => "tincture:local.markets"})
+      verb!(view, trial.id, :open, %{"ref" => "tincture:local.markets", "call" => 1})
 
       verb!(view, trial.id, :press, %{
         "binding" => "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",

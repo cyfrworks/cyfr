@@ -23,12 +23,14 @@ A Controller is the control plane's side of the backends wire
 tests/fixtures/locus_backends.json: control messages signed under the
 control key with a rising sequence, program environments sealed to the
 owner and the service lifetime `hello` learned, and session messages
-(open, send, recv, close) signed as invokes under each owner's key. Every
-request can be given its own timestamp, nonce, sequence, boot or key, and
-every signed session message is kept so it can be sent again unchanged.
-The wire carries lines, never MCP: an `McpClient` speaks MCP's JSON-RPC
-over a session's lines to the probe program, as CYFR's MCP client does,
-opening the session again and initializing afresh when it has ended. The signing and sealing here must reproduce the vector
+(open, send, recv and close of a `run` session; input, output and resize of
+a `terminal` one, its bytes in padded base64) signed as invokes under each
+owner's key. Every request can be given its own timestamp, nonce, sequence,
+boot or key, and every signed session message is kept so it can be sent
+again unchanged. The wire carries lines and bytes, never MCP: an
+`McpClient` speaks MCP's JSON-RPC over a run session's lines to the probe
+program, as CYFR's MCP client does, opening the session again and
+initializing afresh when it has ended. The signing and sealing here must reproduce the vector
 file: `check_vectors` runs when this module is loaded, before any container
 starts, and `python3 tests/locus-backends-image/harness.py --self-check`
 runs it alone, with no Docker.
@@ -165,6 +167,16 @@ def b64url(data):
 
 def unb64url(text):
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def b64(data):
+    """A terminal's bytes as the wire carries them: standard base64 with padding."""
+    return base64.b64encode(data).decode()
+
+
+def unb64(text):
+    """A terminal's bytes from the wire's base64, refusing any other alphabet or a missing pad."""
+    return base64.b64decode(text, validate=True)
 
 
 # ————— AES-256-GCM, as the seal is (Prima.MacEnvelope.seal/6) —————
@@ -345,7 +357,7 @@ def open_sealed(sealing_key, owner, boot, sealed):
 
 
 def program_wire(program):
-    """A program as a sync defines it, from {name, command, env} and the optional login command, home, bounds and hosts.
+    """A program as a sync defines it, from {name, command, env} and the optional home, bounds and hosts.
 
     An optional member with no value is absent, never null: the wire refuses a present null.
     """
@@ -355,7 +367,7 @@ def program_wire(program):
         "env_names": sorted((program.get("env") or {}).keys()),
         "home": program.get("home", "scratch"),
     }
-    for name in ["login_command", "memory_bytes", "home_max_bytes", "hosts"]:
+    for name in ["memory_bytes", "home_max_bytes", "hosts"]:
         if program.get(name) is not None:
             wire[name] = program[name]
     return wire
@@ -379,7 +391,7 @@ def check_vectors():
     compare("owner_key", owner_key(key, owner["athanor"], owner["server"], owner["generation"],
                                    owner["epoch"]).hex(), WIRE["owner_key_hex"])
 
-    compare("version", VERSION, 2)
+    compare("version", VERSION, 3)
     compare("routes", sorted(ROUTES), ["control", "health", "session"])
     for kind in ["hello", "reconcile", "sync", "renew", "release", "status", "home"]:
         vector = WIRE[kind]
@@ -391,18 +403,41 @@ def check_vectors():
         compare(f"{kind}.canonical", canonical("control", values, body), vector["canonical"])
         compare(f"{kind}.header", control_header(control_key(key), fields, body), vector["header"])
 
-    for kind in ["open", "send", "recv", "close"]:
+    for kind in ["open", "send", "recv", "close", "open_terminal", "input", "output", "resize"]:
         vector = WIRE[kind]
         body = vector["body"].encode()
         fields = vector["fields"]
         signing = owner_key(key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
         message = json.loads(vector["body"])
         compare(f"{kind}.body", wire_json(message).decode(), vector["body"])
-        compare(f"{kind}.answer", wire_json(json.loads(vector["answer"])).decode(), vector["answer"])
+        for answer in ["answer", "answer_ended"]:
+            if answer in vector:
+                compare(f"{kind}.{answer}", wire_json(json.loads(vector[answer])).decode(), vector[answer])
         compare(f"{kind}.owner", [message["owner"], message["e"]],
                 [{"athanor": fields["athanor"], "server": fields["server"]}, fields["epoch"]])
         compare(f"{kind}.canonical", canonical("invoke", [fields[n] for n in SESSION_FIELDS], body), vector["canonical"])
         compare(f"{kind}.header", invoke_header(signing, fields, body), vector["header"])
+
+    terminal = json.loads(WIRE["open_terminal"]["body"])
+    compare("open_terminal.size", [terminal["mode"], 1 <= terminal["rows"] <= BOUNDS["max_pty_size"],
+                                   1 <= terminal["cols"] <= BOUNDS["max_pty_size"]], ["terminal", True, True])
+    compare("open.size", [name for name in ["rows", "cols"] if name in json.loads(WIRE["open"]["body"])], [])
+    resized = json.loads(WIRE["resize"]["body"])
+    compare("resize.size", [1 <= resized["rows"] <= BOUNDS["max_pty_size"],
+                            1 <= resized["cols"] <= BOUNDS["max_pty_size"]], [True, True])
+
+    def decoded(text):
+        try:
+            return unb64(text)
+        except ValueError:
+            return None
+
+    typed = decoded(json.loads(WIRE["input"]["body"])["bytes"])
+    compare("input.bytes", typed is not None and b64(typed), json.loads(WIRE["input"]["body"])["bytes"])
+    compare("input.length", typed is not None and 1 <= len(typed) <= BOUNDS["max_chunk_bytes"], True)
+    for chunk in json.loads(WIRE["output"]["answer"])["chunks"]:
+        written = decoded(chunk["bytes"])
+        compare(f"output.chunk.{chunk['seq']}", written is not None and b64(written), chunk["bytes"])
 
     sync_program = json.loads(WIRE["sync"]["body"])["programs"][0]
     compare("sync.program", program_wire({"name": sync_program["name"], "command": sync_program["command"],
@@ -591,11 +626,15 @@ class Controller:
         url = base + ROUTES["session"] if base else request.url
         return (*post(url, request.headers, request.body), request)
 
-    def open(self, owner, program, key="k", mode="run", argv=None, home_id=None, **options):
-        """Opens (or attaches to) the session of `key`: (status, answer)."""
+    def open(self, owner, program, key="k", mode="run", argv=None, home_id=None, rows=None, cols=None, **options):
+        """Opens (or attaches to) the session of `key` and `mode`: (status, answer).
+
+        A `terminal` open names its terminal's `rows` and `cols`; a run open names neither.
+        """
         message = {"type": "open", "program": program, "key": key, "mode": mode, "argv": list(argv or [])}
-        if home_id is not None:
-            message["home_id"] = home_id
+        for name, value in [("home_id", home_id), ("rows", rows), ("cols", cols)]:
+            if value is not None:
+                message[name] = value
         status, answer, _boot, _request = self.session(owner, message, **options)
         return status, answer
 
@@ -608,6 +647,24 @@ class Controller:
         status, answer, _boot, _request = self.session(
             owner, {"type": "recv", "session": session, "after": after, "max_wait_ms": max_wait_ms},
             timeout=max_wait_ms / 1000 + 30, **options)
+        return status, answer
+
+    def input(self, owner, session, data, **options):
+        """Writes the bytes `data` to a terminal session: (status, answer)."""
+        status, answer, _boot, _request = self.session(owner, {"type": "input", "session": session,
+                                                               "bytes": b64(data)}, **options)
+        return status, answer
+
+    def output(self, owner, session, after=0, max_wait_ms=5_000, **options):
+        """Reads a terminal session's chunks past `after`, their bytes still in base64: (status, answer)."""
+        status, answer, _boot, _request = self.session(
+            owner, {"type": "output", "session": session, "after": after, "max_wait_ms": max_wait_ms},
+            timeout=max_wait_ms / 1000 + 30, **options)
+        return status, answer
+
+    def resize(self, owner, session, rows, cols, **options):
+        status, answer, _boot, _request = self.session(owner, {"type": "resize", "session": session,
+                                                               "rows": rows, "cols": cols}, **options)
         return status, answer
 
     def close(self, owner, session, **options):
@@ -633,6 +690,27 @@ class Controller:
                 return lines, after, answer["running"]
             if time.monotonic() > deadline:
                 sys.exit(f"FAIL: timed out reading {session}: {lines[-20:]}")
+
+    def output_until(self, owner, session, found, after=0, timeout_s=20):
+        """Reads a terminal session's bytes from `after` until `found(bytes)` is truthy or the session ends.
+
+        Answers (every byte read, decoded, the last sequence number read,
+        whether the process still runs); the suite fails when neither happens
+        in time.
+        """
+        read = b""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            status, answer = self.output(owner, session, after, 2_000)
+            if status != 200:
+                sys.exit(f"FAIL: an output of {session} is refused: {status} {answer}")
+            for chunk in answer["chunks"]:
+                read += unb64(chunk["bytes"])
+                after = chunk["seq"]
+            if found(read) or not answer["running"]:
+                return read, after, answer["running"]
+            if time.monotonic() > deadline:
+                sys.exit(f"FAIL: timed out reading {session}: {read[-2000:]!r}")
 
     # ————— MCP over a session —————
 
@@ -1016,7 +1094,7 @@ class Stack(imagesuite.Stack):
 
 
 def health(base, version=VERSION):
-    """The health probe at `version`: (status, answer). Unauthenticated, and answered at version 2 alone."""
+    """The health probe at `version`: (status, answer). Unauthenticated, and answered at the wire's version alone."""
     status, answer, _boot = post(base + ROUTES["health"], {"content-type": "application/json"},
                                  wire_json({"version": version}), 5)
     return status, answer
@@ -1052,7 +1130,7 @@ def raw_head(base, route, header, declared):
 
 
 def probe(name="probe", env=None, **program):
-    """The probe program, an MCP server; `program` adds a login command, a home, bounds or hosts."""
+    """The probe program, an MCP server; `program` adds a home, bounds or hosts."""
     return {"name": name, "command": PROBE, "env": env or {}, **program}
 
 

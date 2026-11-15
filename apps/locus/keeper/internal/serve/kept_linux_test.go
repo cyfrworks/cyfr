@@ -58,7 +58,7 @@ func (k *keeper) homeRequest(t *testing.T, typ, id, path string, uid int) map[st
 }
 
 // keptRequest is the parsed request for a kept spawn of `/bin/sh -c script`.
-func keptRequest(t *testing.T, attach, id, script, path string, uid int, maxBytes *uint64, pty bool) *protocol.Request {
+func keptRequest(t *testing.T, attach, id, script, path string, uid int, maxBytes *uint64) *protocol.Request {
 	t.Helper()
 	message := map[string]any{
 		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "pool": "runner",
@@ -69,9 +69,6 @@ func keptRequest(t *testing.T, attach, id, script, path string, uid int, maxByte
 	}
 	if maxBytes != nil {
 		message["home_max_bytes"] = *maxBytes
-	}
-	if pty {
-		message["pty"] = true
 	}
 	line, err := json.Marshal(message)
 	if err != nil {
@@ -87,7 +84,7 @@ func keptRequest(t *testing.T, attach, id, script, path string, uid int, maxByte
 // spawnKept starts a kept spawn and answers its spawn id and its relay.
 func (k *keeper) spawnKept(t *testing.T, id, script, path string, uid int) (string, *relayConn) {
 	t.Helper()
-	k.s.handleSpawn(keptRequest(t, k.attach, id, script, path, uid, nil, false))
+	k.s.handleSpawn(keptRequest(t, k.attach, id, script, path, uid, nil))
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned || spawned["id"] != id || int(spawned["uid"].(float64)) != uid {
 		t.Fatalf("kept spawn %s answered %v", id, spawned)
@@ -186,7 +183,7 @@ func TestAKeptHomeLivesUnderItsOwnUID(t *testing.T) {
 		t.Fatalf("home_measure: %v", measured)
 	}
 	over := uint64(bytes)
-	k.s.handleSpawn(keptRequest(t, k.attach, "k3", "true", path, uid, &over, false))
+	k.s.handleSpawn(keptRequest(t, k.attach, "k3", "true", path, uid, &over))
 	if refused := k.reply(t); refused["type"] != protocol.TypeError || refused["code"] != protocol.CodeHomeOverCap {
 		t.Fatalf("a spawn at its home's bound: %v", refused)
 	}
@@ -230,9 +227,9 @@ func TestAKeptSpawnOutsideItsRangeOrHomeIsRefused(t *testing.T) {
 	k := keptKeeper(t)
 	root := k.s.cfg.Kept.Root
 	for name, req := range map[string]*protocol.Request{
-		"a uid outside the range": keptRequest(t, k.attach, "1", "true", filepath.Join(root, "vlt_x"), testKeptLast+1, nil, false),
-		"a home below another":    keptRequest(t, k.attach, "2", "true", filepath.Join(root, "a", "b"), testKeptFirst, nil, false),
-		"a home not made":         keptRequest(t, k.attach, "3", "true", filepath.Join(root, "vlt_absent"), testKeptFirst, nil, false),
+		"a uid outside the range": keptRequest(t, k.attach, "1", "true", filepath.Join(root, "vlt_x"), testKeptLast+1, nil),
+		"a home below another":    keptRequest(t, k.attach, "2", "true", filepath.Join(root, "a", "b"), testKeptFirst, nil),
+		"a home not made":         keptRequest(t, k.attach, "3", "true", filepath.Join(root, "vlt_absent"), testKeptFirst, nil),
 	} {
 		k.s.handleSpawn(req)
 		if refused := k.reply(t); refused["type"] != protocol.TypeError || refused["code"] != protocol.CodeBadRequest {
@@ -241,14 +238,18 @@ func TestAKeptSpawnOutsideItsRangeOrHomeIsRefused(t *testing.T) {
 	}
 }
 
-// A pty spawn's stdin, stdout and stderr are a terminal of 40 rows by 120
-// columns, its controlling terminal; its stdout frames carry the terminal,
-// and its stderr ends at once.
+// ptySize is a spawn's pty of rows by cols.
+func ptySize(rows, cols uint64) *protocol.PtySize {
+	return &protocol.PtySize{Rows: &rows, Cols: &cols}
+}
+
+// A pty spawn's stdin, stdout and stderr are a terminal of the rows and
+// columns it asked for, its controlling terminal; its stdout frames carry
+// the terminal, and its stderr ends at once.
 func TestAPtySpawnRunsOnATerminal(t *testing.T) {
 	k := boundedKeeper(t)
 	req := spawnRequest(t, k.attach, "t1", `tty; [ -t 0 ] && [ -t 2 ] && echo isatty; stty size; IFS= read -r line; echo "got:$line"`, map[string]string{}, false, 64<<20)
-	pty := true
-	req.Pty = &pty
+	req.Pty = ptySize(40, 120)
 	k.s.handleSpawn(req)
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned {
@@ -268,6 +269,33 @@ func TestAPtySpawnRunsOnATerminal(t *testing.T) {
 		t.Fatalf("a pty spawn's stderr: %q ended %t", rc.got[frame.StreamStderr], rc.ended[frame.StreamStderr])
 	}
 	k.releasedPair(t, spawned["spawn_id"].(string))
+}
+
+// A resize reaches a pty spawn's terminal: the command reads the new size,
+// and the keeper answers nothing.
+func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
+	k := boundedKeeper(t)
+	req := spawnRequest(t, k.attach, "t2", `stty size; read x; stty size`, map[string]string{}, false, 64<<20)
+	req.Pty = ptySize(24, 80)
+	k.s.handleSpawn(req)
+	spawned := k.reply(t)
+	if spawned["type"] != protocol.TypeSpawned {
+		t.Fatalf("pty spawn: %v", spawned)
+	}
+	spawnID := spawned["spawn_id"].(string)
+	rc := k.accept(t)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "24 80") })
+	resize, rerr := protocol.ParseRequest([]byte(`{"v":1,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+	if rerr != nil {
+		t.Fatal(rerr.Detail)
+	}
+	k.s.handle(resize)
+	rc.send(t, frame.StreamStdin, []byte("\n"))
+	rc.readUntil(t, func() bool { return false })
+	if out := string(rc.got[frame.StreamStdout]); !strings.Contains(out, "24 80") || !strings.Contains(out, "50 132") {
+		t.Fatalf("the terminal before and after the resize:\n%s", out)
+	}
+	k.releasedPair(t, spawnID)
 }
 
 // A kept spawn takes no file-size limit of its own (protocol.KeptUnbounded):
@@ -397,7 +425,7 @@ func TestAKeptUIDWhoseRetirementCannotFinishIsQuarantined(t *testing.T) {
 	if busy := k.homeRequest(t, protocol.TypeHomeMake, "m2", filepath.Join(k.s.cfg.Kept.Root, "vlt_home-other"), uid); busy["code"] != protocol.CodeUIDBusy {
 		t.Fatalf("home_make on a quarantined uid: %v", busy)
 	}
-	k.s.handleSpawn(keptRequest(t, k.attach, "again", "true", path, uid, nil, false))
+	k.s.handleSpawn(keptRequest(t, k.attach, "again", "true", path, uid, nil))
 	if busy := k.reply(t); busy["code"] != protocol.CodeUIDBusy {
 		t.Fatalf("a spawn on a quarantined uid: %v", busy)
 	}

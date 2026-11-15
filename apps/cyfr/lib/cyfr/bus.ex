@@ -64,10 +64,12 @@ defmodule Cyfr.Bus do
     Notify,
     Ping,
     PolicyDecision,
+    Program,
     Progress,
     Request,
     RoomInView,
     ScheduleCompleted,
+    ScheduleTurnDue,
     ScheduleRun,
     Schedules,
     Session,
@@ -405,6 +407,19 @@ defmodule Cyfr.Bus do
         "one person's list of threads moved, on that person's own topic: a shared thread is " <>
           "told to each of its people in their own athanor, never a message"
     },
+    %{
+      key: :programs,
+      scope: :tenant,
+      struct: Program,
+      match: {:prefix, "bus:programs:"},
+      template: "tenant:<athanor_id>:bus:programs:<user_id>",
+      producers: ["Opus.Programs.Terminal", "Opus.Programs.Box"],
+      consumers: ["PrismWeb.ProgramsLive", "PrismWeb.ShellLive"],
+      reason:
+        "one person's running program sessions moved, on that person's own topic, so their " <>
+          "pages list them and no other member learns what they run; it carries what " <>
+          "`Opus.Programs.running/1` answers and nothing a program printed or was typed"
+    },
     # --- global: unscoped on purpose ---
     %{
       key: :vault_changed_global,
@@ -508,6 +523,18 @@ defmodule Cyfr.Bus do
       reason:
         "a committed completion heard on every member; only the issuing member's " <>
           "subscriber acts, so a peer's delivery writes nothing twice"
+    },
+    %{
+      key: :schedule_turns,
+      scope: :global,
+      struct: ScheduleTurnDue,
+      match: {:exact, "aqua:schedule_turns"},
+      template: "aqua:schedule_turns",
+      producers: ["Opus.Schedules.Scheduler"],
+      consumers: ["Aqua.ScheduleTurns"],
+      reason:
+        "a committed claim of an Aqua line heard on every member; it only wakes the " <>
+          "consumer, which starts only the claims its own boot holds"
     },
     %{
       key: :crew_deliveries,
@@ -821,6 +848,14 @@ defmodule Cyfr.Bus do
   def threads(actor, user_id) when is_binary(user_id) and user_id != "",
     do: prefix(actor) <> "bus:threads:" <> user_id
 
+  @doc """
+  One person's running program sessions (`Cyfr.Bus.Program`): `user_id`
+  is that person, whose sessions they are, and only their surfaces hear it.
+  """
+  @spec programs(Actor.t(), String.t()) :: String.t()
+  def programs(actor, user_id) when is_binary(user_id) and user_id != "",
+    do: prefix(actor) <> "bus:programs:" <> user_id
+
   # ---------------------------------------------------------------------------
   # Global topics
   # ---------------------------------------------------------------------------
@@ -862,6 +897,10 @@ defmodule Cyfr.Bus do
   @doc "A committed schedule completion (`Cyfr.Bus.ScheduleCompleted`)."
   @spec schedule_completions() :: String.t()
   def schedule_completions, do: "cyfr:schedule_completions"
+
+  @doc "A committed claim of a schedule's Aqua line (`Cyfr.Bus.ScheduleTurnDue`)."
+  @spec schedule_turns() :: String.t()
+  def schedule_turns, do: "aqua:schedule_turns"
 
   @doc "A committed crew record (`Cyfr.Bus.CrewPending`)."
   @spec crew_deliveries() :: String.t()
