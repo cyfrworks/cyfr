@@ -2692,7 +2692,7 @@ defmodule PrismWeb.SystemLayer do
 
   # The fallback's one line, in the shelf's strip at the shell's chips'
   # level (z-index 67): it starts after the Devices chip on the shelf's left
-  # end and stops short of the AQUA button's room on its right, and it never
+  # end and stops short of the Aqua button's room on its right, and it never
   # reaches above the shelf into the apps' area, so a full app keeps all of
   # it. The shelf's stylesheet (`canvas_chrome.css`) centres it in the
   # strip as it does the chips, sets its width, and widens the chips' room

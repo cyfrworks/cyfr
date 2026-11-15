@@ -36,7 +36,7 @@ func (s *updateScenario) backup() (string, error) {
 const sqliteDatabase = "SQLite format 3\x00 the scenario's database"
 
 // backupScaffold gives the scenario a SQLite database restore recognises,
-// managed scaffold files beside its own, and a person's own AQUA crew
+// managed scaffold files beside its own, and a person's own Aqua crew
 // member, which is no managed file.
 func (s *updateScenario) backupScaffold() {
 	s.edit("data/cyfr.db", sqliteDatabase)
@@ -306,7 +306,7 @@ func TestBackupRefusesALinkWhereAManagedFileIs(t *testing.T) {
 	}{
 		{"the seccomp profile", "keeper.seccomp.json, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed",
 			func(s *updateScenario) { s.relink("keeper.seccomp.json") }},
-		{"a managed AQUA file", "aqua/aqua.md, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed",
+		{"a managed Aqua file", "aqua/aqua.md, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed",
 			func(s *updateScenario) { s.relink("aqua/aqua.md") }},
 		{"wit/", "wit, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
 			func(s *updateScenario) { s.relink("wit") }},

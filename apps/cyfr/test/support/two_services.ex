@@ -608,7 +608,7 @@ defmodule Cyfr.Test.TwoServices do
 
     File.write!(Path.join([seed, "aqua", "aqua.md"]), """
     ---
-    title: AQUA
+    title: Aqua
     catalyst_ref: #{@stub}
     model: step-stub
     ---

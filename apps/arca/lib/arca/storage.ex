@@ -45,7 +45,7 @@ defmodule Arca.Storage do
 
   - **Seed media**: `["seed", root | rest]` — the install media every
     athanor is provisioned from (`seed/components` the bundle,
-    `seed/aqua` the AQUA template; `seed_roots/0` is the roster). Read in
+    `seed/aqua` the Aqua template; `seed_roots/0` is the roster). Read in
     place from the one seed tree (`:seed_path`), reachable only by
     system contexts, never stored through an adapter.
   - **Global paths**: `cache`, `system`, `shared` → stored at root level
@@ -89,7 +89,7 @@ defmodule Arca.Storage do
       ├── shared/{thread_id}/            # Global: a shared thread's attachments
       └── athanors/{athanor_id}/         # Tenant-scoped: everything the athanor owns
           ├── components/{type}s/{publisher}/{name}/{version}/
-          ├── aqua/                      # the athanor's AQUA agent definitions
+          ├── aqua/                      # the athanor's Aqua agent definitions
           ├── threads/                   # chat attachment blobs
           ├── notes/                     # host-only notes kept out of a thread
           ├── payloads/                  # retained execution bodies — tenant-reserved, system-written
@@ -104,7 +104,7 @@ defmodule Arca.Storage do
   each root is a same-named subdirectory of the one seed tree
   (`:seed_path`, the repo's `seed/` on a checkout, `/app/seed` in Docker),
   copied into the athanor at provisioning and on a pull: the component
-  bundle at `seed/components` (baked into the image) and the AQUA template
+  bundle at `seed/components` (baked into the image) and the Aqua template
   at `seed/aqua` (the operator-editable mount).
 
   ## The volume vs. the seed tree
@@ -117,7 +117,7 @@ defmodule Arca.Storage do
     image-baked, read-only at this facade and at every adapter. A new
     image ships a new default; what an athanor holds is its own copy,
     offered the newer version and never changed under it. The operator's
-    AQUA mount (`./aqua` → `/app/seed/aqua` in compose) is operator input,
+    Aqua mount (`./aqua` → `/app/seed/aqua` in compose) is operator input,
     not athanor state.
 
   At-rest encryption of the volume or bucket is the operator's concern
@@ -298,7 +298,7 @@ defmodule Arca.Storage do
     `data/system/`
   - `shared` — a shared thread's attachments under `data/shared/{thread_id}/`
 
-  The AQUA soul, crew and scrolls (`aqua/aqua.md`, `aqua/crew/*.md`,
+  The Aqua soul, crew and scrolls (`aqua/aqua.md`, `aqua/crew/*.md`,
   `aqua/skills/*/SKILL.md`) are the athanor's own — an ordinary tenant
   path, served through the seed overlay like `components/`: the shipped
   template shows through until a file is edited.

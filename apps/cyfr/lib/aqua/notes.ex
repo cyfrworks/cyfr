@@ -53,7 +53,7 @@ defmodule Aqua.Notes do
   turn; `Aqua.ScheduleNotes`, which keeps a schedule's outcome where no
   person is at the keyboard, through the publication that writes its
   receipt beside the note (`keep_fenced/6`); and `PrismWeb.AquaLive`,
-  which edits the pinned page on the AQUA page.
+  which edits the pinned page on the Aqua page.
   """
 
   require Logger

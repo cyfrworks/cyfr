@@ -669,7 +669,7 @@ defmodule PrismWeb.SystemLayerTest do
 
   defp view_context(view), do: :sys.get_state(view.pid).socket.assigns.context
 
-  # A thread pane in its host, AQUA's panel on the desktop, opened and
+  # A thread pane in its host, Aqua's panel on the desktop, opened and
   # turned to `thread_id`: answers the panel and the pane once the pane is
   # on the thread.
   defp panel_pane(conn, thread_id) do
@@ -5569,7 +5569,7 @@ defmodule PrismWeb.SystemLayerTest do
       %{conn: conn, user: user, athanor: athanor, local: local}
     end
 
-    test "a thread pane's grant is asked in AQUA's panel's layer, and its outcome goes back to " <>
+    test "a thread pane's grant is asked in Aqua's panel's layer, and its outcome goes back to " <>
            "the pane",
          %{conn: conn, user: user, athanor: athanor, local: local} do
       app =

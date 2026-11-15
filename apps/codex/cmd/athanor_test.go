@@ -20,7 +20,7 @@ func TestAthanorGet_ReadsProvisionedAndShowsTheSettings(t *testing.T) {
 		}
 	}
 	out, err := runCLI(t, newCLIServer(t, "", pending), "athanor", "get")
-	if want := "Me (me) — active\n  not provisioned yet: retry it from the AQUA panel in CYFR\n" +
+	if want := "Me (me) — active\n  not provisioned yet: retry it from the Aqua panel in CYFR\n" +
 		"  the last attempt failed at seed: bundle missing\n"; err != nil || out != want {
 		t.Errorf("an unprovisioned athanor printed %q (error %v), want %q", out, err, want)
 	}

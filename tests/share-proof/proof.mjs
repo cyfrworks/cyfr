@@ -138,7 +138,7 @@ const OWNER = `@${ADMIN_NAME}`;
 const CAPS_MEANING = "An empty cap is no limit. 0 admits no use. A number is the most requests that day; " +
   "a day ends at midnight UTC.";
 const NEWCOMERS = "You administer this CYFR, so a key you share with everyone is also what each new person's " +
-  "AQUA uses when it fits";
+  "Aqua uses when it fits";
 const UNCAPPED = "Shared with everyone and no cap, anyone on this CYFR may use it without limit. " + NEWCOMERS +
   ", with no limit unless you set one.";
 const CAPPED = NEWCOMERS + ".";
@@ -844,7 +844,7 @@ async function main() {
         "each shared with everyone through the sheet, which warns about the provider's terms, requests as you, " +
         "your provider limits and secrets before a choice, opens with its caps empty and says what they mean, " +
         "says nothing of a share to everyone until everyone is chosen, then that it has no limit and is what each " +
-        "new person's AQUA uses, and once Company AI's cap is typed only the AQUA sentence, without the no-limit " +
+        "new person's Aqua uses, and once Company AI's cap is typed only the Aqua sentence, without the no-limit " +
         "clause, proven with the passkey; Shared by you reads both; the whole state is the two entries and two shares " +
         "their forms requested",
       { passkey, entries: shownIds, sheets: [sharedAi, sharedMail].map(({ shown, chosen, capped }) => ({ shown, chosen, capped })), shared_by_you: madeShares,

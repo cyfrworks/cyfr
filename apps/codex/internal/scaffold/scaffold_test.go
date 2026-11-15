@@ -28,7 +28,7 @@ import (
 )
 
 // TestIsManaged pins down which scaffold entries `cyfr update` is allowed to
-// overwrite. Managed = the guides, the WIT definitions, and the AQUA files
+// overwrite. Managed = the guides, the WIT definitions, and the Aqua files
 // the scaffold ships — the soul, the shipped roles and every file inside a
 // shipped scroll. Everything a member owns — config, the compose/proxy
 // files, their own roles and scrolls, .env — must NOT be managed, or

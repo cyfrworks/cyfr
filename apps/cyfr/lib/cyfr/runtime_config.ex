@@ -362,7 +362,7 @@ defmodule Cyfr.RuntimeConfig do
 
     * `CYFR_DATA_PATH` — the one runtime storage root (default `"data"`)
     * `CYFR_SEED_PATH` — the seed tree every athanor is provisioned from:
-      the component bundle under `components/` and the AQUA template under
+      the component bundle under `components/` and the Aqua template under
       `aqua/`
       (default `"seed"`)
     * `CYFR_DATABASE_PATH` — the SQLite file (default `cyfr.db` under the

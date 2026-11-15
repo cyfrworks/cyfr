@@ -3,14 +3,14 @@
 
 defmodule Aqua.Hands do
   @moduledoc """
-  AQUA's hands — `files`, `storage`, `http`, `request_setup`: the
+  Aqua's hands — `files`, `storage`, `http`, `request_setup`: the
   model-visible operations that run a local catalyst under the pinned
   authority, and the UI event that is none. Their table is
   `Sanctum.VirtualTools`; this module reads it.
 
   Every question about a hand is answered from those rows:
 
-    * **kind** — what `Aqua.Kinds.kind_for/2` and the AQUA page classify
+    * **kind** — what `Aqua.Kinds.kind_for/2` and the Aqua page classify
       a `tool.action` as, and which reads are reviewed as safe to
       re-dispatch after an uncertain recovery (`recovery: :replay_safe`);
     * **child call** — the catalyst and the input a `tool.action` becomes
@@ -59,13 +59,13 @@ defmodule Aqua.Hands do
 
   @doc """
   Return `[{tool, [{action, kind}]}]` shaped like the MCP path's enumeration,
-  so the AQUA harness can merge MCP + virtual + external surfaces into one
+  so the Aqua harness can merge MCP + virtual + external surfaces into one
   uniform list (`Sanctum.VirtualTools.action_kinds/0`).
   """
   @spec list_for_panel() :: [{String.t(), [{String.t(), atom()}]}]
   defdelegate list_for_panel, to: VirtualTools, as: :action_kinds
 
-  @doc "Whether `tool` is a virtual tool managed by AQUA."
+  @doc "Whether `tool` is a virtual tool managed by Aqua."
   @spec hand?(term()) :: boolean()
   defdelegate hand?(tool), to: VirtualTools, as: :tool?
 

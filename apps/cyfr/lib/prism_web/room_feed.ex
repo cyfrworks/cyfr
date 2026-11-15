@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.RoomFeed do
   @moduledoc """
-  The shared thread a page has open, told to the person's own AQUA
+  The shared thread a page has open, told to the person's own Aqua
   beside it.
 
   The chat overlay (`PrismWeb.ChatOverlayLive`) shows the shared thread;

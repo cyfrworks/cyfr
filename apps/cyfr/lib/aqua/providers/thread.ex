@@ -5,15 +5,15 @@ defmodule Aqua.Providers.Thread do
   @moduledoc """
   Chat on the wire: the `thread` tool, and the `crew` tool beside it.
 
-  Exposes AQUA thread addressing, queuing, history and approvals to
+  Exposes Aqua thread addressing, queuing, history and approvals to
   MCP clients through the thread runner.
 
   `crew` is the second tool this provider serves: `ask` and `list`, the
   soul's hand-off to a crew member from inside its turn (`Aqua.Crew`).
   `threads` is the third: `list` and `read`, the person's shared threads
-  as their own AQUA reads them when a question needs it, under the
+  as their own Aqua reads them when a question needs it, under the
   person's own seat (`Sanctum.SharedThreads.listed/1`,
-  `Aqua.RoomExcerpt`), and only from an open turn of that person's AQUA
+  `Aqua.RoomExcerpt`), and only from an open turn of that person's Aqua
   (`Aqua.Tape.calling_turn/2`, the rule `crew` keeps too): a component's
   run that holds the grant reads nothing, refused `:not_in_a_turn`. Both
   are in a chain only, and neither writes: a line reaches a shared thread
@@ -1067,7 +1067,7 @@ defmodule Aqua.Providers.Thread do
   # Shared threads, read for the person
   # ---------------------------------------------------------------------------
 
-  # From a turn of the person's own AQUA, and under their own seat: the
+  # From a turn of the person's own Aqua, and under their own seat: the
   # threads they sit in, and only those. A chain with no open turn behind
   # it, such as a component's run started by a key, a webhook or a
   # schedule, reads none; the turn's person is the caller's.

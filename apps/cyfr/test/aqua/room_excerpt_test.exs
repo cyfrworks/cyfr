@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.RoomExcerptTest do
-  # The shared thread read for the person's own AQUA: under their own
+  # The shared thread read for the person's own Aqua: under their own
   # seat, people's words only, the newest of them, bounded, and never a
   # write.
   use ExUnit.Case, async: false

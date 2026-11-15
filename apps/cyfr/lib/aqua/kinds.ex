@@ -6,7 +6,7 @@ defmodule Aqua.Kinds do
   What an operation is to the assistant: its kind, whether it may ever
   run without a card, the verbs a tool has and the standing it takes —
   read from the catalog's annotations and the virtual-tool
-  catalog, one rule for the AQUA page and the runtime ceiling alike. The
+  catalog, one rule for the Aqua page and the runtime ceiling alike. The
   classification is the gate's (`Sanctum.Catalog.tool_kind/2`,
   `Sanctum.Catalog.tool_actions/1`), which the `aqua` tool's door in the
   component domain (`Compendium.AquaAgent.validate_tool_policy/2`) reads
@@ -30,7 +30,7 @@ defmodule Aqua.Kinds do
   scroll's write) or `standing: :thread` (a kept note), and an action
   whose kind is unknown is refused too — "not known" and "not yet
   loaded" read the same here, and only the second could otherwise run
-  something destructive with no card. The one rule the AQUA page and the
+  something destructive with no card. The one rule the Aqua page and the
   runtime ceiling (`Aqua.ToolGrants.effective/2`) read; the kinds it
   admits are `Sanctum.VirtualTools.auto_permitted_kind?/1`'s.
   """

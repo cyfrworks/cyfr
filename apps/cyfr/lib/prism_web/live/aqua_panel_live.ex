@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.AquaPanelLive do
   @moduledoc """
-  The person's own AQUA, over the desktop and every page drawn over it: a
+  The person's own Aqua, over the desktop and every page drawn over it: a
   button at the shelf's right end and, opened, a panel onto their own
   athanor — the threads of You, one of them open as
   `PrismWeb.ThreadPaneLive` focused on You.
@@ -447,10 +447,10 @@ defmodule PrismWeb.AquaPanelLive do
         aria-expanded={to_string(@open)}
         aria-controls={@open && "aqua-panel-sheet"}
         aria-keyshortcuts="Control+J"
-        title="Your own AQUA, on your own athanor wherever you are (Ctrl+J)"
+        title="Your own Aqua, on your own athanor wherever you are (Ctrl+J)"
         class="shelf-end-button"
       >
-        <span class="aqua-panel-orb" aria-hidden="true"></span> AQUA
+        <span class="aqua-panel-orb" aria-hidden="true"></span> Aqua
       </button>
 
       <%!-- Escape from inside the sheet (the hook's: the thread's own view
@@ -467,7 +467,7 @@ defmodule PrismWeb.AquaPanelLive do
         :if={@open}
         id="aqua-panel-sheet"
         role="dialog"
-        aria-label="Your AQUA"
+        aria-label="Your Aqua"
         tabindex="-1"
         phx-hook="AquaPanel"
         phx-mounted={JS.ignore_attributes(["style", "data-aqua-moving"])}
@@ -501,7 +501,7 @@ defmodule PrismWeb.AquaPanelLive do
           data-aqua-grip
         >
           <span class="aqua-panel-orb" aria-hidden="true"></span>
-          <span class="shrink-0 text-sm font-semibold">AQUA</span>
+          <span class="shrink-0 text-sm font-semibold">Aqua</span>
           <%!-- A browser's LiveView sends a change only from an input inside
                a form, so the change is the form's. --%>
           <form
@@ -614,7 +614,7 @@ defmodule PrismWeb.AquaPanelLive do
           class="flex shrink-0 items-center justify-between gap-2 border-b border-amber-900/60 bg-amber-950/40 px-3 py-1.5 text-xs text-amber-200"
         >
           <span class="min-w-0 truncate">
-            AQUA is still being set up
+            Aqua is still being set up
             <span :if={note = provisioning_note(@athanor)} class="text-amber-300/80">{note}</span>
           </span>
           <button
@@ -686,11 +686,11 @@ defmodule PrismWeb.AquaPanelLive do
 
   defp close_and_return, do: JS.push("close") |> JS.focus(to: "#aqua-panel-button")
 
-  # Who asked: the person by the console's name for them, the soul as AQUA.
+  # Who asked: the person by the console's name for them, the soul as Aqua.
   defp asker(%{sent_by: "person", author: author}, ctx), do: PrismWeb.People.label(author, ctx)
 
   defp asker(%{sent_by: agent}, _ctx),
-    do: if(Prima.AgentRef.soul?(agent), do: "AQUA", else: agent)
+    do: if(Prima.AgentRef.soul?(agent), do: "Aqua", else: agent)
 
   defp first_line(text), do: text |> String.trim() |> String.split("\n", parts: 2) |> hd()
 

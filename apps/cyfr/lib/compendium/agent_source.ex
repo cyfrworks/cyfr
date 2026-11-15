@@ -3,7 +3,7 @@
 
 defmodule Compendium.AgentSource do
   @moduledoc """
-  An AQUA agent — the soul or a crew member — as a consent source node.
+  An Aqua agent — the soul or a crew member — as a consent source node.
 
   `agent:local.<name>` is a source ref like any component's: it plans,
   consents, activates and loads through the same machinery, which reads

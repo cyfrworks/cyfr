@@ -27,24 +27,24 @@ func init() {
 
 var aquaCmd = &cobra.Command{
 	Use:     "aqua",
-	Short:   "The athanor's AQUA — its soul, crew and scrolls",
+	Short:   "The athanor's Aqua — its soul, crew and scrolls",
 	GroupID: "admin",
-	Long: `The athanor has one assistant, AQUA. This command manages what it is made of:
+	Long: `The athanor has one assistant, Aqua. This command manages what it is made of:
 
-  the soul      aqua.md — who AQUA is (name "aqua"); edited, never created or deleted
-  the crew      who AQUA hands jobs to, each on a brain of its own — aqua/crew/<name>.md
-  the scrolls   how a job is done, for AQUA and its crew — aqua/skills/<name>/SKILL.md
+  the soul      aqua.md — who Aqua is (name "aqua"); edited, never created or deleted
+  the crew      who Aqua hands jobs to, each on a brain of its own — aqua/crew/<name>.md
+  the scrolls   how a job is done, for Aqua and its crew — aqua/skills/<name>/SKILL.md
   the guides    the read-only documentation guides
 
 "list" shows all of it; "get" reads the soul, a crew member or a guide; "skills" reads
-the scrolls; "status" says which files are shipped, edited or yours. AQUA's page
+the scrolls; "status" says which files are shipped, edited or yours. Aqua's page
 in CYFR restores the shipped set.`,
 }
 
 var aquaListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the soul, crew, guides and scrolls",
-	Long:  "List everything the athanor's AQUA is made of: the soul, its crew and the guides, then the scrolls it has learned.",
+	Long:  "List everything the athanor's Aqua is made of: the soul, its crew and the guides, then the scrolls it has learned.",
 	Example: `  cyfr aqua list
   cyfr aqua list --json`,
 	Args: cobra.NoArgs,
@@ -110,7 +110,7 @@ var aquaStatusCmd = &cobra.Command{
   edited    a shipped file the athanor changed
   yours     a crew member or scroll the athanor made
 
-AQUA's page in CYFR restores the shipped set.`,
+Aqua's page in CYFR restores the shipped set.`,
 	Example: `  cyfr aqua status
   cyfr aqua status --json`,
 	Args: cobra.NoArgs,
@@ -130,8 +130,8 @@ AQUA's page in CYFR restores the shipped set.`,
 
 var aquaSkillsCmd = &cobra.Command{
 	Use:   "skills",
-	Short: "The scrolls AQUA has learned",
-	Long: "Read the scrolls — the procedures the athanor's AQUA has learned, one aqua/skills/<name>/SKILL.md each. " +
+	Short: "The scrolls Aqua has learned",
+	Long: "Read the scrolls — the procedures the athanor's Aqua has learned, one aqua/skills/<name>/SKILL.md each. " +
 		"Run bare (or with list) for the index, get for one scroll's body.",
 	Example: `  cyfr aqua skills
   cyfr aqua skills get release-notes`,
@@ -313,7 +313,7 @@ func renderAquaStatus(result map[string]any) {
 func renderScrollList(result map[string]any) {
 	scrolls := mapsOf(result["skills"])
 	if len(scrolls) == 0 {
-		fmt.Println("No scrolls yet — AQUA learns one at aqua/skills/<name>/SKILL.md.")
+		fmt.Println("No scrolls yet — Aqua learns one at aqua/skills/<name>/SKILL.md.")
 		return
 	}
 	rows := make([]map[string]string, 0, len(scrolls))

@@ -3,7 +3,7 @@
 
 defmodule Compendium.AquaTemplateTest do
   @moduledoc """
-  The shipped AQUA tree as the athanor's own: a fill copies it in, a
+  The shipped Aqua tree as the athanor's own: a fill copies it in, a
   release that changes the seed changes nothing until a reset asks for it,
   an edited copy is restored by `reset/2` while member work is kept
   (`all: true` for the exact shipped set), a shipped skill is copied whole

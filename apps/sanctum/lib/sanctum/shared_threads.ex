@@ -203,7 +203,7 @@ defmodule Sanctum.SharedThreads do
   end
 
   @doc """
-  What a person's own AQUA reads of a thread their list of threads names
+  What a person's own Aqua reads of a thread their list of threads names
   (`listed/1`'s, by the same rule: an active thread they hold an active
   seat in): their read mark (`read_seq`), how many of the thread's
   messages someone else wrote past it (`unread`), and its newest `count`

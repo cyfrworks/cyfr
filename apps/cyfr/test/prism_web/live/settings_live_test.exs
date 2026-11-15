@@ -253,16 +253,16 @@ defmodule PrismWeb.SettingsLiveTest do
     view |> form("#approvals-form", %{"hours" => "6"}) |> render_submit()
     assert has_element?(view, ~s(#approval-hours[value="6"]))
 
-    # Saved in the athanor's settings, where AQUA reads it: the page read
+    # Saved in the athanor's settings, where Aqua reads it: the page read
     # again shows it.
     {again, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
     assert has_element?(again, ~s(#approval-hours[value="6"]))
 
-    # Cleared, the stored wait is gone and AQUA's own default holds again.
+    # Cleared, the stored wait is gone and Aqua's own default holds again.
     again |> form("#approvals-form", %{"hours" => ""}) |> render_submit()
-    assert render(again) =~ "Approvals wait AQUA&#39;s default time again."
+    assert render(again) =~ "Approvals wait Aqua&#39;s default time again."
     refute has_element?(again, ~s(#approval-hours[value]))
-    assert has_element?(again, "#approvals", "Left empty, AQUA's own default")
+    assert has_element?(again, "#approvals", "Left empty, Aqua's own default")
 
     athanor = seated_athanor()
     {:ok, row} = Sanctum.Tenancy.Athanors.get(athanor.id)
@@ -842,7 +842,7 @@ defmodule PrismWeb.SettingsLiveTest do
       [share, let_in, reach, administrators] =
         texts(view, ~s([data-test="setup"] ol > li > p:first-of-type))
 
-      assert share =~ "what each new person's AQUA uses when it fits"
+      assert share =~ "what each new person's Aqua uses when it fits"
       assert share =~ "daily cap per person filled in"
       assert let_in =~ "invitation link"
       assert let_in =~ "allowlist"
@@ -859,7 +859,7 @@ defmodule PrismWeb.SettingsLiveTest do
       PrismWeb.Vocabulary.refute_vocabulary(view |> element(~s([data-test="setup"])) |> render())
 
       # No key yet: the first step says where one is connected.
-      assert has_element?(view, ~s([data-test="setup-no-key"]), "Connect one on your AQUA page.")
+      assert has_element?(view, ~s([data-test="setup-no-key"]), "Connect one on your Aqua page.")
 
       view |> element(~s([data-test="setup-close"])) |> render_click()
       refute has_element?(view, ~s([data-test="setup"]))
@@ -970,7 +970,7 @@ defmodule PrismWeb.SettingsLiveTest do
 
       assert texts(view, ~s([data-test="share-everyone"])) == [
                "You administer this CYFR, so a key you share with everyone is also what each " <>
-                 "new person's AQUA uses when it fits."
+                 "new person's Aqua uses when it fits."
              ]
 
       # The preset is not submitted by itself: a submit naming no audience

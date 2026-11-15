@@ -24,7 +24,7 @@ defmodule PrismWeb.SettingsLive do
       stands on included, which then leaves the page. A sign-out is a
       session's, never a key's: removing a key is the account pages', and
       the card links there.
-    * **AQUA's approvals** — how many hours an approval card waits for
+    * **Aqua's approvals** — how many hours an approval card waits for
       the person's answer before it expires (`athanor.settings`, the
       athanor's `approvals.expiry_hours`), and a link to API Keys.
     * **Decisions about the host** — for the platform administrator, the
@@ -276,12 +276,12 @@ defmodule PrismWeb.SettingsLive do
   end
 
   # A whole number of hours is stored; an empty field removes the stored
-  # wait (a `nil` in the patch deletes the key), so AQUA's own default
+  # wait (a `nil` in the patch deletes the key), so Aqua's own default
   # holds again.
   def handle_event("approvals_save", %{"hours" => hours}, socket) do
     case String.trim(hours) do
       "" ->
-        approvals_save(socket, nil, "Approvals wait AQUA's default time again.")
+        approvals_save(socket, nil, "Approvals wait Aqua's default time again.")
 
       typed ->
         case Integer.parse(typed) do
@@ -649,7 +649,7 @@ defmodule PrismWeb.SettingsLive do
   defp load_settings(socket), do: assign(socket, :platform_settings, [])
 
   # How long an approval card waits in the athanor this page stands in,
-  # when the person set it; unset, AQUA's own default holds.
+  # when the person set it; unset, Aqua's own default holds.
   defp load_approvals(socket) do
     hours =
       case call_tool(socket, "athanor/get", %{}) do
@@ -1221,13 +1221,13 @@ defmodule PrismWeb.SettingsLive do
           </.table>
         </.card>
 
-        <%!-- How long AQUA's approval cards wait, and where API keys are made --%>
+        <%!-- How long Aqua's approval cards wait, and where API keys are made --%>
         <.card>
           <section id="approvals">
-            <h3 class="text-sm font-medium text-gray-400 mb-1">AQUA's approvals</h3>
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Aqua's approvals</h3>
             <p class="text-xs text-gray-500 mb-4">
-              When AQUA asks before it acts, its card waits this many hours for your answer,
-              then expires, and AQUA asks again the next time. Left empty, AQUA's own default
+              When Aqua asks before it acts, its card waits this many hours for your answer,
+              then expires, and Aqua asks again the next time. Left empty, Aqua's own default
               holds.
             </p>
             <form id="approvals-form" phx-submit="approvals_save" class="flex gap-2 items-end">
@@ -1313,7 +1313,7 @@ defmodule PrismWeb.SettingsLive do
           <p id="mode-words" class="text-xs text-gray-500 mb-3">
             <span data-test="mode-lite">
               <strong>lite</strong>
-              shows the pages for everyday work: AQUA, Files, Vault, Schedules, Webhooks,
+              shows the pages for everyday work: Aqua, Files, Vault, Schedules, Webhooks,
               API Keys, Programs, Settings, Tips and Legal.
             </span>
             <span data-test="mode-dev">
@@ -1403,7 +1403,7 @@ defmodule PrismWeb.SettingsLive do
           <li data-test="setup-share">
             <span class="font-medium">Share a key with everyone.</span>
             <p class="text-xs text-gray-400 mt-1">
-              A key you share with everyone is what each new person's AQUA uses when it fits,
+              A key you share with everyone is what each new person's Aqua uses when it fits,
               so they can start without a key of their own. They never see it. The sheet opens
               with a daily cap per person filled in; change it before you confirm.
             </p>
@@ -1432,7 +1432,7 @@ defmodule PrismWeb.SettingsLive do
                 navigate={PrismWeb.Focus.path(@athanor_route, "/aqua?setup=1")}
                 class="text-blue-400 hover:underline"
               >
-                Connect one on your AQUA page.
+                Connect one on your Aqua page.
               </.link>
             </p>
             <p :if={@keys == :not_own} class="text-xs text-gray-400 mt-2" data-test="setup-not-own">

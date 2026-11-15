@@ -10,7 +10,7 @@ defmodule PrismWeb.DesktopLive do
   page's place while no Dashboard page is open over it, and the address a
   Dashboard page's close returns to (`path/1`).
 
-  `?publisher=<p>&tincture_name=<n>` (the palette's and AQUA's
+  `?publisher=<p>&tincture_name=<n>` (the palette's and Aqua's
   `ui.tincture.focus`) asks the desktop's picker to show that tincture;
   the desktop's own hook reads it from this page's address and hands it to
   the shell (`PrismWeb.ShellLive`, `focus_named`), so the page does

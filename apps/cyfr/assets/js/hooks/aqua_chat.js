@@ -4,7 +4,7 @@
 // Chat composer textarea hook (ThreadPaneLive).
 //
 // - Takes focus when it mounts — a pane opening, a thread switching, the
-//   person's own AQUA panel opening — unless focus already sits inside a
+//   person's own Aqua panel opening — unless focus already sits inside a
 //   dialog: the open panel owns focus, and the page's own pane mounting
 //   beside it must not pull it back out.
 // - Auto-grows from one row up to a max height (then scrolls).

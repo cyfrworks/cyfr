@@ -4,7 +4,7 @@
 defmodule PrismWeb.ChatOverlayLive do
   @moduledoc """
   The chat: CYFR's own overlay of the threads a person shares with people,
-  beside AQUA's (`PrismWeb.AquaPanelLive`), which is the person with their
+  beside Aqua's (`PrismWeb.AquaPanelLive`), which is the person with their
   assistant. A nested LiveView of the desktop (`PrismWeb.ShellLive`), so it
   stays while the person moves between the pages drawn over the desktop.
 
@@ -36,7 +36,7 @@ defmodule PrismWeb.ChatOverlayLive do
   shared threads (`Cyfr.Bus.SharedThreadChanged`, their mark's own moves
   included), never polled.
 
-  The thread the overlay shows is told to the person's own AQUA beside it
+  The thread the overlay shows is told to the person's own Aqua beside it
   on the desktop's own topic (`PrismWeb.RoomFeed`, the session's
   `room_feed`), by its id and title only, and `nil` once the overlay is
   closed or shows none. No frame is opened here and no message body
@@ -138,7 +138,7 @@ defmodule PrismWeb.ChatOverlayLive do
 
   # A thread, read under the person's own seat: one they do not sit in
   # answers as a missing one. Shown, its read mark moves to its newest
-  # message and AQUA beside the desktop is told what is open.
+  # message and Aqua beside the desktop is told what is open.
   defp open_shared(socket, thread_id) do
     case PrismWeb.Ops.call_tool(socket, "shared_thread/get", %{"thread" => thread_id}) do
       {:ok, %{status: "active"} = thread} ->
@@ -168,7 +168,7 @@ defmodule PrismWeb.ChatOverlayLive do
 
   defp mark_read(socket), do: socket
 
-  # What AQUA beside the desktop reads: the thread the overlay shows, by
+  # What Aqua beside the desktop reads: the thread the overlay shows, by
   # its id and title, or nothing while it is closed or shows none.
   defp announce(%{assigns: %{room_feed: feed}} = socket) when is_binary(feed) do
     room =

@@ -64,7 +64,7 @@ func showAthanor(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if provisioned, _ := result["provisioned"].(bool); !provisioned {
-		fmt.Println("  not provisioned yet: retry it from the AQUA panel in CYFR")
+		fmt.Println("  not provisioned yet: retry it from the Aqua panel in CYFR")
 		if failure, _ := result["provisioning_failure"].(map[string]any); failure != nil {
 			fmt.Printf("  the last attempt failed at %s: %s\n", str(failure["step"]), str(failure["detail"]))
 		}

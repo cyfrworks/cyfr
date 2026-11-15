@@ -9,7 +9,7 @@ defmodule Aqua.Models do
     * `capabilities/5` — what one model can do and the options it lets a
       caller set, read from its catalyst's `describe` and cached under the
       key the reading ran with; `brain_options/2` is the options of an
-      agent's brain, read as a person on the AQUA page;
+      agent's brain, read as a person on the Aqua page;
     * `catalogue/1` — the listing the console's pickers show, every
       installed catalyst that speaks the contract and has what it needs
       connected asked for its models;
@@ -518,8 +518,8 @@ defmodule Aqua.Models do
   `Compendium.Component.resolve_component/2`'s one absence) is not an
   absence: each is `:model_unavailable`, never a model to install.
 
-  A soul with no key is the one thing that keeps a fresh athanor's AQUA
-  silent, so both the AQUA page and the chat's own empty state ask here;
+  A soul with no key is the one thing that keeps a fresh athanor's Aqua
+  silent, so both the Aqua page and the chat's own empty state ask here;
   the crew index (`Aqua.Crew.index/2`) names only the members that read
   ready.
   """
