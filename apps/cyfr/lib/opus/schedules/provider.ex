@@ -225,6 +225,10 @@ defmodule Opus.Schedules.Provider do
               Arg.new("catch_up_limit", :integer,
                 description:
                   "How many missed times one catch-up fires, 1 to #{Opus.Schedules.Scheduler.max_catch_up()} (create/update; required with catch_up, refused with skip)"
+              ),
+              Arg.new("definition", :string,
+                description:
+                  "The schedule's definition as read (get/list answer it): the update is refused as changed when its name, time, reference, profile, input or missed-run policy moved since; a fire or a pause does not move it"
               )
             ],
             kind: :write,
@@ -428,7 +432,8 @@ defmodule Opus.Schedules.Provider do
           end
 
         case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, update_attrs,
-               by_person: by_person?(ctx)
+               by_person: by_person?(ctx),
+               definition: args["definition"]
              ) do
           {:ok, updated} ->
             Opus.Schedules.Scheduler.update(updated.id)
@@ -832,6 +837,7 @@ defmodule Opus.Schedules.Provider do
       reference: schedule.reference,
       resolved_reference: schedule.resolved_reference,
       profile_id: schedule.profile_id,
+      definition: Arca.CronSchedule.definition(schedule),
       input: decode_stored(schedule.input, nil, "input"),
       metadata: decode_stored(schedule.metadata, nil, "metadata"),
       status: schedule.status,
@@ -871,8 +877,9 @@ defmodule Opus.Schedules.Provider do
   # refusal vocabulary (`Prima.Refusal`). A write's refusal: a member that
   # lost its slot is answered as itself, as a feed's write is. A create's
   # `:not_found` is its athanor's missing row, which names no schedule.
-  defp store_refusal(reason, _id) when reason in [:not_owner, :no_athanor, :aqua_line_by_person],
-    do: {:error, reason}
+  defp store_refusal(reason, _id)
+       when reason in [:not_owner, :no_athanor, :aqua_line_by_person, :schedule_changed],
+       do: {:error, reason}
 
   defp store_refusal(reason, id), do: {:error, format_store_error(reason, id)}
 

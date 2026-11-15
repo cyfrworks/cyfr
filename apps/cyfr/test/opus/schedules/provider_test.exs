@@ -62,6 +62,44 @@ defmodule Opus.Schedules.ProviderTest do
       assert {:ok, %{schedules: [%{schedule_id: ^id, profile_id: "prof-cron"}]}} =
                Provider.handle("schedule", ctx, %{"action" => "list"})
     end
+
+    test "names the definition an update is made against, and an update against an old one is refused",
+         %{ctx: ctx} do
+      {:ok, %{schedule_id: id, definition: read}} =
+        Provider.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-cron",
+          "name" => "answer-definition",
+          "cron_expression" => "*/5 * * * *",
+          "reference" => "reagent:local.test:1.0.0"
+        })
+
+      {:ok, row} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), id)
+      assert read == Arca.CronSchedule.definition(row)
+
+      update = fn args ->
+        Provider.handle(
+          "schedule",
+          ctx,
+          Map.merge(%{"action" => "update", "schedule_id" => id}, args)
+        )
+      end
+
+      assert {:ok, %{name: "first", definition: now}} =
+               update.(%{"name" => "first", "definition" => read})
+
+      refute now == read
+
+      assert {:error, :schedule_changed} =
+               update.(%{"cron_expression" => "*/10 * * * *", "definition" => read})
+
+      assert {:ok, %{name: "first", cron_expression: "*/5 * * * *"}} =
+               Provider.handle("schedule", ctx, %{"action" => "get", "schedule_id" => id})
+
+      # Without one, an update is made against whatever the schedule holds.
+      assert {:ok, %{cron_expression: "*/10 * * * *"}} =
+               update.(%{"cron_expression" => "*/10 * * * *"})
+    end
   end
 
   describe "missed runs" do

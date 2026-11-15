@@ -9,7 +9,9 @@ defmodule PrismWeb.SchedulesLive do
   New Schedule and a row's Edit open one form: Edit prefills it with the
   schedule and saves through `schedule.update`, sending what it runs (the
   reference) and the profile only when they changed, since naming them is
-  binding the schedule again, which the tool authorizes as at create. A
+  binding the schedule again, which the tool authorizes as at create. The
+  save names the definition the form was opened with: a schedule changed
+  since is refused, and the form shows it as it is now. A
   change of kind, a component's schedule made a line for Aqua or back, is
   the same form's Runs choice. A refusal shows in the form in the tool's
   own words, and the form keeps what was typed.
@@ -118,20 +120,7 @@ defmodule PrismWeb.SchedulesLive do
         {:noreply, socket}
 
       sched ->
-        cron = f(sched, :cron_expression)
-        preset = if Enum.any?(@cron_presets, &(elem(&1, 1) == cron)), do: cron, else: "custom"
-
-        {:noreply,
-         socket
-         |> fetch_components()
-         |> assign(
-           show_create: true,
-           editing: sched,
-           form_error: nil,
-           cron_preset: preset,
-           cron_custom: cron,
-           form: to_form(edit_params(sched))
-         )}
+        {:noreply, socket |> fetch_components() |> open_edit(sched)}
     end
   end
 
@@ -200,6 +189,7 @@ defmodule PrismWeb.SchedulesLive do
       {:noreply,
        socket |> close_form() |> fetch_schedules() |> put_flash(:info, "Schedule saved")}
     else
+      {:error, :schedule_changed} -> {:noreply, reopen(socket, sched)}
       {:error, reason} -> {:noreply, refuse(socket, reason)}
     end
   end
@@ -343,6 +333,41 @@ defmodule PrismWeb.SchedulesLive do
     )
   end
 
+  # The form opened for `sched` as listed, its time as a preset or custom.
+  defp open_edit(socket, sched) do
+    cron = f(sched, :cron_expression)
+    preset = if Enum.any?(@cron_presets, &(elem(&1, 1) == cron)), do: cron, else: "custom"
+
+    assign(socket,
+      show_create: true,
+      editing: sched,
+      form_error: nil,
+      cron_preset: preset,
+      cron_custom: cron,
+      form: to_form(edit_params(sched))
+    )
+  end
+
+  # The schedule changed after the form was opened: the form shows it as
+  # it is now, or, when it is gone, says so.
+  defp reopen(socket, sched) do
+    socket = fetch_schedules(socket)
+    id = f(sched, :schedule_id)
+
+    case Enum.find(socket.assigns.schedules, &(f(&1, :schedule_id) == id)) do
+      nil ->
+        refuse(socket, {:not_found, "Schedule", id})
+
+      now ->
+        socket
+        |> open_edit(now)
+        |> assign(
+          :form_error,
+          "This schedule changed since you opened it. The form now shows it as it is; make your change again."
+        )
+    end
+  end
+
   # A refusal, the page's or the tool's, in the form's one line.
   defp refuse(socket, reason), do: assign(socket, :form_error, error_message(reason))
 
@@ -365,10 +390,12 @@ defmodule PrismWeb.SchedulesLive do
   defp input_text(input) when is_map(input), do: Jason.encode!(input)
   defp input_text(_none), do: ""
 
-  # `schedule.update`'s arguments for the form as submitted. The name, the
-  # time, the missed-run policy and the input or line are always sent; the
-  # reference and the profile only when they changed, as naming them binds
-  # the schedule again. An emptied input clears the component's.
+  # `schedule.update`'s arguments for the form as submitted, against the
+  # definition the form was opened with, which the store compares under
+  # the row's lock. The name, the time, the missed-run policy and the input
+  # or line are always sent; the reference and the profile only when they
+  # changed, as naming them binds the schedule again (and resolves an
+  # unversioned reference anew). An emptied input clears the component's.
   defp update_args(sched, %{"target" => "aqua"} = params, cron) do
     with :ok <- if(cron == "", do: {:error, "Please select a schedule frequency"}, else: :ok),
          {:ok, missed_args} <- missed_input(params) do
@@ -396,6 +423,7 @@ defmodule PrismWeb.SchedulesLive do
     %{
       "action" => "update",
       "schedule_id" => f(sched, :schedule_id),
+      "definition" => f(sched, :definition),
       "name" => params["name"],
       "cron_expression" => cron
     }

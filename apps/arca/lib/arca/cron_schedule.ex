@@ -150,6 +150,11 @@ defmodule Arca.CronSchedule do
   unless `by_person: true` says the caller is the schedule's person in a
   signed-in session of their own (`aqua_target/3`): who may write is
   decided against the row being written, never one read before.
+
+  With `definition:` (the row's `definition/1` as the caller read it), the
+  write is refused `:schedule_changed` unless the row under its lock still
+  has that definition: a change made since the caller read it is never
+  overwritten by one made against what it replaced.
   """
   @spec update(Prima.Actor.t(), String.t(), map(), keyword()) ::
           {:ok, map()}
@@ -157,15 +162,18 @@ defmodule Arca.CronSchedule do
              :not_found
              | :not_owner
              | :aqua_line_by_person
+             | :schedule_changed
              | {:validation, %{atom() => [String.t()]}}
              | :database_error}
   # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
   def update(%Prima.Actor{} = actor, id, attrs, opts \\ []) do
     by_person = Keyword.get(opts, :by_person, false) == true
+    read = Keyword.get(opts, :definition)
 
     Errors.with_db_rescue("CronSchedule.update", fn ->
       guarded(actor, id, :live, fn schedule ->
-        with :ok <- aqua_target(schedule, attrs, by_person) do
+        with :ok <- as_read(schedule, read),
+             :ok <- aqua_target(schedule, attrs, by_person) do
           attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
 
           schedule
@@ -176,6 +184,35 @@ defmodule Arca.CronSchedule do
       end)
     end)
     |> Arca.Data.project()
+  end
+
+  @doc """
+  A digest of what a schedule is defined to do: its name, time,
+  reference, profile, input and missed-run policy. What the scheduler
+  records of its fires (the run times and counts, the last error), its
+  status and its thread are not part of it, so a fire or a pause between
+  a read and a write does not change it.
+  """
+  @spec definition(map()) :: String.t()
+  def definition(%{} = row) do
+    [
+      row.name,
+      row.cron_expression,
+      row.reference,
+      row.profile_id,
+      row.input,
+      row.missed_runs,
+      row.catch_up_limit
+    ]
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
+  end
+
+  defp as_read(_schedule, nil), do: :ok
+
+  defp as_read(schedule, read) when is_binary(read) do
+    if definition(schedule) == read, do: :ok, else: {:error, :schedule_changed}
   end
 
   @doc "Gets a schedule by ID with tenant-scoped lookup."

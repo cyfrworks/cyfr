@@ -227,6 +227,56 @@ defmodule Arca.CronScheduleTest do
     end
   end
 
+  describe "update/4 against a definition" do
+    test "writes while the row has the definition read, and refuses it once the definition moved",
+         %{actor: actor} do
+      {:ok, row} = CronSchedule.create(actor, valid_attrs())
+      read = CronSchedule.definition(row)
+
+      assert {:ok, renamed} =
+               CronSchedule.update(actor, row.id, %{name: row.name <> "-a"}, definition: read)
+
+      assert {:error, :schedule_changed} =
+               CronSchedule.update(actor, row.id, %{name: row.name <> "-b"}, definition: read)
+
+      assert {:ok, ^renamed} = CronSchedule.get(actor, row.id)
+
+      for change <- [
+            %{cron_expression: "*/10 * * * *"},
+            %{reference: "reagent:local.other:1.0.0"},
+            %{profile_id: "prof_other"},
+            %{input: ~s({"n":2})},
+            %{missed_runs: "catch_up", catch_up_limit: 2}
+          ] do
+        {:ok, before} = CronSchedule.get(actor, row.id)
+        {:ok, _} = CronSchedule.update(actor, row.id, change)
+        {:ok, moved} = CronSchedule.get(actor, row.id)
+        refute CronSchedule.definition(moved) == CronSchedule.definition(before), inspect(change)
+      end
+    end
+
+    test "a fire, a recorded failure, the next run time, a pause and a resume leave it as read",
+         %{actor: actor} do
+      {:ok, row} = CronSchedule.create(actor, valid_attrs())
+      read = CronSchedule.definition(row)
+
+      {:ok, _} = CronSchedule.record_run(actor, row.id, "exec_1")
+      {:ok, _} = CronSchedule.record_error(actor, row.id, "boom", nil)
+
+      {:ok, _} =
+        CronSchedule.update(actor, row.id, %{next_run_at: DateTime.add(DateTime.utc_now(), 60)})
+
+      {:ok, _} = CronSchedule.update(actor, row.id, %{status: "paused"})
+      {:ok, _} = CronSchedule.update(actor, row.id, %{status: "active"})
+
+      {:ok, now} = CronSchedule.get(actor, row.id)
+      assert CronSchedule.definition(now) == read
+
+      assert {:ok, %{name: "still-mine"}} =
+               CronSchedule.update(actor, row.id, %{name: "still-mine"}, definition: read)
+    end
+  end
+
   describe "list/2" do
     test "lists all non-deleted schedules in the athanor regardless of creator", %{actor: actor} do
       {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "s1"}))

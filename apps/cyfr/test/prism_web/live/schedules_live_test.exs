@@ -680,6 +680,68 @@ defmodule PrismWeb.SchedulesLiveTest do
       same_but(before, now, [])
     end
 
+    test "a schedule changed since the form opened is not written; the form says so and shows it as it is",
+         %{view: view, ctx: ctx, params: params} do
+      opened = made!(view, ctx, params)
+      edit!(view, opened.id)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "replacement",
+          version: "0.1.0",
+          type: "reagent",
+          description: "Another target"
+        })
+
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.replacement")
+
+      {:ok, _} =
+        Opus.Schedules.Provider.handle("schedule", ctx, %{
+          "action" => "update",
+          "schedule_id" => opened.id,
+          "reference" => "reagent:local.replacement:0.1.0",
+          "profile_id" => profile,
+          "input" => %{"replacement" => true}
+        })
+
+      {:ok, changed} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), opened.id)
+      render_submit(view, "save", %{params | "cron_custom" => "0 0 2 2 *"})
+
+      assert form_error(view) =~ "This schedule changed since you opened it"
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), opened.id)
+      same_but(changed, now, [])
+
+      # The form now holds the schedule as it is, and saves against it.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.form.params["reference"] == "reagent:local.replacement:0.1.0"
+      assert assigns.form.params["profile_id"] == profile
+      assert assigns.form.params["input"] == ~s({"replacement":true})
+
+      render_submit(view, "save", Map.put(assigns.form.params, "cron_custom", "0 0 2 2 *"))
+
+      {:ok, saved} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), opened.id)
+      assert saved.cron_expression == "0 0 2 2 *"
+      same_but(changed, saved, [:cron_expression])
+    end
+
+    test "a fire, a failure, a pause and a resume between opening and Save do not make the form stale",
+         %{view: view, ctx: ctx, params: params} do
+      opened = made!(view, ctx, params)
+      edit!(view, opened.id)
+      actor = Sanctum.Context.actor(ctx)
+
+      {:ok, _} = Arca.CronSchedule.record_run(actor, opened.id, "exec_1")
+      {:ok, _} = Arca.CronSchedule.record_error(actor, opened.id, "boom", nil)
+      render_click(view, "pause", %{"id" => opened.id})
+      render_click(view, "resume", %{"id" => opened.id})
+
+      render_submit(view, "save", %{params | "name" => params["name"] <> "-later"})
+
+      refute has_element?(view, ~s(#schedule-form [data-test="schedule-form-error"]))
+      assert {:ok, %{name: name}} = Arca.CronSchedule.get(actor, opened.id)
+      assert name == params["name"] <> "-later"
+    end
+
     test "a person who is not the schedule's cannot edit it", %{
       view: view,
       ctx: ctx,

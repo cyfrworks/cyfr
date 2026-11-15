@@ -241,6 +241,7 @@ defmodule Prima.RefusalTest do
     {:not_addressable, :forbidden},
     {:not_in_a_turn, :forbidden},
     {:aqua_line_by_person, :forbidden},
+    {:schedule_changed, :conflict},
     {:no_agent, :setup_required},
     {:execution_unavailable, :unavailable},
     {:message_too_long, :invalid_argument},
