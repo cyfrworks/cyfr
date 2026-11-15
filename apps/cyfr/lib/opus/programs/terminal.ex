@@ -74,9 +74,10 @@ defmodule Opus.Programs.Terminal do
 
   A session of the person's browser (`by: :browser`, `Opus.Browser`) is
   the person's in what it does: its holder attaches as a person's screen
-  does and is handed acknowledged deliveries and the tail, nothing of a
-  turn ends it, and the day unwatched never runs out while its holder
-  stays attached, which keeps its own idle stop. Every change of
+  does and is handed acknowledged deliveries and the tail, and nothing of
+  a turn ends it. Its holder keeps its idle stop, so it lives as long as
+  that holder: it ends `:closed` once its last attached process is gone,
+  however that process ended, where a person's session only detaches. Every change of
   what `Opus.Programs.running/1` reports is announced on the person's
   own `Cyfr.Bus.programs/2` topic (`Cyfr.Bus.Program`). Nothing that
   passes through is stored or logged: the output it keeps and hands on
@@ -369,6 +370,13 @@ defmodule Opus.Programs.Terminal do
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     cond do
+      # The browser's session lives as long as its holder, its one attached
+      # process, which keeps its idle stop: when the holder dies, killed
+      # included, nothing keeps that stop, so the session ends.
+      match?(%{^pid => %{monitor: ^ref}}, state.subscribers) and state.by == :browser ->
+        state = unsubscribe(state, pid)
+        if state.subscribers == %{}, do: finish(state, :closed), else: {:noreply, state}
+
       match?(%{^pid => %{monitor: ^ref}}, state.subscribers) ->
         {:noreply, unsubscribe(state, pid)}
 
