@@ -446,7 +446,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(certificate_protocol certificates challenge_refusals challenges issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals verify)}
     ],
     "device_unlock.json" => [
-      {"apps/codex/internal/shell/home_test.go", ~w(exchange)},
       {"apps/codex/internal/shell/proof_test.go",
        ~w(protocol common_fields purpose_fields keys proofs verify)},
       {"apps/codex/internal/shell/server_test.go", ~w(exchange)},
