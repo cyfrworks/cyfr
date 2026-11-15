@@ -180,10 +180,11 @@ defmodule Sanctum.ProviderTest do
                platform_admin: false
              }
 
-      # The mark, written onto the row, is read by a key established after it.
+      # The role is the person's, by the mark on their row; the key's call
+      # itself never carries the operator capability.
       {:ok, _row} = Sanctum.TestContext.ensure_platform(issuer.user_id)
 
-      assert %{key_name: "weekly", role: "administrator", platform_admin: true} =
+      assert %{key_name: "weekly", role: "administrator", platform_admin: false} =
                whoami.("weekly")
     end
 

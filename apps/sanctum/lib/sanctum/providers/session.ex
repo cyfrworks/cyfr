@@ -8,10 +8,11 @@ defmodule Sanctum.Providers.Session do
   session's end, a protected device's unlock and lock, and the caller's
   self-description resources.
 
-  `whoami` answers the caller here: their person, athanor and the
-  administrator's mark (`platform_admin`), when their session ends, their
-  name as the screen shows it (`name`, `Sanctum.Tenancy.Users.display_name/1`),
-  their `role` (`administrator` or `person`, by that mark) and, for a call
+  `whoami` answers the caller here: their person, athanor and whether
+  this call carries the operator capability (`platform_admin`, never for a
+  key's call), when their session ends, their name as the screen shows it
+  (`name`, `Sanctum.Tenancy.Users.display_name/1`), their `role`
+  (`administrator` or `person`, by the mark on their row) and, for a call
   made with an API key, the key's name (`key_name`, nil otherwise).
 
   `unlock` and `lock` are a protected device's, through its device
@@ -183,7 +184,7 @@ defmodule Sanctum.Providers.Session do
            session_expires_at: session_expires_at(ctx),
            key_name: key_name,
            name: Sanctum.Tenancy.Users.display_name(ctx.user_id),
-           role: if(ctx.platform_admin == true, do: "administrator", else: "person")
+           role: role(ctx.user_id)
          }}
 
       {:error, :not_found} ->
@@ -192,6 +193,13 @@ defmodule Sanctum.Providers.Session do
       {:error, _unread} ->
         {:error, {:unavailable, "Storage"}}
     end
+  end
+
+  # The person's role here, by the administrator's mark on their row, as
+  # Settings and the door read it: a key's call never carries the mark on
+  # its context (`platform_admin`), whoever made the key.
+  defp role(user_id) do
+    if Sanctum.Tenancy.platform_admin?(user_id), do: "administrator", else: "person"
   end
 
   # Revoke the Sanctum session authenticated by this request.
