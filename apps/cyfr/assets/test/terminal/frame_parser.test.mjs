@@ -28,22 +28,28 @@ beforeEach(() => {
 })
 afterEach(() => delete globalThis.window)
 
-function mount() {
+function mount(tail = "") {
   const pushed = []
+  const handlers = {}
   const hook = Object.create(
     TerminalHook({Terminal, FitAddon: Addon, WebLinksAddon: Addon, open: () => {}})
   )
   Object.assign(hook, {
     el: {dataset: {session: "trm_1"}, querySelector: () => ({})},
-    handleEvent() {},
+    handleEvent: (event, fn) => (handlers[event] = fn),
     pushEvent: (event, payload, reply) => {
       pushed.push({event, payload})
-      reply?.({})
+      reply?.(event === "terminal_ready" ? {data: Buffer.from(tail).toString("base64")} : {})
     }
   })
   hook.mounted()
-  return {hook, pushed}
+  return {hook, pushed, handlers}
 }
+
+const typed = (pushed) =>
+  pushed.filter((p) => p.event === "terminal_input").map((p) => p.payload.terminal_input)
+
+const drawn = (hook) => new Promise((resolve) => hook.term.write("", resolve))
 
 // What the program prints, parsed, and what the terminal sent it back.
 async function answers(printed) {
@@ -86,6 +92,30 @@ test("every window operation is off and its reports send nothing", async () => {
 test("a settings query answers a value, never the words it was asked", async () => {
   assert.deepEqual(await answers("\x1bP$qrm -rf ~\x1b\\"), ["\x1bP0$r\x1b\\"])
   assert.deepEqual(await answers("\x1bP$qm\x1b\\"), ["\x1bP1$r0m\x1b\\"])
+})
+
+// What was printed before is drawn again on a reload, a second screen or
+// a tail that replaces the screen: the queries in it were answered when
+// the program asked them, and their answers typed into the program now
+// would land in whatever it reads, a shell's prompt among them.
+test("a replayed screen sends no answer to the queries in it, and a live query is answered", async () => {
+  const queries = "\x1b[6n\x1b[c\x1b]11;?\x07"
+  const {hook, pushed, handlers} = mount("before" + queries)
+  try {
+    await drawn(hook)
+    assert.deepEqual(typed(pushed), [])
+
+    handlers.terminal_tail({session: "trm_1", delivery: "t-1", data: Buffer.from(queries).toString("base64")})
+    await drawn(hook)
+    assert.deepEqual(typed(pushed), [])
+
+    handlers.terminal_output({session: "trm_1", delivery: "t-2", data: Buffer.from("\x1b[6n").toString("base64")})
+    await drawn(hook)
+    assert.equal(typed(pushed).length, 1)
+    assert.match(typed(pushed)[0], /^\x1b\[\d+;\d+R$/)
+  } finally {
+    hook.destroyed()
+  }
 })
 
 test("an answerback request (ENQ) sends nothing", async () => {

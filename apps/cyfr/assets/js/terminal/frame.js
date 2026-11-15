@@ -97,6 +97,7 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       this.queue = []
       this.queued = 0
       this.sending = false
+      this.replaying = false
       term.onData((data) => this.type(data))
 
       // Each output is acknowledged by its token once drawn, and the
@@ -108,7 +109,7 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       this.handleEvent("terminal_tail", ({session, delivery, data}) => {
         if (session !== this.session) return
         term.reset()
-        term.write(decode(data), () => this.written(delivery))
+        this.replay(decode(data), () => this.written(delivery))
       })
 
       // The program ended: the screen stays as it was to be read, and
@@ -132,8 +133,19 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       this.fit.fit()
       this.size = {rows: term.rows, cols: term.cols}
       this.pushEvent("terminal_ready", {session: this.session, ...this.size}, (reply) => {
-        if (reply && typeof reply.data === "string") term.write(decode(reply.data))
+        if (reply && typeof reply.data === "string") this.replay(decode(reply.data))
         term.focus()
+      })
+    },
+
+    // What the program printed before, drawn again: a query in it was
+    // answered when the program asked it, so the terminal's answers to it
+    // now are not the program's to read and are not sent.
+    replay(bytes, done) {
+      this.replaying = true
+      this.term.write(bytes, () => {
+        this.replaying = false
+        if (done) done()
       })
     },
 
@@ -144,7 +156,7 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
 
     // What the person typed, queued and sent a piece at a time.
     type(data) {
-      if (this.ended || this.queued + data.length > MAX_PENDING_UNITS) return
+      if (this.ended || this.replaying || this.queued + data.length > MAX_PENDING_UNITS) return
       for (const piece of pieces(data)) this.queue.push(piece)
       this.queued += data.length
       this.send()
