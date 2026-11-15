@@ -1005,7 +1005,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       server = %{
         "server_digest" => "sha256:srv",
         "server_name" => "github",
-        "tool_patterns" => []
+        "tool_patterns" => [],
+        "record" => %{"address" => "https://api.github.example/mcp", "headers" => []}
       }
 
       limits = Prima.Limits.to_map(Prima.Limits.defaults(:reagent))

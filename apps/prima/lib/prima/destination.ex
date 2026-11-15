@@ -34,9 +34,10 @@ defmodule Prima.Destination do
 
       %{"program" => "claude"}
 
-  A login entry's material goes to no host: it is a program's own
-  sign-in, and its destination names that program, the name of an
-  `mcp_servers` row (`^[a-z0-9][a-z0-9-]{0,31}$`). `program` stands alone:
+  A login need's binding goes to no host: it mounts a program row's kept
+  folder, and its destination names that program, the name of an
+  `mcp_servers` row (`^[a-z0-9][a-z0-9-]{0,31}$`). No vault entry has
+  one. `program` stands alone:
   beside any other member it is refused `{:program_with, key}`. A program
   destination admits no request (`matches?/3`), contains only itself
   (`within?/2`) and admits no sets (`admitted/1` is the host form's).
@@ -80,7 +81,7 @@ defmodule Prima.Destination do
           paths: [String.t(), ...] | nil
         }
 
-  @typedoc "A program's destination: the program whose own sign-in the material is."
+  @typedoc "A program's destination: the program row whose kept folder a binding mounts."
   @type program :: %__MODULE__{
           hosts: nil,
           scheme: nil,

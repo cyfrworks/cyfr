@@ -102,18 +102,6 @@ defmodule Sanctum.VaultStreamTest do
     refute_received %VaultEntry{}
   end
 
-  test "a login entry waiting for its sign-in reads as needing reauthorisation", %{ctx: ctx} do
-    {:ok, _view} =
-      Sanctum.TestContext.create_vault(ctx, %{
-        name: "claude-login",
-        kind: "login",
-        program: "claude"
-      })
-
-    assert %{"name" => "claude-login", "type" => "login", "status" => "needs_reauthorisation"} =
-             heard()
-  end
-
   test "another athanor's refresh never lists this athanor's entries", %{ctx: ctx} do
     _ = create!(ctx, "ours")
     assert {:ok, items} = Sanctum.Providers.Vault.standing(%{ctx | athanor_id: "ath_other"}, nil)

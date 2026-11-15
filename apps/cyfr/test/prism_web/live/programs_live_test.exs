@@ -4,13 +4,16 @@
 defmodule PrismWeb.ProgramsLiveTest do
   @moduledoc """
   The Programs page adds a program through its one form, its mark chosen,
-  sends its env lines as the backend's env, says why a row was not added,
-  says why a row it added or tested could not connect, shows the warnings
-  a program it added carries in the flash and on its row, offers Restart
-  for an mcp program only, replaces a program's whole definition keeping
-  its folder, and shows a disabled program as stopped. It prefills the
-  program form from a component's login need, and its sign-in terminal
-  shows a program's lines as text, bounded.
+  sends its env lines as the program's env, asks the person to confirm a
+  program's definition and makes it once confirmed, says why a row was not
+  added, says why a row it added or tested could not connect, shows the
+  warnings a program it added carries in the flash and on its row, offers
+  Restart for an mcp program only, replaces a program's whole definition
+  keeping its folder, removes a program once its removal is confirmed,
+  and shows a disabled program as stopped. It prefills the program form
+  from a component's login need, opens the sign-in in the row's folder
+  once the install is confirmed, and its sign-in terminal shows a
+  program's lines as text, bounded.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -112,19 +115,20 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> render_submit()
 
     answered(view)
+    confirm!(view, user, athanor, "mcp_servers.create")
 
     warning =
-      "Backend 'github' expands GITHUB_TOKEN, a vault-bound env name, in its command: the " <>
-        "value is placed on the command line, where every process on the backends service, " <>
-        "other athanors' backends included, can read it; the safe route is to let the " <>
-        "program read it from its environment."
+      "The command expands GITHUB_TOKEN, a vault-bound env name: the value is placed on " <>
+        "the command line, where every process on the backends service, other athanors' " <>
+        "programs included, can read it; the safe route is to let the program read it from " <>
+        "its environment."
 
     assert flash(view, "info") == "'github' added (ready)."
     assert flash(view, "warning") == warning
     assert_received {:control, "sync", _sync, _fields}
 
     html = view |> element("tr[phx-value-name=github]") |> render_click()
-    assert html =~ "expands GITHUB_TOKEN, a vault-bound env name, in its command"
+    assert html =~ "The command expands GITHUB_TOKEN, a vault-bound env name"
   end
 
   test "the program form refuses a malformed env line, and a program the catalog refuses",
@@ -410,10 +414,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         mark: "mcp",
         url: nil,
         enabled: false,
-        config_json:
-          Jason.encode!(%{
-            "backends" => [%{"name" => "fs", "command" => "npx -y fs", "env" => %{}}]
-          })
+        config_json: Jason.encode!(%{"command" => "npx -y fs", "env" => %{}})
       })
 
     {:ok, _} =
@@ -568,26 +569,53 @@ defmodule PrismWeb.ProgramsLiveTest do
         url: nil,
         home: "kept",
         login_command: "#{name} auth login",
-        config_json:
-          Jason.encode!(%{
-            "backends" => [
-              %{"name" => name, "command" => "npx -y @anthropic-ai/#{name}", "env" => %{}}
-            ]
-          })
+        config_json: Jason.encode!(%{"command" => "npx -y @anthropic-ai/#{name}", "env" => %{}})
       })
 
     row
   end
 
-  defp login!(user, athanor, name, program) do
-    {:ok, entry} =
-      Sanctum.TestContext.create_vault(person(user, athanor), %{
-        name: name,
-        kind: "login",
-        program: program
-      })
+  # The person confirms the one confirmation of `operation` the page asked
+  # for, as on another of their devices, and the page makes its change
+  # again naming it (`system_layer_repeat/4`) and answers.
+  defp confirm!(view, user, athanor, operation) do
+    person = person(user, athanor)
 
-    entry.id
+    assert {:ok, [%{ref: ref, operation: ^operation}]} =
+             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(person), user.user_id)
+
+    Sanctum.TestContext.prove!(person, ref)
+
+    assert eventually(fn ->
+             match?(
+               {:ok, %{state: "consumed"}},
+               Arca.PendingConfirmations.get(Sanctum.Context.actor(person), ref)
+             )
+           end)
+
+    answered(view)
+  end
+
+  # What the page's confirmation shows, as the store holds it.
+  defp asked(user, athanor, operation) do
+    person = person(user, athanor)
+
+    assert {:ok, [%{ref: ref, operation: ^operation}]} =
+             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(person), user.user_id)
+
+    {:ok, %{preview: preview}} =
+      Arca.PendingConfirmations.get(Sanctum.Context.actor(person), ref)
+
+    Jason.decode!(preview)
+  end
+
+  defp open_confirmations(user, athanor) do
+    person = person(user, athanor)
+
+    {:ok, open} =
+      Arca.PendingConfirmations.list_open(Sanctum.Context.actor(person), user.user_id)
+
+    open
   end
 
   # Until `fun` holds, or a bound passes.
@@ -599,21 +627,19 @@ defmodule PrismWeb.ProgramsLiveTest do
     end
   end
 
-  test "a kept program signs in through the terminal: its lines in, the person's out, its end said",
-       %{conn: conn, athanor: athanor, user: user} do
+  test "a kept program signs in through the terminal in its own folder: its lines in, the person's out, its end said",
+       %{conn: conn, athanor: athanor} do
     fake = controller!()
     row = driven_row!(athanor)
-    entry = login!(user, athanor, "claude-login", "claude")
+    home = row.id
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
     view |> element("tr[phx-value-name=claude]") |> render_click()
     assert has_element?(view, ~s([data-test="program-settings"]), "claude auth login")
+    assert has_element?(view, ~s([data-test="program-folder"]), "removed with the program")
+    view |> element(~s([data-test="sign-in"])) |> render_click()
 
-    view
-    |> form(~s([data-test="home-actions"] form[phx-submit="sign_in"]), %{"entry" => entry})
-    |> render_submit()
-
-    assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^entry}, _}, 2_000
+    assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^home}, _}, 2_000
     assert has_element?(view, ~s([data-test="sign-in-terminal"]))
 
     # The program's line, with the colour a terminal draws it in, shows as text.
@@ -633,8 +659,10 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     Scripted.end_sessions(fake, row.id, 0)
 
+    # Whether it signed in is the program's to say: the frame says its
+    # command ended.
     assert eventually(fn ->
-             has_element?(view, ~s([data-test="terminal-ended"]), "Signed in.")
+             has_element?(view, ~s([data-test="terminal-ended"]), "The sign-in command ended.")
            end)
 
     refute has_element?(view, ~s([data-test="terminal-input"]))
@@ -643,21 +671,20 @@ defmodule PrismWeb.ProgramsLiveTest do
   # One terminal, one session: selecting another target closes the session
   # running, the new terminal sends to its own, and its heading names it.
   test "selecting another program's sign-in closes the one running and sends to the new one",
-       %{conn: conn, athanor: athanor, user: user} do
+       %{conn: conn, athanor: athanor} do
     fake = controller!()
     claude = driven_row!(athanor)
     codex = driven_row!(athanor, "codex")
-    a = login!(user, athanor, "claude-login", "claude")
-    b = login!(user, athanor, "codex-login", "codex")
+    {a, b} = {claude.id, codex.id}
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
-    sign_in(view, "claude", a)
+    sign_in(view, "claude")
     assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
     Scripted.write(fake, claude.id, "first")
     assert eventually(fn -> has_element?(view, ~s([data-test="terminal-lines"]), "first") end)
     assert_receive {:session, "recv", %{"session" => session_a}, _fields}, 2_000
 
-    sign_in(view, "codex", b)
+    sign_in(view, "codex")
     assert_receive {:session, "close", %{"session" => ^session_a}, _fields}, 2_000
     assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
     assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
@@ -676,7 +703,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     # After its session ended, selecting the same sign-in again starts afresh.
     Scripted.end_sessions(fake, codex.id, 0)
     assert eventually(fn -> has_element?(view, ~s([data-test="terminal-ended"])) end)
-    sign_in(view, "codex", b)
+    sign_in(view, "codex")
     assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
     assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
     refute has_element?(view, ~s([data-test="terminal-ended"]))
@@ -685,14 +712,14 @@ defmodule PrismWeb.ProgramsLiveTest do
   # A program that writes more than the terminal keeps: the person reads its
   # last 500 lines, the earlier ones gone.
   test "the terminal keeps a program's last 500 lines",
-       %{conn: conn, athanor: athanor, user: user} do
+       %{conn: conn, athanor: athanor} do
     fake = controller!()
     row = driven_row!(athanor)
-    entry = login!(user, athanor, "claude-login", "claude")
+    home = row.id
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
-    sign_in(view, "claude", entry)
-    assert_receive {:session, "open", %{"home_id" => ^entry}, _fields}, 2_000
+    sign_in(view, "claude")
+    assert_receive {:session, "open", %{"home_id" => ^home}, _fields}, 2_000
 
     written = for n <- 1..510, do: "line-" <> String.pad_leading(Integer.to_string(n), 3, "0")
     Enum.each(written, &Scripted.write(fake, row.id, &1))
@@ -715,15 +742,15 @@ defmodule PrismWeb.ProgramsLiveTest do
   # its state, printed by a crash report or LiveView's termination log,
   # carries only how many lines there are.
   test "the terminal's text is in no crash report of the page, only its count",
-       %{conn: conn, athanor: athanor, user: user} do
+       %{conn: conn, athanor: athanor} do
     fake = controller!()
     row = driven_row!(athanor)
-    entry = login!(user, athanor, "claude-login", "claude")
+    home = row.id
     canary = "sk-canary-" <> Base.encode16(:crypto.strong_rand_bytes(8))
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
-    sign_in(view, "claude", entry)
-    assert_receive {:session, "open", %{"home_id" => ^entry}, _fields}, 2_000
+    sign_in(view, "claude")
+    assert_receive {:session, "open", %{"home_id" => ^home}, _fields}, 2_000
     Scripted.write(fake, row.id, canary)
     assert eventually(fn -> has_element?(view, ~s([data-test="terminal-lines"]), canary) end)
 
@@ -757,12 +784,10 @@ defmodule PrismWeb.ProgramsLiveTest do
   # session, whose terminal is gone, is closed when its start arrives, and
   # the second is the one Send reaches.
   test "a sign-in started for a terminal no longer open is closed",
-       %{conn: conn, athanor: athanor, user: user} do
+       %{conn: conn, athanor: athanor} do
     controller!()
-    driven_row!(athanor)
-    driven_row!(athanor, "codex")
-    a = login!(user, athanor, "claude-login", "claude")
-    b = login!(user, athanor, "codex-login", "codex")
+    a = driven_row!(athanor).id
+    b = driven_row!(athanor, "codex").id
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
 
@@ -771,12 +796,12 @@ defmodule PrismWeb.ProgramsLiveTest do
     :sys.suspend(view.pid)
 
     first =
-      Task.async(fn -> render_submit(view, "sign_in", %{"name" => "claude", "entry" => a}) end)
+      Task.async(fn -> render_click(view, "sign_in", %{"name" => "claude"}) end)
 
     Process.sleep(100)
 
     second =
-      Task.async(fn -> render_submit(view, "sign_in", %{"name" => "codex", "entry" => b}) end)
+      Task.async(fn -> render_click(view, "sign_in", %{"name" => "codex"}) end)
 
     Process.sleep(100)
     :sys.resume(view.pid)
@@ -805,45 +830,40 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert session_b != session_a
   end
 
-  # Signs `name` in with `entry`, its row expanded first unless it is.
-  defp sign_in(view, name, entry) do
-    unless has_element?(view, ~s([data-test="home-actions"] input[name="name"][value="#{name}"])),
+  # Signs `name` in, its row expanded first unless it is.
+  defp sign_in(view, name) do
+    unless has_element?(view, ~s([data-test="sign-in"][phx-value-name="#{name}"])),
       do: view |> element("tr[phx-value-name=#{name}]") |> render_click()
 
-    view
-    |> form(~s([data-test="home-actions"] form[phx-submit="sign_in"]), %{"entry" => entry})
-    |> render_submit()
+    view |> element(~s([data-test="sign-in"][phx-value-name="#{name}"])) |> render_click()
   end
 
-  test "Reset folder empties the chosen login entry's folder", %{
-    conn: conn,
-    athanor: athanor,
-    user: user
-  } do
+  test "Reset folder empties the program's own folder", %{conn: conn, athanor: athanor} do
     controller!()
-    driven_row!(athanor)
-    entry = login!(user, athanor, "claude-login", "claude")
+    home = driven_row!(athanor).id
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
     view |> element("tr[phx-value-name=claude]") |> render_click()
-
-    view
-    |> form(~s([data-test="home-actions"] form[phx-submit="reset_home"]), %{"entry" => entry})
-    |> render_submit()
+    view |> element(~s([data-test="reset-folder"])) |> render_click()
 
     answered(view)
 
-    assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry}, _fields}, 2_000
+    assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^home}, _fields}, 2_000
     assert flash(view, "info") == "The folder is empty again."
     assert render(view) =~ "Reset folder"
     refute render(view) =~ "Reset home"
   end
 
-  test "the program form defines a kept driven program with its bounds, and makes its login entry once confirmed",
+  test "the program form adds a kept driven program with its bounds once its definition is " <>
+         "confirmed, and opens its sign-in in its folder",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()
     {view, _html} = mount_athanor(conn, "/programs", athanor)
     view |> element("button", "Add program") |> render_click()
+
+    # A program's folder is its own: no other program's is offered.
+    refute has_element?(view, ~s(form#add-program [name="login_entry"]))
+    refute has_element?(view, ~s(form#add-program [name="backend"]))
 
     view
     |> form("form#add-program", %{
@@ -859,58 +879,144 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     answered(view)
 
+    # Nothing is made before the person confirms the whole definition.
+    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+    refute has_element?(view, ~s([data-test="sign-in-terminal"]))
+
+    assert %{
+             "operation" => "mcp_servers.create",
+             "resource" => "claude",
+             "details" => %{
+               "command" => "npx -y @anthropic-ai/claude-code",
+               "mark" => "driven",
+               "folder" => "new",
+               "hosts" => "every public host",
+               "memory_bytes" => "1073741824",
+               "home_max_bytes" => "2147483648",
+               "sign_in_command" => "claude auth login",
+               "environment" => "none"
+             }
+           } = asked(user, athanor, "mcp_servers.create")
+
+    assert has_element?(view, ~s([data-test="confirmation"]))
+    confirm!(view, user, athanor, "mcp_servers.create")
+
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "claude")
     assert {row.transport, row.mark} == {"program", "driven"}
     assert row.home == "kept"
     assert row.memory_bytes == 1024 * 1_048_576
     assert row.home_max_bytes == 2048 * 1_048_576
     assert row.login_command == "claude auth login"
+    assert {:ok, []} = Arca.VaultStorage.list(ctx(athanor))
 
-    # The login entry is a sensitive change: it is made once the person
-    # confirms it, and the sign-in opens on it.
-    assert {:ok, []} = Sanctum.Mount.login_entries(athanor.id)
-    refute has_element?(view, ~s([data-test="sign-in-terminal"]))
-    person = person(user, athanor)
-
-    assert {:ok, [%{ref: ref, operation: "vault.create"}]} =
-             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(person), user.user_id)
-
-    Sanctum.TestContext.prove!(person, ref)
+    # It was asked once, and its sign-in opens in the row's own folder.
+    assert open_confirmations(user, athanor) == []
+    home = row.id
+    assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^home}, _fields}, 2_000
     assert eventually(fn -> has_element?(view, ~s([data-test="sign-in-terminal"])) end)
-
-    assert {:ok, [entry]} = Sanctum.Mount.login_entries(athanor.id)
-    assert {:ok, %{name: "claude-login"}} = Arca.VaultStorage.get(ctx(athanor), entry)
-
-    assert_receive {:session, "open", %{"mode" => "sign_in"}, _fields}, 2_000
   end
 
-  test "a kept mcp program names its login entry", %{conn: conn, athanor: athanor, user: user} do
+  test "an install from a component's need asks once, then opens the sign-in in the row's folder",
+       %{conn: conn, athanor: athanor, user: user} do
     controller!()
-    entry = login!(user, athanor, "gh-login", "gh")
-    {view, _html} = mount_athanor(conn, "/programs", athanor)
-    view |> element("button", "Add program") |> render_click()
+    ref = harness!(athanor)
+    query = URI.encode_query(%{"install" => ref, "need" => "claude"})
+    {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
+    render(view)
 
+    assert has_element?(view, ~s([data-test="install-from"]), "asks you to confirm the program")
+    view |> form("form#add-program", %{}) |> render_submit()
+    answered(view)
+
+    assert %{"details" => %{"command" => "npx -y @anthropic-ai/claude-code@2.1.316"}} =
+             asked(user, athanor, "mcp_servers.create")
+
+    confirm!(view, user, athanor, "mcp_servers.create")
+
+    assert {:ok, %{id: home, mark: "driven", home: "kept"}} =
+             Arca.McpServerStorage.get(ctx(athanor), "claude")
+
+    assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^home}, _fields}, 2_000
+    assert open_confirmations(user, athanor) == []
+  end
+
+  # A removal is asked through the confirmation, which says what goes with
+  # the program before it is given; a tool server's is the browser's.
+  test "Remove asks before a program goes, saying its folder goes with it",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    row = driven_row!(athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+    refute has_element?(view, ~s([data-test="remove-program"][data-confirm]))
+    view |> element(~s([data-test="remove-program"])) |> render_click()
+    answered(view)
+
+    assert {:ok, _} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+
+    assert %{"details" => %{"folder" => folder, "grants_asking_again" => "none"}} =
+             asked(user, athanor, "mcp_servers.delete")
+
+    assert folder == row.id
+
+    assert has_element?(
+             view,
+             ~s([data-test="confirmation-consequence"]),
+             "Removing it ends its sessions and removes its folder with everything kept there. " <>
+               "No grant uses it."
+           )
+
+    confirm!(view, user, athanor, "mcp_servers.delete")
+
+    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+    assert flash(view, "info") == "'claude' removed."
+  end
+
+  test "a program whose stored hosts do not read is saved again from Edit, then removed",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    row = driven_row!(athanor)
+    {:ok, _} = Arca.McpServerStorage.update(ctx(athanor), "claude", %{hosts: "not a list"})
+    {:ok, broken} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+    assert {:error, _unread} = Sanctum.ToolServerDigest.recorded(broken)
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+    view |> element(~s(button[data-test="edit"])) |> render_click()
+
+    # The person types the hosts again and saves; it reaches more than a
+    # list that does not read, so it is asked.
     view
     |> form("form#add-program", %{
-      "name" => "gh",
-      "mark" => "mcp",
-      "command" => "gh mcp",
-      "login_command" => "gh auth login",
+      "command" => "npx -y @anthropic-ai/claude",
+      "mark" => "driven",
       "home" => "kept",
-      "login_entry" => entry
+      "login_command" => "claude auth login",
+      "hosts" => "api.anthropic.com"
     })
     |> render_submit()
 
     answered(view)
 
-    assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "gh")
-    assert {row.transport, row.mark} == {"program", "mcp"}
-    assert row.home == "kept"
-    assert row.login_entry_id == entry
+    assert %{"details" => %{"hosts" => ["api.anthropic.com"]}} =
+             asked(user, athanor, "mcp_servers.update")
+
+    confirm!(view, user, athanor, "mcp_servers.update")
+    assert flash(view, "info") =~ "'claude' saved"
+
+    assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+    assert {saved.id, saved.hosts} == {row.id, ~s(["api.anthropic.com"])}
+    assert {:ok, _record} = Sanctum.ToolServerDigest.recorded(saved)
+
+    # Whole again, it is removed once its removal is confirmed.
+    view |> element(~s([data-test="remove-program"])) |> render_click()
+    answered(view)
+    confirm!(view, user, athanor, "mcp_servers.delete")
+    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "claude")
   end
 
   test "a program's hosts are set in its form, shown on its row and changed there",
-       %{conn: conn, athanor: athanor} do
+       %{conn: conn, athanor: athanor, user: user} do
     controller!()
     {view, _html} = mount_athanor(conn, "/programs", athanor)
     view |> element("button", "Add program") |> render_click()
@@ -928,6 +1034,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> render_submit()
 
     answered(view)
+    confirm!(view, user, athanor, "mcp_servers.create")
 
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
     assert Jason.decode!(row.hosts) == ["api.example.com", "registry.npmjs.org"]
@@ -940,8 +1047,15 @@ defmodule PrismWeb.ProgramsLiveTest do
              "api.example.com, registry.npmjs.org"
            )
 
+    # Fewer hosts are a change to the definition, confirmed as any is.
     view |> form("form#hosts-fetch", %{"hosts" => "api.example.com"}) |> render_submit()
     answered(view)
+
+    assert %{"details" => %{"hosts" => ["api.example.com"]}} =
+             asked(user, athanor, "mcp_servers.update")
+
+    confirm!(view, user, athanor, "mcp_servers.update")
+    assert open_confirmations(user, athanor) == []
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
     assert Jason.decode!(row.hosts) == ["api.example.com"]
 
@@ -952,8 +1066,14 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert {:ok, %{hosts: ~s(["api.example.com"])}} =
              Arca.McpServerStorage.get(ctx(athanor), "fetch")
 
+    # Every public host reaches more: it is asked, and saved once confirmed.
     view |> form("form#hosts-fetch", %{"hosts" => ""}) |> render_submit()
     answered(view)
+
+    assert {:ok, %{hosts: ~s(["api.example.com"])}} =
+             Arca.McpServerStorage.get(ctx(athanor), "fetch")
+
+    confirm!(view, user, athanor, "mcp_servers.update")
     assert {:ok, %{hosts: nil}} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
     assert has_element?(view, ~s([data-test="program-hosts"]), "every public host")
   end
@@ -989,7 +1109,6 @@ defmodule PrismWeb.ProgramsLiveTest do
        %{conn: conn, athanor: athanor, user: user} do
     controller!()
     row = driven_row!(athanor)
-    entry = login!(user, athanor, "claude-login", "claude")
     {view, _html} = mount_athanor(conn, "/programs", athanor)
 
     view |> element("tr[phx-value-name=claude]") |> render_click()
@@ -1026,6 +1145,12 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     answered(view)
 
+    # Another command reaches more: it is saved once confirmed.
+    assert %{"details" => %{"command" => "npx -y @anthropic-ai/claude-code@2.1.400"}} =
+             asked(user, athanor, "mcp_servers.update")
+
+    confirm!(view, user, athanor, "mcp_servers.update")
+
     assert flash(view, "info") =~ "'claude' saved"
     refute has_element?(view, "form#add-program")
 
@@ -1035,18 +1160,22 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert {saved.transport, saved.mark, saved.home} == {"program", "driven", "kept"}
     assert saved.memory_bytes == 1024 * 1_048_576
 
-    assert [%{"name" => "claude", "command" => "npx -y @anthropic-ai/claude-code@2.1.400"}] =
-             Arca.McpServerStorage.config(saved)["backends"]
+    assert Arca.McpServerStorage.config(saved) == %{
+             "command" => "npx -y @anthropic-ai/claude-code@2.1.400",
+             "env" => %{},
+             "timeout_ms" => 30_000
+           }
 
-    # The folder is its login entry's, untouched: no reset or retire sent.
-    assert {:ok, [^entry]} = Sanctum.Mount.login_entries(athanor.id)
+    # The folder is the row's, untouched: no reset or retire sent.
     refute_received {:control, "home", _home, _fields}
   end
 
-  test "Edit keeps a kept mcp program's login entry, and a stale epoch is refused in the form",
+  # Every change to a program's definition is confirmed, a narrower one
+  # too, and its confirmation says which grants will ask again.
+  test "an Edit that only narrows is confirmed, saying which grants ask again, and a stale " <>
+         "epoch is refused in the form",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()
-    entry = login!(user, athanor, "gh-login", "gh")
 
     {:ok, row} =
       Arca.McpServerStorage.insert(ctx(athanor), %{
@@ -1057,88 +1186,38 @@ defmodule PrismWeb.ProgramsLiveTest do
         url: nil,
         enabled: false,
         home: "kept",
-        login_entry_id: entry,
-        config_json:
-          Jason.encode!(%{
-            "backends" => [%{"name" => "github", "command" => "gh mcp", "env" => %{}}]
-          })
+        memory_bytes: 2_147_483_648,
+        config_json: Jason.encode!(%{"command" => "gh mcp", "env" => %{}})
       })
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
     view |> element("tr[phx-value-name=gh]") |> render_click()
     view |> element(~s(button[data-test="edit"])) |> render_click()
 
-    assert has_element?(view, ~s(form#add-program option[value="#{entry}"][selected]))
-
-    view
-    |> form("form#add-program", %{"command" => "gh mcp --verbose", "login_entry" => entry})
-    |> render_submit()
-
+    view |> form("form#add-program", %{"memory_mib" => "1024"}) |> render_submit()
     answered(view)
 
+    assert %{"details" => %{"memory_bytes" => "1073741824", "grants_asking_again" => "none"}} =
+             asked(user, athanor, "mcp_servers.update")
+
+    assert has_element?(view, ~s([data-test="confirmation-consequence"]), "No grant uses it.")
+    assert {:ok, ^row} = Arca.McpServerStorage.get(ctx(athanor), "gh")
+
+    confirm!(view, user, athanor, "mcp_servers.update")
+    assert open_confirmations(user, athanor) == []
     assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "gh")
-    assert {saved.id, saved.login_entry_id, saved.home} == {row.id, entry, "kept"}
-    # The backend keeps the name it was defined with, so its tools keep theirs.
-    assert [%{"name" => "github", "command" => "gh mcp --verbose"}] =
-             Arca.McpServerStorage.config(saved)["backends"]
+    assert {saved.id, saved.home, saved.memory_bytes} == {row.id, "kept", 1_073_741_824}
 
     # An edit opened before another change is refused, and changes nothing.
     view |> element(~s(button[data-test="edit"])) |> render_click()
     {:ok, _} = Arca.McpServerStorage.update(ctx(athanor), "gh", %{enabled: false})
 
-    view
-    |> form("form#add-program", %{"command" => "gh mcp --stale", "login_entry" => entry})
-    |> render_submit()
+    view |> form("form#add-program", %{"memory_mib" => "512"}) |> render_submit()
 
     html = answered(view)
     assert html =~ "Failed to save:"
     assert html =~ "changed since epoch"
-    assert {:ok, %{config_json: json}} = Arca.McpServerStorage.get(ctx(athanor), "gh")
-    refute json =~ "--stale"
-  end
-
-  test "Edit on a program of several backends opens its config, and saving it replaces the whole",
-       %{conn: conn, athanor: athanor} do
-    controller!()
-
-    {:ok, _} =
-      Arca.McpServerStorage.insert(ctx(athanor), %{
-        cap: 0,
-        name: "tools",
-        transport: "program",
-        mark: "mcp",
-        url: nil,
-        enabled: false,
-        config_json:
-          Jason.encode!(%{
-            "backends" => [
-              %{"name" => "fs", "command" => "npx -y fs", "env" => %{}},
-              %{"name" => "git", "command" => "npx -y git", "env" => %{}}
-            ]
-          })
-      })
-
-    {view, _html} = mount_athanor(conn, "/programs", athanor)
-    view |> element("tr[phx-value-name=tools]") |> render_click()
-    view |> element(~s(button[data-test="edit"])) |> render_click()
-
-    refute has_element?(view, "form#add-program")
-    assert view |> element("form#add-config textarea") |> render() =~ "npx -y git"
-
-    config =
-      Jason.encode!(%{
-        "transport" => "program",
-        "mark" => "mcp",
-        "backends" => [%{"name" => "fs", "command" => "npx -y fs@2", "env" => %{}}]
-      })
-
-    view |> form("form#add-config", %{"config" => config}) |> render_submit()
-    answered(view)
-
-    assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "tools")
-
-    assert [%{"name" => "fs", "command" => "npx -y fs@2"}] =
-             Arca.McpServerStorage.config(saved)["backends"]
+    assert {:ok, %{memory_bytes: 1_073_741_824}} = Arca.McpServerStorage.get(ctx(athanor), "gh")
   end
 
   test "a disabled program's details read as stopped: no program running, no tools",
@@ -1152,10 +1231,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         transport: "program",
         mark: "mcp",
         url: nil,
-        config_json:
-          Jason.encode!(%{
-            "backends" => [%{"name" => "github", "command" => "npx -y github", "env" => %{}}]
-          })
+        config_json: Jason.encode!(%{"command" => "npx -y github", "env" => %{}})
       })
 
     on_exit(fn -> Emissary.External.ServerSupervisor.stop("github", athanor.id) end)
@@ -1183,7 +1259,6 @@ defmodule PrismWeb.ProgramsLiveTest do
   # what the program form does not show and a bound of no whole MiB.
   defp full_program!(user, athanor) do
     entry!(user, athanor, "gh", %{"hosts" => ["api.github.com"]}, true)
-    login = login!(user, athanor, "gh-login", "gh")
 
     {:ok, row} =
       Arca.McpServerStorage.insert(ctx(athanor), %{
@@ -1194,20 +1269,14 @@ defmodule PrismWeb.ProgramsLiveTest do
         url: nil,
         enabled: false,
         home: "kept",
-        login_entry_id: login,
         memory_bytes: 16_777_217,
         home_max_bytes: 2_147_483_648,
         login_command: "gh auth login",
         hosts: Jason.encode!(["api.github.com", "github.com"]),
         config_json:
           Jason.encode!(%{
-            "backends" => [
-              %{
-                "name" => "github",
-                "command" => "gh mcp",
-                "env" => %{"GH_TOKEN" => "vault:gh", "NODE_ENV" => "production"}
-              }
-            ],
+            "command" => "gh mcp",
+            "env" => %{"GH_TOKEN" => "vault:gh", "NODE_ENV" => "production"},
             "timeout_ms" => 60_000,
             "tool_patterns" => ["search"],
             "console" => true
@@ -1250,6 +1319,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     view |> element(~s(button[data-test="edit"])) |> render_click()
     view |> form("form#add-program", %{"command" => "gh mcp --read-only"}) |> render_submit()
     answered(view)
+    confirm!(view, user, athanor, "mcp_servers.update")
 
     assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "gh")
     assert saved.epoch == before.epoch + 1
@@ -1257,7 +1327,6 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert Map.take(saved, [
              :mark,
              :home,
-             :login_entry_id,
              :memory_bytes,
              :home_max_bytes,
              :login_command,
@@ -1266,7 +1335,6 @@ defmodule PrismWeb.ProgramsLiveTest do
              Map.take(before, [
                :mark,
                :home,
-               :login_entry_id,
                :memory_bytes,
                :home_max_bytes,
                :login_command,
@@ -1274,13 +1342,8 @@ defmodule PrismWeb.ProgramsLiveTest do
              ])
 
     assert Arca.McpServerStorage.config(saved) == %{
-             "backends" => [
-               %{
-                 "name" => "github",
-                 "command" => "gh mcp --read-only",
-                 "env" => %{"GH_TOKEN" => "vault:gh", "NODE_ENV" => "production"}
-               }
-             ],
+             "command" => "gh mcp --read-only",
+             "env" => %{"GH_TOKEN" => "vault:gh", "NODE_ENV" => "production"},
              "timeout_ms" => 60_000,
              "tool_patterns" => ["search"],
              "console" => true
@@ -1308,6 +1371,76 @@ defmodule PrismWeb.ProgramsLiveTest do
       })
 
     row
+  end
+
+  # A tool server elsewhere is deleted on the browser's question, which
+  # names the grant of its tools that will ask again; the delete blocks it.
+  test "Delete on a tool server names the grants of its tools, which ask again once it is gone",
+       %{conn: conn, athanor: athanor, user: user} do
+    tool_server!(user, athanor)
+    source = "reagent:local.relay-user"
+    granted = Sanctum.Context.internal(athanor_id: athanor.id, scope: :athanor)
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_head!(
+        granted,
+        %{
+          id: "prof_relay_user",
+          kind: :owner,
+          source_ref: source,
+          label: "default",
+          status: :active
+        },
+        %{
+          id: "cons_relay_user",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape",
+          commit_digest: "sha256:commit",
+          resolved_policy:
+            Jason.encode!(%{
+              "canonical" => "jcs-1",
+              "nodes" => %{
+                source => %{
+                  "limits" => Prima.Test.AuthorityFixtures.limits_map(),
+                  "edges" => %{
+                    "@ingress" => %{
+                      "tool_servers" => [
+                        %{
+                          "server_digest" => "sha256:relay",
+                          "server_name" => "relay",
+                          "tool_patterns" => ["search"],
+                          "record" => %{"address" => "https://127.0.0.1:9/mcp", "headers" => []}
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }),
+          activation: %{source => "sha256:act"}
+        }
+      )
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=relay]") |> render_click()
+
+    assert has_element?(
+             view,
+             ~s([data-test="delete-server"][data-confirm="Delete this row? ) <>
+               ~s(The one grant that uses it will ask again: #{source}."])
+           )
+
+    view |> element(~s([data-test="delete-server"])) |> render_click()
+    answered(view)
+
+    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+    assert open_confirmations(user, athanor) == []
+
+    assert {:ok, %{status: "needs_consent"}} =
+             Arca.ProfileStorage.get(ctx(athanor), "prof_relay_user")
   end
 
   defp edit_relay(view) do

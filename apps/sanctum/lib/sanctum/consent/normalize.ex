@@ -222,7 +222,7 @@ defmodule Sanctum.Consent.Normalize do
   defp credential_hosts(type, nil, tag) do
     kind = hd(String.split(type, ":", parts: 2))
 
-    if kind in Prima.CredentialKinds.all() and kind != "login",
+    if kind in Prima.CredentialKinds.all(),
       do: {:error, {tag, :hosts, "a credential need names the hosts it calls"}},
       else: :ok
   end
@@ -230,8 +230,8 @@ defmodule Sanctum.Consent.Normalize do
   defp credential_hosts(_type, _hosts, _tag), do: :ok
 
   # A login need names the program it mounts into, and only a login need
-  # names one: which program a login entry signs in to is what the person
-  # consents to.
+  # names one: which program's row it binds is what the person consents
+  # to.
   defp program(type, need, tag) do
     login? = hd(String.split(type, ":", parts: 2)) == "login"
 

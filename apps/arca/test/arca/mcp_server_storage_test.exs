@@ -109,9 +109,10 @@ defmodule Arca.McpServerStorageTest do
                memory_bytes: nil,
                home_max_bytes: nil,
                login_command: nil,
-               login_entry_id: nil,
                hosts: nil
              } = server
+
+      refute Map.has_key?(server, :login_entry_id)
 
       assert {:ok, ^server} = McpServerStorage.get(actor, "plain")
     end
@@ -131,10 +132,10 @@ defmodule Arca.McpServerStorageTest do
                  login_command: "claude auth login"
                })
 
-      assert %{transport: "program", mark: "driven", home: "kept", login_entry_id: nil} = piped
+      assert %{transport: "program", mark: "driven", home: "kept"} = piped
       assert {:ok, ^piped} = McpServerStorage.get(actor, "claude")
 
-      assert {:ok, %{epoch: 1}} =
+      assert {:ok, %{id: gh, epoch: 1}} =
                McpServerStorage.insert(actor, %{
                  cap: 0,
                  name: "gh",
@@ -142,7 +143,6 @@ defmodule Arca.McpServerStorageTest do
                  mark: "mcp",
                  url: nil,
                  home: "kept",
-                 login_entry_id: "vlt_gh",
                  login_command: "gh auth login"
                })
 
@@ -154,18 +154,16 @@ defmodule Arca.McpServerStorageTest do
                    home: "scratch",
                    memory_bytes: 268_435_456,
                    home_max_bytes: nil,
-                   login_command: nil,
-                   login_entry_id: nil
+                   login_command: nil
                  },
-                 1
+                 %{id: gh, epoch: 1}
                )
 
       assert %{
                epoch: 2,
                home: "scratch",
                memory_bytes: 268_435_456,
-               login_command: nil,
-               login_entry_id: nil
+               login_command: nil
              } = updated
 
       # A store-level constraint still holds: a program has no url.
@@ -410,20 +408,49 @@ defmodule Arca.McpServerStorageTest do
                })
 
       assert {:ok, %{epoch: 2}} =
-               McpServerStorage.update(actor, "casrow", %{url: "https://y.com/mcp"}, 1)
+               McpServerStorage.update(actor, "casrow", %{url: "https://y.com/mcp"}, %{
+                 id: id,
+                 epoch: 1
+               })
 
       assert {:error, :stale_epoch} =
-               McpServerStorage.update(actor, "casrow", %{url: "https://z.com/mcp"}, 1)
+               McpServerStorage.update(actor, "casrow", %{url: "https://z.com/mcp"}, %{
+                 id: id,
+                 epoch: 1
+               })
 
       assert {:error, :stale_epoch} = McpServerStorage.bump_epoch(actor, id, 1)
 
       assert {:ok, %{url: "https://y.com/mcp", epoch: 2}} = McpServerStorage.get(actor, "casrow")
 
-      assert {:error, :not_found} = McpServerStorage.update(actor, "absent", %{enabled: true}, 1)
+      assert {:error, :not_found} =
+               McpServerStorage.update(actor, "absent", %{enabled: true}, %{id: id, epoch: 2})
+    end
+
+    # The row a write expects is the row it read, by its id: another row
+    # made under the name at the same epoch is not written.
+    test "a write naming the row it read is refused on another row under the name",
+         %{actor: actor} do
+      assert {:ok, %{id: first}} =
+               McpServerStorage.insert(actor, %{cap: 0, name: "reborn", url: "https://x.com/mcp"})
+
+      assert {:ok, _} = McpServerStorage.delete(actor, "reborn")
+
+      assert {:ok, %{id: second, epoch: 1}} =
+               McpServerStorage.insert(actor, %{cap: 0, name: "reborn", url: "https://y.com/mcp"})
+
+      assert {:error, :stale_epoch} =
+               McpServerStorage.update(actor, "reborn", %{url: "https://z.com/mcp"}, %{
+                 id: first,
+                 epoch: 1
+               })
+
+      assert {:ok, %{id: ^second, url: "https://y.com/mcp", epoch: 1}} =
+               McpServerStorage.get(actor, "reborn")
     end
 
     test "an http row has a url and a program has none", %{actor: actor} do
-      program = Jason.encode!(%{"backends" => []})
+      program = Jason.encode!(%{"command" => "npx server", "env" => %{}})
 
       assert {:ok, %{transport: "program", mark: "mcp", url: nil}} =
                McpServerStorage.insert(actor, %{
@@ -479,6 +506,48 @@ defmodule Arca.McpServerStorageTest do
       assert %{row: %{id: b_id}} = rows[{actor_b.athanor_id, b.id}]
       assert b_id == b.id
       refute Map.has_key?(rows, {actor_a.athanor_id, b.id})
+    end
+  end
+
+  describe "standing/1" do
+    test "names each id's athanor, whether it keeps a home and whether its athanor is archived, across athanors" do
+      actor_a = Arca.Test.Actor.local(athanor_id: "ath_a", user_id: "user_a")
+      actor_b = Arca.Test.Actor.local(athanor_id: "ath_b", user_id: "user_b")
+
+      program = fn actor, name, home ->
+        {:ok, row} =
+          McpServerStorage.insert(actor, %{
+            cap: 0,
+            name: name,
+            transport: "program",
+            mark: "driven",
+            url: nil,
+            home: home
+          })
+
+        row
+      end
+
+      kept = program.(actor_a, "kept", "kept")
+      scratch = program.(actor_a, "scratch", "scratch")
+
+      {:ok, http} =
+        McpServerStorage.insert(actor_a, %{cap: 0, name: "web", url: "https://a.com/mcp"})
+
+      archived = program.(actor_b, "kept", "kept")
+      Arca.Test.Actor.archive!("ath_b")
+
+      ids = [kept.id, scratch.id, http.id, archived.id, "mcp_no-such-row"]
+      assert {:ok, standing} = McpServerStorage.standing(ids)
+
+      assert standing == %{
+               kept.id => %{athanor_id: "ath_a", kept: true, athanor_archived: false},
+               scratch.id => %{athanor_id: "ath_a", kept: false, athanor_archived: false},
+               http.id => %{athanor_id: "ath_a", kept: false, athanor_archived: false},
+               archived.id => %{athanor_id: "ath_b", kept: true, athanor_archived: true}
+             }
+
+      assert {:ok, %{}} = McpServerStorage.standing([])
     end
   end
 

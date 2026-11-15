@@ -14,7 +14,7 @@ defmodule Aqua.Models do
       installed catalyst that speaks the contract and has what it needs
       connected asked for its models;
     * `model_status/2` — whether each agent's brain is ready: installed,
-      and bound to a key or a login the agent runs it with
+      and bound to a key or a program the agent runs it with
       (`t:status/0`);
     * `providers/1` — every brain the athanor can connect, with what it
       needs and how it stands, which Aqua's setup offers;
@@ -29,15 +29,21 @@ defmodule Aqua.Models do
   alias Sanctum.Context
 
   @typedoc """
-  An agent's brain as `model_status/2` reads it. The first four carry the
+  An agent's brain as `model_status/2` reads it. The first five carry the
   release the agent's ref resolves to; `:missing` and `:model_unavailable`
   carry the ref the agent names, whether or not the listing resolved it:
 
-    * `:ready` — the agent runs it with a bound key, or a bound login
-      entry for a brain that mounts a program's own sign-in;
+    * `:ready` — the agent runs it with a bound key, or a bound program
+      row for a brain that runs a program on its own sign-in, which is
+      signed in when the program says so;
     * `:needs_key` — a key to connect;
-    * `:needs_sign_in` — a brain whose every required need mounts a
-      program's own sign-in, with no signed-in login entry bound;
+    * `:needs_grant` — the person's grant is all it asks, as Aqua's
+      setup reads it (`t:provider/0`): a brain that needs nothing else,
+      or one whose every required need is a program's own sign-in (a login
+      need) with each program's row set up here and none bound yet;
+    * `:needs_program` — a brain whose every required need is a
+      program's own sign-in, with a program it needs not set up here:
+      its program to set up on the Programs page and its grant to give;
     * `:consent_stale` — the agent's own consent no longer covers its
       shape (its brain, model, options or capabilities changed since it
       was consented), so it runs again once the person consents again;
@@ -52,7 +58,8 @@ defmodule Aqua.Models do
   @type status ::
           {:ready
            | :needs_key
-           | :needs_sign_in
+           | :needs_grant
+           | :needs_program
            | :consent_stale
            | :consent_damaged
            | :consent_unavailable
@@ -214,14 +221,12 @@ defmodule Aqua.Models do
   declares the contract, at its newest version, asked for `models`
   through the catalog, so consent applies to what runs. A catalyst whose
   setup plan (`component.setup_plan`, as `model_status/2` reads it)
-  leaves a key or a sign-in to connect is not run, and no run, failed or
-  otherwise, is recorded for it. It is listed under `errors` with
-  `:connection_not_granted`'s sentence, the one its run is refused with,
-  when nothing is bound; with "The login entry bound to <need> is not
-  signed in; sign it in on the Programs page." when its bound login entry
-  waits on its program's sign-in, the state a catalyst may word in its
-  own way. Any other plan, or a plan that cannot be read, runs the
-  listing, whose own refusal is the catalyst's row.
+  leaves a key, a program or its grant to connect is not run, and no run,
+  failed or otherwise, is recorded for it. It is listed under `errors` with
+  `:connection_not_granted`'s sentence, the one its run is refused with.
+  Any other plan, or a plan that cannot be read, runs the listing, whose
+  own refusal is the catalyst's row: a program not signed in is the
+  catalyst's to say.
 
   Returns `{:ok, %{"models" => %{provider => [id]}, "refs" => %{provider
   => versionless ref}, "errors" => %{provider => message}}}`. A provider
@@ -288,8 +293,8 @@ defmodule Aqua.Models do
   end
 
   # A listing opened on every pane mount runs nothing for a catalyst
-  # still waiting on its key or sign-in: such a run could only fail, and a
-  # failed run stands as something waiting on the person
+  # still waiting on its key, program or grant: such a run could only
+  # fail, and a failed run stands as something waiting on the person
   # (`Cyfr.Providers.Attention`).
   defp list_models(ctx, ref) do
     case to_connect(ctx, ref) do
@@ -306,51 +311,13 @@ defmodule Aqua.Models do
     case Aqua.Ops.call_tool("component", ctx, %{"action" => "setup_plan", "reference" => ref}) do
       {:ok, %{ready: false} = plan} ->
         case unready(plan, ref) do
-          {status, _} when status in [:needs_key, :needs_sign_in] -> setup_sentence(ctx, plan)
+          {:connect, _} -> refusal_text(:connection_not_granted)
           _no_setup -> nil
         end
 
       _ready_or_unread ->
         nil
     end
-  end
-
-  # A root binds one entry, on its own ingress, so a login entry it binds
-  # serves the plan's required login need. Nothing bound, or a binding
-  # that fails for another reason, is a grant to make.
-  defp setup_sentence(ctx, plan) do
-    if signing_in?(ctx, plan) do
-      needs =
-        for need <- plan.needs, need[:required] != false, need[:kind] == "login", do: need.name
-
-      "The login entry bound to #{Enum.join(needs, ", ")} is not signed in; " <>
-        "sign it in on the Programs page."
-    else
-      refusal_text(:connection_not_granted)
-    end
-  end
-
-  # Whether a login entry the plan binds waits on its program's sign-in:
-  # its row in the caller's vault (`vault.list`) is a login whose status is
-  # `needs_reauth`, which the Vault page calls "not signed in". A vault
-  # that cannot be listed leaves the binding to the grant sentence.
-  defp signing_in?(ctx, plan) do
-    bound =
-      for %{entry_id: id, satisfied: false} when is_binary(id) <-
-            get_in(plan, [:consent, :needs]) || [],
-          do: id
-
-    bound != [] and
-      case Aqua.Ops.call_tool("vault", ctx, %{"action" => "list"}) do
-        {:ok, %{entries: entries}} ->
-          Enum.any?(
-            entries,
-            &(&1.id in bound and &1.kind == "login" and &1.status == "needs_reauth")
-          )
-
-        _unlisted ->
-          false
-      end
   end
 
   defp ask_models(ctx, ref) do
@@ -390,8 +357,10 @@ defmodule Aqua.Models do
   the credential kind otherwise (`qualifier` the provider its key is
   for), or nil for a brain that needs nothing — its `state` as its own
   consent reads it (`:needs_grant` for a brain never granted, or whose
-  grant was revoked, that needs nothing else of the person), and `shared`, `%{owner, person_daily}` when what
-  binds it is a key someone shared with the person.
+  grant was revoked, that needs nothing else of the person: no required
+  need, or only its programs' own, each set up here as a kept driven
+  program row the grant binds), and `shared`, `%{owner, person_daily}`
+  when what binds it is a key someone shared with the person.
   """
   @type provider :: %{
           provider: String.t(),
@@ -401,7 +370,7 @@ defmodule Aqua.Models do
             :ready
             | :needs_grant
             | :needs_key
-            | :needs_sign_in
+            | :needs_program
             | :consent_damaged
             | :consent_unavailable
             | :model_unavailable,
@@ -424,23 +393,24 @@ defmodule Aqua.Models do
   def providers(%Context{} = ctx) do
     with {:ok, rows} <- Compendium.model_catalysts(ctx) do
       shares = offered_shares(ctx)
+      programs = set_up_programs(ctx)
 
       {:ok,
        rows
        |> newest_speaking()
-       |> Enum.map(fn {provider, ref} -> provider(ctx, provider, ref, shares) end)
+       |> Enum.map(fn {provider, ref} -> provider(ctx, provider, ref, shares, programs) end)
        |> Enum.sort_by(&{is_nil(&1.shared), &1.provider})}
     end
   end
 
-  defp provider(ctx, provider, ref, shares) do
+  defp provider(ctx, provider, ref, shares, programs) do
     case Aqua.Ops.call_tool("component", ctx, %{"action" => "setup_plan", "reference" => ref}) do
       {:ok, plan} ->
         %{
           provider: provider,
           ref: ref,
           need: need_of(plan),
-          state: plan_state(plan, ref),
+          state: plan_state(plan, ref, programs),
           shared: shared(plan, shares)
         }
 
@@ -456,18 +426,51 @@ defmodule Aqua.Models do
     end
   end
 
-  defp plan_state(%{ready: true}, _ref), do: :ready
+  defp plan_state(%{ready: true}, _ref, _programs), do: :ready
 
-  defp plan_state(plan, ref) do
-    if grant_only?(plan), do: :needs_grant, else: plan |> unready(ref) |> elem(0)
+  defp plan_state(plan, ref, programs) do
+    case unready(plan, ref) do
+      {:connect, _} -> connect_state(plan, programs)
+      {state, _} -> state
+    end
   end
 
   # A brain with no grant to stand on, never made or revoked, and no
   # required need: the person's grant is all it asks, so no key is offered.
   # A required need already met before a revocation is not told apart
-  # here, since an ungranted plan carries no binding to read it from.
-  defp grant_only?(plan),
-    do: head_state(plan) in ["missing", "revoked"] and is_nil(need_of(plan))
+  # here, since an ungranted plan carries no binding to read it from. So
+  # is a brain whose required needs are all its programs' own, each set
+  # up here: the grant binds the program row its plan offers, granted
+  # before or not. On a plan that reads ready, as an agent's status reads
+  # it once the agent's edge binds nothing, the grant that waits is the
+  # agent's own.
+  defp grant_only?(plan, programs) do
+    case head_state(plan) do
+      state when state in ["damaged", "unavailable"] ->
+        false
+
+      state ->
+        (state in ["missing", "revoked"] and is_nil(need_of(plan))) or
+          (signs_in?(plan) and
+             Enum.all?(required(plan), &MapSet.member?(programs, &1[:program])))
+    end
+  end
+
+  # The programs set up here that a login need binds: the athanor's kept
+  # driven program rows, by name (`Sanctum.Mount`). A list that cannot be
+  # read sets none up.
+  defp set_up_programs(ctx) do
+    case Aqua.Ops.call_tool("mcp_servers", ctx, %{"action" => "list"}) do
+      {:ok, %{servers: servers}} ->
+        for %{transport: "program", mark: "driven", home: "kept", enabled: true, name: name} <-
+              servers,
+            into: MapSet.new(),
+            do: name
+
+      _unread ->
+        MapSet.new()
+    end
+  end
 
   # A bound need whose binding is a share offered to the person: the share
   # the setup plan names is the one the person's consent holds.
@@ -492,15 +495,16 @@ defmodule Aqua.Models do
   For each agent given (the roster's string-keyed projection: `"name"`
   and `"catalyst_ref"`), its brain: the installed release its catalyst
   resolves to and whether the consent it runs under is complete —
-  `%{name => t:status/0}`: `{:ready | :needs_key | :needs_sign_in | :consent_stale |
-  :consent_damaged | :consent_unavailable, resolved_ref}`, or `{:missing |
-  :model_unavailable, catalyst_ref}`. An agent that names no catalyst
-  has no entry. Each agent is read on its own consent, the soul's or the
-  crew member's (`Compendium.AgentSource`), so a member whose brain is
-  not installed or not bound reads so while the soul reads ready.
+  `%{name => t:status/0}`: `{:ready | :needs_key | :needs_grant |
+  :needs_program | :consent_stale | :consent_damaged |
+  :consent_unavailable, resolved_ref}`, or `{:missing | :model_unavailable,
+  catalyst_ref}`. An agent that names no catalyst has no entry. Each
+  agent is read on its own consent, the soul's or the crew member's
+  (`Compendium.AgentSource`), so a member whose brain is not installed
+  or not bound reads so while the soul reads ready.
 
   A brain is ready on a bound need of either kind: a key the catalyst's
-  requests carry, or a login entry it mounts into its program
+  requests carry, or a program row whose folder it runs its program in
   (`Sanctum.Mount`) — the setup plan and the edge read both the same
   way. A consent the brain runs under that is damaged, or that the
   store could not answer, is `:consent_damaged` or
@@ -526,11 +530,12 @@ defmodule Aqua.Models do
     # The listing's refusal is kept: a listing that cannot be read never
     # resolves a model against no catalysts.
     listing = Aqua.AgentConfig.catalyst_listing(ctx)
+    programs = set_up_programs(ctx)
 
     for %{"name" => name, "catalyst_ref" => ref} <- agents,
         is_binary(name) and is_binary(ref) and ref != "",
         into: %{} do
-      {name, catalyst_status(ctx, listing, name, ref)}
+      {name, catalyst_status(ctx, listing, programs, name, ref)}
     end
   end
 
@@ -539,11 +544,12 @@ defmodule Aqua.Models do
   # what the agent actually runs it with, resolved as a turn would resolve
   # it. A bound key the agent's edge does not select is still one to
   # connect.
-  defp catalyst_status(_ctx, {:error, _unread}, _name, ref), do: {:model_unavailable, ref}
+  defp catalyst_status(_ctx, {:error, _unread}, _programs, _name, ref),
+    do: {:model_unavailable, ref}
 
-  defp catalyst_status(ctx, {:ok, listing}, name, ref) do
+  defp catalyst_status(ctx, {:ok, listing}, programs, name, ref) do
     case Aqua.AgentConfig.resolve_catalyst(listing, ref) do
-      {:ok, resolved} -> planned_status(ctx, name, ref, resolved)
+      {:ok, resolved} -> planned_status(ctx, programs, name, ref, resolved)
       {:error, _no_such_catalyst} -> {:missing, ref}
     end
   end
@@ -553,15 +559,16 @@ defmodule Aqua.Models do
   # every other refusal (a store that could not answer, which the
   # component domain answers as a sentence, a damaged row, a timeout, a
   # forbidden call, anything else) leaves whether it is installed unknown.
-  defp planned_status(ctx, name, ref, resolved) do
+  defp planned_status(ctx, programs, name, ref, resolved) do
     case Aqua.Ops.call_tool("component", ctx, %{
            "action" => "setup_plan",
            "reference" => resolved
          }) do
       {:ok, plan} ->
-        if plan.ready == true,
-          do: agent_status(ctx, name, ref, resolved, plan),
-          else: unready(plan, resolved)
+        case plan_state(plan, resolved, programs) do
+          :ready -> agent_status(ctx, name, ref, resolved, connect_state(plan, programs))
+          state -> {state, resolved}
+        end
 
       {:error, {:not_found, {:component, _reference}}} ->
         {:missing, ref}
@@ -576,28 +583,28 @@ defmodule Aqua.Models do
   # damage (the agent's head, a lender, a stored grant that fails its
   # checks), because the store could not answer, or because the agent's
   # shape moved since its consent is said as such, never as a key to
-  # connect; every other refusal, and an edge that binds nothing, is a key
-  # (or a sign-in) to connect.
-  defp agent_status(ctx, name, catalyst_ref, resolved, plan) do
+  # connect; every other refusal, and an edge that binds nothing, is
+  # `connect`, what connecting its brain asks (`connect_state/2`).
+  defp agent_status(ctx, name, catalyst_ref, resolved, connect) do
     source = Prima.AgentRef.ref(name)
 
     case Opus.authority_for(ctx, :default, source) do
       {:ok, authority} ->
         if lent?(authority, source, catalyst_ref),
           do: {:ready, resolved},
-          else: {to_connect(plan), resolved}
+          else: {connect, resolved}
 
       {:error, reason} ->
         case Aqua.ConsentStatus.classify_refusal(reason) do
           {:ok, :stale} -> {:consent_stale, resolved}
           {:error, :corrupt} -> {:consent_damaged, resolved}
           {:error, :unavailable} -> {:consent_unavailable, resolved}
-          _absent_or_forbidden -> {to_connect(plan), resolved}
+          _absent_or_forbidden -> {connect, resolved}
         end
     end
   end
 
-  # A bound vault is an entry, a key or a login alike
+  # A bound vault is an entry, a key or a program row alike
   # (`Prima.Authority.Blob.bound_vault?/1`).
   defp lent?(authority, source, catalyst_ref) do
     case Prima.Authority.Blob.lookup_edge(authority.policy, source, catalyst_ref, "") do
@@ -607,32 +614,41 @@ defmodule Aqua.Models do
   end
 
   # A plan that is not ready because the model's own consent is damaged,
-  # or the store could not answer it, is no key to connect: connecting
+  # or the store could not answer it, is nothing to connect: connecting
   # cannot repair a consent that exists. A head never granted, or no
-  # profile, is.
+  # profile, is `:connect`, which `connect_state/2` names.
   defp unready(plan, resolved) do
     case head_state(plan) do
       "damaged" -> {:consent_damaged, resolved}
       "unavailable" -> {:consent_unavailable, resolved}
-      _missing_or_ungranted -> {to_connect(plan), resolved}
+      _missing_or_ungranted -> {:connect, resolved}
     end
   end
 
-  # What connecting a brain asks of the person: a brain whose every
-  # required need mounts a program's own sign-in needs that program signed
-  # in and its login entry bound; any other a key.
-  defp to_connect(plan), do: if(signs_in?(plan), do: :needs_sign_in, else: :needs_key)
+  # What connecting a brain asks of the person, the one rule Aqua's setup
+  # and every agent's status read: its grant alone (`grant_only?/2`), else
+  # a program to set up for a brain whose every required need is a
+  # program's own sign-in, else a key.
+  defp connect_state(plan, programs) do
+    cond do
+      grant_only?(plan, programs) -> :needs_grant
+      signs_in?(plan) -> :needs_program
+      true -> :needs_key
+    end
+  end
 
   @doc """
   Whether a brain, as its setup plan (`component.setup_plan`) answers it,
   runs on a program's own sign-in: every need it requires is a `login`
-  need, met by a login entry rather than a key.
+  need, met by a program row rather than a key.
   """
   @spec signs_in?(map()) :: boolean()
   def signs_in?(plan) when is_map(plan) do
-    required = for need <- plan[:needs] || [], need[:required] != false, do: need
+    required = required(plan)
     required != [] and Enum.all?(required, &(&1[:kind] == "login"))
   end
+
+  defp required(plan), do: for(need <- plan[:needs] || [], need[:required] != false, do: need)
 
   defp head_state(%{consent: %{head_state: state}}), do: state
   defp head_state(_plan), do: nil

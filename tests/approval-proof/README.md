@@ -193,7 +193,7 @@ either fails whole, and their columns need no class.
 | `vault_defaults` | `provider_hint` | | `id`: a default's own id; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's; `inserted_at`, `updated_at`: times |
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
 | `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via` | `shape_digest`, `commit_digest`, `blob_digest`, `resolved_policy`, `activation`: what a commit of her decisions writes (`derived`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
-| `consent_vault_refs` | `binding_key`, `share_id`, `via_label`, `lifetime_kind`, `consumed_by_root` | `binding_digest`: `requested`; `expires_at`: the until the preview showed her | `consent_id`: the admission's; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's |
+| `consent_vault_refs` | `binding_key`, `share_id`, `mcp_server_id`, `via_label`, `lifetime_kind`, `consumed_by_root` | `binding_digest`: `requested`; `expires_at`: the until the preview showed her | `consent_id`: the admission's; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's |
 
 The bounds:
 

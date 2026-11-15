@@ -387,20 +387,12 @@ defmodule Prima.Refusal do
   defp row({:invalid_argument, message}) when is_binary(message),
     do: {:invalid_argument, message}
 
-  # A part this release declares and does not run yet (a recipient's use
-  # of a shared login entry): refused before anything is read or written.
-  defp row({:not_built, what}) when is_atom(what),
-    do: {:invalid_argument, "This is not built yet."}
-
-  # A login need's mount (`Sanctum.Mount`): the program its entry names is
-  # not set up as a program with a kept home, or the bound entry is no
-  # login entry.
+  # A login need's mount (`Sanctum.Mount`): the program row its binding
+  # names is not set up as a program with a kept home.
   defp row({:program_unavailable, name}) when is_binary(name),
     do:
       {:setup_required,
        "The program #{name} is not set up with a kept home; set it up on Programs."}
-
-  defp row(:not_mountable), do: {:invalid_argument, "This entry is not a login entry."}
 
   # An OAuth grant or refresh for a provider this athanor holds no OAuth
   # client for (`Sanctum.ProviderCredentials`): the client is set on the
@@ -630,10 +622,15 @@ defmodule Prima.Refusal do
       {:setup_required,
        "#{member}'s brain has no key bound yet — connect one from its card on the AQUA page"}
 
-  defp row({:crew_unready, member, :not_signed_in}) when is_binary(member),
+  defp row({:crew_unready, member, :no_grant}) when is_binary(member),
     do:
       {:setup_required,
-       "#{member}'s program is not signed in — sign it in on the Programs page, then connect " <>
+       "#{member}'s brain needs only your grant — connect it from its card on the AQUA page"}
+
+  defp row({:crew_unready, member, :no_program}) when is_binary(member),
+    do:
+      {:setup_required,
+       "#{member}'s program is not set up — set it up on the Programs page, then connect " <>
          "it from its card on the AQUA page"}
 
   defp row({:crew_unready, member, :consent_stale}) when is_binary(member),

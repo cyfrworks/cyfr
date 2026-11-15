@@ -3,22 +3,25 @@
 
 defmodule Opus.Programs.Definition do
   @moduledoc """
-  A program row's definition: what `config.backends` may hold, the program
-  settings a row carries beside it (`validate_row/1`), and the programs a
-  sync defines (`programs/2`, `wire/1`).
+  A program row's definition: the one command and environment its
+  `config` holds (`validate/1`), the program settings a row carries beside
+  them (`validate_row/1`), and the program a sync defines (`program/2`,
+  `wire/1`).
 
-  A program row runs its backends on the backends service Locus serves
-  (`Opus.Programs`), each a shell command with an environment:
+  A program row runs one program on the backends service Locus serves
+  (`Opus.Programs`), a shell command with an environment:
 
-      [%{"name" => "github", "command" => "npx -y @modelcontextprotocol/server-github",
-         "env" => %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token"}}]
+      %{"command" => "npx -y @modelcontextprotocol/server-github",
+        "env" => %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token"}}
 
-  `validate/1` accepts a list of at most `max_backends/0` backends (4)
-  and answers it normalized, or
+  On the wire the program is named `program_name/0`, the same for every
+  row: the row itself is the owner the service runs it under.
+
+  `validate/1` answers the definition normalized, or
   `{:error, {:invalid_argument, message}}`:
 
-    * a name matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique;
-    * a command meets `Prima.LocusBackends.check_command/1`: text beyond
+    * the config holds no key but `config_keys/0`;
+    * the command meets `Prima.LocusBackends.check_command/1`: text beyond
       whitespace, at most `Prima.LocusBackends.max_command_bytes/0` bytes,
       no NUL byte and no `vault:` — every process on the service can read
       a command line, so a credential never goes in one;
@@ -46,61 +49,44 @@ defmodule Opus.Programs.Definition do
 
   alias Prima.{KeeperProtocol, LocusBackends, VaultRef}
 
-  @name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @env_name ~r/\A[A-Z_][A-Z0-9_]{0,63}\z/
   @max_literal_bytes 4096
-  @max_backends 4
+  @program_name "program"
 
-  @typedoc "One validated backend."
-  @type backend :: %{String.t() => String.t() | %{String.t() => String.t()}}
+  @program_keys ~w(mark home memory_bytes home_max_bytes login_command hosts)
+  # What a program's config may hold: its definition, its settings, and
+  # the keys every row's config shares.
+  @config_keys ~w(command env transport timeout_ms tool_patterns console) ++ @program_keys
 
-  @doc "The most backends one server may define."
-  @spec max_backends() :: pos_integer()
-  def max_backends, do: @max_backends
+  @typedoc "A validated definition: the command and its environment as stored."
+  @type definition :: %{String.t() => String.t() | %{String.t() => String.t()}}
 
-  @doc "Validate and normalize a program's backends."
-  @spec validate(term()) :: {:ok, [backend()]} | {:error, {:invalid_argument, String.t()}}
-  def validate(backends) when is_list(backends) do
-    cond do
-      backends == [] ->
-        invalid("A program needs at least one backend")
+  @doc "The name every program goes by on the backends wire."
+  @spec program_name() :: String.t()
+  def program_name, do: @program_name
 
-      length(backends) > max_backends() ->
-        invalid("A program defines at most #{max_backends()} backends")
+  @doc "The keys a program's config may hold."
+  @spec config_keys() :: [String.t()]
+  def config_keys, do: @config_keys
 
-      true ->
-        with {:ok, normalized} <- each(backends, &backend/1),
-             :ok <- unique_names(normalized) do
-          {:ok, normalized}
-        end
+  @doc "Validate and normalize a program's config to its definition: its command and env."
+  @spec validate(term()) :: {:ok, definition()} | {:error, {:invalid_argument, String.t()}}
+  def validate(%{} = config) do
+    with :ok <- only_keys(config),
+         :ok <- check_command(config["command"]),
+         {:ok, env} <- check_env(Map.get(config, "env") || %{}) do
+      {:ok, %{"command" => config["command"], "env" => env}}
     end
   end
 
-  def validate(_backends), do: invalid("config.backends must be a list of backends")
+  def validate(_config), do: invalid("config must be an object")
 
-  @doc "The vault entry names the backends' env templates reference, sorted and unique."
+  @doc "The vault entry names a definition's env templates reference, sorted and unique."
   @spec entry_names(term()) :: [String.t()]
-  def entry_names(backends) when is_list(backends) do
-    backends
-    |> Enum.flat_map(fn
-      %{"env" => %{} = env} -> VaultRef.names(env)
-      _ -> []
-    end)
-    |> Enum.uniq()
-    |> Enum.sort()
-  end
+  def entry_names(%{"env" => %{} = env}),
+    do: env |> VaultRef.names() |> Enum.uniq() |> Enum.sort()
 
-  def entry_names(_backends), do: []
-
-  @doc """
-  The warnings a program's backends carry, in backend order: each
-  vault-bound env name a command expands, then, beside the vault-bound
-  names it does not expand, the first form that computes a value when the
-  shell runs it. Empty when there is nothing to warn of.
-  """
-  @spec warnings(term()) :: [String.t()]
-  def warnings(backends) when is_list(backends), do: Enum.flat_map(backends, &backend_warnings/1)
-  def warnings(_backends), do: []
+  def entry_names(_definition), do: []
 
   # The command runs as `/bin/sh -c command` (Locus.Backends.Backend), so a
   # vault-bound name the shell expands puts the disclosed value in a child's
@@ -110,10 +96,16 @@ defmodule Opus.Programs.Definition do
   # joined here too.
   @computed ["$(", "`", "$[", "${!", "${ ", "${\t", "${\n", "${|"]
 
-  defp backend_warnings(%{"name" => name, "command" => command} = backend)
-       when is_binary(command) do
+  @doc """
+  The warnings a program's definition carries: each vault-bound env name
+  its command expands, then, beside the vault-bound names it does not
+  expand, the first form that computes a value when the shell runs it.
+  Empty when there is nothing to warn of.
+  """
+  @spec warnings(term()) :: [String.t()]
+  def warnings(%{"command" => command} = definition) when is_binary(command) do
     bound =
-      case Map.get(backend, "env") do
+      case Map.get(definition, "env") do
         %{} = env -> for {key, value} <- Enum.sort(env), VaultRef.vault_ref?(value), do: key
         _absent -> []
       end
@@ -122,29 +114,28 @@ defmodule Opus.Programs.Definition do
     {expanded, beside} = Enum.split_with(bound, &expands?(text, &1))
     form = if beside != [], do: Enum.find(@computed, &String.contains?(text, &1))
 
-    Enum.map(expanded, &warning(name, {:expands, &1})) ++
-      if(form, do: [warning(name, {:computes, form, beside})], else: [])
+    Enum.map(expanded, &warning({:expands, &1})) ++
+      if(form, do: [warning({:computes, form, beside})], else: [])
   end
 
-  defp backend_warnings(_backend), do: []
+  def warnings(_definition), do: []
 
   defp expands?(text, key) do
     Regex.match?(~r/\$\{?#{Regex.escape(key)}(?![A-Za-z0-9_])/, text)
   end
 
   @exposed "on the command line, where every process on the backends service, other " <>
-             "athanors' backends included, can read it; the safe route is to let the " <>
+             "athanors' programs included, can read it; the safe route is to let the " <>
              "program read it from its environment"
 
-  defp warning(backend, {:expands, var}) do
-    "Backend '#{backend}' expands #{var}, a vault-bound env name, in its command: " <>
-      "the value is placed #{@exposed}."
+  defp warning({:expands, var}) do
+    "The command expands #{var}, a vault-bound env name: the value is placed #{@exposed}."
   end
 
-  defp warning(backend, {:computes, form, vars}) do
-    "Backend '#{backend}' has #{inspect(form)} in its command beside the vault-bound " <>
-      "#{Enum.join(vars, ", ")}: a command substitution, arithmetic expansion or " <>
-      "indirection can place the value #{@exposed}."
+  defp warning({:computes, form, vars}) do
+    "The command has #{inspect(form)} beside the vault-bound #{Enum.join(vars, ", ")}: " <>
+      "a command substitution, arithmetic expansion or indirection can place the value " <>
+      "#{@exposed}."
   end
 
   @typedoc "One program a sync defines, its environment as stored (templates unresolved)."
@@ -160,13 +151,11 @@ defmodule Opus.Programs.Definition do
         }
 
   @doc """
-  The program settings a row carries beside its backends, checked: the
+  The program settings a row carries beside its definition, checked: the
   `transport` is `program` (an `http` row has none); its `mark` is `mcp`
-  or `driven`, and a `driven` program has exactly one backend, the program
-  a person or a brain drives; `home` is `"scratch"` or `"kept"`, and a kept
-  `mcp` program names the login entry its sessions run in
-  (`login_entry_id`; whether it is one is the caller's to check); `memory_bytes` lies in the keeper's range; `home_max_bytes` is a
-  kept home's alone, at least 1 MiB; `login_command` meets
+  or `driven`; `home` is `"scratch"` or `"kept"`, a kept home being the
+  row's own folder; `memory_bytes` lies in the keeper's range;
+  `home_max_bytes` is a kept home's alone, at least 1 MiB; `login_command` meets
   `Prima.LocusBackends.check_command/1`; `hosts`, the only hosts the
   program reaches beside the resolver and the deployment's private hosts,
   is a list the keeper takes (`Prima.KeeperProtocol.valid_hosts?/1`: 1 to
@@ -181,12 +170,10 @@ defmodule Opus.Programs.Definition do
     mark = config["mark"]
 
     with :ok <- check_mark(mark),
-         :ok <- one_program(mark, config["backends"]),
          :ok <- check_home(home),
          :ok <- check_memory(config["memory_bytes"]),
          :ok <- check_home_max(home, config["home_max_bytes"]),
          :ok <- check_login_command(config["login_command"]),
-         {:ok, entry} <- check_login_entry(mark, home, config["login_entry_id"]),
          {:ok, hosts} <- check_hosts(config["hosts"]) do
       {:ok,
        %{
@@ -195,15 +182,12 @@ defmodule Opus.Programs.Definition do
          memory_bytes: config["memory_bytes"],
          home_max_bytes: config["home_max_bytes"],
          login_command: config["login_command"],
-         login_entry_id: entry,
          hosts: hosts
        }}
     end
   end
 
   def validate_row(_config), do: invalid("Only a row whose transport is program is a program")
-
-  @program_keys ~w(mark home memory_bytes home_max_bytes login_command login_entry_id hosts)
 
   @doc "The config keys that are a program's settings, stored as columns rather than in `config_json`."
   @spec program_keys() :: [String.t()]
@@ -216,11 +200,6 @@ defmodule Opus.Programs.Definition do
       invalid(
         "config.mark must be mcp (CYFR speaks MCP to it) or driven (a person or a brain runs it)"
       )
-
-  defp one_program("driven", backends) when is_list(backends) and length(backends) != 1,
-    do: invalid("A driven program is one program: it defines exactly one backend")
-
-  defp one_program(_mark, _backends), do: :ok
 
   defp check_home(home) when home in ["scratch", "kept"], do: :ok
   defp check_home(_home), do: invalid("config.home must be scratch or kept")
@@ -327,44 +306,26 @@ defmodule Opus.Programs.Definition do
 
   defp unreadable, do: invalid("The program's stored hosts do not read; save the program again")
 
-  # A kept mcp program's sessions run in its login entry's home; a driven
-  # program's catalyst names its entry by its need, so the row names none.
-  defp check_login_entry("mcp", "kept", entry) when is_binary(entry) and entry != "",
-    do: {:ok, entry}
-
-  defp check_login_entry("mcp", "kept", _entry),
-    do: invalid("A kept mcp program names the login entry its home is: config.login_entry_id")
-
-  defp check_login_entry(_mark, _home, nil), do: {:ok, nil}
-
-  defp check_login_entry("driven", _home, _entry),
-    do: invalid("A driven program names no login entry: its catalyst's need binds one")
-
-  defp check_login_entry(_mark, _home, _entry),
-    do: invalid("config.login_entry_id names the entry of a kept home: set config.home to kept")
-
   @doc """
-  The programs a stored row defines: one per validated backend, each with
-  the row's program settings, or the refusal of a row whose stored hosts
-  do not read.
+  The program a stored row defines from its validated definition, with the
+  row's program settings, or the refusal of a row whose stored hosts do
+  not read.
   """
-  @spec programs(map(), [backend()]) ::
-          {:ok, [program()]} | {:error, {:invalid_argument, String.t()}}
-  def programs(row, backends) do
+  @spec program(map(), definition()) ::
+          {:ok, program()} | {:error, {:invalid_argument, String.t()}}
+  def program(row, %{"command" => command, "env" => env}) do
     with {:ok, hosts} <- stored_hosts(row) do
       {:ok,
-       for backend <- backends do
-         %{
-           name: backend["name"],
-           command: backend["command"],
-           env: backend["env"],
-           login_command: Map.get(row, :login_command),
-           home: if(Map.get(row, :home) == "kept", do: :kept, else: :scratch),
-           memory_bytes: Map.get(row, :memory_bytes),
-           home_max_bytes: Map.get(row, :home_max_bytes),
-           hosts: hosts
-         }
-       end}
+       %{
+         name: @program_name,
+         command: command,
+         env: env,
+         login_command: Map.get(row, :login_command),
+         home: if(Map.get(row, :home) == "kept", do: :kept, else: :scratch),
+         memory_bytes: Map.get(row, :memory_bytes),
+         home_max_bytes: Map.get(row, :home_max_bytes),
+         hosts: hosts
+       }}
     end
   end
 
@@ -383,87 +344,64 @@ defmodule Opus.Programs.Definition do
     }
   end
 
-  defp backend(%{"name" => name, "command" => command} = backend) do
-    with :ok <- check_name(name),
-         :ok <- check_command(name, command),
-         {:ok, env} <- check_env(name, Map.get(backend, "env", %{})),
-         :ok <- only_keys(name, backend) do
-      {:ok, %{"name" => name, "command" => command, "env" => env}}
-    end
-  end
-
-  defp backend(_backend), do: invalid("Every backend needs a name and a command")
-
-  defp only_keys(name, backend) do
-    case Map.keys(backend) -- ["name", "command", "env"] do
+  defp only_keys(config) do
+    case Map.keys(config) -- @config_keys do
       [] -> :ok
-      extra -> invalid("Backend '#{name}' has unknown keys: #{Enum.join(Enum.sort(extra), ", ")}")
+      extra -> invalid("config has unknown keys: #{Enum.join(Enum.sort(extra), ", ")}")
     end
   end
-
-  defp check_name(name) when is_binary(name) do
-    if Regex.match?(@name, name),
-      do: :ok,
-      else: invalid("Backend name #{inspect(name)} must match #{Regex.source(@name)}")
-  end
-
-  defp check_name(name), do: invalid("Backend name #{inspect(name)} must be a string")
 
   # The command rule is `Prima.LocusBackends.check_command/1`'s; the
   # sentences are this surface's.
-  defp check_command(name, command) do
+  defp check_command(command) do
     case LocusBackends.check_command(command) do
       :ok ->
         :ok
 
       {:error, :not_a_string} ->
-        invalid("Backend '#{name}' needs a command string")
+        invalid("A program needs a command string: config.command")
 
       {:error, :empty} ->
-        invalid("Backend '#{name}' needs a command")
+        invalid("A program needs a command: config.command")
 
       {:error, :too_long} ->
-        invalid(
-          "Backend '#{name}' has a command longer than #{LocusBackends.max_command_bytes()} bytes"
-        )
+        invalid("config.command is longer than #{LocusBackends.max_command_bytes()} bytes")
 
       {:error, :nul} ->
-        invalid("Backend '#{name}' has a NUL byte in its command")
+        invalid("config.command has a NUL byte")
 
       {:error, :vault_reference} ->
         invalid(
-          "Backend '#{name}' names a vault entry in its command — command lines are " <>
-            "visible to every process on the backends service; pass it through env instead"
+          "config.command names a vault entry — command lines are visible to every " <>
+            "process on the backends service; pass it through config.env instead"
         )
     end
   end
 
-  defp check_env(name, env) when is_map(env) do
+  defp check_env(env) when is_map(env) do
     env
     |> Enum.sort()
-    |> each(fn {key, value} -> env_entry(name, key, value) end)
+    |> each(fn {key, value} -> env_entry(key, value) end)
     |> case do
       {:ok, pairs} -> {:ok, Map.new(pairs)}
       error -> error
     end
   end
 
-  defp check_env(name, _env), do: invalid("Backend '#{name}' env must be an object")
+  defp check_env(_env), do: invalid("config.env must be an object")
 
-  defp env_entry(backend, key, value) when is_binary(key) and is_binary(value) do
+  defp env_entry(key, value) when is_binary(key) and is_binary(value) do
     cond do
       not Regex.match?(@env_name, key) ->
-        invalid(
-          "Backend '#{backend}' env name #{inspect(key)} must match #{Regex.source(@env_name)}"
-        )
+        invalid("config.env name #{inspect(key)} must match #{Regex.source(@env_name)}")
 
       key in LocusBackends.reserved_env_names() or
           String.starts_with?(key, LocusBackends.reserved_env_prefixes()) ->
-        invalid("Backend '#{backend}' env name #{key} is reserved")
+        invalid("config.env name #{key} is reserved")
 
       VaultRef.unresolved_ref?(value) ->
         invalid(
-          "Backend '#{backend}' env #{key} names a reference this server does not resolve — " <>
+          "config.env #{key} names a reference this server does not resolve — " <>
             "use \"vault:ENTRY\""
         )
 
@@ -472,29 +410,19 @@ defmodule Opus.Programs.Definition do
 
       key not in LocusBackends.literal_env_names() ->
         invalid(
-          "Backend '#{backend}' env #{key} must reference a vault entry (\"vault:ENTRY\"); " <>
+          "config.env #{key} must reference a vault entry (\"vault:ENTRY\"); " <>
             "only #{Enum.join(LocusBackends.literal_env_names(), ", ")} may hold a literal"
         )
 
       byte_size(value) > @max_literal_bytes or String.contains?(value, <<0>>) ->
-        invalid("Backend '#{backend}' env #{key} is not a valid value")
+        invalid("config.env #{key} is not a valid value")
 
       true ->
         {:ok, {key, value}}
     end
   end
 
-  defp env_entry(backend, key, _value),
-    do: invalid("Backend '#{backend}' env #{inspect(key)} must be a string value")
-
-  defp unique_names(backends) do
-    names = Enum.map(backends, & &1["name"])
-
-    case names -- Enum.uniq(names) do
-      [] -> :ok
-      [dup | _] -> invalid("Backend name '#{dup}' is used twice")
-    end
-  end
+  defp env_entry(key, _value), do: invalid("config.env #{inspect(key)} must be a string value")
 
   defp each(items, fun) do
     items

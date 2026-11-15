@@ -1220,6 +1220,72 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
+  describe "the pane's empty state over a model that runs a program" do
+    # The athanor is ready, and its soul's model runs a program on its own
+    # sign-in, never granted.
+    setup %{athanor: athanor, here: here} do
+      {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(here, Cyfr.Test.Guests.wasm(:catalyst), %{
+          name: "claude",
+          version: "0.1.0",
+          type: "catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "claude" => %{
+                  "type" => "login",
+                  "program" => "claude",
+                  "reason" => "to run Claude Code on your own plan",
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      :ok
+    end
+
+    test "with its program's row set up, it says it needs only the grant, given on the AQUA page",
+         %{conn: conn, athanor: athanor, here: here} do
+      pane = empty_pane(conn, athanor)
+      assert render(pane) =~ "has no model yet"
+      refute has_element?(pane, ~s([data-test="model-grant"]))
+      Cyfr.Test.Sandbox.end_views()
+
+      {:ok, _row} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(here), %{
+          cap: 0,
+          name: "claude",
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          home: "kept",
+          config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
+        })
+
+      pane = empty_pane(conn, athanor)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="model-grant"]),
+               "your AQUA's model needs only your grant."
+             )
+
+      assert has_element?(
+               pane,
+               ~s(a[href="#{athanor_path("/aqua?setup=1", athanor)}"]),
+               "Grant it on your AQUA page."
+             )
+
+      refute render(pane) =~ "has no model yet"
+      refute render(pane) =~ @connect
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
   # The athanor as a fill leaves it, its soul's model connected
   # (`ready_athanor!/2`): the shipped AQUA tree and the components the
   # soul depends on (the suite's own seed tree ships the AQUA template
@@ -1296,11 +1362,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute has_element?(panel, "#aqua-card-aqua", "Model connected")
     refute has_element?(panel, "#aqua-card-aqua", "the model has no key yet")
 
-    refute has_element?(
-             panel,
-             "#aqua-card-aqua button[phx-click=open_consent]",
-             "Connect a model"
-           )
+    refute has_element?(panel, ~s(#aqua-card-aqua a[data-test="connect"]))
 
     refute has_element?(panel, "#aqua-card-aqua button[phx-click=open_consent]", "Change the key")
 

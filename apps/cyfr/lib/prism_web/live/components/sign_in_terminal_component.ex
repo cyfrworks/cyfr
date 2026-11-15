@@ -4,11 +4,11 @@
 defmodule PrismWeb.SignInTerminalComponent do
   @moduledoc """
   A program's sign-in, in a bounded terminal frame: the row's login command
-  runs on a pseudo-terminal in a login entry's kept home, and its lines and
-  the person's input go both ways.
+  runs on a pseudo-terminal in the row's own folder, and its lines and the
+  person's input go both ways.
 
-  On its first update it asks `mcp_servers.sign_in` for the row and the
-  entry, which opens the session and starts a relay bound to the person's
+  On its first update it asks `mcp_servers.sign_in` for the row, which
+  opens the session and starts a relay bound to the person's
   session, and attaches the page's process to it
   (`Opus.Programs.sign_in_attach/3`), telling the page
   `{PrismWeb.SignInTerminalComponent, :started, id, token}` so it closes
@@ -127,7 +127,7 @@ defmodule PrismWeb.SignInTerminalComponent do
   end
 
   defp start(socket) do
-    args = %{"name" => socket.assigns.row, "entry" => socket.assigns.entry}
+    args = %{"name" => socket.assigns.row}
 
     with {:ok, result} <- call_tool(socket.assigns.context, "mcp_servers/sign_in", args),
          token when is_binary(token) <- result[:session] || result["session"],
@@ -151,13 +151,11 @@ defmodule PrismWeb.SignInTerminalComponent do
   defp ended(socket, reason),
     do: socket |> assign(:state, :ended) |> assign(:reason, sentence(reason))
 
-  # What the relay's end says: signed in, or the end it names.
-  defp sentence(:signed_in), do: "Signed in."
+  # What the relay's end says: the command's end, or the end it names.
+  # Whether the program is signed in is the program's to say.
   defp sentence({:exited, nil}), do: "The sign-in command ended."
+  defp sentence({:exited, 0}), do: "The sign-in command ended."
   defp sentence({:exited, code}), do: "The sign-in command exited with status #{code}."
-
-  defp sentence({:not_signed_in, why}),
-    do: "The command ended, but the login entry is not signed in: #{reason_text(why)}"
 
   defp sentence(:closed), do: "The sign-in was closed."
   defp sentence(:unattended), do: "The sign-in ended: nothing was attached to it."
@@ -167,9 +165,6 @@ defmodule PrismWeb.SignInTerminalComponent do
   defp sentence(:not_yours), do: "This sign-in belongs to another session."
   defp sentence(text) when is_binary(text), do: text
   defp sentence(reason), do: "The sign-in ended: #{error_message(reason)}"
-
-  defp reason_text(text) when is_binary(text), do: text
-  defp reason_text(reason), do: error_message(reason)
 
   @impl true
   def render(assigns) do

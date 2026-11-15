@@ -208,6 +208,90 @@ defmodule Prima.ConsentPreviewTest do
     end
   end
 
+  test "a tool server row carries what its grant records of it, never a literal's value" do
+    {:ok, %ConsentPreview{rows: rows} = preview} = ConsentPreview.decode(vectors()["preview"])
+
+    assert [
+             %Row{
+               values: %{
+                 "record" =>
+                   %{
+                     "address" => "https://forecasts.example/mcp",
+                     "headers" => [
+                       %{"name" => "authorization", "entry" => "forecasts-token"},
+                       %{"name" => "x-region", "literal" => true} = literal
+                     ]
+                   } = http
+               }
+             },
+             %Row{
+               values: %{
+                 "record" => %{
+                   "address" => "npx -y @modelcontextprotocol/server-github",
+                   "env" => [
+                     %{"name" => "GITHUB_TOKEN", "entry" => "github-token"},
+                     %{"name" => "NODE_ENV", "literal" => true}
+                   ],
+                   "folder" => "kept",
+                   "hosts" => ["api.github.com", "github.com"],
+                   "memory_bytes" => 268_435_456,
+                   "home_max_bytes" => 1_073_741_824,
+                   "sign_in_command" => "gh auth login"
+                 }
+               }
+             }
+           ] = Enum.filter(rows, &(&1.kind == :tool_servers))
+
+    assert map_size(literal) == 2
+    assert map_size(http) == 2
+    assert ConsentPreview.decode(ConsentPreview.encode(preview)) == {:ok, preview}
+
+    refusals = Map.new(vectors()["refusals"], &{&1["name"], &1["preview"]})
+
+    assert ConsentPreview.decode(refusals["a tool server record carrying a literal's value"]) ==
+             {:error, {:invalid_field, "record"}}
+
+    assert ConsentPreview.decode(refusals["a tool server naming no record"]) ==
+             {:error, {:missing_field, "record"}}
+  end
+
+  test "a program's record holds its settings, each absent when unset and never null" do
+    refusals = Map.new(vectors()["refusals"], &{&1["name"], &1["preview"]})
+
+    for name <- [
+          "a program record naming its hosts as null",
+          "a program record naming its hosts out of order",
+          "a program record naming a host twice",
+          "a program record naming an empty host",
+          "a program record naming no folder",
+          "a program record naming another kind of folder",
+          "a program record naming its memory bound as null",
+          "a program record naming a bound of no bytes",
+          "a program record naming a bound that is no whole number",
+          "a program record naming an empty sign-in command",
+          "a program record naming a setting no record holds",
+          "an http record naming a program's folder"
+        ] do
+      assert ConsentPreview.decode(refusals[name]) == {:error, {:invalid_field, "record"}}, name
+    end
+
+    # Unset hosts and bounds are absent, and no host at all is a list of
+    # its own: each reads back as it was written.
+    {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
+    program = Enum.find(rows, &(&1.kind == :tool_servers and &1.values["name"] == "github"))
+    record = program.values["record"]
+
+    for settings <- [
+          Map.take(record, ["address", "env", "folder"]),
+          record
+          |> Map.take(["address", "env"])
+          |> Map.merge(%{"folder" => "scratch", "hosts" => []})
+        ] do
+      row = put_in(program.values["record"], settings)
+      assert Row.decode(Row.encode(row)) == {:ok, row}
+    end
+  end
+
   test "every refusal is refused with its reason" do
     for %{"name" => name, "preview" => preview, "error" => error} <- vectors()["refusals"] do
       assert tag(ConsentPreview.decode(preview)) == error, name
@@ -257,8 +341,9 @@ defmodule Prima.ConsentPreviewTest do
     assert Enum.map(credentials, & &1["source"]) |> Enum.sort() ==
              Enum.sort(ConsentPreview.Row.sources() ++ ["own", "own", "own"])
 
-    # One own entry is a login entry: its destination names its program.
-    assert [%{"name" => "claude-login", "disclosed" => false}] =
+    # One own binding is a login need's program row: its destination names
+    # the program, and the row is named as the program is.
+    assert [%{"name" => "claude", "disclosed" => false}] =
              Enum.filter(credentials, &Map.has_key?(&1["destination"], "program"))
 
     assert Enum.map(credentials, & &1["lifetime"]["kind"]) |> Enum.uniq() |> Enum.sort() ==

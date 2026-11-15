@@ -27,8 +27,9 @@ same locus-backends service, both with every setting compose gives them.
 A person signed in on the server (tests/release-boot/fixture.exs) has a
 canary credential, a random token, in the vault under a name this suite
 owns, seeded by the release's fixture (`vault`), defines an mcp program
-whose probe program reads it from the vault over `/mcp` with the person's
-session, and calls the program's tools as the console calls them (`/mcp`
+whose probe program reads it from the vault, under the confirmation of its
+whole definition the person's own device gives (the fixture's `confirmed`),
+and calls the program's tools as the console calls them (`/mcp`
 dispatches declared tools only); cyfr's MCP client drives the program over
 the session routes:
 
@@ -378,21 +379,25 @@ def cyfr_controller(image):
                f"{status} {json.dumps(refused)[:600]}")
         seeded = stack.fixture("vault", signed_in["token"], entry, "api_key", canary)
         expect(seeded.get("name") == entry, "the release's fixture seeds the canary's entry", seeded)
-        created = person.tool("mcp_servers", {"action": "create", "name": "e2e-probe", "config": {
-            "transport": "program", "mark": "mcp",
-            "console": True,
-            "backends": [{"name": "probe", "command": "node /probe/probe-backend.mjs",
-                          "env": {"PROBE_SECRET": f"vault:{entry}", "LOG_LEVEL": LITERAL}}],
-        }})
+        # Adding a program asks the confirmation of its whole definition
+        # (`program_definition`), which the person's own device gives.
+        created = stack.fixture("confirmed", signed_in["token"], "mcp_servers", json.dumps({
+            "action": "create", "name": "e2e-probe", "config": {
+                "transport": "program", "mark": "mcp",
+                "console": True,
+                "command": "node /probe/probe-backend.mjs",
+                "env": {"PROBE_SECRET": f"vault:{entry}", "LOG_LEVEL": LITERAL},
+            }}))
         print(f"created: {json.dumps(created)[:400]}", flush=True)
+        expect("ok" in created, "the person adds the program under their device's confirmation", created)
 
-        # A proxied tool is `<server>:<tool>`, which the console calls for
+        # A proxied tool is `<row>:<tool>`, which the console calls for
         # the person through the gate (/mcp dispatches declared tools only);
         # the server opted into that plane with `console`.
         def console(tool, arguments):
             return stack.fixture("console", signed_in["token"], tool, json.dumps(arguments))
 
-        echoed = console("e2e-probe:probe__echo_env", {"name": "PROBE_SECRET", "stderr": True})
+        echoed = console("e2e-probe:echo_env", {"name": "PROBE_SECRET", "stderr": True})
         expect("ok" in echoed and canary not in text_of(echoed) and "[REDACTED]" in text_of(echoed),
                "the person sees the canary masked in the tool's answer", echoed)
 
@@ -408,15 +413,15 @@ def cyfr_controller(image):
         idle_pid = processes[0]["pid"]
         eventually(lambda: not stack.pool_processes(), "cyfr's session to end idle",
                    timeout_s=CYFR_IDLE_MS / 1000 + 20)
-        woken = console("e2e-probe:probe__whoami", {})
+        woken = console("e2e-probe:whoami", {})
         expect("ok" in woken and canary not in text_of(woken), "the next call through cyfr is answered after the idle "
                "end", woken)
         rewoken = eventually(lambda: stack.pool_processes(), "cyfr's woken session to run its program", timeout_s=60)
         expect(all(p["pid"] != idle_pid for p in rewoken), "cyfr woke the program under a new process",
                [idle_pid, rewoken])
-        failed = console("e2e-probe:probe__fail", {"name": "PROBE_SECRET"})
+        failed = console("e2e-probe:fail", {"name": "PROBE_SECRET"})
         expect(canary not in text_of(failed), "a tool's error through cyfr carries no canary", failed)
-        ran = console("e2e-probe:probe__run", {"argv": ["/bin/sh", "-c", 'echo "$PROBE_SECRET"; echo "$PROBE_SECRET" >&2']})
+        ran = console("e2e-probe:run", {"argv": ["/bin/sh", "-c", 'echo "$PROBE_SECRET"; echo "$PROBE_SECRET" >&2']})
         expect("ok" in ran and canary not in text_of(ran), "a command's output through cyfr carries no canary", ran)
         # And the person's own client over /mcp: the server's definition, read back.
         got = person.tool("mcp_servers", {"action": "get", "name": "e2e-probe"})
@@ -448,8 +453,10 @@ def cyfr_controller(image):
         controller = Controller(stack.base, stack.key, generation=server["g"])
         controller.boot = boot
 
+        # A row is one program, which cyfr names `program` on the wire
+        # (`Opus.Programs.Definition.program_name/0`).
         def served():
-            return controller.open(owner, "probe", key=f"e2e-{secrets.token_hex(4)}")
+            return controller.open(owner, "program", key=f"e2e-{secrets.token_hex(4)}")
 
         status, answer = served()
         expect(status == 200 and answer["resumed"] is False,

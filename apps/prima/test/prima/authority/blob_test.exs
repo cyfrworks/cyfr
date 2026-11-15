@@ -58,7 +58,11 @@ defmodule Prima.Authority.BlobTest do
                 %{
                   "server_digest" => "sha256:srv",
                   "server_name" => "github",
-                  "tool_patterns" => ["github.*"]
+                  "tool_patterns" => ["github.*"],
+                  "record" => %{
+                    "address" => "https://api.github.example/mcp",
+                    "headers" => [%{"name" => "authorization", "entry" => "github"}]
+                  }
                 }
               ]
             },
@@ -128,7 +132,8 @@ defmodule Prima.Authority.BlobTest do
                    server_digest: "sha256:srv",
                    server_name: "github",
                    tool_patterns: ["github.*"],
-                   descriptions_digest: nil
+                   descriptions_digest: nil,
+                   record: %{"address" => "https://api.github.example/mcp"}
                  }
                ]
              } = source
@@ -404,6 +409,79 @@ defmodule Prima.Authority.BlobTest do
                  %{"tool_patterns" => ["a.*"]}
                ])
                |> Blob.parse()
+    end
+
+    test "a tool server's record names its address, each value by name and a program's " <>
+           "settings, never a literal's value" do
+      server = fn record ->
+        golden()
+        |> put_in(["nodes", @formula, "edges", "#{@catalyst}|source", "tool_servers"], [
+          %{
+            "server_digest" => "sha256:srv",
+            "server_name" => "github",
+            "tool_patterns" => ["github.*"],
+            "record" => record
+          }
+        ])
+        |> Blob.parse()
+      end
+
+      held = %{
+        "address" => "npx -y server-github",
+        "env" => [
+          %{"name" => "GITHUB_TOKEN", "entry" => "personal"},
+          %{"name" => "NODE_ENV", "literal" => true}
+        ],
+        "folder" => "kept",
+        "hosts" => ["api.github.com", "github.com"],
+        "memory_bytes" => 268_435_456,
+        "home_max_bytes" => 1_073_741_824,
+        "sign_in_command" => "gh auth login"
+      }
+
+      # Each setting but the folder is absent when unset; no host at all is
+      # a list of its own.
+      bare = Map.take(held, ["address", "env", "folder"])
+      http = %{"address" => "https://mcp.example/v1", "headers" => []}
+
+      for record <- [
+            held,
+            bare,
+            %{bare | "folder" => "scratch"},
+            Map.put(bare, "hosts", []),
+            http
+          ] do
+        assert {:ok, blob} = server.(record)
+
+        assert %Edge{tool_servers: [%{record: ^record}]} =
+                 blob.nodes[@formula].edges["#{@catalyst}|source"]
+      end
+
+      for refused <- [
+            nil,
+            Map.delete(held, "address"),
+            Map.put(held, "headers", []),
+            put_in(held, ["env", Access.at(1), "value"], "production"),
+            put_in(held, ["env", Access.at(0), "literal"], true),
+            Map.update!(held, "env", &Enum.reverse/1),
+            Map.update!(held, "env", &(&1 ++ [%{"name" => "NODE_ENV", "entry" => "x"}])),
+            Map.delete(held, "folder"),
+            %{held | "folder" => "shared"},
+            %{held | "hosts" => nil},
+            %{held | "hosts" => ["github.com", "api.github.com"]},
+            %{held | "hosts" => ["github.com", "github.com"]},
+            %{held | "hosts" => [""]},
+            %{held | "memory_bytes" => nil},
+            %{held | "memory_bytes" => 0},
+            %{held | "home_max_bytes" => "1 GiB"},
+            %{held | "sign_in_command" => ""},
+            Map.put(held, "login_command", "gh auth login"),
+            Map.put(http, "folder", "kept"),
+            Map.put(http, "hosts", ["mcp.example"])
+          ] do
+        assert {:error, {:invalid_resource, @formula, _, :tool_servers, _}} = server.(refused),
+               inspect(refused)
+      end
     end
   end
 
