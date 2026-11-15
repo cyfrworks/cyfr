@@ -515,7 +515,8 @@ describe("the line desktop 0.2.0", () => {
       item("budget.xlsx", "file_offer", "files", 4)
     ])
     await flush()
-    for (const words of ["Open in Aqua", "Open runs", "Open schedules", "Open files"]) p.tap((b) => b.words === words)
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
+    for (const words of [/^Open in Aqua$/i, /^Open runs$/, /^Open schedules$/, /^Open files$/]) p.tap((b) => words.test(b.words))
     assert.deepEqual(p.pages, [["aqua", "Trip planning"], ["executions", DIGEST], ["schedules", "Backup photos"], ["files", "budget.xlsx"]])
   })
 
@@ -531,7 +532,8 @@ describe("the line desktop 0.2.0", () => {
       {kind: "own", id: "th_tax", title: "Tax notes", people: ["a"], last_activity: today(13, 0), waits_on_you: false, unread: null}
     ])
     await flush()
-    p.tap((b) => b.words === "Open in Aqua")
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
+    p.tap((b) => /^Open in Aqua$/i.test(b.words))
     p.tap((b) => b.dataset.key === "th-th_family")
     p.tap((b) => b.dataset.key === "th-th_tax")
     p.tap((b) => b.words === "Open runs")

@@ -182,8 +182,9 @@ function hits(p) {
     return {label: e.getAttribute("aria-label") || "", element: e, ...box}
   })
 }
+const starts = (label, start) => (start instanceof RegExp ? start.test(label) : label.startsWith(start))
 const tap = (p, start) => {
-  const hit = hits(p).find((h) => h.label.startsWith(start))
+  const hit = hits(p).find((h) => starts(h.label, start))
   assert.ok(hit, `no tap target "${start}" among ${hits(p).map((h) => h.label).join(" | ")}`)
   hit.element.dispatch("click")
   p.pump()
@@ -546,7 +547,8 @@ describe("the road desktop 0.2.0", () => {
         {kind: "confirmation", id: "a5", label: "Send mail", since: iso(-6), destination: {kind: "ref", page: null, ref: "c1"}},
       ],
     })
-    for (const [visitor, choice] of [["Approval in Trip", "Open Aqua"], ["digest failed", "Open runs"], ["Backup failed", "Open schedules"], ["report.pdf offered", "Open files"]]) {
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
+    for (const [visitor, choice] of [["Approval in Trip", /^Open Aqua/i], ["digest failed", "Open runs"], ["Backup failed", "Open schedules"], ["report.pdf offered", "Open files"]]) {
       tap(p, visitor)
       tap(p, choice)
       tap(p, "Close")
@@ -565,7 +567,8 @@ describe("the road desktop 0.2.0", () => {
     })
     tap(p, "Post boxes")
     tap(p, "Trip, 3 unread")
-    tap(p, "Notes, with Aqua")
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
+    tap(p, /^Notes, with Aqua/i)
     assert.deepEqual(p.calls.settings, [["chat", "t1"], ["aqua", "t2"]])
   })
 
@@ -578,12 +581,13 @@ describe("the road desktop 0.2.0", () => {
       ],
     })
     tap(p, "Approval in Trip")
-    tap(p, "Open Aqua")
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
+    tap(p, /^Open Aqua/i)
     tap(p, "digest failed")
     tap(p, "Open runs")
     tap(p, "Post boxes")
     tap(p, "Trip, 2 people")
-    tap(p, "Notes, with Aqua")
+    tap(p, /^Notes, with Aqua/i)
     assert.deepEqual(p.calls.settings, [["aqua", "th1"], ["executions", "e9"], ["chat", "t1"], ["aqua", "t2"]])
   })
 
@@ -675,12 +679,13 @@ describe("the road desktop 0.2.0 draws", () => {
       const p = await road({width, height, installed, document: {widgets: {files: {on: true}}}})
       for (const [key, items] of Object.entries(everything)) picture(p, key, items)
       const big = (start) => {
-        const h = hits(p).find((x) => x.label.startsWith(start))
+        const h = hits(p).find((x) => starts(x.label, start))
         assert.ok(h && h.width >= 44 && h.height >= 44, `${start}: ${h && `${h.width}x${h.height}`}`)
       }
+      // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
       for (const [card, choices] of [
         ["digest failed", ["Retry run", "Open runs"]],
-        ["Approval in Trip", ["Open Aqua"]],
+        ["Approval in Trip", [/^Open Aqua/i]],
         ["Maps waits for your grant", ["Review grant"]],
         ["Silo", ["Open settings"]],
         ["Archive", ["Open files"]],

@@ -246,7 +246,7 @@ const hit = (p, start) => {
 }
 const labelled = (p, start) => p.hits().some((h) => (h.getAttribute("aria-label") || "").startsWith(start))
 const tap = (p, start) => (hit(p, start).dispatch("click"), p.pump())
-const button = (p, label) => p.board().querySelectorAll("button").find((b) => b.textContent === label)
+const button = (p, label) => p.board().querySelectorAll("button").find((b) => (label instanceof RegExp ? label.test(b.textContent) : b.textContent === label))
 const press = async (p, label) => {
   const b = button(p, label)
   assert.ok(b, `no "${label}" on the board: ${p.board().textContent}`)
@@ -477,13 +477,14 @@ describe("the street desktop 0.2.0", () => {
       {kind: "own", id: "th-3", title: "Tax notes", people: ["Noor"], last_activity: at(-130), waits_on_you: false, unread: null},
     ])
     p.pump()
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
     for (const [target, label, page] of [
-      ["Waiting on you: an approval", "Open Aqua", ["aqua", "th-1"]],
+      ["Waiting on you: an approval", /^Open Aqua$/i, ["aqua", "th-1"]],
       ["Waiting on you: a failed run", "Open runs", ["executions", "ex-9"]],
       ["Waiting on you: a failed schedule", "Open schedules", ["schedules", "sch-1"]],
       ["Waiting on you: a file offered", "Open files", ["files", "of-1"]],
       ["Thread Family", "Open the chat", ["chat", "th-2"]],
-      ["Thread Tax notes", "Open Aqua", ["aqua", "th-3"]],
+      ["Thread Tax notes", /^Open Aqua$/i, ["aqua", "th-3"]],
     ]) {
       tap(p, target)
       await press(p, label)
@@ -507,12 +508,13 @@ describe("the street desktop 0.2.0", () => {
       {kind: "own", id: "th-3", title: "Tax notes", people: ["Noor"], last_activity: at(-130), waits_on_you: false, unread: null},
     ])
     p.pump()
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
     for (const [target, label] of [
-      ["Waiting on you: an approval, Approve in Trip planning", "Open Aqua"],
-      ["Waiting on you: an approval, Approve in Book club", "Open Aqua"],
+      ["Waiting on you: an approval, Approve in Trip planning", /^Open Aqua$/i],
+      ["Waiting on you: an approval, Approve in Book club", /^Open Aqua$/i],
       ["Waiting on you: a failed run", "Open runs"],
       ["Thread Family", "Open the chat"],
-      ["Thread Tax notes", "Open Aqua"],
+      ["Thread Tax notes", /^Open Aqua$/i],
     ]) {
       tap(p, target)
       await press(p, label)

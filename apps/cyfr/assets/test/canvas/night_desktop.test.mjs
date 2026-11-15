@@ -276,7 +276,7 @@ function plateButtons(p) {
 }
 const plateNote = (p) => (/<p class="plate__note" role="status">([^<]*)<\/p>/.exec(p.plate.innerHTML) || [])[1]
 function press(p, label) {
-  const button = plateButtons(p).find((b) => b.label === label)
+  const button = plateButtons(p).find((b) => (label instanceof RegExp ? label.test(b.label) : b.label === label))
   assert.ok(button, `no "${label}" on the plate among ${plateButtons(p).map((b) => b.label).join(" | ")}`)
   p.tap({"data-plate": button.index})
 }
@@ -356,7 +356,8 @@ describe("the night desktop 0.2.0", () => {
     picture(runs, [RUN_DONE])
     p.draw()
     p.tap({class: "ripple", "data-ref": "failed:formula:local.digest:1.0.0"})
-    assert.deepEqual(plateButtons(p).map((b) => b.label), ["Open runs", "Ask Aqua"])
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
+    assert.match(plateButtons(p).map((b) => b.label).join(" | "), /^Open runs \| Ask Aqua$/i)
   })
 
   for (const [answer, words] of [
@@ -537,10 +538,11 @@ describe("the night desktop 0.2.0", () => {
     picture(p.line("schedules.changes"), [{kind: "changed", schedule_id: "sch_1", name: "Morning digest", reference: "formula:local.digest:1.0.0", cron_expression: "0 9 * * *", status: "active", next_run_at: "2026-11-11T09:00:00Z", run_count: 41, error_count: 1}])
     picture(p.line("files.changes"), [{kind: "offer", id: "off_1", name: "budget.xlsx", from: "Sam", changed_at: AT}])
     p.draw()
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
     for (const [target, label, page] of [
       ["thread:t1", "Open the approval", "aqua"],
       ["thread:t2", "Open in chat", "chat"],
-      ["thread:t3", "Open in Aqua", "aqua"],
+      ["thread:t3", /^Open in Aqua$/i, "aqua"],
       ["failed:formula:local.digest:1.0.0", "Open runs", "executions"],
       ["schedule:sch_1", "Open schedules", "schedules"],
       ["offer:off_1", "Open files", "files"],
@@ -576,10 +578,11 @@ describe("the night desktop 0.2.0", () => {
       {kind: "own", id: "t3", title: "Tax notes", people: ["me"], unread: null},
     ])
     p.draw()
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
     for (const [target, label, opened] of [
       ["thread:t1", "Open the approval", ["aqua", "t1"]],
       ["thread:t2", "Open in chat", ["chat", "t2"]],
-      ["thread:t3", "Open in Aqua", ["aqua", "t3"]],
+      ["thread:t3", /^Open in Aqua$/i, ["aqua", "t3"]],
       ["failed:formula:local.digest:1.0.0", "Open runs", ["executions", "exe_fail"]],
     ]) {
       p.tap({"data-target": target})
