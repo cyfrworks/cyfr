@@ -126,21 +126,28 @@ func (s *slot) ready(id int64, text []byte) error {
 // ack takes the host's acknowledgement of response id up to chunk seq: it
 // names the last chunk of the unbroken run the host holds, so it
 // acknowledges every chunk of the response up to it. It releases the slot
-// when the unacknowledged chunk is one of them, sends nothing the host
-// holds again, and the ack of the response's last chunk drops the
-// response, the host holding it whole. An ack past the furthest chunk sent
-// names chunks the host cannot hold, and changes nothing.
+// when the unacknowledged chunk is one of them and sends nothing the host
+// holds again. The ack of the response's last chunk ends the response
+// whatever else was sent: the host holds it whole, or wants no more of it
+// (one past the host's bound). An ack of a response none of which was sent,
+// or past the furthest chunk sent but for the last, names chunks the host
+// cannot hold, and changes nothing.
 func (s *slot) ack(id int64, seq int) error {
 	r := s.kept[id]
-	if r == nil || seq < 0 || seq > r.high {
+	if r == nil || seq < 0 || seq >= r.of || r.high < 0 {
+		return nil
+	}
+	if seq == r.of-1 {
+		s.drop(id)
+		return s.pump()
+	}
+	if seq > r.high {
 		return nil
 	}
 	if s.sent != nil && s.sent.id == id && s.sent.seq <= seq {
 		s.sent = nil
 	}
-	if seq == r.of-1 {
-		s.drop(id)
-	} else if r.next <= seq {
+	if r.next <= seq {
 		r.next = seq + 1
 	}
 	return s.pump()

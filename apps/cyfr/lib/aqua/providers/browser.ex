@@ -3,21 +3,21 @@
 
 defmodule Aqua.Providers.Browser do
   @moduledoc """
-  The `browser` tool: AQUA's browser, a real Chrome that is the person's
+  The `browser` tool: Aqua's browser, a real Chrome that is the person's
   alone (`Opus.Browser`), and the person's browser setting
   (`Aqua.BrowserSetting`).
 
-  ## AQUA's actions
+  ## Aqua's actions
 
   `open` (an http or https address), `read` (the page as text, each
-  element AQUA can act on marked with its ref), `click` and `type` (an
+  element Aqua can act on marked with its ref), `click` and `type` (an
   element by its ref), `key` (one named key), `page` (the window shows a
-  page AQUA wrote, as html), `screenshot` and `close`. They run in a
+  page Aqua wrote, as html), `screenshot` and `close`. They run in a
   turn's chain and nowhere else (`planes: [:in_chain]`), only for a
   person's own sign-in (`consent: :interactive`), and each follows the
   person's browser setting (`follows_setting`), not a policy line: with
   it on, every one runs without a card; with it off, every one is
-  refused here before any Chrome starts, and AQUA says the browser is
+  refused here before any Chrome starts, and Aqua says the browser is
   turned off. `read` and `screenshot` are reads, `close` a write, and the
   rest reach the outside.
 
@@ -36,11 +36,11 @@ defmodule Aqua.Providers.Browser do
   ## The setting
 
   `turn_on` and `turn_off` set the person's browser setting; `status`
-  reads it, with whether AQUA's browser is added and running. The
-  person calls them from the AQUA page; a turn calls them too, proved as
+  reads it, with whether Aqua's browser is added and running. The
+  person calls them from the Aqua page; a turn calls them too, proved as
   the running turn itself. `turn_on` is never standing (`standing:
   false`): a turn's call asks with a card in its thread each time, so
-  text AQUA read never widens its own reach. `turn_off` only takes reach
+  text Aqua read never widens its own reach. `turn_off` only takes reach
   away and holds at once.
   """
 
@@ -184,20 +184,20 @@ defmodule Aqua.Providers.Browser do
         Operation.new(
           "browser",
           "turn_on",
-          "Let AQUA use the browser",
+          "Let Aqua use the browser",
           [],
           [kind: :write, sources: [], standing: false] ++ setting
         ),
         Operation.new(
           "browser",
           "turn_off",
-          "Stop AQUA using the browser",
+          "Stop Aqua using the browser",
           [],
           [kind: :write, sources: [], reduces_authority: true] ++ setting
         )
       ],
       description:
-        "AQUA's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on; status reads the setting, turn_on asks the person to let AQUA use the browser, turn_off stops AQUA using it.",
+        "Aqua's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on; status reads the setting, turn_on asks the person to let Aqua use the browser, turn_off stops Aqua using it.",
       title: "Browser"
     )
   end
@@ -336,7 +336,7 @@ defmodule Aqua.Providers.Browser do
   defp unavailable({:error, :unavailable}), do: {:error, {:unavailable, "The browser setting"}}
   defp unavailable(answer), do: answer
 
-  # The browser's refusals, in words AQUA and the person read.
+  # The browser's refusals, in words Aqua and the person read.
   defp refused({:ok, _} = ok), do: ok
   defp refused({:error, reason}), do: {:error, refusal(reason)}
 
@@ -346,27 +346,32 @@ defmodule Aqua.Providers.Browser do
   defp refusal(:not_added),
     do:
       conflict(
-        "The browser was not found. The person adds AQUA's browser from the AQUA page, once."
+        "The browser was not found. The person adds Aqua's browser from the Aqua page, once."
       )
 
-  defp refusal(:not_browser), do: conflict("This program is not AQUA's browser.")
+  defp refusal(:not_browser), do: conflict("This program is not Aqua's browser.")
 
   defp refusal(:disabled),
-    do: conflict("AQUA's browser is disabled on the Programs page; the person enables it there.")
+    do: conflict("Aqua's browser is disabled on the Programs page; the person enables it there.")
 
   defp refusal(:unavailable), do: conflict("The browser's response is unavailable.")
 
   defp refusal(:too_many_windows),
     do:
       conflict(
-        "AQUA's browser has its #{Opus.Browser.max_windows()} windows open, one for each thread that used it. " <>
-          "Close this thread's window when done with it; the person can close AQUA's browser from what is running."
+        "Aqua's browser has its #{Opus.Browser.max_windows()} windows open, one for each thread that used it. " <>
+          "Close this thread's window when done with it; the person can close Aqua's browser from what is running."
       )
 
   defp refusal({:ended, _reason}),
     do: conflict("The browser stopped before it answered. Ask again to start it.")
 
   defp refusal(:too_large), do: {:invalid_argument, "That page is too large to show."}
+
+  defp refusal(:response_too_large),
+    do:
+      {:invalid_argument,
+       "The browser's answer is larger than the #{div(Opus.Browser.max_response(), 1_048_576)} MiB CYFR takes; read a smaller page."}
 
   defp refusal({:driver, code, sentence})
        when code in ~w(bad_url bad_ref bad_key no_window too_large bad_request),

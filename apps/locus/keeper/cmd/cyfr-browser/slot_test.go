@@ -166,6 +166,23 @@ func TestAckIsCumulative(t *testing.T) {
 	}
 }
 
+// The ack of a response's last chunk ends it whatever was sent, as a host
+// that wants no more of one, past its bound, tells it: the slot goes on to
+// the next response at once.
+func TestLastAckEndsAResponse(t *testing.T) {
+	s, h, _ := newTestSlot(4, time.Minute)
+	check(t, s.ready(1, []byte("abcdefghijklmnop")))
+	check(t, s.ready(2, []byte("xyz")))
+	expectFrames(t, h, "two responses ready", "res 1/0")
+	check(t, s.ack(1, 3))
+	expectFrames(t, h, "the host wants no more of the first", "res 2/0")
+	if _, kept := s.kept[1]; kept {
+		t.Fatal("a response the host let go is still kept")
+	}
+	check(t, s.again(1, 1))
+	expectFrames(t, h, "again for the response let go", "gone 1")
+}
+
 func TestKeepExpires(t *testing.T) {
 	s, h, c := newTestSlot(4, time.Minute)
 	check(t, s.ready(1, []byte("abcdefgh")))

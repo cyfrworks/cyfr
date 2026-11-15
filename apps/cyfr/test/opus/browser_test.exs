@@ -3,7 +3,7 @@
 
 defmodule Opus.BrowserTest do
   @moduledoc """
-  AQUA's browser (`Opus.Browser`, through the `browser` tool's provider)
+  Aqua's browser (`Opus.Browser`, through the `browser` tool's provider)
   against the scripted backends service, its driver a script that speaks
   the driver's framing (`Cyfr.Test.ScriptedDriver`): a window per thread,
   named from the proved turn's lineage; a caller the session owner does
@@ -260,7 +260,7 @@ defmodule Opus.BrowserTest do
 
       {_fifth, fifth} = turn!(ctx)
       refused = call(ctx, fifth, "open", %{"url" => "https://a.example/"})
-      assert refusal(refused) =~ "AQUA's browser has its 4 windows open"
+      assert refusal(refused) =~ "Aqua's browser has its 4 windows open"
 
       # Acting again in a thread that already has a window is no fifth.
       assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://b.example/"})
@@ -533,7 +533,7 @@ defmodule Opus.BrowserTest do
       assert [%{session: ^session}] = browser_sessions(ctx)
     end
 
-    test "the person lists it as AQUA's browser and closes it; the next action starts it again",
+    test "the person lists it as Aqua's browser and closes it; the next action starts it again",
          %{ctx: ctx, lineage: lineage} do
       assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
       assert [%{session: session, by: :browser}] = browser_sessions(ctx)
@@ -569,6 +569,100 @@ defmodule Opus.BrowserTest do
     end
   end
 
+  describe "review round one" do
+    # Finding 1: a request that waited in the holder's mailbox is proved
+    # again just before it is sent.
+    test "a request that waited is proved again before it is sent: a turn cancelled meanwhile, or a caller gone, sends nothing",
+         %{ctx: ctx, turn: turn, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      holder = holder(ctx)
+
+      :sys.suspend(holder)
+      task = Task.async(fn -> call(ctx, lineage, "click", %{"ref" => "12"}) end)
+      eventually(fn -> mailbox(holder) >= 1 end, "the click to wait for the holder")
+      set_status(turn, "cancelled")
+      :sys.resume(holder)
+
+      assert refusal(Task.await(task, 10_000)) == "This turn no longer owns the work."
+
+      {_next, next} = turn!(ctx)
+      :sys.suspend(holder)
+      caller = spawn(fn -> call(ctx, next, "click", %{"ref" => "13"}) end)
+      eventually(fn -> mailbox(holder) >= 1 end, "the second click to wait for the holder")
+      Process.exit(caller, :kill)
+      :sys.resume(holder)
+
+      # The holder answers what came after them, so both were decided.
+      assert {:ok, _} = call(ctx, next, "read")
+      clicks = for {:driver, :req, _s, %{"op" => "click"} = request} <- drain(), do: request
+      assert clicks == []
+    end
+
+    # Finding 2: the host holds every response to the bound the vector file
+    # states, while it assembles it, whatever the driver sends.
+    test "a response past the bound is refused as it is assembled, and nothing of it is kept",
+         %{fake: fake, ctx: ctx, lineage: lineage} do
+      past = String.duplicate("x", Opus.Browser.Frame.max_response())
+
+      driver =
+        Driver.start(self(),
+          chunk: 98_112,
+          answer: fn
+            %{"op" => "read"} -> {:ok, %{"text" => past}}
+            _other -> {:ok, %{"url" => "https://example.com/", "title" => "Example"}}
+          end
+        )
+
+      Scripted.set(fake, :terminal, driver)
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+
+      assert {:error, :response_too_large} =
+               Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{})
+
+      assert :sys.get_state(holder(ctx)).pending == %{}
+
+      # The driver was told to let it go: the next answer comes at once.
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.org/"})
+    end
+
+    # Finding 3: what a turn types and what a page shows are in no status,
+    # last message or debug log of the holder.
+    test "what a turn types and what a page shows are in no status or debug log of the holder",
+         %{ctx: ctx, lineage: lineage} = context do
+      typed = "typed-#{System.unique_integer([:positive])}-private"
+      shown = "shown-#{System.unique_integer([:positive])}-private"
+
+      answers(
+        context,
+        "read",
+        {:ok, %{"url" => "https://example.com/", "title" => "T", "text" => shown}}
+      )
+
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      holder = holder(ctx)
+      :ok = :sys.log(holder, true)
+      assert {:ok, _} = call(ctx, lineage, "type", %{"ref" => "12", "text" => typed})
+      assert {:ok, %{text: ^shown}} = call(ctx, lineage, "read")
+
+      status = inspect(:sys.get_status(holder), limit: :infinity, printable_limit: :infinity)
+      :ok = :sys.log(holder, false)
+
+      refute status =~ typed
+      refute status =~ shown
+    end
+
+    # Finding 4: the browser's session lives as long as its holder.
+    test "a holder killed takes the browser's session with it", %{ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      assert [%{session: session}] = browser_sessions(ctx)
+
+      Process.exit(holder(ctx), :kill)
+
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^session, reason: :closed}, 5_000
+      assert browser_sessions(ctx) == []
+    end
+  end
+
   describe "the browser's row" do
     test "with none, the browser was not found", %{ctx: ctx, row: row, lineage: lineage} do
       {:ok, _} =
@@ -581,7 +675,7 @@ defmodule Opus.BrowserTest do
                "The browser was not found."
     end
 
-    test "a row of its name with another definition is not AQUA's browser and does not start",
+    test "a row of its name with another definition is not Aqua's browser and does not start",
          %{ctx: ctx, row: row, lineage: lineage} do
       {:ok, _} =
         Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), row.name, %{
@@ -592,7 +686,7 @@ defmodule Opus.BrowserTest do
       browser_row!(ctx, %{config_json: Jason.encode!(%{"command" => "sh", "env" => %{}})})
 
       assert refusal(call(ctx, lineage, "open", %{"url" => "https://example.com/"})) ==
-               "This program is not AQUA's browser."
+               "This program is not Aqua's browser."
 
       refute_received {:session, "open", _open, _fields}
     end
@@ -612,6 +706,11 @@ defmodule Opus.BrowserTest do
       _none ->
         []
     end
+  end
+
+  defp mailbox(pid) do
+    {:message_queue_len, length} = Process.info(pid, :message_queue_len)
+    length
   end
 
   defp drain(acc \\ []) do

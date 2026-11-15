@@ -23,6 +23,7 @@ defmodule Opus.Browser.FrameTest do
   test "the bounds are the vectors'", %{vectors: vectors} do
     assert Frame.max_to_host() == vectors["max_to_host"]
     assert Frame.max_to_driver() == vectors["max_to_driver"]
+    assert Frame.max_response() == vectors["max_response"]
     assert vectors["start"] == <<0x1E, "B1">>
   end
 

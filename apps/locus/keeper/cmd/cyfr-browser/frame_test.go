@@ -18,6 +18,7 @@ type frameVectors struct {
 	Start       string `json:"start"`
 	MaxToHost   int    `json:"max_to_host"`
 	MaxToDriver int    `json:"max_to_driver"`
+	MaxResponse int    `json:"max_response"`
 	Encode      []struct {
 		Name, Body, Frame string
 	} `json:"encode"`
@@ -48,6 +49,9 @@ func TestFrameBounds(t *testing.T) {
 	if v.Start != "\x1eB1" || v.MaxToHost != maxToHost || v.MaxToDriver != maxToDriver {
 		t.Fatalf("the vectors' start and bounds are %q, %d, %d; the driver's \\x1eB1, %d, %d",
 			v.Start, v.MaxToHost, v.MaxToDriver, maxToHost, maxToDriver)
+	}
+	if v.MaxResponse != maxResponse {
+		t.Fatalf("the vectors bound a response at %d bytes; the driver at %d", v.MaxResponse, maxResponse)
 	}
 	if body := len(must(json.Marshal(resMessage{"res", 1 << 53, 1 << 30, 1 << 30, strings.Repeat("A", 4*((maxChunk+2)/3))}))); body > maxToHost {
 		t.Fatalf("a res frame of the largest chunk holds %d bytes, past the host's %d", body, maxToHost)

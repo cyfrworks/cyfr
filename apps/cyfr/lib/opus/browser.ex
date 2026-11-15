@@ -3,7 +3,7 @@
 
 defmodule Opus.Browser do
   @moduledoc """
-  AQUA's browser, held for one person: the session the browser driver
+  Aqua's browser, held for one person: the session the browser driver
   runs in (the program row of the browser's own definition,
   `Opus.Programs.Definition.browser?/1`), which starts Chrome over its
   debugging pipe inside the box, with its profile in the row's kept
@@ -22,7 +22,7 @@ defmodule Opus.Browser do
   is the one of the thread the proved turn runs in, named from the
   lineage the gate stamped and from no argument. A request that waits
   for the browser to start is proved again before it is sent, so a turn
-  superseded meanwhile sends nothing. Whether AQUA may use the browser
+  superseded meanwhile sends nothing. Whether Aqua may use the browser
   at all is the person's browser setting, which the tool's provider
   reads before it calls here (`Aqua.BrowserSetting`).
 
@@ -47,7 +47,12 @@ defmodule Opus.Browser do
   last on the session's input, and keeps it until the last is
   acknowledged or it has kept it too long. An acknowledgement names the
   last chunk of the unbroken run this holder holds, never one past a
-  gap, so a response is let go only once it is held whole. A delivery of the session's
+  gap; the acknowledgement of a response's last chunk lets it go, held
+  whole or wanted no more. A response's text is at most
+  `Opus.Browser.Frame.max_response/0` bytes, the bound the vector file
+  states for both sides: this holder keeps no more of one than that
+  while it assembles it, since the browser's uid can speak this
+  protocol, and refuses one past it (`:response_too_large`). A delivery of the session's
   output is taken only once every whole frame in it is read, so what the
   driver prints faster waits in the service's bounded buffer. After a
   replacement tail, the bytes before the first whole frame are dropped
@@ -78,6 +83,10 @@ defmodule Opus.Browser do
   @spec max_windows() :: pos_integer()
   def max_windows, do: @max_windows
 
+  @doc "The most bytes a response's text may hold (`Opus.Browser.Frame.max_response/0`)."
+  @spec max_response() :: pos_integer()
+  def max_response, do: Frame.max_response()
+
   @doc "The operations `act/3` runs."
   @spec ops() :: [String.t()]
   def ops, do: @ops
@@ -90,7 +99,7 @@ defmodule Opus.Browser do
   def memory_bytes, do: setting("browser_memory_bytes")
 
   @doc """
-  The athanor's row of AQUA's browser: `{:ok, row}`, `{:error, :not_added}`
+  The athanor's row of Aqua's browser: `{:ok, row}`, `{:error, :not_added}`
   when it holds none, `{:error, :not_browser}` for a row of the browser's
   name with another definition, `{:error, :disabled}` for one that is
   disabled.
@@ -135,9 +144,12 @@ defmodule Opus.Browser do
     with {:ok, {athanor_id, user_id, turn_id}} <- turn(caller),
          window when is_binary(window) <- Map.get(lineage, "thread_id"),
          {:ok, pid} <- holder(athanor_id, user_id) do
+      # What a turn types, an address it opens and a page it writes travel
+      # as their JSON in an `Opus.Programs.Output`, which shows its size
+      # alone, so no debug log, status or crash report prints them.
       GenServer.call(
         pid,
-        {:act, caller, turn_id, window, op, args},
+        {:act, caller, turn_id, window, op, Programs.Output.new(Jason.encode!(args))},
         @start_ms + @request_ms + @answer_margin_ms
       )
     else
@@ -269,7 +281,7 @@ defmodule Opus.Browser do
        session: nil,
        phase: :idle,
        starting: nil,
-       buffer: "",
+       buffer: Programs.Output.new(""),
        next_id: 1,
        pending: %{},
        queued: [],
@@ -282,7 +294,7 @@ defmodule Opus.Browser do
   end
 
   @impl true
-  def handle_call({:act, caller, turn_id, window, op, args}, from, state) do
+  def handle_call({:act, caller, turn_id, window, op, %Programs.Output{} = args}, from, state) do
     state = %{state | last_act: now()}
     request = %{from: from, caller: caller, turn_id: turn_id, window: window, op: op, args: args}
 
@@ -294,7 +306,7 @@ defmodule Opus.Browser do
         {:reply, {:error, :too_many_windows}, state}
 
       state.phase == :ready ->
-        {:noreply, state |> send_request(request) |> idle()}
+        {:noreply, state |> dispatch(request) |> idle()}
 
       state.phase == :starting ->
         {:noreply, %{state | queued: state.queued ++ [request]}}
@@ -331,9 +343,9 @@ defmodule Opus.Browser do
 
   def handle_info({Programs, session, {kind, delivery, %Programs.Output{bytes: bytes}}}, state)
       when kind in [:bytes, :tail] and session == state.session do
-    buffer = if kind == :tail, do: bytes, else: state.buffer <> bytes
+    buffer = if kind == :tail, do: bytes, else: state.buffer.bytes <> bytes
     {bodies, rest} = Frame.decode(buffer)
-    state = Enum.reduce(bodies, %{state | buffer: rest}, &frame/2)
+    state = Enum.reduce(bodies, %{state | buffer: Programs.Output.new(rest)}, &frame/2)
     state = if kind == :tail, do: recover(state), else: state
     _ = Programs.taken(state.browser, session, delivery)
     {:noreply, idle(state)}
@@ -400,23 +412,31 @@ defmodule Opus.Browser do
     :ok
   end
 
-  # What a page shows passes through here; no status or crash report
-  # prints it.
+  # What a page shows and what the person's turns type pass through here,
+  # in its state, its messages and its replies: no status, debug log or
+  # crash report prints a byte of either. Every binary its state, last
+  # message, exit reason and debug log hold, at any depth, shows as its
+  # size alone.
   @impl true
   def format_status(status) do
-    Map.update(status, :state, nil, fn
-      %{buffer: buffer, pending: pending} = state ->
-        %{
-          state
-          | buffer: "#{byte_size(buffer)} bytes",
-            pending: Map.new(pending, fn {id, r} -> {id, Map.take(r, [:op, :window, :of])} end),
-            queued: length(state.queued)
-        }
-
-      other ->
-        other
+    Map.new(status, fn
+      {key, value} when key in [:state, :message, :reason, :log] -> {key, scrub(value)}
+      other -> other
     end)
   end
+
+  defp scrub(binary) when is_binary(binary), do: "#{byte_size(binary)} bytes"
+
+  defp scrub(%module{} = struct),
+    do: {module, struct |> Map.from_struct() |> scrub()}
+
+  defp scrub(map) when is_map(map), do: Map.new(map, fn {key, value} -> {key, scrub(value)} end)
+  defp scrub([head | tail]), do: [scrub(head) | scrub(tail)]
+
+  defp scrub(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> scrub() |> List.to_tuple()
+
+  defp scrub(other), do: other
 
   # ---------------------------------------------------------------------------
 
@@ -457,7 +477,7 @@ defmodule Opus.Browser do
     case Programs.attach(state.browser, session) do
       {:ok, %{tail: %Programs.Output{bytes: tail}}} ->
         {bodies, rest} = Frame.decode(tail)
-        state = %{state | session: session, buffer: rest}
+        state = %{state | session: session, buffer: Programs.Output.new(rest)}
         {:noreply, Enum.reduce(bodies, state, &frame/2)}
 
       {:error, _gone} ->
@@ -489,40 +509,60 @@ defmodule Opus.Browser do
   defp hello(_hello, %{phase: :starting} = state) do
     state = %{state | phase: :ready}
 
-    Enum.reduce(state.queued, %{state | queued: []}, fn request, state ->
-      # A request that waited for the start is the turn's only while that
-      # turn still runs.
-      case turn(request.caller) do
-        {:ok, {_athanor_id, _user_id, turn_id}} when turn_id == request.turn_id ->
-          send_request(state, request)
-
-        _superseded ->
-          GenServer.reply(request.from, {:error, :not_owned})
-          state
-      end
-    end)
+    Enum.reduce(state.queued, %{state | queued: []}, &dispatch(&2, &1))
   end
 
   defp hello(_hello, state), do: state
 
+  # A request reaches the driver only while its caller waits for it and
+  # its turn still runs, proved again here, just before it is sent: one
+  # that waited in this holder's mailbox or for the browser's start is the
+  # turn's no more once that turn was cancelled, superseded or paused, or
+  # its caller died. Nothing is sent for it, so nothing of it runs.
+  defp dispatch(state, request) do
+    {caller_pid, _tag} = request.from
+
+    cond do
+      not Process.alive?(caller_pid) ->
+        state
+
+      not owned?(request) ->
+        GenServer.reply(request.from, {:error, :not_owned})
+        state
+
+      true ->
+        send_request(state, request)
+    end
+  end
+
+  defp owned?(%{caller: caller, turn_id: turn_id}),
+    do: match?({:ok, {_athanor_id, _user_id, ^turn_id}}, turn(caller))
+
   defp send_request(state, request) do
     id = state.next_id
 
+    # The arguments' JSON, as the caller encoded it, is the frame's `args`.
     frame =
-      Frame.message(%{
-        "t" => "req",
-        "id" => id,
-        "win" => request.window,
-        "op" => request.op,
-        "args" => request.args
-      })
+      Frame.encode(
+        IO.iodata_to_binary([
+          ~s({"t":"req","id":),
+          Integer.to_string(id),
+          ~s(,"win":),
+          Jason.encode!(request.window),
+          ~s(,"op":),
+          Jason.encode!(request.op),
+          ~s(,"args":),
+          request.args.bytes,
+          "}"
+        ])
+      )
 
     if byte_size(frame) > Frame.max_to_driver() do
       GenServer.reply(request.from, {:error, :too_large})
       state
     else
       timer = Process.send_after(self(), {:expired, id}, @request_ms)
-      request = Map.merge(request, %{timer: timer, parts: %{}, of: nil})
+      request = Map.merge(request, %{timer: timer, parts: %{}, of: nil, size: 0})
       write(state, frame, {:request, id})
       %{state | next_id: id + 1, pending: Map.put(state.pending, id, request)}
     end
@@ -537,15 +577,29 @@ defmodule Opus.Browser do
         acknowledge(state, id, of - 1)
 
       {request, {:ok, bytes}} when request.of in [nil, of] ->
-        parts = Map.put(request.parts, seq, bytes)
-        # A chunk past a gap is held and not acknowledged; one within the
-        # unbroken run, a repeat among them, acknowledges the whole run.
-        held = unbroken(parts)
-        if seq <= held, do: acknowledge(state, id, held)
+        held_part = Map.get(request.parts, seq, Programs.Output.new(""))
+        size = request.size - byte_size(held_part.bytes) + byte_size(bytes)
 
-        if map_size(parts) == of,
-          do: answer(state, id, request, Enum.map_join(0..(of - 1), &parts[&1])),
-          else: %{state | pending: Map.put(state.pending, id, %{request | parts: parts, of: of})}
+        if size > Frame.max_response() do
+          # A response past the bound is taken no further and nothing more
+          # of it is kept: the acknowledgement of its last chunk tells the
+          # driver this holder wants no more of it.
+          acknowledge(state, id, of - 1)
+          refuse(state, id, request, {:error, :response_too_large})
+        else
+          parts = Map.put(request.parts, seq, Programs.Output.new(bytes))
+          # A chunk past a gap is held and not acknowledged; one within the
+          # unbroken run, a repeat among them, acknowledges the whole run.
+          held = unbroken(parts)
+          if seq <= held, do: acknowledge(state, id, held)
+
+          if map_size(parts) == of,
+            do: answer(state, id, request, Enum.map_join(0..(of - 1), &parts[&1].bytes)),
+            else: %{
+              state
+              | pending: Map.put(state.pending, id, %{request | parts: parts, of: of, size: size})
+            }
+        end
 
       {request, _unreadable} ->
         acknowledge(state, id, of - 1)
@@ -560,6 +614,12 @@ defmodule Opus.Browser do
     Enum.reduce_while(0..map_size(parts)//1, -1, fn seq, last ->
       if Map.has_key?(parts, seq), do: {:cont, seq}, else: {:halt, last}
     end)
+  end
+
+  defp refuse(state, id, request, reply) do
+    Process.cancel_timer(request.timer)
+    GenServer.reply(request.from, reply)
+    %{state | pending: Map.delete(state.pending, id)}
   end
 
   defp gone(id, state) do
@@ -657,11 +717,14 @@ defmodule Opus.Browser do
   # at most the wire's one input.
 
   defp write(%{session: nil}, _frame, _tag), do: :ok
-  defp write(state, frame, tag), do: send(state.writer, {:write, state.session, frame, tag})
+  # A frame goes to the writer as an `Opus.Programs.Output`, which shows
+  # its size alone, since it may carry what a turn types.
+  defp write(state, frame, tag),
+    do: send(state.writer, {:write, state.session, Programs.Output.new(frame), tag})
 
   defp write_loop(watch, owner, browser) do
     receive do
-      {:write, session, frame, tag} ->
+      {:write, session, %Programs.Output{bytes: frame}, tag} ->
         case write_all(browser, session, frame) do
           :ok -> :ok
           {:error, reason} -> send(owner, {:write_failed, tag, reason})

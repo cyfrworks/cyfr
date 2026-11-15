@@ -5,7 +5,8 @@ defmodule Opus.Programs.Output do
   @moduledoc """
   Bytes a program wrote on its terminal, as `Opus.Programs` hands them to
   a process attached to the session: each `{:bytes, delivery, output}` message and
-  an attach's `tail`. What a program prints may be a credential (a
+  an attach's `tail`; and the bytes Aqua's browser's holder keeps of what
+  it sends the browser and what the browser answers (`Opus.Browser`). What a program prints may be a credential (a
   sign-in's code, an address with a token in it), so the value inspects
   as its size alone, and a crash report or a status that prints a
   mailbox, a message or a state holding one prints none of its bytes.
