@@ -99,7 +99,7 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       this.sending = false
       term.onData((data) => this.type(data))
 
-      // Each output is acknowledged by its number once drawn, and the
+      // Each output is acknowledged by its token once drawn, and the
       // server hands the next only then; a tail replaces what is shown,
       // since what came before it was let go.
       this.handleEvent("terminal_output", ({session, delivery, data}) => {

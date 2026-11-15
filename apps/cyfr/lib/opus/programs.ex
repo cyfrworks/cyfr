@@ -379,8 +379,8 @@ defmodule Opus.Programs do
   answered the last of its output (an `Opus.Programs.Output`), the
   terminal's size and whether it is kept, after which the process
   receives `{Opus.Programs, session_id, {:bytes, delivery, output}}`,
-  each output an `Opus.Programs.Output` and each delivery numbered 1, 2,
-  … for this process, the next only once it said it took the last
+  each output an `Opus.Programs.Output` and each delivery a fresh random
+  token, the next only once it said it took the last by its token
   (`taken/3`); `{Opus.Programs, session_id, {:tail, delivery, output}}`
   when more came meanwhile than is kept for it, the last
   #{div(256 * 1024, 1024)} KiB, to show in place of what it showed; and
@@ -430,16 +430,16 @@ defmodule Opus.Programs do
   end
 
   @doc """
-  The calling process, attached to the session, took the delivery
-  numbered `delivery` (a page's browser drew it): when that is the one
+  The calling process, attached to the session, took the delivery whose
+  token is `delivery` (a page's browser drew it): when that is the one
   outstanding for it, it is handed what came since, or the next output.
   Until it says so it is handed nothing more, and what comes meanwhile
   is kept for it, the last #{div(256 * 1024, 1024)} KiB at most
-  (`Opus.Programs.Terminal`); any other number answers `:ok` and changes
+  (`Opus.Programs.Terminal`); any other token answers `:ok` and changes
   nothing. `{:error, :not_found}` for a session it is not attached to.
   """
-  @spec taken(Sanctum.Context.t(), String.t(), pos_integer()) :: :ok | {:error, term()}
-  def taken(%Sanctum.Context{} = ctx, session_id, delivery) when is_integer(delivery),
+  @spec taken(Sanctum.Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def taken(%Sanctum.Context{} = ctx, session_id, delivery) when is_binary(delivery),
     do: terminal_call(ctx, session_id, &{:taken, &1, self(), delivery})
 
   @doc "Set the session's terminal to `rows` by `cols`; its program is signalled the change."

@@ -157,7 +157,7 @@ describe("the terminal carries the person's keys and the program's bytes", () =>
   // At the end the screen stays to be read, and takes nothing more.
   test("once its program ended, the screen keeps what it shows and sends nothing more", () => {
     const {hook, term, pushed, handlers} = mount()
-    handlers.terminal_output({session: "trm_1", delivery: 1, data: bytes("why it failed")})
+    handlers.terminal_output({session: "trm_1", delivery: "t-1", data: bytes("why it failed")})
     const before = pushed.length
     handlers.terminal_ended({session: "trm_other"})
     assert.equal(hook.ended, false)
@@ -169,27 +169,27 @@ describe("the terminal carries the person's keys and the program's bytes", () =>
     assert.notEqual(term.written.at(-1), "reset")
 
     term.data("typed after\r")
-    handlers.terminal_output({session: "trm_1", delivery: 2, data: bytes("late")})
+    handlers.terminal_output({session: "trm_1", delivery: "t-2", data: bytes("late")})
     assert.equal(pushed.length, before)
     assert.equal(term.disposed, undefined)
   })
 
-  test("acknowledges each output by its number once drawn, and a tail replaces the screen", () => {
+  test("acknowledges each output by its token once drawn, and a tail replaces the screen", () => {
     const {term, pushed, handlers} = mount()
-    handlers.terminal_output({session: "trm_other", delivery: 1, data: bytes("not mine")})
+    handlers.terminal_output({session: "trm_other", delivery: "t-other", data: bytes("not mine")})
     assert.equal(pushed.filter((p) => p.event === "terminal_written").length, 0)
 
-    handlers.terminal_output({session: "trm_1", delivery: 1, data: bytes("one")})
+    handlers.terminal_output({session: "trm_1", delivery: "t-1", data: bytes("one")})
     assert.deepEqual(pushed.at(-1), {
       event: "terminal_written",
-      payload: {session: "trm_1", delivery: 1},
+      payload: {session: "trm_1", delivery: "t-1"},
       reply: undefined
     })
 
-    handlers.terminal_tail({session: "trm_1", delivery: 2, data: bytes("the last of it")})
+    handlers.terminal_tail({session: "trm_1", delivery: "t-2", data: bytes("the last of it")})
     assert.equal(term.written.at(-2), "reset")
     assert.equal(Buffer.from(term.written.at(-1)).toString(), "the last of it")
-    assert.deepEqual(pushed.at(-1).payload, {session: "trm_1", delivery: 2})
+    assert.deepEqual(pushed.at(-1).payload, {session: "trm_1", delivery: "t-2"})
     assert.equal(pushed.filter((p) => p.event === "terminal_written").length, 2)
   })
 

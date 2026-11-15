@@ -700,6 +700,38 @@ defmodule PrismWeb.ProgramsLiveTest do
     pid
   end
 
+  # The browser behind the page names the delivery it drew by the token it
+  # was handed with it; the page forwards only the token it pushed last.
+  test "the page forwards only the token of the delivery it pushed last",
+       %{conn: conn, athanor: athanor} do
+    fake = controller!()
+    row = driven_row!(athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    session = open!(view, "claude")
+    ready!(view, session)
+
+    Scripted.write(fake, row.id, "one")
+
+    assert_push_event(
+      view,
+      "terminal_output",
+      %{session: ^session, delivery: delivery, data: data},
+      2_000
+    )
+
+    assert Base.decode64!(data) == "one\r\n"
+    Scripted.write(fake, row.id, "two")
+    Process.sleep(200)
+
+    for guess <- ["1", "2", delivery <> "x"],
+        do: render_hook(view, "terminal_written", %{"session" => session, "delivery" => guess})
+
+    refute_push_event(view, "terminal_output", %{session: ^session}, 300)
+
+    render_hook(view, "terminal_written", %{"session" => session, "delivery" => delivery})
+    assert output!(view, session) == "two\r\n"
+  end
+
   test "a reload or a second tab attaches to the running screen, and leaving ends nothing",
        %{conn: conn, athanor: athanor, user: user} do
     fake = controller!()
@@ -789,7 +821,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute has_element?(view, ~s([data-test="terminal-keep"]))
 
     # An acknowledgement the browser sends after the end says nothing new.
-    render_hook(view, "terminal_written", %{"session" => session, "delivery" => 2})
+    render_hook(view, "terminal_written", %{"session" => session, "delivery" => "stale"})
     assert has_element?(view, ~s([data-test="terminal-ended"]), "The program ended.")
 
     {reloaded, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
@@ -867,7 +899,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute inspect(terminated, limit: :infinity, printable_limit: :infinity) =~ canary
 
     # The chunk as the page receives it prints as its size.
-    message = {Opus.Programs, session, {:bytes, 1, Opus.Programs.Output.new(canary)}}
+    message = {Opus.Programs, session, {:bytes, "token", Opus.Programs.Output.new(canary)}}
     refute inspect(message, limit: :infinity, printable_limit: :infinity) =~ canary
 
     # A call the page does not take (it defines no handle_call) crashes it;
