@@ -288,8 +288,14 @@ defmodule Opus.Programs.Terminal do
   def handle_info({Opus.Programs, :owner, _grant}, state),
     do: {:stop, :normal, ended(state, :exited)}
 
-  def handle_info({:EXIT, reader, _reason}, %{reader: reader} = state),
+  # The reader ends of itself once it has read the program's end. One
+  # that dies otherwise leaves nothing reading the session, so it ends as
+  # a program the service no longer runs for it does, and is closed.
+  def handle_info({:EXIT, reader, :normal}, %{reader: reader} = state),
     do: {:noreply, %{state | reader: nil}}
+
+  def handle_info({:EXIT, reader, _died}, %{reader: reader} = state),
+    do: {:stop, :normal, ended(%{state | reader: nil}, :exited)}
 
   # The courier of the box's open ends once it has carried the answer.
   def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}

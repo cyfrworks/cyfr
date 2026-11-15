@@ -544,6 +544,20 @@ defmodule Opus.Programs.TerminalTest do
       assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: :exited}, 2_000
     end
 
+    # A reader that died left the session listed and unread for good.
+    test "when nothing can read it any more, and is closed", %{ctx: ctx, row: row} do
+      {id, session} = start!(ctx, row)
+      {:ok, _} = Programs.attach(ctx, id)
+      %{reader: reader} = :sys.get_state(terminal(id))
+      Process.exit(reader, :kill)
+
+      assert_receive {Opus.Programs, ^id, {:ended, :exited}}, 2_000
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: :exited}, 2_000
+      eventually(fn -> gone?(id) end, "the session to end")
+      assert {:ok, []} = Programs.running(ctx)
+    end
+
     test "when its row changes or goes", %{ctx: ctx, row: row} do
       {id, session} = start!(ctx, row)
       {:ok, _} = Programs.attach(ctx, id)
