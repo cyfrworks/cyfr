@@ -64,15 +64,16 @@
 # build toolchain's files too; its runners still hold no capability, no
 # route and no descriptor but their channel and relay.
 
-# ---- The process helper, cyfr-locus, and cyfr-stub: static Go binaries,
-# pinned to the Go release apps/locus/keeper/go.mod names ----
+# ---- The process helper, cyfr-locus, cyfr-stub and cyfr-browser: static Go
+# binaries, pinned to the Go release apps/locus/keeper/go.mod names ----
 FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS keeper
 WORKDIR /src
 COPY apps/locus/keeper/go.mod apps/locus/keeper/go.sum ./
 RUN go mod download
 COPY apps/locus/keeper/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus . \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-stub ./cmd/cyfr-stub
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-stub ./cmd/cyfr-stub \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-browser ./cmd/cyfr-browser
 
 # ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS relbuilder
@@ -134,7 +135,8 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # APT_REFRESH busts the build cache for this layer so the upgrade is not
 # served stale from a cached layer: CI passes the UTC date (YYYY-MM-DD), so
 # the layer refreshes once a day and is shared within it; a local build may
-# leave it.
+# leave it. Chromium, and a font for the pages it renders, are AQUA's
+# browser's, which cyfr-browser (below) drives.
 ARG APT_REFRESH=0
 RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
@@ -145,6 +147,9 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     locales \
     build-essential \
     iptables \
+    && apt-get install -y --no-install-recommends \
+    chromium \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen
@@ -248,6 +253,11 @@ COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 # tools through (catalyst:local.claude-code): it answers each call from the
 # answer CYFR puts in the call's input, and holds nothing.
 COPY --from=keeper /out/cyfr-stub /usr/local/bin/cyfr-stub
+# AQUA's browser: the command of a person's browser row, which the backends
+# service runs on a terminal in the row's kept home. It starts Chromium
+# headless with its profile in that home and drives it over Chrome's
+# debugging pipe, which stays inside the box: no debugging port is opened.
+COPY --from=keeper /out/cyfr-browser /usr/local/bin/cyfr-browser
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The egress guard the builds and backends islands run (docker-compose.yml's
 # locus-builds-guard and locus-backends-guard); iptables, installed above,

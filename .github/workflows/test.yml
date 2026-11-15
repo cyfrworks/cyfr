@@ -1524,6 +1524,16 @@ jobs:
       - name: Kept homes
         run: python3 tests/locus-backends-image/kept_home.py cyfr-locus:backends
 
+      # AQUA's browser: cyfr-browser on a terminal in a kept home, driving
+      # Chromium over its debugging pipe, framed as
+      # tests/fixtures/browser_frames.json says: a megabyte read whole in
+      # acknowledged chunks, no output past an unacknowledged chunk, a forced
+      # tail asked again and a short keep answered gone, each operation once,
+      # a profile another kept uid cannot read and no TCP listener. It prints
+      # Chrome's memory with one, three and six windows.
+      - name: AQUA's browser
+        run: python3 tests/locus-backends-image/browser.py cyfr-locus:backends
+
       # A program's pipe: a pipe row's cat in a kept home under the home's
       # uid, attached to by its key, a read replayed by its after, retired
       # once idle and started again (resumed: false), its oldest lines
