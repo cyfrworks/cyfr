@@ -490,6 +490,24 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
+  test "a card that arrives after a schedule was made offers it, though the pane opened before the schedule existed",
+       %{conn: conn, athanor: athanor, here: here} do
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(here))
+    pane = open_pane(conn, athanor, thread)
+
+    morning = schedule!(here, "Morning after mount")
+    card = card!(here, thread, @write, %{"standing" => nil})
+    offer = ~s([id$="-card-#{card.id}"] [data-test="approval-for-schedule"])
+
+    Prima.Test.Wait.wait_until(
+      fn -> has_element?(pane, offer, "Morning after mount") end,
+      5_000,
+      "the card offers the schedule made after the pane opened"
+    )
+
+    assert has_element?(pane, ~s(#{offer} button[phx-value-schedule="#{morning.id}"]))
+  end
+
   test "the thread's standing answers are listed, bounded ones too, each to withdraw",
        %{conn: conn, athanor: athanor, thread: thread} do
     pane = open_pane(conn, athanor, thread)

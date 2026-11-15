@@ -50,7 +50,7 @@ defmodule PrismWeb.ThreadPaneLive do
   fire is written in the server's voice and drawn as that schedule's,
   under its name, never as the person's line. A card in a daily thread
   offers its answer for one of the person's schedules of Aqua's
-  (`Aqua.answer_schedules/1`). A request to a
+  (`Aqua.answer_schedules/1`), read as the card is drawn. A request to a
   crew member says who asked whom and whether it is answered, with the
   replies to it beneath it; a reply whose request is not on screen stands
   on its own, and a notice says the member needs the person. A room lists
@@ -263,7 +263,6 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:children, [])
       |> assign(:parent, nil)
       |> assign(:pending_approvals, [])
-      |> assign(:schedules, [])
       |> assign(:seen, thread && thread.read_seq)
       |> assign(:any_messages, false)
       |> reset_live()
@@ -294,7 +293,6 @@ defmodule PrismWeb.ThreadPaneLive do
         |> assign(:requests, requests)
         |> assign(:pending_approvals, pending_in(rows))
         |> assign(:any_messages, rows != [])
-        |> assign(:schedules, answer_schedules(socket.assigns.context, thread))
         |> apply_live(live)
         |> relatives(thread)
         |> seen(rows |> Enum.map(& &1.seq) |> Enum.max(fn -> nil end))
@@ -343,14 +341,20 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp read_children(socket), do: socket
 
-  # The schedules a card offers an answer for: in a daily thread, where a
-  # schedule of Aqua's fires.
-  defp answer_schedules(ctx, %{kind: "daily"}) do
-    {:ok, schedules} = Aqua.answer_schedules(ctx)
-    schedules
+  # The schedules a card offers an answer for, read as the card is drawn,
+  # so a schedule made after the pane opened is among them: in a daily
+  # thread, where a schedule of Aqua's fires, and only for a card whose
+  # action takes one. Nothing keeps them, so there is nothing to refresh.
+  defp card_schedules(ctx, %{kind: "daily"}, intent) do
+    if Aqua.standing_offered?(intent, :schedule) do
+      {:ok, schedules} = Aqua.answer_schedules(ctx)
+      schedules
+    else
+      []
+    end
   end
 
-  defp answer_schedules(_ctx, _thread), do: []
+  defp card_schedules(_ctx, _thread, _intent), do: []
 
   # The person has seen the rows the pane shows: the thread's read mark
   # moves to `seq`, forward only, and a row at or behind the mark it holds
@@ -1954,7 +1958,7 @@ defmodule PrismWeb.ThreadPaneLive do
                     id={@dom <> "-card-" <> msg.id}
                     message_id={msg.id}
                     approval_id={msg.approval_id}
-                    schedules={@schedules}
+                    schedules={card_schedules(@context, @thread, intent)}
                     bounds={Map.take(resolution, ~w(lifecycle schedule until constraint sources))}
                     payload={intent}
                     status={msg.status}
