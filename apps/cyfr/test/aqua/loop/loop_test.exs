@@ -162,6 +162,9 @@ defmodule Aqua.LoopTest do
 
   test "the spec a turn runs on names its root run's admission as the parent call of its calls",
        %{ctx: ctx, thread: thread} do
+    # The gate names the admission a run starts under in its context; the
+    # turn's root row takes it from there.
+    ctx = %{ctx | call_id: "call_turn_root_admission"}
     turn = accept!(ctx, thread, "hello")
     script!([reply("hi")])
     assert :completed = Task.await(run(ctx, turn), 30_000)
@@ -175,8 +178,7 @@ defmodule Aqua.LoopTest do
         from(e in "executions", where: e.id == ^pinned.root_execution_id, select: e.call_id)
       )
 
-    assert is_binary(root)
-    assert spec.call_id == root
+    assert {root, spec.call_id} == {"call_turn_root_admission", "call_turn_root_admission"}
   end
 
   test "a turn lasts at least one answer of its brain, at the time the brain's node is consented",
