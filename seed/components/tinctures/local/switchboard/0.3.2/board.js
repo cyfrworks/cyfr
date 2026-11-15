@@ -10,7 +10,7 @@
 (function () {
   'use strict';
 
-  const { state, PAUSE, RESUME, RETRY, text, isItem, componentRef, componentName, isAqua, threadTitle } = window.SB;
+  const { state, PAUSE, RESUME, RETRY, text, isItem, componentRef, componentName, isAqua, threadTitle, callLabel } = window.SB;
   const html = document.documentElement;
 
   /* ---------- time, in the person's own zone and words ---------- */
@@ -237,7 +237,7 @@
     for (const a of loose) {
       const jack = jackOf(a);
       out.calls.push({
-        id: `call:${a.id}`, widget: 'calls', kind: a.kind, name: text(a.label) || KIND[a.kind] || 'Call', call: a,
+        id: `call:${a.id}`, widget: 'calls', kind: a.kind, name: callLabel(a) || KIND[a.kind] || 'Call', call: a,
         lamp: fault(a) ? 'red' : 'amber', meta: [KIND[a.kind] || 'Call', rel(a.since)],
         targets: jack && jack !== 'aqua' ? [jack, 'aqua'] : ['aqua'], primary: jack, page: pageOf(a), at: refOf(a), aqua: jack === 'aqua' ? 'open' : 'ask',
       });

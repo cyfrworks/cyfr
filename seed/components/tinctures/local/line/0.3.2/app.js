@@ -169,16 +169,19 @@
   // A daily thread (one a day) and a workspace thread are Aqua's; a shared
   // thread is people's.
   const isAqua = (t) => t.kind === "daily" || t.kind === "workspace";
-  // A daily thread's title is its date: "Today" or "Yesterday" in the
-  // person's zone, else the date.
-  function threadTitle(t) {
-    const title = text(t.title);
-    const day = t.kind === "daily" ? Date.parse(title) : NaN;
-    if (Number.isNaN(day)) return title || "Untitled";
+  // A day as a daily thread's title and an approval's label in one carry
+  // it, an ISO date: "Today" or "Yesterday" in the person's zone, else the
+  // date. Any other text reads as it is.
+  function dayName(s) {
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(s) ? Date.parse(s) : NaN;
+    if (Number.isNaN(day)) return s;
     const ago = Math.round((Date.parse(parts(new Date()).day) - day) / 86400000);
     if (ago === 0) return "Today";
     if (ago === 1) return "Yesterday";
     return new Intl.DateTimeFormat(zone().locale, { timeZone: "UTC", day: "numeric", month: "short" }).format(day);
+  }
+  function threadTitle(t) {
+    return (t.kind === "daily" ? dayName(text(t.title)) : text(t.title)) || "Untitled";
   }
 
   // "formula:local.digest:1.0.0" without its version.
@@ -471,9 +474,10 @@
     return offer ? text(offer.from) : "";
   }
   const PAGE_ACT = { aqua: "Open in Aqua", chat: "Open chat", executions: "Open runs", schedules: "Open schedules", files: "Open files" };
+  // An approval is labelled with its thread's title: a daily thread's is its day.
   function about(a) {
     if (a.kind === "failed_run") return itemRun(a) ? runName(itemRun(a)) : refName(text(a.id));
-    return text(a.label) || { approval: "An approval", confirmation: "A confirmation", file_offer: "A file", failed_schedule: "A schedule" }[a.kind] || "Something";
+    return (a.kind === "approval" ? dayName(text(a.label)) : text(a.label)) || { approval: "An approval", confirmation: "A confirmation", file_offer: "A file", failed_schedule: "A schedule" }[a.kind] || "Something";
   }
   function settledWhat(kind, outcome) {
     if (outcome === "expired") return "Its time ran out";

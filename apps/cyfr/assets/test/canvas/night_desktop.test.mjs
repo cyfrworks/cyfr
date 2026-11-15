@@ -672,4 +672,16 @@ describe("the night desktop 0.3.2", () => {
       assert.ok(p.html("wall").includes(`<span class="tube">${words}</span>`), p.html("wall"))
     }
   })
+
+  test("an approval in a daily thread is named by its day as the thread is, and one in a crew thread by its title as given", async () => {
+    const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
+    const p = await lit({version: V3, attention: [[day(0), "t0"], [day(-1), "t1"], [day(-3), "t3"], ["builder", "tc"]].map(([label, ref], i) =>
+      ({kind: "approval", id: `ap${i}`, label, since: `2026-11-10T14:0${i}:00Z`, destination: {kind: "page", page: "aqua", ref}}))})
+    const puddle = p.html("puddle-index")
+    assert.deepEqual([...puddle.matchAll(/<b>approve<\/b> <span>([^<]*)<\/span>/g)].map(([, label]) => label), ["Today", "Yesterday", date, "builder"])
+    // A thread the street does not hang names its plate by the approval.
+    p.tap({class: "ripple", "data-ref": "thread:t1"})
+    assert.match(p.plate.innerHTML, /<h2 id="plate-title">Yesterday<\/h2>/)
+    assert.ok([0, -1, -3].every((n) => !(puddle + p.street() + p.plate.innerHTML).includes(day(n))))
+  })
 })

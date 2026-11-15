@@ -1067,7 +1067,8 @@ function waitingWords(a) {
       return { head: `${componentName(text(a.id))} failed`, tail: cause && cause !== 'failed' ? shortReason(cause) : 'its last run', fail: true };
     }
     case 'failed_schedule': return { head: `${label || 'A schedule'} failed`, tail: 'its last run', fail: true };
-    case 'approval': return { head: 'Approve in', tail: label || 'a thread' };
+    // An approval is labelled with its thread's title: a daily thread's is its day.
+    case 'approval': return { head: 'Approve in', tail: dayTitle(label) || 'a thread' };
     case 'confirmation': return { head: 'Confirm in CYFR', tail: label || 'a change' };
     case 'file_offer': { const from = offerOf(a) && text(offerOf(a).from); return { head: from ? `${from} offers` : 'A file offered', tail: label || 'a file' }; }
     default: return { head: 'Waiting', tail: label };
@@ -1089,14 +1090,15 @@ function isoDay(d) {
   catch (err) { return at.toISOString().slice(0, 10); }
   return `${p.year}-${p.month}-${p.day}`;
 }
-// A thread's title; a daily thread's is its date: "Today" or "Yesterday", else the date.
-function threadTitle(th) {
-  const title = text(th.title);
-  if (th.kind !== 'daily' || Number.isNaN(Date.parse(title))) return title;
-  if (title === isoDay(0)) return 'Today';
-  if (title === isoDay(-1)) return 'Yesterday';
-  try { return new Date(Date.parse(title)).toLocaleDateString(LOCALE, { timeZone: 'UTC', day: 'numeric', month: 'short' }); } catch (err) { return title; }
+// A day as a daily thread's title and an approval's label in one carry it, an ISO date:
+// "Today" or "Yesterday", else the date. Any other text reads as it is.
+function dayTitle(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) return s;
+  if (s === isoDay(0)) return 'Today';
+  if (s === isoDay(-1)) return 'Yesterday';
+  try { return new Date(Date.parse(s)).toLocaleDateString(LOCALE, { timeZone: 'UTC', day: 'numeric', month: 'short' }); } catch (err) { return s; }
 }
+function threadTitle(th) { return th.kind === 'daily' ? dayTitle(text(th.title)) : text(th.title); }
 function threadSub(th) {
   const people = Array.isArray(th.people) ? th.people.length : 0;
   if (th.waits_on_you) return 'waits on you';

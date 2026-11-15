@@ -697,4 +697,18 @@ describe("the street desktop 0.3.2", () => {
       assert.ok(labelled(p, `Thread ${words}, with Aqua`), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
     }
   })
+
+  test("an approval in a daily thread is named by its day as the thread is, and one in a crew thread by its title as given", async () => {
+    const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
+    const named = ["Today", "Yesterday", date, "builder"]
+    const p = await street({version: "0.3.2"})
+    picture(p.stream("attention.changes"), [[day(0), "th-0"], [day(-1), "th-1"], [day(-3), "th-3"], ["builder", "th-crew"]].map(([label, ref], i) =>
+      waiting(`ap-${i}`, "approval", {kind: "page", page: "aqua", ref}, {label, since: at(i * 10 - 60)})))
+    p.pump(5)
+    const asks = p.hits().map((h) => h.getAttribute("aria-label") || "").filter((l) => l.startsWith("Waiting on you: an approval"))
+    assert.deepEqual(asks.map((l) => l.split(", ")[1]).sort(), named.map((n) => `Approve in ${n}`).sort())
+    tap(p, "Waiting on you: an approval, Approve in Yesterday")
+    assert.match(p.board().textContent, /Approve in Yesterday/)
+    assert.ok([0, -1, -3].every((n) => !(asks.join(" ") + p.board().textContent).includes(day(n))), asks.join(" | "))
+  })
 })

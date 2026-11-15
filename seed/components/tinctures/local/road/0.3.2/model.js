@@ -267,12 +267,13 @@
   }
 
   // What waits on the person: the attention items, and an installed app whose grant is not
-  // current, a porter at the house. An offer names its sender when the files stream holds it.
+  // current, a porter at the house. An offer names its sender when the files stream holds it;
+  // an approval is labelled with its thread's title, and a daily thread's is its day.
   function waiting() {
     const out = [];
     for (const { value: a } of state.attention.values()) {
       const offer = a.kind === 'file_offer' && state.files.get(a.ref);
-      out.push(offer && offer.value.from ? { ...a, from: offer.value.from } : a);
+      out.push(offer && offer.value.from ? { ...a, from: offer.value.from } : a.kind === 'approval' ? { ...a, label: dayTitle(a.label) } : a);
     }
     for (const app of state.installed) {
       const c = state.components.get(bare(app.ref));
@@ -351,15 +352,16 @@
   }
 
   // The threads listed: the newest daily thread stands for Aqua's days, the earlier ones a step
-  // back in Aqua's panel. A daily thread's title is its date: "Today" or "Yesterday" on the
-  // person's clock, else the date.
+  // back in Aqua's panel. A day, as a daily thread's title and an approval's label in one carry
+  // it, is an ISO date: "Today" or "Yesterday" on the person's clock, else the date. Any other
+  // text reads as it is.
   function threads() {
     const all = [...state.threads.values()].map((held) => held.value);
     const newest = all.reduce((n, t) => (t.daily && (!n || t.title > n.title) ? t : n), null);
     return all.filter((t) => !t.daily || t === newest).map((t) => (t.daily ? { ...t, title: dayTitle(t.title) } : t));
   }
   function dayTitle(iso) {
-    const d = Date.parse(iso);
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? Date.parse(iso) : NaN;
     if (Number.isNaN(d)) return iso;
     const ago = Math.floor(nowLocal() / 1440) - Math.round(d / 86400000);
     if (ago === 0) return 'Today';

@@ -314,11 +314,11 @@
     const newest = all.reduce((n, t) => (t.kind === 'daily' && (!n || text(t.title) > text(n.title)) ? t : n), null);
     return all.filter((t) => t.kind !== 'daily' || t === newest);
   }
-  // A thread's title; a daily thread's is its date: "Today" or "Yesterday"
-  // in the person's zone, else the date.
-  function threadTitle(t) {
-    const title = text(t.title);
-    const day = t.kind === 'daily' ? Date.parse(title) : NaN;
+  // A day as a daily thread's title and an approval's label in one carry
+  // it, an ISO date: "Today" or "Yesterday" in the person's zone, else the
+  // date. Any other text reads as it is.
+  function dayTitle(title) {
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(title) ? Date.parse(title) : NaN;
     if (Number.isNaN(day)) return title;
     const { locale, time_zone: zone } = state.appearance;
     try {
@@ -330,6 +330,9 @@
       return new Intl.DateTimeFormat(locale, { timeZone: 'UTC', day: 'numeric', month: 'short' }).format(day);
     } catch (_) { return title; }
   }
+  const threadTitle = (t) => (t.kind === 'daily' ? dayTitle(text(t.title)) : text(t.title));
+  // An approval is labelled with its thread's title: a daily thread's is its day.
+  const callLabel = (a) => (a.kind === 'approval' ? dayTitle(text(a.label)) : text(a.label));
   // A feed's latest result: the one heard last on its subscription.
   function feed(name) {
     let best = null;
@@ -356,6 +359,6 @@
     files: () => items('files.changes'),
     system: () => items('system.changes')[0] || null,
     runs, feed, components,
-    componentRef, componentName, text, isItem, isAqua, threadTitle,
+    componentRef, componentName, text, isItem, isAqua, threadTitle, callLabel,
   };
 })();

@@ -213,10 +213,11 @@
     return {
       hm: (t) => hmF.format(new Date(t)),
       long: (t) => longF.format(new Date(t)),
-      // A daily thread's title, its date: "Today" or "Yesterday" in the
-      // person's zone, else the date.
+      // A day as a daily thread's title and an approval's label in one
+      // carry it, an ISO date: "Today" or "Yesterday" in the person's zone,
+      // else the date. Any other text reads as it is.
       day(iso, now) {
-        const d = time(iso);
+        const d = /^\d{4}-\d{2}-\d{2}$/.test(text(iso)) ? time(iso) : null;
         if (d === null) return text(iso);
         const ago = dayNo(now) - Math.round(d / 86400000);
         return ago === 0 ? 'Today' : ago === 1 ? 'Yesterday' : dateF.format(new Date(d));
@@ -283,6 +284,7 @@
   // ui.going holds the items answered a moment ago, still switching off.
   function waiting(s, ui) {
     const out = [];
+    let C = null;
     for (const a of s.attention.values()) {
       const k = KINDS[a.kind];
       const d = isItem(a.destination) ? a.destination : {};
@@ -294,7 +296,10 @@
       else if (a.kind === 'confirmation') target = 'cyfr';
       // An offer reads with its sender, from the locker's stream.
       const offer = a.kind === 'file_offer' ? s.files.get(text(a.id)) : null;
-      const label = a.kind === 'failed_run' ? compName(a.label || a.id) : text(a.label) + (offer && isStr(offer.from) ? ' from ' + offer.from : '');
+      // An approval is labelled with its thread's title: a daily thread's is its day.
+      const label = a.kind === 'failed_run' ? compName(a.label || a.id)
+        : a.kind === 'approval' ? (C || (C = clock(s))).day(a.label, Date.now())
+          : text(a.label) + (offer && isStr(offer.from) ? ' from ' + offer.from : '');
       out.push({ id: 'a:' + text(a.id), kind: a.kind, target, label, since: time(a.since), page: d.kind === 'page' ? text(d.page) : null, item: a, word: k.word, hue: k.hue, light: k.light });
     }
     // An installed app whose grant is not current waits on the person too.

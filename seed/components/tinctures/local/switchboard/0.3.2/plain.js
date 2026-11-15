@@ -5,7 +5,7 @@
   'use strict';
 
   const SB = window.SB;
-  const { state, text, isItem, componentName, isAqua, threadTitle } = SB;
+  const { state, text, isItem, componentName, isAqua, threadTitle, callLabel } = SB;
   const KIND = { approval: 'approval', confirmation: 'confirmation', failed_run: 'failed run', failed_schedule: 'failed schedule', file_offer: 'file offer' };
   const HEALTH = { ok: 'healthy', degraded: 'degraded', low_storage: 'low storage' };
 
@@ -39,7 +39,7 @@
     const lead = document.createElement('p'); lead.className = 'plain-lead';
     lead.textContent = `${calls.length} ${calls.length === 1 ? 'thing waits' : 'things wait'} on you.`;
     out.push(lead);
-    out.push(section('Waiting on you', calls.map((a) => [text(a.label), KIND[a.kind] || text(a.kind), when(a.since)]), 'Nothing waits on you.'));
+    out.push(section('Waiting on you', calls.map((a) => [callLabel(a), KIND[a.kind] || text(a.kind), when(a.since)]), 'Nothing waits on you.'));
     out.push(section('Threads', SB.threads().map((t) => [threadTitle(t), isAqua(t) ? 'with Aqua' : 'shared', t.waits_on_you ? 'waits on you' : '', Number.isInteger(t.unread) && t.unread > 0 ? `${t.unread} unread` : '', when(t.last_activity)]), 'No threads yet.'));
     out.push(section('Apps', state.installed.map((a) => [a.name, a.open ? 'open' : '']), 'No apps installed.'));
     out.push(section('Components', [...SB.components().values()].filter((c) => c.type !== 'tincture' && c.type !== 'agent').map((c) => [text(c.name), text(c.type), text(c.version), c.update_available ? 'update ready' : '']), 'No components installed.'));
