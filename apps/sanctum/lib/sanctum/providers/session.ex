@@ -8,6 +8,12 @@ defmodule Sanctum.Providers.Session do
   session's end, a protected device's unlock and lock, and the caller's
   self-description resources.
 
+  `whoami` answers the caller here: their person, athanor and the
+  administrator's mark (`platform_admin`), when their session ends, their
+  name as the screen shows it (`name`, `Sanctum.Tenancy.Users.display_name/1`),
+  their `role` (`administrator` or `member`, by that mark) and, for a call
+  made with an API key, the key's name (`key_name`, nil otherwise).
+
   `unlock` and `lock` are a protected device's, through its device
   channel alone (`auth_method: :device`, a client that reports a holder):
   `unlock` with no arguments answers an `unlock` challenge, and with its
@@ -165,15 +171,27 @@ defmodule Sanctum.Providers.Session do
     # Local identity only. Registry identity (push tokens, personal namespace,
     # memberships) lives on the `registry.whoami` action under Compendium MCP
     # so the auth sliver stays Compendium-free. Clients compose the two.
-    {:ok,
-     %{
-       user_id: ctx.user_id,
-       email: derive_email(ctx),
-       provider: derive_provider(ctx),
-       athanor_id: ctx.athanor_id,
-       platform_admin: ctx.platform_admin,
-       session_expires_at: session_expires_at(ctx)
-     }}
+    case Sanctum.ApiKey.name_of(ctx) do
+      {:ok, key_name} ->
+        {:ok,
+         %{
+           user_id: ctx.user_id,
+           email: derive_email(ctx),
+           provider: derive_provider(ctx),
+           athanor_id: ctx.athanor_id,
+           platform_admin: ctx.platform_admin,
+           session_expires_at: session_expires_at(ctx),
+           key_name: key_name,
+           name: Sanctum.Tenancy.Users.display_name(ctx.user_id),
+           role: if(ctx.platform_admin == true, do: "administrator", else: "member")
+         }}
+
+      {:error, :not_found} ->
+        {:error, {:invalid_argument, "Not authenticated."}}
+
+      {:error, _unread} ->
+        {:error, {:unavailable, "Storage"}}
+    end
   end
 
   # Revoke the Sanctum session authenticated by this request.
