@@ -399,6 +399,56 @@ defmodule Opus.Programs.TurnSessionTest do
     end
   end
 
+  describe "a start racing the turn's end" do
+    test "registered after the end ran, it reads the ended turn and opens nothing",
+         %{ctx: ctx, row: row, lineage: lineage, turn: turn} do
+      relays = Process.whereis(Opus.Programs.Relays)
+      :ok = :sys.suspend(relays)
+      on_exit(fn -> if Process.alive?(relays), do: :sys.resume(relays) end)
+      caller = turn_caller(ctx, lineage)
+
+      task =
+        Task.async(fn ->
+          Programs.start(caller, row.id, %{rows: 50, cols: 200, args: [], epoch: row.epoch})
+        end)
+
+      eventually(
+        fn ->
+          {:messages, messages} = Process.info(relays, :messages)
+          Enum.any?(messages, &match?({:"$gen_call", _, {:start_child, _}}, &1))
+        end,
+        "the start to wait at the supervisor"
+      )
+
+      set_status(turn, "completed")
+      :ok = Programs.end_turn(ctx.athanor_id, turn.id)
+      :ok = :sys.resume(relays)
+
+      assert {:error, :not_found} = Task.await(task, 5_000)
+      assert {:ok, []} = Programs.running(ctx)
+      refute_received {:session, "open", _message, _fields}
+    end
+
+    test "registered before the end, its opening is refused by the end",
+         %{ctx: ctx, row: row, lineage: lineage, turn: turn, fake: fake} do
+      Scripted.hold(fake, "opened")
+      caller = turn_caller(ctx, lineage)
+
+      task =
+        Task.async(fn ->
+          Programs.start(caller, row.id, %{rows: 50, cols: 200, args: [], epoch: row.epoch})
+        end)
+
+      assert_receive {:session, "open", %{"key" => key}, _fields}, 2_000
+      set_status(turn, "completed")
+      :ok = Programs.end_turn(ctx.athanor_id, turn.id)
+
+      assert {:error, :not_found} = Task.await(task, 5_000)
+      assert {:ok, []} = Programs.running(ctx)
+      assert [] = Registry.lookup(Opus.Programs.Registry, {:terminal, key})
+    end
+  end
+
   describe "who reaches a session" do
     test "a person's screen lists and closes the turn's session, and attaches to, types on and reads nothing of it",
          %{ctx: ctx, row: row, lineage: lineage} do

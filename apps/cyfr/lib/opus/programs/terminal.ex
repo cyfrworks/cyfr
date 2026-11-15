@@ -145,7 +145,7 @@ defmodule Opus.Programs.Terminal do
 
   @impl true
   def handle_call({:open, deadline}, from, %{session: nil, opening: nil} = state) do
-    case hold(state, deadline) do
+    case with(:ok <- turn_running(state), do: hold(state, deadline)) do
       {:ok, state} ->
         holder = self()
         owner = state.owner
@@ -318,8 +318,12 @@ defmodule Opus.Programs.Terminal do
       else: {:noreply, state}
   end
 
-  def handle_cast({:turn_ended, turn_id}, %{turn_id: turn_id} = state) when turn_id != nil,
-    do: finish(state, :standing)
+  # A turn that ended while its start was opening refuses the start; the
+  # box closes whatever it opened for this process as it ends.
+  def handle_cast({:turn_ended, turn_id}, %{turn_id: turn_id} = state) when turn_id != nil do
+    if state.opening, do: GenServer.reply(state.opening, {:error, :not_found})
+    finish(%{state | opening: nil}, :standing)
+  end
 
   def handle_cast({:turn_ended, _another}, state), do: {:noreply, state}
 
@@ -700,6 +704,20 @@ defmodule Opus.Programs.Terminal do
   defp turn_open(state) do
     with {:ok, status} <- Opus.Programs.turn_status(state.athanor_id, state.turn_id),
          do: {:ok, status in Prima.TurnState.open_statuses()}
+  end
+
+  # A turn's start opens nothing unless its turn still runs, read once the
+  # process is registered under it: a turn's end marks its row before it
+  # ends what is registered (`Opus.Programs.end_turn/2`), so either the end
+  # finds this process or this read finds the end.
+  defp turn_running(%{turn_id: nil}), do: :ok
+
+  defp turn_running(state) do
+    case Opus.Programs.turn_status(state.athanor_id, state.turn_id) do
+      {:ok, "running"} -> :ok
+      {:ok, _not_running} -> {:error, :not_found}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
   end
 
   defp summary(state) do

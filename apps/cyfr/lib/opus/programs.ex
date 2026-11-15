@@ -655,8 +655,11 @@ defmodule Opus.Programs do
 
   @doc """
   End every session the turn `turn_id` of the athanor started, as its turn
-  ended (`:standing`): its process stops, and the box closes its session.
-  Answers at once.
+  ended (`:standing`): its process stops, and the box closes its session;
+  one still opening refuses its start. Called once the turn's row is
+  marked ended, so a start that registered too late for this call reads
+  that mark before it opens anything and is refused
+  (`Opus.Programs.Terminal`). Answers at once.
   """
   @spec end_turn(String.t(), String.t()) :: :ok
   def end_turn(athanor_id, turn_id) when is_binary(athanor_id) and is_binary(turn_id) do
