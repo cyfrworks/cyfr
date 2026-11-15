@@ -2093,7 +2093,12 @@ defmodule Cyfr.Boundaries do
       grant_row: 2,
       revoke: 2
     ],
+    # `definition/1`: the one digest a program's confirmation and its
+    # grants are both held to, which Emissary's provider compares to decide
+    # whether a program's definition moved and binds for the row a program
+    # becomes when it is made a tool server elsewhere.
     "Sanctum.ToolServerDigest" => [
+      definition: 1,
       descriptions_digest: 2,
       from_server: 1,
       normalize_input_schema: 1,
