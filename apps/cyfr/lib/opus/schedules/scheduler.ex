@@ -160,7 +160,7 @@ defmodule Opus.Schedules.Scheduler do
   and input that read), then spawns no run and opens no decision: it says
   the fire (`[:cyfr, :schedules, :fired]`) and wakes Aqua's turn consumer
   (`Cyfr.Bus.schedule_turns/0`). That consumer starts a turn of Aqua as
-  the schedule's person in the schedule's own thread
+  the schedule's person in their daily thread current when it fires
   (`Aqua.ScheduleTurns`), whose root's admission starts the occurrence and
   records the fire's decision (`Opus.TurnRoot.claim/3`). A recovered claim
   of such a row is woken again, never run here.
