@@ -480,7 +480,7 @@ defmodule Compendium.Providers.Registry do
   def handle(_ctx, %{"action" => "legal_page", "name" => name})
       when is_binary(name) and name != "" do
     case Compendium.Registry.Client.get_legal_page(name) do
-      {:ok, body} -> {:ok, body}
+      {:ok, body} -> {:ok, legal_page(body)}
       {:error, err} -> refuse(err)
     end
   end
@@ -517,6 +517,18 @@ defmodule Compendium.Providers.Registry do
   # ============================================================================
   # Private helpers
   # ============================================================================
+
+  # A legal page as the registry publishes it, with the registry it came
+  # from: `registry`, its host, and `base_url`, the address the page's
+  # links that name a path alone are read against (on this CYFR such a
+  # path names nothing). Both come from this deployment's configuration,
+  # never from the page.
+  defp legal_page(%{"content_markdown" => markdown} = body) when is_binary(markdown) do
+    host = Compendium.RegistryHost.canonical_rest_host()
+    Map.merge(body, %{"registry" => host, "base_url" => Compendium.RegistryHost.base_url(host)})
+  end
+
+  defp legal_page(body), do: body
 
   # Every registry call answers through one seam: a registry's own error
   # becomes its refusal here, and any other reason is the gate's to

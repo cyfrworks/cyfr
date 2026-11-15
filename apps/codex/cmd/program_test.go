@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -49,13 +50,14 @@ func newProgramScenario(t *testing.T, current, latest string) *programScenario {
 	if err := errors.Join(os.WriteFile(s.self, []byte("old cyfr"), 0755), os.Chmod(s.self, 0755)); err != nil {
 		t.Fatal(err)
 	}
-	bin := t.TempDir()
+	// The stand-in machine, at no terminal, its PATH one folder holding
+	// only a curl and an sh that record any run.
+	standInMachine(t)
+	askTerminal = func() bool { return false }
 	for _, name := range []string{"curl", "sh"} {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\necho \"$0 $*\" >> "+s.ran+"\n"), 0755); err != nil {
-			t.Fatal(err)
-		}
+		standInLink(t, filepath.Join(os.Getenv("PATH"), name))
 	}
-	t.Setenv("PATH", bin)
+	t.Setenv(fakeRecord, s.ran)
 	t.Chdir(t.TempDir())
 	savedVersion, savedLatest, savedFetch, savedCask, savedSelf, savedHand := version.Version, latestRelease, fetchBinary, caskInstalled, selfExecutable, handOver
 	t.Cleanup(func() {
@@ -380,36 +382,29 @@ func TestContinueAsChecksTheRelease(t *testing.T) {
 	s.unchanged()
 }
 
-// fakeBrew puts a brew on PATH, in shell builtins alone since the
-// scenario's PATH holds no other tools, that records each run in its
-// directory's log, answers `--prefix` with its directory, `list --cask cyfr` as
-// installed and `list --cask --versions cyfr` with the version in its
-// directory's version file, which `upgrade --cask cyfr` sets to upgradeTo.
+// fakeBrew puts a brew on PATH, this test binary (runFakeBrew), that
+// records each run in its directory's log, answers `--prefix` with its
+// directory, `list --cask cyfr` as installed and `list --cask --versions
+// cyfr` with the version in its directory's version file, which `upgrade
+// --cask cyfr` sets to upgradeTo.
 func fakeBrew(t *testing.T, installed, upgradeTo string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("the fake brew is a shell script")
+		t.Skip("the fake brew is a link to this test binary, which Windows makes only with a privilege")
 	}
 	dir := t.TempDir()
-	script := `#!/bin/sh
-dir='` + dir + `'
-echo "$*" >> "$dir/log"
-case "$*" in
-  --prefix) echo "$dir" ;;
-  "list --cask --versions cyfr") read -r v < "$dir/version"; echo "cyfr $v" ;;
-  "list --cask cyfr") ;;
-  "upgrade --cask cyfr") echo "` + upgradeTo + `" > "$dir/version" ;;
-  update) ;;
-  *) exit 1 ;;
-esac
-`
 	if err := errors.Join(
-		os.WriteFile(filepath.Join(dir, "brew"), []byte(script), 0755),
 		os.WriteFile(filepath.Join(dir, "version"), []byte(installed+"\n"), 0644),
+		os.WriteFile(filepath.Join(dir, "upgrade-to"), []byte(upgradeTo+"\n"), 0644),
 	); err != nil {
 		t.Fatal(err)
 	}
+	standInLink(t, filepath.Join(dir, "brew"))
+	t.Setenv(fakeBrewDir, dir)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if found, err := exec.LookPath("brew"); err != nil || found != filepath.Join(dir, "brew") {
+		t.Fatalf("PATH's brew is %q (%v), not the stand-in", found, err)
+	}
 	return dir
 }
 

@@ -21,6 +21,36 @@ defmodule Compendium.Providers.RegistryTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
+  test "a legal page answers as fetched, with the registry it came from and its address",
+       %{ctx: ctx} do
+    page =
+      "Report it [here][r], <a href='/legal/dmca'>or here</a>, `[code](/legal/x)` " <>
+        "or [elsewhere](https://example.com/x).\n\n[r]: /legal/ncii/report"
+
+    # A page that names a registry or an address of its own names neither.
+    RegistryStub.start!(fn %{method: "GET", path: "/v1/legal/terms"} ->
+      {200,
+       RegistryStub.answer(%{
+         "name" => "terms",
+         "title" => "Terms",
+         "content_markdown" => page,
+         "registry" => "elsewhere.example",
+         "base_url" => "https://elsewhere.example"
+       })}
+    end)
+
+    host = Compendium.RegistryHost.canonical_rest_host()
+
+    assert {:ok,
+            %{
+              "name" => "terms",
+              "title" => "Terms",
+              "content_markdown" => page,
+              "registry" => host,
+              "base_url" => Compendium.RegistryHost.base_url(host)
+            }} == RegistryProvider.handle(ctx, %{"action" => "legal_page", "name" => "terms"})
+  end
+
   # A client reads the tool's description from the catalog: it speaks of
   # the configured registry, never of cyfr.run.
   test "the registry tool describes registry operations, never cyfr.run's" do

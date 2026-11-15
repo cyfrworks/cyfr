@@ -50,6 +50,8 @@ type machineSeams struct {
 	// passwordless is whether sudo runs any command now without asking for
 	// a password: a login it still keeps, or no entry that asks one.
 	passwordless func() bool
+	// terminal is whether this process has a terminal for sudo to ask at.
+	terminal func() bool
 	// authenticate is sudo's own password prompt on this terminal; it
 	// runs no command.
 	authenticate func() error
@@ -96,6 +98,14 @@ var machine = machineSeams{
 	// one rule, its manual's "sudo -v" sentence. A password any command
 	// would ask is asked here first, after the sentence.
 	passwordless: func() bool { return exec.Command("sudo", "-n", "-v").Run() == nil },
+	terminal: func() bool {
+		f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			return false
+		}
+		f.Close()
+		return true
+	},
 	authenticate: func() error {
 		cmd := exec.Command("sudo", "-v")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -150,14 +160,23 @@ func (p passwordRefused) Error() string {
 // unlockSudo is the password step after mayAdminister and any question,
 // before root commands and before anything is written for them. CYFR
 // never asks for, reads or keeps a password: when sudo will ask, the one
-// sentence before its prompt says whose, and sudo asks on this terminal
-// before any command runs (passwordRefused). The caller forgets sudo's
+// sentence before its prompt says whose, naming Ubuntu only where it is
+// Ubuntu 26.04, and sudo asks on this terminal before any command runs
+// (passwordRefused). With no terminal for sudo to ask at, nothing is
+// announced and the step refuses at once. The caller forgets sudo's
 // login (machine.forget).
 func unlockSudo(out io.Writer, again string) error {
 	if machine.passwordless() {
 		return nil
 	}
-	fmt.Fprintln(out, "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.")
+	if !machine.terminal() {
+		return fmt.Errorf("sudo needs your password and there is no terminal for it to ask at, so nothing was changed. Run `%s` at a terminal", again)
+	}
+	if machine.supported() {
+		fmt.Fprintln(out, "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.")
+	} else {
+		fmt.Fprintln(out, "This machine will now ask for your password: the one you log in to it with. Nothing shows while you type.")
+	}
 	if machine.authenticate() != nil {
 		return passwordRefused{again}
 	}
@@ -309,18 +328,24 @@ func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool
 	return false, nil
 }
 
-// upWithGroup is cyfr up's first step, in a terminal older than the
-// account's docker group: the same cyfr up, through sg, so no person has to
-// refresh the terminal. It answers true when that run did the work.
-func upWithGroup(args []string, out, errOut io.Writer) (bool, error) {
-	if !machine.supported() {
+// withDockerGroup is cyfr up's and cyfr setup's first step, in a terminal
+// older than the account's docker group: the same subcommand, through sg,
+// so no person has to refresh the terminal and every step of its run
+// reaches Docker. It runs nothing when Docker already answers this account,
+// a rootless Docker included, or when there is no sg to run it with, and
+// answers true when that run did the work.
+func withDockerGroup(subcommand string, args []string, out, errOut io.Writer) (bool, error) {
+	if !machine.supported() || machine.reachable() {
+		return false, nil
+	}
+	if _, err := os.Stat(sgProgram); err != nil {
 		return false, nil
 	}
 	account, err := user.Current()
 	if err != nil {
 		return false, err
 	}
-	return continueWithGroup("up", args, account.Username, out, errOut)
+	return continueWithGroup(subcommand, args, account.Username, out, errOut)
 }
 
 // sgProgram runs a command with a group the account's processes do not

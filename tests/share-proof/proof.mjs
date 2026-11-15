@@ -133,13 +133,15 @@ const FIELD = "API_KEY";
 // the Settings page.
 const ADMIN_NAME = "share-admin";
 const OWNER = `@${ADMIN_NAME}`;
-// What the sharing sheet says of its caps, and of a share to everyone with
-// none, to the platform administrator.
+// What the sharing sheet says of its caps, and to the platform administrator
+// of a share to everyone once it is chosen: with no cap, and with one.
 const CAPS_MEANING = "An empty cap is no limit. 0 admits no use. A number is the most requests that day; " +
   "a day ends at midnight UTC.";
-const UNCAPPED = "Shared with everyone and no cap, anyone on this CYFR may use it without limit. You administer " +
-  "this CYFR, so a key you share with everyone is also what each new person's AQUA uses when it fits, with no " +
-  "limit unless you set one.";
+const NEWCOMERS = "You administer this CYFR, so a key you share with everyone is also what each new person's " +
+  "AQUA uses when it fits";
+const UNCAPPED = "Shared with everyone and no cap, anyone on this CYFR may use it without limit. " + NEWCOMERS +
+  ", with no limit unless you set one.";
+const CAPPED = NEWCOMERS + ".";
 
 // ---------------------------------------------------------------------------
 // Whole objects
@@ -632,8 +634,9 @@ async function createKey(page, vault, spec) {
 }
 
 // A key shared with everyone through the system layer's sharing sheet: what
-// the sheet offers and says before anything is chosen, then everyone and
-// `spec`'s caps, its credential_sharing record proven with the passkey.
+// the sheet offers and says before anything is chosen, what it says of a
+// share to everyone once everyone is chosen and again once `spec`'s caps are
+// typed, its credential_sharing record proven with the passkey.
 async function shareKey(page, vault, entryId, spec) {
   await open(page, vault);
   await page.locator(`[data-test="entry-share"][phx-value-id="${entryId}"]`).click({ timeout: 30_000 });
@@ -648,16 +651,27 @@ async function shareKey(page, vault, entryId, spec) {
       caps: [...form.querySelectorAll('input[type="number"]')].map((el) => [el.name, el.value]),
       warnings: text('[data-test="share-warning"] p'),
       meaning: text('[data-test="share-caps-meaning"]'),
-      uncapped: text('[data-test="share-uncapped"]'),
+      everyone: text('[data-test="share-everyone"]'),
       secret_inputs: form.querySelectorAll('input[type="password"], textarea').length,
     };
   }, sheet);
+  // What the sheet says of a share to everyone, once it says `expected`
+  // or after a bounded wait, as it then reads.
+  const everyone = `${sheet} [data-test="share-everyone"]`;
+  const says = async (expected) => {
+    await page.waitForFunction(([selector, text]) =>
+      [...document.querySelectorAll(selector)].map((el) => el.textContent.replace(/\s+/g, " ").trim())
+        .join("\n") === text, [everyone, expected], { timeout: 30_000 }).catch(() => {});
+    return page.$$eval(everyone, (els) => els.map((el) => el.textContent.replace(/\s+/g, " ").trim()));
+  };
   await page.locator(`${sheet} input[name="audience"][value="everyone"]`).check();
+  const chosen = await says(UNCAPPED);
   if (spec.person_daily !== "") await page.locator(`${sheet} input[name="person_daily"]`).fill(spec.person_daily);
+  const capped = await says(spec.person_daily !== "" ? CAPPED : UNCAPPED);
   await page.locator(`${layer} [data-test="share-submit"]`).click();
   const confirmation = await proveOwn(page);
   const shared = await told(page, "Shared.");
-  return { asked, shown, shared, confirmation, key_on_page: holdsKey(await page.content()) };
+  return { asked, shown, chosen, capped, shared, confirmation, key_on_page: holdsKey(await page.content()) };
 }
 
 // The door's form on the Settings page, its value typed, then `action`
@@ -799,7 +813,7 @@ async function main() {
     ai.share = shareOf(AI.name);
     mail.share = shareOf(MAIL.name);
     setModel();
-    const sheetOpened = (made) => made.asked && same(made.shown, {
+    const sheetOpened = (made, spec) => made.asked && same(made.shown, {
       audiences: ["Everyone on this CYFR"],
       caps: [["person_daily", ""], ["total_daily", ""]],
       warnings: [
@@ -808,9 +822,9 @@ async function main() {
         "Recipients use your provider limits up to the caps you set and never see the credential. You can revoke the share at any time."
       ],
       meaning: [CAPS_MEANING],
-      uncapped: [UNCAPPED],
+      everyone: [],
       secret_inputs: 0,
-    });
+    }) && same(made.chosen, [UNCAPPED]) && same(made.capped, [spec.person_daily !== "" ? CAPPED : UNCAPPED]);
     const linesMade = byYouLines([
       [ai.share, "active", "Company AI, shared with everyone, 0 today, at most 3 a person a day"],
       [mail.share, "active", "Company Mail, shared with everyone, 0 today, no cap"],
@@ -824,14 +838,16 @@ async function main() {
       passkey.ok && [madeAi, madeMail, sharedAi, sharedMail].every((m) => provenHere(m.confirmation)) &&
         madeAi.created && madeMail.created && !madeAi.disclosed && !madeMail.disclosed &&
         !madeAi.key_on_page && !madeMail.key_on_page && Object.keys(shownIds).length === 2 &&
-        sheetOpened(sharedAi) && sheetOpened(sharedMail) && sharedAi.shared && sharedMail.shared &&
+        sheetOpened(sharedAi, AI) && sheetOpened(sharedMail, MAIL) && sharedAi.shared && sharedMail.shared &&
         !sharedAi.key_on_page && !sharedMail.key_on_page && same(madeShares, linesMade) && made.held,
       "Company AI and Company Mail made on the Vault page, each key typed in its form and proven with the passkey, " +
         "each shared with everyone through the sheet, which warns about the provider's terms, requests as you, " +
         "your provider limits and secrets before a choice, opens with its caps empty and says what they mean, " +
-        "proven with the passkey; Shared by you reads both; the whole state is the two entries and two shares " +
+        "says nothing of a share to everyone until everyone is chosen, then that it has no limit and is what each " +
+        "new person's AQUA uses, and once Company AI's cap is typed only the AQUA sentence, without the no-limit " +
+        "clause, proven with the passkey; Shared by you reads both; the whole state is the two entries and two shares " +
         "their forms requested",
-      { passkey, entries: shownIds, sheets: [sharedAi.shown, sharedMail.shown], shared_by_you: madeShares,
+      { passkey, entries: shownIds, sheets: [sharedAi, sharedMail].map(({ shown, chosen, capped }) => ({ shown, chosen, capped })), shared_by_you: madeShares,
         state: made.compared,
         confirmations: [madeAi.confirmation, madeMail.confirmation, sharedAi.confirmation, sharedMail.confirmation] })) {
       return;
