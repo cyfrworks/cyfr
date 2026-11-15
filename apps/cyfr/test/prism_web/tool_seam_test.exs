@@ -143,6 +143,11 @@ defmodule PrismWeb.ToolSeamTest do
     # write ARCHITECTURE.md §3 (Prism) lets the console make beside the
     # gate. There is no `user.put_prefs` tool and there should not be one.
     {"apps/cyfr/lib/prism_web/live/settings_live.ex", "Sanctum.Tenancy.Users.put_prefs"},
+    # The same kind of preference: that the pane has shown this person the
+    # line about what Aqua reads in shared threads, which decides only
+    # whether the line is drawn again. Written to the session's own person,
+    # with nothing taken from the event.
+    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Sanctum.Tenancy.Users.put_prefs"},
     # The version of the account service's terms the sign tab has shown this
     # person, a presentation preference of the same kind: it decides only
     # whether the notice is drawn again, it is written to the person's own

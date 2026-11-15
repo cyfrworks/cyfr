@@ -34,7 +34,7 @@ defmodule Arca.SharedMessages do
 
   import Ecto.Query
 
-  alias Arca.Schemas.{SharedMessage, SharedThread}
+  alias Arca.Schemas.{SharedMessage, SharedThread, SharedThreadMember}
 
   @typedoc "A message, as a plain map with its payload decoded."
   @type row :: map()
@@ -177,6 +177,77 @@ defmodule Arca.SharedMessages do
   end
 
   def latest(%Prima.Actor{}, _thread_id, _count), do: {:error, :cross_tenant}
+
+  @doc """
+  What `user_id` reads of the thread from their seat in it, in one
+  statement: the thread's status, their read mark, how many of the
+  thread's messages someone else wrote past that mark, and the thread's
+  newest `count` messages, oldest first, at most `max_page/0`. Being one
+  statement, it reads one snapshot on either database, so the mark, the
+  count and the messages agree whatever is written meanwhile. The newest
+  messages are those past the thread's last `seq` less `count`, since
+  `seq` is dense. `{:error, :not_found}` when the person holds no active
+  seat in the thread.
+  """
+  @spec read_tail(Prima.Actor.t(), String.t(), String.t(), pos_integer()) ::
+          {:ok,
+           %{
+             status: String.t(),
+             read_seq: non_neg_integer(),
+             unread: non_neg_integer(),
+             messages: [row()]
+           }}
+          | {:error, :not_found | :cross_tenant | :database_error}
+  # arca:unscoped-ok a shared thread is no athanor's; it is read by its id from the reader's own seat.
+  def read_tail(%Prima.Actor{scope: :platform}, thread_id, user_id, count)
+      when is_binary(thread_id) and is_binary(user_id) and is_integer(count) and count > 0 do
+    count = min(count, @max_page)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.SharedMessages.read_tail", fn ->
+      from(m in SharedThreadMember,
+        join: t in SharedThread,
+        on: t.id == m.thread_id,
+        left_join: s in SharedMessage,
+        on:
+          s.thread_id == m.thread_id and
+            s.seq >
+              fragment(
+                "(SELECT coalesce(max(x.seq), 0) FROM shared_messages AS x WHERE x.thread_id = ?) - ?",
+                m.thread_id,
+                ^count
+              ),
+        where: m.thread_id == ^thread_id and m.user_id == ^user_id and m.status == "active",
+        order_by: [asc: s.seq],
+        select: {
+          t.status,
+          m.read_seq,
+          fragment(
+            "(SELECT count(*) FROM shared_messages AS u WHERE u.thread_id = ? AND u.seq > ? AND u.author <> ?)",
+            m.thread_id,
+            m.read_seq,
+            m.user_id
+          ),
+          s
+        }
+      )
+      |> Arca.Repo.all()
+      |> case do
+        [] ->
+          {:error, :not_found}
+
+        [{status, read_seq, unread, _} | _] = rows ->
+          {:ok,
+           %{
+             status: status,
+             read_seq: read_seq,
+             unread: unread,
+             messages: for({_, _, _, %SharedMessage{} = row} <- rows, do: decode(row))
+           }}
+      end
+    end)
+  end
+
+  def read_tail(%Prima.Actor{}, _thread_id, _user_id, _count), do: {:error, :cross_tenant}
 
   defp fields(attrs) do
     author = attrs[:author]
