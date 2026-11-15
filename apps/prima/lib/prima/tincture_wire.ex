@@ -446,8 +446,10 @@ defmodule Prima.TinctureWire do
   @doc """
   What an `open` comes to, as `opened` tells the frame: the shell opened
   the tincture (`opened`), refused it (`refused`, with the refusal's
-  class: one it does not list is `not_found`, a subject it does not take
-  `invalid_argument`), or did not act on it (`cancelled`), naming
+  class: a subject the tincture does not take is `invalid_argument` only
+  to a canvas whose `installed` names the tincture, and every other
+  refusal is `not_found`, so a frame learns nothing of what is installed
+  that it could not list), or did not act on it (`cancelled`), naming
   `too_soon` when it came too soon after the last spend of the activation.
   """
   @spec open_outcomes() :: [String.t()]

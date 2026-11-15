@@ -1252,7 +1252,7 @@ defmodule PrismWeb.ShellDesktopTest do
       refute render(chat) =~ "Not yours"
     end
 
-    test "open carries a subject of a kind the app declares to its handshake, and refuses any other",
+    test "open carries a subject of a kind the app declares to its handshake, and refuses any other, saying why only to a frame told the tincture",
          %{conn: conn} do
       view = shell!(conn)
       main = canvas(view).id
@@ -1279,6 +1279,25 @@ defmodule PrismWeb.ShellDesktopTest do
       verb!(view, app.id, :open, %{"ref" => "tincture:local.plain-view", "call" => 8}, nil)
       app_id = app.id
       assert answer!(view, app_id, "opened") == %{"call" => 8, "outcome" => "opened"}
+
+      # An app is told no list of tinctures, so a subject it names that the
+      # tincture does not take is refused as a tincture not listed is: the
+      # refusal tells it nothing about what is installed.
+      verb!(
+        view,
+        app.id,
+        :open,
+        %{"ref" => "tincture:local.plain-view", "subject" => subject, "call" => 9},
+        nil
+      )
+
+      assert answer!(view, app_id, "opened") ==
+               %{"call" => 9, "outcome" => "refused", "reason" => "not_found"}
+
+      verb!(view, app.id, :open, %{"ref" => "tincture:local.nobody", "call" => 10}, nil)
+
+      assert answer!(view, app_id, "opened") ==
+               %{"call" => 10, "outcome" => "refused", "reason" => "not_found"}
     end
 
     test "opening an existing app on another subject delivers the new subject", %{conn: conn} do

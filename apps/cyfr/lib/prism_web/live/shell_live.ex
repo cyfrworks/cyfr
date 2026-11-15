@@ -1017,7 +1017,7 @@ defmodule PrismWeb.ShellLive do
       socket = if subject, do: give_subject(socket, {:full, id}, subject), else: socket
       opened(socket, frame, args["call"], "opened")
     else
-      refused -> socket |> drop_message() |> open_refused(frame, args["call"], refused)
+      refused -> socket |> drop_message() |> open_refused(frame, args["call"], refused, false)
     end
   end
 
@@ -1177,13 +1177,31 @@ defmodule PrismWeb.ShellLive do
 
   # An open the shell does not act on: a tincture it does not list, a
   # subject the app does not take, or the person rearranging the desktop.
-  defp open_refused(socket, frame, call, nil),
-    do: opened(socket, frame, call, "refused", "not_found")
-
-  defp open_refused(socket, frame, call, :refused),
+  # A refusal about a reference tells the frame nothing it could not list
+  # itself: only a canvas whose `installed` names the tincture (`lists`)
+  # hears that its subject is not taken; every other frame hears
+  # `not_found`, as for a tincture the shell does not list.
+  defp open_refused(socket, frame, call, :refused, true = _lists),
     do: opened(socket, frame, call, "refused", "invalid_argument")
 
-  defp open_refused(socket, frame, call, _not_now), do: opened(socket, frame, call, "cancelled")
+  defp open_refused(socket, frame, call, refused, _lists) when refused in [nil, :refused],
+    do: opened(socket, frame, call, "refused", "not_found")
+
+  defp open_refused(socket, frame, call, _not_now, _lists),
+    do: opened(socket, frame, call, "cancelled")
+
+  # Whether the `installed` the shell told canvas `canvas_id` names the
+  # tincture `ref` lists.
+  defp told_lists?(socket, canvas_id, ref) do
+    case listed(socket, ref) do
+      %{} = card ->
+        told = Map.get(socket.assigns.told, canvas_id, [])
+        Enum.any?(told, &(&1.ref == Frames.ref_of(card)))
+
+      nil ->
+        false
+    end
+  end
 
   # ---- a desktop's controls ---------------------------------------------------
 
@@ -1671,7 +1689,10 @@ defmodule PrismWeb.ShellLive do
 
       opened(socket, frame, args["call"], "opened")
     else
-      refused -> socket |> drop_message() |> open_refused(frame, args["call"], refused)
+      refused ->
+        socket
+        |> drop_message()
+        |> open_refused(frame, args["call"], refused, told_lists?(socket, canvas_id, ref))
     end
   end
 
