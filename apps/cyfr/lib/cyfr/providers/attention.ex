@@ -45,9 +45,9 @@ defmodule Cyfr.Providers.Attention do
   The destination is where the person acts on the item, in one trusted
   spelling: `{kind: "page", page, ref}` for where Prism shows it, each a
   page a canvas opens with `settings` (`aqua`, Aqua's panel on the desktop,
-  whose threads hold the approvals; the Dashboard's `executions`,
-  `schedules` and `files`), and the record there (a thread, a run, a
-  schedule or an offer), or `{kind: "ref", page: nil,
+  opened at the thread the approval waits in; the Dashboard's
+  `executions`, `schedules` and `files`), and the record there (a thread,
+  a run, a schedule or an offer), or `{kind: "ref", page: nil,
   ref}` for a confirmation, which the system layer presents wherever the
   person is, and for a request, which the system layer presents above
   the frame that asked. No field carries a message, a credential, a

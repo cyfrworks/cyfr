@@ -2,18 +2,21 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.AquaPanelLiveTest do
-  # The person's own Aqua on the desktop: beside the shared thread the
-  # chat overlay shows, the panel's send lands in You with that thread read
-  # into the turn, and an answer pastes back onto it, attributed.
+  # The person's own Aqua on the desktop: it opens on today's daily
+  # thread, steps back and forward by day, and its button carries today's
+  # unread count. Beside the shared thread the chat overlay shows, the
+  # panel's send lands in today's thread with that thread read into the
+  # turn, and an answer pastes back onto it, attributed.
   # The panel itself: what the assistant points at stays in the panel, a
   # halt reaches its own turn, a grant is asked in its own layer, Escape
-  # and Ctrl+J close it, it keeps its thread, its place, its size and its
-  # docking across a reload (the pointer and the hand's sheet are the
-  # hook's, tested in assets/test/aqua_panel/), and it deletes the open
-  # thread and tries a failed fill again. Its pane is a window onto the
-  # runner: two desktops of the person see one thread, a send is held while
-  # the athanor is being prepared, and a file is stored for any device.
-  # Driven against the real loop and a scripted model.
+  # and Ctrl+J close it, it keeps its place, its size and its docking
+  # across a reload (the pointer and the hand's sheet are the hook's,
+  # tested in assets/test/aqua_panel/), the attention stream opens it at
+  # any thread of the person's, and it tries a failed fill again. Its pane
+  # is a window onto the runner: two desktops of the person see one thread,
+  # a send is held while the athanor is being prepared, and a file is
+  # stored for any device. Driven against the real loop and a scripted
+  # model.
   use PrismWeb.ConnCase, async: false
 
   require Ecto.Query
@@ -123,39 +126,50 @@ defmodule PrismWeb.AquaPanelLiveTest do
     overlay
   end
 
-  # The panel's pane, turned to thread `id`.
-  defp select!(panel, id) do
-    panel |> form("#aqua-panel-thread-form", %{"id" => id}) |> render_change()
+  # The panel's pane, turned to thread `id` as the attention stream turns
+  # it: the desktop opens the panel there.
+  defp show!(panel, id) do
+    send(panel.pid, {:open, id})
+    render(panel)
     on_thread!(child!(panel, "aqua-panel-pane"), id)
   end
 
-  # The panel's thread of You, once its turn has ended.
-  defp settled_you!(me) do
+  # Today's daily thread, which the panel makes and opens on.
+  defp today!(me) do
+    {:ok, today} = Aqua.Day.current(me)
+    today
+  end
+
+  # Today's daily thread, once a send's turn in it has ended.
+  defp settled_today!(me) do
+    today = today!(me)
+
     wait_until(
       fn ->
-        match?([_], Threads.list(Sanctum.Context.actor(me))) and
-          match?(
-            {:ok, []},
-            Aqua.Tape.open_turns(me, hd(Threads.list(Sanctum.Context.actor(me))).id)
-          )
+        Threads.latest_messages(Sanctum.Context.actor(me), today.id, 1) != [] and
+          match?({:ok, []}, Aqua.Tape.open_turns(me, today.id))
       end,
       60_000
     )
 
-    [you_thread] = Threads.list(Sanctum.Context.actor(me))
-    you_thread
+    today
   end
 
-  test "the panel opens onto You beside the shared thread the chat shows, and a send with its box ticked lands in You with that thread read into the turn",
+  # A day as the panel's header names one other than today.
+  defp day_name(thread), do: Calendar.strftime(thread.day, "%a %-d %b %Y")
+
+  test "the panel opens on today's daily thread beside the shared thread the chat shows, and a send with its box ticked lands there with that thread read into the turn",
        %{conn: conn, me: me, team: team, user: user} do
     view = desktop!(conn)
     beside!(view, team)
 
     {panel, _html} = open_panel(view)
     assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your Aqua"] header), "Aqua")
+    assert has_element?(panel, "#aqua-panel-day-name", "Today")
 
     pane = child!(panel, "aqua-panel-pane")
-    assert thread_of(pane) == nil
+    today = today!(me)
+    assert thread_of(pane).id == today.id
     assert render(pane) =~ "Read #{team.title} with each message"
 
     refute has_element?(pane, ~s(label[title*="room"])),
@@ -169,9 +183,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
     pane |> form("form", %{"message" => "what do they mean?"}) |> render_submit()
 
-    # In You, and only there — with the shared thread read into the turn's
-    # request beside the task, never into the system prompt.
-    you_thread = settled_you!(me)
+    # In today's thread, and only there — with the shared thread read into
+    # the turn's request beside the task, never into the system prompt.
+    you_thread = settled_today!(me)
     [request] = model_requests()
     text = request_text(request)
     assert text =~ "## Read from a shared thread"
@@ -187,8 +201,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     {:ok, said} = Sanctum.SharedThreads.messages(user.user_id, team.id)
     refute Enum.any?(said, &(&1.content == "what do they mean?"))
 
-    # The pane is on the thread its first message created.
-    on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
+    # The pane stays on today's thread.
+    on_thread!(child!(panel, "aqua-panel-pane"), today.id)
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -210,7 +224,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     ])
 
     pane |> form("form", %{"message" => "what is unread in #{team.title}?"}) |> render_submit()
-    you_thread = settled_you!(me)
+    you_thread = settled_today!(me)
 
     # The list names the thread with its two unread messages; the read
     # marks those two lines and not the person's own.
@@ -257,7 +271,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert {:error, :not_found} = Threads.get_message(Sanctum.Context.actor(them_ctx), kept.id)
 
     # A later turn in another thread of the person's reads none of it.
-    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(me))
+    {:ok, elsewhere} = Arca.Test.Days.thread(Sanctum.Context.actor(me))
     Cyfr.Test.ScriptedWorker.script([model_reply("Nothing here yet.")])
     prism = %{Sanctum.TestContext.local(:prism) | user_id: me.user_id, athanor_id: me.athanor_id}
     assert {:ok, _sent} = Aqua.Runner.send_message(prism, elsewhere.id, "@aqua what did I ask?")
@@ -292,7 +306,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.ScriptedWorker.script([model_reply("Hello.")])
     pane |> form("form", %{"message" => "hello"}) |> render_submit()
 
-    settled_you!(me)
+    settled_today!(me)
     # One model request, and nothing of the shared thread in it.
     [request] = model_requests()
     text = request_text(request)
@@ -337,7 +351,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
     pane |> form("form", %{"message" => "what do they mean?"}) |> render_submit()
 
-    you_thread = settled_you!(me)
+    you_thread = settled_today!(me)
 
     answer =
       Enum.find(
@@ -386,7 +400,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.ScriptedWorker.script([model_reply("hello you")])
     pane |> form("form", %{"message" => "hello me"}) |> render_submit()
 
-    you_thread = settled_you!(me)
+    you_thread = settled_today!(me)
     assert you_thread.athanor_id == mine.id
     [request] = model_requests()
     refute request_text(request) =~ "Read from a shared thread"
@@ -428,20 +442,20 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.ScriptedWorker.script([model_reply("hello you")])
     pane |> form("form", %{"message" => "hello me"}) |> render_submit()
 
-    _you_thread = settled_you!(me)
+    _you_thread = settled_today!(me)
     [request] = model_requests()
     assert request["model"] == "kept-model-1"
 
     Cyfr.Test.Sandbox.end_views()
   end
 
-  # The panel's pane on the thread the first send created, with the turn
+  # The panel's pane on today's thread, with the turn a send started
   # under way.
   defp panel_thread(panel, me, text) do
     pane = child!(panel, "aqua-panel-pane")
     pane |> form("form", %{"message" => text}) |> render_submit()
-    [you_thread] = Threads.list(Sanctum.Context.actor(me))
-    {on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id), you_thread}
+    today = today!(me)
+    {on_thread!(child!(panel, "aqua-panel-pane"), today.id), today}
   end
 
   defp intents(pane, thread, user, intents) do
@@ -475,7 +489,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     # The panel is on the thread it was on, and the chat beside it is where
     # it was.
     on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
-    assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{you_thread.id}"][selected]))
+    assert has_element?(panel, "#aqua-panel-day-name", "Today")
     assert find_live_child(overlay, "chat-thread-" <> team.id)
 
     # Dismissed, it is gone.
@@ -485,11 +499,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the panel lists the requests waiting on the crew, and one turns the panel to the thread it was asked in",
+  test "the panel lists the requests waiting on the crew, and one turns the panel to the day it was asked in",
        %{conn: conn, me: me} do
     actor = Sanctum.Context.actor(me)
-    {:ok, room} = Threads.create(actor)
-    {:ok, child} = Threads.crew_thread(actor, room.id, "builder")
+    {:ok, room} = Threads.daily(actor, Date.add(today!(me).day, -4))
+    {:ok, _child} = Threads.crew_thread(actor, room.id, "builder")
 
     {:ok, %{message: request}} =
       Aqua.Tape.accept(me, room.id, %{
@@ -510,13 +524,10 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert has_element?(panel, waiting, "Build the site")
     refute has_element?(panel, waiting, "and test it")
 
-    # A crew member's thread is reached from its room, never listed.
-    assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{room.id}"]))
-    refute has_element?(panel, ~s(#aqua-panel-threads option[value="#{child.id}"]))
-
     panel |> element("#{waiting} button") |> render_click()
     on_thread!(child!(panel, "aqua-panel-pane"), room.id)
-    assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{room.id}"][selected]))
+    assert has_element?(panel, "#aqua-panel-day-name", day_name(room))
+    assert has_element?(panel, "#aqua-panel-today")
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -571,14 +582,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
         manifest: Jason.encode!(%{})
       })
 
-    {:ok, you_thread} = Threads.create(Sanctum.Context.actor(me))
-
     # The desktop has its own layer, beside the shared thread the chat
-    # shows; the panel is You.
+    # shows; the panel is on today's thread.
     view = desktop!(conn)
     beside!(view, team)
     {panel, _html} = open_panel(view)
-    pane = select!(panel, you_thread.id)
+    you_thread = today!(me)
+    pane = on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
 
     send(pane.pid, %Cyfr.Bus.ThreadEvent{
       athanor_id: mine.id,
@@ -620,7 +630,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
       "the pane to hear its grant"
     )
 
-    # Granted in You.
+    # Granted in the person's own athanor.
     assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(me, "catalyst:local.#{name}")
     assert :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil
 
@@ -661,19 +671,20 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the panel keeps its thread across a reload, and closed stays closed",
+  test "a reload finds the panel open on today's thread, whatever day it showed, and closed stays closed",
        %{conn: conn, me: me} do
-    {:ok, kept} = Threads.create(Sanctum.Context.actor(me))
-    {:ok, _} = Threads.update(Sanctum.Context.actor(me), kept.id, %{title: "Kept"})
+    today = today!(me)
+    {:ok, earlier} = Threads.daily(Sanctum.Context.actor(me), Date.add(today.day, -2))
 
     {panel, _html} = open_panel(desktop!(conn))
-    select!(panel, kept.id)
+    panel |> element("#aqua-panel-day-before") |> render_click()
+    on_thread!(child!(panel, "aqua-panel-pane"), earlier.id)
 
     # A reload mounts the desktop and its panel afresh; the same session
-    # finds the same panel.
+    # finds the panel open, on today's thread.
     panel = child!(desktop!(conn), "aqua-panel")
     assert has_element?(panel, "#aqua-panel-sheet")
-    on_thread!(child!(panel, "aqua-panel-pane"), kept.id)
+    on_thread!(child!(panel, "aqua-panel-pane"), today.id)
 
     render_click(panel, "close", %{})
     panel = child!(desktop!(conn), "aqua-panel")
@@ -713,7 +724,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
              ~s(#aqua-panel-sheet button[data-aqua-handle][aria-label="Change height"])
            )
 
-    assert has_element?(panel, "#aqua-panel-sheet header[data-aqua-grip] #aqua-panel-threads")
+    assert has_element?(panel, "#aqua-panel-sheet header[data-aqua-grip] #aqua-panel-day-name")
 
     assert has_element?(
              panel,
@@ -915,12 +926,12 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     Cyfr.Test.ScriptedWorker.script([model_reply("Hi there")])
     pane |> form("form", %{"message" => "@aqua hello from me"}) |> render_submit()
-    you_thread = settled_you!(me)
+    you_thread = settled_today!(me)
 
-    # The person's other desktop, under a session of its own, opens the same
-    # thread and reads the reply the runner wrote.
+    # The person's other desktop, under a session of its own, opens on the
+    # same thread and reads the reply the runner wrote.
     {other, _html} = open_panel(desktop!(log_in_user(build_conn(), user)))
-    other_pane = select!(other, you_thread.id)
+    other_pane = on_thread!(child!(other, "aqua-panel-pane"), you_thread.id)
     assert render(other_pane) =~ "hello from me"
     assert render(other_pane) =~ "Hi there"
     refute render(other_pane) =~ "is asking"
@@ -960,7 +971,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     end
 
     pane |> form("form[phx-submit=submit]", %{"message" => "@aqua read these"}) |> render_submit()
-    thread = settled_you!(me)
+    thread = settled_today!(me)
 
     # The files rode the model request on the task: text files the brain
     # does not take inline (it takes PNG and PDF) as text blocks under
@@ -1031,7 +1042,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     pane |> form("form[phx-submit=submit]", %{"message" => "@aqua keep this"}) |> render_submit()
 
-    thread = settled_you!(me)
+    thread = settled_today!(me)
     [msg | _] = Threads.messages(Sanctum.Context.actor(me), thread.id)
     [ref] = Aqua.attachment_refs(msg)
     {:ok, blob} = Aqua.attachment_blob_path(thread.id, msg.id, ref)
@@ -1052,7 +1063,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     # message the first sent and its file, with a text the send refuses: the
     # refusal discards nothing this pane did not store itself.
     {other, _html} = open_panel(desktop!(again_conn))
-    other_pane = select!(other, thread.id)
+    other_pane = on_thread!(child!(other, "aqua-panel-pane"), thread.id)
 
     render_hook(other_pane, "restore_draft", %{
       "thread_id" => thread.id,
@@ -1122,19 +1133,20 @@ defmodule PrismWeb.AquaPanelLiveTest do
     pane |> form("form", %{"message" => "@aqua hold this"}) |> render_submit()
 
     # Held, not refused: the pane says so, the browser is given the whole
-    # send to keep, and nothing was written.
+    # send to keep, naming no thread since it joins today's, and nothing
+    # was written.
     assert_push_event(pane, "aqua:held_send", %{
       envelope:
-        %{"client_id" => client_id, "message_id" => message_id, "thread_id" => thread_id} =
-          envelope
+        %{"client_id" => client_id, "message_id" => message_id, "thread_id" => nil} = envelope
     })
 
+    thread_id = today!(ctx).id
+    on_thread!(pane, thread_id)
     assert render(pane) =~ "Retry"
     assert [] == Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 10)
 
-    # A reload: the panel the send turned to its new thread opens on it
-    # again, the hook offers the held send back, and it is held again under
-    # the same identity.
+    # A reload: the panel opens on today's thread again, the hook offers the
+    # held send back, and it is held again under the same identity.
     render(panel)
 
     reloaded =
@@ -1205,53 +1217,171 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the open thread of You is deleted from the panel's header, which turns to a blank thread; a crew member's thread has no delete",
+  test "the panel offers no list of threads, no new thread and no delete; a crew member's thread is reached from its room, and Today returns",
        %{conn: conn, me: me} do
     actor = Sanctum.Context.actor(me)
-    {:ok, doomed} = Threads.create(actor)
-    {:ok, room} = Threads.create(actor)
-    {:ok, child} = Threads.crew_thread(actor, room.id, "builder")
+    today = today!(me)
+    {:ok, child} = Threads.crew_thread(actor, today.id, "builder")
 
-    {panel, _html} = open_panel(desktop!(conn))
-    # The blank thread has nothing to delete.
+    {panel, html} = open_panel(desktop!(conn))
+    refute has_element?(panel, "#aqua-panel-sheet select")
     refute has_element?(panel, "#aqua-panel-delete")
+    refute has_element?(panel, ~s(#aqua-panel-sheet [phx-click="delete_thread"]))
+    refute html =~ "New thread"
+    # Today is where the panel is: no step forward, no Today to return to.
+    assert has_element?(panel, "#aqua-panel-day-after[disabled]")
+    refute has_element?(panel, "#aqua-panel-today")
 
-    pane = select!(panel, doomed.id)
-    panel |> element("#aqua-panel-delete") |> render_click()
-
-    assert {:error, :not_found} = Threads.get(actor, doomed.id)
-    refute has_element?(panel, ~s(#aqua-panel-threads option[value="#{doomed.id}"]))
-    assert has_element?(panel, ~s(#aqua-panel-threads option[value=""][selected]))
-    wait_until(fn -> thread_of(pane) == nil end, 5_000, "the pane on a blank thread")
-
-    # A crew member's thread is its room's, reached from it.
-    select!(panel, room.id)
+    pane = on_thread!(child!(panel, "aqua-panel-pane"), today.id)
     pane |> element(~s([id$="-crew-#{child.id}"])) |> render_click()
     on_thread!(pane, child.id)
-    refute has_element?(panel, "#aqua-panel-delete")
+    assert has_element?(panel, "#aqua-panel-day-name", "builder's thread")
+    refute has_element?(panel, "#aqua-panel-day-before")
+
+    panel |> element("#aqua-panel-today") |> render_click()
+    on_thread!(pane, today.id)
+    assert has_element?(panel, "#aqua-panel-day-name", "Today")
 
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a thread chosen in the panel turns its one pane, New thread to a blank one, and a reload finds it blank",
+  test "back goes to the nearest earlier day that has a thread, forward and Today return, all in one pane",
        %{conn: conn, me: me} do
     actor = Sanctum.Context.actor(me)
-    {:ok, first} = Threads.create(actor)
-    {:ok, second} = Threads.create(actor)
+    today = today!(me)
+    {:ok, yesterday} = Threads.daily(actor, Date.add(today.day, -1))
+    {:ok, older} = Threads.daily(actor, Date.add(today.day, -3))
 
     {panel, _html} = open_panel(desktop!(conn))
-    pane = select!(panel, first.id)
-    select!(panel, second.id)
+    pane = on_thread!(child!(panel, "aqua-panel-pane"), today.id)
+
+    panel |> element("#aqua-panel-day-before") |> render_click()
+    on_thread!(pane, yesterday.id)
+    assert has_element?(panel, "#aqua-panel-day-name", day_name(yesterday))
+    assert has_element?(panel, "#aqua-panel-today")
+
+    # The day between has no thread: back skips it.
+    panel |> element("#aqua-panel-day-before") |> render_click()
+    on_thread!(pane, older.id)
+    assert has_element?(panel, "#aqua-panel-day-name", day_name(older))
+    assert has_element?(panel, "#aqua-panel-day-before[disabled]")
+
+    panel |> element("#aqua-panel-day-after") |> render_click()
+    on_thread!(pane, yesterday.id)
+
+    panel |> element("#aqua-panel-day-after") |> render_click()
+    on_thread!(pane, today.id)
+    assert has_element?(panel, "#aqua-panel-day-name", "Today")
+
+    panel |> element("#aqua-panel-day-before") |> render_click()
+    panel |> element("#aqua-panel-day-before") |> render_click()
+    on_thread!(pane, older.id)
+    panel |> element("#aqua-panel-today") |> render_click()
+    on_thread!(pane, today.id)
     assert child!(panel, "aqua-panel-pane").pid == pane.pid
 
-    panel |> form("#aqua-panel-thread-form", %{"id" => ""}) |> render_change()
-    wait_until(fn -> thread_of(pane) == nil end, 5_000, "the pane on a blank thread")
-    assert child!(panel, "aqua-panel-pane").pid == pane.pid
+    Cyfr.Test.Sandbox.end_views()
+  end
 
-    # The blank thread is a place: a reload finds it, not the newest thread.
+  test "a send from an earlier day joins today's thread, which the panel then shows",
+       %{conn: conn, me: me} do
+    today = today!(me)
+    {:ok, earlier} = Threads.daily(Sanctum.Context.actor(me), Date.add(today.day, -2))
+
+    {panel, _html} = open_panel(desktop!(conn))
+    pane = show!(panel, earlier.id)
+    assert has_element?(panel, "#aqua-panel-day-name", day_name(earlier))
+
+    Cyfr.Test.ScriptedWorker.script([model_reply("Noted today.")])
+    pane |> form("form", %{"message" => "from an earlier day"}) |> render_submit()
+
+    on_thread!(pane, today.id)
+    assert has_element?(panel, "#aqua-panel-day-name", "Today")
+    settled_today!(me)
+
+    assert Enum.any?(
+             Threads.latest_messages(Sanctum.Context.actor(me), today.id, 10),
+             &(&1.content == "from an earlier day")
+           )
+
+    assert [] == Threads.latest_messages(Sanctum.Context.actor(me), earlier.id, 10)
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # A post on `thread` the person did not write: a schedule's fire, in the
+  # server's voice, as the person's list hears of it.
+  defp fire!(me, thread, name) do
+    {:ok, %{message: row}} =
+      Aqua.Tape.accept(me, thread.id, %{
+        message: %{
+          author: Prima.Author.system(),
+          sent_by: "person",
+          content: "summarise what is unread",
+          payload: %{"schedule" => %{"id" => "sch_#{name}", "name" => name}}
+        }
+      })
+
+    row
+  end
+
+  test "the button carries today's unread count: a post raises it, and showing today's thread clears it",
+       %{conn: conn, me: me} do
+    view = desktop!(conn)
+    panel = child!(view, "aqua-panel")
+    today = today!(me)
+    refute has_element?(panel, "#aqua-panel-unread")
+
+    # A post on an earlier day's thread is not today's.
+    {:ok, earlier} = Threads.daily(Sanctum.Context.actor(me), Date.add(today.day, -1))
+    fire!(me, earlier, "Weekly")
+    fire!(me, today, "Morning brief")
+    post = fire!(me, today, "Evening brief")
+
+    wait_until(
+      fn -> has_element?(panel, "#aqua-panel-unread", "2") end,
+      5_000,
+      "today's two posts counted on the button"
+    )
+
+    {panel, _html} = open_panel(view)
+    on_thread!(child!(panel, "aqua-panel-pane"), today.id)
+
+    wait_until(
+      fn -> not has_element?(panel, "#aqua-panel-unread") end,
+      5_000,
+      "the count cleared once today's thread is shown"
+    )
+
+    assert {:ok, %{read_seq: seq}} = Threads.get(Sanctum.Context.actor(me), today.id)
+    assert seq == post.seq
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the attention stream's destination opens the thread an approval waits in: an earlier day's or a crew member's",
+       %{conn: conn, me: me} do
+    actor = Sanctum.Context.actor(me)
+    today = today!(me)
+    {:ok, earlier} = Threads.daily(actor, Date.add(today.day, -5))
+    {:ok, crew} = Threads.crew_thread(actor, earlier.id, "builder")
+
     panel = child!(desktop!(conn), "aqua-panel")
-    assert has_element?(panel, ~s(#aqua-panel-threads option[value=""][selected]))
-    assert thread_of(child!(panel, "aqua-panel-pane")) == nil
+    refute has_element?(panel, "#aqua-panel-sheet")
+
+    show!(panel, earlier.id)
+    assert has_element?(panel, "#aqua-panel-sheet")
+    assert has_element?(panel, "#aqua-panel-day-name", day_name(earlier))
+
+    show!(panel, crew.id)
+    assert has_element?(panel, "#aqua-panel-day-name", "builder's thread")
+
+    # An id of no thread of the person's opens today's.
+    other = test_user()
+    theirs = Sanctum.Test.People.athanor!(other.user_id)
+    {:ok, foreign} = Arca.Test.Days.thread(Prima.Actor.in_athanor(theirs.id))
+    send(panel.pid, {:open, foreign.id})
+    on_thread!(child!(panel, "aqua-panel-pane"), today.id)
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -1306,8 +1436,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
         value: "my own words\n\nAbout the apps widget: "
       })
 
-      # Nothing was sent: no thread of You was made, and nothing is attached.
-      assert Threads.list(Sanctum.Context.actor(me)) == []
+      # Nothing was sent: today's thread holds nothing, and nothing is
+      # attached.
+      assert Threads.latest_messages(Sanctum.Context.actor(me), today!(me).id, 10) == []
       assert :sys.get_state(pane.pid).socket.assigns.uploads.attachments.entries == []
 
       Cyfr.Test.Sandbox.end_views()

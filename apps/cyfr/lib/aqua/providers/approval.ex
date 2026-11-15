@@ -60,6 +60,10 @@ defmodule Aqua.Providers.Approval do
               description:
                 "resolve: the run a standing approval ends with — its execution, turn or schedule"
             ),
+            Arg.new("schedule", :string,
+              description:
+                "resolve: with scope always and lifecycle schedule, the id of the person's schedule of Aqua's the approval stands for and ends with"
+            ),
             Arg.new("until", :string,
               description:
                 "resolve: an ISO 8601 UTC time a standing approval ends at, a bound beside its lifecycle"
@@ -183,15 +187,16 @@ defmodule Aqua.Providers.Approval do
   @lifecycles %{"execution" => :execution, "turn" => :turn, "schedule" => :schedule}
 
   # The bounds a resolve names, each read explicitly: a lifecycle by its
-  # name, a deadline as an ISO 8601 time with its offset, a constraint as
-  # its resource kind and patterns, sources as their canonical objects
-  # (none named is no bound). Whether they may stand is the decision's
-  # (`Aqua.Approvals`, `Aqua.Standing`).
+  # name, the schedule it ends with by its id, a deadline as an ISO 8601
+  # time with its offset, a constraint as its resource kind and patterns,
+  # sources as their canonical objects (none named is no bound). Whether
+  # they may stand is the decision's (`Aqua.Approvals`, `Aqua.Standing`).
   defp bounds(args) do
     with {:ok, until} <- until(args["until"]) do
       {:ok,
        %{
          lifecycle: lifecycle(args["lifecycle"]),
+         schedule: args["schedule"],
          until: until,
          constraint: constraint(args["constraint"]),
          sources: sources(args["sources"])

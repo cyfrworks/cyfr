@@ -40,7 +40,7 @@ const BUTTON = "aqua-panel-button"
 const PALETTE = "command-palette"
 
 // What a header press leaves alone: its own controls.
-const CONTROL = "button, select, input, textarea, a, [data-aqua-edge]"
+const CONTROL = "button, input, textarea, a, [data-aqua-edge]"
 
 // A pointer that travels less than this is a click, not a pull.
 const PULL_MIN_PX = 4

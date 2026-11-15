@@ -20,9 +20,16 @@ defmodule PrismWeb.ThreadPaneLive do
   rows, the runner's live state, the subscription) on every turn. What
   the host must know travels back as `{:pane, id, message}` to
   `socket.parent_pid`, first of all `{:ready, pid, thread_id}` once the
-  pane is live, which is how the host learns where to send the switch,
-  and `{:opened, thread}` once a first message has made the thread's
-  row.
+  pane is live, which is how the host learns where to send the switch.
+
+  A send from a daily thread, of today or an earlier day, or from a pane
+  on no thread names no thread and joins today's daily thread
+  (`thread.send`); its files are written under today's first
+  (`thread.today`). When the thread it joined is not the one shown, the
+  pane turns to it and asks its host to show it, `{:open_thread, id}`.
+  While the pane shows a thread the person has seen it: the read mark
+  moves to the newest row when the thread opens and as each row lands
+  (`Aqua.mark_read/3`, forward only).
 
   A turn that needs a grant asks for it as a `:grant` prompt read under
   the pane's own context and sent to the view that renders the pane,
@@ -39,7 +46,11 @@ defmodule PrismWeb.ThreadPaneLive do
   the turn ended when it has no such message to offer.
 
   Every line is named by who sent it (`sent_by`): a person as the console
-  names them, the soul as Aqua, a crew member by its name. A request to a
+  names them, the soul as Aqua, a crew member by its name. A schedule's
+  fire is written in the server's voice and drawn as that schedule's,
+  under its name, never as the person's line. A card in a daily thread
+  offers its answer for one of the person's schedules of Aqua's
+  (`Aqua.answer_schedules/1`). A request to a
   crew member says who asked whom and whether it is answered, with the
   replies to it beneath it; a reply whose request is not on screen stands
   on its own, and a notice says the member needs the person. A room lists
@@ -88,6 +99,9 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5
+
+  # The threads that hold crew threads.
+  @rooms Threads.room_kinds()
 
   # The session, focused on the athanor the host names (`"athanor_id"`), is
   # established and kept current by the guard; a refused one never mounts.
@@ -249,7 +263,8 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:children, [])
       |> assign(:parent, nil)
       |> assign(:pending_approvals, [])
-      |> assign(:schedule_thread?, false)
+      |> assign(:schedules, [])
+      |> assign(:seen, thread && thread.read_seq)
       |> assign(:any_messages, false)
       |> reset_live()
 
@@ -257,13 +272,6 @@ defmodule PrismWeb.ThreadPaneLive do
       {true, %{} = thread} ->
         follow_thread(thread.id, thread.athanor_id)
         live = Aqua.thread_state(thread.id, thread.athanor_id)
-
-        socket =
-          assign(
-            socket,
-            :schedule_thread?,
-            Aqua.schedule_thread?(socket.assigns.context, thread.id)
-          )
 
         # Newest window only: unbounded, this read loaded every row of a
         # long-lived thread into every viewer's socket. The runner's
@@ -286,8 +294,10 @@ defmodule PrismWeb.ThreadPaneLive do
         |> assign(:requests, requests)
         |> assign(:pending_approvals, pending_in(rows))
         |> assign(:any_messages, rows != [])
+        |> assign(:schedules, answer_schedules(socket.assigns.context, thread))
         |> apply_live(live)
         |> relatives(thread)
+        |> seen(rows |> Enum.map(& &1.seq) |> Enum.max(fn -> nil end))
 
       _ ->
         socket
@@ -323,7 +333,8 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # Read again on each crew row the room hears: a reply or notice names a
   # thread the room may not have listed yet.
-  defp read_children(%{assigns: %{thread: %{kind: "own", id: id}}} = socket) do
+  defp read_children(%{assigns: %{thread: %{kind: kind, id: id}}} = socket)
+       when kind in @rooms do
     case Threads.children(Sanctum.Context.actor(socket.assigns.context), id) do
       children when is_list(children) -> assign(socket, :children, children)
       {:error, _} -> socket
@@ -331,6 +342,26 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp read_children(socket), do: socket
+
+  # The schedules a card offers an answer for: in a daily thread, where a
+  # schedule of Aqua's fires.
+  defp answer_schedules(ctx, %{kind: "daily"}) do
+    {:ok, schedules} = Aqua.answer_schedules(ctx)
+    schedules
+  end
+
+  defp answer_schedules(_ctx, _thread), do: []
+
+  # The person has seen the rows the pane shows: the thread's read mark
+  # moves to `seq`, forward only, and a row at or behind the mark it holds
+  # moves nothing.
+  defp seen(%{assigns: %{thread: %{id: id}, seen: mark}} = socket, seq)
+       when is_integer(seq) and (is_nil(mark) or seq > mark) do
+    _ = Aqua.mark_read(socket.assigns.context, id, seq)
+    assign(socket, :seen, seq)
+  end
+
+  defp seen(socket, _seq), do: socket
 
   defp unsubscribe_thread(%{assigns: %{thread: %{id: id, athanor_id: athanor_id}}} = socket) do
     unfollow_thread(id, athanor_id)
@@ -448,7 +479,7 @@ defmodule PrismWeb.ThreadPaneLive do
     do: {:noreply, assign(socket, :restart_prompt, nil)}
 
   def handle_event("retry_send", _params, %{assigns: %{held_send: %{} = held}} = socket),
-    do: deliver(socket, held, nil)
+    do: deliver(socket, held)
 
   def handle_event("retry_send", _params, socket), do: {:noreply, socket}
 
@@ -463,7 +494,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # shape is checked and the thread must be this member's to read.
   def handle_event("restore_draft", params, socket) do
     case restored(socket, params) do
-      {:ok, envelope} -> deliver(socket, envelope, nil)
+      {:ok, envelope} -> deliver(socket, envelope)
       :error -> {:noreply, mirror(socket, nil)}
     end
   end
@@ -487,8 +518,9 @@ defmodule PrismWeb.ThreadPaneLive do
     {:noreply, assign(socket, :model_override, if(model == "", do: nil, else: model))}
   end
 
-  # A program's answer is withdrawn by its row: the entry names the
-  # program, and its row is what the revoke names.
+  # A program's answer is withdrawn by its row, and an answer for a
+  # schedule by that schedule: the entry names them, and the revoke names
+  # them as the answer's key.
   def handle_event(
         "revoke_grant",
         %{"agent" => agent, "tool" => tool, "action" => action} = params,
@@ -507,6 +539,7 @@ defmodule PrismWeb.ThreadPaneLive do
             "tool_action" => action
           }
           |> Prima.MapUtil.put_present("program", params["program"])
+          |> Prima.MapUtil.put_present("schedule", params["schedule"])
 
         {:noreply, run(socket, &PrismWeb.Ops.call_tool(&1, "thread/revoke_grant", args))}
     end
@@ -610,7 +643,7 @@ defmodule PrismWeb.ThreadPaneLive do
         %ThreadEvent{thread_id: id, kind: kind, data: data},
         %{assigns: %{thread: %{id: id}}} = socket
       ) do
-    {:noreply, handle_thread_event(socket, kind, data)}
+    {:noreply, socket |> handle_thread_event(kind, data) |> seen(landed(kind, data))}
   end
 
   def handle_info(%ThreadEvent{}, socket), do: {:noreply, socket}
@@ -707,7 +740,7 @@ defmodule PrismWeb.ThreadPaneLive do
           # The send held for the fill goes now, once; a refusal holds it
           # again for the person's own retry.
           case socket.assigns.held_send do
-            %{} = held -> deliver(socket, held, nil)
+            %{} = held -> deliver(socket, held)
             nil -> {:noreply, socket}
           end
         else
@@ -753,6 +786,7 @@ defmodule PrismWeb.ThreadPaneLive do
             "lifecycle",
             choice[:lifecycle] && to_string(choice[:lifecycle])
           )
+          |> Prima.MapUtil.put_present("schedule", choice[:schedule])
           |> Prima.MapUtil.put_present(
             "until",
             choice[:until] && DateTime.to_iso8601(choice[:until])
@@ -990,6 +1024,10 @@ defmodule PrismWeb.ThreadPaneLive do
   defp handle_thread_event(socket, :error, text), do: put_flash(socket, :error, text)
   defp handle_thread_event(socket, _kind, _data), do: socket
 
+  # The row an event landed on the tape, by its sequence.
+  defp landed(kind, %{seq: seq}) when kind in [:message, :request, :reply, :notice], do: seq
+  defp landed(_kind, _data), do: nil
+
   # A text row an agent wrote while a turn runs is the turn's reply.
   defp replied?(%{kind: "text", author: @agent_author}, %{assigns: %{running: true}}), do: true
   defp replied?(_row, _socket), do: false
@@ -1040,11 +1078,11 @@ defmodule PrismWeb.ThreadPaneLive do
     ctx = socket.assigns.context
     message_id = Prima.UUID7.generate_id("msg")
 
-    with {:ok, thread, created?} <- current_or_new(socket),
-         {room, socket} = room_context(socket, thread),
-         {:ok, refs} <- attach(ctx, thread.id, message_id, files) do
+    with {:ok, thread_id} <- destination(socket, files),
+         {room, socket} = room_context(socket),
+         {:ok, refs} <- attach(ctx, thread_id, message_id, files) do
       envelope = %{
-        thread_id: thread.id,
+        thread_id: thread_id,
         client_id: Prima.UUID7.generate_id("snd"),
         message_id: message_id,
         text: message,
@@ -1054,7 +1092,7 @@ defmodule PrismWeb.ThreadPaneLive do
         room: Keyword.get(room, :room)
       }
 
-      deliver(socket, envelope, if(created?, do: thread))
+      deliver(socket, envelope)
     else
       {:error, reason} -> {:noreply, refuse(socket, reason)}
     end
@@ -1068,25 +1106,24 @@ defmodule PrismWeb.ThreadPaneLive do
   # files this session stored under the message id are discarded
   # (`discard_stored/2`), since a refused send would otherwise leave blobs
   # that belong to no row.
-  defp deliver(socket, envelope, created) do
+  defp deliver(socket, envelope) do
     ctx = socket.assigns.context
 
     case PrismWeb.Ops.call_tool(ctx, "thread/send", send_args(envelope)) do
-      {:ok, _} ->
+      {:ok, answer} ->
         {:noreply,
          socket
          |> assign(:held_send, nil)
          |> assign(:input, "")
          |> mirror(nil)
-         |> opened(created)}
+         |> joined(answer[:thread])}
 
       {:error, :not_provisioned} ->
         {:noreply,
          socket
          |> assign(:held_send, envelope)
          |> assign(:input, "")
-         |> mirror(envelope)
-         |> opened(created)}
+         |> mirror(envelope)}
 
       {:error, reason} ->
         {:noreply,
@@ -1096,6 +1133,19 @@ defmodule PrismWeb.ThreadPaneLive do
          |> mirror(nil)
          |> refuse(reason)}
     end
+  end
+
+  # Where a send goes: a crew member's or a workspace thread by its id. A
+  # send from a daily thread, or from a pane on no thread, names none and
+  # joins today's daily thread; its files are written under today's, the
+  # thread the message joins, so one with files asks for it first.
+  defp destination(%{assigns: %{thread: %{kind: kind, id: id}}}, _files) when kind != "daily",
+    do: {:ok, id}
+
+  defp destination(_socket, []), do: {:ok, nil}
+
+  defp destination(socket, _files) do
+    with {:ok, %{id: id}} <- PrismWeb.Ops.call_tool(socket, "thread/today", %{}), do: {:ok, id}
   end
 
   # The message's files go through the gate (`thread/attach`) under the
@@ -1152,14 +1202,16 @@ defmodule PrismWeb.ThreadPaneLive do
     |> Map.reject(fn {_k, v} -> is_nil(v) end)
   end
 
-  # A thread this send created is this pane's now, and the host's
-  # to address — the URL is the host's, the pane only asked for a row.
-  defp opened(socket, nil), do: socket
+  # The thread a send joined: today's daily thread, when the pane showed
+  # another day or none, is shown now, here and by the host.
+  defp joined(%{assigns: %{thread: %{id: id}}} = socket, id), do: socket
 
-  defp opened(socket, thread) do
-    tell_host(socket, {:opened, thread})
-    open_thread(socket, thread)
+  defp joined(socket, id) when is_binary(id) do
+    tell_host(socket, {:open_thread, id})
+    open_thread(socket, thread_of(socket.assigns.context, id))
   end
+
+  defp joined(socket, _none), do: socket
 
   # What the browser keeps of a held send, so a reload offers it back
   # (`restore_draft`) under the same identity; nil clears it.
@@ -1170,23 +1222,19 @@ defmodule PrismWeb.ThreadPaneLive do
     })
   end
 
+  # A send that names no thread joins today's and carries no files.
   defp restored(
          socket,
-         %{
-           "thread_id" => thread_id,
-           "client_id" => client_id,
-           "message_id" => message_id,
-           "text" => text
-         } = params
+         %{"client_id" => client_id, "message_id" => message_id, "text" => text} = params
        )
-       when is_binary(thread_id) and is_binary(client_id) and is_binary(message_id) and
-              is_binary(text) do
+       when is_binary(client_id) and is_binary(message_id) and is_binary(text) do
+    thread_id = params["thread_id"]
     attachments = params["attachments"] || []
     room = params["room"]
 
     with true <- is_list(attachments) and Enum.all?(attachments, &is_map/1),
          true <- is_nil(room) or is_map(room),
-         {:ok, _thread} <- Threads.get(Sanctum.Context.actor(socket.assigns.context), thread_id) do
+         true <- (is_nil(thread_id) and attachments == []) or readable?(socket, thread_id) do
       {:ok,
        %{
          thread_id: thread_id,
@@ -1204,6 +1252,11 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp restored(_socket, _params), do: :error
+
+  defp readable?(socket, thread_id) when is_binary(thread_id),
+    do: match?({:ok, _}, Threads.get(Sanctum.Context.actor(socket.assigns.context), thread_id))
+
+  defp readable?(_socket, _thread_id), do: false
 
   defp refuse(socket, reason) do
     case reason do
@@ -1260,25 +1313,16 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The shared thread beside this pane, named for this send. Its lines are
   # read server-side, under the person's seat, for this one turn.
-  defp room_context(%{assigns: %{read_room?: true, room: %{} = room}} = socket, _thread) do
+  defp room_context(%{assigns: %{read_room?: true, room: %{} = room}} = socket) do
     if reads_room?(room), do: {[room: room], socket}, else: {[], socket}
   end
 
-  defp room_context(socket, _thread), do: {[], socket}
+  defp room_context(socket), do: {[], socket}
 
   # Beside a shared thread: what the chat overlay shows is one, so there is
   # something to read and to paste onto.
   defp reads_room?(%{"shared_thread_id" => id}) when is_binary(id), do: true
   defp reads_room?(_room), do: false
-
-  defp current_or_new(%{assigns: %{thread: %{} = thread}}), do: {:ok, thread, false}
-
-  defp current_or_new(socket) do
-    with {:ok, %{id: id}} <- PrismWeb.Ops.call_tool(socket, "thread/create", %{}),
-         {:ok, thread} <- Threads.get(Sanctum.Context.actor(socket.assigns.context), id) do
-      {:ok, thread, true}
-    end
-  end
 
   # A thread verb for the current member, through the tool surface;
   # `assigns` are applied when it answers.
@@ -1804,12 +1848,12 @@ defmodule PrismWeb.ThreadPaneLive do
         >
           <span>standing answers in this chat:</span>
           <span
-            :for={{agent, tool, action, program} <- Enum.sort(@grants)}
+            :for={{agent, tool, action, program, schedule} <- Enum.sort(@grants)}
             class="inline-flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-gray-300 font-mono"
             title={"answered for #{agent}"}
             data-test="standing-answer"
           >
-            <span class="text-gray-500">{agent}:</span>{tool}.{action}<span :if={program}>, every start of {program.name}</span>
+            <span class="text-gray-500">{agent}:</span>{answered(tool, action, program, schedule)}
             <button
               type="button"
               phx-click="revoke_grant"
@@ -1817,6 +1861,7 @@ defmodule PrismWeb.ThreadPaneLive do
               phx-value-tool={tool}
               phx-value-action={action}
               phx-value-program={program && program.id}
+              phx-value-schedule={schedule && schedule.id}
               class="inline-flex min-h-6 min-w-6 items-center justify-center text-gray-500 hover:text-gray-200"
               title="withdraw this standing answer"
             >
@@ -1908,8 +1953,8 @@ defmodule PrismWeb.ThreadPaneLive do
                     id={@dom <> "-card-" <> msg.id}
                     message_id={msg.id}
                     approval_id={msg.approval_id}
-                    schedule_thread={@schedule_thread?}
-                    bounds={Map.take(resolution, ~w(lifecycle until constraint sources))}
+                    schedules={@schedules}
+                    bounds={Map.take(resolution, ~w(lifecycle schedule until constraint sources))}
                     payload={intent}
                     status={msg.status}
                     decided_at={msg.resolved_at}
@@ -2190,6 +2235,14 @@ defmodule PrismWeb.ThreadPaneLive do
     """
   end
 
+  # A standing answer as the chat lists it: its call, and the program or
+  # the schedule it is one of.
+  defp answered(tool, action, program, schedule) do
+    "#{tool}.#{action}" <>
+      if(program, do: ", every start of #{program.name}", else: "") <>
+      if(schedule, do: ", for #{schedule.name}", else: "")
+  end
+
   # The status line is drawn only while it says something.
   defp status?(assigns) do
     assigns.preparing? or assigns.roster == [] or assigns.queued > 0 or
@@ -2443,9 +2496,27 @@ defmodule PrismWeb.ThreadPaneLive do
   defp role_of(%{kind: "error"}), do: "error"
   defp role_of(%{kind: "system"}), do: "system"
   defp role_of(%{author: @agent_author}), do: "assistant"
+
+  defp role_of(%{author: @system_author} = msg),
+    do: if(fired_by(msg), do: "schedule", else: "user")
+
   defp role_of(_), do: "user"
 
-  defp author_label(%{author: @system_author}, _members, _ctx), do: nil
+  # The schedule whose fire a row is, by its name: a text row in the
+  # server's voice that names it.
+  defp fired_by(%{kind: "text", author: @system_author} = msg) do
+    case Threads.payload(msg)["schedule"] do
+      %{"name" => name} when is_binary(name) -> name
+      _none -> nil
+    end
+  end
+
+  defp fired_by(_msg), do: nil
+
+  defp author_label(%{author: @system_author} = msg, _members, _ctx) do
+    if name = fired_by(msg), do: "Schedule · #{name}"
+  end
+
   defp author_label(%{kind: kind}, _members, _ctx) when kind in ["error", "system"], do: nil
 
   # A copy of an assistant's line is the person's, and says so.
@@ -2473,5 +2544,6 @@ defmodule PrismWeb.ThreadPaneLive do
   defp role_class("user"), do: "bg-indigo-600 text-white"
   defp role_class("error"), do: "bg-red-900/40 text-red-300 border border-red-800"
   defp role_class("system"), do: "bg-gray-800/60 text-gray-400 border border-gray-800 italic"
+  defp role_class("schedule"), do: "bg-sky-950/50 text-sky-100 border border-sky-900/60"
   defp role_class(_), do: "bg-gray-800 text-gray-200"
 end

@@ -149,7 +149,7 @@ defmodule Cyfr.Providers.AttentionTest do
       ctx: ctx,
       actor: actor
     } do
-      thread = thread!(actor, "Plan the trip")
+      thread = thread!(actor)
       waiting = approval!(actor, thread)
       decided = approval!(actor, thread, status: "approved")
       expired = approval!(actor, thread, expires_at: DateTime.add(DateTime.utc_now(), -60))
@@ -157,7 +157,7 @@ defmodule Cyfr.Providers.AttentionTest do
       assert [item] = refreshed(ctx)
       assert item["kind"] == "approval"
       assert item["id"] == waiting.id
-      assert item["label"] == "Plan the trip"
+      assert item["label"] == thread.title
       assert item["destination"] == %{"kind" => "page", "page" => "aqua", "ref" => thread.id}
       refute item["id"] in [decided.id, expired.id]
     end
@@ -318,7 +318,7 @@ defmodule Cyfr.Providers.AttentionTest do
     end
 
     test "is every kind at once, oldest first", %{ctx: ctx, actor: actor, other_ctx: other_ctx} do
-      approval!(actor, thread!(actor, "t"))
+      approval!(actor, thread!(actor))
       confirmation!(ctx)
       run!(actor, ctx.user_id, "reagent:local.x:1.0.0", "failed", ~U[2026-01-01 00:00:00.000000Z])
       schedule = schedule!(actor, ctx.user_id, "s")
@@ -340,7 +340,7 @@ defmodule Cyfr.Providers.AttentionTest do
       other_ctx: other_ctx
     } do
       other = Context.actor(other_ctx)
-      approval!(other, thread!(other, "theirs"))
+      approval!(other, thread!(other))
       confirmation!(other_ctx)
       run!(other, other_ctx.user_id, "reagent:local.x:1.0.0", "failed", DateTime.utc_now())
       offer!(ctx, other_ctx.user_id, ["to-them.csv"])
@@ -357,7 +357,7 @@ defmodule Cyfr.Providers.AttentionTest do
       actor: actor,
       other_ctx: other_ctx
     } do
-      approval!(actor, thread!(actor, "mine"))
+      approval!(actor, thread!(actor))
       offer!(other_ctx, ctx.user_id, ["f.csv"])
 
       # The other person's context focused here: not their athanor.
@@ -373,7 +373,7 @@ defmodule Cyfr.Providers.AttentionTest do
   describe "live" do
     test "an approval enters when it opens, as the refresh lists it, and leaves when resolved",
          %{ctx: ctx, actor: actor} do
-      thread = thread!(actor, "Ship it")
+      thread = thread!(actor)
       approval = approval!(actor, thread)
 
       :ok =
@@ -422,7 +422,7 @@ defmodule Cyfr.Providers.AttentionTest do
 
     test "deleting a thread removes its waiting approval from attention",
          %{ctx: ctx, actor: actor} do
-      thread = thread!(actor, "Gone soon")
+      thread = thread!(actor)
       approval = approval!(actor, thread)
       assert [%{"kind" => "approval", "id" => id}] = refreshed(ctx)
       assert id == approval.id
@@ -437,7 +437,7 @@ defmodule Cyfr.Providers.AttentionTest do
     test "an approval decided before its announcement is read no more, and enters nothing", %{
       actor: actor
     } do
-      thread = thread!(actor, "Gone")
+      thread = thread!(actor)
       approval = approval!(actor, thread, status: "approved")
 
       :ok =
@@ -626,7 +626,7 @@ defmodule Cyfr.Providers.AttentionTest do
       # The other person's topic in this athanor, too.
       :ok = Bus.subscribe(actor, Bus.attention(actor, other_ctx.user_id))
 
-      thread = thread!(actor, "mine")
+      thread = thread!(actor)
       approval = approval!(actor, thread)
 
       :ok =
@@ -657,7 +657,7 @@ defmodule Cyfr.Providers.AttentionTest do
 
     test "no item names a person", %{ctx: ctx, actor: actor, other_ctx: other_ctx} do
       :ok = Cyfr.Requests.open(ctx, Prima.UUID7.request_id(), "feed.bind")
-      approval!(actor, thread!(actor, "t"))
+      approval!(actor, thread!(actor))
       confirmation!(ctx)
       run!(actor, ctx.user_id, "reagent:local.x:1.0.0", "failed", DateTime.utc_now())
       offer!(other_ctx, ctx.user_id, ["f.csv"])
@@ -711,8 +711,9 @@ defmodule Cyfr.Providers.AttentionTest do
     }
   end
 
-  defp thread!(actor, title) do
-    {:ok, thread} = Arca.ThreadStorage.create(actor, %{title: title})
+  # A daily thread of a date of its own, titled with its date.
+  defp thread!(actor) do
+    {:ok, thread} = Arca.Test.Days.thread(actor)
     thread
   end
 
