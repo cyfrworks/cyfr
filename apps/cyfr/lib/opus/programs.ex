@@ -82,6 +82,8 @@ defmodule Opus.Programs do
   # passed.
   @answer_margin_ms 1_000
   @relays Opus.Programs.Relays
+  # The most one input carries: the wire's one input message.
+  @max_input Prima.LocusBackends.max_chunk_bytes()
   # How long a terminal's start waits for the service to run it.
   @start_ms 60_000
   @local "local"
@@ -374,8 +376,12 @@ defmodule Opus.Programs do
   answered the last of its output (an `Opus.Programs.Output`), the
   terminal's size and whether it is kept, after which the process
   receives `{Opus.Programs, session_id, {:bytes, output}}`, each output
-  an `Opus.Programs.Output`, and `{Opus.Programs, session_id, {:ended,
-  reason}}` once (`t:ended/0`). Attaching again is attaching once.
+  an `Opus.Programs.Output`, the next only once it said it took the last
+  (`taken/2`); `{Opus.Programs, session_id, {:tail, output}}` when more
+  came meanwhile than is kept for it, the last
+  #{div(256 * 1024, 1024)} KiB, to show in place of what it showed; and
+  `{Opus.Programs, session_id, {:ended, reason}}` once (`t:ended/0`),
+  whatever it owes. Attaching again is attaching once.
   `{:error, :not_found}` for a session that is not running or not the
   caller's person's.
   """
@@ -399,25 +405,36 @@ defmodule Opus.Programs do
   end
 
   @doc """
-  Type `bytes` on the session's terminal, as they are. `{:error, :ended}`
-  once its program no longer runs, `{:error, :unavailable}` when the
-  service did not take them.
+  Type `bytes` on the session's terminal, as they are: at most
+  #{div(@max_input, 1024)} KiB a call, the wire's one input
+  (`Prima.LocusBackends.max_chunk_bytes/0`; `{:error, :too_large}` past it), so one
+  call holds the caller, and the service, for one write alone.
+  `{:error, :ended}` once its program no longer runs,
+  `{:error, :unavailable}` when the service did not take them.
   """
   @spec input(Sanctum.Context.t(), String.t(), binary()) :: :ok | {:error, term()}
   def input(%Sanctum.Context{}, _session_id, ""), do: :ok
 
+  def input(%Sanctum.Context{}, _session_id, bytes)
+      when is_binary(bytes) and byte_size(bytes) > @max_input,
+      do: {:error, :too_large}
+
   def input(%Sanctum.Context{} = ctx, session_id, bytes) when is_binary(bytes) do
-    with {:ok, grant, session} <- terminal_call(ctx, session_id, &{:use, &1}) do
-      bytes
-      |> chunks(Prima.LocusBackends.max_chunk_bytes())
-      |> Enum.reduce_while(:ok, fn chunk, :ok ->
-        case typed(Session.input(grant, session, chunk)) do
-          :ok -> {:cont, :ok}
-          error -> {:halt, error}
-        end
-      end)
-    end
+    with {:ok, grant, session} <- terminal_call(ctx, session_id, &{:use, &1}),
+         do: typed(Session.input(grant, session, bytes))
   end
+
+  @doc """
+  The calling process, attached to the session, took the last output it
+  was handed (a page's browser drew it): it is handed what came since,
+  or the next output. Until it says so it is handed nothing more, and
+  what comes meanwhile is kept for it, the last
+  #{div(256 * 1024, 1024)} KiB at most (`Opus.Programs.Terminal`).
+  `{:error, :not_found}` for a session it is not attached to.
+  """
+  @spec taken(Sanctum.Context.t(), String.t()) :: :ok | {:error, term()}
+  def taken(%Sanctum.Context{} = ctx, session_id),
+    do: terminal_call(ctx, session_id, &{:taken, &1, self()})
 
   @doc "Set the session's terminal to `rows` by `cols`; its program is signalled the change."
   @spec resize(Sanctum.Context.t(), String.t(), pos_integer(), pos_integer()) ::
@@ -567,14 +584,6 @@ defmodule Opus.Programs do
     do:
       is_binary(arg) and byte_size(arg) <= 4096 and String.valid?(arg) and
         not String.contains?(arg, <<0>>)
-
-  defp chunks(bytes, size) when byte_size(bytes) <= size, do: [bytes]
-
-  defp chunks(bytes, size),
-    do: [
-      binary_part(bytes, 0, size)
-      | chunks(binary_part(bytes, size, byte_size(bytes) - size), size)
-    ]
 
   # What a write to a terminal answered.
   defp typed({:ok, :running}), do: :ok

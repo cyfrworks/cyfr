@@ -698,6 +698,88 @@ defmodule Opus.Programs.TerminalTest do
     end
   end
 
+  # What a program prints crosses into the server only as fast as it is
+  # taken: before, the reader asked for the next output as soon as it had
+  # sent the last, and every attached process was handed every output.
+  describe "what a program prints is bounded" do
+    test "against a paused owner, one read is outstanding and nothing piles up",
+         %{ctx: ctx, row: row, fake: fake} do
+      {id, _session} = start!(ctx, row)
+      pid = terminal(id)
+      %{reader: reader} = :sys.get_state(pid)
+      :ok = :sys.suspend(pid)
+
+      for round <- 1..5 do
+        for i <- 1..4, do: Scripted.write(fake, row.id, "round #{round} line #{i}")
+        Process.sleep(150)
+      end
+
+      {:messages, messages} = Process.info(pid, :messages)
+      assert Enum.count(messages, &match?({:read, _output, _running}, &1)) == 1
+      assert {:message_queue_len, 0} = Process.info(reader, :message_queue_len)
+
+      :sys.resume(pid)
+
+      eventually(
+        fn -> :sys.get_state(pid).tail.bytes =~ "round 5 line 4" end,
+        "what waited in the service to be read once the owner took the first"
+      )
+    end
+
+    test "a process that never says it took its output is handed nothing more, and " <>
+           "at most the tail is kept for it; once it does, it gets the tail and goes on",
+         %{ctx: ctx, row: row, fake: fake} do
+      {id, _session} = start!(ctx, row)
+      {:ok, _} = Programs.attach(ctx, id)
+      Scripted.write(fake, row.id, "first")
+      assert_receive {Opus.Programs, ^id, {:bytes, %{bytes: "first\r\n"}}}, 2_000
+
+      line = String.duplicate("x", 10_000)
+      for i <- 1..40, do: Scripted.write(fake, row.id, "#{i}:" <> line)
+      eventually(fn -> :sys.get_state(terminal(id)).tail.bytes =~ "40:" end, "all to be read")
+      refute_receive {Opus.Programs, ^id, {_kind, _output}}, 300
+
+      me = self()
+
+      assert %{subscribers: %{^me => %{pending: pending, lost: true}}} =
+               :sys.get_state(terminal(id))
+
+      assert byte_size(pending.bytes) == 256 * 1024
+
+      # It took the first: it is handed the tail, which replaces its screen.
+      assert :ok = Programs.taken(ctx, id)
+      assert_receive {Opus.Programs, ^id, {:tail, %{bytes: tail}}}, 2_000
+      assert byte_size(tail) == 256 * 1024
+      assert String.ends_with?(tail, "40:" <> line <> "\r\n")
+
+      # It took the tail too: what comes next is handed at once.
+      assert :ok = Programs.taken(ctx, id)
+      Scripted.write(fake, row.id, "more")
+      assert_receive {Opus.Programs, ^id, {:bytes, %{bytes: "more\r\n"}}}, 2_000
+    end
+
+    test "the end of a program reaches a process that owes its acknowledgement",
+         %{ctx: ctx, row: row, fake: fake} do
+      {id, _session} = start!(ctx, row)
+      {:ok, _} = Programs.attach(ctx, id)
+      Scripted.write(fake, row.id, "first")
+      assert_receive {Opus.Programs, ^id, {:bytes, _output}}, 2_000
+      Scripted.write(fake, row.id, "kept for it")
+      Scripted.end_sessions(fake, row.id, 0)
+      assert_receive {Opus.Programs, ^id, {:ended, :exited}}, 3_000
+    end
+
+    test "one input carries at most the wire's one input message",
+         %{ctx: ctx, row: row} do
+      {id, _session} = start!(ctx, row)
+      max = Prima.LocusBackends.max_chunk_bytes()
+      assert {:error, :too_large} = Programs.input(ctx, id, :binary.copy("a", max + 1))
+      refute_received {:session, "input", _message, _fields}
+      assert :ok = Programs.input(ctx, id, :binary.copy("a", max))
+      assert_receive {:session, "input", _message, _fields}, 2_000
+    end
+  end
+
   describe "nothing it carries is printed" do
     test "its status and an inspect of its output show sizes, never bytes", %{
       ctx: ctx,
@@ -772,7 +854,9 @@ defmodule Opus.Programs.TerminalTest do
 
       {_kind, _reason, stack} =
         try do
-          Opus.Programs.Terminal.handle_info({:read, output, true}, %{tail: output})
+          # A state missing what the callback reads, so it raises holding
+          # the output; called through `apply/3`, as a process would.
+          apply(Opus.Programs.Terminal, :handle_info, [{:read, output, true}, %{tail: output}])
         catch
           kind, reason -> {kind, reason, __STACKTRACE__}
         end

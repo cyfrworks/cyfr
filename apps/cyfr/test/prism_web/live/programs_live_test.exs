@@ -622,8 +622,11 @@ defmodule PrismWeb.ProgramsLiveTest do
     Base.decode64!(data)
   end
 
+  # What the page hands the frame next, which the frame then says it drew,
+  # as its hook does once xterm has written it.
   defp output!(view, session) do
     assert_push_event(view, "terminal_output", %{session: ^session, data: data}, 2_000)
+    render_hook(view, "terminal_written", %{"session" => session})
     Base.decode64!(data)
   end
 

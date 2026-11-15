@@ -18,6 +18,29 @@
 // and icon titles, and a clipboard write.
 export const SWALLOWED_OSC = [0, 1, 2, 52]
 
+// What the person types or pastes goes to the server a piece at a time,
+// each answered before the next is sent, so a paste waits here rather
+// than on the server. A piece is at most this many UTF-16 units, which
+// is under the wire's 64 KiB as UTF-8; what waits is at most
+// MAX_PENDING_UNITS, and a paste past it is not sent.
+export const PIECE_UNITS = 16384
+export const MAX_PENDING_UNITS = 1048576
+
+// `text` cut into pieces of at most `units` UTF-16 units, never between
+// the two halves of a surrogate pair.
+export function pieces(text, units = PIECE_UNITS) {
+  const out = []
+  let at = 0
+  while (at < text.length) {
+    let end = Math.min(at + units, text.length)
+    const last = text.charCodeAt(end - 1)
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end -= 1
+    out.push(text.slice(at, end))
+    at = end
+  }
+  return out
+}
+
 // Open `uri` for the person, who clicked it: an http or https address
 // alone, with no opener and no referrer. Answers whether it opened.
 export function openLink(uri, open) {
@@ -60,10 +83,21 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       term.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri, open)))
       term.open(screen)
 
-      term.onData((data) => this.pushEvent("terminal_input", {session: this.session, terminal_input: data}))
+      this.queue = []
+      this.queued = 0
+      this.sending = false
+      term.onData((data) => this.type(data))
 
+      // Each output is acknowledged once drawn, and the server hands the
+      // next only then; a tail replaces what is shown, since what came
+      // before it was let go.
       this.handleEvent("terminal_output", ({session, data}) => {
-        if (session === this.session) term.write(decode(data))
+        if (session === this.session) term.write(decode(data), () => this.written())
+      })
+      this.handleEvent("terminal_tail", ({session, data}) => {
+        if (session !== this.session) return
+        term.reset()
+        term.write(decode(data), () => this.written())
       })
 
       this.onResize = () => this.resized()
@@ -76,6 +110,29 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       this.pushEvent("terminal_ready", {session: this.session, ...this.size}, (reply) => {
         if (reply && typeof reply.data === "string") term.write(decode(reply.data))
         term.focus()
+      })
+    },
+
+    written() {
+      this.pushEvent("terminal_written", {session: this.session})
+    },
+
+    // What the person typed, queued and sent a piece at a time.
+    type(data) {
+      if (this.queued + data.length > MAX_PENDING_UNITS) return
+      for (const piece of pieces(data)) this.queue.push(piece)
+      this.queued += data.length
+      this.send()
+    },
+
+    send() {
+      if (this.sending || this.queue.length === 0) return
+      const piece = this.queue.shift()
+      this.queued -= piece.length
+      this.sending = true
+      this.pushEvent("terminal_input", {session: this.session, terminal_input: piece}, () => {
+        this.sending = false
+        this.send()
       })
     },
 

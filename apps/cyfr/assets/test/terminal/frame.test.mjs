@@ -4,7 +4,15 @@
 import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import {SWALLOWED_OSC, TerminalHook, decode, openLink} from "../../js/terminal/frame.js"
+import {
+  MAX_PENDING_UNITS,
+  PIECE_UNITS,
+  SWALLOWED_OSC,
+  TerminalHook,
+  decode,
+  openLink,
+  pieces
+} from "../../js/terminal/frame.js"
 
 // A terminal that records what the hook asks of it: its options, the OSC
 // handlers registered, the addons loaded, every listener attached and
@@ -27,7 +35,11 @@ class FakeTerminal {
   onBell() { this.listeners.add("bell") }
   onTitleChange() { this.listeners.add("title") }
   onBinary() { this.listeners.add("binary") }
-  write(bytes) { this.written.push(bytes) }
+  write(bytes, drawn) {
+    this.written.push(bytes)
+    if (drawn) drawn()
+  }
+  reset() { this.written.push("reset") }
   focus() {}
   dispose() { this.disposed = true }
 }
@@ -130,12 +142,58 @@ describe("the terminal carries the person's keys and the program's bytes", () =>
   test("types what the person types, and draws only its own session's output", () => {
     const {term, pushed, handlers} = mount()
     term.data("code-1234\r")
-    assert.deepEqual(pushed[1], {event: "terminal_input", payload: {session: "trm_1", terminal_input: "code-1234\r"}, reply: undefined})
+    assert.equal(pushed[1].event, "terminal_input")
+    assert.deepEqual(pushed[1].payload, {session: "trm_1", terminal_input: "code-1234\r"})
 
     handlers.terminal_output({session: "trm_other", data: bytes("not mine")})
     handlers.terminal_output({session: "trm_1", data: bytes("\u001b[32mmine\u001b[0m")})
     assert.equal(term.written.length, 1)
     assert.equal(Buffer.from(term.written[0]).toString(), "\u001b[32mmine\u001b[0m")
+  })
+
+  // The server hands the next output only once the last is drawn: the
+  // acknowledgement comes from the write's own callback, so the bound
+  // holds for the socket too. A tail replaces what is shown.
+  test("acknowledges each output once drawn, and a tail replaces the screen", () => {
+    const {term, pushed, handlers} = mount()
+    handlers.terminal_output({session: "trm_other", data: bytes("not mine")})
+    assert.equal(pushed.filter((p) => p.event === "terminal_written").length, 0)
+
+    handlers.terminal_output({session: "trm_1", data: bytes("one")})
+    assert.deepEqual(pushed.at(-1), {event: "terminal_written", payload: {session: "trm_1"}, reply: undefined})
+
+    handlers.terminal_tail({session: "trm_1", data: bytes("the last of it")})
+    assert.equal(term.written.at(-2), "reset")
+    assert.equal(Buffer.from(term.written.at(-1)).toString(), "the last of it")
+    assert.equal(pushed.filter((p) => p.event === "terminal_written").length, 2)
+  })
+
+  // A paste goes a piece at a time, each answered before the next leaves,
+  // and one past what may wait is not sent at all.
+  test("sends a paste a piece at a time, and keeps no more than its bound waiting", () => {
+    const {term, pushed} = mount()
+    const paste = "x".repeat(PIECE_UNITS * 2 + 5)
+    term.data(paste)
+
+    const inputs = () => pushed.filter((p) => p.event === "terminal_input")
+    assert.equal(inputs().length, 1)
+    assert.equal(inputs()[0].payload.terminal_input.length, PIECE_UNITS)
+    inputs()[0].reply({})
+    assert.equal(inputs().length, 2)
+    inputs()[1].reply({})
+    assert.equal(inputs()[2].payload.terminal_input.length, 5)
+    inputs()[2].reply({})
+    assert.equal(inputs().length, 3)
+
+    term.data("y".repeat(MAX_PENDING_UNITS + 1))
+    assert.equal(inputs().length, 3)
+  })
+
+  test("never cuts a character's two halves apart", () => {
+    const text = "a".repeat(3) + "\u{1F600}" + "b"
+    const cut = pieces(text, 4)
+    assert.equal(cut.join(""), text)
+    assert.deepEqual(cut.map((p) => p.length), [3, 3])
   })
 
   test("tells the program a new size only when the frame's size changed", () => {

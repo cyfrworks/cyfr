@@ -321,17 +321,27 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
+  # Each piece the hook sends is answered before it sends the next, so
+  # what a person pastes waits in the browser, not here.
   def handle_event("terminal_input", %{"session" => session, "terminal_input" => data}, socket)
       when is_binary(data) do
     case Opus.Programs.input(socket.assigns.context, session, data) do
       :ok ->
-        {:noreply, socket}
+        {:reply, %{}, socket}
 
-      {:error, :unavailable} ->
-        {:noreply, put_flash(socket, :error, "The program did not take that; type it again.")}
+      {:error, reason} when reason in [:unavailable, :too_large] ->
+        {:reply, %{}, put_flash(socket, :error, "The program did not take that; type it again.")}
 
       {:error, reason} ->
-        {:noreply, ended(socket, session, reason)}
+        {:reply, %{}, ended(socket, session, reason)}
+    end
+  end
+
+  # The browser drew what it was handed last: the session hands it more.
+  def handle_event("terminal_written", %{"session" => session}, socket) do
+    case Opus.Programs.taken(socket.assigns.context, session) do
+      :ok -> {:noreply, socket}
+      {:error, reason} -> {:noreply, ended(socket, session, reason)}
     end
   end
 
@@ -442,12 +452,14 @@ defmodule PrismWeb.ProgramsLive do
     do: {:noreply, prefill_install(socket, ref, need)}
 
   # What the shown session's program wrote goes straight to the frame's
-  # hook, and is kept nowhere here.
-  def handle_info({Opus.Programs, session, {:bytes, %{bytes: bytes}}}, socket) do
+  # hook, and is kept nowhere here: the next output, or the tail that
+  # replaces what the frame shows when more came than it was kept.
+  def handle_info({Opus.Programs, session, {kind, %{bytes: bytes}}}, socket)
+      when kind in [:bytes, :tail] do
     case socket.assigns.terminal do
       %{session: ^session} ->
-        {:noreply,
-         push_event(socket, "terminal_output", %{session: session, data: Base.encode64(bytes)})}
+        event = if kind == :tail, do: "terminal_tail", else: "terminal_output"
+        {:noreply, push_event(socket, event, %{session: session, data: Base.encode64(bytes)})}
 
       _other ->
         {:noreply, socket}

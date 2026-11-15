@@ -24,6 +24,17 @@ defmodule Opus.Programs.Terminal do
   for what the program writes and `{Opus.Programs, id, {:ended, reason}}`
   once. A detach, or an attached process's exit, ends nothing.
 
+  Nothing a program prints can grow memory here without bound. The
+  reader asks the service for the next output only once this process has
+  taken the last, so what a program prints faster than it is taken waits
+  in the service's own bounded buffer, which drops its oldest. An
+  attached process is handed the next output only once it has said it
+  took the last (`Opus.Programs.taken/2`, which a page says once its
+  browser has drawn it); what comes meanwhile is kept for it, at most the
+  last #{div(256 * 1024, 1024)} KiB, and handed whole as
+  `{Opus.Programs, id, {:tail, output}}` when more than that came, which
+  replaces what it shows. Its end reaches it whatever it owes.
+
   It ends, and only then:
 
     * `:exited`: the program exited, or the service no longer runs it
@@ -133,7 +144,9 @@ defmodule Opus.Programs.Terminal do
   def handle_call({:attach, person, pid}, _from, state) do
     if yours?(state, person) do
       subscribers =
-        Map.put_new_lazy(state.subscribers, pid, fn -> Process.monitor(pid) end)
+        Map.put_new_lazy(state.subscribers, pid, fn ->
+          %{monitor: Process.monitor(pid), ready: true, pending: nil, lost: false}
+        end)
 
       state = state |> Map.put(:subscribers, subscribers) |> idle() |> changed()
 
@@ -141,6 +154,20 @@ defmodule Opus.Programs.Terminal do
        state}
     else
       {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  # An attached process took what it was handed last: it is handed what
+  # came since, or the next output when nothing did.
+  def handle_call({:taken, person, pid}, _from, state) do
+    case state.subscribers do
+      %{^pid => subscriber} ->
+        if yours?(state, person),
+          do: {:reply, :ok, put_in(state.subscribers[pid], hand(state, pid, subscriber))},
+          else: {:reply, {:error, :not_found}, state}
+
+      _not_attached ->
+        {:reply, {:error, :not_found}, state}
     end
   end
 
@@ -235,6 +262,7 @@ defmodule Opus.Programs.Terminal do
   end
 
   def handle_info({:read, %Output{} = output, running}, state) do
+    if state.reader, do: send(state.reader, :taken)
     state = output(state, output)
 
     if running,
@@ -246,7 +274,7 @@ defmodule Opus.Programs.Terminal do
     do: {:stop, :normal, ended(state, :exited)}
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    if match?(%{^pid => ^ref}, state.subscribers),
+    if match?(%{^pid => %{monitor: ^ref}}, state.subscribers),
       do: {:noreply, unsubscribe(state, pid)},
       else: {:noreply, state}
   end
@@ -373,22 +401,53 @@ defmodule Opus.Programs.Terminal do
 
   defp output(state, %Output{bytes: ""}), do: state
 
-  defp output(state, %Output{bytes: bytes} = output) do
+  defp output(state, %Output{bytes: bytes}) do
     tail = state.tail.bytes <> bytes
     size = byte_size(tail)
 
     tail =
       if size > @tail_bytes, do: binary_part(tail, size - @tail_bytes, @tail_bytes), else: tail
 
-    for pid <- Map.keys(state.subscribers),
-        do: send(pid, {Opus.Programs, state.id, {:bytes, output}})
+    subscribers =
+      Map.new(state.subscribers, fn {pid, s} -> {pid, offer(state, pid, s, bytes)} end)
 
-    idle(%{state | tail: Output.new(tail)})
+    idle(%{state | tail: Output.new(tail), subscribers: subscribers})
+  end
+
+  # An attached process that took what it was handed last is handed this
+  # output now; one that has not keeps it, with what came before it, the
+  # last #{div(256 * 1024, 1024)} KiB of them at most.
+  defp offer(state, pid, %{ready: true} = subscriber, bytes) do
+    send(pid, {Opus.Programs, state.id, {:bytes, Output.new(bytes)}})
+    %{subscriber | ready: false}
+  end
+
+  defp offer(_state, _pid, subscriber, bytes) do
+    kept = if subscriber.pending, do: subscriber.pending.bytes <> bytes, else: bytes
+    size = byte_size(kept)
+
+    if size > @tail_bytes,
+      do: %{
+        subscriber
+        | pending: Output.new(binary_part(kept, size - @tail_bytes, @tail_bytes)),
+          lost: true
+      },
+      else: %{subscriber | pending: Output.new(kept)}
+  end
+
+  # What a process that took the last output is handed: what came since,
+  # as the tail when some of it was let go, or nothing until more comes.
+  defp hand(_state, _pid, %{pending: nil} = subscriber), do: %{subscriber | ready: true}
+
+  defp hand(state, pid, %{pending: pending, lost: lost} = subscriber) do
+    kind = if lost, do: :tail, else: :bytes
+    send(pid, {Opus.Programs, state.id, {kind, pending}})
+    %{subscriber | ready: false, pending: nil, lost: false}
   end
 
   defp unsubscribe(state, pid) do
-    {ref, subscribers} = Map.pop(state.subscribers, pid)
-    if ref, do: Process.demonitor(ref, [:flush])
+    {subscriber, subscribers} = Map.pop(state.subscribers, pid)
+    if subscriber, do: Process.demonitor(subscriber.monitor, [:flush])
     %{state | subscribers: subscribers} |> idle() |> changed()
   end
 
@@ -471,15 +530,21 @@ defmodule Opus.Programs.Terminal do
   end
 
   # The reader: one output at a time, each naming the last chunk it was
-  # answered, so a lost answer is replayed. A service that does not
-  # answer is asked again each second for a minute.
+  # answered, so a lost answer is replayed, and the next asked for only
+  # once the owner has taken the last. A service that does not answer is
+  # asked again each second for a minute.
   defp read(terminal, grant, session, after_seq, failures) do
     case Session.output(grant, session, after_seq, @recv_wait_ms) do
       {:ok, %{chunks: chunks, running: running}} ->
         output = Output.new(IO.iodata_to_binary(Enum.map(chunks, & &1.bytes)))
         last = if chunks == [], do: after_seq, else: List.last(chunks).seq
         send(terminal, {:read, output, running})
-        if running, do: read(terminal, grant, session, last, 0)
+
+        if running do
+          receive do
+            :taken -> read(terminal, grant, session, last, 0)
+          end
+        end
 
       {:error, {:refused, _code, _boot} = refused} ->
         send(terminal, {:read_failed, refused})
