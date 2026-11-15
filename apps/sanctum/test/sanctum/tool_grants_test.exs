@@ -450,8 +450,6 @@ defmodule Sanctum.ToolGrantsTest do
             %{kind: "storage_path", patterns: ["data/*"]},
             %{kind: "storage_path", patterns: ["data/notes/", "data/*.md"]},
             %{patterns: ["data/"]},
-            %{kind: :storage_path, patterns: ["data/"]},
-            %{"kind" => "storage_path", "patterns" => ["data/"]},
             :corrupt
           ] do
         assert {:error, {:scope_not_permitted, :invalid_constraint}} =
@@ -467,6 +465,15 @@ defmodule Sanctum.ToolGrantsTest do
                  }),
                  now
                )
+
+      # Read as the store reads it, whatever its keys
+      # (`Arca.Schemas.ToolGrant.read_constraint/1`).
+      for alike <- [
+            %{kind: :storage_path, patterns: ["data/"]},
+            %{"kind" => "storage_path", "patterns" => ["data/"]}
+          ] do
+        assert :ok = ToolGrants.check_standing(Map.put(write, :constraint, alike), now)
+      end
 
       fetch = decision(%{tool: "probe_web", action: "fetch"})
 

@@ -368,6 +368,61 @@ defmodule Aqua.ProgramGrantTest do
     end
   end
 
+  describe "the store reads a constraint one way, whatever its keys" do
+    defp stored_row(ctx, constraint) do
+      %{
+        id: "grant_#{System.unique_integer([:positive])}",
+        athanor_id: ctx.athanor_id,
+        scope: "agent",
+        effect: "allow",
+        agent_name: "aqua",
+        tool: "program",
+        action: "start",
+        granted_at: DateTime.utc_now(),
+        constraint: constraint
+      }
+    end
+
+    test "a program row that does not stand is refused, keyed by atoms or by strings",
+         %{ctx: ctx} do
+      for constraint <- [
+            %{kind: "program_row", patterns: ["missing_program"]},
+            %{kind: :program_row, patterns: ["missing_program"]},
+            %{"kind" => "program_row", "patterns" => ["missing_program"]}
+          ] do
+        assert {:error, :no_program} =
+                 Arca.ToolGrantStorage.put(stored_row(ctx, constraint)),
+               inspect(constraint)
+      end
+    end
+
+    test "a program row that stands is the answer's, keyed by atoms or by strings",
+         %{ctx: ctx, gh: gh} do
+      for constraint <- [
+            %{"kind" => "program_row", "patterns" => [gh.id]},
+            %{kind: "program_row", patterns: [gh.id]}
+          ] do
+        assert {:ok, %{program_row: row}} =
+                 Arca.ToolGrantStorage.put(stored_row(ctx, constraint))
+
+        assert row == gh.id
+      end
+    end
+
+    test "a program row constraint names exactly one row, or the write is refused",
+         %{ctx: ctx, gh: gh, jq: jq} do
+      for constraint <- [
+            %{"kind" => "program_row", "patterns" => [gh.id, jq.id]},
+            %{kind: "program_row", patterns: [gh.id, jq.id]}
+          ] do
+        assert {:error, {:invalid, %{constraint: ["names exactly one program row"]}}} =
+                 Arca.ToolGrantStorage.put(stored_row(ctx, constraint))
+      end
+
+      assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(Sanctum.Context.actor(ctx), gh.id)
+    end
+  end
+
   test "the soul's policy asks for a start and a send, and never makes a start automatic" do
     refute Aqua.Kinds.auto_permitted?("program", "start")
     assert Aqua.Kinds.auto_permitted?("program", "list")

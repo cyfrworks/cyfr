@@ -137,7 +137,7 @@ defmodule Arca.Schemas.ToolGrant do
     |> validate_inclusion(:effect, @effects)
     |> validate_thread()
     |> put_constraint(constraint)
-    |> put_change(:program_row, key_row(%{constraint: constraint}))
+    |> put_change(:program_row, if(constraint, do: key_row(%{constraint: constraint}), else: ""))
     |> put_sources(sources)
     |> validate_lifecycle()
     |> validate_bounds()
@@ -151,12 +151,32 @@ defmodule Arca.Schemas.ToolGrant do
   so each program's standing answer stands, and goes, on its own.
   """
   @spec key_row(map()) :: String.t()
-  def key_row(%{constraint: %{kind: kind, patterns: [row]}})
-      when kind in ["program_row", :program_row] and is_binary(row),
-      do: row
+  def key_row(%{constraint: %{} = constraint} = attrs) do
+    case read_constraint(constraint) do
+      {"program_row", [row]} when is_binary(row) -> row
+      _another -> Map.get(attrs, :program_row) |> key_row_of()
+    end
+  end
 
-  def key_row(%{program_row: row}) when is_binary(row), do: row
-  def key_row(_attrs), do: ""
+  def key_row(attrs) when is_map(attrs), do: attrs |> Map.get(:program_row) |> key_row_of()
+
+  defp key_row_of(row) when is_binary(row), do: row
+  defp key_row_of(_none), do: ""
+
+  @doc """
+  A constraint as a writer hands it, read one way whatever its keys:
+  `{kind, patterns}`, the kind spelled as a string (`kind: :storage_path`
+  and `"kind" => "storage_path"` alike), each nil when absent. The
+  changeset, the program row an answer carries (`key_row/1`) and the rule
+  that decides which answers stand (`Sanctum.ToolGrants`) read it here.
+  """
+  @spec read_constraint(map()) :: {String.t() | term(), term()}
+  def read_constraint(%{} = constraint) do
+    kind = Map.get(constraint, :kind, Map.get(constraint, "kind"))
+    patterns = Map.get(constraint, :patterns, Map.get(constraint, "patterns"))
+    kind = if is_atom(kind) and not is_nil(kind), do: Atom.to_string(kind), else: kind
+    {kind, patterns}
+  end
 
   @doc """
   A stored constraint read back: `%{kind: kind, patterns: [pattern]}`, or
@@ -218,11 +238,12 @@ defmodule Arca.Schemas.ToolGrant do
   defp put_constraint(changeset, nil), do: changeset
 
   defp put_constraint(changeset, %{} = constraint) do
-    kind = Map.get(constraint, :kind, Map.get(constraint, "kind"))
-    patterns = Map.get(constraint, :patterns, Map.get(constraint, "patterns"))
-    kind = if is_atom(kind) and not is_nil(kind), do: Atom.to_string(kind), else: kind
+    {kind, patterns} = read_constraint(constraint)
 
     case constraint_errors(kind, patterns) do
+      [] when kind == "program_row" and length(patterns) != 1 ->
+        add_error(changeset, :constraint, "names exactly one program row")
+
       [] ->
         put_change(
           changeset,

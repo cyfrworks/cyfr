@@ -125,6 +125,11 @@ defmodule Arca.ToolGrantStorage do
     |> Ecto.Changeset.unique_constraint(columns, name: column_index_name(columns))
   end
 
+  @doc "A constraint read one way whatever its keys (`Arca.Schemas.ToolGrant.read_constraint/1`)."
+  @spec read_constraint(map()) :: {term(), term()}
+  def read_constraint(constraint) when is_map(constraint),
+    do: ToolGrant.read_constraint(constraint)
+
   @doc "The program row an answer's key carries (`Arca.Schemas.ToolGrant.key_row/1`)."
   @spec key_row(map()) :: String.t()
   def key_row(attrs) when is_map(attrs), do: ToolGrant.key_row(attrs)

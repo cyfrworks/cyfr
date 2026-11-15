@@ -440,8 +440,12 @@ defmodule Sanctum.ToolGrants do
     end
   end
 
-  defp constraint_parts(%{kind: kind, patterns: patterns}) when is_binary(kind),
-    do: {:ok, kind, patterns}
+  defp constraint_parts(%{} = constraint) do
+    case Arca.ToolGrantStorage.read_constraint(constraint) do
+      {kind, patterns} when is_binary(kind) -> {:ok, kind, patterns}
+      _unread -> :error
+    end
+  end
 
   defp constraint_parts(_constraint), do: :error
 
