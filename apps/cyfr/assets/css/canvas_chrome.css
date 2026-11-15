@@ -317,10 +317,16 @@
 }
 .canvas-shelf-app[data-canvas-minimised="true"] { opacity: 0.5; }
 
-/* The person's running programs, after the open apps: each a chip with
- * its Close beside it, dimmed while no screen shows the program. */
-#canvas-shelf-programs { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.canvas-shelf-program { display: flex; align-items: center; }
+/* The open apps and the person's running programs, one row that scrolls
+ * sideways between the chips' room and the shelf's right end: neither
+ * group shrinks into the other, and every app and every Close is reached
+ * by scrolling. A program is a chip with its Close beside it, dimmed
+ * while no screen shows it. */
+.canvas-shelf-scroll { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.canvas-shelf-scroll > #canvas-shelf-apps,
+.canvas-shelf-scroll > #canvas-shelf-programs { flex-shrink: 0; }
+#canvas-shelf-programs { display: flex; align-items: center; gap: 6px; }
+.canvas-shelf-program { display: flex; align-items: center; flex-shrink: 0; }
 .canvas-shelf-program[data-canvas-watched="false"] .canvas-shelf-app { opacity: 0.6; }
 .canvas-shelf-program-close {
   height: 34px;

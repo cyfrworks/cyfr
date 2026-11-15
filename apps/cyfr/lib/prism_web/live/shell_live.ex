@@ -100,10 +100,11 @@ defmodule PrismWeb.ShellLive do
   ## Running programs
 
   The shelf lists the person's own running program sessions (C8,
-  `Opus.Programs`): what `running/1` answers when the shell mounts, then
-  each `Cyfr.Bus.Program` on the person's own `Cyfr.Bus.programs/2`
-  topic, so a program whose tab was closed still stands there until it
-  ends. `PrismWeb.CanvasLive` draws them; a chip opens the program's
+  `Opus.Programs`): only ever what `running/1` answers, read when the
+  shell mounts and again at each `Cyfr.Bus.Program` on the person's own
+  `Cyfr.Bus.programs/2` topic, whose fields it never lists, so a program
+  whose tab was closed still stands there until it ends. A read that
+  fails keeps what is shown and is tried again shortly. `PrismWeb.CanvasLive` draws them; a chip opens the program's
   terminal on the Programs page (`?terminal=<session>`), and its Close
   asks `close/2`, after which the list is what `running/1` answers. The
   shelf shows only while a canvas is shown; without one, the Programs
@@ -384,6 +385,8 @@ defmodule PrismWeb.ShellLive do
   # What the shelf shows of one of the person's running program sessions,
   # as `Opus.Programs.running/1` and `Cyfr.Bus.Program` carry it.
   @program_fields [:session, :row_id, :name, :started_at, :kept, :attached, :by]
+  # How soon a failed read of the running programs is tried again.
+  @programs_retry_ms 5_000
 
   @canvas_ready_ms 10_000
 
@@ -451,6 +454,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:aqua_panel, nil)
       |> assign(:covered, false)
       |> assign(:programs, [])
+      |> assign(:programs_retry, nil)
 
     socket =
       if connected?(socket) do
@@ -3125,13 +3129,16 @@ defmodule PrismWeb.ShellLive do
 
   defp superseded?(_assigns, _prompt_id, _prompt), do: false
 
-  # What `Opus.Programs.running/1` answers of the person's own sessions,
-  # oldest first; none when it answers nothing for this caller.
+  # The shelf's programs: what `Opus.Programs.running/1` answers of the
+  # person's own sessions, oldest first, and nothing else. A read that
+  # fails keeps what is shown and is tried again shortly, one retry
+  # pending at a time; the timer ends with the shell.
   defp load_programs(socket) do
     case Opus.Programs.running(socket.assigns.context) do
       {:ok, running} ->
-        assign(
-          socket,
+        socket
+        |> cancel_programs_retry()
+        |> assign(
           :programs,
           running
           |> Enum.map(&Map.take(&1, @program_fields))
@@ -3139,9 +3146,28 @@ defmodule PrismWeb.ShellLive do
         )
 
       {:error, _not_answered} ->
-        assign(socket, :programs, [])
+        retry_programs(socket)
     end
   end
+
+  defp retry_programs(%{assigns: %{programs_retry: ref}} = socket) when is_reference(ref),
+    do: socket
+
+  defp retry_programs(socket),
+    do:
+      assign(
+        socket,
+        :programs_retry,
+        Process.send_after(self(), :reload_programs, @programs_retry_ms)
+      )
+
+  defp cancel_programs_retry(%{assigns: %{programs_retry: ref}} = socket)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+    assign(socket, :programs_retry, nil)
+  end
+
+  defp cancel_programs_retry(socket), do: socket
 
   defp load_tinctures(socket), do: socket |> read_listing() |> follow_listing()
 
@@ -3505,22 +3531,12 @@ defmodule PrismWeb.ShellLive do
   # Other tray traffic on the athanor's topic is for the topbar, not the shell.
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
-  # The person's own program sessions moved (`Cyfr.Bus.programs/2`, which
-  # only C8 publishes, for this person alone): a session started or
-  # changed stands on the shelf as reported, and one that ended leaves it.
-  def handle_info(%Cyfr.Bus.Program{kind: :ended, session: session}, socket),
-    do: {:noreply, update(socket, :programs, &Enum.reject(&1, fn p -> p.session == session end))}
+  # The person's own program sessions moved: whatever the message says,
+  # the shelf reads `running/1` again, and only its answer is listed.
+  def handle_info(%Cyfr.Bus.Program{}, socket), do: {:noreply, load_programs(socket)}
 
-  def handle_info(%Cyfr.Bus.Program{} = program, socket) do
-    entry = Map.take(program, @program_fields)
-
-    {:noreply,
-     update(socket, :programs, fn programs ->
-       if Enum.any?(programs, &(&1.session == entry.session)),
-         do: Enum.map(programs, &if(&1.session == entry.session, do: entry, else: &1)),
-         else: programs ++ [entry]
-     end)}
-  end
+  def handle_info(:reload_programs, socket),
+    do: {:noreply, socket |> assign(:programs_retry, nil) |> load_programs()}
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)

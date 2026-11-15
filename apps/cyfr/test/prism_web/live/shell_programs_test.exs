@@ -254,6 +254,134 @@ defmodule PrismWeb.ShellProgramsTest do
     assert {:ok, []} = Opus.Programs.running(person(user, athanor))
   end
 
+  # The shell's context, swapped for one the session owner refuses, so
+  # each read of `running/1` fails until it is put back. A validated
+  # context stands as it is for the caller bound, set long here, so
+  # neither the guard nor the owner reads the session again meanwhile.
+  defp reads_fail(view) do
+    Prima.Test.Env.put_app_env(:sanctum, :caller_memo_ttl_ms, 600_000)
+
+    :sys.replace_state(view.pid, fn channel ->
+      update_in(channel.socket, fn socket ->
+        Phoenix.Component.assign(socket, :context, %{
+          socket.assigns.context
+          | authenticated: false,
+            validated_at: DateTime.utc_now()
+        })
+      end)
+    end)
+  end
+
+  defp reads_work(view, ctx) do
+    :sys.replace_state(view.pid, fn channel ->
+      update_in(
+        channel.socket,
+        &Phoenix.Component.assign(&1, :context, %{ctx | validated_at: DateTime.utc_now()})
+      )
+    end)
+  end
+
+  defp shell_assigns(view), do: :sys.get_state(view.pid).socket.assigns
+
+  test "a read that fails keeps what is shown, tries again once at a time, and the next read is the truth",
+       %{conn: conn, user: user, athanor: athanor, row: row} do
+    [first, second, third] = for _n <- 1..3, do: start!(user, athanor, row)
+    {desktop, _html} = mount_desktop(conn)
+    for session <- [first, second, third], do: assert(has_element?(desktop, chip(session)))
+    ctx = shell_assigns(desktop).context
+
+    reads_fail(desktop)
+    assert {:ok, :closed} = Opus.Programs.close(person(user, athanor), first)
+
+    # The end's read failed: the other two still stand, and one retry waits.
+    assert eventually(fn -> is_reference(shell_assigns(desktop).programs_retry) end)
+    retry = shell_assigns(desktop).programs_retry
+    assert has_element?(desktop, chip(second))
+    assert has_element?(desktop, chip(third))
+
+    # Another message while it waits sets no second retry.
+    :ok = Opus.Programs.keep(person(user, athanor), second, true)
+    render(desktop)
+    assert shell_assigns(desktop).programs_retry == retry
+
+    # The retry reads again and lists what is running.
+    reads_work(desktop, ctx)
+    assert eventually(fn -> not has_element?(desktop, chip(first)) end, 160)
+    assert has_element?(desktop, chip(second) <> ~s( a[title*=", kept"]))
+    assert has_element?(desktop, chip(third))
+    assert shell_assigns(desktop).programs_retry == nil
+  end
+
+  test "a message is only a reason to read again: what it names is never listed by itself",
+       %{conn: conn, user: user, athanor: athanor, row: row} do
+    {desktop, _html} = mount_desktop(conn)
+    actor = Sanctum.Context.actor(person(user, athanor))
+
+    # A session running/1 does not answer, named on the topic, is not drawn.
+    Cyfr.Bus.broadcast(
+      actor,
+      Cyfr.Bus.programs(actor, user.user_id),
+      Cyfr.Bus.Program.new(actor, :started,
+        session: "trm_ghost",
+        row_id: row.id,
+        name: "ghost",
+        started_at: DateTime.utc_now(),
+        kept: false,
+        attached: false,
+        by: :person
+      )
+    )
+
+    render(desktop)
+    refute has_element?(desktop, chip("trm_ghost"))
+
+    # An end, then a late change of the same session, does not bring it back.
+    session = start!(user, athanor, row)
+    assert eventually(fn -> has_element?(desktop, chip(session)) end)
+    assert {:ok, :closed} = Opus.Programs.close(person(user, athanor), session)
+    assert eventually(fn -> not has_element?(desktop, chip(session)) end)
+
+    send(
+      desktop.pid,
+      Cyfr.Bus.Program.new(actor, :changed,
+        session: session,
+        row_id: row.id,
+        name: "claude",
+        started_at: DateTime.utc_now(),
+        kept: true,
+        attached: true,
+        by: :person
+      )
+    )
+
+    render(desktop)
+    refute has_element?(desktop, chip(session))
+  end
+
+  test "the open apps and the programs scroll sideways as one row the shelf bounds, each chip and its Close whole",
+       %{conn: conn, user: user, athanor: athanor, row: row} do
+    session = start!(user, athanor, row)
+    {desktop, _html} = mount_desktop(conn)
+
+    assert has_element?(desktop, "#canvas-shelf .canvas-shelf-scroll > #canvas-shelf-apps")
+
+    assert has_element?(
+             desktop,
+             ~s(#canvas-shelf .canvas-shelf-scroll > #canvas-shelf-programs [data-canvas-shelf-program="#{session}"])
+           )
+
+    css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
+    [_, row_rule] = Regex.run(~r/\.canvas-shelf-scroll \{([^}]*)\}/, css)
+    assert row_rule =~ "min-width: 0;"
+    assert row_rule =~ "overflow-x: auto;"
+
+    assert css =~
+             ".canvas-shelf-scroll > #canvas-shelf-apps,\n.canvas-shelf-scroll > #canvas-shelf-programs { flex-shrink: 0; }"
+
+    [_, chip] = Regex.run(~r/\.canvas-shelf-program \{([^}]*)\}/, css)
+    assert chip =~ "flex-shrink: 0;"
+  end
+
   test "another person's running programs never reach this person's shelf",
        %{conn: conn, user: user, athanor: athanor, row: row} do
     mine = start!(user, athanor, row)
