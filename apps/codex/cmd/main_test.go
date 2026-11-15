@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -34,6 +35,40 @@ const watchdogChild = "CYFR_CMD_TEST_WATCHDOG_CHILD"
 // killed at its first `compose up`.
 const asCyfr = "CYFR_CMD_TEST_AS_CYFR"
 
+// testSystem names the system testMachine is, linux unless set: a run of
+// the suite with it set to darwin or windows takes those systems' paths
+// wherever a test does not name its own.
+const testSystem = "CYFR_CMD_TEST_SYSTEM"
+
+// realMachine is the machine as cyfr observes it, for the one test that
+// runs its real sudo calls against a stand-in sudo program.
+var realMachine = machine
+
+// testMachine is the machine the package's tests stand on: system, not
+// Ubuntu 26.04, its Docker answering, nothing installed or running, no
+// display manager, screen service or terminal for sudo, and every root
+// step refused. No test depends on the host's system, its Docker or its
+// sudo.
+func testMachine(system string) machineSeams {
+	refused := errors.New("a test reached the machine's root step without standing in for the machine")
+	return machineSeams{
+		supported:      func() bool { return false },
+		arch:           func() string { return "amd64" },
+		reachable:      func() bool { return true },
+		installed:      func(string) bool { return false },
+		running:        func() bool { return false },
+		groups:         func(string) []string { return nil },
+		displayManager: func() bool { return false },
+		screenService:  func() (bool, bool) { return false, false },
+		system:         func() string { return system },
+		passwordless:   func() bool { return false },
+		terminal:       func() bool { return false },
+		authenticate:   func() error { return refused },
+		apply:          func([]string) error { return refused },
+		forget:         func() {},
+	}
+}
+
 // TestMain runs the package's tests under a home of their own: init and
 // the commands that sign in save the CLI's config under ~/.cyfr, and no
 // test reads or writes the home of the person running it, nor opens its
@@ -48,6 +83,13 @@ func TestMain(m *testing.M) {
 	// opens one stands in for both.
 	hasDisplay = func() bool { return false }
 	launchBrowser = func(string) error { return errors.New("a test launched the browser without standing in for it") }
+	// Nor does a test observe or change the machine it runs on: every test,
+	// and every run of this binary as cyfr, stands on testMachine unless
+	// it stands in for a machine of its own (standInMachine).
+	machine = testMachine(cmp.Or(os.Getenv(testSystem), "linux"))
+	if status, ok := runStandIn(); ok {
+		os.Exit(status)
+	}
 	// The program a handover started (TestUpdateHandsOverForReal), which
 	// carries the handover scenario's environment on.
 	if os.Getenv(handoverDir) != "" && slices.Contains(os.Args, "--continue-as") {

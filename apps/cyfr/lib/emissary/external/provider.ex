@@ -11,26 +11,24 @@ defmodule Emissary.External.Provider do
 
     * `http` — a tool server elsewhere: a URL and a header map that may
       name vault entries;
-    * `program` — a program CYFR runs: backends (`Opus.Programs.Definition`)
-      the backends service runs, each a command and an env map whose
-      credentials are vault templates. Its mark says how it is spoken to:
-      `mcp`, Emissary speaking MCP over its sessions and offering its
-      tools, or `driven`, one backend a person or a brain runs, never MCP.
+    * `program` — a program CYFR runs: one command and an env map whose
+      credentials are vault templates (`Opus.Programs.Definition`), which
+      the backends service runs. Its mark says how it is spoken to: `mcp`,
+      Emissary speaking MCP over its session and offering its tools, or
+      `driven`, a program a person or a brain runs, never MCP.
 
   A program also carries its settings, stored as columns of its row
-  (`Opus.Programs.Definition.validate_row/1`): its mark, its home (`scratch`, or
-  `kept`: one home per login entry that survives retirement), its memory
-  bound, a kept home's disk bound, the login command a sign-in runs, the
-  hosts it may reach (none named: every public host), and, for a kept
-  `mcp` program, the login entry its sessions run in, which must
-  be an active login entry of this athanor naming the row
-  (`Sanctum.Mount.login_entry/3`). A program is refused when this server
+  (`Opus.Programs.Definition.validate_row/1`): its mark, its home
+  (`scratch`, or `kept`: the row's own folder, which survives its
+  sessions and is retired with the row), its memory bound, a kept home's
+  disk bound, the login command a sign-in runs and the hosts it may reach
+  (none named: every public host). A program is refused when this server
   runs no programs controller (`Opus.Programs`) or runs as a cluster.
 
-  `sign_in` runs a kept program's login command on a pseudo-terminal in a
-  login entry's home and answers the token a console attaches to
-  (`Opus.Programs.sign_in/3`); `reset_home` empties a login entry's kept
-  home under the same uid. Both are a person's acts: interactive, admin.
+  `sign_in` runs a kept program's login command on a pseudo-terminal in
+  the row's home and answers the token a console attaches to
+  (`Opus.Programs.sign_in/2`); `reset_home` empties a kept program's home
+  under the same uid. Both are a person's acts: interactive, admin.
 
   Both carry the tool patterns the server is allowed to offer at all. Every
   action but `list` is `permission: :admin`, because it reads or changes
@@ -47,9 +45,31 @@ defmodule Emissary.External.Provider do
   refresh, restart, enable, disable, delete — and defines none. No action
   is reachable from a running chain.
 
+  A program's definition is also a sensitive change (`program_definition`
+  in `Sanctum.Pairing`'s table), confirmed by the person whatever surface
+  asks, decided by what the row is and what it becomes: becoming a
+  program, by an add or by an update of a tool server elsewhere, is an
+  addition; a program whose definition an update moves
+  (`Sanctum.ToolServerDigest.definition/1`, the digest its grants are
+  bound at, so they ask again) is a change; a program that stops being
+  one, by its delete or by an update to a tool server elsewhere, is its
+  removal, which names every grant that stands on it and will ask again.
+  The confirmation shows and binds the whole definition and the row it
+  changes, its id and epoch (`definition_change/4`), so one given for
+  `TOKEN=vault:personal` does not admit `TOKEN=vault:work`, and the write
+  carries that id and epoch into the storage transaction, which refuses
+  another row or a row written since. A re-save that moves nothing asks
+  nothing, and a tool server elsewhere that stays one asks none.
+
+  Deleting any row, a tool server elsewhere's too, blocks every profile
+  whose grant stands on it (`Arca.McpServerStorage.delete/3`), so a
+  grant of a server that is gone asks again rather than refusing at use.
+  `get` names those grants (`grants`, `Sanctum.Mount.granted_to/2`), the
+  ones a change's or a removal's confirmation names too.
+
   `create` and `update` refuse a definition whose header names no active
   vault entry with a destination covering the server's URL, or whose
-  backend env names no active disclosed entry, reading the entries'
+  env names no active disclosed entry, reading the entries'
   metadata and unsealing nothing; the refusal names the header or the
   variable, never the entry. A connect holds the entries to the same
   rules again (`Sanctum.VaultReader.unseal_for/3`, `unseal_disclosed/2`),
@@ -64,8 +84,10 @@ defmodule Emissary.External.Provider do
   Every write raises the row's epoch. `update` names the epoch it read and
   is refused when the row has moved on. A write that changes what runs —
   update, delete, disable, restart — stops the server's process, which
-  releases a program's backends on the backends service; the next use
-  starts it again at the new epoch.
+  releases a program on the backends service; the next use starts it
+  again at the new epoch. A removed program's sessions end and its kept
+  home is retired (`Emissary.External.Reconciler.row_deleted/2`), whether
+  its row was deleted or made a tool server elsewhere.
 
   A literal credential in a credential-shaped header is refused rather than
   sealed — `mcp_servers.config_json` is not an encrypted column, and a token
@@ -84,9 +106,9 @@ defmodule Emissary.External.Provider do
   @impl true
   def service, do: "emissary"
 
-  alias Opus.Programs.Definition, as: BackendDefinition
   alias Emissary.External.Proxy
   alias Emissary.External.Servers
+  alias Opus.Programs.Definition
   alias Prima.VaultRef
   alias Sanctum.Context
 
@@ -131,20 +153,13 @@ defmodule Emissary.External.Provider do
         "config",
         {:record,
          [
-           Arg.new(
-             "backends",
-             {:array,
-              Arg.new(
-                nil,
-                {:record,
-                 [
-                   Arg.new("command", :string, required: true),
-                   Arg.new("env", {:map, Arg.new(nil, :string)}),
-                   Arg.new("name", :string, required: true)
-                 ]}
-              )},
+           Arg.new("command", :string,
              description:
-               "A program's backends, at most #{BackendDefinition.max_backends()}: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals."
+               "A program's command, run by a shell on the backends service. It never names a vault entry."
+           ),
+           Arg.new("env", {:map, Arg.new(nil, :string)},
+             description:
+               "A program's environment. Every value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals."
            ),
            Arg.new("console", :boolean,
              description:
@@ -167,12 +182,12 @@ defmodule Emissary.External.Provider do
            ),
            Arg.new("mark", :string,
              description:
-               "How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).",
+               "How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it.",
              enum: ["mcp", "driven"]
            ),
            Arg.new("home", :string,
              description:
-               "A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.",
+               "A program's home: scratch (default), scrubbed at retirement, or kept, the program's own folder, kept until the program is deleted.",
              enum: ["scratch", "kept"]
            ),
            Arg.new("memory_bytes", :integer,
@@ -186,10 +201,6 @@ defmodule Emissary.External.Provider do
            Arg.new("login_command", :string,
              description:
                "The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'."
-           ),
-           Arg.new("login_entry_id", :string,
-             description:
-               "A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own)."
            ),
            Arg.new("hosts", {:array, Arg.new(nil, :string)},
              description:
@@ -235,6 +246,10 @@ defmodule Emissary.External.Provider do
               required: true,
               description:
                 "The epoch the caller read with get (required for update; refused when the server has changed since)"
+            ),
+            Arg.new("keep_headers", {:array, Arg.new(nil, :string)},
+              description:
+                "Headers of a tool server that keep the value stored at that epoch, which get shows as [set] and never answers; a name kept is not also given in config.headers"
             )
           ],
           kind: :write,
@@ -355,11 +370,9 @@ defmodule Emissary.External.Provider do
           "sign_in",
           "Sign in to a program",
           [
-            Arg.new("name", :string, required: true, description: "The program's server name"),
-            Arg.new("entry", :string,
+            Arg.new("name", :string,
               required: true,
-              description:
-                "The id of the login entry whose kept home the sign-in runs in; a kept mcp program's own entry"
+              description: "The program's server name; the sign-in runs in its kept home"
             )
           ],
           kind: :execute,
@@ -370,12 +383,12 @@ defmodule Emissary.External.Provider do
         Operation.new(
           "mcp_servers",
           "reset_home",
-          "Reset a login entry's kept home",
+          "Reset a program's kept home",
           [
-            Arg.new("entry", :string,
+            Arg.new("name", :string,
               required: true,
               description:
-                "The id of the login entry whose kept home is emptied, under the same uid"
+                "The program's server name; its kept home is emptied, under the same uid"
             )
           ],
           kind: :destructive,
@@ -412,7 +425,8 @@ defmodule Emissary.External.Provider do
   # a stale value, and no fallback number stands in for it.
   defp handle_create(ctx, args) do
     with {:ok, name, attrs} <- server_args(ctx, args),
-         {:ok, cap} <- server_cap() do
+         {:ok, cap} <- server_cap(),
+         :ok <- confirm_change(ctx, name, nil, attrs) do
       attrs = Map.merge(attrs, %{name: name, cap: cap})
 
       case Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), attrs) do
@@ -436,17 +450,30 @@ defmodule Emissary.External.Provider do
   end
 
   # The connection config is replaced whole, at the epoch the caller read;
-  # whether the server is enabled is kept.
+  # whether the server is enabled is kept. A header named in
+  # `keep_headers` takes the value the row stores at that epoch, so a
+  # literal the caller was never shown survives the replacement; the
+  # update's own epoch check refuses it should the row move meanwhile.
   defp handle_update(ctx, args) do
-    with {:ok, name, attrs} <- server_args(ctx, args),
-         {:ok, epoch} <- epoch_arg(args) do
-      case Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), name, attrs, epoch) do
+    with {:ok, epoch} <- epoch_arg(args),
+         {:ok, args} <- kept_headers(ctx, args, epoch),
+         {:ok, name, attrs} <- server_args(ctx, args),
+         {:ok, stored} <- stored_at(ctx, name, epoch),
+         :ok <- confirm_change(ctx, name, stored, attrs) do
+      case Arca.McpServerStorage.update(
+             Sanctum.Context.actor(ctx),
+             name,
+             attrs,
+             %{id: stored.id, epoch: epoch}
+           ) do
         {:ok, %{enabled: true} = server} ->
           stop_process(ctx, name)
+          after_change(ctx, stored, server)
           {:ok, ctx |> connect(server) |> with_warnings(server)}
 
         {:ok, server} ->
           stop_process(ctx, name)
+          after_change(ctx, stored, server)
           changed(ctx)
           {:ok, server |> summary(%{status: "disabled"}) |> with_warnings(server)}
 
@@ -468,6 +495,91 @@ defmodule Emissary.External.Provider do
     end
   end
 
+  # A program made a tool server elsewhere is removed as a program: its
+  # sessions end and its folder is retired, as its delete does. A program
+  # whose confirmed definition moved ends its sessions the same way and
+  # keeps its folder, so no session runs on under the old definition.
+  defp after_change(ctx, %{transport: "program"} = stored, %{transport: "http"}),
+    do: Emissary.External.Reconciler.row_deleted(ctx.athanor_id, stored)
+
+  defp after_change(ctx, %{transport: "program"} = stored, %{transport: "program"} = server) do
+    if same_definition?(stored, server),
+      do: :ok,
+      else: Opus.Programs.end_mounts(ctx.athanor_id, stored.id)
+  end
+
+  defp after_change(_ctx, _stored, _server), do: :ok
+
+  defp kept_headers(_ctx, %{"keep_headers" => []} = args, _epoch), do: {:ok, args}
+
+  defp kept_headers(ctx, %{"keep_headers" => names, "name" => name} = args, epoch)
+       when is_list(names) and is_binary(name) do
+    config = args["config"] || %{}
+    given = Map.get(config, "headers") || %{}
+
+    with {:ok, %{transport: "http", epoch: ^epoch} = server} <- stored_for_keep(ctx, name),
+         stored = Arca.McpServerStorage.config(server)["headers"] || %{},
+         :ok <- keepable(names, stored, given) do
+      kept = Map.take(stored, names)
+      {:ok, put_in(args, ["config", "headers"], Map.merge(given, kept))}
+    else
+      {:ok, %{transport: "http"}} ->
+        {:error,
+         {:conflict,
+          "Server '#{name}' changed since epoch #{epoch} — read it again with get and retry"}}
+
+      {:ok, _program} ->
+        {:error, {:invalid_argument, "Only a tool server's headers are kept: a program has none"}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp kept_headers(_ctx, args, _epoch), do: {:ok, args}
+
+  # The row an update replaces, at the epoch the caller read: what its
+  # confirmation is decided against.
+  defp stored_at(ctx, name, epoch) do
+    case stored_for_keep(ctx, name) do
+      {:ok, %{epoch: ^epoch} = stored} ->
+        {:ok, stored}
+
+      {:ok, _moved} ->
+        {:error,
+         {:conflict,
+          "Server '#{name}' changed since epoch #{epoch} — read it again with get and retry"}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp stored_for_keep(ctx, name) do
+    case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
+      {:ok, server} -> {:ok, server}
+      {:error, :not_found} -> {:error, {:not_found, "Server", name}}
+      {:error, _reason} -> {:error, {:unavailable, "The server store"}}
+    end
+  end
+
+  # A kept header is one the row stores, and not one the caller also sets.
+  defp keepable(names, stored, given) do
+    cond do
+      (missing = Enum.reject(names, &Map.has_key?(stored, &1))) != [] ->
+        {:error,
+         {:invalid_argument,
+          "keep_headers names a header this server does not store: #{Enum.join(missing, ", ")}"}}
+
+      (both = Enum.filter(names, &Map.has_key?(given, &1))) != [] ->
+        {:error,
+         {:invalid_argument, "A header is kept or given, not both: #{Enum.join(both, ", ")}"}}
+
+      true ->
+        :ok
+    end
+  end
+
   defp epoch_arg(%{"epoch" => epoch}) when is_integer(epoch) and epoch > 0, do: {:ok, epoch}
 
   defp epoch_arg(_args),
@@ -484,21 +596,22 @@ defmodule Emissary.External.Provider do
 
       true ->
         with :ok <- validate_tool_patterns(config["tool_patterns"]),
-             {:ok, attrs} <- transport_args(ctx, name, config["transport"] || "http", config) do
+             {:ok, attrs} <- transport_args(ctx, config["transport"] || "http", config) do
           {:ok, name, attrs}
         end
     end
   end
 
-  defp transport_args(ctx, _name, "http", config) do
+  defp transport_args(ctx, "http", config) do
     cond do
       is_nil(config["url"]) or config["url"] == "" ->
         {:error, {:invalid_argument, "Missing required parameter: config.url"}}
 
-      Map.has_key?(config, "backends") ->
-        {:error, {:invalid_argument, "An http server has no backends — use transport program"}}
+      Map.has_key?(config, "command") or Map.has_key?(config, "env") ->
+        {:error,
+         {:invalid_argument, "An http server has no command or env — use transport program"}}
 
-      Enum.any?(BackendDefinition.program_keys(), &Map.has_key?(config, &1)) ->
+      Enum.any?(Definition.program_keys(), &Map.has_key?(config, &1)) ->
         {:error,
          {:invalid_argument,
           "An http server is no program: it has no mark, home, bounds, login command or hosts"}}
@@ -519,22 +632,20 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  defp transport_args(ctx, name, "program", config) do
+  defp transport_args(ctx, "program", config) do
     cond do
       Map.has_key?(config, "url") ->
-        {:error,
-         {:invalid_argument, "A program has no url — its backends run on the backends service"}}
+        {:error, {:invalid_argument, "A program has no url — it runs on the backends service"}}
 
       Map.has_key?(config, "headers") ->
-        {:error, {:invalid_argument, "A program has no headers — use backend env"}}
+        {:error, {:invalid_argument, "A program has no headers — use env"}}
 
       true ->
         with :ok <- programs_available(),
-             {:ok, backends} <- BackendDefinition.validate(config["backends"]),
-             :ok <- env_disclosures(ctx, backends),
-             {:ok, columns} <- BackendDefinition.validate_row(config),
-             :ok <- login_entry(ctx, name, columns.login_entry_id) do
-          base = %{"backends" => backends}
+             {:ok, definition} <- Definition.validate(config),
+             :ok <- env_disclosures(ctx, definition),
+             {:ok, columns} <- Definition.validate_row(config) do
+          base = definition
 
           {:ok,
            Map.merge(columns, %{
@@ -546,7 +657,7 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  defp transport_args(_ctx, _name, transport, _config),
+  defp transport_args(_ctx, transport, _config),
     do: {:error, {:invalid_argument, "Unknown transport #{inspect(transport)}"}}
 
   # The program columns an http row carries: none, so an update to http
@@ -558,27 +669,8 @@ defmodule Emissary.External.Provider do
       memory_bytes: nil,
       home_max_bytes: nil,
       login_command: nil,
-      login_entry_id: nil,
       hosts: nil
     }
-
-  # A kept mcp program names its login entry, which must be a login entry of
-  # this athanor naming the row, active or its program not signed in yet:
-  # the row is how its program signs in. The refusal names neither the
-  # entry's material nor why beyond that.
-  defp login_entry(_ctx, _name, nil), do: :ok
-
-  defp login_entry(ctx, name, entry) do
-    case Sanctum.Mount.login_entry(ctx, entry, name, for: :sign_in) do
-      {:ok, _entry} ->
-        :ok
-
-      {:error, _reason} ->
-        {:error,
-         {:invalid_argument,
-          "config.login_entry_id names no login entry of this athanor for program '#{name}'"}}
-    end
-  end
 
   defp programs_available do
     cond do
@@ -657,24 +749,22 @@ defmodule Emissary.External.Provider do
 
   defp header_destinations(_ctx, _headers, _url), do: :ok
 
-  # A backend's environment hands its values to the process it starts, so
+  # A program's environment hands its values to the process it starts, so
   # an env template names only a disclosed entry
   # (`Sanctum.Vault.disclosed?/2`, metadata only). A missing or inactive
-  # entry is refused alike, and the refusal names the backend and the
-  # variable, never the entry.
-  defp env_disclosures(ctx, backends) do
-    Enum.find_value(backends, :ok, fn %{"name" => backend, "env" => env} ->
-      Enum.find_value(env, fn {var, value} ->
-        with {:vault, %{name: entry}} <- VaultRef.classify(value),
-             false <- Sanctum.Vault.disclosed?(ctx, entry) do
-          {:error,
-           {:invalid_argument,
-            "Backend '#{backend}' env #{var} names no active disclosed vault entry; " <>
-              "a backend's environment takes only a disclosed entry"}}
-        else
-          _literal_or_disclosed -> nil
-        end
-      end)
+  # entry is refused alike, and the refusal names the variable, never the
+  # entry.
+  defp env_disclosures(ctx, %{"env" => env}) do
+    Enum.find_value(env, :ok, fn {var, value} ->
+      with {:vault, %{name: entry}} <- VaultRef.classify(value),
+           false <- Sanctum.Vault.disclosed?(ctx, entry) do
+        {:error,
+         {:invalid_argument,
+          "config.env #{var} names no active disclosed vault entry; " <>
+            "a program's environment takes only a disclosed entry"}}
+      else
+        _literal_or_disclosed -> nil
+      end
     end)
   end
 
@@ -756,7 +846,7 @@ defmodule Emissary.External.Provider do
   defp with_warnings(result, server), do: Map.put(result, :warnings, warnings(server))
 
   defp warnings(%{transport: "program"} = server),
-    do: BackendDefinition.warnings(Arca.McpServerStorage.config(server)["backends"])
+    do: Definition.warnings(Arca.McpServerStorage.config(server))
 
   defp warnings(_server), do: []
 
@@ -794,17 +884,28 @@ defmodule Emissary.External.Provider do
   defp error_text(reason), do: Sanctum.Refusals.render(reason)
 
   # The row is deleted first; stopping the process then releases what it
-  # ran.
+  # ran. The delete carries the row read and confirmed, its id and epoch.
   defp handle_delete(ctx, args) do
-    with {:ok, name} <- name_arg(args) do
-      case Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), name) do
+    with {:ok, name} <- name_arg(args),
+         {:ok, stored} <- program_row(ctx, name),
+         :ok <- confirm_change(ctx, name, stored, nil) do
+      case Arca.McpServerStorage.delete(
+             Sanctum.Context.actor(ctx),
+             name,
+             %{id: stored.id, epoch: stored.epoch}
+           ) do
         {:ok, server} ->
           stop_process(ctx, name)
+          Emissary.External.Reconciler.row_deleted(ctx.athanor_id, server)
           changed(ctx)
           {:ok, %{deleted: name, id: server.id}}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Server", name}}
+
+        {:error, :stale_epoch} ->
+          {:error,
+           {:conflict, "Server '#{name}' changed since it was read — read it again and retry"}}
 
         {:error, reason} ->
           Logger.warning(
@@ -816,8 +917,198 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  # A program's backends are released and the program started again at a
-  # new epoch.
+  # ============================================================================
+  # A program's definition, confirmed
+  # ============================================================================
+
+  # A program row's definition is a sensitive change (`program_definition`,
+  # `Sanctum.Pairing`), decided by what the row is (`stored`, nil for an
+  # add) and what it becomes (`attrs`, nil for a delete): becoming a
+  # program is an addition, a program whose definition moves is a change,
+  # and a program that stops being one is its removal. Whether a program's
+  # definition moved is the one rule its grants are held to: its
+  # definition's digest (`Sanctum.ToolServerDigest.definition/1`), every
+  # value of its record and each literal's value with it. Enabling and
+  # disabling are the one exception (`handle_enable_disable/3`).
+  # A confirmed change to a stored row names the grants that stand on it
+  # (`Sanctum.Mount.granted_to/2`): its digest moves, so each asks again.
+  defp confirm_change(ctx, name, nil, %{transport: "program"} = attrs) do
+    row = Map.merge(%{id: "new", enabled: true}, attrs)
+    confirmed(ctx, definition_change("mcp_servers.create", name, row, nil))
+  end
+
+  defp confirm_change(
+         ctx,
+         name,
+         %{transport: "program"} = stored,
+         %{transport: "program"} = attrs
+       ) do
+    row = Map.merge(stored, attrs)
+
+    if same_definition?(stored, row),
+      do: :ok,
+      else: confirm_with_grants(ctx, "mcp_servers.update", name, stored, row, nil)
+  end
+
+  # A program made a tool server elsewhere is bound to both halves: the
+  # program that goes and the whole definition the row becomes, so the
+  # confirmation admits that outcome alone, never a delete or another
+  # address.
+  defp confirm_change(ctx, name, %{transport: "program"} = stored, %{transport: "http"} = attrs),
+    do:
+      confirm_with_grants(
+        ctx,
+        "mcp_servers.update",
+        name,
+        stored,
+        stored,
+        Map.merge(stored, attrs)
+      )
+
+  defp confirm_change(ctx, name, %{transport: "program"} = stored, nil),
+    do: confirm_with_grants(ctx, "mcp_servers.delete", name, stored, stored, nil)
+
+  defp confirm_change(ctx, name, stored, %{transport: "program"} = attrs),
+    do:
+      confirm_with_grants(ctx, "mcp_servers.create", name, stored, Map.merge(stored, attrs), nil)
+
+  defp confirm_change(_ctx, _name, _tool_server, _tool_server_or_nothing), do: :ok
+
+  defp confirm_with_grants(ctx, operation, name, stored, row, becomes) do
+    case Sanctum.Mount.granted_to(ctx.athanor_id, stored) do
+      {:ok, grants} -> confirmed(ctx, definition_change(operation, name, row, grants, becomes))
+      {:error, :unavailable} -> {:error, grants_unavailable(name)}
+    end
+  end
+
+  defp grants_unavailable(name), do: {:unavailable, "The grants that use '#{name}'"}
+
+  defp same_definition?(stored, row) do
+    case {Sanctum.ToolServerDigest.definition(stored), Sanctum.ToolServerDigest.definition(row)} do
+      {{:ok, digest}, {:ok, digest}} -> true
+      _moved_or_unrecorded -> false
+    end
+  end
+
+  defp confirmed(ctx, {:ok, change}) do
+    case Sanctum.Consent.confirm_program_definition(ctx, change) do
+      {:error, :invalid_request} -> {:error, unshowable()}
+      decided -> decided
+    end
+  end
+
+  defp confirmed(_ctx, {:error, _unrecorded}), do: {:error, unshowable()}
+
+  defp unshowable,
+    do:
+      {:invalid_argument,
+       "This program cannot be shown in full in its confirmation, so it is not asked: " <>
+         "its command at most #{Prima.Confirmation.Preview.max_text()} bytes and at most " <>
+         "64 environment variables."}
+
+  @doc """
+  The `program_definition` change `operation` (`mcp_servers.create`,
+  `update` or `delete`) makes to the program row `row` named `name`, as
+  `Sanctum.Consent.confirm_program_definition/2` takes it: what the
+  confirmation shows and what it binds, from one definition.
+
+  The row is a stored row, or the row an add or update would store (its
+  `id` and `epoch` the stored row's, `"new"` and none for an add). What
+  is shown is its record (`Sanctum.ToolServerDigest.recorded/1`): the
+  command, and each environment variable by its name with the vault
+  entry it names (`TOKEN=vault:personal`), a literal by its name alone,
+  and its settings: the folder (a kept program's is the row's own,
+  `"new"` until it is made; a scratch program's is `"scratch"`), the
+  hosts, the memory and disk bounds and the sign-in command; and beside
+  it the mark. A change to a stored row also names `grants`, the
+  components whose grant stands on the row and asks again
+  (`Sanctum.Mount.granted_to/2`), `nil` for an add of a new row. A
+  program made a tool server elsewhere names `becomes`, the row it
+  becomes: its address and each header by its name with the entry it
+  names (`becomes`, `becomes_headers`), and its definition's digest
+  among the arguments, so the confirmation admits that outcome alone. The
+  arguments are the same definition with the row's stored config beside
+  it, so a literal's value is bound without being shown, and the row's
+  id and epoch, so an approval given for one row admits no other row
+  made under its name. `{:error, _}` for a row that is no program or
+  whose record does not read.
+  """
+  @spec definition_change(String.t(), String.t(), map(), [String.t()] | nil, map() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def definition_change(operation, name, row, grants, becomes \\ nil) do
+    with {:ok, record} <- Sanctum.ToolServerDigest.recorded(row),
+         {:ok, becoming, becomes_digest} <- becoming(becomes) do
+      kept? = record["folder"] == "kept"
+
+      shown =
+        %{
+          "command" => record["address"],
+          "environment" => environment(record["env"]),
+          "mark" => row.mark,
+          "folder" => if(kept?, do: row.id, else: "scratch"),
+          "hosts" => record["hosts"] || "every public host",
+          "memory_bytes" => bound(record["memory_bytes"], "the backends service's bound"),
+          "home_max_bytes" =>
+            if(kept?,
+              do: bound(record["home_max_bytes"], "the folders' volume"),
+              else: "scratch folder"
+            )
+        }
+        |> put_present("sign_in_command", record["sign_in_command"])
+        |> put_present("grants_asking_again", if(grants == [], do: "none", else: grants))
+        |> Map.merge(becoming)
+
+      {:ok,
+       %{
+         operation: operation,
+         arguments:
+           shown
+           |> Map.merge(%{"name" => name, "config" => row.config_json, "row" => row.id})
+           |> put_present("epoch", Map.get(row, :epoch))
+           |> put_present("becomes_digest", becomes_digest),
+         resource: name,
+         details: shown
+       }}
+    end
+  end
+
+  # What a program made a tool server elsewhere becomes, as shown: its
+  # address and each header by its name with the entry it names, a
+  # literal by its name alone; and its definition's digest, which binds
+  # every value, a literal's included.
+  defp becoming(nil), do: {:ok, %{}, nil}
+
+  defp becoming(row) do
+    with {:ok, record} <- Sanctum.ToolServerDigest.recorded(row),
+         {:ok, digest} <- Sanctum.ToolServerDigest.definition(row) do
+      {:ok,
+       %{"becomes" => record["address"], "becomes_headers" => environment(record["headers"])},
+       digest}
+    end
+  end
+
+  defp environment([]), do: "none"
+
+  defp environment(variables) do
+    Enum.map(variables, fn
+      %{"name" => name, "entry" => entry} = variable ->
+        "#{name}=#{scheme(variable)}vault:#{entry}"
+
+      %{"name" => name} ->
+        "#{name} (a literal, not shown)"
+    end)
+  end
+
+  defp scheme(%{"scheme" => scheme}), do: scheme <> " "
+  defp scheme(_variable), do: ""
+
+  defp bound(bytes, _absent) when is_integer(bytes), do: Integer.to_string(bytes)
+  defp bound(nil, absent), do: absent
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  # A program is released and started again at a new epoch.
   defp handle_restart(ctx, args) do
     with {:ok, name} <- name_arg(args) do
       case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
@@ -860,44 +1151,30 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  # A sign-in runs a kept program's login command in a login entry's home:
-  # a driven program's any login entry naming it, a kept mcp program's own
-  # entry.
+  # A sign-in runs a kept program's login command in the row's own home.
   defp handle_sign_in(ctx, args) do
     with {:ok, name} <- name_arg(args),
-         {:ok, entry} <- entry_arg(args),
          {:ok, server} <- program_row(ctx, name),
-         :ok <- signs_in(server),
-         {:ok, %{id: entry_id}} <- sign_in_entry(ctx, server, entry) do
-      case Opus.Programs.sign_in(ctx, server, entry_id) do
-        {:ok, token} -> {:ok, %{session: token, program: name, entry: entry_id}}
+         :ok <- signs_in(server) do
+      case Opus.Programs.sign_in(ctx, server) do
+        {:ok, token} -> {:ok, %{session: token, program: name}}
         {:error, reason} -> {:error, programs_refusal(reason, "Sign-in to #{name}")}
       end
     end
   end
 
-  # Every session in the home ends and it is made again empty, under the
-  # same uid.
+  # Every session in the row's home ends and it is made again empty, under
+  # the same uid.
   defp handle_reset_home(ctx, args) do
-    with {:ok, entry} <- entry_arg(args) do
-      case Sanctum.Mount.home_of(ctx.athanor_id, entry) do
-        {:ok, home_id} ->
-          case Opus.Programs.home(ctx.athanor_id, home_id, :reset) do
-            :ok -> {:ok, %{reset: entry}}
-            {:error, reason} -> {:error, programs_refusal(reason, "The folder reset")}
-          end
-
-        :none ->
-          {:error, {:not_found, "Login entry", entry}}
-
-        {:error, _reason} ->
-          {:error, {:unavailable, "The vault"}}
+    with {:ok, name} <- name_arg(args),
+         {:ok, server} <- program_row(ctx, name),
+         :ok <- kept(server) do
+      case Opus.Programs.home(ctx.athanor_id, server.id, :reset) do
+        :ok -> {:ok, %{reset: name}}
+        {:error, reason} -> {:error, programs_refusal(reason, "The folder reset")}
       end
     end
   end
-
-  defp entry_arg(%{"entry" => entry}) when is_binary(entry) and entry != "", do: {:ok, entry}
-  defp entry_arg(_args), do: {:error, {:invalid_argument, "Missing required parameter: entry"}}
 
   defp program_row(ctx, name) do
     case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
@@ -919,23 +1196,10 @@ defmodule Emissary.External.Provider do
        {:invalid_argument,
         "'#{name}' has no sign-in: a program with a kept home and a login command signs in"}}
 
-  defp sign_in_entry(ctx, server, entry) do
-    # A sign-in is how an entry whose program is not signed in (needs_reauth:
-    # a new entry, or one a restore left) becomes active, so it is admitted
-    # here; a row may name one (`login_entry/3`), and nothing else does.
-    case Sanctum.Mount.login_entry(ctx, entry, server.name, for: :sign_in) do
-      {:ok, %{id: id}} = found when server.mark == "driven" or id == server.login_entry_id ->
-        found
+  defp kept(%{transport: "program", home: "kept"}), do: :ok
 
-      {:ok, _other} ->
-        {:error, {:invalid_argument, "A kept mcp program signs in with its own login entry only"}}
-
-      {:error, _reason} ->
-        {:error,
-         {:invalid_argument,
-          "'#{entry}' is no active login entry of this athanor for program '#{server.name}'"}}
-    end
-  end
+  defp kept(%{name: name}),
+    do: {:error, {:invalid_argument, "'#{name}' keeps no home: only a kept program's resets"}}
 
   defp handle_list(ctx) do
     case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
@@ -991,16 +1255,23 @@ defmodule Emissary.External.Provider do
               _ -> []
             end
 
-          {:ok,
-           Map.merge(summary(server, %{}), %{
-             enabled: server.enabled,
-             config: readable_config(server),
-             status: format_status(status),
-             server_info: format_server_info(status),
-             tools: tools,
-             programs: program_status(ctx, server),
-             warnings: warnings(server)
-           })}
+          case Sanctum.Mount.granted_to(ctx.athanor_id, server) do
+            {:ok, grants} ->
+              {:ok,
+               Map.merge(summary(server, %{}), %{
+                 enabled: server.enabled,
+                 config: readable_config(server),
+                 status: format_status(status),
+                 server_info: format_server_info(status),
+                 tools: tools,
+                 programs: program_status(ctx, server),
+                 warnings: warnings(server),
+                 grants: grants
+               })}
+
+            {:error, :unavailable} ->
+              {:error, grants_unavailable(name)}
+          end
 
         {:error, :not_found} ->
           {:error, {:not_found, "Server", name}}
@@ -1012,7 +1283,7 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  # What the backends service reports for a program's backends: status,
+  # What the backends service reports for a program: status,
   # restarts, the last crash, a scratch program's masked stderr tail or a
   # kept one's stderr length alone (a kept home's contents are the
   # person's), its home, the bytes its kept homes hold, whether one is over
@@ -1171,6 +1442,12 @@ defmodule Emissary.External.Provider do
   defp disabled(name),
     do: {:invalid_argument, "Server '#{name}' is disabled — enable it first"}
 
+  # Enabling and disabling ask no confirmation, though `enabled` is in the
+  # definition's digest: the one stated exception to the rule that a moved
+  # digest asks (`confirm_change/4`). Disabling only stops the program;
+  # enabling brings back exactly the definition last confirmed, since
+  # every change made while it was disabled was confirmed itself. A grant
+  # made at the enabled definition stands again once it is enabled.
   defp handle_enable_disable(ctx, args, enabled) do
     action_name = if enabled, do: "enable", else: "disable"
 
@@ -1215,7 +1492,7 @@ defmodule Emissary.External.Provider do
   # refuses a literal only in a header whose NAME looks like a credential — a
   # denylist that "x-hub" and "x-signature" walk past. Header names and
   # `vault:` binding names are the operator's wiring; literal values are not
-  # shown. Backend env values are vault templates or the non-secret literals
+  # shown. A program's env values are vault templates or the non-secret literals
   # `Opus.Programs.Definition` allows, and are shown as stored.
   defp readable_config(server) do
     config =
@@ -1231,7 +1508,7 @@ defmodule Emissary.External.Provider do
   end
 
   # A program's settings, stored as columns, shown in its config as given.
-  defp with_program(config, server), do: Map.merge(config, BackendDefinition.settings(server))
+  defp with_program(config, server), do: Map.merge(config, Definition.settings(server))
 
   # A vault template names a vault entry, which is the binding an operator
   # needs to see; anything else is a literal and only its presence is
@@ -1250,7 +1527,7 @@ defmodule Emissary.External.Provider do
         _ -> []
       end
 
-    (headers ++ BackendDefinition.entry_names(config["backends"]))
+    (headers ++ Definition.entry_names(config))
     |> Enum.uniq()
     |> Enum.sort()
   end

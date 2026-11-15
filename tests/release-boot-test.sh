@@ -15,12 +15,8 @@
 # (tests/identity-proof/front.sh) against a stranger answering on its
 # address, with `docker` a stand-in; and the proofs' redaction
 # (tests/browser/lib.mjs `redact`) against a case of every pattern it
-# hides, run by node; the browser harness's socket lifetimes against
-# peer resets (tests/browser/lib-test.mjs), without launching a browser;
-# and the headless case's helper, which runs cyfr login on a terminal of
-# its own, against a stand-in that refuses any other input
-# (tests/release-boot/headless-setup-transport-test.py), and its
-# credential checks (tests/release-boot/credential-evidence-test.py).
+# hides, run by node; and the browser harness's socket lifetimes against
+# peer resets (tests/browser/lib-test.mjs), without launching a browser.
 # The old proof ports are held while release cells and browser homes bind
 # their own listeners. This check needs the verification host exclusively.
 set -euo pipefail
@@ -77,8 +73,11 @@ until_true() {
 }
 accepts() { python3 -c 'import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 1).close()' "$1" "$2"; }
 
-# Run each proof's actual version read on every accepted release version,
-# so its live-slot comparison and snapshot manifest keep pre-release suffixes.
+# Run the release boot proof's actual version read on every accepted
+# release version, so its live-slot comparison keeps pre-release suffixes.
+# The compose proof reads no version: its snapshots are cyfr backup's,
+# whose snapshot.json carries the release the image answers
+# (TestBackupKeepsTheReleaseVersionWhole).
 python3 -I - "$root" "$scratch" <<'PY'
 import json, pathlib, subprocess, sys
 root, scratch = map(pathlib.Path, sys.argv[1:])
@@ -86,7 +85,7 @@ versions = json.loads((root / "tests/fixtures/release_manifest.json").read_text(
 tree = scratch / "versions"
 mix = tree / "apps/prima/mix.exs"
 mix.parent.mkdir(parents=True)
-for proof in ("tests/release-boot/boot.sh", "tests/compose-proof/run.sh"):
+for proof in ("tests/release-boot/boot.sh",):
     reads = [line.strip() for line in (root / proof).read_text().splitlines()
              if line.lstrip().startswith(("VERSION=", "version=")) and '"$ROOT/apps/prima/mix.exs"' in line]
     if len(reads) != 1:
@@ -100,7 +99,7 @@ for proof in ("tests/release-boot/boot.sh", "tests/compose-proof/run.sh"):
                                 capture_output=True, text=True, timeout=5)
         if result.returncode != 0 or result.stdout != version:
             sys.exit(f"FAIL: {proof} read {result.stdout!r} from version {version!r}: {result.stderr}")
-print(f"ok: both proofs read all {len(versions)} accepted release versions intact")
+print(f"ok: the release boot proof reads all {len(versions)} accepted release versions intact")
 PY
 
 # The stand-in listeners: `hang ADDR PORT` accepts every connection and
@@ -841,13 +840,5 @@ pass "the redaction hides every case's values, keeps JSON JSON and keeps what is
 
 node --test "$root/tests/browser/lib-test.mjs" || fail "the browser harness did not handle a peer reset"
 pass "the browser harness records idle resets and fails active transfers without ending the process"
-
-python3 -I "$root/tests/release-boot/headless-setup-transport-test.py" --root "$root" ||
-  fail "the headless case's helper does not run cyfr login on a terminal"
-pass "the headless case's helper runs cyfr login on a terminal of its own, as a person at an ssh session does"
-
-python3 -I "$root/tests/release-boot/credential-evidence-test.py" --root "$root" ||
-  fail "the headless case's credential checks accept a leftover session or an echoed passphrase"
-pass "the headless case's credential checks refuse a session or a device after a setup that made nothing, and a passphrase echoed anywhere"
 
 echo "release-boot-test: all checks passed"

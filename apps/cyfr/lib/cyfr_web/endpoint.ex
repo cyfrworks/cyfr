@@ -6,8 +6,7 @@ defmodule CyfrWeb.Endpoint do
   The one endpoint. The API, the MCP transport, tinctures and the Prism
   LiveViews all answer here — one origin, one cookie, one login, one
   `check_origin` — so a CM5 kiosk, a phone and a laptop each need exactly
-  one URL. Headless is a deployment that omits the HTML routes, not a
-  second endpoint.
+  one URL.
 
   It serves on two listeners, the loopback listener in every mode and the
   proxy listener in a tailnet or public home, and each hands it a request

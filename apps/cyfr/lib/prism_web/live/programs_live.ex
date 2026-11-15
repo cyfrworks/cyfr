@@ -8,30 +8,39 @@ defmodule PrismWeb.ProgramsLive do
   kinds:
 
     * `http` — a tool server elsewhere, reached at its URL;
-    * `program` — a program the backends service runs, marked `mcp` (CYFR
-      speaks MCP to it and offers its tools) or `driven` (a person or a
-      brain runs it, such as a coding harness; one backend).
+    * `program` — a program the backends service runs, one command and
+      one environment, marked `mcp` (CYFR speaks MCP to it and offers its
+      tools, named `<row>:<tool>`) or `driven` (a person or a brain runs
+      it, such as a coding harness).
 
   A program's home is `scratch`, made for each process and scrubbed when
-  it ends, or `kept`, one folder per login entry that survives retirement.
-  A row may set its memory bound and a kept home's disk bound, and a
-  program that signs in names its `login_command`. A program's hosts are
-  its network list: the only hosts it reaches beside the deployment's
-  private hosts, exact names resolved each time it starts, which the
-  program forms set and an expanded program row changes (`mcp_servers.update`
-  with the row's config and the new list); none named, every public host.
+  it ends, or `kept`: the row's own folder, which survives its sessions
+  and is removed with the row. A row may set its memory bound and a kept
+  home's disk bound, and a program that signs in names its
+  `login_command`. A program's hosts are its network list: the only hosts
+  it reaches beside the deployment's private hosts, exact names resolved
+  each time it starts, which the program forms set and an expanded
+  program row changes (`mcp_servers.update` with the row's config and the
+  new list); none named, every public host.
 
-  Forms add an http server (its config as JSON) and a program, one
-  backend named for the program, its mark chosen. **Edit** on an expanded
-  program replaces its whole definition (`mcp_servers.update` at the epoch
-  it was read at), in the program form, or in the config form when it
-  defines more than one backend; its folder is kept. A kept row offers
-  **Sign in**: the sign-in terminal
-  (`PrismWeb.SignInTerminalComponent`) runs the row's login command in a
-  login entry's home, for the entry a kept mcp program names, or for one
-  the person picks or makes (`vault.create kind=login`) on a driven
-  program. **Reset home** empties a login entry's home under the same uid
-  (`mcp_servers.reset_home`).
+  Forms add an http server (its config as JSON) and a program, its mark
+  chosen. **Edit** on an expanded program replaces its whole definition
+  (`mcp_servers.update` at the epoch it was read at) in the program form;
+  its folder is kept. **Edit** on a tool server elsewhere opens its
+  address and its headers, one `Name: value` per line: a header whose
+  stored value is a literal shows as `[set]`, which `mcp_servers.get`
+  answers in its place, and a line left at `[set]` keeps that value
+  (`keep_headers`), so no stored value reaches the page. A kept row offers
+  **Sign in**: the sign-in terminal (`PrismWeb.SignInTerminalComponent`)
+  runs the row's login command in the row's folder. **Reset folder**
+  empties it under the same uid (`mcp_servers.reset_home`). A program's
+  folder is its own and is never shared.
+
+  Adding a program, every edit that changes its definition and removing
+  one are each confirmed by the person (`program_definition`): the system
+  layer shows the whole definition, and the page repeats the change once
+  it is confirmed (`system_layer_repeat/4`). A removal's confirmation says that
+  its folder goes with it and which grants that use it will ask again.
 
   An expanded row's details are read again after it is enabled or
   disabled, and when the list says it is disabled, so a disabled program
@@ -40,16 +49,18 @@ defmodule PrismWeb.ProgramsLive do
   `?install=<component_ref>&need=<need>` opens the program form, driven,
   prefilled from that component's login need (`component.setup_plan`): the program
   named, its command and login command as the need's install block
-  suggests, its home kept, every field editable. Saving it defines the row,
-  makes a login entry for it and opens the sign-in terminal. `?name=` (the
+  suggests, its home kept, every field editable. Installing it defines the
+  row, once confirmed, and opens the sign-in terminal in its folder; a
+  grant of the component then binds the row. `?name=` (the
   `ui.mcp_server.focus` intent) expands one row.
 
   A definition the catalog refuses says why in its form. A server saved
   whose connect is refused, and a Test whose connect is refused, say why
   in the flash, and a definition saved with warnings shows them.
 
-  Adding or replacing a row, and a row's Enable, Disable, Test, Refresh,
-  Restart, hosts and Reset folder, call off the page's process (`call/5`): a connect waits up to a
+  Adding, replacing or removing a row, and a row's Enable, Disable, Test,
+  Refresh, Restart, hosts and Reset folder, call off the page's process
+  (`call/5`): a connect waits up to a
   minute, and the browser gives up on an event it waits on for 30
   seconds. The page says what it is doing until the answer comes, takes
   no other of these meanwhile, and the call runs to its end if the person
@@ -78,7 +89,12 @@ defmodule PrismWeb.ProgramsLive do
   @forms ~w(config program)
 
   # The events that call off the page's process, one at a time.
-  @calls ~w(add_server add_program toggle_enabled test refresh restart reset_home set_hosts)
+  @calls ~w(add_server add_program save_server delete toggle_enabled test refresh restart reset_home set_hosts)
+
+  # What a tool server's Edit shows for a header whose stored value is a
+  # literal: `mcp_servers.get` never answers it, and saving the line as it
+  # stands keeps the stored value (`keep_headers`).
+  @kept "[set]"
 
   @impl true
   def mount(_params, _session, socket) do
@@ -104,7 +120,6 @@ defmodule PrismWeb.ProgramsLive do
       # The row whose definition an open form replaces: %{name, epoch,
       # config}, its config as `mcp_servers.get` answered it.
       |> assign(:editing, nil)
-      |> assign(:logins, [])
       |> assign(:terminal, nil)
       # What the page is doing until a call's answer comes; nil when idle.
       |> assign(:working, nil)
@@ -129,23 +144,47 @@ defmodule PrismWeb.ProgramsLive do
      |> assign(:editing, nil)}
   end
 
-  # The whole definition of an expanded program, in the form that holds
-  # it: the program form for one backend, the config form for more.
+  # The whole definition of an expanded row, in the form that holds it:
+  # the program form for a program, the server form for a tool server.
   def handle_event("edit", %{"name" => name}, socket) do
     case socket.assigns.detail do
       %{name: ^name, epoch: epoch} = detail ->
-        {form, prefill} = edit_prefill(config(detail))
+        read = definition(detail)
+        {form, prefill} = edit_prefill(read)
 
         {:noreply,
          socket
          |> assign(:show_add, form)
          |> assign(:form_error, nil)
          |> assign(:install, nil)
-         |> assign(:editing, %{name: name, epoch: epoch, config: config(detail)})
+         |> assign(:editing, %{name: name, epoch: epoch, config: read})
          |> assign(:prefill, Map.put(prefill, "name", name))}
 
       _not_read ->
-        {:noreply, put_flash(socket, :error, "Open the program first, then edit it.")}
+        {:noreply, put_flash(socket, :error, "Open the row first, then edit it.")}
+    end
+  end
+
+  # A tool server's whole definition: its address and its headers, one
+  # `Name: value` per line, a line left at [set] keeping its stored value.
+  # Every member the form does not show is kept as it was read.
+  def handle_event("save_server", %{"url" => url, "headers" => text}, socket) do
+    %{name: name, config: read} = socket.assigns.editing
+
+    case parse_headers(text) do
+      {:ok, headers} ->
+        {kept, given} = Enum.split_with(headers, fn {_name, value} -> value == @kept end)
+
+        config =
+          read
+          |> Map.merge(%{"url" => String.trim(url), "headers" => Map.new(given)})
+
+        if Map.put(config, "headers", Map.new(headers)) == read,
+          do: {:noreply, unchanged(socket, name)},
+          else: {:noreply, update_server(socket, name, config, Enum.map(kept, &elem(&1, 0)))}
+
+      {:error, message} ->
+        {:noreply, assign(socket, :form_error, message)}
     end
   end
 
@@ -167,11 +206,8 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # One backend, named for the program unless the definition it replaces
-  # named it otherwise.
   def handle_event("add_program", params, socket) do
     name = form_name(socket, params)
-    backend = blank_nil(trimmed(params, "backend")) || name
 
     with {:filled, true} <- {:filled, name != "" and trimmed(params, "command") != ""},
          {:ok, program} <- program_config(params) do
@@ -179,17 +215,10 @@ defmodule PrismWeb.ProgramsLive do
         socket.assigns.editing
         |> edited_base()
         |> Map.merge(program)
-        |> Map.merge(%{
-          "transport" => "program",
-          "backends" => [
-            %{"name" => backend, "command" => trimmed(params, "command"), "env" => program["env"]}
-          ]
-        })
-        |> Map.delete("env")
-        |> put_entry(params)
+        |> Map.merge(%{"transport" => "program", "command" => trimmed(params, "command")})
 
       # A new driven program is installed: with a kept home and a sign-in,
-      # its login entry is made and its sign-in opened.
+      # its sign-in opens in its folder once it is made.
       if socket.assigns.editing == nil and config["mark"] == "driven",
         do: install(socket, name, config),
         else: save(socket, name, config)
@@ -202,24 +231,13 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
+  # A program's removal is confirmed first (its folder goes with it); a
+  # tool server's is asked in the browser.
   def handle_event("delete", %{"name" => name}, socket) do
-    case call_tool(socket, "mcp_servers/delete", %{"name" => name}) do
-      {:ok, _} ->
-        servers = Enum.reject(socket.assigns.servers, &(&1[:name] == name))
+    args = %{"name" => name}
 
-        expanded_name =
-          if socket.assigns.expanded_name == name, do: nil, else: socket.assigns.expanded_name
-
-        {:noreply,
-         socket
-         |> assign(:servers, servers)
-         |> assign(:expanded_name, expanded_name)
-         |> assign(:detail, if(expanded_name == nil, do: nil, else: socket.assigns.detail))
-         |> put_flash(:info, "'#{name}' deleted.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to delete: #{error_message(reason)}")}
-    end
+    {:noreply,
+     call(socket, working({:delete, name}), {:delete, name}, "mcp_servers/delete", args)}
   end
 
   # Enabling starts nothing here, but the details read after it may: a
@@ -260,25 +278,16 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # The person signs a kept row in: with the entry an mcp program names, or
-  # the entry picked, or a new one made for the program.
-  def handle_event("sign_in", %{"name" => name} = params, socket) do
-    case sign_in_entry(socket, name, params["entry"]) do
-      {:ok, entry} -> {:noreply, open_terminal(socket, name, entry)}
-      :new -> {:noreply, new_login(socket, name)}
-      {:error, sentence} -> {:noreply, put_flash(socket, :error, sentence)}
-    end
-  end
+  # The person signs a kept row in, in its own folder.
+  def handle_event("sign_in", %{"name" => name}, socket),
+    do: {:noreply, open_terminal(socket, name)}
 
-  def handle_event("reset_home", %{"entry" => entry}, socket) when entry != "" do
+  def handle_event("reset_home", %{"name" => name}, socket) do
     {:noreply,
      call(socket, "Emptying the folder…", :reset_home, "mcp_servers/reset_home", %{
-       "entry" => entry
+       "name" => name
      })}
   end
-
-  def handle_event("reset_home", _params, socket),
-    do: {:noreply, put_flash(socket, :error, "Choose the login entry whose folder to reset.")}
 
   # A program's network list changes with the rest of its config as it is
   # stored, since an update replaces the config whole, at the epoch the
@@ -295,7 +304,7 @@ defmodule PrismWeb.ProgramsLive do
     args = %{"name" => name, "epoch" => detail && detail[:epoch], "config" => config}
 
     {:noreply,
-     call(socket, "Saving #{name}'s hosts…", {:set_hosts, name}, "mcp_servers/update", args)}
+     call(socket, working({:set_hosts, name}), {:set_hosts, name}, "mcp_servers/update", args)}
   end
 
   @impl true
@@ -326,7 +335,7 @@ defmodule PrismWeb.ProgramsLive do
 
   @impl true
   def handle_info(:load, socket) do
-    {:noreply, socket |> refresh_servers() |> refresh_logins() |> assign(:loading, false)}
+    {:noreply, socket |> refresh_servers() |> assign(:loading, false)}
   end
 
   def handle_info({:focus, name}, socket) do
@@ -389,12 +398,12 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   @impl true
-  def handle_async(:call, {:ok, {tag, answer, outcome}}, socket),
+  def handle_async(:call, {:ok, {tag, call, outcome}}, socket),
     do:
       CyfrWeb.ContextGuard.deliver(
         assign(socket, :working, nil),
         tag,
-        &{:noreply, called(&1, answer, outcome)}
+        &{:noreply, called(&1, call, outcome)}
       )
 
   # Only the node's shutdown stops a call (`run_to_end/1`).
@@ -403,11 +412,15 @@ defmodule PrismWeb.ProgramsLive do
   # ————— a row's call —————
 
   # The call, off the event and run to its end, then the list read again,
-  # and the row it names read again when it is the one expanded.
+  # and the row it names read again when it is the one expanded. A change
+  # a program's definition confirms carries the ask the page holds for it
+  # (`PrismWeb.SystemLayer.repeating/2`), and its answer is the layer's to
+  # settle (`settle/3`).
   defp call(socket, working, answer, tool, args) do
     ctx = socket.assigns.context
     tag = CyfrWeb.ContextGuard.capture(ctx)
     expand = expanded_after(answer)
+    repeat = if confirmed?(answer), do: SystemLayer.repeating(socket, answer), else: []
 
     socket
     |> assign(:working, working)
@@ -416,25 +429,42 @@ defmodule PrismWeb.ProgramsLive do
       fn ->
         outcome =
           run_to_end(fn ->
-            result = call_tool(ctx, tool, args)
+            result = call_tool(ctx, tool, args, repeat)
             {result, servers(ctx), expand && detail(ctx, expand)}
           end)
 
-        {tag, answer, outcome}
+        {tag, {answer, tool, args}, outcome}
       end,
       supervisor: Prism.TaskSupervisor
     )
   end
+
+  # The changes a program's definition may need confirmed.
+  defp confirmed?({kind, _name}) when kind in [:create, :update, :set_hosts, :delete], do: true
+  defp confirmed?({:install, _name, _config}), do: true
+  defp confirmed?(_answer), do: false
+
+  # What the page says while a change's call runs.
+  defp working({:create, name}), do: "Adding #{name}…"
+  defp working({:install, name, _config}), do: "Adding #{name}…"
+  defp working({:update, name}), do: "Saving #{name}…"
+  defp working({:set_hosts, name}), do: "Saving #{name}'s hosts…"
+  defp working({:delete, name}), do: "Removing #{name}…"
+
+  # The person confirmed a change the page asked for: it is made again,
+  # once, naming the confirmation.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat(answer, tool, args, socket),
+    do: {:noreply, call(socket, working(answer), answer, tool, args)}
 
   defp expanded_after({kind, name}) when kind in [:restart, :set_hosts, :toggle, :update],
     do: name
 
   defp expanded_after(_answer), do: nil
 
-  defp called(socket, answer, {:error, _crashed} = result),
-    do: answered(socket, answer, result)
+  defp called(socket, call, {:error, _crashed} = result), do: settle(socket, call, result)
 
-  defp called(socket, answer, {result, servers, detail}) do
+  defp called(socket, {answer, _tool, _args} = call, {result, servers, detail}) do
     socket = assign(socket, :servers, servers)
 
     socket =
@@ -443,7 +473,22 @@ defmodule PrismWeb.ProgramsLive do
         _none -> socket
       end
 
-    answered(socket, answer, result)
+    settle(socket, call, result)
+  end
+
+  # A change that may need confirming is the system layer's to settle: it
+  # shows the confirmation the change asked for, and the page answers
+  # once it was made or refused.
+  defp settle(socket, {answer, tool, args}, result) do
+    if confirmed?(answer) do
+      case SystemLayer.answer(socket, answer, tool, args, result) do
+        {:ok, value, socket} -> answered(socket, answer, {:ok, value})
+        {:error, reason, socket} -> answered(socket, answer, {:error, reason})
+        {:asked, socket} -> assign(socket, :form_error, nil)
+      end
+    else
+      answered(socket, answer, result)
+    end
   end
 
   defp answered(socket, {:test, name}, {:ok, %{error: sentence}}) when is_binary(sentence),
@@ -481,6 +526,19 @@ defmodule PrismWeb.ProgramsLive do
 
   defp answered(socket, {:toggle, _name}, {:ok, _}), do: socket
 
+  defp answered(socket, {:delete, name}, {:ok, _}) do
+    expanded_name =
+      if socket.assigns.expanded_name == name, do: nil, else: socket.assigns.expanded_name
+
+    socket
+    |> assign(:expanded_name, expanded_name)
+    |> assign(:detail, if(expanded_name == nil, do: nil, else: socket.assigns.detail))
+    |> put_flash(:info, "'#{name}' removed.")
+  end
+
+  defp answered(socket, {:delete, _name}, {:error, reason}),
+    do: put_flash(socket, :error, "Failed to remove: #{error_message(reason)}")
+
   defp answered(socket, {:toggle, _name}, {:error, reason}),
     do: put_flash(socket, :error, "Failed: #{error_message(reason)}")
 
@@ -507,7 +565,7 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   # A new driven program: the row, then (for a kept home with a sign-in)
-  # a login entry for it and the sign-in terminal on it.
+  # the sign-in terminal in its folder.
   defp answered(socket, {:install, name, config}, {:ok, result}) do
     socket =
       socket
@@ -515,7 +573,7 @@ defmodule PrismWeb.ProgramsLive do
       |> answered({:create, name}, {:ok, result})
 
     if config["home"] == "kept" and present?(config["login_command"]),
-      do: new_login(socket, name),
+      do: open_terminal(socket, name),
       else: socket
   end
 
@@ -526,30 +584,59 @@ defmodule PrismWeb.ProgramsLive do
 
   # A new row, or the whole definition of the row the form edits; a
   # definition the form leaves as it was read is not written at all.
-  defp save(%{assigns: %{editing: %{name: name, config: config}}} = socket, name, config) do
-    {:noreply,
-     socket
-     |> assign(:show_add, nil)
-     |> assign(:editing, nil)
-     |> assign(:prefill, %{})
-     |> put_flash(:info, "Nothing changed in '#{name}'.")}
-  end
+  defp save(%{assigns: %{editing: %{name: name, config: config}}} = socket, name, config),
+    do: {:noreply, unchanged(socket, name)}
 
   defp save(%{assigns: %{editing: %{name: name, epoch: epoch}}} = socket, name, config) do
     args = %{"name" => name, "epoch" => epoch, "config" => config}
-    {:noreply, call(socket, "Saving #{name}…", {:update, name}, "mcp_servers/update", args)}
+
+    {:noreply,
+     call(socket, working({:update, name}), {:update, name}, "mcp_servers/update", args)}
   end
 
   defp save(socket, name, config) do
     args = %{"name" => name, "config" => config}
-    {:noreply, call(socket, "Adding #{name}…", {:create, name}, "mcp_servers/create", args)}
+
+    {:noreply,
+     call(socket, working({:create, name}), {:create, name}, "mcp_servers/create", args)}
+  end
+
+  defp unchanged(socket, name) do
+    socket
+    |> assign(:show_add, nil)
+    |> assign(:editing, nil)
+    |> assign(:prefill, %{})
+    |> put_flash(:info, "Nothing changed in '#{name}'.")
+  end
+
+  defp update_server(socket, name, config, kept) do
+    %{epoch: epoch} = socket.assigns.editing
+    args = %{"name" => name, "epoch" => epoch, "config" => config, "keep_headers" => kept}
+    call(socket, working({:update, name}), {:update, name}, "mcp_servers/update", args)
+  end
+
+  # One `Name: value` per line; blank lines are skipped.
+  defp parse_headers(text) do
+    text
+    |> String.split(~r/\R/)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.reduce_while({:ok, []}, fn line, {:ok, headers} ->
+      case String.split(line, ":", parts: 2) do
+        [name, value] when name != "" ->
+          {:cont, {:ok, headers ++ [{String.trim(name), String.trim(value)}]}}
+
+        _ ->
+          {:halt, {:error, "Each header line is Name: value — #{inspect(line)} is not."}}
+      end
+    end)
   end
 
   # What an edit keeps of the definition it replaces: every member the
   # program form does not show (the timeout, the tool patterns, console
   # reach), exactly as read. The members it shows are its own, a blank one
   # clearing its member.
-  @shown ~w(backends mark home memory_bytes home_max_bytes login_command login_entry_id hosts)
+  @shown ~w(command env mark home memory_bytes home_max_bytes login_command hosts)
 
   defp edited_base(%{config: config}), do: Map.drop(config, @shown)
   defp edited_base(nil), do: %{}
@@ -558,25 +645,38 @@ defmodule PrismWeb.ProgramsLive do
   defp form_name(%{assigns: %{editing: %{name: name}}}, _params), do: name
   defp form_name(_socket, params), do: trimmed(params, "name")
 
-  # The form an edit opens and what it holds: the program form for one
-  # backend, the config form, as JSON, for more.
-  defp edit_prefill(%{"backends" => [backend]} = config) do
+  # A row's whole definition as an update takes it: its config, and a tool
+  # server's address, which the row holds beside it.
+  defp definition(%{transport: "http", url: url} = detail),
+    do: Map.put(config(detail), "url", url)
+
+  defp definition(detail), do: config(detail)
+
+  # The form an edit opens and what it holds: a tool server's own form,
+  # or the program form.
+  defp edit_prefill(%{"transport" => "http"} = config) do
+    {"server",
+     %{
+       "url" => config["url"],
+       "headers" =>
+         Enum.map_join(Enum.sort(config["headers"] || %{}), "\n", fn {k, v} -> "#{k}: #{v}" end)
+     }}
+  end
+
+  defp edit_prefill(config) do
     {"program",
      %{
-       "backend" => backend["name"],
-       "command" => backend["command"],
-       "env" => Enum.map_join(backend["env"] || %{}, "\n", fn {k, v} -> "#{k}=#{v}" end),
+       "command" => config["command"],
+       "env" =>
+         Enum.map_join(Enum.sort(config["env"] || %{}), "\n", fn {k, v} -> "#{k}=#{v}" end),
        "mark" => config["mark"],
        "home" => config["home"],
        "memory_mib" => mib_text(config["memory_bytes"]),
        "disk_mib" => mib_text(config["home_max_bytes"]),
        "login_command" => config["login_command"],
-       "login_entry_id" => config["login_entry_id"],
        "hosts" => config["hosts"]
      }}
   end
-
-  defp edit_prefill(config), do: {"config", %{"config" => Jason.encode!(config, pretty: true)}}
 
   # A bound as its field shows it: whole MiB, or its exact bytes, so a
   # save leaves it as it was.
@@ -589,8 +689,8 @@ defmodule PrismWeb.ProgramsLive do
   defp install(socket, name, config) do
     args = %{"name" => name, "config" => config}
 
-    {:noreply,
-     call(socket, "Adding #{name}…", {:install, name, config}, "mcp_servers/create", args)}
+    answer = {:install, name, config}
+    {:noreply, call(socket, working(answer), answer, "mcp_servers/create", args)}
   end
 
   # The program form's settings: the mark, the env, the home, the bounds
@@ -612,6 +712,17 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
+  # A stored network list as the page shows it. A list the keeper would not
+  # take is answered as its stored text, which is shown as unreadable and
+  # never as every public host, and the form starts empty so it can be
+  # saved again.
+  defp hosts_shown(nil), do: "every public host"
+  defp hosts_shown(hosts) when is_list(hosts), do: Enum.join(hosts, ", ")
+  defp hosts_shown(_unreadable), do: "a stored list that does not read: save the hosts again"
+
+  defp hosts_typed(hosts) when is_list(hosts), do: Enum.join(hosts, ", ")
+  defp hosts_typed(_none_or_unreadable), do: ""
+
   # The hosts a form names, split on commas and white space; none, no list.
   defp host_list(params) do
     case String.split(params["hosts"] || "", [",", " ", "\n", "\t", "\r"], trim: true) do
@@ -619,12 +730,6 @@ defmodule PrismWeb.ProgramsLive do
       hosts -> hosts
     end
   end
-
-  # A kept mcp program names its login entry.
-  defp put_entry(%{"home" => "kept", "mark" => "mcp"} = config, params),
-    do: put_present(config, "login_entry_id", blank_nil(trimmed(params, "login_entry")))
-
-  defp put_entry(config, _params), do: config
 
   defp mib(params, key, what) do
     case trimmed(params, key) do
@@ -717,73 +822,16 @@ defmodule PrismWeb.ProgramsLive do
 
   # ————— signing in —————
 
-  defp sign_in_entry(socket, name, entry) do
-    server = Enum.find(socket.assigns.servers, &(&1[:name] == name)) || %{}
-    named = config(socket.assigns.detail)["login_entry_id"]
-
-    cond do
-      server[:mark] == "mcp" and present?(named) ->
-        {:ok, named}
-
-      server[:mark] == "mcp" ->
-        {:error, "This program names no login entry; edit it to name one, then sign in."}
-
-      entry in [nil, "", "new"] ->
-        :new
-
-      true ->
-        {:ok, entry}
-    end
-  end
-
-  # A new login entry for `program`, named for it, its home the box makes
-  # at the first sign-in; the sign-in opens on it once it is made. Making a
-  # vault entry is a sensitive change: the system layer asks for its
-  # confirmation, and `system_layer_repeat/4` makes it again once given.
-  defp new_login(socket, program) do
-    name = unused_name(socket.assigns.logins, program <> "-login")
-    args = %{"name" => name, "kind" => "login", "program" => program}
-    made_login(SystemLayer.call(socket, {:login, program}, "vault/create", args), program)
-  end
-
-  defp made_login({:ok, result, socket}, program) do
-    case field(field(result, :entry) || %{}, :id) do
-      id when is_binary(id) -> socket |> refresh_logins() |> open_terminal(program, id)
-      _ -> put_flash(socket, :error, "The login entry was made, but its id was not answered.")
-    end
-  end
-
-  defp made_login({:asked, socket}, _program), do: socket
-
-  defp made_login({:error, reason, socket}, _program),
-    do: put_flash(socket, :error, "Could not make a login entry: #{error_message(reason)}")
-
-  # The login entry a person confirmed is made, once, and its sign-in opens.
-  @impl PrismWeb.SystemLayer.Hook
-  def system_layer_repeat({:login, program} = tag, tool, args, socket),
-    do: {:noreply, made_login(SystemLayer.call(socket, tag, tool, args), program)}
-
-  defp unused_name(logins, base) do
-    taken = MapSet.new(logins, & &1.name)
-
-    Stream.iterate(1, &(&1 + 1))
-    |> Stream.map(fn
-      1 -> base
-      n -> "#{base}-#{n}"
-    end)
-    |> Enum.find(&(not MapSet.member?(taken, &1)))
-  end
-
   # One sign-in at a time: a terminal for a new target closes the session
   # of the one before (or, when that session's start has not been heard
   # here yet, closes it when it is: the `:started` above), and each
   # terminal is a component of its own, so selecting a target, or the same
   # one again after its session ended, starts afresh and never reaches the
   # previous session.
-  defp open_terminal(socket, name, entry) do
+  defp open_terminal(socket, name) do
     close_terminal(socket)
     id = "sign-in-#{System.unique_integer([:positive])}"
-    assign(socket, :terminal, %{id: id, row: name, entry: entry, token: nil})
+    assign(socket, :terminal, %{id: id, row: name, token: nil})
   end
 
   defp close_terminal(%{assigns: %{terminal: %{token: token}, context: context}})
@@ -833,40 +881,6 @@ defmodule PrismWeb.ProgramsLive do
       _ -> []
     end
   end
-
-  # The athanor's login entries, each with the program its destination
-  # names.
-  defp refresh_logins(socket) do
-    logins =
-      case call_tool(socket, "vault/list", %{}) do
-        {:ok, %{entries: list}} when is_list(list) ->
-          for entry <- list, field(entry, :kind) == "login" do
-            %{
-              id: field(entry, :id),
-              name: field(entry, :name),
-              status: field(entry, :status),
-              program: program_of(field(entry, :destination))
-            }
-          end
-
-        _ ->
-          []
-      end
-
-    assign(socket, :logins, logins)
-  end
-
-  defp program_of(%{"program" => program}), do: program
-  defp program_of(%{program: program}), do: program
-
-  defp program_of(text) when is_binary(text) do
-    case Jason.decode(text) do
-      {:ok, %{"program" => program}} -> program
-      _ -> nil
-    end
-  end
-
-  defp program_of(_), do: nil
 
   # ————— small helpers —————
 
@@ -919,7 +933,6 @@ defmodule PrismWeb.ProgramsLive do
         id={@terminal.id}
         context={@context}
         row={@terminal.row}
-        entry={@terminal.entry}
       />
 
       <.card :if={@show_add == "program"}>
@@ -928,7 +941,8 @@ defmodule PrismWeb.ProgramsLive do
             Install <span class="font-mono">{@prefill["name"]}</span>
             for <span class="font-mono">{@install.ref}</span>
             — {@install.reason}. This is the program as it will run; change anything first.
-            Saving it makes a login entry for it and opens its sign-in.
+            Installing it asks you to confirm the program, then opens its sign-in in the
+            program's own folder.
           </p>
           <p :if={@editing} class="text-sm text-gray-300" data-test="editing">
             Replace the whole definition of <span class="font-mono">{@editing.name}</span>.
@@ -949,7 +963,6 @@ defmodule PrismWeb.ProgramsLive do
               placeholder="github"
               class="max-w-xs font-mono"
             />
-            <input type="hidden" name="backend" value={@prefill["backend"]} />
           </div>
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">Command</label>
@@ -969,14 +982,14 @@ defmodule PrismWeb.ProgramsLive do
               class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
             >
               <option value="mcp" selected={@prefill["mark"] != "driven"}>
-                MCP: CYFR offers its tools, named &lt;name&gt;:&lt;name&gt;__&lt;tool&gt;
+                MCP: CYFR offers its tools, named &lt;name&gt;:&lt;tool&gt;
               </option>
               <option value="driven" selected={@prefill["mark"] == "driven"}>
                 driven: a person or a brain runs it, such as a coding harness
               </option>
             </select>
           </div>
-          <.program_fields prefill={@prefill} logins={@logins} />
+          <.program_fields prefill={@prefill} />
           <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>
           <.button type="submit">
             {cond do
@@ -988,19 +1001,45 @@ defmodule PrismWeb.ProgramsLive do
         </form>
       </.card>
 
+      <.card :if={@show_add == "server" and @editing}>
+        <form id="edit-server" phx-submit="save_server" class="space-y-4">
+          <p class="text-sm text-gray-300" data-test="editing">
+            Replace the whole definition of <span class="font-mono">{@editing.name}</span>, a
+            tool server elsewhere. A header shown as <code class="text-gray-400">[set]</code>
+            keeps its stored value unless you type a new one.
+          </p>
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-1">Address</label>
+            <.input name="url" required value={@prefill["url"]} class="font-mono" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-1">
+              Headers (Name: value per line)
+            </label>
+            <textarea
+              name="headers"
+              rows="4"
+              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono"
+            >{@prefill["headers"]}</textarea>
+            <p class="text-xs text-gray-600 mt-1">
+              A value may be <code class="text-gray-500">vault:ENTRY</code>
+              or <code class="text-gray-500">Bearer vault:ENTRY</code>, a single-field entry
+              whose destination covers this address.
+            </p>
+          </div>
+          <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>
+          <.button type="submit">Save</.button>
+        </form>
+      </.card>
+
       <.card :if={@show_add == "config"}>
         <form id="add-config" phx-submit="add_server" class="space-y-4">
-          <p :if={@editing} class="text-sm text-gray-300" data-test="editing">
-            Replace the whole definition of <span class="font-mono">{@editing.name}</span>.
-            Its folder is kept.
-          </p>
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
             <.input
               name="name"
               required
               value={@prefill["name"]}
-              disabled={@editing != nil}
               placeholder="notion"
               class="max-w-xs font-mono"
             />
@@ -1019,11 +1058,11 @@ defmodule PrismWeb.ProgramsLive do
             <p class="text-xs text-gray-600 mt-1">
               A header value may be <code class="text-gray-500">vault:ENTRY</code>
               or <code class="text-gray-500">Bearer vault:ENTRY</code>, a single-field entry
-              whose destination covers this server's URL (create one on the Vault page). A program's config is <code class="text-gray-500">{"{\"transport\": \"program\", \"mark\": \"mcp\" | \"driven\", \"backends\": [...], \"home\": ..., ...}"}</code>.
+              whose destination covers this server's URL (create one on the Vault page). A program's config is <code class="text-gray-500">{"{\"transport\": \"program\", \"mark\": \"mcp\" | \"driven\", \"command\": ..., \"env\": {...}, \"home\": ..., ...}"}</code>: one command and one environment, so a bundle of servers is a row each.
             </p>
           </div>
           <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>
-          <.button type="submit">{if @editing, do: "Save", else: "Add server"}</.button>
+          <.button type="submit">Add server</.button>
         </form>
       </.card>
 
@@ -1113,21 +1152,16 @@ defmodule PrismWeb.ProgramsLive do
                         <dd class="font-mono text-gray-300">
                           {config(@detail)["login_command"] || "none"}
                         </dd>
-                        <dt
-                          :if={server[:mark] == "mcp" and server[:home] == "kept"}
-                          class="text-gray-500"
-                        >
-                          Login entry
-                        </dt>
-                        <dd
-                          :if={server[:mark] == "mcp" and server[:home] == "kept"}
-                          class="font-mono text-gray-300"
-                        >
-                          {entry_name(@logins, config(@detail)["login_entry_id"]) || "none named"}
+                        <dt class="text-gray-500">Folder</dt>
+                        <dd class="text-gray-300" data-test="program-folder">
+                          {if server[:home] == "kept",
+                            do:
+                              "its own, kept between runs and removed with the program; no other program shares it",
+                            else: "a fresh one each run"}
                         </dd>
                         <dt class="text-gray-500">Hosts</dt>
                         <dd class="font-mono text-gray-300" data-test="program-hosts">
-                          {Enum.join(config(@detail)["hosts"] || ["every public host"], ", ")}
+                          {hosts_shown(config(@detail)["hosts"])}
                         </dd>
                       </dl>
                       <form
@@ -1141,7 +1175,7 @@ defmodule PrismWeb.ProgramsLive do
                           <label class="block text-xs text-gray-500 uppercase mb-1">Hosts</label>
                           <.input
                             name="hosts"
-                            value={Enum.join(config(@detail)["hosts"] || [], ", ")}
+                            value={hosts_typed(config(@detail)["hosts"])}
                             placeholder="every public host"
                             class="font-mono"
                           />
@@ -1187,7 +1221,7 @@ defmodule PrismWeb.ProgramsLive do
                           </div>
                         </div>
                       </div>
-                      <.home_actions server={server} config={config(@detail)} logins={@logins} />
+                      <.home_actions server={server} config={config(@detail)} />
                       <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-800">
                         <.button
                           variant="ghost"
@@ -1198,7 +1232,7 @@ defmodule PrismWeb.ProgramsLive do
                           {if server[:enabled] == true, do: "Disable", else: "Enable"}
                         </.button>
                         <.button
-                          :if={server[:transport] == "program" and @detail}
+                          :if={@detail}
                           variant="ghost"
                           phx-click="edit"
                           phx-value-name={server[:name]}
@@ -1231,10 +1265,21 @@ defmodule PrismWeb.ProgramsLive do
                           Restart
                         </.button>
                         <.button
+                          :if={server[:transport] == "program"}
                           variant="ghost"
                           phx-click="delete"
                           phx-value-name={server[:name]}
-                          data-confirm="Delete this row?"
+                          data-test="remove-program"
+                        >
+                          Remove
+                        </.button>
+                        <.button
+                          :if={server[:transport] != "program"}
+                          variant="ghost"
+                          phx-click="delete"
+                          phx-value-name={server[:name]}
+                          data-confirm={delete_question(@detail)}
+                          data-test="delete-server"
                         >
                           Delete
                         </.button>
@@ -1251,8 +1296,15 @@ defmodule PrismWeb.ProgramsLive do
     """
   end
 
+  # A tool server elsewhere is deleted on the browser's question, which
+  # names the grants that stand on it and will ask again
+  # (`mcp_servers.get`'s `grants`), as a program's confirmation does.
+  defp delete_question(%{grants: grants}) when is_list(grants),
+    do: "Delete this row? " <> SystemLayer.grants_asking_again(grants)
+
+  defp delete_question(_detail), do: "Delete this row?"
+
   attr :prefill, :map, required: true
-  attr :logins, :list, required: true
 
   # A program's settings beside its name, command and mark.
   defp program_fields(assigns) do
@@ -1274,7 +1326,7 @@ defmodule PrismWeb.ProgramsLive do
           class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
         >
           <option value="kept" selected={@prefill["home"] == "kept"}>
-            kept: the program keeps its folder and its sign-in
+            kept: its own folder, kept with its sign-in and removed with it
           </option>
           <option value="scratch" selected={@prefill["home"] != "kept"}>
             scratch: a fresh folder each run
@@ -1304,7 +1356,7 @@ defmodule PrismWeb.ProgramsLive do
       <label class="block text-xs text-gray-500 uppercase mb-1">Hosts</label>
       <.input
         name="hosts"
-        value={Enum.join(@prefill["hosts"] || [], ", ")}
+        value={hosts_typed(@prefill["hosts"])}
         placeholder="every public host"
         class="font-mono"
       />
@@ -1314,28 +1366,6 @@ defmodule PrismWeb.ProgramsLive do
         no wildcard, scheme or port, resolved each time it starts. Left empty, it reaches every
         public host. A name that shares an address with another, as names behind one CDN or
         front end do, admits that other too.
-      </p>
-    </div>
-    <div>
-      <label class="block text-xs text-gray-500 uppercase mb-1">
-        Login entry (a kept MCP program)
-      </label>
-      <select
-        name="login_entry"
-        class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
-      >
-        <option value="">none</option>
-        <option
-          :for={login <- @logins}
-          value={login.id}
-          selected={login.id == @prefill["login_entry_id"]}
-        >
-          {login.name} (program {login.program})
-        </option>
-      </select>
-      <p class="text-xs text-gray-600 mt-1">
-        An MCP program that signs in on its own keeps its folder in a login entry naming it. A
-        driven program's folder is its component's login entry.
       </p>
     </div>
     <div>
@@ -1357,50 +1387,33 @@ defmodule PrismWeb.ProgramsLive do
 
   attr :server, :map, required: true
   attr :config, :map, required: true
-  attr :logins, :list, required: true
 
-  # Sign-in and reset for a kept row.
+  # Sign-in and reset for a kept row, in its own folder.
   defp home_actions(assigns) do
-    assigns =
-      assign(
-        assigns,
-        :entries,
-        Enum.filter(assigns.logins, &(&1.program == assigns.server[:name]))
-      )
-
     ~H"""
     <div
       :if={@server[:home] == "kept"}
       class="flex flex-wrap items-end gap-3 pt-2 border-t border-gray-800"
       data-test="home-actions"
     >
-      <form :if={@config["login_command"]} phx-submit="sign_in" class="flex items-end gap-2">
-        <input type="hidden" name="name" value={@server[:name]} />
-        <select
-          :if={@server[:mark] == "driven"}
-          name="entry"
-          class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white"
-        >
-          <option :for={entry <- @entries} value={entry.id}>{entry.name}</option>
-          <option value="new">a new login entry</option>
-        </select>
-        <.button type="submit" variant="ghost">Sign in</.button>
-      </form>
-      <form :if={@entries != []} phx-submit="reset_home" class="flex items-end gap-2">
-        <select
-          name="entry"
-          class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white"
-        >
-          <option :for={entry <- @entries} value={entry.id}>{entry.name}</option>
-        </select>
-        <.button
-          type="submit"
-          variant="ghost"
-          data-confirm="Empty this folder? The program's sign-in and everything it kept there are removed."
-        >
-          Reset folder
-        </.button>
-      </form>
+      <.button
+        :if={@config["login_command"]}
+        variant="ghost"
+        phx-click="sign_in"
+        phx-value-name={@server[:name]}
+        data-test="sign-in"
+      >
+        Sign in
+      </.button>
+      <.button
+        variant="ghost"
+        phx-click="reset_home"
+        phx-value-name={@server[:name]}
+        data-test="reset-folder"
+        data-confirm="Empty this program's folder? Its sign-in and everything it kept there are removed."
+      >
+        Reset folder
+      </.button>
     </div>
     """
   end
@@ -1410,9 +1423,6 @@ defmodule PrismWeb.ProgramsLive do
   # The expanded row's settings, as `mcp_servers.get` answers them.
   defp config(%{config: %{} = config}), do: config
   defp config(_detail), do: %{}
-
-  defp entry_name(_logins, nil), do: nil
-  defp entry_name(logins, id), do: Enum.find_value(logins, id, &(&1.id == id && &1.name))
 
   defp home_line(%{transport: "program"} = server), do: server[:home] || "scratch"
 

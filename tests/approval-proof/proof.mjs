@@ -433,6 +433,7 @@ const FIELDS = {
     binding_key: exact,
     vault_entry_id: minted(VAULT_PAGE),
     share_id: exact,
+    mcp_server_id: exact,
     via_label: exact,
     binding_digest: derived(REQUESTED),
     lifetime_kind: exact,
@@ -538,11 +539,11 @@ async function signUp(page) {
 
 // The page's own request, waiting on its record, proven with the passkey at
 // the account pages in the tab the system layer opens: what the sign page
-// asked and whether the tab came back to home.test.
+// asked and whether home.test's return page confirmed it.
 async function proveHere(page, panel) {
   const tab = await confirmInTab(page, keys, CELL_HOME,
     () => page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 }));
-  return { what: tab.what, landed: tab.landed, error: tab.error || null };
+  return { what: tab.what, confirmed: tab.confirmed, by: tab.by, error: tab.error || null };
 }
 
 // The grant prompt for the component `ref`, the tincture unless named,
@@ -906,7 +907,7 @@ async function main() {
     // implies, with its lifetime.
     const bindingRow = (consentId, key, spec, kind = "standing", expires = null, consumed = null) => ({
       consent_id: consentId, athanor_id: person.athanor_id, binding_key: key,
-      vault_entry_id: ids[spec.name], share_id: null, via_label: null,
+      vault_entry_id: ids[spec.name], share_id: null, mcp_server_id: null, via_label: null,
       binding_digest: implied[spec.name].binding_digest, lifetime_kind: kind, expires_at: expires,
       consumed_by_root: consumed,
     });
@@ -1450,7 +1451,7 @@ async function main() {
     };
     const expectedOffer = {
       kind: "grant",
-      sheet_title: "Update this grant (consent rev 1)",
+      sheet_title: "Review this app's grant",
       need: {
         picks: [{ name: XAI.name, pressed: true }],
         held: `You already have an entry for ${XAI.host}: ${XAI.name}`,

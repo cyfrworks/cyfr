@@ -30,7 +30,6 @@ defmodule Prima.Remediation do
     base = %{
       "component_ref" => component_ref,
       "message" => setup_message(need),
-      "setup_command" => grant_command(component_ref),
       "profile_id" => payload[:profile_id] || payload["profile_id"]
     }
 
@@ -64,7 +63,6 @@ defmodule Prima.Remediation do
        "component_ref" => component_ref,
        "profile_id" => payload[:profile_id] || payload["profile_id"],
        "message" => consent_message(cause),
-       "setup_command" => grant_command(component_ref),
        "issues" => [
          %{
            "type" => "consent_required",
@@ -92,7 +90,4 @@ defmodule Prima.Remediation do
 
   defp consent_message(_moved),
     do: "This app asks for more than its grant holds; review and grant it again to continue"
-
-  defp grant_command(""), do: "cyfr profile grant"
-  defp grant_command(ref), do: "cyfr profile grant #{ref}"
 end

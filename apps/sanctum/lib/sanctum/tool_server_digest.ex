@@ -3,25 +3,73 @@
 
 defmodule Sanctum.ToolServerDigest do
   @moduledoc """
-  External MCP configuration digest pinned by a consent tool_server resource.
+  What a consent records of a tool server, and the digest a grant's
+  tool_server resource pins: both from one definition, so the record a
+  grant and a preview show and the digest a use is checked against cannot
+  drift.
 
-  `JCS({id, transport, mark, url, enabled, header_templates, backends,
-  tool_patterns, program})` over the server row's id and its stored header
-  and env **templates** (vault references and non-credential literals),
-  never resolved values: rotating a referenced vault entry must not move
-  the digest, while re-pointing the URL, swapping a header or env
-  reference, changing a backend's command, or deleting the row and
-  creating another under the same name must. A program's `program` member
-  is everything else that decides what it is and what it reaches, each
-  setting it holds: its hosts (the set of names, in one order; absent, every
-  public host), its folder's
-  identity (its home and the login entry a kept home is), its memory and
-  disk bounds and its sign-in command, so a definition replaced with
-  wider hosts, another folder or other bounds no longer matches a grant
-  made for the old one. An http row has neither a mark nor a program. A program's `url` is the empty string. Only a
-  tool server has a digest: an `http` row or a program marked `mcp`; a
-  `driven` program offers no tools. There is
-  deliberately no stored digest column — a stored digest is a cache someone
+  `recorded/1` is what is recorded of a row, everything that decides what
+  it is and reaches but a literal's value, nothing a person may not read:
+  its address (an http row's url, a program's command) and each header
+  (http) or environment variable (program) by its name with the vault
+  entry it names, a literal by its name alone, marked literal; and a
+  program's settings: its `folder` (`"kept"`, the row's own folder kept
+  between runs, or `"scratch"`), its `hosts` (the set of names it
+  reaches, sorted, each once; absent, every public host, which `[]`
+  never reads as), its `memory_bytes` and `home_max_bytes` bounds and its
+  `sign_in_command`, each absent when the row leaves it unset:
+
+      %{"address" => "https://mcp.example/v1",
+        "headers" => [%{"name" => "authorization", "entry" => "github", "scheme" => "Bearer"},
+                      %{"name" => "user-agent", "literal" => true}]}
+
+      %{"address" => "npx -y @modelcontextprotocol/server-github",
+        "env" => [%{"name" => "GITHUB_TOKEN", "entry" => "gh"},
+                  %{"name" => "NODE_ENV", "literal" => true}],
+        "folder" => "kept",
+        "hosts" => ["api.github.com", "github.com"],
+        "memory_bytes" => 268435456,
+        "home_max_bytes" => 1073741824,
+        "sign_in_command" => "gh auth login"}
+
+  A literal's value is never recorded: it is a secret the page never sees.
+
+  The digest is `JCS({id, transport, enabled, mark, record, literals})`:
+  the record, each literal's value by its name beside it (`literals`),
+  and the row's identity, never resolved values. Rotating a referenced
+  vault entry must not move the digest, while each of these must, so a
+  definition that reaches more no longer matches a grant made for the
+  old one and the person is asked again at use:
+
+    * everything the record holds: the address whole (scheme, host, port
+      and path; a program's command), every header and env name with the
+      entry it names and its scheme, and a program's settings. A name
+      added, removed or pointed at another entry moves the digest; a
+      vault entry rotated in place does not;
+    * a literal's value, since a peer may route on any header (a literal
+      `Host` sends the call and its credentials elsewhere);
+    * the row's id, so a row deleted and made again under its name does,
+      and whether it is enabled.
+
+  So a record that is the same under a moved digest is a value the record
+  does not show that moved: a literal's, the row's id or whether it is
+  enabled.
+
+  The server's tool patterns and its timeout are left out: a grant
+  carries its own patterns and only ever reaches their intersection with
+  the server's (`tool_patterns/1`). An http row has no mark, command, env
+  or program settings; a program has no url.
+
+  Every row has this digest (`definition/1`), and it is the one answer to
+  whether a row's definition changed: a program's change asks its
+  confirmation exactly when it moves the digest
+  (`Emissary.External.Provider`), and a login need's binding of a driven
+  program is approved at it (`Sanctum.Mount`), so a binding made for one
+  definition does not mount another. A grant's tool_server resource pins
+  it only of a tool server (`from_server/1`): an `http` row or a program
+  marked `mcp`; a `driven` program offers no tools.
+
+  There is deliberately no stored digest column — a stored digest is a cache someone
   forgets to recompute; deriving at read makes "changed config ⇒ mismatch ⇒
   deny" true by construction.
 
@@ -32,99 +80,137 @@ defmodule Sanctum.ToolServerDigest do
 
   alias Prima.JCS
   alias Prima.ToolPattern
+  alias Prima.VaultRef
+
+  @typedoc "What is recorded of a tool server (`recorded/1`)."
+  @type server_record :: %{
+          required(String.t()) => String.t() | pos_integer() | [map() | String.t()]
+        }
 
   @doc "Compute the digest for a server's stored configuration."
   @spec compute(map()) :: {:ok, String.t()} | {:error, term()}
-  def compute(
-        %{
-          id: id,
-          transport: transport,
-          mark: mark,
-          url: url,
-          enabled: enabled,
-          headers: headers,
-          backends: backends,
-          tool_patterns: patterns,
-          program: program
-        } = server
-      )
-      when is_binary(id) and
-             ((transport == "http" and is_nil(mark)) or (transport == "program" and mark == "mcp")) and
-             (is_binary(url) or is_nil(url)) and is_boolean(enabled) and is_map(headers) and
-             is_list(backends) and is_list(patterns) and
-             ((transport == "http" and is_nil(program)) or
-                (transport == "program" and is_map(program))) do
-    with {:ok, backends} <- backend_templates(backends),
-         :ok <- readable_hosts(program) do
-      JCS.hash(
-        %{
-          "id" => id,
-          "transport" => transport,
-          "url" => url || "",
-          "enabled" => enabled,
-          "header_templates" => templates(headers),
-          "backends" => backends,
-          "tool_patterns" => Enum.sort(patterns)
-        }
-        |> with_program(mark, program)
-      )
-    else
-      :error -> {:error, {:invalid_server_config, server}}
+  def compute(server) do
+    with {:ok, record, literals} <- record_of(server) do
+      %{
+        "id" => server.id,
+        "transport" => server.transport,
+        "enabled" => server.enabled,
+        "record" => record,
+        "literals" => literals
+      }
+      |> put_present("mark", server.mark)
+      |> JCS.hash()
     end
   end
 
-  def compute(other), do: {:error, {:invalid_server_config, other}}
-
-  defp readable_hosts(%{"hosts" => hosts}) when not is_nil(hosts) do
-    if is_list(hosts) and Enum.all?(hosts, &is_binary/1), do: :ok, else: :error
+  @doc """
+  What is recorded of a stored server row (`Arca.McpServerStorage`) as
+  the moduledoc shows it, `{:error, {:invalid_server_config, _}}` for one
+  that is no tool server or does not read.
+  """
+  @spec recorded(map()) :: {:ok, server_record()} | {:error, term()}
+  def recorded(server) do
+    with {:ok, record, _literals} <- server |> fields() |> record_of(), do: {:ok, record}
   end
 
-  defp readable_hosts(_program), do: :ok
+  # The record and, beside it, each literal's value by its name: what the
+  # digest covers that the record must not carry.
+  defp record_of(
+         %{
+           id: id,
+           transport: transport,
+           mark: mark,
+           url: url,
+           enabled: enabled,
+           headers: headers,
+           command: command,
+           env: env,
+           program: program
+         } = server
+       )
+       when is_binary(id) and
+              ((transport == "http" and is_binary(url) and is_nil(mark) and is_nil(command) and
+                  is_nil(env) and is_nil(program)) or
+                 (transport == "program" and is_nil(url) and mark in ["mcp", "driven"] and
+                    is_binary(command) and is_map(env) and is_map(program))) and
+              is_boolean(enabled) and is_map(headers) do
+    if transport == "http" do
+      {:ok, %{"address" => url, "headers" => named(headers)}, literals(headers)}
+    else
+      case settings(program) do
+        {:ok, settings} ->
+          {:ok, Map.merge(settings, %{"address" => command, "env" => named(env)}), literals(env)}
 
-  # JCS takes no null, so an absent member is left out: a program's mark and
-  # program members are present, each setting it has not left absent.
-  defp with_program(document, nil, nil), do: document
-
-  defp with_program(document, mark, program) do
-    program =
-      program
-      |> Map.update("hosts", nil, &host_set/1)
-      |> Map.reject(fn {_key, value} -> is_nil(value) end)
-
-    Map.merge(document, %{"mark" => mark, "program" => program})
+        :error ->
+          {:error, {:invalid_server_config, server}}
+      end
+    end
   end
 
-  # What a program may reach is a set: its hosts in one order, each once.
-  # Absent is no restriction, which a list, even an empty one, never reads as.
-  defp host_set(hosts) when is_list(hosts), do: hosts |> Enum.uniq() |> Enum.sort()
-  defp host_set(nil), do: nil
+  defp record_of(other), do: {:error, {:invalid_server_config, other}}
 
-  defp templates(map) do
-    map
-    |> Enum.map(fn {name, template} ->
-      %{"name" => to_string(name), "template" => to_string(template)}
+  # Each name with the entry it names, or marked literal, in name order.
+  defp named(values) do
+    values
+    |> Enum.map(fn {name, value} ->
+      case VaultRef.template(value) do
+        {:ok, %{scheme: nil, name: entry}} ->
+          %{"name" => to_string(name), "entry" => entry}
+
+        {:ok, %{scheme: scheme, name: entry}} ->
+          %{"name" => to_string(name), "entry" => entry, "scheme" => scheme}
+
+        :error ->
+          %{"name" => to_string(name), "literal" => true}
+      end
     end)
     |> Enum.sort_by(& &1["name"])
   end
 
-  defp backend_templates(backends) do
-    backends
-    |> Enum.reduce_while({:ok, []}, fn
-      %{"name" => name, "command" => command} = backend, {:ok, acc}
-      when is_binary(name) and is_binary(command) ->
-        env = if is_map(backend["env"]), do: backend["env"], else: %{}
-
-        entry = %{"name" => name, "command" => command, "env_templates" => templates(env)}
-        {:cont, {:ok, [entry | acc]}}
-
-      _other, _acc ->
-        {:halt, :error}
-    end)
-    |> case do
-      {:ok, entries} -> {:ok, Enum.sort_by(entries, & &1["name"])}
-      :error -> :error
+  defp literals(values) do
+    for {name, value} <- values, not VaultRef.vault_ref?(value), into: %{} do
+      {to_string(name), to_string(value)}
     end
   end
+
+  # A program's settings as the record holds them, each one it leaves
+  # unset absent: JCS takes no null, and absent hosts (every public host)
+  # must never read as a list. A setting that does not read leaves the row
+  # without a record, never with one that reads it as wider.
+  defp settings(%{"home" => folder} = program) when folder in ["kept", "scratch"] do
+    with {:ok, hosts} <- host_set(program["hosts"]),
+         true <- Enum.all?(["memory_bytes", "home_max_bytes"], &bound?(program[&1])),
+         true <- is_nil(program["login_command"]) or nonempty?(program["login_command"]) do
+      {:ok,
+       %{"folder" => folder}
+       |> put_present("hosts", hosts)
+       |> put_present("memory_bytes", program["memory_bytes"])
+       |> put_present("home_max_bytes", program["home_max_bytes"])
+       |> put_present("sign_in_command", program["login_command"])}
+    else
+      _unreadable -> :error
+    end
+  end
+
+  defp settings(_program), do: :error
+
+  # What a program may reach is a set: its hosts in one order, each once.
+  defp host_set(nil), do: {:ok, nil}
+
+  defp host_set(hosts) when is_list(hosts) do
+    if Enum.all?(hosts, &nonempty?/1),
+      do: {:ok, hosts |> Enum.uniq() |> Enum.sort()},
+      else: :error
+  end
+
+  defp host_set(_hosts), do: :error
+
+  defp bound?(bytes), do: is_nil(bytes) or (is_integer(bytes) and bytes > 0)
+
+  defp nonempty?(value), do: is_binary(value) and value != ""
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   @doc """
   The ONE place a peer's schema spelling is normalized on the way in.
@@ -138,32 +224,49 @@ defmodule Sanctum.ToolServerDigest do
     tool["inputSchema"] || tool["parameters"] || %{}
   end
 
-  @doc "The digest for a stored server row (`Arca.McpServerStorage`)."
+  @doc """
+  The digest of a stored row's definition (`Arca.McpServerStorage`), of
+  any transport and mark, `{:error, {:invalid_server_config, _}}` for one
+  whose record does not read. A row an add or an update would store reads
+  the same way, its `id` the stored row's.
+  """
+  @spec definition(map()) :: {:ok, String.t()} | {:error, term()}
+  def definition(server), do: server |> fields() |> compute()
+
+  @doc """
+  The digest a grant's tool_server resource pins of a stored tool server:
+  its `definition/1`. A `driven` program is no tool server and has none.
+  """
   @spec from_server(map()) :: {:ok, String.t()} | {:error, term()}
-  def from_server(server) do
+  def from_server(%{transport: "program", mark: "driven"} = server),
+    do: {:error, {:invalid_server_config, server}}
+
+  def from_server(server), do: definition(server)
+
+  # A stored row as `compute/1` and `recorded/1` read it.
+  defp fields(server) do
     config = Arca.McpServerStorage.config(server)
 
-    compute(%{
+    %{
       id: server.id,
       transport: server.transport,
       mark: Map.get(server, :mark),
       url: server.url,
       enabled: server.enabled == true,
       headers: config["headers"] || %{},
-      backends: config["backends"] || [],
-      tool_patterns: tool_patterns(server),
+      command: if(server.transport == "program", do: config["command"]),
+      env: if(server.transport == "program", do: config["env"] || %{}),
       program: program(server)
-    })
+    }
   end
 
-  # What else decides what a program is and reaches, as its row stores it.
-  # A stored host list that does not read leaves the row without a digest,
-  # never with one that reads it as no restriction.
+  # A program's settings as its row stores them (`settings/1` records
+  # them). A stored host list that does not read leaves the row without a
+  # record, never with one that reads it as no restriction.
   defp program(%{transport: "program"} = server) do
     %{
       "hosts" => stored_hosts(Map.get(server, :hosts)),
       "home" => Map.get(server, :home),
-      "login_entry" => Map.get(server, :login_entry_id),
       "memory_bytes" => Map.get(server, :memory_bytes),
       "home_max_bytes" => Map.get(server, :home_max_bytes),
       "login_command" => Map.get(server, :login_command)

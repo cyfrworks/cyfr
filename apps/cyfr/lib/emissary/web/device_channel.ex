@@ -18,7 +18,7 @@ defmodule Emissary.Web.DeviceChannel do
   The upgrade admits nothing. A device that is not yet a client here
   opens with `hello`, naming its key's kid, its account's identifier,
   what holds the key, the name it shows and, when it brings one, the
-  setup token or an invitation's code: only a connection that has sent
+  setup token: only a connection that has sent
   nothing may. The channel reserves a paired-client id for it and asks
   `Sanctum.DeviceUnlock.hello/2`, which answers a `sign_in` request bound
   to this channel by that id, held for the key the hello named; the
@@ -176,8 +176,8 @@ defmodule Emissary.Web.DeviceChannel do
   the client's identity once one is established and under none before,
   with its refusal class. A client's decision opens its request-log row
   with what was refused: the message's type and its field names, and an
-  intent's argument names, never a value, so a hello's setup token or
-  invitation code and an answer's signature reach no row. A refusal of a
+  intent's argument names, never a value, so a hello's setup token and an
+  answer's signature reach no row. A refusal of a
   hello or of its answer, by `Sanctum.DeviceUnlock.hello/2` or `admit/2`,
   is told first: `refused`, carrying the refusal's class and its sentence
   (`Prima.Refusal`'s), as an answer's `error` carries them; nothing else
@@ -194,8 +194,8 @@ defmodule Emissary.Web.DeviceChannel do
       after its challenge expired, a second `connect`, a renewal refused,
       or anything but `connect`, `renew` and `proof` before a proof
       verified, a hello's exchange apart; a hello whose capability admits
-      nobody (a setup token that is not this CYFR's, an invitation code
-      that names none) or that names no key, account, holder or name in
+      nobody (a setup token that is not this CYFR's) or that names no
+      key, account, holder or name in
       the protocol's grammar; an answer refused, and a hello's request
       expired unanswered. An intent, a repeated confirmation among them,
       is answered first with its `id` and an `error` naming the class.
@@ -431,7 +431,7 @@ defmodule Emissary.Web.DeviceChannel do
         {:push, {:ping, ""}, keepalive(state)}
 
       {:error, reason} ->
-        refuse(assign_call(state), reason)
+        refuse(assign_call(state), reason, operation: "device.keepalive")
     end
   end
 
@@ -542,7 +542,7 @@ defmodule Emissary.Web.DeviceChannel do
     else
       {:error, :contradictory} -> refuse(state, :malformed_frame)
       {:error, :unavailable} -> {:ok, state}
-      {:error, reason} -> refuse(assign_call(state), reason)
+      {:error, reason} -> refuse(assign_call(state), reason, operation: "device.capabilities")
     end
   end
 
@@ -666,7 +666,7 @@ defmodule Emissary.Web.DeviceChannel do
         else
           # The gate decided the renewal under its call id; the refusal of
           # its replacement is a decision of its own.
-          {:error, reason} -> refuse(assign_call(state), reason)
+          {:error, reason} -> refuse(assign_call(state), reason, operation: "device.renew")
         end
 
       {:error, reason} ->
@@ -947,7 +947,7 @@ defmodule Emissary.Web.DeviceChannel do
             {:push, revoke_frames(state, [grant.grant_id]), drop_grants(state, [grant.grant_id])}
 
           {:error, reason} ->
-            refuse(assign_call(state), reason)
+            refuse(assign_call(state), reason, operation: "device.event")
         end
     end
   end
@@ -985,7 +985,7 @@ defmodule Emissary.Web.DeviceChannel do
     case Sanctum.DeviceCerts.verify_request(state.cert, state.client) do
       {:ok, client} -> {:ok, %{state | client: carried(client, state)}}
       {:error, :unavailable} -> {:ok, state}
-      {:error, reason} -> refuse(assign_call(state), reason)
+      {:error, reason} -> refuse(assign_call(state), reason, operation: "device.standing")
     end
   end
 
@@ -1027,7 +1027,10 @@ defmodule Emissary.Web.DeviceChannel do
 
   # One decision under the call id assigned the refused message, under
   # the client's identity once one is established and none before, naming
-  # the operation an intent gave; then the close, after `:frames`. The
+  # the operation an intent gave, or `device.<what>` for a check of the
+  # client's standing made on a frame or a timer of the channel's own
+  # (its capabilities report, keepalive, renewal, an event's delivery, a
+  # standing announcement); then the close, after `:frames`. The
   # state is closed for good first, every timer cancelled, so a frame or
   # a timer the transport still delivers before the peer's close records
   # nothing. `record: false` closes a refusal the gate already recorded.
@@ -1238,7 +1241,7 @@ defmodule Emissary.Web.DeviceChannel do
 
   # What a refusal of `message` records of it: its type and the names of
   # its fields, and an intent's argument names. Never a value: a hello
-  # carries the setup token or an invitation's code, an answer its
+  # carries the setup token, an answer its
   # signature, a connect its certificate.
   defp received({type, body}) do
     received = %{"type" => Atom.to_string(type), "field_names" => field_names(body)}

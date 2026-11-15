@@ -580,6 +580,28 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute html =~ "A.Q.U.A."
   end
 
+  test "a line says once that what Aqua reads in a shared thread goes to the person's model provider, until they dismiss it",
+       %{conn: conn, user: user, athanor: athanor, thread: thread} do
+    sentence =
+      "Aqua reads your shared threads when you ask about them. What it reads there, other people's words included, goes to your model provider."
+
+    pane = open_pane(conn, athanor, thread)
+    assert has_element?(pane, ~s([id$="-reads-notice"]), sentence)
+
+    # Another mount, before it is dismissed, says it again.
+    again = open_pane(conn, athanor, thread)
+    assert has_element?(again, ~s([id$="-reads-notice"]), sentence)
+
+    again |> element(~s(button[phx-click="dismiss_reads_notice"])) |> render_click()
+    refute has_element?(again, ~s([id$="-reads-notice"]))
+
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    assert Sanctum.Tenancy.Users.prefs(row)["aqua_reads_threads_seen"] == true
+
+    # Kept on the person's own row: no mount says it again.
+    refute has_element?(open_pane(conn, athanor, thread), ~s([id$="-reads-notice"]))
+  end
+
   test "at 720×720 an open thread's text and small targets carry the shared size classes alone",
        %{
          conn: conn,
@@ -619,7 +641,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute source =~ @under_12px
     refute source =~ @inline_style
 
-    for click <- ~w(approve_all_pending decline_all_pending retry_send discard_send dismiss_link) do
+    for click <-
+          ~w(approve_all_pending decline_all_pending retry_send discard_send dismiss_link dismiss_reads_notice) do
       assert source =~ ~r/phx-click="#{click}"[^>]*class="[^"]*min-h-6/,
              "the #{click} control is under 24 px"
     end
@@ -737,6 +760,53 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     })
 
     refute has_element?(pane, ~s(button[phx-click="stop"]))
+  end
+
+  test "a turn's end is announced as a reply only when the turn wrote one", %{
+    conn: conn,
+    athanor: athanor,
+    thread: thread,
+    user: user,
+    here: here
+  } do
+    pane = open_pane(conn, athanor, thread)
+
+    turn = fn kind, data ->
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: thread.athanor_id,
+        thread_id: thread.id,
+        kind: kind,
+        data: data
+      })
+    end
+
+    announced = fn ->
+      pane
+      |> element(~s([id$="-announcer"]))
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    # A turn that ends with no reply (a refused key, a failure) is not
+    # announced as one.
+    turn.(:turn_starting, user.user_id)
+    turn.(:turn_finished, nil)
+    assert announced.() == "AQUA stopped without a reply."
+
+    {:ok, reply} =
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
+        author: "aqua",
+        sent_by: "aqua",
+        content: "Here it is."
+      })
+
+    turn.(:turn_starting, user.user_id)
+    turn.(:turn_started, "trn_replied")
+    turn.(:message, reply)
+    turn.(:turn_finished, nil)
+    assert announced.() == "AQUA replied."
   end
 
   # A component in `ctx`'s athanor a turn can ask a grant for.
@@ -1136,8 +1206,81 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       pane = empty_pane(conn, athanor)
 
       assert render(pane) =~ "has no model yet"
-      assert render(pane) =~ @connect
+
+      # The way to a model is a link to Aqua's setup.
+      assert has_element?(
+               pane,
+               ~s(a[data-test="model-connect"][href="#{athanor_path("/aqua?setup=1", athanor)}"]),
+               @connect
+             )
+
       refute has_element?(pane, ~s([data-test="model-consent"]))
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  describe "the pane's empty state over a model that runs a program" do
+    # The athanor is ready, and its soul's model runs a program on its own
+    # sign-in, never granted.
+    setup %{athanor: athanor, here: here} do
+      {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(here, Cyfr.Test.Guests.wasm(:catalyst), %{
+          name: "claude",
+          version: "0.1.0",
+          type: "catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "claude" => %{
+                  "type" => "login",
+                  "program" => "claude",
+                  "reason" => "to run Claude Code on your own plan",
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      :ok
+    end
+
+    test "with its program's row set up, it says it needs only the grant, given on the AQUA page",
+         %{conn: conn, athanor: athanor, here: here} do
+      pane = empty_pane(conn, athanor)
+      assert render(pane) =~ "has no model yet"
+      refute has_element?(pane, ~s([data-test="model-grant"]))
+      Cyfr.Test.Sandbox.end_views()
+
+      {:ok, _row} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(here), %{
+          cap: 0,
+          name: "claude",
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          home: "kept",
+          config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
+        })
+
+      pane = empty_pane(conn, athanor)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="model-grant"]),
+               "your AQUA's model needs only your grant."
+             )
+
+      assert has_element?(
+               pane,
+               ~s(a[href="#{athanor_path("/aqua?setup=1", athanor)}"]),
+               "Grant it on your AQUA page."
+             )
+
+      refute render(pane) =~ "has no model yet"
+      refute render(pane) =~ @connect
 
       Cyfr.Test.Sandbox.end_views()
     end
@@ -1219,11 +1362,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute has_element?(panel, "#aqua-card-aqua", "Model connected")
     refute has_element?(panel, "#aqua-card-aqua", "the model has no key yet")
 
-    refute has_element?(
-             panel,
-             "#aqua-card-aqua button[phx-click=open_consent]",
-             "Connect a model"
-           )
+    refute has_element?(panel, ~s(#aqua-card-aqua a[data-test="connect"]))
 
     refute has_element?(panel, "#aqua-card-aqua button[phx-click=open_consent]", "Change the key")
 

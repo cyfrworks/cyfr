@@ -317,8 +317,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       ctx = socket.assigns.context
 
+      choice = Catalog.decode_model_choice(value)
+
       result =
-        case Catalog.decode_model_choice(value) do
+        case choice do
           {:inherit} ->
             call_aqua(ctx, %{
               "action" => "update",
@@ -352,6 +354,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       send(self(), {:refresh, :agents})
 
       case result do
+        # A brain or model picked moves the agent's consent's shape, so its
+        # consent is asked again at once, in the page's system layer.
+        {:ok, _} when is_tuple(choice) and elem(choice, 0) == :model ->
+          send(self(), {:ask_grant, Prima.AgentRef.ref(name)})
+          {:noreply, socket}
+
         {:ok, _} ->
           {:noreply, socket}
 
@@ -451,6 +459,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     crew = agents |> Enum.reject(&(&1["type"] == soul_type)) |> Enum.sort_by(& &1["name"])
     status = Aqua.model_status(ctx, agents)
 
+    # The page's setup is open while the soul's brain is not connected and
+    # names the crew members whose brain is not; a roster that could not
+    # be read tells it nothing.
+    unless unread? do
+      send(self(), {:agents_read, brains_read(soul, crew, status)})
+    end
+
     socket
     |> assign(:agents, agents)
     |> assign(:agents_unread, unread?)
@@ -460,6 +475,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign_plans(ctx, agents)
     |> load_brain_options(agents, status)
     |> ensure_tool_actions_loaded()
+  end
+
+  defp brains_read(soul, crew, status) do
+    ready? = &match?({:ready, _}, status[&1])
+
+    %{
+      soul: soul && soul["name"],
+      soul_ready: soul != nil and ready?.(soul["name"]),
+      unconnected: for(m <- crew, not m["disabled"], not ready?.(m["name"]), do: m["name"])
+    }
   end
 
   # Each ready brain's options, from its own `describe` — a catalyst run
@@ -490,8 +515,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # Each agent's catalyst, read once through its setup plan: the programs
   # its login needs offer to install, and whether it runs on a program's
-  # own sign-in (`Aqua.brain_signs_in?/1`), so its card offers to change
-  # the entry, not a key. A plan that cannot be read offers nothing.
+  # own sign-in (`Aqua.brain_signs_in?/1`), whose binding is the one row
+  # named as its program, so its card offers no other to change to. A
+  # plan that cannot be read offers nothing.
   defp assign_plans(socket, ctx, agents) do
     plans =
       for ref <- agents |> Enum.map(& &1["catalyst_ref"]) |> Enum.uniq(),
@@ -541,11 +567,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # A ready brain's action changes what it is bound to: a key, or the login
-  # entry its program signs in with, which holds no key.
-  defp change_label({:ready, _}, true), do: "Change the entry"
-  defp change_label({:ready, _}, false), do: "Change the key"
-  defp change_label(_unready, _signs_in?), do: "Connect a model"
+  # Aqua's setup, for the agent whose card links to it: the soul's by
+  # default, a crew member's named.
+  defp setup_path(athanor, _agent, true), do: PrismWeb.Focus.path(athanor, "/aqua?setup=1")
+
+  defp setup_path(athanor, agent, false),
+    do:
+      PrismWeb.Focus.path(
+        athanor,
+        "/aqua?" <> URI.encode_query(%{"setup" => "1", "agent" => agent["name"]})
+      )
 
   defp installable(plan) do
     for need <- plan[:needs] || [],
@@ -917,6 +948,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           <form
             id={"aqua-card-#{@agent["name"]}-title"}
             phx-change="editor_update_field"
+            phx-submit="editor_update_field"
             phx-target={@myself}
             class="space-y-1"
           >
@@ -996,6 +1028,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         :if={!@is_soul}
         id={"aqua-card-#{@agent["name"]}-#{field}"}
         phx-change="editor_update_field"
+        phx-submit="editor_update_field"
         phx-target={@myself}
         class="space-y-1"
       >
@@ -1024,15 +1057,46 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </.link>
       </div>
 
+      <%!-- A member with no brain yet is connected through the setup like
+           any other. --%>
+      <div
+        :if={@agent["catalyst_ref"] in [nil, ""]}
+        class="flex flex-wrap items-center gap-2 text-[11px]"
+      >
+        <span class="text-amber-300">No brain yet</span>
+        <.link
+          patch={setup_path(@athanor, @agent, @is_soul)}
+          data-test="connect"
+          class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
+        >
+          Connect
+        </.link>
+      </div>
+
       <div :if={@model_status} class="flex flex-wrap items-center gap-2 text-[11px]">
         <span :if={match?({:ready, _}, @model_status)} class="text-emerald-400">
           Model connected
         </span>
+        <span :if={match?({:consent_stale, _}, @model_status)} class="text-amber-300">
+          Its consent is out of date: what it runs on changed since it was consented.
+        </span>
+        <button
+          :if={match?({:consent_stale, _}, @model_status)}
+          type="button"
+          phx-click="open_consent"
+          phx-value-ref={Prima.AgentRef.ref(@agent["name"])}
+          class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
+        >
+          Consent again
+        </button>
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet
         </span>
-        <span :if={match?({:needs_sign_in, _}, @model_status)} class="text-amber-300">
-          Program not signed in — it signs in on the Programs page
+        <span :if={match?({:needs_grant, _}, @model_status)} class="text-amber-300">
+          Not connected — it needs only your grant
+        </span>
+        <span :if={match?({:needs_program, _}, @model_status)} class="text-amber-300">
+          Not connected — set up its program on the Programs page, then grant it
         </span>
         <%!-- A consent that exists but is damaged, or could not be read, is
              no key to connect: no Connect button is offered over it. --%>
@@ -1061,14 +1125,30 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         >
           {if @installing, do: "Installing…", else: "Install"}
         </button>
+        <.link
+          :if={
+            match?(
+              {status, _} when status in [:needs_key, :needs_grant, :needs_program],
+              @model_status
+            )
+          }
+          patch={setup_path(@athanor, @agent, @is_soul)}
+          data-test="connect"
+          class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
+        >
+          Connect
+        </.link>
+        <%!-- A ready brain changes its key here; one that runs a program is
+             bound to the one row named as its program, changed on the
+             Programs page. --%>
         <button
-          :if={match?({status, _} when status in [:ready, :needs_key, :needs_sign_in], @model_status)}
+          :if={match?({:ready, _}, @model_status) and not @signs_in?}
           type="button"
           phx-click="open_consent"
           phx-value-ref={elem(@model_status, 1)}
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
         >
-          {change_label(@model_status, @signs_in?)}
+          Change the key
         </button>
       </div>
 
@@ -1138,7 +1218,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           <p class="block text-[10px] uppercase tracking-wider text-gray-500">
             Capabilities
             <span class="normal-case text-gray-600">
-              — reads run without asking; writes and executes ask unless you mark them "auto"; destructive always asks.
+              — reads run without asking; writes and executes ask unless you mark them "auto"; some, and every destructive one, always ask.
             </span>
           </p>
           <% auto_count = count_auto(@tool_policy, @tool_actions) %>
@@ -1189,7 +1269,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                         <span></span>
                       <% kind == :read -> %>
                         <span class="text-[10px] text-emerald-400/70">runs without asking</span>
-                      <% kind == :destructive -> %>
+                      <% kind == :destructive or not auto_permitted?(key) -> %>
                         <span class="text-[10px] text-gray-500">always asks</span>
                       <% true -> %>
                         <.auto_ask_toggle

@@ -31,30 +31,31 @@ defmodule Opus.Programs do
 
   ## Kept homes
 
-  `home/3` resets a login entry's kept home (every session in it ends and
-  it is made again empty under the same uid) or retires it (its sessions
-  end, the home is removed and its uid freed). The box that holds a home
-  drew its uid; CYFR never learns it. A retire is retried until the box
-  acknowledges it. Either way the brain sessions threads kept for the home
-  are forgotten, so a member whose brain ran there starts a new one.
+  A program row with a kept home has one folder, its own: the home's id is
+  the row's id, made with the row and retired with it. `home/3` resets a
+  row's kept home (every session in it ends and it is made again empty
+  under the same uid) or retires it (its sessions end, the home is removed
+  and its uid freed). The box that holds a home drew its uid; CYFR never
+  learns it. A retire is retried until the box acknowledges it. Either way
+  the brain sessions threads kept for the home are forgotten, so a member
+  whose brain ran there starts a new one.
 
   ## Pipes
 
-  `pipe_open/6` opens, for an attempt of a catalyst whose login need the
+  `pipe_open/5` opens, for an attempt of a catalyst whose login need the
   caller resolved (`Opus.Host.Pipe`), a `run` session of a program row in
-  a login entry's kept home under a key, held by an `Opus.Programs.Pipe`
-  process that belongs to the row, the home and the key, never to the
-  attempt: a later attempt opening the same key attaches to the session
-  while its program runs. `pipe_send/5`, `pipe_recv/6` and `pipe_close/4`
-  carry it for an attempt that opened it, each in the caller's process.
-  A session no attempt uses for the box's idle period ends, and so does
-  every session in a login entry's home when the entry is revoked,
-  suspended or deleted (`end_mounts/2`).
+  the row's kept home under a key, held by an `Opus.Programs.Pipe` process
+  that belongs to the row and the key, never to the attempt: a later
+  attempt opening the same key attaches to the session while its program
+  runs. `pipe_send/5`, `pipe_recv/6` and `pipe_close/4` carry it for an
+  attempt that opened it, each in the caller's process. A session no
+  attempt uses for the box's idle period ends, and so does every session
+  of a row that is deleted (`end_mounts/2`).
 
   ## Sign-in
 
-  `sign_in/3` opens a `sign_in` session of a row's login command in a login
-  entry's kept home, relayed by an `Opus.Programs.SignIn` process to the one
+  `sign_in/2` opens a `sign_in` session of a row's login command in the
+  row's kept home, relayed by an `Opus.Programs.SignIn` process to the one
   subscriber that attaches with the same binding (`sign_in_attach/3`,
   `sign_in_send/3`, `sign_in_close/2`). The binding is the caller's
   athanor, person and credential, read from the context, so a token is
@@ -200,31 +201,30 @@ defmodule Opus.Programs do
   end
 
   @doc """
-  Reset (`:reset`) or retire (`:retire`) the kept home `home_id` of the
-  athanor. Answers `:ok` once the box acknowledged it; a retire that could
+  Reset (`:reset`) or retire (`:retire`) the kept home of the athanor's
+  program row `row_id`. Answers `:ok` once the box acknowledged it; a retire that could
   not be sent is answered with the reason and stays pending, sent again on
   every tick until it lands.
 
   Whatever the box answered, the brain session kept on each thread of an
-  agent whose head binds the home's login entry
-  (`Sanctum.Mount.agents_mounting/2`) is forgotten, so its next
+  agent whose head binds the row (`Sanctum.Mount.agents_mounting/2`) is
+  forgotten, so its next
   message starts a new session rather than resuming one the home no
   longer holds. A store that cannot forget them turns an `:ok` into
   `{:error, {:unavailable, "Threads"}}`.
   """
   @spec home(String.t(), String.t(), :reset | :retire) :: :ok | {:error, term()}
-  def home(athanor_id, home_id, op) when op in [:reset, :retire] do
-    answer = call(box_of(athanor_id), {:home, athanor_id, home_id, op}, Box.control_timeout_ms())
+  def home(athanor_id, row_id, op) when op in [:reset, :retire] do
+    answer = call(box_of(athanor_id), {:home, athanor_id, row_id, op}, Box.control_timeout_ms())
 
-    case {answer, forget_sessions(athanor_id, home_id)} do
+    case {answer, forget_sessions(athanor_id, row_id)} do
       {:ok, {:error, _unanswered}} -> {:error, {:unavailable, "Threads"}}
       _forgotten_or_refused -> answer
     end
   end
 
-  # A home's id is its login entry's.
-  defp forget_sessions(athanor_id, entry_id) do
-    with {:ok, agents} <- Sanctum.Mount.agents_mounting(athanor_id, entry_id),
+  defp forget_sessions(athanor_id, row_id) do
+    with {:ok, agents} <- Sanctum.Mount.agents_mounting(athanor_id, row_id),
          {:ok, _forgotten} <-
            Arca.ThreadStorage.forget_sessions(Prima.Actor.in_athanor(athanor_id), agents) do
       :ok
@@ -250,31 +250,27 @@ defmodule Opus.Programs do
 
   @doc """
   Start a sign-in on `row` (a stored `mcp_servers` row with a kept home and
-  a login command) in the kept home `home_id`, for the caller `ctx`: its
-  owner held, its login command running on a pseudo-terminal. Answers a
-  token the same caller attaches to within 30 s; a row whose login command
-  is not its command with words after it has none to run
-  (`:no_login_command`).
+  a login command) in its kept home, for the caller `ctx`: its owner held,
+  its login command running on a pseudo-terminal. Answers a token the same
+  caller attaches to within 30 s; a row whose login command is not its
+  command with words after it has none to run (`:no_login_command`).
   """
-  @spec sign_in(Sanctum.Context.t(), map(), String.t()) :: {:ok, String.t()} | {:error, term()}
-  def sign_in(%Sanctum.Context{} = ctx, row, home_id) when is_binary(home_id) do
+  @spec sign_in(Sanctum.Context.t(), map()) :: {:ok, String.t()} | {:error, term()}
+  def sign_in(%Sanctum.Context{} = ctx, row) do
     token = "si_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
     binding = caller(ctx)
 
     with {:ok, argv} <- login_argv(row) do
-      start_sign_in(token, binding, ctx, row, home_id, argv)
+      start_sign_in(token, binding, row, argv)
     end
   end
 
-  defp start_sign_in(token, binding, ctx, row, home_id, argv) do
+  defp start_sign_in(token, binding, row, argv) do
     args = [
       name: relay_name(token),
       token: token,
       binding: binding,
-      ctx: ctx,
       owner: %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
-      program: program_name(row),
-      home_id: home_id,
       key: key(binding),
       argv: argv
     ]
@@ -297,18 +293,17 @@ defmodule Opus.Programs do
     do: relay_call(token, {:send, caller(ctx), line})
 
   @doc """
-  End every running sign-in and pipe session of the athanor in the kept
-  home of the login entry `entry_id`: the entry was revoked, suspended or
-  deleted, so nothing runs in its home any more. Answers at once; each
-  sign-in relay ends `:entry_ended`, and each pipe holder closes its
-  session and releases its owner.
+  End every running sign-in and pipe session of the athanor's program row
+  `row_id`: the row was deleted, so nothing runs in its home any more.
+  Answers at once; each sign-in relay ends `:row_ended`, and each pipe
+  holder closes its session and releases its owner.
   """
   @spec end_mounts(String.t(), String.t()) :: :ok
-  def end_mounts(athanor_id, entry_id) when is_binary(athanor_id) and is_binary(entry_id) do
+  def end_mounts(athanor_id, row_id) when is_binary(athanor_id) and is_binary(row_id) do
     if Process.whereis(@relays) do
       for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(@relays),
           is_pid(pid),
-          do: GenServer.cast(pid, {:entry_ended, athanor_id, entry_id})
+          do: GenServer.cast(pid, {:row_ended, athanor_id, row_id})
     end
 
     :ok
@@ -332,9 +327,9 @@ defmodule Opus.Programs do
 
   @doc """
   Open, for the attempt `opener`, the `run` session of the program row
-  `row` (a stored `mcp_servers` program row with a kept home)
-  in the kept home `home_id` under `key`, starting its program with `argv`
-  appended unless it runs for the key. Answers the session and whether it
+  `row` (a stored `mcp_servers` program row with a kept home) in its kept
+  home under `key`, starting its program with `argv` appended unless it
+  runs for the key. Answers the session and whether it
   was running (`resumed`); a repeat by the same opener while the session
   is the same answers as the first did. Everything, the owner's
   acquisition and a retry included, fits `deadline` (Unix milliseconds):
@@ -342,25 +337,24 @@ defmodule Opus.Programs do
   `{:error, :deadline}` and leaves nothing it started open. Refused
   otherwise as `hold/2` and the session route refuse.
   """
-  @spec pipe_open(map(), String.t(), String.t(), [String.t()], String.t(), integer()) ::
+  @spec pipe_open(map(), String.t(), [String.t()], String.t(), integer()) ::
           {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
-  def pipe_open(row, home_id, key, argv, opener, deadline)
-      when is_binary(home_id) and is_binary(key) and is_list(argv) and is_binary(opener) and
-             is_integer(deadline) do
-    pipe_open(row, home_id, key, argv, opener, deadline, 1)
+  def pipe_open(row, key, argv, opener, deadline)
+      when is_binary(key) and is_list(argv) and is_binary(opener) and is_integer(deadline) do
+    pipe_open(row, key, argv, opener, deadline, 1)
   end
 
   # A holder that ended as it was found (its idle period ran out) is
   # started afresh, once. The call is awaited past the deadline by the
   # margin the holder needs to answer that it passed.
-  defp pipe_open(row, home_id, key, argv, opener, deadline, tries) do
-    with {:ok, pid} <- pipe_holder(row, home_id, key) do
+  defp pipe_open(row, key, argv, opener, deadline, tries) do
+    with {:ok, pid} <- pipe_holder(row, key) do
       wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
       GenServer.call(pid, {:open, opener, argv, deadline}, wait)
     end
   catch
     :exit, {reason, _} when reason in [:noproc, :normal] and tries > 0 ->
-      pipe_open(row, home_id, key, argv, opener, deadline, tries - 1)
+      pipe_open(row, key, argv, opener, deadline, tries - 1)
 
     :exit, {:timeout, _} ->
       {:error, :deadline}
@@ -371,17 +365,14 @@ defmodule Opus.Programs do
 
   defp left(deadline), do: max(deadline - System.system_time(:millisecond), 1)
 
-  defp pipe_holder(row, home_id, key) do
+  defp pipe_holder(row, key) do
     owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch}
 
     args = [
       name:
         {:via, Registry,
-         {@registry, {:pipe, owner.athanor_id, owner.server_id, owner.epoch, home_id, key}}},
+         {@registry, {:pipe, owner.athanor_id, owner.server_id, owner.epoch, key}}},
       owner: owner,
-      program: program_name(row),
-      row_name: row.name,
-      home_id: home_id,
       key: key
     ]
 
@@ -526,31 +517,6 @@ defmodule Opus.Programs do
     :exit, _ -> :ok
   end
 
-  @doc """
-  What every pipe session held here mounts: its athanor, its login entry
-  (its kept home) and the program row's name, once each, so a sweep can
-  end those whose entry no longer serves (`end_mounts/2`).
-  """
-  @spec mounts() :: [{String.t(), String.t(), String.t()}]
-  def mounts do
-    if Process.whereis(@relays) do
-      for {_id, pid, _type, [Pipe]} <- DynamicSupervisor.which_children(@relays),
-          is_pid(pid),
-          mount = pipe_mount(pid),
-          mount != nil,
-          uniq: true,
-          do: mount
-    else
-      []
-    end
-  end
-
-  defp pipe_mount(pid) do
-    GenServer.call(pid, :mount, 5_000)
-  catch
-    :exit, _ -> nil
-  end
-
   defp use_pipe(athanor_id, opener, session) do
     case pipe_pid(session) do
       nil -> :none
@@ -582,27 +548,14 @@ defmodule Opus.Programs do
        |> binary_part(0, 32))
   end
 
-  # A sign-in runs the row's login command for its first program.
   # A session runs its program's command with arguments of its opener's: a
   # login command is that command and the words it adds.
   defp login_argv(row) do
     login = Map.get(row, :login_command)
+    command = Arca.McpServerStorage.config(row)["command"]
 
-    case Arca.McpServerStorage.config(row)["backends"] do
-      [%{"command" => command} | _] when is_binary(login) ->
-        if String.starts_with?(login, command <> " "),
-          do: {:ok, login |> String.replace_prefix(command <> " ", "") |> String.split()},
-          else: {:error, :no_login_command}
-
-      _ ->
-        {:error, :no_login_command}
-    end
-  end
-
-  defp program_name(row) do
-    case Arca.McpServerStorage.config(row)["backends"] do
-      [%{"name" => name} | _] -> name
-      _ -> "program"
-    end
+    if is_binary(login) and is_binary(command) and String.starts_with?(login, command <> " "),
+      do: {:ok, login |> String.replace_prefix(command <> " ", "") |> String.split()},
+      else: {:error, :no_login_command}
   end
 end

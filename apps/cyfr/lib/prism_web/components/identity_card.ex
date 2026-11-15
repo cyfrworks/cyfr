@@ -5,7 +5,7 @@ defmodule PrismWeb.IdentityCard do
   @moduledoc """
   The person's name and their account's identifier in Settings
   (`PrismWeb.SettingsLive`): the name this CYFR recorded for them and the
-  identifier the command line names them by. Their account, its keys and
+  identifier that names their account. Their account, its keys and
   its recovery code are the account pages', never this CYFR's.
 
   A person this CYFR has recorded no name for finishes it here: they type

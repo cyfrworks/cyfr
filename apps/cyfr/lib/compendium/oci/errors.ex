@@ -20,6 +20,7 @@ defmodule Compendium.OCI.Errors do
           | :parse_error
           | :ssrf_blocked
           | :policy_acceptance_required
+          | :admin_required
           | :taken_down
           | :registry_host_mismatch
 
@@ -215,6 +216,23 @@ defmodule Compendium.OCI.Errors do
   (`Compendium.RegistryHost.canonical_rest_host/0`).
   """
   @spec from_api_response(integer(), binary(), String.t()) :: t()
+  def from_api_response(status, body, operation)
+
+  # A member change goes under the namespace's own push token
+  # (`Compendium.Providers.Shared.namespace_bearer/2`), so the registry's
+  # 403 to one is the caller's role in the namespace: only its
+  # administrators change its members, and no sync grants that.
+  def from_api_response(403, body, operation)
+      when operation in ~w(add_member update_member remove_member) do
+    %__MODULE__{
+      reason: :admin_required,
+      message: "Only an administrator of this namespace can add, change or remove its members.",
+      registry: Compendium.RegistryHost.canonical_rest_host(),
+      status: 403,
+      detail: %{operation: operation, original_detail: parse_errors(body)}
+    }
+  end
+
   def from_api_response(status, body, operation) do
     err = from_response(status, body, Compendium.RegistryHost.canonical_rest_host())
     %{err | detail: %{operation: operation, original_detail: err.detail}}
@@ -292,7 +310,7 @@ defmodule Compendium.OCI.Errors do
   @doc "Returns user-facing guidance based on error reason."
   @spec actionable_hint(t()) :: String.t()
   def actionable_hint(%__MODULE__{reason: :unauthorized}),
-    do: "Run `cyfr registry sync` to mint your push tokens."
+    do: "Sync your push tokens on the Registry page."
 
   def actionable_hint(%__MODULE__{reason: :registry_unavailable}),
     do: "Check your network connection and verify the registry is reachable."
@@ -318,7 +336,7 @@ defmodule Compendium.OCI.Errors do
 
   def actionable_hint(%__MODULE__{reason: :taken_down, registry: registry}),
     do:
-      "Component was removed by #{registry || "the registry"}'s moderators. If you believe this was in error, open an appeal from the prism Registry tab or run `cyfr registry appeals`."
+      "Component was removed by #{registry || "the registry"}'s moderators. If you believe this was in error, appeal the takedown on the Registry page."
 
   def actionable_hint(%__MODULE__{}), do: ""
 

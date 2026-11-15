@@ -172,7 +172,7 @@ defmodule Locus.Keeper do
   @channel_fd 3
   @channel_env "KEEPER_CHANNEL"
   @kept_homes_env "KEEPER_KEPT_HOMES"
-  # A kept home's id: a login entry's, a plain file name.
+  # A kept home's id: its program row's, a plain file name.
   @home_id ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   # A home request runs a helper as the home's uid; a retirement ends every
   # process of the uid with a grace and scrubs it, which takes passes.

@@ -703,7 +703,14 @@ async function confirmRegrant(page, ref, { timeoutMs = 45_000, whileOpen = async
     const p = await prompt(page);
     return !p || p.kind !== "grant" ? true : null;
   }, { timeoutMs, what: `the grant prompt for ${ref} confirmed` });
-  return { title: asked.title, asked_for: asked.title === `Grant ${ref}`, place, meanwhile };
+  return { title: asked.title, asked_for: asked.title === `Grant ${componentName(ref)}`, place, meanwhile };
+}
+
+// A component by its name, as the system layer titles its grant: the part of
+// `type:namespace.name[:version]` after the namespace.
+function componentName(ref) {
+  const body = ref.split(":")[1];
+  return body.slice(body.indexOf(".") + 1);
 }
 
 // What the shell draws, for a step that did not find what it expected.
@@ -798,7 +805,7 @@ async function stepTwoCanvases(page, name, viewport) {
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.0" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.2" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -994,8 +1001,8 @@ async function stepAppOverCanvas(page, name) {
 const canvasSocket = (url) => /\/_f\/v1\/o\/[^/]+\/socket$/.test(url.pathname);
 
 const ATTENTION_RUNS = [
-  ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.2", duration_ms: 100, error: { class: "setup_required", cause: "needs_setup" } })),
-  { kind: "failed", execution_id: "attention_other", reference: "catalyst:local.openai:1.4.2", duration_ms: 100, error: { class: "unavailable", cause: "unavailable" } },
+  ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.3", duration_ms: 100, error: { class: "setup_required", cause: "needs_setup" } })),
+  { kind: "failed", execution_id: "attention_other", reference: "catalyst:local.openai:1.4.3", duration_ms: 100, error: { class: "unavailable", cause: "unavailable" } },
 ];
 
 function attentionFailures(ws) {

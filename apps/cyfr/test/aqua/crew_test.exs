@@ -182,11 +182,11 @@ defmodule Aqua.CrewTest do
     assert roster |> Enum.map(& &1["name"]) |> Enum.sort() ==
              ~w(aqua claude-code explorer openai-codex planner)
 
-    # The harnesses' catalysts ship, with no login entry bound to their
-    # programs, and the explorer's key is not bound: none is told of.
+    # The harnesses' catalysts ship, with no program row bound to their
+    # needs, and the explorer's key is not bound: none is told of.
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["claude-code"] == {:needs_sign_in, "catalyst:local.claude-code:0.1.4"}
-    assert status["openai-codex"] == {:needs_sign_in, "catalyst:local.openai-codex:0.1.2"}
+    assert status["claude-code"] == {:needs_program, "catalyst:local.claude-code:0.1.4"}
+    assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.2"}
     assert {:needs_key, _} = status["explorer"]
 
     assert Crew.index(ctx, roster) ==
@@ -269,11 +269,11 @@ defmodule Aqua.CrewTest do
 
   # Readiness holds at every way a job reaches a member, not only in the
   # index: the shipped explorer has no key bound here, and the programs of
-  # claude-code and openai-codex have no login entry signed in.
+  # claude-code and openai-codex are not set up.
   @unready [
     {"explorer", :no_key, "no key bound"},
-    {"claude-code", :not_signed_in, "not signed in"},
-    {"openai-codex", :not_signed_in, "not signed in"}
+    {"claude-code", :no_program, "program is not set up"},
+    {"openai-codex", :no_program, "program is not set up"}
   ]
 
   test "a person's @name of a member that is not ready is refused with why, and writes nothing",
@@ -288,6 +288,65 @@ defmodule Aqua.CrewTest do
     assert rows(ctx, room.id) == []
     assert Threads.children(actor(ctx), room.id) == []
     assert pending_records(ctx) == []
+  end
+
+  # A harness whose program row is set up waits on the person's grant
+  # alone: its refusal asks for that, never for the program it has, while
+  # one whose program has no row still asks for its program.
+  test "a member whose program is set up and not granted is refused for the grant alone",
+       %{ctx: ctx, room: room} do
+    {:ok, _row} =
+      Arca.McpServerStorage.insert(actor(ctx), %{
+        cap: 0,
+        name: "claude",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
+      })
+
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+    status = Aqua.Models.model_status(ctx, roster)
+    assert status["claude-code"] == {:needs_grant, "catalyst:local.claude-code:0.1.4"}
+    assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.2"}
+
+    for {member, reason, words} <- [
+          {"claude-code", :no_grant, "claude-code's brain needs only your grant"},
+          {"openai-codex", :no_program, "program is not set up"}
+        ] do
+      assert {:error, {:crew_unready, ^member, ^reason} = refusal} =
+               Runner.send_message(ctx, room.id, "@#{member} look into this")
+
+      assert Aqua.Ops.render_refusal(refusal) =~ words
+    end
+
+    refute Aqua.Ops.render_refusal({:crew_unready, "claude-code", :no_grant}) =~ "Programs page"
+    assert rows(ctx, room.id) == []
+  end
+
+  test "a member whose brain changed and was not confirmed is refused with what to do: confirm it",
+       %{ctx: ctx, room: room} do
+    # The planner's brain moves to another model; its consent is not given
+    # again.
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("planner"),
+        "---\ntitle: planner\ndescription: Plans.\navoid: Building.\n" <>
+          "catalyst_ref: #{@model}\nmodel: claude-opus-5-5\n---\n\nYou are the planner.\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+    assert {:error, {:crew_unready, "planner", :consent_stale} = refusal} =
+             Runner.send_message(ctx, room.id, "@planner look into this")
+
+    assert Aqua.Ops.render_refusal(refusal) ==
+             "planner's brain changed since it was consented to — confirm the change from its " <>
+               "card on the AQUA page"
+
+    assert rows(ctx, room.id) == []
   end
 
   test "the soul's crew.ask of a member that is not ready is refused with why, and asks nobody",
@@ -821,7 +880,7 @@ defmodule Aqua.CrewTest do
     assert {:ok, []} = Tape.pending_approvals(ctx, turn)
   end
 
-  test "archiving cancels every open turn in its own transaction, the suspended one included, and leaves none to recover",
+  test "archiving cancels every open turn in its own transaction, the running one included, and leaves none open",
        %{ctx: ctx, room: room} do
     script!([{:probe, self()}])
     request = soul_request!(ctx, room, "planner", "take a while")
@@ -830,15 +889,25 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     turn_id = delivered_turn(ctx, child, request.id)
 
-    assert {:ok, %{suspended: true}} = Runner.suspend_turn(ctx, child.id, turn: turn_id)
-    assert {:ok, %{status: "paused", paused_reason: "suspended"}} = Tape.turn(ctx, turn_id)
+    assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn_id)
 
     # The store's write alone, as a crash before the runner's stop leaves it.
-    assert {:ok, %{thread: %{archived_at: %DateTime{}}}} = Tape.archive(ctx, child.id)
+    assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: cancelled}} =
+             Tape.archive(ctx, child.id)
+
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
     assert {:ok, []} = Tape.open_turns(ctx, child.id)
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
-    assert {:error, :not_open} = Runner.recover_turn(ctx, child.id, turn_id)
+
+    # Then the runner's stop, as the archive's caller makes it: no attempt
+    # of what the turn ran outlives the case.
+    executions =
+      Arca.Repo.all(
+        from(e in Arca.Schemas.Execution, where: e.athanor_id == ^ctx.athanor_id, select: e.id)
+      )
+
+    assert :ok = Runner.stop_cancelled(cancelled)
+    wait_until(fn -> Enum.all?(executions, &is_nil(Opus.Attempt.whereis(&1))) end, 30_000)
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     assert %{status: "answered"} = row(ctx, request.id)

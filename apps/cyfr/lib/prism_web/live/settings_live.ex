@@ -24,19 +24,49 @@ defmodule PrismWeb.SettingsLive do
       stands on included, which then leaves the page. A sign-out is a
       session's, never a key's: removing a key is the account pages', and
       the card links there.
-    * **Invite to this CYFR** — the platform administrator's invitation
-      links naming no thread (`invitation.create` with no `thread_id`): a
-      link is shown once with a copy control, and every one naming no
-      thread is listed (`invitation.list`) and, while pending, revoked
-      (`invitation.revoke`). A thread's own links belong to its people.
+    * **AQUA's approvals** — how many hours an approval card waits for
+      the person's answer before it expires (`athanor.settings`, the
+      athanor's `approvals.expiry_hours`), and a link to API Keys.
+    * **Decisions about the host** — for the platform administrator, the
+      gate's decisions no athanor holds (`decision.list_global`), each
+      opened whole (`decision.get_global`), and closing an account at the
+      directory this CYFR serves (`directory.tombstone`), which asks a
+      fresh confirmation through the system layer.
+    * **Invitation links** — the invitations `invitation.list` answers
+      the person (every one to the platform administrator, a person's own
+      to anyone else), a thread's among them, each by the name it offers,
+      the thread it names, its state and expiry, and, while pending,
+      revoked (`invitation.revoke`). The administrator also makes one
+      naming no thread (`invitation.create` with no `thread_id`),
+      offering an optional name: the link is shown once with a copy
+      control, and with a sentence when it opens only on this computer
+      (`local_only`).
+    * **Administrators** — in the allowlist, for a platform administrator:
+      the people carrying the mark, another person made an administrator
+      (`door.mark_admin`) and a mark taken away (`door.clear_admin`), never
+      the last one, each asking a fresh confirmation through the system
+      layer.
+    * **Setting up this CYFR** — at `?setup=1`, where Aqua's setup sends
+      an administrator who has not seen it, a guided order over controls
+      that exist, for a person whose row carries the mark when it opens
+      (never the session's remembered capability); opening it writes
+      `admin_setup_seen` in their `users.prefs`. Its first step lists the
+      person's own keys the store would share, the newest first
+      (`vault.list`, `share.list`), and opens the system layer's sharing
+      sheet for one at the setup's preset (`PrismWeb.SystemLayer.Share`);
+      the others link to the invitations, the allowlist and the
+      administrators and say what `cyfr access` and `cyfr backup` do. It
+      is closed and opened again from the page.
 
   The refusals each change can meet are shown as the refusal's own
   sentence.
 
   The identity card's controls carry its own `data-test` names, and this
   page's `keys`, `keys-scope`, `keys-account`, `key` (with `data-kid`),
-  `session` (with `data-id`), `session-end`; `invite-cyfr`, `invitation-create`, `invitation-new`, `invitation-link`,
-  `invitation-copy` and `invitation-revoke`.
+  `session` (with `data-id`), `session-end`; `invite-cyfr`, `invitation-create`, `invitation-new`,
+  `invitation-local`, `invitation-link`, `invitation-copy`, `invitation-name` and `invitation-revoke`;
+  `setup`, `setup-open`, `setup-close`, `setup-key`, `setup-key-share`, `setup-no-key`,
+  `setup-not-own` and `setup-unread`.
   """
 
   use PrismWeb, :live_view
@@ -48,6 +78,7 @@ defmodule PrismWeb.SettingsLive do
 
   alias Phoenix.LiveView.JS
   alias PrismWeb.{IdentityCard, SystemLayer}
+  alias PrismWeb.SystemLayer.Share
 
   @impl true
   def mount(_params, _session, socket) do
@@ -69,11 +100,16 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:log_stats, %{total: 0, errors: 0, avg_duration_ms: 0, error_rate: 0.0})
       |> assign(:door_entries, [])
       |> assign(:door_requests, [])
+      |> assign(:admins, [])
       |> assign(:door_value, "")
       |> assign(:door_note, "")
       |> assign(:invitations, [])
       |> assign(:new_link, nil)
+      |> assign(:new_link_local, false)
       |> assign(:platform_settings, [])
+      |> assign(:approval_hours, nil)
+      |> assign(:host_decisions, [])
+      |> assign(:host_decision, nil)
       |> assign(:settings_revision, nil)
       |> assign(:settings_members, [])
       |> assign(:settings_ttl_ms, nil)
@@ -85,18 +121,85 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:keys, nil)
       |> assign(:account_page, nil)
       |> assign(:keys_error, nil)
+      |> assign(:setup, false)
+      |> assign(:setup_keys, {:listed, []})
 
     {:ok, socket}
   end
 
   @impl true
-  def handle_params(_params, _uri, socket) do
+  def handle_params(params, _uri, socket) do
+    socket = assign(socket, :setup, params["setup"] == "1" and setup_open?(socket))
+
     # Paint first — the system-status load probes the registry.
     if connected?(socket), do: send(self(), :load)
     {:noreply, socket}
   end
 
+  # Opening the administrator's setup once is what Aqua's setup stops
+  # offering it on (`users.prefs`' `admin_setup_seen`).
+  defp setup_open?(socket) do
+    case setup_standing(socket) do
+      {:ok, user} ->
+        if connected?(socket), do: setup_seen(user)
+        true
+
+      :none ->
+        false
+    end
+  end
+
+  # Whether the person may use the administrator's setup: they carry the
+  # mark as their row reads now (`Sanctum.Tenancy.revalidate/1`), never by
+  # the session's remembered capability. Asked when it opens and again at
+  # each of its acts, so a mark taken away while it is open closes it.
+  defp setup_standing(%{assigns: %{context: %Sanctum.Context{user_id: user_id} = ctx}})
+       when is_binary(user_id) do
+    with {:ok, %Sanctum.Context{platform_admin: true}} <- Sanctum.Tenancy.revalidate(ctx),
+         {:ok, user} <- Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, user}
+    else
+      _not_an_administrator -> :none
+    end
+  end
+
+  defp setup_standing(_socket), do: :none
+
+  defp setup_still_open(%{assigns: %{setup: true}} = socket),
+    do: assign(socket, :setup, match?({:ok, _user}, setup_standing(socket)))
+
+  defp setup_still_open(socket), do: socket
+
+  defp setup_seen(user) do
+    case Sanctum.Tenancy.Users.put_prefs(user, %{"admin_setup_seen" => true}) do
+      {:ok, _user} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[SettingsLive] admin_setup_seen was not written: #{inspect(reason)}")
+    end
+  end
+
   @impl true
+  def handle_event("setup_share", %{"id" => id}, %{assigns: %{setup: true}} = socket) do
+    socket = setup_still_open(socket)
+
+    case {socket.assigns.setup, Enum.find(listed(socket.assigns.setup_keys), &(&1.id == id))} do
+      {false, _key} ->
+        {:noreply,
+         put_flash(socket, :error, "You no longer administer this CYFR, so nothing was done.")}
+
+      {true, %{shared: false} = key} ->
+        SystemLayer.show(SystemLayer.layer_id(), Share.prompt(key, Share.threads(socket), :setup))
+        {:noreply, socket}
+
+      {true, _shared_or_unlisted} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("setup_share", _params, socket), do: {:noreply, socket}
+
   def handle_event("door_form_changed", params, socket) do
     {:noreply,
      socket
@@ -119,6 +222,12 @@ defmodule PrismWeb.SettingsLive do
     door_call(socket, "door/remove", %{"id" => id}, "Entry removed.")
   end
 
+  def handle_event("admin_mark", %{"person" => person}, socket),
+    do: marking(socket, "mark_admin", String.trim(person))
+
+  def handle_event("admin_clear", %{"id" => user_id}, socket),
+    do: marking(socket, "clear_admin", user_id)
+
   def handle_event("door_resolve", %{"id" => id, "decision" => decision}, socket) do
     door_call(socket, "door/resolve", %{"id" => id, "decision" => decision}, "Request resolved.")
   end
@@ -135,10 +244,20 @@ defmodule PrismWeb.SettingsLive do
   end
 
   # An invitation to this CYFR, naming no thread: the administrator's.
-  def handle_event("invitation_create", _params, socket) do
-    case call_tool(socket, "invitation/create", %{}) do
-      {:ok, %{invitation_url: link}} ->
-        {:noreply, socket |> assign(:new_link, link) |> load_invitations()}
+  def handle_event("invitation_create", params, socket) do
+    args =
+      case String.trim(Map.get(params, "name", "")) do
+        "" -> %{}
+        name -> %{"name" => name}
+      end
+
+    case call_tool(socket, "invitation/create", args) do
+      {:ok, %{invitation_url: link} = answer} ->
+        {:noreply,
+         socket
+         |> assign(:new_link, link)
+         |> assign(:new_link_local, Map.get(answer, :local_only, false))
+         |> load_invitations()}
 
       {:error, reason} ->
         {:noreply,
@@ -155,6 +274,39 @@ defmodule PrismWeb.SettingsLive do
         {:noreply, put_flash(socket, :error, "Could not revoke: #{error_message(reason)}")}
     end
   end
+
+  # A whole number of hours is stored; an empty field removes the stored
+  # wait (a `nil` in the patch deletes the key), so AQUA's own default
+  # holds again.
+  def handle_event("approvals_save", %{"hours" => hours}, socket) do
+    case String.trim(hours) do
+      "" ->
+        approvals_save(socket, nil, "Approvals wait AQUA's default time again.")
+
+      typed ->
+        case Integer.parse(typed) do
+          {n, ""} when n > 0 ->
+            approvals_save(socket, n, "Approvals now wait #{n} hours.")
+
+          _not_hours ->
+            {:noreply,
+             put_flash(socket, :error, "Not saved: the wait is a whole number of hours.")}
+        end
+    end
+  end
+
+  def handle_event("host_decision", %{"id" => call_id}, socket) do
+    case call_tool(socket, "decision/get_global", %{"call_id" => call_id}) do
+      {:ok, %{decision: decision}} -> {:noreply, assign(socket, :host_decision, decision)}
+      {:error, reason} -> {:noreply, put_flash(socket, :error, error_message(reason))}
+    end
+  end
+
+  def handle_event("host_decision_close", _params, socket),
+    do: {:noreply, assign(socket, :host_decision, nil)}
+
+  def handle_event("tombstone", %{"identifier" => identifier}, socket),
+    do: tombstone(socket, String.trim(identifier))
 
   # A change is made against the store revision the card was listed at,
   # so an operator who saved on another member since is not overwritten:
@@ -205,6 +357,52 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
+  defp approvals_save(socket, hours, saved) do
+    args = %{"settings" => %{"approvals" => %{"expiry_hours" => hours}}}
+
+    case call_tool(socket, "athanor/settings", args) do
+      {:ok, _athanor} ->
+        {:noreply, socket |> load_approvals() |> put_flash(:info, saved)}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Not saved: #{error_message(reason)}")}
+    end
+  end
+
+  # Closing an account needs the administrator's fresh confirmation: asked
+  # for through the system layer, and repeated from `system_layer_repeat/4`
+  # once confirmed.
+  defp tombstone(socket, identifier) do
+    case SystemLayer.call(socket, {:tombstone, identifier}, "directory/tombstone", %{
+           "identifier" => identifier
+         }) do
+      {:ok, _gone, socket} ->
+        {:noreply, put_flash(socket, :info, "The account #{identifier} is closed.")}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply, put_flash(socket, :error, "Not closed: #{error_message(reason)}")}
+    end
+  end
+
+  # A share the setup's sheet made: the setup's keys are read again.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report("share-" <> _entry_id, :confirmed, socket),
+    do:
+      {:noreply, socket |> setup_still_open() |> load_setup_keys() |> put_flash(:info, "Shared.")}
+
+  def system_layer_report("share-" <> _entry_id, _outcome, socket), do: {:noreply, socket}
+  def system_layer_report(_prompt_id, _outcome, _socket), do: :pass
+
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat({:tombstone, identifier}, _tool, _args, socket),
+    do: tombstone(socket, identifier)
+
+  def system_layer_repeat({:marking, action, person}, _tool, _args, socket),
+    do: marking(socket, action, person)
+
   @impl true
   def handle_info(:load, socket) do
     {:noreply,
@@ -214,9 +412,12 @@ defmodule PrismWeb.SettingsLive do
      |> load_door()
      |> load_invitations()
      |> load_settings()
+     |> load_approvals()
+     |> load_host_decisions()
      |> load_prefs()
      |> load_identifier()
      |> load_keys()
+     |> load_setup_keys()
      |> assign(:loading, false)}
   end
 
@@ -278,12 +479,39 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
+  # Making or unmaking an administrator needs the administrator's fresh
+  # confirmation: asked for through the system layer, and repeated from
+  # `system_layer_repeat/4` once confirmed.
+  defp marking(socket, action, person) do
+    case SystemLayer.call(socket, {:marking, action, person}, "door/" <> action, %{
+           "person" => person
+         }) do
+      {:ok, _marked, socket} ->
+        done = if action == "mark_admin", do: "Made an administrator.", else: "Mark taken away."
+        {:noreply, socket |> load_door() |> put_flash(:info, done)}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply,
+         put_flash(socket, :error, "The administrators did not change: #{error_message(reason)}")}
+    end
+  end
+
+  # How a person is named in the administrators' list.
+  defp admin_name(%{name: name}), do: "@" <> name
+  defp admin_name(%{user_id: id}), do: id
+
   # The door is the platform admin's; everyone else sees no section.
   defp load_door(%{assigns: %{context: %{platform_admin: true}}} = socket) do
-    entries =
+    {entries, admins} =
       case call_tool(socket, "door/list", %{}) do
-        {:ok, %{entries: entries}} -> Enum.reject(entries, &(&1.status == "requested"))
-        _ -> []
+        {:ok, %{entries: entries, admins: admins}} ->
+          {Enum.reject(entries, &(&1.status == "requested")), admins}
+
+        _ ->
+          {[], []}
       end
 
     requests =
@@ -295,28 +523,30 @@ defmodule PrismWeb.SettingsLive do
     socket
     |> assign(:door_entries, entries)
     |> assign(:door_requests, requests)
+    |> assign(:admins, admins)
   end
 
   # A socket whose capability went since it read the door drops what it read.
   defp load_door(socket),
-    do: assign(socket, door_entries: [], door_requests: [])
+    do: assign(socket, door_entries: [], door_requests: [], admins: [])
 
-  # The invitations to this CYFR that name no thread, newest first: the
-  # administrator's section. A thread's own are its people's.
-  defp load_invitations(%{assigns: %{context: %{platform_admin: true}}} = socket) do
+  # The invitations the person may see, newest first: every one to the
+  # administrator, their own to anyone else, a thread's among them.
+  defp load_invitations(socket) do
     invitations =
       case call_tool(socket, "invitation/list", %{}) do
-        {:ok, %{invitations: invitations}} ->
-          Enum.reject(invitations, &Map.has_key?(&1, :thread_id))
-
-        _ ->
-          []
+        {:ok, %{invitations: invitations}} -> invitations
+        _ -> []
       end
 
     assign(socket, :invitations, invitations)
   end
 
-  defp load_invitations(socket), do: assign(socket, invitations: [], new_link: nil)
+  # Where an invitation seats its newcomer: the thread's title to a viewer
+  # seated there, a thread for anyone else, or this CYFR alone.
+  defp invitation_place(%{thread_title: title}), do: title
+  defp invitation_place(%{thread_id: _id}), do: "a thread"
+  defp invitation_place(_none), do: "this CYFR"
 
   defp until(iso) do
     case DateTime.from_iso8601(iso) do
@@ -338,6 +568,20 @@ defmodule PrismWeb.SettingsLive do
   defp asked_by(%{asked_by_name: name}), do: "@" <> name
   defp asked_by(%{requested_by: by}), do: by
 
+  # What removing an entry does, asked before it is removed.
+  defp remove_question(%{effect: "deny"}),
+    do: "Remove this deny? The person may sign in again wherever * or an allow admits them."
+
+  defp remove_question(%{kind: "wildcard"}),
+    do:
+      "Remove *? Everyone no allow names can no longer sign in, and their sessions and API " <>
+        "keys here end."
+
+  defp remove_question(_allow),
+    do:
+      "Remove this allow? Unless * admits them, the person can no longer sign in, and their " <>
+        "sessions and API keys here end."
+
   defp setting_call(socket, tool, args, ok_message) do
     args = if is_nil(args["revision"]), do: Map.delete(args, "revision"), else: args
 
@@ -352,6 +596,42 @@ defmodule PrismWeb.SettingsLive do
   end
 
   # The platform settings are the operator's, like the door.
+  # The setup's first step: the person's own keys the store would share,
+  # the newest first, each saying whether it is shared with everyone
+  # already, as `{:listed, keys}`; `:not_own` outside the person's own
+  # athanor, where keys are not shared, and `:unread` when they could not
+  # be read.
+  defp load_setup_keys(%{assigns: %{setup: true, context: ctx}} = socket) do
+    with true <- PrismWeb.Athanors.own?(%{id: ctx.athanor_id}, ctx),
+         {:ok, entries} <- fetch_list(socket, "vault/list", :entries),
+         {:ok, shares} <- fetch_list(socket, "share/list", :shares) do
+      everyone =
+        for %{status: "active", audience: "everyone", entry_id: id} <- shares,
+            into: MapSet.new(),
+            do: id
+
+      keys =
+        entries
+        |> Enum.filter(&Share.shareable?/1)
+        |> Enum.sort_by(& &1.created_at, {:desc, DateTime})
+        |> Enum.map(&%{id: &1.id, name: &1.name, shared: MapSet.member?(everyone, &1.id)})
+
+      assign(socket, :setup_keys, {:listed, keys})
+    else
+      false ->
+        assign(socket, :setup_keys, :not_own)
+
+      {:error, message} ->
+        Logger.warning("[SettingsLive] the setup's keys were not read: #{message}")
+        assign(socket, :setup_keys, :unread)
+    end
+  end
+
+  defp load_setup_keys(socket), do: socket
+
+  defp listed({:listed, keys}), do: keys
+  defp listed(_not_listed), do: []
+
   defp load_settings(%{assigns: %{context: %{platform_admin: true}}} = socket) do
     case call_tool(socket, "settings/list", %{}) do
       {:ok, %{settings: settings} = listing} ->
@@ -367,6 +647,37 @@ defmodule PrismWeb.SettingsLive do
   end
 
   defp load_settings(socket), do: assign(socket, :platform_settings, [])
+
+  # How long an approval card waits in the athanor this page stands in,
+  # when the person set it; unset, AQUA's own default holds.
+  defp load_approvals(socket) do
+    hours =
+      case call_tool(socket, "athanor/get", %{}) do
+        {:ok, %{settings: %{"approvals" => %{"expiry_hours" => hours}}}} when is_integer(hours) ->
+          hours
+
+        _unset ->
+          nil
+      end
+
+    assign(socket, :approval_hours, hours)
+  end
+
+  # The host's own decisions, the newest first: the administrator's.
+  defp load_host_decisions(%{assigns: %{context: %{platform_admin: true}}} = socket) do
+    case call_tool(socket, "decision/list_global", %{"limit" => 20}) do
+      {:ok, %{decisions: decisions}} -> assign(socket, :host_decisions, decisions)
+      _unread -> assign(socket, :host_decisions, [])
+    end
+  end
+
+  defp load_host_decisions(socket), do: assign(socket, :host_decisions, [])
+
+  defp decision_outcome(%{"admission" => "refused"} = d),
+    do: "refused: " <> (d["reason"] || d["refusal_class"] || "no reason recorded")
+
+  defp decision_outcome(%{"completion" => completion}) when is_binary(completion), do: completion
+  defp decision_outcome(_admitted), do: "admitted"
 
   defp setting_text(nil), do: "none"
   defp setting_text(value) when is_binary(value), do: value
@@ -453,6 +764,14 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
+  # How this page's session signed in, in words: every console session
+  # is an account's sign-in in a browser, a passkey's or a device's
+  # approval (`Sanctum.Session`).
+  defp signed_in_with(:oidc), do: "your account, in this browser"
+  defp signed_in_with(:device), do: "a device of your account"
+  defp signed_in_with(:api_key), do: "an API key"
+  defp signed_in_with(_other), do: "-"
+
   defp services_map(nil), do: %{}
   defp services_map(services) when is_map(services), do: services
   defp services_map(_), do: %{}
@@ -515,6 +834,18 @@ defmodule PrismWeb.SettingsLive do
       <div :if={@loading} class="text-center text-gray-500 py-12">Loading...</div>
 
       <div :if={!@loading} class="space-y-6">
+        <.setup_panel :if={@setup} keys={@setup_keys} athanor_route={assigns[:athanor_route]} />
+
+        <p :if={@context.platform_admin and not @setup} class="text-sm">
+          <.link
+            patch={PrismWeb.Focus.path(assigns[:athanor_route], "/settings?setup=1")}
+            data-test="setup-open"
+            class="text-blue-400 hover:underline"
+          >
+            Set up this CYFR for the people you let in
+          </.link>
+        </p>
+
         <.card>
           <IdentityCard.card name={@name} identifier={@identifier} error={@name_error} />
         </.card>
@@ -563,25 +894,37 @@ defmodule PrismWeb.SettingsLive do
           </div>
         </.card>
 
-        <%!-- Request Metrics --%>
+        <%!-- The person's own athanor's requests in the last hour --%>
         <.card>
-          <h3 class="text-sm font-medium text-gray-400 mb-4">Request Metrics (1h)</h3>
-          <div class="grid grid-cols-3 gap-4">
-            <div>
-              <dt class="text-xs text-gray-500 uppercase">Total Requests</dt>
-              <dd class="text-2xl font-bold text-white mt-1">{@log_stats.total}</dd>
+          <section id="request-stats">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Your requests, last hour</h3>
+            <p class="text-xs text-gray-500 mb-4">
+              The calls made in your own athanor in the last hour, by you, your apps, schedules
+              and API keys, and how many failed. Each call, a failed one with its reason, is on
+              <.link
+                navigate={PrismWeb.Focus.path(assigns[:athanor_route], "/activities")}
+                class="underline"
+                data-test="activities-link"
+              >Activities</.link>
+              (dev mode). Nobody's athanor but yours is counted here.
+            </p>
+            <div class="grid grid-cols-3 gap-4">
+              <div>
+                <dt class="text-xs text-gray-500 uppercase">Requests</dt>
+                <dd class="text-2xl font-bold text-white mt-1">{@log_stats.total}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500 uppercase">Failed</dt>
+                <dd class={"text-2xl font-bold mt-1 #{if @log_stats.error_rate > 0, do: "text-red-400", else: "text-green-400"}"}>
+                  {@log_stats.error_rate}%
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500 uppercase">Average time</dt>
+                <dd class="text-2xl font-bold text-white mt-1">{@log_stats.avg_duration_ms}ms</dd>
+              </div>
             </div>
-            <div>
-              <dt class="text-xs text-gray-500 uppercase">Error Rate</dt>
-              <dd class={"text-2xl font-bold mt-1 #{if @log_stats.error_rate > 0, do: "text-red-400", else: "text-green-400"}"}>
-                {@log_stats.error_rate}%
-              </dd>
-            </div>
-            <div>
-              <dt class="text-xs text-gray-500 uppercase">Avg Duration</dt>
-              <dd class="text-2xl font-bold text-white mt-1">{@log_stats.avg_duration_ms}ms</dd>
-            </div>
-          </div>
+          </section>
         </.card>
 
         <%!-- The door: who may sign in (platform admins) --%>
@@ -642,11 +985,56 @@ defmodule PrismWeb.SettingsLive do
               </:col>
               <:col :let={e} label="Note">{e.note || "-"}</:col>
               <:col :let={e} label="Actions">
-                <.button variant="ghost" phx-click="door_remove" phx-value-id={e.id}>
+                <.button
+                  variant="ghost"
+                  phx-click="door_remove"
+                  phx-value-id={e.id}
+                  data-confirm={remove_question(e)}
+                >
                   Remove
                 </.button>
               </:col>
             </.table>
+
+            <div id="admins" class="mt-6">
+              <h4 class="text-xs text-gray-500 uppercase mb-2">Administrators</h4>
+              <p class="text-xs text-gray-500 mb-2">
+                The people who run this CYFR: this allowlist, its invitations and its settings.
+                Making someone an administrator allows their account too. The last
+                administrator always keeps the mark. Each change asks you to confirm.
+              </p>
+              <ul class="divide-y divide-gray-800 text-sm">
+                <li
+                  :for={admin <- @admins}
+                  class="flex items-center justify-between py-1"
+                  data-test="admin"
+                  data-id={admin.user_id}
+                >
+                  <span>{admin_name(admin)}</span>
+                  <.button
+                    :if={length(@admins) > 1}
+                    variant="ghost"
+                    phx-click="admin_clear"
+                    phx-value-id={admin.user_id}
+                    data-confirm="Take the administrator's mark away? They stay a person here."
+                  >
+                    Take the mark away
+                  </.button>
+                </li>
+              </ul>
+              <form id="admin-form" phx-submit="admin_mark" class="flex gap-2 items-end mt-2">
+                <div class="flex-1">
+                  <.input
+                    name="person"
+                    value=""
+                    required
+                    id="admin-person"
+                    placeholder="@name of a person here"
+                  />
+                </div>
+                <.button type="submit" variant="ghost">Make an administrator</.button>
+              </form>
+            </div>
 
             <form id="door-entry-form" phx-change="door_form_changed" class="mt-4 space-y-2">
               <div class="flex gap-2 items-end">
@@ -684,20 +1072,28 @@ defmodule PrismWeb.SettingsLive do
           </section>
         </.card>
 
-        <%!-- Invitations to this CYFR, naming no thread (platform admins) --%>
-        <.card :if={@context.platform_admin}>
+        <%!-- Invitation links: every one to the administrator, a person's own to anyone else --%>
+        <.card :if={@context.platform_admin or @invitations != []}>
           <section id="invite-cyfr" data-test="invite-cyfr">
-            <h3 class="text-sm font-medium text-gray-400 mb-1">Invite to this CYFR</h3>
-            <p class="text-xs text-gray-500 mb-4">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Invitation links</h3>
+            <p :if={@context.platform_admin} class="text-xs text-gray-500 mb-4">
               A link makes someone new a person here, with their own athanor. Someone who
               already has a CYFR name signs in with it from the same link. It works once and
               expires after seven days. To bring someone into a thread, invite them from the
-              thread.
+              thread; every link, a thread's too, is listed here.
+            </p>
+            <p :if={!@context.platform_admin} class="text-xs text-gray-500 mb-4">
+              The links you made to bring someone into a thread. Each works once and expires
+              after seven days.
             </p>
 
             <div :if={@new_link} data-test="invitation-new" class="mb-4 space-y-2">
               <p class="text-xs text-gray-400">
                 Send this link to the person you invite. It is shown only now.
+              </p>
+              <p :if={@new_link_local} class="text-xs text-yellow-400" data-test="invitation-local">
+                This address opens only on this computer. To invite someone on another computer,
+                make CYFR reachable there first with <code>cyfr access</code>.
               </p>
               <div class="flex gap-2 items-center">
                 <code
@@ -717,6 +1113,10 @@ defmodule PrismWeb.SettingsLive do
             </div>
 
             <.table :if={@invitations != []} id="invitation-rows" rows={@invitations}>
+              <:col :let={i} label="Their name">
+                <span data-test="invitation-name">{i[:name] || "-"}</span>
+              </:col>
+              <:col :let={i} label="Into">{invitation_place(i)}</:col>
               <:col :let={i} label="State">
                 <.badge color={if i[:state] == "pending", do: "green", else: "yellow"}>
                   {i[:state]}
@@ -737,9 +1137,25 @@ defmodule PrismWeb.SettingsLive do
               </:col>
             </.table>
 
-            <.button class="mt-4" phx-click="invitation_create" data-test="invitation-create">
-              Create an invitation link
-            </.button>
+            <form
+              :if={@context.platform_admin}
+              id="invitation-form"
+              phx-submit="invitation_create"
+              class="mt-4 flex gap-2 items-end"
+            >
+              <label class="flex-1 text-xs text-gray-500">
+                Their name (optional)
+                <.input
+                  name="name"
+                  value=""
+                  id="invitation-name"
+                  placeholder="filled in on their new account page"
+                />
+              </label>
+              <.button type="submit" data-test="invitation-create">
+                Create an invitation link
+              </.button>
+            </form>
           </section>
         </.card>
 
@@ -762,6 +1178,9 @@ defmodule PrismWeb.SettingsLive do
           <.table id="platform-settings" rows={@platform_settings}>
             <:col :let={s} label="Setting">
               <span class="font-mono">{s.key}</span>
+              <span :if={s[:doc]} class="block text-xs text-gray-400" data-test="setting-doc">
+                {s[:doc]}
+              </span>
               <span :if={s.variable} class="block text-xs text-gray-500">{s.variable}</span>
             </:col>
             <:col :let={s} label="Value">
@@ -802,9 +1221,103 @@ defmodule PrismWeb.SettingsLive do
           </.table>
         </.card>
 
+        <%!-- How long AQUA's approval cards wait, and where API keys are made --%>
+        <.card>
+          <section id="approvals">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">AQUA's approvals</h3>
+            <p class="text-xs text-gray-500 mb-4">
+              When AQUA asks before it acts, its card waits this many hours for your answer,
+              then expires, and AQUA asks again the next time. Left empty, AQUA's own default
+              holds.
+            </p>
+            <form id="approvals-form" phx-submit="approvals_save" class="flex gap-2 items-end">
+              <label class="text-xs text-gray-500">
+                Hours
+                <.input
+                  name="hours"
+                  value={@approval_hours}
+                  type="number"
+                  id="approval-hours"
+                  placeholder="default"
+                />
+              </label>
+              <.button type="submit" variant="ghost">Save</.button>
+            </form>
+            <p class="text-xs text-gray-500 mt-4" data-test="api-keys-link">
+              Your own programs and scripts call CYFR as you with an API key: <.link
+                navigate={PrismWeb.Focus.path(assigns[:athanor_route], "/api-keys")}
+                class="underline"
+              >
+                API Keys
+              </.link>.
+            </p>
+          </section>
+        </.card>
+
+        <%!-- The host's own decisions, and closing an account (platform admins) --%>
+        <.card :if={@context.platform_admin}>
+          <section id="host-decisions">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Decisions about the host</h3>
+            <p class="text-xs text-gray-500 mb-4">
+              What the gate admitted or refused outside every athanor: sign-ins, setup and
+              the other calls no athanor holds. Each person's own athanor keeps its own, which
+              only they read.
+            </p>
+            <div :if={@host_decisions == []} class="py-2">
+              <.empty_state message="No decisions about the host yet" />
+            </div>
+            <.table :if={@host_decisions != []} id="host-decision-rows" rows={@host_decisions}>
+              <:col :let={d} label="When">{until(d["inserted_at"] || "")}</:col>
+              <:col :let={d} label="Call">{d["tool"]}{if d["action"], do: "." <> d["action"]}</:col>
+              <:col :let={d} label="Outcome">{decision_outcome(d)}</:col>
+              <:col :let={d} label="Actions">
+                <.button variant="ghost" phx-click="host_decision" phx-value-id={d["call_id"]}>
+                  Open
+                </.button>
+              </:col>
+            </.table>
+            <div :if={@host_decision} id="host-decision" class="mt-4 space-y-1">
+              <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <%= for {field, value} <- Enum.sort(@host_decision), not is_nil(value) do %>
+                  <dt class="text-gray-500">{field}</dt>
+                  <dd class="text-gray-200 break-all">{to_string(value)}</dd>
+                <% end %>
+              </dl>
+              <.button variant="ghost" phx-click="host_decision_close">Close</.button>
+            </div>
+
+            <h4 class="text-xs text-gray-500 uppercase mt-6 mb-2">Close an account</h4>
+            <p class="text-xs text-gray-500 mb-2">
+              Where this CYFR keeps people's accounts itself, in place of cyfr.run, an account
+              can be closed for good: nobody signs in with it again anywhere, its name stays
+              taken, and it cannot be undone. It asks you to confirm.
+            </p>
+            <form id="tombstone-form" phx-submit="tombstone" class="flex gap-2 items-end">
+              <div class="flex-1">
+                <.input
+                  name="identifier"
+                  value=""
+                  required
+                  placeholder="per_…"
+                  id="tombstone-identifier"
+                />
+              </div>
+              <.button type="submit" variant="ghost">Close the account</.button>
+            </form>
+          </section>
+        </.card>
+
         <%!-- Preferences --%>
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Preferences</h3>
+          <p id="mode-words" class="text-xs text-gray-500 mb-3">
+            <strong>lite</strong>
+            shows the pages for everyday work: AQUA, Files, Vault, Schedules, Webhooks,
+            Programs, Settings and Legal. <strong>dev</strong>
+            adds a side menu with the pages for building and looking closer: Executions, where
+            each run's failure says why, Components, Builds, API Keys, Reports and more. What
+            you may do is the same in both.
+          </p>
           <div class="flex items-center gap-3">
             <span class="text-sm text-gray-300">Mode</span>
             <.button
@@ -837,8 +1350,10 @@ defmodule PrismWeb.SettingsLive do
               <dd class="text-sm text-white mt-1">{@context.provider}</dd>
             </div>
             <div>
-              <dt class="text-xs text-gray-500 uppercase">Auth Method</dt>
-              <dd class="text-sm text-white mt-1">{@context.auth_method || "-"}</dd>
+              <dt class="text-xs text-gray-500 uppercase">Signed in with</dt>
+              <dd class="text-sm text-white mt-1" data-test="auth-method">
+                {signed_in_with(@context.auth_method)}
+              </dd>
             </div>
             <div class="col-span-2">
               <dt class="text-xs text-gray-500 uppercase">User ID</dt>
@@ -850,6 +1365,117 @@ defmodule PrismWeb.SettingsLive do
 
       <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
+    """
+  end
+
+  attr :keys, :any, required: true
+  attr :athanor_route, :any, default: nil
+
+  # The administrator's setup: a guided order over controls that exist,
+  # each step saying what it does and opening its control.
+  defp setup_panel(assigns) do
+    ~H"""
+    <.card>
+      <section id="setup" data-test="setup" class="space-y-4">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h3 class="text-sm font-medium text-white">Set up this CYFR for the people you let in</h3>
+            <p class="text-xs text-gray-400 mt-1">
+              Each step opens a control this CYFR already has. Close this whenever you like;
+              Settings offers it again.
+            </p>
+          </div>
+          <.link
+            patch={PrismWeb.Focus.path(@athanor_route, "/settings")}
+            data-test="setup-close"
+            class="text-sm text-gray-400 hover:text-white"
+          >
+            Close
+          </.link>
+        </div>
+
+        <ol class="space-y-4 text-sm list-decimal list-inside">
+          <li data-test="setup-share">
+            <span class="font-medium">Share a key with everyone.</span>
+            <p class="text-xs text-gray-400 mt-1">
+              A key you share with everyone is what each new person's AQUA uses when it fits,
+              so they can start without a key of their own. They never see it. The sheet opens
+              with a daily cap per person filled in; change it before you confirm.
+            </p>
+            <ul :if={listed(@keys) != []} class="mt-2 space-y-1">
+              <li :for={key <- listed(@keys)} class="flex items-center gap-3" data-test="setup-key">
+                <span>{key.name}</span>
+                <span :if={key.shared} class="text-xs text-gray-400">Shared with everyone</span>
+                <.button
+                  :if={!key.shared}
+                  variant="ghost"
+                  phx-click="setup_share"
+                  phx-value-id={key.id}
+                  data-test="setup-key-share"
+                >
+                  Share with everyone
+                </.button>
+              </li>
+            </ul>
+            <p
+              :if={@keys == {:listed, []}}
+              class="text-xs text-gray-400 mt-2"
+              data-test="setup-no-key"
+            >
+              You have no key that can be shared.
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/aqua?setup=1")}
+                class="text-blue-400 hover:underline"
+              >
+                Connect one on your AQUA page.
+              </.link>
+            </p>
+            <p :if={@keys == :not_own} class="text-xs text-gray-400 mt-2" data-test="setup-not-own">
+              Keys are shared from your own athanor. Open Settings there to share one.
+            </p>
+            <p :if={@keys == :unread} class="text-xs text-gray-400 mt-2" data-test="setup-unread">
+              Your keys could not be read just now. Open this again shortly.
+            </p>
+          </li>
+
+          <li data-test="setup-let-in">
+            <span class="font-medium">Let people in.</span>
+            <p class="text-xs text-gray-400 mt-1">
+              Make an <a href="#invite-cyfr" class="text-blue-400 hover:underline">invitation link</a>
+              and send it: it lets one new person in, once. The
+              <a href="#allowlist" class="text-blue-400 hover:underline">allowlist</a>
+              decides who may sign in at all: allow an account, or * for anyone with a CYFR
+              account; a deny keeps one out.
+            </p>
+          </li>
+
+          <li data-test="setup-reach">
+            <span class="font-medium">How this CYFR is reached.</span>
+            <p class="text-xs text-gray-400 mt-1">
+              A link works only where this CYFR's address does: one that opens only on this
+              computer is no use to anyone else. On the machine that runs CYFR,
+              <code>cyfr access</code>
+              changes how it is reached.
+            </p>
+          </li>
+
+          <li data-test="setup-administrators">
+            <span class="font-medium">What only administrators can do.</span>
+            <p class="text-xs text-gray-400 mt-1">
+              Administrators change the allowlist, invite people and change this CYFR's
+              settings. <a href="#admins" class="text-blue-400 hover:underline">Make a second
+              administrator</a>
+              so this CYFR is never left without one. To keep a copy, run <code>cyfr backup</code>
+              on the machine that runs CYFR: it takes a snapshot of the
+              database, the files stored on that machine, the keyring and the configuration, which
+              <code>cyfr restore</code>
+              puts back. Files kept in S3 storage are not in it, and a
+              snapshot holds the keyring, so keep it as safe as CYFR itself.
+            </p>
+          </li>
+        </ol>
+      </section>
+    </.card>
     """
   end
 

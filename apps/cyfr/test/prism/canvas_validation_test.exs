@@ -424,7 +424,7 @@ defmodule Prism.CanvasValidationTest do
       assert stored(ctx).revision == 0
       html = render(view)
       assert html =~ ~s(data-kind="grant")
-      assert html =~ "Grant tincture:local.markets"
+      assert html =~ "Grant markets"
 
       assert [{_prompt, {{:activation, "main"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
@@ -476,7 +476,7 @@ defmodule Prism.CanvasValidationTest do
       view = shell!(conn)
       trial = trial(view)
 
-      verb!(view, trial.id, :open, %{"ref" => "tincture:local.markets"})
+      verb!(view, trial.id, :open, %{"ref" => "tincture:local.markets", "call" => 1})
 
       verb!(view, trial.id, :press, %{
         "binding" => "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",

@@ -5,11 +5,11 @@ defmodule Opus.Programs.SignIn do
   @moduledoc """
   One sign-in: a `terminal` session running a program row's login command
   (the row's command with the words its login command adds as arguments),
-  on a pseudo-terminal of 40 rows by 120 columns in a login entry's
-  kept home, relayed to the one process that attaches to it
-  (`Opus.Programs.sign_in/3`) as lines: what the terminal writes is split
-  at its newlines, a part with none yet sent as a line of its own, and a
-  line the subscriber sends is typed with a carriage return.
+  on a pseudo-terminal of 40 rows by 120 columns in the row's kept home,
+  relayed to the one process that attaches to it (`Opus.Programs.sign_in/2`)
+  as lines: what the terminal writes is split at its newlines, a part with
+  none yet sent as a line of its own, and a line the subscriber sends is
+  typed with a carriage return.
 
   The relay holds the row's owner (`Opus.Programs.hold/1`), opens the
   session under a key derived from its caller's binding (so one caller has
@@ -18,19 +18,13 @@ defmodule Opus.Programs.SignIn do
   sends each batch as `{Opus.Programs, token, {:lines, lines}}`; a line the
   subscriber sends is written to the terminal. It ends — `{Opus.Programs,
   token, {:ended, reason}}` to the subscriber, the session closed and the
-  owner released — when the command ends (`:signed_in` when it exited 0
-  and its login entry is active, which makes an entry whose program was not
-  signed in (`needs_reauth`: a new entry, or one a restore left) active
-  through `Sanctum.Mount.signed_in/2` under the
-  interactive context that opened it; `{:exited, code}` for any other end
-  of the command, `code` nil for one ended by a signal, the entry left as
-  it is; `{:not_signed_in, reason}` when it exited 0 but the entry could not
-  be made active), when the subscriber
-  exits or asks it to (`:closed`), when no subscriber attaches within 30 s
-  (`:unattended`), when the box tells it to stand down or issues a new
-  grant (`:stand_down`, `:owner_moved`), or when the session cannot be read
-  (`:lost`), or when its login entry is revoked, suspended or deleted
-  (`:entry_ended`, `Opus.Programs.end_mounts/2`). CYFR stores nothing
+  owner released — when the command ends (`{:exited, code}`, `code` nil
+  for one ended by a signal: whether the program is signed in is the
+  program's to say), when the subscriber exits or asks it to (`:closed`),
+  when no subscriber attaches within 30 s (`:unattended`), when the box
+  tells it to stand down or issues a new grant (`:stand_down`,
+  `:owner_moved`), when the session cannot be read (`:lost`), or when its
+  row is deleted (`:row_ended`, `Opus.Programs.end_mounts/2`). CYFR stores nothing
   of what passes through, and nothing of it shows in `:sys.get_status/1`
   or a crash report: a sign-in's lines and what the person types are
   credentials, shown only as counts.
@@ -56,8 +50,8 @@ defmodule Opus.Programs.SignIn do
     owner = Keyword.fetch!(args, :owner)
 
     params = %{
-      program: Keyword.fetch!(args, :program),
-      home_id: Keyword.fetch!(args, :home_id),
+      program: Opus.Programs.Definition.program_name(),
+      home_id: owner.server_id,
       key: Keyword.fetch!(args, :key),
       mode: :terminal,
       argv: Keyword.fetch!(args, :argv),
@@ -65,7 +59,7 @@ defmodule Opus.Programs.SignIn do
       cols: @cols
     }
 
-    with {:ok, grant} <- Opus.Programs.hold(Map.put(owner, :sign_in, true)),
+    with {:ok, grant} <- Opus.Programs.hold(owner),
          {:ok, grant, %{session: session}} <- open(grant, owner, params) do
       relay = self()
       reader = spawn_link(fn -> read(relay, grant, session, 0) end)
@@ -74,8 +68,6 @@ defmodule Opus.Programs.SignIn do
        %{
          token: Keyword.fetch!(args, :token),
          binding: Keyword.fetch!(args, :binding),
-         ctx: Keyword.fetch!(args, :ctx),
-         entry_id: Keyword.fetch!(args, :home_id),
          owner: owner,
          grant: grant,
          session: session,
@@ -103,7 +95,7 @@ defmodule Opus.Programs.SignIn do
       {:error, {:refused, :stale_boot, boot}} when is_binary(boot) and boot != grant.boot ->
         Opus.Programs.boot_seen(boot)
 
-        with {:ok, grant} <- Opus.Programs.hold(Map.put(owner, :sign_in, true)),
+        with {:ok, grant} <- Opus.Programs.hold(owner),
              {:ok, opened} <- Session.open(grant, params),
              do: {:ok, grant, opened}
 
@@ -138,13 +130,11 @@ defmodule Opus.Programs.SignIn do
   def handle_call(_request, _from, state), do: {:reply, {:error, :not_yours}, state}
 
   @impl true
-  def handle_cast({:entry_ended, athanor_id, entry_id}, %{entry_id: entry_id} = state) do
-    if state.owner.athanor_id == athanor_id,
-      do: {:stop, :normal, ended(state, :entry_ended)},
+  def handle_cast({:row_ended, athanor_id, row_id}, %{owner: owner} = state) do
+    if owner.athanor_id == athanor_id and owner.server_id == row_id,
+      do: {:stop, :normal, ended(state, :row_ended)},
       else: {:noreply, state}
   end
-
-  def handle_cast({:entry_ended, _athanor_id, _entry_id}, state), do: {:noreply, state}
 
   @impl true
   def handle_info({:read, lines, running, exit_code}, state) do
@@ -152,7 +142,7 @@ defmodule Opus.Programs.SignIn do
 
     if running,
       do: {:noreply, state},
-      else: {:stop, :normal, ended(state, exited(state, exit_code))}
+      else: {:stop, :normal, ended(state, {:exited, exit_code})}
   end
 
   def handle_info({:read_failed, _reason}, state), do: {:stop, :normal, ended(state, :lost)}
@@ -216,17 +206,6 @@ defmodule Opus.Programs.SignIn do
     do: {Opus.Programs, token, {:lines, {:redacted, length(lines)}}}
 
   defp redact_text(message), do: message
-
-  # Only a command that exited 0 signed the program in; the entry is made
-  # active again then, and left as it is on any other end.
-  defp exited(state, 0) do
-    case Sanctum.Mount.signed_in(state.ctx, state.entry_id) do
-      :ok -> :signed_in
-      {:error, reason} -> {:not_signed_in, reason}
-    end
-  end
-
-  defp exited(_state, code), do: {:exited, code}
 
   defp relay(%{subscriber: nil} = state, lines) do
     kept = Enum.reverse(lines, state.kept) |> Enum.take(@kept_lines)

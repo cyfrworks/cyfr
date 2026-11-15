@@ -62,7 +62,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     {:ok, :added} = Sanctum.SharedThreads.add(user.user_id, team.id, user_id: other.user_id)
     {:ok, _} = Sanctum.SharedThreads.post(other.user_id, team.id, "ship friday")
 
-    {:ok, conn: conn, user: user, mine: mine, me: me, team: team}
+    {:ok, conn: conn, user: user, other: other, mine: mine, me: me, team: team}
   end
 
   defp route(athanor), do: Athanors.route_slug(athanor)
@@ -146,23 +146,25 @@ defmodule PrismWeb.AquaPanelLiveTest do
     you_thread
   end
 
-  test "the panel opens onto You beside the shared thread the chat shows, and a send lands in You with that thread read into the turn",
+  test "the panel opens onto You beside the shared thread the chat shows, and a send with its box ticked lands in You with that thread read into the turn",
        %{conn: conn, me: me, team: team, user: user} do
     view = desktop!(conn)
     beside!(view, team)
 
-    {panel, html} = open_panel(view)
+    {panel, _html} = open_panel(view)
     assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
-    assert html =~ "Reading #{team.title}"
 
     pane = child!(panel, "aqua-panel-pane")
     assert thread_of(pane) == nil
-    assert render(pane) =~ "Read #{team.title}"
+    assert render(pane) =~ "Read #{team.title} with each message"
 
     refute has_element?(pane, ~s(label[title*="room"])),
            "the shared-thread read tooltip still says room"
 
     assert has_element?(pane, ~s(label[title*="thread beside it"]))
+
+    pane |> element(~s(input[phx-click="toggle_read_room"])) |> render_click()
+    assert has_element?(pane, ~s(input[phx-click="toggle_read_room"][checked]))
 
     Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
     pane |> form("form", %{"message" => "what do they mean?"}) |> render_submit()
@@ -191,20 +193,137 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the panel reads what the chat shows: another shared thread, and none once the chat closes",
+  test "asked what is unread in a shared thread, a turn reads it with threads and answers, and the person's read mark stays",
+       %{conn: conn, me: me, team: team, user: user, other: other} do
+    {:ok, _} = Sanctum.SharedThreads.post(user.user_id, team.id, "noted")
+    {:ok, _} = Sanctum.SharedThreads.post(other.user_id, team.id, "and bring the deck")
+    them = Sanctum.Tenancy.Users.display_name(other.user_id)
+    mine = Sanctum.Tenancy.Users.display_name(user.user_id)
+
+    {panel, _html} = open_panel(desktop!(conn))
+    pane = child!(panel, "aqua-panel-pane")
+
+    Cyfr.Test.ScriptedWorker.script([
+      model_call("c1", "threads", %{"action" => "list"}),
+      model_call("c2", "threads", %{"action" => "read", "thread" => team.id}),
+      model_reply("#{them} asks you to ship Friday and bring the deck.")
+    ])
+
+    pane |> form("form", %{"message" => "what is unread in #{team.title}?"}) |> render_submit()
+    you_thread = settled_you!(me)
+
+    # The list names the thread with its two unread messages; the read
+    # marks those two lines and not the person's own.
+    [_asked, listed, read] = model_requests()
+    assert request_text(listed) =~ team.id
+    assert request_text(listed) =~ ~s("unread": 2)
+
+    read = request_text(read)
+    assert read =~ "(unread) #{them}: ship friday"
+    assert read =~ "#{mine}: noted"
+    refute read =~ "(unread) #{mine}: noted"
+    assert read =~ "(unread) #{them}: and bring the deck"
+
+    assert Enum.any?(
+             Threads.latest_messages(Sanctum.Context.actor(me), you_thread.id, 10),
+             &(&1.content == "#{them} asks you to ship Friday and bring the deck.")
+           )
+
+    # Reading for the person is not the person reading: both stay unread.
+    {:ok, listed} = Sanctum.SharedThreads.listed(user.user_id)
+    assert %{unread: 2} = Enum.find(listed, &(&1.id == team.id))
+
+    # What the read answered is kept as every tool result is: a row of the
+    # person's own thread, read under their athanor's actor. Under the other
+    # person's own athanor it is missing.
+    kept =
+      Enum.find(
+        Threads.latest_messages(Sanctum.Context.actor(me), you_thread.id, 20),
+        &(&1.kind == "tool_result" and &1.content =~ "and bring the deck")
+      )
+
+    assert kept, "the read's result is a row of the person's thread"
+    assert {:ok, %{id: kept_id}} = Threads.get_message(Sanctum.Context.actor(me), kept.id)
+    assert kept_id == kept.id
+
+    their_athanor = Sanctum.Test.People.athanor!(other.user_id)
+
+    them_ctx = %{
+      Sanctum.TestContext.local()
+      | user_id: other.user_id,
+        athanor_id: their_athanor.id
+    }
+
+    assert {:error, :not_found} = Threads.get_message(Sanctum.Context.actor(them_ctx), kept.id)
+
+    # A later turn in another thread of the person's reads none of it.
+    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(me))
+    Cyfr.Test.ScriptedWorker.script([model_reply("Nothing here yet.")])
+    prism = %{Sanctum.TestContext.local(:prism) | user_id: me.user_id, athanor_id: me.athanor_id}
+    assert {:ok, _sent} = Aqua.Runner.send_message(prism, elsewhere.id, "@aqua what did I ask?")
+
+    wait_until(
+      fn ->
+        length(model_requests()) == 4 and
+          match?({:ok, []}, Aqua.Tape.open_turns(me, elsewhere.id))
+      end,
+      60_000,
+      "the turn in the other thread"
+    )
+
+    later = request_text(List.last(model_requests()))
+    assert later =~ "what did I ask?"
+    refute later =~ "bring the deck"
+    refute later =~ "ship friday"
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "beside a shared thread the box starts unticked, and a send that does not ask about it reads nothing of it",
+       %{conn: conn, me: me, team: team} do
+    view = desktop!(conn)
+    beside!(view, team)
+    {panel, _html} = open_panel(view)
+    pane = child!(panel, "aqua-panel-pane")
+
+    assert has_element?(pane, ~s(input[phx-click="toggle_read_room"]))
+    refute has_element?(pane, ~s(input[phx-click="toggle_read_room"][checked]))
+
+    Cyfr.Test.ScriptedWorker.script([model_reply("Hello.")])
+    pane |> form("form", %{"message" => "hello"}) |> render_submit()
+
+    settled_you!(me)
+    # One model request, and nothing of the shared thread in it.
+    [request] = model_requests()
+    text = request_text(request)
+    assert text =~ "hello"
+    refute text =~ "ship friday"
+    refute text =~ "Read from a shared thread"
+    refute request["system"] =~ "ship friday"
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the pane's box names what the chat shows: another shared thread, and none once the chat closes",
        %{conn: conn, team: team, user: user} do
     {:ok, second} = Sanctum.SharedThreads.create(user.user_id, "Second thread")
 
     view = desktop!(conn)
     overlay = beside!(view, team)
-    {panel, html} = open_panel(view)
-    assert html =~ "Reading #{team.title}"
+    {panel, _html} = open_panel(view)
+    pane = child!(panel, "aqua-panel-pane")
+    assert render(pane) =~ "Read #{team.title} with each message"
 
     overlay |> element("#shared-thread-#{second.id} button") |> render_click()
-    assert render(panel) =~ "Reading Second thread"
+
+    wait_until(
+      fn -> render(pane) =~ "Read Second thread with each message" end,
+      5_000,
+      "the box naming the second thread"
+    )
 
     overlay |> element("#chat-close") |> render_click()
-    refute has_element?(panel, "#aqua-panel-room")
+    wait_until(fn -> not (render(pane) =~ "with each message") end, 5_000, "no box")
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -261,7 +380,6 @@ defmodule PrismWeb.AquaPanelLiveTest do
        %{conn: conn, mine: mine, me: me} do
     {panel, _html} = open_panel(desktop!(conn))
     assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
-    refute has_element?(panel, "#aqua-panel-room")
 
     pane = child!(panel, "aqua-panel-pane")
     refute render(pane) =~ "with each message"
@@ -472,7 +590,23 @@ defmodule PrismWeb.AquaPanelLiveTest do
     render(pane)
     render(panel)
     assert has_element?(panel, ~s(#system-layer-panel-dialog [data-kind="grant"]))
-    assert has_element?(panel, "#system-layer-panel-dialog .consent-sheet", "in #{mine.name}")
+    # The sheet names where the grant lands: the person's own athanor, the
+    # one they hold, reads as theirs rather than by its name. That it is
+    # this athanor, the panel's, is what the grant writes: it is read back
+    # below under `me`, whose athanor is `mine`.
+    assert has_element?(
+             panel,
+             "#system-layer-panel-dialog .consent-sheet__subtitle",
+             "in your athanor"
+           )
+
+    refute has_element?(
+             panel,
+             "#system-layer-panel-dialog .consent-sheet__subtitle",
+             "in #{mine.name}"
+           )
+
+    assert PrismWeb.Athanors.own?(mine, me)
     desktop_dialog = "#" <> PrismWeb.SystemLayer.desktop_layer_id() <> "-dialog"
     refute has_element?(view, ~s(#{desktop_dialog} [data-kind="grant"]))
 

@@ -58,8 +58,12 @@ defmodule PrismWeb.SystemLayer.Prompt do
       person's own vault entry it shares, and `threads`, the shared
       threads the person sits in, each `%{id, name}` with the name the
       person reads (a pair's is the other person's), which the sheet offers
-      beside everyone as the share's audience. It creates the share
-      through `share.create`;
+      beside everyone as the share's audience, and optionally `preset`,
+      one of `Share.presets/0` (the administrator's setup's), which only
+      starts the sheet's choice. It creates the share through
+      `share.create`. While it is shown the layer keeps the
+      sheet's choice on it as `choice` (`Share.choice/2`); an arriving
+      prompt carrying one is refused, so a choice ends with its prompt;
     * `:pairing` — nothing: the prompt reads the person's paired clients
       itself and revokes one through `pairing.revoke` when the person asks
       (`PrismWeb.SystemLayer.Pairing`);
@@ -104,10 +108,11 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   @typedoc "A prompt."
   @type t :: %{
-          id: String.t(),
-          kind: kind(),
-          action: Sanctum.Pairing.action() | nil,
-          subject: map()
+          optional(:choice) => map(),
+          required(:id) => String.t(),
+          required(:kind) => kind(),
+          required(:action) => Sanctum.Pairing.action() | nil,
+          required(:subject) => map()
         }
 
   @doc "The kinds of prompt the layer draws."
@@ -260,11 +265,16 @@ defmodule PrismWeb.SystemLayer.Prompt do
   end
 
   defp subject(:share, %{entry_id: entry_id, name: name, threads: threads} = subject)
-       when map_size(subject) == 3 and is_binary(entry_id) and entry_id != "" and
-              is_binary(name) and name != "" and is_list(threads) do
-    if Enum.all?(threads, &thread?/1),
-      do: {:ok, subject},
-      else: {:error, :invalid_prompt}
+       when is_binary(entry_id) and entry_id != "" and is_binary(name) and name != "" and
+              is_list(threads) do
+    preset = Map.drop(subject, [:entry_id, :name, :threads])
+
+    if Enum.all?(threads, &thread?/1) and
+         (preset == %{} or
+            (map_size(preset) == 1 and
+               Map.get(preset, :preset) in PrismWeb.SystemLayer.Share.presets())),
+       do: {:ok, subject},
+       else: {:error, :invalid_prompt}
   end
 
   defp subject(:pairing, subject) when map_size(subject) == 0, do: {:ok, %{}}

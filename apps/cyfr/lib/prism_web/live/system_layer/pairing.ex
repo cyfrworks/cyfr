@@ -11,12 +11,20 @@ defmodule PrismWeb.SystemLayer.Pairing do
   never a decision, and each passkey of their account that signed in here
   as **Passkey**. This CYFR owns only its own bindings, so the list says
   that signing one out leaves its key on the account, and that removing
-  the key from the account ends it everywhere. A command line is a
-  protected device like any other.
+  the key from the account ends it everywhere.
 
   A device comes here by its first connection (`Sanctum.DeviceUnlock`),
   once it is a key of the person's account; nothing is paired from this
   list.
+
+  Above the list, each passkey a browser offered for the person's account
+  (`pairing.waiting`, `Sanctum.SignIn.waiting/2`) asks to be added, with
+  its short code. On a box's own screen, unlocked by its shell, Approve
+  opens the shell's own page with the request's public ref alone: the
+  shell reads the passkey from this CYFR itself, draws its code, asks for
+  the PIN again and adds it with the box's key. Anywhere else the person
+  is told to approve it on the box. Times show in the browser's own time
+  zone (`time[data-local]`, which the layer's script rewrites).
   """
 
   use Phoenix.Component
@@ -25,13 +33,54 @@ defmodule PrismWeb.SystemLayer.Pairing do
   attr :pairing, :map, default: nil
   attr :myself, :any, required: true
   attr :button_class, :any, required: true
+  attr :shell, :boolean, default: false
 
-  @doc "The paired clients, each with its control that signs it out of this CYFR."
+  @doc """
+  The passkeys waiting to be added, and the paired clients, each with its
+  control that signs it out of this CYFR.
+  """
   def devices(assigns) do
-    assigns = assign(assigns, clients: clients(assigns.pairing))
+    assigns =
+      assign(assigns, clients: clients(assigns.pairing), waiting: waiting(assigns.pairing))
 
     ~H"""
     <section class="space-y-3" aria-label="Paired devices" data-test="pairing">
+      <%= case @waiting do %>
+        <% {:ok, waiting} -> %>
+          <div
+            :for={passkey <- waiting}
+            class="space-y-1 rounded-md border border-gray-700 p-3 text-sm"
+            data-test="pairing-waiting"
+            data-ref={passkey.ref}
+          >
+            <p class="font-medium">A browser asks to add a passkey</p>
+            <p>
+              Its code is <span class="font-mono" data-test="pairing-waiting-code">{passkey.code}</span>.
+              Approve it only if a browser in front of you shows this same code. If you did
+              not ask for it, leave it: it is forgotten five minutes after it was asked,
+              and nothing is added.
+            </p>
+            <p class="text-xs text-gray-400">
+              Asked <.local_time at={passkey.asked_at} />
+            </p>
+            <a
+              :if={@shell}
+              href={PrismWeb.DeviceUnlockController.passkey_url(passkey.ref)}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-test="pairing-approve"
+              class={@button_class}
+            >
+              Approve
+            </a>
+            <p :if={!@shell} class="text-xs text-gray-300" data-test="pairing-approve-on-box">
+              Approve it on your CYFR box's own screen, in Your devices there.
+            </p>
+          </div>
+        <% {:error, sentence} -> %>
+          <p class="text-sm" role="alert" data-test="pairing-waiting-unread">{sentence}</p>
+        <% :unread -> %>
+      <% end %>
       <%= case @clients do %>
         <% {:ok, []} -> %>
           <p class="text-sm text-gray-300" data-test="pairing-none">No device is paired yet.</p>
@@ -66,7 +115,10 @@ defmodule PrismWeb.SystemLayer.Pairing do
                   {scope(client)}
                 </p>
                 <p class="text-xs text-gray-400">
-                  {added(client)} {client.paired_at}{expiry(client)}
+                  {added(client)}
+                  <.local_time at={client.paired_at} /><span :if={
+                    is_binary(client[:certificate_expires_at])
+                  }>; its certificate renews before <.local_time at={client.certificate_expires_at} /></span>
                 </p>
               </div>
               <button
@@ -91,13 +143,21 @@ defmodule PrismWeb.SystemLayer.Pairing do
     """
   end
 
+  attr :at, :string, required: true
+
+  # An ISO 8601 instant, as the server answers it until the layer's script
+  # shows it in the browser's own time zone.
+  defp local_time(assigns) do
+    ~H"""
+    <time datetime={@at} data-local>{@at}</time>
+    """
+  end
+
   defp clients(%{clients: clients}), do: clients
   defp clients(_pairing), do: {:ok, []}
 
-  defp expiry(%{certificate_expires_at: at}) when is_binary(at),
-    do: "; its certificate renews before #{at}"
-
-  defp expiry(_client), do: ""
+  defp waiting(%{waiting: waiting}), do: waiting
+  defp waiting(_pairing), do: {:ok, []}
 
   defp name(%{source: "passkey"}), do: "Passkey"
   defp name(client), do: client[:display_name] || "Paired device"
@@ -138,7 +198,8 @@ defmodule PrismWeb.SystemLayer.Pairing do
     cond do
       unencrypted != [] ->
         "This box keeps its data unencrypted, whoever takes it reads everything " <>
-          "(#{Enum.join(unencrypted, " and ")} disk)."
+          "(#{Enum.join(unencrypted, " and ")} disk). Keep the box where only people you " <>
+          "trust can reach it, or install Ubuntu again with disk encryption turned on."
 
       "unknown" in [root, data] ->
         "Whether this box's disks are encrypted could not be determined."

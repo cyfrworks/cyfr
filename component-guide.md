@@ -505,7 +505,7 @@ See the bundled `seed/components/formulas/local/list-models` formula for a produ
 
 ## Manifest (`cyfr-manifest.json`)
 
-The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (`cyfr profile grant <ref>` or the console's Vault page). A name-level `<ref>` grants what the newest installed version asks for; one pinned to an installed version, what that version asks for.
+The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (on the Components page, open it and choose **Grant access**). A name-level `<ref>` grants what the newest installed version asks for; one pinned to an installed version, what that version asks for.
 
 ### Field Reference
 
@@ -528,7 +528,7 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `category` | string | Optional | Registry category for browsing |
 | `forked_from` | string | Optional | The ref this component was forked from (`component.fork` stamps it) |
 | `contracts` | string[] | Catalysts (if they answer one) | Named operation sets the component answers on its `run` export, as `family/name@major` — `model/chat@1` is the one the host reads (see [Model catalysts](#model-catalysts-the-modelchat1-contract)) |
-| `agent` | object | Agents | The agent's catalyst, model, and policy (`auto` / `ask` sets). Only valid on `type` `"agent"` |
+| `agent` | object | Agents | The agent's catalyst and model; its tools, and the provider's own search as `native_search`, are in `caps.tools`. Only valid on `type` `"agent"` |
 | `provides` | object | Optional | Public configuration for a need of a dependency: keyed by a `dependencies.static` reference, then the dependency's need name, each a `destination` and string `values` (at most 4 KiB). The consent shows that need as satisfied by the publisher |
 | `results` | object | Optional | The shape of what each operation answers, keyed by operation name (at most 64, each 1 to 64 characters), in the shape grammar: `string`, `number`, `integer`, `boolean`, `time`, `enum`, `list`, `object` and `json`, any of them `nullable`. `results[operation]` describes the `data` of the operation's `{"status", "data"}` envelope, and a feed accepts only a 2xx envelope whose data matches. An error envelope, a non-2xx status or an output that is not an envelope is refused, for catalysts and formulas alike, so a formula feeding a canvas returns the same envelope. A feed's binding copies the shape when it is bound; it decides nothing a consent covers and is not part of the release digest |
 
@@ -577,7 +577,7 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 
 An OAuth need declares the provider, its scopes and the hosts the token is sent to (`"type": "oauth:google"`, `"scopes": [...]`, `"hosts": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
 
-A **login need** names a program the component runs with the person's own sign-in: `"type": "login"`, `"program"` the name of the program's row (lowercase letters, digits and hyphens), `reason` and `required`, and no `hosts`, `paths`, `attach`, `disclose`, `fields` or `scopes`. It is satisfied by a login entry whose destination is that program: the program runs in the folder the entry keeps, where its own sign-in lives, and nothing is attached to the component's requests or disclosed to it. An optional `install` block suggests the row: `command`, what fetches or runs the program, and `login_command`, its own sign-in, each held to the rules of a program's command (at most 4096 bytes, no NUL, no `vault:`). The component's setup plan and the AQUA page offer **install `<program>`** with both shown and editable; the person decides, and accepting defines the row, makes the login entry and opens the sign-in terminal. Pin the version your component was tested against in `command`. The component reaches the program through its pipe ([`cyfr:process/pipe`](#cyfrprocesspipe--a-programs-session)), naming the need.
+A **login need** names a program the component runs with the person's own sign-in: `"type": "login"`, `"program"` the name of the program's row (lowercase letters, digits and hyphens), `reason` and `required`, and no `hosts`, `paths`, `attach`, `disclose`, `fields` or `scopes`. It is satisfied by the athanor's own program row of that name, a driven program with a kept folder, which the grant binds: the program runs in the row's own folder, where its own sign-in lives, and nothing is attached to the component's requests or disclosed to it. A program's folder is never shared, so no share meets a login need. An optional `install` block suggests the row: `command`, what fetches or runs the program, and `login_command`, its own sign-in, each held to the rules of a program's command (at most 4096 bytes, no NUL, no `vault:`). The component's setup plan and the AQUA page offer **install `<program>`** with both shown and editable; the person decides, confirms the program's whole definition once, and accepting defines the row and opens the sign-in terminal in its folder; the component's grant then binds the row. Pin the version your component was tested against in `command`. The component reaches the program through its pipe ([`cyfr:process/pipe`](#cyfrprocesspipe--a-programs-session)), naming the need.
 
 ```json
 "needs": {
@@ -958,7 +958,7 @@ Error: `{"error": {"type": "...", "message": "..."}}`.
 
 ### `cyfr:process/pipe` — a program's session
 
-A catalyst drives a program its `login` need names (see [`needs` Section](#needs-section)) over lines: it writes lines to the program's standard input and reads the lines it writes, each numbered in the session's sequence. The program runs in its own box, in the folder the bound login entry keeps, under the person's own sign-in; the component never holds a credential or an address of its own, and CYFR checks every call against the run's grant.
+A catalyst drives a program its `login` need names (see [`needs` Section](#needs-section)) over lines: it writes lines to the program's standard input and reads the lines it writes, each numbered in the session's sequence. The program runs in its own box, in the folder of the program row the grant binds, under the person's own sign-in; the component never holds a credential or an address of its own, and CYFR checks every call against the run's grant.
 
 | Function | Answers |
 |---|---|
@@ -972,14 +972,14 @@ A catalyst drives a program its `login` need names (see [`needs` Section](#needs
 - **`recv`** answers the lines past `after` (0 for the first read), waiting at most `max-wait-ms` (at most 20 000) for one when there is none. A line is kept until a later call names an `after` at or past it, so asking again with the same `after` answers the same lines; an answer carries as many lines as fit, and the next read names the last `seq` it got. A reader that falls behind loses the oldest lines past the session's buffer (8 MiB), counted in `dropped`. `running: false` says the program ended; a session no longer held answers no lines and `running: false`.
 - **`close`** ends the session and its program; a repeat is harmless.
 
-A session also ends when its program row is disabled or deleted, and when its login entry is revoked, suspended or deleted.
+A session also ends when its program row is disabled or deleted.
 
 An error is a code:
 
 | Code | What it means |
 |---|---|
-| `denied` | The manifest declares no `login` need of that name, the run's grant binds no login entry to it or binds one of another program, or the session is not one this run opened |
-| `setup_required` | The bound login entry, its program row or the grant no longer serves (revoked, disabled, expired, shared with you), or the program's folder is past its cap |
+| `denied` | The manifest declares no `login` need of that name, the run's grant binds no program row to it or binds another program's, or the session is not one this run opened |
+| `setup_required` | The bound program row or the grant no longer serves (deleted, disabled, revoked, expired), or the program's folder is past its cap |
 | `busy` | The box runs as many programs as it may; try again later |
 | `ended` | A send to a session whose program ended: open the key again |
 | `invalid_request` | A key over 256 bytes, an argument or line the pipe refuses |
@@ -1045,14 +1045,11 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr list` | `component` | `list` | `type` |
 | — | `component` | `setup_plan` | `reference` (shows the component's needs and whether each is bound + live) |
 | — | `tools` | `list` | `component_ref` (optional — filters to the component's consented tool allowlist) |
-| `cyfr schedule create` | `schedule` | `create` | `name`, `cron_expression`, `reference`, `profile_id` (`--profile`), `input` |
 | `cyfr schedule list` | `schedule` | `list` | `limit` |
 | `cyfr schedule pause` | `schedule` | `pause` | `schedule_id` |
 | `cyfr schedule resume` | `schedule` | `resume` | `schedule_id` |
 | `cyfr schedule delete` | `schedule` | `delete` | `schedule_id` |
-| `cyfr profile grant` | `profile` | `plan` / `preview` / `commit` | `ref`; then `decisions`, `plan_token`, `proof`, `commit_digest` |
 | `cyfr profile list` | `profile` | `list` | `ref` |
-| `cyfr profile revoke` | `profile` | `revoke` | `profile_id` |
 | — | `vault` | `list` / `create` / `rotate` / `rebind` / `authorize` / `revoke` / `delete` | `id`, `name`, `kind`, `fields`, `destination`, `disclose` |
 | — | `oauth` | `set_client` | `provider`, `client_id`, `client_secret` |
 | `cyfr log list` | `mcp_log` | `list` | `tool`, `status`, `limit`, `since` |
@@ -1192,7 +1189,7 @@ To ship a model catalyst of your own: declare the contract, answer the three ope
 
 ## Needs & the Vault
 
-A **vault entry** is a credential the operator owns — an API key, an OAuth grant, or a credential bundle, encrypted at rest and bound to a destination. A manifest `needs` block names *roles*; the operator names *credentials*; a **consent revision** maps them. The operator creates entries on the Vault page and binds them on the system layer's grant sheet or with `cyfr profile grant <ref>`. A component never writes or learns a vault entry name. Reagents cannot read credentials.
+A **vault entry** is a credential the operator owns — an API key, an OAuth grant, or a credential bundle, encrypted at rest and bound to a destination. A manifest `needs` block names *roles*; the operator names *credentials*; a **consent revision** maps them. The operator creates entries on the Vault page and binds them in the component's grant sheet (on the Components page, open it and choose **Grant access**). A component never writes or learns a vault entry name. Reagents cannot read credentials.
 
 For attachment, declare `attach` and the destination `hosts` (and optionally `paths`). An API key or bundle names the one field to attach in `fields`; an OAuth need names its token's `scopes`. Name the need as `"connection": "<need>"` on the `cyfr:http` request with no credential header of your own. CYFR pins the request once under the component's egress, attaches the value in the host within the entry's destination, and masks it from the answer. The component, runner and worker service receive no attached credential. The need's hosts must also fit its egress ask; the entry's destination and the granted egress are independent bounds.
 
@@ -1268,7 +1265,7 @@ A consent covers every release of the component line unless the operator pins a 
 > `session.*`, `key.*`, `vault.*`, `profile.*`,
 > `mcp_log.*`, `policy_log.*`, `retention.*`, `record.*` except `record.payload`, `component.push/delete`,
 > registry identity mutation, webhook/schedule mutation, `profile.publish`,
-> `execution.force_release`, `system.notify`, and MCP-server management.
+> `system.notify`, and MCP-server management.
 > Formulas cannot touch auth, credentials, or the consent plane.
 
 ---
@@ -1366,7 +1363,7 @@ be delivered and asks the sender to send it again.
 1. Scaffold    cyfr new <type> <name>                  (once — creates project structure)
 2. Edit        Edit src/src/lib.rs
 3. Compile     cyfr build compile <type>:local.<name>:<version>   (versioned — targets specific version)
-4. Grant       cyfr profile grant <type>:local.<name>  (versionless — first time only, covers later versions)
+4. Grant       on Components, open <type>:local.<name> and choose Grant access  (versionless — first time only, covers later versions)
 5. Run         cyfr run <type>:local.<name> --input '{...}'       (versionless — uses latest version)
 6. Iterate     Edit → compile → run (a versionless consent persists across version bumps)
 ```
@@ -1421,7 +1418,7 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 | `core_module` | The binary is a core WebAssembly module, not a component | Build a component: target `wasm32-wasip2` with `cargo component build` |
 | `malformed` (`invalid_wasm`) | Not valid WebAssembly, or uses a refused feature | Verify target is `wasm32-wasip2`, update toolchain, `wasm-tools validate` with the refused features off (**Refused features** under [Limits](#limits-capslimits)) |
 | `too_large` | Binary over 50 MiB | Enable `lto = true`, `opt-level = "s"`, remove unused deps |
-| `consent_required` | The component has no granted capabilities | Grant it: `cyfr profile grant <type>:<ref>` |
+| `consent_required` | The component has no granted capabilities | Grant it: on Components, open the component and choose **Grant access** |
 | `domain_blocked` | HTTP to a domain outside the consent | Declare it in `caps.egress.domains` and re-grant |
 | `rate_limited` | Too many requests in window | Wait for reset, or re-grant with a higher `limits.rate_limit` |
 | `secret_denied` | Name outside the vault-entry projection (its field map) | Declare the name in the need's `fields`; operator re-grants |
@@ -1453,7 +1450,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `uncertain` | The call may have taken effect and no result says whether it did: its handler stopped once it may have acted ("Tool <name> crashed; its outcome is unknown", or exited, timed out or was cancelled), a component it ran was stopped with its work possibly still running ("Execution timeout after Nms", or cancelled before it completed), or the host call's answer was lost. Check before repeating it |
 | `unknown` | The host produced a result in an unexpected shape |
 
-`setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan` and a `cyfr profile grant <ref>` command). Formulas can surface this to users via `emit`.
+`setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan`). Formulas can surface this to users via `emit`.
 
 ---
 
@@ -1463,7 +1460,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 - [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `needs`, `caps`
 - [ ] For an attached key or bundle, `needs.fields` names exactly one field and requests name the need as `connection`; for a disclosed need, the fields match the names the binary passes to `cyfr:vault/read.get`. The person's entry may name its fields otherwise; the grant maps them
 - [ ] Tested with `cyfr run` using representative input
-- [ ] Catalysts: every egress domain declared in `caps.egress.domains`, component granted (`cyfr profile grant c:<ref>`)
+- [ ] Catalysts: every egress domain declared in `caps.egress.domains`, component granted (on Components, open `c:<ref>` and choose **Grant access**)
 - [ ] OAuth catalysts: need of type `oauth:<provider>` declares every scope your operations use
 - [ ] `cargo clean` run (`target/` is ~500MB+ per component)
 - [ ] All errors return `json!({"error": "..."}).to_string()` — never panic

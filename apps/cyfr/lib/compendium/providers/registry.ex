@@ -9,9 +9,9 @@ defmodule Compendium.Providers.Registry do
   account is made, at the account pages.
 
   Every operation that speaks for the person at the registry (a token
-  mint, a policy acceptance, an appeal, a publisher claim and its
-  verification) is one request a key of their account signs, in two calls
-  of the same action with the same arguments, the shape
+  mint, an appeal, a publisher claim and its verification) is one request
+  a key of their account signs, in two calls of the same action with the
+  same arguments, the shape
   `confirmation.request` and `confirm` have. Without an `answer`, the
   action composes the registry request for the caller's account and
   answers `request`, the `Prima.SignIn` request of purpose `registry`
@@ -38,14 +38,8 @@ defmodule Compendium.Providers.Registry do
 
   @identity_mutations ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove sync)
 
-  # The signed operations the `signed_in` tier serves, before a person
-  # holds a name: a key belongs to an athanor and is nobody's registry
-  # identity, so their handlers refuse one. The rest declare
-  # `consent: :interactive`, which refuses a key at the gate.
-  @person_acts ~w(legal_accept)
-
   # Every action that sends a change to the registry — a POST that claims,
-  # verifies, mints, adds, updates, accepts, reports or appeals — reaches
+  # verifies, mints, adds, updates, reports or appeals — reaches
   # outside the home and is `external`; a DELETE there (`tokens_revoke`,
   # `members_remove`) is `destructive`. None takes a standing answer
   # (`standing: false`): an assistant's proposal of one is approved one
@@ -352,23 +346,6 @@ defmodule Compendium.Providers.Registry do
         ),
         Operation.new(
           "registry",
-          "legal_accept",
-          "Legal accept registry",
-          [
-            Arg.new("policy_version", :string,
-              required: true,
-              description: "Policy version string (for legal_accept; obtained via legal_version)"
-            ),
-            answer_arg()
-          ],
-          auth: :signed_in,
-          kind: :external,
-          sources: [:outside],
-          standing: false,
-          planes: [:external, :in_chain]
-        ),
-        Operation.new(
-          "registry",
           "appeal",
           "Appeal registry",
           [
@@ -396,7 +373,7 @@ defmodule Compendium.Providers.Registry do
         )
       ],
       description:
-        "Registry operations, each a request your identity signs: sync your push tokens, claim and verify a publisher namespace by DNS, accept the registry's policies and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
+        "Registry operations, each a request your identity signs: sync your push tokens, claim and verify a publisher namespace by DNS and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
       title: "Registry"
     )
   end
@@ -411,13 +388,6 @@ defmodule Compendium.Providers.Registry do
             "arguments: your passkey's from the account pages, or the registry request your " <>
             "device signed"
       )
-
-  def handle(%Context{auth_method: :api_key}, %{"action" => action})
-      when action in @person_acts do
-    {:error,
-     {:invalid_argument,
-      "registry.#{action} is a person's act — sign in; an API key cannot do it"}}
-  end
 
   def handle(%Context{} = ctx, %{"action" => action} = args)
       when action in @identity_mutations do
@@ -510,7 +480,7 @@ defmodule Compendium.Providers.Registry do
   def handle(_ctx, %{"action" => "legal_page", "name" => name})
       when is_binary(name) and name != "" do
     case Compendium.Registry.Client.get_legal_page(name) do
-      {:ok, body} -> {:ok, body}
+      {:ok, body} -> {:ok, legal_page(body)}
       {:error, err} -> refuse(err)
     end
   end
@@ -528,20 +498,6 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  def handle(
-        %Context{user_id: user_id} = ctx,
-        %{
-          "action" => "legal_accept",
-          "policy_version" => version
-        } = args
-      )
-      when is_binary(user_id) do
-    case ensure_present(version, "policy_version") do
-      :ok -> signed(ctx, "policy.accept", %{"policy_version" => version}, args)
-      {:error, reason} -> refuse(reason)
-    end
-  end
-
   def handle(%Context{user_id: user_id} = ctx, %{"action" => "appeal"} = args)
       when is_binary(user_id) do
     body = Map.take(args, ~w(action_type action_ref argument))
@@ -555,12 +511,24 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  def handle(_ctx, %{"action" => action}) when action in ~w(legal_accept appeal),
+  def handle(_ctx, %{"action" => "appeal"}),
     do: {:error, {:invalid_argument, "authentication required"}}
 
   # ============================================================================
   # Private helpers
   # ============================================================================
+
+  # A legal page as the registry publishes it, with the registry it came
+  # from: `registry`, its host, and `base_url`, the address the page's
+  # links that name a path alone are read against (on this CYFR such a
+  # path names nothing). Both come from this deployment's configuration,
+  # never from the page.
+  defp legal_page(%{"content_markdown" => markdown} = body) when is_binary(markdown) do
+    host = Compendium.RegistryHost.canonical_rest_host()
+    Map.merge(body, %{"registry" => host, "base_url" => Compendium.RegistryHost.base_url(host)})
+  end
+
+  defp legal_page(body), do: body
 
   # Every registry call answers through one seam: a registry's own error
   # becomes its refusal here, and any other reason is the gate's to

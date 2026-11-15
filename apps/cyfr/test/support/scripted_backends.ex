@@ -31,8 +31,7 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   Each session is a scripted MCP program, answering as a server over stdio
   does: `initialize`, `tools/list` (the tools the test sets for its server
-  with `set(fake, :tools, %{server_id => full_names})`, as full names
-  `<backend>__<tool>`: `github__search` unless set), paged one tool a page
+  with `tools(fake, server_id, names)`: `search` unless set), paged one tool a page
   under `nextCursor` unless `set(fake, :page_size, n)`, `tools/call`
   (`found`) and `ping`; a cursor it never issued, a call of a tool it
   does not list and any other method are answered with a JSON-RPC error.
@@ -299,7 +298,7 @@ defmodule Cyfr.Test.ScriptedBackends do
     end
   end
 
-  @doc "The tool names, `<backend>__<tool>`, the programs of `server` list."
+  @doc "The tool names the program of `server` lists."
   def tools(%{agent: agent}, server, names),
     do: Agent.update(agent, &put_in(&1, [:tools, server], names))
 
@@ -863,8 +862,8 @@ defmodule Cyfr.Test.ScriptedBackends do
          "serverInfo" => %{"name" => "scripted", "version" => "1"}
        }}
 
-  defp reply(st, server, s, "tools/list", params) do
-    names = listed(st, server, s)
+  defp reply(st, server, _s, "tools/list", params) do
+    names = listed(st, server)
     size = Map.get(st, :page_size, 1)
 
     case page_start(params["cursor"], length(names)) do
@@ -882,8 +881,8 @@ defmodule Cyfr.Test.ScriptedBackends do
     end
   end
 
-  defp reply(st, server, s, "tools/call", %{"name" => name}) do
-    if name in listed(st, server, s),
+  defp reply(st, server, _s, "tools/call", %{"name" => name}) do
+    if name in listed(st, server),
       do: {:ok, %{"content" => [%{"type" => "text", "text" => "found"}]}},
       else: {:error, %{"code" => -32_602, "message" => "Unknown tool: #{name}"}}
   end
@@ -893,15 +892,9 @@ defmodule Cyfr.Test.ScriptedBackends do
   defp reply(_st, _server, _s, method, _params),
     do: {:error, %{"code" => -32_601, "message" => "Method not found: #{method}"}}
 
-  # The program's own tool names: the test's full names for its server
-  # (`github__search` unless set), without its `<backend>__` prefix.
-  defp listed(st, server, s) do
-    prefix = s.program <> "__"
-
-    for name <- Map.get(st.tools, server, ["github__search"]),
-        String.starts_with?(name, prefix),
-        do: String.replace_prefix(name, prefix, "")
-  end
+  # The program's tool names: the test's for its server (`search` unless
+  # set).
+  defp listed(st, server), do: Map.get(st.tools, server, ["search"])
 
   defp cursor(start), do: Base.url_encode64("page:#{start}", padding: false)
 

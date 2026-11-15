@@ -55,9 +55,24 @@ defmodule PrismWeb.LoginLiveTest do
       Sanctum.SignIn.request(:sign_in, binding, admission: {:setup, @token})
 
     answer = DirectoryServer.passkey_answer(request, account, hd(account.passkeys))
-    {:ok, %{user: user}} = Sanctum.SignIn.answer(answer, binding)
-    %{account: account, user: user}
+    {:ok, %{user: user, session_token: token}} = Sanctum.SignIn.answer(answer, binding)
+    %{account: account, user: user, session_token: token}
   end
+
+  # A browser holding `token`'s session, as its cookie carries it.
+  defp with_session(conn, token),
+    do:
+      Plug.Test.init_test_session(conn, %{
+        to_string(CyfrWeb.SignInResponse.session_key()) => token
+      })
+
+  # The answer `account`'s passkey gives `request`, as the account pages
+  # hand it to the page.
+  defp answer_of(request, account),
+    do:
+      request
+      |> DirectoryServer.passkey_answer(account, hd(account.passkeys))
+      |> Prima.SignIn.fragment()
 
   defp passkey!(account, dir), do: DirectoryServer.add_passkey!(dir.dir, account)
 
@@ -109,6 +124,92 @@ defmodule PrismWeb.LoginLiveTest do
     render_hook(view, "account_answer", %{"answer" => answer})
     {path, _flash} = assert_redirect(view, @answered_ms)
     assert "/auth/passkey/complete/" <> _ticket = path
+  end
+
+  test "a new passkey from a browser that holds none shows its code and the way on, for any account",
+       %{conn: conn, dir: dir} do
+    %{account: account} = first!(dir)
+    stranger = DirectoryServer.account!(dir.dir, dir.url)
+
+    for named <- [account, stranger] do
+      {:ok, view, _html} = live(conn, ~p"/login")
+      view |> element(~s([data-test="sign-in"])) |> render_click()
+      assert_push_event(view, "account:hop", %{url: url})
+      [_page, fragment] = String.split(url, "#", parts: 2)
+      {:ok, map} = Prima.SignIn.parse_fragment(fragment)
+      {:ok, request} = Prima.SignIn.decode(map)
+      {pub, _priv} = :crypto.generate_key(:ecdh, :secp256r1)
+
+      {:ok, key} =
+        Prima.Identity.Key.new(
+          alg: :es256,
+          kind: :passkey,
+          pub: pub,
+          credential_id: :crypto.strong_rand_bytes(16)
+        )
+
+      answer = %Prima.SignIn.NewPasskey{
+        challenge: request.challenge,
+        identifier: named.identifier,
+        key: key
+      }
+
+      render_hook(view, "account_answer", %{"answer" => Prima.SignIn.fragment(answer)})
+      html = render_async(view, @answered_ms)
+
+      assert view |> element(~s([data-test="passkey-code"])) |> render() =~
+               binary_part(key.kid, 7, 16)
+
+      assert html =~ "open Your devices"
+
+      assert String.replace(html, ~r/\s+/, " ") =~
+               "If nobody approves it within five minutes it is forgotten, and nothing is added."
+
+      assert has_element?(view, ~s([data-test="sign-in"]))
+      refute has_element?(view, ~s([data-test="sign-in-error"]))
+      refute_vocabulary(html)
+    end
+
+    # Past the bound the page says so, as it would for any account.
+    for _n <- 1..(Sanctum.SignIn.max_waiting() - 1) do
+      binding = {:browser, "csrf-#{System.unique_integer([:positive])}"}
+      {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, binding)
+      {pub, _priv} = :crypto.generate_key(:ecdh, :secp256r1)
+
+      {:ok, key} =
+        Prima.Identity.Key.new(alg: :es256, kind: :passkey, pub: pub, credential_id: "c")
+
+      answer = %Prima.SignIn.NewPasskey{
+        challenge: request.challenge,
+        identifier: stranger.identifier,
+        key: key
+      }
+
+      {:ok, %{waiting: _code}} = Sanctum.SignIn.answer(answer, binding)
+    end
+
+    {:ok, view, _html} = live(conn, ~p"/login")
+    view |> element(~s([data-test="sign-in"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    [_page, fragment] = String.split(url, "#", parts: 2)
+    {:ok, request} = fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+    {pub, _priv} = :crypto.generate_key(:ecdh, :secp256r1)
+    {:ok, key} = Prima.Identity.Key.new(alg: :es256, kind: :passkey, pub: pub, credential_id: "c")
+
+    answer = %Prima.SignIn.NewPasskey{
+      challenge: request.challenge,
+      identifier: stranger.identifier,
+      key: key
+    }
+
+    render_hook(view, "account_answer", %{"answer" => Prima.SignIn.fragment(answer)})
+    html = render_async(view, @answered_ms)
+
+    assert view |> element(~s([data-test="sign-in-error"])) |> render() =~
+             "Too many browsers already ask to add a passkey to this account."
+
+    refute has_element?(view, ~s([data-test="passkey-waiting"]))
+    refute_vocabulary(html)
   end
 
   # The account's directory, read for an account this CYFR has not read
@@ -216,21 +317,27 @@ defmodule PrismWeb.LoginLiveTest do
       |> Prima.SignIn.fragment()
     end
 
-    # The registry, checking each request as the registry does under the
-    # account's log, and answering `answer.(request)`.
-    defp registry(account, answer) do
+    # The registry, checking each signed request as the registry does under
+    # the account's log, and answering `answer.(request)`; its terms'
+    # version read answers `legal.()`, by default a registry that cannot
+    # answer it.
+    defp registry(account, answer, legal \\ fn -> {503, ""} end) do
       {:ok, state} = Prima.Identity.verify_chain(account.log)
 
-      Sanctum.Test.RegistryStub.start!(fn %{body: body} = request ->
-        case Prima.RegistryRequest.verify(
-               body,
-               state,
-               %{host: Sanctum.Test.RegistryStub.host(), directory: account.url},
-               System.system_time(:millisecond)
-             ) do
-          {:ok, signed} -> answer.(Map.put(request, :signed, signed))
-          {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
-        end
+      Sanctum.Test.RegistryStub.start!(fn
+        %{method: "GET", path: "/v1/legal/version"} ->
+          legal.()
+
+        %{body: body} = request ->
+          case Prima.RegistryRequest.verify(
+                 body,
+                 state,
+                 %{host: Sanctum.Test.RegistryStub.host(), directory: account.url},
+                 System.system_time(:millisecond)
+               ) do
+            {:ok, signed} -> answer.(Map.put(request, :signed, signed))
+            {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
+          end
       end)
     end
 
@@ -442,7 +549,7 @@ defmodule PrismWeb.LoginLiveTest do
                assert_redirect(view, @answered_ms)
 
       assert_received {:registry_request, %{path: "/v1/tokens/mint"}}
-      refute_received {:registry_request, _second}
+      refute_received {:registry_request, %{path: "/v1/tokens/mint"}}
     end
 
     test "a mint the registry makes after the person left is stored", %{conn: conn, dir: dir} do
@@ -522,7 +629,7 @@ defmodule PrismWeb.LoginLiveTest do
 
     test "a registry's refusal is the flash the browser returns with, in a person's words",
          %{conn: conn, dir: dir} do
-      asked = asked!(conn, dir, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+      asked = asked!(conn, dir, %{"action" => "sync"})
 
       registry(asked.account, fn _request ->
         Sanctum.Test.RegistryStub.refusal(:unknown_identity)
@@ -541,7 +648,7 @@ defmodule PrismWeb.LoginLiveTest do
 
     test "returned in a browser without the session that asked, it is sent nowhere",
          %{conn: conn, dir: dir} do
-      asked = asked!(conn, dir, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+      asked = asked!(conn, dir, %{"action" => "sync"})
       registry(asked.account, fn _request -> flunk("nothing is sent") end)
 
       {:ok, view, _html} = live(conn, ~p"/login")
@@ -553,6 +660,408 @@ defmodule PrismWeb.LoginLiveTest do
     end
   end
 
+  describe "the registry's terms after a registry signature" do
+    # A registry whose mint answers each time and whose terms' version read
+    # answers `legal.()`.
+    defp terms_registry(account, legal) do
+      registry(
+        account,
+        fn %{path: "/v1/tokens/mint"} ->
+          {200,
+           Sanctum.Test.RegistryStub.answer(%{
+             "personal_namespace" => %{"slug" => "terms-person", "token" => "cyfr_pt_terms"},
+             "memberships" => []
+           })}
+        end,
+        legal
+      )
+    end
+
+    # The terms' version answer naming `version`, published on 10 November.
+    defp legal_answer(version, at \\ "2026-11-10T09:30:00Z") do
+      {200, Jason.encode!(%{"policy_version" => version, "policies" => [], "updated_at" => at})}
+    end
+
+    # A registry whose terms' version answer is what `answers` holds now.
+    defp answering(asked) do
+      {:ok, answers} = Agent.start_link(fn -> legal_answer("2026-11") end)
+      terms_registry(asked.account, fn -> Agent.get(answers, & &1) end)
+      answers
+    end
+
+    # One sync signed at the account pages and handed to a fresh sign tab
+    # under the session that asked: the tab.
+    defp synced!(asked) do
+      {:ok, %{request: map}} =
+        Compendium.Providers.Registry.handle(asked.ctx, %{"action" => "sync"})
+
+      {:ok, request} = Prima.SignIn.decode(map)
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+
+      render_hook(view, "account_answer", %{
+        "answer" => signed_at_pages(%{asked | request: request})
+      })
+
+      view
+    end
+
+    # The tab went back with the act's success and said nothing more.
+    defp went_back!(view) do
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {"/", %{"info" => "Your push tokens are synced."}} =
+                 assert_redirect(view, @answered_ms)
+      end)
+    end
+
+    defp seen(user_id) do
+      {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+      Sanctum.Tenancy.Users.prefs(user)["registry_terms_seen"]
+    end
+
+    defp seen!(user_id, version) do
+      {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+      {:ok, _user} = Sanctum.Tenancy.Users.put_prefs(user, %{"registry_terms_seen" => version})
+    end
+
+    defp notice!(view) do
+      Prima.Test.Wait.wait_until(
+        fn -> has_element?(view, "[data-test=terms-notice]") end,
+        @answered_ms,
+        "the terms notice to be shown"
+      )
+
+      view |> element("[data-test=terms-changed]") |> render()
+    end
+
+    defp continued!(view, params \\ %{}) do
+      view |> element("[data-test=terms-continue]") |> render_click(params)
+      assert {"/", _flash} = assert_redirect(view, @answered_ms)
+    end
+
+    # A registry whose first terms' version read is held until the test
+    # sends the stub `:release`, the test told `{:legal_held, stub}`; later
+    # reads answer at once.
+    defp held_terms(asked, version) do
+      test = self()
+      first = :atomics.new(1, [])
+      :atomics.put(first, 1, 1)
+
+      terms_registry(asked.account, fn ->
+        if :atomics.exchange(first, 1, 0) == 1 do
+          send(test, {:legal_held, self()})
+
+          receive do
+            :release -> :ok
+          end
+        end
+
+        legal_answer(version)
+      end)
+    end
+
+    # The check that outlived its read has ended.
+    defp settled! do
+      Prima.Test.Wait.wait_until(
+        fn -> Task.Supervisor.children(Prism.TaskSupervisor) == [] end,
+        @answered_ms,
+        "the check to end"
+      )
+    end
+
+    # The task reading the terms for a check: the child of the page's task
+    # supervisor called by another of its children.
+    defp read_task do
+      children = Task.Supervisor.children(Prism.TaskSupervisor)
+
+      Enum.find(children, fn pid ->
+        case Process.info(pid, :dictionary) do
+          {:dictionary, dictionary} ->
+            Enum.any?(Keyword.get(dictionary, :"$callers", []), &(&1 in children))
+
+          nil ->
+            false
+        end
+      end)
+    end
+
+    defp text(html),
+      do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.split() |> Enum.join(" ")
+
+    defp synced?(asked) do
+      match?(
+        {:ok, %{token: "cyfr_pt_terms"}},
+        Compendium.Registry.CredentialStore.get(
+          asked.ctx,
+          Compendium.RegistryHost.canonical_host(),
+          "terms-person"
+        )
+      )
+    end
+
+    test "a version the person was not shown is said beside what the act did, recorded on Continue, and said again when it changes again",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answers = answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(asked.ctx.athanor_id)
+      legal = "/a/" <> Sanctum.Tenancy.Athanors.route_slug(athanor) <> "/legal"
+
+      view = synced!(asked)
+      html = notice!(view)
+
+      assert text(html) ==
+               "Your push tokens are synced. The account service's terms changed on 10 November 2026. " <>
+                 "They are now version 2026-11, and using the account service means you accept them. " <>
+                 "Read the terms Continue"
+
+      assert view |> element("[data-test=terms-read]") |> render() =~ ~s(href="#{legal}")
+      refute_vocabulary(html)
+      assert synced?(asked)
+
+      # Shown, not yet gone on from: nothing is recorded.
+      assert seen(asked.ctx.user_id) == "2026-09"
+      continued!(view)
+      assert seen(asked.ctx.user_id) == "2026-11"
+
+      # The same version again says nothing: the browser goes back.
+      went_back!(synced!(asked))
+      assert seen(asked.ctx.user_id) == "2026-11"
+
+      # A newer version is said again.
+      Agent.update(answers, fn _ -> legal_answer("2026-12") end)
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-12,"
+      continued!(view)
+      assert seen(asked.ctx.user_id) == "2026-12"
+    end
+
+    test "a person with no version recorded is shown nothing, and the current one is recorded",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answering(asked)
+      assert seen(asked.ctx.user_id) == nil
+
+      went_back!(synced!(asked))
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-11"
+    end
+
+    test "a registry that does not answer its version: the act completes, nothing is said or recorded",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      terms_registry(asked.account, fn -> {503, ""} end)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      went_back!(synced!(asked))
+      assert_received {:registry_request, %{method: "GET", path: "/v1/legal/version"}}
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "an answer whose date is no time, or that is no answer, leaves the act's success and records nothing",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answers = answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      for answer <- [
+            {200, ~s({"policy_version":"2026-11","policies":[],"updated_at":{}})},
+            legal_answer("2026-11", "the tenth of November"),
+            legal_answer("2026-11", "2026-11-10T09:30:00+08:00"),
+            {200, ~s(["2026-11"])}
+          ] do
+        Agent.update(answers, fn _ -> answer end)
+        went_back!(synced!(asked))
+        assert seen(asked.ctx.user_id) == "2026-09", "recorded after #{inspect(answer)}"
+      end
+
+      assert synced?(asked)
+    end
+
+    test "a version that is empty, marked up or longer than 64 characters is said and recorded nowhere",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answers = answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      for version <- ["", "<b>2026-11</b>", "2026 11", String.duplicate("a", 65)] do
+        Agent.update(answers, fn _ -> legal_answer(version) end)
+        went_back!(synced!(asked))
+        assert seen(asked.ctx.user_id) == "2026-09", "recorded #{inspect(version)}"
+      end
+
+      # 64 characters is a version.
+      longest = String.duplicate("a", 64)
+      Agent.update(answers, fn _ -> legal_answer(longest) end)
+      assert text(notice!(synced!(asked))) =~ "They are now version #{longest},"
+    end
+
+    test "a tab closed while the version is read records nothing, and the next act says the version",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      seen!(asked.ctx.user_id, "2026-09")
+      test = self()
+      armed = :atomics.new(1, [])
+      :atomics.put(armed, 1, 1)
+
+      terms_registry(asked.account, fn ->
+        if :atomics.exchange(armed, 1, 0) == 1 do
+          send(test, {:legal_held, self()})
+
+          receive do
+            :release -> :ok
+          end
+        end
+
+        legal_answer("2026-11")
+      end)
+
+      view = synced!(asked)
+      assert_receive {:legal_held, held}, @answered_ms
+
+      {_ref, _topic, proxy} = view.proxy
+      Process.unlink(proxy)
+      page = Process.monitor(view.pid)
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert_receive {:DOWN, ^page, :process, _pid, {:shutdown, :closed}}, @answered_ms
+
+      send(held, :release)
+
+      Prima.Test.Wait.wait_until(
+        fn -> Task.Supervisor.children(Prism.TaskSupervisor) == [] end,
+        @answered_ms,
+        "the check that outlived the tab to end"
+      )
+
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
+
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-11,"
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "Continue records the held version for the held person and goes where the request said, whatever it is sent",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      other = Sanctum.Test.RegistryStub.person!()
+
+      {:ok, _other} =
+        Sanctum.Tenancy.Users.put_prefs(other, %{"registry_terms_seen" => "2026-01"})
+
+      answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-11,"
+
+      continued!(view, %{
+        "user_id" => other.id,
+        "version" => "forged",
+        "back" => "https://elsewhere.example/"
+      })
+
+      assert seen(asked.ctx.user_id) == "2026-11"
+      assert seen(other.id) == "2026-01"
+    end
+
+    test "Continue after the session ended elsewhere records nothing and goes to the sign-in",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-11,"
+      assert {:ok, count} = Sanctum.Session.revoke_all_for_user(asked.ctx.user_id)
+      assert count > 0
+
+      view |> element("[data-test=terms-continue]") |> render_click()
+      assert {"/login", _flash} = assert_redirect(view, @answered_ms)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "a person with no version recorded is given no version the rule refuses",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answers = answering(asked)
+
+      for version <- ["", "<b>2026-11</b>", String.duplicate("a", 65)] do
+        Agent.update(answers, fn _ -> legal_answer(version) end)
+        went_back!(synced!(asked))
+        assert seen(asked.ctx.user_id) == nil, "recorded #{inspect(version)}"
+      end
+    end
+
+    test "a read that fails while it is held leaves the act's success and records nothing",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_terms(asked, "2026-11")
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert_receive {:legal_held, stub}, @answered_ms
+      reader = read_task()
+      assert is_pid(reader)
+
+      try do
+        ExUnit.CaptureLog.capture_log(fn -> Process.exit(reader, :read_failed) end)
+        went_back!(view)
+      after
+        send(stub, :release)
+      end
+
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "for a person with nothing recorded, a read killed or held past its bound records nothing, and the next act records silently",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+
+      for ending <- [:killed, :late] do
+        held_terms(asked, "2026-11")
+        view = synced!(asked)
+        assert_receive {:legal_held, stub}, @answered_ms
+
+        try do
+          if ending == :killed do
+            ExUnit.CaptureLog.capture_log(fn -> Process.exit(read_task(), :read_failed) end)
+          end
+
+          went_back!(view)
+        after
+          send(stub, :release)
+        end
+
+        settled!()
+        assert seen(asked.ctx.user_id) == nil, "recorded after a read #{ending}"
+      end
+
+      went_back!(synced!(asked))
+      assert seen(asked.ctx.user_id) == "2026-11"
+    end
+
+    test "a version answered past the read's bound shows the act's success and records nothing",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_terms(asked, "2026-11")
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert_receive {:legal_held, stub}, @answered_ms
+
+      try do
+        went_back!(view)
+      after
+        send(stub, :release)
+      end
+
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+  end
+
   test "an answer the page cannot take signs no one in and says so", %{conn: conn, dir: dir} do
     first!(dir)
     {:ok, view, _html} = live(conn, ~p"/login")
@@ -561,5 +1070,159 @@ defmodule PrismWeb.LoginLiveTest do
     html = render_async(view, @answered_ms)
     assert html =~ "nobody was signed in"
     refute_vocabulary(html)
+  end
+
+  test "Create your account sends the browser to the new-account page with a request bound to it",
+       %{conn: conn, dir: dir} do
+    first!(dir)
+    {:ok, view, html} = live(conn, ~p"/login")
+    assert html =~ "Create your account"
+
+    view |> element(~s([data-test="create-account"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    assert String.starts_with?(url, dir.url <> "/account/new#name=&request=")
+    [_page, fragment] = String.split(url, "&request=", parts: 2)
+
+    assert {:ok, %{"purpose" => "sign_in", "return" => return}} =
+             Prima.SignIn.parse_fragment(fragment)
+
+    assert String.ends_with?(return, "/login")
+  end
+
+  test "signing out lands on the sign-in page saying so", %{conn: conn, dir: dir} do
+    first!(dir)
+    {:ok, view, html} = live(conn, ~p"/login?error=signed_out")
+    assert view |> element(~s([data-test="sign-in-notice"])) |> render() =~ "You signed out."
+    refute has_element?(view, ~s([data-test="sign-in-error"]))
+    refute_vocabulary(html)
+  end
+
+  test "a person this CYFR has not let in reads who can, in one sentence whatever the reason",
+       %{conn: conn, dir: dir} do
+    first!(dir)
+    stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+    {:ok, view, _html} = live(conn, ~p"/login")
+
+    view |> element(~s([data-test="sign-in"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    [_page, fragment] = String.split(url, "#", parts: 2)
+    {:ok, request} = fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+
+    render_hook(view, "account_answer", %{"answer" => answer_of(request, stranger)})
+    html = render_async(view, @answered_ms)
+    sentence = "This CYFR has not let you in. Whoever runs it can let you in."
+    assert view |> element(~s([data-test="sign-in-error"])) |> render() =~ sentence
+    assert Prima.Refusal.message({:door, :denied}) == sentence
+    assert Prima.Refusal.message({:door, :not_allowed}) == sentence
+    refute_vocabulary(html)
+  end
+
+  # What `/login` says to `account` signing in with its passkey there.
+  defp refusal_at_login(conn, account) do
+    {:ok, view, _html} = live(conn, ~p"/login")
+    view |> element(~s([data-test="sign-in"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    [_page, fragment] = String.split(url, "#", parts: 2)
+    {:ok, request} = fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+    render_hook(view, "account_answer", %{"answer" => answer_of(request, account)})
+    render_async(view, @answered_ms)
+
+    view
+    |> element(~s([data-test="sign-in-error"]))
+    |> render()
+    |> String.replace(~r/<[^>]*>/, "")
+    |> String.trim()
+  end
+
+  test "a person let in and later denied reads the refusal a newcomer nobody listed reads",
+       %{conn: conn, dir: dir} do
+    %{user: first} = first!(dir)
+    {:ok, wildcard} = Sanctum.Door.Store.allow("wildcard", "*", first.id)
+    denied = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+    {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, {:browser, "denied-browser"})
+
+    {:ok, %{user: person}} =
+      Sanctum.SignIn.answer(answer_of(request, denied), {:browser, "denied-browser"})
+
+    {:ok, _denied} = Sanctum.Tenancy.Users.deny(person)
+    {:ok, _} = Sanctum.Door.Store.remove(wildcard.id)
+    newcomer = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+
+    said_to_denied = refusal_at_login(conn, denied)
+    said_to_newcomer = refusal_at_login(build_conn(), newcomer)
+    assert said_to_newcomer == "This CYFR has not let you in. Whoever runs it can let you in."
+    assert said_to_denied == said_to_newcomer
+  end
+
+  test "a sign-in from a tab whose sign-in another tab replaced says this browser is signed in",
+       %{conn: conn, dir: dir} do
+    %{account: account, session_token: token} = first!(dir)
+    {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, {:browser, "an-earlier-tab"})
+    {:ok, view, _html} = conn |> with_session(token) |> live(~p"/login")
+
+    render_hook(view, "account_answer", %{"answer" => answer_of(request, account)})
+    render_async(view, @answered_ms)
+    error = view |> element(~s([data-test="sign-in-error"])) |> render()
+    assert error =~ "This browser is signed in already, from another tab."
+    assert error =~ ~s(href="/")
+    refute error =~ "nobody was signed in"
+  end
+
+  test "a confirmation that names no page to return to says it is done and closes its tab",
+       %{conn: conn, dir: dir} do
+    %{account: account, user: user, session_token: token} = first!(dir)
+    {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
+    hash = Sanctum.Session.token_hash(token)
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: user.id,
+        athanor_id: athanor_id,
+        provider: "passkey",
+        auth_method: :oidc,
+        authenticated: true,
+        session_token_hash: hash,
+        permissions: Sanctum.Context.person_permissions()
+      )
+
+    {:ok, record} =
+      Prima.Confirmation.new(
+        id: Prima.Confirmation.ref("cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32))),
+        home: Sanctum.origin(),
+        rp_id: URI.parse(Sanctum.origin()).host,
+        athanor: athanor_id,
+        person: user.id,
+        operation: "vault.create",
+        args_digest: Prima.Digest.sha256("args"),
+        action: "credential_entry",
+        preview: %{home: Sanctum.origin(), athanor: "Home", operation: "vault.create"},
+        challenge: :crypto.strong_rand_bytes(32),
+        expires_at: System.system_time(:millisecond) + 300_000
+      )
+
+    {:ok, row} =
+      Arca.PendingConfirmations.open(Sanctum.Context.actor(ctx), %{
+        record: record,
+        opener: "session:test",
+        asker: %{"kind" => "session"}
+      })
+
+    {:ok, %{request: request}} =
+      Sanctum.SignIn.request(:confirm, {:session, hash}, ctx: ctx, ref: row.ref)
+
+    {:ok, view, _html} = conn |> with_session(token) |> live(~p"/login")
+
+    render_hook(view, "account_answer", %{"answer" => answer_of(request, account)})
+    html = render_async(view, @answered_ms)
+    assert_push_event(view, "account:close", %{})
+
+    assert view |> element(~s([data-test="confirmed"])) |> render() =~
+             "This tab closes by itself."
+
+    refute has_element?(view, ~s([data-test="sign-in"]))
+    refute_vocabulary(html)
+
+    assert {:ok, %{state: "confirmed"}} =
+             Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), row.ref)
   end
 end

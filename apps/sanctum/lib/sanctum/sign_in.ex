@@ -135,6 +135,29 @@ defmodule Sanctum.SignIn do
   reason is logged by its shape. A request held on another member, or
   after this one restarted, is unknown here.
 
+  ## A passkey for an account a browser holds none of
+
+  The account pages may answer a browser's `:sign_in` request with a new
+  passkey instead (`Prima.SignIn.NewPasskey`): the passkey they made for
+  the account the person named. `answer/3` takes it through steps 1 and 2
+  and `Prima.SignIn.offered/3` (a `:sign_in` request, `:answer_refused`
+  otherwise), reads no log, since it signs nothing and admits no one, and
+  holds it for the request's lifetime, keyed by the account and a fresh
+  public `ref`, with its short code (`Prima.SignIn.NewPasskey.code/1`),
+  which the browser's page then shows. Anyone who knows a name can offer
+  one, so at most `max_waiting/0` wait for an account at once: another is
+  refused `:too_many_waiting` until one is added or expires, and the
+  person approves only the code the browser in front of them shows.
+  Whether the identifier names a person here, or an account at all, is
+  never said: the page and the bound read the same for any account. `waiting/2` lists a person's own waiting
+  passkeys, which their devices list (`pairing.waiting`): a device of the
+  account adds one to the account's log with its own key, after the
+  person compares its code, and the browser then signs in with it like
+  any passkey. A waiting passkey leaves only when its time ends, added or
+  not, so nothing an outsider can see of the bound says whether anyone
+  signed in here: the owner's own list leaves out one the account's log
+  already lists, read for the owner now. One never added adds nothing.
+
   ## Registry answers
 
   `record_namespace/2`: the namespace lands on the `users` row the moment
@@ -149,7 +172,7 @@ defmodule Sanctum.SignIn do
   require Logger
 
   alias Prima.Identity.Encoding
-  alias Prima.SignIn.{DeviceAnswer, PasskeyAnswer}
+  alias Prima.SignIn.{DeviceAnswer, NewPasskey, PasskeyAnswer}
   alias Sanctum.Context
   alias Sanctum.Tenancy.Users
 
@@ -181,9 +204,24 @@ defmodule Sanctum.SignIn do
   """
   @type minted :: %{request: Prima.SignIn.t(), url: String.t() | nil}
 
+  @typedoc """
+  A passkey a browser offered for an account, waiting for a device of the
+  account to add it: its public `ref`, the account's `identifier`, the
+  `key`, its short `code` and when it was offered (`asked_at`, in
+  milliseconds).
+  """
+  @type waiting :: %{
+          ref: String.t(),
+          identifier: String.t(),
+          key: Prima.Identity.Key.t(),
+          code: String.t(),
+          asked_at: non_neg_integer()
+        }
+
   @typedoc "What an accepted answer did, by its purpose."
   @type outcome ::
           %{purpose: :sign_in, user: Users.user(), session_token: String.t()}
+          | %{purpose: :sign_in, waiting: String.t()}
           | %{purpose: :sign_in, user: Users.user(), kid: String.t()}
           | %{purpose: :confirm, ref: String.t(), back: String.t() | nil}
           | %{
@@ -460,6 +498,18 @@ defmodule Sanctum.SignIn do
     end
   end
 
+  @doc """
+  The host of the account pages a browser is sent to (`request/3`'s url),
+  which the setup and invitation pages name before they send it there.
+  """
+  @spec directory_host() :: String.t()
+  def directory_host do
+    # The boot refused a directory URL with no host (`directory/0`).
+    case URI.parse(directory()) do
+      %URI{host: host} when is_binary(host) -> host
+    end
+  end
+
   # The directory's origin: its account pages are served at its root. The
   # boot refused a deployment naming none, or one that is no directory URL
   # (`Sanctum.Supervisor`).
@@ -489,6 +539,13 @@ defmodule Sanctum.SignIn do
 
   defp key(challenge), do: {:sign_in_request, challenge}
   defp nonce_key(nonce), do: {:sign_in_registry_nonce, nonce}
+  defp waiting_key(identifier, ref), do: {:sign_in_new_passkey, identifier, ref}
+
+  @max_waiting 3
+
+  @doc "How many passkeys browsers offered may wait for one account at once."
+  @spec max_waiting() :: pos_integer()
+  def max_waiting, do: @max_waiting
 
   # ---- the answer --------------------------------------------------------------
 
@@ -497,8 +554,11 @@ defmodule Sanctum.SignIn do
   by `binding` (or by any binding of a list, as a browser holds its
   forgery token and its session together), and do what its purpose does
   (the module doc). `answer`
-  is a passkey's answer as its fragment, or a decoded
-  `Prima.SignIn.PasskeyAnswer` or `Prima.SignIn.DeviceAnswer`. `opts`:
+  is the account pages' answer as its fragment, or a decoded
+  `Prima.SignIn.PasskeyAnswer`, `Prima.SignIn.NewPasskey` or
+  `Prima.SignIn.DeviceAnswer`. A new passkey is held, not checked against
+  a log, and answers its short code (`%{purpose: :sign_in, waiting:
+  code}`). `opts`:
   `:ref`, the confirmation the answer must be for, and `:operation` with
   `:body`, the registry operation and body it must be for, so an answer
   to any other request is refused before it does anything; `:now`, the
@@ -508,13 +568,18 @@ defmodule Sanctum.SignIn do
   a `:registry` request is the `Prima.RegistryRequest` it signed (the
   module doc).
 
-  Refusals: `:answer_refused`, `:identity_stale`, `:identity_gone`,
+  Refusals: `:answer_refused`, `:too_many_waiting` (a new passkey past
+  `max_waiting/0`), `:identity_stale`, `:identity_gone`,
   `:stale_head`, `{:door, reason}`, `:invitation_invalid`,
   `:setup_closed`, `:not_set_up`, `:not_standing`, the newcomer's own
   refusals (`Sanctum.Newcomer.admit/2`), `:unavailable`.
   """
   @spec answer(
-          String.t() | PasskeyAnswer.t() | DeviceAnswer.t() | Prima.RegistryRequest.t(),
+          String.t()
+          | PasskeyAnswer.t()
+          | NewPasskey.t()
+          | DeviceAnswer.t()
+          | Prima.RegistryRequest.t(),
           binding() | [binding()],
           keyword()
         ) ::
@@ -523,10 +588,23 @@ defmodule Sanctum.SignIn do
 
   def answer(fragment, binding, opts) when is_binary(fragment) do
     with {:ok, map} <- Prima.SignIn.parse_fragment(fragment),
-         {:ok, answer} <- PasskeyAnswer.decode(map) do
+         {:ok, answer} <- Prima.SignIn.decode_answer(map) do
       answer(answer, binding, opts)
     else
       {:error, reason} -> refused(reason)
+    end
+  end
+
+  def answer(%NewPasskey{} = answer, binding, opts) when is_list(opts) do
+    now = Keyword.get_lazy(opts, :now, fn -> System.system_time(:millisecond) end)
+
+    with {:ok, held} <- spent(answer.challenge),
+         :ok <- bound(held.binding, binding),
+         :ok <- expected(held, opts),
+         {:ok, home} <- home(),
+         {:ok, key} <- offered(answer, held.request, home, now),
+         :ok <- wait(answer.identifier, key, now) do
+      {:ok, %{purpose: :sign_in, waiting: NewPasskey.code(key)}}
     end
   end
 
@@ -558,6 +636,89 @@ defmodule Sanctum.SignIn do
   end
 
   def answer(_answer, _binding, _opts), do: refused(:invalid_answer)
+
+  defp offered(answer, request, home, now) do
+    case Prima.SignIn.offered(answer, request, home: home, now: now) do
+      {:ok, key} -> {:ok, key}
+      {:error, reason} -> refused(reason)
+    end
+  end
+
+  # Held for a request's lifetime, keyed by the account and its own public
+  # ref: a device of that account reads it there, and nothing else does.
+  # It is counted once held, and taken back when more than the bound wait,
+  # so answers that race each other never leave more than the bound held.
+  defp wait(identifier, key, now) do
+    ref = Encoding.b64(:crypto.strong_rand_bytes(16))
+
+    waiting = %{
+      ref: ref,
+      identifier: identifier,
+      key: key,
+      code: NewPasskey.code(key),
+      asked_at: now
+    }
+
+    held = waiting_key(identifier, ref)
+
+    with :ok <- put(held, waiting) do
+      if length(Arca.Cache.match(waiting_key(identifier, :_))) > @max_waiting do
+        Arca.Cache.invalidate(held)
+        {:error, :too_many_waiting}
+      else
+        :ok
+      end
+    end
+  end
+
+  defp put(key, waiting) do
+    case Arca.Cache.put(key, waiting, Prima.SignIn.lifetime_ms()) do
+      :ok -> :ok
+      {:error, _unavailable} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  The passkeys browsers offered for the caller's own account and that wait
+  for a device of it to add them (the module doc), oldest first; with a
+  `ref`, that one alone, or none. A passkey the account's log lists now,
+  read for the caller from its directory, is left out: it was added. A log
+  that cannot be read leaves out none, and the device that adds one says
+  when the account lists it already. Only a person here with an account
+  has any: `:unauthenticated` for any other caller, `:unavailable` when
+  the store cannot answer. A passkey offered on another member of the cell
+  is not listed here.
+  """
+  @spec waiting(Context.t(), String.t() | nil) ::
+          {:ok, [waiting()]} | {:error, :unauthenticated | :unavailable}
+  def waiting(%Context{user_id: user_id}, ref) when is_binary(user_id) do
+    with {:ok, identifier} <- account_of(user_id) do
+      offered =
+        identifier
+        |> waiting_key(ref || :_)
+        |> Arca.Cache.match()
+        |> Enum.map(&elem(&1, 1))
+
+      listed = if offered == [], do: [], else: listed(identifier)
+
+      {:ok,
+       offered
+       |> Enum.reject(&(&1.key.kid in listed))
+       |> Enum.sort_by(&{&1.asked_at, &1.ref})}
+    end
+  end
+
+  def waiting(%Context{}, _ref), do: {:error, :unauthenticated}
+
+  # The kids the account's log lists now, read from its directory.
+  defp listed(identifier) do
+    with {:ok, head} <- Sanctum.IdentityFreshness.fresh!(identifier),
+         {:ok, state} <- state(head) do
+      Enum.map(state.keys, & &1.kid)
+    else
+      _unread -> []
+    end
+  end
 
   # Taken, so spent on this answer whatever the rest says.
   defp spent(challenge) do
@@ -939,7 +1100,10 @@ defmodule Sanctum.SignIn do
     with {:ok, :allowed} <- Sanctum.Door.sign_in(user), do: unlocked(user.id)
   end
 
-  defp admitted(_user, _admission), do: {:error, :not_standing}
+  # A person this CYFR held and no longer admits reads what a stranger
+  # reads: the door's one refusal, so no sentence tells a denied person
+  # from one nobody listed.
+  defp admitted(_user, _admission), do: {:error, {:door, :denied}}
 
   # A new person: admitted under the request's admission, or as the door
   # admits their identifier. One another answer made meanwhile is the

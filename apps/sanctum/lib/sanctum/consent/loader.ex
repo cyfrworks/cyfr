@@ -535,6 +535,11 @@ defmodule Sanctum.Consent.Loader do
   read by its tag (`Arca.ConsentStorage.row_identity/1`):
 
     * `{:entry, entry_id, binding_digest}` — the athanor's own entry;
+    * `{:program, row_id, result}` — the athanor's own program row a
+      login need binds, read live (`Sanctum.Mount.program/2`):
+      `{:ok, row}` while it stands at the digest the row was approved at,
+      `{:error, :binding_went_stale}` when it does not, and the read's
+      own refusal otherwise (`:not_found`, `:database_error`);
     * `{:selection, label, result}` — a selection (`via`) of the profile
       `label`, resolved exactly as `load_root/3` resolves it:
       `{:ok, vault}`, the lender's bound vault, or
@@ -564,9 +569,14 @@ defmodule Sanctum.Consent.Loader do
   """
   @spec row_binding(Context.t(), map(), map()) ::
           {:entry, String.t(), String.t()}
+          | {:program, String.t(), {:ok, map()} | {:error, term()}}
           | {:selection, String.t(), {:ok, map()} | {:error, term()}}
           | {:share, String.t(), {:ok, map()} | {:error, term()}}
           | :malformed
+  def row_binding(%Context{} = ctx, _consent, %{mcp_server_id: id, binding_digest: digest})
+      when is_binary(id),
+      do: {:program, id, live_program(ctx, id, digest)}
+
   def row_binding(%Context{} = ctx, consent, ref) when is_map(consent) and is_map(ref) do
     case Arca.ConsentStorage.row_identity(ref) do
       {:entry, _key, entry_id, digest} ->
@@ -580,6 +590,24 @@ defmodule Sanctum.Consent.Loader do
 
       :none ->
         :malformed
+    end
+  end
+
+  # A program row's liveness: the row as the athanor holds it, at the
+  # digest the binding was approved at.
+  defp live_program(ctx, id, digest) do
+    case Sanctum.Mount.program(ctx, id) do
+      {:ok, row} ->
+        with true <- is_binary(digest),
+             {:ok, live} <- Sanctum.ToolServerDigest.definition(row),
+             true <- Plug.Crypto.secure_compare(live, digest) do
+          {:ok, row}
+        else
+          _moved_or_unrecorded -> {:error, :binding_went_stale}
+        end
+
+      {:error, _} = refused ->
+        refused
     end
   end
 

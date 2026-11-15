@@ -3,8 +3,7 @@
 
 defmodule Opus.Programs.DefinitionTest do
   @moduledoc """
-  A program's backends: named, capped per server, a command that
-  names no vault entry, env names that are neither malformed nor reserved,
+  A program's definition: one command that names no vault entry, env names that are neither malformed nor reserved,
   and env values that are vault templates except for the non-secret names
   that may hold literals; a command that places a vault-bound value on the
   command line is accepted and warned of. A program is one kind, marked
@@ -12,12 +11,11 @@ defmodule Opus.Programs.DefinitionTest do
   """
   use ExUnit.Case, async: true
 
-  alias Opus.Programs.Definition, as: BackendDefinition
+  alias Opus.Programs.Definition
 
-  defp backend(overrides \\ %{}) do
+  defp config(overrides \\ %{}) do
     Map.merge(
       %{
-        "name" => "github",
         "command" => "npx -y @modelcontextprotocol/server-github",
         "env" => %{
           "GITHUB_PERSONAL_ACCESS_TOKEN" => "Bearer vault:gh-token",
@@ -29,69 +27,56 @@ defmodule Opus.Programs.DefinitionTest do
   end
 
   defp token(command, env \\ %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token"}) do
-    [%{"name" => "github", "command" => command, "env" => env}]
+    %{"command" => command, "env" => env}
   end
 
-  defp refused(backends) do
-    assert {:error, {:invalid_argument, message}} = BackendDefinition.validate(backends)
+  defp refused(config) do
+    assert {:error, {:invalid_argument, message}} = Definition.validate(config)
     message
   end
 
-  test "a valid list is answered normalized, with an absent env as an empty map" do
-    bare = %{"name" => "fs", "command" => "npx -y @modelcontextprotocol/server-filesystem /tmp"}
+  test "a valid config is answered as its definition, with an absent env as an empty map" do
+    assert {:ok, definition} = Definition.validate(config(%{"timeout_ms" => 5_000}))
+    assert definition == config()
 
-    assert {:ok, [first, second]} = BackendDefinition.validate([backend(), bare])
-    assert first == backend()
-    assert second == Map.put(bare, "env", %{})
+    bare = %{"command" => "npx -y @modelcontextprotocol/server-filesystem /tmp"}
+    assert {:ok, %{"command" => _, "env" => %{}}} = Definition.validate(bare)
   end
 
-  test "backend names are lowercase slugs of at most 32 characters, unique within the server" do
-    for name <- ["", "GitHub", "-lead", "has space", "a__b", String.duplicate("a", 33), 7] do
-      assert refused([backend(%{"name" => name})]) =~ "Backend name"
-    end
-
-    assert {:ok, _} =
-             BackendDefinition.validate([backend(%{"name" => String.duplicate("a", 32)})])
-
-    assert refused([backend(), backend()]) =~ "used twice"
-  end
-
-  test "a server has at least one backend and at most the configured cap" do
-    assert refused([]) =~ "at least one"
-    assert refused(nil) =~ "must be a list"
-
-    cap = BackendDefinition.max_backends()
-    many = for i <- 1..(cap + 1), do: backend(%{"name" => "b#{i}"})
-    assert refused(many) =~ "at most #{cap}"
-    assert {:ok, _} = BackendDefinition.validate(Enum.take(many, cap))
+  test "a program is one command and one environment: a backends list is an unknown key" do
+    assert refused(%{"backends" => [config()]}) =~ "unknown keys: backends"
+    assert refused(config(%{"cwd" => "/"})) =~ "unknown keys: cwd"
+    assert refused(nil) =~ "must be an object"
+    assert Definition.program_name() == "program"
   end
 
   test "a command is a non-empty string that names no vault entry" do
-    assert refused([backend(%{"command" => "  "})]) =~ "needs a command"
-    assert refused([backend(%{"command" => nil})]) =~ "command"
-    assert refused([backend(%{"command" => "run --token vault:gh-token"})]) =~ "visible"
-    assert refused([backend(%{"command" => "run VAULT:gh"})]) =~ "visible"
-    assert refused([backend(%{"command" => "a" <> <<0>>})]) =~ "NUL"
+    assert refused(config(%{"command" => "  "})) =~ "needs a command"
+    assert refused(config(%{"command" => nil})) =~ "command"
+    assert refused(%{"env" => %{}}) =~ "command"
+    assert refused(config(%{"command" => "run --token vault:gh-token"})) =~ "visible"
+    assert refused(config(%{"command" => "run VAULT:gh"})) =~ "visible"
+    assert refused(config(%{"command" => "a" <> <<0>>})) =~ "NUL"
     too_long = String.duplicate("a", Prima.LocusBackends.max_command_bytes() + 1)
-    assert refused([backend(%{"command" => too_long})]) =~ "longer"
+    assert refused(config(%{"command" => too_long})) =~ "longer"
 
     assert {:ok, _} =
-             BackendDefinition.validate([
-               backend(%{"command" => binary_part(too_long, 1, byte_size(too_long) - 1)})
-             ])
+             Definition.validate(
+               config(%{"command" => binary_part(too_long, 1, byte_size(too_long) - 1)})
+             )
   end
 
   # A definition whose command places a vault-bound value on the command
   # line is the administrator's to make: it is accepted as written and
   # carries the warning.
-  defp warned(backends) do
-    assert {:ok, normalized} = BackendDefinition.validate(backends)
-    assert normalized == Enum.map(backends, &Map.put_new(&1, "env", %{}))
-    BackendDefinition.warnings(normalized)
+  defp warned(config) do
+    assert {:ok, normalized} = Definition.validate(config)
+    assert normalized == Map.put_new(config, "env", %{})
+    Definition.warnings(normalized)
   end
 
   @exposed "on the command line, where every process on the backends service, other " <>
-             "athanors' backends included, can read it; the safe route is to let the " <>
+             "athanors' programs included, can read it; the safe route is to let the " <>
              "program read it from its environment."
 
   describe "a vault-bound env name on the command line is warned of" do
@@ -107,8 +92,8 @@ defmodule Opus.Programs.DefinitionTest do
             "npx server --token $GITHUB_PERSONAL_\\\nACCESS_TOKEN"
           ] do
         assert warned(token(command)) == [
-                 "Backend 'github' expands GITHUB_PERSONAL_ACCESS_TOKEN, a vault-bound env " <>
-                   "name, in its command: the value is placed " <> @exposed
+                 "The command expands GITHUB_PERSONAL_ACCESS_TOKEN, a vault-bound env " <>
+                   "name: the value is placed " <> @exposed
                ],
                command
       end
@@ -126,7 +111,7 @@ defmodule Opus.Programs.DefinitionTest do
             {"npx server --token $\\\n(printenv GITHUB_PERSONAL_ACCESS_TOKEN)", "$("}
           ] do
         assert warned(token(command)) == [
-                 "Backend 'github' has #{inspect(form)} in its command beside the vault-bound " <>
+                 "The command has #{inspect(form)} beside the vault-bound " <>
                    "GITHUB_PERSONAL_ACCESS_TOKEN: a command substitution, arithmetic expansion " <>
                    "or indirection can place the value " <> @exposed
                ],
@@ -141,18 +126,10 @@ defmodule Opus.Programs.DefinitionTest do
     test "every expanded name is warned of, then a computing form beside the others" do
       env = %{"A_TOKEN" => "vault:a", "B_TOKEN" => "vault:b", "C_TOKEN" => "vault:c"}
 
-      backends =
-        token("run --a $A_TOKEN --c ${C_TOKEN} --d $(date)", env) ++
-          [%{"name" => "other", "command" => "run --b $B_TOKEN", "env" => env}]
-
-      assert [a, c, computed, b] = warned(backends)
-      assert a =~ "Backend 'github' expands A_TOKEN, a vault-bound env name"
-      assert c =~ "Backend 'github' expands C_TOKEN, a vault-bound env name"
-
-      assert computed =~
-               ~s(Backend 'github' has "$(" in its command beside the vault-bound B_TOKEN: )
-
-      assert b =~ "Backend 'other' expands B_TOKEN, a vault-bound env name"
+      assert [a, c, computed] = warned(token("run --a $A_TOKEN --c ${C_TOKEN} --d $(date)", env))
+      assert a =~ "The command expands A_TOKEN, a vault-bound env name"
+      assert c =~ "The command expands C_TOKEN, a vault-bound env name"
+      assert computed =~ ~s(The command has "$(" beside the vault-bound B_TOKEN: )
     end
 
     test "a command that reads the value from its environment carries no warning" do
@@ -173,36 +150,35 @@ defmodule Opus.Programs.DefinitionTest do
       command = "node \"$(npm root -g)/server/index.js\" --env $NODE_ENV `date +%s`"
       assert warned(token(command, env)) == []
       assert warned(token(command, %{})) == []
-      assert warned([%{"name" => "bare", "command" => command}]) == []
+      assert warned(%{"command" => command}) == []
     end
 
     test "a literal-name entry bound to the vault is vault-bound too" do
       assert [warning] = warned(token("run --log $DEBUG", %{"DEBUG" => "vault:dbg"}))
-      assert warning =~ "Backend 'github' expands DEBUG"
+      assert warning =~ "The command expands DEBUG"
     end
 
     test "the literal vault: refusal stands beside the warning" do
-      assert refused(token("run --token vault:gh-token")) =~ "names a vault entry in its command"
+      assert refused(token("run --token vault:gh-token")) =~ "names a vault entry"
 
-      assert refused(token("run --token VAULT:gh-token", %{})) =~
-               "names a vault entry in its command"
+      assert refused(token("run --token VAULT:gh-token", %{})) =~ "names a vault entry"
     end
   end
 
   test "env names are well formed and none is reserved" do
     for name <- ["lower", "1ST", "A-B", String.duplicate("A", 65)] do
-      assert refused([backend(%{"env" => %{name => "vault:x"}})]) =~ "must match"
+      assert refused(config(%{"env" => %{name => "vault:x"}})) =~ "must match"
     end
 
     for name <-
           ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD CYFR_LOCUS_BACKENDS_KEY LOCUS_BACKENDS_PORT KEEPER_CHANNEL) do
-      assert refused([backend(%{"env" => %{name => "vault:x"}})]) =~ "reserved"
+      assert refused(config(%{"env" => %{name => "vault:x"}})) =~ "reserved"
     end
   end
 
   # The keeper's vectors and the backends wire's hold the prefixes the
   # keeper and the backends service refuse, and the wire's the names the
-  # service lets hold a literal, so a backend CYFR accepts is one neither
+  # service lets hold a literal, so a program CYFR accepts is one neither
   # of them refuses for its env.
   test "the reserved prefixes and the literal names are the keeper's and the backends wire's vectors'" do
     vectors = fn name ->
@@ -220,108 +196,94 @@ defmodule Opus.Programs.DefinitionTest do
     assert Prima.LocusBackends.literal_env_names() == wire["literal_env_names"]
 
     for name <- Prima.LocusBackends.reserved_env_names() ++ Enum.map(prefixes, &(&1 <> "TOKEN")) do
-      assert refused([backend(%{"env" => %{name => "vault:x"}})]) =~ "reserved"
+      assert refused(config(%{"env" => %{name => "vault:x"}})) =~ "reserved"
     end
   end
 
   test "an env value is a vault template; only the non-secret names may hold a literal" do
-    assert refused([backend(%{"env" => %{"API_KEY" => "sk-literal"}})]) =~
+    assert refused(config(%{"env" => %{"API_KEY" => "sk-literal"}})) =~
              "must reference a vault entry"
 
     for unresolved <- ["secret:x", "Token secret:x", "vault:"] do
-      assert refused([backend(%{"env" => %{"API_KEY" => unresolved}})]) =~ "does not resolve"
-      assert refused([backend(%{"env" => %{"NODE_ENV" => unresolved}})]) =~ "does not resolve"
+      assert refused(config(%{"env" => %{"API_KEY" => unresolved}})) =~ "does not resolve"
+      assert refused(config(%{"env" => %{"NODE_ENV" => unresolved}})) =~ "does not resolve"
     end
 
-    assert refused([backend(%{"env" => %{"API_KEY" => 42}})]) =~ "string value"
+    assert refused(config(%{"env" => %{"API_KEY" => 42}})) =~ "string value"
+    assert refused(config(%{"env" => ["API_KEY"]})) =~ "must be an object"
 
     for name <- Prima.LocusBackends.literal_env_names() do
-      assert {:ok, _} = BackendDefinition.validate([backend(%{"env" => %{name => "1"}})])
+      assert {:ok, _} = Definition.validate(config(%{"env" => %{name => "1"}}))
     end
-  end
-
-  test "a backend carries only a name, a command and an env" do
-    assert refused([backend(%{"cwd" => "/"})]) =~ "unknown keys: cwd"
   end
 
   test "the vault entries the env templates reference, sorted and unique" do
-    backends = [
-      backend(),
-      %{"name" => "b", "command" => "x", "env" => %{"A" => "vault:zeta", "B" => "vault:gh-token"}}
-    ]
+    definition =
+      config(%{
+        "env" => %{
+          "A" => "vault:zeta",
+          "B" => "vault:gh-token",
+          "C" => "Bearer vault:gh-token",
+          "NODE_ENV" => "production"
+        }
+      })
 
-    assert BackendDefinition.entry_names(backends) == ["gh-token", "zeta"]
-    assert BackendDefinition.entry_names(nil) == []
+    assert Definition.entry_names(definition) == ["gh-token", "zeta"]
+    assert Definition.entry_names(%{}) == []
+    assert Definition.entry_names(nil) == []
   end
 
   describe "one kind of program, marked by how it is spoken to" do
     defp row(overrides),
       do:
         Map.merge(
-          %{"transport" => "program", "backends" => [backend()], "home" => "scratch"},
+          Map.merge(config(), %{"transport" => "program", "home" => "scratch"}),
           overrides
         )
 
     test "a program saved as mcp and one saved as driven run through one definition" do
-      assert {:ok, mcp} = BackendDefinition.validate_row(row(%{"mark" => "mcp"}))
-      assert {:ok, driven} = BackendDefinition.validate_row(row(%{"mark" => "driven"}))
+      assert {:ok, mcp} = Definition.validate_row(row(%{"mark" => "mcp"}))
+      assert {:ok, driven} = Definition.validate_row(row(%{"mark" => "driven"}))
 
-      # The columns differ in the mark alone, and the programs a sync defines
-      # from either row are the same, on the wire as in memory.
+      # The columns differ in the mark alone, and the program a sync defines
+      # from either row is the same, on the wire as in memory.
       assert Map.delete(mcp, :mark) == Map.delete(driven, :mark)
       assert {mcp.mark, driven.mark} == {"mcp", "driven"}
 
       stored = fn columns -> Map.merge(columns, %{transport: "program"}) end
-      {:ok, [backend]} = BackendDefinition.validate([backend()])
+      {:ok, definition} = Definition.validate(row(%{"mark" => "mcp"}))
 
-      assert {:ok, [program]} = BackendDefinition.programs(stored.(mcp), [backend])
-      assert {:ok, [^program]} = BackendDefinition.programs(stored.(driven), [backend])
-      assert BackendDefinition.wire(program).command == backend()["command"]
+      assert {:ok, program} = Definition.program(stored.(mcp), definition)
+      assert {:ok, ^program} = Definition.program(stored.(driven), definition)
+      assert program.name == Definition.program_name()
+      assert Definition.wire(program).command == config()["command"]
     end
 
     test "the mark is mcp or driven, and nothing reads the old kinds" do
       for mark <- [nil, "pipe", "stdio", "MCP"] do
         assert {:error, {:invalid_argument, message}} =
-                 BackendDefinition.validate_row(row(%{"mark" => mark}))
+                 Definition.validate_row(row(%{"mark" => mark}))
 
         assert message =~ "config.mark must be mcp"
       end
 
       for transport <- ["stdio", "pipe", "http"] do
         assert {:error, {:invalid_argument, "Only a row whose transport is program is a program"}} =
-                 BackendDefinition.validate_row(row(%{"transport" => transport, "mark" => "mcp"}))
+                 Definition.validate_row(row(%{"transport" => transport, "mark" => "mcp"}))
       end
     end
 
-    test "a driven program is one backend; an mcp program may define several" do
-      two = [backend(), backend(%{"name" => "other"})]
+    test "a kept program of either mark names no login entry: its folder is its row's" do
+      for mark <- ["mcp", "driven"] do
+        assert {:ok, columns} =
+                 Definition.validate_row(row(%{"mark" => mark, "home" => "kept"}))
 
-      assert {:ok, %{mark: "mcp"}} =
-               BackendDefinition.validate_row(row(%{"mark" => "mcp", "backends" => two}))
+        assert columns.home == "kept"
+        refute Map.has_key?(columns, :login_entry_id)
+      end
 
-      assert {:error,
-              {:invalid_argument,
-               "A driven program is one program: it defines exactly one backend"}} =
-               BackendDefinition.validate_row(row(%{"mark" => "driven", "backends" => two}))
-    end
-
-    test "a kept mcp program names its login entry; a driven one names none" do
-      assert {:error, {:invalid_argument, message}} =
-               BackendDefinition.validate_row(row(%{"mark" => "mcp", "home" => "kept"}))
-
-      assert message =~ "A kept mcp program names the login entry"
-
-      assert {:ok, %{login_entry_id: "ent_1"}} =
-               BackendDefinition.validate_row(
-                 row(%{"mark" => "mcp", "home" => "kept", "login_entry_id" => "ent_1"})
-               )
-
-      assert {:error,
-              {:invalid_argument,
-               "A driven program names no login entry: its catalyst's need binds one"}} =
-               BackendDefinition.validate_row(
-                 row(%{"mark" => "driven", "home" => "kept", "login_entry_id" => "ent_1"})
-               )
+      refute "login_entry_id" in Definition.program_keys()
+      refute "login_entry_id" in Definition.config_keys()
     end
   end
 end

@@ -110,7 +110,9 @@ defmodule PrismWeb.ConsentSheetComponent do
       named account of the edge under its `name`;
     * narrowing, per node, for each kind its enforcement point can check:
       the egress domains, methods, schemes and private ranges and the
-      storage actions as exact values, the storage paths through a picker
+      storage actions as exact values, a host the person names under a
+      wildcard host the ask carries (the preview says whether it lies
+      inside the ask, as the commit does), the storage paths through a picker
       over `file.list` inside each asked folder, the tools per action (a
       wildcard ask whole or none), the limits, each capped at the ask
       and sent only when lowered, and the flows to each exit, one class at
@@ -180,6 +182,7 @@ defmodule PrismWeb.ConsentSheetComponent do
       lowerable: 1,
       lowered: 3,
       map_pending?: 1,
+      mib: 1,
       mapped: 2,
       new_choice: 3,
       row_needs: 1,
@@ -197,6 +200,8 @@ defmodule PrismWeb.ConsentSheetComponent do
   }
 
   @read_methods ~w(GET HEAD)
+
+  @mib 1_048_576
 
   @impl true
   def mount(socket) do
@@ -619,6 +624,30 @@ defmodule PrismWeb.ConsentSheetComponent do
         {:noreply, socket |> assign(:subset, subset) |> walk_again({kind, node})}
       else
         {:noreply, socket}
+      end
+    end)
+  end
+
+  # A host the person names under a wildcard host the ask carries, added
+  # to the hosts it may talk to. Whether it lies inside the ask is the
+  # home's to say: the preview answers it, or refuses it beside the row.
+  # A node whose ask names no wildcard host offers no such box, and the
+  # event is refused there as the box is absent, the walk left as it was.
+  def handle_event("add_host", %{"node" => node, "host" => host}, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      host = String.trim(host)
+      granted = granted_values(socket, node, "egress", "domains")
+      offered? = wildcard_host?(ask_row(socket.assigns.plan, "egress", node))
+
+      if not offered? or host == "" or host in granted do
+        {:noreply, socket}
+      else
+        asked = asked_values(socket.assigns.plan, node, "egress", "domains")
+
+        subset =
+          put_set(socket.assigns.subset, node, "egress", "domains", granted ++ [host], asked)
+
+        {:noreply, socket |> assign(:subset, subset) |> walk_again({"egress", node})}
       end
     end)
   end
@@ -1350,10 +1379,10 @@ defmodule PrismWeb.ConsentSheetComponent do
               <li :for={entry <- group.entries}>
                 <strong>{capability_label(entry.capability)}</strong>
                 <span :if={entry.added != []}>
-                  asks for {Enum.join(entry.added, ", ")}, which your grant does not give
+                  asks for {delta_values(entry.capability, entry.added)}, which your grant does not give
                 </span>
                 <span :if={entry.removed != []}>
-                  no longer asks for {Enum.join(entry.removed, ", ")}
+                  no longer asks for {delta_values(entry.capability, entry.removed)}
                 </span>
               </li>
             </ul>
@@ -1714,13 +1743,13 @@ defmodule PrismWeb.ConsentSheetComponent do
       >
         <.link
           :if={@athanor_route}
-          navigate={PrismWeb.Focus.path(@athanor_route, "/vault")}
+          navigate={PrismWeb.Focus.path(@athanor_route, elem(empty_offer(@need), 0))}
           class="consent-sheet__link underline"
         >
-          Add a vault entry
+          {elem(empty_offer(@need), 1)}
         </.link>
-        <span :if={!@athanor_route}>Add a vault entry</span>
-        for {need_for(@need)} first.
+        <span :if={!@athanor_route}>{elem(empty_offer(@need), 1)}</span>
+        {elem(empty_offer(@need), 2)}
       </p>
 
       <p :if={is_binary(field(@need, :newer_shipped))} class="consent-sheet__update">
@@ -2124,6 +2153,24 @@ defmodule PrismWeb.ConsentSheetComponent do
           />
           <span class="font-mono">{value}</span>
         </label>
+        <form
+          :if={@controls? and field == "domains" and wildcard_host?(@ask)}
+          phx-submit="add_host"
+          phx-target={@myself}
+          class="consent-sheet__add-host flex flex-wrap items-center gap-2"
+          data-test="grant-add-host"
+        >
+          <input type="hidden" name="node" value={@row["node"]} />
+          <input
+            type="text"
+            name="host"
+            placeholder="a host under the wildcard"
+            aria-label="A host it may talk to, under the wildcard"
+            autocomplete="off"
+            class="font-mono text-xs"
+          />
+          <button type="submit" class="consent-sheet__choice">Add host</button>
+        </form>
         <span :if={@controls? and field == "paths"}>
           <button
             :for={folder <- folders(@ask)}
@@ -2199,12 +2246,20 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   defp row(%{row: %{"kind" => "tool_servers"}} = assigns) do
+    assigns = assign(assigns, :changes, server_changes(assigns.head, assigns.row["values"]))
+
     ~H"""
     <div class="consent-sheet__row" data-row="tool_servers" data-node={@row["node"]}>
       <.node_line row={@row} />
       <span class="font-medium">{@row["values"]["name"]}</span>
       <span class="font-mono text-xs text-gray-400">{@row["values"]["digest"]}</span>
       <div>Its tools matching: {list_label(@row["values"]["tool_patterns"], "none")}</div>
+      <div :for={line <- record_lines(@row["values"]["record"])} data-test="server-record">
+        {line}
+      </div>
+      <ul :if={@changes != []} class="consent-sheet__changes" data-test="server-changes">
+        <li :for={sentence <- @changes}>{sentence}</li>
+      </ul>
     </div>
     """
   end
@@ -2303,7 +2358,7 @@ defmodule PrismWeb.ConsentSheetComponent do
             phx-value-choice={class}
             checked={on?}
           />
-          <span class="font-mono">{class}</span>
+          <span>{class_words(class)}</span>
         </label>
       </div>
       <.refusal refusal={@refusal} at={{"exits", @row["node"]}} />
@@ -2401,7 +2456,150 @@ defmodule PrismWeb.ConsentSheetComponent do
     |> Enum.find(&(field(&1, :binding_key) == key))
   end
 
+  # A tool server the head grants, by its name: what a re-grant's row
+  # compares the server asked for with (`server_changes/2`).
+  defp head_binding(plan, %{"kind" => "tool_servers", "values" => %{"name" => name}}) do
+    plan
+    |> field(:head_tool_servers)
+    |> List.wrap()
+    |> Enum.find(&(field(&1, :name) == name))
+  end
+
   defp head_binding(_plan, _row), do: nil
+
+  # What a grant records of a tool server, a line each: its address, each
+  # header or environment variable with the vault entry it names, a
+  # literal by its name alone, and a program's settings. The record holds
+  # no literal's value.
+  defp record_lines(%{"address" => address} = record) do
+    ["Address: #{address}"] ++
+      for(
+        {word, value} <- record_values(record),
+        do: "#{word} #{value["name"]}: #{entry_words(value)}"
+      ) ++
+      setting_lines(record)
+  end
+
+  defp record_lines(_none), do: []
+
+  defp entry_words(%{"literal" => true}), do: "a literal, its value not shown"
+
+  defp entry_words(%{"entry" => entry, "scheme" => scheme}),
+    do: "vault entry #{entry} (#{scheme})"
+
+  defp entry_words(%{"entry" => entry}), do: "vault entry #{entry}"
+
+  # A program's settings, each as the person reads it; an http server has
+  # none.
+  defp setting_lines(%{"folder" => _folder} = record) do
+    ["Folder: #{folder_words(record["folder"])}", "Hosts: #{hosts_words(record["hosts"])}"] ++
+      ["Memory bound: #{bound_words(record["memory_bytes"])}"] ++
+      ["Folder bound: #{bound_words(record["home_max_bytes"])}"] ++
+      for(command <- List.wrap(record["sign_in_command"]), do: "Sign-in command: #{command}")
+  end
+
+  defp setting_lines(_http), do: []
+
+  defp record_values(record) do
+    for {key, word} <- [{"headers", "Header"}, {"env", "Variable"}],
+        value <- List.wrap(record[key]),
+        do: {word, value}
+  end
+
+  # What moved in a tool server the head grants, as the person reads it:
+  # the record the head holds against the one asked for. The record holds
+  # everything the digest covers but a literal's value, the row's id and
+  # whether it is enabled, so when the records differ each difference is
+  # named for what it is; when they are the same under a moved digest,
+  # only that a value the card does not show changed, which is all that
+  # can be told without the values. Nothing for a first grant or an
+  # unmoved digest.
+  defp server_changes(%{} = head, %{"digest" => digest, "record" => %{} = asked}) do
+    held = field(head, :record)
+
+    cond do
+      field(head, :digest) == digest or not is_map(held) ->
+        []
+
+      held == asked ->
+        ["A value it does not show changed."]
+
+      true ->
+        kind_change(held, asked) ++
+          address_change(held["address"], asked["address"]) ++
+          value_changes(held, asked) ++ setting_changes(held, asked)
+    end
+  end
+
+  defp server_changes(_head, _values), do: []
+
+  defp kind_change(%{"env" => _}, %{"headers" => _}),
+    do: ["It is now a server reached at its address, where it was a program."]
+
+  defp kind_change(%{"headers" => _}, %{"env" => _}),
+    do: ["It is now a program, where it was a server reached at its address."]
+
+  defp kind_change(_held, _asked), do: []
+
+  defp address_change(same, same), do: []
+  defp address_change(held, asked), do: ["Its address changed from #{held} to #{asked}."]
+
+  # A program's settings, compared only between two programs: a server
+  # that became a program, or the other way, says so (`kind_change/2`).
+  defp setting_changes(%{"folder" => _} = held, %{"folder" => _} = asked) do
+    for {key, what, words} <- [
+          {"folder", "folder", &folder_words/1},
+          {"hosts", "hosts", &hosts_words/1},
+          {"memory_bytes", "memory bound", &bound_words/1},
+          {"home_max_bytes", "folder bound", &bound_words/1},
+          {"sign_in_command", "sign-in command", &(&1 || "none")}
+        ],
+        held[key] != asked[key],
+        do: "Its #{what} changed from #{words.(held[key])} to #{words.(asked[key])}."
+  end
+
+  defp setting_changes(_held, _asked), do: []
+
+  defp folder_words("kept"), do: "a folder kept between runs"
+  defp folder_words("scratch"), do: "a scratch folder"
+
+  defp hosts_words(nil), do: "every public host"
+  defp hosts_words([]), do: "no host"
+  defp hosts_words(hosts), do: Enum.join(hosts, ", ")
+
+  # A bound in whole MiB, or its exact bytes, so two bounds never read
+  # alike; absent, the service's own.
+  defp bound_words(nil), do: "the default"
+  defp bound_words(bytes) when rem(bytes, @mib) == 0, do: "#{div(bytes, @mib)} MiB"
+  defp bound_words(bytes), do: "#{bytes} bytes"
+
+  defp value_changes(held, asked) do
+    was = Map.new(record_values(held), fn {word, value} -> {{word, value["name"]}, value} end)
+    now = Map.new(record_values(asked), fn {word, value} -> {{word, value["name"]}, value} end)
+
+    for key <- Enum.sort(Enum.uniq(Map.keys(was) ++ Map.keys(now))),
+        sentence <- value_change(key, Map.get(was, key), Map.get(now, key)),
+        do: sentence
+  end
+
+  defp value_change(_key, same, same), do: []
+
+  defp value_change({word, name}, nil, now),
+    do: ["New #{String.downcase(word)} #{name}, #{naming(now)}."]
+
+  defp value_change({word, name}, _was, nil), do: ["#{word} #{name} is removed."]
+
+  defp value_change({word, name}, %{"entry" => entry}, %{"entry" => entry}),
+    do: ["#{word} #{name} names vault entry #{entry} another way."]
+
+  defp value_change({word, name}, was, now),
+    do: ["#{word} #{name} now #{naming_now(now)}, instead of #{naming(was)}."]
+
+  defp naming(%{"literal" => true}), do: "a literal"
+  defp naming(%{"entry" => entry}), do: "naming vault entry #{entry}"
+
+  defp naming_now(%{"literal" => true}), do: "is a literal"
+  defp naming_now(%{"entry" => entry}), do: "names vault entry #{entry}"
 
   # A head binding that lived once and was used: what "Grant once again"
   # renews.
@@ -2472,7 +2670,20 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp asked_methods(%{"values" => %{"methods" => methods}}) when is_list(methods), do: methods
   defp asked_methods(_ask), do: []
 
+  # Whether the ask names a wildcard host, under which the person may name
+  # hosts of their own.
+  defp wildcard_host?(ask),
+    do: Enum.any?((ask && ask["values"]["domains"]) || [], &String.contains?(&1, "*"))
+
   defp folders(ask), do: Enum.filter(ask["values"]["paths"] || [], &String.ends_with?(&1, "/"))
+
+  # A class of what a run read (`Prima.Source`), in the person's words.
+  defp class_words("pinned"), do: "the pinned page"
+  defp class_words("filed"), do: "filed notes"
+  defp class_words("files_by_grant"), do: "files its grant reads"
+  defp class_words("vault_disclosed"), do: "values the vault disclosed"
+  defp class_words("outside"), do: "anything from outside this athanor"
+  defp class_words(class), do: class
 
   # What kind of place an exit is, in the person's words.
   defp exit_label("need:" <> need), do: "where its #{need} credential goes"
@@ -2520,7 +2731,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   # whether the component reads it.
   defp credential_sentence(node, values) do
     name = values["name"]
-    source = source_words(values["source"], node)
+    source = binding_words(values["source"], values["destination"], node)
 
     used =
       case values["edge"] do
@@ -2567,6 +2778,11 @@ defmodule PrismWeb.ConsentSheetComponent do
   # Whose credential a binding is: the athanor's own entry, a key another
   # person shares (its name already says whose, "Shared by" its owner), or
   # the public configuration the app's publisher ships.
+  # What a binding is: a program of the athanor's, which a login need
+  # binds and whose destination names it, or whose credential it is.
+  defp binding_words(_source, %{"program" => _program}, _node), do: "a program of this athanor"
+  defp binding_words(source, _destination, node), do: source_words(source, node)
+
   defp source_words("own", _node), do: "an entry of this athanor"
   defp source_words("share", _node), do: "a key shared with you"
 
@@ -2593,7 +2809,20 @@ defmodule PrismWeb.ConsentSheetComponent do
     end
   end
 
-  # What a need is for: the program a login need signs in, else the hosts
+  # Where a need nothing meets yet is met from, and what to do there: a
+  # login need's program row is set up on Programs, every other need's
+  # entry is added to the vault.
+  defp empty_offer(need) do
+    case field(need, :program) do
+      program when is_binary(program) ->
+        {"/programs", "Set up the program", "#{program} with a kept folder first."}
+
+      _credential ->
+        {"/vault", "Add a vault entry", "for #{need_for(need)} first."}
+    end
+  end
+
+  # What a need is for: the program a login need runs, else the hosts
   # it calls, as it declares them.
   defp need_for(need) do
     case field(need, :program) do
@@ -2605,7 +2834,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   # Whose an entry is and where it may go; one that meets the need only
   # through a `*.` host says how wide each such host is.
   defp candidate_words(candidate) do
-    whose = source_words(field(candidate, :source), nil)
+    whose = binding_words(field(candidate, :source), field(candidate, :destination), nil)
 
     case field(candidate, :destination) do
       %{} = destination ->
@@ -2639,9 +2868,9 @@ defmodule PrismWeb.ConsentSheetComponent do
     "#{dep} uses it through its '#{field(lender, :label)}' profile, which lends #{lends}"
   end
 
-  # Where a credential goes: a login entry is mounted into the kept folder
-  # of the program its destination names, and every other entry is sent
-  # only to its destination.
+  # Where a credential goes: a login need's program row is mounted, its
+  # kept folder named by the program its destination names, and every
+  # other entry is sent only to its destination.
   defp where_words(%{"program" => program}), do: "mounted into #{program}'s kept folder"
   defp where_words(destination), do: "sent only to #{destination_label(destination)}"
 
@@ -2659,7 +2888,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp destination_label(_destination), do: ""
 
-  # A login entry is mounted, never attached or disclosed. A value not
+  # A program row is mounted, never attached or disclosed. A value not
   # disclosed to the component is one CYFR attaches to the requests bound
   # for the entry's destination, and the component never holds it.
   defp disclosure_label(%{"destination" => %{"program" => _program}}),
@@ -2701,6 +2930,10 @@ defmodule PrismWeb.ConsentSheetComponent do
     do: "#{r} per #{w}"
 
   defp limit_value("rate_requests", values), do: get_in(values, ["rate_limit", "requests"])
+
+  defp limit_value("max_memory_bytes", %{"max_memory_bytes" => bytes}) when is_integer(bytes),
+    do: mib(bytes)
+
   defp limit_value(field, values), do: values[field] || "none"
 
   # What changed since the head, by node: the app's own first, unheaded,
@@ -2733,8 +2966,13 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp capability_label("tools"), do: "Tools:"
   defp capability_label("egress." <> field), do: "Network #{field}:"
   defp capability_label("storage." <> field), do: "Files #{field}:"
-  defp capability_label("policy." <> mode), do: "Agent policy #{mode}:"
+  defp capability_label("native_search"), do: "Web search:"
   defp capability_label(capability), do: "#{capability}:"
+
+  # A change's values as the person reads them: an agent's provider search
+  # is the one value of its row, named by what it is.
+  defp delta_values("native_search", _values), do: "its provider's own web search"
+  defp delta_values(_capability, values), do: Enum.join(values, ", ")
 
   # Each field the component reads and the entry field that answers it.
   defp field_map_label(fields, _none) when is_map(fields) and map_size(fields) > 0 do
@@ -2751,7 +2989,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp title(nil), do: "Loading…"
   defp title(%{expected_consent_revision: 0}), do: "Grant this app"
-  defp title(%{expected_consent_revision: n}), do: "Update this grant (consent rev #{n})"
+  defp title(%{expected_consent_revision: _granted}), do: "Review this app's grant"
   defp title(_plan), do: "Grant this app"
 
   defp choice_class(true), do: "consent-sheet__choice consent-sheet__choice--selected"

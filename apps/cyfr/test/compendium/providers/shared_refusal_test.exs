@@ -35,7 +35,7 @@ defmodule Compendium.Providers.SharedRefusalTest do
   end
 
   test "the sentence carries the actionable hint" do
-    assert Shared.refusal(error(401, :unauthorized)).message =~ "cyfr registry sync"
+    assert Shared.refusal(error(401, :unauthorized)).message =~ "push tokens on the Registry page"
   end
 
   test "anything else, a signed request's refusal among them, is left to the gate" do

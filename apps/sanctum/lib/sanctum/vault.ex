@@ -70,6 +70,10 @@ defmodule Sanctum.Vault do
 
   require Logger
 
+  # The words a name the preview cannot hold is refused in.
+  @name_rule "A name is text of at most #{Prima.Confirmation.Preview.max_text()} bytes " <>
+               "with no line break, tab or other control character."
+
   @kinds Prima.CredentialKinds.all()
   @rebind_attempts 3
 
@@ -90,6 +94,7 @@ defmodule Sanctum.Vault do
           attach_only: boolean(),
           payload_rev: non_neg_integer(),
           last_used_at: DateTime.t() | nil,
+          created_at: DateTime.t(),
           used_by: [use_view()] | nil
         }
 
@@ -104,7 +109,8 @@ defmodule Sanctum.Vault do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Living entries in the caller's athanor, metadata only. Each entry's
+  Living entries in the caller's athanor, metadata only, each with when
+  it was made (`created_at`, as `status/1` answers it too). Each entry's
   `used_by` names the grants that bind it now: every active profile whose
   head revision binds the entry (`Arca.ConsentStorage.entry_uses/1`), by
   source and label, `[]` when none does. When those grants cannot be read
@@ -296,7 +302,7 @@ defmodule Sanctum.Vault do
   Create an entry holding material (`Sanctum.Vault.Payload`). `params`:
 
     * `:name` (required) — athanor-unique label among living entries
-    * `:kind` (required) — `"api_key" | "oauth" | "bundle" | "login"`
+    * `:kind` (required) — `"api_key" | "oauth" | "bundle"`
     * `:fields` — `%{name => value}` material map (default empty)
     * `:oauth` — token bundle map (see `Sanctum.Vault.Payload`)
     * `:provider_hint` — immutable; defaults `""`
@@ -306,23 +312,10 @@ defmodule Sanctum.Vault do
       `Prima.Destination` map (string or atom keys); absent is
       `:destination_required` and one outside the grammar
       `{:invalid_destination, reason}`, both before anything is asked; a
-      program's destination (`{"program": name}`) is a login entry's alone
-      and is refused `:program_destination_login_only` for any other kind
+      program's destination (`{"program": name}`) names no host, and is
+      refused `{:invalid_destination, :hosts_required}`
     * `:disclose` — `true` to let a component read the fields; `false`
       when absent, so the entry is attach-only unless it says otherwise
-    * `:program` — a login entry's program, the `mcp_servers` row its kept
-      home is mounted into
-
-  A `login` entry points at a program's own sign-in: it names its
-  `:program` (`:program_required` without one) and holds no material, so
-  it takes no `:fields`, `:oauth`, `:destination` or `:disclose: true`
-  (each `:login_binding_fixed`). Its destination is the program form
-  `{"program": name}`, it is attach-only, and its id is the id of the kept
-  home the program runs in (`Sanctum.Mount`); the box that holds the home
-  draws the home's uid when it first makes it, so the entry stores none.
-  It starts `needs_reauth`, its program not signed in: a sign-in of the
-  program whose command exits 0 makes it active (`Sanctum.Mount.signed_in/2`),
-  so nothing mounts it for a run before then.
 
   An `oauth` entry names its provider (`:provider_required`), and its
   endpoints are fixed here and never change: a provider hint with a preset
@@ -339,7 +332,7 @@ defmodule Sanctum.Vault do
          {:ok, name} <- required_name(params),
          {:ok, kind} <- required_kind(params),
          {:ok, endpoints} <- create_endpoints(kind, params),
-         {:ok, destination} <- create_destination(kind, params),
+         {:ok, destination} <- required_destination(params),
          {:ok, disclose} <- disclose_param(params),
          {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
          :ok <-
@@ -373,7 +366,7 @@ defmodule Sanctum.Vault do
                  id: id,
                  name: name,
                  kind: kind,
-                 status: starting_status(kind),
+                 status: "active",
                  sealed_payload: sealed,
                  binding_digest: digest
                }),
@@ -391,6 +384,10 @@ defmodule Sanctum.Vault do
 
   @doc """
   Rename the mutable label. Identity, bindings and consents are untouched.
+  The name is held to the rule create's confirmation holds it to: a name
+  a confirmation preview cannot hold (empty, longer than its text, or with
+  a control character) is refused `{:invalid_argument, sentence}`, and
+  nothing changes.
 
   It is announced like every other mutation even so. Consents bind an entry
   *id*, but an external MCP server's headers and backend env bind a
@@ -400,9 +397,10 @@ defmodule Sanctum.Vault do
   entry's material changing. That is a resolution change, and the
   reconciler is what acts on those.
   """
-  @spec rename(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def rename(%Context{} = ctx, id, new_name) when is_binary(new_name) and new_name != "" do
+  @spec rename(Context.t(), String.t(), term()) :: :ok | {:error, term()}
+  def rename(%Context{} = ctx, id, new_name) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
+         :ok <- previewable_name(new_name),
          {:ok, entry} <- get_living(ctx, id),
          :ok <- check_name_free(ctx, new_name),
          :ok <- Arca.VaultStorage.update_meta(Context.actor(ctx), id, %{name: new_name}) do
@@ -506,8 +504,7 @@ defmodule Sanctum.Vault do
          :ok <- endpoints_unnamed(params),
          :ok <- scopes_unnamed(params),
          {:ok, changes} <- rebind_changes(params),
-         {:ok, entry} <- get_living(ctx, id),
-         :ok <- not_login(entry) do
+         {:ok, entry} <- get_living(ctx, id) do
       if changes == %{} do
         {:error, :no_binding_changes}
       else
@@ -739,6 +736,7 @@ defmodule Sanctum.Vault do
       attach_only: entry.attach_only,
       payload_rev: entry.payload_rev,
       last_used_at: entry.last_used_at,
+      created_at: entry.inserted_at,
       used_by: used_by
     }
   end
@@ -746,44 +744,22 @@ defmodule Sanctum.Vault do
   defp default_view(%{provider_hint: hint, vault_entry_id: id}) when is_binary(id),
     do: {hint, %{vault_entry_id: id}}
 
+  # A name is the resource every confirmation about its entry previews
+  # (`Prima.Confirmation.Preview`): create's confirmation holds it to the
+  # preview's text rule before anything is stored, and a rename is held to
+  # the same rule, so no entry carries a name its later rotation, rebind or
+  # grant could not ask about.
+  defp previewable_name(name) do
+    if Prima.Identity.Encoding.text?(name, Prima.Confirmation.Preview.max_text()),
+      do: :ok,
+      else: {:error, {:invalid_argument, @name_rule}}
+  end
+
   defp required_name(%{name: name}) when is_binary(name) and name != "", do: {:ok, name}
   defp required_name(_), do: {:error, :name_required}
 
   defp required_kind(%{kind: kind}) when kind in @kinds, do: {:ok, kind}
   defp required_kind(_), do: {:error, {:invalid_kind, @kinds}}
-
-  # A login entry's destination is its program's, and it holds nothing a
-  # create could name beside it: no material, no destination of hosts, no
-  # disclosure. Every other kind names where its material may go.
-  defp create_destination("login", params) do
-    cond do
-      not match?(%{program: program} when is_binary(program), params) ->
-        {:error, :program_required}
-
-      Enum.any?(
-        [:destination, :oauth, :oauth_endpoints, :oauth_scopes],
-        &Map.has_key?(params, &1)
-      ) or
-        Map.get(params, :fields, %{}) != %{} or Map.get(params, :disclose) == true ->
-        {:error, :login_binding_fixed}
-
-      true ->
-        case Prima.Destination.from_map(%{"program" => params.program}) do
-          {:ok, parsed} -> {:ok, Prima.Destination.canonical(parsed)}
-          {:error, _reason} = refused -> refused
-        end
-    end
-  end
-
-  defp create_destination(_kind, %{program: _program}),
-    do: {:error, :program_destination_login_only}
-
-  defp create_destination(_kind, params), do: required_destination(params)
-
-  # A login entry's program is not signed in when the entry is made; every
-  # other entry holds its material from the start.
-  defp starting_status("login"), do: "needs_reauth"
-  defp starting_status(_kind), do: "active"
 
   # Where an entry's material may go: named by the caller, never defaulted,
   # and stored as the destination's canonical text, the bytes its binding
@@ -799,8 +775,8 @@ defmodule Sanctum.Vault do
   # A destination as a caller names it, string or atom keys, held to
   # `Prima.Destination`'s athanor-entry grammar and answered as its
   # canonical text. `Sanctum.Vault.OAuthGrant` holds a new entry's to the
-  # same rule. A program's destination is a login entry's alone, which a
-  # create of another kind, a rebind and a new OAuth entry refuse alike.
+  # same rule. A program's destination names no host: no entry has one,
+  # and a create, a rebind and a new OAuth entry refuse it alike.
   @spec destination_text(term()) :: {:ok, String.t()} | {:error, term()}
   def destination_text(%{} = destination) when not is_struct(destination) do
     case Prima.Destination.from_map(string_keys(destination)) do
@@ -808,7 +784,7 @@ defmodule Sanctum.Vault do
         {:ok, Prima.Destination.canonical(parsed)}
 
       {:ok, %Prima.Destination{}} ->
-        {:error, :program_destination_login_only}
+        {:error, {:invalid_destination, :hosts_required}}
 
       {:error, _reason} = refused ->
         refused
@@ -935,16 +911,8 @@ defmodule Sanctum.Vault do
     end
   end
 
-  # A login entry's binding is its program and nothing else, and it holds no
-  # material: a rotate or a rebind has nothing to move.
-  defp not_login(%{kind: "login"}), do: {:error, :login_binding_fixed}
-  defp not_login(_entry), do: :ok
-
   defp get_rotatable(ctx, id) do
     case get_any(ctx, id) do
-      {:ok, %{kind: "login"}} ->
-        {:error, :login_binding_fixed}
-
       {:ok, %{status: status} = entry} when status in ["active", "needs_reauth"] ->
         {:ok, entry}
 
@@ -1109,8 +1077,8 @@ defmodule Sanctum.Vault do
     end
   end
 
-  # An active entry is fine; one that waits for its owner's sign-in or a
-  # rotation needs reauthorisation; any other stands no more.
+  # An active entry is fine; one that waits for its owner to authorize it
+  # again or rotate it needs reauthorisation; any other stands no more.
   defp stream_view(%{kind: kind, status: "active"}), do: %{type: kind, status: "fine"}
 
   defp stream_view(%{kind: kind, status: "needs_reauth"}),

@@ -57,8 +57,8 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # says what is wrong with the stored resource, and nothing branches on
     # the sentence; a vault binding's scope, binding key, destination,
     # attach rule, field map, named accounts, provided configuration,
-    # lender and flows each say theirs.
-    "apps/prima/lib/prima/authority/blob.ex" => 25,
+    # lender and flows each say theirs, and so does a tool server's record.
+    "apps/prima/lib/prima/authority/blob.ex" => 26,
     "apps/prima/lib/prima/component_ref.ex" => 19,
     # An external MCP server's own faults, said to the operator: among
     # them a session id it issued that is not visible ASCII or too short
@@ -69,7 +69,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # What is wrong with the values offered (an empty field, a cron
     # expression, a reference that does not resolve) and the cap reached.
     "apps/cyfr/lib/opus/schedules/provider.ex" => 3,
-    "apps/cyfr/lib/opus/provider.ex" => 11,
+    "apps/cyfr/lib/opus/provider.ex" => 9,
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 10,
@@ -93,7 +93,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/prima/lib/prima/decision.ex" => 13,
     "apps/cyfr/lib/aqua/approvals.ex" => 4,
     "apps/cyfr/lib/compendium/component.ex" => 3,
-    "apps/cyfr/lib/compendium/providers/shared.ex" => 4,
+    "apps/cyfr/lib/compendium/providers/shared.ex" => 3,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
     # The build orchestration behind `Compendium.Builds.Provider`, which
     # the scan reaches by following a tool module into what it calls.

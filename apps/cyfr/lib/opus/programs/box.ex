@@ -62,8 +62,8 @@ defmodule Opus.Programs.Box do
       every owner still registered here;
     * `sync` when a holder asks for its owner: the row is read again
       (fenced: the same epoch, enabled, a program, its athanor
-      active), its programs read from its backends and its program columns
-      (`Opus.Programs.Definition.programs/2`), its env templates resolved
+      active), its program read from its definition and its program columns
+      (`Opus.Programs.Definition.program/2`), its env templates resolved
       through `Sanctum.VaultReader.unseal_disclosed/2` and sealed for the
       owner and the service's lifetime. A template naming an attach-only
       entry refuses the sync `:disclosure_refused` before any entry is
@@ -167,16 +167,11 @@ defmodule Opus.Programs.Box do
 
   @release_wait_ms 3_000
 
-  @typedoc """
-  One program row of one athanor at one epoch, as a holder names it; `sign_in: true` says the holder is a
-  sign-in relay, which renewal admits while the row's login entry waits to
-  be signed in again.
-  """
+  @typedoc "One program row of one athanor at one epoch, as a holder names it."
   @type owner :: %{
           required(:athanor_id) => String.t(),
           required(:server_id) => String.t(),
-          required(:epoch) => pos_integer(),
-          optional(:sign_in) => boolean()
+          required(:epoch) => pos_integer()
         }
 
   @typedoc "What a holder signs its session messages to the service with."
@@ -337,11 +332,11 @@ defmodule Opus.Programs.Box do
         # refused by the service under its grant, so the owner is synced
         # again.
         entry = state.owners[key]
-        state = put_owner(state, key, add_holder(entry, pid, owner))
+        state = put_owner(state, key, add_holder(entry, pid))
         {:reply, {:ok, grant(state, key, entry)}, state}
 
       true ->
-        state = state |> register(key, epoch, pid, from, owner) |> enqueue({:sync, key})
+        state = state |> register(key, epoch, pid, from) |> enqueue({:sync, key})
         {:noreply, dispatch(state)}
     end
   end
@@ -596,10 +591,10 @@ defmodule Opus.Programs.Box do
   # A higher epoch replaces the owner: its holders, which hold a version
   # nothing will run again, are told to stand down, and a live one is
   # released.
-  defp register(state, key, epoch, pid, from, owner) do
+  defp register(state, key, epoch, pid, from) do
     case state.owners[key] do
       %{epoch: ^epoch} = entry ->
-        put_owner(state, key, %{add_holder(entry, pid, owner) | waiters: [from | entry.waiters]})
+        put_owner(state, key, %{add_holder(entry, pid) | waiters: [from | entry.waiters]})
 
       previous ->
         state =
@@ -618,7 +613,6 @@ defmodule Opus.Programs.Box do
 
         put_owner(state, key, %{
           holders: %{pid => Process.monitor(pid)},
-          sign_ins: if(sign_in?(owner), do: MapSet.new([pid]), else: MapSet.new()),
           epoch: epoch,
           generation: nil,
           live?: false,
@@ -633,19 +627,11 @@ defmodule Opus.Programs.Box do
     end
   end
 
-  # A holder whose owner map says `sign_in: true` holds the owner for a
-  # sign-in session (`Opus.Programs.SignIn`): renewal admits it while the
-  # row's login entry waits to be signed in again (`mount/2`).
-  defp add_holder(entry, pid, owner) do
-    entry =
-      if Map.has_key?(entry.holders, pid),
-        do: entry,
-        else: %{entry | holders: Map.put(entry.holders, pid, Process.monitor(pid))}
-
-    if sign_in?(owner), do: %{entry | sign_ins: MapSet.put(entry.sign_ins, pid)}, else: entry
+  defp add_holder(entry, pid) do
+    if Map.has_key?(entry.holders, pid),
+      do: entry,
+      else: %{entry | holders: Map.put(entry.holders, pid, Process.monitor(pid))}
   end
-
-  defp sign_in?(owner), do: Map.get(owner, :sign_in) == true
 
   defp remove_holder(entry, pid) do
     case Map.pop(entry.holders, pid) do
@@ -655,23 +641,7 @@ defmodule Opus.Programs.Box do
       {ref, holders} ->
         Process.demonitor(ref, [:flush])
 
-        %{entry | holders: holders, sign_ins: MapSet.delete(entry.sign_ins, pid)}
-    end
-  end
-
-  # The owner's entry is admitted for its sign-ins alone: every other
-  # holder is told to stand down and holds it no more.
-  defp stand_down_all_but_sign_ins(state, key) do
-    case state.owners[key] do
-      nil ->
-        state
-
-      entry ->
-        others =
-          for {pid, _ref} <- entry.holders, not MapSet.member?(entry.sign_ins, pid), do: pid
-
-        Enum.each(others, &send(&1, {Opus.Programs, :stand_down, key}))
-        put_owner(state, key, Enum.reduce(others, entry, &remove_holder(&2, &1)))
+        %{entry | holders: holders}
     end
   end
 
@@ -1059,12 +1029,7 @@ defmodule Opus.Programs.Box do
 
       keys ->
         owners = Map.new(keys, &{&1, state.owners[&1].epoch})
-        signing = for key <- keys, MapSet.size(state.owners[key].sign_ins) > 0, do: key
-
-        {:send,
-         state
-         |> base_spec(:renew)
-         |> Map.merge(%{owners: owners, signing: MapSet.new(signing)})}
+        {:send, state |> base_spec(:renew) |> Map.put(:owners, owners)}
     end
   end
 
@@ -1156,20 +1121,11 @@ defmodule Opus.Programs.Box do
 
     case Arca.McpServerStorage.fenced(pairs) do
       {:ok, rows} ->
-        verdicts =
-          Map.new(pairs, fn key ->
-            verdict =
-              if passes_fence?(rows[key], spec.owners[key]),
-                do: mount(rows[key], MapSet.member?(spec.signing, key)),
-                else: :out
+        {kept, fenced_out} =
+          Enum.split_with(pairs, &passes_fence?(rows[&1], spec.owners[&1]))
 
-            {key, verdict}
-          end)
-
-        {kept, fenced_out} = Enum.split_with(pairs, &(verdicts[&1] != :out))
-        signing_only = Enum.filter(pairs, &(verdicts[&1] == :sign_in_only))
         answer = if kept == [], do: :nothing_to_renew, else: renew(spec, keys.control, kept)
-        {:renewed, answer, fenced_out, signing_only}
+        {:renewed, answer, fenced_out}
 
       {:error, _} ->
         {:error, :store_unavailable}
@@ -1191,13 +1147,13 @@ defmodule Opus.Programs.Box do
     owner = %{athanor_id: spec.athanor_id, server_id: spec.server_id, epoch: spec.epoch}
 
     with {:ok, row} <- fence_one(owner),
-         {:ok, backends} <- Definition.validate(Arca.McpServerStorage.config(row)["backends"]),
-         {:ok, programs} <- Definition.programs(row, backends),
-         :ok <- within_share(spec, length(programs)),
-         {:ok, sealed} <- seal_env(spec, keys.seal, programs) do
-      # A definition's warnings never stop its programs: the administrator
+         {:ok, definition} <- Definition.validate(Arca.McpServerStorage.config(row)),
+         {:ok, program} <- Definition.program(row, definition),
+         :ok <- within_share(spec),
+         {:ok, sealed} <- seal_env(spec, keys.seal, program) do
+      # A definition's warnings never stop its program: the administrator
       # was told when it was saved, and each sync says so once in the log.
-      for warning <- Definition.warnings(backends) do
+      for warning <- Definition.warnings(definition) do
         Logger.warning(
           "[Opus.Programs] server #{spec.server_id} of athanor " <>
             "#{spec.athanor_id} starts with a warning: #{warning}"
@@ -1211,13 +1167,13 @@ defmodule Opus.Programs.Box do
         e: spec.epoch,
         lease_ms: spec.lease_ms,
         idle_ms: spec.idle_ms,
-        programs: Enum.map(programs, &Definition.wire/1),
+        programs: [Definition.wire(program)],
         sealed: sealed
       }
 
       case post(spec, keys.control, body) do
         {:http, _status, _boot, _body} = answer ->
-          {:synced, answer, Definition.entry_names(backends), length(programs)}
+          {:synced, answer, Definition.entry_names(definition), 1}
 
         error ->
           error
@@ -1309,44 +1265,16 @@ defmodule Opus.Programs.Box do
 
   defp passes_fence?(fenced, epoch), do: match?({:ok, _row}, fence_verdict(fenced, epoch))
 
-  # A kept mcp program runs in the home of the login entry it names, so each
-  # renewal asks again that the entry is an active login entry of the
-  # row's athanor naming the row: one revoked, suspended by a restore or
-  # deleted releases the owner. A vault that cannot answer releases it too:
-  # nothing runs in a home whose entry cannot be shown live. An entry whose
-  # program is not signed in (needs_reauth: a new entry, or one a restore
-  # left) is admitted for a sign-in alone, as
-  # `Sanctum.Mount.login_entry/4` with `for: :sign_in` admits it: an owner
-  # held by a sign-in keeps it (`:sign_in_only`), and its other holders, an
-  # MCP server's sessions, stand down. A driven program's entry is its catalyst's
-  # need's, checked where the need is resolved.
-  defp mount(%{row: %{transport: "program", mark: "mcp", home: "kept"} = row}, signing?) do
-    ctx = Sanctum.Context.internal(athanor_id: row.athanor_id, scope: :athanor)
+  defp within_share(%{share: nil}), do: :ok
 
-    with true <- is_binary(row.login_entry_id) || :out,
-         {:ok, entry} <-
-           Sanctum.Mount.login_entry(ctx, row.login_entry_id, row.name, for: :sign_in) do
-      cond do
-        entry.status == "active" -> :live
-        signing? -> :sign_in_only
-        true -> :out
-      end
-    else
-      _refused -> :out
-    end
-  end
-
-  defp mount(_fenced, _signing?), do: :live
-
-  defp within_share(%{share: nil}, _count), do: :ok
-
-  defp within_share(spec, count) do
-    if spec.athanor_programs + count > spec.share,
+  defp within_share(spec) do
+    if spec.athanor_programs + 1 > spec.share,
       do: {:error, {:pool_share, spec.share}},
       else: :ok
   end
 
-  defp seal_env(spec, seal_key, programs) do
+  # The sealed env is keyed by the program's wire name, as a sync names it.
+  defp seal_env(spec, seal_key, program) do
     owner = %{
       athanor: spec.athanor_id,
       server: spec.server_id,
@@ -1354,40 +1282,33 @@ defmodule Opus.Programs.Box do
       epoch: spec.epoch
     }
 
-    with {:ok, env} <- resolve_env(spec.athanor_id, programs) do
-      LocusBackends.seal(seal_key, owner, spec.boot, Jason.encode!(env))
-    end
-  end
-
-  defp resolve_env(athanor_id, programs) do
-    with :ok <- check_env(athanor_id, programs) do
-      unseal_env(athanor_id, programs)
+    with :ok <- check_env(spec.athanor_id, program.env),
+         {:ok, env} <- unseal_env(spec.athanor_id, program.env) do
+      LocusBackends.seal(seal_key, owner, spec.boot, Jason.encode!(%{program.name => env}))
     end
   end
 
   # From metadata alone (`Sanctum.Vault.disclosed?/2`): a reference this
   # server does not resolve, or an entry missing, inactive or attach-only,
   # refuses the sync before any entry is unsealed.
-  defp check_env(athanor_id, programs) do
+  defp check_env(athanor_id, env) do
     ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
 
-    Enum.find_value(programs, :ok, fn program ->
-      Enum.find_value(program.env, fn {name, value} ->
-        case VaultRef.classify(value) do
-          {:vault, %{name: entry}} ->
-            cond do
-              Sanctum.Vault.disclosed?(ctx, entry) -> nil
-              active?(athanor_id, entry) -> {:error, :disclosure_refused}
-              true -> {:error, {:env_unresolved, program.name, name}}
-            end
+    Enum.find_value(env, :ok, fn {name, value} ->
+      case VaultRef.classify(value) do
+        {:vault, %{name: entry}} ->
+          cond do
+            Sanctum.Vault.disclosed?(ctx, entry) -> nil
+            active?(athanor_id, entry) -> {:error, :disclosure_refused}
+            true -> {:error, {:env_unresolved, name}}
+          end
 
-          :unresolved ->
-            {:error, {:env_unresolved, program.name, name}}
+        :unresolved ->
+          {:error, {:env_unresolved, name}}
 
-          :literal ->
-            nil
-        end
-      end)
+        :literal ->
+          nil
+      end
     end)
   end
 
@@ -1398,21 +1319,12 @@ defmodule Opus.Programs.Box do
     )
   end
 
-  defp unseal_env(athanor_id, programs) do
-    Enum.reduce_while(programs, {:ok, %{}}, fn program, {:ok, acc} ->
-      case resolve_program_env(athanor_id, program) do
-        {:ok, env} -> {:cont, {:ok, Map.put(acc, program.name, env)}}
-        error -> {:halt, error}
-      end
-    end)
-  end
-
-  defp resolve_program_env(athanor_id, program) do
-    Enum.reduce_while(program.env, {:ok, %{}}, fn {name, value}, {:ok, acc} ->
+  defp unseal_env(athanor_id, env) do
+    Enum.reduce_while(env, {:ok, %{}}, fn {name, value}, {:ok, acc} ->
       case resolve_value(athanor_id, value) do
         {:ok, resolved} -> {:cont, {:ok, Map.put(acc, name, resolved)}}
         {:error, :disclosure_refused} -> {:halt, {:error, :disclosure_refused}}
-        :error -> {:halt, {:error, {:env_unresolved, program.name, name}}}
+        :error -> {:halt, {:error, {:env_unresolved, name}}}
       end
     end)
   end
@@ -1540,7 +1452,7 @@ defmodule Opus.Programs.Box do
 
   defp answer_boot({:http, _status, boot, _body}), do: boot
   defp answer_boot({:synced, answer, _names, _count}), do: answer_boot(answer)
-  defp answer_boot({:renewed, answer, _fenced_out, _signing_only}), do: answer_boot(answer)
+  defp answer_boot({:renewed, answer, _fenced_out}), do: answer_boot(answer)
   defp answer_boot({:claimed, _claim, result}), do: answer_boot(result)
   defp answer_boot({:released, answer, _given_up}), do: answer_boot(answer)
   defp answer_boot(_result), do: nil
@@ -1669,9 +1581,8 @@ defmodule Opus.Programs.Box do
     end
   end
 
-  defp settle_job(state, {:renew}, _spec, {:renewed, answer, fenced_out, signing_only}) do
+  defp settle_job(state, {:renew}, _spec, {:renewed, answer, fenced_out}) do
     state = Enum.reduce(fenced_out, state, &revoke(&2, &1))
-    state = Enum.reduce(signing_only, state, &stand_down_all_but_sign_ins(&2, &1))
 
     state =
       case answer do
@@ -2069,7 +1980,7 @@ defmodule Opus.Programs.Box do
   def refusal_name(code), do: Map.get(@renamed_refusals, code, code)
 
   defp refusal({:synced, answer, _names, _count}), do: refusal(answer)
-  defp refusal({:renewed, answer, _fenced_out, _signing_only}), do: refusal(answer)
+  defp refusal({:renewed, answer, _fenced_out}), do: refusal(answer)
   defp refusal({:claimed, _claim, result}), do: refusal(result)
   defp refusal({:released, answer, _given_up}), do: refusal(answer)
   defp refusal({:http, 401, _boot, _body}), do: :backends_refused_signature

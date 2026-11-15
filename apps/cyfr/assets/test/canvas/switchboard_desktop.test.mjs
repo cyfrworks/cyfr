@@ -804,3 +804,26 @@ describe("the switchboard desktop 0.2.0", () => {
     assert.deepEqual(b.shell.press, [["b_vpn", "disconnect"]])
   })
 })
+
+// ---------------------------------------------------------------------------
+// 0.3.0: a meter with no reading names its feed and how to bind one.
+// ---------------------------------------------------------------------------
+
+const V3 = new URL("../../../../../seed/components/tinctures/local/switchboard/0.3.0/", import.meta.url)
+
+describe("the switchboard 0.3.0", () => {
+  const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`
+
+  test("the weather and VPN meters with no reading name their feed and say to ask AQUA for one, until a reading comes", async () => {
+    const b = board({version: V3})
+    await settle()
+    b.pump()
+    assert.equal(b.$(".wx-at").textContent, sentence("weather"))
+    assert.equal(b.$(".vpn-at").textContent, sentence("vpn"))
+
+    picture(b, "feed:weather", [{binding: "bnd_w", feed: "weather", label: "Lisbon", result: {temp_c: 21, sky: "clear"}}])
+    assert.equal(b.$(".wx-at").textContent, "")
+    assert.equal(b.$(".weather h2").textContent, "Lisbon")
+    assert.equal(b.$(".vpn-at").textContent, sentence("vpn"))
+  })
+})

@@ -32,11 +32,15 @@ defmodule PrismWeb.SystemLayer do
   in either clears both. `athanor_route` and
   `athanor_name` name the athanor a grant lands in. `covered` (false by
   default) is the desktop's while a Dashboard page covers it: the layer
-  then draws none of its prompts and nothing of it is modal, whatever
-  raised the prompt, while each keeps its place and what it holds (a
-  grant's walk, a credential entry's waiting record) and the facts of its
-  records are still taken, so it is drawn again as it stands once the
-  layer is uncovered. The browser clears a prompt's forms as it closes, so
+  then draws none of the prompts a frame can raise and nothing of them is
+  modal, while each keeps its place and what it holds (a grant's walk, a
+  credential entry's waiting record) and the facts of its records are
+  still taken, so it is drawn again as it stands once the layer is
+  uncovered. The pairing prompt alone is drawn over the page: only the
+  person's press on the desktop's own chrome raises it, never a frame.
+  When it waits behind a prompt hidden under the page, it stays there and
+  the layer says, in a line over the page, that something on the desktop
+  waits for an answer. The browser clears a prompt's forms as it closes, so
   a typed value is typed again. A prompt
   (`PrismWeb.SystemLayer.Prompt`) arrives by `show/2`, which is
   `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`. A prompt that arrives while another is open
@@ -120,7 +124,8 @@ defmodule PrismWeb.SystemLayer do
       (`credential_sharing`); the prompt reports `:confirmed` once the
       share is made, and shows a refusal's sentence and stays open
       otherwise;
-    * pairing — `pairing.list` when it opens, and `pairing.revoke`;
+    * pairing — `pairing.list` and `pairing.waiting` when it opens, and
+      `pairing.revoke`;
     * a frame's request — the call the prompt names (`tool` and `args`),
       dispatched as the layer's own change once the person approves it,
       with the preview CYFR built of exactly that call drawn first and
@@ -529,9 +534,37 @@ defmodule PrismWeb.SystemLayer do
           | {:error, term(), Phoenix.LiveView.Socket.t()}
           | {:asked, Phoenix.LiveView.Socket.t()}
   def call(socket, tag, tool, args, opts \\ []) do
+    result = Ops.call_tool(socket, tool, args, repeating(socket, tag))
+    answer(socket, tag, tool, args, result, opts)
+  end
+
+  @doc """
+  The options a dispatch of the change `tag` names carries
+  (`PrismWeb.Ops.call_tool/4`): the secret of the ask the page holds under
+  `tag`, which makes the dispatch its repeat, or none. For a page that
+  dispatches off its own process, a change whose answer can take longer
+  than the browser waits for an event, and hands the answer back to
+  `answer/6` on its process; `call/5` is the two in one.
+  """
+  @spec repeating(Phoenix.LiveView.Socket.t(), term()) :: keyword()
+  def repeating(socket, tag) do
+    case held_for(socket, tag) do
+      nil -> []
+      held -> [confirmation_id: held.id]
+    end
+  end
+
+  @doc """
+  What `call/5` answers for `result`, the answer of `tool` dispatched with
+  `args` as the change `tag` names, under the options `repeating/2` gave
+  it: the held ask settled by it, and a new ask held and shown.
+  """
+  @spec answer(Phoenix.LiveView.Socket.t(), term(), String.t(), map(), term(), keyword()) ::
+          {:ok, term(), Phoenix.LiveView.Socket.t()}
+          | {:error, term(), Phoenix.LiveView.Socket.t()}
+          | {:asked, Phoenix.LiveView.Socket.t()}
+  def answer(socket, tag, tool, args, result, opts \\ []) do
     held = held_for(socket, tag)
-    repeat = if held, do: [confirmation_id: held.id], else: []
-    result = Ops.call_tool(socket, tool, args, repeat)
     socket = if held, do: settle_held(socket, held, result), else: socket
 
     case result do
@@ -761,7 +794,15 @@ defmodule PrismWeb.SystemLayer do
     {:ok, socket}
   end
 
-  def update(%{outcome: {ref, outcome}}, socket), do: {:ok, on_outcome(socket, ref, outcome)}
+  # A completed change closes its prompt and shows the next, which may
+  # read through the context: inside the guard, as every update that acts
+  # on it.
+  def update(%{outcome: {ref, outcome}}, socket) do
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.guard(socket, &{:noreply, on_outcome(&1, ref, outcome)})
+
+    {:ok, socket}
+  end
 
   def update(%{expire: ref}, socket), do: {:ok, expire(socket, ref)}
 
@@ -1069,11 +1110,12 @@ defmodule PrismWeb.SystemLayer do
 
   defp approve_landed(socket, _ref, false), do: socket
 
-  # A completed change lets go of the form that typed it. A release's
-  # outcome replaces the record's `cancelled` fact heard before it, so the
-  # prompt ends saying why, whichever arrived first; an outcome that the
-  # approval could not be withdrawn never does, since the fact shows it
-  # was.
+  # A completed change closes its prompt and lets go of the form that
+  # typed it: the page shows what the change made (a secret to copy among
+  # it), and nothing is left over it. A release's outcome replaces the
+  # record's `cancelled` fact heard before it, so the prompt ends saying
+  # why, whichever arrived first; an outcome that the approval could not
+  # be withdrawn never does, since the fact shows it was.
   defp on_outcome(socket, ref, outcome) do
     case Map.get(socket.assigns.panels, ref) do
       nil ->
@@ -1082,11 +1124,21 @@ defmodule PrismWeb.SystemLayer do
       %{status: {:ended, :cancelled}} when is_unwithdrawn(outcome) ->
         socket
 
-      panel ->
-        socket = set_status(socket, ref, outcome)
-        if outcome == :completed, do: clear_forms(socket, panel), else: socket
+      panel when outcome == :completed ->
+        socket |> clear_forms(panel) |> drop_panel(ref) |> close_prompt(panel.prompt_id)
+
+      _panel ->
+        set_status(socket, ref, outcome)
     end
   end
+
+  # A prompt that ended with nothing more to say leaves the layer: the next
+  # one waiting is shown in its place.
+  defp close_prompt(%{assigns: %{current: %{id: id}}} = socket, id),
+    do: socket |> drop_prompt_asks(id) |> advance()
+
+  defp close_prompt(socket, id),
+    do: assign(socket, :queue, Enum.reject(socket.assigns.queue, &(&1.id == id)))
 
   # One record, read by its ref as the `request`.
   defp pending_entry(socket, ref) do
@@ -1316,14 +1368,19 @@ defmodule PrismWeb.SystemLayer do
 
   # The pairing prompt, as it is shown, has its list still to read.
   defp mark_shown(%{assigns: %{current: %{kind: :pairing, id: id}}} = socket),
-    do: assign(socket, pairing: %{prompt_id: id, clients: :unread})
+    do: assign(socket, pairing: %{prompt_id: id, clients: :unread, waiting: :unread})
 
   defp mark_shown(socket), do: assign(socket, pairing: nil)
 
   # What a shown prompt reads: for the pairing prompt, the person's paired
-  # clients.
+  # clients and the passkeys waiting for their account.
   defp load_shown(%{assigns: %{pairing: %{clients: :unread} = pairing}} = socket),
-    do: assign(socket, :pairing, %{pairing | clients: clients(socket)})
+    do:
+      assign(socket, :pairing, %{
+        pairing
+        | clients: clients(socket),
+          waiting: waiting_passkeys(socket)
+      })
 
   defp load_shown(socket), do: socket
 
@@ -1467,6 +1524,21 @@ defmodule PrismWeb.SystemLayer do
           {:noreply, socket}
       end
     end)
+  end
+
+  # The sharing sheet's choice as it changes, so the sheet says what the
+  # share being made means (`PrismWeb.SystemLayer.Share`). It is kept on
+  # the shown prompt itself, so it ends with that prompt, however it ends,
+  # and a prompt arriving under the same id starts from none
+  # (`Prompt.validate/1` keeps no choice). A change the sheet's form could
+  # not have sent is not kept (`Share.choice/2`).
+  def handle_event("share_change", %{"prompt_id" => id} = params, socket) do
+    with {:ok, prompt} <- open(socket, id, [:share]),
+         {:ok, choice} <- Share.choice(params, prompt.subject) do
+      {:noreply, assign(socket, :current, Map.put(prompt, :choice, choice))}
+    else
+      _unkept -> {:noreply, socket}
+    end
   end
 
   def handle_event("pairing_revoke", %{"id" => id, "client" => client_id}, socket)
@@ -2242,6 +2314,13 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  defp waiting_passkeys(socket) do
+    case Ops.call_tool(socket.assigns.context, "pairing/waiting", %{}) do
+      {:ok, %{waiting: waiting}} -> {:ok, waiting}
+      {:error, reason} -> {:error, Ops.error_message(reason)}
+    end
+  end
+
   defp pairing_revoke(socket, prompt, client_id) do
     case layer_call(socket, prompt, {:pairing_revoke, client_id}, "pairing/revoke", %{
            "client_id" => client_id
@@ -2265,7 +2344,7 @@ defmodule PrismWeb.SystemLayer do
         pairing
 
       _other ->
-        %{prompt_id: prompt.id, clients: {:ok, []}}
+        %{prompt_id: prompt.id, clients: {:ok, []}, waiting: {:ok, []}}
     end
   end
 
@@ -2465,6 +2544,15 @@ defmodule PrismWeb.SystemLayer do
   defp can_prove?(%Sanctum.Context{} = context), do: Sanctum.Pairing.can_confirm?(context)
   defp can_prove?(_context), do: false
 
+  # What a covered layer still draws over the page. An app keeps running
+  # under a page and its bridge forwards a verb without the person's input,
+  # so no prompt a frame can raise stands modal over the page's own asks.
+  # The pairing prompt carries nothing of a frame's and only the person's
+  # press on the desktop's own Devices control raises it, which no frame
+  # draws or reaches.
+  defp over_page?(%{kind: :pairing}), do: true
+  defp over_page?(_prompt), do: false
+
   # ---------------------------------------------------------------------------
   # Render
   # ---------------------------------------------------------------------------
@@ -2472,11 +2560,21 @@ defmodule PrismWeb.SystemLayer do
   @impl true
   def render(assigns) do
     # The prompt drawn, `shown`: the open one, or none while the layer is
-    # covered, when it keeps its place and state and is drawn again as it
-    # stands. Derived on every render from `covered` and `current`
-    # together, so the browser sees the dialog open again once the layer is
-    # uncovered, though `current` itself never moved.
-    shown = if assigns.covered, do: nil, else: assigns.current
+    # covered and the open one is not drawn over a page, when it keeps its
+    # place and state and is drawn again as it stands. Derived on every
+    # render from `covered` and `current` together, so the browser sees the
+    # dialog open again once the layer is uncovered, though `current`
+    # itself never moved.
+    shown =
+      if assigns.covered and not over_page?(assigns.current),
+        do: nil,
+        else: assigns.current
+
+    # A prompt drawn over a page that waits behind one hidden there (the
+    # devices', behind a frame's) is not put in front of it, which may hold
+    # an approved change waiting for its proof; the person is told instead
+    # where the hidden one is.
+    held_back = assigns.covered and is_nil(shown) and Enum.any?(assigns.queue, &over_page?/1)
     may = shown && may_confirm?(assigns[:context], shown)
 
     panel =
@@ -2488,6 +2586,7 @@ defmodule PrismWeb.SystemLayer do
     assigns =
       assign(assigns,
         shown: shown,
+        held_back: held_back,
         may: may,
         # A record is proven here only by a client with a person behind it;
         # one with none waits for another client of the person.
@@ -2530,6 +2629,7 @@ defmodule PrismWeb.SystemLayer do
             myself={@myself}
             id={@id}
             pairing={@pairing}
+            shell={@shell}
             context={assigns[:context]}
             athanor_route={@athanor_route}
             athanor_name={@athanor_name}
@@ -2555,6 +2655,18 @@ defmodule PrismWeb.SystemLayer do
           </p>
         </div>
       </dialog>
+
+      <%!-- Above the Devices chip, at the chips' level, so it stands over
+           the page that covers the desktop. --%>
+      <p
+        :if={@held_back}
+        id={"#{@id}-held-back"}
+        data-test="held-back"
+        role="status"
+        class="pointer-events-none absolute bottom-10 left-2 z-[67] max-w-xs rounded-md bg-black/70 px-2 py-1 text-xs text-white/90"
+      >
+        Something on your desktop is waiting for your answer. Go back to the desktop to see it.
+      </p>
 
       <.notice :if={@notice} id={@id} notice={@notice} error={@notice_error} myself={@myself} />
 
@@ -2656,6 +2768,7 @@ defmodule PrismWeb.SystemLayer do
   attr :myself, :any, required: true
   attr :id, :string, required: true
   attr :pairing, :map, default: nil
+  attr :shell, :boolean, default: false
   attr :context, :any, default: nil
   attr :athanor_route, :any, default: nil
   attr :athanor_name, :any, default: nil
@@ -2675,7 +2788,7 @@ defmodule PrismWeb.SystemLayer do
         walk={@prompt.subject}
         context={@context}
         athanor_route={@athanor_route}
-        athanor_name={@athanor_name}
+        athanor_name={grant_place(@athanor_name, @context)}
         layer={@id}
         prompt_id={@prompt.id}
       />
@@ -2820,6 +2933,7 @@ defmodule PrismWeb.SystemLayer do
       prompt={@prompt}
       administrator={match?(%Context{platform_admin: true}, @context)}
       myself={@myself}
+      choice={Share.drawn(@prompt)}
     />
     """
   end
@@ -2829,6 +2943,7 @@ defmodule PrismWeb.SystemLayer do
     <Pairing.devices
       prompt_id={@prompt.id}
       pairing={@pairing}
+      shell={@shell}
       myself={@myself}
       button_class={button_class(false)}
     />
@@ -2889,7 +3004,8 @@ defmodule PrismWeb.SystemLayer do
       assign(assigns,
         entry: assigns.panel.entry,
         methods: (assigns.panel.entry && assigns.panel.entry[:methods]) || [],
-        open: assigns.panel.status in [:pending, :waiting]
+        open: assigns.panel.status in [:pending, :waiting],
+        consequence: consequence(assigns.panel.entry)
       )
 
     ~H"""
@@ -2909,6 +3025,10 @@ defmodule PrismWeb.SystemLayer do
         preview={@entry.preview}
         test="confirmation-preview"
       />
+
+      <p :if={@consequence} class="text-sm" data-test="confirmation-consequence">
+        {@consequence}
+      </p>
 
       <p
         :if={is_nil(@entry) or is_nil(@entry[:preview])}
@@ -3065,7 +3185,7 @@ defmodule PrismWeb.SystemLayer do
     ]
   end
 
-  defp title(%{kind: :grant, subject: %{ref: ref}}), do: "Grant #{ref}"
+  defp title(%{kind: :grant, subject: %{ref: ref}}), do: "Grant #{component_name(ref)}"
 
   defp title(%{kind: :credential_entry, subject: %{return: _return, provider: provider}}),
     do: "Connect your #{provider} account"
@@ -3075,10 +3195,57 @@ defmodule PrismWeb.SystemLayer do
 
   defp title(%{kind: :share, subject: %{name: name}}), do: "Share #{name}"
   defp title(%{kind: :pairing}), do: "Your devices"
-  defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
+
+  defp title(%{
+         kind: :confirmation,
+         action: :program_definition,
+         subject: %{operation: operation}
+       }),
+       do: program_title(operation)
+
+  defp title(%{kind: :confirmation, subject: %{operation: operation}}),
+    do: operation_title(operation)
 
   defp title(%{kind: :request, subject: %{asker: %{name: name}, operation: operation}}),
     do: "#{name} asks you to approve #{operation}"
+
+  # Where a grant lands, as the person reads it: their own athanor as
+  # theirs, any other by its name.
+  defp grant_place(name, %Sanctum.Context{athanor_id: id} = ctx) when is_binary(name) do
+    if PrismWeb.Athanors.own?(%{id: id}, ctx), do: "your athanor", else: name
+  end
+
+  defp grant_place(name, _context), do: name
+
+  # A component by its name, as a person calls it; the sheet below names
+  # its whole reference.
+  defp component_name(ref) do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %{name: name}} -> name
+      {:error, _unparsed} -> ref
+    end
+  end
+
+  # A change by the words its operation is declared with (`Prima.Operation`),
+  # never its `tool.action` name.
+  defp operation_title(operation) when is_binary(operation) do
+    with [tool, action] <- String.split(operation, ".", parts: 2),
+         {:ok, {_module, %{operations: operations}}} <-
+           Map.fetch(Sanctum.Catalog.operations(), tool),
+         %Prima.Operation{description: words} <- Enum.find(operations, &(&1.action == action)) do
+      words
+    else
+      _undeclared -> "Confirm a change"
+    end
+  end
+
+  defp operation_title(_operation), do: "Confirm a change"
+
+  # A program's definition, by what its confirmation does to it.
+  defp program_title("mcp_servers.create"), do: "Add a program"
+  defp program_title("mcp_servers.update"), do: "Change a program"
+  defp program_title("mcp_servers.delete"), do: "Remove a program"
+  defp program_title(_operation), do: "Confirm a program"
 
   defp description(%{kind: :grant}),
     do:
@@ -3130,6 +3297,64 @@ defmodule PrismWeb.SystemLayer do
   defp detail(value) when is_list(value), do: Enum.join(value, ", ")
   defp detail(value), do: value
 
+  # What a program's change does beyond its row, said before it is
+  # confirmed: a removal, by a delete or by making the row a tool server
+  # elsewhere (`becomes`), ends its sessions and its folder; and every
+  # change to a stored row makes the grants that stand on it, which its
+  # confirmation names, ask again.
+  defp consequence(%{
+         action: "program_definition",
+         preview: %{"operation" => operation, "details" => details}
+       }) do
+    becomes =
+      case details["becomes"] do
+        address when is_binary(address) ->
+          ["It stops being a program and becomes a tool server elsewhere at #{address}."]
+
+        _stays ->
+          []
+      end
+
+    ends =
+      cond do
+        operation != "mcp_servers.delete" and becomes == [] ->
+          []
+
+        details["folder"] == "scratch" ->
+          ["Removing it ends its sessions."]
+
+        true ->
+          ["Removing it ends its sessions and removes its folder with everything kept there."]
+      end
+
+    grants =
+      case details["grants_asking_again"] do
+        "none" -> [grants_asking_again([])]
+        [_ | _] = all -> [grants_asking_again(all)]
+        _no_stored_row -> []
+      end
+
+    case becomes ++ ends ++ grants do
+      [] -> nil
+      said -> Enum.join(said, " ")
+    end
+  end
+
+  defp consequence(_entry), do: nil
+
+  @doc """
+  The sentence that names the grants, by their components, that a change
+  to a program row or tool server makes ask again
+  (`Sanctum.Mount.granted_to/2`): what a confirmation of the change and
+  a tool server's delete say alike.
+  """
+  @spec grants_asking_again([String.t()]) :: String.t()
+  def grants_asking_again([]), do: "No grant uses it."
+  def grants_asking_again([one]), do: "The one grant that uses it will ask again: #{one}."
+
+  def grants_asking_again(all) when is_list(all),
+    do: "The #{length(all)} grants that use it will ask again: #{Enum.join(all, ", ")}."
+
   # The client that asked, as the home named it: a hint, never a proof.
   defp asker(%{"kind" => "client"} = asker), do: "a paired device#{named(asker)}"
   defp asker(%{"kind" => "key"} = asker), do: "an API key#{named(asker)}"
@@ -3163,7 +3388,6 @@ defmodule PrismWeb.SystemLayer do
     do: "Waiting for your confirmation, here or on another of your devices."
 
   defp status(%{status: :approved}), do: "Approved. Completing the change."
-  defp status(%{status: :completed}), do: "Completed."
 
   defp status(%{status: {:refused, :asked_again}}),
     do: "The request changed, so it was asked for again. Nothing was changed."

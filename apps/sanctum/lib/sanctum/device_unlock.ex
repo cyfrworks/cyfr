@@ -20,12 +20,12 @@ defmodule Sanctum.DeviceUnlock do
   it holds (`kid`), the account it is a key of (`identifier`), what holds
   the key (`holder_kind`) and the name it shows (`display_name`), each in
   `Prima.Device`'s grammar, and, when it comes with one, the capability
-  that admits a new person: the setup token or an invitation's code.
+  that admits a new person: the setup token.
   `hello/2` answers a `sign_in` request (`Prima.SignIn`) bound to the
   channel that asked, by the client id it reserved for the device, and
   held for the key, holder and name the hello named
-  (`Sanctum.SignIn.request/3`); a setup token that is not this CYFR's, or
-  an invitation code that names none, is refused before anything is held.
+  (`Sanctum.SignIn.request/3`); a setup token that is not this CYFR's is
+  refused before anything is held.
   The device signs the request's digest after its local unlock, and
   `admit/2` takes the answer: `Sanctum.SignIn.answer/3` spends the request
   and verifies the answer against the account's log, by the key the hello
@@ -96,7 +96,7 @@ defmodule Sanctum.DeviceUnlock do
           required(:identifier) => String.t(),
           required(:holder_kind) => String.t(),
           required(:display_name) => String.t(),
-          optional(:admission) => {:setup, String.t()} | {:invitation, String.t()} | nil
+          optional(:admission) => {:setup, String.t()} | nil
         }
 
   @typedoc """
@@ -124,8 +124,7 @@ defmodule Sanctum.DeviceUnlock do
   Answer a device's hello on the channel that reserved `client_id` for it
   with a `sign_in` request held for that channel and the hello's key (the
   module doc). Refusals: `:setup_closed` (a setup token that is not this
-  CYFR's), `:invitation_invalid` (an invitation code that names none),
-  `{:invalid_argument, sentence}`, `:unavailable`.
+  CYFR's), `{:invalid_argument, sentence}`, `:unavailable`.
   """
   @spec hello(String.t(), hello()) :: {:ok, Prima.SignIn.t()} | {:error, term()}
   def hello(
@@ -166,15 +165,8 @@ defmodule Sanctum.DeviceUnlock do
     if Sanctum.Newcomer.setup_token?(token), do: {:ok, admission}, else: {:error, :setup_closed}
   end
 
-  defp admission({:invitation, code}) do
-    with {:ok, hash} <- Sanctum.Invitations.code_hash(code),
-         :ok <- Sanctum.Invitations.redeemable_hash(hash) do
-      {:ok, {:invitation, hash}}
-    end
-  end
-
   defp admission(_other),
-    do: {:error, {:invalid_argument, "A hello comes with the setup token or an invitation"}}
+    do: {:error, {:invalid_argument, "A hello comes with the setup token or none"}}
 
   @doc """
   Take the device's answer to the request its hello was answered, on the
@@ -182,7 +174,7 @@ defmodule Sanctum.DeviceUnlock do
   pair the device and issue its first certificate. Answers
   `t:admitted/0`. Refusals: `Sanctum.SignIn.answer/3`'s, among them
   `:answer_refused`, `:identity_stale`, `:identity_gone`, `:stale_head`,
-  `{:door, reason}`, `:invitation_invalid`, `:setup_closed`, and
+  `{:door, reason}`, `:setup_closed`, and
   `:unavailable`.
   """
   @spec admit(String.t(), Prima.SignIn.DeviceAnswer.t() | map()) ::
@@ -528,7 +520,7 @@ defmodule Sanctum.DeviceUnlock do
         :ok
 
       {:ok, hashes} ->
-        Sanctum.Session.announce_revoked(user_id, hashes)
+        Sanctum.Session.announce_revoked(user_id, hashes, :signed_out)
 
       {:error, _unanswered} ->
         {:error, :unavailable}

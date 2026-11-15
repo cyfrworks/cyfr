@@ -69,7 +69,7 @@ func setupTokenOf(t *testing.T) string {
 // holds.
 func setupLinkLine(t *testing.T, address string) string {
 	t.Helper()
-	return "Next: cyfr up. Then open " + address + "/setup#" + setupTokenOf(t) + " to set up its first person, or run cyfr login --setup here.\n"
+	return "Next: cyfr up. Then open " + address + "/setup#" + setupTokenOf(t) + " to set up its first person.\n"
 }
 
 // initThenPublic is a new CYFR from init, then made public at
@@ -346,40 +346,5 @@ func TestInitEndsWithTheSSHLineOnAMachineWithNoDisplay(t *testing.T) {
 		if !strings.HasSuffix(out.String(), want) {
 			t.Errorf("with a display %v init printed:\n%s\nwant it to end on:\n%s", display, out.String(), want)
 		}
-	}
-}
-
-// A new .env that makes CYFR headless, CYFR_HEADLESS read as the server
-// reads it, prints that the first person runs cyfr login --setup after
-// cyfr up, and no setup link, since a headless CYFR serves no page.
-func TestInitPrintsLoginSetupForAHeadlessCYFR(t *testing.T) {
-	const notice = "\nCYFR is set up in this directory, reached from this computer at http://localhost:4000.\n" +
-		"Want it on your phone and laptop too? Run cyfr access tailnet first.\n" +
-		"CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.\n"
-	for _, c := range []struct {
-		assignment string
-		headless   bool
-	}{
-		{"CYFR_HEADLESS=on", true},
-		{`CYFR_HEADLESS=" on "`, true},
-		{"CYFR_HEADLESS=off", false},
-		{"CYFR_HEADLESS=", false},
-	} {
-		t.Run(c.assignment, func(t *testing.T) {
-			newInitProject(t)
-			useFakeEngine(t)
-			if err := os.WriteFile(".env.example", []byte(read(t, ".env.example")+c.assignment+"\n"), 0644); err != nil {
-				t.Fatal(err)
-			}
-			var out bytes.Buffer
-			if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-				t.Fatalf("init: %v\n%s", err, out.String())
-			}
-			text := out.String()
-			printsNotice, printsLink := strings.HasSuffix(text, notice), strings.Contains(text, "/setup#")
-			if printsNotice != c.headless || printsLink == c.headless {
-				t.Errorf("init printed the headless notice %v and the setup link %v, want the notice %v:\n%s", printsNotice, printsLink, c.headless, text)
-			}
-		})
 	}
 }

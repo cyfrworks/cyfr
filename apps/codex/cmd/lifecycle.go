@@ -410,11 +410,13 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init first shows the commands that install what is missing (docker.io, docker-compose-v2 and apparmor, the running service and this account's membership of the docker group), asks, and runs them through one sudo; answered no, init installs nothing, writes nothing and exits 0. The rest of init then runs in a process that has the group, and 'cyfr up' gets the group the same way.
+On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init first shows the commands that install what is missing (docker.io, docker-compose-v2 and apparmor, the running service and this account's membership of the docker group), asks, and runs them through one sudo; answered no, init installs nothing, writes nothing and exits 0. CYFR never asks for, reads or keeps a password: when sudo will ask, init first says it asks for the password you log in to this machine with, and sudo asks in its own prompt before any command runs, so a refused password changes nothing. An account outside the sudo and admin groups is told so before anything is asked, with the commands as one sudo line for whoever administers the machine, and nothing is changed; answered 1 at the screen question, it is told before anything is written, in words alone, that whoever administers the machine can add it to the sudo group. The rest of init then runs in a process that has the group, and 'cyfr up' gets the group the same way.
+
+On macOS and Windows at a terminal, while Docker does not answer, init offers to open Docker's installer page for Docker Desktop and says what the system's prompt will be (a Mac's login password or Touch ID; Windows asking to allow the app to make changes), or, with Docker Desktop installed, says to start it; then it waits, writing nothing, until Docker answers, and goes on. Answered no, init opens and writes nothing and exits 0.
 
 The CYFR init makes is reached from this machine, at http://localhost:<CYFR_PORT>. 'cyfr access tailnet' reaches it from your phone and laptop too, and 'cyfr access public --domain <your domain>' from the internet. On Ubuntu 26.04 LTS on amd64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. 'cyfr login --setup' in this directory sets up the first person at this terminal instead, with this command line as their device; a headless CYFR (CYFR_HEADLESS=on) serves no page, so there it is the only way. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json.`,
 	Example: `  cyfr init
@@ -483,7 +485,20 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 	}
 	var screenErr error
 	if screen {
-		screenErr = screenOn(ctx, false, out)
+		// The password is asked here, not before the project is written:
+		// sudo's login would lapse during the image pulls between them. A
+		// refusal here, of the password or of an account that has left the
+		// sudo group since the question, comes after the project is
+		// written, and says so.
+		const notSetUp = "so the screen was not set up; CYFR is set up in this directory."
+		var refused passwordRefused
+		var outside outsideTheGroups
+		switch screenErr = screenOn(ctx, false, out); {
+		case errors.As(screenErr, &refused):
+			screenErr = errors.New("The password was not accepted, " + notSetUp + " Run `cyfr screen on` here to set it up")
+		case errors.As(screenErr, &outside):
+			screenErr = fmt.Errorf("Your account, %s, is not in the sudo or admin group, %s Whoever administers this machine can add your account to the sudo group; then run `cyfr screen on` here", outside.account, notSetUp)
+		}
 	}
 	initEnding(out, screen && screenErr == nil)
 	return screenErr
@@ -493,9 +508,8 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 // reached from this machine: its address, the offer to reach it from the
 // person's other devices, made before anyone is set up, while a new
 // address signs no one out, and the next step, which on screen is the
-// reboot that shows setup there, and otherwise the setup link or cyfr
-// login --setup at this terminal (sshTunnel's line beside them on a
-// machine with no display). A headless CYFR serves no setup page.
+// reboot that shows setup there, and otherwise the setup link
+// (sshTunnel's line beside it on a machine with no display).
 func initEnding(out io.Writer, screen bool) {
 	values, _ := access.ReadEnvValues(".env")
 	port := existingSelection(".env").port
@@ -503,16 +517,12 @@ func initEnding(out io.Writer, screen bool) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintf(out, "CYFR is set up in this directory, reached from this computer at %s.\n", address)
 	fmt.Fprintln(out, "Want it on your phone and laptop too? Run cyfr access tailnet first.")
-	if headless(values) {
-		fmt.Fprintln(out, "CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.")
-		return
-	}
 	if screen {
 		fmt.Fprintln(out, "Next: cyfr up, then sudo reboot.")
 		fmt.Fprintln(out, "At power-on this screen opens CYFR's setup page, which makes its first person's account with this box as its first device.")
 		return
 	}
-	fmt.Fprintf(out, "Next: cyfr up. Then open %s to set up its first person, or run cyfr login --setup here.\n", hyperlink(out, setupLink(address, values)))
+	fmt.Fprintf(out, "Next: cyfr up. Then open %s to set up its first person.\n", hyperlink(out, setupLink(address, values)))
 	if !hasDisplay() {
 		fmt.Fprintln(out, sshTunnel(port))
 	}
@@ -691,17 +701,6 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		fmt.Fprintln(out, "   the checkout itself as CONTRIBUTING.md's \"Running from source\" says.")
 	}
 	return nil
-}
-
-// headlessVar is the switch that makes CYFR headless: the API and /mcp,
-// and no browser page.
-const headlessVar = "CYFR_HEADLESS"
-
-// headless reports whether .env's values make CYFR headless, CYFR_HEADLESS
-// read as the server's switch reads it (Prima.EnvValue.switch): `on`, white
-// space around it aside.
-func headless(values map[string]string) bool {
-	return strings.TrimSpace(values[headlessVar]) == "on"
 }
 
 // setupLink is the link that sets up the first person of the CYFR at
@@ -913,7 +912,7 @@ var upCmd = &cobra.Command{
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints, or by 'cyfr login --setup' in this directory, at this terminal. A headless CYFR (CYFR_HEADLESS=on) serves no setup page, so there 'cyfr login --setup' is the only way.
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -928,7 +927,7 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 		if !access.HasComposeFile(".") {
 			return fmt.Errorf("There is no CYFR in this directory, so nothing was started: it holds no compose file (%s). Run 'cyfr up' in CYFR's directory, the one that holds its docker-compose.yml, or 'cyfr init' here to make one", strings.Join(access.ComposeMainFiles, ", "))
 		}
-		if continued, err := upWithGroup(continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
+		if continued, err := withDockerGroup("up", continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
 			return err
 		}
 		return runUp(ctx, cmd.OutOrStdout())
@@ -937,10 +936,9 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 
 // runUp is `cyfr up` in the working directory.
 func runUp(ctx context.Context, out io.Writer) error {
-	// Registry auth is per-user: the server signs each registry request
-	// with the person's identity key, and `cyfr registry sync` mints and
-	// stores their push tokens. There are no static registry credentials to
-	// configure.
+	// Registry auth is per-user: the person mints and stores their push
+	// tokens on CYFR's Registry page. There are no static registry
+	// credentials to configure.
 	if err := refuseUndeclaredRestore(); err != nil {
 		return err
 	}
@@ -1004,14 +1002,9 @@ func runUp(ctx context.Context, out io.Writer) error {
 // screen when the cyfr-screen service shows it, a reboot away when it is
 // enabled and has not started; otherwise through the setup link, which a
 // local CYFR on a machine with no display reaches through sshTunnel's
-// line, or cyfr login --setup at this terminal. A headless CYFR serves no
-// setup page.
+// line.
 func setupNext(out io.Writer, head access.Head) {
 	values, _ := access.ReadEnvValues(".env")
-	if headless(values) {
-		fmt.Fprintln(out, "Run cyfr login --setup here to set up its first person.")
-		return
-	}
 	link := hyperlink(out, setupLink(access.Describe(head).Address, values))
 	switch enabled, active := machine.screenService(); {
 	case active:
@@ -1019,9 +1012,9 @@ func setupNext(out io.Writer, head access.Head) {
 	case enabled:
 		fmt.Fprintln(out, "Now run sudo reboot. This screen opens setup at power-on.")
 	case head.Mode == access.ModeTailnet:
-		fmt.Fprintf(out, "Open %s on your phone or laptop, with Tailscale on, to set up its first person, or run cyfr login --setup here.\n", link)
+		fmt.Fprintf(out, "Open %s on your phone or laptop, with Tailscale on, to set up its first person.\n", link)
 	default:
-		fmt.Fprintf(out, "Open %s to set up its first person, or run cyfr login --setup here.\n", link)
+		fmt.Fprintf(out, "Open %s to set up its first person.\n", link)
 		if head.Mode == access.ModeLocal && !hasDisplay() {
 			fmt.Fprintln(out, sshTunnel(head.Port))
 		}
@@ -1108,13 +1101,9 @@ func readSetUp(ctx context.Context, e stackEngine, head access.Head) setUp {
 	return setUpDone
 }
 
-// upThenSetup is the next step of a CYFR that never booted, with .env's
-// values: cyfr up, then its first person set up at the setup link link,
-// or at this terminal for a headless CYFR, which serves no setup page.
-func upThenSetup(values map[string]string, link string) string {
-	if headless(values) {
-		return "Next: cyfr up. Then run cyfr login --setup here to set up its first person."
-	}
+// upThenSetup is the next step of a CYFR that never booted: cyfr up, then
+// its first person set up at the setup link link.
+func upThenSetup(link string) string {
 	return "Next: cyfr up. Then open " + link + " to set up its first person."
 }
 
@@ -1218,16 +1207,28 @@ func runDown(ctx context.Context, out io.Writer) error {
 	if !access.HasComposeFile(".") {
 		return fmt.Errorf("There is no stack in this directory, so nothing was stopped: it holds no compose file (%s). Run 'cyfr down' in CYFR's directory, the one that holds its docker-compose.yml", strings.Join(access.ComposeMainFiles, ", "))
 	}
-	e, unlock, _, err := openLocked(ctx, "down", out)
+	_, unlock, err := stopStack(ctx, "down", out)
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	if err := answerFailure(e.Stop(context.WithoutCancel(ctx), "down", true)); err != nil {
-		return err
-	}
+	unlock()
 	fmt.Fprintln(out, "CYFR server stopped.")
 	return nil
+}
+
+// stopStack is cyfr down's stop, for command: the stack's lock, its
+// recovery, then every service stopped, removed and checked stopped, Serve
+// closed first. It answers the engine and the lock's release, still held.
+func stopStack(ctx context.Context, command string, out io.Writer) (stackEngine, func(), error) {
+	e, unlock, _, err := openLocked(ctx, command, out)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := answerFailure(e.Stop(context.WithoutCancel(ctx), command, true)); err != nil {
+		unlock()
+		return nil, nil, err
+	}
+	return e, unlock, nil
 }
 
 // restoreBarred reports whether the dotenv file at path sets

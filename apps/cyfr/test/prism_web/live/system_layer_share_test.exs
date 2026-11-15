@@ -19,13 +19,14 @@ defmodule PrismWeb.SystemLayerShareTest do
   @subject %{entry_id: "vlt_1", name: "market key", threads: @threads}
   @prompt %{id: "share-vlt_1", kind: :share, action: :credential_sharing, subject: @subject}
 
-  defp sheet(administrator, prompt \\ @prompt),
+  defp sheet(administrator, prompt \\ @prompt, choice \\ %{}),
     do:
       render_component(&Share.sheet/1,
         id: "system-layer",
         prompt: prompt,
         administrator: administrator,
-        myself: nil
+        myself: nil,
+        choice: choice
       )
 
   defp text(html, selector) do
@@ -88,15 +89,68 @@ defmodule PrismWeb.SystemLayerShareTest do
              ]
     end
 
-    test "says what an uncapped share to everyone means, and to the platform administrator " <>
-           "what it means for a newcomer's AQUA" do
-      assert text(sheet(false), ~s([data-test="share-uncapped"])) == [
-               "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
-             ]
+    test "says what a share to everyone means only while everyone is chosen, each fact " <>
+           "while it is true, for a person and for the platform administrator" do
+      uncapped = "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
 
-      [administrator] = text(sheet(true), ~s([data-test="share-uncapped"]))
-      assert administrator =~ "anyone on this CYFR may use it without limit"
-      assert administrator =~ "each new person's AQUA uses when it fits"
+      newcomers =
+        "You administer this CYFR, so a key you share with everyone is also what each new " <>
+          "person's AQUA uses when it fits"
+
+      none = %{"person_daily" => "", "total_daily" => ""}
+      everyone = Map.put(none, "audience", "everyone")
+      thread = Map.put(none, "audience", "shared_thread:sth_traders")
+
+      states = [
+        {"nothing chosen yet", %{}, [], []},
+        {"nothing chosen, the caps touched", none, [], []},
+        {"everyone and no cap", everyone, [uncapped],
+         [uncapped <> " " <> newcomers <> ", with no limit unless you set one."]},
+        {"everyone, the caps blank", %{everyone | "person_daily" => "  "}, [uncapped],
+         [uncapped <> " " <> newcomers <> ", with no limit unless you set one."]},
+        {"everyone and a cap per person", %{everyone | "person_daily" => "5"}, [],
+         [newcomers <> "."]},
+        {"everyone and a cap together", %{everyone | "total_daily" => "0"}, [],
+         [newcomers <> "."]},
+        {"everyone and a cap that is not a count", %{everyone | "total_daily" => "many"}, [],
+         [newcomers <> "."]},
+        {"a thread and no cap", thread, [], []},
+        {"a thread and a cap", %{thread | "person_daily" => "5"}, [], []}
+      ]
+
+      for {state, choice, person, administrator} <- states do
+        assert text(sheet(false, @prompt, choice), ~s([data-test="share-everyone"])) == person,
+               "a person: " <> state
+
+        assert text(sheet(true, @prompt, choice), ~s([data-test="share-everyone"])) ==
+                 administrator,
+               "the administrator: " <> state
+      end
+    end
+
+    test "draws the choice it was given" do
+      html =
+        sheet(false, @prompt, %{
+          "audience" => "shared_thread:sth_pair",
+          "person_daily" => "5",
+          "total_daily" => ""
+        })
+
+      checked =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(input[name="audience"][checked]))
+        |> Enum.flat_map(&LazyHTML.attribute(&1, "value"))
+
+      assert checked == ["shared_thread:sth_pair"]
+
+      values =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(input[type="number"]))
+        |> Enum.map(&{LazyHTML.attribute(&1, "name"), LazyHTML.attribute(&1, "value")})
+
+      assert values == [{["person_daily"], ["5"]}, {["total_daily"], [""]}]
     end
 
     test "asks for no value and offers no component policy" do
@@ -112,6 +166,83 @@ defmodule PrismWeb.SystemLayerShareTest do
       for administrator <- [true, false],
           word <- words,
           do: refute(sheet(administrator) =~ ~r/\b#{word}\b/i, word)
+    end
+  end
+
+  describe "choice/2" do
+    test "keeps the audience the sheet offers and the caps as typed, and nothing else" do
+      assert Share.choice(
+               %{
+                 "audience" => "shared_thread:sth_pair",
+                 "person_daily" => "5",
+                 "total_daily" => "",
+                 "prompt_id" => "share-vlt_1",
+                 "_target" => ["person_daily"]
+               },
+               @subject
+             ) ==
+               {:ok,
+                %{
+                  "audience" => "shared_thread:sth_pair",
+                  "person_daily" => "5",
+                  "total_daily" => ""
+                }}
+
+      assert Share.choice(%{"prompt_id" => "share-vlt_1"}, @subject) == {:ok, %{}}
+    end
+
+    test "refuses a change the form could not have sent" do
+      for change <- [
+            %{"audience" => "shared_thread:sth_elsewhere"},
+            %{"audience" => "listed"},
+            %{"audience" => %{"x" => "bad"}},
+            %{"audience" => "everyone", "person_daily" => %{"x" => "bad"}},
+            %{"audience" => "everyone", "total_daily" => ["1"]},
+            %{"audience" => "everyone", "person_daily" => 5},
+            %{"audience" => "everyone", "person_daily" => String.duplicate("9", 33)}
+          ] do
+        assert Share.choice(change, @subject) == :error, inspect(change)
+      end
+    end
+
+    test "a share prompt carries no preset but the administrator's setup's, which only " <>
+           "starts the choice drawn" do
+      for preset <- [:everyone, "setup", %{"audience" => "everyone"}, nil] do
+        prompt = put_in(@prompt, [:subject, :preset], preset)
+
+        assert PrismWeb.SystemLayer.Prompt.validate(prompt) == {:error, :invalid_prompt},
+               inspect(preset)
+      end
+
+      assert {:ok, prompt} =
+               PrismWeb.SystemLayer.Prompt.validate(
+                 Share.prompt(%{id: "vlt_1", name: "market key"}, @threads, :setup)
+               )
+
+      assert Share.drawn(prompt) == %{
+               "audience" => "everyone",
+               "person_daily" => "50",
+               "total_daily" => ""
+             }
+
+      # A change the person made replaces it; no preset, nothing chosen.
+      chosen = %{"audience" => "shared_thread:sth_pair"}
+      assert Share.drawn(Map.put(prompt, :choice, chosen)) == chosen
+      assert Share.drawn(@prompt) == %{}
+
+      # The events take no preset: a change naming one keeps the form's
+      # fields alone.
+      assert Share.choice(%{"preset" => "setup", "audience" => "everyone"}, @subject) ==
+               {:ok, %{"audience" => "everyone"}}
+    end
+
+    test "an arriving prompt that carries a choice is refused" do
+      assert PrismWeb.SystemLayer.Prompt.validate(
+               Map.put(@prompt, :choice, %{"audience" => "everyone"})
+             ) == {:error, :invalid_prompt}
+
+      assert {:ok, prompt} = PrismWeb.SystemLayer.Prompt.validate(@prompt)
+      refute Map.has_key?(prompt, :choice)
     end
   end
 

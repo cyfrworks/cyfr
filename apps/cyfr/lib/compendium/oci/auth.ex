@@ -13,7 +13,7 @@ defmodule Compendium.OCI.Auth do
   1. Client resolves the per-namespace push token from `CredentialStore`.
   2. Client emits `Authorization: Bearer <cyfr_pt_...>` on every request.
   3. On 401 to a push, the stored token is removed and the push refuses
-     `registry_token_missing`, naming `cyfr registry sync`; there is no
+     `registry_token_missing`, naming the Registry page's sync; there is no
      automatic refresh.
 
   `Authorization: Basic base64(anyuser:token)` is also accepted server-side

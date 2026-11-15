@@ -62,9 +62,11 @@ defmodule Arca.Repo.Migrations.Baseline do
     executions()
     logs()
     retention()
+    # Before the vault and consent: a binding of a login need names a
+    # program row.
+    registrations()
     vault_and_consent()
     file_offers()
-    registrations()
     schedules()
     outbox()
     threads()
@@ -353,7 +355,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :name, :string, null: false
       add :key_hash, :binary, null: false
       add :key_prefix, :string, null: false
-      add :type, :string, null: false
       add :scope, :text, null: false, default: "[]"
       add :ip_allowlist, :text
       add :revoked, :boolean, null: false, default: false
@@ -1761,17 +1762,21 @@ defmodule Arca.Repo.Migrations.Baseline do
           "(audience = 'everyone' AND thread_id IS NULL)"
     }
 
-    # A binding names exactly one of an athanor's entry, a share and a
-    # selection's label; an entry or a share is bound at a digest, and a
+    # A binding names exactly one of an athanor's entry, an athanor's
+    # program row (a login need's), a share and a selection's label; an
+    # entry, a program row or a share is bound at a digest, and a
     # selection pins one only when it was chosen against one.
     ref_names_one = %{
       name: "consent_vault_refs_names_one",
       expr:
-        "(vault_entry_id IS NOT NULL AND share_id IS NULL AND via_label IS NULL " <>
-          "AND binding_digest IS NOT NULL) OR " <>
-          "(share_id IS NOT NULL AND vault_entry_id IS NULL AND via_label IS NULL " <>
-          "AND binding_digest IS NOT NULL) OR " <>
-          "(via_label IS NOT NULL AND vault_entry_id IS NULL AND share_id IS NULL)"
+        "(vault_entry_id IS NOT NULL AND mcp_server_id IS NULL AND share_id IS NULL " <>
+          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
+          "(mcp_server_id IS NOT NULL AND vault_entry_id IS NULL AND share_id IS NULL " <>
+          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
+          "(share_id IS NOT NULL AND vault_entry_id IS NULL AND mcp_server_id IS NULL " <>
+          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
+          "(via_label IS NOT NULL AND vault_entry_id IS NULL AND mcp_server_id IS NULL " <>
+          "AND share_id IS NULL)"
     }
 
     ref_lifetime = %{
@@ -1945,12 +1950,16 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # One row per binding of a revision, keyed by its `binding_key`
     # (`<source node reference>|<edge key>|<slot>`): the athanor's own
-    # entry it binds, the share it binds (a bare id: the share is another
-    # athanor's row), or the label of the profile a selection borrows from,
-    # and the binding's own lifetime; the one that is set is the binding's
-    # scope (`Arca.Schemas.ConsentVaultRef.scope/1`). An entry may appear
-    # in several rows of one consent. `consumed_by_root` is the root
-    # execution a `once` binding was consumed under.
+    # entry it binds, the athanor's own program row a login need binds,
+    # the share it binds (a bare id: the share is another athanor's row),
+    # or the label of the profile a selection borrows from, and the
+    # binding's own lifetime; the one that is set is the binding's scope
+    # (`Arca.Schemas.ConsentVaultRef.scope/1`). An entry may appear in
+    # several rows of one consent. `consumed_by_root` is the root
+    # execution a `once` binding was consumed under. A program row is
+    # deleted, not tombstoned as an entry is, so its bindings go with it;
+    # its delete first blocks the profiles whose head stands on it
+    # (`Arca.McpServerStorage.delete/3`), which then ask again.
     create table(:consent_vault_refs, primary_key: false) do
       add :consent_id, references(:consents, column: :id, type: :string), null: false
       add :athanor_id, :string, null: false
@@ -1959,6 +1968,14 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :vault_entry_id,
           references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id]),
           check: if(sqlite?, do: ref_names_one)
+
+      add :mcp_server_id,
+          references(:mcp_servers,
+            column: :id,
+            type: :string,
+            with: [athanor_id: :athanor_id],
+            on_delete: :delete_all
+          )
 
       add :share_id, :string
       add :via_label, :string
@@ -1977,6 +1994,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:consent_vault_refs, [:consent_id, :binding_key])
     create index(:consent_vault_refs, [:vault_entry_id, :athanor_id])
+    create index(:consent_vault_refs, [:mcp_server_id, :athanor_id])
     create index(:consent_vault_refs, [:share_id])
 
     # Single-use, delete-on-read. No foreign keys by design: a proof outlives
@@ -2182,8 +2200,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :transport, :string, null: false, check: if(sqlite?, do: transport_check)
       # A program's mark: `mcp`, spoken to in MCP, or `driven`.
       add :mark, :string
-      # A program's home: `scratch` is scrubbed at retirement, `kept`
-      # survives it under a uid of its own.
+      # A program's home: `scratch` is scrubbed at retirement, `kept` is the
+      # row's own folder, named by its id, under a uid of its own.
       add :home, :string, null: false, default: "scratch", check: if(sqlite?, do: home_known)
       # A program's memory bound; null means the backends service's total.
       add :memory_bytes, :bigint
@@ -2191,10 +2209,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :home_max_bytes, :bigint
       # The command a sign-in session runs on a pseudo-terminal.
       add :login_command, :text
-      # A kept `mcp` program's login entry, whose home its sessions run in;
-      # a `driven` program's catalyst names its own entry and leaves this
-      # null.
-      add :login_entry_id, :string
       # A program's network list (JSON).
       add :hosts, :text
       add :url, :string
@@ -2218,6 +2232,8 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     checked(sqlite?, :mcp_servers, [home_known])
     create unique_index(:mcp_servers, [:athanor_id, :name])
+    # A consent binding names a program row with its athanor.
+    create unique_index(:mcp_servers, [:athanor_id, :id])
 
     create table(:webhooks, primary_key: false) do
       add :id, :string, primary_key: true, null: false
@@ -2344,6 +2360,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :last_execution_id, :string
       add :run_count, :integer, null: false, default: 0
       add :error_count, :integer, null: false, default: 0
+      # Why the last fire failed, until a fire succeeds again.
+      add :last_error, :text
       # The pinned version a fire runs, resolved when the row is written.
       add :resolved_reference, :string, null: false
       add :athanor_id, :string, null: false

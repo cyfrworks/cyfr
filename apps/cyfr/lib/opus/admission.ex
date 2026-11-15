@@ -515,9 +515,11 @@ defmodule Opus.Admission do
   end
 
   # A root mints its invocation reservation at admission, from the budget
-  # its authority was minted with; a child charges its root's.
+  # its authority was minted with; a child charges its root's. A root is a
+  # run with no parent, whether or not its caller named it its own root (a
+  # stream does, so its events are its own).
   defp reservation(opts) do
-    case {opts[:root_execution_id], opts[:authority]} do
+    case {opts[:parent_execution_id], opts[:authority]} do
       {nil, %Authority{budget: %Authority.Budget{id: id, cap: cap}}} -> %{budget_id: id, cap: cap}
       _ -> nil
     end
@@ -901,7 +903,7 @@ defmodule Opus.Admission do
       Attempt.open(
         execution_id: record.id,
         attempt: record.attempt,
-        call_id: record.call_id,
+        call_id: record.admitted.call_id,
         ctx: run.ctx,
         authority: run.opts[:authority],
         component_ref: run.component_ref,

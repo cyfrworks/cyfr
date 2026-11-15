@@ -612,7 +612,8 @@ defmodule Compendium.ProviderTest do
                })
 
       assert err_msg(reason) ==
-               "The stored registry credential is damaged; run `cyfr registry sync` to replace it."
+               "The stored registry credential is damaged; sync your push tokens on the Registry " <>
+                 "page to replace it."
     end
 
     @tag :capture_log
@@ -703,10 +704,10 @@ defmodule Compendium.ProviderTest do
           "reference" => "c:local.my-tool:1.0.0"
         })
 
-      # A local publish requires a claimed personal namespace; the error must explain that requirement.
+      # A local publish requires the person's name recorded here; the error must say where.
       refute err_msg(msg) =~ "No push token for namespace 'local'"
-      assert err_msg(msg) =~ "personal namespace"
-      assert err_msg(msg) =~ "cyfr registry claim"
+      assert err_msg(msg) =~ "no name recorded here"
+      assert err_msg(msg) =~ "Your name in Settings"
     end
 
     # The OCI gateway on loopback, answering every request 401: the registry
@@ -749,7 +750,7 @@ defmodule Compendium.ProviderTest do
                  "reference" => "r:local.pushed-tool:1.0.0"
                })
 
-      assert err_msg(reason) =~ "cyfr registry sync"
+      assert err_msg(reason) =~ "push tokens on the Registry page"
       refute_received {:registry_request, _}
     end
 
@@ -774,7 +775,7 @@ defmodule Compendium.ProviderTest do
                  "reference" => "r:local.pushed-tool:1.0.0"
                })
 
-      assert err_msg(reason) =~ "cyfr registry sync"
+      assert err_msg(reason) =~ "push tokens on the Registry page"
       assert {:error, :not_found} = Registry.CredentialStore.get(ctx, registry, "testns")
     end
 
@@ -801,7 +802,7 @@ defmodule Compendium.ProviderTest do
 
       # Resolution succeeded (no claim/credential error); the push then fails only
       # because the local component itself was never built in this test.
-      refute err_msg(msg) =~ "personal namespace"
+      refute err_msg(msg) =~ "no name recorded here"
       refute err_msg(msg) =~ "No push token"
       assert err_msg(msg) =~ "Component not found locally"
     end
@@ -2548,7 +2549,8 @@ defmodule Compendium.ProviderTest do
                    "reason" => "superseded"
                  })
 
-        assert Sanctum.Refusals.render(reason) =~ "no push token for namespace 'alice'"
+        assert Sanctum.Refusals.render(reason) ==
+                 "This CYFR holds no push token for alice: sync your push tokens on the Registry page."
       end
     end
 
@@ -2608,7 +2610,7 @@ defmodule Compendium.ProviderTest do
 
       for action <-
             ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add
-               members_update members_remove report appeal legal_accept) do
+               members_update members_remove report appeal) do
         assert action in visible
       end
     end
@@ -2626,7 +2628,7 @@ defmodule Compendium.ProviderTest do
                })
 
       refute match?(%Prima.Refusal{stage: :admission}, msg)
-      assert err_msg(msg) =~ "personal namespace"
+      assert err_msg(msg) =~ "no name recorded here"
     end
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do

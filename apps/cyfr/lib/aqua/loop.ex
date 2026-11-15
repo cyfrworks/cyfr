@@ -81,7 +81,12 @@ defmodule Aqua.Loop do
   # beside the retry's (`Aqua.Loop.Stream`).
   @recoverable ~w(rate_limited overloaded incomplete_stream)
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
-  @setup ~w(authentication secret_denied)
+  # A refusal for want of a key bound to the brain asks the person for its
+  # consent; a key the provider refused (`authentication`) is the
+  # provider's to say, as a line in the thread, since the grant would bind
+  # the same key again.
+  @setup ~w(secret_denied)
+  @refused_key "authentication"
   # The refusal of a session the brain no longer holds (`Prima.Model`). A
   # step the turn forgot its thread's session on closes with this type as
   # its error, as a retried step closes with its own, so a continued turn
@@ -188,6 +193,7 @@ defmodule Aqua.Loop do
   defp never_ran(ctx, claim, turn, reason) do
     case needs_setup(reason) do
       nil ->
+        say_refused_key(ctx, turn, reason)
         end_unrun(ctx, claim, turn, describe(reason))
         {:failed, reason}
 
@@ -202,6 +208,26 @@ defmodule Aqua.Loop do
         {:failed, :setup_required}
     end
   end
+
+  # A brain that could not be described because the provider refused its
+  # key says so in the thread, in the provider's words.
+  defp say_refused_key(ctx, turn, {:model_refused, _catalyst, %{"type" => @refused_key} = error}) do
+    Tape.append(ctx, turn.thread_id, %{
+      author: Prima.Author.system(),
+      sent_by: turn.agent,
+      kind: "system",
+      content: refused_key_line(error),
+      turn_id: turn.id,
+      execution_id: turn.root_execution_id
+    })
+  end
+
+  defp say_refused_key(_ctx, _turn, _reason), do: :ok
+
+  defp refused_key_line(%{"message" => message}) when is_binary(message),
+    do: "The model refused its key: #{message}"
+
+  defp refused_key_line(_error), do: "The model refused its key."
 
   defp end_unrun(ctx, claim, turn, error) do
     Opus.suspend_lease_watch(claim.keeper)
@@ -666,7 +692,7 @@ defmodule Aqua.Loop do
       messages: messages,
       tools: spec.tools,
       capabilities: spec.capabilities,
-      native_search?: Map.get(spec.policy, "native_search") == "auto",
+      offers_search?: offers_search?(spec),
       session: state.session,
       options: spec.brain_options
     )
@@ -713,17 +739,16 @@ defmodule Aqua.Loop do
     webhook = if turn.origin == "webhook", do: [Prima.Source.outside("webhook")], else: []
 
     search =
-      if native_search?(spec), do: [Prima.Source.outside("web_search")], else: []
+      if offers_search?(spec), do: [Prima.Source.outside("web_search")], else: []
 
     spec.sources ++ webhook ++ search
   end
 
-  # The request offers web search exactly when `Request.build/1` adds the
-  # provider tool: the policy grants `native_search` and the model has it.
-  defp native_search?(spec),
-    do:
-      Map.get(spec.policy, "native_search") == "auto" and
-        "web_search" in (Map.get(spec.capabilities || %{}, :provider_tools) || [])
+  # The request offers web search, and the turn records the open web as a
+  # source, on one answer: the policy turns it on, the grant carries it and
+  # the model has the tool.
+  defp offers_search?(spec),
+    do: Request.offers_search?(spec.policy, spec.authority, spec.capabilities)
 
   # The earlier turns whose rows a request sends: every row's turn but
   # this one's, and the turn a crew row came from — a delivered request's
@@ -796,6 +821,19 @@ defmodule Aqua.Loop do
         })
 
         {:halt, {:failed, :setup_required}, state}
+
+      {:error, %{"type" => @refused_key} = error} ->
+        _ =
+          Tape.close_step(
+            guest(state),
+            state.turn,
+            step,
+            "error",
+            refused(state, error, error["message"])
+          )
+
+        _ = system_row(state, refused_key_line(error))
+        {:halt, {:failed, refused_key_line(error)}, state}
 
       {:error, %{"type" => _type, "message" => message} = error} ->
         _ =

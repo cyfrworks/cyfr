@@ -144,6 +144,64 @@ defmodule PrismWeb.SchedulesLiveTest do
     refute has_element?(unfocused, marked)
   end
 
+  describe "a run that did not succeed" do
+    test "the row says what its schedule says of it and links its run, until a good run clears it",
+         %{conn: conn, view: view, ctx: ctx, params: params} do
+      render_submit(view, "create", params)
+      assert {:ok, %{id: id} = schedule} = schedule(ctx, params)
+      actor = Sanctum.Context.actor(ctx)
+      failed = "Last run failed: The upstream closed the connection."
+      unknown = "Last run did not report its end, so whether it had its effect is not known."
+      run = athanor_path("/executions?id=exec_failed")
+
+      {:ok, _} = Arca.CronSchedule.record_error(actor, id, failed, occurrence!(ctx, schedule))
+      {page, _html} = mount_athanor(conn, "/schedules")
+      assert has_element?(page, "p", failed)
+      assert has_element?(page, ~s(a[href="#{run}"]), "Open the run")
+
+      # A run whose end was never recorded is never called a failure.
+      {:ok, _} = Arca.CronSchedule.record_error(actor, id, unknown, occurrence!(ctx, schedule))
+      {page, _html} = mount_athanor(conn, "/schedules")
+      assert has_element?(page, "p", unknown)
+      refute has_element?(page, "p", "Last run failed")
+      assert has_element?(page, ~s(a[href="#{run}"]), "Open the run")
+
+      # A run that never started names no run.
+      {:ok, _} =
+        Arca.CronSchedule.record_error(
+          actor,
+          id,
+          "Last run did not start: Invalid JSON input",
+          nil
+        )
+
+      {page, _html} = mount_athanor(conn, "/schedules")
+      assert has_element?(page, "p", "Last run did not start: Invalid JSON input")
+      refute has_element?(page, "a", "Open the run")
+
+      {:ok, _} = Arca.CronSchedule.record_run(actor, id, "exec_good")
+      {page, _html} = mount_athanor(conn, "/schedules")
+      refute has_element?(page, "p", "Last run")
+      refute has_element?(page, "a", "Open the run")
+    end
+  end
+
+  # An ended occurrence of `schedule` whose run is `exec_failed`, each due
+  # at a time of its own.
+  defp occurrence!(ctx, schedule) do
+    n = System.unique_integer([:positive, :monotonic])
+
+    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+      id: "occ_" <> Integer.to_string(n),
+      athanor_id: ctx.athanor_id,
+      schedule_id: schedule.id,
+      scheduled_for: DateTime.add(DateTime.utc_now(), -n, :second),
+      state: "failed",
+      execution_id: "exec_failed",
+      claimed_at: DateTime.utc_now()
+    }).id
+  end
+
   describe "missed runs" do
     test "a schedule is made with the policy chosen, its row shows it, and the row saves a change",
          %{view: view, ctx: ctx, params: params} do

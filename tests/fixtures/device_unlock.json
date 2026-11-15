@@ -968,22 +968,6 @@
       "ticket": "base64url_unpadded"
     },
     "http": {
-      "refusals": {
-        "body": [
-          "error"
-        ],
-        "codes": {
-          "invalid_request": 422,
-          "unavailable": 503,
-          "ticket_refused": 403,
-          "rate_limited": 429
-        },
-        "note": "rate_limited is the rate limiter's answer on both routes: its body is {code, message}, not body's {error}.",
-        "retry_after": [
-          "rate_limited",
-          "unavailable"
-        ]
-      },
       "unlock_complete": {
         "get": "/auth/device/complete",
         "fragment": "ticket",
@@ -992,18 +976,6 @@
           "_csrf_token",
           "ticket"
         ]
-      },
-      "device_session": {
-        "method": "POST",
-        "path": "/device/session",
-        "request": [
-          "ticket"
-        ],
-        "response": [
-          "expires_at",
-          "session_token"
-        ],
-        "credential": "none"
       }
     },
     "shell": {
@@ -1016,6 +988,14 @@
       "confirm": {
         "method": "GET",
         "path": "/confirm",
+        "query": [
+          "ref"
+        ],
+        "target": "_blank"
+      },
+      "passkey": {
+        "method": "GET",
+        "path": "/passkey",
         "query": [
           "ref"
         ],

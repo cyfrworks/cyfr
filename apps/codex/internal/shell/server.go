@@ -27,7 +27,8 @@ import (
 
 // Listen is the shell's one listener: literal loopback, never a name, so
 // no other host's resolution reaches it. Prism's Lock posts to it, and its
-// Confirm on this device opens /confirm?ref= in a window of its own
+// Confirm on this device and its Approve of a passkey a browser asks for
+// open /confirm?ref= and /passkey?ref= in a window of their own
 // (tests/fixtures/device_unlock.json, exchange.shell).
 const Listen = "127.0.0.1:7340"
 
@@ -40,8 +41,10 @@ const Origin = "http://" + Listen
 // rebinding names another), and every POST must come from the shell's own
 // pages' Origin, or for Lock from the home's own Prism Origin, with a form
 // body. A top-level navigation only opens a page: GET /confirm?ref= reads
-// that confirmation from the home over the channel and draws it, which
-// authorizes nothing; no GET changes anything. Every page is no-store under
+// that confirmation from the home over the channel and draws it, and GET
+// /passkey?ref= reads that passkey request the same way and draws it with
+// the code this shell derives from its key, both of which authorize
+// nothing; no GET changes anything. Every page is no-store under
 // a policy that runs no script but the three fixed ones below, loads
 // nothing, submits forms only here and to the home, is framed by nothing
 // and sends no referrer to another origin. The shell signs nothing a page
@@ -62,7 +65,9 @@ const Origin = "http://" + Listen
 // attempt's genesis was made with: /resume checks that before it sends
 // anything, and only then issues the proof. A drawn confirmation's
 // preview goes only to the request naming its reference (GET /confirm,
-// /confirm/decide), never to a plain read.
+// /confirm/decide), and a drawn passkey request's code likewise (GET
+// /passkey, /passkey/decide), never to a plain read: the window Prism
+// opens holds no proof.
 // Never a cookie: 127.0.0.1's cookies go to every port on it, so another
 // local listener would collect and replay one. A setup's passphrase, the
 // secret-to-be on a machine without a chip, is shown only in the answer to
@@ -154,6 +159,14 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		srv.page(w, pageData{View: srv.Shell.confirmView(ref)})
 		return
 	}
+	if r.Method == http.MethodGet && r.URL.Path == "/passkey" {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		ref := r.URL.Query().Get("ref")
+		srv.Shell.DrawPasskey(ctx, ref)
+		srv.page(w, pageData{View: srv.Shell.passkeyView(ref)})
+		return
+	}
 	action, ok := actions[r.URL.Path]
 	if !ok || r.Method != http.MethodPost {
 		http.NotFound(w, r)
@@ -222,8 +235,8 @@ var actions = map[string]action{
 	"/resume": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.onward(ctx, w, r, f, srv.Shell.resumeByPage(ctx, string(f.get("code"))))
 	}},
-	// The account's log is read before the key is opened, as cyfr login
-	// reads it: a key the log no longer lists shows its code again, and
+	// The account's log is read before the key is opened: a key the log
+	// no longer lists shows its code again, and
 	// the PIN typed is erased unused.
 	"/unlock": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.CheckListed(ctx)
@@ -258,6 +271,22 @@ var actions = map[string]action{
 			return
 		}
 		srv.page(w, pageData{View: v, Answer: "answered"})
+	}},
+	// A request still drawn (a wrong PIN) is shown again; a settled one
+	// closes its window; any other says what happened and stays open, so
+	// the person reads why nothing was added.
+	"/passkey/decide": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		ref := string(f.get("ref"))
+		settled := srv.Shell.DecidePasskey(ctx, ref, string(f.get("key")), string(f.get("decision")) == "approve", f.get("secret"))
+		v := srv.Shell.passkeyView(ref)
+		switch {
+		case v.Passkey != nil:
+			srv.page(w, pageData{View: v})
+		case settled:
+			srv.page(w, pageData{View: v, Answer: "answered"})
+		default:
+			srv.page(w, pageData{View: v, Answer: "ended"})
+		}
 	}},
 }
 
@@ -321,7 +350,7 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 			to = ticket
 		case errors.Is(err, errNoProof):
 			srv.Shell.mu.Lock()
-			srv.Shell.say("Only the page this %s was unlocked on opens CYFR: lock it, then unlock it here.", srv.Shell.cfg.Noun)
+			srv.Shell.say("Only the page this screen was unlocked on opens CYFR: lock it, then unlock it here.")
 			srv.Shell.mu.Unlock()
 		default:
 			srv.Shell.mu.Lock()
@@ -390,7 +419,8 @@ func warnings(r disk.Report) []string {
 	}{{"system disk", r.Root}, {"CYFR data volume", r.Data}} {
 		switch v.state {
 		case disk.Unencrypted:
-			out = append(out, "This box keeps its data unencrypted, whoever takes it reads everything: its "+v.name+" is not encrypted.")
+			out = append(out, "This box keeps its data unencrypted, whoever takes it reads everything: its "+v.name+" is not encrypted. "+
+				"Keep the box where only people you trust can reach it, or install Ubuntu again with disk encryption turned on.")
 		case disk.Unknown:
 			out = append(out, "Whether this box's "+v.name+" is encrypted could not be determined.")
 		}

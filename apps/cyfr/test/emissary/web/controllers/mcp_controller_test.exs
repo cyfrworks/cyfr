@@ -186,8 +186,7 @@ defmodule Emissary.Web.MCPControllerTest do
 
       {:ok, key_result} =
         Sanctum.TestContext.create_key(ctx, %{
-          name: "test-ctrl-key",
-          type: :application
+          name: "test-ctrl-key"
         })
 
       on_exit(fn ->
@@ -1224,7 +1223,7 @@ defmodule Emissary.Web.MCPControllerTest do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, key_result} =
-        Sanctum.TestContext.create_key(ctx, %{name: "listen-gate-key", type: :application})
+        Sanctum.TestContext.create_key(ctx, %{name: "listen-gate-key"})
 
       {:ok, api_key: key_result.api_key}
     end

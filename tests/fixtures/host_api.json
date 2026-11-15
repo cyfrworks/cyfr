@@ -715,8 +715,8 @@
           "why": "the manifest declares no login need of that name, the run's binding is not that need's or mounts another program, or the session is not one the caller's attempt opened"
         },
         {
-          "answer": "{\"v\":1,\"error\":\"guest_error\",\"message\":\"The login entry bound to coder is revoked.\",\"type\":\"setup_required\"}",
-          "why": "the binding, its login entry or its program row no longer serves, or the program's folder is past its cap; also busy (the box is full) and invalid_request"
+          "answer": "{\"v\":1,\"error\":\"guest_error\",\"message\":\"The program bound to coder was removed.\",\"type\":\"setup_required\"}",
+          "why": "the binding or its program row no longer serves, or the program's folder is past its cap; also busy (the box is full) and invalid_request"
         },
         {
           "answer": "{\"v\":1,\"error\":\"lost\"}",

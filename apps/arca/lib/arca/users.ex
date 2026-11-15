@@ -30,7 +30,7 @@ defmodule Arca.Users do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.User
+  alias Arca.Schemas.{IdentityLogEntry, PersonIdentity, User}
 
   @type refusal :: {:error, :cross_tenant | :database_error}
   @type write_refusal ::
@@ -137,6 +137,218 @@ defmodule Arca.Users do
 
   def set_namespace(%Prima.Actor{}, _user_id, _namespace), do: {:error, :cross_tenant}
 
+  @doc "The active people carrying the platform administrator's mark, oldest mark first."
+  @spec platform_admins(Prima.Actor.t()) :: {:ok, [map()]} | refusal()
+  # arca:unscoped-ok the platform administrators are the instance's, held by no athanor.
+  def platform_admins(%Prima.Actor{scope: :platform}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Users.platform_admins", fn ->
+      {:ok, Arca.Repo.all(from(u in admins(), order_by: [asc: u.platform_admin_at, asc: u.id]))}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def platform_admins(%Prima.Actor{}), do: {:error, :cross_tenant}
+
+  # Fixed at compile time: one key for the server, shared by every node of
+  # a cell through the one database.
+  @admins_lock :erlang.phash2("arca:platform_admins")
+
+  @doc """
+  Take the administrators' lock for the rest of the enclosing transaction
+  (`Arca.Repo.transaction_lock/1`): a PostgreSQL transaction-level
+  advisory lock; on SQLite the write lock every writing transaction
+  already holds. Raises outside a transaction.
+
+  Every act that reads who carries the platform administrator's mark in
+  order to change it or to decide by it takes this one lock before it
+  reads: a marking or a clearing (`set_platform_admin/4`, and so the
+  marking's own check of a deny and its allow), the door's deny and
+  removal (`with_admins_locked/2`), a denial
+  (`Arca.SecurityTransitions.deny_user/3`) and the closure of an account
+  (`closable/2`). Under it the set of administrators and their standing
+  cannot change, so it is counted once, and no order among people's rows
+  is needed for it.
+
+  It is taken before any person's or door entry's row. A closure takes it
+  after the directory's lock (`Arca.IdentityLog.tombstone/3` locks its
+  usage row, then runs `closable/2`); no holder of this lock takes the
+  directory's lock or the census lock (`Arca.AthanorCensus`) after it.
+  """
+  @spec lock_admins() :: :ok
+  # arca:db-raise-ok raises outside a transaction, as its doc says; its caller holds one
+  def lock_admins, do: Arca.Repo.transaction_lock(@admins_lock)
+
+  @doc """
+  Write the platform administrator's mark on the person `user_id` names
+  (`mark?` true) or clear it (false), as one transaction only the control
+  plane's holder runs (`Arca.Repo.owned/2`), under the administrators'
+  lock (`lock_admins/0`), so two changes never each count the other's
+  administrator and leave none: clearing the mark of the last
+  administrator who can still act (active, marked, and holding no account
+  this CYFR's directory has closed) is refused `:last_admin`. `by:`
+  (required) is the administrator who asks, read under that lock: one who
+  can no longer act is refused `:not_admin`. Only an active person is
+  marked (`:not_active`); marking a marked person, or clearing an unmarked
+  one, changes nothing. `also:`, a function of the person's row run last
+  in the transaction, answers `:ok` or `{:error, reason}`, which rolls the
+  change back: marking writes the person's allow beside the mark.
+  """
+  @spec set_platform_admin(Prima.Actor.t(), String.t(), boolean(), keyword()) ::
+          {:ok, map()}
+          | {:error, :not_found | :not_active | :last_admin | :not_admin | :not_owner | term()}
+          | refusal()
+  def set_platform_admin(actor, user_id, mark?, opts \\ [])
+
+  def set_platform_admin(%Prima.Actor{scope: :platform}, user_id, mark?, opts)
+      when is_binary(user_id) and is_boolean(mark?) and is_list(opts) do
+    by = Keyword.fetch!(opts, :by)
+    also = Keyword.get(opts, :also, fn _user -> :ok end)
+
+    Arca.Repo.owned("Arca.Users.set_platform_admin", fn ->
+      :ok = lock_admins()
+      marked = Arca.Repo.all(from(u in admins(), select: u.id))
+
+      with :ok <- acting(by, marked),
+           {:ok, user} <- found(Arca.Repo.get(User, user_id)),
+           :ok <- markable(user, mark?, marked),
+           {:ok, user} <- marked(user, mark?),
+           :ok <- also_ran(also.(Arca.Data.project(user))) do
+        {:ok, user}
+      end
+    end)
+  end
+
+  def set_platform_admin(%Prima.Actor{}, _user_id, _mark?, _opts), do: {:error, :cross_tenant}
+
+  defp admins,
+    do: from(u in User, where: not is_nil(u.platform_admin_at) and u.status == "active")
+
+  # The administrator who asks is read under the lock the change holds, so
+  # one whose mark was cleared or whose account was closed since their
+  # session last read it changes nothing.
+  defp acting(by, marked),
+    do: if(by in standing(marked), do: :ok, else: {:error, :not_admin})
+
+  defp markable(%User{status: "active"}, true, _marked), do: :ok
+  defp markable(%User{}, true, _marked), do: {:error, :not_active}
+
+  defp markable(%User{id: id}, false, marked) do
+    if id in marked and standing(marked -- [id]) == [], do: {:error, :last_admin}, else: :ok
+  end
+
+  defp marked(%User{platform_admin_at: %DateTime{}} = user, true), do: {:ok, user}
+  defp marked(%User{platform_admin_at: nil} = user, false), do: {:ok, user}
+
+  # The mark is written past the changeset, which keeps it read-only for
+  # every other write, as the installation's first person is born with it.
+  defp marked(%User{} = user, mark?) do
+    now = DateTime.utc_now()
+
+    user
+    |> Ecto.Changeset.change(platform_admin_at: if(mark?, do: now), updated_at: now)
+    |> Arca.Repo.update()
+    |> settled()
+  end
+
+  @doc """
+  Run `write` as one transaction only the control plane's holder runs
+  (`Arca.Repo.owned/2`), under the administrators' lock (`lock_admins/0`),
+  taken before `write` reads anything. `write` gets `marked?`, which
+  answers whether the person `{kind, value}` names, by their id
+  (`"person"`) or their account's identifier (`"identifier"`), carries
+  the platform administrator's mark (a value that names nobody here does
+  not); it answers `{:ok, value}` or `{:error, reason}`, which rolls it
+  back.
+
+  The door's writes that can shut a person out decide in it: a deny, and
+  a removal, which reads its entry inside it. No marking commits between
+  their read of the mark and their write, so an administrator's allow is
+  never removed and an administrator is never denied.
+  """
+  @spec with_admins_locked(
+          Prima.Actor.t(),
+          (({String.t(), String.t()} -> boolean()) -> {:ok, term()} | {:error, term()})
+        ) :: {:ok, term()} | {:error, :not_owner | term()} | refusal()
+  def with_admins_locked(%Prima.Actor{scope: :platform}, write) when is_function(write, 1) do
+    Arca.Repo.owned("Arca.Users.with_admins_locked", fn ->
+      :ok = lock_admins()
+      write.(&marked?/1)
+    end)
+  end
+
+  def with_admins_locked(%Prima.Actor{}, _write), do: {:error, :cross_tenant}
+
+  defp marked?({kind, value}) when kind in ["person", "identifier"] and is_binary(value) do
+    Arca.Repo.exists?(from(u in named(kind, value), where: not is_nil(u.platform_admin_at)))
+  end
+
+  defp named("person", user_id), do: from(u in User, where: u.id == ^user_id)
+
+  defp named("identifier", identifier) do
+    holder = from(p in PersonIdentity, where: p.identifier == ^identifier, select: p.user_id)
+    from(u in User, where: u.id in subquery(holder))
+  end
+
+  @doc """
+  Whether the account `identifier` may be closed without leaving this CYFR
+  with no platform administrator who can still act. `{:error, :only_admin}`
+  when the person it names carries the mark and no other administrator can
+  still act; `:ok` otherwise, also for an account no person here holds.
+
+  An administrator who can still act is active, marked, and holds no
+  account this CYFR's directory has closed (a genesis here with `gone_at`);
+  an account another directory keeps has no log here and stands.
+
+  Asked inside the closing transaction (`Arca.IdentityLog.tombstone/3`'s
+  `verify:`), it decides under the directory's lock, after every earlier
+  closure committed, and then under the administrators' lock
+  (`lock_admins/0`), so a change of the mark is decided before or after
+  it, never beside it. Asked alone it reads in a transaction of its own.
+  A read that fails answers `{:error, :database_error}`, which refuses.
+  """
+  @spec closable(Prima.Actor.t(), String.t()) :: :ok | {:error, :only_admin} | refusal()
+  # arca:unscoped-ok the platform administrators are the instance's, held by no athanor.
+  def closable(%Prima.Actor{scope: :platform}, identifier) when is_binary(identifier) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Users.closable", fn ->
+      Arca.Repo.read_transaction(fn ->
+        :ok = lock_admins()
+        marked = Arca.Repo.all(from(u in admins(), select: u.id))
+
+        holder =
+          Arca.Repo.one(
+            from(p in PersonIdentity, where: p.identifier == ^identifier, select: p.user_id)
+          )
+
+        if holder in marked and standing(marked -- [holder]) == [],
+          do: {:error, :only_admin},
+          else: :ok
+      end)
+      |> case do
+        {:ok, answer} -> answer
+        {:error, _} = refused -> refused
+      end
+    end)
+  end
+
+  def closable(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
+
+  # Of `user_ids`, those whose account this CYFR's directory has not closed.
+  defp standing([]), do: []
+
+  defp standing(user_ids) do
+    closed =
+      Arca.Repo.all(
+        from(p in PersonIdentity,
+          join: e in IdentityLogEntry,
+          on: e.identifier == p.identifier and e.seq == 0,
+          where: p.user_id in ^user_ids and not is_nil(e.gone_at),
+          select: p.user_id
+        )
+      )
+
+    user_ids -- closed
+  end
+
   @doc """
   Write `attrs` over the person `user_id` names, as the row reads now.
   `updated_at` is stamped here. The standing columns (`status`,
@@ -194,7 +406,7 @@ defmodule Arca.Users do
   (`Arca.InstallationClaims.guard!/1`): the installation's first person is
   made only by `setup`, and is written with the platform administrator's
   mark (`users.platform_admin_at`) in this transaction; no other mint
-  writes it. Every other admission onto an empty node is `:not_set_up`,
+  writes it, and only `set_platform_admin/4` writes it afterwards. Every other admission onto an empty node is `:not_set_up`,
   and a `setup` on a node that holds a person is `:setup_closed`.
   """
   @spec mint(Prima.Actor.t(), map(), keyword()) ::

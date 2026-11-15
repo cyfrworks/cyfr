@@ -20,16 +20,16 @@ import (
 // groupCommandOrder defines the display order within each help group.
 // Every registered command must appear in its group.
 var groupCommandOrder = map[string][]string{
-	"server":   {"init", "setup", "access", "up", "down", "update", "restore"},
-	"identity": {"login", "logout", "device", "whoami", "open", "status", "athanor", "thread"},
+	"server":   {"init", "setup", "access", "up", "down", "update", "backup", "restore", "uninstall"},
+	"identity": {"whoami", "status", "athanor"},
 	"component": {
 		"new", "build", "search", "list", "inspect", "pull", "register",
-		"run", "fork", "remove", "push", "deprecate", "yank", "schedule",
+		"run", "fork", "remove", "schedule",
 		"tincture",
 	},
 	"security": {"key", "profile", "webhook"},
 	"admin": {
-		"admin", "settings", "log", "decision", "retention", "aqua", "mcp", "registry", "report",
+		"log", "decision", "retention", "aqua", "mcp", "registry",
 		"notify", "context", "call",
 	},
 }
@@ -71,7 +71,7 @@ func customUsage(cmd *cobra.Command) error {
 		ordered := orderCommands(cmds, g.ID)
 		fmt.Fprintf(out, "%s\n", g.Title)
 		for _, c := range ordered {
-			fmt.Fprintf(out, "  %-12s%s\n", c.Name(), c.Short)
+			fmt.Fprintf(out, "  %-*s%s\n", nameWidth(ordered), c.Name(), c.Short)
 		}
 		fmt.Fprintln(out)
 	}
@@ -80,7 +80,7 @@ func customUsage(cmd *cobra.Command) error {
 	if len(ungrouped) > 0 {
 		fmt.Fprintln(out, "Additional Commands:")
 		for _, c := range ungrouped {
-			fmt.Fprintf(out, "  %-12s%s\n", c.Name(), c.Short)
+			fmt.Fprintf(out, "  %-*s%s\n", nameWidth(ungrouped), c.Name(), c.Short)
 		}
 		fmt.Fprintln(out)
 	}
@@ -115,7 +115,7 @@ func defaultSubcommandUsage(cmd *cobra.Command) error {
 		fmt.Fprintln(out, "\nAvailable Commands:")
 		for _, c := range cmd.Commands() {
 			if c.IsAvailableCommand() || c.Name() == "help" {
-				fmt.Fprintf(out, "  %-12s%s\n", c.Name(), c.Short)
+				fmt.Fprintf(out, "  %-*s%s\n", nameWidth(cmd.Commands()), c.Name(), c.Short)
 			}
 		}
 	}
@@ -166,4 +166,14 @@ func orderCommands(cmds []*cobra.Command, groupID string) []*cobra.Command {
 	}
 
 	return result
+}
+
+// nameWidth is the column the commands' names take in help: twelve, or
+// the longest name and two spaces, so no name runs into its description.
+func nameWidth(cmds []*cobra.Command) int {
+	width := 12
+	for _, c := range cmds {
+		width = max(width, len(c.Name())+2)
+	}
+	return width
 }

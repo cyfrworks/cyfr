@@ -25,9 +25,9 @@ POST /mcp  ──────────────────>  Authenticate
   <──── JSON-RPC response ─────
 ```
 
-Every CLI command that talks to a server (`cyfr run`, `cyfr profile grant`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
+Every CLI command that talks to a server (`cyfr run`, `cyfr call`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
 
-The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, canvas pages under `/_c`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`), inbound webhooks (`/hooks`), a device's channel and session (`/device`), and the account service's routes, `/directory/v1`, `/v1/handles`, `/v1/identities/:identifier/handle`, `/v1/namespaces/personal/claim` and `/account`, which answer where this CYFR serves its own account service; and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
+The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, canvas pages under `/_c`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`), inbound webhooks (`/hooks`), a device's channel (`/device`), and the account service's routes, `/directory/v1`, `/v1/handles`, `/v1/identities/:identifier/handle`, `/v1/namespaces/personal/claim` and `/account`, which answer where this CYFR serves its own account service; and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
 
 ---
 
@@ -37,42 +37,33 @@ CYFR supports two authentication methods. Choose the one that fits your use case
 
 | Method | When to Use | How It Works |
 |--------|-------------|--------------|
-| **API Keys** | Apps and service-to-service callers (frontend, backend, CI/CD) | `Authorization: Bearer cyfr_pk_...` header |
-| **Session Tokens** | Human devs using the CLI (`cyfr login`) | The command line is a protected device: its shell unlocks its key and holds the session in memory while it runs |
+| **API Keys** | The CLI, scripts, backends, CI/CD and agents acting as you | `Authorization: Bearer cyfr_sk_...` header |
+| **Browser Sessions** | People acting on CYFR's screen: a browser signed in with a passkey, or the CYFR box unlocked with its PIN | A session cookie set by the sign-in |
 
 ### API Keys
 
-API keys are the primary way applications authenticate with CYFR. There are three types:
+An API key is how a script, a backend or CI/CD acts as you in your athanor. There is one kind, `cyfr_sk_`: what it may do is fixed when you make it, its permissions ticked from a preset and, if you like, the only tools it may run. Left without tools, it runs any tool you granted. Keep it out of browser code and out of source: anyone holding it acts as you within what it may do, until you revoke it.
 
-| Type | Prefix | Use Case | Security Considerations |
-|------|--------|----------|------------------------|
-| **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
-| **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. Of the registry's, claiming a name or a publisher namespace, verifying a publisher namespace, minting push tokens, accepting the registry's policies and filing an appeal are requests a key of the person's account signs; the registry's other requests, for a namespace's tokens, members and components and for reports, go under the person's stored push token. |
+A key carries out what you approved and never approves anything itself. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, filing a report or an appeal — take a signed-in session instead. Of the registry's, claiming a name or a publisher namespace, verifying a publisher namespace, minting push tokens and filing an appeal are requests a key of the person's account signs; the registry's other requests, for a namespace's tokens, members and components and for reports, go under the person's stored push token.
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
-### Session Tokens
+### Browser Sessions
 
-Session tokens are for human developers using the CLI. `cyfr login` makes the command line a device of its person's account, as the box's own screen is ([devices-guide.md](devices-guide.md)):
-
-1. The first time, it makes the device's key, protected by a PIN in the machine's chip or a generated passphrase, and the person adds the key to their account at the account pages or with `cyfr device approve` on another terminal of theirs, or makes their account with it (`--setup`, `--join`); its first connection to each CYFR introduces it on the device channel (`/device`), admitted under setup, an invitation or that CYFR's allowlist
-2. Each time, it unlocks the key and proves it on its device channel (`session.unlock`), and spends the one-time ticket it is answered at `POST /device/session` (`{ticket}` → `{session_token, expires_at}`) for a session bound to that device
-3. It starts the person's shell with the session, which it holds in memory and never writes to disk; the session lives while the shell's device channel keeps it, ends within a minute of the channel's end, and ends at once on `session.lock` or the device's revocation
-
-No CYFR approves a command line, and no provider signs one in. `CYFR_SESSION_TTL_HOURS` (30 days by default) bounds a browser's sessions, never a device's. `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
+People act on CYFR's screen. A browser signs in with the person's passkey, and the CYFR box's own screen unlocks with its PIN ([devices-guide.md](devices-guide.md)); either way the browser holds the session as a cookie, and a person's interactive acts (above) are made there. The command line signs no one in: it calls with an API key, passed as `--token <key>` or `CYFR_TOKEN`.
 
 ```bash
-cyfr login                    # Unlock this command line's key and start a shell
-cyfr whoami                   # Check current session
-exit                          # Leave the shell: its session ends
+export CYFR_TOKEN=cyfr_sk_...   # a key made on CYFR's API Keys page
+cyfr whoami                     # who the key acts as
 ```
+
+`CYFR_SESSION_TTL_HOURS` (30 days by default) bounds a browser's sessions, never the box's, which only the box's own channel extends. `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
 
 ### Service-to-service
 
-Backend services and automation authenticate with API keys — a service key
-(`cyfr_sk_`) for backends, an admin key (`cyfr_ak_`, ideally IP-allowlisted) for
-CI/CD and infrastructure. See **API Key Lifecycle** below.
+Backend services and automation authenticate with an API key (`cyfr_sk_`),
+narrowed to the tools they run and, for CI/CD, IP-allowlisted. See **API Key
+Lifecycle** below.
 
 ---
 
@@ -81,18 +72,20 @@ CI/CD and infrastructure. See **API Key Lifecycle** below.
 ### Create
 
 ```bash
-# Application key (frontend) — defaults to execute, component_read, storage_read
-cyfr key create --name "react-app" --type application
+# Runs tools and reads their runs (the first preset, when --scope is omitted)
+cyfr key create --name "node-backend"
 
-# Service key (backend) — defaults to execute, vault_read, component_read, storage_read/write
-cyfr key create --name "node-backend" --type service
+# Runs one tool and nothing else, whatever its version
+cyfr key create --name "weather-script" --tool "c:local.weather"
 
-# Service key with extra scope
-cyfr key create --name "node-backend-rw" --type service --scope "vault_read,component_manage"
+# Builds components
+cyfr key create --name "builder" --scope "execute,component_read,storage_read,component_manage,storage_write"
 
-# Admin key (CI/CD) with IP allowlist — defaults to * (all scopes)
-cyfr key create --name "github-actions" --type admin --ip-allowlist "140.82.112.0/20"
+# Manages keys and webhooks, from CI/CD's addresses only
+cyfr key create --name "github-actions" --scope "admin" --ip-allowlist "140.82.112.0/20"
 ```
+
+The API Keys page offers the same presets, in both modes.
 
 Or via MCP:
 
@@ -103,8 +96,8 @@ Or via MCP:
     "name": "key",
     "arguments": {
       "action": "create",
-      "name": "react-app",
-      "type": "application"
+      "name": "weather-script",
+      "tools": ["c:local.weather"]
     }
   }
 }
@@ -114,45 +107,50 @@ Response (the raw key is shown **only once**):
 
 ```json
 {
-  "api_key": "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
-  "name": "react-app",
-  "type": "application",
+  "api_key": "cyfr_sk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
+  "name": "weather-script",
   "scope": ["execute", "component_read", "storage_read"],
+  "tools": ["catalyst:local.weather"],
   "created_at": "2025-02-13T..."
 }
 ```
 
 ### Available Scopes
 
-Scopes control what operations an API key can perform. Each scope maps to a category of actions:
+A key's permissions control what operations it can perform. Each is shown on the API Keys page by what it lets a key do:
 
-| Scope | What It Allows |
-|-------|----------------|
-| `execute` | Run components, manage schedules, compile builds |
-| `vault_read` | `oauth.list`: the names of the OAuth providers the athanor has client credentials for, who stored them and when; never the secret |
-| `component_read` | Get component blobs, discover components |
-| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, mint and manage registry push tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
-| `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
-| `storage_write` | Set retention policies; write, edit and delete component source; write, delete, offer, accept, decline and withdraw files |
-| `admin` | API key management, retention cleanup, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
-| `*` | Wildcard — all permissions |
+| Scope | On the Page | What It Allows |
+|-------|-------------|----------------|
+| `execute` | Run tools | Run components, manage schedules, compile builds |
+| `component_read` | Read components | Get component blobs, discover components |
+| `storage_read` | Read files, runs and logs | View execution records, a run's events and logs, MCP logs, enforcement logs, retention config; a key's own runs need it |
+| `component_manage` | Build and publish components | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, mint and manage registry push tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
+| `storage_write` | Write files | Set retention policies; write, edit and delete component source; write, delete, offer, accept, decline and withdraw files |
+| `admin` | Manage keys, webhooks and programs | API key management, webhooks, retention cleanup, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
+| `vault_read` | List OAuth clients | `oauth.list`: the names of the OAuth providers the athanor has client credentials for, who stored them and when; never the secret |
 
-#### Key Type Defaults and Ceilings
+A name outside this table is refused when the key is made.
 
-Each key type has default scopes (applied when none are specified) and a ceiling (the maximum scopes it can be granted):
+#### Presets
 
-| Type | Default Scopes | Allowed Scopes (Ceiling) |
-|------|---------------|--------------------------|
-| **Application** | `["execute", "component_read", "storage_read"]` | `["execute", "vault_read", "component_read", "storage_read"]` |
-| **Service** | `["execute", "vault_read", "component_read", "storage_read", "storage_write"]` | `["execute", "vault_read", "component_read", "component_manage", "storage_read", "storage_write"]` |
-| **Admin** | `["*"]` (all) | `["vault_read", "admin", "*"]` |
+A key's permissions are ticked from a preset; the first is what a key made without permissions holds:
+
+| Preset | Permissions |
+|--------|-------------|
+| Run tools and read their runs | `["execute", "component_read", "storage_read"]` |
+| Build components | `["execute", "component_read", "storage_read", "component_manage", "storage_write"]` |
+| Manage keys and webhooks | `["admin"]` |
+
+#### Tools
+
+`tools` names the only tools a key may run: each a component reference without its version (`c:local.weather`), so the key keeps running it across updates, or an outside server's tool by the name `tools/list` gives it (`greeter:hello`). What a named tool runs as its own dependencies stands on your grant of it. A run of any other tool (started, streamed or retried with the key), the route of a tincture not named, and a call to an outside tool not named are refused, and `tools/list` shows the key only the outside tools it names: "This API key may run only the tools named when it was made, and this is not one of them." Left empty, the key runs any tool you granted.
 
 ### IP Allowlist
 
-Restrict which IPs can use a key (recommended for admin keys):
+Restrict which IPs can use a key (recommended for CI/CD):
 
 ```bash
-cyfr key create --name "ci" --type admin --ip-allowlist "140.82.112.0/20,10.0.0.1"
+cyfr key create --name "ci" --ip-allowlist "140.82.112.0/20,10.0.0.1"
 ```
 
 Supports exact IPs and CIDR notation. Both IPv4 and IPv6 are supported.
@@ -163,7 +161,7 @@ Supports exact IPs and CIDR notation. Both IPv4 and IPv6 are supported.
 cyfr key rotate react-app
 ```
 
-Returns a new key and invalidates the old one.
+Returns a new key with the same permissions and tools, and invalidates the old one. Nothing changes what a key may do: to change it, make a new key and revoke this one.
 
 ### Revoke
 
@@ -177,7 +175,7 @@ cyfr key revoke react-app
 cyfr key list
 ```
 
-Lists all keys with their name, type, scope, and creation date. Raw key values are never shown — only the 12-character prefix (e.g., `cyfr_pk_aBcD...`).
+Lists all keys with their name, permissions (`scope`), tools and creation date. Raw key values are never shown — only the 12-character prefix (e.g., `cyfr_sk_aBcD...`).
 
 ---
 
@@ -191,7 +189,7 @@ Two different credential types serve two different purposes: API keys authentica
 | **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` | Google/Slack grants |
 | **Who uses it** | Your app (in the `Authorization` header) | WASM components (the host attaches the entry, or the component reads it when its need discloses it) | WASM components (via `cyfr:oauth/token`) |
 | **Stored where** | Your app's environment | CYFR's vault (sealed, encrypted at rest) | CYFR's vault (sealed, encrypted at rest) |
-| **Managed by** | `cyfr key create/revoke/rotate` | `vault` verbs + console Vault page; bound via `cyfr profile grant` | `vault.authorize` (browser grant) + `oauth.set_client` (provider app creds); bound via `cyfr profile grant` |
+| **Managed by** | `cyfr key create/revoke/rotate` | `vault` verbs + console Vault page; bound on the Components page's **Grant access** | `vault.authorize` (browser grant) + `oauth.set_client` (provider app creds); bound on the Components page's **Grant access** |
 | **Lifecycle** | Static — set once | Static — rotate without re-consent | Dynamic — host auto-refreshes |
 
 **Example flow:**
@@ -300,7 +298,7 @@ finished.
 | `MCP-Protocol-Version` | `2026-07-28` | Always — must equal the `_meta` version |
 | `Mcp-Method` | the request's `method` | Always |
 | `Mcp-Name` | `params.name`, or `params.uri` for `resources/read` | Methods that name a subject |
-| `Authorization` | `Bearer cyfr_pk_...`, `Bearer cyfr_sk_...`, `Bearer cyfr_ak_...`, or a session token | Always, unless calling a public action |
+| `Authorization` | `Bearer cyfr_sk_...` | Always, unless calling a public action |
 
 A value that is not plain visible ASCII travels Base64-encoded in the
 specification's sentinel form, `=?base64?<encoded>?=`, and the server decodes it
@@ -415,7 +413,7 @@ A CYFR may require every person there to sign in with their company's
 account (`CYFR_COMPANY_LOGIN`, [README.md](README.md#requiring-a-company-sign-in)).
 While a person's company sign-in is missing, past its days, or given under
 another company configuration, CYFR refuses every request made with their
-credentials: an API key they made, their session token and their paired
+credentials: an API key they made, their browser sessions and their paired
 devices alike. The refusal, `company_login_required`, answers HTTP `403`
 with this message:
 
@@ -430,7 +428,7 @@ its next revalidation.
 Retrying does not help, and no key or session needs to be made again. The
 person opens the CYFR in a browser, signs in, and chooses **Sign in with
 your company** on the page it sends them to. After that, the same API key
-and session token are admitted again.
+and session are admitted again.
 
 ### Public Tools (No Auth Required)
 
@@ -466,10 +464,9 @@ params); and any other refusal the code of its class in the table above.
 
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that
-has not yet claimed a namespace: the registry's policy reads and
-acceptance (`registry.legal_version`, `registry.legal_page`,
-`registry.legal_accept`). Those are not public — they need the session —
-but they do not need a claimed identity.
+has not yet claimed a namespace: the registry's policy reads
+(`registry.legal_version`, `registry.legal_page`). Those are not public —
+they need the session — but they do not need a claimed identity.
 
 Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `decision.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
@@ -477,13 +474,13 @@ Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`
 
 ## Example Scenarios
 
-### React Frontend with an Application Key
+### A Script with a Key Narrowed to One Tool
 
-An application key is safe to embed in client-side code. It can execute and search components but cannot access secrets or admin operations.
+A key acts as you, so it never goes into browser code. Narrowed to the one tool a script calls, a leaked key runs that tool and nothing else.
 
 ```javascript
 const CYFR_URL = "https://your-cyfr-server.example.com/mcp";
-const CYFR_KEY = "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345";
+const CYFR_KEY = process.env.CYFR_TOKEN; // cyfr_sk_..., made with --tool c:local.claude
 const PROTOCOL_VERSION = "2026-07-28";
 
 async function runComponent(reference, input, type = "catalyst") {
@@ -522,9 +519,9 @@ const result = await runComponent(
 );
 ```
 
-### Node.js Backend with a Service Key
+### Node.js Backend with a Key
 
-Service keys should live in environment variables, never in source code.
+Keys live in environment variables, never in source code.
 
 ```javascript
 const CYFR_URL = process.env.CYFR_URL || "http://localhost:4000/mcp";
@@ -594,7 +591,7 @@ jobs:
 
       - name: Build and test component
         env:
-          CYFR_TOKEN: ${{ secrets.CYFR_ADMIN_KEY }}
+          CYFR_TOKEN: ${{ secrets.CYFR_KEY }}
         run: |
           cyfr --url https://your-cyfr-server.example.com build compile reagent:local.my-tool:0.1.0
           cyfr --url https://your-cyfr-server.example.com run reagent:local.my-tool:0.1.0 --input '{"test": true}'
@@ -613,7 +610,7 @@ jobs:
       - name: Compile and register component
         env:
           CYFR_URL: ${{ secrets.CYFR_URL }}
-          CYFR_ADMIN_KEY: ${{ secrets.CYFR_ADMIN_KEY }}  # cyfr_ak_...
+          CYFR_KEY: ${{ secrets.CYFR_KEY }}  # cyfr_sk_..., made from "Build components"
         run: |
           curl -X POST "$CYFR_URL/mcp" \
             -H "Content-Type: application/json" \
@@ -621,7 +618,7 @@ jobs:
             -H "MCP-Protocol-Version: 2026-07-28" \
             -H "Mcp-Method: tools/call" \
             -H "Mcp-Name: build" \
-            -H "Authorization: Bearer $CYFR_ADMIN_KEY" \
+            -H "Authorization: Bearer $CYFR_KEY" \
             -d '{
               "jsonrpc": "2.0",
               "id": 1,
@@ -745,7 +742,7 @@ For long-running formula executions (e.g., agentic loops), CYFR supports real-ti
 
 **Starting a streaming execution:**
 
-Use `execution.run_stream` instead of `execution.run`. It returns immediately with an `execution_id` and `stream_url`:
+Use `execution.run_stream` instead of `execution.run`. It returns as soon as the run is admitted, with an `execution_id` and `stream_url`; a run that admission refuses is answered with that refusal and leaves what `execution.run` leaves when it is refused, and no stream is opened:
 
 ```json
 {
@@ -787,6 +784,8 @@ data: {"status":"completed","duration_ms":15234}
 
 The endpoint supports `Last-Event-ID` for reconnection — either form of id — and sends keep-alive comments every 15 seconds. Durable events are delivered in the order they were numbered, whatever order they were published in. The connection closes on the terminal lifecycle event.
 
+Reading a run needs `storage_read` beside `execute`: the stream, `execution.logs`, `execution.cancel` and `execution.retry` refuse a credential without it as `forbidden`, naming the permission, whatever id it asks for. With it, an unknown run and another athanor's are both `not_found`.
+
 **Setup required events (during streaming):**
 
 When a formula invokes a sub-component whose consent isn't satisfiable — a need with no live vault entry bound, or a shape that drifted past its approved consent — the system automatically emits a `setup_required` event with machine-readable fix instructions:
@@ -794,16 +793,16 @@ When a formula invokes a sub-component whose consent isn't satisfiable — a nee
 ```
 id: 1.5
 event: emit
-data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","message":"...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"setup_command":"cyfr profile grant catalyst:local.stripe:0.1.0","message":"This app needs a vault entry for \"api_key\""}
+data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","message":"...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"message":"This app needs a vault entry for \"api_key\""}
 ```
 
-Each issue's `fix` object contains the MCP tool, action, and args to start the consent walk. Frontends can use these to render one-click fix buttons; `setup_command` provides the CLI alternative. A run with no grant to stand on surfaces the same way with issue type `consent_required`, its message saying why: never granted, revoked, or asking for more than the grant holds. The formula still fails — the event is informational so consumers can act on it.
+Each issue's `fix` object contains the MCP tool, action, and args to start the consent walk. Frontends can use these to render one-click fix buttons. A run with no grant to stand on surfaces the same way with issue type `consent_required`, its message saying why: never granted, revoked, or asking for more than the grant holds. The formula still fails — the event is informational so consumers can act on it.
 
 **Checking readiness up front** — `component.setup_plan` answers "can this run?" from the consent. Its `consent` section carries the profile (`profile_id`, `revision`, `scope`) and one row per need — `satisfied` plus a human-readable `detail` ("bound to my-anthropic-key", "no vault entry bound for 'api_key' — grant one to continue", "was rebound since this consent — re-approve to continue"). Top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching vault entry.
 
 ### Scheduling Recurring Executions
 
-CYFR supports cron-based scheduling for recurring component execution. Create schedules via the MCP `schedule` tool or the `cyfr schedule` CLI commands. Bind each schedule to a consented execution profile using `profile_id` (MCP) or `--profile` (CLI); `cyfr profile list <ref>` shows that component's profile IDs.
+CYFR supports cron-based scheduling for recurring component execution. A person makes a schedule on the Schedules page, or with the MCP `schedule` tool's `create`; the `cyfr schedule` CLI commands list, update, pause, resume and delete them. Each schedule is bound to a consented execution profile by `profile_id` (MCP) or `--profile` (`cyfr schedule update`); `cyfr profile list <ref>` shows that component's profile IDs.
 
 **Creating a schedule via MCP:**
 
@@ -840,17 +839,16 @@ CYFR supports cron-based scheduling for recurring component execution. Create sc
 **Managing schedules:**
 
 ```bash
-cyfr schedule create --profile <profile_id> --name daily-report --cron "0 9 * * *" --ref "formula:local.report:1.0.0"
 cyfr schedule list
 cyfr schedule pause <schedule_id>
 cyfr schedule resume <schedule_id>
 cyfr schedule delete <schedule_id>
 ```
 
-`--missed-runs` and `--catch-up-limit` declare the same policy on `cyfr schedule create` and `cyfr schedule update`:
+`--missed-runs` and `--catch-up-limit` declare the same policy on `cyfr schedule update`, as the Schedules page does for a new schedule:
 
 ```bash
-cyfr schedule create --profile <profile_id> --name nightly --cron "0 2 * * *" --ref "formula:local.report:1.0.0" --missed-runs catch_up --catch-up-limit 3
+cyfr schedule update <schedule_id> --missed-runs catch_up --catch-up-limit 3
 cyfr schedule update <schedule_id> --missed-runs skip
 ```
 
@@ -869,13 +867,12 @@ cyfr log get <call_id>                     # Full details for a specific log ent
 cyfr log correlate <request_id>            # Find related log entries and decisions
 ```
 
-Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are not recorded when admitted; a refusal of any call is recorded — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. The entries that decide for themselves without the gate, the browser's sign-in, a device's own entries, the account service where this CYFR serves one, and the OAuth callback, record each refusal they make, and nothing for a request they admit. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_sanctum_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via Sanctum's `decision` tool (service `sanctum`) or `cyfr decision` CLI commands. An athanor's decisions are its person's; a platform admin reads the host's own, the ones made before any athanor was resolved, with `--global`, and never an athanor's:
+Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are not recorded when admitted; a refusal of any call is recorded — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. The entries that decide for themselves without the gate, the browser's sign-in, a device's own entries, the account service where this CYFR serves one, and the OAuth callback, record each refusal they make, and nothing for a request they admit. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_sanctum_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via Sanctum's `decision` tool (service `sanctum`) or `cyfr decision` CLI commands. An athanor's decisions are its person's; a platform admin reads the host's own, the ones made before any athanor was resolved, under **Decisions about the host** on the Settings page (`decision.list_global`), and never an athanor's:
 
 ```bash
 cyfr decision list --admission refused     # Recent refusals
 cyfr decision get <call_id>                # One decision
 cyfr decision correlate <request_id>       # A request's decisions, logs and executions
-cyfr decision list --global               # The host's own decisions (platform admins)
 ```
 
 ### Concrete Example: User Management
@@ -891,10 +888,9 @@ Handles all database operations via Supabase's REST API.
 ```bash
 # Create the catalyst project (if starting fresh)
 cyfr new catalyst supabase --version 0.2.0
-
-# Grant it: pick a vault entry for each need, approve the capability ask
-cyfr profile grant c:local.supabase
 ```
+
+Grant it on the Components page: open `c:local.supabase` and choose **Grant access**, then pick a vault entry for each need and approve the capability ask.
 
 Create the vault entry first (console Vault page, or `vault.create` with fields `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`, a `destination` naming your project's host, and `disclose: true`, since the catalyst reads the fields itself). If you own the Supabase project, you can skip the vault entry entirely and pass the URL and anon key as call arguments — the sealed path is for values that must not appear in logs.
 
@@ -922,11 +918,7 @@ Orchestrates the validator and database catalyst.
 
 **Setup:**
 
-```bash
-# The formula declares "caps": {"tools": ["execution.run"]} in its manifest;
-# granting it approves that ask
-cyfr profile grant f:local.users-api
-```
+The formula declares `"caps": {"tools": ["execution.run"]}` in its manifest; granting it on the Components page (open `f:local.users-api` and choose **Grant access**) approves that ask.
 
 **Pseudocode flow:**
 
@@ -960,7 +952,7 @@ const result = await runComponent(
 
 **Option A: One Formula per resource** — simpler. Input includes `"action": "create|read|update|delete"`. Good for small apps (e.g., `f:local.users-api:0.1.0`).
 
-**Option B: One Formula per operation** — finer-grained policy, rate limits, and audit per operation. Use when different operations need different security postures (e.g., `f:local.users-delete:0.1.0` requires an admin key, `f:local.users-list:0.1.0` allows an application key).
+**Option B: One Formula per operation** — finer-grained policy, rate limits, and audit per operation. Use when different operations need different security postures (e.g., a key narrowed to `f:local.users-list` cannot run `f:local.users-delete`).
 
 ### Where Application Data Lives
 
@@ -991,7 +983,7 @@ An offer ends once: accepted, declined, withdrawn or expired, whichever lands fi
 
 ## Granting Components: Vault Entries & Consent
 
-Before a component can run, an operator grants it: which **vault entries** satisfy its manifest `needs`, and how much of its `caps` ask to approve. Nothing auto-applies — the manifest is an ask, and a human commits every grant. The interactive paths are `cyfr profile grant <ref>` and the console's Vault page; everything below is the same flow over MCP.
+Before a component can run, an operator grants it: which **vault entries** satisfy its manifest `needs`, and how much of its `caps` ask to approve. Nothing auto-applies — the manifest is an ask, and a human commits every grant. The interactive path is the Components page: open the component and choose **Grant access**; everything below is the same flow over MCP.
 
 `cyfr register` scans and registers local components, auto-pulling any missing published dependencies. Grant each component afterwards — a catalyst with nothing granted is rejected with a `consent_required` or `setup_required` error. Every root run needs a granted profile.
 
@@ -1125,7 +1117,7 @@ Four typed errors cross every surface (MCP, HTTP, CLI, consoles) with normative 
 
 | Error | Payload | Meaning / next step |
 |-------|---------|---------------------|
-| `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a vault entry for it (`profile.plan` / `cyfr profile grant <ref>`) |
+| `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a vault entry for it (`profile.plan`, or the component's **Grant access** on the Components page) |
 | `consent_required` | `{cause, ref}` | The run has no grant to stand on, and `cause` says why, for the component `ref` names: `no_grant` when nobody has granted it, `revoked` when its grant was revoked, `shape_moved` when its ask changed since approval. A `shape_moved` payload also carries the head's `profile_id`, `current_revision` and `shape_diff`, which shows each component's changes, naming its `node` and marking new or dropped dependencies with `new` or `dropped`. Grant it, or review and grant again. A reference that names no component is `not_found` instead |
 | `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
 | `confirmation_required` | `{id, operation, expires_at}` | A sensitive change needs the person's fresh confirmation before `expires_at`; nothing was changed, and it is no denial. `id` is the asking client's own secret for this one request: keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation.pending` lists the pending confirmation by its ref, derived one way from `id`, never by `id` itself, and names the client that asked. Over MCP the asking client then repeats the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to `id`, which no request log records; a repeat before the proof answers the same `id` and opens nothing, and a repeat after it completes the change once. The CLI repeats for you on a terminal: it shows the ref and repeats each time you press Enter. A plain HTTP endpoint carries no repeat |
@@ -1147,7 +1139,19 @@ The committed consent is the runtime capability — `ask ∩ operator choices �
 
 ## Inbound Webhooks
 
-A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:slug` a sender signs with HMAC-SHA256. The signature is verified before anything else: an unknown or disabled slug answers 404, a missing or wrong signature 401, and a webhook store that cannot answer 503. A webhook configured with an idempotency key header (GitHub's `X-GitHub-Delivery`, a Stripe event id) runs each delivery once: a request without the header answers 400, a key already seen answers 200 `{"status": "duplicate", "first_seen_at": "..."}` without running the target again, and when the replay store cannot answer the claim the delivery answers 503 `unavailable` and runs nothing, since without the claim nothing proves the delivery has not already run. A delivery that ends non-2xx gives its claim back, so the sender's retry runs as a fresh delivery. An accepted delivery whose run fails gives its claim back the same way, but one whose run ends with its outcome unknown (its runner was lost after it may have acted, or its result was not kept) keeps it: the sender's retry answers `duplicate` and runs nothing, since the first run may already have taken effect.
+A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:slug` a sender signs with HMAC-SHA256 under the webhook's secret. The signature header, `x-cyfr-signature` unless the webhook names another `signature_header`, carries `sha256=` and the lowercase hex HMAC of the exact body. A webhook that names a `timestamp_header` signs the time as well: that header carries the time the delivery is sent in Unix seconds, the HMAC is over `<time>.<body>` (the time, a dot, the body), and a time further from now than `webhook_max_skew_seconds` (300 by default) is refused as a replay.
+
+```bash
+# SECRET is exported, so the signer reads it from its environment: a key
+# passed as an argument is readable by any local user from the command line.
+body='{"event":"ping"}'
+sig=$(printf '%s' "$body" | python3 -c 'import hashlib, hmac, os, sys
+print(hmac.new(os.environ["SECRET"].encode(), sys.stdin.buffer.read(), hashlib.sha256).hexdigest())')
+curl -X POST "https://<your CYFR>/hooks/<slug>" -H 'content-type: application/json' \
+  -H "x-cyfr-signature: sha256=$sig" -d "$body"
+```
+
+The signature is verified before anything else: an unknown or disabled slug answers 404; a signature or timestamp that is missing, malformed, wrong or out of the window answers 401 with a sentence naming which, the header and the form to sign in; and a webhook store that cannot answer 503. A webhook configured with an idempotency key header (GitHub's `X-GitHub-Delivery`, a Stripe event id) runs each delivery once: a request without the header answers 400, a key already seen answers 200 `{"status": "duplicate", "first_seen_at": "..."}` without running the target again, and when the replay store cannot answer the claim the delivery answers 503 `unavailable` and runs nothing, since without the claim nothing proves the delivery has not already run. A delivery that ends non-2xx gives its claim back, so the sender's retry runs as a fresh delivery. An accepted delivery whose run fails gives its claim back the same way, but one whose run ends with its outcome unknown (its runner was lost after it may have acted, or its result was not kept) keeps it: the sender's retry answers `duplicate` and runs nothing, since the first run may already have taken effect.
 
 ---
 
@@ -1224,7 +1228,7 @@ Eleven streams carry what a canvas reads. Each declares a shape, which `canvas.c
 | Stream | Subject | Each event |
 |--------|---------|------------|
 | `feed.results` | A feed's name. It selects which payloads are delivered on the athanor's one feeds topic, and only a canvas's frame opens the stream | `binding`, `feed`, `revision`, `at`, `result`, `label`, `actions` (`name`, `label`): an accepted result, published only after it was kept. Never the feed's arguments. The refresh is the feed's last accepted result |
-| `runs.changes` | — | `kind` (`started`, `completed`, `failed`, `cancelled`), `execution_id`, `parent_execution_id`, `reference`, `component_type`, `duration_ms`, `started_at` (when the run was admitted, ISO 8601 UTC), `ended_at` (when it ended, null while it runs), `error` (`class` and `cause`, never the sentence, which may carry a component's own words; every cause is listed with its readable sentence as the labels of its enum in the shape `canvas.catalog` answers; a run keeps the class it failed in, so a refresh reads the cause the live event carried, and a component's own failure is `internal`, read as `failed`). Never a run's input or output. The refresh is the athanor's 20 newest runs |
+| `runs.changes` | — | `kind` (`started`, `completed`, `failed`, `cancelled`), `execution_id`, `parent_execution_id`, `reference`, `component_type`, `duration_ms`, `started_at` (when the run was admitted, ISO 8601 UTC), `ended_at` (when it ended, null while it runs), `error` (`class` and `cause`, never the sentence, which may carry a component's own words; every cause is listed with its readable sentence as the labels of its enum in the shape `canvas.catalog` answers; a run keeps the class it failed in, so a refresh reads the cause the live event carried, and a component's own failure is `internal`, read as `failed`), `origin` (who started it: `interactive`, `programmatic`, `schedule` or `webhook`; null for a run another run started), `retryable` (whether `execution.retry` runs it again, by the rule the retry answers by). Never a run's input or output. The refresh is the athanor's 20 newest runs |
 | `schedules.changes` | — | `kind` (`changed`, `removed`), `schedule_id`, `name`, `reference`, `cron_expression`, `status`, `next_run_at`, `last_run_at`, `run_count`, `error_count`: a schedule as a committed create, edit, pause, resume or run left it, and `removed` with the schedule as it was when it is deleted. Never its input, metadata or profile. The refresh is every live schedule of the athanor, paused ones included, each as `changed` |
 | `schedule_runs.changes` | — | `kind` (`fired`, `failed`), `schedule_id`, `occurrence_id`, `execution_id`, `scheduled_for`, `reason` (`class` and `cause`, listed as a run's are): an occurrence of a schedule fired or failed, keyed by its `occurrence_id`; a schedule that failed before it claimed any occurrence is told with none, a change no item holds; a feed's fire is not a schedule run. The refresh is the athanor's 20 newest occurrences of schedules, oldest first, a `failed` or `uncertain` one as `failed` and any other as `fired`, each with no `reason` |
 | `activity.changes` | — | `kind` (`started`, `ended`), `id` (the job's own id, its key), `member` (the crew agent's name), `asked_by` (the asking person's public name, `AQUA` for the soul, or the asking agent's name), `title` (the short title `crew.ask` gave the job, at most 64 characters, or null), `since`, `status` (the job's turn state): a crew member's job as it is accepted, starts and ends. Never the task's text or a person's id. The refresh is every open job of the athanor's crew, oldest first, each `started` |
@@ -1257,13 +1261,12 @@ The installation's first person, made by its setup, is its platform
 administrator, a mark on their person that no other
 path writes: minted
 their own athanor past the server caps, never denied by the allowlist, and able
-to run the operator verbs (`door.*`, `execution.force_release`).
+to run the operator verbs (`door.*`).
 The capability is over the instance: an operator works inside their
 own athanor like everyone else and enters no other — opening another person's is
 refused like anyone's — and there is no cross-athanor reach. They hold no seat in
-a shared thread by the capability, and read one only where they sit. The **server allowlist** (`cyfr admin allow
-<@name|identifier|*>`, `cyfr admin deny <person|identifier|@name>`, or the Settings
-page, which takes a name or `*`) judges accounts: one its setup or an invitation
+a shared thread by the capability, and read one only where they sit. The **server allowlist** (Settings → Server allowlist,
+whose Allow and Deny take a name or `*`) judges accounts: one its setup or an invitation
 admitted signs in by the allow of its identifier (`per_…`) that admission wrote, and
 any other when `*` or an allow naming its identifier admits it, unless a deny names it.
 An entry given a name keeps the identifier the registry answers for it, with the name
@@ -1282,8 +1285,8 @@ after seven days, and its code is shown only when it is made.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `create` | optional `thread_id`, `name` | Make an invitation. With `thread_id`, a shared thread you sit in while it is active (never a pair), it seats its newcomer there; without, it names no thread, and only the platform administrator makes one (Settings, **Invite to this CYFR**). `name` is the name the new account page fills in. Answers the invitation and `invitation_url`, once |
-| `list` | — | The invitations you made, or every one for the platform administrator, newest first: each with its `state` (`pending`, `redeemed`, `revoked`, `expired`), its expiry, and the `thread_id` and, to a viewer seated there, `thread_title` it names |
+| `create` | optional `thread_id`, `name` | Make an invitation. With `thread_id`, a shared thread you sit in while it is active (never a pair), it seats its newcomer there; without, it names no thread, and only the platform administrator makes one (Settings, **Invite to this CYFR**). `name` is the name the new account page fills in. Answers the invitation and `invitation_url`, once, and `local_only: true` while CYFR's address is this computer's alone, so the link opens nowhere else |
+| `list` | — | The invitations you made, or every one for the platform administrator, newest first: each with its `state` (`pending`, `redeemed`, `revoked`, `expired`), its expiry, the `name` it offers, and the `thread_id` and, to a viewer seated there, `thread_title` it names |
 | `revoke` | `invitation_id` | Close a pending invitation, as its issuer or the platform administrator |
 
 An operator keeps their keys in their own vault, as everyone does, and offers one to the people here by sharing it with everyone: such a share is what a new person's first sign-in binds when it fits ([Shares](#shares-share-tool)). The people it is offered to grant it through the same consent walk as their own entries; no share bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.
@@ -1392,21 +1395,26 @@ value, it refuses to boot. `.env.locus.example` documents the builder's own
 
 Programs run on the Locus backends service (the `locus-backends` compose
 service), which CYFR reaches over a signed wire; every compose deploy
-starts it. A program row (`"transport": "program"`) is marked by how it is
-spoken to: `mcp`, CYFR's MCP client speaking to each backend over the
-lines of a session the service runs for it, or `driven`, one backend a
-person or a brain runs. A tool server elsewhere is an `http` row. Each backend's process
-runs under a pooled uid of its own, started by `cyfr-locus`, with a private
-home directory, an environment built only from its server's definition and
-a memory bound of its own; the service keeps nothing of CYFR's, and CYFR
+starts it. A program row (`"transport": "program"`) is one command and one
+environment, marked by how it is spoken to: `mcp`, CYFR's MCP client
+speaking to it over the lines of a session the service runs for it, its
+tools named `<row>:<tool>`, or `driven`, a program a person or a brain
+runs. A package that bundles several MCP servers is a row for each. A
+tool server elsewhere is an `http` row. Adding a program, every update
+that changes its definition and its removal, an update that makes it a
+tool server elsewhere included, are each confirmed by the person, who is
+shown the whole definition (`program_definition`, as `mcp_servers`
+documents it). A program's process runs under a pooled uid of its own, or
+its kept folder's, started by `cyfr-locus`, with an environment built
+only from its definition and a memory bound of its own; the service keeps nothing of CYFR's, and CYFR
 sends each program's definition again when the service restarts. With the URL or the key unset CYFR refuses programs; with a
 malformed value it refuses to boot. Programs are not available in a
 cluster. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
 side.
 
-A backend's environment may name only a single-field disclosed entry of its own athanor (`NAME=vault:entry`). An attach-only entry is refused when the definition is made and when the backend starts, and a key shared with you is never available to a definition. Material is resolved in the host and sent sealed to the backends service for that server's environment, never in the command line.
+A program's environment may name only a single-field disclosed entry of its own athanor (`NAME=vault:entry`). An attach-only entry is refused when the definition is made and when the program starts, and a key shared with you is never available to a definition. Material is resolved in the host and sent sealed to the backends service for that server's environment, never in the command line.
 
-Every process on the backends service, every other athanor's backends included, can read each backend's command line, though not its environment: the service runs its backends in one process namespace with an ordinary `/proc`. Hiding command lines would take `CAP_SYS_ADMIN` in the container, to mount its `/proc` with `hidepid`, or seccomp and AppArmor profiles that let `cyfr-locus` give each backend a process namespace and a `/proc` of its own; the shipped service holds neither. A backend's command runs as `/bin/sh -c command`, so the safe route for a credential is the program's environment, where it reads the value itself. A definition whose command names `vault:` is refused: a vault reference in a command is never resolved, so the program would receive the reference's text. A command that holds one of its own vault-bound env names as an expansion (`$NAME`, `${NAME}`, `${NAME:-…}` and every other `${NAME…}` form, quoted or escaped alike), or holds, beside a vault-bound name, a form that computes a value when the shell runs it — a command substitution (`$(…)`, a backtick, `${ …; }`, `${|…;}`), an arithmetic expansion (`$((…))`, `$[…]`) or an indirection (`${!…}`) — places the value on the command line, where every process on the service, every other athanor's backends included, can read it. The administrator decides: such a definition is saved and its backends start, and CYFR warns, naming the backend and the variable, in the answer to `mcp_servers.create` and `mcp_servers.update` (their `warnings` list), in the console's flash, in `mcp_servers.get` and in the log each time its backends start. The check reads the command's text with its line continuations joined; a command with no vault-bound name carries no warning. What the program does with a value is its own: a command such as `printenv NAME | xargs …`, or a program that passes the value on the command line of a process it starts, puts it where the service's other backends can read it, and no warning says so.
+Every process on the backends service, every other athanor's programs included, can read each program's command line, though not its environment: the service runs its programs in one process namespace with an ordinary `/proc`. Hiding command lines would take `CAP_SYS_ADMIN` in the container, to mount its `/proc` with `hidepid`, or seccomp and AppArmor profiles that let `cyfr-locus` give each program a process namespace and a `/proc` of its own; the shipped service holds neither. A program's command runs as `/bin/sh -c command`, so the safe route for a credential is the program's environment, where it reads the value itself. A definition whose command names `vault:` is refused: a vault reference in a command is never resolved, so the program would receive the reference's text. A command that holds one of its own vault-bound env names as an expansion (`$NAME`, `${NAME}`, `${NAME:-…}` and every other `${NAME…}` form, quoted or escaped alike), or holds, beside a vault-bound name, a form that computes a value when the shell runs it — a command substitution (`$(…)`, a backtick, `${ …; }`, `${|…;}`), an arithmetic expansion (`$((…))`, `$[…]`) or an indirection (`${!…}`) — places the value on the command line, where every process on the service, every other athanor's programs included, can read it. The administrator decides: such a definition is saved and its program starts, and CYFR warns, naming the variable, in the answer to `mcp_servers.create` and `mcp_servers.update` (their `warnings` list), in the console's flash, in `mcp_servers.get` and in the log each time its program starts. The check reads the command's text with its line continuations joined; a command with no vault-bound name carries no warning. What the program does with a value is its own: a command such as `printenv NAME | xargs …`, or a program that passes the value on the command line of a process it starts, puts it where the service's other programs can read it, and no warning says so.
 
 ### Running a worker outside Compose
 
@@ -1478,22 +1486,23 @@ of memory.
 This assumes you've completed the Quick Start in the [README](README.md) (install, init, server running).
 
 ```bash
-# 1. Start CYFR and authenticate
+# 1. Start CYFR, open the setup link it prints in a browser and set up your account,
+#    then make an API key on CYFR's API Keys page for the command line
 cyfr up
-cyfr login
+export CYFR_TOKEN=cyfr_sk_...
 
 # 2a. Use existing components (e.g., the shipped Claude catalyst)
 cyfr register
-cyfr profile grant c:local.claude
+#     Grant it: on Components, open c:local.claude and choose Grant access
 
 # 2b. Or create a new component from scratch
 cyfr new catalyst my-api
 #     Edit data/athanors/{athanor_id}/components/catalysts/local/my-api/0.1.0/src/src/lib.rs
 cyfr build compile catalyst:local.my-api:0.1.0
-cyfr profile grant catalyst:local.my-api
+#     Grant it: on Components, open catalyst:local.my-api and choose Grant access
 
-# 3. Create an API key for your app
-cyfr key create --name "my-app" --type service
+# 3. Create an API key for your app (confirm it in Prism or on the box)
+cyfr key create --name "my-app"
 
 # 4. Use the returned key in your app's Authorization header
 #    Authorization: Bearer cyfr_sk_...

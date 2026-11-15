@@ -13,7 +13,6 @@ defmodule Opus.Provider do
   - `cancel` - Cancel a running execution
   - `retry` - Run a schedule's or a feed's failed run again, as it ran
   - `status` - Execution slot diagnostics
-  - `force_release` - Release every athanor's execution slots (operator only)
   - `read_resource` - Read an `opus://executions/…` resource
   - `usage` - The runs one profile admitted, each with its origin, root
     and time
@@ -195,6 +194,15 @@ defmodule Opus.Provider do
     end
   end
 
+  # Logs, cancel and retry are `:execute` operations that read the run's
+  # record, and reading a record needs `:storage_read` too
+  # (`Opus.Record.get/3`). A caller who may not use it, for want of the
+  # permission or from inside a running component, is told so before any
+  # row is read, so the answer is the same whether the id names a run or
+  # not; a caller who may reads a missing run and another athanor's alike,
+  # as not found.
+  defp may_read_runs(ctx), do: Context.require_permission(ctx, :storage_read)
+
   # An in-chain cancel reads its row in the chain before anything is
   # cancelled; an external-plane cancel leaves the read to the cancel.
   defp check_chain_scope(ctx, execution_id, args) do
@@ -222,10 +230,10 @@ defmodule Opus.Provider do
       "Completed: #{Prima.Time.iso8601(record.completed_at) || "N/A"}",
       "Duration: #{record.duration_ms || 0}ms",
       "",
-      "Reference: #{inspect(record.reference)}",
+      "Reference: #{record.reference}",
       "",
       "Input:",
-      inspect(record.input, pretty: true),
+      Prima.Json.safe_encode(record.input),
       ""
     ]
 
@@ -234,7 +242,7 @@ defmodule Opus.Provider do
         lines ++
           [
             "Output:",
-            inspect(record.output, pretty: true),
+            Prima.Json.safe_encode(record.output),
             ""
           ]
       else
@@ -446,15 +454,6 @@ defmodule Opus.Provider do
             planes: [:external],
             permission: :execute
           ),
-          # Releasing every athanor's slots is the operator's lever
-          # alone. Until the in-flight executions it released drain, the
-          # node runs OVER-admitted by that many slots — the recovery
-          # trades wedged slots for a temporary over-cap.
-          Operation.new("execution", "force_release", "Force release execution", [],
-            scope: :platform,
-            kind: :destructive,
-            planes: [:external]
-          ),
           # The admission of an MCP `resources/read` of an opus:// URI
           # (`resource_templates/0`).
           Operation.new(
@@ -609,7 +608,8 @@ defmodule Opus.Provider do
         %Context{} = ctx,
         %{"action" => "logs", "execution_id" => execution_id} = args
       ) do
-    with {:ok, record} <- read_in_chain(ctx, execution_id, args) do
+    with :ok <- may_read_runs(ctx),
+         {:ok, record} <- read_in_chain(ctx, execution_id, args) do
       logs = format_execution_logs(record)
 
       {:ok,
@@ -641,7 +641,8 @@ defmodule Opus.Provider do
           "execution_id" => execution_id
         } = args
       ) do
-    with :ok <- check_chain_scope(ctx, execution_id, args) do
+    with :ok <- may_read_runs(ctx),
+         :ok <- check_chain_scope(ctx, execution_id, args) do
       case Opus.cancel(ctx, execution_id) do
         {:ok, result} ->
           {:ok, result}
@@ -680,8 +681,9 @@ defmodule Opus.Provider do
   # retry's answer.
   def handle("execution", %Context{} = ctx, %{"action" => "retry", "execution_id" => id})
       when is_binary(id) do
-    with {:ok, record} <- retriable(ctx, id),
-         :ok <- known_failed(record),
+    with :ok <- may_read_runs(ctx),
+         {:ok, record} <- retriable(ctx, id),
+         :ok <- Record.retriable(record),
          {:ok, consent_id} <- rooted_at(ctx, record),
          {:ok, input} <- Record.input(ctx, record) do
       case Opus.start_root(ctx, {:id, record.profile_id}, record.reference, input,
@@ -707,27 +709,6 @@ defmodule Opus.Provider do
   # Status action - execution slot diagnostics
   def handle("execution", %Context{} = ctx, %{"action" => "status"}) do
     {:ok, scoped_slot_status(ctx, slot_status())}
-  end
-
-  # Force release action - emergency slot recovery. Releasing EVERY
-  # athanor's slots is a server-wide side effect; the `scope: :platform`
-  # annotation admits operators alone before this arm is reached.
-  def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
-    Logger.warning("[Opus.Provider] Force release triggered by user=#{ctx.user_id}")
-
-    :telemetry.execute(
-      [:cyfr, :opus, :force_release],
-      %{system_time: System.system_time()},
-      %{user_id: ctx.user_id, auth_method: ctx.auth_method}
-    )
-
-    case Prima.Slots.force_release_all(@slots) do
-      {:error, :unavailable} ->
-        {:error, "Execution slots are not running — nothing was released"}
-
-      {:ok, _released} ->
-        {:ok, Map.put(scoped_slot_status(ctx, slot_status()), :force_released, true)}
-    end
   end
 
   def handle("execution", %Context{} = ctx, %{"action" => "read_resource", "uri" => uri})
@@ -756,48 +737,30 @@ defmodule Opus.Provider do
     {:error, {:invalid_argument, "Missing required argument: profile_id"}}
   end
 
-  # Start the execution in the background and answer its id and stream URL;
-  # the caller follows the SSE endpoint for intermediate events.
+  # Admit the run, then answer its id and stream URL while it goes on in
+  # the background (`Opus.start_root/5`); the caller follows the SSE
+  # endpoint for its events. A run admission refuses answers that refusal
+  # here, in the words and code a plain run answers with, and leaves no
+  # stream behind.
   defp start_root("run_stream", ctx, args) do
     reference = args["reference"]
-    input = args["input"] || %{}
-
+    selector = profile_selector(args)
     execution_id = Record.generate_id()
 
-    opts = build_run_opts(args)
-    opts = [{:execution_id, execution_id} | opts]
-    # This execution IS the root — its emit target is itself
-    opts = [{:root_execution_id, execution_id} | opts]
+    # This execution IS the root: its emit target, where a setup_required
+    # event is streamed, is itself.
+    opts = [execution_id: execution_id, root_execution_id: execution_id] ++ build_run_opts(args)
 
-    # Spawn execution in background, registering PID for cancellation
-    logger_metadata = Prima.LoggerContext.capture()
-
-    case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
-           Prima.LoggerContext.restore(logger_metadata)
-
-           case Registry.register(Opus.Registry, execution_id, :running) do
-             {:ok, _} ->
-               run_root_formatted(ctx, reference, input, opts, args)
-
-             {:error, reason} ->
-               Logger.error(
-                 "[Opus.Provider] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
-               )
-           end
-         end) do
-      {:ok, _pid} ->
+    case Opus.start_root(ctx, selector, reference, args["input"] || %{}, opts) do
+      {:ok, ^execution_id} ->
         {:ok,
          %{
            execution_id: execution_id,
            stream_url: "/api/executions/#{execution_id}/events"
          }}
 
-      {:error, reason} ->
-        Logger.error(
-          "[Opus.Provider] Failed to spawn execution #{execution_id}: #{inspect(reason)}"
-        )
-
-        {:error, "execution_spawn_failed"}
+      refused ->
+        format_admission(refused, ctx, selector, reference)
     end
   end
 
@@ -823,14 +786,13 @@ defmodule Opus.Provider do
   # Private Helpers
   # ============================================================================
 
-  # The run a retry repeats: the caller's athanor's own, failed, and a
-  # component root the scheduler fired for a schedule or a feed (its
-  # `schedule_id`), with the profile it rooted at. Another athanor's run
-  # reads as one that does not exist.
+  # The run a retry repeats is the caller's athanor's own, and repeated
+  # only as retry's rule admits it (`Opus.Record.retriable/1`). Another
+  # athanor's run reads as one that does not exist.
   defp retriable(ctx, id) do
     case Record.get(ctx, id) do
       {:ok, %Record{athanor_id: athanor_id} = record} when athanor_id == ctx.athanor_id ->
-        retriable(record)
+        {:ok, record}
 
       {:ok, _another_athanors} ->
         {:error, {:not_found, "Execution", id}}
@@ -842,44 +804,6 @@ defmodule Opus.Provider do
         refused
     end
   end
-
-  defp retriable(%Record{status: status}) when status != :failed,
-    do: {:error, {:conflict, "Only a failed run can be retried."}}
-
-  defp retriable(
-         %Record{parent_execution_id: nil, kind: "component", schedule_id: schedule} = run
-       )
-       when is_binary(schedule),
-       do: {:ok, run}
-
-  defp retriable(%Record{}),
-    do: {:error, {:conflict, "Only a run a schedule or a feed started can be retried."}}
-
-  # A run is run again only once it is known to have failed: its attempt
-  # closed `error`, the run's own failure. An `uncertain` or `result_lost`
-  # outcome (a lapse, a lost result, a restore, an attempt that ended
-  # before it closed the run) may have completed what it did, and no
-  # contract proves running it again safe (ARCHITECTURE.md §6.5).
-  defp known_failed(%Record{} = record) do
-    case Record.ended_outcome(record) do
-      {:ok, "error"} ->
-        :ok
-
-      {:ok, _uncertain} ->
-        {:error, uncertain_outcome()}
-
-      {:error, :not_found} ->
-        {:error, uncertain_outcome()}
-
-      {:error, _unread} ->
-        {:error, {:unavailable, "Executions"}}
-    end
-  end
-
-  defp uncertain_outcome,
-    do:
-      {:conflict,
-       "This run's outcome is uncertain: it is not known to have failed, so it is not run again."}
 
   # The consent revision the run rooted at, which its retry must root at
   # too; a run that records no profile or no revision has no grant to be
@@ -895,14 +819,21 @@ defmodule Opus.Provider do
 
   defp rooted_at(_ctx, %Record{}), do: {:error, :retry_grant_moved}
 
+  defp run_root_formatted(ctx, reference, input, opts, args) do
+    selector = profile_selector(args)
+
+    ctx
+    |> Opus.run_root(selector, reference, input, opts)
+    |> format_admission(ctx, selector, reference)
+  end
+
+  # A run's answer, or its refusal in the words a run and a stream share.
   # A run stands on its person's grant. With none to stand on, the refusal
   # names its cause: a reference that names no component is not found,
   # whatever profiles exist, and otherwise the component was never granted
   # or its grant was revoked (`Sanctum.Consent.ungranted/2`).
-  defp run_root_formatted(ctx, reference, input, opts, args) do
-    selector = profile_selector(args)
-
-    case Opus.run_root(ctx, selector, reference, input, opts) do
+  defp format_admission(result, ctx, selector, reference) do
+    case result do
       {:error, :no_profile} when selector == :default ->
         ungranted(ctx, reference)
 

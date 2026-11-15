@@ -148,7 +148,7 @@ defmodule Aqua.Crew do
          {:ok, title} <- title(args["title"]),
          {:ok, tools} <- tools(args["tools"]),
          {:ok, options} <- options(args["options"]),
-         {:ok, turn} <- calling_turn(ctx, args),
+         {:ok, turn} <- Tape.calling_turn(ctx, args),
          {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          :ok <- Admission.request(thread, turn.agent, member, roster),
@@ -199,7 +199,7 @@ defmodule Aqua.Crew do
   """
   @spec list(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def list(%Context{} = ctx, args) do
-    with {:ok, turn} <- calling_turn(ctx, args),
+    with {:ok, turn} <- Tape.calling_turn(ctx, args),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          {:ok, person} <- asker(ctx, turn),
          {:ok, index} <- index(person, roster) do
@@ -288,11 +288,19 @@ defmodule Aqua.Crew do
 
   @typedoc """
   Why a crew member cannot take a job: no brain named, its catalyst not
-  installed, no key bound, its program not signed in, a consent it runs
-  under damaged, or the reads that would tell unavailable.
+  installed, no key bound, its program not set up and granted, only the
+  person's grant to give, a consent it runs under damaged, or the reads
+  that would tell unavailable.
   """
   @type unready ::
-          :no_brain | :not_installed | :no_key | :not_signed_in | :consent_damaged | :unavailable
+          :no_brain
+          | :not_installed
+          | :no_key
+          | :no_grant
+          | :no_program
+          | :consent_stale
+          | :consent_damaged
+          | :unavailable
 
   @doc """
   Whether crew member `member` can take a job now: `:ok` when its brain
@@ -336,7 +344,9 @@ defmodule Aqua.Crew do
   defp unready(nil), do: :no_brain
   defp unready({:missing, _}), do: :not_installed
   defp unready({:needs_key, _}), do: :no_key
-  defp unready({:needs_sign_in, _}), do: :not_signed_in
+  defp unready({:needs_grant, _}), do: :no_grant
+  defp unready({:needs_program, _}), do: :no_program
+  defp unready({:consent_stale, _}), do: :consent_stale
   defp unready({:consent_damaged, _}), do: :consent_damaged
   defp unready({_unread, _}), do: :unavailable
 
@@ -412,24 +422,6 @@ defmodule Aqua.Crew do
 
   defp options(_options),
     do: {:error, {:invalid_argument, "crew.ask takes 'options' as an object"}}
-
-  # The turn the call comes from, by the thread and root the gate's
-  # lineage stamped: a call with no open turn behind it asks nobody.
-  defp calling_turn(ctx, %{"thread_id" => thread_id, "root_execution_id" => root})
-       when is_binary(thread_id) and is_binary(root) do
-    case Tape.open_turns(ctx, thread_id) do
-      {:ok, turns} ->
-        case Enum.find(turns, &(&1.root_execution_id == root)) do
-          nil -> {:error, :not_addressable}
-          turn -> {:ok, turn}
-        end
-
-      {:error, _} = refused ->
-        refused
-    end
-  end
-
-  defp calling_turn(_ctx, _args), do: {:error, :not_addressable}
 
   # ---------------------------------------------------------------------------
   # The consumer

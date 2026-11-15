@@ -140,7 +140,6 @@ defmodule Arca.CredentialIssuanceTest do
       name: "ci-key-#{n}",
       key_hash: :crypto.hash(:sha256, "ci-key-#{n}"),
       key_prefix: "cyfr_sk_ci",
-      type: "service",
       created_by: user_id,
       athanor_id: athanor_id
     }

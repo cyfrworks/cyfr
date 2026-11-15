@@ -149,8 +149,9 @@ defmodule Sanctum.Consent.Plan do
   # proof (120s) is the short-lived one; the plan token only pins facts.
   @plan_ttl_ms 600_000
 
-  # The needs an entry meets; the others name a component.
-  @credential_kinds Prima.CredentialKinds.all()
+  # The needs a binding meets, an entry's or a program row's; the others
+  # name a component.
+  @credential_kinds Prima.Manifest.Needs.binding_kinds()
 
   @type t :: %{
           plan_token: String.t(),
@@ -166,6 +167,7 @@ defmodule Sanctum.Consent.Plan do
           unresolved: %{reason: String.t(), missing: String.t() | nil} | nil,
           head_bindings: [head_binding()],
           head_narrowing: map(),
+          head_tool_servers: [%{name: String.t(), digest: String.t(), record: map()}],
           shape_diff: [Sanctum.Consent.ShapeDiff.entry()],
           candidates: [map()],
           tool_server_candidates: [Sanctum.Proxy.tool_server_candidate()],
@@ -245,12 +247,13 @@ defmodule Sanctum.Consent.Plan do
   with that dependency's needs missing; one not installed leaves it
   unresolved as missing.
 
-  A need met by mounting a login entry (`Prima.Manifest.Needs.mount_only?/1`)
-  is covered by the program its destination names, never by hosts: its
-  row names the `program`, its candidates are the athanor's login entries
-  naming that program (attach-only, holding no fields), and no share is
-  offered for it, since a recipient's use of a shared login entry is not
-  built. The `@ingress` slot never offers a login entry.
+  A need met by mounting a program row (`Prima.Manifest.Needs.mount_only?/1`)
+  is covered by the program it names, never by hosts: its row names the
+  `program`, its candidates are the athanor's own program rows that fit
+  it (`Prima.Manifest.Needs.fit/2`: a driven program of that name with a
+  kept home), each named by its row's id as `entry_id`, of kind
+  `program`, holding no fields, and never a vault entry; no share is
+  offered for it, since a program's folder is never shared.
   """
   @spec plan(Context.t(), map()) :: {:ok, t()} | {:error, term()}
   def plan(%Context{} = ctx, %{ref: ref} = params) when is_binary(ref) do
@@ -311,6 +314,7 @@ defmodule Sanctum.Consent.Plan do
          unresolved: unresolved(closure),
          head_bindings: head.bindings,
          head_narrowing: head_narrowing,
+         head_tool_servers: head_tool_servers(stored, source_ref),
          shape_diff: shape_diff,
          candidates: candidates,
          tool_server_candidates: Sanctum.Proxy.impl!().consent_candidates(ctx),
@@ -585,23 +589,32 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp need_warning(%{disclose_only: true} = need) do
-    "need '#{need.need}' wants a disclosed #{kind_words(need)}: the component reads the value " <>
-      "itself, and no disclosed entry can yet — create one first" <> newer_words(need)
+    "The #{need.need} credential needs a disclosed #{kind_words(need)}: the component reads " <>
+      "the value itself, and the vault has no disclosed one yet" <> newer_words(need) <> "."
+  end
+
+  # A program's own sign-in is met by its program row, never a vault entry.
+  defp need_warning(%{kind: "login"} = need) do
+    "The #{need.need} need is met by the program #{Map.get(need, :program)} with a kept " <>
+      "folder, and none is set up yet. Set it up on the Programs page first."
   end
 
   defp need_warning(need) do
-    "need '#{need.need}' wants #{kind_words(need)}, and none can yet. Create one first."
+    "The #{need.need} credential needs #{article(kind_words(need))}, and the vault has none yet."
   end
 
   defp kind_words(%{kind: "oauth"} = need) do
-    "oauth entry for #{Enum.join(need.hosts, ", ")} granting " <>
+    "OAuth sign-in to #{Enum.join(need.hosts, ", ")} granting " <>
       Enum.join(scope_set(need.scopes), ", ")
   end
 
-  defp kind_words(%{kind: "login"} = need),
-    do: "login entry for the program #{Map.get(need, :program)}"
+  defp kind_words(%{kind: "api_key"} = need),
+    do: "API key for #{Enum.join(need.hosts || [], ", ")}"
 
   defp kind_words(need), do: "#{need.kind} entry for #{Enum.join(need.hosts || [], ", ")}"
+
+  defp article(<<first, _::binary>> = words) when first in ~c"AEIOU", do: "an " <> words
+  defp article(words), do: "a " <> words
 
   defp newer_words(%{newer_shipped: version}) when is_binary(version),
     do: ", or update to version #{version}, which the release ships"
@@ -616,42 +629,43 @@ defmodule Sanctum.Consent.Plan do
   # ---------------------------------------------------------------------------
 
   @typedoc """
-  What a need's choice reads: the athanor's active entries, the shares
-  offered to the person, the defaults.
+  What a need's choice reads: the athanor's active entries, its program
+  rows, the shares offered to the person, the defaults.
   """
   @type choice_sources :: %{
           own: [map()],
+          programs: [map()],
           shares: [Sanctum.Shares.binding_view()],
           defaults: map()
         }
 
   @doc false
-  # Read once per plan or preview: the athanor's active entries, the
-  # shares offered to the context's person (none for a context with no
-  # person) and the athanor's default per provider. A store that could
-  # not answer what is offered is `{:unavailable, "Shares"}`: read as none
-  # offered, the walk would offer to connect a key over keys that exist.
+  # Read once per plan or preview: the athanor's active entries, its
+  # program rows (`Sanctum.Mount.programs/1`), the shares offered to the
+  # context's person (none for a context with no person) and the
+  # athanor's default per provider. A store that could not answer what is
+  # offered is `{:unavailable, "Shares"}`: read as none offered, the walk
+  # would offer to connect a key over keys that exist.
   @spec choice_sources(Context.t()) :: {:ok, choice_sources()} | {:error, term()}
   def choice_sources(ctx) do
     with {:ok, entries} <- Sanctum.Vault.list(ctx),
          {:ok, defaults} <- Sanctum.Vault.defaults(ctx),
+         {:ok, programs} <- Sanctum.Mount.programs(ctx),
          {:ok, shares} <- shares(ctx) do
       {:ok,
        %{
          own: Enum.filter(entries, &bindable?/1),
+         programs: programs,
          shares: shares,
          defaults: defaults
        }}
     end
   end
 
-  # An active entry, or a login entry whose program is not signed in yet:
-  # it is bound before its program signs in, and nothing mounts it for a
-  # run until a sign-in makes it active (`Sanctum.Mount.signed_in/2`).
+  # An entry the plan offers: an active one.
   @doc false
   @spec bindable?(map()) :: boolean()
   def bindable?(%{status: "active"}), do: true
-  def bindable?(%{kind: "login", status: "needs_reauth"}), do: true
   def bindable?(_entry), do: false
 
   # A person who does not stand, or no person, is offered no share.
@@ -682,8 +696,8 @@ defmodule Sanctum.Consent.Plan do
         }
   def need_choice(sources, need) do
     candidates =
-      (Enum.flat_map(sources.own, &own_candidate(&1, need)) ++
-         Enum.flat_map(sources.shares, &share_candidate(&1, need)))
+      need
+      |> offered(sources)
       |> Enum.sort_by(&rank/1)
 
     suggested = suggestion(candidates, sources, need)
@@ -693,6 +707,42 @@ defmodule Sanctum.Consent.Plan do
       suggested: suggested,
       choice_required: length(candidates) > 1 and suggested == nil
     }
+  end
+
+  # A login need is met by a program row alone, and every other need by an
+  # entry or a share.
+  defp offered(%{kind: "login"} = need, sources),
+    do: Enum.flat_map(sources.programs, &program_candidate(&1, need))
+
+  defp offered(need, sources),
+    do:
+      Enum.flat_map(sources.own, &own_candidate(&1, need)) ++
+        Enum.flat_map(sources.shares, &share_candidate(&1, need))
+
+  # A program row that fits the login need, named by its id as an entry
+  # is: it holds no field, and nothing of it is disclosed.
+  defp program_candidate(row, need) do
+    case Prima.Manifest.Needs.fit(need, row) do
+      :exact ->
+        [
+          %{
+            source: "own",
+            entry_id: row.id,
+            name: row.name,
+            kind: "program",
+            provider: "",
+            destination: %{"program" => row.name},
+            disclosed: false,
+            field_names: [],
+            fields: %{},
+            fit: "exact",
+            label_match: false
+          }
+        ]
+
+      :none ->
+        []
+    end
   end
 
   # A need the component reads itself is met by a disclosed entry alone.
@@ -716,24 +766,14 @@ defmodule Sanctum.Consent.Plan do
       |> with_fit(entry, need)
 
     if meets?(candidate, entry.oauth_scopes, need) and mappable?(candidate, need) and
-         (candidate.disclosed or not reads_itself?(need)) and not mounted_at_ingress?(entry, need),
+         (candidate.disclosed or not reads_itself?(need)),
        do: [candidate],
        else: []
   end
 
-  # A login entry is mounted into its program and holds nothing a
-  # component reads: it never meets the `@ingress` slot, whatever its row
-  # says of disclosure.
-  defp mounted_at_ingress?(%{kind: "login"}, nil), do: true
-  defp mounted_at_ingress?(_entry, _need), do: false
-
   # A share has no component policy: it meets any need it fits, on any
   # node, and never one the component reads itself, since it is attach-only.
   defp share_candidate(_share, nil), do: []
-
-  # A recipient's use of a shared login entry is not built, so no share is
-  # offered for a need met by mounting.
-  defp share_candidate(_share, %{kind: "login"}), do: []
 
   defp share_candidate(share, need) do
     candidate =
@@ -1251,8 +1291,24 @@ defmodule Sanctum.Consent.Plan do
   defp held_narrowing({:ok, head, profile_id}, source_ref, asked),
     do: head_narrowing(profile_id, head, source_ref, asked)
 
+  # Each tool server the head grants, as its grant recorded it: what a
+  # card compares the server asked for again with. A head that does not
+  # read was refused by `held_narrowing/3`.
+  defp head_tool_servers(:none, _source_ref), do: []
+
+  defp head_tool_servers({:ok, head, _profile_id}, source_ref) do
+    with {:ok, blob} <- Sanctum.Consent.Loader.head_blob(head),
+         {:ok, %{tool_servers: servers}} <- Prima.Authority.Blob.ingress(blob, source_ref) do
+      for server <- servers,
+          do: %{name: server.server_name, digest: server.server_digest, record: server.record}
+    else
+      _none -> []
+    end
+  end
+
   # A head row as a re-grant reopens it: its key, what it binds (the
-  # athanor's entry, the share or the lending profile's label, never
+  # athanor's entry or program row, the share or the lending profile's
+  # label, never
   # material), its lifetime and whether a root
   # consumed it, and, as the commit reads the row (`Commit.head_place/2`),
   # which of these it binds (`source`), where it sits and the need it was
@@ -1264,7 +1320,7 @@ defmodule Sanctum.Consent.Plan do
       consumed: is_binary(ref.consumed_by_root)
     }
     |> Prima.MapUtil.put_present(:fields, if(is_nil(ref.via_label), do: held[ref.binding_key]))
-    |> Prima.MapUtil.put_present(:entry_id, ref.vault_entry_id)
+    |> Prima.MapUtil.put_present(:entry_id, ref.vault_entry_id || ref.mcp_server_id)
     |> Prima.MapUtil.put_present(:share_id, ref.share_id)
     |> Prima.MapUtil.put_present(:label, ref.via_label)
     |> Map.merge(placed(reads, ref))

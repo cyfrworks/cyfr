@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -29,9 +28,9 @@ import (
 // fakeHome is a CYFR as the shell meets it, beside the directory and
 // registry its people's accounts live at (accounts): the device channel,
 // which admits a device by its hello (a sign_in request answered by a key
-// the account's log lists, under the setup token, an invitation or its
-// door) and connects one under the certificate it issued, verifying every
-// proof against the challenge it holds; and the device session's ticket.
+// the account's log lists, under the setup token or its door) and
+// connects one under the certificate it issued, verifying every proof
+// against the challenge it holds.
 // It records every byte it receives, so a test can show no PIN or
 // passphrase reached it.
 type fakeHome struct {
@@ -43,27 +42,28 @@ type fakeHome struct {
 	received   bytes.Buffer
 	setupToken string
 	setupUsed  bool
-	// invitationCode admits a new person once; openDoor admits anyone.
-	invitationCode string
-	openDoor       bool
-	members        map[string]bool
-	clients        map[string]*fakeClient // by client id
-	held           map[string]map[string]any
-	requests       map[string]map[string]any // a hello's sign_in request by challenge
-	hellos         []map[string]any
-	ops            []string
-	locked         []string
-	confirmed      []map[string]any
-	pending        map[string]map[string]any // ref -> record
-	asked          map[string]map[string]any // challenge -> the confirm request answered
-	capabilities   [][]string
-	unlockSeq      int
-	conns          []*websocket.Conn
-	closeWith      websocket.StatusCode
-	stalled        chan struct{}
-	sessions       map[string]string // spent ticket -> the session's bearer
-	sessionFields  []string
-	shapes         []string
+	// openDoor admits anyone.
+	openDoor  bool
+	members   map[string]bool
+	clients   map[string]*fakeClient // by client id
+	held      map[string]map[string]any
+	requests  map[string]map[string]any // a hello's sign_in request by challenge
+	hellos    []map[string]any
+	ops       []string
+	locked    []string
+	confirmed []map[string]any
+	pending   map[string]map[string]any // ref -> record
+	waiting   map[string]map[string]any // ref -> a passkey a browser asks to add
+	// onWaiting runs once a pairing.waiting read has taken its answer,
+	// under the home's lock, as a change the CYFR makes right after it.
+	onWaiting    func(ref string)
+	asked        map[string]map[string]any // challenge -> the confirm request answered
+	capabilities [][]string
+	unlockSeq    int
+	conns        []*websocket.Conn
+	closeWith    websocket.StatusCode
+	stalled      chan struct{}
+	shapes       []string
 	// stale is a certificate this CYFR will not take any more (4408).
 	stale func(cert map[string]any) bool
 }
@@ -78,22 +78,11 @@ type fakeClient struct {
 }
 
 func newFakeHome(t *testing.T) *fakeHome {
-	var v struct {
-		Exchange struct {
-			HTTP struct {
-				DeviceSession struct {
-					Request []string `json:"request"`
-				} `json:"device_session"`
-			} `json:"http"`
-		} `json:"exchange"`
-	}
-	fixture(t, "device_unlock.json", &v)
 	h := &fakeHome{t: t, accounts: accounttest.New(t), setupToken: strings.Repeat("ab", 32), members: map[string]bool{},
 		clients: map[string]*fakeClient{}, held: map[string]map[string]any{}, requests: map[string]map[string]any{},
-		pending: map[string]map[string]any{}, sessions: map[string]string{}, sessionFields: v.Exchange.HTTP.DeviceSession.Request}
+		pending: map[string]map[string]any{}, waiting: map[string]map[string]any{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/device/websocket", h.channel)
-	mux.HandleFunc("POST /device/session", h.deviceSession)
 	h.srv = httptest.NewServer(mux)
 	t.Cleanup(h.srv.Close)
 	t.Cleanup(func() {
@@ -392,8 +381,8 @@ func expiresAt(cert map[string]any) time.Time {
 
 // hello answers a hello: a sign_in request held for the key it names,
 // which the account's log must list, then the device's answer verified
-// over the request's digest, the person admitted (the setup token once, an
-// invitation's code once, a member, or the open door), and the client
+// over the request's digest, the person admitted (the setup token once, a
+// member, or the open door), and the client
 // paired or certified again. It answers the close code of a refusal.
 func (h *fakeHome) hello(m map[string]any, read func() map[string]any, send func(map[string]any)) websocket.StatusCode {
 	h.mu.Lock()
@@ -436,18 +425,13 @@ func (h *fakeHome) hello(m map[string]any, read func() map[string]any, send func
 	switch {
 	case admission["setup"] != nil:
 		if admission["setup"] != h.setupToken || h.setupUsed {
-			return 4403
-		}
-		h.setupUsed = true
-	case admission["invitation"] != nil:
-		if h.invitationCode == "" || admission["invitation"] != h.invitationCode {
 			// As the CYFR tells a refused hello its sentence before the
 			// close (device.json's refused vector).
 			send(map[string]any{"type": "refused", "error": map[string]any{"class": "unauthenticated",
-				"message": "This invitation can no longer be used. Ask whoever invited you for a new one."}})
+				"message": "This CYFR is set up. Sign in with your passkey, a device you connected, or a sign-in method you linked."}})
 			return 4403
 		}
-		h.invitationCode = ""
+		h.setupUsed = true
 	case !h.members[identifier] && !h.openDoor:
 		return 4403
 	}
@@ -525,6 +509,16 @@ func (h *fakeHome) intent(op string, args, binding map[string]any) (any, any) {
 		entry := map[string]any{"ref": ref, "operation": rec["operation"], "preview": rec["preview"],
 			"asker": map[string]any{"name": "Prism"}}
 		return map[string]any{"confirmations": []any{entry}}, nil
+	case "pairing.waiting":
+		ref, _ := args["ref"].(string)
+		rec := h.waiting[ref]
+		if h.onWaiting != nil {
+			h.onWaiting(ref)
+		}
+		if rec != nil {
+			return map[string]any{"waiting": []any{rec}}, nil
+		}
+		return map[string]any{"waiting": []any{}}, nil
 	case "confirmation.request":
 		ref, _ := args["ref"].(string)
 		rec := h.pending[ref]
@@ -639,27 +633,6 @@ func (h *fakeHome) hellosSeen() []map[string]any {
 	return append([]map[string]any(nil), h.hellos...)
 }
 
-// deviceSession is POST /device/session: the unlock's ticket spent once
-// for the session's bearer, with no cookie and no CSRF.
-func (h *fakeHome) deviceSession(w http.ResponseWriter, r *http.Request) {
-	raw, _ := io.ReadAll(r.Body)
-	var m map[string]any
-	_ = json.Unmarshal(raw, &m)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.received.Write(raw)
-	if len(m) != len(h.sessionFields) || (len(h.sessionFields) > 0 && m[h.sessionFields[0]] == nil) {
-		h.shapes = append(h.shapes, fmt.Sprintf("%s %v", r.URL.Path, m))
-	}
-	ticket := stringOf(m, "ticket")
-	if _, spent := h.sessions[ticket]; spent || !strings.HasPrefix(ticket, "TICKET-") || r.Header.Get("Cookie") != "" {
-		reply(w, 403, map[string]any{"error": "ticket_refused"})
-		return
-	}
-	h.sessions[ticket] = "TOKEN-" + strings.TrimPrefix(ticket, "TICKET-")
-	reply(w, 200, map[string]any{"session_token": h.sessions[ticket], "expires_at": time.Now().Add(time.Minute).UnixMilli()})
-}
-
 // account makes an account at the CYFR's directory with one device key
 // of its own, named name, and answers its identifier, that device's
 // private key and the recovery key.
@@ -686,7 +659,7 @@ func (h *fakeHome) account(t *testing.T, name string) (string, ed25519.PrivateKe
 func (h *fakeHome) approve(t *testing.T, identifier string, dev ed25519.PrivateKey, pub []byte) {
 	t.Helper()
 	err := account.Approve(context.Background(), account.Directory{URL: h.accounts.URL()}, identifier,
-		dev.Public().(ed25519.PublicKey), func(m []byte) []byte { return ed25519.Sign(dev, m) }, pub, time.Now().UnixMilli())
+		dev.Public().(ed25519.PublicKey), func(m []byte) []byte { return ed25519.Sign(dev, m) }, account.DeviceKey(pub), time.Now().UnixMilli())
 	if err != nil {
 		t.Fatal(err)
 	}

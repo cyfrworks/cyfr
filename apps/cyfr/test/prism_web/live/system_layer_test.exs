@@ -3584,13 +3584,122 @@ defmodule PrismWeb.SystemLayerTest do
     end
   end
 
+  # A wildcard host is narrowed by naming hosts under it: the preview
+  # answers whether a named host lies inside the ask, as the commit does,
+  # and refuses one outside it beside the network row.
+  describe "a host named under a wildcard host" do
+    setup [:signed_in]
+
+    setup %{ctx: ctx} do
+      local = %{Sanctum.TestContext.local() | user_id: ctx.user_id, athanor_id: ctx.athanor_id}
+      name = "layer-wild-#{System.unique_integer([:positive])}"
+      publish_asking!(local, name, "0.1.0", ["*.layer.example"])
+
+      # The same ask under another name, granted whole: what the narrowed
+      # grant is compared with, every resource but the hosts unchanged.
+      twin = "#{name}-whole"
+      publish_asking!(local, twin, "0.1.0", ["*.layer.example"])
+      {:ok, _} = commit_with!(local, "catalyst:local.#{twin}", %{})
+
+      %{local: local, node: "catalyst:local.#{name}", twin: "catalyst:local.#{twin}"}
+    end
+
+    test "is granted in the wildcard's place, and one outside the ask is refused",
+         %{view: view, node: node, twin: twin, local: local} do
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-host", node)
+      prompt(view, grant)
+      %{current: %{subject: %{preview: before}}} = layer_assigns(view)
+
+      add_host(view, "evil.example")
+
+      assert has_element?(
+               view,
+               ~s([data-row="egress"] [data-test="grant-refusal"][role="alert"]),
+               "The narrowing of #{node} names egress domain evil.example, which it does not ask for"
+             )
+
+      %{current: %{subject: %{decisions: decisions, preview: after_refusal}}} =
+        layer_assigns(view)
+
+      assert decisions == %{"ref" => node, "bindings" => []}
+      assert after_refusal == before
+
+      add_host(view, "api.layer.example")
+      refute has_element?(view, ~s([data-test="grant-refusal"]))
+
+      click(
+        view,
+        ~s(input[phx-click="toggle_value"][phx-value-field="domains"][phx-value-choice="*.layer.example"])
+      )
+
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+
+      assert decisions == %{
+               "ref" => node,
+               "bindings" => [],
+               "subset" => %{node => %{"egress" => %{"domains" => ["api.layer.example"]}}}
+             }
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-host") == :confirmed
+      {_head, ingress, limits} = head!(local, node)
+      {_twin_head, whole, whole_limits} = head!(local, twin)
+
+      assert {ingress, limits} ==
+               {%{whole | egress: %{whole.egress | domains: ["api.layer.example"]}}, whole_limits}
+    end
+
+    # The box is absent where the ask names no wildcard host, and an event
+    # sent anyway is refused there: the walk stays exactly as it was.
+    test "is refused where the ask names no wildcard host", %{view: view, ctx: ctx} do
+      %{ref: ref, name_ref: node} = asking_more(%{ctx: ctx})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-exact", ref)
+      prompt(view, grant)
+
+      assert has_element?(view, ~s([data-row="egress"]))
+      refute has_element?(view, ~s([data-test="grant-add-host"]))
+
+      click(
+        view,
+        ~s(input[phx-click="toggle_value"][phx-value-field="domains"][phx-value-choice="b.layer.example"])
+      )
+
+      %{current: %{subject: %{decisions: narrowed, preview: previewed}}} = layer_assigns(view)
+
+      assert narrowed["subset"] == %{
+               node => %{"egress" => %{"domains" => ["a.layer.example"]}}
+             }
+
+      view
+      |> with_target("#consent-sheet-system-layer-grant-g-exact")
+      |> render_click("add_host", %{"node" => node, "host" => "b.layer.example"})
+
+      render(view)
+
+      assert %{current: %{subject: %{decisions: ^narrowed, preview: ^previewed}}} =
+               layer_assigns(view)
+    end
+
+    defp add_host(view, host) do
+      view
+      |> form(~s([data-row="egress"] form[data-test="grant-add-host"]), %{"host" => host})
+      |> render_submit()
+
+      render(view)
+    end
+  end
+
   describe "the person's exact choices" do
     setup [:signed_in, :asking_more]
 
     test "narrowing and lowered limits are submitted exactly, and are what is granted",
-         %{view: view, ref: ref, name_ref: node, local: local} do
+         %{view: view, ref: ref, name: name, name_ref: node, local: local} do
       {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-choose", ref)
       prompt(view, grant)
+
+      # A first grant is titled by the component's name.
+      assert has_element?(view, "#system-layer-title", "Grant #{name}")
+      assert has_element?(view, ".consent-sheet__header h3", "Grant this app")
 
       # The wildcard ask is one row, every tool, whole or none.
       assert has_element?(view, ~s([data-row="tools"]), "Every tool of the catalog (*)")
@@ -3785,6 +3894,11 @@ defmodule PrismWeb.SystemLayerTest do
       assert added == ["b.layer.example", "c.layer.example"]
 
       html = prompt(view, grant)
+
+      # A grant the athanor holds is reviewed, named by no revision.
+      assert has_element?(view, "#system-layer-title", "Grant #{name}")
+      assert has_element?(view, ".consent-sheet__header h3", "Review this app's grant")
+      refute html =~ "consent rev"
       assert has_element?(view, ~s([data-test="grant-delta"]), "which your grant does not give")
       assert has_element?(view, ~s([data-test="grant-delta"]), "c.layer.example")
       refute html =~ "now wants"
@@ -4804,6 +4918,27 @@ defmodule PrismWeb.SystemLayerTest do
   describe "a confirmation another client of the person asked for" do
     setup :signed_in
 
+    test "a program's definition is titled by what it does to the program, never its operation",
+         %{view: view, ctx: ctx} do
+      other = other_session!(ctx)
+      name = "titled-#{System.unique_integer([:positive])}"
+
+      change = %{
+        operation: "mcp_servers.create",
+        arguments: %{name: name, transport: "program", command: "npx -y some-program"},
+        resource: name
+      }
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Sanctum.Consent.confirm_program_definition(other, change)
+
+      prompt_id = Prompt.confirmation_id(Prima.Confirmation.ref(id))
+      wait_until(fn -> open_prompt(view) == prompt_id end, 2_000, "the opened fact")
+
+      assert has_element?(view, "#system-layer-title", "Add a program")
+      refute render(view) =~ "Confirm mcp_servers.create"
+    end
+
     test "opens on every client from the stream, shows the preview and the asker before the proof, and is confirmed by its ref",
          %{view: view, ctx: ctx, user: user} do
       authenticator = Sanctum.TestContext.passkey!(user.user_id)
@@ -4830,6 +4965,9 @@ defmodule PrismWeb.SystemLayerTest do
       html = render(view)
       assert html =~ ~s(data-kind="confirmation")
       assert html =~ ~s(data-own="false")
+      # Titled in the words its operation is declared with.
+      assert has_element?(view, "#system-layer-title", "Create vault")
+      refute html =~ "Confirm vault.create"
       assert has_element?(view, ~s([data-test="confirmation-preview"]), "vault.create")
       assert has_element?(view, ~s([data-test="confirmation-preview"]), name)
       assert has_element?(view, ~s([data-test="confirmation-asker"]), "a browser signed in")
@@ -5317,7 +5455,7 @@ defmodule PrismWeb.SystemLayerTest do
       # The grant is shown, and nothing moved.
       html = render(view)
       assert html =~ ~s(data-kind="grant")
-      assert html =~ "Grant tincture:local.markets"
+      assert html =~ "Grant markets"
       no_outcome("fallback-1")
       assert %{document: %{working: "1.0.1"}, revision: 1} = versions(ctx)
       grant = open_prompt(view)
@@ -5344,7 +5482,8 @@ defmodule PrismWeb.SystemLayerTest do
 
       html = render(view)
       assert html =~ ~s(data-kind="grant")
-      assert html =~ "Grant tincture:local.markets:1.0.0"
+      assert html =~ "Grant markets"
+      assert html =~ "tincture:local.markets:1.0.0"
       no_outcome("fallback-1")
       grant = open_prompt(view)
 
@@ -5484,7 +5623,7 @@ defmodule PrismWeb.SystemLayerTest do
       {view, _html} = mount_athanor(conn, "/api-keys")
       name = "hook-key-#{System.unique_integer([:positive])}"
 
-      render_submit(view, "create", %{"name" => name, "type" => "application"})
+      render_submit(view, "create", %{"name" => name})
 
       assert {:ok, [%{ref: ref, operation: "key.create"}]} =
                Arca.PendingConfirmations.list_open(Sanctum.Context.actor(local), local.user_id)
@@ -5715,6 +5854,102 @@ defmodule PrismWeb.SystemLayerTest do
 
       refute html =~ "Revoke"
       PrismWeb.Vocabulary.refute_vocabulary(html)
+    end
+
+    # A passkey a browser offered for the account asks to be added with its
+    # code. The box's own screen approves it on its shell's page, which it
+    # opens with the request's public ref alone; any other surface says to
+    # approve it on the box.
+    test "a passkey a browser offered asks to be added, approved on the box's shell by its ref" do
+      waiting = %{
+        ref: "ref-1",
+        code: "90536cacfa867215",
+        key: %{"kid" => "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141"},
+        asked_at: "2026-11-14T09:00:00Z"
+      }
+
+      for shell <- [true, false] do
+        html =
+          render_component(&PrismWeb.SystemLayer.Pairing.devices/1,
+            prompt_id: "pairing-1",
+            pairing: %{clients: {:ok, []}, waiting: {:ok, [waiting]}},
+            shell: shell,
+            myself: nil,
+            button_class: ""
+          )
+
+        doc = LazyHTML.from_fragment(html)
+        [offer] = Enum.to_list(LazyHTML.query(doc, ~s([data-test="pairing-waiting"])))
+        text = offer |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()
+
+        assert LazyHTML.attribute(offer, "data-ref") == ["ref-1"]
+
+        approve = LazyHTML.query(offer, ~s([data-test="pairing-approve"]))
+
+        if shell do
+          assert LazyHTML.attribute(approve, "href") == [
+                   "http://127.0.0.1:7340/passkey?ref=ref-1"
+                 ]
+
+          assert LazyHTML.attribute(approve, "target") == ["_blank"]
+
+          assert text ==
+                   "A browser asks to add a passkey Its code is 90536cacfa867215. Approve it " <>
+                     "only if a browser in front of you shows this same code. If you did not ask " <>
+                     "for it, leave it: it is forgotten five minutes after it was asked, and " <>
+                     "nothing is added. Asked " <>
+                     "2026-11-14T09:00:00Z Approve"
+        else
+          assert Enum.empty?(approve)
+
+          assert text ==
+                   "A browser asks to add a passkey Its code is 90536cacfa867215. Approve it " <>
+                     "only if a browser in front of you shows this same code. If you did not ask " <>
+                     "for it, leave it: it is forgotten five minutes after it was asked, and " <>
+                     "nothing is added. Asked " <>
+                     "2026-11-14T09:00:00Z Approve it on your CYFR box's own screen, in Your " <>
+                     "devices there."
+        end
+
+        PrismWeb.Vocabulary.refute_vocabulary(html)
+      end
+    end
+
+    test "the times are the browser's to show in its own time zone, and an unencrypted box is told what to do" do
+      device = %{
+        client_id: "pcl_box",
+        source: "device_cert",
+        display_name: "CYFR box",
+        holder_kind: "chip",
+        paired_at: "2026-11-07T09:00:00Z",
+        certificate_expires_at: "2026-11-08T09:00:00Z",
+        storage: %{root: "unencrypted", data: "encrypted"}
+      }
+
+      html =
+        render_component(&PrismWeb.SystemLayer.Pairing.devices/1,
+          prompt_id: "pairing-1",
+          pairing: %{clients: {:ok, [device]}, waiting: {:ok, []}},
+          myself: nil,
+          button_class: ""
+        )
+
+      doc = LazyHTML.from_fragment(html)
+      times = LazyHTML.query(doc, "time[data-local]")
+
+      assert LazyHTML.attribute(times, "datetime") == [
+               "2026-11-07T09:00:00Z",
+               "2026-11-08T09:00:00Z"
+             ]
+
+      [storage] = Enum.to_list(LazyHTML.query(doc, ~s([data-test="pairing-storage"])))
+
+      assert storage |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim() ==
+               "This box keeps its data unencrypted, whoever takes it reads everything " <>
+                 "(system disk). Keep the box where only people you trust can reach it, or " <>
+                 "install Ubuntu again with disk encryption turned on."
+
+      assert Enum.empty?(LazyHTML.query(doc, ~s([data-test="pairing-waiting"])))
     end
   end
 end

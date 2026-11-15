@@ -62,7 +62,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
                 %{
                   "server_digest" => digest,
                   "server_name" => server,
-                  "tool_patterns" => ["issues.*"]
+                  "tool_patterns" => ["issues.*"],
+                  "record" => %{"address" => "https://127.0.0.1:1/mcp", "headers" => []}
                 }
               ]
             }
@@ -187,6 +188,63 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     refute Sanctum.Refusals.render(reason) =~ "Denied by chain authority"
   end
 
+  # A key narrowed to named tools is asked of the root it starts; the
+  # root's outside dependencies stand on the grant, as for the person.
+  describe "a key narrowed to the chain's root" do
+    setup %{ctx: ctx} do
+      _owner = Sanctum.TestContext.owner!()
+      issuer = Sanctum.TestContext.issuer!(%{ctx | user_id: Arca.Test.Actor.owner_id()})
+
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(issuer, %{
+          name: "consumer-only",
+          scope: ["execute"],
+          tools: ["f:local.mcp-consumer"]
+        })
+
+      {:ok, key} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      {:ok, key: Sanctum.TestContext.via(key, :api)}
+    end
+
+    test "its root's granted outside dependency is admitted, though the key does not list it",
+         %{key: key, digest: digest} do
+      assert Sanctum.ApiKey.admit_tool(key, {:component, "f:local.mcp-consumer:0.1.0"}) == :ok
+
+      {:error, reason} =
+        Sanctum.Gate.call_in_chain(
+          "ghserver:issues.list",
+          guest(key),
+          %{},
+          authority_with_server(digest),
+          lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(key))
+        )
+
+      # Past the admission: the failure is the unreachable upstream.
+      refute match?(%Prima.Refusal{stage: :admission}, reason)
+      refute Sanctum.Refusals.render(reason) =~ "This API key may run only"
+    end
+
+    test "a dependency its root is not granted is refused by the grant, not by the key",
+         %{key: key, digest: digest} do
+      {:error, %Prima.Refusal{stage: :admission, message: message}} =
+        Sanctum.Gate.call_in_chain(
+          "ghserver:repo_get",
+          guest(key),
+          %{},
+          authority_with_server(digest),
+          lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(key))
+        )
+
+      assert message =~ "Denied by chain authority"
+    end
+
+    test "the same outside tool called by the key itself is refused by the key",
+         %{key: key} do
+      assert {:error, %Prima.Refusal{stage: :admission, reason: :key_tool_not_named}} =
+               Sanctum.Gate.call_external("ghserver:issues.list", key, %{})
+    end
+  end
+
   test "a tool outside the granted patterns is not callable", %{ctx: ctx, digest: digest} do
     auth = authority_with_server(digest)
 
@@ -251,7 +309,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
         hosts: Jason.encode!(["api.example.com"]),
         config_json:
           Jason.encode!(%{
-            "backends" => [%{"name" => "fetch", "command" => "npx -y fetch", "env" => %{}}],
+            "command" => "npx -y fetch",
+            "env" => %{},
             "timeout_ms" => 1_000
           })
       })
@@ -270,16 +329,124 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     # The whole definition replaced, the same command, every public host.
     {:ok, _} =
-      Arca.McpServerStorage.update(actor, "fetcher", %{hosts: nil}, program.epoch)
+      Arca.McpServerStorage.update(actor, "fetcher", %{hosts: nil}, %{
+        id: program.id,
+        epoch: program.epoch
+      })
 
     Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
 
-    {:error, %Prima.Refusal{stage: :admission, message: message}} =
-      Sanctum.Gate.call_in_chain("fetcher:issues.list", guest(ctx), %{}, auth,
-        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
-      )
+    assert {:error,
+            %Prima.Refusal{stage: :admission, class: :forbidden, reason: {:invoke_denied, _}}} =
+             Sanctum.Gate.call_in_chain("fetcher:issues.list", guest(ctx), %{}, auth,
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+             )
+  end
 
-    assert message =~ "Denied by chain authority"
+  # The call under `auth` passes the authority (it fails later, at the
+  # upstream nothing serves here) or is refused by it.
+  defp authorized?(ctx, auth) do
+    case Sanctum.Gate.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+           lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+         ) do
+      {:error, %Prima.Refusal{stage: :admission, class: :forbidden, reason: {:invoke_denied, _}}} ->
+        false
+
+      {:error, _upstream} ->
+        true
+    end
+  end
+
+  # The server's whole definition replaced through `mcp_servers.update`, the
+  # edit's own path, at the epoch it stands at now.
+  defp edit(ctx, config, extra \\ %{}) do
+    {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "ghserver")
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("ghserver", ctx.athanor_id) end)
+
+    assert {:ok, _} =
+             Emissary.External.Provider.handle(
+               "mcp_servers",
+               ctx,
+               Map.merge(
+                 %{
+                   "action" => "update",
+                   "name" => "ghserver",
+                   "epoch" => epoch,
+                   "config" => config
+                 },
+                 extra
+               )
+             )
+
+    Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+  end
+
+  @granted %{
+    "url" => "https://127.0.0.1:1/mcp",
+    "headers" => %{},
+    "timeout_ms" => 1_000,
+    "tool_patterns" => ["issues.*", "repo_get"]
+  }
+
+  test "an edit that changes neither the address nor a header keeps the grant",
+       %{ctx: ctx, digest: digest} do
+    auth = authority_with_server(digest)
+    assert authorized?(ctx, auth)
+
+    # The same definition saved again, another timeout and other tool
+    # patterns: none changes where the calls go or what rides along.
+    for config <- [
+          @granted,
+          %{@granted | "timeout_ms" => 5_000},
+          %{@granted | "tool_patterns" => ["issues.*"]}
+        ] do
+      edit(ctx, config)
+      assert authorized?(ctx, auth), inspect(config)
+    end
+  end
+
+  test "an edit of the address or of any header no longer matches the grant, a literal Host among them",
+       %{ctx: ctx} do
+    for name <- ["gh-key", "gh-key-2"] do
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: name,
+          kind: "api_key",
+          fields: %{"token" => "ghp_grant_test_0123456789"},
+          destination: %{"hosts" => ["127.0.0.1", "127.0.0.2"], "port" => 1}
+        })
+    end
+
+    # The grant is made for a definition carrying a vault-bound header and
+    # a literal one.
+    granted = %{
+      @granted
+      | "headers" => %{"Authorization" => "Bearer vault:gh-key", "X-Team" => "blue"}
+    }
+
+    edit(ctx, granted)
+    {:ok, server} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "ghserver")
+    {:ok, digest} = Sanctum.ToolServerDigest.from_server(server)
+    auth = authority_with_server(digest)
+    assert authorized?(ctx, auth)
+
+    for config <- [
+          %{granted | "url" => "https://127.0.0.2:1/mcp"},
+          %{granted | "url" => "https://127.0.0.1:1/other"},
+          put_in(granted, ["headers", "Authorization"], "Bearer vault:gh-key-2"),
+          %{granted | "headers" => %{"X-Team" => "blue"}},
+          put_in(granted, ["headers", "X-Team"], "green"),
+          %{granted | "headers" => %{"Authorization" => "Bearer vault:gh-key"}},
+          # The address and the vault-bound header kept, a literal Host
+          # added: a peer routing on it sends the credential elsewhere.
+          put_in(granted, ["headers", "Host"], "other-tenant.example")
+        ] do
+      edit(ctx, config)
+      refute authorized?(ctx, auth), inspect(config)
+
+      edit(ctx, granted)
+      assert authorized?(ctx, auth)
+    end
   end
 
   test "an unknown server resolves to the sentinel and denies", %{ctx: ctx, digest: digest} do

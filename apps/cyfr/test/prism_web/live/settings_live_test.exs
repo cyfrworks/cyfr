@@ -13,6 +13,7 @@ defmodule PrismWeb.SettingsLiveTest do
   use PrismWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
   alias Sanctum.Test.RegistryStub
 
@@ -63,69 +64,267 @@ defmodule PrismWeb.SettingsLiveTest do
     assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
   end
 
-  describe "invite to this CYFR" do
+  describe "invitation links" do
     defp text(html), do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.trim()
 
-    test "the administrator creates a link naming no thread, shown once, lists it and revokes it",
+    test "the administrator makes a link offering a name, shown once, lists every link by name and place, and revokes one",
          %{conn: conn} do
       ops = test_user()
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
 
-      # The administrator's invitation into a thread they sit in is the
-      # thread's, and this section does not list it.
+      # The administrator's invitation into a thread they sit in is listed
+      # too, by the thread's title.
       {:ok, thread} = Sanctum.SharedThreads.create(ops.user_id, "Settings thread")
       ctx = Sanctum.TestContext.session!(ops.user_id)
       {:ok, %{invitation: threaded}} = Sanctum.Invitations.create(ctx, thread.id)
 
       {view, html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
-      assert html =~ "Invite to this CYFR"
+      assert html =~ "Invitation links"
       assert has_element?(view, ~s([data-test="invite-cyfr"] [data-test="invitation-create"]))
       refute has_element?(view, ~s([data-test="invitation-new"]))
-      refute has_element?(view, ~s([phx-value-id="#{threaded.id}"]))
+      assert has_element?(view, ~s(#invite-cyfr tr), ~r/Settings thread\s*pending/)
 
-      view
-      |> element(~s([data-test="invitation-create"]))
-      |> render_click()
+      assert has_element?(
+               view,
+               ~s([data-test="invitation-revoke"][phx-value-id="#{threaded.id}"])
+             )
+
+      view |> form("#invitation-form", %{"name" => "uj-wren"}) |> render_submit()
 
       link = view |> element(~s([data-test="invitation-link"])) |> render() |> text()
       assert String.starts_with?(link, Sanctum.origin() <> "/invite#")
       code = link |> String.split("#") |> List.last()
       assert has_element?(view, ~s([data-test="invitation-copy"]))
 
-      [%{id: id, issued_by: issuer}] =
+      # A test CYFR's address is this computer's loopback, which the link
+      # opens nowhere else than.
+      assert has_element?(view, ~s([data-test="invitation-local"]), "opens only on this computer")
+
+      [%{id: id, issued_by: issuer, name: "uj-wren"}] =
         Arca.Repo.all(from(i in Arca.Schemas.Invitation, where: is_nil(i.thread_id)))
 
       assert issuer == ops.user_id
-      assert {:ok, shown} = Sanctum.Invitations.lookup(code)
+      assert {:ok, %{name: "uj-wren"} = shown} = Sanctum.Invitations.lookup(code)
       refute Map.has_key?(shown, :thread)
 
+      assert has_element?(view, ~s(#invite-cyfr tr), ~r/uj-wren\s*this CYFR\s*pending/)
       revoke = ~s(#invite-cyfr [data-test="invitation-revoke"][phx-value-id="#{id}"])
       assert has_element?(view, revoke)
-      refute has_element?(view, ~s([phx-value-id="#{threaded.id}"]))
 
       # Shown once: the page read again lists the link and no longer shows it.
       {again, html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
       refute has_element?(again, ~s([data-test="invitation-new"]))
       refute html =~ code
-      assert has_element?(again, "#invite-cyfr td", "pending")
 
       again |> element(revoke) |> render_click()
 
-      assert has_element?(again, "#invite-cyfr td", "revoked")
+      assert has_element?(again, ~s(#invite-cyfr tr), ~r/uj-wren\s*this CYFR\s*revoked/)
       refute has_element?(again, revoke)
       assert %DateTime{} = Arca.Repo.get!(Arca.Schemas.Invitation, id).revoked_at
       assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
       assert Arca.Repo.get!(Arca.Schemas.Invitation, threaded.id).revoked_at == nil
     end
 
-    test "a person who is not the administrator does not see the section", %{conn: conn} do
+    test "a person who is not the administrator sees their own thread links with Revoke, and makes none here",
+         %{conn: conn} do
       person = test_user()
       {view, html} = conn |> log_in_user(person) |> mount_athanor("/settings")
-
-      refute html =~ "Invite to this CYFR"
+      refute html =~ "Invitation links"
       refute has_element?(view, ~s([data-test="invite-cyfr"]))
+
+      {:ok, thread} = Sanctum.SharedThreads.create(person.user_id, "Crew thread")
+      ctx = Sanctum.TestContext.session!(person.user_id)
+      {:ok, %{invitation: invitation}} = Sanctum.Invitations.create(ctx, thread.id, "uj-oren")
+
+      {view, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
+      assert has_element?(view, ~s(#invite-cyfr tr), ~r/uj-oren\s*Crew thread\s*pending/)
       refute has_element?(view, ~s([data-test="invitation-create"]))
+
+      view
+      |> element(~s([data-test="invitation-revoke"][phx-value-id="#{invitation.id}"]))
+      |> render_click()
+
+      assert %DateTime{} = Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id).revoked_at
     end
+  end
+
+  test "a second person given the administrator's mark sees and uses the administrator's Settings; the last mark stays",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    mira = test_user()
+    {:ok, mira_row} = Sanctum.Tenancy.Users.get(mira.user_id)
+
+    {view, _html} = conn |> log_in_user(mira) |> mount_athanor("/settings")
+    refute has_element?(view, "#allowlist")
+
+    {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+    admins =
+      view |> render() |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-test="admin"]))
+
+    assert Enum.count(admins) == 1
+    assert has_element?(view, ~s([data-test="admin"][data-id="#{ops.user_id}"]))
+    refute has_element?(view, ~s(button[phx-click="admin_clear"]))
+
+    # Marking asks the administrator to confirm, through the system layer.
+    view |> form("#admin-form", %{"person" => mira.user_id}) |> render_submit()
+
+    assert [%{operation: "door.mark_admin"}] =
+             Arca.Repo.all(
+               from(c in Arca.Schemas.PendingConfirmation, where: c.user_id == ^ops.user_id)
+             )
+
+    {:ok, _} = Sanctum.Tenancy.Users.mark_platform_admin(mira_row, ops.user_id)
+
+    # Mira, now an administrator, sees the allowlist and changes it.
+    {view, _html} = build_conn() |> log_in_user(mira) |> mount_athanor("/settings")
+    assert has_element?(view, "#allowlist")
+    assert has_element?(view, ~s([data-test="admin"][data-id="#{mira.user_id}"]))
+
+    identifier = "per_" <> Prima.Digest.sha256_hex("second-admin-#{mira.user_id}")
+
+    view
+    |> element(~s(form[phx-change="door_form_changed"]))
+    |> render_change(%{"value" => identifier})
+
+    view |> element("button[phx-click=door_allow]") |> render_click()
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
+
+    # The first administrator's mark comes off; the last one, Mira's, stays.
+    {:ok, ops_row} = Sanctum.Tenancy.Users.get(ops.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.clear_platform_admin(ops_row, mira.user_id)
+
+    assert {:error, :last_admin} =
+             Sanctum.Tenancy.Users.clear_platform_admin(mira_row, mira.user_id)
+
+    assert Sanctum.Tenancy.platform_admin?(mira.user_id)
+  end
+
+  test "the page says in words what Mode, the request card, a setting and the sign-in are, and Remove asks first",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", ops.user_id)
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+
+    assert has_element?(view, "#mode-words", "Executions, where each run's failure says why")
+    assert has_element?(view, "#request-stats h3", "Your requests, last hour")
+    assert has_element?(view, "#request-stats", "Nobody's athanor but yours is counted here.")
+    assert has_element?(view, ~s([data-test="auth-method"]), "your account, in this browser")
+
+    {:ok, %Cyfr.Platform.Settings.Roster.Entry{doc: doc}} =
+      Cyfr.Platform.Settings.Roster.fetch("max_athanors")
+
+    assert has_element?(view, ~s([data-test="setting-doc"]), doc)
+
+    assert has_element?(
+             view,
+             ~s(button[phx-click="door_remove"][data-confirm^="Remove *?"])
+           )
+
+    for html <- [
+          view |> element("#mode-words") |> render(),
+          view |> element("#request-stats") |> render(),
+          view |> element("#approvals") |> render(),
+          view |> element("#host-decisions") |> render()
+        ],
+        do: PrismWeb.Vocabulary.refute_vocabulary(html)
+  end
+
+  test "an approval's wait is saved as whole hours, and the page links to API Keys", %{conn: conn} do
+    person = test_user()
+    {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+
+    assert has_element?(view, ~s(#approval-hours[placeholder="default"]))
+    refute has_element?(view, ~s(#approval-hours[value]))
+    assert has_element?(view, ~s([data-test="api-keys-link"] a[href$="/api-keys"]))
+
+    view |> form("#approvals-form", %{"hours" => "0"}) |> render_submit()
+    assert render(view) =~ "the wait is a whole number of hours"
+
+    view |> form("#approvals-form", %{"hours" => "6"}) |> render_submit()
+    assert has_element?(view, ~s(#approval-hours[value="6"]))
+
+    # Saved in the athanor's settings, where AQUA reads it: the page read
+    # again shows it.
+    {again, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
+    assert has_element?(again, ~s(#approval-hours[value="6"]))
+
+    # Cleared, the stored wait is gone and AQUA's own default holds again.
+    again |> form("#approvals-form", %{"hours" => ""}) |> render_submit()
+    assert render(again) =~ "Approvals wait AQUA&#39;s default time again."
+    refute has_element?(again, ~s(#approval-hours[value]))
+    assert has_element?(again, "#approvals", "Left empty, AQUA's own default")
+
+    athanor = seated_athanor()
+    {:ok, row} = Sanctum.Tenancy.Athanors.get(athanor.id)
+
+    refute Map.has_key?(
+             Sanctum.Tenancy.Athanors.settings(row)["approvals"] || %{},
+             "expiry_hours"
+           )
+  end
+
+  test "the request card names the page where a failed request with no execution is read", %{
+    conn: conn
+  } do
+    person = test_user()
+    {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+
+    assert has_element?(
+             view,
+             ~s(#request-stats [data-test="activities-link"][href$="/activities"]),
+             "Activities"
+           )
+
+    refute view |> element("#request-stats") |> render() =~ "Executions"
+
+    # A failed call that starts no execution: revoking an invitation that
+    # does not exist.
+    render_click(view, "invitation_revoke", %{"id" => "inv_missing"})
+
+    {activities, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/activities")
+    assert has_element?(activities, "tr", ~r/invitation\.revoke.*failed/s)
+  end
+
+  test "the administrator reads the host's decisions, opens one, and closing an account asks a confirmation",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+
+    # A refused call no athanor holds: a decision about the host.
+    request_id = Prima.UUID7.request_id()
+
+    anonymous =
+      Sanctum.Context.build(authenticated: false, permissions: [], request_id: request_id)
+
+    {:error, _} = Sanctum.Gate.call_external("tools", anonymous, %{"action" => "list"})
+
+    {:ok, [refused]} =
+      Arca.DecisionLog.list_global(%Prima.Actor{platform_admin: true}, request_id: request_id)
+
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+    assert has_element?(view, "#host-decisions tr", ~r/tools\.list\s*refused/)
+
+    view
+    |> element(~s(#host-decisions button[phx-value-id="#{refused.call_id}"]))
+    |> render_click()
+
+    assert has_element?(view, "#host-decision dd", refused.call_id)
+
+    identifier = "per_" <> Prima.Digest.sha256_hex("closed-#{ops.user_id}")
+    view |> form("#tombstone-form", %{"identifier" => identifier}) |> render_submit()
+
+    assert [%{operation: "directory.tombstone"}] =
+             Arca.Repo.all(
+               from(c in Arca.Schemas.PendingConfirmation, where: c.user_id == ^ops.user_id)
+             )
+
+    # Someone who is not the administrator sees neither.
+    person = test_user()
+    {view, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
+    refute has_element?(view, "#host-decisions")
   end
 
   # A key the platform administrator offers is shared from their own
@@ -191,7 +390,9 @@ defmodule PrismWeb.SettingsLiveTest do
     assert {:error, :denied} = Sanctum.Door.admit_identifier(bob)
 
     door_entry(view, "door_allow", "@nobody")
-    assert render(view) =~ "No one holds that handle at the registry."
+
+    assert render(view) =~
+             "No account with that name yet: check the spelling, or ask them to make one."
 
     ExUnit.CaptureLog.capture_log(fn ->
       door_entry(view, "door_allow", "@down")
@@ -551,6 +752,290 @@ defmodule PrismWeb.SettingsLiveTest do
       view |> element(~s([data-test="session-end"][phx-value-id="#{own_id}"])) |> render_click()
       assert_redirect(view, "/login")
       assert {:error, :invalid_session} = Sanctum.Session.load(own)
+    end
+  end
+
+  describe "the administrator's setup" do
+    @market %{
+      "hosts" => ["api.market.example"],
+      "methods" => ["GET"],
+      "paths" => ["/v1/quotes"]
+    }
+
+    # A person signed in to their own athanor, an administrator or not.
+    defp person!(admin?) do
+      user = test_user()
+      if admin?, do: {:ok, _} = Sanctum.TestContext.ensure_platform(user.user_id)
+      {:ok, own} = Sanctum.Tenancy.Athanors.get_by_owner(user.user_id)
+
+      ctx =
+        Sanctum.Context.build(
+          user_id: user.user_id,
+          athanor_id: own.id,
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      %{
+        user: user,
+        conn: log_in_user(build_conn(), user),
+        own: own,
+        ctx: Sanctum.TestContext.via(ctx, :prism)
+      }
+    end
+
+    defp key!(%{ctx: ctx}, name, destination) do
+      {:ok, %{entry: entry}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Gate.call_external("vault", &1, %{
+            "action" => "create",
+            "name" => name,
+            "kind" => "api_key",
+            "fields" => %{"MARKET_KEY" => "mk-sentinel-#{name}"},
+            "destination" => destination,
+            "disclose" => false
+          })
+        )
+
+      entry
+    end
+
+    defp seen(%{user: user}) do
+      {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+      Sanctum.Tenancy.Users.prefs(row)["admin_setup_seen"]
+    end
+
+    defp texts(view, selector) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(selector)
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+    end
+
+    test "opens for an administrator at ?setup=1, writes that it was seen, says each step, " <>
+           "and is offered again from Settings once closed" do
+      admin = person!(true)
+      {view, _html} = mount_athanor(admin.conn, "/settings?setup=1", admin.own)
+
+      assert has_element?(view, ~s([data-test="setup"]))
+      refute has_element?(view, ~s([data-test="setup-open"]))
+      assert seen(admin) == true
+
+      assert texts(view, ~s([data-test="setup"] ol > li > span)) == [
+               "Share a key with everyone.",
+               "Let people in.",
+               "How this CYFR is reached.",
+               "What only administrators can do."
+             ]
+
+      [share, let_in, reach, administrators] =
+        texts(view, ~s([data-test="setup"] ol > li > p:first-of-type))
+
+      assert share =~ "what each new person's AQUA uses when it fits"
+      assert share =~ "daily cap per person filled in"
+      assert let_in =~ "invitation link"
+      assert let_in =~ "allowlist"
+      assert reach =~ "cyfr access"
+      assert reach =~ "opens only on this computer"
+      assert administrators =~ "second administrator"
+      assert administrators =~ "cyfr backup"
+      assert administrators =~ "the database, the files stored on that machine"
+      assert administrators =~ "Files kept in S3 storage are not in it"
+      refute administrators =~ "everything"
+      assert has_element?(view, ~s([data-test="setup"] a[href="#admins"]))
+      assert has_element?(view, ~s([data-test="setup"] a[href="#invite-cyfr"]))
+      assert has_element?(view, ~s([data-test="setup"] a[href="#allowlist"]))
+      PrismWeb.Vocabulary.refute_vocabulary(view |> element(~s([data-test="setup"])) |> render())
+
+      # No key yet: the first step says where one is connected.
+      assert has_element?(view, ~s([data-test="setup-no-key"]), "Connect one on your AQUA page.")
+
+      view |> element(~s([data-test="setup-close"])) |> render_click()
+      refute has_element?(view, ~s([data-test="setup"]))
+      view |> element(~s([data-test="setup-open"])) |> render_click()
+      assert has_element?(view, ~s([data-test="setup"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "opens for nobody but an administrator, read from their row as it is now" do
+      person = person!(false)
+      {view, _html} = mount_athanor(person.conn, "/settings?setup=1", person.own)
+      refute has_element?(view, ~s([data-test="setup"]))
+      refute has_element?(view, ~s([data-test="setup-open"]))
+      assert seen(person) == nil
+
+      # An administrator whose mark was taken away while signed in: the
+      # session still remembers the capability, the row does not.
+      admin = person!(true)
+      {view, _html} = mount_athanor(admin.conn, "/settings", admin.own)
+      assert has_element?(view, ~s([data-test="setup-open"]))
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(u in Arca.Schemas.User, where: u.id == ^admin.user.user_id),
+          set: [platform_admin_at: nil]
+        )
+
+      view |> element(~s([data-test="setup-open"])) |> render_click()
+      refute has_element?(view, ~s([data-test="setup"]))
+      assert seen(admin) == nil
+
+      # Nor does the first step's event open a sheet outside the setup.
+      market = key!(admin, "market key", @market)
+      render_click(view, "setup_share", %{"id" => market.id})
+      refute has_element?(view, "#system-layer-dialog [data-kind=share]")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a mark taken away while the setup is open closes it at its next act, which does " <>
+           "nothing" do
+      admin = person!(true)
+      market = key!(admin, "market key", @market)
+      {view, _html} = mount_athanor(admin.conn, "/settings?setup=1", admin.own)
+      share = ~s([data-test="setup-key-share"][phx-value-id="#{market.id}"])
+      assert has_element?(view, share)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(u in Arca.Schemas.User, where: u.id == ^admin.user.user_id),
+          set: [platform_admin_at: nil]
+        )
+
+      view |> element(share) |> render_click()
+      refute has_element?(view, "#system-layer-dialog [data-kind=share]")
+      refute has_element?(view, ~s([data-test="setup"]))
+      assert render(view) =~ "You no longer administer this CYFR, so nothing was done."
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the first step's event acts on a listed key alone: keys not read, or outside the " <>
+           "person's own athanor, open nothing and keep the page up" do
+      admin = person!(true)
+      market = key!(admin, "market key", @market)
+      {view, _html} = mount_athanor(admin.conn, "/settings?setup=1", admin.own)
+
+      for state <- [:unread, :not_own] do
+        :sys.replace_state(view.pid, fn channel ->
+          update_in(channel.socket, &Phoenix.Component.assign(&1, :setup_keys, state))
+        end)
+
+        render_click(view, "setup_share", %{"id" => market.id})
+        assert Process.alive?(view.pid), inspect(state)
+        refute has_element?(view, "#system-layer-dialog [data-kind=share]"), inspect(state)
+      end
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the first step lists the administrator's shareable keys, the newest first, and " <>
+           "opens the sharing sheet at everyone with the daily cap per person; what is made " <>
+           "is what the sheet shows when confirmed" do
+      admin = person!(true)
+      # Named so the alphabet orders them the other way round: the step
+      # orders them by when each was made.
+      older = key!(admin, "alpha key", @market)
+      newer = key!(admin, "zulu key", @market)
+      _not_shareable = key!(admin, "open key", %{"hosts" => ["api.market.example"]})
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.VaultEntry, where: e.id == ^older.id),
+          set: [inserted_at: ~U[2026-01-01 00:00:00.000000Z]]
+        )
+
+      {view, _html} = mount_athanor(admin.conn, "/settings?setup=1", admin.own)
+
+      assert texts(view, ~s([data-test="setup-key"] > span:first-child)) ==
+               ["zulu key", "alpha key"]
+
+      view
+      |> element(~s([data-test="setup-key-share"][phx-value-id="#{newer.id}"]))
+      |> render_click()
+
+      sheet = "#system-layer-dialog form#system-layer-share"
+      assert has_element?(view, sheet <> ~s( input[name="audience"][value="everyone"][checked]))
+      assert has_element?(view, sheet <> ~s( input[name="person_daily"][value="50"]))
+      refute view |> element(sheet <> ~s( input[name="total_daily"])) |> render() =~ ~s(value="5)
+
+      assert texts(view, ~s([data-test="share-everyone"])) == [
+               "You administer this CYFR, so a key you share with everyone is also what each " <>
+                 "new person's AQUA uses when it fits."
+             ]
+
+      # The preset is not submitted by itself: a submit naming no audience
+      # makes nothing, whatever the sheet started from.
+      view |> element(sheet) |> render_submit(%{"audience" => ""})
+
+      assert has_element?(
+               view,
+               "#system-layer-dialog [role=alert]",
+               "Choose who it is shared with"
+             )
+
+      # The administrator changes the cap before confirming: what is made is
+      # what the sheet shows then.
+      typed = %{"audience" => "everyone", "person_daily" => "20", "total_daily" => ""}
+      view |> form(sheet, typed) |> render_change()
+      view |> form(sheet, typed) |> render_submit()
+
+      assert {:ok, [%{ref: ref, operation: "share.create"}]} =
+               Arca.PendingConfirmations.list_open(
+                 Sanctum.Context.actor(admin.ctx),
+                 admin.user.user_id
+               )
+
+      Sanctum.TestContext.prove!(admin.ctx, ref)
+
+      shares = fn ->
+        {:ok, %{shares: shares}} =
+          Sanctum.Gate.call_external("share", admin.ctx, %{"action" => "list"})
+
+        shares
+      end
+
+      wait_until(fn -> shares.() != [] end, 2_000, "the share made once confirmed")
+
+      assert [%{entry_id: entry_id, audience: "everyone", person_daily: 20, total_daily: nil}] =
+               shares.()
+
+      assert entry_id == newer.id
+
+      wait_until(
+        fn ->
+          has_element?(
+            view,
+            ~s([data-test="setup-key"]:first-child),
+            "Shared with everyone"
+          )
+        end,
+        2_000,
+        "the step reads the key shared"
+      )
+
+      refute has_element?(
+               view,
+               ~s([data-test="setup-key-share"][phx-value-id="#{newer.id}"])
+             )
+
+      # A key already shared with everyone opens no second sheet.
+      render_click(view, "setup_share", %{"id" => newer.id})
+      refute has_element?(view, "#system-layer-dialog [data-kind=share]")
+
+      # The share stands under the Vault page's Shared by you with the cap
+      # that was confirmed.
+      [share] = shares.()
+      {vault, _html} = mount_athanor(admin.conn, "/vault", admin.own)
+
+      assert texts(
+               vault,
+               ~s([data-test="shared-by-you-row"][data-id="#{share.id}"] [data-test="share-line"])
+             ) == ["zulu key, shared with everyone, 0 today, at most 20 a person a day"]
+
+      Cyfr.Test.Sandbox.end_views()
     end
   end
 

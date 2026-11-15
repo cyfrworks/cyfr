@@ -7,13 +7,14 @@ defmodule Arca.Schemas.ConsentVaultRef do
   the revision and keyed by `(consent_id, binding_key)`.
 
   `binding_key` is `<source node reference>|<edge key>|<slot>`; the row
-  names exactly one of the athanor's own entry (`vault_entry_id`), a share
+  names exactly one of the athanor's own entry (`vault_entry_id`), the
+  athanor's own program row a login need binds (`mcp_server_id`), a share
   of another athanor's entry (`share_id`, a bare id: the share is its
   owner's row), each with the binding digest it was approved at, or a
   selection (`via_label`), the label of the profile of the same athanor it
   borrows from, with the digest it pinned when it pinned one. Its scope is
   derived from the one it names (`scope/1`): `share` for a share,
-  `athanor` for an entry or a selection. A selection's `athanor` scope
+  `athanor` for an entry, a program row or a selection. A selection's `athanor` scope
   says only that it is resolved within the borrowing consent's own
   athanor; it says nothing about the scope of the lender's entry, which
   the loader answers when it resolves the selection. It carries the
@@ -37,6 +38,7 @@ defmodule Arca.Schemas.ConsentVaultRef do
     field :athanor_id, :string
     field :binding_key, :string
     field :vault_entry_id, :string
+    field :mcp_server_id, :string
     field :share_id, :string
     field :via_label, :string
     field :binding_digest, :string
@@ -47,8 +49,8 @@ defmodule Arca.Schemas.ConsentVaultRef do
 
   @doc """
   The scope of a binding, a row or a ref map naming one: `"share"` when it
-  names a share (`share_id` set), `"athanor"` otherwise, an entry of the
-  athanor's own or a selection resolved within it.
+  names a share (`share_id` set), `"athanor"` otherwise, an entry or a
+  program row of the athanor's own or a selection resolved within it.
   """
   @spec scope(map()) :: String.t()
   def scope(%{share_id: share_id}) when is_binary(share_id) and share_id != "", do: "share"
@@ -56,8 +58,8 @@ defmodule Arca.Schemas.ConsentVaultRef do
 
   @doc """
   A new row held to the binding rules: a key, a consent and an athanor;
-  exactly one of `vault_entry_id`, `share_id` and `via_label`; a digest
-  for an entry or a share; a lifetime in the vocabulary, with
+  exactly one of `vault_entry_id`, `mcp_server_id`, `share_id` and
+  `via_label`; a digest for an entry, a program row or a share; a lifetime in the vocabulary, with
   `expires_at` exactly when it is `until`.
   """
   @spec changeset(map()) :: Ecto.Changeset.t()
@@ -68,6 +70,7 @@ defmodule Arca.Schemas.ConsentVaultRef do
       :athanor_id,
       :binding_key,
       :vault_entry_id,
+      :mcp_server_id,
       :share_id,
       :via_label,
       :binding_digest,
@@ -83,7 +86,7 @@ defmodule Arca.Schemas.ConsentVaultRef do
 
   defp validate_names_one(changeset) do
     named =
-      for field <- [:vault_entry_id, :share_id, :via_label],
+      for field <- [:vault_entry_id, :mcp_server_id, :share_id, :via_label],
           present?(get_field(changeset, field)),
           do: field
 
@@ -100,7 +103,11 @@ defmodule Arca.Schemas.ConsentVaultRef do
         add_error(changeset, :binding_digest, "names the digest its entry is bound at")
 
       _ ->
-        add_error(changeset, :binding, "names exactly one of an entry, a share and a selection")
+        add_error(
+          changeset,
+          :binding,
+          "names exactly one of an entry, a program, a share and a selection"
+        )
     end
   end
 

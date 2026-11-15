@@ -63,15 +63,17 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
   alias Sanctum.Catalog
   alias Sanctum.Gate.CatalogSourcesTest.{Declared, Undeclared}
 
-  # What reaches the registry or the bytes it served, and an execution's
-  # own retained payload, whatever an outside sender wrote into it.
+  # What reaches the registry or the bytes it served, an execution's own
+  # retained payload, whatever an outside sender wrote into it, and what
+  # other people said in a shared thread the person sits in.
   @outside ~w(component.search component.discover component.get_blob component.pull
-              component.deprecate component.yank record.payload) ++
+              component.deprecate component.yank record.payload threads.list
+              threads.read) ++
              for(
                action <- ~w(sync claim_publisher verify_publisher tokens_list
                             tokens_issue tokens_revoke members_list members_add members_update
                             members_remove whoami get_namespace report list_my_reports
-                            legal_page legal_version legal_accept appeal),
+                            legal_page legal_version appeal),
                do: "registry.#{action}"
              )
 
@@ -122,13 +124,13 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
       read = &Compendium.Providers.Component.answer_sources(nil, &1)
       pulled = Prima.Source.outside("catalyst:acme.weather")
 
-      assert read.(%{"component_ref" => "catalyst:local.claude:1.4.2"}) == []
+      assert read.(%{"component_ref" => "catalyst:local.claude:1.4.3"}) == []
       assert read.(%{"component_ref" => "catalyst:acme.weather:0.2.0"}) == [pulled]
       assert read.(%{component_ref: "catalyst:acme.weather:0.2.0", needs: []}) == [pulled]
 
       listing = %{
         components: [
-          %{component_ref: "catalyst:local.claude:1.4.2", description: "shipped"},
+          %{component_ref: "catalyst:local.claude:1.4.3", description: "shipped"},
           %{component_ref: "catalyst:acme.weather:0.2.0", description: "theirs"},
           %{component_ref: "catalyst:acme.weather:0.3.0", description: "theirs again"}
         ],

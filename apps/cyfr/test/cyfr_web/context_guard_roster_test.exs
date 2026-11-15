@@ -43,7 +43,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   @components ~w(
     AquaLive.AgentsComponent AquaLive.NotesComponent AquaLive.RestoreComponent
     AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent SignInTerminalComponent
-    CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive
+    CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive GrantsComponent
   )
 
   # The tasks started from the console, by file, and each answer they send
@@ -67,7 +67,12 @@ defmodule CyfrWeb.ContextGuardRosterTest do
       {1, [{"live/components/report_component.ex", :report}]},
     # A deprecate or a yank, and the page's read of the registry.
     "live/registry_live.ex" =>
-      {2, [{"live/registry_live.ex", :act}, {"live/registry_live.ex", :load}]},
+      {3,
+       [
+         {"live/registry_live.ex", :act},
+         {"live/registry_live.ex", :load},
+         {"live/registry_live.ex", :managed}
+       ]},
     # A program row's call: adding one, or its Test, Refresh, Restart,
     # hosts or Reset folder.
     "live/programs_live.ex" => {1, [{"live/programs_live.ex", :call}]},
@@ -83,6 +88,8 @@ defmodule CyfrWeb.ContextGuardRosterTest do
          {"live/aqua_live.ex", :catalyst_installed},
          {"live/aqua_live/agents_component.ex", :brain_options}
        ]},
+    # A brain's one `models` call after its grant, answered to the page.
+    "live/aqua_live.ex" => {1, [{"live/aqua_live.ex", :setup_answer}]},
     # The system layer's listener on `confirmation.changes`, whose facts
     # the layer takes in the focus it was opened for.
     "live/system_layer.ex" => {1, [{"live/system_layer.ex", :fact}]}
@@ -97,8 +104,11 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   # the page acts on. A registry signature it carries is completed in the
   # same task as the session its request was bound to, read from the store
   # and revalidated, and answers only the sentence the page shows
-  # (`PrismWeb.LoginLive`).
-  @unfocused %{"live/login_live.ex" => {1, [:answer]}}
+  # (`PrismWeb.LoginLive`). The check starts one task of its own, the
+  # account service's terms read, under that session, and awaits it for a
+  # bounded time; its result reaches the page only inside the check's
+  # `:answer`, so the page takes no second answer.
+  @unfocused %{"live/login_live.ex" => {2, [:answer]}}
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/
 

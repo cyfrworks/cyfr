@@ -768,50 +768,187 @@ defmodule Opus.ProviderTest do
       assert_receive {:fill_requested, _athanor_id, "first_need", _in_transaction}
     end
 
-    # `run_stream` answers before its background run is admitted, so a
-    # refusal before any row reaches its caller as every such refusal
-    # does: the run is acknowledged, no execution exists, and its events
-    # route answers not found.
-    test "execution.run_stream acknowledges, asks for the fill, and writes no execution", %{
-      ctx: ctx,
-      ref: ref
-    } do
+    # `run_stream` answers once its run is admitted, so a refusal at
+    # admission answers the stream's caller as it answers a run's, in the
+    # same words and class, leaves what the run's leaves (here, before any
+    # row: nothing), and opens no stream.
+    test "execution.run_stream answers the run's refusal and leaves what it leaves",
+         %{ctx: ctx, ref: ref} do
       before = {started(ctx), slots(ctx)}
+      args = %{"reference" => ref, "input" => %{"a" => 1, "b" => 2}}
 
-      assert {:ok, %{execution_id: id, stream_url: url}} =
-               Provider.handle("execution", ctx, %{
-                 "action" => "run_stream",
-                 "reference" => ref,
-                 "input" => %{"a" => 1, "b" => 2}
-               })
+      assert Provider.handle("execution", ctx, Map.put(args, "action", "run_stream")) ==
+               {:error, :not_provisioned}
 
       assert_receive {:fill_requested, _athanor_id, "first_need", _in_transaction}, 5_000
 
-      # The background run registered under the id before it asked for the
-      # fill, and its entry goes when it ends.
-      Prima.Test.Wait.wait_until(fn -> Registry.lookup(Opus.Registry, id) == [] end)
+      {answer, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          over_mcp(ctx, Map.put(args, "action", "run_stream"))
+        end)
+
+      refute Map.has_key?(answer, "error")
+
+      assert {answer["result"]["isError"], answer["result"]["content"]} ==
+               {true,
+                [
+                  %{
+                    "type" => "text",
+                    "text" => "This athanor is still being prepared — retry shortly"
+                  }
+                ]}
+
       assert {started(ctx), slots(ctx)} == before
-
-      conn =
-        Plug.Test.conn(:get, url)
-        |> Plug.Conn.assign(:context, ctx)
-        |> Emissary.Web.ExecutionEventsController.stream(%{"id" => id})
-
-      assert conn.status == 404
     end
+  end
+
+  # A stream is admitted as a run is: its root reserves its invocation
+  # budget, a refusal after its row is admitted leaves what a run's does,
+  # and a stream nobody follows ends as the run it is.
+  describe "a streamed root, as a run" do
+    test "reserves the root's budget, which a child's charge stands on", %{ctx: ctx, ref: ref} do
+      actor = Context.actor(ctx)
+      stream_id = Opus.Record.generate_id()
+
+      for shape <- [[], [execution_id: stream_id, root_execution_id: stream_id]] do
+        {:ok, %{authority: authority, stamp: stamp, profile: profile}} =
+          Opus.Admission.authority_and_stamp_for(ctx, :default, ref)
+
+        opts =
+          shape ++
+            [
+              authority: authority,
+              activation_stamp: stamp,
+              activation_digest: stamp.activation_digest,
+              profile_id: profile.id
+            ]
+
+        {:ok, {admitted, _endpoint, _input, _opts}, id} =
+          Opus.Dispatch.admit(ctx, ref, %{"a" => 1, "b" => 2}, opts)
+
+        %{current_attempt: attempt} = Arca.Repo.get!(Arca.Schemas.Execution, id)
+        budget = authority.budget.id
+
+        assert %{root_execution_id: ^id, charged: 0, released_at: nil} =
+                 Arca.BudgetReservations.lookup(actor, budget),
+               inspect(shape)
+
+        # A child's charge, under the root's attempt, stands on it.
+        assert Arca.BudgetReservations.charge(
+                 actor,
+                 budget,
+                 %{id: "chg_#{id}", attempt: attempt},
+                 1
+               ) ==
+                 :ok,
+               inspect(shape)
+
+        _closed = Opus.Attempt.refuse(admitted.attempt, "test over")
+      end
+    end
+
+    test "refused after its row is admitted, it leaves what a refused run leaves", %{
+      ctx: ctx,
+      ref: ref
+    } do
+      # Over the consented max_request_size: refused once the row stands.
+      args = %{"reference" => ref, "input" => %{"a" => String.duplicate("x", 1_100_000)}}
+
+      {run, run_rows} = refused_with(ctx, Map.put(args, "action", "run"))
+      {stream, stream_rows} = refused_with(ctx, Map.put(args, "action", "run_stream"))
+
+      assert {:error, _refusal} = run
+      assert stream == run
+      assert stream_rows == run_rows
+    end
+
+    test "a stream nobody follows ends as its run, its reservation as a run's", %{
+      ctx: ctx,
+      ref: ref
+    } do
+      args = %{"reference" => ref, "input" => %{"a" => 1, "b" => 2}}
+
+      {:ok, %{execution_id: streamed}} =
+        Provider.handle("execution", ctx, Map.put(args, "action", "run_stream"))
+
+      {:ok, %{execution_id: ran}} =
+        Provider.handle("execution", ctx, Map.put(args, "action", "run"))
+
+      Prima.Test.Wait.wait_until(fn -> terminal?(streamed) end, 30_000, "the streamed run's end")
+
+      assert left_behind(streamed) == left_behind(ran)
+    end
+  end
+
+  # What a call refused after admission leaves in the athanor: its answer,
+  # and each execution row it wrote with its reservation, compared by
+  # what is not an id or a time.
+  defp refused_with(ctx, args) do
+    before = Arca.Repo.all(from(e in Arca.Schemas.Execution, select: e.id))
+    {answer, _log} = ExUnit.CaptureLog.with_log(fn -> Provider.handle("execution", ctx, args) end)
+
+    ids =
+      Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.id not in ^before, select: e.id))
+
+    Enum.each(ids, fn id ->
+      Prima.Test.Wait.wait_until(fn -> terminal?(id) end, 30_000, "the refused run's end")
+    end)
+
+    {answer, Enum.map(ids, &left_behind/1)}
+  end
+
+  defp terminal?(id),
+    do:
+      Arca.Repo.get!(Arca.Schemas.Execution, id).status in Arca.Schemas.Execution.terminal_statuses()
+
+  defp left_behind(id) do
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
+
+    reservation =
+      Arca.Repo.one(
+        from(r in Arca.Schemas.BudgetReservation,
+          where: r.root_execution_id == ^id,
+          select: %{cap: r.cap, charged: r.charged, released: not is_nil(r.released_at)}
+        )
+      )
+
+    charges =
+      Arca.Repo.aggregate(
+        from(c in Arca.Schemas.BudgetCharge,
+          join: r in Arca.Schemas.BudgetReservation,
+          on: r.id == c.reservation_id,
+          where: r.root_execution_id == ^id
+        ),
+        :count
+      )
+
+    attempts =
+      Arca.Repo.all(
+        from(a in Arca.Schemas.ExecutionAttempt, where: a.execution_id == ^id, select: a.state)
+      )
+
+    %{
+      status: row.status,
+      error: {row.error_class, row.error_message},
+      kind: row.kind,
+      reference: row.reference,
+      attempts: attempts,
+      reservation: reservation,
+      charges: charges
+    }
   end
 
   # The execution slots the context's athanor holds.
   defp slots(ctx), do: Map.get(Prima.Slots.status(Opus.Slots).keys, ctx.athanor_id, 0)
 
-  # What an MCP client receives for `tools/call` of `execution.run` with
-  # `args`: the JSON-RPC body the transport writes for the router's answer.
+  # What an MCP client receives for `tools/call` of `execution.run`, or the
+  # action `args` names, with `args`: the JSON-RPC body the transport writes for the router's answer.
   defp over_mcp(ctx, args) do
     message = %Prima.MCP.Message{
       type: :request,
       id: 1,
       method: "tools/call",
-      params: %{"name" => "execution", "arguments" => Map.put(args, "action", "run")}
+      params: %{"name" => "execution", "arguments" => Map.put_new(args, "action", "run")}
     }
 
     case Emissary.MCP.Router.dispatch(ctx, message) do
@@ -1325,7 +1462,15 @@ defmodule Opus.ProviderTest do
 
       assert logs_result.execution_id == execution_id
       assert logs_result.status == "failed"
-      assert is_binary(logs_result.logs)
+
+      # The text names the reference and shows the input as JSON, never
+      # as Elixir terms.
+      assert logs_result.logs =~
+               "\nReference: #{logs_result.reference}\n\nInput:\n" <>
+                 Jason.encode!(logs_result.input) <> "\n"
+
+      refute logs_result.logs =~ "%{"
+      refute logs_result.logs =~ "=>"
     end
 
     test "returns error for non-existent execution", %{ctx: ctx} do
@@ -1338,6 +1483,71 @@ defmodule Opus.ProviderTest do
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
       assert Prima.Refusal.message(reason) =~ "not found"
+    end
+  end
+
+  # Logs, cancel and retry read the run's record, which needs
+  # `:storage_read` beside the operations' `:execute`. A caller without
+  # it, and a caller inside a running component, is told so before any row
+  # is read, the same for its own run, an unknown id and another athanor's
+  # run, and nothing is cancelled.
+  describe "execution tool - reading a run without storage_read" do
+    test "logs, cancel and retry name the permission whatever the id", %{ctx: ctx} do
+      own = Opus.Record.new(ctx, "reagent:local.reader:1.0.0", %{})
+      :ok = Opus.Record.write_started(ctx, own)
+
+      other = %{ctx | athanor_id: ctx.athanor_id <> "_other", user_id: ctx.user_id <> "_other"}
+      Arca.Test.Actor.athanor!(other.athanor_id)
+      foreign = Opus.Record.new(other, "reagent:local.reader:1.0.0", %{})
+      :ok = Opus.Record.write_started(other, foreign)
+
+      execute_only = %{ctx | permissions: MapSet.new([:execute])}
+      guest = Context.enter_guest(execute_only)
+      ids = [own.id, "exec_nonexistent", foreign.id]
+
+      for {caller, refusal} <- [
+            {execute_only, {:missing_permission, :storage_read}},
+            {guest, {:guest_plane, :storage_read}}
+          ],
+          action <- ["logs", "cancel", "retry"],
+          id <- ids do
+        assert Provider.handle("execution", caller, %{
+                 "action" => action,
+                 "execution_id" => id
+               }) == {:error, refusal},
+               "#{caller.plane} #{action} #{id}"
+      end
+
+      # What an outside caller reads: the gate answers the refusal as a
+      # JSON-RPC error in the permission's words.
+      for id <- ids do
+        answer = over_mcp(execute_only, %{"action" => "logs", "execution_id" => id})
+
+        assert {answer["error"], answer["result"]} ==
+                 {%{
+                    "code" => -33004,
+                    "message" => "Unauthorized: missing required permission 'storage_read'"
+                  }, nil},
+               id
+      end
+
+      assert %Prima.Refusal{
+               class: :forbidden,
+               message:
+                 "Unauthorized: missing required permission 'storage_read' " <>
+                   "(API key does not include this scope — recreate with --scope storage_read)"
+             } = Sanctum.Refusals.classify({:missing_permission, :storage_read}, :api_key)
+
+      assert ["running", "running"] =
+               Arca.Repo.all(
+                 from(e in "executions", where: e.id in ^[own.id, foreign.id], select: e.status)
+               )
+
+      # With the permission, another athanor's run reads as an unknown one.
+      for id <- ["exec_nonexistent", foreign.id] do
+        assert Provider.handle("execution", ctx, %{"action" => "logs", "execution_id" => id}) ==
+                 {:error, {:not_found, "Execution", id}}
+      end
     end
   end
 
@@ -1487,34 +1697,21 @@ defmodule Opus.ProviderTest do
   end
 
   # ============================================================================
-  # Force Release Action
+  # Slot status
   # ============================================================================
 
-  describe "execution tool - force_release action" do
-    test "the handler releases when reached; the operator gate is the annotation" do
-      # Releasing every athanor's slots is a server-wide side effect. The
-      # `scope: :platform` annotation admits platform admins alone at
-      # dispatch (the gate); the handler itself does not
-      # re-check, so a direct call releases.
+  describe "execution tool - slot status" do
+    test "a platform administrator's status names no athanor: the instance's totals and the focused athanor's count alone" do
       admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
 
-      {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => "force_release"})
-      assert result.force_released == true
-    end
+      {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => "status"})
 
-    test "a platform administrator's status and release name no athanor: the instance's totals and the focused athanor's count alone" do
-      admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
-
-      for action <- ["status", "force_release"] do
-        {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => action})
-
-        refute Map.has_key?(result, :keys), "execution.#{action} named the executing athanors"
-        refute Map.has_key?(result, :holders), "execution.#{action} named the slots' holders"
-        refute Map.has_key?(result, :unreaped), "execution.#{action} named the penalised athanors"
-        assert is_integer(result.key_active)
-        assert is_integer(result.key_unreaped)
-        assert is_integer(result.key_max)
-      end
+      refute Map.has_key?(result, :keys), "execution.status named the executing athanors"
+      refute Map.has_key?(result, :holders), "execution.status named the slots' holders"
+      refute Map.has_key?(result, :unreaped), "execution.status named the penalised athanors"
+      assert is_integer(result.key_active)
+      assert is_integer(result.key_unreaped)
+      assert is_integer(result.key_max)
     end
 
     test "a member's status names no other athanor's unreaped kills, only its own count", %{
@@ -1530,11 +1727,18 @@ defmodule Opus.ProviderTest do
       assert result.key_unreaped == 0
     end
 
-    test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
-      assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
-               Sanctum.Gate.call_external("execution", ctx, %{
-                 "action" => "force_release"
-               })
+    test "no one releases every athanor's slots: the action is unknown, and offered to no one",
+         %{ctx: ctx} do
+      admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
+
+      for caller <- [ctx, admin_ctx] do
+        assert {:error,
+                %Prima.Refusal{
+                  stage: :admission,
+                  reason: {:unknown_action, "execution.force_release"}
+                }} =
+                 Sanctum.Gate.call_external("execution", caller, %{"action" => "force_release"})
+      end
 
       [tool] =
         Sanctum.Visibility.filter_for_context(

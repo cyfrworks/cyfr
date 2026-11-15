@@ -156,8 +156,7 @@ func (d Dialer) Open(ctx context.Context, device Device, key Signer, report func
 // Hello is a device's first connection to a CYFR (Prima.Device's hello):
 // the key it holds (its public half), the account whose log lists it, the
 // holder that keeps it, the name the CYFR lists it by and, for a new
-// person, the capability that admits them ({"setup": token} or
-// {"invitation": code}).
+// person, the capability that admits them ({"setup": token}).
 type Hello struct {
 	Key         []byte
 	Identifier  string

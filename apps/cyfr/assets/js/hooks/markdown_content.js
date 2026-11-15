@@ -6,6 +6,8 @@
 // result with DOMPurify before it touches innerHTML. The allow/forbid
 // lists below are the whole sanitizer policy for assistant- and
 // user-authored markdown; loosen them only with the XSS surface in mind.
+// An element that names data-link-base has its rendered links that name
+// no address of their own resolved against that base (resolveLinks).
 
 import {marked} from "../../vendor/marked.esm.js"
 import DOMPurify from "../../vendor/purify.es.mjs"
@@ -59,6 +61,22 @@ function renderMarkdownToHTML(raw) {
   })
 }
 
+// A link that names an address of its own: a scheme, a fragment of the
+// page, or a host (//host/path).
+const OWN_ADDRESS = /^\s*(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i
+
+// Resolves every anchor's href under root that names no address of its
+// own against base; other anchors and every other element are left as
+// they are. It reads the rendered anchors, never the markdown, so a link
+// in a code example stays text. The base is the hosting element's, never
+// the content's.
+export function resolveLinks(root, base) {
+  for (const a of root.querySelectorAll("a[href]")) {
+    const href = a.getAttribute("href")
+    if (!OWN_ADDRESS.test(href)) a.setAttribute("href", new URL(href, base).href)
+  }
+}
+
 const MarkdownContent = {
   mounted() { this._render() },
   updated() { this._render() },
@@ -67,6 +85,8 @@ const MarkdownContent = {
     if (!raw) return
     try {
       this.el.innerHTML = renderMarkdownToHTML(raw)
+      const base = this.el.getAttribute("data-link-base")
+      if (base) resolveLinks(this.el, base)
     } catch (e) {
       console.error('[MarkdownContent] render failed:', e)
     }

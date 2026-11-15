@@ -75,8 +75,8 @@ there alone, and nothing the loop does reaches the public cyfr.run. A
 unless `.env` names others: the loop is how a developer stays on this
 machine.
 Nothing is seeded: a new athanor's components ship with CYFR, so a fresh
-sign-in pulls nothing, and `cyfr push` publishes into the local registry
-when that is what you test. Its admin pages are at
+sign-in pulls nothing, and the Components page pushes into the local
+registry when that is what you test. Its admin pages are at
 https://cyfr.test/admin; the first administrator is made once at
 `https://cyfr.test/admin/bootstrap?token=<ADMIN_TOKEN>`, the token the
 loop mints into the machine's dev-stack directory,
@@ -158,8 +158,8 @@ worktree's loop takes the next free slot, Prism on 4010 and so on, and
 prints its address, which the worktree remembers in
 `data/dev-stack.slot` for its next run. A `.env` that sets `CYFR_PORT` or
 another address of the stack refuses a slot it disagrees with, by name.
-With an API key from Prism's API Keys page, or the session token of a
-`cyfr login`, `CYFR_TOKEN=<key> scripts/dev-stack.sh check` runs a
+With an API key made on Prism's API Keys page,
+`CYFR_TOKEN=<key> scripts/dev-stack.sh check` runs a
 component through the worktree's running loop and asserts its answer.
 
 AQUA answers in its panel once a model provider's key is in the vault, as on
@@ -248,7 +248,14 @@ same worktree refuses, naming the run that holds it.
   on origin's main head (a detached checkout of it will do), reads HEAD's
   check runs through `gh` before it tags HEAD, or HEAD plus a bump commit
   holding the version lines alone, which the tag's own workflow checks
-  again before it publishes; `--push` pushes main and the tag together,
+  again before it publishes. `--notes <file>` is required: the file is the
+  release's written note (what the release changes for a running CYFR and
+  what a person does before updating), which goes into the annotated tag's
+  message and which the tag's workflow publishes as the release's notes,
+  refusing a tag that carries none or that no longer names the commit its
+  push started the run for (`scripts/ci/release-note.sh`). A note is at
+  most 64 KiB, and a longer one is refused before anything is made;
+  `--push` pushes main and the tag together,
   by full refs, in one atomic push. `--gate` is the fallback for a HEAD with no
   run: it runs the release stage, the gate's close, here first. Right
   before it tags it runs the dependency audits again

@@ -27,10 +27,12 @@ defmodule Arca.Schemas.User do
   refuses them as read-only, and `changeset/2` refuses a generation at
   birth, which is always the column's 1.
 
-  `platform_admin_at` is the platform administrator's mark: when the
-  installation's first person was made, written by that admission
-  (`Arca.Users.mint/3`) and cleared by their denial
-  (`Arca.SecurityTransitions`), never by a changeset here.
+  `platform_admin_at` is the platform administrator's mark: written by
+  the admission that made the installation's first person
+  (`Arca.Users.mint/3`), then set or cleared by an administrator's act
+  (`Arca.Users.set_platform_admin/4`), never the last one cleared, and
+  never by a changeset here. A denial never clears it: a marked person is
+  never denied (`Arca.SecurityTransitions`, `Sanctum.Door.Store.deny/4`).
   """
 
   use Ecto.Schema

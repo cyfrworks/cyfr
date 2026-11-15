@@ -8,7 +8,8 @@
 # on the guest's own screen runs the install script as `curl ... | sh` pipes
 # it, with production trust, then `cyfr init`, whose screen question's first
 # answer shows CYFR on the screen, and `cyfr up`, and CYFR answers on its
-# port. Before that `cyfr up`, the same terminal, older than the docker
+# port. Before that init, two of its refusals change nothing: a wrong
+# password at sudo's own prompt, and an account outside the sudo group. Before that `cyfr up`, the same terminal, older than the docker
 # group init joined, runs `cyfr setup`, whose pages set up and start a
 # second CYFR beside it, taken down again. After a reboot labwc and Chrome run on tty1 and show the screen's
 # own setup page (screen-setup.png): with the guest's isolated swtpm it asks
@@ -88,10 +89,11 @@ missing() {
 . "$HERE/lib.sh" || missing
 proof_traps
 
-# The published release the guests install. This tree's server image runs
+# The published release the guests install, INSTALL_VERSION, is the one
+# the bare install line takes, read below by the installer's own
+# resolve_version before anything starts. This tree's server image runs
 # under its docker-compose.yml and beside its locus images, so its stack
 # files are this tree's.
-INSTALL_VERSION=0.6.0-alpha.6
 
 usage() { echo "usage: $0 [--out DIR] [--no-tpm]"; }
 # The guest's TPM: an isolated swtpm of its own, or none (--no-tpm).
@@ -140,6 +142,11 @@ OUT=$(cd "$OUT" && pwd)
 PROOF_WORK=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_PREFIX}install-screen.XXXXXX") || exit 1
 WORK=$PROOF_WORK
 echo "install proof: prefix $PROOF_PREFIX, evidence in $OUT"
+
+sed '$d' "$ROOT/scripts/install.sh" >"$WORK/install-functions.sh" || exit 1
+INSTALL_VERSION=$(sh -c '. "$1"; unset CYFR_VERSION; resolve_version' sh "$WORK/install-functions.sh") ||
+  { echo "install proof: the release the install line takes could not be read from GitHub's listing" >&2; exit 69; }
+echo "install proof: the install line takes release $INSTALL_VERSION"
 
 transcript_has() { grep -qE -- "$2" "$GUEST_DIR/transcript-$1.txt"; }
 
@@ -277,6 +284,47 @@ sys.exit(0 if st["phase"] == "done" and st["address"] == "http://localhost:4000"
   guest_root 'docker network prune -f' || fail "the setup pages' networks were not removed ($GUEST_DIR/root.txt)"
 }
 
+# The one line cyfr says just before sudo's own prompt.
+PASSWORD_SENTENCE='Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.'
+
+# requirements_refused: on the machine without Docker, before the init that
+# installs it, cyfr init's two refusals. In tty1's terminal sudo's own
+# prompt, after cyfr's line saying whose password it asks, is answered
+# three times with a wrong one. Then an account outside the sudo group, at
+# a terminal of its own (script), is told it is not in the sudo or admin
+# group, with the commands for whoever administers the machine, before
+# anything is asked.
+# Neither installs, joins a group or writes into its folder; the second
+# account and its copy of cyfr are removed after.
+requirements_refused() {
+  local status
+  step "cyfr init with a refused password: nothing changes"
+  pane_step refused 'sudo -k; mkdir -p ~/refused && cd ~/refused && cyfr init' 300 \
+    'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" not-the-password
+  check "cyfr init exits 1 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 1
+  check "sudo's own prompt asked three times (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" = 3
+  check "cyfr says whose password on the line before sudo's first prompt" sh -c 'grep -A1 -xF -- "$1" "$2" | sed -n 2p | grep -qE -- "$3"' sh \
+    "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-refused.txt" "$SUDO_PROMPT"
+  check "it says the refused password changed nothing" transcript_has refused '^Error: The password was not accepted, so nothing was changed\. Run `cyfr init` again to try again$'
+  check "nothing was installed, no group joined, nothing written" guest_ssh '! dpkg -s docker.io >/dev/null 2>&1 && ! id -nG proof | grep -qw docker && [ -z "$(ls -A ~/refused)" ] && rmdir ~/refused'
+  pane_step_end refused
+
+  step "cyfr init by an account outside the sudo and admin groups"
+  guest_root 'useradd -m -s /bin/bash visitor && install -m 0755 /home/proof/.local/bin/cyfr /tmp/cyfr-visitor' ||
+    fail "the second account was not made ($GUEST_DIR/root.txt)"
+  status=0
+  guest_root_out "runuser -l visitor -c 'mkdir try && cd try && printf \"yes\\n\" | script -qec \"/tmp/cyfr-visitor init\" /dev/null'" \
+    >"$GUEST_DIR/visitor.txt" || status=$?
+  tr -d '\r' <"$GUEST_DIR/visitor.txt" >"$GUEST_DIR/transcript-visitor.txt"
+  check "cyfr init exits 1 (it exited $status)" test "$status" = 1
+  check "it says the account is not in the sudo or admin group" grep -qxF 'Your account, visitor, is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:' "$GUEST_DIR/transcript-visitor.txt"
+  check "it gives the commands as one sudo line, joining visitor to the docker group" sh -c 'grep -qx "  sudo sh -c '\''apt-get update &&" "$1" && grep -qx "    usermod -aG docker visitor'\''" "$1"' sh "$GUEST_DIR/transcript-visitor.txt"
+  check "it says nothing was changed, and when to run init again" grep -qxF 'Error: Nothing was changed. Run `cyfr init` again once they have' "$GUEST_DIR/transcript-visitor.txt"
+  check "it asks nothing and sudo never runs" sh -c '! grep -qE -- "Install these requirements|$2" "$1"' sh "$GUEST_DIR/transcript-visitor.txt" "$SUDO_PROMPT"
+  check "nothing was installed, no group joined, and its folder is as it was: empty" guest_root '! dpkg -s docker.io >/dev/null 2>&1 && ! id -nG visitor | grep -qw docker && [ -z "$(ls -A /home/visitor/try)" ]'
+  guest_root 'userdel -r visitor 2>/dev/null; rm -f /tmp/cyfr-visitor; ! id visitor' || fail "the second account was not removed ($GUEST_DIR/root.txt)"
+}
+
 # box_install: on the guest under way, the install script typed into
 # tty1's terminal, cyfr init with its screen, this tree's server in the
 # release's place and the box made its own account service in .env, cyfr
@@ -291,18 +339,22 @@ box_install() {
   guest_copy_in "$ROOT/scripts/install.sh" install.sh || fail "the install script was not copied into the guest"
 
   step "the install script, typed into tty1's terminal"
-  pane_step script "cat install.sh | CYFR_VERSION=$INSTALL_VERSION sh" 900 'Install cosign\? \[y/N\]' y "$SUDO_PROMPT" @password
+  pane_step script "cat install.sh | sh" 900 'Install cosign\? \[y/N\]' y "$SUDO_PROMPT" @password
   check "the install script exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "the bare install line takes release $INSTALL_VERSION and says which it took" transcript_has script "^Installing cyfr v${INSTALL_VERSION//./\\.}, the newest (release|pre-release, since no release that is not a pre-release is published yet) \\(linux/amd64\\)"
   check "it asks to install cosign once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
   check "it shows the commands before it asks" sh -c 'sed "/Install cosign/q" "$1" | grep -qx "  sudo apt-get update" && sed "/Install cosign/q" "$1" | grep -qx "  sudo apt-get install -y cosign"' sh "$GUEST_DIR/transcript-script.txt"
   check "the release's signature is verified" transcript_has script 'Signature verified'
   guest_ssh 'stat -c "%U %a" ~/.local/bin/cyfr' >"$GUEST_DIR/cyfr.txt" 2>&1
   check "cyfr is in ~/.local/bin, the person's" grep -qE '^proof 7[0-9]{2}$' "$GUEST_DIR/cyfr.txt"
   check "the install script linked cyfr onto PATH" transcript_has script 'sudo ln -sf /home/proof/.local/bin/cyfr /usr/local/bin/cyfr'
+  check "it says it linked cyfr" transcript_has script '^Linked /usr/local/bin/cyfr to /home/proof/\.local/bin/cyfr, so cyfr is on your PATH\.'
   pane_step_end script
 
-  step "cyfr init on a machine without Docker, its screen question answered 1"
   guest_copy_in "$CANDIDATE_BIN" .local/bin/cyfr || fail "the candidate was not copied into the guest"
+  requirements_refused
+
+  step "cyfr init on a machine without Docker, its screen question answered 1"
   # The guest's virtio display has no 3D; the product sets no renderer.
   guest_root 'mkdir -p /etc/systemd/system/cyfr-screen.service.d && printf "[Service]\nEnvironment=WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1\n" >/etc/systemd/system/cyfr-screen.service.d/proof.conf' ||
     fail "the guest's renderer was not set ($GUEST_DIR/root.txt)"
@@ -311,6 +363,8 @@ box_install() {
   check "cyfr init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "it asks \"Install these requirements?\" once" test "${PANE_ANSWERED[0]}" = 1
   check "sudo asks at most two passwords, the requirements' and the screen's (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" -le 2
+  check "cyfr says whose password on the line before sudo's first prompt" sh -c 'grep -A1 -xF -- "$1" "$2" | sed -n 2p | grep -qE -- "$3"' sh \
+    "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-init.txt" "$SUDO_PROMPT"
   check "init goes on through the docker group and asks the screen question once (asked ${PANE_ANSWERED[2]})" sh -c '[ "$1" = 1 ] && grep -qx "This machine has no desktop. Show CYFR on its screen?" "$2"' sh "${PANE_ANSWERED[2]}" "$GUEST_DIR/transcript-init.txt"
   check "it never asks how CYFR is reached" sh -c '! grep -q "How will you reach CYFR" "$1"' sh "$GUEST_DIR/transcript-init.txt"
   check "it shows the screen's commands" transcript_has init '^  systemctl enable cyfr-screen$'
@@ -459,7 +513,11 @@ screen_confirms() {
   sleep 6
   check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
   since=$(guest_ssh 'date +%s')
-  screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  # The sheet opens with the keyboard's focus on Confirm on this device,
+  # and Enter presses it; the page it opens shows that it was that link.
+  # Chrome's find bar is not used here: closed, it leaves the focus on the
+  # page's body, not on the match in the sheet.
+  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   confirm_page_until confirm-drawn "$since" 60
   check "Confirm on this device opened the screen's own page, which draws the key CYFR is asked to make" \
     sh -c 'grep -q "Confirm on this screen" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
@@ -485,7 +543,8 @@ screen_confirms() {
   guest_chord ctrl 1 || fail "QMP did not send the keys"
   sleep 2
   since=$(guest_ssh 'date +%s')
-  screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  # Prism's tab keeps its focus on Confirm on this device, as above.
+  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   confirm_page_until confirm-again "$since" 60
   check "Confirm on this device draws it again" grep -q key.create "$GUEST_DIR/shell-confirm-again.html"
   printf '\t000000\n' | guest_keys || fail "QMP did not type"
@@ -620,6 +679,86 @@ screen_severed() {
   check "screenshot screen-severed-back.png" guest_screenshot screen-severed-back.png
 }
 
+# screen_stays_stopped STOP FILE: STOP run as root on the guest, then a
+# watch that kills nothing: the screen's processes have 20 seconds to end
+# by themselves, and then for five seconds in a row nothing may hold the
+# screen's Chrome profile and none of the account's labwc, the D-Bus
+# daemon dbus-run-session started, launcher, screen shell, keyboard, idle
+# watch or Chrome, its crash handler among them, may run. Every process
+# it sees is kept in FILE with its parent: pid, parent pid, start time
+# and command line, so a process left over or come back names what
+# started it (the brackets keep each pattern from matching the shells
+# that carry it). 1 when the 20 seconds pass with one still running, or
+# one runs during the five.
+screen_stays_stopped() {
+  guest_root_out "$1; "'
+    seen() {
+      { pgrep -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"
+        pgrep -u proof -x labwc
+        pgrep -u proof -f "^dbus-daemon --nofork --print-addres[s]"
+        pgrep -u proof -f "/\.cyfr/screen/launcher\.s[h]"
+        pgrep -u proof -f "cyfr screen shel[l]"
+        pgrep -u proof -x wvkbd-mobintl
+        pgrep -u proof -x swayidle
+        pgrep -u proof -f "/opt/google/chrom[e]/"
+      } | sort -un | paste -sd, -
+    }
+    record() {
+      echo "== $(date -u +%FT%T.%NZ)"
+      ps -o pid=,ppid=,lstart=,args= -p "$1"
+      parents=$(ps -o ppid= -p "$1" | tr -d " " | sort -u | paste -sd, -)
+      [ -z "$parents" ] || ps -o pid=,ppid=,lstart=,args= -p "$parents" | sed "s/^/parent /"
+    }
+    ended=no
+    for i in $(seq 20); do
+      pids=$(seen)
+      if [ -z "$pids" ]; then ended=yes; break; fi
+      record "$pids"
+      sleep 1
+    done
+    [ "$ended" = yes ] || { echo "== still running 20 seconds after the stop"; exit 1; }
+    for i in 1 2 3 4 5; do
+      sleep 1
+      pids=$(seen)
+      [ -z "$pids" ] || { record "$pids"; echo "== running again within five seconds"; exit 1; }
+    done
+    exit 0' >"$GUEST_DIR/$2" 2>&1
+}
+
+# screen_stop_watched WHAT STOP FILE: screen_stays_stopped STOP FILE as a
+# check named by WHAT; once a failure is recorded, what the watch saw is
+# killed, the launcher first, so the rest of the run can go on.
+screen_stop_watched() {
+  local status=0
+  screen_stays_stopped "$2" "$3" || status=$?
+  check "$1: the screen's processes end by themselves within 20 s and none runs for five seconds in a row ($GUEST_DIR/$3)" test "$status" = 0
+  [ "$status" = 0 ] || guest_root '
+    pkill -KILL -u proof -f "/\.cyfr/screen/launcher\.s[h]"; pkill -KILL -u proof -f "cyfr screen shel[l]"
+    pkill -KILL -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"; pkill -KILL -u proof -f "/opt/google/chrom[e]/"
+    pkill -KILL -u proof -x labwc; pkill -KILL -u proof -x wvkbd-mobintl; pkill -KILL -u proof -x swayidle
+    pkill -KILL -u proof -f "^dbus-daemon --nofork --print-addres[s]"; true'
+}
+
+# screen_session_record WHEN: the guest's login sessions, whether logind
+# ends a session's processes when it logs out (KillUserProcesses), the
+# screen account's processes with their cgroups, and what logind and
+# polkit said in the last two minutes, kept in screen-session.txt under
+# WHEN.
+screen_session_record() {
+  { echo "== $1"
+    guest_root_out 'date -u +%FT%T.%NZ
+      loginctl list-sessions --no-legend
+      busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager KillUserProcesses
+      ps -u proof -o pid=,ppid=,lstart=,cgroup=,args= | cut -c1-240
+      journalctl -b -o short-iso --no-pager --since -2min | grep -E "systemd-logind|polkitd|cyfr-screen"'
+  } >>"$GUEST_DIR/screen-session.txt" 2>&1
+}
+
+# No login session is on tty1, where the screen's was.
+screen_session_gone() {
+  guest_root '! loginctl list-sessions --no-legend | grep -qw tty1'
+}
+
 # Chrome's profile, copied while Prism was open, put back while the screen
 # is stopped, then a reboot: the screen boots locked, and the copy's
 # cookie, the one Prism first opened with, opens nothing.
@@ -647,7 +786,7 @@ clean_install() {
   if [ "$GUEST_TPM" = swtpm ]; then
     check "with a chip it asks for a six-digit PIN" grep -q 'Choose a six-digit PIN' "$GUEST_DIR/shell-setup.html"
   else
-    check "without a chip it asks for the passphrase it shows" grep -q 'no chip to keep a short PIN safe' "$GUEST_DIR/shell-setup.html"
+    check "without a chip it asks for the passphrase it shows" grep -q 'no chip it can use to keep a short PIN safe' "$GUEST_DIR/shell-setup.html"
   fi
   guest_ssh "sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env" >"$WORK/token" 2>&1
   guest_ssh 'ps -eo args' >"$GUEST_DIR/processes.txt" 2>&1
@@ -695,8 +834,23 @@ clean_install() {
     check "the setup page shows the account's recovery code (it shows shell-recovery.html)" false
   fi
 
+  # volumes_seen AT: the docker volumes with their labels, and the docker
+  # context, as the test account and as root, with root's view of the
+  # daemon's root directory and every container's mounts, in
+  # GUEST_DIR/volumes-AT.txt and printed: an observation, never a check.
+  volumes_seen() {
+    {
+      echo "volumes $1, as proof:"
+      guest_ssh 'docker context show; docker volume ls --format "{{.Name}} {{.Labels}}"' 2>&1 || echo "(the read failed)"
+      echo "volumes $1, as root:"
+      guest_root_out 'docker context show; docker info --format "root {{.DockerRootDir}} driver {{.Driver}}"; docker volume ls --format "{{.Name}} {{.Labels}}"; echo containers:; docker ps -a --format "{{.Names}} {{.Status}} {{.Mounts}}"' 2>&1 || echo "(the read failed)"
+    } | tee "$GUEST_DIR/volumes-$1.txt" | sed 's/^/observed: /'
+  }
+
   step "cyfr down, then a reboot: CYFR stays down and the screen says why"
+  volumes_seen stack-up
   guest_ssh 'cd ~/cyfr && ~/.local/bin/cyfr down' >"$GUEST_DIR/down.txt" 2>&1 || fail "cyfr down failed ($GUEST_DIR/down.txt)"
+  volumes_seen after-cyfr-down
   guest_reboot
   screen_runs || fail "labwc and Chrome did not come back on tty1 ($GUEST_DIR/screen.txt)"
   sleep 20
@@ -712,6 +866,97 @@ clean_install() {
   check "Ctrl+Alt+F2 reaches a terminal on tty2" sh -c '[ "$(cat "$1")" = "tty2
 active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "screenshot screen-terminal.png" guest_screenshot screen-terminal.png
+
+  step "cyfr uninstall --yes stops CYFR as cyfr down does and removes nothing else from the folder: the folder, the volumes, the settings and the device key as cyfr down left them"
+  # Read as root after cyfr down and again after the uninstall, and
+  # compared whole: the folder, each volume's files and the account's
+  # ~/.cyfr (its settings and device key), each entry's kind, size, mode,
+  # owner and link target and each file's digest. Any read that fails
+  # fails the step; ~/.cyfr is recorded absent only when there is none.
+  left_as_it_was() {
+    guest_root_out '
+      set -eu
+      t=$(mktemp -d)
+      tree() {
+        (cd "$1" && find . -printf "%p %y %s %m %U:%G %l\n" >"$t/entries" && find . -type f -print0 >"$t/files")
+        sort "$t/entries"
+        sort -z "$t/files" | (cd "$1" && xargs -0 -r sha256sum)
+      }
+      echo folder:
+      tree /home/proof/cyfr
+      volumes=$(docker volume ls -q)
+      for v in $(printf "%s\n" $volumes | sort); do
+        echo "volume $v:"
+        m=$(docker volume inspect -f "{{.Mountpoint}}" "$v")
+        tree "$m"
+      done
+      echo settings and device key:
+      if [ -e /home/proof/.cyfr ]; then tree /home/proof/.cyfr; else echo absent; fi
+      rm -r "$t"'
+  }
+  # The names the uninstall's volume command gives, one a line, sorted;
+  # none when it prints no such command.
+  uninstall_volume_names() {
+    local line
+    line=$(grep '^    docker volume rm ' "$GUEST_DIR/transcript-uninstall.txt" || true)
+    # shellcheck disable=SC2086 # the line's quoted names, split into words
+    printf '%s\n' ${line#    docker volume rm } | tr -d "'" | sed '/^$/d' | sort
+  }
+  # The volume command names exactly the volumes of the stack it
+  # uninstalls, those labelled with its compose project (cyfr, the
+  # folder's name, every engine call's -p), and is absent when that stack
+  # has none. The setup pages' CYFR, taken down with cyfr down earlier,
+  # keeps volumes of its own project on the guest.
+  volume_command_names_the_volumes() {
+    [ "$(uninstall_volume_names)" = "$(sort "$GUEST_DIR/stack-volumes.txt")" ]
+  }
+  # No volume the first listing found outside that project is named.
+  volume_command_names_no_other_project() {
+    local others
+    others=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort | comm -23 - <(sort "$GUEST_DIR/stack-volumes.txt"))
+    [ -z "$(comm -12 <(uninstall_volume_names) <(printf '%s\n' "$others" | sed '/^$/d'))" ]
+  }
+  check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
+  # The screen's browser writes its profile in the folder until the screen
+  # stops, which cyfr down leaves running: it is stopped before the first
+  # listing, so the two listings compare cyfr down's stop with the
+  # uninstall's.
+  screen_session_record before-the-stop
+  screen_stop_watched "systemctl stop cyfr-screen" 'systemctl stop cyfr-screen' screen-holders.txt
+  screen_session_record after-the-stop
+  check "the screen's stop ends its login session" screen_session_gone
+  check "the guest has logger, which the screen's session.sh says a refused end with, installing nothing" guest_ssh 'command -v logger'
+  volumes_seen after-the-reboot-and-cyfr-down
+  left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
+  guest_ssh 'docker volume ls -q --filter label=com.docker.compose.project=cyfr' >"$GUEST_DIR/stack-volumes.txt" 2>&1 ||
+    fail "the stack's volumes could not be listed ($GUEST_DIR/stack-volumes.txt)"
+  # The screen holds tty1 since the reboot, which ended tty1's tmux
+  # session: the step types into a detached one, which gives sudo its
+  # terminal all the same.
+  guest_ssh 'tmux has-session -t proof 2>/dev/null || tmux new-session -d -s proof -x 200 -y 50' ||
+    fail "no tmux session for the uninstall"
+  pane_wait '\$ *$' 30 || fail "the uninstall's shell drew no prompt within $PANE_BUDGET s"
+  pane_step uninstall 'cd ~/cyfr && cyfr uninstall --yes' 600 "$SUDO_PROMPT" @password
+  check "cyfr uninstall exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "sudo asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
+  check "cyfr says whose password on the line before sudo's prompt" sh -c 'grep -A1 -xF -- "$1" "$2" | sed -n 2p | grep -qE -- "$3"' sh \
+    "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-uninstall.txt" "$SUDO_PROMPT"
+  check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
+  check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
+  check "it names no volume of another project" volume_command_names_no_other_project
+  check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
+  pane_step_end uninstall
+  screen_stop_watched "after the uninstall" : screen-holders-uninstall.txt
+  screen_session_record after-the-uninstall
+  check "after the uninstall no login session is on tty1" screen_session_gone
+  left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
+  volumes_seen after-the-uninstall
+  check "the folder, the volumes, the settings and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
+  check "no container and no custom network of CYFR is left" guest_ssh '[ -z "$(docker ps -aq)$(docker network ls -q --filter type=custom)" ]'
+  check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
+  check "the program and its link onto PATH are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr 2>/dev/null'
+  check "the screen is given back to tty1's login prompt" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-enabled --quiet cyfr-screen && [ ! -e /etc/systemd/system/cyfr-screen.service ]'
+  check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"

@@ -25,6 +25,9 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   require Logger
 
   @max_recent 8
+  # The installed components a typed search shows at most, as the
+  # component domain matches them.
+  @max_matches 50
 
   @impl true
   def mount(socket) do
@@ -34,6 +37,8 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
      |> assign(:query, "")
      |> assign(:items, [])
      |> assign(:all_items, [])
+     |> assign(:components?, false)
+     |> assign(:components, [])
      |> assign(:loading, false)}
   end
 
@@ -55,11 +60,14 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   def handle_event("close", _params, socket), do: {:noreply, close(socket)}
 
-  def handle_event("search", %{"value" => query}, socket) do
-    # The item SET is loaded once, on open — only the filter changes while
-    # typing. Reloading here re-ran two tool calls per (debounced)
-    # keystroke for a set that cannot change under the palette.
-    {:noreply, socket |> assign(:query, query) |> refilter()}
+  # The pages, requests and tinctures are loaded once, on open, and only
+  # filtered while typing. Installed components are the component domain's
+  # to match (`component.search` over the installed ones), so a search
+  # finds one by its name however many are installed.
+  def handle_event("search", %{"value" => query}, socket) when is_binary(query) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      {:noreply, socket |> assign(:query, query) |> find_components() |> refilter()}
+    end)
   end
 
   # Every target is a page path; `Nav.href/2` decides whether the focus
@@ -78,6 +86,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     |> assign(:query, "")
     |> assign(:items, [])
     |> assign(:all_items, [])
+    |> assign(:components, [])
   end
 
   # ============================================================================
@@ -85,7 +94,8 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   # ============================================================================
 
   # The mode's pages always; the developer's lookups — recent requests,
-  # components — only where those pages exist to open.
+  # components — only where those pages exist to open. Before anything is
+  # typed the components are the newest few.
   defp load_items(socket) do
     ctx = socket.assigns[:context]
     mode = Prism.Labels.mode(socket.assigns[:ui_mode])
@@ -99,7 +109,6 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           nav_items(mode) ++
             context_actions(socket.assigns[:active_context]) ++
             recent_request_items(ctx) ++
-            component_items(ctx) ++
             tincture_items(ctx)
 
         true ->
@@ -108,11 +117,78 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
     socket
     |> assign(:all_items, items)
+    |> assign(:components?, not is_nil(ctx) and Prism.Labels.dev?(mode))
+    |> find_components()
     |> refilter()
   end
 
   defp refilter(socket) do
-    assign(socket, :items, filter_items(socket.assigns.all_items, socket.assigns.query))
+    %{all_items: items, query: query, components: components} = socket.assigns
+    assign(socket, :items, filter_items(items, query) ++ components)
+  end
+
+  defp find_components(%{assigns: %{components?: false}} = socket),
+    do: assign(socket, :components, [])
+
+  defp find_components(socket) do
+    ctx = socket.assigns.context
+
+    case String.trim(socket.assigns.query) do
+      "" ->
+        assign(
+          socket,
+          :components,
+          component_items(ctx, "component/list", %{"limit" => @max_recent})
+        )
+
+      typed ->
+        assign(socket, :components, matching_components(ctx, typed))
+    end
+  end
+
+  # The component domain matches a name or a description. Text shaped as a
+  # reference, the label a component is shown by (`catalyst:local.http:0.1.0`)
+  # or any start of one, asks it for the name part, narrowed to the kind
+  # when one is named, and keeps the answers whose reference holds the text;
+  # when none does, the text is searched as it was typed, so a name or a
+  # description with a dot in it (`v1.2`) is still found.
+  defp matching_components(ctx, typed) do
+    with {type, name} <- reference_parts(typed),
+         [_ | _] = found <- by_reference(ctx, typed, type, name) do
+      found
+    else
+      _plain_or_none ->
+        args = %{"query" => typed, "source" => "local", "limit" => @max_matches}
+        component_items(ctx, "component/search", args)
+    end
+  end
+
+  defp by_reference(ctx, typed, type, name) do
+    args = %{"query" => name, "source" => "local", "limit" => @max_matches}
+    args = if type, do: Map.put(args, "type", type), else: args
+    needle = String.downcase(typed)
+
+    ctx
+    |> component_items("component/search", args)
+    |> Enum.filter(&String.contains?(String.downcase(&1.label), needle))
+  end
+
+  # `{kind or nil, name part}` of text shaped as a reference: a kind before
+  # a colon, or a publisher and a name joined by a dot; nil for plain text.
+  defp reference_parts(typed) do
+    {type, rest} =
+      case String.split(typed, ":", parts: 2) do
+        [kind, rest] -> {if(kind in Prima.ComponentRef.valid_types(), do: kind), rest}
+        [rest] -> {nil, rest}
+      end
+
+    name =
+      case rest |> String.split(":", parts: 2) |> hd() |> String.split(".", parts: 2) do
+        [_publisher, name] -> name
+        [only] -> if type, do: only
+      end
+
+    if name, do: {type, name}
   end
 
   defp nav_items(mode) do
@@ -195,8 +271,8 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     end
   end
 
-  defp component_items(ctx) do
-    case call_tool(ctx, "component/list", %{"limit" => @max_recent}) do
+  defp component_items(ctx, tool, args) do
+    case call_tool(ctx, tool, args) do
       {:ok, %{components: list}} when is_list(list) ->
         Enum.map(list, fn comp ->
           ref = comp[:component_ref] || ""
@@ -216,22 +292,25 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     end
   end
 
-  # The desktop, the tincture focused in its picker (`PrismWeb.DesktopLive`).
-  defp desktop_path(t),
-    do:
-      "/?publisher=#{URI.encode_www_form(t.publisher)}" <>
-        "&tincture_name=#{URI.encode_www_form(t.name)}"
+  # A desktop opens the shell's chooser of desktops by its key; an app,
+  # the tincture focused in the picker (`PrismWeb.DesktopLive`).
+  defp tincture_path(t) do
+    if Prism.Frames.canvas?(t),
+      do: "/?shell=desktops",
+      else:
+        "/?publisher=#{URI.encode_www_form(t.publisher)}" <>
+          "&tincture_name=#{URI.encode_www_form(t.name)}"
+  end
 
   defp tincture_items(ctx) do
     try do
       Prism.TinctureRegistry.list_tinctures(ctx)
-      |> Enum.take(@max_recent)
       |> Enum.map(fn t ->
         %{
           kind: :tincture,
           label: t.title || "#{t.publisher}.#{t.name}",
-          hint: "tincture",
-          to: desktop_path(t),
+          hint: if(Prism.Frames.canvas?(t), do: "desktop", else: "tincture"),
+          to: tincture_path(t),
           icon: "palette",
           keywords:
             ["tincture", t.publisher, t.name, t.title]
@@ -301,7 +380,6 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
               type="text"
               placeholder="Search pages, components, requests…  (Esc to close)"
               value={@query}
-              autofocus
               phx-keyup="search"
               phx-target={@myself}
               phx-debounce="120"

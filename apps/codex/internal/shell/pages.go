@@ -27,13 +27,15 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <p>This screen opens CYFR once it answers. If it does not, run <code>cyfr up</code> in CYFR's directory; Ctrl+Alt+F2 opens a terminal.</p>
 {{else if eq .Answer "answered"}}
 <h1>Done</h1><p>This window closes by itself.</p><script>{{.Close}}</script>
+{{else if eq .Answer "ended"}}
+<h1>Add a passkey to your account</h1>
 {{else if eq .Page "setup"}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 <h1>Set up CYFR</h1>
-{{if .Passphrase}}<p>This box has no chip to keep a short PIN safe, so it uses this passphrase. Write it down now: this screen shows it this once.</p>
+{{if .Passphrase}}<p>This box has no chip it can use to keep a short PIN safe, so it uses this passphrase. Write it down now: this screen shows it this once.</p>
 <p class="code">{{.Passphrase}}</p>
 {{else if not .Digits}}{{if .Drawn}}<p>Type the passphrase this screen showed you. If you did not write it down, show a new one: the one shown before stops working.</p>
-{{else}}<p>This box has no chip to keep a short PIN safe, so it uses a passphrase, which this screen shows once. Have something to write it down on.</p>{{end}}
+{{else}}<p>This box has no chip it can use to keep a short PIN safe, so it uses a passphrase, which this screen shows once. Have something to write it down on.</p>{{end}}
 <form method="post" action="/passphrase">{{template "proof"}}<button{{if not .Drawn}} autofocus{{end}}>Show {{if .Drawn}}a new{{else}}the{{end}} passphrase</button></form>
 {{end}}
 {{if or .Digits .Drawn}}<form method="post" action="/setup">{{template "proof"}}
@@ -53,8 +55,6 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <p>On a device of yours, scan this code or open the address below, and check that it shows <b>{{.Code}}</b>.</p>
 <div class="qr">{{.QR}}</div>
 <p class="code">{{.AddURL}}</p>
-<p>Or run this on a terminal of yours that is unlocked:</p>
-<p class="code">cyfr device approve {{.Key}}</p>
 <form method="post" action="/enroll">{{template "proof"}}<label>Your name: @<input name="name" autocomplete="off" required></label><button>I approved it</button></form>
 <h1>No account yet?</h1>
 <form method="post" action="/create">{{template "proof"}}
@@ -97,8 +97,22 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <dl>{{range .Fields}}<dt>{{index . 0}}</dt><dd>{{index . 1}}</dd>{{end}}</dl>
 <form method="post" action="/confirm/decide">{{template "proof"}}
 <input type="hidden" name="ref" value="{{.Confirm.Ref}}">
-<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}, again<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off"></label>
+{{template "again" .}}
 <button name="decision" value="confirm">Confirm</button>
+<button name="decision" value="cancel" class="quiet" formnovalidate>Cancel</button>
+</form>
+{{else if and (eq .Page "passkey") (not .Passkey)}}
+<h1>A passkey request is open</h1>
+<p>It is shown in the window that asked for it.</p>
+{{else if eq .Page "passkey"}}
+<h1>Add a passkey to your account</h1>
+<p>A browser asks to add a passkey to your account. Approve it only if that browser shows this same code:</p>
+<p class="code">{{.Passkey.Code}}</p>
+<form method="post" action="/passkey/decide">{{template "proof"}}
+<input type="hidden" name="ref" value="{{.Passkey.Ref}}">
+<input type="hidden" name="key" value="{{.Passkey.Digest}}">
+{{template "again" .}}
+<button name="decision" value="approve">Approve</button>
 <button name="decision" value="cancel" class="quiet" formnovalidate>Cancel</button>
 </form>
 {{else}}
@@ -115,6 +129,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <label>The passphrase<input name="secret" type="password" autocomplete="off" required></label>
 <label>The passphrase again<input name="again" type="password" autocomplete="off" required></label>
 {{end}}{{end}}
+{{define "again"}}<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}, again<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off"></label>{{end}}
 {{define "proof"}}<input type="hidden" name="proof">{{end}}
 {{define "typed"}}<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" autofocus required></label>{{end}}
 {{define "terms"}}{{if .Terms}}<label><input type="checkbox" name="accept" value="yes"> I accept the terms at {{.Terms}}</label>{{end}}{{end}}`))

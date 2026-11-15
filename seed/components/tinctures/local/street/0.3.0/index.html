@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Street</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="place" aria-label="Your street">
+  <div id="stage">
+    <canvas id="world" aria-hidden="true"></canvas>
+    <div id="labels"></div>
+  </div>
+  <section id="board" aria-live="polite" aria-label="Board"></section>
+  <section id="plan" hidden aria-label="Arrange the street"></section>
+</main>
+
+<div id="fallback">
+  <h1>Your street</h1>
+  <p id="fallback-when">The street draws your day with scripts, and they are not running here.</p>
+  <div class="cols" id="fallback-lists"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

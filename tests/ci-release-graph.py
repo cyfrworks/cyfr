@@ -208,6 +208,14 @@ SIGN_RUN = (
     '"$RUNNER_TEMP/release/release.json"'
 )
 MANIFEST_DIR_ENV = {"RELEASE_MANIFEST_DIR": "${{ runner.temp }}/release"}
+# The release's written note, the annotated tag's message beneath its
+# subject (scripts/release.sh writes it from --notes): the version job
+# refuses a tag that carries none, and the release job writes it beside
+# release.json for GoReleaser to publish as the release's notes.
+RELEASE_NOTE_SH = os.path.join(ROOT, "scripts", "ci", "release-note.sh")
+NOTE_CHECK_RUN = 'scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release-note.md"'
+NOTE_WRITE_RUN = 'scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release/notes.md"'
+GORELEASER_ARGS = "release --clean --release-notes ${{ runner.temp }}/release/notes.md"
 # .goreleaser.yml's release attaches the scaffold from its workdir,
 # apps/codex, and the manifest and its bundle from RELEASE_MANIFEST_DIR
 # alone: an unset variable or a missing file fails the release.
@@ -656,11 +664,14 @@ def check_tag(wf, build, release):
         return "the workflow or the tag check's job sets an environment of its own"
     steps = job.get("steps", [])
     if (
-        len(steps) != 2
+        len(steps) != 3
         or str(steps[0].get("uses", "")).split("@")[0] != "actions/checkout"
         or set(steps[0]) != {"uses"}
     ):
-        return "the tag check's steps are not the checkout of the tag and the comparison"
+        return "the tag check's steps are not the checkout of the tag, the comparison and the note's check"
+    note = steps[2]
+    if set(note) - {"name", "run"} or run_lines(note) != run_lines({"run": NOTE_CHECK_RUN}):
+        return f"the tag check's third step is {note!r}, not the note's check {NOTE_CHECK_RUN!r}"
     step = steps[1]
     if set(step) - {"name", "run"} or "run" not in step:
         return f"the tag check's comparison carries {sorted(set(step) - {'name', 'run'})}"
@@ -743,20 +754,21 @@ def check_release_manifest(wf, merge, release):
         (lambda s: MANIFEST_OUT in str(s.get("run", "")), "write release.json"),
         (lambda s: "--manifest" in str(s.get("run", "")), "validate release.json"),
         (lambda s: "sign-blob" in str(s.get("run", "")), "sign release.json"),
+        (lambda s: "release-note.sh" in str(s.get("run", "")), "write the release note"),
         (lambda s: str(s.get("uses", "")).split("@")[0] == "goreleaser/goreleaser-action", "run GoReleaser"),
     ]:
         at, reason = only(predicate, what)
         if reason:
             return reason
         order.append(at)
-    scaffold, manifest, validate, sign, goreleaser = order
+    scaffold, manifest, validate, sign, note, goreleaser = order
     lines = run_lines(steps[manifest])
     if SCHEMA_READ not in lines or SCHEMA_ARG not in lines or not any(SCHEMA_KEY in line for line in lines):
         return "the CLI release's manifest does not carry the schema fingerprint its merged cyfr image answers"
-    for at, want in [(scaffold, SCAFFOLD_RUN), (validate, VALIDATE_RUN), (sign, SIGN_RUN)]:
+    for at, want in [(scaffold, SCAFFOLD_RUN), (validate, VALIDATE_RUN), (sign, SIGN_RUN), (note, NOTE_WRITE_RUN)]:
         if run_lines(steps[at]) != run_lines({"run": want}):
             return f"the CLI release runs {steps[at].get('run')!r}, not {want!r}"
-    for at in (scaffold, manifest, validate, sign):
+    for at in (scaffold, manifest, validate, sign, note):
         if set(steps[at]) - {"name", "run"}:
             extra = sorted(set(steps[at]) - {"name", "run"})
             return f"the CLI release's step {steps[at].get('name')!r} carries {extra}"
@@ -766,10 +778,12 @@ def check_release_manifest(wf, merge, release):
     if [max(downloads)] + order != sorted([max(downloads)] + order):
         return (
             "the CLI release does not download the digests, build the scaffold, write, validate "
-            "and sign release.json, then run GoReleaser, in that order"
+            "and sign release.json, write the release note, then run GoReleaser, in that order"
         )
     if steps[goreleaser].get("with", {}).get("workdir") != "apps/codex":
         return "GoReleaser does not run in apps/codex"
+    if steps[goreleaser].get("with", {}).get("args") != GORELEASER_ARGS:
+        return f"GoReleaser runs {steps[goreleaser].get('with', {}).get('args')!r}, not {GORELEASER_ARGS!r}"
     env = steps[goreleaser].get("env") or {}
     if {k: env.get(k) for k in MANIFEST_DIR_ENV} != MANIFEST_DIR_ENV:
         return f"GoReleaser's RELEASE_MANIFEST_DIR is {env.get('RELEASE_MANIFEST_DIR')!r}, not {MANIFEST_DIR_ENV}"
@@ -862,6 +876,10 @@ def check_homebrew(wf, release):
 
 
 def check_goreleaser(config):
+    # The changelog step is what reads --release-notes (GoReleaser's
+    # changelog pipe): disabled, it publishes an empty body.
+    if "disable" in (config.get("changelog") or {}):
+        return f".goreleaser.yml's changelog sets disable ({config.get('changelog')!r}), so the release note is never read"
     release = config.get("release") or {}
     # A tag with a pre-release publishes a GitHub pre-release, and
     # GoReleaser marks no release the repository's latest.
@@ -1359,6 +1377,10 @@ def scaffold_failures(version):
 RELEASE_SH = os.path.join(ROOT, "scripts", "release.sh")
 HELPER_APPS = ["arca", "cyfr", "locus", "prima", "sanctum"]
 HELPER_BASE = "0.0.0"
+# The written note each run of the helper is given (--notes): a heading
+# whose # git's default cleanup would strip, so the tag must keep it as
+# written.
+HELPER_NOTE = "# Start on an empty database\n\nThe schema changed: run cyfr uninstall, then install this release.\n"
 
 
 def helper_mixfiles(repo):
@@ -1434,11 +1456,17 @@ def helper_origin(repo):
     return repo + "-origin.git"
 
 
-def run_helper(repo, version, answer=None, args=(), bin_dir=None, extra_env=None):
-    """scripts/release.sh VERSION ARGS... in repo, its standard input a
+def run_helper(repo, version, answer=None, args=(), bin_dir=None, extra_env=None, notes=HELPER_NOTE):
+    """scripts/release.sh VERSION ARGS... --notes FILE in repo, FILE outside
+    it holding notes (no --notes when notes is None), its standard input a
     terminal holding answer when one is given (the dirty-tree prompt asks
     only on a terminal), else nothing, under helper_env(repo, bin_dir)
     and extra_env. Returns (status, output)."""
+    if notes is not None:
+        path = os.path.join(scratch(), "notes-" + hashlib.sha256(notes.encode()).hexdigest()[:12] + ".md")
+        with open(path, "w") as f:
+            f.write(notes)
+        args = [*args, "--notes", path]
     master = slave = None
     stdin = subprocess.DEVNULL
     if answer is not None:
@@ -1480,6 +1508,18 @@ def declares_at(repo, ref, version):
     return True
 
 
+def tag_note_failure(repo, version):
+    """Why the tag version in repo is not annotated with the subject
+    `Release <version>` and HELPER_NOTE beneath it as written, or None."""
+    ref = f"refs/tags/{version}"
+    kind = helper_git(repo, "for-each-ref", "--format=%(objecttype)", ref)
+    subject = helper_git(repo, "for-each-ref", "--format=%(contents:subject)", ref)
+    body = helper_git(repo, "for-each-ref", "--format=%(contents:body)", ref)
+    if kind != "tag" or subject != f"Release {version}" or body != HELPER_NOTE.strip():
+        return f"release.sh's tag {version} is a {kind!r} with subject {subject!r} and note {body!r}, not its written note"
+    return None
+
+
 def helper_failure(script):
     """release.sh, run in disposable repositories: each accepted version is
     bumped, committed and tagged; each refused one is refused with nothing
@@ -1503,12 +1543,26 @@ def helper_failure(script):
             return f"release.sh on {version!r} tagged {helper_git(repo, 'tag', '-l')!r}, not a commit declaring it"
         if helper_git(repo, "rev-list", "--count", "HEAD") != "2":
             return f"release.sh on {version!r} made no bump commit"
+        reason = tag_note_failure(repo, version)
+        if reason:
+            return reason
     repo = helper_repo(script, HELPER_BASE)
     before = helper_state(repo)
     for version in refused:
         status, _ = run_helper(repo, version)
         if status == 0 or helper_state(repo) != before:
             return f"release.sh exits {status} on {version!r}, no release version, or changed the repository"
+    # A release without its written note is refused before anything is made.
+    for what, notes, args in (
+        ("no --notes", None, ()),
+        ("an empty notes file", "", ()),
+        ("a notes file of blank lines", " \n\t\n", ()),
+        ("a notes file that is not there", None, ("--notes", os.path.join(scratch(), "no-such-notes.md"))),
+        ("a note one byte over 64 KiB", "x" * 65537, ()),
+    ):
+        status, output = run_helper(repo, "0.1.0", args=args, notes=notes)
+        if status == 0 or helper_state(repo) != before:
+            return f"release.sh with {what} exits {status} or changed the repository: {output.strip()[-300:]}"
     for answer, dirty in ((None, False), ("y\n", True)):
         repo = helper_repo(script, "0.6.0-alpha.1")
         head = helper_git(repo, "rev-parse", "HEAD")
@@ -1522,6 +1576,9 @@ def helper_failure(script):
                 f"release.sh on a HEAD declaring 0.6.0-alpha.1 (another file uncommitted: {dirty}) exits {status}, "
                 f"tagging {tagged!r} rather than HEAD without a commit: {output.strip()[-300:]}"
             )
+        reason = tag_note_failure(repo, "0.6.0-alpha.1")
+        if reason:
+            return reason
     # A bump over a staged unrelated change, let through at the prompt (the
     # terminal then answers the commit message's prompt too): the tagged
     # commit is the version lines alone, and the change stays staged.
@@ -1848,7 +1905,99 @@ RELEASE_SH_MUTANTS = [
     ("the push naming HEAD", lambda t: t.replace('"$TAGGED:refs/heads/main"', "HEAD", 1)),
     ("main's head unread before the proof", lambda t: t.replace("main_is_head || exit 1", ":", 1)),
     ("main's head unread after the proof", lambda t: t.replace("if ! main_is_head; then", "if false; then", 1)),
+    ("an empty note let through", lambda t: t.replace(""" || ! grep -q '[^[:space:]]' <<<"$NOTE"; then""", "; then", 1)),
+    ("the tag without the note", lambda t: t.replace('-F "$TAG_MESSAGE"', '-m "Release $VERSION"')),
+    ("the note's size unbounded", lambda t: t.replace('if [ "$(wc -c <"$NOTES")" -gt "$NOTE_LIMIT" ]; then', "if false; then", 1)),
+    ("the note's lines cleaned up by git", lambda t: t.replace("git tag -a --cleanup=verbatim", "git tag -a")),
 ]
+
+
+# --- scripts/ci/release-note.sh: the tag's written note ---
+
+# Tags on the note repository's origin: an annotated tag with the note, a
+# lightweight tag and an annotated tag whose message is its subject alone,
+# each on the run's commit, and an annotated tag with the note moved to the
+# commit after it.
+NOTE_TAGS = {"1.0.0": "note", "1.0.1": "lightweight", "1.0.2": "subject only", "1.0.3": "moved"}
+
+
+def note_repo():
+    """A repository whose origin holds NOTE_TAGS, holding each of them
+    itself as a lightweight tag of the run's commit, as a checkout of a tag
+    push may: the script must fetch the tag to read its note. Answers the
+    repository and the run's commit."""
+    repo = os.path.join(scratch(), "note-%d" % len(_HELPER_REPOS))
+    _HELPER_REPOS.append(repo)
+    os.makedirs(repo)
+    helper_git(repo, "init", "-q")
+    # The commit's message has a body, which a lightweight tag reads as its
+    # contents: only the annotation tells it from a note.
+    helper_git(repo, "commit", "-q", "--allow-empty", "-m", "release\n\nA commit's body, not a release note.")
+    run = helper_git(repo, "rev-parse", "HEAD")
+    helper_git(repo, "commit", "-q", "--allow-empty", "-m", "after the release")
+    for tag, kind in NOTE_TAGS.items():
+        if kind == "moved":
+            helper_git(repo, "tag", "-a", "--cleanup=verbatim", tag, "HEAD", "-m", f"Release {tag}\n\n{HELPER_NOTE}")
+        elif kind == "note":
+            helper_git(repo, "tag", "-a", "--cleanup=verbatim", tag, run, "-m", f"Release {tag}\n\n{HELPER_NOTE}")
+        elif kind == "subject only":
+            helper_git(repo, "tag", "-a", tag, run, "-m", f"Release {tag}")
+        else:
+            helper_git(repo, "tag", tag, run)
+    helper_git(repo, "init", "-q", "--bare", helper_origin(repo))
+    helper_git(repo, "remote", "add", "origin", helper_origin(repo))
+    helper_git(repo, "push", "-q", "origin", "HEAD:refs/heads/main", "--tags")
+    for tag in NOTE_TAGS:
+        helper_git(repo, "tag", "-f", tag, run)
+    return repo, run
+
+
+def release_note_failure(script):
+    """release-note.sh against note_repo's tags for the run's commit: the
+    annotated tag's note written to OUT as written, and the lightweight,
+    subject-only and moved tags refused with an ::error:: line and OUT
+    unwritten. The first failure, or None."""
+    repo, run = note_repo()
+    path = os.path.join(scratch(), "release-note-%d.sh" % len(_HELPER_REPOS))
+    with open(path, "w") as f:
+        f.write(script)
+    for tag, kind in NOTE_TAGS.items():
+        out = os.path.join(scratch(), f"note-{len(_HELPER_REPOS)}-{tag}.md")
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", path, tag, run, out],
+            cwd=repo, env=helper_env(repo), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60,
+        )
+        output = result.stdout.decode(errors="replace")
+        if kind == "note":
+            written = open(out).read() if os.path.exists(out) else None
+            if result.returncode != 0 or written != HELPER_NOTE:
+                return f"release-note.sh on an annotated tag with a note exits {result.returncode}, writing {written!r}: {output.strip()[-300:]}"
+        elif result.returncode == 0 or "::error::" not in output or os.path.exists(out):
+            return f"release-note.sh on a {kind} tag exits {result.returncode} or writes the note, or says no ::error::: {output.strip()[-300:]}"
+    return None
+
+
+RELEASE_NOTE_MUTANTS = [
+    ("a lightweight tag let through", lambda t: t.replace('!= tag ]; then', '= nothing ]; then', 1)),
+    ("an empty note let through", lambda t: t.replace("""if ! grep -q '[^[:space:]]' <<<"$note"; then""", "if false; then", 1)),
+    ("the tag not fetched", lambda t: t.replace('git fetch --quiet --force --no-tags origin "refs/tags/$tag:refs/tags/$tag"', ":", 1)),
+    ("the tag not bound to the run's commit", lambda t: t.replace('if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$commit" ]; then', "if false; then", 1)),
+    ("the note not written", lambda t: t.replace(""">"$out"\n""", """>/dev/null\n""", 1)),
+]
+
+
+def release_note_failures():
+    """release-note.sh held to its tags, and each mutant of it refused."""
+    with open(RELEASE_NOTE_SH) as f:
+        script = f.read()
+    failures = [r for r in [release_note_failure(script)] if r]
+    for name, mutate in RELEASE_NOTE_MUTANTS:
+        mutant = mutate(script)
+        if mutant == script:
+            failures.append(f"a mutant changed nothing: release-note.sh, {name}")
+        elif release_note_failure(mutant) is None:
+            failures.append(f"a mutant of release-note.sh was accepted: {name}")
+    return failures
 
 
 def release_helper_failures():
@@ -2426,6 +2575,41 @@ def release_steps(wf):
     return wf["jobs"]["release"]["steps"]
 
 
+def note_check_dropped(wf):
+    del wf["jobs"][TAG_JOB]["steps"][2]
+
+
+def note_check_continues(wf):
+    wf["jobs"][TAG_JOB]["steps"][2]["continue-on-error"] = True
+
+
+def note_check_ignored(wf):
+    wf["jobs"][TAG_JOB]["steps"][2]["run"] = NOTE_CHECK_RUN + " || true"
+
+
+def is_note(s):
+    return "release-note.sh" in str(s.get("run", ""))
+
+
+def note_not_written(wf):
+    release_steps(wf).remove(release_step(wf, is_note))
+
+
+def note_after_goreleaser(wf):
+    steps = release_steps(wf)
+    note = release_step(wf, is_note)
+    steps.remove(note)
+    steps.insert(step_index(wf["jobs"]["release"], lambda s: "goreleaser-action" in str(s.get("uses"))) + 1, note)
+
+
+def goreleaser_without_note(wf):
+    step_using(wf, "release", "goreleaser/goreleaser-action")["with"]["args"] = "release --clean"
+
+
+def goreleaser_note_from_elsewhere(wf):
+    step_using(wf, "release", "goreleaser/goreleaser-action")["with"]["args"] = GORELEASER_ARGS.replace("notes.md", "other.md")
+
+
 def release_step(wf, predicate):
     return next(s for s in release_steps(wf) if predicate(s))
 
@@ -2571,6 +2755,8 @@ def replace_glob(old, new):
 
 
 GORELEASER_MUTANTS = [
+    ("the changelog disabled", lambda c: c.update(changelog={"disable": True})),
+    ("the changelog disabled by a template", lambda c: c.update(changelog={"disable": "{{ true }}"})),
     ("release.json not attached", drop_glob(MANIFEST_GLOBS[0])),
     ("release.json's bundle not attached", drop_glob(MANIFEST_GLOBS[1])),
     ("the scaffold not attached", drop_glob(SCAFFOLD_GLOB)),
@@ -2639,6 +2825,13 @@ MUTANTS = [
     ("a fixed tag compared with the declared version", fixed_tag_against_declared),
     ("an inexact tag comparison", tag_compared_inexactly),
     ("a tag mismatch that exits 0", tag_mismatch_exits_0),
+    ("no note check in the tag check", note_check_dropped),
+    ("continue-on-error on the note check", note_check_continues),
+    ("the note check's refusal ignored", note_check_ignored),
+    ("the release note not written", note_not_written),
+    ("the release note written after GoReleaser", note_after_goreleaser),
+    ("GoReleaser without the release note", goreleaser_without_note),
+    ("GoReleaser's notes from another file", goreleaser_note_from_elsewhere),
     ("the version read from another file", tag_reads_another_file),
     ("GITHUB_REF_NAME fixed on the tag comparison", tag_env_fixed),
     ("the tag check checking out main", tag_checkout_main),
@@ -2788,6 +2981,7 @@ def graph_mode():
     failures += scaffold
     helper, helper_versions = release_helper_failures()
     failures += helper
+    failures += release_note_failures()
     modes = 0
     if not scaffold:
         mode_failures, modes = manifest_mode_failures(pinned, version)
@@ -2805,7 +2999,8 @@ def graph_mode():
         f"and its pushes pass, under {range_locale()}; "
         f"{len(refused)} fixtures, {len(MUTANTS)} mutants of release.yml, {len(TEST_MUTANTS)} of "
         f"test.yml, {len(GORELEASER_MUTANTS)} of .goreleaser.yml, {len(SCAFFOLD_MUTANTS)} of "
-        f"scaffold-tarball.sh, {len(RELEASE_SH_MUTANTS)} of release.sh and {3 * len(files)} of the Dockerfiles, "
+        f"scaffold-tarball.sh, {len(RELEASE_SH_MUTANTS)} of release.sh, {len(RELEASE_NOTE_MUTANTS)} of "
+        f"release-note.sh and {3 * len(files)} of the Dockerfiles, "
         f"{vectors} manifest vectors, {scaffold_refused} versions, {forms} scaffold argument forms and "
         f"{planted} planted composes refused; {versions} versions held to the rule, which "
         f"{len(RULE_MUTANTS)} other rules and {file_mutants} mutants of the vector file fail; "

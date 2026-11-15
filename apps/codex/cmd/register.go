@@ -23,8 +23,8 @@ var registerCmd = &cobra.Command{
 	GroupID: "component",
 	Long: `Scan the athanor's component storage for local components (catalysts, reagents,
 formulas, and tinctures) and register them in the Compendium registry, making
-them available for search and execution. Run 'cyfr profile grant <ref>'
-afterwards to consent a component's declared needs before it can run.`,
+them available for search and execution. A component runs once you grant
+its declared needs in CYFR: on Components, open it and choose Grant access.`,
 	Example: `  cyfr register
   cyfr register --json`,
 	Args: cobra.NoArgs,

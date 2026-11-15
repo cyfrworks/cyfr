@@ -24,23 +24,14 @@ func init() {
 	inspectCmd.Flags().Bool("readme", false, "Include README.md content in output")
 	rootCmd.AddCommand(inspectCmd)
 	rootCmd.AddCommand(pullCmd)
-	pushCmd.Flags().String("registry", "", "OCI registry to push to (e.g., ghcr.io/youruser)")
-	rootCmd.AddCommand(pushCmd)
 	rootCmd.AddCommand(registryCmd)
 	registryCmd.AddCommand(registryDiscoverCmd)
-	// cyfr.run push tokens are provisioned by `cyfr registry sync`
-	// (registry.go), never by sign-in.
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
 	newCmd.Flags().String("template", "", "Scaffold template (tincture only: vanilla, vite or react)")
 	rootCmd.AddCommand(newCmd)
 	forkCmd.Flags().String("name", "", "New component name (defaults to original)")
 	forkCmd.Flags().String("version", "", "New component version (defaults to original)")
 	rootCmd.AddCommand(forkCmd)
-	deprecateCmd.Flags().String("reason", "", "Human-readable explanation surfaced to pullers (required)")
-	_ = deprecateCmd.MarkFlagRequired("reason")
-	rootCmd.AddCommand(deprecateCmd)
-	yankCmd.Flags().String("reason", "", "Optional explanation surfaced to pullers")
-	rootCmd.AddCommand(yankCmd)
 }
 
 var searchCmd = &cobra.Command{
@@ -272,42 +263,6 @@ var pullCmd = &cobra.Command{
 	},
 }
 
-var pushCmd = &cobra.Command{
-	Use:     "push [type] <reference>",
-	Short:   "Sign and push component to the registry",
-	GroupID: "component",
-	Long: `Sign a local component and push it to the registry.
-Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compatible registry.`,
-	Example: `  cyfr push c:local.claude:0.2.0
-  cyfr push r:local.sentiment:1.0.0 --registry ghcr.io/youruser`,
-	Args: cobra.RangeArgs(1, 2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		args = joinTypeShorthand(args)
-		client := newClient()
-		normalized, err := resolveComponentRef(cmd.Context(), client, args[0])
-		if err != nil {
-			return err
-		}
-
-		if !ref.ParseRef(normalized).HasVersion {
-			return errors.New("Pushing requires an explicit version (e.g., c:local.claude:0.1.0)")
-		}
-
-		progressID := randomHex(8)
-
-		toolArgs := ops.ComponentPushArgs{Reference: normalized,
-			ProgressId: ops.Value(progressID)}
-		if registry, _ := cmd.Flags().GetString("registry"); registry != "" {
-			toolArgs.Registry = ops.Value(registry)
-		}
-		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, toolArgs, progressPrinter())
-		if err != nil {
-			return handleToolError(err, "Push failed")
-		}
-		return renderResult(result)
-	},
-}
-
 var newCmd = &cobra.Command{
 	Use:     "new <type> <name>",
 	Short:   "Scaffold a new component",
@@ -431,90 +386,6 @@ Copies source code, manifest, and compiled artifact. Requires source code
 	},
 }
 
-var deprecateCmd = &cobra.Command{
-	Use:     "deprecate <reference>",
-	Short:   "Mark a component version deprecated",
-	GroupID: "component",
-	Long: `Mark a component version as deprecated on the registry.
-
-Pinned pulls still succeed with a warning header; non-pinned resolution
-demotes deprecated versions behind active ones. Requires --reason
-(surfaced to pullers).
-
-Must pass a fully-qualified ref including version. You must hold a push
-token for the component's namespace (i.e. you are the publisher).`,
-	Example: `  cyfr deprecate c:alice.widget:1.0.0 --reason "use v2 — better schemas"
-  cyfr deprecate r:acme.com.http:2.0.0 --reason "security fix in 2.1.0"`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client := newClient()
-		normalized, err := resolveComponentRef(cmd.Context(), client, args[0])
-		if err != nil {
-			return err
-		}
-		if !ref.ParseRef(normalized).HasVersion {
-			return errors.New("Deprecate requires a pinned version (e.g., c:alice.widget:1.0.0)")
-		}
-		reason, _ := cmd.Flags().GetString("reason")
-
-		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentDeprecateArgs{Reference: normalized,
-			Reason: reason})
-		if err != nil {
-			return handleToolError(err, "Deprecate failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-		fmt.Printf("Deprecated %s\n  reason: %s\n", normalized, reason)
-		return nil
-	},
-}
-
-var yankCmd = &cobra.Command{
-	Use:     "yank <reference>",
-	Short:   "Mark a component version yanked",
-	GroupID: "component",
-	Long: `Mark a component version as yanked on the registry.
-
-Stronger signal than deprecate: yanked versions are excluded from search
-and non-pinned resolution. Pinned pulls still succeed (reproducibility).
-Reason is optional.
-
-Must pass a fully-qualified ref including version. You must hold a push
-token for the component's namespace.`,
-	Example: `  cyfr yank c:alice.widget:1.0.0
-  cyfr yank r:acme.com.http:2.0.0 --reason "accidental push"`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client := newClient()
-		normalized, err := resolveComponentRef(cmd.Context(), client, args[0])
-		if err != nil {
-			return err
-		}
-		if !ref.ParseRef(normalized).HasVersion {
-			return errors.New("Yank requires a pinned version (e.g., c:alice.widget:1.0.0)")
-		}
-		reason, _ := cmd.Flags().GetString("reason")
-
-		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentYankArgs{Reference: normalized,
-			Reason: ops.Value(reason)})
-		if err != nil {
-			return handleToolError(err, "Yank failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-		if reason == "" {
-			fmt.Printf("Yanked %s\n", normalized)
-		} else {
-			fmt.Printf("Yanked %s\n  reason: %s\n", normalized, reason)
-		}
-		return nil
-	},
-}
-
 var registryCmd = &cobra.Command{
 	Use:     "registry",
 	Short:   "OCI registry operations",
@@ -527,7 +398,12 @@ var registryDiscoverCmd = &cobra.Command{
 	Short:   "List a publisher's components on the registry",
 	Long:    "List the components a publisher's namespace holds on the registry, newest first.",
 	Example: `  cyfr registry discover alice`,
-	Args:    cobra.ExactArgs(1),
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) != 1 {
+			return errors.New("Name one publisher's namespace: cyfr registry discover <namespace>")
+		}
+		return nil
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentDiscoverArgs{Namespace: ops.Value(args[0])})

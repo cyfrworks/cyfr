@@ -8,9 +8,9 @@
 # which serves the account pages and the names beside its log, and h.test,
 # the CYFR people join, which reaches the directory through the identity
 # proof's front (tests/identity-proof/front.sh and cells.sh). proof.mjs
-# drives Chromium and a test device through H's setup by its operator,
-# invitations redeemed by an account in the browser and by a device's
-# hello, and a change confirmed at H by passkey; this script answers its
+# drives Chromium through H's setup by its operator, an invitation
+# redeemed by an account in the browser, and a change confirmed at H by
+# passkey; this script answers its
 # asks for H's part (`ask-N.json`, answered `answer-N.json`).
 #
 # Usage: tests/join-proof/run.sh

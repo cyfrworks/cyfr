@@ -18,9 +18,10 @@ defmodule Arca.McpServerStorage do
   - transport: `"http"` or `"program"`
   - mark: a program's `"mcp"` or `"driven"`; nil for http
   - url: MCP server endpoint URL (http); nil for a program
-  - home, memory_bytes, home_max_bytes, login_command, login_entry_id,
-    hosts: a program's settings (`Arca.Schemas.McpServer`)
-  - config_json: JSON text with headers, timeout_ms, backends, etc.
+  - home, memory_bytes, home_max_bytes, login_command, hosts: a program's
+    settings (`Arca.Schemas.McpServer`)
+  - config_json: JSON text with headers (http), command and env (program),
+    timeout_ms, etc.
   - enabled: Whether the server is active
   - epoch: 1 on insert, one higher after every write to the row
   - revision: 0 on insert, one higher after every write to the row — the
@@ -33,7 +34,7 @@ defmodule Arca.McpServerStorage do
   same statement. `bump_epoch/3` is the one host-owned write, published
   under this member's live ownership of its slot and the revision it read
   (`Arca.FencedPublication`). The others (`insert/2`, `update/4`,
-  `delete/2`) are a person's writes, made without the slot check, and
+  `delete/3`) are a person's writes, made without the slot check, and
   answer the written row as the database returned it.
 
   `insert/2` counts the athanor's servers against the caller's cap and
@@ -46,6 +47,9 @@ defmodule Arca.McpServerStorage do
   alias Arca.Schemas.Athanor
   alias Arca.Schemas.McpServer
 
+  @typedoc "The row a write expects to find under its name: its id and epoch."
+  @type expected :: %{id: String.t(), epoch: pos_integer()}
+
   # A program's settings, which `update/4` writes as named (nil clears one).
   @program_columns [
     :mark,
@@ -53,13 +57,12 @@ defmodule Arca.McpServerStorage do
     :memory_bytes,
     :home_max_bytes,
     :login_command,
-    :login_entry_id,
     :hosts
   ]
 
   @doc """
-  The decoded `config_json` of a stored row — headers, `timeout_ms`,
-  `tool_patterns`, `backends`.
+  The decoded `config_json` of a stored row — headers, `command`, `env`,
+  `timeout_ms`, `tool_patterns`.
 
   `insert/2` stores the string verbatim; this is the other half of that, and
   the one place it is read. A row whose JSON is absent or malformed reads as
@@ -198,40 +201,79 @@ defmodule Arca.McpServerStorage do
   @doc """
   Delete an MCP server config by name, scoped to the given tenant, and
   answer the row that was deleted.
+
+  In one transaction the row is locked, every profile whose head stands
+  on it is blocked to ask again (`Arca.ConsentStorage.head_profiles_on_row/2`
+  through `block_dependents/4`, the order a revision binding the row
+  takes), and then the row is deleted; a login need's bindings go with it
+  (the baseline's cascade).
+
+  With `expected` (`%{id, epoch}`, the row a person confirmed removing),
+  the row under `name` must still be that row at that epoch, compared
+  under its lock: another row made under the name, or the row written
+  since, is `{:error, :stale_epoch}` and nothing is written.
   """
-  @spec delete(Prima.Actor.t(), String.t()) ::
-          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
-  def delete(%Prima.Actor{athanor_id: athanor_id} = actor, name)
+  @spec delete(Prima.Actor.t(), String.t(), expected() | nil) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
+  def delete(actor, name, expected \\ nil)
+
+  def delete(%Prima.Actor{athanor_id: athanor_id} = actor, name, expected)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.delete", fn ->
-      query =
-        from(s in McpServer, where: s.name == ^name, select: s)
-        |> where_tenant(actor)
-
-      case Arca.Repo.delete_all(query) do
-        {1, [server]} -> {:ok, server}
-        {0, _} -> {:error, :not_found}
-      end
+      Arca.Repo.locking_transaction(fn ->
+        with %McpServer{id: id} = row <- locked(actor, name) || {:error, :not_found},
+             :ok <- as_expected(row, expected),
+             {:ok, _blocked} <-
+               Arca.ConsentStorage.block_dependents(
+                 actor,
+                 {athanor_id, %{id: id, name: row.name}},
+                 [],
+                 Arca.StatusTransitions.blocked_profile_status()
+               ),
+             {1, [server]} <-
+               Arca.Repo.delete_all(
+                 from(s in McpServer, where: s.id == ^id, select: s)
+                 |> where_tenant(actor)
+               ) do
+          server
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
     end)
     |> Arca.Data.project()
   end
 
-  def delete(%Prima.Actor{}, _name), do: {:error, :no_athanor}
+  def delete(%Prima.Actor{}, _name, _expected), do: {:error, :no_athanor}
+
+  defp as_expected(_row, nil), do: :ok
+  defp as_expected(%McpServer{id: id, epoch: epoch}, %{id: id, epoch: epoch}), do: :ok
+  defp as_expected(_row, _expected), do: {:error, :stale_epoch}
+
+  defp locked(actor, name) do
+    from(s in McpServer, where: s.name == ^name)
+    |> where_tenant(actor)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+  end
 
   @doc """
   Update fields of a server config (`:transport`, `:url`, `:config_json`,
   `:enabled` and the program columns, `@program_columns`) and raise its
   epoch, in one statement.
 
-  With `expected_epoch`, the write happens only while the row is still at
-  that epoch; a row that moved on answers `{:error, :stale_epoch}`.
+  With `expected` (`%{id, epoch}`, the row the caller read and a person
+  confirmed changing), the write happens only while the row under `name`
+  is still that row at that epoch, in the one statement: another row made
+  under the name, or the row written since, answers
+  `{:error, :stale_epoch}`.
   """
-  @spec update(Prima.Actor.t(), String.t(), map(), pos_integer() | nil) ::
+  @spec update(Prima.Actor.t(), String.t(), map(), expected() | nil) ::
           {:ok, map()}
           | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
-  def update(actor, name, updates, expected_epoch \\ nil)
+  def update(actor, name, updates, expected \\ nil)
 
-  def update(%Prima.Actor{athanor_id: athanor_id} = actor, name, updates, expected_epoch)
+  def update(%Prima.Actor{athanor_id: athanor_id} = actor, name, updates, expected)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_map(updates) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.update", fn ->
       set =
@@ -242,12 +284,12 @@ defmodule Arca.McpServerStorage do
 
       from(s in McpServer, where: s.name == ^name, select: s)
       |> where_tenant(actor)
-      |> write_epoch(set, expected_epoch, fn -> get(actor, name) end)
+      |> write_expected(set, expected, fn -> get(actor, name) end)
     end)
     |> Arca.Data.project()
   end
 
-  def update(%Prima.Actor{}, _name, _updates, _expected_epoch), do: {:error, :no_athanor}
+  def update(%Prima.Actor{}, _name, _updates, _expected), do: {:error, :no_athanor}
 
   @doc """
   Raise a row's epoch, found by id in the actor's athanor, with nothing
@@ -362,16 +404,62 @@ defmodule Arca.McpServerStorage do
     |> Arca.Data.project()
   end
 
+  @doc """
+  Where the rows `ids` stand, whatever athanor holds each, for the
+  programs controller's sweep of the kept homes a box holds: each id that
+  names a row maps to its athanor, whether it is a program with a kept
+  home, and whether its athanor is archived. An id that names no row is
+  absent. Nothing of a row's definition is read.
+  """
+  @spec standing([String.t()]) ::
+          {:ok,
+           %{
+             String.t() => %{
+               athanor_id: String.t(),
+               kept: boolean(),
+               athanor_archived: boolean()
+             }
+           }}
+          | {:error, :database_error}
+  # arca:unscoped-ok a box names its kept homes by row id alone, so the sweep reads each id's own athanor back and answers no definition.
+  def standing(ids) when is_list(ids) do
+    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.standing", fn ->
+      rows =
+        Arca.Repo.all(
+          from(s in McpServer,
+            left_join: a in Athanor,
+            on: a.id == s.athanor_id,
+            where: s.id in ^Enum.uniq(ids),
+            select: {s.id, s.athanor_id, s.transport, s.home, a.status}
+          )
+        )
+
+      {:ok,
+       Map.new(rows, fn {id, athanor_id, transport, home, athanor_status} ->
+         {id,
+          %{
+            athanor_id: athanor_id,
+            kept: transport == "program" and home == "kept",
+            athanor_archived: athanor_status == "archived"
+          }}
+       end)}
+    end)
+  end
+
   # arca:unscoped-ok every caller hands in a query already scoped with where_tenant/2.
-  defp write_epoch(query, set, expected_epoch, reread) do
-    query = if expected_epoch, do: where(query, [s], s.epoch == ^expected_epoch), else: query
+  defp write_expected(query, set, expected, reread) do
+    query =
+      case expected do
+        %{id: id, epoch: epoch} -> where(query, [s], s.id == ^id and s.epoch == ^epoch)
+        nil -> query
+      end
 
     case Arca.Repo.update_all(query, set: set, inc: [epoch: 1, revision: 1]) do
       {1, [server]} ->
         {:ok, server}
 
       {0, _} ->
-        case expected_epoch && reread.() do
+        case expected && reread.() do
           {:ok, _moved_on} -> {:error, :stale_epoch}
           {:error, :database_error} = error -> error
           _ -> {:error, :not_found}

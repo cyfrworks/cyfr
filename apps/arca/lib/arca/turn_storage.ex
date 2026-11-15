@@ -46,10 +46,10 @@ defmodule Arca.TurnStorage do
   Which root turn may run at all is the thread's, not the turn's:
   `threads.active_turn_id` (`Arca.ThreadStorage`). `start/3` takes it in
   the transaction that moves the turn to `running`, naming the consumed
-  sequence the caller read; `finish/4` and `suspend/3` give it up;
-  `takeover/3`, `recover/3` and `pause_recovered/3` take it from a turn
-  whose holder is not a live member, in the same transaction that counts
-  the recovery — so a member that did not take the claim cannot spend one.
+  sequence the caller read; `finish/4` gives it up; `takeover/3` and
+  `pause_recovered/3` take it from a turn whose holder is not a live
+  member, in the same transaction that counts the recovery — so a member
+  that did not take the claim cannot spend one.
   An approval pause keeps the claim: the turn is still this member's work.
 
   ## Crew requests and replies
@@ -100,9 +100,9 @@ defmodule Arca.TurnStorage do
   nothing.
 
   A turn is held to the recovery limit it stores, written from the
-  policy its caller passes (`:recovery_limit`) when the turn starts or
-  is first claimed by a recovery, and never widened afterwards: a
-  recovery or a takeover past it is `{:error, :recovery_exhausted}`.
+  policy its caller passes (`:recovery_limit`) when the turn starts, and
+  never widened afterwards: a takeover past it is
+  `{:error, :recovery_exhausted}`.
   """
 
   import Ecto.Query
@@ -121,8 +121,8 @@ defmodule Arca.TurnStorage do
   @outcomes Prima.TurnState.outcomes()
   @decisions Prima.TurnState.decisions()
   @invalidated Prima.TurnState.invalidated()
-  # The open turns a suspend or a takeover moves: an `accepted` turn has
-  # no root attempt yet, so nothing of it is held to suspend or take over.
+  # The open turns a takeover moves: an `accepted` turn has no root
+  # attempt yet, so nothing of it is held to take over.
   @held @open -- ["accepted"]
 
   # ---------------------------------------------------------------------------
@@ -761,8 +761,8 @@ defmodule Arca.TurnStorage do
   end
 
   @doc """
-  Cancel every open turn of `thread_id` — accepted, running, paused and
-  suspended alike — inside the caller's locking transaction, the way a
+  Cancel every open turn of `thread_id` — accepted, running and paused
+  alike — inside the caller's locking transaction, the way a
   retire ends them. Every open turn's row is taken first, before anything
   of the thread, the order the turn's own writers take them in, so a
   completion that holds its turn is waited on and its turn, ended by
@@ -857,139 +857,6 @@ defmodule Arca.TurnStorage do
   end
 
   @doc """
-  Set a running or paused turn down, keeping every row it has written and
-  giving up the thread's claim, so any member may pick it up
-  (`turn.suspend`). `attrs`: `:fence` (the one the caller read) and
-  `:reason`.
-
-  The fence is raised first, so the runner that held the turn writes
-  nothing afterwards. A running turn's root attempt and root execution
-  leave `running` with it and its open running interval is added to
-  `active_ms`, exactly as an approval pause does. What suspending adds to
-  a pause is the release: an approval pause keeps `active_turn_id`
-  because the turn is still its person's work, while a suspended turn is
-  nobody's until its person recovers it. Event `turn.paused`, reason
-  `suspended`.
-  """
-  @spec suspend(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def suspend(%Prima.Actor{athanor_id: athanor_id}, turn_id, attrs)
-      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.suspend", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        turn = take!(athanor_id, turn_id, attrs)
-        if turn.status not in @held, do: Arca.Repo.rollback(:not_running)
-        lock_root!(athanor_id, turn)
-        now = DateTime.utc_now()
-
-        ran =
-          if turn.status == "running" do
-            ran =
-              Arca.ExecutionAttempts.pause!(Prima.Actor.in_athanor(athanor_id), turn.attempt) || 0
-
-            execution_status!(athanor_id, turn.root_execution_id, "running", "paused")
-            ran
-          else
-            0
-          end
-
-        {1, _} =
-          from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
-          |> Arca.Repo.update_all(
-            set: [
-              status: "paused",
-              paused_at: now,
-              paused_reason: "suspended",
-              launch_step_id: nil,
-              active_ms: turn.active_ms + ran
-            ]
-          )
-
-        Arca.ThreadStorage.release_all!(
-          Prima.Actor.in_athanor(athanor_id),
-          turn.thread_id,
-          turn_id
-        )
-
-        turn = turn!(athanor_id, turn_id)
-
-        event!(athanor_id, turn, "turn.paused", nil, %{
-          "reason" => "suspended",
-          "detail" => Map.get(attrs, :reason)
-        })
-
-        turn
-      end)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def suspend(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
-
-  @doc """
-  Take an open turn no live member is running and carry it on
-  (`turn.recover`): the thread's claim and the recovery count in one
-  transaction, so a member that did not take the claim cannot spend a
-  recovery. `attrs`: `:fence` (the one the caller read), the root's grant
-  (required), and `:recovery_limit`, the policy an accepted turn is held
-  to from here on.
-
-  The fence is compared and raised first. The claim is admitted only by a
-  thread nobody holds, one this turn already holds, or one whose holder's
-  boot is no longer a live member — never by a live peer's, which is
-  `{:error, :held_elsewhere}`. A running turn is adopted as `takeover/3` adopts
-  one: the predecessor attempt retired, a successor opened, the
-  predecessor's unaccounted interval added. A paused turn keeps the
-  attempt its pause left; the loop that continues it resumes that one.
-  An accepted turn has never run: its recovery is its first claim, which
-  writes its limit and spends no recovery. Refused
-  `{:error, :recovery_exhausted}` once the stored limit is spent and
-  `{:error, :not_open}` for a turn that is over.
-  """
-  @spec recover(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def recover(actor, turn_id, attrs \\ %{})
-
-  def recover(%Prima.Actor{athanor_id: athanor_id}, turn_id, attrs)
-      when is_binary(athanor_id) and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.recover", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        turn = take!(athanor_id, turn_id, attrs)
-        if turn.status not in @open, do: Arca.Repo.rollback(:not_open)
-        {limit, spends} = recovery!(turn, attrs)
-        grant = standing!(athanor_id, turn, attrs, :required)
-
-        thread = thread!(athanor_id, turn.thread_id)
-        if thread.archived_at, do: Arca.Repo.rollback(:thread_archived)
-        Arca.ThreadStorage.take_claim!(Prima.Actor.in_athanor(athanor_id), thread.id, turn_id)
-
-        adopted =
-          if turn.status == "running" and turn.root_execution_id,
-            do: adopt_root!(athanor_id, turn, grant),
-            else: %{sets: [], ran_ms: 0, attempt: nil}
-
-        {1, _} =
-          from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
-          |> Arca.Repo.update_all(
-            set:
-              adopted.sets ++
-                [
-                  runner_id: Prima.Boot.id(),
-                  recovery_limit: limit,
-                  recovery_attempts: turn.recovery_attempts + spends,
-                  active_ms: turn.active_ms + adopted.ran_ms
-                ]
-          )
-
-        turn = turn!(athanor_id, turn_id)
-        event!(athanor_id, turn, "turn.recovered", nil, %{"attempt" => adopted.attempt})
-        turn
-      end)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def recover(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
-
-  @doc """
   Take over a running turn another runner lost: the one place a
   successor attempt is opened. `attrs`: `:fence` (the one the caller read)
   and the root's grant (required); the successor's lease is read from the
@@ -1012,7 +879,7 @@ defmodule Arca.TurnStorage do
       Arca.Repo.locking_transaction(fn ->
         turn = take!(athanor_id, turn_id, attrs)
         if turn.status not in @held, do: Arca.Repo.rollback(:not_open)
-        {_limit, spends} = recovery!(turn, attrs)
+        spend_recovery!(turn)
         if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
         grant = standing!(athanor_id, turn, attrs, :required)
 
@@ -1029,7 +896,7 @@ defmodule Arca.TurnStorage do
               sets ++
                 [
                   runner_id: Prima.Boot.id(),
-                  recovery_attempts: turn.recovery_attempts + spends,
+                  recovery_attempts: turn.recovery_attempts + 1,
                   active_ms: turn.active_ms + ran
                 ]
           )
@@ -3084,18 +2951,14 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # What a recovery writes and spends: an accepted turn has never run, so
-  # its recovery is its first claim — it writes the limit and spends
-  # nothing; any other turn spends one of the limit it stores.
+  # A takeover spends one of the recoveries the turn's row stores.
   # arca:db-raise-ok inside the caller's transaction
-  defp recovery!(%Turn{status: "accepted"} = turn, attrs), do: {recovery_limit!(turn, attrs), 0}
-
-  defp recovery!(%Turn{recovery_limit: limit, recovery_attempts: spent}, _attrs)
+  defp spend_recovery!(%Turn{recovery_limit: limit, recovery_attempts: spent})
        when is_integer(limit) do
-    if spent >= limit, do: Arca.Repo.rollback(:recovery_exhausted), else: {limit, 1}
+    if spent >= limit, do: Arca.Repo.rollback(:recovery_exhausted), else: :ok
   end
 
-  defp recovery!(%Turn{}, _attrs), do: Arca.Repo.rollback(:illegal_transition)
+  defp spend_recovery!(%Turn{}), do: Arca.Repo.rollback(:illegal_transition)
 
   # The root a starting turn binds, read from its rows under the turn's
   # lock: a running `turn` execution of this turn, its current attempt

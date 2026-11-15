@@ -323,7 +323,7 @@ defmodule Sanctum.Gate.RequestLogTest do
               "type" => "text",
               "text" =>
                 Jason.encode!(%{
-                  "api_key" => "cyfr_pk_super_secret_value",
+                  "api_key" => "cyfr_sk_super_secret_value",
                   "session_token" => "raw-session-token",
                   "secret" => "whsec_value",
                   "name" => "my-key"
@@ -333,7 +333,7 @@ defmodule Sanctum.Gate.RequestLogTest do
           "isError" => false
         })
 
-      refute output =~ "cyfr_pk_super_secret_value"
+      refute output =~ "cyfr_sk_super_secret_value"
       refute output =~ "raw-session-token"
       refute output =~ "whsec_value"
 
@@ -735,7 +735,7 @@ defmodule Sanctum.Gate.RequestLogTest do
   describe "the texts a decision and its row store" do
     setup do
       Process.register(self(), :request_log_patterned_observer)
-      {:ok, key: Prima.CredentialShape.mint({:api_key, :service})}
+      {:ok, key: Prima.CredentialShape.mint(:api_key)}
     end
 
     test "an unknown action named with a credential leaves it in neither row, and the " <>
@@ -914,7 +914,7 @@ defmodule Sanctum.Gate.RequestLogTest do
   # Each minter draws from `Prima.CredentialShape`, so what it issues is
   # what the request log recognises under any key.
   describe "the credentials the platform mints" do
-    test "every API-key type, the webhook secret and the confirmation secret have their " <>
+    test "an API key, the webhook secret and the confirmation secret have their " <>
            "declared shape and reach no row",
          %{ctx: ctx} do
       # The person issues in their own athanor, the only one a credential
@@ -923,27 +923,23 @@ defmodule Sanctum.Gate.RequestLogTest do
       own = Sanctum.Test.People.athanor!(user)
       issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
 
-      api_keys =
-        for {type, _prefix} <- Prima.CredentialShape.api_key_prefixes() do
-          opts = %{name: "shape-#{type}", type: type, scope: []}
+      opts = %{name: "shape-key", scope: []}
 
-          confirmed =
-            Sanctum.TestContext.confirmed(issuer, :credential_issuance, %{
-              operation: "key.create",
-              arguments: opts,
-              resource: opts.name
-            })
+      confirmed =
+        Sanctum.TestContext.confirmed(issuer, :credential_issuance, %{
+          operation: "key.create",
+          arguments: opts,
+          resource: opts.name
+        })
 
-          {:ok, %{api_key: key}} = Sanctum.ApiKey.create(confirmed, opts)
-          {{:api_key, type}, key}
-        end
+      {:ok, %{api_key: key}} = Sanctum.ApiKey.create(confirmed, opts)
 
       assert {:error, {:confirmation_required, %{id: secret}}} =
                Sanctum.ApiKey.create(issuer, %{name: "unproven", scope: []})
 
       minted = [{:confirmation_secret, secret}, {:webhook_secret, webhook_secret!(issuer)}]
 
-      for {kind, credential} <- api_keys ++ minted do
+      for {kind, credential} <- [{:api_key, key} | minted] do
         assert Prima.CredentialShape.match?(kind, credential), inspect(kind)
 
         decision = decision(ctx)

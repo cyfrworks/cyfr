@@ -13,17 +13,14 @@ defmodule Sanctum.PermissionVocabularyTest do
   without an error. These assertions turn that silence into a test failure.
   """
 
-  test "every API-key default and ceiling scope is a known permission" do
-    known = Sanctum.Atoms.known_permissions() |> MapSet.new()
+  test "a key may hold every permission but the wildcard, and its presets hold only those" do
+    keyed = for {scope, _what} <- Sanctum.ApiKey.permissions(), do: scope
 
-    for {_type, scopes} <- Sanctum.ApiKey.type_defaults(),
-        scope <- scopes do
-      assert scope in known, "default scope #{inspect(scope)} not in Sanctum.Atoms"
-    end
+    assert Enum.sort(keyed) ==
+             Enum.sort(Enum.map(Sanctum.Atoms.person_permissions(), &Atom.to_string/1))
 
-    for {_type, scopes} <- Sanctum.ApiKey.type_ceilings(),
-        scope <- scopes do
-      assert scope in known, "ceiling scope #{inspect(scope)} not in Sanctum.Atoms"
+    for {_name, scopes} <- Sanctum.ApiKey.presets(), scope <- scopes do
+      assert scope in keyed, "preset scope #{inspect(scope)} is no key permission"
     end
   end
 

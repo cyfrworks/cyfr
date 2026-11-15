@@ -332,7 +332,7 @@ func TestConfirmationRequired_WithoutDataStillSendsThePersonToPrism(t *testing.T
 	}
 
 	text := rendered.Error()
-	for _, want := range []string{"Confirmation required", "nothing was changed", "Confirm it on a device of yours"} {
+	for _, want := range []string{"Confirmation required", "nothing was changed", "Confirm it in Prism or on the box"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("rendered output lacks %q:\n%s", want, text)
 		}
@@ -346,7 +346,7 @@ func TestFormatConsentError_ConfirmationRequired(t *testing.T) {
 	text := formatConsentError(tag, payload)
 
 	want := "Confirmation required: vault.create needs a fresh confirmation; nothing was changed.\n" +
-		"  Confirm " + pendingRef + " on a device of yours before 2026-09-21T14:18:20.000000Z (a passkey in Prism, a CYFR screen, or a command line paired by cyfr login), where this key or client is named as the one asking."
+		"  Confirm " + pendingRef + " in Prism or on the box before 2026-09-21T14:18:20.000000Z, where this key or client is named as the one asking."
 	if text != want {
 		t.Errorf("got:\n%s\nwant:\n%s", text, want)
 	}
@@ -626,18 +626,18 @@ func TestFormatConsentError_ConsentRequiredNamesItsCause(t *testing.T) {
 		{
 			map[string]any{"cause": "no_grant", "ref": "r:local.city-greeting"},
 			"r:local.city-greeting has not been granted.\n" +
-				"  Grant it in CYFR, or run: cyfr profile grant r:local.city-greeting",
+				"  Grant it in CYFR: on Components, open r:local.city-greeting and choose Grant access.",
 		},
 		{
 			map[string]any{"cause": "revoked", "ref": "r:local.city-greeting"},
 			"Your grant for r:local.city-greeting was revoked.\n" +
-				"  Grant it again in CYFR, or run: cyfr profile grant r:local.city-greeting",
+				"  Grant it in CYFR: on Components, open r:local.city-greeting and choose Grant access.",
 		},
 		{
 			map[string]any{"cause": "shape_moved", "ref": "r:local.city-greeting",
 				"profile_id": "prof_1", "current_revision": float64(2), "shape_diff": []any{}},
 			"r:local.city-greeting asks for more than your grant holds (consent rev 2).\n" +
-				"  Review and grant it again in CYFR, or run: cyfr profile grant r:local.city-greeting",
+				"  Grant it in CYFR: on Components, open r:local.city-greeting and choose Grant access.",
 		},
 	}
 	for _, c := range cases {

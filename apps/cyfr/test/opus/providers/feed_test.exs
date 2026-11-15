@@ -180,7 +180,7 @@ defmodule Opus.Providers.FeedTest do
 
       assert runs.projection ==
                ~w(kind execution_id parent_execution_id reference component_type duration_ms
-                  started_at ended_at error revision at)
+                  started_at ended_at error origin retryable revision at)
 
       # Each carries the delivery contract: a feed's result by its binding,
       # revisioned by its result's sequence; a run by its id, never leaving.
@@ -223,11 +223,27 @@ defmodule Opus.Providers.FeedTest do
         "duration_ms" => 1,
         "started_at" => "2026-11-09T10:00:00.000001Z",
         "ended_at" => "2026-11-09T10:00:01Z",
+        "origin" => "schedule",
+        "retryable" => true,
         "revision" => 1_794_218_401_000_000,
         "at" => "2026-11-09T10:00:01Z"
       }
 
       assert :ok = Shape.check(runs.shape, Map.put(run, "error", nil))
+
+      # Who started it is one of the four origins, or none for a run
+      # another run started; whether Retry runs it is a boolean.
+      for origin <- [nil | Prima.Origin.spellings()],
+          do:
+            assert(
+              :ok = Shape.check(runs.shape, Map.merge(run, %{"error" => nil, "origin" => origin}))
+            )
+
+      assert {:error, _} =
+               Shape.check(runs.shape, Map.merge(run, %{"error" => nil, "origin" => "you"}))
+
+      assert {:error, _} =
+               Shape.check(runs.shape, Map.merge(run, %{"error" => nil, "retryable" => nil}))
 
       running = Map.merge(run, %{"kind" => "started", "ended_at" => nil, "error" => nil})
       assert :ok = Shape.check(runs.shape, running)
@@ -971,7 +987,15 @@ defmodule Opus.Providers.FeedTest do
 
         assert_receive %Cyfr.Bus.Execution{} = payload, 5_000
         told = on_the_wire(stream, Map.from_struct(payload))
-        assert unstamped(told) == unstamped(event)
+
+        # Whether Retry runs it is read from its closed attempt
+        # (`Opus.Record.retriable/1`), which this record has none of, so it
+        # reads no Retry; a real run's is `Opus.ProviderRetryTest`'s.
+        assert told["retryable"] == false
+
+        assert Map.delete(unstamped(told), "retryable") ==
+                 Map.delete(unstamped(event), "retryable")
+
         assert is_integer(told["revision"]) and is_binary(told["at"])
       end
     end
@@ -999,7 +1023,11 @@ defmodule Opus.Providers.FeedTest do
       completed_at: ended_at,
       duration_ms: event["duration_ms"],
       error: event["error"] && "Execution failed: a sentence that never travels",
-      error_class: event["error"] && String.to_existing_atom(event["error"]["class"])
+      error_class: event["error"] && String.to_existing_atom(event["error"]["class"]),
+      admitted: %{
+        call_id: nil,
+        origin: event["origin"] && String.to_existing_atom(event["origin"])
+      }
     }
   end
 

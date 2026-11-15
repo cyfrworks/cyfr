@@ -168,10 +168,8 @@ defmodule Prima.RefusalTest do
     {{:not_found, {:blob, "sha256:ab12"}}, :not_found},
     {{:invalid_reference, "Invalid reference format: x"}, :invalid_argument},
     {{:invalid_reference, :empty}, :invalid_argument},
-    {{:not_built, :shared_login}, :invalid_argument},
     {{:program_unavailable, "claude"}, :setup_required},
     {{:oauth_client_required, "google"}, :setup_required},
-    {:not_mountable, :invalid_argument},
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
@@ -241,6 +239,7 @@ defmodule Prima.RefusalTest do
     {:thread_archived, :forbidden},
     {{:child_awaits_card, "planner"}, :conflict},
     {:not_addressable, :forbidden},
+    {:not_in_a_turn, :forbidden},
     {:no_agent, :setup_required},
     {:execution_unavailable, :unavailable},
     {:message_too_long, :invalid_argument},
@@ -273,6 +272,10 @@ defmodule Prima.RefusalTest do
     {{:limit_reached, :mint_per_hour, 10}, :rate_limited},
     {{:limit_reached, :max_athanors, 100}, :rate_limited},
     {:invalid_bearer, :unauthenticated},
+    {{:session_ended, :denied}, :unauthenticated},
+    {{:session_ended, :device_removed}, :unauthenticated},
+    {{:session_ended, :signed_out}, :unauthenticated},
+    {{:session_ended, :ended}, :unauthenticated},
     {:invalid_api_key, :unauthenticated},
     {:api_key_revoked, :unauthenticated},
     {:invalid_credential, :unauthenticated},
@@ -301,7 +304,13 @@ defmodule Prima.RefusalTest do
     {:multipart_refused, :invalid_argument},
     {:socket_body_too_large, :invalid_argument},
     {:socket_body_length_required, :invalid_argument},
-    {:signature_invalid, :unauthenticated},
+    {{:webhook_signature, :missing_signature, "x-cyfr-signature"}, :unauthenticated},
+    {{:webhook_signature, :malformed_signature, "x-cyfr-signature"}, :unauthenticated},
+    {{:webhook_signature, :missing_timestamp, "x-cyfr-timestamp"}, :unauthenticated},
+    {{:webhook_signature, :malformed_timestamp, "x-cyfr-timestamp"}, :unauthenticated},
+    {{:webhook_signature, :timestamp_skew, "x-cyfr-timestamp"}, :unauthenticated},
+    {{:webhook_signature, :signature_mismatch, nil}, :unauthenticated},
+    {{:webhook_signature, :signature_mismatch, "x-cyfr-timestamp"}, :unauthenticated},
     {:internal_error, :internal},
     {:invalid_params, :invalid_argument},
     {:consent_required, :consent_required},
@@ -638,15 +647,17 @@ defmodule Prima.RefusalTest do
 
     test "the corrupt registry credential says what to do" do
       assert Refusal.classify({:corrupt, :registry_credential}).message ==
-               "The stored registry credential is damaged; run `cyfr registry sync` to replace it."
+               "The stored registry credential is damaged; sync your push tokens on the Registry " <>
+                 "page to replace it."
     end
 
-    test "a policy refusal names the version the registry requires" do
+    test "a policy refusal says the account has no acceptance on record, naming the version" do
       assert Refusal.message({:policy_required, "2026-09"}) ==
-               "Accept the registry's policy version 2026-09 first."
+               "The account service has no record that your account accepted its terms " <>
+                 "(version 2026-09), so it refused this."
 
       assert Refusal.message({:policy_required, nil}) ==
-               "Accept the registry's current policy first."
+               "The account service has no record that your account accepted its terms, so it refused this."
     end
 
     test "a refusal about an account says account, never cyfr.run or directory" do
@@ -667,7 +678,7 @@ defmodule Prima.RefusalTest do
     end
 
     test "a push with no usable token names the sync that mints one" do
-      assert Refusal.message(:registry_token_missing) =~ "`cyfr registry sync`"
+      assert Refusal.message(:registry_token_missing) =~ "push tokens on the Registry page"
     end
 
     test "every registry refusal CYFR passes on is a reason of the table" do

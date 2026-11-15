@@ -59,7 +59,9 @@ defmodule Sanctum.Pairing do
   | `:home_transfer` | a fresh confirmation |
   | `:pairing_revocation` | a fresh confirmation |
   | `:restore_reenable` | a fresh confirmation |
+  | `:program_definition` | a fresh confirmation |
   | `:directory_tombstone` | a fresh confirmation, the platform administrator's |
+  | `:platform_admin_marking` | a fresh confirmation, the platform administrator's |
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
   are sensitive, and no operation makes either (each is *Not built yet*
@@ -67,7 +69,9 @@ defmodule Sanctum.Pairing do
   people than before: a new share (`share.create`) and a share's audience
   widened to everyone or to another group (`share.set_audience`), decided
   by `Sanctum.Shares`. Whether a change widens is decided from the stored
-  row, and the confirmation is asked only then.
+  row, and the confirmation is asked only then. `program_definition` is a
+  program row's whole definition, decided by `Emissary.External.Provider`:
+  adding one, every update that changes it, and its removal.
 
   `sensitive?/1` is what the deciding sites ask
   (`Sanctum.Consent.Authz.confirm/3`): the table's answer, so a sensitive
@@ -103,7 +107,9 @@ defmodule Sanctum.Pairing do
     home_transfer: :fresh,
     pairing_revocation: :fresh,
     restore_reenable: :fresh,
-    directory_tombstone: :fresh
+    program_definition: :fresh,
+    directory_tombstone: :fresh,
+    platform_admin_marking: :fresh
   }
 
   @typedoc "An action the table names."
@@ -117,7 +123,9 @@ defmodule Sanctum.Pairing do
           | :home_transfer
           | :pairing_revocation
           | :restore_reenable
+          | :program_definition
           | :directory_tombstone
+          | :platform_admin_marking
 
   @typedoc "A paired client and the certificate it connects under."
   @type paired :: %{client_id: String.t(), certificate: DeviceCert.t()}
@@ -275,7 +283,7 @@ defmodule Sanctum.Pairing do
   confirmed (`Arca.PairedClients.revoke/2`). A sensitive change
   (`pairing_revocation`, `Sanctum.Consent.Authz.confirm/3`). Once the
   revocation commits it is announced as a standing change of the person
-  (`Sanctum.Telemetry.sessions_revoked/1`), so every holder of their
+  (`Sanctum.Telemetry.sessions_revoked/3`), so every holder of their
   context, the client's device channel among them, reads the standing
   again at once rather than at its next ping, and the channel refuses the
   client and closes. Answers the client's row as revoked.
@@ -293,19 +301,28 @@ defmodule Sanctum.Pairing do
     end
   end
 
-  defp revoke_client(ctx, %{id: client_id}) do
+  # The confirmation names the client by the name the person sees for it;
+  # a client with none, or with one the preview cannot hold, is named by
+  # nothing rather than by its id, and the revocation goes on.
+  defp revoke_client(ctx, %{id: client_id} = client) do
     with :ok <-
            Authz.confirm(ctx, :pairing_revocation, %{
              operation: "pairing.revoke",
              arguments: %{"client_id" => client_id},
-             resource: client_id
+             resource: previewable(Map.get(client, :display_name))
            }) do
       case Arca.PairedClients.revoke(Context.actor(ctx), client_id) do
         {:ok, row} ->
           # The announcement makes each listener revalidate, never drop
           # unread: a holder of the person's context whose own credential
           # still stands keeps it, and only the revoked client's goes.
-          :ok = Sanctum.Telemetry.sessions_revoked(row.user_id)
+          :ok =
+            Sanctum.Telemetry.sessions_revoked(
+              row.user_id,
+              :device_removed,
+              row.revoked_session_hashes
+            )
+
           {:ok, row}
 
         {:error, :database_error} ->
@@ -315,6 +332,12 @@ defmodule Sanctum.Pairing do
           {:error, reason}
       end
     end
+  end
+
+  defp previewable(name) do
+    if Prima.Identity.Encoding.text?(name, Prima.Confirmation.Preview.max_text()),
+      do: name,
+      else: nil
   end
 
   defp own_client(ctx, client_id) do
