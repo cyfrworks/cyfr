@@ -314,7 +314,9 @@ defmodule Aqua.ToolGrants do
            |> Enum.flat_map(fn {name, agent_rows} ->
              agent_rows
              |> allowed_keys()
-             |> Enum.map(fn {tool, action, row, schedule} -> {name, tool, action, row, schedule} end)
+             |> Enum.map(fn {tool, action, row, schedule} ->
+               {name, tool, action, row, schedule}
+             end)
            end),
          {:ok, programs} <- program_names(ctx, answers),
          {:ok, schedules} <- schedule_names(ctx, answers) do
@@ -333,7 +335,9 @@ defmodule Aqua.ToolGrants do
   # id.
   defp program_names(ctx, answers) do
     answers
-    |> Enum.flat_map(fn {_name, _tool, _action, row, _schedule} -> if row, do: [row], else: [] end)
+    |> Enum.flat_map(fn {_name, _tool, _action, row, _schedule} ->
+      if row, do: [row], else: []
+    end)
     |> Enum.uniq()
     |> Enum.reduce_while({:ok, %{}}, fn row, {:ok, names} ->
       case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row) do

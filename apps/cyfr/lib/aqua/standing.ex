@@ -246,7 +246,8 @@ defmodule Aqua.Standing do
     do: {:ok, %{lifecycle_kind: "turn", lifecycle_id: id}}
 
   # An answer that ends with a schedule names the schedule.
-  defp ended_with(_ctx, _turn, _row, :schedule), do: {:error, {:scope_not_permitted, :no_schedule}}
+  defp ended_with(_ctx, _turn, _row, :schedule),
+    do: {:error, {:scope_not_permitted, :no_schedule}}
 
   defp ended_with(_ctx, _turn, _row, _kind),
     do: {:error, {:scope_not_permitted, :invalid_lifecycle}}
