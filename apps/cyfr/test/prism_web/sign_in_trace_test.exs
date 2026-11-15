@@ -88,9 +88,7 @@ defmodule PrismWeb.SignInTraceTest do
       |> Prima.SignIn.fragment()
 
     # The answer is checked off the event; the page redirects once it is.
-    ends = Process.monitor(login.pid)
-    render_hook(login, "account_answer", %{"answer" => answer})
-    ticket_path = redirected!(login, ends)
+    ticket_path = Cyfr.Test.SignInAnswer.redirected!(login, answer)
     assert ticket_path =~ "/auth/passkey/complete/"
 
     signed_in = page |> recycle() |> get(ticket_path)
@@ -100,47 +98,6 @@ defmodule PrismWeb.SignInTraceTest do
     assert_console_on_filled_athanor(signed_in, user.id)
 
     Cyfr.Test.Sandbox.end_views()
-  end
-
-  # Where the page sends the browser once it acts on the answer. The
-  # page checks the answer in a task of its own (`start_async`), and a
-  # sign-in's check runs the fill's local half before it answers, so on
-  # a loaded host it takes as long as that work does. The wait is on the
-  # page's events, never a clock: the check task's end, after which its
-  # result is already in the page's mailbox, then the page's own end,
-  # which a redirect is (`ends` monitors it from before the event). A
-  # page that acts on the result and stays fails, naming what it says.
-  defp redirected!(view, ends) do
-    for task <- checks(view.pid) do
-      ref = Process.monitor(task)
-      receive do: ({:DOWN, ^ref, :process, ^task, _reason} -> :ok)
-    end
-
-    # A call the page answers comes after the result in its mailbox: one
-    # it answers means it acted on the result and stayed.
-    try do
-      :sys.get_state(view.pid)
-    catch
-      :exit, _gone -> :gone
-    else
-      _state -> flunk("the sign-in page acted on the answer and stayed:\n#{render(view)}")
-    end
-
-    receive do
-      {:DOWN, ^ends, :process, _pid, {:shutdown, {:redirect, %{to: to}}}} ->
-        to
-
-      {:DOWN, ^ends, :process, _pid, reason} ->
-        flunk("the sign-in page stopped without a redirect: #{inspect(reason)}")
-    end
-  end
-
-  # The page's checks still running: its tasks under `Prism.TaskSupervisor`.
-  defp checks(page) do
-    for task <- Task.Supervisor.children(Prism.TaskSupervisor),
-        {:dictionary, dictionary} <- [Process.info(task, :dictionary)],
-        page in Keyword.get(dictionary, :"$callers", []),
-        do: task
   end
 
   # The fill the person's athanor received with nothing here performing

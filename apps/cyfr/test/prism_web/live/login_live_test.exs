@@ -121,8 +121,7 @@ defmodule PrismWeb.LoginLiveTest do
       |> DirectoryServer.passkey_answer(account, hd(account.passkeys))
       |> Prima.SignIn.fragment()
 
-    render_hook(view, "account_answer", %{"answer" => answer})
-    {path, _flash} = assert_redirect(view, @answered_ms)
+    path = Cyfr.Test.SignInAnswer.redirected!(view, answer)
     assert "/auth/passkey/complete/" <> _ticket = path
   end
 
