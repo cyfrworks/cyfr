@@ -69,10 +69,10 @@ browsers, so the models can be rebuilt from a run's record.
 
 | Step | What holds |
 |---|---|
-| `setup` | `@proof` is made at `registry.test`'s `/account/new`: the registry's policy accepted, the recovery code shown and saved, then the passkey. The directory holds the account's genesis and the passkey's `add_key`, and the registry holds `@proof` owned by the account's identifier, that identifier's acceptance of its policy, the nonces of the two requests the recovery key signed and its read of the log, and answers `@proof` with the identifier and `https://registry.test`. A is then set up by signing in with the account through its setup link; A's person (with the platform administrator's mark), identity, cached head, athanor and paired client (the passkey, by its kid) are read whole |
-| `allow` | B's administrator makes `@proof-b` at the pages, sets B up with it, and allows `@proof` in Settings; B's allowlist holds setup's allow of the administrator's identifier and `@proof`'s identifier labelled `proof`; B's person, identity and athanor are its administrator's |
-| `sign_in` | a fresh profile holding the person's passkey opens B's sign-in page and signs in with the account, typing no address: the sign page says "Sign in to https://b.test", and B admits the identifier under its allow (`admission` `open`), with an athanor of their own there; B's identities, people, athanors, cached heads, paired clients and sessions are read whole, each session bound to its passkey's kid and head and holding the token its browser's cookie carries |
-| `sync` | "Sync push tokens" at A opens the sign page, which shows the registry request in words ("Create a publishing token named … at registry.test"); the passkey signs it, A completes it and says "Your push tokens are synced."; A stores one push token for `@proof`, whose digest is the registry's token for it, made by the account's identifier |
+| `setup` | `@proof` is made at `registry.test`'s `/account/new`: the registry's policy accepted, the recovery code shown and saved, then the passkey. The directory holds the account's genesis and the passkey's `add_key`, and the registry holds `@proof` owned by the account's identifier, that identifier's acceptance of its policy, the nonces of the two requests the recovery key signed and its read of the log, and answers `@proof` with the identifier and `https://registry.test`. A is then set up by signing in with the account through its setup link; A's person (with the platform administrator's mark, its namespace `proof`, the name the registry gives the account at the admission), identity, cached head, athanor (named and slugged `proof` after that namespace) and paired client (the passkey, by its kid) are read whole |
+| `allow` | B's administrator makes `@proof-b` at the pages, sets B up with it, and allows `@proof` in Settings, whose row names it `@proof`; B's allowlist holds setup's allow of the administrator's identifier labelled `proof-b` and `@proof`'s identifier labelled `proof`; B's person, identity and athanor (`proof-b`) are its administrator's |
+| `sign_in` | a fresh profile holding the person's passkey opens B's sign-in page and signs in with the account, typing no address: the sign page says "Sign in to https://b.test", and B admits the identifier under its allow (`admission` `open`), with an athanor of their own there named after their namespace, `proof`; B's identities, people, athanors, cached heads, paired clients and sessions are read whole, each session bound to its passkey's kid and head and holding the token its browser's cookie carries |
+| `sync` | "Sync push tokens" at A opens the sign page, which shows the registry request in words ("Create a publishing token named … at registry.test"); the passkey signs it, A completes it and says "Your push tokens are synced."; A's person, with no terms version recorded, records the registry's current one in their preferences once the signature completes; A stores one push token for `@proof`, whose digest is the registry's token for it, made by the account's identifier |
 | `ban` | the registry's operator bans `@proof`'s owner through the admin pages; the ban revokes the token in its transaction, the token presented to the registry is refused, A's next sync says banned's sentence and records no nonce; then every object read in the run is read again and held to what was read before |
 | `readme` | this file's field table holds exactly the rows the proof's models print |
 
@@ -204,7 +204,6 @@ row per field of each row of each step's objects:
 | setup:registry.policy_acceptances[a][row] | policy_version | derived | the registry's GET /v1/legal/version |
 | setup:registry.policy_acceptances[a][row] | accepted_at | bound | a time inside the account made at registry.test's pages |
 | setup:registry.policy_acceptances[a][row] | identifier | derived | the signer's identifier |
-| setup:registry.policy_acceptances[a][row] | former_identity | exact | `null` |
 | setup:registry.request_nonces[a][row 1] | identifier | derived | the signer's identifier |
 | setup:registry.request_nonces[a][row 1] | nonce | captured | 16 new bytes |
 | setup:registry.request_nonces[a][row 1] | expires_at | bound | a time inside the account made at registry.test's pages, plus the 120 s a signed request lives |
@@ -222,7 +221,7 @@ row per field of each row of each step's objects:
 | setup:a.users[row] | email_verified | exact | `null` |
 | setup:a.users[row] | admission | exact | `"setup"` |
 | setup:a.users[row] | display_name | exact | `null` |
-| setup:a.users[row] | namespace | exact | `"proof"`: the name the registry says the account holds, learned at the sign-in (`Sanctum.SignIn`) |
+| setup:a.users[row] | namespace | exact | `"proof"`: the name the registry says the account holds, learned at the admission (`Sanctum.Newcomer`) |
 | setup:a.users[row] | status | exact | `"active"` |
 | setup:a.users[row] | prefs | exact | `"{}"` |
 | setup:a.users[row] | first_seen_at | bound | a time inside setup at A |
@@ -233,8 +232,8 @@ row per field of each row of each step's objects:
 | setup:a.users[row] | created_at | bound | a time inside setup at A |
 | setup:a.users[row] | updated_at | bound | a time inside setup at A up to setup:a.users's read |
 | setup:a.athanors[row] | id | captured | a new ath_ id |
-| setup:a.athanors[row] | name | exact | `"Me"` |
-| setup:a.athanors[row] | slug | exact | `"me"` |
+| setup:a.athanors[row] | name | exact | `"proof"`: its person's namespace |
+| setup:a.athanors[row] | slug | exact | `"proof"`: its person's namespace |
 | setup:a.athanors[row] | owner_user_id | derived | its person |
 | setup:a.athanors[row] | status | exact | `"active"` |
 | setup:a.athanors[row] | archived_at | exact | `null` |
@@ -283,7 +282,7 @@ row per field of each row of each step's objects:
 | allow:b.users[row] | email_verified | exact | `null` |
 | allow:b.users[row] | admission | exact | `"setup"` |
 | allow:b.users[row] | display_name | exact | `null` |
-| allow:b.users[row] | namespace | exact | `"proof-b"`: the name the registry says the account holds, learned at the sign-in (`Sanctum.SignIn`) |
+| allow:b.users[row] | namespace | exact | `"proof-b"`: the name the registry says the account holds, learned at the admission (`Sanctum.Newcomer`) |
 | allow:b.users[row] | status | exact | `"active"` |
 | allow:b.users[row] | prefs | exact | `"{}"` |
 | allow:b.users[row] | first_seen_at | bound | a time inside B's administrator's account and setup at B |
@@ -294,8 +293,8 @@ row per field of each row of each step's objects:
 | allow:b.users[row] | created_at | bound | a time inside B's administrator's account and setup at B |
 | allow:b.users[row] | updated_at | bound | a time inside B's administrator's account and setup at B up to allow:b.users's read |
 | allow:b.athanors[row] | id | captured | a new ath_ id |
-| allow:b.athanors[row] | name | exact | `"Me"` |
-| allow:b.athanors[row] | slug | exact | `"me"` |
+| allow:b.athanors[row] | name | exact | `"proof-b"`: its person's namespace |
+| allow:b.athanors[row] | slug | exact | `"proof-b"`: its person's namespace |
 | allow:b.athanors[row] | owner_user_id | derived | its person |
 | allow:b.athanors[row] | status | exact | `"active"` |
 | allow:b.athanors[row] | archived_at | exact | `null` |
@@ -323,7 +322,7 @@ row per field of each row of each step's objects:
 | allow:b.server_allowlist[setup's allow of the administrator] | requested_by | exact | `null` |
 | allow:b.server_allowlist[setup's allow of the administrator] | added_by | derived | B's administrator |
 | allow:b.server_allowlist[setup's allow of the administrator] | note | exact | `"setup"` |
-| allow:b.server_allowlist[setup's allow of the administrator] | label | exact | `null` |
+| allow:b.server_allowlist[setup's allow of the administrator] | label | exact | `"proof-b"`: the name the administrator's account holds, learned at the admission (`Sanctum.Newcomer`) |
 | allow:b.server_allowlist[setup's allow of the administrator] | created_at | bound | a time inside B's administrator's account and setup at B |
 | allow:b.server_allowlist[setup's allow of the administrator] | updated_at | bound | a time inside B's administrator's account and setup at B |
 | allow:b.server_allowlist[the allow of @proof] | id | captured | a new door_ id |
@@ -368,8 +367,8 @@ row per field of each row of each step's objects:
 | sign_in:b.athanors[the administrator's] | status | exact | as read at allow |
 | sign_in:b.athanors[the administrator's] | updated_at | bound | as read at allow, or a time inside the sign-in at B |
 | sign_in:b.athanors[the person's] | id | captured | a new ath_ id |
-| sign_in:b.athanors[the person's] | name | exact | `"Me"` |
-| sign_in:b.athanors[the person's] | slug | exact | `"me-2"` |
+| sign_in:b.athanors[the person's] | name | exact | `"proof"`: its person's namespace |
+| sign_in:b.athanors[the person's] | slug | exact | `"proof"`: its person's namespace |
 | sign_in:b.athanors[the person's] | owner_user_id | derived | its person |
 | sign_in:b.athanors[the person's] | status | exact | `"active"` |
 | sign_in:b.athanors[the person's] | archived_at | exact | `null` |
@@ -401,7 +400,7 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the person's] | email_verified | exact | `null` |
 | sign_in:b.users[the person's] | admission | exact | `"open"` |
 | sign_in:b.users[the person's] | display_name | exact | `null` |
-| sign_in:b.users[the person's] | namespace | exact | `"proof"`: the name the registry says the account holds, learned at the sign-in (`Sanctum.SignIn`) |
+| sign_in:b.users[the person's] | namespace | exact | `"proof"`: the name the registry says the account holds, learned at the admission (`Sanctum.Newcomer`) |
 | sign_in:b.users[the person's] | status | exact | `"active"` |
 | sign_in:b.users[the person's] | prefs | exact | `"{}"` |
 | sign_in:b.users[the person's] | first_seen_at | bound | a time inside the sign-in at B |
@@ -489,6 +488,21 @@ row per field of each row of each step's objects:
 | sign_in:b.sessions[the person's] | system | captured | the system the sign-in's user agent names, in words |
 | sign_in:b.sessions[the person's] | last_seen_at | bound | a time inside the sign-in at B |
 | sign_in:b.sessions[the person's] | inserted_at | bound | a time inside the sign-in at B |
+| sync:a.users[row] | admission | exact | as read at setup |
+| sync:a.users[row] | created_at | exact | as read at setup |
+| sync:a.users[row] | denied_at | exact | as read at setup |
+| sync:a.users[row] | display_name | exact | as read at setup |
+| sync:a.users[row] | email | exact | as read at setup |
+| sync:a.users[row] | email_verified | exact | as read at setup |
+| sync:a.users[row] | first_seen_at | exact | as read at setup |
+| sync:a.users[row] | id | exact | as read at setup |
+| sync:a.users[row] | last_seen_at | bound | as read at setup, or a time inside the sync |
+| sync:a.users[row] | namespace | exact | as read at setup |
+| sync:a.users[row] | platform_admin_at | exact | as read at setup |
+| sync:a.users[row] | prefs | derived | the registry's GET /v1/legal/version, recorded once the sync's signature completed |
+| sync:a.users[row] | security_generation | exact | as read at setup |
+| sync:a.users[row] | status | exact | as read at setup |
+| sync:a.users[row] | updated_at | bound | a time inside the sync up to sync:a.users's read |
 | sync:registry.push_tokens[proof][row] | id | captured | a token id: a new UUID, not the nil UUID |
 | sync:registry.push_tokens[proof][row] | token_hash | derived | the digest of the token A sealed |
 | sync:registry.push_tokens[proof][row] | namespace_slug | exact | `"proof"` |
@@ -535,7 +549,6 @@ row per field of each row of each step's objects:
 | ban:registry.banned_identities[row] | appeal_allowed_after | exact | `null` |
 | ban:registry.banned_identities[row] | related_report_ids | exact | `[]` |
 | ban:registry.banned_identities[row] | identifier | derived | A's identifier |
-| ban:registry.banned_identities[row] | former_identity | exact | `null` |
 | ban:registry.push_tokens[proof][row] | id | exact | as read at sync |
 | ban:registry.push_tokens[proof][row] | token_hash | exact | as read at sync |
 | ban:registry.push_tokens[proof][row] | namespace_slug | exact | as read at sync |
@@ -558,21 +571,21 @@ row per field of each row of each step's objects:
 | ban:registry.request_nonces[a][a nonce read at sync 3] | identifier | exact | as read at sync |
 | ban:registry.request_nonces[a][a nonce read at sync 3] | nonce | exact | as read at sync |
 | ban:registry.request_nonces[a][a nonce read at sync 3] | expires_at | exact | as read at sync |
-| held:a.users[row] | admission | exact | as read at setup |
-| held:a.users[row] | created_at | exact | as read at setup |
-| held:a.users[row] | denied_at | exact | as read at setup |
-| held:a.users[row] | display_name | exact | as read at setup |
-| held:a.users[row] | email | exact | as read at setup |
-| held:a.users[row] | email_verified | exact | as read at setup |
-| held:a.users[row] | first_seen_at | exact | as read at setup |
-| held:a.users[row] | id | exact | as read at setup |
-| held:a.users[row] | last_seen_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
-| held:a.users[row] | namespace | exact | as read at setup |
-| held:a.users[row] | platform_admin_at | exact | as read at setup |
-| held:a.users[row] | prefs | exact | as read at setup |
-| held:a.users[row] | security_generation | exact | as read at setup |
-| held:a.users[row] | status | exact | as read at setup |
-| held:a.users[row] | updated_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
+| held:a.users[row] | admission | exact | as read at sync |
+| held:a.users[row] | created_at | exact | as read at sync |
+| held:a.users[row] | denied_at | exact | as read at sync |
+| held:a.users[row] | display_name | exact | as read at sync |
+| held:a.users[row] | email | exact | as read at sync |
+| held:a.users[row] | email_verified | exact | as read at sync |
+| held:a.users[row] | first_seen_at | exact | as read at sync |
+| held:a.users[row] | id | exact | as read at sync |
+| held:a.users[row] | last_seen_at | bound | as read at sync, or a time inside the run from sync's end to the last read |
+| held:a.users[row] | namespace | exact | as read at sync |
+| held:a.users[row] | platform_admin_at | exact | as read at sync |
+| held:a.users[row] | prefs | exact | as read at sync |
+| held:a.users[row] | security_generation | exact | as read at sync |
+| held:a.users[row] | status | exact | as read at sync |
+| held:a.users[row] | updated_at | bound | as read at sync, or a time inside the run from sync's end to the last read |
 | held:a.person_identities[row] | directory_url | exact | as read at setup |
 | held:a.person_identities[row] | head_hash | exact | as read at setup |
 | held:a.person_identities[row] | id | exact | as read at setup |
@@ -666,7 +679,6 @@ row per field of each row of each step's objects:
 | held:registry.policy_acceptances[a][row] | policy_version | exact | as read at setup |
 | held:registry.policy_acceptances[a][row] | accepted_at | exact | as read at setup |
 | held:registry.policy_acceptances[a][row] | identifier | exact | as read at setup |
-| held:registry.policy_acceptances[a][row] | former_identity | exact | as read at setup |
 | held:registry.request_nonces[a][a nonce read at sync 1] | identifier | exact | as read at ban |
 | held:registry.request_nonces[a][a nonce read at sync 1] | nonce | exact | as read at ban |
 | held:registry.request_nonces[a][a nonce read at sync 1] | expires_at | exact | as read at ban |
@@ -694,7 +706,6 @@ row per field of each row of each step's objects:
 | held:registry.banned_identities[row] | appeal_allowed_after | exact | as read at ban |
 | held:registry.banned_identities[row] | related_report_ids | exact | as read at ban |
 | held:registry.banned_identities[row] | identifier | exact | as read at ban |
-| held:registry.banned_identities[row] | former_identity | exact | as read at ban |
 | held:b.users[the administrator's] | admission | exact | as read at sign_in |
 | held:b.users[the administrator's] | created_at | exact | as read at sign_in |
 | held:b.users[the administrator's] | denied_at | exact | as read at sign_in |

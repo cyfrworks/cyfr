@@ -238,7 +238,7 @@ registry_admin() {
 
 # Each step the proof asks for (harness.sh `answer_asks`).
 answer_ask() {
-  local ask="$1" op cell value file
+  local ask="$1" op cell column value file
   op="$(asked "$ask" op)"
   case "$op" in
     setup_token)
@@ -248,11 +248,18 @@ answer_ask() {
       ANSWER="{\"at\":$RUN_STARTED_MS}"
       ;;
     rows)
+      # Every rows ask names its column and value, empty for a whole table
+      # (proof.mjs cyfrRows); one that does not is refused in words, which
+      # fails the read that asked.
+      if ! column="$(asked "$ask" column 2>/dev/null)" || ! value="$(asked "$ask" value 2>/dev/null)"; then
+        ANSWER='{"error":"the rows ask names no column and value"}'
+        return
+      fi
       cell="$WORK/$(asked "$ask" cell)"
-      if [ -z "$(asked "$ask" column)" ]; then
+      if [ -z "$column" ]; then
         ANSWER="$(handle_fixture "$cell" rows "$(asked "$ask" table)")" || ANSWER=""
       else
-        ANSWER="$(handle_fixture "$cell" rows "$(asked "$ask" table)" "$(asked "$ask" column)" "$(asked "$ask" value)")" || ANSWER=""
+        ANSWER="$(handle_fixture "$cell" rows "$(asked "$ask" table)" "$column" "$value")" || ANSWER=""
       fi
       ;;
     set)

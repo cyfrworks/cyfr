@@ -111,8 +111,14 @@ async function claim(key, what, read, io = {}) {
 // A read filtered by `column` names it (`filter`): a tamper of that column
 // is refused by the row leaving the read.
 const filtered = (read, column) => Object.assign(read, { filter: column || null });
+// A read that answers no rows (the fixture's error, or none) fails, in
+// the fixture's words, never as an empty table.
+const rowsOf = (answer, what) => {
+  if (!Array.isArray(answer?.rows)) throw new Error(`${what}: ${answer?.error ?? "no rows were answered"}`);
+  return answer.rows;
+};
 const cyfrRows = (cell, tableName, column = "", value = "") => filtered(async () =>
-  (await ask({ op: "rows", cell, table: tableName, column, value })).rows, column);
+  rowsOf(await ask({ op: "rows", cell, table: tableName, column, value }), `${cell}.${tableName}`), column);
 // A cell's athanors once none is being filled: the fill runs after the
 // admission commits and ends by writing the row (`Sanctum.Provisioning`,
 // `provisioned_at` or `provisioning_failed_at`), so a row read before it
@@ -139,7 +145,7 @@ const cyfrIo = (cell, tableName, keyField = "id") => ({
   state: async () => ask({ op: "state", cell, table: tableName }),
 });
 const registryRows = (tableName, column = "", value = "") => filtered(async () =>
-  (await ask({ op: "registry_rows", table: tableName, column, value })).rows, column);
+  rowsOf(await ask({ op: "registry_rows", table: tableName, column, value }), `registry.${tableName}`), column);
 const registryWrite = async (tableName, key, keyValue, field, value, phase) => {
   const answer = await ask({ op: "registry_set", table: tableName, key, key_value: String(keyValue), field, value, phase });
   if (answer.set !== 1) throw new Error(`registry ${tableName}.${field}: the write changed ${JSON.stringify(answer)}`);
@@ -313,8 +319,15 @@ async function main(chromium) {
   windowed("admin", from, "B's administrator's account and setup at B");
   S.credentials.b = await heldKey(adminKeys);
   S.cookies.admin = await cookieDigest(adminContext, B, "b");
-  const bSegment = `@${(await ask({ op: "rows", cell: "b", table: "athanors" })).rows[0]?.slug ?? "me"}`;
-  await admin.goto(`${B}/a/${encodeURIComponent(bSegment)}/settings`);
+  let bSlug;
+  let bRead = null;
+  try {
+    bSlug = (await cyfrRows("b", "athanors")())[0]?.slug;
+  } catch (error) {
+    bRead = String(error.message);
+  }
+  if (!row("allow", atB.landed && typeof bSlug === "string", "B's administrator lands at B with an athanor of their own", { setup: atB, slug: bSlug ?? null, read_error: bRead })) return;
+  await admin.goto(`${B}/a/${encodeURIComponent(`@${bSlug}`)}/settings`);
   await connected(admin);
   const entry = admin.locator('#door-entry-form input[name="value"]');
   await entry.fill(`@${HANDLE}`);
@@ -322,7 +335,9 @@ async function main(chromium) {
   await waitFor(async () => (await allow.getAttribute("phx-value-door")) === `@${HANDLE}`, { timeoutMs: 30_000, what: "the door form taking @proof" });
   from = clock();
   await allow.click();
-  const labelled = await admin.waitForSelector('[data-test="door-entry-label"]', { timeout: 60_000 }).then(() => true).catch(() => false);
+  // Each entry shows its name; @proof's is the allow just made.
+  const labelled = await admin.locator('[data-test="door-entry-name"]', { hasText: new RegExp(`^@${HANDLE}$`) })
+    .waitFor({ timeout: 60_000 }).then(() => true).catch(() => false);
   windowed("allow", from, "the allow");
   await park(admin);
   row("allow", atB.landed && labelled, "B's administrator sets B up with their own account and allows @proof in Settings", { setup: atB, labelled });
@@ -355,8 +370,9 @@ async function main(chromium) {
   // 4. registry.sync at A, signed by the passkey, stores a push token; the
   // registry bans the identifier; the token is refused there, and A's next
   // sync answers banned.
-  const aSegment = `@${S.rows["setup:a.athanors"]?.[0]?.slug ?? "me"}`;
-  const registryPage = `${A}/a/${encodeURIComponent(aSegment)}/registry`;
+  const aSlug = S.rows["setup:a.athanors"]?.[0]?.slug;
+  if (!row("sync", typeof aSlug === "string", "A's person's athanor, read at setup, names the page the sync is on", { slug: aSlug ?? null })) return;
+  const registryPage = `${A}/a/${encodeURIComponent(`@${aSlug}`)}/registry`;
   from = clock();
   const synced = await sync(desk, keys, registryPage);
   windowed("sync", from, "the sync");
@@ -365,6 +381,19 @@ async function main(chromium) {
   row("sync", synced.landed && /^Create a publishing token named “.+” at registry\.test$/.test(synced.what ?? "") &&
     synced.flash.includes("Your push tokens are synced."),
   "Sync push tokens at A: the sign page shows the registry request in words, the passkey signs it, and A completes it", synced);
+
+  // The terms version is recorded in a task of its own after the
+  // signature completes, bounded at 3 s (PrismWeb.LoginLive): A's person
+  // is read once it has run, or once that bound and a margin have passed.
+  const aUsers = cyfrRows("a", "users");
+  await claim("sync:a.users", "A's person records the registry's terms version the sync's signature completed under", filtered(async () => {
+    const closes = clock() + 15_000;
+    for (;;) {
+      const rows = await aUsers();
+      if (rows.some((r) => r.prefs !== "{}") || clock() >= closes) return rows;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }, ""), cyfrIo("a", "users"));
 
   const aUserId = S.rows["setup:a.users"]?.[0]?.id;
   const credential = async () => (await ask({ op: "credential", user_id: aUserId, registry: OCI, slug: HANDLE })).credential;
