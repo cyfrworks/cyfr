@@ -367,6 +367,42 @@ defmodule Opus.Programs do
     end
   end
 
+  @doc """
+  What a start of the program row `row_id` of the caller's athanor shows
+  on its card, read from the row now: its id, name, pinned command and
+  epoch, the folder it runs in and the hosts it may reach. Refused
+  `:row_changed` for a row no longer at `epoch` (the one the call names),
+  `:not_found` for a row that is gone or is no program, `:unavailable`
+  when the store cannot answer.
+  """
+  @spec card(Sanctum.Context.t(), String.t(), term()) :: {:ok, map()} | {:error, term()}
+  def card(%Sanctum.Context{} = ctx, row_id, epoch) when is_binary(row_id) do
+    case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row_id) do
+      {:ok, %{transport: "program", epoch: ^epoch} = row} ->
+        {:ok,
+         %{
+           "row" => row.id,
+           "name" => row.name,
+           "command" => Arca.McpServerStorage.config(row)["command"],
+           "epoch" => epoch,
+           "folder" => if(row.home == "kept", do: "its own folder", else: "a scratch folder"),
+           "hosts" => row.hosts || "every public host"
+         }}
+
+      {:ok, %{transport: "program"}} ->
+        {:error, :row_changed}
+
+      {:ok, _not_a_program} ->
+        {:error, :not_found}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
   @doc "The most sessions one turn holds at once."
   @spec turn_sessions() :: pos_integer()
   def turn_sessions, do: @turn_sessions

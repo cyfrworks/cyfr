@@ -185,6 +185,62 @@ defmodule PrismWeb.AquaApprovalCardTest do
   # A canvas write's card names the streams the version reads, from the
   # proposal the approval binds, each feed by its name; another call's
   # card says nothing of streams.
+  describe "a program's start" do
+    defp program_card do
+      card(%{
+        "action_kind" => "execute",
+        "program" => %{
+          "row" => "mcp_gh",
+          "name" => "gh",
+          "command" => "gh --hostname github.com",
+          "epoch" => 3,
+          "folder" => "its own folder",
+          "hosts" => "api.github.com"
+        },
+        "proposal" => %{
+          "tool" => "program",
+          "action" => "start",
+          "args" => %{
+            "program" => "mcp_gh",
+            "epoch" => 3,
+            "terminal_args" => ["repo", "view", "a b", "it's", "x\ey"]
+          }
+        }
+      })
+    end
+
+    test "shows the program, its folder and hosts, its pinned command and every word, quoted, unfolded" do
+      html = program_card()
+      doc = LazyHTML.from_fragment(html)
+      shown = LazyHTML.query(doc, ~s([data-test="approval-program"]))
+      text = shown |> LazyHTML.text() |> String.replace(~r/\s+/, " ")
+
+      assert text =~ "runs gh"
+      assert text =~ "in its own folder, reaching api.github.com"
+
+      command = LazyHTML.query(doc, ~s([data-test="approval-program-command"]))
+
+      assert LazyHTML.text(command) ==
+               ~s(gh --hostname github.com "repo" "view" "a b" "it's" "x\\ey")
+
+      assert doc |> LazyHTML.query(~s([data-test="approval-program-word"])) |> Enum.count() == 5
+
+      # Not inside the folded details: shown as the card opens.
+      assert doc |> LazyHTML.query(~s(details [data-test="approval-program"])) |> Enum.count() ==
+               0
+    end
+
+    test "says what every start widens in plain words, and chooses nothing until pressed" do
+      html = program_card()
+
+      assert html =~ "also approve every start of gh, whatever follows its"
+      assert html =~ "command, in its own folder, reaching api.github.com:"
+      refute html =~ "also approve:"
+      assert %{once: true, run: true, until: true, always: true, limit: false} = offers(html)
+      refute html =~ ~r/<input[^>]*checked/
+    end
+  end
+
   test "a canvas write's card names the streams the version reads" do
     streams_of = fn html ->
       case Regex.run(~r/data-test="approval-canvas-streams"[^>]*>(.*?)<\/div>/s, html,

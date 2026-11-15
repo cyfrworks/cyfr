@@ -159,7 +159,60 @@ defmodule Aqua.Loop.Policy do
     end
   end
 
+  # A program's start shows the person exactly what will run before it
+  # asks or runs: one whose words a card cannot show whole (beyond the
+  # count and size its declaration holds them to), or whose row is gone or
+  # is not the row the call names by its epoch, is refused first.
+  defp decide_open(%Call{kind: :catalog, tool: "program", action: "start"} = call, policy, opts) do
+    with :ok <- program_words(call.args),
+         {:ok, _shown} <- program_shown(Keyword.get(opts, :ctx), call) do
+      by_key(call, policy, opts)
+    end
+  end
+
   defp decide_open(%Call{} = call, policy, opts), do: by_key(call, policy, opts)
+
+  defp program_words(args) do
+    case Sanctum.Catalog.validate_arguments("program", Map.put(args, "action", "start")) do
+      {:ok, _cast} ->
+        :ok
+
+      {:error, invalid} ->
+        {:refuse,
+         "program.start: " <>
+           Aqua.Ops.render_refusal(invalid) <>
+           " (the person sees every word before it runs)"}
+    end
+  end
+
+  @doc """
+  What a program's start shows on its card, read from its row in the
+  caller's athanor now: the program's name, its pinned command, its
+  epoch, its folder and the hosts it may reach, with the row's id.
+  `{:refuse, sentence}` for a row that is gone, is no program, or is no
+  longer at the epoch the call names, so no card shows a command other
+  than the one that would run. `{:ok, nil}` where no context reads it.
+  """
+  @spec program_shown(Sanctum.Context.t() | nil, Call.t()) ::
+          {:ok, map() | nil} | {:refuse, String.t()}
+  def program_shown(%Sanctum.Context{} = ctx, %Call{args: %{"program" => row_id} = args})
+      when is_binary(row_id) do
+    case Opus.program_card(ctx, row_id, args["epoch"]) do
+      {:ok, shown} ->
+        {:ok, shown}
+
+      {:error, :row_changed} ->
+        {:refuse, "program.start: the program changed since it was listed; list it again"}
+
+      {:error, _gone_or_unread} ->
+        {:refuse, "program.start: no such program on the Programs page"}
+    end
+  end
+
+  def program_shown(%Sanctum.Context{}, %Call{}),
+    do: {:refuse, "program.start: name a program by its id, as program.list answers it"}
+
+  def program_shown(nil, %Call{}), do: {:ok, nil}
 
   @doc """
   Whether `policy` still grants `call` without asking.
@@ -357,7 +410,10 @@ defmodule Aqua.Loop.Policy do
   the outside ones it names. A launch's proposal also binds those
   sources, and what `opts[:launch]` (`launch_flow/3`) read of the
   launched grant: its consent revision and the classes the approval
-  lets flow.
+  lets flow. A program's start names what will run (`opts[:program]`,
+  `program_shown/2`): the program's name, its pinned command, its folder
+  and the hosts it may reach; the words that follow are the proposal's,
+  and its epoch binds the row the card read.
   """
   @spec card(Call.t(), keyword()) :: map()
   def card(%Call{} = call, opts \\ []) do
@@ -385,6 +441,7 @@ defmodule Aqua.Loop.Policy do
       "proposal" => proposal,
       "sources" => Prima.Source.to_json_list(sources)
     }
+    |> Prima.MapUtil.put_present("program", Keyword.get(opts, :program))
   end
 
   @doc """

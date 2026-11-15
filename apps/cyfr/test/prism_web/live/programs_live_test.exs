@@ -695,6 +695,58 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert {:ok, []} = Opus.Programs.running(person(user, athanor))
   end
 
+  test "a program Aqua started is listed as Aqua's, closed here, and never shown here",
+       %{conn: conn, athanor: athanor, user: user} do
+    _fake = controller!()
+    row = driven_row!(athanor)
+    me = person(user, athanor)
+    actor = Sanctum.Context.actor(me)
+    {:ok, thread} = Arca.ThreadStorage.create(actor)
+
+    {:ok, %{turn: turn}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: user.user_id, sent_by: "person", content: "run claude"},
+        turn: %{agent: "aqua", requested_by: user.user_id, origin: :interactive}
+      })
+
+    require Ecto.Query
+    root = "exe_page_turn_#{System.unique_integer([:positive])}"
+
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [root_execution_id: root, status: "running"]
+      )
+
+    caller =
+      Opus.Programs.turn(Sanctum.Context.enter_guest(me), %{
+        "thread_id" => thread.id,
+        "root_execution_id" => root,
+        "parent_execution_id" => root
+      })
+
+    assert {:ok, session} =
+             Opus.Programs.start(caller, row.id, %{
+               rows: 50,
+               cols: 200,
+               args: [],
+               epoch: row.epoch
+             })
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+
+    assert has_element?(view, ~s([data-test="running-session"]), "started by Aqua")
+    refute has_element?(view, ~s([data-test="running-session"] button[phx-click="show_terminal"]))
+
+    view
+    |> element(~s([data-test="running-session"] button[phx-value-session="#{session}"]))
+    |> render_click()
+
+    assert_receive {:session, "close", _message, _fields}, 2_000
+    assert {:ok, []} = Opus.Programs.running(me)
+  end
+
   defp terminal_pid(session) do
     [{pid, _person}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
     pid

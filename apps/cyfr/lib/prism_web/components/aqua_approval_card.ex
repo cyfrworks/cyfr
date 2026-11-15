@@ -57,6 +57,15 @@ defmodule PrismWeb.AquaApprovalCard do
   some exit (`proposal["lets_flow"]`): the approval lets them flow to
   every exit of that grant, and binds them.
 
+  A program's start shows what will run (`intent["program"]`, read from
+  the row as the card opened, `Aqua.Loop.Policy.program_shown/2`): the
+  program by its name, the folder it runs in, the hosts it may reach, and
+  its pinned command followed by every word the call names, each whole
+  and quoted. Its standing answers say what they widen in plain words,
+  every start of that program whatever follows its command, and none is
+  chosen until the person presses one; the answer stands for that one
+  program (`Aqua.Standing`).
+
   A canvas write's card names the streams the version it writes reads,
   from the proposal's own `data` and `feeds` (`canvas_streams/1`), which
   the approval binds: what the page will read is on the card, not only in
@@ -152,6 +161,18 @@ defmodule PrismWeb.AquaApprovalCard do
           this page will read:
           <span class="font-mono text-gray-100">{Enum.join(canvas_streams(@proposal), ", ")}</span>
         <% end %>
+      </div>
+      <div
+        :if={@payload["program"]}
+        class="text-[12px] text-gray-400 mb-2"
+        data-test="approval-program"
+      >
+        runs <span class="font-medium text-gray-100">{@payload["program"]["name"]}</span>
+        in {@payload["program"]["folder"]}, reaching {@payload["program"]["hosts"]}: <div
+          class="mt-1 px-2 py-1.5 bg-gray-950 border border-gray-800 rounded font-mono text-gray-100 break-all whitespace-pre-wrap"
+          data-test="approval-program-command"
+          phx-no-format
+        >{@payload["program"]["command"]}<span :for={word <- program_words(@proposal)}> <span data-test="approval-program-word">{quoted(word)}</span></span></div>
       </div>
       <div
         :if={lets_flow(@proposal) != []}
@@ -261,7 +282,11 @@ defmodule PrismWeb.AquaApprovalCard do
               class="flex flex-wrap gap-2 items-center justify-end mt-1.5 text-[11px] text-gray-500"
               data-test="approval-standing"
             >
-              <span>also approve:</span>
+              <span :if={!@payload["program"]}>also approve:</span>
+              <span :if={@payload["program"]} data-test="approval-program-standing">
+                also approve every start of {@payload["program"]["name"]}, whatever follows its
+                command, in {@payload["program"]["folder"]}, reaching {@payload["program"]["hosts"]}:
+              </span>
               <button
                 type="button"
                 phx-click="approval:approve"
@@ -394,6 +419,15 @@ defmodule PrismWeb.AquaApprovalCard do
 
     {:ok, assign_new(socket, :limit, fn -> limit(socket.assigns.payload) end)}
   end
+
+  # The words a program's start runs after its command, as the call names
+  # them; each is shown whole and quoted, so a space, a quote or a control
+  # character in one is seen as it will run.
+  defp program_words(%{"args" => %{"terminal_args" => words}}) when is_list(words), do: words
+  defp program_words(_proposal), do: []
+
+  defp quoted(word) when is_binary(word), do: inspect(word, printable_limit: :infinity)
+  defp quoted(word), do: inspect(word)
 
   # What a standing answer may be limited to: the path the call names, in
   # the storage door's spelling, when the action declares which of its

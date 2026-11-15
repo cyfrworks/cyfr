@@ -201,10 +201,6 @@ defmodule Opus.Programs.Provider do
 
   def answer_sources(_actor, _answer), do: [Prima.Source.outside(nil)]
 
-  @doc "The words a start may carry at most, and the characters each."
-  @spec word_bounds() :: {pos_integer(), pos_integer()}
-  def word_bounds, do: {@max_words, @max_word_chars}
-
   @impl true
   def handle("program", %Context{} = ctx, %{"action" => action} = args),
     do: dispatch(action, Programs.turn(ctx, args), args)

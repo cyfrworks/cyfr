@@ -1420,10 +1420,18 @@ defmodule Aqua.Loop do
         do: [launch: Policy.launch_flow(call, state.spec.ctx, sources)],
         else: []
 
+    program =
+      with %Call{kind: :catalog, tool: "program", action: "start"} <- call,
+           {:ok, %{} = shown} <- Policy.program_shown(state.spec.ctx, call) do
+        [program: shown]
+      else
+        _not_a_start_or_unread -> []
+      end
+
     intent =
       Policy.card(
         call,
-        [id: Prima.UUID7.generate_id("apr"), sources: sources] ++ launch ++ card_opts
+        [id: Prima.UUID7.generate_id("apr"), sources: sources] ++ launch ++ program ++ card_opts
       )
       |> Map.put("tool_call_id", call.tool_call_id)
 

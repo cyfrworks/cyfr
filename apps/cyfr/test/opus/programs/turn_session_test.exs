@@ -445,7 +445,11 @@ defmodule Opus.Programs.TurnSessionTest do
 
       assert {:error, :not_found} = Task.await(task, 5_000)
       assert {:ok, []} = Programs.running(ctx)
-      assert [] = Registry.lookup(Opus.Programs.Registry, {:terminal, key})
+
+      eventually(
+        fn -> Registry.lookup(Opus.Programs.Registry, {:terminal, key}) == [] end,
+        "the refused start's process to end"
+      )
     end
   end
 

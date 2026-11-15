@@ -32,6 +32,7 @@ defmodule Opus.FacadeTest do
     get: 2,
     list_by_request: 3,
     pause_turn_root: 3,
+    program_card: 3,
     release_turn_root: 3,
     resume_lease_watch: 1,
     resume_turn_root: 3,

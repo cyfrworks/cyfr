@@ -614,6 +614,13 @@ defmodule Opus do
   defdelegate release_turn_root(ctx, execution_id, opts), to: TurnRoot, as: :release
 
   @doc """
+  What a program's start shows on its card, read from the row now
+  (`Opus.Programs.card/3`).
+  """
+  @spec program_card(Context.t(), String.t(), term()) :: {:ok, map()} | {:error, term()}
+  defdelegate program_card(ctx, row_id, epoch), to: Opus.Programs, as: :card
+
+  @doc """
   End every program session the turn `turn_id` of the athanor started, as
   its turn ended (`Opus.Programs.end_turn/2`). Answers at once.
   """
