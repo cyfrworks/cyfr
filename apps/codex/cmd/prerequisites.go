@@ -328,18 +328,24 @@ func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool
 	return false, nil
 }
 
-// upWithGroup is cyfr up's first step, in a terminal older than the
-// account's docker group: the same cyfr up, through sg, so no person has to
-// refresh the terminal. It answers true when that run did the work.
-func upWithGroup(args []string, out, errOut io.Writer) (bool, error) {
-	if !machine.supported() {
+// withDockerGroup is cyfr up's and cyfr setup's first step, in a terminal
+// older than the account's docker group: the same subcommand, through sg,
+// so no person has to refresh the terminal and every step of its run
+// reaches Docker. It runs nothing when Docker already answers this account,
+// a rootless Docker included, or when there is no sg to run it with, and
+// answers true when that run did the work.
+func withDockerGroup(subcommand string, args []string, out, errOut io.Writer) (bool, error) {
+	if !machine.supported() || machine.reachable() {
+		return false, nil
+	}
+	if _, err := os.Stat(sgProgram); err != nil {
 		return false, nil
 	}
 	account, err := user.Current()
 	if err != nil {
 		return false, err
 	}
-	return continueWithGroup("up", args, account.Username, out, errOut)
+	return continueWithGroup(subcommand, args, account.Username, out, errOut)
 }
 
 // sgProgram runs a command with a group the account's processes do not
