@@ -924,7 +924,7 @@ defmodule Locus.ListenerTest do
   defp session_route, do: LB.route(:session)
   defp backends_health_route, do: LB.route(:health)
 
-  defp lb(code), do: ~s({"error":"#{code}","version":2})
+  defp lb(code), do: ~s({"error":"#{code}","version":3})
 
   defp seq, do: System.unique_integer([:positive, :monotonic]) + 1_000
 
@@ -967,7 +967,6 @@ defmodule Locus.ListenerTest do
         %{
           name: "fetch",
           command: "exec cat",
-          login_command: nil,
           env_names: [],
           home: :scratch,
           memory_bytes: nil,
@@ -1411,9 +1410,9 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 413, lb(:too_large), :close, @unread_ms)
 
       for {body, status, code} <- [
-            {~s({"version":1}), 409, :version},
+            {~s({"version":2}), 409, :version},
             {~s({}), 409, :version},
-            {~s({"version":2,"x":1}), 400, :bad_request}
+            {~s({"version":3,"x":1}), 400, :bad_request}
           ] do
         client = ctx.port |> connect() |> send_request("POST", backends_health_route(), [], body)
         {_answer, client} = assert_refused(client, status, lb(code), :open)

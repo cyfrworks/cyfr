@@ -47,6 +47,12 @@ defmodule Sanctum.ToolGrantsTest do
         ]),
         Operation.tool([
           op("probe_execution", "run", [Arg.new("connection", :string)], kind: :execute)
+        ]),
+        Operation.tool([
+          op("probe_program", "start", [Arg.new("program", :string)],
+            kind: :execute,
+            resource: {"program", :program_row}
+          )
         ])
       ]
     end
@@ -285,7 +291,8 @@ defmodule Sanctum.ToolGrantsTest do
                thread_id: "thread_1",
                agent_name: "aqua",
                tool: "probe_component",
-               action: "pull"
+               action: "pull",
+               program_row: ""
              }
 
       assert {:ok, []} = ToolGrants.for_thread(ctx, "thread_1")
@@ -443,8 +450,6 @@ defmodule Sanctum.ToolGrantsTest do
             %{kind: "storage_path", patterns: ["data/*"]},
             %{kind: "storage_path", patterns: ["data/notes/", "data/*.md"]},
             %{patterns: ["data/"]},
-            %{kind: :storage_path, patterns: ["data/"]},
-            %{"kind" => "storage_path", "patterns" => ["data/"]},
             :corrupt
           ] do
         assert {:error, {:scope_not_permitted, :invalid_constraint}} =
@@ -460,6 +465,15 @@ defmodule Sanctum.ToolGrantsTest do
                  }),
                  now
                )
+
+      # Read as the store reads it, whatever its keys
+      # (`Arca.Schemas.ToolGrant.read_constraint/1`).
+      for alike <- [
+            %{kind: :storage_path, patterns: ["data/"]},
+            %{"kind" => "storage_path", "patterns" => ["data/"]}
+          ] do
+        assert :ok = ToolGrants.check_standing(Map.put(write, :constraint, alike), now)
+      end
 
       fetch = decision(%{tool: "probe_web", action: "fetch"})
 
@@ -820,6 +834,131 @@ defmodule Sanctum.ToolGrantsTest do
                  }),
                  DateTime.utc_now()
                )
+    end
+  end
+
+  describe "an action whose resource is a program row" do
+    # A program row of the context's athanor, as the store holds one.
+    defp program!(ctx, id) do
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.McpServer, [
+          %{
+            id: id,
+            athanor_id: ctx.athanor_id,
+            name: id,
+            transport: "program",
+            mark: "driven",
+            config_json: ~s({"command":"gh","env":{}}),
+            enabled: true,
+            epoch: 1,
+            revision: 0,
+            created_by: ctx.user_id,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+    end
+
+    setup %{ctx: ctx} do
+      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
+      {:ok, thread: thread.id, start: %{tool: "probe_program", action: "start"}}
+    end
+
+    test "stands only constrained to exactly one row, and a deny stands as any deny does",
+         %{start: start} do
+      now = DateTime.utc_now()
+      one = %{kind: "program_row", patterns: ["mcp_gh"]}
+
+      assert :ok = ToolGrants.check_standing(decision(Map.put(start, :constraint, one)), now)
+
+      assert :ok =
+               ToolGrants.check_standing(
+                 decision(Map.merge(start, %{scope: "agent", constraint: one})),
+                 now
+               )
+
+      assert :ok = ToolGrants.check_standing(decision(Map.put(start, :effect, "deny")), now)
+
+      for {constraint, reason} <- [
+            {nil, :unconstrained_program},
+            {%{kind: "program_row", patterns: ["mcp_gh", "mcp_other"]}, :unconstrained_program},
+            {%{kind: "program_row", patterns: ["mcp_*"]}, :invalid_constraint},
+            {%{kind: "program_row", patterns: []}, :invalid_constraint},
+            {%{kind: "storage_path", patterns: ["data/"]}, :resource_kind}
+          ] do
+        assert {:error, {:scope_not_permitted, ^reason}} =
+                 ToolGrants.check_standing(decision(Map.put(start, :constraint, constraint)), now),
+               inspect(constraint)
+      end
+
+      # Another action takes no program row.
+      assert {:error, {:scope_not_permitted, :no_resource}} =
+               ToolGrants.check_standing(decision(%{constraint: one}), now)
+    end
+
+    test "an allow covers the start of its own row and of no other", %{
+      ctx: ctx,
+      thread: thread,
+      start: start
+    } do
+      program!(ctx, "mcp_gh")
+      program!(ctx, "mcp_other")
+
+      {:ok, _} =
+        ToolGrants.put(
+          ctx,
+          decision(
+            Map.merge(start, %{
+              thread_id: thread,
+              constraint: %{kind: "program_row", patterns: ["mcp_gh"]}
+            })
+          )
+        )
+
+      call = fn row ->
+        Map.merge(start, %{
+          agent_name: "aqua",
+          thread_id: thread,
+          args: %{"program" => row},
+          sources: []
+        })
+      end
+
+      assert ToolGrants.admits?(ctx, call.("mcp_gh"))
+      refute ToolGrants.admits?(ctx, call.("mcp_other"))
+      refute ToolGrants.admits?(ctx, call.("mcp_g"))
+      refute ToolGrants.admits?(ctx, Map.put(call.("mcp_gh"), :args, %{}))
+    end
+
+    test "names a program of the writer's athanor that stands, or is refused", %{
+      ctx: ctx,
+      other: other,
+      thread: thread,
+      start: start
+    } do
+      program!(other, "mcp_theirs")
+
+      for row <- ["mcp_theirs", "mcp_nowhere"] do
+        attrs =
+          decision(
+            Map.merge(start, %{
+              thread_id: thread,
+              constraint: %{kind: "program_row", patterns: [row]}
+            })
+          )
+
+        assert {:error, {:scope_not_permitted, :no_program}} = ToolGrants.put(ctx, attrs)
+        assert {:error, {:scope_not_permitted, :no_program}} = ToolGrants.grant_row(ctx, attrs)
+      end
+
+      assert {:ok, []} = ToolGrants.for_thread(ctx, thread)
+    end
+
+    test "is never an authored auto: an auto is a standing answer for every program" do
+      refute Sanctum.Catalog.auto_permitted?("probe_program", "start")
+      assert Sanctum.Catalog.auto_permitted?("probe_component", "pull")
     end
   end
 end

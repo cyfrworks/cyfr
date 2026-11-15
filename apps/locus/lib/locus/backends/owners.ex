@@ -38,13 +38,12 @@ defmodule Locus.Backends.Owners do
 
   ## Sessions
 
-  `open/3` opens a session at exactly the owner's `(g, e)`. A `run` open
-  attaches to the session running for its `(program, home, key)`
-  (`resumed: true`) or starts one (`resumed: false`); a `sign_in` open
-  does the same for the program's login command on a pseudo-terminal,
-  which needs a kept home and a login command (`bad_request`). A program
-  whose home is kept needs a `home_id` and a scratch one none
-  (`bad_request`); a program the owner does not define is
+  `open/3` opens a session at exactly the owner's `(g, e)`. An open
+  attaches to the session running for its `(program, home, key, mode)`
+  (`resumed: true`) or starts one (`resumed: false`): a `run` session's
+  process on pipes, a `terminal` one's on a pseudo-terminal of the open's
+  size. A program whose home is kept needs a `home_id` and a scratch one
+  none (`bad_request`); a program the owner does not define is
   `unknown_program`; one failed, `program_failed`. An owner holds at most
   `Prima.LocusBackends.max_sessions/0` sessions, running or ended: the
   oldest ended one whose process is gone is forgotten for a new one, and
@@ -99,10 +98,10 @@ defmodule Locus.Backends.Owners do
   is absent (`Locus.Launcher.home_ensure/2`) and the process runs under
   the home's own uid.
 
-  `session/3` names the running or ended session a `send`, `recv` or
-  `close` reaches, at exactly the owner's version; one the owner does not
-  hold is `unknown_session`. Nothing waits on a session here: those calls
-  go to the session itself.
+  `session/3` names the running or ended session every other session
+  message reaches, and its mode, at exactly the owner's version; one the
+  owner does not hold is `unknown_session`. Nothing waits on a session
+  here: those calls go to the session itself.
 
   ## Crashes
 
@@ -112,7 +111,7 @@ defmodule Locus.Backends.Owners do
   once the backoff's wait for that many crashes (`restart_backoff_ms/0`)
   has passed since the last, and the `max_crashes/0`-th fails that key,
   refusing its opens `program_failed` until a sync at a new version. One
-  key's crashes never fail another's open: one home's sign-ins, or one
+  key's crashes never fail another's open: one home's terminals, or one
   caller's crashing session, leave every other key's process alone. A
   status reports the program `failed` while any of its keys is.
 
@@ -234,7 +233,7 @@ defmodule Locus.Backends.Owners do
 
   @doc "Opens a session as `message` asks, for the owner `invoke` names."
   @spec open(GenServer.server(), map(), map()) ::
-          {:ok, %{status: :running, session: String.t(), resumed: boolean(), pty: boolean()}}
+          {:ok, %{status: :running, session: String.t(), resumed: boolean()}}
           | {:error, LocusBackends.code()}
   def open(server \\ __MODULE__, invoke, message) do
     GenServer.call(server, {:open, invoke, message}, @open_timeout_ms)
@@ -242,16 +241,16 @@ defmodule Locus.Backends.Owners do
     :exit, _reason -> {:error, :unavailable}
   end
 
-  @doc "The session `id` of the owner `invoke` names: its process and the owner's secrets."
+  @doc "The session `id` of the owner `invoke` names: its process and its mode."
   @spec session(GenServer.server(), map(), String.t()) ::
-          {:ok, pid() | nil, [String.t()]} | {:error, LocusBackends.code()}
+          {:ok, pid() | nil, LocusBackends.mode()} | {:error, LocusBackends.code()}
   def session(server \\ __MODULE__, invoke, id),
     do: GenServer.call(server, {:session, invoke, id})
 
   @doc """
   Retires every owner whose lease has passed, asks every running session
-  of the rest to end if no send and no recv used it within its owner's
-  idle period, and measures every capped kept home a session runs in
+  of the rest to end if no message used it within its owner's idle
+  period, and measures every capped kept home a session runs in
   whose interval has passed.
   """
   @spec sweep(GenServer.server()) :: :ok
@@ -377,7 +376,7 @@ defmodule Locus.Backends.Owners do
     case admit_owner(state, invoke) do
       {:ok, owner, state} ->
         case Map.fetch(owner.sessions, id) do
-          {:ok, session} -> {:reply, {:ok, session.pid, owner.secrets}, state}
+          {:ok, session} -> {:reply, {:ok, session.pid, session.mode}, state}
           :error -> {:reply, {:error, :unknown_session}, state}
         end
 
@@ -837,6 +836,7 @@ defmodule Locus.Backends.Owners do
       key: {program.name, message.home_id, message.key, message.mode},
       mode: message.mode,
       argv: message.argv,
+      size: if(message.mode == :terminal, do: %{rows: message.rows, cols: message.cols}),
       memory_bytes: program.memory_bytes || state.memory_bytes
     }
 
@@ -869,24 +869,19 @@ defmodule Locus.Backends.Owners do
       end
     else
       {:ok, session_id} ->
-        session = owner.sessions[session_id]
-        {:reply, {:ok, opened_answer(session_id, true, session.mode)}, state}
+        {:reply, {:ok, opened_answer(session_id, true)}, state}
 
       {:error, code} ->
         {:reply, {:error, code}, state}
     end
   end
 
-  # A kept program's sessions need a home, and a scratch one's none; a
-  # sign-in runs a login command in a kept home.
+  # A kept program's sessions need a home, and a scratch one's none.
   defp shape(%{home: :kept}, %{home_id: nil}), do: {:error, :bad_request}
 
   defp shape(%{home: :scratch}, %{home_id: home_id}) when home_id != nil,
     do: {:error, :bad_request}
 
-  defp shape(%{home: :scratch}, %{mode: :sign_in}), do: {:error, :bad_request}
-  defp shape(%{login_command: nil}, %{mode: :sign_in}), do: {:error, :bad_request}
-  defp shape(_program, %{mode: :sign_in, argv: [_ | _]}), do: {:error, :bad_request}
   defp shape(_program, _message), do: :ok
 
   defp not_failed(owner, program, key) do
@@ -992,7 +987,7 @@ defmodule Locus.Backends.Owners do
          :ok <- claimed(state, program, ask, result) do
       case running(owner, ask.key) do
         {:ok, session_id} ->
-          GenServer.reply(from, {:ok, opened_answer(session_id, true, ask.mode)})
+          GenServer.reply(from, {:ok, opened_answer(session_id, true)})
           reservation(state, {ask.owner, ask.session}, :abandoned)
 
         :error ->
@@ -1056,6 +1051,7 @@ defmodule Locus.Backends.Owners do
         owner: %{athanor: owner.athanor, server: owner.server, g: owner.g, e: owner.e},
         session: session_id,
         program: program.name,
+        mode: ask.mode,
         spec: spec(state, owner, program, ask, session_id),
         secrets: owner.secrets,
         launcher: state.launcher,
@@ -1112,20 +1108,17 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  # What a session's process runs: a run's command with the open's
+  # What a session's process runs: the program's command with the open's
   # arguments as its own, `"$@"` (the administrator allowed the program;
-  # its arguments shape only what runs inside its box), or a sign-in's
-  # login command on a pseudo-terminal.
+  # its arguments shape only what runs inside its box), a terminal's on a
+  # pseudo-terminal of the open's size, told the terminal type unless its
+  # environment names one.
   defp spec(state, owner, program, ask, session_id) do
-    argv =
-      case ask.mode do
-        :run -> ["/bin/sh", "-c", program.command <> " \"$@\"", "sh" | ask.argv]
-        :sign_in -> ["/bin/sh", "-c", program.login_command]
-      end
+    env = Map.fetch!(owner.env, program.name)
 
     %{
-      argv: argv,
-      env: Map.fetch!(owner.env, program.name),
+      argv: ["/bin/sh", "-c", program.command <> " \"$@\"", "sh" | ask.argv],
+      env: if(ask.size, do: Map.put_new(env, "TERM", LocusBackends.terminal_type()), else: env),
       pool: @pool,
       memory_bytes: ask.memory_bytes,
       cpu_quota: state.cpu_quota,
@@ -1133,7 +1126,7 @@ defmodule Locus.Backends.Owners do
     }
     |> put_given(:home, ask.home_id)
     |> put_given(:home_max_bytes, program.home_max_bytes)
-    |> put_given(:pty, if(ask.mode == :sign_in, do: true))
+    |> put_given(:pty, ask.size)
     |> put_given(:hosts, program.hosts)
   end
 
@@ -1150,8 +1143,8 @@ defmodule Locus.Backends.Owners do
     max(wait - (state.clock.() - last), 0)
   end
 
-  defp opened_answer(session_id, resumed?, mode),
-    do: %{status: :running, session: session_id, resumed: resumed?, pty: mode == :sign_in}
+  defp opened_answer(session_id, resumed?),
+    do: %{status: :running, session: session_id, resumed: resumed?}
 
   # ————— what sessions report —————
 
@@ -1165,7 +1158,7 @@ defmodule Locus.Backends.Owners do
   defp session_event(state, owner, session_id, session, :started) do
     Enum.each(
       session.waiting,
-      &GenServer.reply(&1, {:ok, opened_answer(session_id, false, session.mode)})
+      &GenServer.reply(&1, {:ok, opened_answer(session_id, false)})
     )
 
     state

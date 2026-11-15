@@ -97,6 +97,19 @@ defmodule PrismWeb.ShellLive do
   frame is let go and the canvas is decided again, as one with no frame
   held is.
 
+  ## Running programs
+
+  The shelf lists the person's own running program sessions (C8,
+  `Opus.Programs`): only ever what `running/1` answers, read when the
+  shell mounts and again at each `Cyfr.Bus.Program` on the person's own
+  `Cyfr.Bus.programs/2` topic, whose fields it never lists, so a program
+  whose tab was closed still stands there until it ends. A read that
+  fails keeps what is shown and is tried again shortly. `PrismWeb.CanvasLive` draws them; a chip opens the program's
+  terminal on the Programs page (`?terminal=<session>`), and its Close
+  asks `close/2`, after which the list is what `running/1` answers. The
+  shelf shows only while a canvas is shown; without one, the Programs
+  page lists them.
+
   ## The chooser of desktops
 
   The shell's key `desktops` opens the chooser over the canvas: from the
@@ -141,14 +154,15 @@ defmodule PrismWeb.ShellLive do
   that asked keeps running under it; `chat` opens the chat overlay and
   `aqua` AQUA's panel in place, each at the thread a `ref` names when
   the person's own seat reads it there (a shared thread they sit in, a
-  thread of their own), and a Dashboard page ignores a `ref`. A
-  control's press and a write
-  are answered over the frame's port (`canvas_answer`) with their typed
-  outcome, `cancelled` when this view did not act on them. Its bridge
-  (`iframe_bridge.js`) forwards those verbs only while the page holds
-  activation that no input in the shell's chrome and no earlier verb has
-  spent, and drops one sent within the activation's lifespan of the last
-  spend at once, a press or a write told `cancelled` naming `too_soon`.
+  thread of their own), and a Dashboard page ignores a `ref` but
+  Executions, which opens at the run it names in either UI mode. An open, a control's press
+  and a write are answered over the frame's port (`canvas_answer`) with
+  their typed outcome, `cancelled` when this view did not act on them
+  (an app's open too, `opened`). Its bridge (`iframe_bridge.js`) forwards
+  those verbs only while the page holds activation that no input in the
+  shell's chrome and no earlier verb has spent, and drops one sent within
+  the activation's lifespan of the last spend at once, an open, a press
+  or a write told `cancelled` naming `too_soon`.
   Each carries the ordinal of the person's input its bridge forwarded it
   with, and one input is honoured once.
 
@@ -360,6 +374,7 @@ defmodule PrismWeb.ShellLive do
   alias Prism.CanvasValidation
   alias Prism.Frames
   alias Prism.Fallback
+  alias PrismWeb.TerminalComponent
   alias Sanctum.TinctureAuth
 
   # How long a canvas has, from the moment the glass shows it, to send
@@ -367,6 +382,12 @@ defmodule PrismWeb.ShellLive do
   # its frame's open, for one that opens shown, so a page that never
   # loads, and so never handshakes, falls back as one that loads
   # and dies.
+  # What the shelf shows of one of the person's running program sessions,
+  # as `Opus.Programs.running/1` and `Cyfr.Bus.Program` carry it.
+  @program_fields [:session, :row_id, :name, :started_at, :kept, :attached, :by]
+  # How soon a failed read of the running programs is tried again.
+  @programs_retry_ms 5_000
+
   @canvas_ready_ms 10_000
 
   # The stream a canvas reads a feed's results on (`Opus.Providers.Feed`).
@@ -432,6 +453,8 @@ defmodule PrismWeb.ShellLive do
       |> assign(:chat_overlay, nil)
       |> assign(:aqua_panel, nil)
       |> assign(:covered, false)
+      |> assign(:programs, [])
+      |> assign(:programs_retry, nil)
 
     socket =
       if connected?(socket) do
@@ -444,8 +467,10 @@ defmodule PrismWeb.ShellLive do
           actor = Sanctum.Context.actor(ctx)
           Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
 
-          if Prima.PersonId.person?(ctx.user_id),
-            do: Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, ctx.user_id))
+          if Prima.PersonId.person?(ctx.user_id) do
+            Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, ctx.user_id))
+            Cyfr.Bus.subscribe(actor, Cyfr.Bus.programs(actor, ctx.user_id))
+          end
         end
 
         params = get_connect_params(socket) || %{}
@@ -455,6 +480,7 @@ defmodule PrismWeb.ShellLive do
         |> assign(:appearance, Prism.Appearance.block(params))
         |> assign(:person, %{"name" => Prism.Appearance.person_name(ctx.user_id)})
         |> load_tinctures()
+        |> load_programs()
       else
         socket
       end
@@ -744,6 +770,27 @@ defmodule PrismWeb.ShellLive do
 
   def handle_event("close_chooser", _params, socket), do: {:noreply, close_chooser(socket)}
 
+  # Close on a running program's shelf chip. What the shelf lists next is
+  # what `Opus.Programs.running/1` answers, whatever close said.
+  def handle_event("close_program", %{"session" => session}, socket) when is_binary(session) do
+    socket =
+      case Opus.Programs.close(socket.assigns.context, session) do
+        {:ok, :closed} ->
+          socket
+
+        {:ok, :already_gone} ->
+          put_flash(socket, :info, TerminalComponent.ended_text(:not_found))
+
+        {:error, :unanswered} ->
+          put_flash(socket, :error, TerminalComponent.ended_text(:unanswered))
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Failed: #{error_message(reason)}")
+      end
+
+    {:noreply, load_programs(socket)}
+  end
+
   # The person's devices: the system layer's pairing prompt, one at a time.
   def handle_event("devices", _params, socket) do
     if socket.assigns.pairing_prompt do
@@ -1005,16 +1052,18 @@ defmodule PrismWeb.ShellLive do
   end
 
   # `open` names a tincture this shell lists, versionless or at the
-  # version it lists; anything else opens nothing.
-  defp tincture_verb(socket, _frame, %{verb: :open, args: %{"ref" => ref} = args}) do
+  # version it lists; anything else opens nothing. Either way the frame is
+  # answered under the open's call.
+  defp tincture_verb(socket, frame, %{verb: :open, args: %{"ref" => ref} = args}) do
     subject = Map.get(args, "subject")
 
     with %{id: id} = card <- listed(socket, ref),
          :ok <- accepts(card, subject) do
       socket = launch_tincture(socket, id)
-      if subject, do: give_subject(socket, {:full, id}, subject), else: socket
+      socket = if subject, do: give_subject(socket, {:full, id}, subject), else: socket
+      opened(socket, frame, args["call"], "opened")
     else
-      _refused -> drop_message(socket)
+      refused -> socket |> drop_message() |> open_refused(frame, args["call"], refused, false)
     end
   end
 
@@ -1118,11 +1167,11 @@ defmodule PrismWeb.ShellLive do
     if ready?(socket, frame), do: socket, else: enter_fallback(socket, :not_ready)
   end
 
-  defp live_canvas_verb(socket, %{key: {:canvas, canvas_id}}, %{
+  defp live_canvas_verb(socket, %{key: {:canvas, canvas_id}} = frame, %{
          verb: :open,
          args: %{"ref" => ref} = args
        }),
-       do: open_from_canvas(socket, canvas_id, ref, Map.get(args, "subject"))
+       do: open_from_canvas(socket, frame, canvas_id, ref, args)
 
   defp live_canvas_verb(socket, frame, %{verb: :press, args: %{"control" => _} = args}),
     do: press_control(socket, frame, args)
@@ -1148,8 +1197,11 @@ defmodule PrismWeb.ShellLive do
 
   defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
 
-  # A press of a control or a write of the preferences the shell did not
-  # act on is answered so, never left waiting: it did not run.
+  # An open, a press of a control or a write of the preferences the shell
+  # did not act on is answered so, never left waiting: it did not run.
+  defp not_run(socket, frame, %{verb: :open, args: %{"call" => call}}),
+    do: opened(socket, frame, call, "cancelled")
+
   defp not_run(socket, frame, %{verb: :press, args: %{"control" => control, "call" => call}}),
     do: answer(socket, frame, "pressed", Prima.TinctureWire.pressed(control, call, "cancelled"))
 
@@ -1165,6 +1217,37 @@ defmodule PrismWeb.ShellLive do
   # its bridge, once and never held for a later handshake.
   defp answer(socket, %{id: frame_id}, verb, args),
     do: push_event(socket, "canvas_answer", %{frame: frame_id, verb: verb, args: args})
+
+  defp opened(socket, frame, call, outcome, reason \\ nil),
+    do: answer(socket, frame, "opened", Prima.TinctureWire.opened(call, outcome, reason))
+
+  # An open the shell does not act on: a tincture it does not list, a
+  # subject the app does not take, or the person rearranging the desktop.
+  # A refusal about a reference tells the frame nothing it could not list
+  # itself: only a canvas whose `installed` names the tincture (`lists`)
+  # hears that its subject is not taken; every other frame hears
+  # `not_found`, as for a tincture the shell does not list.
+  defp open_refused(socket, frame, call, :refused, true = _lists),
+    do: opened(socket, frame, call, "refused", "invalid_argument")
+
+  defp open_refused(socket, frame, call, refused, _lists) when refused in [nil, :refused],
+    do: opened(socket, frame, call, "refused", "not_found")
+
+  defp open_refused(socket, frame, call, _not_now, _lists),
+    do: opened(socket, frame, call, "cancelled")
+
+  # Whether the `installed` the shell told canvas `canvas_id` names the
+  # tincture `ref` lists.
+  defp told_lists?(socket, canvas_id, ref) do
+    case listed(socket, ref) do
+      %{} = card ->
+        told = Map.get(socket.assigns.told, canvas_id, [])
+        Enum.any?(told, &(&1.ref == Frames.ref_of(card)))
+
+      nil ->
+        false
+    end
+  end
 
   # ---- a desktop's controls ---------------------------------------------------
 
@@ -1567,10 +1650,25 @@ defmodule PrismWeb.ShellLive do
     })
   end
 
+  # A run's page, Executions at the run `ref` names, as its address focuses
+  # one, where its sentence is: in either UI mode, since the run's sentence
+  # is read nowhere else. What the page shows of it is the page's, under
+  # the person's own reads.
+  defp settings(socket, "executions", ref) when is_binary(ref) do
+    push_event(socket, "navigate", %{
+      to:
+        PrismWeb.Nav.href(
+          "/executions?" <> URI.encode_query(%{"id" => ref}),
+          socket.assigns.athanor_route
+        )
+    })
+  end
+
   # One of Prism's own pages, by its key in the Dashboard's list for the
   # person's UI mode: it opens as the overlay over the desktop, the page's
   # LiveView moved there by this view's hook, so the canvas keeps running.
-  # A page opens at its top: no Dashboard page takes a record to open at.
+  # A page opens at its top: no other Dashboard page takes a record to
+  # open at.
   defp settings(socket, page, _ref) do
     mode = Prism.Labels.mode(socket.assigns[:ui_mode])
 
@@ -1623,16 +1721,24 @@ defmodule PrismWeb.ShellLive do
   # A listed tincture the canvas opens is the person's open: placed where
   # the layout has it, or opened as `Prism.Arrangement.open/4` places it,
   # and written to the layout with the next write.
-  defp open_from_canvas(socket, canvas_id, ref, subject) do
+  defp open_from_canvas(socket, frame, canvas_id, ref, args) do
+    subject = Map.get(args, "subject")
+
     with :ok <- arranging(socket),
          %{} = card <- listed(socket, ref),
          :ok <- accepts(card, subject),
-         {:ok, opened} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
-      if subject,
-        do: give_subject(opened, {:app, canvas_id, Frames.ref_of(card)}, subject),
-        else: opened
+         {:ok, arranged} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
+      arranged =
+        if subject,
+          do: give_subject(arranged, {:app, canvas_id, Frames.ref_of(card)}, subject),
+          else: arranged
+
+      opened(arranged, frame, args["call"], "opened")
     else
-      _refused -> drop_message(socket)
+      refused ->
+        socket
+        |> drop_message()
+        |> open_refused(frame, args["call"], refused, told_lists?(socket, canvas_id, ref))
     end
   end
 
@@ -3023,6 +3129,46 @@ defmodule PrismWeb.ShellLive do
 
   defp superseded?(_assigns, _prompt_id, _prompt), do: false
 
+  # The shelf's programs: what `Opus.Programs.running/1` answers of the
+  # person's own sessions, oldest first, and nothing else. A read that
+  # fails keeps what is shown and is tried again shortly, one retry
+  # pending at a time; the timer ends with the shell.
+  defp load_programs(socket) do
+    case Opus.Programs.running(socket.assigns.context) do
+      {:ok, running} ->
+        socket
+        |> cancel_programs_retry()
+        |> assign(
+          :programs,
+          running
+          |> Enum.map(&Map.take(&1, @program_fields))
+          |> Enum.sort_by(& &1.started_at, DateTime)
+        )
+
+      {:error, _not_answered} ->
+        retry_programs(socket)
+    end
+  end
+
+  defp retry_programs(%{assigns: %{programs_retry: ref}} = socket) when is_reference(ref),
+    do: socket
+
+  defp retry_programs(socket),
+    do:
+      assign(
+        socket,
+        :programs_retry,
+        Process.send_after(self(), :reload_programs, @programs_retry_ms)
+      )
+
+  defp cancel_programs_retry(%{assigns: %{programs_retry: ref}} = socket)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+    assign(socket, :programs_retry, nil)
+  end
+
+  defp cancel_programs_retry(socket), do: socket
+
   defp load_tinctures(socket), do: socket |> read_listing() |> follow_listing()
 
   # The listing read again for a decision. A read that changes what
@@ -3385,6 +3531,13 @@ defmodule PrismWeb.ShellLive do
   # Other tray traffic on the athanor's topic is for the topbar, not the shell.
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
+  # The person's own program sessions moved: whatever the message says,
+  # the shelf reads `running/1` again, and only its answer is listed.
+  def handle_info(%Cyfr.Bus.Program{}, socket), do: {:noreply, load_programs(socket)}
+
+  def handle_info(:reload_programs, socket),
+    do: {:noreply, socket |> assign(:programs_retry, nil) |> load_programs()}
+
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
@@ -3522,6 +3675,8 @@ defmodule PrismWeb.ShellLive do
         frames={@frames}
         tinctures={@tinctures}
         arrangement={@arrangement}
+        programs={@programs}
+        athanor_route={@athanor_route}
       />
 
       <%!-- The shell's own chrome: no frame draws it or reaches it. --%>

@@ -498,6 +498,70 @@ defmodule Sanctum.Consent.FlowTest do
       assert grant["tool_patterns"] == ["issues.*"]
     end
 
+    test "the digest, the grant and the preview derive from one row and agree, and none " <>
+           "carries a literal's value",
+         %{ctx: ctx} do
+      publish!(ctx, "flow-mcp-record")
+      ref = "reagent:local.flow-mcp-record"
+      literal = "tenant-literal-#{System.unique_integer([:positive])}"
+
+      {:ok, server} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "recordsrv",
+          url: "https://127.0.0.1:9/mcp",
+          config_json:
+            Jason.encode!(%{
+              "headers" => %{"authorization" => "Bearer vault:flow-token", "x-tenant" => literal},
+              "timeout_ms" => 1_000
+            })
+        })
+
+      {:ok, digest} = Sanctum.ToolServerDigest.from_server(server)
+      {:ok, record} = Sanctum.ToolServerDigest.recorded(server)
+
+      assert record == %{
+               "address" => "https://127.0.0.1:9/mcp",
+               "headers" => [
+                 %{"name" => "authorization", "entry" => "flow-token", "scheme" => "Bearer"},
+                 %{"name" => "x-tenant", "literal" => true}
+               ]
+             }
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      decisions = %{ref: ref, tool_servers: [%{server_name: "recordsrv"}]}
+      {:ok, preview} = Commit.preview(ctx, decisions)
+
+      assert [%{"values" => %{"name" => "recordsrv", "digest" => ^digest, "record" => ^record}}] =
+               Enum.filter(preview.rows, &(&1["kind"] == "tool_servers"))
+
+      {:ok, %{profile_id: profile_id}} =
+        Commit.commit(ctx, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: 0
+        })
+
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+
+      assert [%{"server_digest" => ^digest, "server_name" => "recordsrv", "record" => ^record}] =
+               head.resolved_policy
+               |> Jason.decode!()
+               |> get_in(["nodes", ref, "edges", "@ingress", "tool_servers"])
+
+      # A re-grant's plan holds the head's record for the card to compare.
+      {:ok, again} = Plan.plan(ctx, %{ref: ref})
+
+      assert again.head_tool_servers == [%{name: "recordsrv", digest: digest, record: record}]
+
+      # The literal's value is in neither the whole grant nor the whole preview.
+      refute head.resolved_policy =~ literal
+      refute Jason.encode!(preview) =~ literal
+      refute inspect(again) =~ literal
+    end
+
     test "an unknown server cannot be granted", %{ctx: ctx} do
       publish!(ctx, "flow-mcp-ghost")
 

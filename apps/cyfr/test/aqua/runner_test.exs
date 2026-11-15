@@ -1656,7 +1656,7 @@ defmodule Aqua.RunnerTest do
         case unquote(operation) do
           :send -> {:send, ctx, "@aqua late", [agents: [%{"name" => "aqua"}]]}
           :stop -> {:stop, ctx}
-          :revoke_grant -> {:revoke_grant, ctx, "aqua", "notes", "keep"}
+          :revoke_grant -> {:revoke_grant, ctx, "aqua", "notes", "keep", nil}
           :restart_for_consent -> {:restart_for_consent, ctx, %{}}
         end
 

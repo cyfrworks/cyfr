@@ -34,10 +34,12 @@ defmodule Cyfr.BusPayloadTest do
     Notify,
     Ping,
     PolicyDecision,
+    Program,
     Progress,
     Request,
     RoomInView,
     ScheduleCompleted,
+    ScheduleTurnDue,
     CrewPending,
     ScheduleRun,
     Schedules,
@@ -120,6 +122,7 @@ defmodule Cyfr.BusPayloadTest do
       RoomInView.new(%{"athanor_id" => "ath_payload", "thread_id" => "t", "title" => "x"}),
       AquaAsk.new("About the runs widget on my main desktop (canvas): "),
       ScheduleCompleted.new(@actor),
+      ScheduleTurnDue.new(@actor),
       CrewPending.new(@actor),
       VaultEntry.new(@actor, :changed, name: "github", type: "api_key", status: "fine"),
       CrewActivity.new(@actor, :started,
@@ -139,6 +142,16 @@ defmodule Cyfr.BusPayloadTest do
         name: "q3.csv",
         type: "text/csv",
         changed_at: ~U[2026-11-09 09:00:00Z]
+      ),
+      Program.new(@actor, :ended,
+        session: "trm_payload",
+        row_id: "mcp_payload",
+        name: "claude",
+        started_at: ~U[2026-11-15 09:00:00Z],
+        kept: false,
+        attached: false,
+        by: :person,
+        reason: :closed
       ),
       ThreadListed.new(@actor, :own,
         id: "thr_payload",
@@ -436,6 +449,7 @@ defmodule Cyfr.BusPayloadTest do
             :confirmations -> Bus.confirmations(other, "usr_1")
             :attention -> Bus.attention(other, "usr_1")
             :threads -> Bus.threads(other, "usr_1")
+            :programs -> Bus.programs(other, "usr_1")
             _ -> apply(Bus, key, [other])
           end
 

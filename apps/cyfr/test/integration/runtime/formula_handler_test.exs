@@ -1347,7 +1347,10 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       # Prima.Remediation's, the one component-guide documents.
       remediation = parsed["error"]["remediation"]
       assert remediation["component_ref"] == "catalyst:local.no-policy-test:0.1.0"
-      assert remediation["setup_command"] =~ "profile grant"
+
+      assert Enum.sort(Map.keys(remediation)) ==
+               ["component_ref", "issues", "message", "profile_id"]
+
       assert is_list(remediation["issues"])
     end
 

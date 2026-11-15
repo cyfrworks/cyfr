@@ -5,8 +5,8 @@ defmodule Locus.Backends do
   @moduledoc """
   The backends service: the programs CYFR registers, one owner per
   athanor and `mcp_servers` row, each session of a program a long-lived
-  process under the keeper whose lines go to and from its owner, served
-  over `Prima.LocusBackends`. This module is its facade:
+  process under the keeper whose lines, or whose terminal's bytes, go to
+  and from its owner, served over `Prima.LocusBackends`. This module is its facade:
   the children `Locus.Application` starts on a node that holds a backends
   key, and the address its listener serves on as `Locus.Config` reads it.
   Nothing

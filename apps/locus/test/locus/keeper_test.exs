@@ -860,6 +860,25 @@ defmodule Locus.KeeperTest do
       assert {:error, :unknown_spawn} = Keeper.signal(handle, "SIGTERM")
     end
 
+    test "resize is the vectors' request naming the spawn, and a released or unknown spawn's is unknown_spawn",
+         %{name: name, fake: fake} do
+      assert {:ok, handle} = spawn_live(name, "echo ready; exec sleep 30")
+      assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+
+      assert :ok = Keeper.resize(handle, 50, 132)
+
+      [resize] = recorded(fake, "resize")
+      vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "resize"))
+      assert resize == %{vector | "spawn_id" => handle.spawn_id}
+
+      :ok = Keeper.release(name, handle, 0)
+      assert ending(events_until_released(handle)) == [{:exited, nil, "SIGKILL"}, :released]
+
+      assert {:error, :unknown_spawn} = Keeper.resize(handle, 24, 80)
+      assert {:error, :unknown_spawn} = Keeper.resize(%{handle | ref: make_ref()}, 24, 80)
+      assert [^resize] = requests(fake, "resize")
+    end
+
     test "release with a grace lets the spawn end on its own, and is the vectors' request", %{
       name: name,
       fake: fake
@@ -1137,7 +1156,11 @@ defmodule Locus.KeeperTest do
       assert {:ok, _handle} =
                Keeper.spawn(
                  name,
-                 Map.merge(spec, %{home: "vlt_a", home_max_bytes: 1_048_576, pty: true})
+                 Map.merge(spec, %{
+                   home: "vlt_a",
+                   home_max_bytes: 1_048_576,
+                   pty: %{rows: 40, cols: 120}
+                 })
                )
 
       assert [spawn] = for(%{"type" => "spawn"} = r <- FakeKeeper.requests(fake), do: r)
@@ -1147,7 +1170,7 @@ defmodule Locus.KeeperTest do
                "home_path" => Path.join(root, "vlt_a"),
                "home_uid" => uid,
                "home_max_bytes" => 1_048_576,
-               "pty" => true
+               "pty" => %{"rows" => 40, "cols" => 120}
              }
 
       :ok = FakeKeeper.mode(fake, :home_over_cap)

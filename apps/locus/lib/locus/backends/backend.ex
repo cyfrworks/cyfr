@@ -5,48 +5,51 @@ defmodule Locus.Backends.Backend do
   @moduledoc """
   One session of a program of one owner (an athanor's `mcp_servers` row at
   a generation and epoch): its process, started through a
-  `Locus.Launcher`, and the sequence-numbered buffer of the lines it
-  writes (`Locus.Backends.Relay`). It knows no protocol: lines go in with
-  `send_lines/2` and come out with `recv/3`, and what they mean is the
-  owner's.
+  `Locus.Launcher`, and the sequence-numbered buffer of what it writes
+  (`Locus.Backends.Relay`). It knows no protocol. A session of mode `:run`
+  takes lines with `send_lines/2`; one of mode `:terminal` runs on a
+  pseudo-terminal and takes bytes with `input/2` and a size with
+  `resize/3`; `recv/3` answers lines of the one and chunks of bytes of the
+  other, and what they mean is the owner's.
 
   ## Its life
 
   A session starts its process at once, or after `:delay_ms` when its
   owners hold it back for a crash's backoff, and tells its owners
   `:started` once the launcher answers the spawn. It is `running` until
-  its process ends, and then `ended`: its buffered lines stay readable,
+  its process ends, and then `ended`: what it buffered stays readable,
   every later `recv/3` answers `running: false`, and every later
-  `send_lines/2` answers `:ended`. The process stays its until it is gone
-  and its owners hear `{:ended, end}`, `end` saying whether the end was a
-  crash (`crash: true`: the process exited of its own accord with a
-  status other than 0 or by a signal, wrote a line past
-  `Prima.LocusBackends.max_line_bytes/0`, or its spawn was refused) and
-  why; once nothing of its process is left (the launcher's `:released`, or
+  `send_lines/2`, `input/2` and `resize/3` answers `:ended`. The process
+  stays its until it is gone and its owners hear `{:ended, end}`, `end`
+  saying whether the end was a crash (`crash: true`: the process exited
+  of its own accord with a status other than 0 or by a signal, wrote a
+  line past `Prima.LocusBackends.max_line_bytes/0`, or its spawn was
+  refused) and why; once nothing of its process is left (the launcher's `:released`, or
   its refusal of the spawn), `:vacated`, after which it holds no uid. A
   spawn the launcher did not answer (`launcher_unavailable`) is
   `:unconfirmed` instead: it may yet run, and only the launcher can say.
 
-  `close/1`, `retire_if_idle/2` (no `send_lines/2` and no `recv/3` within
-  the idle period), `end_session/2` (its owners ending it: the cap of its
-  home, its home's reset or retirement) and `stop/2` (its owner retired)
-  end the process with the stop grace; none of them is a crash. A session
-  ended this way answers `running: false` at once, however long its
-  process takes to go.
+  `close/1`, `retire_if_idle/2` (no message within the idle period),
+  `end_session/2` (its owners ending it: the cap of its home, its home's
+  reset or retirement) and `stop/2` (its owner retired) end the process
+  with the stop grace; none of them is a crash. A session ended this way
+  answers `running: false` at once, however long its process takes to
+  go.
 
-  ## Lines
+  ## Masking
 
-  A session on a pseudo-terminal (`:pty`) makes the part of a line with
-  no newline a line of its own once `:flush_ms` (200 ms) pass with no
-  more bytes, so a prompt that waits for its answer is read. Everything a
-  session answers — its lines and the stderr tail of its status — passes
-  through `Prima.LocusBackends.mask/2` with its owner's secret values.
-  Nothing of a process's stdout or stderr is logged.
+  Everything a session answers is masked with its owner's secret values:
+  a run's lines and the stderr tail of its status through
+  `Prima.LocusBackends.mask/2`, a terminal's bytes as they arrive through
+  one `Prima.LocusBackends.masker/1`, so a value split between two of its
+  writes is masked whole; what the masker holds when the process is gone
+  is buffered as `Prima.LocusBackends.mask_end/1` answers it. Nothing of a
+  process's stdout or stderr is logged.
 
   ## Recv
 
-  `recv/3` answers at once when a line past `after` is buffered or the
-  session has ended, and otherwise waits up to `max_wait_ms` for either;
+  `recv/3` answers at once when a line or a chunk past `after` is
+  buffered or the session has ended, and otherwise waits up to `max_wait_ms` for either;
   the session holds the wait, so nothing else does. A wait counts as a use
   when it is asked, not while it waits.
   """
@@ -58,7 +61,6 @@ defmodule Locus.Backends.Backend do
   alias Locus.Backends.Relay
   alias Prima.LocusBackends
 
-  @flush_ms 200
   # A release the launcher never reports is taken as done after the grace
   # and this bound, as the owners take one.
   @release_timeout_ms 15_000
@@ -71,25 +73,35 @@ defmodule Locus.Backends.Backend do
   @typedoc "How a session ended: a crash or not, and why."
   @type ended :: %{crash: boolean(), error: String.t() | nil}
 
-  @typedoc "What `recv/3` answers."
-  @type received :: %{
-          lines: [LocusBackends.line()],
-          dropped: non_neg_integer(),
-          running: boolean()
-        }
+  @typedoc "What `recv/3` answers: lines of a run, chunks of a terminal."
+  @type received ::
+          %{
+            lines: [LocusBackends.line()],
+            dropped: non_neg_integer(),
+            running: boolean(),
+            exit_code: 0..255 | nil
+          }
+          | %{
+              chunks: [LocusBackends.chunk()],
+              dropped: non_neg_integer(),
+              running: boolean(),
+              exit_code: 0..255 | nil
+            }
 
   @doc """
   Starts a session. Options:
 
     * `:owner` (`%{athanor, server, g, e}`), `:session` (its id),
       `:program` (its program's name) and `:spec` (the
-      `t:Locus.Launcher.spec/0` its process is spawned with), required;
+      `t:Locus.Launcher.spec/0` its process is spawned with, a
+      terminal's naming its `pty`), required;
+    * `:mode`, `:run` (the default) or `:terminal`;
     * `:secrets`, the owner's secret values;
     * `:launcher` and `:launcher_server`;
     * `:notify`, the process told of `:started`, `{:ended, end}` and
       `:vacated`;
     * `:delay_ms`, the wait before the spawn (0);
-    * `:stop_grace_ms` (2 s), `:flush_ms` (200 ms), `:release_timeout_ms`;
+    * `:stop_grace_ms` (2 s), `:release_timeout_ms`;
     * `:bounds`, overriding `Prima.LocusBackends.bounds/0` by name
       (`:max_line_bytes`, `:max_buffer_bytes`, `:max_buffer_lines`,
       `:line_charge_bytes`, `:stderr_tail_bytes`, `:max_session_bytes`);
@@ -102,7 +114,17 @@ defmodule Locus.Backends.Backend do
   def send_lines(server, lines) when is_list(lines),
     do: GenServer.call(server, {:send, lines}, @call_margin_ms)
 
-  @doc "The lines past `after`, waiting up to `max_wait_ms` for one or the session's end."
+  @doc "Write `bytes` to a terminal session's process as they are: `:running` or `:ended`."
+  @spec input(GenServer.server(), binary()) :: :running | :ended
+  def input(server, bytes) when is_binary(bytes),
+    do: GenServer.call(server, {:input, bytes}, @call_margin_ms)
+
+  @doc "Set a terminal session's size: `:running` or `:ended`."
+  @spec resize(GenServer.server(), pos_integer(), pos_integer()) :: :running | :ended
+  def resize(server, rows, cols) when is_integer(rows) and is_integer(cols),
+    do: GenServer.call(server, {:resize, rows, cols}, @call_margin_ms)
+
+  @doc "The lines or chunks past `after`, waiting up to `max_wait_ms` for one or the session's end."
   @spec recv(GenServer.server(), non_neg_integer(), non_neg_integer()) :: received()
   def recv(server, after_seq, max_wait_ms),
     do: GenServer.call(server, {:recv, after_seq, max_wait_ms}, max_wait_ms + @call_margin_ms)
@@ -116,7 +138,7 @@ defmodule Locus.Backends.Backend do
   def end_session(server, reason) when is_binary(reason),
     do: GenServer.cast(server, {:end, :ended, reason})
 
-  @doc "End the session if no send and no recv used it within `idle_ms`."
+  @doc "End the session if no message used it within `idle_ms`."
   @spec retire_if_idle(GenServer.server(), non_neg_integer()) :: :ok
   def retire_if_idle(server, idle_ms), do: GenServer.cast(server, {:retire_if_idle, idle_ms})
 
@@ -144,6 +166,8 @@ defmodule Locus.Backends.Backend do
     bounds = Map.merge(LocusBackends.bounds(), Map.new(Keyword.get(opts, :bounds, [])))
     clock = Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end)
     spec = Keyword.fetch!(opts, :spec)
+    mode = Keyword.get(opts, :mode, :run)
+    secrets = Keyword.get(opts, :secrets, [])
 
     with {:ok, launcher} <- launcher(opts) do
       state = %{
@@ -151,33 +175,33 @@ defmodule Locus.Backends.Backend do
         session: Keyword.fetch!(opts, :session),
         program: Keyword.fetch!(opts, :program),
         spec: spec,
-        pty: Map.get(spec, :pty) == true,
-        secrets: Keyword.get(opts, :secrets, []),
+        mode: mode,
+        secrets: secrets,
+        masker: if(mode == :terminal, do: LocusBackends.masker(secrets)),
         launcher: launcher,
         launcher_server: Keyword.get(opts, :launcher_server, launcher),
         notify: Keyword.get(opts, :notify),
         stop_grace_ms: Keyword.get(opts, :stop_grace_ms, 2_000),
-        flush_ms: Keyword.get(opts, :flush_ms, @flush_ms),
         release_timeout_ms: Keyword.get(opts, :release_timeout_ms, @release_timeout_ms),
         budget: bounds.max_session_bytes - @answer_margin_bytes,
         clock: clock,
         last_used: clock.(),
         relay:
-          Relay.new(
-            Map.take(bounds, [
-              :max_line_bytes,
-              :max_buffer_bytes,
-              :max_buffer_lines,
-              :line_charge_bytes,
-              :stderr_tail_bytes
-            ])
-          ),
+          bounds
+          |> Map.take([
+            :max_line_bytes,
+            :max_buffer_bytes,
+            :max_buffer_lines,
+            :line_charge_bytes,
+            :stderr_tail_bytes
+          ])
+          |> Map.put(:mode, mode)
+          |> Relay.new(),
         status: :starting,
         handle: nil,
         released: false,
         ending: nil,
         ended: nil,
-        flush_timer: nil,
         waiters: [],
         stoppers: []
       }
@@ -195,13 +219,21 @@ defmodule Locus.Backends.Backend do
   end
 
   @impl GenServer
-  def handle_call({:send, _lines}, _from, %{status: status} = state) when status != :running,
-    do: {:reply, :ended, used(state)}
+  def handle_call({kind, _data}, _from, %{status: status} = state)
+      when kind in [:send, :input] and status != :running,
+      do: {:reply, :ended, used(state)}
 
-  def handle_call({:send, lines}, _from, state) do
-    data = Enum.map(lines, &[&1, ?\n])
+  def handle_call({:send, lines}, _from, state),
+    do: write(state, Enum.map(lines, &[&1, ?\n]))
 
-    case state.launcher.send(state.handle, data) do
+  def handle_call({:input, bytes}, _from, state), do: write(state, bytes)
+
+  def handle_call({:resize, _rows, _cols}, _from, %{status: status} = state)
+      when status != :running,
+      do: {:reply, :ended, used(state)}
+
+  def handle_call({:resize, rows, cols}, _from, state) do
+    case state.launcher.resize(state.handle, rows, cols) do
       :ok -> {:reply, :running, used(state)}
       {:error, _reason} -> {:reply, :ended, used(state)}
     end
@@ -298,11 +330,6 @@ defmodule Locus.Backends.Backend do
     end
   end
 
-  def handle_info({:flush, timer}, %{flush_timer: timer} = state),
-    do: {:noreply, %{state | flush_timer: nil, relay: Relay.flush(state.relay)} |> wake()}
-
-  def handle_info({:flush, _timer}, state), do: {:noreply, state}
-
   # A release the launcher has not reported within its bound ends the
   # stoppers' wait and the session, never what it holds: that is gone only
   # when the launcher says so, as `:released` or to the spawn's heir.
@@ -333,12 +360,16 @@ defmodule Locus.Backends.Backend do
                  argv: {:redacted, length(spec.argv)}
              },
              secrets: {:redacted, length(secrets)},
+             masker: if(state.masker, do: :redacted),
              relay: %{bytes: relay.bytes, next_seq: relay.next_seq, dropped: relay.dropped},
              waiters: length(state.waiters)
          }}
 
       {:message, {:send, lines}} ->
         {:message, {:send, {:redacted, length(lines)}}}
+
+      {:message, {:input, bytes}} ->
+        {:message, {:input, {:redacted, byte_size(bytes)}}}
 
       {:message, {launcher, ref, {stream, bytes}}} when stream in [:stdout, :stderr] ->
         {:message, {launcher, ref, {stream, {:redacted, byte_size(bytes)}}}}
@@ -353,9 +384,15 @@ defmodule Locus.Backends.Backend do
 
   # ————— the process's events —————
 
+  defp on_event(%{mode: :terminal} = state, {:stdout, bytes})
+       when state.status == :running or state.ending != nil do
+    {released, masker} = LocusBackends.mask_chunk(state.masker, bytes)
+    wake(%{state | masker: masker, relay: Relay.output(state.relay, released)})
+  end
+
   defp on_event(state, {:stdout, bytes}) when state.status == :running or state.ending != nil do
     case Relay.stdout(state.relay, bytes) do
-      {:ok, relay} -> %{state | relay: relay} |> arm_flush() |> wake()
+      {:ok, relay} -> wake(%{state | relay: relay})
       {:error, :line_too_long} -> overflow(state)
     end
   end
@@ -404,12 +441,13 @@ defmodule Locus.Backends.Backend do
     finish(state, :crash, "line too long")
   end
 
-  # The process gone: the part of a line it left is a line, and the
-  # session is ended now if it was not already.
+  # The process gone: the part of a line it left is a line, what a
+  # terminal's masker held is masked whole, and the session is ended now if
+  # it was not already.
   defp released(%{released: true} = state), do: state
 
   defp released(state) do
-    state = %{state | released: true, relay: Relay.flush(state.relay)}
+    state = %{state | released: true, relay: rest(state)}
     # Released with no exit heard: the launcher let every spawn go.
     state = ended(state, state.ending || %{crash: true, error: "exited code=null signal=null"})
     notify(state, :vacated)
@@ -463,19 +501,19 @@ defmodule Locus.Backends.Backend do
 
   defp ended(state, _ended), do: state
 
-  # ————— lines —————
+  # ————— what it wrote —————
 
-  defp arm_flush(%{pty: true} = state) do
-    if Relay.partial?(state.relay) do
-      timer = make_ref()
-      Process.send_after(self(), {:flush, timer}, state.flush_ms)
-      %{state | flush_timer: timer}
-    else
-      %{state | flush_timer: nil}
+  defp rest(%{mode: :terminal} = state),
+    do: Relay.output(state.relay, LocusBackends.mask_end(state.masker))
+
+  defp rest(state), do: Relay.flush(state.relay)
+
+  defp write(state, data) do
+    case state.launcher.send(state.handle, data) do
+      :ok -> {:reply, :running, used(state)}
+      {:error, _reason} -> {:reply, :ended, used(state)}
     end
   end
-
-  defp arm_flush(state), do: state
 
   # Every wait a new line or the end answers.
   defp wake(state) do
@@ -493,13 +531,26 @@ defmodule Locus.Backends.Backend do
   end
 
   defp answer(state, after_seq) do
-    {lines, dropped, relay} = Relay.take(state.relay, after_seq, state.budget)
-    lines = Enum.map(lines, &%{&1 | text: LocusBackends.mask(&1.text, state.secrets)})
+    {taken, dropped, relay} = Relay.take(state.relay, after_seq, state.budget)
     running = state.status != :ended
     exit_code = if running, do: nil, else: Map.get(state.ending || %{}, :exit_code)
+    answer = %{dropped: dropped, running: running, exit_code: exit_code}
 
-    {%{lines: lines, dropped: dropped, running: running, exit_code: exit_code},
-     %{state | relay: relay}}
+    answer =
+      case state.mode do
+        # A terminal's chunks were masked as they arrived.
+        :terminal ->
+          Map.put(answer, :chunks, taken)
+
+        :run ->
+          Map.put(
+            answer,
+            :lines,
+            Enum.map(taken, &%{&1 | text: LocusBackends.mask(&1.text, state.secrets)})
+          )
+      end
+
+    {answer, %{state | relay: relay}}
   end
 
   defp used(state), do: %{state | last_used: state.clock.()}

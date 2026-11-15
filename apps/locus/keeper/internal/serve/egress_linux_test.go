@@ -282,7 +282,7 @@ func TestAKeptAdmissionTheGuardDidNotConfirmIsCleared(t *testing.T) {
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, testKeptFirst); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
-	req := keptRequest(t, k.attach, "k", "sleep 60", path, testKeptFirst, nil, false)
+	req := keptRequest(t, k.attach, "k", "sleep 60", path, testKeptFirst, nil)
 	req.Hosts = []string{"api.example.com"}
 	k.s.handleSpawn(req)
 	if r := k.reply(t); r["code"] != protocol.CodeGuardUnavailable {

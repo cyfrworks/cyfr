@@ -62,9 +62,11 @@ defmodule Arca.Repo.Migrations.Baseline do
     executions()
     logs()
     retention()
+    # Before the vault and consent: a binding of a login need names a
+    # program row.
+    registrations()
     vault_and_consent()
     file_offers()
-    registrations()
     schedules()
     outbox()
     threads()
@@ -1760,17 +1762,21 @@ defmodule Arca.Repo.Migrations.Baseline do
           "(audience = 'everyone' AND thread_id IS NULL)"
     }
 
-    # A binding names exactly one of an athanor's entry, a share and a
-    # selection's label; an entry or a share is bound at a digest, and a
+    # A binding names exactly one of an athanor's entry, an athanor's
+    # program row (a login need's), a share and a selection's label; an
+    # entry, a program row or a share is bound at a digest, and a
     # selection pins one only when it was chosen against one.
     ref_names_one = %{
       name: "consent_vault_refs_names_one",
       expr:
-        "(vault_entry_id IS NOT NULL AND share_id IS NULL AND via_label IS NULL " <>
-          "AND binding_digest IS NOT NULL) OR " <>
-          "(share_id IS NOT NULL AND vault_entry_id IS NULL AND via_label IS NULL " <>
-          "AND binding_digest IS NOT NULL) OR " <>
-          "(via_label IS NOT NULL AND vault_entry_id IS NULL AND share_id IS NULL)"
+        "(vault_entry_id IS NOT NULL AND mcp_server_id IS NULL AND share_id IS NULL " <>
+          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
+          "(mcp_server_id IS NOT NULL AND vault_entry_id IS NULL AND share_id IS NULL " <>
+          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
+          "(share_id IS NOT NULL AND vault_entry_id IS NULL AND mcp_server_id IS NULL " <>
+          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
+          "(via_label IS NOT NULL AND vault_entry_id IS NULL AND mcp_server_id IS NULL " <>
+          "AND share_id IS NULL)"
     }
 
     ref_lifetime = %{
@@ -1944,12 +1950,16 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # One row per binding of a revision, keyed by its `binding_key`
     # (`<source node reference>|<edge key>|<slot>`): the athanor's own
-    # entry it binds, the share it binds (a bare id: the share is another
-    # athanor's row), or the label of the profile a selection borrows from,
-    # and the binding's own lifetime; the one that is set is the binding's
-    # scope (`Arca.Schemas.ConsentVaultRef.scope/1`). An entry may appear
-    # in several rows of one consent. `consumed_by_root` is the root
-    # execution a `once` binding was consumed under.
+    # entry it binds, the athanor's own program row a login need binds,
+    # the share it binds (a bare id: the share is another athanor's row),
+    # or the label of the profile a selection borrows from, and the
+    # binding's own lifetime; the one that is set is the binding's scope
+    # (`Arca.Schemas.ConsentVaultRef.scope/1`). An entry may appear in
+    # several rows of one consent. `consumed_by_root` is the root
+    # execution a `once` binding was consumed under. A program row is
+    # deleted, not tombstoned as an entry is, so its bindings go with it;
+    # its delete first blocks the profiles whose head stands on it
+    # (`Arca.McpServerStorage.delete/3`), which then ask again.
     create table(:consent_vault_refs, primary_key: false) do
       add :consent_id, references(:consents, column: :id, type: :string), null: false
       add :athanor_id, :string, null: false
@@ -1958,6 +1968,14 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :vault_entry_id,
           references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id]),
           check: if(sqlite?, do: ref_names_one)
+
+      add :mcp_server_id,
+          references(:mcp_servers,
+            column: :id,
+            type: :string,
+            with: [athanor_id: :athanor_id],
+            on_delete: :delete_all
+          )
 
       add :share_id, :string
       add :via_label, :string
@@ -1976,6 +1994,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:consent_vault_refs, [:consent_id, :binding_key])
     create index(:consent_vault_refs, [:vault_entry_id, :athanor_id])
+    create index(:consent_vault_refs, [:mcp_server_id, :athanor_id])
     create index(:consent_vault_refs, [:share_id])
 
     # Single-use, delete-on-read. No foreign keys by design: a proof outlives
@@ -2035,6 +2054,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # `Prima.Source`): a turn that read an outside source the list does
       # not name asks again. Empty covers none; a deny names none.
       add :sources, :text, null: false, default: "[]"
+      # The program row an allow's `program_row` constraint names, empty
+      # for every other kind: part of the answer's identity, so each
+      # program's standing answer stands on its own (`Arca.Schemas.ToolGrant`).
+      add :program_row, :string, null: false, default: ""
     end
 
     # Each partial key is named for its scope, the name Postgres reports a
@@ -2042,14 +2065,14 @@ defmodule Arca.Repo.Migrations.Baseline do
     # `Arca.ToolGrantStorage` declares each constraint under both spellings.
     create unique_index(
              :tool_grants,
-             [:thread_id, :agent_name, :tool, :action],
+             [:thread_id, :agent_name, :tool, :action, :program_row],
              where: "scope = 'thread'",
              name: :tool_grants_thread_scope_index
            )
 
     create unique_index(
              :tool_grants,
-             [:athanor_id, :agent_name, :tool, :action],
+             [:athanor_id, :agent_name, :tool, :action, :program_row],
              where: "scope = 'agent'",
              name: :tool_grants_agent_scope_index
            )
@@ -2181,19 +2204,13 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :transport, :string, null: false, check: if(sqlite?, do: transport_check)
       # A program's mark: `mcp`, spoken to in MCP, or `driven`.
       add :mark, :string
-      # A program's home: `scratch` is scrubbed at retirement, `kept`
-      # survives it under a uid of its own.
+      # A program's home: `scratch` is scrubbed at retirement, `kept` is the
+      # row's own folder, named by its id, under a uid of its own.
       add :home, :string, null: false, default: "scratch", check: if(sqlite?, do: home_known)
       # A program's memory bound; null means the backends service's total.
       add :memory_bytes, :bigint
       # A kept home's size cap.
       add :home_max_bytes, :bigint
-      # The command a sign-in session runs on a pseudo-terminal.
-      add :login_command, :text
-      # A kept `mcp` program's login entry, whose home its sessions run in;
-      # a `driven` program's catalyst names its own entry and leaves this
-      # null.
-      add :login_entry_id, :string
       # A program's network list (JSON).
       add :hosts, :text
       add :url, :string
@@ -2217,6 +2234,8 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     checked(sqlite?, :mcp_servers, [home_known])
     create unique_index(:mcp_servers, [:athanor_id, :name])
+    # A consent binding names a program row with its athanor.
+    create unique_index(:mcp_servers, [:athanor_id, :id])
 
     create table(:webhooks, primary_key: false) do
       add :id, :string, primary_key: true, null: false
@@ -2312,6 +2331,16 @@ defmodule Arca.Repo.Migrations.Baseline do
           "AND (catch_up_left = 0 OR catch_up_until IS NOT NULL)"
     }
 
+    # A schedule fires a component under the profile it binds, or holds a
+    # line for Aqua (`agent:local.aqua`), whose turn runs under Aqua's own
+    # consent and binds none. A feed always binds one.
+    profile_bound = %{
+      name: "cron_schedules_profile_bound",
+      expr:
+        "(kind = 'schedule' AND reference = 'agent:local.aqua' AND profile_id IS NULL) OR " <>
+          "(reference <> 'agent:local.aqua' AND profile_id IS NOT NULL)"
+    }
+
     occurrence_state =
       known(
         "schedule_occurrences_state_known",
@@ -2348,7 +2377,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       # The pinned version a fire runs, resolved when the row is written.
       add :resolved_reference, :string, null: false
       add :athanor_id, :string, null: false
-      add :profile_id, :string, null: false
+      add :profile_id, :string, check: if(sqlite?, do: profile_bound)
+      # The thread an Aqua line's turns run in, made on its first fire
+      # (`Arca.CronSchedule.thread/3`). No foreign key: the thread is the
+      # person's, kept when the schedule is deleted, and a thread deleted
+      # since is made again on the next fire.
+      add :thread_id, :string
       # forbid | allow: whether a due occurrence may be claimed while another
       # of the same schedule is still open.
       add :concurrency, :string, null: false, default: "forbid"
@@ -2379,7 +2413,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       kind_spec,
       missed_runs_known,
       catch_up_limit_declared,
-      catch_up_episode
+      catch_up_episode,
+      profile_bound
     ])
 
     create unique_index(:cron_schedules, [:id, :athanor_id])

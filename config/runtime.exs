@@ -307,12 +307,6 @@ if config_env() != :test do
   config :cyfr, :locus_builds_url, locus_builds && locus_builds.url
   config :cyfr, :locus_builds_key, locus_builds && locus_builds.key
 
-  # A headless node (default: false) serves the API, MCP and public tinctures
-  # and no browser surface: every route on the browser pipeline answers 404.
-  # Codex signs in through the session tool on /mcp, so it does not notice.
-  headless? = env_bool.("CYFR_HEADLESS", false)
-  config :cyfr, :headless, headless?
-
   # CYFR_SECRET_KEY_BASE overrides the configured key. Required in
   # production; dev may use the key from its config file. Empty is unset,
   # as for every other setting here. A set value that is blank after
@@ -617,13 +611,6 @@ if config_env() != :test do
       {:error, message} -> raise message
     end
 
-  # A headless node has no browser page, and a company's sign-in goes
-  # through one: an issuer configured there could never be used.
-  if headless? and oidc do
-    raise "CYFR_HEADLESS=on cannot be combined with CYFR_OIDC_ISSUER: " <>
-            "a company's sign-in goes through the browser page a headless node refuses"
-  end
-
   if oidc do
     config :sanctum, :oidc_issuer, oidc.issuer
     config :sanctum, :oidc_client, %{client_id: oidc.client_id, client_secret: oidc.client_secret}
@@ -635,10 +622,10 @@ if config_env() != :test do
   # The company sign-in this CYFR may require of every person
   # (`Sanctum.CompanyLogin`), its issuer WorkOS or the OpenID Connect
   # issuer above. Every refusal names its setting
-  # (`Cyfr.RuntimeConfig.company_login_config/3`); WorkOS's API key is a
+  # (`Cyfr.RuntimeConfig.company_login_config/2`); WorkOS's API key is a
   # secret, never logged.
   company_login =
-    case Cyfr.RuntimeConfig.company_login_config(getenv, oidc, headless?) do
+    case Cyfr.RuntimeConfig.company_login_config(getenv, oidc) do
       {:ok, company_login} -> company_login
       {:error, message} -> raise message
     end

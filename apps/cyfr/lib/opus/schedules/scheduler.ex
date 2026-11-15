@@ -150,6 +150,30 @@ defmodule Opus.Schedules.Scheduler do
   wakes the consumer; a lost one loses nothing. The row's stored metadata
   says whether the outcome is kept (`keep_outcome/1`).
 
+  ## A line for Aqua
+
+  A schedule whose reference is Aqua's (`Arca.CronSchedule.aqua_line/0`)
+  holds a line for Aqua, and this module never calls Aqua: the claimed
+  occurrence row, written in the claim's own transaction, is the record
+  of the fire. Its fire passes the gates a component's does (the slot and
+  generation, the athanor and person still standing, a pinned reference
+  and input that read), then spawns no run and opens no decision: it says
+  the fire (`[:cyfr, :schedules, :fired]`) and wakes Aqua's turn consumer
+  (`Cyfr.Bus.schedule_turns/0`). That consumer starts a turn of Aqua as
+  the schedule's person in the schedule's own thread
+  (`Aqua.ScheduleTurns`), whose root's admission starts the occurrence and
+  records the fire's decision (`Opus.TurnRoot.claim/3`). A recovered claim
+  of such a row is woken again, never run here.
+
+  Its end is `end_turn/4`, this module's one public end of an occurrence
+  besides `complete/4`, which Aqua reaches through the execution domain's
+  facade alone (`Opus.end_schedule_turn/4`): the occurrence ends through
+  the same one ending, as its turn's root execution row says, so the
+  caller decides nothing recovery would not read from that row itself. A
+  turn that never started ends only a claim this boot still holds. The
+  failed or completed event follows, as for a component's run, and with
+  it the schedule's attention item.
+
   Every member arms a timer for every active row: at its start, and again
   at every standing pass, which holds each timer to its row: it arms the
   active rows it holds no timer for, arms again, in place of the old
@@ -182,7 +206,7 @@ defmodule Opus.Schedules.Scheduler do
   require Arca.Repo.Errors
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
-  alias Cyfr.Bus.{FeedPublished, ScheduleCompleted}
+  alias Cyfr.Bus.{FeedPublished, ScheduleCompleted, ScheduleTurnDue}
   alias Opus.Schedules.Changes
   alias Opus.Schedules.Cron
 
@@ -1056,10 +1080,59 @@ defmodule Opus.Schedules.Scheduler do
     # Right after the claim or the take, the claim is this member's and
     # fresh: the tick's pass would find it too young, so the two-tick pass
     # is asked for beside it.
-    if still_ours?(generation),
-      do: start_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation),
-      else: defer_occurrence(schedule.id, left_open(state))
+    cond do
+      not still_ours?(generation) ->
+        defer_occurrence(schedule.id, left_open(state))
+
+      aqua_line?(schedule) ->
+        due_for_aqua(schedule, occurrence, ctx, state)
+
+      true ->
+        start_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation)
+    end
   end
+
+  # An Aqua line's claim is its record: nothing runs here. The fire is
+  # said and Aqua's consumer woken; a lost wake-up loses nothing, since the
+  # consumer reads its boot's claims on a tick too, and a claim no turn
+  # starts is reached by recovery as any claim is, and woken again.
+  defp due_for_aqua(schedule, occurrence, ctx, state) do
+    :telemetry.execute(
+      [:cyfr, :schedules, :fired],
+      %{system_time: System.system_time()},
+      %{
+        request_id: nil,
+        schedule_id: schedule.id,
+        kind: schedule.kind,
+        occurrence_id: occurrence.id,
+        scheduled_for: occurrence.scheduled_for,
+        reference: schedule.resolved_reference,
+        execution_id: nil,
+        athanor_id: ctx.athanor_id,
+        user_id: ctx.user_id
+      }
+    )
+
+    actor = Sanctum.Context.actor(ctx)
+
+    case Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_turns(), ScheduleTurnDue.new(actor)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Opus.Schedules.Scheduler] schedule #{schedule.id}'s turn not announced: #{inspect(reason)}"
+        )
+    end
+
+    announce(schedule, ctx)
+    schedule_timer(schedule.id, state)
+  end
+
+  defp aqua_line?(%{kind: "schedule", resolved_reference: reference}),
+    do: reference == CronSchedule.aqua_line()
+
+  defp aqua_line?(_row), do: false
 
   # The run's execution id is minted here, before the task is spawned: it
   # is the execution the run is admitted as, and the one every end of the
@@ -1555,6 +1628,103 @@ defmodule Opus.Schedules.Scheduler do
     end_occurrence(occurrence, claimant(), execution_id, "completed", nil,
       also: &record_outcome(&1, schedule, execution_id, output)
     )
+  end
+
+  @doc """
+  End the occurrence a turn of Aqua ran for a schedule's line, through the
+  one ending (`end_occurrence/6`), and say it: the completed or failed
+  event, so the schedule's attention item comes or goes as for a
+  component's run. `actor` is the schedule's athanor.
+
+  With `execution_id`, the turn's root: the occurrence must be `started`
+  under that execution, which must have ended; the occurrence ends
+  `completed` when that execution's row says completed and `failed`
+  otherwise, compared and set on the claimant the occurrence stores and
+  that execution, and the schedule's summary is read from the same row
+  (`said/3`). The caller names which run, never how it went: this is the
+  end recovery would write from that row two ticks later
+  (`recover_occurrences/2`), but `completed` or `failed` where recovery
+  says `uncertain`. A turn Aqua recovered on another boot still ends it,
+  since the execution, not the boot, proves the run.
+
+  With nil, a turn that never started: only an occurrence still `claimed`
+  by this boot with no execution ends, `failed` with `reason` ("Last run
+  did not start: ...").
+
+  Refused `:not_an_aqua_line` for any occurrence whose schedule holds no
+  line for Aqua, `:running` while the execution is open, `:stale` when the
+  occurrence is not open under that execution (or that claim), and as
+  the end itself refuses (`:not_owner` on a member that lost its slot).
+  Answers the state written.
+  """
+  @spec end_turn(Prima.Actor.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, String.t()}
+          | {:error, :not_an_aqua_line | :running | :stale | :not_owner | :not_found | term()}
+  def end_turn(actor, occurrence_id, execution_id, reason \\ nil)
+
+  def end_turn(%Prima.Actor{athanor_id: athanor_id} = actor, occurrence_id, execution_id, reason)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(occurrence_id) and
+             (is_binary(execution_id) or is_nil(execution_id)) do
+    with {:ok, occurrence} <- ScheduleOccurrences.get(actor, occurrence_id),
+         {:ok, schedule} <- CronSchedule.get(actor, occurrence.schedule_id),
+         :ok <- if(aqua_line?(schedule), do: :ok, else: {:error, :not_an_aqua_line}),
+         {:ok, claimed_by, state} <- turn_end(actor, occurrence, execution_id) do
+      ended = end_occurrence(occurrence, claimed_by, execution_id, state, reason)
+
+      with {:ok, _moved} <- ended do
+        said_ended(schedule, occurrence, execution_id, state)
+        {:ok, state}
+      end
+    end
+  end
+
+  # Which end a turn's answer comes to, read from the rows alone.
+  defp turn_end(_actor, _occurrence, nil), do: {:ok, claimant(), "failed"}
+
+  defp turn_end(actor, %{state: "started", execution_id: id} = occurrence, id) do
+    case Arca.Execution.get_tenant(actor, id) do
+      %{status: "completed"} ->
+        {:ok, occurrence.claimed_by, "completed"}
+
+      %{status: status} ->
+        if status in Prima.ExecutionState.open_statuses(),
+          do: {:error, :running},
+          else: {:ok, occurrence.claimed_by, "failed"}
+
+      _gone_or_unread ->
+        {:ok, occurrence.claimed_by, "failed"}
+    end
+  end
+
+  defp turn_end(_actor, _occurrence, _execution_id), do: {:error, :stale}
+
+  defp said_ended(schedule, occurrence, execution_id, "completed") do
+    ctx = context_of(schedule)
+
+    :telemetry.execute(
+      [:cyfr, :schedules, :completed],
+      %{system_time: System.system_time(), duration_ms: 0},
+      %{
+        request_id: nil,
+        schedule_id: schedule.id,
+        kind: schedule.kind,
+        occurrence_id: occurrence.id,
+        reference: schedule.resolved_reference,
+        execution_id: execution_id,
+        athanor_id: ctx.athanor_id,
+        user_id: ctx.user_id
+      }
+    )
+  end
+
+  defp said_ended(schedule, occurrence, execution_id, "failed") do
+    reason =
+      case CronSchedule.get(Prima.Actor.in_athanor(schedule.athanor_id), schedule.id) do
+        {:ok, %{last_error: said}} when is_binary(said) -> said
+        _unread -> "turn_failed"
+      end
+
+    emit_schedule_failed(schedule, context_of(schedule), reason, occurrence, execution_id)
   end
 
   defp record_outcome(%{occurrence: occurrence} = finished, read_before, execution_id, output) do

@@ -5,12 +5,12 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/openai-codex/0.1.2/catalyst.wasm) under a
+(seed/components/catalysts/local/openai-codex/0.1.3/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `openai-codex` program, driven by requests signed as CYFR
 signs them (harness.py). The control plane plays CYFR's host for the
 catalyst's pipe as `Opus.Host.Pipe` does: each `pipe_open` names the
-`openai-codex` need and is opened on the program in one login entry's kept folder
+`openai-codex` need and is opened on the program in its program row's kept folder
 under a key of the catalyst's own; `pipe_send`, `pipe_recv` and
 `pipe_close` go to the session it opened. The program's command runs
 fake-openai-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
@@ -76,11 +76,11 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.2")
-REF = "catalyst:local.openai-codex:0.1.2"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.3")
+REF = "catalyst:local.openai-codex:0.1.3"
 NEED = "openai-codex"
 OWNER = owner_of("openai-codex")
-HOME = "vlt_openai-codex"
+HOME = "mcp_openai-codex"
 FAKE = "fake-openai-codex.mjs"
 PROGRAM = {"name": "openai-codex", "command": f"node /probe/{FAKE}", "env": {}, "home": "kept"}
 # Short, so the retirement cases wait little; long enough that a chat
@@ -100,7 +100,7 @@ SYSTEM = "You are a crew member of this athanor."
 
 class Bridge:
     """CYFR's host for the catalyst's pipe, as `Opus.Host.Pipe` is: the need
-    granted is `openai-codex`, bound to one login entry's kept home; a key is the
+    granted is `openai-codex`, bound to its program row's kept home; a key is the
     catalyst's own, hashed with its node and need; a session is answered only
     to the attempt that opened it."""
 
@@ -133,7 +133,7 @@ class Bridge:
         self.calls.append(("open", args))
         if self.refuse_next_open:
             kind, self.refuse_next_open = self.refuse_next_open, None
-            return self.guest_error(kind, "The login entry bound to openai-codex is revoked.")
+            return self.guest_error(kind, "The program openai-codex that openai-codex runs is not an enabled program with a kept folder here.")
         if args.get("need") != NEED:
             return {"error": "denied"}
         key = "pipe-" + hashlib.sha256(f"{REF}\0{NEED}\0{args['key']}".encode()).hexdigest()[:40]
@@ -226,9 +226,8 @@ def main():
            and "model/chat@1" in manifest["contracts"],
            "the catalyst declares model/chat@1 and one need, a login for the program openai-codex", manifest["needs"])
     install = need.get("install", {})
-    expect(install.get("command", "").startswith("npx -y @openai/codex@")
-           and install.get("login_command") == install.get("command") + " login --device-auth",
-           "the need suggests fetching Codex with npx and signing in by device auth", install)
+    expect(install.get("command", "").startswith("npx -y @openai/codex@") and list(install) == ["command"],
+           "the need suggests fetching Codex with npx, and nothing about signing in", install)
 
     backends = Stack("locus-backends-openai-codex", image)
     plane = ControlPlane(secrets.token_bytes(32), runtime.SERVICE).serve()
@@ -433,7 +432,7 @@ def main():
 
         # ————— a refusal of the pipe —————
         bridge.refuse_next_open = "setup_required"
-        output, events = run_catalyst(rt, plane, wasm, "chat", resumed, "a chat whose login entry was revoked")
+        output, events = run_catalyst(rt, plane, wasm, "chat", resumed, "a chat whose program row no longer serves it")
         answers.append((output, events))
         expect(output["status"] == 403 and output["error"]["type"] == "secret_denied"
                and events[-1]["type"] == "error" and events[-1]["error"]["type"] == "secret_denied",

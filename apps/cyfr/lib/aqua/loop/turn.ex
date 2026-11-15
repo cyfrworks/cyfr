@@ -142,7 +142,7 @@ defmodule Aqua.Loop.Turn do
   # correlation, so a row that cannot be read names none.
   defp root_call_id(ctx, %{root_execution_id: id}) when is_binary(id) do
     case Opus.get(ctx, id) do
-      {:ok, %{call_id: call_id}} -> call_id
+      {:ok, %{admitted: %{call_id: call_id}}} -> call_id
       _ -> nil
     end
   end

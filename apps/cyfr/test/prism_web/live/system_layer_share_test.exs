@@ -205,6 +205,37 @@ defmodule PrismWeb.SystemLayerShareTest do
       end
     end
 
+    test "a share prompt carries no preset but the administrator's setup's, which only " <>
+           "starts the choice drawn" do
+      for preset <- [:everyone, "setup", %{"audience" => "everyone"}, nil] do
+        prompt = put_in(@prompt, [:subject, :preset], preset)
+
+        assert PrismWeb.SystemLayer.Prompt.validate(prompt) == {:error, :invalid_prompt},
+               inspect(preset)
+      end
+
+      assert {:ok, prompt} =
+               PrismWeb.SystemLayer.Prompt.validate(
+                 Share.prompt(%{id: "vlt_1", name: "market key"}, @threads, :setup)
+               )
+
+      assert Share.drawn(prompt) == %{
+               "audience" => "everyone",
+               "person_daily" => "50",
+               "total_daily" => ""
+             }
+
+      # A change the person made replaces it; no preset, nothing chosen.
+      chosen = %{"audience" => "shared_thread:sth_pair"}
+      assert Share.drawn(Map.put(prompt, :choice, chosen)) == chosen
+      assert Share.drawn(@prompt) == %{}
+
+      # The events take no preset: a change naming one keeps the form's
+      # fields alone.
+      assert Share.choice(%{"preset" => "setup", "audience" => "everyone"}, @subject) ==
+               {:ok, %{"audience" => "everyone"}}
+    end
+
     test "an arriving prompt that carries a choice is refused" do
       assert PrismWeb.SystemLayer.Prompt.validate(
                Map.put(@prompt, :choice, %{"audience" => "everyone"})

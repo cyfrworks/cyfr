@@ -458,7 +458,10 @@ defmodule Arca.Execution do
 
   @doc """
   Lists the recent executions of the actor's athanor, newest first, with
-  optional filters. An actor without an athanor is `{:error, :no_athanor}`.
+  optional filters, each with what a run's listing reads of it: who
+  started it (`origin`), and what `execution.retry`'s rule reads (`kind`,
+  `schedule_id`, `current_attempt`). An actor without an athanor is
+  `{:error, :no_athanor}`.
 
   Options:
   - `:limit` - Maximum records to return (default: 20)
@@ -564,7 +567,11 @@ defmodule Arca.Execution do
             :parent_execution_id,
             :root_execution_id,
             :resolver_digest,
-            :activation_digest
+            :activation_digest,
+            :origin,
+            :kind,
+            :schedule_id,
+            :current_attempt
           ])
       )
 

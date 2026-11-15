@@ -45,13 +45,6 @@
           "CyfrWeb.Plugs.ApiSecurityHeaders"
         ],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "device_session" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.FrameRequest",
-          "CyfrWeb.Plugs.AuthRateLimit"
-        ],
         "tincture" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -209,15 +202,6 @@
           pipe_through: ["oauth_callback", "oauth_callback_throttle"]
         },
         %{
-          verb: "POST",
-          path: "/device/session",
-          plug: "Emissary.Web.DeviceSessionController",
-          plug_opts: ":create",
-          auth: "device_unlock_ticket",
-          live_view: nil,
-          pipe_through: ["device_session"]
-        },
-        %{
           verb: "GET",
           path: "/directory/v1/:identifier",
           plug: "Emissary.Web.DirectoryController",
@@ -340,7 +324,6 @@
       file: "apps/cyfr/lib/prism/router.ex",
       pipelines: %{
         "attachment" => [
-          "CyfrWeb.Plugs.Headless",
           "CyfrWeb.Plugs.FrameRequest",
           ":fetch_session",
           ":protect_from_forgery",
@@ -349,7 +332,6 @@
         ],
         "attachment_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "auth_browser" => [
-          "CyfrWeb.Plugs.Headless",
           "CyfrWeb.Plugs.FrameRequest",
           ":accepts",
           ":fetch_session",
@@ -359,7 +341,6 @@
           "CyfrWeb.Plugs.BrowserCSP"
         ],
         "browser" => [
-          "CyfrWeb.Plugs.Headless",
           "CyfrWeb.Plugs.FrameRequest",
           ":accepts",
           ":fetch_session",
@@ -554,6 +535,15 @@
           plug_opts: ":index",
           auth: "browser_authenticated",
           live_view: "PrismWeb.SettingsLive",
+          pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/a/:athanor/tips",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":index",
+          auth: "browser_authenticated",
+          live_view: "PrismWeb.TipsLive",
           pipe_through: ["browser"]
         },
         %{

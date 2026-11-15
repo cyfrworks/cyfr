@@ -6,7 +6,7 @@ defmodule Emissary.External.Servers do
   What a stored `mcp_servers` row means as a live connection.
 
   One athanor's row is a name, a transport, a URL (http) or a program's
-  mark and backends, an epoch and a config document; a running
+  mark, command and env, an epoch and a config document; a running
   `Emissary.External.Server` needs resolved headers, a timeout and the
   athanor it belongs to. Turning one into the other is the only thing both
   halves of the external-server subsystem share — the `mcp_servers` tool
@@ -32,7 +32,7 @@ defmodule Emissary.External.Servers do
   @doc """
   The keyword config `Emissary.External.ServerSupervisor.ensure_started/1`
   takes, from a stored row: its id, name, transport, a program's mark,
-  epoch, url, header templates, backends and timeout.
+  command, env and kept home, epoch, url, header templates and timeout.
   """
   @spec server_config(map(), Context.t()) :: keyword()
   def server_config(%{id: id, name: name, url: url} = server, %Context{} = ctx) do
@@ -46,8 +46,9 @@ defmodule Emissary.External.Servers do
       epoch: Map.get(server, :epoch),
       url: url,
       headers: config["headers"] || %{},
-      backends: config["backends"] || [],
-      login_entry_id: login_entry(server),
+      command: config["command"],
+      env: config["env"] || %{},
+      home_id: home_id(server),
       timeout_ms: config["timeout_ms"] || @default_timeout_ms,
       athanor_id: ctx.athanor_id
     ]
@@ -60,18 +61,16 @@ defmodule Emissary.External.Servers do
   defp mark(%{transport: "program", mark: "driven"}), do: :driven
   defp mark(_server), do: nil
 
-  # A kept mcp program's sessions run in its login entry's home.
-  defp login_entry(%{transport: "program", mark: "mcp", home: "kept"} = server),
-    do: Map.get(server, :login_entry_id)
-
-  defp login_entry(_server), do: nil
+  # A kept program's sessions run in its row's own home.
+  defp home_id(%{transport: "program", home: "kept", id: id}), do: id
+  defp home_id(_server), do: nil
 
   @doc """
   Start the server if it is not running, and return its tool catalogue.
 
   Always a typed answer: a server stopped between the two halves — a vault
   revocation, an archived athanor, a restart on a config change, or a
-  program's backend whose claim moved to another member of the cell — is
+  program whose claim moved to another member of the cell — is
   `{:error, {:server_exited, reason}}` and never an exit of this caller.
   """
   @spec ensure_started(map(), Context.t()) :: {:ok, [map()]} | {:error, term()}

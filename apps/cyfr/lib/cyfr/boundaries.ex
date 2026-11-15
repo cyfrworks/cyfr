@@ -469,8 +469,7 @@ defmodule Cyfr.Boundaries do
           "the policy record of every admission. The programs controller " <>
           "(`Opus.Programs`) posts to the backends service through `Sanctum.Egress` and " <>
           "checks a program's env templates from the vault's metadata " <>
-          "(`Sanctum.Vault.disclosed?/2`) before it unseals any, and a sign-in whose " <>
-          "command exited 0 makes its login entry active again (`Sanctum.Mount.signed_in/2`); a " <>
+          "(`Sanctum.Vault.disclosed?/2`) before it unseals any; a " <>
           "catalyst's pipe mounts its login need through `Sanctum.Mount.resolve/4` " <>
           "(`Opus.Host.Pipe`), and a reset or retired home forgets the sessions of the " <>
           "agents whose brain runs there (`Sanctum.Mount.agents_mounting/2`). `Sanctum` bare is the domain's own " <>
@@ -550,7 +549,9 @@ defmodule Cyfr.Boundaries do
           "and the server process and the backends controller make again before " <>
           "unsealing any: a header's entry's destination covers the server's URL " <>
           "(`destination_matches?/3`) and a backend env's entry is disclosed " <>
-          "(`disclosed?/2`). " <>
+          "(`disclosed?/2`). A program's definition is a fresh confirmation, decided " <>
+          "through `Sanctum.Consent.confirm_program_definition/2`, and its removal " <>
+          "names the grants that bind its row (`Sanctum.Mount.granted_to/2`). " <>
           "An outbound call's row runs under its caller's grant, checked through " <>
           "Sanctum.ExecutionStanding as it is admitted and closed, and the MCP " <>
           "controller answers a `Sanctum.UnauthorizedError` raised in the request " <>
@@ -767,7 +768,8 @@ defmodule Cyfr.Boundaries do
           "admission, dispatch or the attempt's rows is the assistant's to name. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
-          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
+          "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
     },
     %{
@@ -823,10 +825,11 @@ defmodule Cyfr.Boundaries do
           "root facade; an mcp program holds its row's owner and speaks MCP over its " <>
           "sessions through the programs controller (`Opus.Programs`, its session " <>
           "client and the row definition it syncs), and the provider asks it for a " <>
-          "row's status, a sign-in and a kept home's reset. " <>
+          "row's status, a person's start of it on a terminal and a kept home's reset. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
-          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
+          "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
     },
     %{
@@ -841,12 +844,14 @@ defmodule Cyfr.Boundaries do
       reason:
         "the console reads executions, invokes tinctures and checks the executor " <>
           "through the execution domain's root facade under the caller's context, and " <>
-          "relays a sign-in's terminal through the programs controller's facade " <>
-          "(`Opus.Programs.sign_in_attach/3`, `sign_in_send/3`, `sign_in_close/2`) " <>
-          "under the context that started it, and names none of either's internals. " <>
+          "shows the person's program terminals through the programs controller's facade " <>
+          "(`Opus.Programs.attach/2`, `taken/3`, `detach/2`, `input/3`, `resize/4`, `keep/3`, " <>
+          "`close/2`, `running/1`) under the person's own context, and names none of " <>
+          "either's internals. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
-          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
+          "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
     },
     %{
@@ -1030,7 +1035,7 @@ defmodule Cyfr.Boundaries do
         CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
         CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.FrameRequest
-        CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SignInResponse
+        CyfrWeb.Router CyfrWeb.SignInResponse
       ),
       reason:
         "the console reads the host's shared web tier and the composition triple its " <>
@@ -1579,15 +1584,6 @@ defmodule Cyfr.Boundaries do
     },
     %{
       from: "PrismWeb.ThreadPaneLive",
-      into: "Arca.Execution",
-      functions: [:get_tenant],
-      reason:
-        "a pending card offers \"for this schedule\" only where its run was started " <>
-          "by one: the pane reads the run's execution row once, under the pane's actor, " <>
-          "for its schedule id alone."
-    },
-    %{
-      from: "PrismWeb.ThreadPaneLive",
       into: "Arca.ThreadStorage",
       functions: [:children, :get, :get_message, :latest_messages, :payload, :resolution],
       reason:
@@ -1853,12 +1849,16 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
     "Sanctum.BearerToken" => [read: 1],
+    # `stands?/1`: a program's terminal session belongs to a person, not
+    # to a browser credential, and ends when that person no longer stands,
+    # read from the store and from no context (`Opus.Programs.Terminal`).
     "Sanctum.Caller" => [
       drop_memo: 1,
       establish: 2,
       establish_context: 1,
       fresh?: 1,
-      revalidate_session: 1
+      revalidate_session: 1,
+      stands?: 1
     ],
     # `authorize_stream/2`: a desktop's control with a pick reads the
     # picked stream's current state at the press, admitted as the
@@ -1899,8 +1899,21 @@ defmodule Cyfr.Boundaries do
     # to stand on, and a setup plan, say why: never granted or revoked
     # (`ungranted/2`), and a setup plan reads ready only where the head
     # stands for the release a run would start (`head_stands/4`).
+    # Every other confirmed operation is decided inside the Sanctum module
+    # that owns its data (vault, shares, api keys, pairing, directory),
+    # while a program row is written by Emissary's provider through Arca,
+    # so no Sanctum module decides it; `confirm_program_definition/2` asks
+    # for and consumes that one action only.
+    # `authorize_interactive/1`: a program's terminal session is reached
+    # only by its person at a screen, as the gate reads an interactive
+    # caller (`Opus.Programs`); `authorize_interactive_in_chain/1`: or by
+    # the turn that started it, whose chain the gate reads as a person's
+    # own there.
     "Sanctum.Consent" => [
+      authorize_interactive: 1,
+      authorize_interactive_in_chain: 1,
       binding_live: 4,
+      confirm_program_definition: 2,
       head_consent: 2,
       head_stands: 4,
       profiles: 2,
@@ -1986,16 +1999,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.IdentityFreshness" => [sweep: 1],
     "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
-    "Sanctum.Mount" => [
-      agents_mounting: 2,
-      home_of: 2,
-      login_entries: 1,
-      login_entry: 3,
-      login_entry: 4,
-      orphaned_homes: 1,
-      resolve: 4,
-      signed_in: 2
-    ],
+    "Sanctum.Mount" => [agents_mounting: 2, granted_to: 2, orphaned_homes: 1, resolve: 5],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],
@@ -2095,10 +2099,16 @@ defmodule Cyfr.Boundaries do
       grant_row: 2,
       revoke: 2
     ],
+    # `definition/1`: the one digest a program's confirmation and its
+    # grants are both held to, which Emissary's provider compares to decide
+    # whether a program's definition moved and binds for the row a program
+    # becomes when it is made a tool server elsewhere.
     "Sanctum.ToolServerDigest" => [
+      definition: 1,
       descriptions_digest: 2,
       from_server: 1,
       normalize_input_schema: 1,
+      recorded: 1,
       tool_patterns: 1
     ],
     "Sanctum.Unauthorized" => [message: 1, reason?: 1],
@@ -2280,10 +2290,7 @@ defmodule Cyfr.Boundaries do
           "the POST, under the browser pipeline's CSRF token, spends a 32-byte ticket the " <>
           "device's own channel was answered once its proof of an unlock challenge " <>
           "verified, held 60 seconds and taken once, and creates the session in the " <>
-          "issuance transaction that rereads the device's standing; a command line's " <>
-          "`POST /device/session` spends the same ticket the same way and answers the " <>
-          "session's token in its body, reading and setting no cookie, so no CSRF token " <>
-          "is asked"
+          "issuance transaction that rereads the device's standing"
     },
     browser_company_login: %{
       admits: :session,
@@ -2437,6 +2444,11 @@ defmodule Cyfr.Boundaries do
     # pin's names never reach the network; only a test build reads it
     # (`Prima.TestSeam.value/2`), so a release's names resolve through `:inet`.
     egress_resolver: :seam,
+    # How long a program's terminal runs with nothing attached and nothing
+    # printed (`Opus.Programs.Terminal`), a day in every release; only a
+    # test build reads it (`Prima.TestSeam.value/2`), and a test sets it so
+    # the real timer ends a session in it.
+    program_idle_ms: :seam,
     # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
     # a hint no shipped preset holds and that preset's token endpoint, which
     # a code exchange and a refresh both reach, never replacing a shipped
@@ -2470,6 +2482,7 @@ defmodule Cyfr.Boundaries do
     # all of them whatever its configuration says.
     cron_scheduler_enabled: :seam,
     schedule_notes_enabled: :seam,
+    schedule_turns_enabled: :seam,
     crew_delivery_enabled: :seam,
     status_watch_enabled: :seam,
     execution_sweeper_enabled: :seam,
@@ -2838,13 +2851,6 @@ defmodule Cyfr.Boundaries do
     %{module: Emissary.Web.HandleController, site: :resolve, plane: :external, origin: :none},
     %{module: Emissary.Web.HandleController, site: :name_of, plane: :external, origin: :none},
     %{module: Emissary.Web.HandleController, site: :claim, plane: :external, origin: :none},
-    # A protected command line's session: the unlock's one-time ticket.
-    %{
-      module: Emissary.Web.DeviceSessionController,
-      site: :create,
-      plane: :external,
-      origin: :none
-    },
     # The OAuth callback, which completes a `vault.authorize` the gate
     # admitted: a state no admission left, a provider's denial, and the
     # grant's refusals once the originating context's standing is read

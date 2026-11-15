@@ -66,7 +66,7 @@ from harness import (  # noqa: E402
     CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, KEEPER_CAPS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, NETWORK,
     POOL_FIRST, POOL_LAST, PORT,
     PROBE, PROJECT_PREFIX, REFUSED, RELEASE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, ROUTES, RUN_DIR, SERVICE,
-    Controller, Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe, require_docker, run,
+    VERSION, Controller, Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe, require_docker, run,
     image_user_name, wait_healthy, wire_json,
 )
 
@@ -383,7 +383,7 @@ def main():
         write = stack.exec("touch /app/planted 2>&1; echo status=$?")
         expect("Read-only file system" in write.stdout, "the root is read-only", write.stdout)
         body = wire_json({**OPEN, "owner": {"athanor": ALPHA["athanor"], "server": ALPHA["server"]}, "e": 1,
-                          "version": 2})
+                          "version": VERSION})
         for route in ["control", "session"]:
             status, _answer, _ = post(stack.base + ROUTES[route], {"content-type": "application/json"}, body)
             expect(status == 401, f"an unsigned request to the {route} route is refused", status)

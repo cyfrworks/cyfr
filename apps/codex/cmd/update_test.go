@@ -2015,6 +2015,33 @@ func TestUpdateRemovesTheSettingsTheReleaseRetired(t *testing.T) {
 	}
 }
 
+// CYFR_HEADLESS, the switch that turned a CYFR's pages off, is retired:
+// an update from a release whose .env.example offered it to this tree's,
+// both on one schema, takes it out of a .env that set it and says so,
+// since every CYFR serves its pages and the new server refuses the name.
+func TestUpdateRetiresTheHeadlessSwitch(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(packageDir, "..", "..", "..", ".env.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := string(data)
+	older := now + "\n# A headless node: the API, /mcp and public tinctures, and no browser\n# page. Not with an OpenID Connect issuer or WorkOS.\n# CYFR_HEADLESS=on\n"
+	env := scenarioEnv + "CYFR_HEADLESS=on\n"
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.examples = map[string]string{"0.8.0": older, "0.9.0": now}
+	s.edit(".env", env)
+	out, err := s.run(context.Background())
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	if got := read(t, filepath.Join(s.project, ".env")); got != scenarioEnv {
+		t.Errorf(".env after the update is %q, want %q", got, scenarioEnv)
+	}
+	if !strings.Contains(out, "Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_HEADLESS.\n") {
+		t.Errorf("the update did not say it removed CYFR_HEADLESS:\n%s", out)
+	}
+}
+
 // A failure writing the scaffold files, or a switch that fails after them,
 // puts every scaffold file back from the snapshot, the one the update
 // created removed, and starts the old stack again under its own files.

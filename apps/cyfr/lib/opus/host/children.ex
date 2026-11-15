@@ -520,7 +520,6 @@ defmodule Opus.Host.Children do
           "kind" => "setup_required",
           "component_ref" => remediation["component_ref"],
           "issues" => remediation["issues"],
-          "setup_command" => remediation["setup_command"],
           "message" => message
         },
         chain.ctx,

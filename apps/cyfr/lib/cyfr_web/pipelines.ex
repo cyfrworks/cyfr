@@ -16,8 +16,8 @@ defmodule CyfrWeb.Pipelines do
   @doc """
   The browser pipeline's plugs in order, each as `{plug, options}`.
 
-  A headless node is refused first, and a request a frame made before
-  the session is fetched. `:put_root_layout` is present only
+  A request a frame made is refused before the session is fetched.
+  `:put_root_layout` is present only
   when `opts[:root_layout]` names a layout: a page rendered through
   `CyfrWeb.MinimalPage` takes none.
   """
@@ -30,8 +30,6 @@ defmodule CyfrWeb.Pipelines do
       end
 
     [
-      # First: a headless node serves none of this (CYFR_HEADLESS).
-      {CyfrWeb.Plugs.Headless, []},
       # Before the session: a frame's request reaches none (`FrameRequest`).
       {CyfrWeb.Plugs.FrameRequest, []},
       {:accepts, ["html"]},

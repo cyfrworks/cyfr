@@ -40,9 +40,6 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:expanded_plan, nil)
       # A refused `setup_plan` call's refusal, said in the plan's place.
       |> assign(:expanded_plan_refusal, nil)
-      # The athanor's program rows, read with a plan that has a login
-      # need, so a need whose program is missing offers its install.
-      |> assign(:program_names, [])
       # The grant prompt this page asked its system layer for, and the
       # count its prompt ids are numbered by.
       |> assign(:grant_prompt, nil)
@@ -746,42 +743,10 @@ defmodule PrismWeb.ComponentsLive do
     socket
     |> assign(:expanded_plan, plan)
     |> assign(:expanded_plan_refusal, nil)
-    |> assign(:program_names, program_names(socket, plan))
   end
 
   defp assign_plan(socket, {:error, reason}),
     do: socket |> assign(:expanded_plan, nil) |> assign(:expanded_plan_refusal, reason)
-
-  # The rows a plan's login needs could name, read only when it has one.
-  defp program_names(socket, plan) do
-    if Enum.any?(plan_field(plan, :needs) || [], &(comp_field(&1, :kind) == "login")) do
-      case call_tool(socket, "mcp_servers/list", %{}) do
-        {:ok, %{servers: servers}} -> Enum.map(servers, & &1[:name])
-        _ -> []
-      end
-    else
-      []
-    end
-  end
-
-  # The Programs page's install form for a login need, when the need
-  # suggests a row and the athanor has none of that name.
-  defp install_path(route, plan, need, names) do
-    with "login" <- comp_field(need, :kind),
-         %{} <- comp_field(need, :install),
-         program when is_binary(program) <- comp_field(need, :program),
-         false <- program in names do
-      query =
-        URI.encode_query(%{
-          "install" => plan_field(plan, :component_ref),
-          "need" => comp_field(need, :name)
-        })
-
-      PrismWeb.Focus.path(route, "/programs?" <> query)
-    else
-      _ -> nil
-    end
-  end
 
   defp need_type(need) do
     case comp_field(need, :kind) do
@@ -1719,28 +1684,6 @@ defmodule PrismWeb.ComponentsLive do
                                     class="text-sm text-gray-300 mt-1"
                                   >
                                     {comp_field(need, :reason)}
-                                  </dd>
-                                  <dd
-                                    :for={
-                                      path <-
-                                        List.wrap(
-                                          install_path(
-                                            @athanor_route,
-                                            @expanded_plan,
-                                            need,
-                                            @program_names
-                                          )
-                                        )
-                                    }
-                                    class="mt-1"
-                                  >
-                                    <.link
-                                      navigate={path}
-                                      class="text-sm text-blue-400 hover:underline"
-                                      data-test="install-program"
-                                    >
-                                      install {comp_field(need, :program)}
-                                    </.link>
                                   </dd>
                                 </div>
                               </dl>

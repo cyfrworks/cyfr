@@ -14,7 +14,7 @@ defmodule Prima.KeeperProtocol do
 
   A request or a reply is one JSON object on one line, ending in `\\n`,
   carrying `"v": 1` and a `type`, at most `max_line_bytes/0` bytes before
-  its newline. A client sends `spawn`, `signal`, `release`, `pool`,
+  its newline. A client sends `spawn`, `signal`, `resize`, `release`, `pool`,
   `home_make`, `home_measure` and `home_retire`; the keeper answers
   `spawned`, `error`, `exited`, `released`, `pool`, `home_made`,
   `home_measured` and `home_retired`.
@@ -55,8 +55,13 @@ defmodule Prima.KeeperProtocol do
   outlives the spawn. A kept spawn requires `home_path`, the home's clean
   absolute path of at most 4095 bytes, and `home_uid`, the home's own uid
   from 1 to 4294967294, and may carry `home_max_bytes`, from 1 to 2^50;
-  those three are refused without `"kept"`. A spawn's `pty` is a boolean
-  whose absence reads as `false`. `home_make`, `home_measure` and
+  those three are refused without `"kept"`. A spawn's `pty` is the size of
+  a pseudo-terminal, `{"rows": r, "cols": c}`, each from 1 to
+  `max_pty_size` (`request_bounds/0`); absent, the spawn has none. A
+  `resize` request carries exactly `spawn_id`, `rows` and `cols` and sets
+  the size of that spawn's terminal, which signals its foreground
+  processes (`SIGWINCH`); like `signal` it is answered only by an `error`,
+  `bad_request` for a spawn with no terminal. `home_make`, `home_measure` and
   `home_retire` carry exactly `id`, `path` and `uid`, under the same rules,
   and are answered `home_made`, `home_measured` (with the home's `bytes`)
   and `home_retired`. The keeper runs a kept spawn under `home_uid` in
@@ -147,6 +152,7 @@ defmodule Prima.KeeperProtocol do
   @max_uid 4_294_967_294
   @max_home_bytes 1024 * 1024 * 1024 * 1024 * 1024
   @max_hosts 32
+  @max_pty_size 1000
   @home_modes ~w(scratch kept)
   @isolations ~w(netns)
   @signals ~w(SIGTERM SIGKILL SIGINT SIGHUP SIGQUIT SIGUSR1 SIGUSR2)
@@ -196,6 +202,7 @@ defmodule Prima.KeeperProtocol do
          hosts: :optional
        ]},
     signal: {"signal", [spawn_id: :required, sig: :required]},
+    resize: {"resize", [spawn_id: :required, rows: :required, cols: :required]},
     release: {"release", [spawn_id: :required, grace_ms: :required]},
     pool: {"pool", [id: :required, pool: :required]},
     home_make: {"home_make", [id: :required, path: :required, uid: :required]},
@@ -261,10 +268,11 @@ defmodule Prima.KeeperProtocol do
             optional(:home_path) => String.t(),
             optional(:home_uid) => pos_integer(),
             optional(:home_max_bytes) => pos_integer(),
-            optional(:pty) => boolean(),
+            optional(:pty) => %{rows: pos_integer(), cols: pos_integer()},
             optional(:hosts) => [String.t(), ...]
           }
           | %{type: :signal, spawn_id: String.t(), sig: signal()}
+          | %{type: :resize, spawn_id: String.t(), rows: pos_integer(), cols: pos_integer()}
           | %{type: :release, spawn_id: String.t(), grace_ms: non_neg_integer()}
           | %{type: :pool, id: String.t(), pool: String.t()}
           | %{
@@ -340,8 +348,9 @@ defmodule Prima.KeeperProtocol do
   grace a release may ask for, the least and most of a spawn's
   `memory_bytes`, the period of a spawn's `cpu_quota` and its least and
   most, the most bytes of a kept home's path, the highest uid a
-  kept home may own, the most a kept home's `home_max_bytes` may be and the
-  most hosts a spawn may name.
+  kept home may own, the most a kept home's `home_max_bytes` may be, the
+  most hosts a spawn may name and the most rows or columns a terminal may
+  have.
   """
   @spec request_bounds() :: %{atom() => non_neg_integer()}
   def request_bounds do
@@ -360,7 +369,8 @@ defmodule Prima.KeeperProtocol do
       max_home_path_bytes: @max_home_path_bytes,
       max_uid: @max_uid,
       max_home_bytes: @max_home_bytes,
-      max_hosts: @max_hosts
+      max_hosts: @max_hosts,
+      max_pty_size: @max_pty_size
     }
   end
 
@@ -404,6 +414,10 @@ defmodule Prima.KeeperProtocol do
   """
   @spec min_memory_bytes() :: pos_integer()
   def min_memory_bytes, do: @min_memory_bytes
+
+  @doc "The most rows or columns a spawn's terminal may have."
+  @spec max_pty_size() :: pos_integer()
+  def max_pty_size, do: @max_pty_size
 
   @doc "The most a spawn's `memory_bytes` may be, 1 TiB: the high end of the keeper's range."
   @spec max_memory_bytes() :: pos_integer()
@@ -626,7 +640,10 @@ defmodule Prima.KeeperProtocol do
   defp write(:spawn, {:home_max_bytes, bytes}) when bytes in 1..@max_home_bytes//1,
     do: {"home_max_bytes", bytes}
 
-  defp write(:spawn, {:pty, pty}) when is_boolean(pty), do: {"pty", pty}
+  defp write(:spawn, {:pty, %{rows: rows, cols: cols} = pty})
+       when map_size(pty) == 2 and rows in 1..@max_pty_size//1 and cols in 1..@max_pty_size//1,
+       do: {"pty", Jason.OrderedObject.new([{"cols", cols}, {"rows", rows}])}
+
   defp write(:spawn, {:hosts, hosts}), do: {"hosts", hosts!(hosts)}
 
   defp write(type, {:path, path}) when type in @home_requests,
@@ -636,6 +653,8 @@ defmodule Prima.KeeperProtocol do
     do: {"uid", uid}
 
   defp write(:signal, {:sig, sig}) when sig in @signals, do: {"sig", sig}
+  defp write(:resize, {:rows, rows}) when rows in 1..@max_pty_size//1, do: {"rows", rows}
+  defp write(:resize, {:cols, cols}) when cols in 1..@max_pty_size//1, do: {"cols", cols}
 
   defp write(:release, {:grace_ms, grace})
        when is_integer(grace) and grace >= 0 and grace <= @max_grace_ms,

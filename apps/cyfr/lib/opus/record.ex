@@ -41,7 +41,7 @@ defmodule Opus.Record do
   - `request_id`: `req_<uuid7>` - From the MCP request context (if available)
   - `call_id`: `call_<uuid7>` - The admission decision the run was started
     under (`Sanctum.Context`'s `call_id`), which the calls its chain makes
-    name as their parent call
+    name as their parent call; the record holds it in `admitted`
   """
 
   require Logger
@@ -72,7 +72,7 @@ defmodule Opus.Record do
   @type t :: %__MODULE__{
           id: String.t(),
           request_id: String.t() | nil,
-          call_id: String.t() | nil,
+          admitted: admitted(),
           user_id: String.t(),
           athanor_id: String.t() | nil,
           reference: String.t(),
@@ -104,15 +104,12 @@ defmodule Opus.Record do
         }
 
   # One execution row, as its admission builds it and a read returns it.
-  # What admission alone needs to write the row (its grant, its origin,
-  # its consent revision, its reservation, its payloads' retention class
-  # and retained input) is admission's (`write_started/3`), not the row's.
+  # What admission alone needs to write the row (its grant, its consent
+  # revision, its reservation, its payloads' retention class and retained
+  # input) is admission's (`write_started/3`), not the row's.
   defstruct [
     :id,
     :request_id,
-    # The admission decision the run was started under: the context's
-    # `call_id` when the record is made (`Arca.DecisionLog`).
-    :call_id,
     :user_id,
     :athanor_id,
     :reference,
@@ -155,7 +152,13 @@ defmodule Opus.Record do
     sources: [],
     # The classes an approved launch let flow to every exit of its tree,
     # written into the root's policy (`Arca.Execution.launch_key/0`).
-    launch_classes: []
+    launch_classes: [],
+    # What the run was admitted under (`admitted/2`): the admission decision
+    # (`call_id`, `Arca.DecisionLog`) and what started it (`origin`,
+    # `Prima.Origin`, a root's alone), taken from the context the record is
+    # made in. `write_started/3` writes the row's origin from it, one
+    # derivation, and a read takes both back from the row.
+    admitted: %{call_id: nil, origin: nil}
   ]
 
   @doc """
@@ -190,7 +193,7 @@ defmodule Opus.Record do
     %__MODULE__{
       id: id,
       request_id: ctx.request_id,
-      call_id: ctx.call_id,
+      admitted: admitted(ctx.call_id, ctx.origin, parent_execution_id),
       user_id: ctx.user_id,
       athanor_id: ctx.athanor_id,
       reference: reference,
@@ -355,9 +358,9 @@ defmodule Opus.Record do
   Admit the execution BEFORE it begins, in `ctx`, the context it was
   admitted in: the row, its first attempt and, for a root carrying a
   reservation, its budget row, in one transaction
-  (`Arca.Execution.admit/2`). A root's row records `ctx`'s origin
-  (`Prima.Origin`), which the admission entry that built `ctx` set; a
-  child's row takes its parent's.
+  (`Arca.Execution.admit/2`). A root's row records the origin the record
+  was admitted under (`admitted`, `Prima.Origin`), which `new/4` took from
+  the context the admission entry built; a child's row takes its parent's.
 
   `opts` carry what the admission settled: `:grant`, the
   `Prima.ExecutionGrant` the run is admitted under (a child's admission
@@ -397,11 +400,10 @@ defmodule Opus.Record do
       Keyword.get_lazy(opts, :retention_class, fn -> default_retention_class(admitted_ctx) end)
 
     input = Keyword.get(opts, :retained_input) || record.input || %{}
-    origin = if is_nil(record.parent_execution_id), do: admitted_ctx.origin
 
     with {:ok, grant} <- admission_grant(record, opts),
          {:ok, staged} <- stage_input(ctx, record, input, class) do
-      case admit(record, origin, grant, opts, [staged]) do
+      case admit(record, record.admitted.origin, grant, opts, [staged]) do
         :ok ->
           :ok
 
@@ -486,7 +488,7 @@ defmodule Opus.Record do
            %{
              id: record.id,
              request_id: record.request_id,
-             call_id: record.call_id,
+             call_id: record.admitted.call_id,
              reference: record.reference,
              input_hash: Arca.Execution.hash_input(record.input),
              user_id: record.user_id,
@@ -816,6 +818,55 @@ defmodule Opus.Record do
   end
 
   @doc """
+  Whether `execution.retry` runs `record` again, by its one rule: `:ok`
+  for a failed component root a schedule or a feed fired (its
+  `schedule_id`), whose attempt closed `error`, the run's own failure;
+  otherwise the refusal the retry answers. A run started anywhere else may
+  have carried a launch's sources or an account its row does not record,
+  so only such a run is repeated exactly from its row; and an `uncertain`
+  or `result_lost` outcome may have completed what it did, which no
+  contract proves safe to run again (ARCHITECTURE.md §6.5). Reads the
+  closed attempt only for a run the rest of the rule admits.
+  """
+  @spec retriable(t()) :: :ok | {:error, term()}
+  def retriable(%__MODULE__{status: status}) when status != :failed,
+    do: {:error, {:conflict, "Only a failed run can be retried."}}
+
+  def retriable(
+        %__MODULE__{parent_execution_id: nil, kind: "component", schedule_id: schedule} = record
+      )
+      when is_binary(schedule),
+      do: known_failed(record)
+
+  def retriable(%__MODULE__{}),
+    do: {:error, {:conflict, "Only a run a schedule or a feed started can be retried."}}
+
+  @doc "Whether `retriable/1` admits `record`: what a run's change says of its Retry."
+  @spec retryable?(t()) :: boolean()
+  def retryable?(%__MODULE__{} = record), do: retriable(record) == :ok
+
+  defp known_failed(%__MODULE__{} = record) do
+    case ended_outcome(record) do
+      {:ok, "error"} ->
+        :ok
+
+      {:ok, _uncertain} ->
+        {:error, uncertain_outcome()}
+
+      {:error, :not_found} ->
+        {:error, uncertain_outcome()}
+
+      {:error, _unread} ->
+        {:error, {:unavailable, "Executions"}}
+    end
+  end
+
+  defp uncertain_outcome,
+    do:
+      {:conflict,
+       "This run's outcome is uncertain: it is not known to have failed, so it is not run again."}
+
+  @doc """
   The outcome the attempt that owns the row `record` was reread as
   (`reread/1`) closed with — `"ok"`, `"error"`, `"uncertain"`,
   `"result_lost"` or `"cancelled"` — read in the record's own athanor.
@@ -994,7 +1045,8 @@ defmodule Opus.Record do
     %__MODULE__{
       id: result.id,
       request_id: result.request_id,
-      call_id: result[:call_id],
+      admitted:
+        admitted(result[:call_id], stored_origin(result[:origin]), result[:parent_execution_id]),
       user_id: result.user_id,
       athanor_id: result[:athanor_id],
       reference: result.reference,
@@ -1182,6 +1234,43 @@ defmodule Opus.Record do
   @error_classes Map.new(Prima.Refusal.classes(), &{Atom.to_string(&1), &1})
 
   defp stored_class(class), do: Map.get(@error_classes, class)
+
+  @typedoc "What a run was admitted under: its decision and what started it."
+  @type admitted :: %{call_id: String.t() | nil, origin: Prima.Origin.t() | nil}
+
+  # The one derivation of what a record was admitted under, at admission
+  # and from its row alike: a root keeps the origin it was started with,
+  # and a child has none, though its row stores its parent's
+  # (`Arca.Execution.admit/2`), so a child reads the same before and after
+  # it is stored.
+  defp admitted(call_id, origin, nil = _parent_execution_id),
+    do: %{call_id: call_id, origin: origin}
+
+  defp admitted(call_id, _origin, _parent_execution_id), do: %{call_id: call_id, origin: nil}
+
+  @doc """
+  What started the run a record, or its stored row, stands for
+  (`Prima.Origin`): a root's origin, and nil for a child or for a row read
+  without its origin. A stored row answers as the record read from it
+  does, so a child's row, which stores its parent's origin, answers nil.
+  """
+  @spec origin(t() | map()) :: Prima.Origin.t() | nil
+  def origin(%__MODULE__{admitted: %{origin: origin}}), do: origin
+
+  def origin(row) when is_map(row) do
+    spelling = Map.get(row, :origin)
+    %{origin: origin} = admitted(nil, stored_origin(spelling), Map.get(row, :parent_execution_id))
+    origin
+  end
+
+  # A row's origin is one of `Prima.Origin`'s spellings, checked as it is
+  # written; one the read does not select is nil.
+  defp stored_origin(spelling) do
+    case Prima.Origin.from_wire(spelling) do
+      {:ok, origin} -> origin
+      {:error, _none} -> nil
+    end
+  end
 
   @doc """
   The executable component type a stored `component_type` column names, as

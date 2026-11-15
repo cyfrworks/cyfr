@@ -652,6 +652,63 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 	}
 }
 
+// A resize sets the size of a spawn's terminal through the keeper's own
+// descriptor of its master and answers nothing; one of a held spawn without
+// a terminal is refused as a bad request, and one of a spawn the keeper does
+// not hold as unknown, as a signal is. None needs root.
+func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ours, theirs := os.NewFile(uintptr(fds[0]), "channel"), os.NewFile(uintptr(fds[1]), "client-channel")
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	master, slave, err := openPty(24, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { slave.Close() })
+	withPty := &spawn{id: strings.Repeat("a", 32), pty: master}
+	plain := &spawn{id: strings.Repeat("b", 32)}
+	t.Cleanup(withPty.closePty)
+	s := &server{
+		log:     logx.NewWriter(io.Discard, "cyfr-locus", false),
+		spawns:  map[string]*spawn{withPty.id: withPty, plain.id: plain},
+		channel: ours,
+	}
+	resize := func(spawnID string) *protocol.Request {
+		req, rerr := protocol.ParseRequest([]byte(`{"v":1,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+		if rerr != nil {
+			t.Fatal(rerr.Detail)
+		}
+		return req
+	}
+	s.handle(resize(withPty.id))
+	if ws, err := unix.IoctlGetWinsize(int(slave.Fd()), unix.TIOCGWINSZ); err != nil || ws.Row != 50 || ws.Col != 132 {
+		t.Fatalf("the terminal after the resize: %+v, %v", ws, err)
+	}
+	unknown := strings.Repeat("c", 32)
+	s.handle(resize(plain.id))
+	s.handle(resize(unknown))
+
+	// The resize that succeeded sent nothing: the first reply is the next
+	// request's refusal.
+	lr := protocol.NewLineReader(theirs)
+	for _, want := range []protocol.ErrorReply{
+		protocol.NewError("", plain.id, protocol.CodeBadRequest),
+		protocol.NewError("", unknown, protocol.CodeUnknownSpawn),
+	} {
+		line, _, err := lr.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got protocol.ErrorReply
+		if err := json.Unmarshal(line, &got); err != nil || got != want {
+			t.Fatalf("answered %s, want %+v", line, want)
+		}
+	}
+}
+
 // newIsolatedKeeper is newKeeper with its runner pool isolated, on a host
 // that lets the keeper isolate a spawn as its start-time probe proves;
 // elsewhere the test is skipped, naming the probe's refusal. The test's

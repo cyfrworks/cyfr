@@ -24,10 +24,16 @@ defmodule Arca.Schemas.ToolGrant do
   An allow may carry bounds: the lifecycle it ends with
   (`lifecycle_kind`, `execution`, `turn` or `schedule`, and
   `lifecycle_id`, that row's id), a deadline (`expires_at`) and a
-  `constraint`, a resource kind (`storage_path` or `egress_domain`) and
+  `constraint`, a resource kind (`storage_path`, `egress_domain` or
+  `program_row`) and
   its patterns, stored as JSON in the one grammar `constraint_errors/2`
   spells. A deny carries none of the four, so a standing deny never
   lapses; one written with any is refused.
+
+  An allow constrained to a program row carries that row in
+  `program_row`, part of its identity with the scope, agent, tool and
+  action (`key_row/1`), so one program's answer never replaces another's;
+  every other answer carries `""`.
 
   An allow also names the outside sources it covers (`sources`, a JSON
   list of named outside `Prima.Source`s, empty by default): a turn that
@@ -63,6 +69,7 @@ defmodule Arca.Schemas.ToolGrant do
     field :expires_at, :utc_datetime_usec
     field :constraint, :string
     field :sources, :string, default: "[]"
+    field :program_row, :string, default: ""
   end
 
   @doc "The lifecycles a bounded allow may end with."
@@ -130,9 +137,45 @@ defmodule Arca.Schemas.ToolGrant do
     |> validate_inclusion(:effect, @effects)
     |> validate_thread()
     |> put_constraint(constraint)
+    |> put_change(:program_row, if(constraint, do: key_row(%{constraint: constraint}), else: ""))
     |> put_sources(sources)
     |> validate_lifecycle()
     |> validate_bounds()
+  end
+
+  @doc """
+  The program row an answer's identity carries: the one row a
+  `program_row` constraint names, or the `program_row` a key names, and
+  `""` for every other answer. With the scope, thread or athanor, agent,
+  tool and action, it is the key a write replaces and a revoke removes,
+  so each program's standing answer stands, and goes, on its own.
+  """
+  @spec key_row(map()) :: String.t()
+  def key_row(%{constraint: %{} = constraint} = attrs) do
+    case read_constraint(constraint) do
+      {"program_row", [row]} when is_binary(row) -> row
+      _another -> Map.get(attrs, :program_row) |> key_row_of()
+    end
+  end
+
+  def key_row(attrs) when is_map(attrs), do: attrs |> Map.get(:program_row) |> key_row_of()
+
+  defp key_row_of(row) when is_binary(row), do: row
+  defp key_row_of(_none), do: ""
+
+  @doc """
+  A constraint as a writer hands it, read one way whatever its keys:
+  `{kind, patterns}`, the kind spelled as a string (`kind: :storage_path`
+  and `"kind" => "storage_path"` alike), each nil when absent. The
+  changeset, the program row an answer carries (`key_row/1`) and the rule
+  that decides which answers stand (`Sanctum.ToolGrants`) read it here.
+  """
+  @spec read_constraint(map()) :: {String.t() | term(), term()}
+  def read_constraint(%{} = constraint) do
+    kind = Map.get(constraint, :kind, Map.get(constraint, "kind"))
+    patterns = Map.get(constraint, :patterns, Map.get(constraint, "patterns"))
+    kind = if is_atom(kind) and not is_nil(kind), do: Atom.to_string(kind), else: kind
+    {kind, patterns}
   end
 
   @doc """
@@ -195,11 +238,12 @@ defmodule Arca.Schemas.ToolGrant do
   defp put_constraint(changeset, nil), do: changeset
 
   defp put_constraint(changeset, %{} = constraint) do
-    kind = Map.get(constraint, :kind, Map.get(constraint, "kind"))
-    patterns = Map.get(constraint, :patterns, Map.get(constraint, "patterns"))
-    kind = if is_atom(kind) and not is_nil(kind), do: Atom.to_string(kind), else: kind
+    {kind, patterns} = read_constraint(constraint)
 
     case constraint_errors(kind, patterns) do
+      [] when kind == "program_row" and length(patterns) != 1 ->
+        add_error(changeset, :constraint, "names exactly one program row")
+
       [] ->
         put_change(
           changeset,
@@ -221,7 +265,8 @@ defmodule Arca.Schemas.ToolGrant do
   (`constraint_kinds/0`); between one and #{@max_patterns} patterns, none
   twice; each in its kind's grammar — a storage path is a safe relative
   path, literal or a folder ending in `/`, never a wildcard, an egress
-  domain a bare domain with an optional `*.` prefix. The write
+  domain a bare domain with an optional `*.` prefix, a program row the
+  row's id, matched whole. The write
   holds a row to it, and the rule that decides which answers may stand
   (`Sanctum.ToolGrants.check_standing/2`) asks it before the write.
   """
@@ -257,6 +302,9 @@ defmodule Arca.Schemas.ToolGrant do
 
   defp pattern?("egress_domain", pattern) when is_binary(pattern),
     do: Prima.Manifest.valid_connect_domain?(pattern)
+
+  defp pattern?("program_row", pattern) when is_binary(pattern),
+    do: Regex.match?(~r/\A[A-Za-z0-9_-]{1,64}\z/, pattern)
 
   defp pattern?(_kind, _pattern), do: false
 

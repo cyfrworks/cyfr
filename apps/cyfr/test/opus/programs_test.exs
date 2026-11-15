@@ -21,8 +21,8 @@ defmodule Opus.ProgramsTest do
   without the control plane; refusals are answered as their kind requires;
   a status names no more owners than the service answers for and is read
   no further than the answer bound; a driven program syncs with its program
-  settings; a kept mcp program runs in its login entry's home; a sign-in is
-  relayed both ways and ends with its command; a kept home is reset, and a
+  settings; a kept mcp program runs in its row's own home; a terminal
+  opens under the service's current boot; a kept home is reset, and a
   retire is sent again until it lands; no key reaches a status or a crash
   report.
   """
@@ -142,13 +142,8 @@ defmodule Opus.ProgramsTest do
         url: nil,
         config_json:
           Jason.encode!(%{
-            "backends" => [
-              %{
-                "name" => "github",
-                "command" => "npx -y @modelcontextprotocol/server-github",
-                "env" => env
-              }
-            ],
+            "command" => "npx -y @modelcontextprotocol/server-github",
+            "env" => env,
             "timeout_ms" => 5_000
           })
       })
@@ -178,7 +173,7 @@ defmodule Opus.ProgramsTest do
   end
 
   defp connect(ctx, row) do
-    assert {:ok, [%{"name" => "github__search"}]} = Servers.ensure_started(row, ctx)
+    assert {:ok, [%{"name" => "search"}]} = Servers.ensure_started(row, ctx)
     server_pid(ctx, row)
   end
 
@@ -242,7 +237,7 @@ defmodule Opus.ProgramsTest do
              "lease_ms" => 30_000,
              "idle_ms" => 900_000,
              "programs" => [
-               %{"name" => "github", "env_names" => ["GITHUB_TOKEN"], "home" => "scratch"}
+               %{"name" => "program", "env_names" => ["GITHUB_TOKEN"], "home" => "scratch"}
              ]
            } = sync
 
@@ -251,9 +246,9 @@ defmodule Opus.ProgramsTest do
     refute Map.has_key?(sync, "athanor_memory_bytes")
     refute Map.has_key?(hd(sync["programs"]), "env")
     refute Map.has_key?(hd(sync["programs"]), "memory_bytes")
-    assert_receive {:sealed_env, ^server, %{"github" => %{"GITHUB_TOKEN" => @secret}}}
+    assert_receive {:sealed_env, ^server, %{"program" => %{"GITHUB_TOKEN" => @secret}}}
 
-    assert_receive {:session, "open", %{"program" => "github", "key" => "mcp", "mode" => "run"},
+    assert_receive {:session, "open", %{"program" => "program", "key" => "mcp", "mode" => "run"},
                     %{athanor: ^athanor, server: ^server, generation: 1, epoch: 1}}
 
     assert_receive {:invoke, "initialize", _fields}
@@ -262,11 +257,11 @@ defmodule Opus.ProgramsTest do
                     %{athanor: ^athanor, server: ^server, generation: 1, epoch: 1}}
 
     assert {:ok, %{"content" => [%{"text" => "found"}]}} =
-             Emissary.External.Server.call_tool(pid, "github__search", %{"q" => "x"})
+             Emissary.External.Server.call_tool(pid, "search", %{"q" => "x"})
 
     assert_receive {:invoke, "tools/call", %{boot: "bb_first", nonce: first_nonce}}
 
-    assert {:ok, _} = Emissary.External.Server.call_tool(pid, "github__search", %{})
+    assert {:ok, _} = Emissary.External.Server.call_tool(pid, "search", %{})
     assert_receive {:invoke, "tools/call", %{nonce: second_nonce}}
     refute first_nonce == second_nonce
 
@@ -526,10 +521,12 @@ defmodule Opus.ProgramsTest do
 
     test "delete commits, then releases", %{ctx: ctx, row: row, admin: admin} do
       assert {:ok, %{deleted: "stoppable"}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "delete",
-                 "name" => "stoppable"
-               })
+               Sanctum.TestContext.confirming(admin, fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "delete",
+                   "name" => "stoppable"
+                 })
+               end)
 
       assert_released(row, 1)
 
@@ -695,7 +692,7 @@ defmodule Opus.ProgramsTest do
     assert_receive {:control, "sync", %{"e" => 1}, %{boot: "bb_second"}}, 2_000
     assert_receive {:sealed_env, _server, _env}
     await_grant(pid, &(&1.boot == "bb_second"))
-    assert {:ok, _} = Emissary.External.Server.call_tool(pid, "github__search", %{})
+    assert {:ok, _} = Emissary.External.Server.call_tool(pid, "search", %{})
     assert_receive {:invoke, "tools/call", %{boot: "bb_second"}}
   end
 
@@ -714,7 +711,7 @@ defmodule Opus.ProgramsTest do
     assert_receive {:control, "reconcile", %{"keep" => []}, %{generation: 2}}, 2_000
     assert_receive {:control, "sync", _sync, %{generation: 2}}, 2_000
     await_grant(pid, &(&1.generation == 2))
-    assert {:ok, _} = Emissary.External.Server.call_tool(pid, "github__search", %{})
+    assert {:ok, _} = Emissary.External.Server.call_tool(pid, "search", %{})
     assert_receive {:invoke, "tools/call", %{generation: 2, epoch: 1}}
   end
 
@@ -768,7 +765,7 @@ defmodule Opus.ProgramsTest do
     Scripted.refuse_once(fake, "tools/call", "epoch_ahead")
 
     assert {:ok, %{"content" => _}} =
-             Emissary.External.Server.call_tool(pid, "github__search", %{})
+             Emissary.External.Server.call_tool(pid, "search", %{})
 
     # The refused send carried the call and nothing ran; the owner is synced
     # again and the call sent once more, which runs.
@@ -801,7 +798,7 @@ defmodule Opus.ProgramsTest do
     assert Process.alive?(bystander)
 
     assert {:ok, %{"content" => _}} =
-             Emissary.External.Server.call_tool(bystander, "github__search", %{})
+             Emissary.External.Server.call_tool(bystander, "search", %{})
   end
 
   test "a reader killed while its recv waits fails nothing of the service's", %{
@@ -815,8 +812,7 @@ defmodule Opus.ProgramsTest do
     start_controller(fake)
     row = mcp_row(ctx, "abandoned", %{"NODE_ENV" => "production"})
     pid = connect(ctx, row)
-    %{grant: grant, sessions: sessions} = :sys.get_state(pid)
-    [%{session: session}] = Map.values(sessions)
+    %{grant: grant, session: %{session: session}} = :sys.get_state(pid)
 
     reader = spawn(fn -> Opus.Programs.Session.recv(grant, session, 1_000_000, 25_000) end)
     assert_receive {:session, "recv", %{"after" => 1_000_000}, _fields}, 2_000
@@ -836,7 +832,7 @@ defmodule Opus.ProgramsTest do
     {:ok, _} = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), row.id)
     Scripted.refuse_once(fake, "tools/call", "stale_epoch")
 
-    assert {:error, message} = Emissary.External.Server.call_tool(pid, "github__search", %{})
+    assert {:error, message} = Emissary.External.Server.call_tool(pid, "search", %{})
     assert message =~ "changed"
     assert %{status: :error} = :sys.get_state(pid)
     refute_receive {:control, "sync", _sync, _fields}, 200
@@ -863,7 +859,7 @@ defmodule Opus.ProgramsTest do
     start_controller(fake)
     row = mcp_row(ctx, "unresolved", %{"GITHUB_TOKEN" => "vault:absent"})
 
-    assert {:error, {:env_unresolved, "github", "GITHUB_TOKEN"}} =
+    assert {:error, {:env_unresolved, "GITHUB_TOKEN"}} =
              Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
     refute_receive {:control, "sync", _sync, _fields}, 200
@@ -882,19 +878,14 @@ defmodule Opus.ProgramsTest do
       %{
         "transport" => "program",
         "mark" => "mcp",
-        "backends" => [
-          %{
-            "name" => "github",
-            "command" => "npx -y @modelcontextprotocol/server-github",
-            "env" => %{"GITHUB_TOKEN" => "vault:" <> entry, "NODE_ENV" => "production"}
-          }
-        ]
+        "command" => "npx -y @modelcontextprotocol/server-github",
+        "env" => %{"GITHUB_TOKEN" => "vault:" <> entry, "NODE_ENV" => "production"}
       }
     end
 
     refusal =
-      "Backend 'github' env GITHUB_TOKEN names no active disclosed vault entry; " <>
-        "a backend's environment takes only a disclosed entry"
+      "config.env GITHUB_TOKEN names no active disclosed vault entry; " <>
+        "a program's environment takes only a disclosed entry"
 
     # Neither definition verb stores it, and neither names the entry.
     assert {:error, {:invalid_argument, ^refusal}} =
@@ -949,13 +940,15 @@ defmodule Opus.ProgramsTest do
     vault_entry(ctx, %{name: "gh-disclosed"})
 
     assert {:ok, %{status: "ready"}} =
-             Provider.handle("mcp_servers", admin, %{
-               "action" => "create",
-               "name" => "disclosed",
-               "config" => naming.("gh-disclosed")
-             })
+             Sanctum.TestContext.confirming(admin, fn person ->
+               Provider.handle("mcp_servers", person, %{
+                 "action" => "create",
+                 "name" => "disclosed",
+                 "config" => naming.("gh-disclosed")
+               })
+             end)
 
-    assert_receive {:sealed_env, _server, %{"github" => %{"GITHUB_TOKEN" => @secret}}}, 2_000
+    assert_receive {:sealed_env, _server, %{"program" => %{"GITHUB_TOKEN" => @secret}}}, 2_000
   end
 
   test "a disclosed entry beside an attach-only one is not unsealed: the sync is refused first",
@@ -985,7 +978,7 @@ defmodule Opus.ProgramsTest do
     # still unread.
     absent = mcp_row(ctx, "absent", %{"A_TOKEN" => "vault:gh-token", "B_TOKEN" => "vault:nope"})
 
-    assert {:error, {:env_unresolved, "github", "B_TOKEN"}} =
+    assert {:error, {:env_unresolved, "B_TOKEN"}} =
              Programs.hold(%{athanor_id: ctx.athanor_id, server_id: absent.id, epoch: 1})
 
     assert {:ok, %{last_used_at: nil}} =
@@ -1009,7 +1002,7 @@ defmodule Opus.ProgramsTest do
     assert {%{status: "active", last_used_at: nil}, %{status: "active"}, _usage} = before
     row = mcp_row(ctx, "shared-named", %{"GITHUB_TOKEN" => "vault:" <> entry_name})
 
-    assert {:error, {:env_unresolved, "github", "GITHUB_TOKEN"}} =
+    assert {:error, {:env_unresolved, "GITHUB_TOKEN"}} =
              Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
     refute_receive {:control, "sync", _sync, _fields}, 200
@@ -1034,7 +1027,7 @@ defmodule Opus.ProgramsTest do
               mark: "mcp",
               epoch: 1,
               status: "ready",
-              programs: [%{"name" => "github"}]
+              programs: [%{"name" => "program"}]
             }} =
              Provider.handle("mcp_servers", admin, %{
                "action" => "get",
@@ -1045,7 +1038,7 @@ defmodule Opus.ProgramsTest do
     assert server == row.id
   end
 
-  test "a command that expands a vault-bound name is saved with its warning, and its backends start",
+  test "a command that expands a vault-bound name is saved with its warning, and its program starts",
        %{ctx: ctx, fake: fake} do
     start_controller(fake)
     vault_entry(ctx)
@@ -1056,40 +1049,37 @@ defmodule Opus.ProgramsTest do
       %{
         "transport" => "program",
         "mark" => "mcp",
-        "backends" => [
-          %{
-            "name" => "github",
-            "command" => command,
-            "env" => %{"GITHUB_TOKEN" => "vault:gh-token"}
-          }
-        ]
+        "command" => command,
+        "env" => %{"GITHUB_TOKEN" => "vault:gh-token"}
       }
     end
 
     expanding = ~s(npx -y @modelcontextprotocol/server-github --token "$GITHUB_TOKEN")
 
     warning =
-      "Backend 'github' expands GITHUB_TOKEN, a vault-bound env name, in its command: the " <>
+      "The command expands GITHUB_TOKEN, a vault-bound env name: the " <>
         "value is placed on the command line, where every process on the backends service, " <>
-        "other athanors' backends included, can read it; the safe route is to let the " <>
+        "other athanors' programs included, can read it; the safe route is to let the " <>
         "program read it from its environment."
 
     log =
       capture_log(fn ->
         assert {:ok, %{status: "ready", warnings: [^warning]}} =
-                 Provider.handle("mcp_servers", admin, %{
-                   "action" => "create",
-                   "name" => "expanding",
-                   "config" => config.(expanding)
-                 })
+                 Sanctum.TestContext.confirming(admin, fn person ->
+                   Provider.handle("mcp_servers", person, %{
+                     "action" => "create",
+                     "name" => "expanding",
+                     "config" => config.(expanding)
+                   })
+                 end)
       end)
 
-    # The definition is stored as written, its backends run with the value
-    # in their env, and the start says so once in the log.
+    # The definition is stored as written, its program runs with the value
+    # in its env, and the start says so once in the log.
     assert {:ok, %{epoch: 1} = row} = Arca.McpServerStorage.get(actor, "expanding")
-    assert [%{"command" => ^expanding}] = Arca.McpServerStorage.config(row)["backends"]
+    assert %{"command" => ^expanding} = Arca.McpServerStorage.config(row)
     assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
-    assert_receive {:sealed_env, _server, %{"github" => %{"GITHUB_TOKEN" => @secret}}}, 2_000
+    assert_receive {:sealed_env, _server, %{"program" => %{"GITHUB_TOKEN" => @secret}}}, 2_000
     assert [_once] = Regex.scan(~r/starts with a warning: #{Regex.escape(warning)}/, log)
 
     # A later reader sees it on the server.
@@ -1097,14 +1087,17 @@ defmodule Opus.ProgramsTest do
              Provider.handle("mcp_servers", admin, %{"action" => "get", "name" => "expanding"})
 
     # An update keeps the warning while the command expands the name, and
-    # drops it once the program reads the value from its environment.
+    # drops it once the program reads the value from its environment. A
+    # changed command is confirmed.
     update = fn epoch, command ->
-      Provider.handle("mcp_servers", admin, %{
-        "action" => "update",
-        "name" => "expanding",
-        "epoch" => epoch,
-        "config" => config.(command)
-      })
+      Sanctum.TestContext.confirming(admin, fn person ->
+        Provider.handle("mcp_servers", person, %{
+          "action" => "update",
+          "name" => "expanding",
+          "epoch" => epoch,
+          "config" => config.(command)
+        })
+      end)
     end
 
     assert capture_log(fn ->
@@ -1135,13 +1128,8 @@ defmodule Opus.ProgramsTest do
         url: nil,
         config_json:
           Jason.encode!(%{
-            "backends" => [
-              %{
-                "name" => "github",
-                "command" => "npx server --token $GITHUB_TOKEN --at `date`",
-                "env" => %{"GITHUB_TOKEN" => "vault:gh-token", "NODE_TOKEN" => "vault:gh-token"}
-              }
-            ]
+            "command" => "npx server --token $GITHUB_TOKEN --at `date`",
+            "env" => %{"GITHUB_TOKEN" => "vault:gh-token", "NODE_TOKEN" => "vault:gh-token"}
           })
       })
 
@@ -1157,12 +1145,12 @@ defmodule Opus.ProgramsTest do
     assert e == row.epoch
 
     assert_received {:sealed_env, _server,
-                     %{"github" => %{"GITHUB_TOKEN" => @secret, "NODE_TOKEN" => @secret}}}
+                     %{"program" => %{"GITHUB_TOKEN" => @secret, "NODE_TOKEN" => @secret}}}
 
-    assert log =~ "starts with a warning: Backend 'github' expands GITHUB_TOKEN, "
+    assert log =~ "starts with a warning: The command expands GITHUB_TOKEN, "
 
     assert log =~
-             ~s(starts with a warning: Backend 'github' has "`" in its command beside the vault-bound NODE_TOKEN: )
+             ~s(starts with a warning: The command has "`" beside the vault-bound NODE_TOKEN: )
 
     Programs.release(owner)
   end
@@ -1192,16 +1180,10 @@ defmodule Opus.ProgramsTest do
             home: "kept",
             memory_bytes: 1_073_741_824,
             home_max_bytes: 2_147_483_648,
-            login_command: "claude auth login",
             config_json:
               Jason.encode!(%{
-                "backends" => [
-                  %{
-                    "name" => "claude",
-                    "command" => "npx -y @anthropic-ai/claude-code",
-                    "env" => %{}
-                  }
-                ]
+                "command" => "npx -y @anthropic-ai/claude-code",
+                "env" => %{}
               })
           },
           over
@@ -1211,16 +1193,24 @@ defmodule Opus.ProgramsTest do
     row
   end
 
-  # A login entry of the athanor naming `program`; its id is its home's.
-  defp login_entry(ctx, name, program) do
-    {:ok, entry} =
-      Sanctum.TestContext.create_signed_in_login(ctx, %{name: name, program: program})
+  # The preview a pending confirmation shows, as the store holds it.
+  defp preview(ctx, id) do
+    {:ok, record} =
+      Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), Prima.Confirmation.ref(id))
 
-    entry.id
+    Jason.decode!(record.preview)
+  end
+
+  # The confirmations opened for `operation` in the context's athanor.
+  defp confirmations(ctx, operation) do
+    Ecto.Query.from(c in Arca.Schemas.PendingConfirmation,
+      where: c.athanor_id == ^ctx.athanor_id and c.operation == ^operation
+    )
+    |> Arca.Repo.all()
   end
 
   # A crew member `harness` whose brain, a catalyst with one login need of
-  # the program `claude`, mounts the login entry `entry`: bound on the
+  # the program `claude`, mounts the program row `entry`: bound on the
   # catalyst's own consent and selected on the member's edge into it, as a
   # person's walk binds it. Answers the context, under a storage root of
   # the test's own.
@@ -1271,6 +1261,20 @@ defmodule Opus.ProgramsTest do
     ctx
   end
 
+  # Whether the login binding the crew member's brain holds still binds
+  # its program row as the row stands now (`Sanctum.Consent.row_binding/3`).
+  defp binding_of_brain(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(actor, "catalyst:local.harnessbrain")
+    {:ok, consent} = Sanctum.Consent.head_consent(ctx, profile.id)
+    [ref] = Enum.filter(consent.vault_refs, &is_binary(&1.mcp_server_id))
+
+    case Sanctum.Consent.row_binding(ctx, consent, ref) do
+      {:program, _id, {:ok, _row}} -> :ok
+      {:program, _id, refused} -> refused
+    end
+  end
+
   defp commit!(ctx, ref, over) do
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
     decisions = Map.merge(%{ref: ref}, over)
@@ -1307,14 +1311,13 @@ defmodule Opus.ProgramsTest do
     end
 
     defp opened(grant, home_id, mode) do
+      size = if mode == :terminal, do: %{rows: 24, cols: 80}, else: %{}
+
       {:ok, answer} =
-        Opus.Programs.Session.open(grant, %{
-          program: "github",
-          home_id: home_id,
-          key: "k",
-          mode: mode,
-          argv: []
-        })
+        Opus.Programs.Session.open(
+          grant,
+          Map.merge(size, %{program: "program", home_id: home_id, key: "k", mode: mode})
+        )
 
       answer
     end
@@ -1325,9 +1328,9 @@ defmodule Opus.ProgramsTest do
       assert %{resumed: true, session: same} = opened(grant, "vlt_keyed", :run)
       assert same == run.session
 
-      assert %{resumed: false, session: sign_in} = opened(grant, "vlt_keyed", :sign_in)
+      assert %{resumed: false, session: terminal} = opened(grant, "vlt_keyed", :terminal)
       assert %{resumed: false, session: other_home} = opened(grant, "vlt_other", :run)
-      assert Enum.uniq([run.session, sign_in, other_home]) == [run.session, sign_in, other_home]
+      assert Enum.uniq([run.session, terminal, other_home]) == [run.session, terminal, other_home]
     end
 
     test "a reset of a home ends every session of that home", %{ctx: ctx, fake: fake} do
@@ -1357,7 +1360,7 @@ defmodule Opus.ProgramsTest do
       start_controller(fake)
       row = mcp_row(ctx, "idling", %{"NODE_ENV" => "production"})
       pid = connect(ctx, row)
-      assert {:ok, _} = Emissary.External.Server.call_tool(pid, "github__search", %{})
+      assert {:ok, _} = Emissary.External.Server.call_tool(pid, "search", %{})
       assert_receive {:invoke, "tools/call", _fields}, 2_000
 
       # Answered, nothing is outstanding: no reader polls the session, so it
@@ -1372,7 +1375,7 @@ defmodule Opus.ProgramsTest do
       Process.sleep(300)
 
       assert {:ok, %{"content" => [%{"text" => "found"}]}} =
-               Emissary.External.Server.call_tool(pid, "github__search", %{})
+               Emissary.External.Server.call_tool(pid, "search", %{})
 
       assert_receive {:session, "open", %{"key" => "mcp"}, _fields}, 2_000
       assert_receive {:invoke, "initialize", _fields}, 2_000
@@ -1387,7 +1390,7 @@ defmodule Opus.ProgramsTest do
       pid = connect(ctx, row)
       Scripted.set(fake, :silent, ["tools/call"])
 
-      call = Task.async(fn -> Emissary.External.Server.call_tool(pid, "github__search", %{}) end)
+      call = Task.async(fn -> Emissary.External.Server.call_tool(pid, "search", %{}) end)
       assert_receive {:invoke, "tools/call", _fields}, 2_000
       Scripted.end_sessions(fake, row.id)
 
@@ -1395,7 +1398,7 @@ defmodule Opus.ProgramsTest do
       assert sentence =~ "ended before it answered"
 
       Scripted.set(fake, :silent, [])
-      assert {:ok, _} = Emissary.External.Server.call_tool(pid, "github__search", %{})
+      assert {:ok, _} = Emissary.External.Server.call_tool(pid, "search", %{})
       assert_receive {:invoke, "initialize", _fields}, 2_000
     end
 
@@ -1412,11 +1415,10 @@ defmodule Opus.ProgramsTest do
                       %{
                         "programs" => [
                           %{
-                            "name" => "claude",
+                            "name" => "program",
                             "home" => "kept",
                             "memory_bytes" => 1_073_741_824,
                             "home_max_bytes" => 2_147_483_648,
-                            "login_command" => "claude auth login",
                             "env_names" => []
                           }
                         ]
@@ -1466,17 +1468,20 @@ defmodule Opus.ProgramsTest do
           "transport" => "program",
           "mark" => "driven",
           "home" => "kept",
-          "backends" => [%{"name" => "claude", "command" => "npx -y @anthropic-ai/claude-code"}]
+          "command" => "npx -y @anthropic-ai/claude-code",
+          "env" => %{}
         }
         |> then(&if(hosts, do: Map.put(&1, "hosts", hosts), else: &1))
       end
 
       assert {:ok, _} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "create",
-                 "name" => "claude",
-                 "config" => config.(["api.anthropic.com", "statsig.anthropic.com"])
-               })
+               Sanctum.TestContext.confirming(admin, fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "create",
+                   "name" => "claude",
+                   "config" => config.(["api.anthropic.com", "statsig.anthropic.com"])
+                 })
+               end)
 
       assert {:ok, row} = Arca.McpServerStorage.get(actor, "claude")
       assert Jason.decode!(row.hosts) == ["api.anthropic.com", "statsig.anthropic.com"]
@@ -1508,18 +1513,21 @@ defmodule Opus.ProgramsTest do
         assert sentence =~ "config.hosts", inspect(hosts)
       end
 
+      # No list is every public host: more than the list, so it is confirmed.
       assert {:ok, _} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "update",
-                 "name" => "claude",
-                 "epoch" => row.epoch,
-                 "config" => config.(nil)
-               })
+               Sanctum.TestContext.confirming(admin, fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "update",
+                   "name" => "claude",
+                   "epoch" => row.epoch,
+                   "config" => config.(nil)
+                 })
+               end)
 
       assert {:ok, %{hosts: nil}} = Arca.McpServerStorage.get(actor, "claude")
     end
 
-    test "a kept mcp program runs its sessions in its login entry's home, and connects to none without it",
+    test "a kept mcp program runs its sessions in its row's own home",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
 
@@ -1531,55 +1539,26 @@ defmodule Opus.ProgramsTest do
           mark: "mcp",
           url: nil,
           home: "kept",
-          login_entry_id: "vlt_missing",
-          login_command: "gh auth login",
           config_json:
-            Jason.encode!(%{
-              "backends" => [
-                %{
-                  "name" => "github",
-                  "command" => "gh mcp",
-                  "env" => %{"NODE_ENV" => "production"}
-                }
-              ]
-            })
+            Jason.encode!(%{"command" => "gh mcp", "env" => %{"NODE_ENV" => "production"}})
         })
 
-      assert {:error, sentence} = Servers.ensure_started(row, ctx)
-      assert sentence =~ "login entry"
-      refute_received {:control, "sync", _sync, _fields}
-
-      # Another program's login entry is refused alike.
-      other = login_entry(ctx, "claude-login", "claude")
-
-      {:ok, row} =
-        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{login_entry_id: other})
-
-      assert {:error, sentence} = Servers.ensure_started(row, ctx)
-      assert sentence =~ "login entry"
-
-      gh = login_entry(ctx, "gh-login", "gh")
-
-      {:ok, row} =
-        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{login_entry_id: gh})
-
-      assert {:ok, [%{"name" => "github__search"}]} = Servers.ensure_started(row, ctx)
-      assert_receive {:session, "open", %{"home_id" => ^gh, "mode" => "run"}, _}, 2_000
-      refute_received {:session, "open", %{"home_id" => ^other}, _fields}
+      home = row.id
+      assert {:ok, [%{"name" => "search"}]} = Servers.ensure_started(row, ctx)
+      assert_receive {:session, "open", %{"home_id" => ^home, "mode" => "run"}, _}, 2_000
     end
   end
 
-  describe "sign-in and homes" do
+  describe "definitions, terminals and homes" do
     setup %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
       row = driven_row(ctx, "claude")
-      entry = login_entry(ctx, "claude-login", "claude")
       admin = %{ctx | permissions: MapSet.new([:*])}
-      {:ok, controller: controller, row: row, admin: admin, entry: entry}
+      {:ok, controller: controller, row: row, admin: admin}
     end
 
     test "replacing a definition is refused whatever adding the same definition is refused",
-         %{ctx: ctx, admin: admin, entry: entry} do
+         %{ctx: ctx, admin: admin} do
       vault_entry(ctx, %{name: "attached", disclose: false})
       vault_entry(ctx)
       actor = Sanctum.Context.actor(ctx)
@@ -1589,9 +1568,8 @@ defmodule Opus.ProgramsTest do
           %{
             "transport" => "program",
             "mark" => "mcp",
-            "backends" => [
-              %{"name" => "editable", "command" => "npx -y editable", "env" => %{}}
-            ]
+            "command" => "npx -y editable",
+            "env" => %{}
           },
           over
         )
@@ -1599,18 +1577,19 @@ defmodule Opus.ProgramsTest do
 
       with_env = fn env ->
         program.(%{
-          "backends" => [
-            %{"name" => "editable", "command" => "npx -y editable", "env" => env}
-          ]
+          "command" => "npx -y editable",
+          "env" => env
         })
       end
 
       assert {:ok, _} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "create",
-                 "name" => "editable",
-                 "config" => program.(%{})
-               })
+               Sanctum.TestContext.confirming(admin, fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "create",
+                   "name" => "editable",
+                   "config" => program.(%{})
+                 })
+               end)
 
       {:ok, before} = Arca.McpServerStorage.get(actor, "editable")
 
@@ -1618,18 +1597,12 @@ defmodule Opus.ProgramsTest do
             with_env.(%{"GITHUB_TOKEN" => "vault:absent"}),
             with_env.(%{"GITHUB_TOKEN" => "vault:attached"}),
             with_env.(%{"MODE" => "a literal where a credential belongs"}),
-            program.(%{"home" => "kept"}),
-            program.(%{"home" => "kept", "login_entry_id" => entry}),
-            program.(%{
-              "mark" => "driven",
-              "backends" => [
-                %{"name" => "a", "command" => "a", "env" => %{}},
-                %{"name" => "b", "command" => "b", "env" => %{}}
-              ]
-            }),
-            program.(%{"mark" => "driven", "home" => "kept", "login_entry_id" => entry}),
+            program.(%{"home" => "kept", "login_entry_id" => "vlt_01"}),
+            program.(%{"backends" => [%{"name" => "a", "command" => "a", "env" => %{}}]}),
+            program.(%{"command" => String.duplicate("x", 5_000)}),
+            program.(%{"command" => nil}),
             program.(%{"hosts" => ["*.example.com"]}),
-            program.(%{"backends" => [%{"name" => "x", "command" => "run vault:gh-token"}]})
+            program.(%{"command" => "run vault:gh-token", "env" => %{}})
           ] do
         # A create of the same name validates the definition before it
         # meets the row that exists, so the two refusals are comparable.
@@ -1653,144 +1626,632 @@ defmodule Opus.ProgramsTest do
       assert {:ok, ^before} = Arca.McpServerStorage.get(actor, "editable")
     end
 
-    test "a sign-in runs the login command in the entry's home and relays its lines both ways",
-         %{ctx: ctx, fake: fake, row: row, admin: admin, entry: entry} do
-      assert {:ok, %{session: token, program: "claude", entry: ^entry}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "sign_in",
-                 "name" => "claude",
-                 "entry" => "claude-login"
-               })
-
-      assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^entry, "argv" => []},
-                      _},
-                     2_000
-
-      # A line the program wrote before anyone attached is kept for them.
-      Scripted.write(fake, row.id, "Open https://claude.ai/oauth and paste the code:")
-      Process.sleep(100)
-
-      # Only the caller that started it attaches.
-      other = %{admin | user_id: "someone-else"}
-      assert {:error, :not_yours} = Programs.sign_in_attach(other, token, self())
-      assert :ok = Programs.sign_in_attach(admin, token, self())
-
-      assert_receive {Opus.Programs, ^token, {:lines, ["Open https://claude.ai/oauth" <> _]}},
-                     2_000
-
-      assert :ok = Programs.sign_in_send(admin, token, "code-1234")
-      assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
-
-      # The command ends by a signal: the subscriber is told, and the owner
-      # released.
-      Scripted.end_sessions(fake, row.id)
-      assert_receive {Opus.Programs, ^token, {:ended, {:exited, nil}}}, 3_000
-      assert_released(row, 1)
-      refute ctx == nil
-    end
-
-    test "a sign-in after a backends restart opens its session under the new boot",
-         %{fake: fake, row: row, admin: admin, entry: entry} do
-      # A live owner answers the sign-in's hold at once, with the grant of
-      # the boot it was synced under.
-      assert {:ok, %{session: _}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
-      Scripted.restart(fake, "bb_second")
-
-      assert {:ok, %{session: _token}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "sign_in",
-                 "name" => "claude",
-                 "entry" => "claude-login"
-               })
-
-      assert_receive {:session, "open", %{"mode" => "sign_in"}, %{boot: "bb_second"}}, 3_000
-    end
-
-    test "a needs_reauth entry signed in with an exit 0 is active again, and with exit 1 stays as it is",
-         %{ctx: ctx, fake: fake, row: row, admin: admin, entry: entry} do
+    # A program's definition is the person's confirmed act
+    # (`program_definition`): the record shows the whole definition and is
+    # bound to it, so it admits that definition and no other.
+    test "an add asks once, shows the whole definition and is admitted with its confirmation",
+         %{ctx: ctx, admin: admin} do
+      vault_entry(ctx, %{name: "personal"})
+      {person, _user} = Sanctum.TestContext.person!(admin)
       actor = Sanctum.Context.actor(ctx)
-      {:ok, _} = Arca.VaultStorage.set_status(actor, entry, "needs_reauth")
 
-      sign_in = fn ->
-        assert {:ok, %{session: token}} =
-                 Provider.handle("mcp_servers", admin, %{
-                   "action" => "sign_in",
-                   "name" => "claude",
-                   "entry" => entry
-                 })
+      args = %{
+        "action" => "create",
+        "name" => "coder",
+        "config" => %{
+          "transport" => "program",
+          "mark" => "driven",
+          "home" => "kept",
+          "command" => "npx -y coder",
+          "hosts" => ["api.coder.test"],
+          "memory_bytes" => 1_073_741_824,
+          "env" => %{"TOKEN" => "vault:personal", "NODE_ENV" => "production"}
+        }
+      }
 
-        assert :ok = Programs.sign_in_attach(admin, token, self())
-        token
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Provider.handle("mcp_servers", person, args)
+
+      assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "coder")
+
+      assert %{
+               "operation" => "mcp_servers.create",
+               "resource" => "coder",
+               "details" => %{
+                 "command" => "npx -y coder",
+                 "mark" => "driven",
+                 "folder" => "new",
+                 "hosts" => ["api.coder.test"],
+                 "memory_bytes" => "1073741824",
+                 "home_max_bytes" => "the folders' volume",
+                 "environment" => ["NODE_ENV (a literal, not shown)", "TOKEN=vault:personal"]
+               }
+             } = preview(person, id)
+
+      refute preview(person, id) |> Jason.encode!() =~ "production"
+
+      Sanctum.TestContext.prove!(person, id)
+      confirmed = %{person | confirmation_id: id}
+      assert {:ok, %{name: "coder"}} = Provider.handle("mcp_servers", confirmed, args)
+      assert {:ok, %{mark: "driven", home: "kept"}} = Arca.McpServerStorage.get(actor, "coder")
+
+      # It was asked once, and is spent.
+      assert [_one] = confirmations(person, "mcp_servers.create")
+    end
+
+    test "a confirmation shown for TOKEN=vault:personal refuses a definition carrying " <>
+           "TOKEN=vault:work",
+         %{ctx: ctx, admin: admin} do
+      vault_entry(ctx, %{name: "personal"})
+      vault_entry(ctx, %{name: "work"})
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+
+      create = fn ctx, entry ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "create",
+          "name" => "coder",
+          "config" => %{
+            "transport" => "program",
+            "mark" => "driven",
+            "command" => "npx -y coder",
+            "env" => %{"TOKEN" => "vault:" <> entry}
+          }
+        })
       end
 
-      token = sign_in.()
-      Scripted.end_sessions(fake, row.id, 1)
-      assert_receive {Opus.Programs, ^token, {:ended, {:exited, 1}}}, 3_000
-      assert_released(row, 1)
-      assert {:ok, %{status: "needs_reauth"}} = Arca.VaultStorage.get(actor, entry)
+      assert {:error, {:confirmation_required, %{id: id}}} = create.(person, "personal")
+      Sanctum.TestContext.prove!(person, id)
+      confirmed = %{person | confirmation_id: id}
 
-      # A mount still refuses it meanwhile: only a sign-in admits it.
-      assert {:error, {:entry_unavailable, "needs_reauth"}} =
-               Sanctum.Mount.login_entry(ctx, entry, "claude")
+      # The proven record is another definition's: nothing is stored, and
+      # a record of its own is opened for it.
+      assert {:error, {:confirmation_required, %{id: other}}} = create.(confirmed, "work")
+      assert other != id
+      assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "coder")
 
-      token = sign_in.()
-      Scripted.end_sessions(fake, row.id, 0)
-      assert_receive {Opus.Programs, ^token, {:ended, :signed_in}}, 3_000
-      assert_released(row, 1)
-      assert {:ok, %{status: "active"}} = Arca.VaultStorage.get(actor, entry)
+      assert {:ok, _} = create.(confirmed, "personal")
+      {:ok, row} = Arca.McpServerStorage.get(actor, "coder")
+      assert Arca.McpServerStorage.config(row)["env"] == %{"TOKEN" => "vault:personal"}
+
+      # An update is bound the same way.
+      update = fn ctx, entry ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "coder",
+          "epoch" => row.epoch,
+          "config" => %{
+            "transport" => "program",
+            "mark" => "driven",
+            "command" => "npx -y coder",
+            "env" => %{"TOKEN" => "vault:personal", "OTHER" => "vault:" <> entry}
+          }
+        })
+      end
+
+      assert {:error, {:confirmation_required, %{id: id}}} = update.(person, "personal")
+      Sanctum.TestContext.prove!(person, id)
+      confirmed = %{person | confirmation_id: id}
+      assert {:error, {:confirmation_required, %{id: _another}}} = update.(confirmed, "work")
+      assert {:ok, ^row} = Arca.McpServerStorage.get(actor, "coder")
+      assert {:ok, %{epoch: 2}} = update.(confirmed, "personal")
     end
 
-    test "a sign-in refuses an entry that is no login entry for the program, and a scratch program",
-         %{ctx: ctx, admin: admin, entry: entry} do
-      login_entry(ctx, "other-login", "other")
+    # Every change to what a program's definition holds asks, a narrower
+    # one too: there is no change that is only narrowing. A re-save that
+    # changes nothing asks nothing.
+    test "every change to a program's definition asks, and a re-save that changes nothing " <>
+           "asks nothing",
+         %{ctx: ctx, admin: admin, row: row} do
+      vault_entry(ctx, %{name: "personal"})
+      vault_entry(ctx, %{name: "work"})
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
 
-      assert {:error, {:invalid_argument, refusal}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "sign_in",
-                 "name" => "claude",
-                 "entry" => "other-login"
+      wide = %{
+        "transport" => "program",
+        "mark" => "driven",
+        "home" => "kept",
+        "command" => "npx -y @anthropic-ai/claude-code",
+        "hosts" => ["a.example", "b.example"],
+        "memory_bytes" => 1_073_741_824,
+        "home_max_bytes" => 2_147_483_648,
+        "env" => %{"TOKEN" => "vault:personal", "NODE_ENV" => "production"}
+      }
+
+      update = fn ctx, epoch, config ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "claude",
+          "epoch" => epoch,
+          "config" => config
+        })
+      end
+
+      assert {:ok, %{epoch: 2}} =
+               Sanctum.TestContext.confirming(person, &update.(&1, row.epoch, wide))
+
+      # The same definition, its hosts in another order, is saved again
+      # with nothing asked.
+      assert {:ok, %{epoch: 3}} =
+               update.(person, 2, Map.put(wide, "hosts", ["b.example", "a.example"]))
+
+      assert confirmations(person, "mcp_servers.update") |> length() == 1
+
+      for {why, config} <- [
+            {"a host removed", Map.put(wide, "hosts", ["a.example"])},
+            {"a host added", Map.put(wide, "hosts", ["a.example", "b.example", "c.example"])},
+            {"no host list", Map.delete(wide, "hosts")},
+            {"a smaller memory bound", Map.put(wide, "memory_bytes", 536_870_912)},
+            {"no memory bound", Map.delete(wide, "memory_bytes")},
+            {"a smaller disk bound", Map.put(wide, "home_max_bytes", 1_073_741_824)},
+            {"a binding removed", Map.put(wide, "env", %{"NODE_ENV" => "production"})},
+            {"a binding changed", put_in(wide, ["env", "TOKEN"], "vault:work")},
+            {"a literal's value changed", put_in(wide, ["env", "NODE_ENV"], "development")},
+            {"a literal removed", Map.put(wide, "env", %{"TOKEN" => "vault:personal"})},
+            {"another command", Map.put(wide, "command", "npx -y other")},
+            {"a scratch folder",
+             wide |> Map.put("home", "scratch") |> Map.delete("home_max_bytes")},
+            {"another mark", Map.put(wide, "mark", "mcp")}
+          ] do
+        assert {:error, {:confirmation_required, _signal}} = update.(person, 3, config), why
+      end
+
+      assert {:ok, %{epoch: 3}} = Arca.McpServerStorage.get(actor, "claude")
+    end
+
+    # A literal environment value is part of what a program is: with
+    # `sh -c "$DEBUG"`, DEBUG from "printf safe" to "cat .credentials" is
+    # another program in the same signed-in folder. The change asks, and
+    # the login grant made for the old definition is stale once it lands.
+    test "a literal environment value changed asks again, and the login grant made for the " <>
+           "old definition no longer binds the row",
+         %{ctx: ctx, admin: admin, row: row} do
+      {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
+      actor = Sanctum.Context.actor(ctx)
+
+      update = fn ctx, epoch, debug ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "claude",
+          "epoch" => epoch,
+          "config" => %{
+            "transport" => "program",
+            "mark" => "driven",
+            "home" => "kept",
+            "command" => ~s(sh -c "$DEBUG"),
+            "memory_bytes" => 1_073_741_824,
+            "home_max_bytes" => 2_147_483_648,
+            "env" => %{"DEBUG" => debug}
+          }
+        })
+      end
+
+      assert {:ok, %{epoch: 2}} =
+               Sanctum.TestContext.confirming(person, &update.(&1, row.epoch, "printf safe"))
+
+      ctx = harness_member!(ctx, row.id)
+      assert binding_of_brain(ctx) == :ok
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               update.(person, 2, "cat .credentials")
+
+      assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(actor, "claude")
+
+      # What the prompt shows is what happens: the grants that bind the
+      # row ask again, and it names them.
+      assert %{
+               "operation" => "mcp_servers.update",
+               "details" => %{
+                 "environment" => ["DEBUG (a literal, not shown)"],
+                 "grants_asking_again" => [
+                   "agent:local.harness",
+                   "catalyst:local.harnessbrain"
+                 ]
+               }
+             } = preview(person, id)
+
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, %{epoch: 3}} = update.(%{person | confirmation_id: id}, 2, "cat .credentials")
+      assert binding_of_brain(ctx) == {:error, :binding_went_stale}
+    end
+
+    # Leaving the programs is a program's removal and asks as one, naming
+    # the grants that use it; coming to them is an addition.
+    test "an update that makes a program a tool server elsewhere asks its removal, and one " <>
+           "that makes a tool server a program asks its addition",
+         %{ctx: ctx, admin: admin, row: row} do
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
+      start_supervised!(Emissary.External.Reconciler)
+      ctx = harness_member!(ctx, row.id)
+      {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
+      actor = Sanctum.Context.actor(ctx)
+
+      update = fn ctx, epoch, config ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "claude",
+          "epoch" => epoch,
+          "config" => config
+        })
+      end
+
+      elsewhere = %{"transport" => "http", "url" => "https://example.com/mcp"}
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               update.(person, row.epoch, elsewhere)
+
+      assert {:ok, ^row} = Arca.McpServerStorage.get(actor, "claude")
+
+      assert %{
+               "operation" => "mcp_servers.update",
+               "resource" => "claude",
+               "details" => %{
+                 "folder" => folder,
+                 "becomes" => "https://example.com/mcp",
+                 "becomes_headers" => "none",
+                 "grants_asking_again" => [
+                   "agent:local.harness",
+                   "catalyst:local.harnessbrain"
+                 ]
+               }
+             } = preview(person, id)
+
+      assert folder == row.id
+
+      Sanctum.TestContext.prove!(person, id)
+      home = row.id
+
+      assert {:ok, _} = update.(%{person | confirmation_id: id}, row.epoch, elsewhere)
+
+      assert {:ok, %{transport: "http", mark: nil, epoch: 2}} =
+               Arca.McpServerStorage.get(actor, "claude")
+
+      # Its folder goes with it, as a removal's does.
+      assert_receive {:control, "home", %{"op" => "retire", "home_id" => ^home}, _}, 2_000
+
+      program = %{
+        "transport" => "program",
+        "mark" => "driven",
+        "home" => "kept",
+        "command" => "npx -y @anthropic-ai/claude-code",
+        "env" => %{}
+      }
+
+      assert {:error, {:confirmation_required, %{id: id}}} = update.(person, 2, program)
+      assert %{"operation" => "mcp_servers.create", "resource" => "claude"} = preview(person, id)
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, _} = update.(%{person | confirmation_id: id}, 2, program)
+      assert {:ok, %{transport: "program", epoch: 3}} = Arca.McpServerStorage.get(actor, "claude")
+    end
+
+    # A program made a tool server elsewhere is confirmed for that outcome
+    # alone: the program that goes and the row it becomes. Its approval
+    # admits neither the program's delete nor another address.
+    test "a conversion's confirmation admits neither a delete nor another address",
+         %{ctx: ctx, admin: admin, row: row} do
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+
+      convert = fn ctx, url ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "claude",
+          "epoch" => row.epoch,
+          "config" => %{"transport" => "http", "url" => url}
+        })
+      end
+
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "claude"})
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               convert.(person, "https://example.com/a")
+
+      assert %{
+               "operation" => "mcp_servers.update",
+               "details" => %{
+                 "command" => "npx -y @anthropic-ai/claude-code",
+                 "folder" => folder,
+                 "becomes" => "https://example.com/a",
+                 "becomes_headers" => "none",
+                 "grants_asking_again" => "none"
+               }
+             } = preview(person, id)
+
+      assert folder == row.id
+      Sanctum.TestContext.prove!(person, id)
+      confirmed = %{person | confirmation_id: id}
+
+      for {why, replay} <- [
+            {"the program's delete", fn -> delete.(confirmed) end},
+            {"another address", fn -> convert.(confirmed, "https://example.com/b") end}
+          ] do
+        assert {:error, {:confirmation_required, %{id: other}}} = replay.(), why
+        refute other == id, why
+        assert {:ok, ^row} = Arca.McpServerStorage.get(actor, "claude"), why
+      end
+
+      assert {:ok, _} = convert.(confirmed, "https://example.com/a")
+
+      assert {:ok, %{transport: "http", url: "https://example.com/a", epoch: 2}} =
+               Arca.McpServerStorage.get(actor, "claude")
+    end
+
+    # Enabling and disabling are the stated exception to "a moved digest
+    # asks": disabling only stops, and enabling brings back the definition
+    # last confirmed, since every change made while disabled was confirmed.
+    test "a change made while a program is disabled asks, and enabling it afterwards asks " <>
+           "nothing and runs the confirmed definition",
+         %{ctx: ctx, admin: admin} do
+      vault_entry(ctx)
+      mcp_row(ctx, "gh")
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+      toggle = &Provider.handle("mcp_servers", person, %{"action" => &1, "name" => "gh"})
+
+      assert {:ok, %{enabled: false, epoch: 2}} = toggle.("disable")
+
+      update =
+        &Provider.handle("mcp_servers", &1, %{
+          "action" => "update",
+          "name" => "gh",
+          "epoch" => 2,
+          "config" => %{
+            "transport" => "program",
+            "mark" => "mcp",
+            "command" => "npx -y @modelcontextprotocol/server-github --read-only",
+            "env" => %{"GITHUB_TOKEN" => "vault:gh-token"}
+          }
+        })
+
+      assert {:error, {:confirmation_required, %{id: id}}} = update.(person)
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, _} = update.(%{person | confirmation_id: id})
+
+      assert {:ok, %{enabled: true, epoch: 4}} = toggle.("enable")
+      assert [_the_change] = confirmations(person, "mcp_servers.update")
+      assert confirmations(person, "mcp_servers.enable") == []
+
+      {:ok, enabled} = Arca.McpServerStorage.get(actor, "gh")
+      assert {:ok, [%{"name" => "search"}]} = Servers.ensure_started(enabled, ctx)
+
+      assert_receive {:control, "sync",
+                      %{
+                        "programs" => [
+                          %{"command" => "npx -y @modelcontextprotocol/server-github --read-only"}
+                        ]
+                      }, _fields},
+                     2_000
+    end
+
+    # An approval is given for one row: another row made under its name
+    # since, with the same definition, is not removed on it.
+    test "a removal confirmed for one row does not remove another made under its name",
+         %{ctx: ctx, admin: admin} do
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+      first = driven_row(ctx, "twin", %{home: "scratch", home_max_bytes: nil})
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "twin"})
+
+      assert {:error, {:confirmation_required, %{id: id}}} = delete.(person)
+      Sanctum.TestContext.prove!(person, id)
+
+      # The row is replaced under its name, the same definition.
+      {:ok, _} = Arca.McpServerStorage.delete(actor, "twin")
+      second = driven_row(ctx, "twin", %{home: "scratch", home_max_bytes: nil})
+      refute second.id == first.id
+
+      assert {:error, {:confirmation_required, %{id: other}}} =
+               delete.(%{person | confirmation_id: id})
+
+      refute other == id
+      assert {:ok, %{id: standing}} = Arca.McpServerStorage.get(actor, "twin")
+      assert standing == second.id
+    end
+
+    # A grant of a program's tools stands on the row as a login grant
+    # does: its removal names it, and blocks it in the delete's
+    # transaction.
+    test "removing a program names and asks again the grants of its tools",
+         %{ctx: ctx, admin: admin} do
+      vault_entry(ctx)
+      github = mcp_row(ctx, "github")
+      ctx = %{ctx | origin: :interactive}
+      actor = Sanctum.Context.actor(ctx)
+      ref = "reagent:local.tool-user"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "tool-user",
+          version: "1.0.0",
+          type: "reagent"
+        })
+
+      commit!(ctx, ref, %{tool_servers: [%{server_name: "github"}]})
+      assert {:ok, [%{status: "active"}]} = Arca.ProfileStorage.list_for_source(actor, ref)
+
+      {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "github"})
+
+      assert {:error, {:confirmation_required, %{id: id}}} = delete.(person)
+
+      assert %{
+               "operation" => "mcp_servers.delete",
+               "details" => %{"grants_asking_again" => [^ref]}
+             } = preview(person, id)
+
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, %{deleted: "github", id: deleted}} = delete.(%{person | confirmation_id: id})
+      assert deleted == github.id
+      assert {:ok, [%{status: "needs_consent"}]} = Arca.ProfileStorage.list_for_source(actor, ref)
+    end
+
+    # Removing a program ends its sessions and retires its folder, and every
+    # grant that binds it asks again: the confirmation says so, and names
+    # them, before it is given. The grants' bindings go with the row, and a
+    # run under them is refused for its consent.
+    test "a removal asks, names the grants that use it, and asks them again",
+         %{ctx: ctx, admin: admin, row: row} do
+      ctx = harness_member!(ctx, row.id)
+      {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
+      actor = Sanctum.Context.actor(ctx)
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "claude"})
+
+      assert {:error, {:confirmation_required, %{id: id}}} = delete.(person)
+      assert {:ok, ^row} = Arca.McpServerStorage.get(actor, "claude")
+
+      assert %{
+               "operation" => "mcp_servers.delete",
+               "resource" => "claude",
+               "details" => %{
+                 "folder" => folder,
+                 "grants_asking_again" => [
+                   "agent:local.harness",
+                   "catalyst:local.harnessbrain"
+                 ]
+               }
+             } = preview(person, id)
+
+      assert folder == row.id
+
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, %{deleted: "claude"}} = delete.(%{person | confirmation_id: id})
+
+      bound =
+        Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef, where: r.mcp_server_id == ^row.id)
+        |> Arca.Repo.all()
+
+      assert bound == []
+
+      for source <- ["catalyst:local.harnessbrain", "agent:local.harness"] do
+        assert {:ok, [%{status: "needs_consent"}]} =
+                 Arca.ProfileStorage.list_for_source(actor, source)
+      end
+
+      # A run of the brain stands on no grant now: it is refused for its
+      # consent, and nothing reaches the row that is gone.
+      Sanctum.TestContext.ready!(ctx.athanor_id)
+
+      assert {:error, refused} =
+               Aqua.Ops.call_tool("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => "catalyst:local.harnessbrain",
+                 "type" => "catalyst",
+                 "input" => %{"operation" => "models", "params" => %{}}
                })
 
-      assert refusal =~ "no active login entry"
-      refute_received {:session, "open", _message, _fields}
-
-      driven_row(ctx, "scratchy", %{home: "scratch", home_max_bytes: nil})
-
-      assert {:error, {:invalid_argument, refusal}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "sign_in",
-                 "name" => "scratchy",
-                 "entry" => entry
-               })
-
-      assert refusal =~ "no sign-in"
+      assert Sanctum.Refusals.render(refused) =~ "needs_consent"
       refute_received {:session, "open", _message, _fields}
     end
 
-    test "reset_home empties the entry's kept home through the box",
-         %{admin: admin, entry: entry} do
-      assert {:ok, %{reset: ^entry}} =
+    # A row whose stored hosts do not read has no record, so its removal
+    # cannot be shown and is not asked; an update with hosts that read,
+    # confirmed as the command line confirms it, makes it whole again.
+    test "a row whose stored hosts do not read is saved again by an update, then removed",
+         %{ctx: ctx, admin: admin} do
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+      broken = driven_row(ctx, "broken", %{hosts: "not a list"})
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "broken"})
+
+      assert {:error, _unread} = Sanctum.ToolServerDigest.recorded(broken)
+      assert {:error, {:invalid_argument, sentence}} = delete.(person)
+      assert sentence =~ "cannot be shown in full"
+      assert {:ok, ^broken} = Arca.McpServerStorage.get(actor, "broken")
+
+      update =
+        &Provider.handle("mcp_servers", &1, %{
+          "action" => "update",
+          "name" => "broken",
+          "epoch" => broken.epoch,
+          "config" => %{
+            "transport" => "program",
+            "mark" => "driven",
+            "home" => "kept",
+            "command" => "npx -y @anthropic-ai/claude-code",
+            "memory_bytes" => 1_073_741_824,
+            "home_max_bytes" => 2_147_483_648,
+            "hosts" => ["api.anthropic.com"],
+            "env" => %{}
+          }
+        })
+
+      assert {:error, {:confirmation_required, %{id: id}}} = update.(person)
+
+      assert %{
+               "operation" => "mcp_servers.update",
+               "details" => %{"hosts" => ["api.anthropic.com"]}
+             } =
+               preview(person, id)
+
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, _saved} = update.(%{person | confirmation_id: id})
+
+      assert {:ok, saved} = Arca.McpServerStorage.get(actor, "broken")
+      assert {saved.id, saved.hosts} == {broken.id, ~s(["api.anthropic.com"])}
+      assert {:ok, _record} = Sanctum.ToolServerDigest.recorded(saved)
+
+      assert {:ok, %{deleted: "broken"}} = Sanctum.TestContext.confirming(person, delete)
+      assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "broken")
+    end
+
+    test "removing a tool server elsewhere asks nothing", %{ctx: ctx, admin: admin} do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "remote",
+          url: "https://mcp.example.test/mcp",
+          config_json: ~s({"headers":{}})
+        })
+
+      {person, _user} = Sanctum.TestContext.person!(admin)
+
+      assert {:ok, %{deleted: "remote"}} =
+               Provider.handle("mcp_servers", person, %{"action" => "delete", "name" => "remote"})
+    end
+
+    test "a terminal after a backends restart opens its session under the new boot",
+         %{fake: fake, row: row, admin: admin} do
+      # A live owner answers the terminal's hold at once, with the grant of
+      # the boot it was synced under.
+      assert {:ok, %{session: _}} = Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
+      Scripted.restart(fake, "bb_second")
+
+      assert {:ok, %{session: _session}} =
+               Provider.handle("mcp_servers", admin, %{"action" => "open", "name" => "claude"})
+
+      assert_receive {:session, "open", %{"mode" => "terminal"}, %{boot: "bb_second"}}, 3_000
+    end
+
+    test "reset_home empties the row's kept home through the box",
+         %{admin: admin, row: row} do
+      assert {:ok, %{reset: "claude"}} =
                Provider.handle("mcp_servers", admin, %{
                  "action" => "reset_home",
-                 "entry" => entry
+                 "name" => "claude"
                })
 
-      assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry, "athanor" => _},
+      home = row.id
+
+      assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^home, "athanor" => _},
                       _},
                      2_000
 
-      assert {:error, {:not_found, "Login entry", "vlt_none"}} =
+      assert {:error, {:not_found, "Server", "nobody"}} =
                Provider.handle("mcp_servers", admin, %{
                  "action" => "reset_home",
-                 "entry" => "vlt_none"
+                 "name" => "nobody"
                })
     end
 
     # The session a member's brain kept lived in the home: after a reset its
     # next request resumes nothing that is gone. A thread whose agent's
-    # brain runs elsewhere keeps its own.
-    test "reset_home forgets the brain session of every thread whose agent's brain mounts the home",
-         %{ctx: ctx, admin: admin, entry: entry} do
+    # brain runs elsewhere keeps its own. The home is the program row's,
+    # named by the id the head binds for the need
+    # (`Sanctum.Mount.agents_mounting/2`).
+    test "a reset forgets the brain session of every thread whose agent's brain mounts the home",
+         %{ctx: ctx, row: row} do
+      entry = row.id
       ctx = harness_member!(ctx, entry)
       actor = Sanctum.Context.actor(ctx)
       {:ok, room} = Arca.ThreadStorage.create(actor)
@@ -1799,11 +2260,7 @@ defmodule Opus.ProgramsTest do
       keep_session!(member, "claude-session-1")
       keep_session!(other, "other-session-1")
 
-      assert {:ok, %{reset: ^entry}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "reset_home",
-                 "entry" => entry
-               })
+      assert :ok = Programs.home(ctx.athanor_id, entry, :reset)
 
       assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry}, _}, 2_000
 
@@ -1819,47 +2276,6 @@ defmodule Opus.ProgramsTest do
       assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
     end
 
-    # A mount reads the brain edge's unnamed binding alone: a named account
-    # bound beside it is not where the brain runs, so its reset leaves the
-    # session the default home keeps.
-    test "reset_home of a named account's home keeps the session of the default's",
-         %{ctx: ctx, admin: admin, entry: named_home} do
-      default_home = login_entry(ctx, "default-login", "claude")
-      ctx = harness_member!(ctx, default_home)
-      brain = "catalyst:local.harnessbrain"
-
-      commit!(ctx, brain, %{
-        bindings: [
-          %{need: "claude", entry_id: default_home},
-          %{need: "claude", entry_id: named_home, name: "spare"}
-        ]
-      })
-
-      commit!(ctx, Prima.AgentRef.ref("harness"), %{
-        selections: [
-          %{dep: brain, need: "claude", entry_id: default_home},
-          %{dep: brain, need: "claude", entry_id: named_home, name: "spare"}
-        ]
-      })
-
-      actor = Sanctum.Context.actor(ctx)
-      {:ok, room} = Arca.ThreadStorage.create(actor)
-      {:ok, member} = Arca.ThreadStorage.crew_thread(actor, room.id, "harness")
-      keep_session!(member, "default-home-session")
-
-      assert {:ok, %{reset: ^named_home}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "reset_home",
-                 "entry" => named_home
-               })
-
-      assert {:ok, %{brain_session: "default-home-session"}} =
-               Arca.ThreadStorage.get(actor, member.id)
-
-      assert :ok = Programs.home(ctx.athanor_id, default_home, :reset)
-      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
-    end
-
     test "a retire that does not land is sent again on every tick until it does",
          %{ctx: ctx, fake: fake, controller: controller} do
       Scripted.refuse_once(fake, "home", "unavailable")
@@ -1872,39 +2288,6 @@ defmodule Opus.ProgramsTest do
       assert_receive {:control, "home", %{"op" => "retire", "home_id" => "vlt_gone"}, _}, 2_000
       assert %{homes: homes} = await_idle(controller)
       assert homes == %{}
-    end
-
-    test "a deleted login entry's home is retired, and so is every one of an archived athanor",
-         %{ctx: ctx, entry: entry} do
-      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
-      start_supervised!(Emissary.External.Reconciler)
-
-      Cyfr.Bus.broadcast_global(
-        Cyfr.Bus.vault_changed_global(),
-        %Cyfr.Bus.VaultEntryChanged{
-          athanor_id: ctx.athanor_id,
-          entry_id: entry,
-          name: "claude-login",
-          kind: :delete
-        }
-      )
-
-      assert_receive {:control, "home", %{"op" => "retire", "home_id" => ^entry}, _}, 3_000
-
-      second = login_entry(ctx, "second-login", "claude")
-
-      Cyfr.Bus.broadcast_global(
-        Cyfr.Bus.athanor_archived_global(),
-        Cyfr.Bus.AthanorArchived.new(ctx.athanor_id)
-      )
-
-      retired =
-        for _ <- 1..2 do
-          assert_receive {:control, "home", %{"op" => "retire", "home_id" => id}, _}, 3_000
-          id
-        end
-
-      assert Enum.sort(retired) == Enum.sort([entry, second])
     end
   end
 
@@ -1923,24 +2306,31 @@ defmodule Opus.ProgramsTest do
     assert_released(row, 1)
   end
 
+  # The pipe holders running on this member.
+  defp pipe_holders do
+    for {_id, pid, _type, [Opus.Programs.Pipe]} <-
+          DynamicSupervisor.which_children(Opus.Programs.Relays),
+        is_pid(pid),
+        do: pid
+  end
+
   describe "pipes" do
     setup %{ctx: ctx} do
       row = driven_row(ctx, "claude")
-      entry = login_entry(ctx, "claude-login", "claude")
-      {:ok, row: row, entry: entry}
+      {:ok, row: row, home: row.id}
     end
 
     test "a session is the row's and the key's: opened for one attempt, attached to by the next, started again once ended",
-         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+         %{ctx: ctx, fake: fake, row: row, home: home} do
       start_controller(fake)
 
       assert {:ok, %{session: first, resumed: false}} =
-               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1", soon())
+               Programs.pipe_open(row, "pipe-k1", ["--resume", "s1"], "att_1", soon())
 
       assert_receive {:session, "open",
                       %{
                         "mode" => "run",
-                        "home_id" => ^entry,
+                        "home_id" => ^home,
                         "key" => "pipe-k1",
                         "argv" => ["--resume", "s1"]
                       }, _},
@@ -1949,10 +2339,10 @@ defmodule Opus.ProgramsTest do
       # A repeat by the same attempt answers as the first did, though the
       # box now attaches to the running session.
       assert {:ok, %{session: ^first, resumed: false}} =
-               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1", soon())
+               Programs.pipe_open(row, "pipe-k1", ["--resume", "s1"], "att_1", soon())
 
       assert {:ok, %{session: ^first, resumed: true}} =
-               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2", soon())
+               Programs.pipe_open(row, "pipe-k1", ["--resume", "s1"], "att_2", soon())
 
       assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", first, ["hello"], soon())
       assert_receive {:session, "send", %{"lines" => ["hello"], "session" => ^first}, _}, 2_000
@@ -1981,7 +2371,7 @@ defmodule Opus.ProgramsTest do
                Programs.pipe_recv(ctx.athanor_id, "att_2", first, line.seq, 0, soon())
 
       assert {:ok, %{session: second, resumed: false}} =
-               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2", soon())
+               Programs.pipe_open(row, "pipe-k1", ["--resume", "s1"], "att_2", soon())
 
       refute second == first
 
@@ -1993,29 +2383,29 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a pipe open after a backends restart is opened under the new boot, its owner synced again",
-         %{fake: fake, row: row, entry: entry} do
+         %{fake: fake, row: row} do
       start_controller(fake)
 
       assert {:ok, %{session: _first}} =
-               Programs.pipe_open(row, entry, "pipe-k1", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-k1", [], "att_1", soon())
 
       Scripted.restart(fake, "bb_second")
 
       # The box's resync under the new boot ends the key's holder, and the
       # open is carried on by a fresh one.
       assert {:ok, %{session: _second}} =
-               Programs.pipe_open(row, entry, "pipe-k2", [], "att_2", soon())
+               Programs.pipe_open(row, "pipe-k2", [], "att_2", soon())
 
       assert_receive {:control, "sync", _message, %{boot: "bb_second"}}, 2_000
       assert_receive {:session, "open", %{"key" => "pipe-k2"}, %{boot: "bb_second"}}, 2_000
     end
 
     test "a close ends the session and releases the owner; a repeat is harmless",
-         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+         %{ctx: ctx, fake: fake, row: row} do
       start_controller(fake)
 
       assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
 
       assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session, soon())
       assert_closed_then_released(row, session)
@@ -2026,32 +2416,29 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a session no attempt uses for the idle period ends, and its owner is released",
-         %{fake: fake, row: row, entry: entry} do
+         %{fake: fake, row: row} do
       start_controller(fake, idle_ms: 200)
 
       assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
 
       assert_closed_then_released(row, session, 5_000)
-      assert Programs.mounts() == []
+      assert pipe_holders() == []
     end
 
-    test "a login entry's revoke ends every session in its home, and no other",
-         %{ctx: ctx, fake: fake, row: row, entry: entry} do
-      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
-      start_supervised!(Emissary.External.Reconciler)
+    test "a deleted row ends every session of its own at once, and no other row's",
+         %{ctx: ctx, fake: fake, row: row} do
       start_controller(fake)
-      other = login_entry(ctx, "claude-second", "claude")
+      other_row = driven_row(ctx, "claude-second")
 
-      assert {:ok, %{session: mine}} =
-               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+      assert {:ok, %{session: mine}} = Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
 
       assert {:ok, %{session: kept}} =
-               Programs.pipe_open(row, other, "pipe-k", [], "att_1", soon())
+               Programs.pipe_open(other_row, "pipe-k", [], "att_1", soon())
 
       flush_sessions()
 
-      assert {:ok, _} = Sanctum.Vault.revoke(ctx, entry)
+      assert :ok = Programs.end_mounts(ctx.athanor_id, row.id)
       assert_receive {:session, "close", %{"session" => ^mine}, _}, 3_000
       refute_received {:session, "close", %{"session" => ^kept}, _}
 
@@ -2061,35 +2448,12 @@ defmodule Opus.ProgramsTest do
                Programs.pipe_send(ctx.athanor_id, "att_1", mine, ["gone"], soon())
     end
 
-    test "a sweep ends a session whose entry changed with no signal said, and no other",
-         %{ctx: ctx, fake: fake, row: row, entry: entry} do
-      start_controller(fake)
-      other = login_entry(ctx, "claude-second", "claude")
-
-      assert {:ok, %{session: mine}} =
-               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
-
-      assert {:ok, %{session: kept}} =
-               Programs.pipe_open(row, other, "pipe-k", [], "att_1", soon())
-
-      assert [{ctx.athanor_id, entry, "claude"}, {ctx.athanor_id, other, "claude"}] |> Enum.sort() ==
-               Enum.sort(Programs.mounts())
-
-      flush_sessions()
-      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry, "needs_reauth")
-      assert :ok = Emissary.External.Reconciler.sweep_mounts()
-
-      assert_receive {:session, "close", %{"session" => ^mine}, _}, 3_000
-      refute_received {:session, "close", %{"session" => ^kept}, _}
-      assert [{_athanor, ^other, "claude"}] = Programs.mounts()
-    end
-
     test "a send whose connection is reset after it arrived is uncertain, never safe to repeat",
-         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+         %{ctx: ctx, fake: fake, row: row} do
       start_controller(fake)
 
       assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
 
       flush_sessions()
       Scripted.set(fake, :reset_send, true)
@@ -2102,14 +2466,14 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a holder killed has its session closed by the box, its row's other holder untouched",
-         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+         %{ctx: ctx, fake: fake, row: row} do
       start_controller(fake)
 
       assert {:ok, %{session: first}} =
-               Programs.pipe_open(row, entry, "pipe-a", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-a", [], "att_1", soon())
 
       assert {:ok, %{session: second}} =
-               Programs.pipe_open(row, entry, "pipe-b", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
 
       [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, first})
       flush_sessions()
@@ -2123,7 +2487,7 @@ defmodule Opus.ProgramsTest do
     end
 
     test "one deadline covers the owner's acquisition and the open; nothing of a late open runs",
-         %{fake: fake, row: row, entry: entry} do
+         %{fake: fake, row: row} do
       start_controller(fake)
 
       # Scaled from a 15 s acquisition and a 17 s open against a 30 s window:
@@ -2133,7 +2497,7 @@ defmodule Opus.ProgramsTest do
       Scripted.hold(fake, "open")
 
       opening =
-        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-k", [], "att_1", deadline) end)
+        Task.async(fn -> Programs.pipe_open(row, "pipe-k", [], "att_1", deadline) end)
 
       assert_receive {:held, "sync", sync}, 2_000
       Process.sleep(1_500)
@@ -2147,26 +2511,26 @@ defmodule Opus.ProgramsTest do
 
       # No holder keeps it, and the owner is released with it.
       assert_released(row, 1)
-      assert Programs.mounts() == []
+      assert pipe_holders() == []
     end
 
     test "a holder killed before it hears the box's answer leaves the box its session to close",
-         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+         %{ctx: ctx, fake: fake, row: row} do
       start_controller(fake)
 
       assert {:ok, %{session: sibling}} =
-               Programs.pipe_open(row, entry, "pipe-b", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
 
       flush_sessions()
       Scripted.hold(fake, "opened")
 
       opening =
-        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", soon()) end)
+        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", soon()) end)
 
       # The backend's session stands; its answer is on its way when the
       # holder that asked is killed.
       assert_receive {:held, "opened", answer}, 2_000
-      key = {:pipe, row.athanor_id, row.id, row.epoch, entry, "pipe-a"}
+      key = {:pipe, row.athanor_id, row.id, row.epoch, "pipe-a"}
       [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
       Process.exit(holder, :kill)
       send(answer, :go)
@@ -2184,20 +2548,20 @@ defmodule Opus.ProgramsTest do
     test "a late pipe close settles after its backend owner expires", %{
       fake: fake,
       row: row,
-      entry: entry
+      home: _home
     } do
       controller = start_controller(fake, lease_ms: 500)
 
       assert {:ok, %{session: _sibling}} =
-               Programs.pipe_open(row, entry, "pipe-b", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
 
       Scripted.hold(fake, "opened")
 
       opening =
-        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", soon()) end)
+        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", soon()) end)
 
       assert_receive {:held, "opened", answer}, 2_000
-      key = {:pipe, row.athanor_id, row.id, row.epoch, entry, "pipe-a"}
+      key = {:pipe, row.athanor_id, row.id, row.epoch, "pipe-a"}
       [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
       Process.exit(holder, :kill)
 
@@ -2219,7 +2583,7 @@ defmodule Opus.ProgramsTest do
         fn ->
           state = :sys.get_state(controller)
 
-          state.pipe_opens == %{} and
+          state.opens == %{} and
             Enum.all?(state.closing, fn {_id, record} -> not record.inflight end)
         end,
         "the late open and its first close to settle"
@@ -2234,14 +2598,14 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a close refused once is owed by the box past its holder's release, and lands on the sweep",
-         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+         %{ctx: ctx, fake: fake, row: row} do
       controller = start_controller(fake)
 
       assert {:ok, %{session: _sibling}} =
-               Programs.pipe_open(row, entry, "pipe-b", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
 
       assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, entry, "pipe-a", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-a", [], "att_1", soon())
 
       flush_sessions()
       Scripted.refuse_once(fake, "close", "unavailable")
@@ -2258,11 +2622,11 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a late first answer never closes the session a second open of the key was given",
-         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+         %{ctx: ctx, fake: fake, row: row} do
       start_controller(fake)
 
       assert {:ok, %{session: _sibling}} =
-               Programs.pipe_open(row, entry, "pipe-b", [], "att_0", soon())
+               Programs.pipe_open(row, "pipe-b", [], "att_0", soon())
 
       flush_sessions()
 
@@ -2272,14 +2636,14 @@ defmodule Opus.ProgramsTest do
       deadline = System.system_time(:millisecond) + 1_000
 
       first =
-        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", deadline) end)
+        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", deadline) end)
 
       assert_receive {:held, "opened", answer}, 2_000
       assert {:error, :deadline} = Task.await(first, 3_000)
 
       # A second open of the key is given the session.
       assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, entry, "pipe-a", [], "att_2", soon())
+               Programs.pipe_open(row, "pipe-a", [], "att_2", soon())
 
       flush_sessions()
 
@@ -2290,11 +2654,11 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a success queued before the deadline and handled after it is closed, never given",
-         %{fake: fake, row: row, entry: entry} do
+         %{fake: fake, row: row} do
       start_controller(fake)
 
       assert {:ok, %{session: sibling}} =
-               Programs.pipe_open(row, entry, "pipe-b", [], "att_0", soon())
+               Programs.pipe_open(row, "pipe-b", [], "att_0", soon())
 
       flush_sessions()
       box = GenServer.whereis(Programs.via("local"))
@@ -2303,7 +2667,7 @@ defmodule Opus.ProgramsTest do
       deadline = System.system_time(:millisecond) + 1_500
 
       opening =
-        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", deadline) end)
+        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", deadline) end)
 
       assert_receive {:held, "opened", answer}, 2_000
 
@@ -2323,12 +2687,12 @@ defmodule Opus.ProgramsTest do
       ctx: ctx,
       fake: fake,
       row: row,
-      entry: entry
+      home: _home
     } do
       controller = start_controller(fake)
 
       assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, entry, "pipe-k", [], "att_1", soon())
+               Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
 
       [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, session})
       monitor = Process.monitor(pid)
@@ -2354,7 +2718,7 @@ defmodule Opus.ProgramsTest do
       row = mcp_row(ctx, "running", %{"NODE_ENV" => "production"})
       connect(ctx, row)
 
-      assert {:ok, %{"e" => 1, "programs" => [%{"name" => "github", "home" => "scratch"}]}} =
+      assert {:ok, %{"e" => 1, "programs" => [%{"name" => "program", "home" => "scratch"}]}} =
                Programs.status(ctx.athanor_id, row.id)
 
       assert_receive {:control, "status", %{"owners" => owners}, _fields}, 2_000
@@ -2621,8 +2985,7 @@ defmodule Opus.ProgramsTest do
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 2_147_483_648)
     controller = start_controller(fake)
     row = driven_row(ctx, "ceiling-pipe")
-    entry = login_entry(ctx, "ceiling-login", "ceiling-pipe")
-    assert {:ok, _} = Programs.pipe_open(row, entry, "before", [], "att_before", soon())
+    assert {:ok, _} = Programs.pipe_open(row, "before", [], "att_before", soon())
     assert_receive {:session, "open", %{"key" => "before"}, _}, 2_000
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 1)
     Scripted.hold(fake, "sync")
@@ -2632,7 +2995,7 @@ defmodule Opus.ProgramsTest do
     assert :sys.get_state(controller).athanor_memory_bytes == 1
 
     opening =
-      Task.async(fn -> Programs.pipe_open(row, entry, "after", [], "att_after", soon()) end)
+      Task.async(fn -> Programs.pipe_open(row, "after", [], "att_after", soon()) end)
 
     overtook =
       receive do

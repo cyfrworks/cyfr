@@ -5,12 +5,12 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/claude-code/0.1.4/catalyst.wasm) under a
+(seed/components/catalysts/local/claude-code/0.1.5/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `claude` program, driven by requests signed as
 CYFR signs them (harness.py). The control plane plays CYFR's host for the
 catalyst's pipe as `Opus.Host.Pipe` does: each `pipe_open` names the
-`claude` need and is opened on the program in one login entry's kept
+`claude` need and is opened on the program in its program row's kept
 folder under a key of the catalyst's own; `pipe_send`, `pipe_recv` and
 `pipe_close` go to the session it opened. The program's command runs
 fake-claude.mjs, a stand-in for Claude Code speaking the event shapes the
@@ -78,11 +78,11 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.4")
-REF = "catalyst:local.claude-code:0.1.4"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.5")
+REF = "catalyst:local.claude-code:0.1.5"
 NEED = "claude"
 OWNER = owner_of("claude-code")
-HOME = "vlt_claude-code"
+HOME = "mcp_claude-code"
 FAKE = "fake-claude.mjs"
 PROGRAM = {"name": "claude", "command": f"node /probe/{FAKE}", "env": {}, "home": "kept"}
 # Short, so the retirement case waits little; long enough that a chat
@@ -102,7 +102,7 @@ SYSTEM = "You are a crew member of this athanor."
 
 class Bridge:
     """CYFR's host for the catalyst's pipe, as `Opus.Host.Pipe` is: the need
-    granted is `claude`, bound to one login entry's kept home; a key is the
+    granted is `claude`, bound to its program row's kept home; a key is the
     catalyst's own, hashed with its node and need; a session is answered only
     to the attempt that opened it."""
 
@@ -135,7 +135,7 @@ class Bridge:
         self.calls.append(("open", args))
         if self.refuse_next_open:
             kind, self.refuse_next_open = self.refuse_next_open, None
-            return self.guest_error(kind, "The login entry bound to claude is revoked.")
+            return self.guest_error(kind, "The program claude that claude runs is not an enabled program with a kept folder here.")
         if args.get("need") != NEED:
             return {"error": "denied"}
         key = "pipe-" + hashlib.sha256(f"{REF}\0{NEED}\0{args['key']}".encode()).hexdigest()[:40]
@@ -451,7 +451,7 @@ def main():
 
         # ————— a refusal of the pipe —————
         bridge.refuse_next_open = "setup_required"
-        output, events = run_catalyst(rt, plane, wasm, "chat", later, "a chat whose login entry was revoked")
+        output, events = run_catalyst(rt, plane, wasm, "chat", later, "a chat whose program row no longer serves it")
         answers.append((output, events))
         expect(output["status"] == 403 and output["error"]["type"] == "secret_denied"
                and events[-1]["type"] == "error" and events[-1]["error"]["type"] == "secret_denied",

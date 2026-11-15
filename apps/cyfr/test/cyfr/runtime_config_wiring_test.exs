@@ -592,8 +592,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       "CYFR_WORKOS_ORGANIZATION" => nil,
       "CYFR_OIDC_ISSUER" => nil,
       "CYFR_OIDC_CLIENT_ID" => nil,
-      "CYFR_OIDC_CLIENT_SECRET" => nil,
-      "CYFR_HEADLESS" => nil
+      "CYFR_OIDC_CLIENT_SECRET" => nil
     }
     @company_oidc %{
       "CYFR_OIDC_ISSUER" => "https://auth.example.com",
@@ -658,7 +657,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
             Map.merge(@company_oidc, %{"CYFR_COMPANY_LOGIN_DAYS" => "30"}),
             Map.merge(join, Map.delete(@company_workos, "CYFR_WORKOS_ORGANIZATION")),
             @company_workos,
-            Map.merge(join, Map.put(@company_workos, "CYFR_HEADLESS", "on")),
             join
           ] do
         env = company_env(overrides)
@@ -666,7 +664,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
 
         {:error, sentence} =
-          Cyfr.RuntimeConfig.company_login_config(getenv, oidc, env["CYFR_HEADLESS"] == "on")
+          Cyfr.RuntimeConfig.company_login_config(getenv, oidc)
 
         with_env(env, fn ->
           error = assert_raise RuntimeError, &read_prod_config!/0
@@ -674,6 +672,17 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           refute Exception.message(error) =~ "sk_test_company_api_key"
         end)
       end
+    end
+
+    # Every CYFR serves its pages: the switch that turned them off is no
+    # setting, so a deployment still naming it is refused by name.
+    test "CYFR_HEADLESS is no setting: the boot refuses it by name" do
+      with_env(company_env(%{"CYFR_HEADLESS" => "on"}), fn ->
+        error = assert_raise RuntimeError, &read_prod_config!/0
+
+        assert Exception.message(error) ==
+                 "[Cyfr] FATAL: " <> Cyfr.Platform.Settings.Roster.refusal(["CYFR_HEADLESS"])
+      end)
     end
   end
 

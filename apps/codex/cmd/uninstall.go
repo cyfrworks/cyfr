@@ -36,6 +36,8 @@ cyfr uninstall shows what it removes and what it leaves, then asks once (--yes a
 - this program, by the path it runs from. A Homebrew install is left to 'brew uninstall --cask cyfr'.
 The program or its link stays when this directory holds it, or holds what it resolves to.
 
+CYFR never asks for, reads or keeps a password. When the screen service or the link is to go, an account outside the sudo and admin groups is refused before anything is shown or asked, with those commands as one sudo line for whoever administers the machine. Otherwise, after the question and before the stack stops, CYFR says whose password sudo will ask for, when it will ask, and sudo asks in its own prompt; a refused password changes nothing, and so does a sudo that needs a password with no terminal to ask at.
+
 It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes, this program's settings files in ~/.cyfr and this machine's device key. It ends by naming each by its path, and the command that removes the volumes.
 
 Each step is said as it is done; when one fails, the command says what is already gone and what is still here.`,
@@ -85,8 +87,6 @@ type uninstallPlan struct {
 	inFolder []string
 	// settings are this program's settings files, which stay.
 	settings []string
-	// deviceKey is this machine's device key, which stays.
-	deviceKey string
 }
 
 // readUninstallPlan reads what an uninstall of the CYFR in the working
@@ -134,9 +134,6 @@ func readUninstallPlan() (*uninstallPlan, error) {
 			}
 		}
 	}
-	if path, err := deviceKey(); err == nil && fileExists(path) {
-		p.deviceKey = path
-	}
 	return p, nil
 }
 
@@ -180,9 +177,6 @@ func (p *uninstallPlan) show(out io.Writer) {
 	if len(p.settings) > 0 {
 		fmt.Fprintf(out, "  this program's settings, %s\n", strings.Join(p.settings, ", "))
 	}
-	if p.deviceKey != "" {
-		fmt.Fprintf(out, "  this machine's device key, %s\n", p.deviceKey)
-	}
 	if p.cask {
 		fmt.Fprintln(out, "  this program, which Homebrew installed: remove it with 'brew uninstall --cask cyfr'")
 	}
@@ -199,6 +193,12 @@ func runUninstall(ctx context.Context, out io.Writer, yes bool) error {
 	if err != nil {
 		return fmt.Errorf("cyfr uninstall could not read this directory (%v); nothing was removed", err)
 	}
+	root := p.rootCommands()
+	if len(root) > 0 {
+		if err := mayAdminister(root, out, "cyfr uninstall"); err != nil {
+			return err
+		}
+	}
 	p.show(out)
 	if !yes {
 		if !askTerminal() {
@@ -212,6 +212,13 @@ func runUninstall(ctx context.Context, out io.Writer, yes bool) error {
 	}
 	r := &uninstallRun{p: p, out: out}
 	defer machine.forget()
+	// sudo has the login before the stack stops, so a refused password
+	// leaves CYFR as it was.
+	if len(root) > 0 {
+		if err := unlockSudo(out, "cyfr uninstall"); err != nil {
+			return err
+		}
+	}
 	if err := r.run(ctx); err != nil {
 		return err
 	}
@@ -221,6 +228,22 @@ func runUninstall(ctx context.Context, out io.Writer, yes bool) error {
 	fmt.Fprint(out, p.left(r.volumes))
 	return nil
 }
+
+// rootCommands are the uninstall's commands as root, in the order it runs
+// them: the screen service's, then the link's removal.
+func (p *uninstallPlan) rootCommands() []string {
+	var commands []string
+	if p.screen {
+		commands = append(commands, screenOffCommands...)
+	}
+	if p.link {
+		commands = append(commands, linkRemoval())
+	}
+	return commands
+}
+
+// linkRemoval is the root command that removes the link onto PATH.
+func linkRemoval() string { return shellQuote([]string{"rm", "-f", "--", usrLocalLink}) }
 
 // left names what the uninstall left, each by its path, and the one
 // command it gives, the volumes' removal: it never prints a command that
@@ -234,9 +257,6 @@ func (p *uninstallPlan) left(volumes []string) string {
 	}
 	if len(p.settings) > 0 {
 		fmt.Fprintf(&b, "  this program's settings, %s\n", strings.Join(p.settings, ", "))
-	}
-	if p.deviceKey != "" {
-		fmt.Fprintf(&b, "  this machine's device key, %s\n", p.deviceKey)
 	}
 	if len(volumes) > 0 {
 		fmt.Fprintf(&b, "  the stack's volumes, which this command removes:\n    docker volume rm %s\n", shellQuote(volumes))
@@ -297,7 +317,7 @@ func (r *uninstallRun) run(ctx context.Context) error {
 		r.done("the screen service")
 	}
 	if p.link {
-		if err := machine.apply([]string{shellQuote([]string{"rm", "-f", "--", usrLocalLink})}); err != nil {
+		if err := machine.apply([]string{linkRemoval()}); err != nil {
 			return r.failed("removing the link "+usrLocalLink, err)
 		}
 		r.done("the link " + usrLocalLink)

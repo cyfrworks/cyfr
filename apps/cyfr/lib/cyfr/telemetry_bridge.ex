@@ -451,7 +451,9 @@ defmodule Cyfr.TelemetryBridge do
       duration_ms: meta[:duration_ms],
       started_at: meta[:started_at],
       ended_at: meta[:ended_at],
-      error: execution_error(meta)
+      error: execution_error(meta),
+      origin: meta[:origin],
+      retryable: meta[:retryable] == true
     }
   end
 

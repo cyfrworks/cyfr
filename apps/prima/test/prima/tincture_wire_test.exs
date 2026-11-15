@@ -435,7 +435,7 @@ defmodule Prima.TinctureWireTest do
 
   test "a grant names exactly one component reference, of any component type, at a version or none" do
     for ref <- [
-          "catalyst:local.openai:1.4.2",
+          "catalyst:local.openai:1.4.3",
           "c:local.openai",
           "reagent:local.notes",
           "formula:example.com.digest:0.2.0",
@@ -627,6 +627,27 @@ defmodule Prima.TinctureWireTest do
                  args["reason"]
                ) ==
                  args
+      end
+
+      opened =
+        for %{"message" => %{"verb" => "opened", "args" => args}} <- rows["valid"], do: args
+
+      assert opened |> Enum.map(& &1["outcome"]) |> Enum.uniq() |> Enum.sort() ==
+               Enum.sort(TinctureWire.open_outcomes())
+
+      for args <- opened do
+        assert TinctureWire.opened(args["call"], args["outcome"], args["reason"]) == args
+      end
+
+      for %{"why" => why, "message" => %{"verb" => "opened", "args" => args}} <- rows["invalid"] do
+        built =
+          try do
+            TinctureWire.opened(args["call"], args["outcome"], args["reason"])
+          rescue
+            ArgumentError -> :raised
+          end
+
+        refute built == args, why
       end
 
       for %{"message" => %{"verb" => "prefs", "args" => args}} <- rows["valid"] do

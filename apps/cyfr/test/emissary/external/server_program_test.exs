@@ -6,8 +6,9 @@ defmodule Emissary.External.ServerProgramTest do
   The program arm of an external MCP server against a program that answers
   as an MCP server over stdio does (`Cyfr.Test.ScriptedBackends`): its
   `tools/list` pages under `nextCursor`, which the connect follows to the
-  last page, and a call it cannot serve is answered with a JSON-RPC error,
-  which the call answers as a failure.
+  last page, a call it cannot serve is answered with a JSON-RPC error,
+  which the call answers as a failure, and its tools are listed and
+  named on an API key as `<row>:<tool>`.
   """
   use ExUnit.Case, async: false
 
@@ -17,7 +18,7 @@ defmodule Emissary.External.ServerProgramTest do
   @root :crypto.strong_rand_bytes(32)
   @secret "ghp_program-test-secret-0123456789"
   @generation_key {Arca.ControlPlane, :generation}
-  @tools ~w(github__search github__issues github__pulls)
+  @tools ~w(search issues pulls)
 
   setup do
     Cyfr.Test.Sandbox.setup!()
@@ -53,14 +54,10 @@ defmodule Emissary.External.ServerProgramTest do
         url: nil,
         config_json:
           Jason.encode!(%{
-            "backends" => [
-              %{
-                "name" => "github",
-                "command" => "npx -y @modelcontextprotocol/server-github",
-                "env" => %{"GITHUB_TOKEN" => "vault:gh-token"}
-              }
-            ],
-            "timeout_ms" => 5_000
+            "command" => "npx -y @modelcontextprotocol/server-github",
+            "env" => %{"GITHUB_TOKEN" => "vault:gh-token"},
+            "timeout_ms" => 5_000,
+            "console" => true
           })
       })
 
@@ -89,13 +86,86 @@ defmodule Emissary.External.ServerProgramTest do
     pid = server_pid(ctx, row)
 
     # The program no longer serves `pulls`, as one upgraded underneath.
-    Scripted.set(fake, :tools, %{row.id => ["github__search"]})
+    Scripted.set(fake, :tools, %{row.id => ["search"]})
 
     assert {:ok, %{"content" => [%{"text" => "found"}]}} =
-             Emissary.External.Server.call_tool(pid, "github__search", %{})
+             Emissary.External.Server.call_tool(pid, "search", %{})
 
     # The program's own message, not a result read as success.
     assert {:error, "Unknown tool: pulls"} =
-             Emissary.External.Server.call_tool(pid, "github__pulls", %{})
+             Emissary.External.Server.call_tool(pid, "pulls", %{})
+  end
+
+  # A key narrowed to a program's tool names it as discovery lists it,
+  # `<row>:<tool>`, compared as written (`Sanctum.ApiKey.admit_tool/2`).
+  describe "a key narrowed to a program's tool" do
+    @not_named "This API key may run only the tools named when it was made, and this is " <>
+                 "not one of them."
+
+    defp narrowed_key!(ctx, name, tools) do
+      _owner = Sanctum.TestContext.owner!()
+      issuer = Sanctum.TestContext.issuer!(%{ctx | user_id: Arca.Test.Actor.owner_id()})
+
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(issuer, %{name: name, scope: ["execute"], tools: tools})
+
+      {:ok, key} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      key
+    end
+
+    defp listed(ctx), do: ctx |> Sanctum.Visibility.external_tools() |> Enum.map(& &1["name"])
+
+    defp call(ctx, name) do
+      Emissary.MCP.Router.dispatch(ctx, %Prima.MCP.Message{
+        type: :request,
+        id: 7,
+        method: "tools/call",
+        params: %{"name" => name, "arguments" => %{}}
+      })
+    end
+
+    setup %{ctx: ctx, row: row} do
+      Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+
+      on_exit(fn ->
+        Emissary.External.ServerSupervisor.stop(row.name, ctx.athanor_id)
+        Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+      end)
+    end
+
+    test "is shown and runs that tool alone", %{ctx: ctx} do
+      assert Enum.sort(listed(ctx)) == ["gh:issues", "gh:pulls", "gh:search"]
+      key = narrowed_key!(ctx, "search-only", ["gh:search"])
+
+      assert listed(key) == ["gh:search"]
+      assert {:ok, %{"isError" => false}} = call(key, "gh:search")
+
+      for name <- ["gh:issues", "gh:pulls"] do
+        assert {name, call(key, name)} == {name, {:error, :insufficient_permissions, @not_named}}
+      end
+    end
+
+    # The name a program's tool had while a program was a set of backends,
+    # `<row>:<backend>__<tool>`, names no tool the program lists now: none
+    # is shown, every listed one is refused, and the old name itself runs
+    # nothing.
+    test "named by its former backend-prefixed name, admits none of its tools", %{ctx: ctx} do
+      key = narrowed_key!(ctx, "former-name", ["gh:github__search"])
+
+      assert listed(key) == []
+
+      for name <- ["gh:search", "gh:issues", "gh:pulls"] do
+        assert {name, call(key, name)} == {name, {:error, :insufficient_permissions, @not_named}}
+      end
+
+      # The name the key holds is admitted as written, and the program
+      # answers that it serves no such tool.
+      assert call(key, "gh:github__search") ==
+               {:ok,
+                %{
+                  "content" => [%{"type" => "text", "text" => "Unknown tool: github__search"}],
+                  "isError" => true
+                }}
+    end
   end
 end

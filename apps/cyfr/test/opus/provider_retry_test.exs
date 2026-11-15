@@ -323,6 +323,61 @@ defmodule Opus.ProviderRetryTest do
     end
   end
 
+  # A run's change, as `runs.changes` tells it live and its refresh reads
+  # it, says who started the run and whether a retry runs it again, by the
+  # rule the retry itself answers by (`Opus.Record.retriable/1`).
+  describe "what a run's change says of Retry" do
+    test "a scheduled run known to have failed: started by a schedule, and Retry runs it", %{
+      ctx: ctx
+    } do
+      watch_runs(ctx)
+      failed = scheduled_failure!(ctx)
+
+      assert_receive %Cyfr.Bus.Execution{
+                       execution_id: ^failed,
+                       kind: :failed,
+                       origin: :schedule,
+                       retryable: true
+                     },
+                     10_000
+
+      assert %Cyfr.Bus.Execution{origin: :schedule, retryable: true} = refreshed(ctx, failed)
+      assert {:ok, record} = Record.get(ctx, failed)
+      assert Record.retriable(record) == :ok
+    end
+
+    test "a run started otherwise names its starter and offers no Retry, as the retry refuses it",
+         %{ctx: ctx} do
+      watch_runs(ctx)
+      script!([{:error, "upstream gone"}])
+      id = Prima.UUID7.execution_id()
+      # A person's own run, as Prism admits it.
+      assert ctx.origin == :interactive
+      origin = :interactive
+
+      {:error, _} = Opus.run_root(ctx, {:id, @profile_id}, @pinned, @input, execution_id: id)
+
+      assert_receive %Cyfr.Bus.Execution{execution_id: ^id, kind: :started, origin: ^origin} =
+                       started,
+                     10_000
+
+      assert started.retryable == false
+
+      assert_receive %Cyfr.Bus.Execution{
+                       execution_id: ^id,
+                       kind: :failed,
+                       origin: ^origin,
+                       retryable: false
+                     },
+                     10_000
+
+      assert %Cyfr.Bus.Execution{origin: ^origin, retryable: false} = refreshed(ctx, id)
+
+      assert refused(retry(ctx, id)) ==
+               {:conflict, "Only a run a schedule or a feed started can be retried."}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
@@ -334,6 +389,12 @@ defmodule Opus.ProviderRetryTest do
   defp watch_runs(ctx) do
     actor = Sanctum.Context.actor(ctx)
     :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
+  end
+
+  # The run `id` as the runs stream's refresh reads it.
+  defp refreshed(ctx, id) do
+    {:ok, items} = Opus.Providers.Feed.recent_runs(ctx, nil)
+    Enum.find(items, &(&1.execution_id == id))
   end
 
   defp refused({:error, reason}) do

@@ -1110,8 +1110,10 @@ defmodule Sanctum.Catalog do
   authored `auto` is a standing answer the agent's file gives for every
   call in every thread, so it obeys the same rule: an action asked on
   every call (`standing: false`, such as `notes.pin`) or allowed only for
-  one thread (`standing: :thread`, such as `notes.keep`) is never `auto`.
-  A destructive, external or undeclared action is `false` too. The one
+  one thread (`standing: :thread`, such as `notes.keep`) is never `auto`,
+  and neither is one whose resource is a program row, which stands only
+  for one row. A destructive, external or undeclared action is `false`
+  too. The one
   predicate the assistant's runtime ceiling (`Aqua.Kinds.auto_permitted?/2`)
   and the `aqua` tool's write door
   (`Compendium.AquaAgent.validate_tool_policy/2`) read.
@@ -1119,8 +1121,9 @@ defmodule Sanctum.Catalog do
   @spec auto_permitted?(String.t(), String.t()) :: boolean()
   def auto_permitted?(tool, action) when is_binary(tool) and is_binary(action) do
     case declaration(tool, action) do
-      {:ok, %{kind: kind, standing: standing}} ->
-        Sanctum.VirtualTools.auto_permitted_kind?(kind) and is_nil(standing)
+      {:ok, %{kind: kind, standing: standing} = declaration} ->
+        Sanctum.VirtualTools.auto_permitted_kind?(kind) and is_nil(standing) and
+          not match?({_argument, :program_row}, Map.get(declaration, :resource))
 
       {:error, :not_found} ->
         false

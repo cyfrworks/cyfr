@@ -770,7 +770,7 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 		values, _ := access.ReadEnvValues(".env")
 		switch {
 		case fresh:
-			fmt.Fprintln(out, upThenSetup(values, hyperlink(out, setupLink(p.NewWords.Address, values))))
+			fmt.Fprintln(out, upThenSetup(hyperlink(out, setupLink(p.NewWords.Address, values))))
 		case read == setUpNone:
 			setupNext(out, p.New)
 		}

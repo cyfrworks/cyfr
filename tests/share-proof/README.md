@@ -135,7 +135,7 @@ unchecked.
 | `share_usage` | `count` | | `athanor_id`: the administrator's sign-in's; `share_id`: its row's under Shared by you; `user_id`: the sign-in's, or the empty id of the share's own total; `day`: today; `updated_at`: a time |
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
 | `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via` | `resolved_policy`, `blob_digest`, `activation`, `shape_digest`, `commit_digest`: what the bootstrap derives (`derived_head`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
-| `consent_vault_refs` | `binding_key`, `vault_entry_id`, `via_label`, `lifetime_kind`, `expires_at`, `consumed_by_root` | `binding_digest`: `requested_digest` | `consent_id`: the admission's; `athanor_id`: the sign-in's; `share_id`: its row's under Shared by you |
+| `consent_vault_refs` | `binding_key`, `vault_entry_id`, `mcp_server_id`, `via_label`, `lifetime_kind`, `expires_at`, `consumed_by_root` | `binding_digest`: `requested_digest` | `consent_id`: the admission's; `athanor_id`: the sign-in's; `share_id`: its row's under Shared by you |
 | `users` | `email`, `email_verified`, `admission`, `display_name`, `namespace`, `status`, `prefs`, `security_generation` | | `id`: the sign-in's; `first_seen_at`, `last_seen_at`, `denied_at`, `platform_admin_at`, `created_at`, `updated_at`: times (`platform_admin_at` none for anyone but the installation's first person) |
 
 The bounds:
@@ -238,7 +238,7 @@ in the tree.
 The unchanged shipped model artifact → production
 `Opus.Host.AttachedFetch` → local provider stand-in composition is
 **uncovered**. The shipped artifacts hard-code provider HTTPS origins
-(`BASE_URL` in `seed/components/catalysts/local/openai/1.4.2/src/src/lib.rs`
+(`BASE_URL` in `seed/components/catalysts/local/openai/1.4.3/src/src/lib.rs`
 and its peers); `Opus.Host.Egress.pin/3` has a resolver option which no
 caller in the host passes. The
 existing suites found in `seed_model_catalysts_test.exs`,

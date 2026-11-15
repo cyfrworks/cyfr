@@ -37,8 +37,8 @@ defmodule Sanctum.Invitations do
 
   ## Redeeming
 
-  An account redeems an invitation, by its identifier: the browser or the
-  device that brings the code hands this CYFR its hash (`code_hash/1`),
+  An account redeems an invitation, by its identifier: the browser that
+  brings the code hands this CYFR its hash (`code_hash/1`),
   which the request it signs holds, never the code.
   `redeemable_hash/1` is the check: the hash's invitation exists and is
   unexpired, unredeemed and unrevoked; its issuer is still an active
@@ -200,15 +200,16 @@ defmodule Sanctum.Invitations do
 
   @doc """
   The hash an invitation is stored under, of the code `code` as it was
-  given (`Prima.Device.invitation_code?/1`): the lowercase hex SHA-256 of
-  its bytes. Anything else is `:invitation_invalid`, as an unknown code
+  given (unpadded base64url of its 32 bytes): the lowercase hex SHA-256 of
+  those bytes. Anything else is `:invitation_invalid`, as an unknown code
   is.
   """
   @spec code_hash(term()) :: {:ok, String.t()} | {:error, :invitation_invalid}
   def code_hash(code) do
-    if Prima.Device.invitation_code?(code),
-      do: {:ok, code |> Base.url_decode64!(padding: false) |> Prima.Digest.sha256_hex()},
-      else: invalid()
+    case Prima.Identity.Encoding.unb64(code, @code_bytes) do
+      {:ok, bytes} -> {:ok, Prima.Digest.sha256_hex(bytes)}
+      _not_a_code -> invalid()
+    end
   end
 
   @doc """

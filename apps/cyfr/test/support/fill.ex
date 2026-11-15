@@ -22,7 +22,10 @@ defmodule Cyfr.Test.Fill do
   trigger and awaits the end of every fill task the trigger started, the
   tasks of `Compendium.ProvisioningSupervisor` whose callers include the
   test. A task is listed there from the moment the trigger's
-  `start_child` answers until it ends, so none is missed.
+  `start_child` answers until it ends, so none is missed. `ended!/2` is
+  that wait alone, for a test whose reads start fills it does not wait
+  on: an `on_exit` names the test's process, gone by then, and the fills
+  end before what they write to is taken away.
 
   `tests/release-boot/fixture.exs`' `fill_settled` waits the same way on
   a release.
@@ -71,16 +74,25 @@ defmodule Cyfr.Test.Fill do
   @spec started!((-> result), pos_integer()) :: result when result: term()
   def started!(trigger, deadline_ms \\ @deadline_ms) when is_function(trigger, 0) do
     answer = trigger.()
+    :ok = ended!(self(), deadline_ms)
+    answer
+  end
+
+  @doc """
+  Await the end of every background fill task `caller` started and that
+  still runs.
+  """
+  @spec ended!(pid(), pos_integer()) :: :ok
+  def ended!(caller, deadline_ms \\ @deadline_ms) when is_pid(caller) do
     deadline = System.monotonic_time(:millisecond) + deadline_ms
-    me = self()
 
     for {:undefined, task, _type, _modules} <-
           Supervisor.which_children(Compendium.ProvisioningSupervisor),
         is_pid(task),
-        me in callers(task),
+        caller in callers(task),
         do: ended!("an athanor", task, deadline)
 
-    answer
+    :ok
   end
 
   defp callers(task) do

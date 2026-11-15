@@ -310,7 +310,7 @@ defmodule Compendium.OCI.Errors do
   @doc "Returns user-facing guidance based on error reason."
   @spec actionable_hint(t()) :: String.t()
   def actionable_hint(%__MODULE__{reason: :unauthorized}),
-    do: "Run `cyfr registry sync` to mint your push tokens."
+    do: "Sync your push tokens on the Registry page."
 
   def actionable_hint(%__MODULE__{reason: :registry_unavailable}),
     do: "Check your network connection and verify the registry is reachable."
@@ -336,7 +336,7 @@ defmodule Compendium.OCI.Errors do
 
   def actionable_hint(%__MODULE__{reason: :taken_down, registry: registry}),
     do:
-      "Component was removed by #{registry || "the registry"}'s moderators. If you believe this was in error, open an appeal from the prism Registry tab or run `cyfr registry appeals`."
+      "Component was removed by #{registry || "the registry"}'s moderators. If you believe this was in error, appeal the takedown on the Registry page."
 
   def actionable_hint(%__MODULE__{}), do: ""
 
