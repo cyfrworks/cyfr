@@ -806,29 +806,55 @@ defmodule Aqua.ScheduleTurnsTest do
                Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
     end
 
-    # A step's worker of a schedule turn's loop holds at its first read of
-    # the standing rows, as it asks whether its call is still allowed, until
-    # the test lets it go: so a call of one parallel batch, admitted, is
-    # checked again at its dispatch under the rows as the test leaves them.
+    # The standing rows as a schedule turn's loop and its steps read them,
+    # once the batch's model call is under way (`armed`). The loop's first
+    # read after that is the batch's decision, which finds the answer for
+    # threads.list: right after it, the answer is withdrawn, before any
+    # call dispatches. A step's worker reads them once to take the policy
+    # and, only for a call the policy asks for, again to judge the standing
+    # answer: the worker that reads them twice is the read's, named to the
+    # test. Nothing is held; every event is one the loop makes in order.
     @doc false
-    def hold_check(_event, _measurements, metadata, %{test: test, held: held}) do
+    def withdraw_at_decision(_event, _measurements, metadata, %{test: test, state: state}) do
       with "tool_grants" <- metadata[:source],
-           [owner | _] <- Process.get(:"$callers", []),
-           true <- loop?(owner),
-           false <- Agent.get(held, &MapSet.member?(&1, self())) do
-        Agent.update(held, &MapSet.put(&1, self()))
-        send(test, {:held, self()})
+           true <- Agent.get(state, & &1.armed) do
+        me = self()
 
-        receive do
-          :go -> :ok
+        cond do
+          loop?(me) ->
+            if Agent.get_and_update(state, &{&1.withdrawn, %{&1 | withdrawn: true}}) == false do
+              {1, _} =
+                Arca.Repo.delete_all(
+                  from(g in Arca.Schemas.ToolGrant,
+                    where:
+                      g.thread_id == ^Agent.get(state, & &1.thread_id) and g.tool == "threads"
+                  )
+                )
+
+              send(test, :withdrawn)
+            end
+
+          loop?(List.first(Process.get(:"$callers", []))) ->
+            reads =
+              Agent.get_and_update(state, fn s ->
+                n = Map.get(s.reads, me, 0) + 1
+                {n, %{s | reads: Map.put(s.reads, me, n)}}
+              end)
+
+            if reads == 2, do: send(test, {:asking_worker, me})
+
+          true ->
+            :ok
         end
       end
 
       :ok
     end
 
-    defp loop?(pid),
+    defp loop?(pid) when is_pid(pid),
       do: Enum.any?(Registry.keys(Aqua.RunnerRegistry, pid), &match?({:turn, _}, &1))
+
+    defp loop?(_none), do: false
 
     # The soul's own file asks for `threads.list`, its grant walked again.
     defp soul_asks!(ctx, key) do
@@ -857,18 +883,21 @@ defmodule Aqua.ScheduleTurnsTest do
     # which the soul asks for, and the parallel batch of its next fire held
     # at both calls' dispatch checks with that answer withdrawn: the read
     # reports the stop while its sibling's fetch is still running.
-    defp withdrawn_mid_batch!(ctx) do
+    defp withdrawn_mid_batch!(ctx, order \\ :read_first) do
       soul_asks!(ctx, "threads.list")
+      read_call = {"t1", "threads", %{"action" => "list"}}
+      fetch_call = {"h1", "http", %{"action" => "get", "url" => "https://example.test/a"}}
+
+      batch =
+        if order == :read_first, do: [read_call, fetch_call], else: [fetch_call, read_call]
 
       start_supervised!(
         {ScriptedWorker,
          ref: [@model, "catalyst:local.http"],
          script: [
            reply("Here."),
-           calls([
-             {"t1", "threads", %{"action" => "list"}},
-             {"h1", "http", %{"action" => "get", "url" => "https://example.test/a"}}
-           ]),
+           {:probe, self()},
+           calls(batch),
            {:probe, self()},
            %{"status" => 200, "body" => "a"}
          ]}
@@ -895,40 +924,41 @@ defmodule Aqua.ScheduleTurnsTest do
           lifecycle_id: id
         })
 
-      {:ok, held} = Agent.start_link(fn -> MapSet.new() end)
-      handler = "hold-check-#{System.unique_integer([:positive])}"
+      {:ok, state} =
+        Agent.start_link(fn ->
+          %{armed: false, withdrawn: false, thread_id: thread_id, reads: %{}}
+        end)
+
+      handler = "withdraw-#{System.unique_integer([:positive])}"
 
       :ok =
-        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold_check/4, %{
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.withdraw_at_decision/4, %{
           test: self(),
-          held: held
+          state: state
         })
 
       on_exit(fn -> :telemetry.detach(handler) end)
 
+      # The next fire's turn has taken its policy and asks its model: from
+      # here the loop's next read of the standing rows is the batch's
+      # decision.
       second = fire!(ctx, id)
       assert ScheduleTurns.drain() == %{second.id => :sent}
-      # The read's worker asks the standing rows whether its call is still
-      # allowed; the fetch's, an automatic one, asks them nothing.
-      assert_receive {:held, read}, 30_000
+      assert_receive {:scripted_probe, model, _model_run}, 30_000
+      Agent.update(state, &%{&1 | armed: true})
+      send(model, :continue)
 
-      # The answer is withdrawn between the batch's admission and its dispatch.
-      {1, _} =
-        Arca.Repo.delete_all(
-          from(g in Arca.Schemas.ToolGrant,
-            where: g.thread_id == ^thread_id and g.tool == "threads"
-          )
-        )
-
-      :telemetry.detach(handler)
-
-      # The fetch's run is held by the script; then the read's worker
-      # reports the stop and ends.
+      # Decided with the answer, then withdrawn before anything dispatched;
+      # the fetch's run is held by the script, and the read's worker, which
+      # judges the standing answer again at its dispatch, reports the stop
+      # and ends.
+      assert_receive :withdrawn, 30_000
       assert_receive {:scripted_probe, player, fetch}, 30_000
+      assert_receive {:asking_worker, read}, 30_000
       [{waiter, _}] = Registry.lookup(Opus.Registry, fetch)
       refute waiter == read
-      send(read, :go)
       wait_until(fn -> not Process.alive?(read) end, 30_000, "the read's worker to end")
+      :telemetry.detach(handler)
 
       {id, second, waiter, player}
     end
@@ -963,6 +993,22 @@ defmodule Aqua.ScheduleTurnsTest do
       send(player, :continue)
 
       stopped_mid_batch!(ctx, id, second)
+    end
+
+    test "the stop stands whichever of the two calls the answer names first",
+         %{ctx: ctx} do
+      {id, second, waiter, player} = withdrawn_mid_batch!(ctx, :fetch_first)
+
+      Process.exit(waiter, :kill)
+      send(player, :continue)
+
+      turn = await_status(ctx, turn_of(ctx, id, second).id, "failed")
+      assert turn.error == sentence("threads.list")
+
+      assert %{dispatch_state: "uncertain"} =
+               Enum.find(steps(ctx, turn), &(&1.tool == "http"))
+
+      assert %{state: "failed"} = ended!(ctx, second, "failed")
     end
 
     test "a sibling whose run is lost after a parallel read reported the stop is marked uncertain, and the stop stands",
