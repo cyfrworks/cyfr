@@ -1478,12 +1478,11 @@ defmodule Cyfr.Boundaries do
     %{
       from: "PrismWeb.AquaPanelLive",
       into: "Arca.ThreadStorage",
-      functions: [:adjacent_day, :day, :day_name, :get, :pending_requests, :unread],
+      functions: [:adjacent_day, :day, :get, :pending_requests, :unread],
       reason:
         "the panel reads today's daily thread without making it, the day a step either " <>
           "way, the thread a destination names, today's unread count and the crew requests " <>
-          "still waiting, all under the caller's actor, and names a day with the store's own " <>
-          "spelling, which reads no row; the assistant owns every thread write."
+          "still waiting, all under the caller's actor; the assistant owns every thread write."
     },
     %{
       from: "PrismWeb.AttachmentController",
@@ -1587,20 +1586,11 @@ defmodule Cyfr.Boundaries do
     %{
       from: "PrismWeb.ThreadPaneLive",
       into: "Arca.ThreadStorage",
-      functions: [
-        :children,
-        :day_name,
-        :get,
-        :get_message,
-        :latest_messages,
-        :payload,
-        :resolution
-      ],
+      functions: [:children, :get, :get_message, :latest_messages, :payload, :resolution],
       reason:
         "the pane opens a thread, its latest messages and a room's crew threads under the " <>
-          "pane's actor, decodes a message's stored payload and resolution with the store's " <>
-          "own projections and names a day with its spelling, which read no row; the " <>
-          "assistant owns every thread write."
+          "pane's actor, and decodes a message's stored payload and resolution with the " <>
+          "store's own projections, which read no row; the assistant owns every thread write."
     },
     # --- the MCP surface's web adapters ---
     %{

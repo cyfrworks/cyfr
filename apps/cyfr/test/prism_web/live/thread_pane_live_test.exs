@@ -2284,7 +2284,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert has_element?(
                pane,
                ~s(#{strip} button[phx-click="open_thread"]),
-               "Back to #{Threads.day_name(room.day)}"
+               "Back to #{PrismWeb.DisplayHelpers.day_name(room.day)}"
              )
 
       refute pane |> element(strip) |> render() =~ room.title

@@ -181,15 +181,6 @@ defmodule Arca.ThreadStorage do
 
   def day(%Prima.Actor{}, _day), do: {:error, :no_athanor}
 
-  @doc """
-  How a daily thread's day is named where a person reads it: its date in
-  words, `"Sun 15 Nov 2026"`. Aqua's panel, its pane and the attention list
-  name a day by it alone; the stored title is the date as ISO 8601, which a
-  desktop reads.
-  """
-  @spec day_name(Date.t()) :: String.t()
-  def day_name(%Date{} = day), do: Calendar.strftime(day, "%a %-d %b %Y")
-
   defp day_or_new(actor, day) do
     lock_athanor(actor)
 

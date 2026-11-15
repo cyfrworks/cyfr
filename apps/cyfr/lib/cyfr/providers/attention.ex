@@ -17,7 +17,7 @@ defmodule Cyfr.Providers.Attention do
 
   | kind | the record | `id` | `label` | `since` | enters, leaves |
   |---|---|---|---|---|---|
-  | `approval` | a pending approval in the athanor's threads | the approval | its thread's name: a daily thread's day by its date (`Arca.ThreadStorage.day_name/1`), another thread's title | opened | opened; resolved or expired |
+  | `approval` | a pending approval in the athanor's threads | the approval | its thread's title: a daily thread's is its day, the ISO date, which the surface that draws it words | opened | opened; resolved or expired |
   | `grant_request` | a frame's request of the person, waiting in the shell that presents it (`Cyfr.Requests`) | the request | the operation it asks for, or the component a grant names | asked | asked; decided, expired, or withdrawn with its frame |
   | `confirmation` | the person's open confirmation of a sensitive change | its ref | its operation | opened | opened; consumed, cancelled, voided or expired |
   | `failed_run` | the newest failed top-level run of a reference the person ran, that no later run of it ended after | the reference | the reference | its end | failed; the reference's next top-level run's end |
@@ -224,15 +224,10 @@ defmodule Cyfr.Providers.Attention do
     with {:ok, rows} <- Arca.TurnStorage.waiting_approvals(actor, now, opts) do
       {:ok,
        for row <- rows do
-         item(:approval, row.id, thread_name(row), row.inserted_at, page("aqua", row.thread_id))
+         item(:approval, row.id, row.title, row.inserted_at, page("aqua", row.thread_id))
        end}
     end
   end
-
-  # The thread an approval waits in, as a person reads it: a daily
-  # thread's day by its date, never the stored ISO title.
-  defp thread_name(%{day: %Date{} = day}), do: Arca.ThreadStorage.day_name(day)
-  defp thread_name(%{title: title}), do: title
 
   defp offers(actor, now, opts) do
     with {:ok, rows} <- Arca.FileOffers.awaiting(actor, now, opts) do

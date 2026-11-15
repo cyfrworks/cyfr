@@ -2470,7 +2470,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The room a crew thread works under: a daily thread by its day's date,
   # a workspace thread by its title.
-  defp room_name(%{kind: "daily", day: %Date{} = day}), do: Threads.day_name(day)
+  defp room_name(%{kind: "daily", day: %Date{} = day}), do: day_name(day)
   defp room_name(%{title: title}) when is_binary(title), do: title
   defp room_name(_none), do: "its thread"
 

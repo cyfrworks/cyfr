@@ -145,7 +145,7 @@ defmodule Cyfr.Providers.AttentionTest do
       assert {:ok, []} = Provider.waiting(ctx, ctx.user_id)
     end
 
-    test "lists a pending approval by its thread's name, a daily thread's day by its date, until it is decided or expires",
+    test "lists a pending approval by its thread's title, a daily thread's day, until it is decided or expires",
          %{
            ctx: ctx,
            actor: actor
@@ -158,8 +158,8 @@ defmodule Cyfr.Providers.AttentionTest do
       assert [item] = refreshed(ctx)
       assert item["kind"] == "approval"
       assert item["id"] == waiting.id
-      assert item["label"] == Arca.ThreadStorage.day_name(thread.day)
-      refute inspect(item) =~ thread.title
+      # The day itself, which the surface that draws the item words.
+      assert item["label"] == Date.to_iso8601(thread.day)
       assert item["destination"] == %{"kind" => "page", "page" => "aqua", "ref" => thread.id}
       refute item["id"] in [decided.id, expired.id]
     end

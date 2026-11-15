@@ -13,7 +13,7 @@ defmodule PrismWeb.AquaPanelLive do
   the desktop opening it on no thread, and its Today control; loading
   the desktop makes nothing. Earlier days are one step back by date: the
   header names the day shown by its date
-  (`Arca.ThreadStorage.day_name/1`), its back control goes to the nearest
+  (`PrismWeb.DisplayHelpers.day_name/1`), its back control goes to the nearest
   earlier day that has a thread (`Arca.ThreadStorage.adjacent_day/3`),
   and its forward control and Today return. There is no list of threads
   to choose from.
@@ -814,7 +814,7 @@ defmodule PrismWeb.AquaPanelLive do
 
   # A daily thread by its day's date, a crew member's by its member, a
   # workspace thread by its title.
-  defp thread_name(%{kind: "daily", day: day}), do: Threads.day_name(day)
+  defp thread_name(%{kind: "daily", day: day}), do: day_name(day)
   defp thread_name(%{kind: "crew", agent: agent}), do: "#{agent}'s thread"
   defp thread_name(%{title: title}), do: title
 

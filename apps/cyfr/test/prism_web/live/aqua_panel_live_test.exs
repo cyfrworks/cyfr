@@ -158,7 +158,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
   # The panel's header names the daily thread shown by its day's date in
   # words, and nowhere by the ISO date its row's title holds.
   defp named!(panel, thread) do
-    assert has_element?(panel, "#aqua-panel-day-name", Threads.day_name(thread.day))
+    assert has_element?(panel, "#aqua-panel-day-name", PrismWeb.DisplayHelpers.day_name(thread.day))
 
     refute panel |> element("#aqua-panel-sheet > header") |> render() =~
              Date.to_iso8601(thread.day)
