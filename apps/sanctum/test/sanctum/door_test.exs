@@ -173,7 +173,7 @@ defmodule Sanctum.DoorTest do
 
       {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
       assert {:ok, :allowed} = Door.admit_person(carol)
-      :ok = Store.remove(wildcard.id)
+      {:ok, _} = Store.remove(wildcard.id)
 
       {:ok, _} = Store.allow("identifier", identifier(10), "ops")
       assert {:ok, :allowed} = Door.admit_person(carol)
@@ -378,7 +378,7 @@ defmodule Sanctum.DoorTest do
       assert {:error, :platform_admin} = Store.remove(own.id)
       assert {:ok, :allowed} = Door.admit_person(operator)
 
-      assert :ok = Store.remove(other.id)
+      assert {:ok, _} = Store.remove(other.id)
       assert [%{id: id}] = Store.list()
       assert id == own.id
     end
@@ -636,7 +636,7 @@ defmodule Sanctum.DoorTest do
       stranger_session = session_for(stranger)
       local_session = session_for(local)
 
-      :ok = Store.remove(wildcard.id)
+      {:ok, _} = Store.remove(wildcard.id)
 
       # `*` names nobody, so there is no entry to read the ejected off —
       # the door is re-asked about everyone instead.
@@ -651,7 +651,7 @@ defmodule Sanctum.DoorTest do
       stranger = remote_at!(directory, 42)
       session = session_for(stranger)
 
-      :ok = Store.remove(wildcard.id)
+      {:ok, _} = Store.remove(wildcard.id)
       assert {:ok, 1} = Door.reconcile()
       assert {:error, :invalid_session} = Sanctum.Session.load(session.token)
 

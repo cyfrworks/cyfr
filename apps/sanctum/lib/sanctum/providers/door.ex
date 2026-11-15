@@ -32,13 +32,22 @@ defmodule Sanctum.Providers.Door do
   (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered,
   since it names nobody; `list` shows the door; `requests` what is
   waiting on the operator — an identifier someone invited into a thread, or one whose
-  sign-in the door refused; `resolve` approves or drops one.
+  sign-in the door refused; `resolve` approves or drops one. `list` also
+  answers the people carrying the administrator's mark, as `admins`.
+
+  `mark_admin` makes another person of this CYFR a platform administrator
+  and writes their identifier's allow; `clear_admin` takes the mark away,
+  never the last one (`Sanctum.Tenancy.Users.mark_platform_admin/2`,
+  `clear_platform_admin/2`). Each is a sensitive change
+  (`platform_admin_marking`): the administrator's fresh confirmation names
+  the person (`Sanctum.Consent.Authz.confirm/3`).
   """
 
   require Logger
 
   @not_restored "denied people were not restored and stay denied"
 
+  alias Sanctum.Consent.Authz
   alias Sanctum.Context
   alias Sanctum.Door
   alias Sanctum.Door.Store
@@ -119,6 +128,37 @@ defmodule Sanctum.Providers.Door do
           scope: :platform,
           kind: :write,
           planes: [:external]
+        ),
+        Operation.new(
+          "door",
+          "mark_admin",
+          "Make a person a platform administrator",
+          [
+            Arg.new("person", :string,
+              required: true,
+              description:
+                "A person of this CYFR: their id (usr_…), their account's identifier (per_…) or the name they hold here (@name) (mark_admin, clear_admin)"
+            )
+          ],
+          scope: :platform,
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "door",
+          "clear_admin",
+          "Take a person's platform administrator mark away",
+          [
+            Arg.new("person", :string,
+              required: true,
+              description:
+                "A person of this CYFR: their id (usr_…), their account's identifier (per_…) or the name they hold here (@name) (mark_admin, clear_admin)"
+            )
+          ],
+          scope: :platform,
+          reduces_authority: true,
+          kind: :write,
+          planes: [:external]
         )
       ],
       description:
@@ -129,7 +169,13 @@ defmodule Sanctum.Providers.Door do
 
   def handle(%Context{}, %{"action" => "list"}) do
     entries = Store.list()
-    {:ok, %{entries: Enum.map(entries, &render/1), count: length(entries)}}
+
+    {:ok,
+     %{
+       entries: Enum.map(entries, &render/1),
+       count: length(entries),
+       admins: Enum.map(Users.platform_admins(), &admin/1)
+     }}
   end
 
   def handle(%Context{}, %{"action" => "requests"}) do
@@ -167,8 +213,7 @@ defmodule Sanctum.Providers.Door do
           end
 
         {:error, reason} ->
-          Logger.error("[Sanctum.Providers.Door] door.allow failed: #{inspect(reason)}")
-          {:error, {:unavailable, "The sign-in allowlist"}}
+          refusal("allow", value, reason)
       end
     end
   end
@@ -210,21 +255,16 @@ defmodule Sanctum.Providers.Door do
               )
           end
 
-        {:error, :platform_admin} ->
-          {:error,
-           {:invalid_argument,
-            "That is this server's platform administrator, who is never denied here"}}
-
         {:error, reason} ->
-          Logger.error("[Sanctum.Providers.Door] door.deny failed: #{inspect(reason)}")
-          {:error, {:unavailable, "The sign-in allowlist"}}
+          refusal("deny", value, reason)
       end
     end
   end
 
   def handle(%Context{}, %{"action" => "remove", "id" => id}) when is_binary(id) do
-    with {:ok, entry} <- Store.get(id),
-         :ok <- Store.remove(id) do
+    # What follows the removal is decided by the entry as it stood when it
+    # was removed, read in the removal's own transaction.
+    with {:ok, entry} <- Store.remove(id) do
       # Removing a deny is letting the person back through: undo what the
       # deny did to their account, exactly as `allow` does — otherwise they
       # stay `denied` with no entry left to explain why.
@@ -262,17 +302,7 @@ defmodule Sanctum.Providers.Door do
           )
       end
     else
-      {:error, :not_found} ->
-        {:error, {:not_found, "Allowlist entry", id}}
-
-      {:error, :platform_admin} ->
-        {:error,
-         {:invalid_argument,
-          "That allow lets this server's platform administrator sign in, so it is never removed"}}
-
-      {:error, reason} ->
-        Logger.error("[Sanctum.Providers.Door] door.remove failed: #{inspect(reason)}")
-        {:error, {:unavailable, "The sign-in allowlist"}}
+      {:error, reason} -> refusal("remove", id, reason)
     end
   end
 
@@ -288,16 +318,39 @@ defmodule Sanctum.Providers.Door do
       :ok ->
         {:ok, %{id: id, rejected: true}}
 
-      {:error, :not_found} ->
-        {:error, {:not_found, "Request", id}}
-
-      {:error, :not_a_request} ->
-        {:error, {:invalid_argument, "That entry is not a pending request"}}
-
-      {:error, _} ->
-        {:error, {:unavailable, "The sign-in allowlist"}}
+      {:error, reason} ->
+        refusal("resolve", id, reason)
     end
   end
+
+  def handle(%Context{} = ctx, %{"action" => action, "person" => value})
+      when action in ["mark_admin", "clear_admin"] and is_binary(value) do
+    with {:ok, user} <- person_for(value),
+         :ok <-
+           Authz.confirm(ctx, :platform_admin_marking, %{
+             operation: "door." <> action,
+             arguments: %{"person" => value},
+             resource: user.id
+           }) do
+      result =
+        case action do
+          "mark_admin" -> Users.mark_platform_admin(user, ctx.user_id)
+          "clear_admin" -> Users.clear_platform_admin(user, ctx.user_id)
+        end
+
+      case result do
+        {:ok, row} ->
+          Sanctum.Notify.allowlist_changed()
+          {:ok, %{user_id: row.id, platform_admin: not is_nil(row.platform_admin_at)}}
+
+        {:error, reason} ->
+          refusal(action, value, reason)
+      end
+    end
+  end
+
+  def handle(_ctx, %{"action" => action}) when action in ["mark_admin", "clear_admin"],
+    do: {:error, {:invalid_argument, "Missing required argument: person"}}
 
   def handle(_ctx, %{"action" => action}) when action in ["allow", "deny"],
     do: {:error, {:invalid_argument, "Missing required argument: value"}}
@@ -434,6 +487,90 @@ defmodule Sanctum.Providers.Door do
   defp refused_kind("wildcard", "deny"),
     do: "Remove the * entry instead of denying it"
 
+  # A person of this CYFR, by their id, their account's identifier or the
+  # name they hold here.
+  defp person_for(value) do
+    found =
+      cond do
+        Prima.PersonId.person?(value) -> Users.get(value)
+        Prima.Identity.Encoding.identifier?(value) -> Users.get_by_identifier(value)
+        String.starts_with?(value, "@") -> Users.get_by_namespace(String.trim_leading(value, "@"))
+        true -> :unread
+      end
+
+    case found do
+      {:ok, user} ->
+        {:ok, user}
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "Person", value}}
+
+      :unread ->
+        {:error,
+         {:invalid_argument,
+          "A person is named by their id (usr_…), their account's identifier (per_…) or their " <>
+            "name here (@name)"}}
+
+      {:error, _unanswered} ->
+        {:error, {:unavailable, "Storage"}}
+    end
+  end
+
+  @marking ["mark_admin", "clear_admin"]
+
+  # A store's refusal as `action`'s answer, for every handler that writes:
+  # `subject` is what the call named (an entry's id, a value, a person).
+  # A change decided under this member's slot answers the ownership
+  # refusal when a successor took it, having written nothing.
+  defp refusal(_action, _subject, :not_owner), do: {:error, Sanctum.Refusals.classify(:not_owner)}
+
+  defp refusal("deny", _subject, :platform_admin),
+    do: invalid("That is this server's platform administrator, who is never denied here")
+
+  defp refusal(action, _subject, :platform_admin) when action in ["remove", "resolve"],
+    do:
+      invalid(
+        "That allow lets this server's platform administrator sign in, so it is never removed"
+      )
+
+  defp refusal("remove", id, :not_found), do: {:error, {:not_found, "Allowlist entry", id}}
+  defp refusal("resolve", id, :not_found), do: {:error, {:not_found, "Request", id}}
+
+  defp refusal(action, _subject, :not_found) when action in @marking,
+    do: {:error, {:not_found, "Person", nil}}
+
+  defp refusal("resolve", _id, :not_a_request),
+    do: invalid("That entry is not a pending request")
+
+  defp refusal(_action, _subject, :last_admin),
+    do:
+      invalid(
+        "That is this CYFR's last platform administrator, whose mark stays; make another " <>
+          "person an administrator first"
+      )
+
+  # The administrator who asked was no longer one when the change was
+  # decided, though their session still read them as one.
+  defp refusal(_action, _subject, :not_admin), do: {:error, :platform_admin_required}
+
+  defp refusal(_action, _subject, :not_active),
+    do: invalid("That person is denied here; allow them first")
+
+  defp refusal(_action, _subject, {:door, :denied}),
+    do: invalid("A deny names that person's account; remove the deny first")
+
+  defp refusal(_action, _subject, :no_account), do: invalid("That person has no account here")
+
+  defp refusal(action, _subject, reason) do
+    Logger.error("[Sanctum.Providers.Door] door.#{action} failed: #{inspect(reason)}")
+
+    if action in @marking,
+      do: {:error, {:unavailable, "Storage"}},
+      else: {:error, {:unavailable, "The sign-in allowlist"}}
+  end
+
+  defp invalid(message), do: {:error, {:invalid_argument, message}}
+
   # The label is a key only when the entry was made from a handle; a name
   # only when one is known.
   defp render(entry) do
@@ -452,6 +589,10 @@ defmodule Sanctum.Providers.Door do
     |> known(:name, entry.label || held_name(entry.kind, entry.value))
     |> known(:asked_by_name, asker_name(entry))
   end
+
+  # An administrator as `list` answers them: their id, and their name here
+  # when they hold one.
+  defp admin(user), do: known(%{user_id: user.id}, :name, namespace({:ok, user}))
 
   defp known(rendered, _key, nil), do: rendered
   defp known(rendered, key, name), do: Map.put(rendered, key, name)
