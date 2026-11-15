@@ -423,6 +423,28 @@ defmodule Aqua.ProgramGrantTest do
     end
   end
 
+  test "a program the store cannot read just now takes no standing answer, in words, and nothing is written",
+       %{ctx: ctx, turn: turn, gh: gh} do
+    {:ok, [built]} = Aqua.Standing.rows(ctx, turn, start(gh.id), :always)
+    Arca.Repo.query!("ALTER TABLE mcp_servers RENAME TO unread_mcp_servers")
+
+    try do
+      assert {:error, {:scope_not_permitted, :program_unavailable} = refusal} =
+               Aqua.Standing.rows(ctx, turn, start(gh.id), :always)
+
+      assert {:error, {:scope_not_permitted, :program_unavailable}} =
+               Sanctum.ToolGrants.put(ctx, built)
+
+      assert Aqua.ToolGrants.refusal_message(refusal) ==
+               "The program could not be read just now, so no standing answer can be given " <>
+                 "for it yet; nothing was approved. Try again, or approve it once."
+    after
+      Arca.Repo.query!("ALTER TABLE unread_mcp_servers RENAME TO mcp_servers")
+    end
+
+    assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(Sanctum.Context.actor(ctx), gh.id)
+  end
+
   test "the soul's policy asks for a start and a send, and never makes a start automatic" do
     refute Aqua.Kinds.auto_permitted?("program", "start")
     assert Aqua.Kinds.auto_permitted?("program", "list")

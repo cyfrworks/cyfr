@@ -427,6 +427,11 @@ defmodule Aqua.ToolGrants do
     do:
       "That program is no longer on the Programs page, so no standing answer can be given for it."
 
+  def refusal_message({:scope_not_permitted, :program_unavailable}),
+    do:
+      "The program could not be read just now, so no standing answer can be given for it " <>
+        "yet; nothing was approved. Try again, or approve it once."
+
   def refusal_message({:scope_not_permitted, :program_changed}),
     do: "That program changed since the card showed it; ask again to see what it runs now."
 

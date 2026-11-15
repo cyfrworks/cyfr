@@ -89,6 +89,7 @@ defmodule Sanctum.ToolGrants do
           | :unconstrained_program
           | :no_program
           | :program_changed
+          | :program_unavailable
           | :invalid_sources
 
   @typedoc "An answer the rule refuses to let stand."
@@ -172,6 +173,7 @@ defmodule Sanctum.ToolGrants do
       {:error, :no_athanor} -> {:error, :forbidden}
       {:error, {:invalid, _field_errors}} -> {:error, :invalid_argument}
       {:error, {:scope_not_permitted, _reason}} = refusal -> refusal
+      {:error, :unavailable} -> refuse(:program_unavailable)
     end
   end
 
@@ -186,7 +188,7 @@ defmodule Sanctum.ToolGrants do
   def put(%Context{} = ctx, attrs) when is_map(attrs) do
     with {:ok, row} <- build(ctx, attrs, :decision),
          :ok <- check_standing(row, DateTime.utc_now()),
-         :ok <- program_shown(ctx, row) do
+         :ok <- program_shown(ctx, row) |> available() do
       case Arca.ToolGrantStorage.put(row) do
         {:ok, grant} -> {:ok, grant}
         {:error, reason} when reason in [:no_program, :program_changed] -> refuse(reason)
@@ -220,6 +222,11 @@ defmodule Sanctum.ToolGrants do
   # names one: read here so a decision says why, and again under the row's
   # lock where it is written (`Arca.ToolGrantStorage.put/1`), which the
   # row's change and removal take too.
+  # A store that cannot say whether the program stands is no answer that
+  # it does: the standing answer is refused, in words, and nothing written.
+  defp available({:error, :unavailable}), do: refuse(:program_unavailable)
+  defp available(answer), do: answer
+
   defp program_shown(_ctx, %{program_row: ""}), do: :ok
 
   defp program_shown(%Context{} = ctx, %{program_row: row_id} = row) do

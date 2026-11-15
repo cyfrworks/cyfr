@@ -246,6 +246,38 @@ defmodule Aqua.ProgramToolTest do
     end
   end
 
+  describe "a standing answer the store cannot record" do
+    test "is refused in words: the card stays waiting, nothing is approved or written",
+         %{ctx: ctx, thread: thread, gh: gh, fake: fake} do
+      turn = accept!(ctx, thread, "@aqua run gh")
+      script!([calls([start("c1", gh, ["--version"], 2_000)]), reply("done")])
+      assert {:paused, :approval} = run(ctx, turn)
+      %{approval: approval} = pending_card(ctx, turn)
+
+      Arca.Repo.query!("ALTER TABLE mcp_servers RENAME TO unread_mcp_servers")
+
+      refused =
+        try do
+          Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: :always})
+        after
+          Arca.Repo.query!("ALTER TABLE unread_mcp_servers RENAME TO mcp_servers")
+        end
+
+      assert {:error, {:scope_not_permitted, :program_unavailable}} = refused
+
+      # The card waits as it was: the press approved nothing.
+      assert %{approval: %{status: "pending"}} = pending_card(ctx, turn)
+      assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(Sanctum.Context.actor(ctx), gh.id)
+      refute_received {:session, "open", _message, _fields}
+
+      # Once the store answers, the person decides it again.
+      prints(fake, gh, "gh version 2", exit: 0)
+      approve!(ctx, turn, %{scope: :once})
+      assert :completed = resume(ctx, turn)
+      assert %{outcome: "ok"} = step(ctx, turn, "c1")
+    end
+  end
+
   describe "no details, no card" do
     test "a start whose row cannot be read as its card opens is refused before it asks",
          %{ctx: ctx, thread: thread, gh: gh} do
