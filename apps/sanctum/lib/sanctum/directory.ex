@@ -231,13 +231,21 @@ defmodule Sanctum.Directory do
   The operator's tombstone: `identifier` is gone to every later read and
   write, its entries kept. A CYFR's platform administrator makes it
   through the operation `directory.tombstone`.
+
+  The account of this CYFR's last platform administrator who can still
+  act is never closed (`Sanctum.Tenancy.Users.closable/1`, asked inside
+  the closing transaction): `{:error, :only_admin}`, and a check that
+  cannot read refuses as `:unavailable`.
   """
-  @spec tombstone(String.t()) :: :ok | {:error, reason()}
+  @spec tombstone(String.t()) :: :ok | {:error, reason() | :only_admin}
   def tombstone(identifier) when is_binary(identifier) do
     with :ok <- serving(:write),
          :ok <- known(identifier) do
-      case Arca.IdentityLog.tombstone(system(), identifier) do
+      verify = fn -> Sanctum.Tenancy.Users.closable(identifier) end
+
+      case Arca.IdentityLog.tombstone(system(), identifier, verify: verify) do
         :ok -> :ok
+        {:error, :only_admin} -> {:error, :only_admin}
         {:error, reason} -> store_refusal(reason)
       end
     end

@@ -1450,7 +1450,7 @@ async function main() {
     };
     const expectedOffer = {
       kind: "grant",
-      sheet_title: "Update this grant (consent rev 1)",
+      sheet_title: "Review this app's grant",
       need: {
         picks: [{ name: XAI.name, pressed: true }],
         held: `You already have an entry for ${XAI.host}: ${XAI.name}`,

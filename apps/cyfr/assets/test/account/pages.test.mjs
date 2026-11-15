@@ -7,14 +7,14 @@ import {describe, test} from "node:test"
 
 import {passkeys} from "../../account/ceremony.js"
 import {Refusal, b64, concat, jcs, sha256, unb64, utf8} from "../../account/encoding.js"
-import {extend, walk} from "../../account/identity.js"
+import {extend, userId, walk} from "../../account/identity.js"
 import {Unreachable} from "../../account/network.js"
 import {readDevice, adding} from "../../account/pages/add.js"
 import {here} from "../../account/pages/common.js"
 import {listing, removal, run as devicesRun} from "../../account/pages/devices.js"
 import {Creation, run as createdRun} from "../../account/pages/new.js"
 import {Recovery, run as recoveryRun} from "../../account/pages/recover.js"
-import {describe as describeRequest, readSigned, run as run_sign, sign} from "../../account/pages/sign.js"
+import {describe as describeRequest, offer, readSigned, run as run_sign, sign} from "../../account/pages/sign.js"
 import {digest, fragment, parseFragment} from "../../account/sign_in.js"
 import {words} from "../../account/view.js"
 
@@ -855,6 +855,50 @@ describe("ways on", () => {
     await doc.getElementById("use-passkey").click()
     assert.match(doc.getElementById("ask-error").textContent, /could not be reached/)
     assert.equal(doc.getElementById("ways").hidden, true)
+  })
+
+  test("a refused passkey on a sign-in offers a passkey made here, which goes back to the CYFR for the account named", async () => {
+    const now = signIn.verify.find((c) => c.name === "a passkey signs in").now_ms
+    const net = world()
+    const {identifier} = await accountWithPasskey(net)
+    const here = await authenticator(identity.keys.passkey_2, null)
+    const refusing = {...here, assert: async () => { throw refused() }}
+    const text = signIn.fragments.requests.sign_in
+    const request = signIn.requests.sign_in.request
+    const doc = documentFor("sign")
+    let went = null
+    run_sign(doc, {...environment(refusing, net), now: () => now, location: {hash: `#${text}`}, navigate: (url) => (went = url)})
+    assert.equal(doc.getElementById("offer-way").hidden, false)
+    await doc.getElementById("use-passkey").click()
+    assert.equal(doc.getElementById("ways").hidden, false)
+    doc.getElementById("offer-start").click()
+    assert.equal(doc.getElementById("offer").hidden, false)
+    assert.equal(doc.getElementById("ask").hidden, true)
+
+    for (const [typed, said] of [["Not A Name!", "A name is 1 to 39"], ["nobody", "No account has that name."]]) {
+      doc.getElementById("offer-name").value = typed
+      await doc.getElementById("offer-make").click()
+      assert.match(doc.getElementById("offer-error").textContent, new RegExp(said))
+      assert.equal(went, null)
+    }
+
+    doc.getElementById("offer-name").value = " Alice "
+    await doc.getElementById("offer-make").click()
+    const key = identity.keys.passkey_2
+    const offered = {challenge: request.challenge, identifier, key: {kid: key.kid, alg: "es256", kind: "passkey", pub: key.public, credential_id: key.credential_id}}
+    assert.equal(went, `${request.return}#${fragment(offered)}`)
+    assert.equal(here.calls.length, 1)
+    const {create} = here.calls[0]
+    assert.deepEqual([create.userId, create.name, create.challenge.length], [userId(identifier), "@alice", 32])
+  })
+
+  test("offers no passkey made here for a confirmation or a registry signature", () => {
+    const now = signIn.verify.find((c) => c.name === "a passkey signs in").now_ms
+    for (const name of ["confirm", "registry"]) {
+      const doc = documentFor("sign")
+      run_sign(doc, {location: {hash: `#${signIn.fragments.requests[name]}`}, now: () => now, passkeys: {}, navigate: () => assert.fail("navigated")})
+      assert.equal(doc.getElementById("offer-way").hidden, true, name)
+    }
   })
 
   test("the recovery page sent a request offers to continue there once a passkey is added, and not before", async () => {

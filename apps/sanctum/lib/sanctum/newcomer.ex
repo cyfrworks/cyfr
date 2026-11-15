@@ -20,8 +20,9 @@ defmodule Sanctum.Newcomer do
   The installation's first person is its platform administrator: the mint
   that writes them writes the mark on their row (`users.platform_admin_at`),
   under the order row and the member slot (`Arca.Users.mint/3`), and no
-  other path writes it; the mark is audited once it commits (`[:cyfr,
-  :sanctum, :tenancy, :platform_admin_bootstrap]`). Only setup makes the
+  other admission writes it; the mark is audited once it commits (`[:cyfr,
+  :sanctum, :tenancy, :platform_admin_bootstrap]`). Later an administrator
+  marks another person (`Sanctum.Tenancy.Users.mark_platform_admin/2`). Only setup makes the
   first person; any other admission onto an empty installation is refused
   `:not_set_up`.
 

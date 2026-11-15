@@ -612,6 +612,17 @@ func TestUninstallRefusesWhatIsNotACYFR(t *testing.T) {
 // The screen service is given back, one root command at a time; a Homebrew
 // install keeps its program for brew; an image another container uses
 // stays and is said, and one that is not on the machine is no failure.
+// screenGivenBack is how `cyfr screen off` and `cyfr uninstall` give the
+// screen back, in order: the unit's stop first, the one path that ends the
+// screen's session and every process in it (session.sh), then its files,
+// and tty1's login prompt last.
+var screenGivenBack = []string{
+	"{ systemctl disable --now cyfr-screen || true; }",
+	"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
+	"systemctl daemon-reload",
+	"systemctl enable --now getty@tty1",
+}
+
 func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T) {
 	s := newUninstallScenario(t)
 	screenInstalled = func() bool { return true }
@@ -632,7 +643,7 @@ func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T)
 			t.Errorf("the output lacks %q:\n%s", line, out)
 		}
 	}
-	if !slices.Equal(s.root, screenOffCommands) {
+	if !slices.Equal(s.root, screenGivenBack) {
 		t.Errorf("sudo ran %q, want the screen's commands one by one", s.root)
 	}
 	if !exists(s.self) {

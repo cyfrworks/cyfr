@@ -111,8 +111,10 @@ const (
 	DecisionListGlobal      = "list_global"
 	DirectoryTombstone      = "tombstone"
 	DoorAllow               = "allow"
+	DoorClearAdmin          = "clear_admin"
 	DoorDeny                = "deny"
 	DoorList                = "list"
+	DoorMarkAdmin           = "mark_admin"
 	DoorRemove              = "remove"
 	DoorRequests            = "requests"
 	DoorResolve             = "resolve"
@@ -179,6 +181,7 @@ const (
 	PairingList             = "list"
 	PairingRenew            = "renew"
 	PairingRevoke           = "revoke"
+	PairingWaiting          = "waiting"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
 	PolicyLogList           = "list"
@@ -306,7 +309,7 @@ var Actions = map[string][]string{
 	"confirmation":        {"cancel", "confirm", "pending", "request"},
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"directory":           {"tombstone"},
-	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
+	"door":                {"allow", "clear_admin", "deny", "list", "mark_admin", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
 	"file":                {"accept", "decline", "delete", "list", "move", "offer", "offers", "read", "withdraw", "write"},
@@ -317,7 +320,7 @@ var Actions = map[string][]string{
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
-	"pairing":             {"list", "renew", "revoke"},
+	"pairing":             {"list", "renew", "revoke", "waiting"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -1357,6 +1360,21 @@ func (args DoorAllowArgs) MarshalJSON() ([]byte, error) {
 	}{Action: DoorAllow, fields: fields(args)})
 }
 
+// DoorClearAdminArgs carries arguments for door.clear_admin.
+type DoorClearAdminArgs struct {
+	// A person of this CYFR: their id (usr_…), their account's identifier (per_…) or the name they hold here (@name) (mark_admin, clear_admin)
+	Person string `json:"person"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DoorClearAdminArgs) MarshalJSON() ([]byte, error) {
+	type fields DoorClearAdminArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DoorClearAdmin, fields: fields(args)})
+}
+
 // DoorDenyArgs carries arguments for door.deny.
 type DoorDenyArgs struct {
 	// A person identifier (per_…), a handle (@name) or * to allow; a person's id (usr_…), a person identifier or a handle to deny. A handle is resolved at the registry and its identifier written, labelled with the handle (allow, deny)
@@ -1385,6 +1403,21 @@ func (args DoorListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: DoorList, fields: fields(args)})
+}
+
+// DoorMarkAdminArgs carries arguments for door.mark_admin.
+type DoorMarkAdminArgs struct {
+	// A person of this CYFR: their id (usr_…), their account's identifier (per_…) or the name they hold here (@name) (mark_admin, clear_admin)
+	Person string `json:"person"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DoorMarkAdminArgs) MarshalJSON() ([]byte, error) {
+	type fields DoorMarkAdminArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DoorMarkAdmin, fields: fields(args)})
 }
 
 // DoorRemoveArgs carries arguments for door.remove.
@@ -2660,6 +2693,21 @@ func (args PairingRevokeArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PairingRevoke, fields: fields(args)})
+}
+
+// PairingWaitingArgs carries arguments for pairing.waiting.
+type PairingWaitingArgs struct {
+	// waiting: one waiting passkey's ref, to read that one alone
+	Ref Field[string] `json:"ref,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingWaitingArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingWaitingArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingWaiting, fields: fields(args)})
 }
 
 // PolicyLogCorrelateArgs carries arguments for policy_log.correlate.

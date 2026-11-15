@@ -63,9 +63,9 @@ func (k Key) Map() map[string]any {
 	return m
 }
 
-// readKey reads a key from its JSON map: exactly a device's or a
-// passkey's fields, its kid its pub's.
-func readKey(v any) (Key, bool) {
+// ReadKey reads a key from its JSON map as the log reads one: exactly a
+// device's or a passkey's fields, its kid its pub's.
+func ReadKey(v any) (Key, bool) {
 	m, ok := v.(map[string]any)
 	if !ok {
 		return Key{}, false
@@ -312,7 +312,7 @@ func readEntry(v any) (*entry, *Refusal) {
 		}
 		e.recovery, r = recoverySet(m)
 	case "add_key":
-		if e.key, ok = readKey(m["key"]); !ok {
+		if e.key, ok = ReadKey(m["key"]); !ok {
 			r = invalid("key")
 		} else if a, named := m["aaguid"]; named && !(e.key.Kind == "passkey" && isAAGUID(a)) {
 			// A passkey's maker, in its one spelling; a device key has none.
@@ -372,7 +372,7 @@ func keyList(v any) ([]Key, bool) {
 	}
 	out := make([]Key, 0, len(list))
 	for _, e := range list {
-		k, ok := readKey(e)
+		k, ok := ReadKey(e)
 		if !ok {
 			return nil, false
 		}

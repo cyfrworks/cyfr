@@ -561,7 +561,7 @@ defmodule Arca.SecurityTransitionsTest do
       assert change.member_user_ids == %{own.id => [user.id]}
     end
 
-    test "clears the platform administrator's mark, which an allow never restores" do
+    test "refuses a person carrying the platform administrator's mark, and writes nothing" do
       {user, own} = owner!()
       session = session!(user.id, own.id)
 
@@ -570,20 +570,12 @@ defmodule Arca.SecurityTransitionsTest do
           set: [platform_admin_at: DateTime.utc_now()]
         )
 
-      assert %DateTime{} = user(user.id).platform_admin_at
-
-      assert {:ok, change} =
+      assert {:error, :platform_admin} =
                SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
 
-      assert change.user.platform_admin_at == nil
-      assert %{status: "denied", platform_admin_at: nil} = user(user.id)
-      assert athanor(own.id).status == "archived"
-      refute session?(session)
-
-      assert {:ok, %{transitioned: true}} =
-               SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
-
-      assert %{status: "active", platform_admin_at: nil} = user(user.id)
+      assert %{status: "active", platform_admin_at: %DateTime{}} = user(user.id)
+      assert athanor(own.id).status == "active"
+      assert session?(session)
     end
 
     test "takes their seats and invitations in shared threads, and ends a pair or a thread left empty" do

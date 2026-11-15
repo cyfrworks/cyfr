@@ -513,7 +513,11 @@ screen_confirms() {
   sleep 6
   check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
   since=$(guest_ssh 'date +%s')
-  screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  # The sheet opens with the keyboard's focus on Confirm on this device,
+  # and Enter presses it; the page it opens shows that it was that link.
+  # Chrome's find bar is not used here: closed, it leaves the focus on the
+  # page's body, not on the match in the sheet.
+  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   confirm_page_until confirm-drawn "$since" 60
   check "Confirm on this device opened the screen's own page, which draws the key CYFR is asked to make" \
     sh -c 'grep -q "Confirm on this screen" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
@@ -539,7 +543,8 @@ screen_confirms() {
   guest_chord ctrl 1 || fail "QMP did not send the keys"
   sleep 2
   since=$(guest_ssh 'date +%s')
-  screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  # Prism's tab keeps its focus on Confirm on this device, as above.
+  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   confirm_page_until confirm-again "$since" 60
   check "Confirm on this device draws it again" grep -q key.create "$GUEST_DIR/shell-confirm-again.html"
   printf '\t000000\n' | guest_keys || fail "QMP did not type"
@@ -672,6 +677,86 @@ screen_severed() {
     sh -c 'grep -q "CYFR is locked" "$1" && ! grep -q "five minutes without use" "$1"' sh "$GUEST_DIR/shell-severed-back.html"
   screen_ready
   check "screenshot screen-severed-back.png" guest_screenshot screen-severed-back.png
+}
+
+# screen_stays_stopped STOP FILE: STOP run as root on the guest, then a
+# watch that kills nothing: the screen's processes have 20 seconds to end
+# by themselves, and then for five seconds in a row nothing may hold the
+# screen's Chrome profile and none of the account's labwc, the D-Bus
+# daemon dbus-run-session started, launcher, screen shell, keyboard, idle
+# watch or Chrome, its crash handler among them, may run. Every process
+# it sees is kept in FILE with its parent: pid, parent pid, start time
+# and command line, so a process left over or come back names what
+# started it (the brackets keep each pattern from matching the shells
+# that carry it). 1 when the 20 seconds pass with one still running, or
+# one runs during the five.
+screen_stays_stopped() {
+  guest_root_out "$1; "'
+    seen() {
+      { pgrep -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"
+        pgrep -u proof -x labwc
+        pgrep -u proof -f "^dbus-daemon --nofork --print-addres[s]"
+        pgrep -u proof -f "/\.cyfr/screen/launcher\.s[h]"
+        pgrep -u proof -f "cyfr screen shel[l]"
+        pgrep -u proof -x wvkbd-mobintl
+        pgrep -u proof -x swayidle
+        pgrep -u proof -f "/opt/google/chrom[e]/"
+      } | sort -un | paste -sd, -
+    }
+    record() {
+      echo "== $(date -u +%FT%T.%NZ)"
+      ps -o pid=,ppid=,lstart=,args= -p "$1"
+      parents=$(ps -o ppid= -p "$1" | tr -d " " | sort -u | paste -sd, -)
+      [ -z "$parents" ] || ps -o pid=,ppid=,lstart=,args= -p "$parents" | sed "s/^/parent /"
+    }
+    ended=no
+    for i in $(seq 20); do
+      pids=$(seen)
+      if [ -z "$pids" ]; then ended=yes; break; fi
+      record "$pids"
+      sleep 1
+    done
+    [ "$ended" = yes ] || { echo "== still running 20 seconds after the stop"; exit 1; }
+    for i in 1 2 3 4 5; do
+      sleep 1
+      pids=$(seen)
+      [ -z "$pids" ] || { record "$pids"; echo "== running again within five seconds"; exit 1; }
+    done
+    exit 0' >"$GUEST_DIR/$2" 2>&1
+}
+
+# screen_stop_watched WHAT STOP FILE: screen_stays_stopped STOP FILE as a
+# check named by WHAT; once a failure is recorded, what the watch saw is
+# killed, the launcher first, so the rest of the run can go on.
+screen_stop_watched() {
+  local status=0
+  screen_stays_stopped "$2" "$3" || status=$?
+  check "$1: the screen's processes end by themselves within 20 s and none runs for five seconds in a row ($GUEST_DIR/$3)" test "$status" = 0
+  [ "$status" = 0 ] || guest_root '
+    pkill -KILL -u proof -f "/\.cyfr/screen/launcher\.s[h]"; pkill -KILL -u proof -f "cyfr screen shel[l]"
+    pkill -KILL -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"; pkill -KILL -u proof -f "/opt/google/chrom[e]/"
+    pkill -KILL -u proof -x labwc; pkill -KILL -u proof -x wvkbd-mobintl; pkill -KILL -u proof -x swayidle
+    pkill -KILL -u proof -f "^dbus-daemon --nofork --print-addres[s]"; true'
+}
+
+# screen_session_record WHEN: the guest's login sessions, whether logind
+# ends a session's processes when it logs out (KillUserProcesses), the
+# screen account's processes with their cgroups, and what logind and
+# polkit said in the last two minutes, kept in screen-session.txt under
+# WHEN.
+screen_session_record() {
+  { echo "== $1"
+    guest_root_out 'date -u +%FT%T.%NZ
+      loginctl list-sessions --no-legend
+      busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager KillUserProcesses
+      ps -u proof -o pid=,ppid=,lstart=,cgroup=,args= | cut -c1-240
+      journalctl -b -o short-iso --no-pager --since -2min | grep -E "systemd-logind|polkitd|cyfr-screen"'
+  } >>"$GUEST_DIR/screen-session.txt" 2>&1
+}
+
+# No login session is on tty1, where the screen's was.
+screen_session_gone() {
+  guest_root '! loginctl list-sessions --no-legend | grep -qw tty1'
 }
 
 # Chrome's profile, copied while Prism was open, put back while the screen
@@ -809,27 +894,42 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
       if [ -e /home/proof/.cyfr ]; then tree /home/proof/.cyfr; else echo absent; fi
       rm -r "$t"'
   }
-  # The volume command names exactly the volumes the first listing found,
-  # and is absent when it found none.
-  volume_command_names_the_volumes() {
-    local want got line
-    want=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort)
+  # The names the uninstall's volume command gives, one a line, sorted;
+  # none when it prints no such command.
+  uninstall_volume_names() {
+    local line
     line=$(grep '^    docker volume rm ' "$GUEST_DIR/transcript-uninstall.txt" || true)
     # shellcheck disable=SC2086 # the line's quoted names, split into words
-    got=$(printf '%s\n' ${line#    docker volume rm } | tr -d "'" | sed '/^$/d' | sort)
-    [ "$got" = "$want" ]
+    printf '%s\n' ${line#    docker volume rm } | tr -d "'" | sed '/^$/d' | sort
+  }
+  # The volume command names exactly the volumes of the stack it
+  # uninstalls, those labelled with its compose project (cyfr, the
+  # folder's name, every engine call's -p), and is absent when that stack
+  # has none. The setup pages' CYFR, taken down with cyfr down earlier,
+  # keeps volumes of its own project on the guest.
+  volume_command_names_the_volumes() {
+    [ "$(uninstall_volume_names)" = "$(sort "$GUEST_DIR/stack-volumes.txt")" ]
+  }
+  # No volume the first listing found outside that project is named.
+  volume_command_names_no_other_project() {
+    local others
+    others=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort | comm -23 - <(sort "$GUEST_DIR/stack-volumes.txt"))
+    [ -z "$(comm -12 <(uninstall_volume_names) <(printf '%s\n' "$others" | sed '/^$/d'))" ]
   }
   check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
   # The screen's browser writes its profile in the folder until the screen
   # stops, which cyfr down leaves running: it is stopped before the first
   # listing, so the two listings compare cyfr down's stop with the
-  # uninstall's. Its browser can outlive the service's stop, so the step
-  # waits until no process holds the profile (the bracket keeps the pattern
-  # from matching the shell that carries it).
-  guest_root 'systemctl stop cyfr-screen; p=--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]; pkill -f -- "$p"; for i in $(seq 30); do pgrep -f -- "$p" >/dev/null || exit 0; sleep 1; done; exit 1' ||
-    fail "the screen's browser did not stop ($GUEST_DIR/root.txt)"
+  # uninstall's.
+  screen_session_record before-the-stop
+  screen_stop_watched "systemctl stop cyfr-screen" 'systemctl stop cyfr-screen' screen-holders.txt
+  screen_session_record after-the-stop
+  check "the screen's stop ends its login session" screen_session_gone
+  check "the guest has logger, which the screen's session.sh says a refused end with, installing nothing" guest_ssh 'command -v logger'
   volumes_seen after-the-reboot-and-cyfr-down
   left_as_it_was >"$GUEST_DIR/left-before.txt" 2>&1 || fail "what the uninstall leaves could not be read after cyfr down ($GUEST_DIR/left-before.txt)"
+  guest_ssh 'docker volume ls -q --filter label=com.docker.compose.project=cyfr' >"$GUEST_DIR/stack-volumes.txt" 2>&1 ||
+    fail "the stack's volumes could not be listed ($GUEST_DIR/stack-volumes.txt)"
   # The screen holds tty1 since the reboot, which ended tty1's tmux
   # session: the step types into a detached one, which gives sudo its
   # terminal all the same.
@@ -843,8 +943,12 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
     "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-uninstall.txt" "$SUDO_PROMPT"
   check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
   check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
+  check "it names no volume of another project" volume_command_names_no_other_project
   check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
+  screen_stop_watched "after the uninstall" : screen-holders-uninstall.txt
+  screen_session_record after-the-uninstall
+  check "after the uninstall no login session is on tty1" screen_session_gone
   left_as_it_was >"$GUEST_DIR/left-after.txt" 2>&1 || fail "what the uninstall left could not be read ($GUEST_DIR/left-after.txt)"
   volumes_seen after-the-uninstall
   check "the folder, the volumes, the settings and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"

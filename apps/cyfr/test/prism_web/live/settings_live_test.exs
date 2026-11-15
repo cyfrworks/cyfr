@@ -147,6 +147,59 @@ defmodule PrismWeb.SettingsLiveTest do
     end
   end
 
+  test "a second person given the administrator's mark sees and uses the administrator's Settings; the last mark stays",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    mira = test_user()
+    {:ok, mira_row} = Sanctum.Tenancy.Users.get(mira.user_id)
+
+    {view, _html} = conn |> log_in_user(mira) |> mount_athanor("/settings")
+    refute has_element?(view, "#allowlist")
+
+    {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+    admins =
+      view |> render() |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-test="admin"]))
+
+    assert Enum.count(admins) == 1
+    assert has_element?(view, ~s([data-test="admin"][data-id="#{ops.user_id}"]))
+    refute has_element?(view, ~s(button[phx-click="admin_clear"]))
+
+    # Marking asks the administrator to confirm, through the system layer.
+    view |> form("#admin-form", %{"person" => mira.user_id}) |> render_submit()
+
+    assert [%{operation: "door.mark_admin"}] =
+             Arca.Repo.all(
+               from(c in Arca.Schemas.PendingConfirmation, where: c.user_id == ^ops.user_id)
+             )
+
+    {:ok, _} = Sanctum.Tenancy.Users.mark_platform_admin(mira_row, ops.user_id)
+
+    # Mira, now an administrator, sees the allowlist and changes it.
+    {view, _html} = build_conn() |> log_in_user(mira) |> mount_athanor("/settings")
+    assert has_element?(view, "#allowlist")
+    assert has_element?(view, ~s([data-test="admin"][data-id="#{mira.user_id}"]))
+
+    identifier = "per_" <> Prima.Digest.sha256_hex("second-admin-#{mira.user_id}")
+
+    view
+    |> element(~s(form[phx-change="door_form_changed"]))
+    |> render_change(%{"value" => identifier})
+
+    view |> element("button[phx-click=door_allow]") |> render_click()
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
+
+    # The first administrator's mark comes off; the last one, Mira's, stays.
+    {:ok, ops_row} = Sanctum.Tenancy.Users.get(ops.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.clear_platform_admin(ops_row, mira.user_id)
+
+    assert {:error, :last_admin} =
+             Sanctum.Tenancy.Users.clear_platform_admin(mira_row, mira.user_id)
+
+    assert Sanctum.Tenancy.platform_admin?(mira.user_id)
+  end
+
   test "the page says in words what Mode, the request card, a setting and the sign-in are, and Remove asks first",
        %{conn: conn} do
     ops = test_user()
@@ -234,7 +287,7 @@ defmodule PrismWeb.SettingsLiveTest do
     assert has_element?(activities, "tr", ~r/invitation\.revoke.*failed/s)
   end
 
-  test "the administrator reads the host's decisions and opens one",
+  test "the administrator reads the host's decisions, opens one, and closing an account asks a confirmation",
        %{conn: conn} do
     ops = test_user()
     {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
@@ -259,7 +312,15 @@ defmodule PrismWeb.SettingsLiveTest do
 
     assert has_element?(view, "#host-decision dd", refused.call_id)
 
-    # Someone who is not the administrator does not see them.
+    identifier = "per_" <> Prima.Digest.sha256_hex("closed-#{ops.user_id}")
+    view |> form("#tombstone-form", %{"identifier" => identifier}) |> render_submit()
+
+    assert [%{operation: "directory.tombstone"}] =
+             Arca.Repo.all(
+               from(c in Arca.Schemas.PendingConfirmation, where: c.user_id == ^ops.user_id)
+             )
+
+    # Someone who is not the administrator sees neither.
     person = test_user()
     {view, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
     refute has_element?(view, "#host-decisions")

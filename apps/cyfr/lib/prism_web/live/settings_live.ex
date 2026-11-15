@@ -29,7 +29,9 @@ defmodule PrismWeb.SettingsLive do
       athanor's `approvals.expiry_hours`), and a link to API Keys.
     * **Decisions about the host** — for the platform administrator, the
       gate's decisions no athanor holds (`decision.list_global`), each
-      opened whole (`decision.get_global`).
+      opened whole (`decision.get_global`), and closing an account at the
+      directory this CYFR serves (`directory.tombstone`), which asks a
+      fresh confirmation through the system layer.
     * **Invitation links** — the invitations `invitation.list` answers
       the person (every one to the platform administrator, a person's own
       to anyone else), a thread's among them, each by the name it offers,
@@ -39,6 +41,11 @@ defmodule PrismWeb.SettingsLive do
       offering an optional name: the link is shown once with a copy
       control, and with a sentence when it opens only on this computer
       (`local_only`).
+    * **Administrators** — in the allowlist, for a platform administrator:
+      the people carrying the mark, another person made an administrator
+      (`door.mark_admin`) and a mark taken away (`door.clear_admin`), never
+      the last one, each asking a fresh confirmation through the system
+      layer.
 
   The refusals each change can meet are shown as the refusal's own
   sentence.
@@ -79,6 +86,7 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:log_stats, %{total: 0, errors: 0, avg_duration_ms: 0, error_rate: 0.0})
       |> assign(:door_entries, [])
       |> assign(:door_requests, [])
+      |> assign(:admins, [])
       |> assign(:door_value, "")
       |> assign(:door_note, "")
       |> assign(:invitations, [])
@@ -132,6 +140,12 @@ defmodule PrismWeb.SettingsLive do
   def handle_event("door_remove", %{"id" => id}, socket) do
     door_call(socket, "door/remove", %{"id" => id}, "Entry removed.")
   end
+
+  def handle_event("admin_mark", %{"person" => person}, socket),
+    do: marking(socket, "mark_admin", String.trim(person))
+
+  def handle_event("admin_clear", %{"id" => user_id}, socket),
+    do: marking(socket, "clear_admin", user_id)
 
   def handle_event("door_resolve", %{"id" => id, "decision" => decision}, socket) do
     door_call(socket, "door/resolve", %{"id" => id, "decision" => decision}, "Request resolved.")
@@ -210,6 +224,9 @@ defmodule PrismWeb.SettingsLive do
   def handle_event("host_decision_close", _params, socket),
     do: {:noreply, assign(socket, :host_decision, nil)}
 
+  def handle_event("tombstone", %{"identifier" => identifier}, socket),
+    do: tombstone(socket, String.trim(identifier))
+
   # A change is made against the store revision the card was listed at,
   # so an operator who saved on another member since is not overwritten:
   # the write is refused and the card lists again.
@@ -270,6 +287,31 @@ defmodule PrismWeb.SettingsLive do
         {:noreply, put_flash(socket, :error, "Not saved: #{error_message(reason)}")}
     end
   end
+
+  # Closing an account needs the administrator's fresh confirmation: asked
+  # for through the system layer, and repeated from `system_layer_repeat/4`
+  # once confirmed.
+  defp tombstone(socket, identifier) do
+    case SystemLayer.call(socket, {:tombstone, identifier}, "directory/tombstone", %{
+           "identifier" => identifier
+         }) do
+      {:ok, _gone, socket} ->
+        {:noreply, put_flash(socket, :info, "The account #{identifier} is closed.")}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply, put_flash(socket, :error, "Not closed: #{error_message(reason)}")}
+    end
+  end
+
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat({:tombstone, identifier}, _tool, _args, socket),
+    do: tombstone(socket, identifier)
+
+  def system_layer_repeat({:marking, action, person}, _tool, _args, socket),
+    do: marking(socket, action, person)
 
   @impl true
   def handle_info(:load, socket) do
@@ -346,12 +388,39 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
+  # Making or unmaking an administrator needs the administrator's fresh
+  # confirmation: asked for through the system layer, and repeated from
+  # `system_layer_repeat/4` once confirmed.
+  defp marking(socket, action, person) do
+    case SystemLayer.call(socket, {:marking, action, person}, "door/" <> action, %{
+           "person" => person
+         }) do
+      {:ok, _marked, socket} ->
+        done = if action == "mark_admin", do: "Made an administrator.", else: "Mark taken away."
+        {:noreply, socket |> load_door() |> put_flash(:info, done)}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply,
+         put_flash(socket, :error, "The administrators did not change: #{error_message(reason)}")}
+    end
+  end
+
+  # How a person is named in the administrators' list.
+  defp admin_name(%{name: name}), do: "@" <> name
+  defp admin_name(%{user_id: id}), do: id
+
   # The door is the platform admin's; everyone else sees no section.
   defp load_door(%{assigns: %{context: %{platform_admin: true}}} = socket) do
-    entries =
+    {entries, admins} =
       case call_tool(socket, "door/list", %{}) do
-        {:ok, %{entries: entries}} -> Enum.reject(entries, &(&1.status == "requested"))
-        _ -> []
+        {:ok, %{entries: entries, admins: admins}} ->
+          {Enum.reject(entries, &(&1.status == "requested")), admins}
+
+        _ ->
+          {[], []}
       end
 
     requests =
@@ -363,11 +432,12 @@ defmodule PrismWeb.SettingsLive do
     socket
     |> assign(:door_entries, entries)
     |> assign(:door_requests, requests)
+    |> assign(:admins, admins)
   end
 
   # A socket whose capability went since it read the door drops what it read.
   defp load_door(socket),
-    do: assign(socket, door_entries: [], door_requests: [])
+    do: assign(socket, door_entries: [], door_requests: [], admins: [])
 
   # The invitations the person may see, newest first: every one to the
   # administrator, their own to anyone else, a thread's among them.
@@ -787,6 +857,46 @@ defmodule PrismWeb.SettingsLive do
               </:col>
             </.table>
 
+            <div id="admins" class="mt-6">
+              <h4 class="text-xs text-gray-500 uppercase mb-2">Administrators</h4>
+              <p class="text-xs text-gray-500 mb-2">
+                The people who run this CYFR: this allowlist, its invitations and its settings.
+                Making someone an administrator allows their account too. The last
+                administrator always keeps the mark. Each change asks you to confirm.
+              </p>
+              <ul class="divide-y divide-gray-800 text-sm">
+                <li
+                  :for={admin <- @admins}
+                  class="flex items-center justify-between py-1"
+                  data-test="admin"
+                  data-id={admin.user_id}
+                >
+                  <span>{admin_name(admin)}</span>
+                  <.button
+                    :if={length(@admins) > 1}
+                    variant="ghost"
+                    phx-click="admin_clear"
+                    phx-value-id={admin.user_id}
+                    data-confirm="Take the administrator's mark away? They stay a person here."
+                  >
+                    Take the mark away
+                  </.button>
+                </li>
+              </ul>
+              <form id="admin-form" phx-submit="admin_mark" class="flex gap-2 items-end mt-2">
+                <div class="flex-1">
+                  <.input
+                    name="person"
+                    value=""
+                    required
+                    id="admin-person"
+                    placeholder="@name of a person here"
+                  />
+                </div>
+                <.button type="submit" variant="ghost">Make an administrator</.button>
+              </form>
+            </div>
+
             <form id="door-entry-form" phx-change="door_form_changed" class="mt-4 space-y-2">
               <div class="flex gap-2 items-end">
                 <div class="flex-1">
@@ -1005,7 +1115,7 @@ defmodule PrismWeb.SettingsLive do
           </section>
         </.card>
 
-        <%!-- The host's own decisions (platform admins) --%>
+        <%!-- The host's own decisions, and closing an account (platform admins) --%>
         <.card :if={@context.platform_admin}>
           <section id="host-decisions">
             <h3 class="text-sm font-medium text-gray-400 mb-1">Decisions about the host</h3>
@@ -1036,6 +1146,25 @@ defmodule PrismWeb.SettingsLive do
               </dl>
               <.button variant="ghost" phx-click="host_decision_close">Close</.button>
             </div>
+
+            <h4 class="text-xs text-gray-500 uppercase mt-6 mb-2">Close an account</h4>
+            <p class="text-xs text-gray-500 mb-2">
+              Where this CYFR keeps people's accounts itself, in place of cyfr.run, an account
+              can be closed for good: nobody signs in with it again anywhere, its name stays
+              taken, and it cannot be undone. It asks you to confirm.
+            </p>
+            <form id="tombstone-form" phx-submit="tombstone" class="flex gap-2 items-end">
+              <div class="flex-1">
+                <.input
+                  name="identifier"
+                  value=""
+                  required
+                  placeholder="per_…"
+                  id="tombstone-identifier"
+                />
+              </div>
+              <.button type="submit" variant="ghost">Close the account</.button>
+            </form>
           </section>
         </.card>
 

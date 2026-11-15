@@ -95,7 +95,11 @@ defmodule Sanctum.Gate.ReplaySafeAuditTest do
              # outcome tells the model what is there now, and changes nothing.
              "source.grep",
              "source.read",
-             "source.tree"
+             "source.tree",
+             # A shared thread the person sits in, read again: what it says
+             # now, and no read mark moved.
+             "threads.list",
+             "threads.read"
            ]
 
     assert replay_safe(Carrier.tools()) == ["carrier.peek"]

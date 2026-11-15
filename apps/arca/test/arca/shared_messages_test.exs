@@ -9,7 +9,8 @@ defmodule Arca.SharedMessagesTest do
   refused in an archived or unknown thread, for an author who is not a
   person or not seated in the thread, and for an id that is not a
   message's; read oldest first, after a `seq` and by the
-  page, or its newest by the page (`latest/3`). The baseline holds one message per `seq` in a thread, and many
+  page, or its newest by the page (`latest/3`), or a reader's mark with
+  the newest and the count unread to them in one statement (`read_tail/4`). The baseline holds one message per `seq` in a thread, and many
   appending at once each land on a `seq` of their own
   (`Arca.SharedMessagesRaceTest`). Every function is the platform's and
   refuses an athanor's actor.
@@ -167,6 +168,69 @@ defmodule Arca.SharedMessagesTest do
     end
   end
 
+  describe "read_tail/4" do
+    # Messages written straight into the table, `seq` dense from the next
+    # one: as many as a case needs without a page of appends.
+    defp written!(thread, author, contents) do
+      next =
+        case SharedMessages.latest(server(), thread.id, 1) do
+          {:ok, [%{seq: seq}]} -> seq + 1
+          {:ok, []} -> 1
+        end
+
+      rows =
+        contents
+        |> Enum.with_index(next)
+        |> Enum.map(fn {content, seq} ->
+          %{
+            id: Prima.UUID7.generate_id("shm"),
+            thread_id: thread.id,
+            seq: seq,
+            author: author,
+            content: content,
+            inserted_at: DateTime.utc_now()
+          }
+        end)
+
+      {_, _} = Arca.Repo.insert_all("shared_messages", rows)
+      :ok
+    end
+
+    test "reads the reader's mark, the newest messages and every unread one someone else wrote, in one count",
+         %{by: by, thread: thread} do
+      other = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+      :ok = written!(thread, other, ~w(a b))
+      :ok = written!(thread, by, ~w(mine))
+      {:ok, :moved} = SharedThreadMembers.mark_read(server(), thread.id, by, 3)
+
+      # Past the mark: one of the reader's own and more than a page by
+      # someone else, so the count has no page's ceiling.
+      :ok = written!(thread, by, ~w(again))
+      max = SharedMessages.max_page()
+      :ok = written!(thread, other, Enum.map(1..(max + 41), &"n#{&1}"))
+
+      assert {:ok, %{status: "active", read_seq: 3, unread: unread, messages: tail}} =
+               SharedMessages.read_tail(server(), thread.id, by, 3)
+
+      assert unread == max + 41
+      last = 4 + max + 41
+      assert Enum.map(tail, & &1.seq) == Enum.to_list((last - 2)..last)
+      assert List.last(tail).content == "n#{max + 41}"
+    end
+
+    test "reads a thread with nothing said, and nothing for a person with no seat",
+         %{by: by, thread: thread} do
+      assert {:ok, %{status: "active", read_seq: 0, unread: 0, messages: []}} =
+               SharedMessages.read_tail(server(), thread.id, by, 3)
+
+      stranger = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+      :ok = written!(thread, by, ~w(hello))
+
+      assert {:error, :not_found} = SharedMessages.read_tail(server(), thread.id, stranger, 3)
+      assert {:error, :not_found} = SharedMessages.read_tail(server(), "sth_nobody", by, 3)
+    end
+  end
+
   test "the baseline holds one message per seq in a thread", %{by: by, thread: thread} do
     {:ok, _} = SharedMessages.append(server(), thread.id, %{author: by, content: "first"})
 
@@ -202,6 +266,7 @@ defmodule Arca.SharedMessagesTest do
 
     assert {:error, :cross_tenant} = SharedMessages.list(actor, thread.id)
     assert {:error, :cross_tenant} = SharedMessages.latest(actor, thread.id, 3)
+    assert {:error, :cross_tenant} = SharedMessages.read_tail(actor, thread.id, by, 3)
     assert {:ok, []} = SharedMessages.list(server(), thread.id)
   end
 end

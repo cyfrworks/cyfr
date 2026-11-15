@@ -60,6 +60,7 @@ defmodule Sanctum.Pairing do
   | `:pairing_revocation` | a fresh confirmation |
   | `:restore_reenable` | a fresh confirmation |
   | `:directory_tombstone` | a fresh confirmation, the platform administrator's |
+  | `:platform_admin_marking` | a fresh confirmation, the platform administrator's |
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
   are sensitive, and no operation makes either (each is *Not built yet*
@@ -103,7 +104,8 @@ defmodule Sanctum.Pairing do
     home_transfer: :fresh,
     pairing_revocation: :fresh,
     restore_reenable: :fresh,
-    directory_tombstone: :fresh
+    directory_tombstone: :fresh,
+    platform_admin_marking: :fresh
   }
 
   @typedoc "An action the table names."
@@ -118,6 +120,7 @@ defmodule Sanctum.Pairing do
           | :pairing_revocation
           | :restore_reenable
           | :directory_tombstone
+          | :platform_admin_marking
 
   @typedoc "A paired client and the certificate it connects under."
   @type paired :: %{client_id: String.t(), certificate: DeviceCert.t()}
@@ -293,12 +296,15 @@ defmodule Sanctum.Pairing do
     end
   end
 
-  defp revoke_client(ctx, %{id: client_id}) do
+  # The confirmation names the client by the name the person sees for it;
+  # a client with none, or with one the preview cannot hold, is named by
+  # nothing rather than by its id, and the revocation goes on.
+  defp revoke_client(ctx, %{id: client_id} = client) do
     with :ok <-
            Authz.confirm(ctx, :pairing_revocation, %{
              operation: "pairing.revoke",
              arguments: %{"client_id" => client_id},
-             resource: client_id
+             resource: previewable(Map.get(client, :display_name))
            }) do
       case Arca.PairedClients.revoke(Context.actor(ctx), client_id) do
         {:ok, row} ->
@@ -321,6 +327,12 @@ defmodule Sanctum.Pairing do
           {:error, reason}
       end
     end
+  end
+
+  defp previewable(name) do
+    if Prima.Identity.Encoding.text?(name, Prima.Confirmation.Preview.max_text()),
+      do: name,
+      else: nil
   end
 
   defp own_client(ctx, client_id) do

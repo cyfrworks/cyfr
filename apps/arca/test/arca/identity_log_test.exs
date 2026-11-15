@@ -221,6 +221,28 @@ defmodule Arca.IdentityLogTest do
     end
   end
 
+  describe "tombstone/3's verify:" do
+    test "a refusal leaves the identifier live and answers its reason; it is asked only of a live one" do
+      {identifier, _genesis} = genesis!()
+
+      assert {:error, :held} =
+               IdentityLog.tombstone(server(), identifier, verify: fn -> {:error, :held} end)
+
+      assert {:ok, %{seq: 0}} = IdentityLog.head(server(), identifier)
+
+      assert :ok = IdentityLog.tombstone(server(), identifier, verify: fn -> :ok end)
+
+      refuse = fn -> flunk("verify: asked of an identifier that is not live") end
+      assert :ok = IdentityLog.tombstone(server(), identifier, verify: refuse)
+      assert {:error, :gone} = IdentityLog.head(server(), identifier)
+
+      assert {:error, :not_found} =
+               IdentityLog.tombstone(server(), "per_" <> String.duplicate("3", 64),
+                 verify: refuse
+               )
+    end
+  end
+
   test "reads page the log and place a hash in it, and only the platform's actor reads or writes" do
     {identifier, genesis} = genesis!()
     {:ok, one, :accepted} = append(identifier, entry(genesis.entry_hash))
@@ -251,6 +273,12 @@ defmodule Arca.IdentityLogRaceTest do
   before it writes its entry (a trigger waits on an advisory lock the test
   holds) and the second blocks on the usage row; on SQLite both queue
   behind a transaction holding the write lock and run one after the other.
+
+  Two administrators' accounts closed at once decide the same way, and so
+  do a closure and a clearing of another administrator's mark, in either
+  order: the change that waits counts the administrators after the other
+  committed, and the last one who can still act keeps their account and
+  their mark.
   """
 
   use ExUnit.Case, async: false
@@ -259,7 +287,7 @@ defmodule Arca.IdentityLogRaceTest do
   import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, IdentityLog}
-  alias Arca.Schemas.{CellLease, IdentityLogEntry, ServerMeta}
+  alias Arca.Schemas.{CellLease, IdentityLogEntry, PersonIdentity, ServerMeta, User}
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -525,6 +553,185 @@ defmodule Arca.IdentityLogRaceTest do
 
     assert {:ok, [_genesis, %{seq: 1}]} =
              unboxed(fn -> IdentityLog.entries(server(), identifier) end)
+  end
+
+  # An administrator of this CYFR, committed: an active person carrying
+  # the mark, whose account is registered at this directory. Every row is
+  # removed after the case.
+  defp admin! do
+    n = System.unique_integer([:positive])
+    user_id = "usr_closing#{n}"
+    entry = "genesis-admin-#{n}"
+    identifier = "per_" <> Prima.Digest.sha256_hex(entry)
+    now = DateTime.utc_now()
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(where(PersonIdentity, user_id: ^user_id))
+        Arca.Repo.delete_all(where(User, id: ^user_id))
+        Arca.Repo.delete_all(where(IdentityLogEntry, identifier: ^identifier))
+      end)
+    end)
+
+    unboxed(fn ->
+      {1, _} =
+        Arca.Repo.insert_all(User, [
+          %{
+            id: user_id,
+            admission: "remote",
+            status: "active",
+            platform_admin_at: now,
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          }
+        ])
+
+      {1, _} =
+        Arca.Repo.insert_all(PersonIdentity, [
+          %{
+            id: "pid_closing#{n}",
+            user_id: user_id,
+            identifier: identifier,
+            head_hash: "sha256:" <> Prima.Digest.sha256_hex(entry),
+            directory_url: "https://dir.example",
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+      {:ok, _genesis, :created} =
+        IdentityLog.register(
+          server(),
+          %{
+            identifier: identifier,
+            entry: entry,
+            entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry),
+            state: "{}"
+          },
+          @policy
+        )
+    end)
+
+    %{user_id: user_id, identifier: identifier}
+  end
+
+  # A marked person committed by another case would stand for every one.
+  defp no_other_admin! do
+    assert [] ==
+             unboxed(fn ->
+               Arca.Repo.all(
+                 from(u in User,
+                   where: not is_nil(u.platform_admin_at) and u.status == "active",
+                   select: u.id
+                 )
+               )
+             end),
+           "a marked person committed by another case would stand"
+  end
+
+  # Holds the transaction it runs in, once its decision is made, until the
+  # test lets it go on.
+  defp holding(test) do
+    fn decided ->
+      send(test, :first_decided)
+      receive do: (:go -> decided)
+    end
+  end
+
+  # The second change, on a connection of its own, telling the test its
+  # backend so the test can watch it wait.
+  defp second(test, change) do
+    Task.async(fn ->
+      unboxed(fn ->
+        send(test, {:second, backend()})
+        change.()
+      end)
+    end)
+  end
+
+  defp waits!(second, fragments, opts \\ []) do
+    assert_receive {:second, waiting}, 5_000
+    if postgres?(), do: LockWait.await_lock_wait!(waiting, fragments, opts)
+    refute Task.yield(second, 300), "the second change decided while the first held its locks"
+  end
+
+  # An administrator taking their own mark away.
+  defp clear(user_id, opts \\ []),
+    do: Arca.Users.set_platform_admin(server(), user_id, false, [by: user_id] ++ opts)
+
+  # The closure's own check, as the directory passes it.
+  defp close(identifier, verify \\ & &1) do
+    check = fn -> verify.(Arca.Users.closable(server(), identifier)) end
+    IdentityLog.tombstone(server(), identifier, verify: check)
+  end
+
+  test "two administrators' accounts closed at once: the one that waits is refused, one stands" do
+    no_other_admin!()
+    a = admin!()
+    b = admin!()
+    test = self()
+
+    first = Task.async(fn -> unboxed(fn -> close(a.identifier, holding(test)) end) end)
+    assert_receive :first_decided, 5_000
+
+    second = second(test, fn -> close(b.identifier) end)
+    waits!(second, [~s("server_meta")])
+
+    send(first.pid, :go)
+    assert :ok = Task.await(first, 25_000)
+    assert {:error, :only_admin} = Task.await(second, 25_000)
+
+    assert {{:error, :gone}, {:ok, %{seq: 0}}} =
+             unboxed(fn ->
+               {IdentityLog.head(server(), a.identifier),
+                IdentityLog.head(server(), b.identifier)}
+             end)
+  end
+
+  test "a mark cleared while another administrator's account closes: the clear that waits is refused" do
+    no_other_admin!()
+    a = admin!()
+    b = admin!()
+    test = self()
+
+    first = Task.async(fn -> unboxed(fn -> close(a.identifier, holding(test)) end) end)
+    assert_receive :first_decided, 5_000
+
+    second = second(test, fn -> clear(b.user_id) end)
+    waits!(second, ["pg_advisory_xact_lock"], event: "advisory")
+
+    send(first.pid, :go)
+    assert :ok = Task.await(first, 25_000)
+    assert {:error, :last_admin} = Task.await(second, 25_000)
+
+    assert {{:error, :gone}, %{platform_admin_at: %DateTime{}}} =
+             unboxed(fn ->
+               {IdentityLog.head(server(), a.identifier), Arca.Repo.get!(User, b.user_id)}
+             end)
+  end
+
+  test "an account closed while another administrator's mark is cleared: the closure that waits is refused" do
+    no_other_admin!()
+    a = admin!()
+    b = admin!()
+    test = self()
+    hold = holding(test)
+
+    first =
+      Task.async(fn -> unboxed(fn -> clear(b.user_id, also: fn _b -> hold.(:ok) end) end) end)
+
+    assert_receive :first_decided, 5_000
+
+    second = second(test, fn -> close(a.identifier) end)
+    waits!(second, ["pg_advisory_xact_lock"], event: "advisory")
+
+    send(first.pid, :go)
+    assert {:ok, %{platform_admin_at: nil}} = Task.await(first, 25_000)
+    assert {:error, :only_admin} = Task.await(second, 25_000)
+
+    assert {:ok, %{seq: 0}} = unboxed(fn -> IdentityLog.head(server(), a.identifier) end)
   end
 
   # A case whose lock wait times out dies with the gate closed; the gate's

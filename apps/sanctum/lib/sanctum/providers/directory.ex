@@ -13,7 +13,10 @@ defmodule Sanctum.Providers.Directory do
   `identifier`, and it is a sensitive change (`directory_tombstone`): the
   administrator's fresh confirmation names the identifier
   (`Sanctum.Consent.Authz.confirm/3`). Every CYFR that reads the account
-  then retires what it bound to it (`Sanctum.IdentityFreshness`).
+  then retires what it bound to it (`Sanctum.IdentityFreshness`). The
+  account of this CYFR's only platform administrator who can still act is
+  refused before anything is asked, and again where it would be closed
+  (`Sanctum.Directory.tombstone/1`); a check that cannot read refuses.
   """
 
   require Logger
@@ -53,6 +56,7 @@ defmodule Sanctum.Providers.Directory do
   def handle(%Context{} = ctx, %{"action" => "tombstone", "identifier" => identifier})
       when is_binary(identifier) do
     with :ok <- spelled(identifier),
+         :ok <- closable(identifier),
          :ok <-
            Authz.confirm(ctx, :directory_tombstone, %{
              operation: "directory.tombstone",
@@ -66,6 +70,9 @@ defmodule Sanctum.Providers.Directory do
 
         {:error, :not_found} ->
           {:error, {:not_found, "account", identifier}}
+
+        {:error, :only_admin} ->
+          only_admin()
 
         {:error, :not_served} ->
           {:error, {:invalid_argument, "This CYFR serves no directory"}}
@@ -88,6 +95,20 @@ defmodule Sanctum.Providers.Directory do
     do: {:error, {:unknown_action, "directory.#{action}"}}
 
   def handle(_ctx, _args), do: {:error, :action_missing}
+
+  defp closable(identifier) do
+    case Sanctum.Tenancy.Users.closable(identifier) do
+      :ok -> :ok
+      {:error, :only_admin} -> only_admin()
+      {:error, :unavailable} -> {:error, {:unavailable, "The people of this CYFR"}}
+    end
+  end
+
+  defp only_admin,
+    do:
+      {:error,
+       {:invalid_argument,
+        "This is the only administrator of this CYFR. Make someone else an administrator first."}}
 
   defp spelled(identifier) do
     if Prima.Identity.Encoding.identifier?(identifier),
