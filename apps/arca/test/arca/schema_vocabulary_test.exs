@@ -148,7 +148,9 @@ defmodule Arca.SchemaVocabularyTest do
       refute Arca.Schemas.Thread.changeset(%Arca.Schemas.Thread{}, %{thread | kind: "bogus"}).valid?
 
       daily = %{thread | kind: "daily", parent_id: nil} |> Map.put(:day, ~D[2026-11-16])
-      workspace = %{thread | kind: "workspace", parent_id: nil} |> Map.put(:workspace_state, "open")
+
+      workspace =
+        %{thread | kind: "workspace", parent_id: nil} |> Map.put(:workspace_state, "open")
 
       for row <- [daily, Map.put(workspace, :opened_from, "msg_asked")] do
         assert Arca.Schemas.Thread.changeset(%Arca.Schemas.Thread{}, row).valid?
@@ -307,7 +309,11 @@ defmodule Arca.SchemaVocabularyTest do
     test "holds an athanor to one daily thread per date", ctx do
       first = thread(ctx, %{})
       assert {1, _} = insert!("threads", first)
-      refused!("threads", thread(ctx, %{day: first.day}), ["threads_athanor_id_day_index", "UNIQUE"])
+
+      refused!("threads", thread(ctx, %{day: first.day}), [
+        "threads_athanor_id_day_index",
+        "UNIQUE"
+      ])
     end
 
     test "lands every message outcome and NULL, and refuses any other", ctx do
