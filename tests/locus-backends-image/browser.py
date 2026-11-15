@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""AQUA's browser in the backends image: cyfr-browser driving Chromium in a kept home, framed over its terminal.
+"""Aqua's browser in the backends image: cyfr-browser driving Chromium in a kept home, framed over its terminal.
 
 Run as docker-compose.yml's locus-backends service, driven only by requests
 signed as CYFR signs them (harness.py). The browser is a kept program whose
@@ -25,7 +25,8 @@ container starts:
   answers `gone` for a response asked for again after that time, and for an
   id it never had.
 - Each operation once: open (a public page unless CYFR_TEST_OFFLINE=1, an
-  address the guard refuses, and an address of another scheme), page,
+  address the guard refuses, and an address of another scheme), five
+  failed opens that leave no window, page,
   read, click (a button whose click changes the page, seen by the next
   read), type, key, screenshot (a PNG that decodes) and close, with the
   errors no_window, bad_ref and bad_key.
@@ -474,13 +475,20 @@ def main():
         refused(b.ask(11, "thr_ops", "open", {"url": "file:///etc/passwd"}), "bad_url", "an open of a file is refused")
         refused(b.ask(12, "thr_ops", "open", {"url": "http://169.254.169.254/"}), "unreachable",
                 "an open of an address the guard refuses answers that the page could not be loaded")
+        # An open that fails leaves no window of its own, so the host's
+        # count of the windows that showed a page counts every one standing.
+        for n in range(5):
+            refused(b.ask(30 + n, f"thr_fail{n}", "open", {"url": "http://169.254.169.254/"}), "unreachable",
+                    f"a failed open in window thr_fail{n} answers that the page could not be loaded")
+        for n in range(5):
+            refused(b.ask(35 + n, f"thr_fail{n}", "read"), "no_window", f"the failed open left no window thr_fail{n}")
         if os.environ.get("CYFR_TEST_OFFLINE") == "1":
             print("skip: an open of a public page needs the public network (CYFR_TEST_OFFLINE=1)", flush=True)
         else:
             opened = ok(b.ask(13, "thr_ops", "open", {"url": "https://example.com/"}), "a public page opens")
             expect(opened == {"url": "https://example.com/", "title": "Example Domain"},
                    "the open answers once the page has loaded, with its address and title", opened)
-        shown = ok(b.ask(14, "thr_ops", "page", {"html": PROBE_PAGE}), "a page AQUA wrote is shown")
+        shown = ok(b.ask(14, "thr_ops", "page", {"html": PROBE_PAGE}), "a page Aqua wrote is shown")
         expect(shown["title"] == "Probe page", "it answers its title", shown)
         text = ok(b.ask(15, "thr_ops", "read"), "the page is read")["text"]
         expect('heading "Before"' in text, "the read has the page's heading", text)

@@ -251,24 +251,42 @@ func (b *browser) run(ctx context.Context, r request) (any, error) {
 }
 
 // in runs fn in window name, made first when create is set, after the
-// window's earlier requests.
+// window's earlier requests. A window this request made is closed before
+// its failure is answered: the host counts the windows that showed a page,
+// so none stands that it does not count.
 func (b *browser) in(ctx context.Context, name string, create bool, fn func(*window) (any, error)) (any, error) {
-	w, err := b.window(ctx, name, create)
+	w, made, err := b.window(ctx, name, create)
 	if err != nil {
 		return nil, err
 	}
 	w.op.Lock()
 	defer w.op.Unlock()
-	return fn(w)
+	out, err := fn(w)
+	if err != nil && made {
+		b.forget(ctx, name, w)
+	}
+	return out, err
 }
 
-func (b *browser) window(ctx context.Context, name string, create bool) (*window, error) {
+// forget closes window w, named name, and forgets it, unless another
+// window has taken its name meanwhile.
+func (b *browser) forget(ctx context.Context, name string, w *window) {
+	b.mu.Lock()
+	if b.windows[name] == w {
+		delete(b.windows, name)
+	}
+	b.mu.Unlock()
+	_ = b.c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": w.target}, nil)
+}
+
+// window answers window name, and whether this call made it.
+func (b *browser) window(ctx context.Context, name string, create bool) (*window, bool, error) {
 	b.mu.Lock()
 	w := b.windows[name]
 	if w == nil {
 		if !create {
 			b.mu.Unlock()
-			return nil, errNoWindow
+			return nil, false, errNoWindow
 		}
 		w = &window{ready: make(chan struct{})}
 		b.windows[name] = w
@@ -282,18 +300,18 @@ func (b *browser) window(ctx context.Context, name string, create bool) (*window
 			b.mu.Unlock()
 		}
 		close(w.ready)
-		return w, w.err
+		return w, w.err == nil, w.err
 	}
 	b.mu.Unlock()
 	select {
 	case <-w.ready:
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, false, ctx.Err()
 	}
 	if w.err != nil {
-		return nil, w.err
+		return nil, false, w.err
 	}
-	return w, nil
+	return w, false, nil
 }
 
 func (b *browser) makeWindow(ctx context.Context, w *window) error {

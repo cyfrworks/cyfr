@@ -16,8 +16,10 @@ import (
 )
 
 // fakeChrome answers the commands of one open and one read over a pipe
-// pair, as Chrome does over its debugging pipe.
-func fakeChrome(commands io.Reader, answers io.Writer) {
+// pair, as Chrome does over its debugging pipe. A navigation to
+// unreachableURL fails as Chrome's does, and each target closed is told on
+// closes when it is given.
+func fakeChrome(commands io.Reader, answers io.Writer, closes chan<- string) {
 	in := bufio.NewReader(commands)
 	address := "about:blank"
 	write := func(message map[string]any) {
@@ -56,11 +58,24 @@ func fakeChrome(commands io.Reader, answers io.Writer) {
 			reply(map[string]any{})
 		case "Page.getFrameTree":
 			reply(map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "T1"}}})
+		case "Target.closeTarget":
+			var p struct {
+				TargetID string `json:"targetId"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			reply(map[string]any{"success": true})
+			if closes != nil {
+				closes <- p.TargetID
+			}
 		case "Page.navigate":
 			var p struct {
 				URL string `json:"url"`
 			}
 			_ = json.Unmarshal(m.Params, &p)
+			if p.URL == unreachableURL {
+				reply(map[string]any{"frameId": "T1", "loaderId": "L3", "errorText": "net::ERR_ADDRESS_UNREACHABLE"})
+				continue
+			}
 			address = p.URL
 			reply(map[string]any{"frameId": "T1", "loaderId": "L2"})
 			load("L1")
@@ -138,10 +153,12 @@ func (h *host) response(id int64) map[string]any {
 	}
 }
 
+const unreachableURL = "https://unreachable.test/"
+
 func TestOpenAndReadOverFakeChrome(t *testing.T) {
 	commandsIn, commandsOut := io.Pipe()
 	answersIn, answersOut := io.Pipe()
-	go fakeChrome(commandsIn, answersOut)
+	go fakeChrome(commandsIn, answersOut, nil)
 	b := newBrowser()
 	b.c = newCDP(commandsOut, answersIn, b.onTarget)
 
@@ -170,6 +187,67 @@ func TestOpenAndReadOverFakeChrome(t *testing.T) {
 	h.send(map[string]any{"t": "req", "id": 4, "win": "thr_01", "op": "open", "args": map[string]any{"url": "file:///etc/passwd"}})
 	if got := h.response(4); !jsonEqual(got, `{"error":{"code":"bad_url","message":"Only http and https addresses open in the browser."}}`) {
 		t.Fatalf("an open of a file answered %v", got)
+	}
+	hostOut.Close()
+	if err := <-served; err != nil {
+		t.Fatalf("serve ended with %v when its input ended", err)
+	}
+}
+
+// An open that fails in a window it made leaves no window: the window is
+// closed before the failure is answered, so the host, which counts the
+// windows that showed a page, counts every window that stands.
+func TestFailedOpenLeavesNoWindow(t *testing.T) {
+	commandsIn, commandsOut := io.Pipe()
+	answersIn, answersOut := io.Pipe()
+	closes := make(chan string, 4)
+	go fakeChrome(commandsIn, answersOut, closes)
+	b := newBrowser()
+	b.c = newCDP(commandsOut, answersIn, b.onTarget)
+
+	hostIn, driverOut := io.Pipe()
+	driverIn, hostOut := io.Pipe()
+	s := newSlot(driverOut, 9, time.Minute)
+	served := make(chan error, 1)
+	go func() { served <- serve(driverIn, s, b.do, nil, make(chan os.Signal)) }()
+	h := &host{t: t, in: hostOut, out: bufio.NewReader(hostIn), r: reader{max: maxToHost}}
+
+	h.send(map[string]any{"t": "req", "id": 1, "win": "thr_01", "op": "open", "args": map[string]any{"url": unreachableURL}})
+	if got := h.response(1); !jsonEqual(got, `{"error":{"code":"unreachable","message":"The page could not be loaded (net::ERR_ADDRESS_UNREACHABLE)."}}`) {
+		t.Fatalf("a failed open answered %v", got)
+	}
+	select {
+	case target := <-closes:
+		if target != "T1" {
+			t.Fatalf("the failed open closed %q, not its own window", target)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the window a failed open made was not closed")
+	}
+	b.mu.Lock()
+	left := len(b.windows)
+	b.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("a failed open left %d windows", left)
+	}
+	h.send(map[string]any{"t": "req", "id": 2, "win": "thr_01", "op": "read", "args": map[string]any{}})
+	if got := h.response(2); !jsonEqual(got, `{"error":{"code":"no_window","message":"There is no browser window for this thread; open a page first."}}`) {
+		t.Fatalf("a read after a failed open answered %v", got)
+	}
+
+	// A failure in a window that already showed a page leaves it standing.
+	h.send(map[string]any{"t": "req", "id": 3, "win": "thr_01", "op": "open", "args": map[string]any{"url": "https://example.com/"}})
+	if got := h.response(3); !jsonEqual(got, `{"ok":{"url":"https://example.com/","title":"Example"}}`) {
+		t.Fatalf("an open answered %v", got)
+	}
+	h.send(map[string]any{"t": "req", "id": 4, "win": "thr_01", "op": "open", "args": map[string]any{"url": unreachableURL}})
+	if got := h.response(4); got["error"] == nil {
+		t.Fatalf("a failed open in a standing window answered %v", got)
+	}
+	select {
+	case target := <-closes:
+		t.Fatalf("a failed open closed the window %q that already showed a page", target)
+	case <-time.After(200 * time.Millisecond):
 	}
 	hostOut.Close()
 	if err := <-served; err != nil {
