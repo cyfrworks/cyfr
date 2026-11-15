@@ -317,21 +317,27 @@ defmodule PrismWeb.LoginLiveTest do
       |> Prima.SignIn.fragment()
     end
 
-    # The registry, checking each request as the registry does under the
-    # account's log, and answering `answer.(request)`.
-    defp registry(account, answer) do
+    # The registry, checking each signed request as the registry does under
+    # the account's log, and answering `answer.(request)`; its terms'
+    # version read answers `legal.()`, by default a registry that cannot
+    # answer it.
+    defp registry(account, answer, legal \\ fn -> {503, ""} end) do
       {:ok, state} = Prima.Identity.verify_chain(account.log)
 
-      Sanctum.Test.RegistryStub.start!(fn %{body: body} = request ->
-        case Prima.RegistryRequest.verify(
-               body,
-               state,
-               %{host: Sanctum.Test.RegistryStub.host(), directory: account.url},
-               System.system_time(:millisecond)
-             ) do
-          {:ok, signed} -> answer.(Map.put(request, :signed, signed))
-          {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
-        end
+      Sanctum.Test.RegistryStub.start!(fn
+        %{method: "GET", path: "/v1/legal/version"} ->
+          legal.()
+
+        %{body: body} = request ->
+          case Prima.RegistryRequest.verify(
+                 body,
+                 state,
+                 %{host: Sanctum.Test.RegistryStub.host(), directory: account.url},
+                 System.system_time(:millisecond)
+               ) do
+            {:ok, signed} -> answer.(Map.put(request, :signed, signed))
+            {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
+          end
       end)
     end
 
@@ -543,7 +549,7 @@ defmodule PrismWeb.LoginLiveTest do
                assert_redirect(view, @answered_ms)
 
       assert_received {:registry_request, %{path: "/v1/tokens/mint"}}
-      refute_received {:registry_request, _second}
+      refute_received {:registry_request, %{path: "/v1/tokens/mint"}}
     end
 
     test "a mint the registry makes after the person left is stored", %{conn: conn, dir: dir} do
@@ -651,6 +657,408 @@ defmodule PrismWeb.LoginLiveTest do
 
       assert html =~ "nobody was signed in"
       refute_received {:registry_request, _}
+    end
+  end
+
+  describe "the registry's terms after a registry signature" do
+    # A registry whose mint answers each time and whose terms' version read
+    # answers `legal.()`.
+    defp terms_registry(account, legal) do
+      registry(
+        account,
+        fn %{path: "/v1/tokens/mint"} ->
+          {200,
+           Sanctum.Test.RegistryStub.answer(%{
+             "personal_namespace" => %{"slug" => "terms-person", "token" => "cyfr_pt_terms"},
+             "memberships" => []
+           })}
+        end,
+        legal
+      )
+    end
+
+    # The terms' version answer naming `version`, published on 10 November.
+    defp legal_answer(version, at \\ "2026-11-10T09:30:00Z") do
+      {200, Jason.encode!(%{"policy_version" => version, "policies" => [], "updated_at" => at})}
+    end
+
+    # A registry whose terms' version answer is what `answers` holds now.
+    defp answering(asked) do
+      {:ok, answers} = Agent.start_link(fn -> legal_answer("2026-11") end)
+      terms_registry(asked.account, fn -> Agent.get(answers, & &1) end)
+      answers
+    end
+
+    # One sync signed at the account pages and handed to a fresh sign tab
+    # under the session that asked: the tab.
+    defp synced!(asked) do
+      {:ok, %{request: map}} =
+        Compendium.Providers.Registry.handle(asked.ctx, %{"action" => "sync"})
+
+      {:ok, request} = Prima.SignIn.decode(map)
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+
+      render_hook(view, "account_answer", %{
+        "answer" => signed_at_pages(%{asked | request: request})
+      })
+
+      view
+    end
+
+    # The tab went back with the act's success and said nothing more.
+    defp went_back!(view) do
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {"/", %{"info" => "Your push tokens are synced."}} =
+                 assert_redirect(view, @answered_ms)
+      end)
+    end
+
+    defp seen(user_id) do
+      {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+      Sanctum.Tenancy.Users.prefs(user)["registry_terms_seen"]
+    end
+
+    defp seen!(user_id, version) do
+      {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+      {:ok, _user} = Sanctum.Tenancy.Users.put_prefs(user, %{"registry_terms_seen" => version})
+    end
+
+    defp notice!(view) do
+      Prima.Test.Wait.wait_until(
+        fn -> has_element?(view, "[data-test=terms-notice]") end,
+        @answered_ms,
+        "the terms notice to be shown"
+      )
+
+      view |> element("[data-test=terms-changed]") |> render()
+    end
+
+    defp continued!(view, params \\ %{}) do
+      view |> element("[data-test=terms-continue]") |> render_click(params)
+      assert {"/", _flash} = assert_redirect(view, @answered_ms)
+    end
+
+    # A registry whose first terms' version read is held until the test
+    # sends the stub `:release`, the test told `{:legal_held, stub}`; later
+    # reads answer at once.
+    defp held_terms(asked, version) do
+      test = self()
+      first = :atomics.new(1, [])
+      :atomics.put(first, 1, 1)
+
+      terms_registry(asked.account, fn ->
+        if :atomics.exchange(first, 1, 0) == 1 do
+          send(test, {:legal_held, self()})
+
+          receive do
+            :release -> :ok
+          end
+        end
+
+        legal_answer(version)
+      end)
+    end
+
+    # The check that outlived its read has ended.
+    defp settled! do
+      Prima.Test.Wait.wait_until(
+        fn -> Task.Supervisor.children(Prism.TaskSupervisor) == [] end,
+        @answered_ms,
+        "the check to end"
+      )
+    end
+
+    # The task reading the terms for a check: the child of the page's task
+    # supervisor called by another of its children.
+    defp read_task do
+      children = Task.Supervisor.children(Prism.TaskSupervisor)
+
+      Enum.find(children, fn pid ->
+        case Process.info(pid, :dictionary) do
+          {:dictionary, dictionary} ->
+            Enum.any?(Keyword.get(dictionary, :"$callers", []), &(&1 in children))
+
+          nil ->
+            false
+        end
+      end)
+    end
+
+    defp text(html),
+      do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.split() |> Enum.join(" ")
+
+    defp synced?(asked) do
+      match?(
+        {:ok, %{token: "cyfr_pt_terms"}},
+        Compendium.Registry.CredentialStore.get(
+          asked.ctx,
+          Compendium.RegistryHost.canonical_host(),
+          "terms-person"
+        )
+      )
+    end
+
+    test "a version the person was not shown is said beside what the act did, recorded on Continue, and said again when it changes again",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answers = answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(asked.ctx.athanor_id)
+      legal = "/a/" <> Sanctum.Tenancy.Athanors.route_slug(athanor) <> "/legal"
+
+      view = synced!(asked)
+      html = notice!(view)
+
+      assert text(html) ==
+               "Your push tokens are synced. The account service's terms changed on 10 November 2026. " <>
+                 "They are now version 2026-11, and using the account service means you accept them. " <>
+                 "Read the terms Continue"
+
+      assert view |> element("[data-test=terms-read]") |> render() =~ ~s(href="#{legal}")
+      refute_vocabulary(html)
+      assert synced?(asked)
+
+      # Shown, not yet gone on from: nothing is recorded.
+      assert seen(asked.ctx.user_id) == "2026-09"
+      continued!(view)
+      assert seen(asked.ctx.user_id) == "2026-11"
+
+      # The same version again says nothing: the browser goes back.
+      went_back!(synced!(asked))
+      assert seen(asked.ctx.user_id) == "2026-11"
+
+      # A newer version is said again.
+      Agent.update(answers, fn _ -> legal_answer("2026-12") end)
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-12,"
+      continued!(view)
+      assert seen(asked.ctx.user_id) == "2026-12"
+    end
+
+    test "a person with no version recorded is shown nothing, and the current one is recorded",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answering(asked)
+      assert seen(asked.ctx.user_id) == nil
+
+      went_back!(synced!(asked))
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-11"
+    end
+
+    test "a registry that does not answer its version: the act completes, nothing is said or recorded",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      terms_registry(asked.account, fn -> {503, ""} end)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      went_back!(synced!(asked))
+      assert_received {:registry_request, %{method: "GET", path: "/v1/legal/version"}}
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "an answer whose date is no time, or that is no answer, leaves the act's success and records nothing",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answers = answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      for answer <- [
+            {200, ~s({"policy_version":"2026-11","policies":[],"updated_at":{}})},
+            legal_answer("2026-11", "the tenth of November"),
+            legal_answer("2026-11", "2026-11-10T09:30:00+08:00"),
+            {200, ~s(["2026-11"])}
+          ] do
+        Agent.update(answers, fn _ -> answer end)
+        went_back!(synced!(asked))
+        assert seen(asked.ctx.user_id) == "2026-09", "recorded after #{inspect(answer)}"
+      end
+
+      assert synced?(asked)
+    end
+
+    test "a version that is empty, marked up or longer than 64 characters is said and recorded nowhere",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answers = answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      for version <- ["", "<b>2026-11</b>", "2026 11", String.duplicate("a", 65)] do
+        Agent.update(answers, fn _ -> legal_answer(version) end)
+        went_back!(synced!(asked))
+        assert seen(asked.ctx.user_id) == "2026-09", "recorded #{inspect(version)}"
+      end
+
+      # 64 characters is a version.
+      longest = String.duplicate("a", 64)
+      Agent.update(answers, fn _ -> legal_answer(longest) end)
+      assert text(notice!(synced!(asked))) =~ "They are now version #{longest},"
+    end
+
+    test "a tab closed while the version is read records nothing, and the next act says the version",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      seen!(asked.ctx.user_id, "2026-09")
+      test = self()
+      armed = :atomics.new(1, [])
+      :atomics.put(armed, 1, 1)
+
+      terms_registry(asked.account, fn ->
+        if :atomics.exchange(armed, 1, 0) == 1 do
+          send(test, {:legal_held, self()})
+
+          receive do
+            :release -> :ok
+          end
+        end
+
+        legal_answer("2026-11")
+      end)
+
+      view = synced!(asked)
+      assert_receive {:legal_held, held}, @answered_ms
+
+      {_ref, _topic, proxy} = view.proxy
+      Process.unlink(proxy)
+      page = Process.monitor(view.pid)
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert_receive {:DOWN, ^page, :process, _pid, {:shutdown, :closed}}, @answered_ms
+
+      send(held, :release)
+
+      Prima.Test.Wait.wait_until(
+        fn -> Task.Supervisor.children(Prism.TaskSupervisor) == [] end,
+        @answered_ms,
+        "the check that outlived the tab to end"
+      )
+
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
+
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-11,"
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "Continue records the held version for the held person and goes where the request said, whatever it is sent",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      other = Sanctum.Test.RegistryStub.person!()
+
+      {:ok, _other} =
+        Sanctum.Tenancy.Users.put_prefs(other, %{"registry_terms_seen" => "2026-01"})
+
+      answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-11,"
+
+      continued!(view, %{
+        "user_id" => other.id,
+        "version" => "forged",
+        "back" => "https://elsewhere.example/"
+      })
+
+      assert seen(asked.ctx.user_id) == "2026-11"
+      assert seen(other.id) == "2026-01"
+    end
+
+    test "Continue after the session ended elsewhere records nothing and goes to the sign-in",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answering(asked)
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert text(notice!(view)) =~ "They are now version 2026-11,"
+      assert {:ok, count} = Sanctum.Session.revoke_all_for_user(asked.ctx.user_id)
+      assert count > 0
+
+      view |> element("[data-test=terms-continue]") |> render_click()
+      assert {"/login", _flash} = assert_redirect(view, @answered_ms)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "a person with no version recorded is given no version the rule refuses",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      answers = answering(asked)
+
+      for version <- ["", "<b>2026-11</b>", String.duplicate("a", 65)] do
+        Agent.update(answers, fn _ -> legal_answer(version) end)
+        went_back!(synced!(asked))
+        assert seen(asked.ctx.user_id) == nil, "recorded #{inspect(version)}"
+      end
+    end
+
+    test "a read that fails while it is held leaves the act's success and records nothing",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_terms(asked, "2026-11")
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert_receive {:legal_held, stub}, @answered_ms
+      reader = read_task()
+      assert is_pid(reader)
+
+      try do
+        ExUnit.CaptureLog.capture_log(fn -> Process.exit(reader, :read_failed) end)
+        went_back!(view)
+      after
+        send(stub, :release)
+      end
+
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
+    end
+
+    test "for a person with nothing recorded, a read killed or held past its bound records nothing, and the next act records silently",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+
+      for ending <- [:killed, :late] do
+        held_terms(asked, "2026-11")
+        view = synced!(asked)
+        assert_receive {:legal_held, stub}, @answered_ms
+
+        try do
+          if ending == :killed do
+            ExUnit.CaptureLog.capture_log(fn -> Process.exit(read_task(), :read_failed) end)
+          end
+
+          went_back!(view)
+        after
+          send(stub, :release)
+        end
+
+        settled!()
+        assert seen(asked.ctx.user_id) == nil, "recorded after a read #{ending}"
+      end
+
+      went_back!(synced!(asked))
+      assert seen(asked.ctx.user_id) == "2026-11"
+    end
+
+    test "a version answered past the read's bound shows the act's success and records nothing",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+      held_terms(asked, "2026-11")
+      seen!(asked.ctx.user_id, "2026-09")
+
+      view = synced!(asked)
+      assert_receive {:legal_held, stub}, @answered_ms
+
+      try do
+        went_back!(view)
+      after
+        send(stub, :release)
+      end
+
+      assert synced?(asked)
+      assert seen(asked.ctx.user_id) == "2026-09"
     end
   end
 

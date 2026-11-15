@@ -148,6 +148,12 @@ defmodule PrismWeb.ToolSeamTest do
     # whether the line is drawn again. Written to the session's own person,
     # with nothing taken from the event.
     {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Sanctum.Tenancy.Users.put_prefs"},
+    # The version of the account service's terms the sign tab has shown this
+    # person, a presentation preference of the same kind: it decides only
+    # whether the notice is drawn again, it is written to the person's own
+    # row under their own session, rechecked first, and no agent has a
+    # reason to write it.
+    {"apps/cyfr/lib/prism_web/live/login_live.ex", "Sanctum.Tenancy.Users.put_prefs"},
     # Dropping the in-flight marker after a manual tincture refresh. Cache
     # invalidation, not persistence.
     {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Arca.Cache.delete_match"},
