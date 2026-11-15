@@ -155,7 +155,7 @@ defmodule Aqua.Providers.Browser do
             Arg.new("html", :string,
               required: true,
               max: @max_html,
-              description: "page: the page to show in this thread's window, as html"
+              description: "for page, the page to show in this thread's window, as html"
             )
           ],
           family

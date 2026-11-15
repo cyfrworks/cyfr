@@ -201,7 +201,11 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "the console's program terminal call downward, rostered in `Cyfr.Boundaries`"},
       {~w(Programs.Words),
        "the words a person typed after a program's command, which the gate's open " <>
-         "wraps as they enter so no status or crash report prints them"}
+         "wraps as they enter so no status or crash report prints them"},
+      {~w(Browser),
+       "Aqua's browser's holder, which the assistant's browser tool acts through and the " <>
+         "Programs page reads the browser's memory setting from, rostered for both in " <>
+         "`Cyfr.Boundaries`' surface rows"}
     ],
     Aqua => [{~w(Supervisor), "the tree the composition root starts"}]
   }

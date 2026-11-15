@@ -55,8 +55,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    BOUNDS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, ROOT, Stack, eventually, expect, owner_of, probe, require_docker,
-    unb64,
+    BOUNDS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, PORT, ROOT, Stack, eventually, expect, owner_of, probe,
+    require_docker, unb64,
 )
 import imagesuite  # noqa: E402
 
@@ -539,7 +539,7 @@ def main():
             read = answer["result"]["content"][0]["text"]
             expect('"ok":false' in read and "EACCES" in read, f"a program in another kept home cannot read {path}", read)
         listening = tcp_listeners(stack)
-        expect(any(port == 4101 for port, _ in listening), "the TCP tables show the service's own listener", listening)
+        expect(any(port == PORT for port, _ in listening), "the TCP tables show the service's own listener", listening)
         expect(not [port for port, owner in listening if owner == uid],
                "nothing of the browser's uid listens on a TCP port", listening)
 
