@@ -639,6 +639,47 @@ defmodule PrismWeb.SchedulesLiveTest do
       assert now.name == params["name"] <> "-p"
     end
 
+    test "a form whose schedule was deleted saves nothing: its id names no other row, and Save answers not found",
+         %{view: view, ctx: ctx, params: params} do
+      gone = made!(view, ctx, params)
+      edit!(view, gone.id)
+
+      {:ok, _} =
+        Opus.Schedules.Provider.handle("schedule", ctx, %{
+          "action" => "delete",
+          "schedule_id" => gone.id
+        })
+
+      # No schedule may take the deleted one's id as its name.
+      assert {:error, {:invalid_argument, said}} =
+               Opus.Schedules.Provider.handle("schedule", ctx, %{
+                 "action" => "create",
+                 "name" => gone.id,
+                 "cron_expression" => "0 0 1 1 *",
+                 "reference" => params["reference"],
+                 "profile_id" => params["profile_id"]
+               })
+
+      assert said =~ "may not begin with sched_ or feed_"
+
+      {:ok, other} =
+        Opus.Schedules.Provider.handle("schedule", ctx, %{
+          "action" => "create",
+          "name" => "other-#{System.unique_integer([:positive])}",
+          "cron_expression" => "0 0 1 1 *",
+          "reference" => params["reference"],
+          "profile_id" => params["profile_id"],
+          "input" => %{"keep" => true}
+        })
+
+      {:ok, before} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), other.schedule_id)
+      render_submit(view, "save", %{params | "name" => "stale-save"})
+
+      assert form_error(view) =~ "not found"
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), other.schedule_id)
+      same_but(before, now, [])
+    end
+
     test "a person who is not the schedule's cannot edit it", %{
       view: view,
       ctx: ctx,

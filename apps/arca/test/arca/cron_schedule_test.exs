@@ -199,6 +199,34 @@ defmodule Arca.CronScheduleTest do
     end
   end
 
+  describe "a name that begins as an id does" do
+    test "is refused at create and at rename, in words, so an id never names a second row",
+         %{actor: actor} do
+      said = ["may not begin with sched_ or feed_, as only an id does"]
+
+      for name <- ["sched_" <> Prima.UUID7.generate(), "feed_rates"] do
+        assert {:error, {:validation, %{name: ^said}}} =
+                 CronSchedule.create(actor, valid_attrs(%{name: name}))
+      end
+
+      {:ok, gone} = CronSchedule.create(actor, valid_attrs())
+      {:ok, _} = CronSchedule.soft_delete(actor, gone.id)
+
+      # The deleted row's id cannot become another row's name.
+      assert {:error, {:validation, %{name: ^said}}} =
+               CronSchedule.create(actor, valid_attrs(%{name: gone.id}))
+
+      {:ok, kept} = CronSchedule.create(actor, valid_attrs())
+
+      assert {:error, {:validation, %{name: ^said}}} =
+               CronSchedule.update(actor, kept.id, %{name: gone.id})
+
+      assert {:error, :not_found} = CronSchedule.get_by_id_or_name(actor, gone.id)
+      assert {:ok, %{name: name}} = CronSchedule.get(actor, kept.id)
+      assert name == kept.name
+    end
+  end
+
   describe "list/2" do
     test "lists all non-deleted schedules in the athanor regardless of creator", %{actor: actor} do
       {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "s1"}))
