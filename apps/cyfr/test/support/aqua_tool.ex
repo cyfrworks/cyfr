@@ -4,7 +4,7 @@
 defmodule Cyfr.Test.AquaTool do
   @moduledoc """
   The `aqua` tool as a test calls it: through the gate on `ctx`'s
-  external plane, its answer deep-stringified, as the AQUA page reads it
+  external plane, its answer deep-stringified, as the Aqua page reads it
   (`PrismWeb.AquaLive.Section.call_aqua/2`).
   """
 

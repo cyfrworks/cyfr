@@ -280,7 +280,7 @@ defmodule PrismWeb.ToolSeamTest do
 
   # The chat's verbs go through the tool surface: the same `thread` and
   # `shared_thread` actions a headless client calls, from the views that
-  # hold them: AQUA's pane and panel for the person's own threads, the chat
+  # hold them: Aqua's pane and panel for the person's own threads, the chat
   # overlay and the shared thread it opens for the threads they share. A
   # card is decided through `approval.resolve`, the one door that carries
   # a standing answer's bounds, as the wire's `approval` tool does. None of

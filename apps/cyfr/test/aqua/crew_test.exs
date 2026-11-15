@@ -344,7 +344,7 @@ defmodule Aqua.CrewTest do
 
     assert Aqua.Ops.render_refusal(refusal) ==
              "planner's brain changed since it was consented to — confirm the change from its " <>
-               "card on the AQUA page"
+               "card on the Aqua page"
 
     assert rows(ctx, room.id) == []
   end

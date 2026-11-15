@@ -128,7 +128,7 @@ defmodule Sanctum.TestContext do
 
   @doc """
   Copy every shipped unit the athanor lacks into `athanor_id` — the
-  shipped AQUA tree and the bundle — without marking it provisioned.
+  shipped Aqua tree and the bundle — without marking it provisioned.
   """
   def shipped!(athanor_id) when is_binary(athanor_id) do
     ctx = Sanctum.Context.internal(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)

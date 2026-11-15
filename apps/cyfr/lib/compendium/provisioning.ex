@@ -4,10 +4,10 @@
 defmodule Compendium.Provisioning do
   @moduledoc """
   Filling an athanor's component athanor: the seed bundle copied into its
-  `components/` and registered as rows, the shipped AQUA tree checked
+  `components/` and registered as rows, the shipped Aqua tree checked
   well-formed and copied into its `aqua/`, the published components the
   bundle depends on pulled from the registry, and the athanor's agents
-  indexed — so the athanor's AQUA answers from the first prompt. The seed
+  indexed — so the athanor's Aqua answers from the first prompt. The seed
   tree is the shipped default: what a release ships later is offered,
   never pushed, and a reset copies it in again.
 
@@ -38,7 +38,7 @@ defmodule Compendium.Provisioning do
 
   A fill is a local half and then a registry half. The local half reads
   and writes only what this server holds: the athanor's roots, the seed
-  bundle copied in and scanned into rows, the shipped AQUA tree, the agent
+  bundle copied in and scanned into rows, the shipped Aqua tree, the agent
   index, and a first consent walk that mints the baseline consent of every
   source the installed bundle can already run. The registry half pulls the
   bundle's published closure, walks the consents again, now with every
@@ -350,7 +350,7 @@ defmodule Compendium.Provisioning do
   Make every provisioned athanor whole against the seed media a release
   shipped — without changing what the athanor chose. A shipped version a
   row names but the tree no longer holds is copied back; an athanor
-  without its shipped soul gets the shipped AQUA tree; the bundle's
+  without its shipped soul gets the shipped Aqua tree; the bundle's
   published dependencies are re-pulled and baseline consents minted for
   any row still without one. Newer shipped versions are NOT copied in:
   they read as available until a person pulls them, so an upgrade never
@@ -447,8 +447,8 @@ defmodule Compendium.Provisioning do
   end
 
   # What the athanor already chose, restored: a shipped version its rows
-  # name but its tree lacks, and the shipped AQUA tree when it holds no
-  # AQUA unit at all. A newer shipped version with no row is left available.
+  # name but its tree lacks, and the shipped Aqua tree when it holds no
+  # Aqua unit at all. A newer shipped version with no row is left available.
   # Each copy is the sync's, published only under its claim and slot.
   defp heal_shipped(ctx, athanor_id, claim) do
     actor = Context.actor(ctx)
@@ -490,18 +490,18 @@ defmodule Compendium.Provisioning do
           case Arca.Overlay.materialize_shipped(Context.actor(ctx), "aqua", claim: fence(claim)) do
             {:ok, copied} ->
               Logger.info(
-                "[Provisioning] #{athanor_id}: copied #{length(copied)} shipped AQUA unit(s)"
+                "[Provisioning] #{athanor_id}: copied #{length(copied)} shipped Aqua unit(s)"
               )
 
             {:error, reason} ->
               Logger.warning(
-                "[Provisioning] #{athanor_id}: AQUA not restored — #{inspect(reason)}"
+                "[Provisioning] #{athanor_id}: Aqua not restored — #{inspect(reason)}"
               )
           end
         end
 
       {:error, reason} ->
-        Logger.warning("[Provisioning] #{athanor_id}: AQUA heal skipped — #{inspect(reason)}")
+        Logger.warning("[Provisioning] #{athanor_id}: Aqua heal skipped — #{inspect(reason)}")
     end
 
     :ok
@@ -569,7 +569,7 @@ defmodule Compendium.Provisioning do
     end
   end
 
-  # The shipped AQUA tree, checked well-formed first (a mount with no soul,
+  # The shipped Aqua tree, checked well-formed first (a mount with no soul,
   # or a soul or crew member that does not parse, fails loud here, at the one
   # moment an operator is watching, instead of as an empty roster later),
   # then copied into the athanor's `aqua/` — every shipped unit it does not

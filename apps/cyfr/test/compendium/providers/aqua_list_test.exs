@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# A store that cannot give the AQUA crew listing; every other read is the
+# A store that cannot give the Aqua crew listing; every other read is the
 # local adapter's.
 defmodule Compendium.Providers.AquaListTest.UnreadableCrew do
   @moduledoc false
@@ -13,7 +13,7 @@ defmodule Compendium.Providers.AquaListTest.UnreadableCrew do
   def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
 end
 
-# A store that refuses the AQUA crew listing with a typed refusal.
+# A store that refuses the Aqua crew listing with a typed refusal.
 defmodule Compendium.Providers.AquaListTest.TypedRefusalCrew do
   @moduledoc false
   use Arca.Storage.TestDouble

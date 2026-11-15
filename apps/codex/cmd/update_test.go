@@ -3135,13 +3135,13 @@ func TestUpdateRefusesBeforeTheLockAndAnyRecovery(t *testing.T) {
 }
 
 // The offline read of a stopped CYFR changes none of its files: the data's
-// owner and mode and the AQUA files stay as they were, since the one-off
+// owner and mode and the Aqua files stay as they were, since the one-off
 // container mounts nothing and skips the entrypoint that seeds and chowns.
 func TestUpdateOfflineReadLeavesTheDataAndAquaAlone(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	s.answer("cyfrps.out", "")
 	s.answer("schema.out", "CYFR_SCHEMA="+schemaOther+"\n")
-	s.edit("aqua/aqua.md", "# the person's own AQUA\n")
+	s.edit("aqua/aqua.md", "# the person's own Aqua\n")
 	before := treeOf(t, s.project)
 	if _, err := s.run(context.Background()); err == nil {
 		t.Fatal("the update of another schema went ahead")

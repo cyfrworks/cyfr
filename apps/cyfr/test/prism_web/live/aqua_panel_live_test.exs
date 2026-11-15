@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.AquaPanelLiveTest do
-  # The person's own AQUA on the desktop: beside the shared thread the
+  # The person's own Aqua on the desktop: beside the shared thread the
   # chat overlay shows, the panel's send lands in You with that thread read
   # into the turn, and an answer pastes back onto it, attributed.
   # The panel itself: what the assistant points at stays in the panel, a
@@ -152,7 +152,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     beside!(view, team)
 
     {panel, _html} = open_panel(view)
-    assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
+    assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your Aqua"] header), "Aqua")
 
     pane = child!(panel, "aqua-panel-pane")
     assert thread_of(pane) == nil
@@ -379,7 +379,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
   test "with no shared thread open beside it the panel reads nothing and sends plainly",
        %{conn: conn, mine: mine, me: me} do
     {panel, _html} = open_panel(desktop!(conn))
-    assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
+    assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your Aqua"] header), "Aqua")
 
     pane = child!(panel, "aqua-panel-pane")
     refute render(pane) =~ "with each message"
@@ -469,7 +469,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     html = intents(pane, you_thread, user, [%{kind: "navigate", to: "/activities?id=req_abc"}])
     refute_push_event(pane, "aqua:intents", %{intents: _})
-    assert html =~ "AQUA points to"
+    assert html =~ "Aqua points to"
     assert html =~ PrismWeb.Focus.path(route(mine), "/activities?id=req_abc")
 
     # The panel is on the thread it was on, and the chat beside it is where
@@ -480,7 +480,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     # Dismissed, it is gone.
     pane |> element(~s(button[phx-click="dismiss_link"])) |> render_click()
-    refute render(pane) =~ "AQUA points to"
+    refute render(pane) =~ "Aqua points to"
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -634,7 +634,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     refute has_element?(panel, "#aqua-panel-button[aria-controls]")
 
     {panel, html} = open_panel(view)
-    assert has_element?(panel, ~s(#aqua-panel-sheet[role="dialog"][aria-label="Your AQUA"]))
+    assert has_element?(panel, ~s(#aqua-panel-sheet[role="dialog"][aria-label="Your Aqua"]))
     # Not modal: the shared thread under it is what the panel reads and
     # pastes into, so nothing claims a focus trap the page does not have —
     # and a click on the page (to scroll it, to select a line) does not
@@ -910,7 +910,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     # The athanor's fill bound a key behind its soul's model, so the empty
     # thread asks for a message and offers no model to connect.
-    assert empty_state(render(pane)) == "Ask AQUA anything."
+    assert empty_state(render(pane)) == "Ask Aqua anything."
     refute render(pane) =~ "A.Q.U.A."
 
     Cyfr.Test.ScriptedWorker.script([model_reply("Hi there")])

@@ -12,7 +12,7 @@ defmodule Cyfr.Bus.SystemStatus do
       no new bytes).
     * `storage_used` and `storage_cap` — the athanor's stored bytes and
       its cap, nil when no cap is set.
-    * `model_connected` — AQUA's own brain can answer.
+    * `model_connected` — Aqua's own brain can answer.
     * `crew_ready` and `crew_total` — the crew members whose brain can
       answer, of all of them.
     * `version` — the running CYFR's version.

@@ -314,7 +314,7 @@ defmodule Aqua.RunnerTest do
     # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =
              Runner.send_message(fresh_ctx, fresh_thread.id, "@aqua hi",
-               agents: [%{"name" => "aqua", "title" => "AQUA"}]
+               agents: [%{"name" => "aqua", "title" => "Aqua"}]
              )
 
     assert [] = Threads.messages(Sanctum.Context.actor(fresh_ctx), fresh_thread.id)

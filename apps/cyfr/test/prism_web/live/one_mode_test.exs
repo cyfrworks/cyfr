@@ -5,7 +5,7 @@ defmodule PrismWeb.OneModeTest do
   @moduledoc """
   One screen: sign-in lands on the desktop, every Dashboard page draws over
   it as an overlay, the desktop is rendered beside the page by the session's
-  root layout rather than routed, the gear, the chat and AQUA stand at the
+  root layout rather than routed, the gear, the chat and Aqua stand at the
   shelf's right end, and no mode switch remains.
   """
 
@@ -80,7 +80,7 @@ defmodule PrismWeb.OneModeTest do
   end
 
   describe "the shelf's right end" do
-    test "holds the gear to the Settings page, the chat and AQUA, the desktop's own",
+    test "holds the gear to the Settings page, the chat and Aqua, the desktop's own",
          %{conn: conn, athanor: athanor} do
       {view, html} = mount_desktop(conn)
 

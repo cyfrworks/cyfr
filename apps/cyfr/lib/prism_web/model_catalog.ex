@@ -22,7 +22,7 @@ defmodule PrismWeb.ModelCatalog do
   @timeout_ms 60_000
 
   # Short: long enough that switching threads does not run the listing
-  # again, short enough that a key bound on the AQUA page shows in the
+  # again, short enough that a key bound on the Aqua page shows in the
   # picker within the minute even where nothing calls `forget/1`.
   @ttl_ms :timer.minutes(1)
 

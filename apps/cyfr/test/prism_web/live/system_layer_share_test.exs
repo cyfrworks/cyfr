@@ -95,7 +95,7 @@ defmodule PrismWeb.SystemLayerShareTest do
 
       newcomers =
         "You administer this CYFR, so a key you share with everyone is also what each new " <>
-          "person's AQUA uses when it fits"
+          "person's Aqua uses when it fits"
 
       none = %{"person_daily" => "", "total_daily" => ""}
       everyone = Map.put(none, "audience", "everyone")

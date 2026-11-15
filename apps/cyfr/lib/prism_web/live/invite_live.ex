@@ -110,7 +110,7 @@ defmodule PrismWeb.InviteLive do
         <div class="text-center space-y-3">
           <img
             src={~p"/images/logo.jpg"}
-            alt="AQUA"
+            alt="Aqua"
             class="h-14 w-14 rounded-full mx-auto ring-2 ring-indigo-400/30"
           />
           <h1 class="text-2xl font-bold tracking-tight text-indigo-200">

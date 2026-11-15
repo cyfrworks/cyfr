@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# A store that cannot give the AQUA crew listing; every other read is the
+# A store that cannot give the Aqua crew listing; every other read is the
 # local adapter's.
 defmodule PrismWeb.AquaLiveTest.UnreadableCrew do
   @moduledoc false
@@ -14,7 +14,7 @@ defmodule PrismWeb.AquaLiveTest.UnreadableCrew do
 end
 
 defmodule PrismWeb.AquaLiveTest do
-  # The AQUA page shows the tree of the person's own athanor, and every
+  # The Aqua page shows the tree of the person's own athanor, and every
   # write lands there through the `aqua` and `notes` tools. These drive the LiveView
   # itself: a test of the tool alone cannot catch a handler that reads
   # the wrong context or a card that offers a verb the tool refuses.
@@ -330,7 +330,7 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
 
       # A soul with no tools, so the member's closure is its brain alone.
-      :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), "---\ntitle: AQUA\n---\n\nsoul\n")
+      :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), "---\ntitle: Aqua\n---\n\nsoul\n")
 
       :ok =
         Arca.put(
@@ -694,7 +694,7 @@ defmodule PrismWeb.AquaLiveTest do
     test "the first paint is the frame and its spinner — no empty state the load has not earned",
          %{conn: conn} do
       html = conn |> get(athanor_path("/aqua")) |> html_response(200)
-      assert html =~ "Loading AQUA…"
+      assert html =~ "Loading Aqua…"
 
       for line <- [
             "No soul here",

@@ -390,7 +390,7 @@ def main():
                "a read the box could not answer after the allow answers provider_error, which the loop does not "
                "retry, saying the session was interrupted", output)
         expect(output["error"].get("session") == session,
-               "the refusal carries the session, which the next message names as AQUA keeps it", output)
+               "the refusal carries the session, which the next message names as Aqua keeps it", output)
         expect([op for op, _ in bridge.calls if op == "close"] == ["close"]
                and [line["type"] for line in sent] == ["control_response"],
                "the session is closed, the allow sent once and nothing else", [bridge.calls, sent])

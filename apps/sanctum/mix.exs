@@ -66,7 +66,7 @@ defmodule Sanctum.MixProject do
       {:plug, "~> 1.14"},
       # The company sign-in's OpenID Connect issuer: the provider
       # configuration worker its exchange names (`Sanctum.Auth.OIDC.Oidcc`).
-      {:ueberauth_oidcc, "~> 0.4.2"},
+      {:ueberauth_oidcc, "~> 0.5.0"},
       # The OAuth token exchange's HTTP.
       {:finch, "~> 0.19"},
       {:req, "~> 0.5"},

@@ -1,0 +1,45 @@
+{
+  "name": "canvas",
+  "type": "tincture",
+  "version": "0.6.3",
+  "publisher": "local",
+  "description": "Your canvas: the day in one sentence, what needs your attention grouped by cause with a grant where one fixes it, your recent runs, each failure with who started it and Retry where a schedule or a feed started it, your apps, and your schedules with the week ahead, each one paused or resumed with a tap; hide a section and show it again; and the first steps, each hidden with a tap and offered again from Getting started.",
+  "tags": ["canvas", "system"],
+  "category": "utility",
+  "tincture": {
+    "icon": "canvas",
+    "tagline": "Your day, your runs, your apps and schedules",
+    "entry": "dist/index.html",
+    "build": {
+      "tool": "vite"
+    },
+    "desktop": {
+      "data": ["runs.changes", "schedules.changes", "schedule_runs.changes"],
+      "controls": [
+        {
+          "id": "pause-schedule",
+          "label": "Pause",
+          "operation": "schedule.pause",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        },
+        {
+          "id": "resume-schedule",
+          "label": "Resume",
+          "operation": "schedule.resume",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        },
+        {"id": "retry-run", "label": "Retry", "operation": "execution.retry", "args": {}, "pick": {"stream": "runs.changes", "field": "/execution_id", "arg": "execution_id"}}
+      ],
+      "prefs": {
+        "widgets": {
+          "attention": {},
+          "runs": {},
+          "apps": {},
+          "schedules": {}
+        },
+        "desktop": {"fields": {"hide_aqua_setup": {"type": "boolean"}, "hide_desktops": {"type": "boolean"}}}
+      },
+      "chrome": "chrome.css"
+    }
+  }
+}

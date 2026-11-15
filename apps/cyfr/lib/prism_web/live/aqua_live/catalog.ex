@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.AquaLive.Catalog do
   @moduledoc """
-  Pure data transforms behind the AQUA page: the tool/action catalog the
+  Pure data transforms behind the Aqua page: the tool/action catalog the
   capability matrix renders, kind classification, and the model-picker
   value codec. No `socket`, no markup.
   """
@@ -21,7 +21,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   be ticked, proposed, approved, and then refused at the call. Those live on
   their own pages, where the person does them as themselves.
 
-  Returns `[{tool, [{action, kind}]}]` merged across MCP tools, AQUA
+  Returns `[{tool, [{action, kind}]}]` merged across MCP tools, Aqua
   virtual tools, and external server tools. Every entry has a kind atom
   (`:read | :write | :execute | :destructive`) sourced from
   `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).

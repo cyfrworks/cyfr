@@ -57,12 +57,12 @@
   "examples": [
     {
       "name": "Chat (model/chat@1)",
-      "description": "One turn: the newest message starts a turn on OpenAI Codex's thread, after the thread's history when the thread is new, its reply streams as contract events, and the response names the session the next turn continues",
+      "description": "One turn: the newest message starts a turn on OpenAI Codex's thread, its reply streams as contract events, and the response names the session the next turn continues",
       "input": {
         "operation": "chat",
         "params": {
           "model": "default",
-          "system": "You are a crew member of this athanor's AQUA.",
+          "system": "You are a crew member of this athanor's Aqua.",
           "messages": [
             {
               "role": "user",

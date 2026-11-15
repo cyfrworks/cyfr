@@ -3,7 +3,7 @@
 
 defmodule Prima.AgentRef do
   @moduledoc """
-  The AQUA agent as a consent source ref: `agent:local.<name>`.
+  The Aqua agent as a consent source ref: `agent:local.<name>`.
 
   An agent is a source node like any component's — it plans, consents,
   activates and loads through the same machinery — so the identity domain

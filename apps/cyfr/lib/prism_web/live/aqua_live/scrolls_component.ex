@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.AquaLive.ScrollsComponent do
   @moduledoc """
-  The scrolls AQUA can read on demand — Agent Skills under
+  The scrolls Aqua can read on demand — Agent Skills under
   `aqua/skills/<name>/SKILL.md` — listed, read, written and removed
   through the `aqua` tool. A write changes a scroll's provenance, which
   the page reads for every section at once, so a write here asks the page
@@ -221,7 +221,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
     <div id="aqua-scrolls-section" phx-target={@myself}>
       <.section_flash flash={@flash} target={@myself} />
 
-      <%!-- The scrolls: what AQUA can read on demand. --%>
+      <%!-- The scrolls: what Aqua can read on demand. --%>
       <details
         :if={@loaded}
         id="aqua-scrolls"
@@ -234,10 +234,10 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
         <div class="border-t border-gray-800 px-4 py-2 space-y-2">
           <div class="flex items-center justify-between gap-2">
             <p :if={@skills == []} class="text-xs text-gray-600">
-              No scrolls here. AQUA can write one when it learns a way of working worth keeping — or you can.
+              No scrolls here. Aqua can write one when it learns a way of working worth keeping — or you can.
             </p>
             <p :if={@skills != []} class="text-xs text-gray-600">
-              A way of working AQUA reads when the task calls for it.
+              A way of working Aqua reads when the task calls for it.
             </p>
             <button
               :if={@skill_editor == nil}
@@ -288,7 +288,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
               type="text"
               name="description"
               value={@skill_editor.description}
-              placeholder="One line: when AQUA should read this"
+              placeholder="One line: when Aqua should read this"
               required
               class="w-full rounded bg-gray-900 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500"
             />

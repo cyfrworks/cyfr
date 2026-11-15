@@ -146,9 +146,9 @@ defmodule PrismWeb.LegalLive do
           Whoever runs the machine this CYFR runs on can read what it keeps there: your files,
           your vault's values and your messages among them. The people of a thread see its
           messages, and leaving a thread does not take yours out of it. A key someone shares
-          with you is used for you and never shown to you. Your questions and the context AQUA
+          with you is used for you and never shown to you. Your questions and the context Aqua
           uses to answer them, including other people's words it reads in shared threads, go to
-          the model provider whose key AQUA uses. The policy below is {@publisher || "the registry"}'s, for your account
+          the model provider whose key Aqua uses. The policy below is {@publisher || "the registry"}'s, for your account
           and the components you publish there.
         </p>
       </section>

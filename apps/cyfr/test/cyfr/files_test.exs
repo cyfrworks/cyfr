@@ -653,7 +653,7 @@ defmodule Arca.FilesTest do
              Files.read(actor, "aqua/crew/scribe.md")
 
     assert {:error, {:invalid_argument, msg}} = Files.write(actor, "aqua/crew/notes.txt", "x")
-    assert msg =~ "outside any AQUA unit"
+    assert msg =~ "outside any Aqua unit"
 
     assert {:error, {:invalid_argument, _}} =
              Files.write(actor, "aqua/crew/scribe.md/inner.txt", "x")

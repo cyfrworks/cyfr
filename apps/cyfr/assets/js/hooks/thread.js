@@ -4,7 +4,7 @@
 // Thread pane hook — keyboard shortcuts and server-pushed intents.
 //
 // Mounted on a pane's root <section>, the pane inside the person's own
-// AQUA panel. Everything here is scoped to this pane:
+// Aqua panel. Everything here is scoped to this pane:
 //
 // - Cmd+. (Ctrl+. elsewhere) halts the running turn of the pane that has
 //   focus. The listener sits on the pane, not the window; the section
@@ -77,7 +77,7 @@ const Thread = {
         try {
           this._dispatchIntent(intent)
         } catch (err) {
-          console.warn("[AQUA] intent dispatch failed", intent, err)
+          console.warn("[Aqua] intent dispatch failed", intent, err)
         }
       }
     })
@@ -102,7 +102,7 @@ const Thread = {
         }
         break
       default:
-        console.warn("[AQUA] unknown intent kind", intent)
+        console.warn("[Aqua] unknown intent kind", intent)
     }
   },
 

@@ -57,12 +57,12 @@
   "examples": [
     {
       "name": "Chat (model/chat@1)",
-      "description": "One turn: the newest message goes to the harness's session, after the thread's history when the session is new, its reply streams as contract events, and the response names the session the next turn continues",
+      "description": "One turn: the newest message goes to the harness's session, its reply streams as contract events, and the response names the session the next turn continues",
       "input": {
         "operation": "chat",
         "params": {
           "model": "claude-opus-5-5",
-          "system": "You are a crew member of this athanor's AQUA.",
+          "system": "You are a crew member of this athanor's Aqua.",
           "messages": [
             {
               "role": "user",

@@ -12,7 +12,7 @@ defmodule PrismWeb.ShellDesktopTest do
   on CYFR's preview and runs only once they approve it; a write
   of its preferences goes over the revision the frame holds, a stale one
   answered with the current document; the visible desktop's chrome is
-  worn and taken off; `ask` opens AQUA's panel with Prism's sentence;
+  worn and taken off; `ask` opens Aqua's panel with Prism's sentence;
   `settings` opens one of Prism's pages; and `open` carries a subject the
   app declares.
   """
@@ -1103,7 +1103,7 @@ defmodule PrismWeb.ShellDesktopTest do
       :ok
     end
 
-    test "ask opens AQUA with Prism's sentence naming a declared widget and the desktop, and nothing else",
+    test "ask opens Aqua with Prism's sentence naming a declared widget and the desktop, and nothing else",
          %{conn: conn} do
       view = shell!(conn)
       main = canvas(view).id
@@ -1171,7 +1171,7 @@ defmodule PrismWeb.ShellDesktopTest do
       assert has_element?(view, ~s(#shell-devices[title="Your devices"]))
     end
 
-    test "settings of aqua, an approval's destination, opens AQUA's panel in place",
+    test "settings of aqua, an approval's destination, opens Aqua's panel in place",
          %{conn: conn} do
       view = shell!(conn)
       main = canvas(view).id
@@ -1207,10 +1207,10 @@ defmodule PrismWeb.ShellDesktopTest do
       assert %{id: ^main, state: :live} = canvas(view)
     end
 
-    test "settings of aqua with a ref opens AQUA's panel at that thread of the person's own, and at its kept one otherwise",
+    test "settings of aqua with a ref opens Aqua's panel at that thread of the person's own, and at its kept one otherwise",
          %{conn: conn, ctx: ctx, user: user} do
       {:ok, plans} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx), %{title: "Plans"})
-      {:ok, theirs} = Sanctum.SharedThreads.create(user.user_id, "Shared, not AQUA's")
+      {:ok, theirs} = Sanctum.SharedThreads.create(user.user_id, "Shared, not Aqua's")
       view = shell!(conn)
       main = canvas(view).id
       panel = find_live_child(view, "aqua-panel")
@@ -1223,7 +1223,7 @@ defmodule PrismWeb.ShellDesktopTest do
       assert %{id: id} = :sys.get_state(panel.pid).socket.assigns.thread
       assert id == plans.id
 
-      # A shared thread is not one of the person's own with AQUA: the
+      # A shared thread is not one of the person's own with Aqua: the
       # panel stays at the thread it holds.
       verb!(view, main, :settings, %{"page" => "aqua", "ref" => theirs.id})
       _ = render(view)

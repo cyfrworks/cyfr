@@ -5,7 +5,7 @@ defmodule Compendium.GuideProtocolDriftTest do
   @moduledoc """
   The guides are not just documentation — `integration-guide.md`,
   `component-guide.md` and `tincture-guide.md` are compiled into
-  `Compendium.Providers.Aqua` as `@external_resource` and served to the AQUA agent
+  `Compendium.Providers.Aqua` as `@external_resource` and served to the Aqua agent
   as its reference material.
 
   Validate guide samples against the server protocol so copied requests are accepted.

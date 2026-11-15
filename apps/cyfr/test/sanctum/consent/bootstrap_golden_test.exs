@@ -83,7 +83,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   end
 
   # The athanor filled as a fill fills it: the bundle copied in and the
-  # scan minting its rows, the AQUA tree copied in and indexed.
+  # scan minting its rows, the Aqua tree copied in and indexed.
   defp fill!(athanor_id) do
     ctx = Sanctum.Context.internal(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
     {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")

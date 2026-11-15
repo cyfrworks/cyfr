@@ -7,7 +7,7 @@ defmodule PrismWeb.ChatOverlayLiveTest do
   its control on the shelf with the count of threads holding unread
   messages, the person's pairs and shared threads opened in place under
   their seat, the sharing acts in CYFR's own code, the read mark moved while
-  a thread is shown, the thread in view told to AQUA's panel, and no frame.
+  a thread is shown, the thread in view told to Aqua's panel, and no frame.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -296,7 +296,7 @@ defmodule PrismWeb.ChatOverlayLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the thread the overlay shows is told to AQUA by its id and title, and nothing once it closes",
+  test "the thread the overlay shows is told to Aqua by its id and title, and nothing once it closes",
        %{conn: conn, alice: alice} do
     {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
     {view, feed} = mount_chat(conn)

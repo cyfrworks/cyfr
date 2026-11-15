@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// The AQUA panel's hooks (PrismWeb.AquaPanelLive). The placement math is
+// The Aqua panel's hooks (PrismWeb.AquaPanelLive). The placement math is
 // geometry.js's; these only wire the pointer, the keyboard and the window
 // to it and draw the result.
 //

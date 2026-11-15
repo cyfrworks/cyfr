@@ -278,7 +278,7 @@ config :cyfr, database_checks_enabled: false
 # lifetimes", Arca.Storage): `base_path` holds all tenant storage, and the
 # seed tree starts with an empty bundle so no test sees one it did not
 # write. A root outside the run's own directory would make tests read or
-# write the repo's own trees. test_helper.exs copies the shipped AQUA
+# write the repo's own trees. test_helper.exs copies the shipped Aqua
 # template into the throwaway seed tree — it is only ever read in place
 # through the overlay. test_helper.exs removes both roots after the suite.
 config :arca,

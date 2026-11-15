@@ -11,7 +11,7 @@ defmodule Aqua.Crew.Activity do
   only a member's child thread opens one (`Aqua.Runner.Admission`). It is
   its `member`, who it was `asked_by` (a person by the name a reader
   outside CYFR may see, `Sanctum.Tenancy.Users.public_name/1`; the soul
-  as AQUA; another agent by its name), its `title` (the one `crew.ask`
+  as Aqua; another agent by its name), its `title` (the one `crew.ask`
   kept on the request that opened the turn, `Aqua.Crew.ask/2`, or nil),
   `since` it was accepted, and its `status` (`Prima.TurnState`). Never the
   task's text, a person's id or an address.
@@ -126,7 +126,7 @@ defmodule Aqua.Crew.Activity do
   defp asked_by(%{sent_by: sent_by} = turn) when is_binary(sent_by) do
     cond do
       sent_by == Admission.person() -> Users.public_name(turn.requested_by)
-      Prima.AgentRef.soul?(sent_by) -> "AQUA"
+      Prima.AgentRef.soul?(sent_by) -> "Aqua"
       true -> sent_by
     end
   end

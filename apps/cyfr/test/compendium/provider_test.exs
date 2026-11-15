@@ -11,7 +11,7 @@ defmodule Compendium.ProviderTest do
 
   @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
 
-  # The athanor's own AQUA definitions live under its tenant storage —
+  # The athanor's own Aqua definitions live under its tenant storage —
   # agent files that shadow the throwaway seed's per-file, so these
   # tests read exactly this fixture whatever the shipped template says.
   # Written through the facade so each shadowing write records its origin

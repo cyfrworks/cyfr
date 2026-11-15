@@ -428,7 +428,7 @@ defmodule Aqua.StreamsTest do
 
       {:ok, _} = job!(ada, scout, "scout", "aqua")
       assert_receive %CrewActivity{member: "scout"} = by_soul
-      assert %{"asked_by" => "AQUA"} = read_as(by_soul)
+      assert %{"asked_by" => "Aqua"} = read_as(by_soul)
 
       {:ok, _} = job!(ada, planner, "planner", "scout")
       assert_receive %CrewActivity{member: "planner"} = by_member
@@ -529,7 +529,7 @@ defmodule Aqua.StreamsTest do
 
       assert [
                %{"kind" => "started", "member" => "planner", "asked_by" => "Ada"},
-               %{"kind" => "started", "member" => "scout", "asked_by" => "AQUA"}
+               %{"kind" => "started", "member" => "scout", "asked_by" => "Aqua"}
              ] = wired
 
       assert Enum.all?(wired, &(&1["status"] == "accepted"))

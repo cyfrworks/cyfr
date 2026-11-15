@@ -179,7 +179,7 @@ func ReplaceFile(name string, data []byte, mode os.FileMode) error {
 	return os.Rename(tmp.Name(), name)
 }
 
-// The AQUA files the scaffold ships and owns, so `cyfr update` refreshes
+// The Aqua files the scaffold ships and owns, so `cyfr update` refreshes
 // them with each release: the soul at aqua/aqua.md, the shipped crew at
 // aqua/crew/<name>.md, and every file under a shipped scroll's directory
 // aqua/skills/<name>/. Each kind is an explicit roster of the names the
@@ -210,7 +210,7 @@ const (
 	scrollsDir = "aqua/skills"
 )
 
-// isManagedAqua reports whether path is one of the AQUA files the scaffold
+// isManagedAqua reports whether path is one of the Aqua files the scaffold
 // ships: the soul, a shipped crew member, or a file inside a shipped scroll.
 func isManagedAqua(path string) bool {
 	if path == aquaSoul {
@@ -265,7 +265,7 @@ var Guides = []string{
 
 // IsManaged returns true for files that are maintained by cyfr and should be
 // overwritten during an update (guides, WIT interface definitions, the
-// keeper's seccomp profile, and the shipped AQUA soul, crew and scrolls).
+// keeper's seccomp profile, and the shipped Aqua soul, crew and scrolls).
 // It is the one policy for what `cyfr update` overwrites, snapshots and
 // `cyfr restore` puts back.
 func IsManaged(path string) bool {
@@ -276,7 +276,7 @@ func IsManaged(path string) bool {
 	if strings.HasPrefix(path, "wit/") || path == "wit" {
 		return true
 	}
-	// The shipped AQUA files are managed; a member's own crew files and
+	// The shipped Aqua files are managed; a member's own crew files and
 	// scrolls are preserved.
 	return isManagedAqua(path)
 }

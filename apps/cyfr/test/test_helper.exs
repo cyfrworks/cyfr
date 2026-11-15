@@ -59,7 +59,7 @@ Cyfr.Test.Settings.install!()
 # that stops it (`Cyfr.Test.HTTPStub`).
 Cyfr.Test.HTTPStub.serve!()
 
-# The storage roots (with a copy of the shipped AQUA template in the
+# The storage roots (with a copy of the shipped Aqua template in the
 # throwaway seed tree, so template reads stay real without the suite
 # touching the repo's own seed/), the schema check, the sandbox mode and
 # the seeded athanors, as every database app's suite has them.

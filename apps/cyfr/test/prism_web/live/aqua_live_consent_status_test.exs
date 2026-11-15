@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.AquaLiveConsentStatusTest do
   @moduledoc """
-  What the AQUA page says about consent: a row and a re-consent button per
+  What the Aqua page says about consent: a row and a re-consent button per
   source whose consent no longer answers, nothing when none drifted, and
   — when the status could not be read — one line that says so and offers
   nothing to press. An outage never reads as "all consents current".
@@ -60,7 +60,7 @@ end
 
 defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
   @moduledoc """
-  The consent the AQUA page asks for (`open_consent`, which its
+  The consent the Aqua page asks for (`open_consent`, which its
   re-consent rows and its setup's steps both send) opens on the plan's
   suggestion: the model's one key is bound before the person does
   anything, and that is what the grant commits.

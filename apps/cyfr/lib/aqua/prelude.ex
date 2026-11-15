@@ -14,7 +14,7 @@ defmodule Aqua.Prelude do
 
   ---
 
-  ## AQUA Shell Control
+  ## Aqua Shell Control
 
   When the person asks you to change the interface, or you want to bring
   something on screen, call the `ui` tool with one intent. Guidelines:

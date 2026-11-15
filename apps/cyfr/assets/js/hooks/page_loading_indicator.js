@@ -9,7 +9,7 @@
 // slow routes, long enough that a 30ms transition doesn't flash.
 //
 // The same events fire for human-driven <.link navigate> clicks AND for the
-// data-phx-link anchors that the AQUA intent dispatcher synthesizes, so this
+// data-phx-link anchors that the Aqua intent dispatcher synthesizes, so this
 // one hook covers both.
 
 const GRACE_MS = 120
