@@ -356,19 +356,12 @@ defmodule Opus.Programs.Terminal do
   end
 
   # What the program wrote is an `Output` from the moment it enters this
-  # process (the reader hands nothing else), in its state and in every
-  # message it handles, so no status, debug log or crash report has a
-  # byte of it to print. The words the program was started with are the
-  # person's, and are left out too.
+  # process (the reader hands nothing else), and the words it was started
+  # with are `Opus.Programs.Words` from the gate on, in its state and in
+  # every message it handles, so no status, debug log or crash report has
+  # a byte or a word of either to print.
   @impl true
-  def format_status(status) do
-    status
-    |> Map.new(fn
-      {:state, %{} = state} -> {:state, %{state | argv: :redacted}}
-      other -> other
-    end)
-    |> Opus.Programs.StatusRedaction.format_status()
-  end
+  def format_status(status), do: Opus.Programs.StatusRedaction.format_status(status)
 
   # ---------------------------------------------------------------------------
 

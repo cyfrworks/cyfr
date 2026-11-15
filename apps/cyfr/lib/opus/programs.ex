@@ -302,7 +302,8 @@ defmodule Opus.Programs do
   row must be an enabled program; `args` are at most
   #{Prima.LocusBackends.max_argv()} words a person typed, each a string of
   at most 4096 bytes without a NUL, and never anything resolved from a
-  vault. Answers the session's id once the service runs it, by
+  vault, as an `Opus.Programs.Words` (a plain list is wrapped here), which
+  the session holds wrapped. Answers the session's id once the service runs it, by
   `deadline` (Unix milliseconds, #{div(60_000, 1000)} s from now unless
   given): past it the start is refused `:deadline`, the box closes
   whatever the service answers later, and a new start can be made at
@@ -314,7 +315,7 @@ defmodule Opus.Programs do
   @spec start(Sanctum.Context.t(), String.t(), %{
           required(:rows) => pos_integer(),
           required(:cols) => pos_integer(),
-          required(:args) => [String.t()],
+          required(:args) => Opus.Programs.Words.t() | [String.t()],
           required(:by) => :person | :aqua,
           optional(:deadline) => integer()
         }) :: {:ok, String.t()} | {:error, term()}
@@ -324,6 +325,8 @@ defmodule Opus.Programs do
         %{rows: rows, cols: cols, args: args, by: by} = opts
       )
       when is_binary(row_id) and by in [:person, :aqua] do
+    args = Opus.Programs.Words.new(args)
+
     with {:ok, {athanor_id, user_id} = person} <- person(ctx) |> no_stranger(),
          :ok <- size(rows, cols),
          :ok <- args(args),
@@ -575,13 +578,11 @@ defmodule Opus.Programs do
       else: {:error, :invalid_size}
   end
 
-  defp args(args) when is_list(args) do
+  defp args(%Opus.Programs.Words{list: args}) when is_list(args) do
     if length(args) <= Prima.LocusBackends.max_argv() and Enum.all?(args, &arg?/1),
       do: :ok,
       else: {:error, :invalid_args}
   end
-
-  defp args(_args), do: {:error, :invalid_args}
 
   defp arg?(arg),
     do:

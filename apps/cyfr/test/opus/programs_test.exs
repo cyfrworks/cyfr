@@ -1316,7 +1316,7 @@ defmodule Opus.ProgramsTest do
       {:ok, answer} =
         Opus.Programs.Session.open(
           grant,
-          Map.merge(size, %{program: "program", home_id: home_id, key: "k", mode: mode, argv: []})
+          Map.merge(size, %{program: "program", home_id: home_id, key: "k", mode: mode})
         )
 
       answer

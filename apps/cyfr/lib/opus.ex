@@ -50,6 +50,7 @@ defmodule Opus do
       Programs.Definition,
       Programs.Session,
       Programs.StatusRedaction,
+      Programs.Words,
       Schedules.Scheduler,
       Supervisor
     ],

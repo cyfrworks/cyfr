@@ -847,6 +847,79 @@ defmodule Opus.Programs.TerminalTest do
     end
   end
 
+  # The words after a program's command were redacted only at the top of
+  # the terminal's own state: its debug log kept them in every earlier
+  # state, and the box held them in each open it had in flight.
+  describe "the words a program starts with are printed nowhere" do
+    @words_secret "review-private-argv-c840"
+
+    test "a terminal's status with its debug log on, and its crash, print none of them",
+         %{ctx: ctx, row: row} do
+      {id, _session} = start!(ctx, row, %{args: ["login", "--password", @words_secret]})
+      pid = terminal(id)
+      :ok = :sys.log(pid, true)
+      assert :ok = Programs.keep(ctx, id, true)
+
+      status = inspect(:sys.get_status(pid), limit: :infinity, printable_limit: :infinity)
+      refute status =~ @words_secret
+      assert status =~ "#Opus.Programs.Words<3 words>"
+
+      ref = Process.monitor(pid)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :error], fn ->
+          send(pid, {:EXIT, self(), :boom})
+          assert_receive {:DOWN, ^ref, :process, _pid, :boom}, 5_000
+          Process.sleep(200)
+        end)
+
+      assert log =~ "terminating"
+      refute log =~ @words_secret
+    end
+
+    test "the box's status and a crash of its callback, with the open in flight, print " <>
+           "none of them",
+         %{ctx: ctx, row: row, fake: fake} do
+      box = GenServer.whereis(Programs.via("local"))
+      :ok = :sys.log(box, true)
+      Scripted.hold(fake, "opened", 5_000)
+
+      start =
+        Task.async(fn ->
+          Programs.start(ctx, row.id, %{
+            rows: 24,
+            cols: 80,
+            args: ["login", "--password", @words_secret],
+            by: :person
+          })
+        end)
+
+      assert_receive {:session, "open", %{"argv" => ["login", "--password", @words_secret]}, _},
+                     2_000
+
+      eventually(fn -> :sys.get_state(box).opens != %{} end, "the open to be in flight")
+      state = :sys.get_state(box)
+      [{ref, %{params: %{argv: %Opus.Programs.Words{}}}}] = Map.to_list(state.opens)
+
+      status = inspect(:sys.get_status(box), limit: :infinity, printable_limit: :infinity)
+      refute status =~ @words_secret
+      assert status =~ "#Opus.Programs.Words<3 words>"
+
+      # The callback that settles the open, raising on an answer it cannot
+      # read, as a crash report would print it: its arguments carry the
+      # state, the open's words in it.
+      {_kind, _reason, stack} =
+        try do
+          apply(Opus.Programs.Box, :handle_info, [{:session_opened, ref, :unreadable}, state])
+        catch
+          kind, reason -> {kind, reason, __STACKTRACE__}
+        end
+
+      refute inspect(stack, limit: :infinity, printable_limit: :infinity) =~ @words_secret
+      assert {:ok, "trm_" <> _} = Task.await(start, 10_000)
+    end
+  end
+
   describe "nothing it carries is printed" do
     test "its status and an inspect of its output show sizes, never bytes", %{
       ctx: ctx,
