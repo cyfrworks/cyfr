@@ -625,8 +625,14 @@ defmodule PrismWeb.ProgramsLiveTest do
   # What the page hands the frame next, which the frame then says it drew,
   # as its hook does once xterm has written it.
   defp output!(view, session) do
-    assert_push_event(view, "terminal_output", %{session: ^session, data: data}, 2_000)
-    render_hook(view, "terminal_written", %{"session" => session})
+    assert_push_event(
+      view,
+      "terminal_output",
+      %{session: ^session, delivery: delivery, data: data},
+      2_000
+    )
+
+    render_hook(view, "terminal_written", %{"session" => session, "delivery" => delivery})
     Base.decode64!(data)
   end
 
@@ -819,7 +825,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute inspect(terminated, limit: :infinity, printable_limit: :infinity) =~ canary
 
     # The chunk as the page receives it prints as its size.
-    message = {Opus.Programs, session, {:bytes, Opus.Programs.Output.new(canary)}}
+    message = {Opus.Programs, session, {:bytes, 1, Opus.Programs.Output.new(canary)}}
     refute inspect(message, limit: :infinity, printable_limit: :infinity) =~ canary
 
     # A call the page does not take (it defines no handle_call) crashes it;

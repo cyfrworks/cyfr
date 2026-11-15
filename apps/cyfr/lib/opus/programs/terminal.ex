@@ -20,20 +20,23 @@ defmodule Opus.Programs.Terminal do
 
   Any number of processes attach to it (`attach/3`), each monitored:
   each is answered the last #{div(256 * 1024, 1024)} KiB of output and the
-  terminal's size, then hears `{Opus.Programs, id, {:bytes, output}}`
-  for what the program writes and `{Opus.Programs, id, {:ended, reason}}`
-  once. A detach, or an attached process's exit, ends nothing.
+  terminal's size, then hears `{Opus.Programs, id, {:bytes, delivery,
+  output}}` for what the program writes, each delivery numbered for it,
+  and `{Opus.Programs, id, {:ended, reason}}` once. A detach, or an
+  attached process's exit, ends nothing.
 
   Nothing a program prints can grow memory here without bound. The
   reader asks the service for the next output only once this process has
   taken the last, so what a program prints faster than it is taken waits
   in the service's own bounded buffer, which drops its oldest. An
   attached process is handed the next output only once it has said it
-  took the last (`Opus.Programs.taken/2`, which a page says once its
-  browser has drawn it); what comes meanwhile is kept for it, at most the
-  last #{div(256 * 1024, 1024)} KiB, and handed whole as
-  `{Opus.Programs, id, {:tail, output}}` when more than that came, which
-  replaces what it shows. Its end reaches it whatever it owes.
+  took the last by its number (`Opus.Programs.taken/3`, which a page says
+  once its browser has drawn it), so one delivery at most is ever
+  unacknowledged for it, whatever it sends; what comes meanwhile is kept
+  for it, at most the last #{div(256 * 1024, 1024)} KiB, and handed whole
+  as `{Opus.Programs, id, {:tail, delivery, output}}` when more than that
+  came, which replaces what it shows. Its end reaches it whatever it
+  owes.
 
   It ends, and only then:
 
@@ -145,7 +148,7 @@ defmodule Opus.Programs.Terminal do
     if yours?(state, person) do
       subscribers =
         Map.put_new_lazy(state.subscribers, pid, fn ->
-          %{monitor: Process.monitor(pid), ready: true, pending: nil, lost: false}
+          %{monitor: Process.monitor(pid), outstanding: nil, sent: 0, pending: nil, lost: false}
         end)
 
       state = state |> Map.put(:subscribers, subscribers) |> idle() |> changed()
@@ -157,13 +160,20 @@ defmodule Opus.Programs.Terminal do
     end
   end
 
-  # An attached process took what it was handed last: it is handed what
-  # came since, or the next output when nothing did.
-  def handle_call({:taken, person, pid}, _from, state) do
+  # An attached process took the delivery it names: when that is the one
+  # outstanding for it, it is handed what came since, or the next output
+  # when nothing did. Any other number, repeated or never sent, changes
+  # nothing, so one delivery at most is ever unacknowledged per process.
+  def handle_call({:taken, person, pid, delivery}, _from, state) do
     case state.subscribers do
-      %{^pid => subscriber} ->
+      %{^pid => %{outstanding: ^delivery} = subscriber} when is_integer(delivery) ->
         if yours?(state, person),
           do: {:reply, :ok, put_in(state.subscribers[pid], hand(state, pid, subscriber))},
+          else: {:reply, {:error, :not_found}, state}
+
+      %{^pid => _subscriber} ->
+        if yours?(state, person),
+          do: {:reply, :ok, state},
           else: {:reply, {:error, :not_found}, state}
 
       _not_attached ->
@@ -417,10 +427,8 @@ defmodule Opus.Programs.Terminal do
   # An attached process that took what it was handed last is handed this
   # output now; one that has not keeps it, with what came before it, the
   # last #{div(256 * 1024, 1024)} KiB of them at most.
-  defp offer(state, pid, %{ready: true} = subscriber, bytes) do
-    send(pid, {Opus.Programs, state.id, {:bytes, Output.new(bytes)}})
-    %{subscriber | ready: false}
-  end
+  defp offer(state, pid, %{outstanding: nil} = subscriber, bytes),
+    do: deliver(state, pid, subscriber, :bytes, Output.new(bytes))
 
   defp offer(_state, _pid, subscriber, bytes) do
     kept = if subscriber.pending, do: subscriber.pending.bytes <> bytes, else: bytes
@@ -437,12 +445,19 @@ defmodule Opus.Programs.Terminal do
 
   # What a process that took the last output is handed: what came since,
   # as the tail when some of it was let go, or nothing until more comes.
-  defp hand(_state, _pid, %{pending: nil} = subscriber), do: %{subscriber | ready: true}
+  defp hand(_state, _pid, %{pending: nil} = subscriber), do: %{subscriber | outstanding: nil}
 
   defp hand(state, pid, %{pending: pending, lost: lost} = subscriber) do
     kind = if lost, do: :tail, else: :bytes
-    send(pid, {Opus.Programs, state.id, {kind, pending}})
-    %{subscriber | ready: false, pending: nil, lost: false}
+    deliver(state, pid, %{subscriber | pending: nil, lost: false}, kind, pending)
+  end
+
+  # Each delivery to a process carries the next number of its own, which
+  # its acknowledgement names (`taken/3`).
+  defp deliver(state, pid, subscriber, kind, %Output{} = output) do
+    delivery = subscriber.sent + 1
+    send(pid, {Opus.Programs, state.id, {kind, delivery, output}})
+    %{subscriber | outstanding: delivery, sent: delivery}
   end
 
   defp unsubscribe(state, pid) do

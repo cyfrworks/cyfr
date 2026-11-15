@@ -154,17 +154,22 @@ describe("the terminal carries the person's keys and the program's bytes", () =>
   // The server hands the next output only once the last is drawn: the
   // acknowledgement comes from the write's own callback, so the bound
   // holds for the socket too. A tail replaces what is shown.
-  test("acknowledges each output once drawn, and a tail replaces the screen", () => {
+  test("acknowledges each output by its number once drawn, and a tail replaces the screen", () => {
     const {term, pushed, handlers} = mount()
-    handlers.terminal_output({session: "trm_other", data: bytes("not mine")})
+    handlers.terminal_output({session: "trm_other", delivery: 1, data: bytes("not mine")})
     assert.equal(pushed.filter((p) => p.event === "terminal_written").length, 0)
 
-    handlers.terminal_output({session: "trm_1", data: bytes("one")})
-    assert.deepEqual(pushed.at(-1), {event: "terminal_written", payload: {session: "trm_1"}, reply: undefined})
+    handlers.terminal_output({session: "trm_1", delivery: 1, data: bytes("one")})
+    assert.deepEqual(pushed.at(-1), {
+      event: "terminal_written",
+      payload: {session: "trm_1", delivery: 1},
+      reply: undefined
+    })
 
-    handlers.terminal_tail({session: "trm_1", data: bytes("the last of it")})
+    handlers.terminal_tail({session: "trm_1", delivery: 2, data: bytes("the last of it")})
     assert.equal(term.written.at(-2), "reset")
     assert.equal(Buffer.from(term.written.at(-1)).toString(), "the last of it")
+    assert.deepEqual(pushed.at(-1).payload, {session: "trm_1", delivery: 2})
     assert.equal(pushed.filter((p) => p.event === "terminal_written").length, 2)
   })
 

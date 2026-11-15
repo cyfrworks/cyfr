@@ -339,9 +339,11 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # The browser drew what it was handed last: the session hands it more.
-  def handle_event("terminal_written", %{"session" => session}, socket) do
-    case Opus.Programs.taken(socket.assigns.context, session) do
+  # The browser drew the delivery it names: the session hands it more,
+  # when that is the one it waits on.
+  def handle_event("terminal_written", %{"session" => session, "delivery" => delivery}, socket)
+      when is_integer(delivery) do
+    case Opus.Programs.taken(socket.assigns.context, session, delivery) do
       :ok -> {:noreply, socket}
       {:error, reason} -> {:noreply, ended(socket, session, reason)}
     end
@@ -453,12 +455,13 @@ defmodule PrismWeb.ProgramsLive do
   # What the shown session's program wrote goes straight to the frame's
   # hook, and is kept nowhere here: the next output, or the tail that
   # replaces what the frame shows when more came than it was kept.
-  def handle_info({Opus.Programs, session, {kind, %{bytes: bytes}}}, socket)
+  def handle_info({Opus.Programs, session, {kind, delivery, %{bytes: bytes}}}, socket)
       when kind in [:bytes, :tail] do
     case socket.assigns.terminal do
       %{session: ^session} ->
         event = if kind == :tail, do: "terminal_tail", else: "terminal_output"
-        {:noreply, push_event(socket, event, %{session: session, data: Base.encode64(bytes)})}
+        data = %{session: session, delivery: delivery, data: Base.encode64(bytes)}
+        {:noreply, push_event(socket, event, data)}
 
       _other ->
         {:noreply, socket}

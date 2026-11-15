@@ -375,13 +375,15 @@ defmodule Opus.Programs do
   Attach the calling process to the caller's session `session_id`:
   answered the last of its output (an `Opus.Programs.Output`), the
   terminal's size and whether it is kept, after which the process
-  receives `{Opus.Programs, session_id, {:bytes, output}}`, each output
-  an `Opus.Programs.Output`, the next only once it said it took the last
-  (`taken/2`); `{Opus.Programs, session_id, {:tail, output}}` when more
-  came meanwhile than is kept for it, the last
+  receives `{Opus.Programs, session_id, {:bytes, delivery, output}}`,
+  each output an `Opus.Programs.Output` and each delivery numbered 1, 2,
+  … for this process, the next only once it said it took the last
+  (`taken/3`); `{Opus.Programs, session_id, {:tail, delivery, output}}`
+  when more came meanwhile than is kept for it, the last
   #{div(256 * 1024, 1024)} KiB, to show in place of what it showed; and
   `{Opus.Programs, session_id, {:ended, reason}}` once (`t:ended/0`),
-  whatever it owes. Attaching again is attaching once.
+  after what is held for it, whatever it owes. Attaching again is
+  attaching once.
   `{:error, :not_found}` for a session that is not running or not the
   caller's person's.
   """
@@ -425,16 +427,17 @@ defmodule Opus.Programs do
   end
 
   @doc """
-  The calling process, attached to the session, took the last output it
-  was handed (a page's browser drew it): it is handed what came since,
-  or the next output. Until it says so it is handed nothing more, and
-  what comes meanwhile is kept for it, the last
-  #{div(256 * 1024, 1024)} KiB at most (`Opus.Programs.Terminal`).
-  `{:error, :not_found}` for a session it is not attached to.
+  The calling process, attached to the session, took the delivery
+  numbered `delivery` (a page's browser drew it): when that is the one
+  outstanding for it, it is handed what came since, or the next output.
+  Until it says so it is handed nothing more, and what comes meanwhile
+  is kept for it, the last #{div(256 * 1024, 1024)} KiB at most
+  (`Opus.Programs.Terminal`); any other number answers `:ok` and changes
+  nothing. `{:error, :not_found}` for a session it is not attached to.
   """
-  @spec taken(Sanctum.Context.t(), String.t()) :: :ok | {:error, term()}
-  def taken(%Sanctum.Context{} = ctx, session_id),
-    do: terminal_call(ctx, session_id, &{:taken, &1, self()})
+  @spec taken(Sanctum.Context.t(), String.t(), pos_integer()) :: :ok | {:error, term()}
+  def taken(%Sanctum.Context{} = ctx, session_id, delivery) when is_integer(delivery),
+    do: terminal_call(ctx, session_id, &{:taken, &1, self(), delivery})
 
   @doc "Set the session's terminal to `rows` by `cols`; its program is signalled the change."
   @spec resize(Sanctum.Context.t(), String.t(), pos_integer(), pos_integer()) ::

@@ -230,7 +230,8 @@ defmodule Opus.Programs.TerminalTest do
 
       Scripted.write(fake, row.id, "second")
 
-      assert_receive {Opus.Programs, ^id, {:bytes, %Opus.Programs.Output{bytes: "second\r\n"}}},
+      assert_receive {Opus.Programs, ^id,
+                      {:bytes, 1, %Opus.Programs.Output{bytes: "second\r\n"}}},
                      2_000
 
       assert :ok = Programs.input(ctx, id, "code-1234\r")
@@ -756,12 +757,12 @@ defmodule Opus.Programs.TerminalTest do
       {id, _session} = start!(ctx, row)
       {:ok, _} = Programs.attach(ctx, id)
       Scripted.write(fake, row.id, "first")
-      assert_receive {Opus.Programs, ^id, {:bytes, %{bytes: "first\r\n"}}}, 2_000
+      assert_receive {Opus.Programs, ^id, {:bytes, 1, %{bytes: "first\r\n"}}}, 2_000
 
       line = String.duplicate("x", 10_000)
       for i <- 1..40, do: Scripted.write(fake, row.id, "#{i}:" <> line)
       eventually(fn -> :sys.get_state(terminal(id)).tail.bytes =~ "40:" end, "all to be read")
-      refute_receive {Opus.Programs, ^id, {_kind, _output}}, 300
+      refute_receive {Opus.Programs, ^id, {_kind, _delivery, _output}}, 300
 
       me = self()
 
@@ -771,15 +772,51 @@ defmodule Opus.Programs.TerminalTest do
       assert byte_size(pending.bytes) == 256 * 1024
 
       # It took the first: it is handed the tail, which replaces its screen.
-      assert :ok = Programs.taken(ctx, id)
-      assert_receive {Opus.Programs, ^id, {:tail, %{bytes: tail}}}, 2_000
+      assert :ok = Programs.taken(ctx, id, 1)
+      assert_receive {Opus.Programs, ^id, {:tail, 2, %{bytes: tail}}}, 2_000
       assert byte_size(tail) == 256 * 1024
       assert String.ends_with?(tail, "40:" <> line <> "\r\n")
 
       # It took the tail too: what comes next is handed at once.
-      assert :ok = Programs.taken(ctx, id)
+      assert :ok = Programs.taken(ctx, id, 2)
       Scripted.write(fake, row.id, "more")
-      assert_receive {Opus.Programs, ^id, {:bytes, %{bytes: "more\r\n"}}}, 2_000
+      assert_receive {Opus.Programs, ^id, {:bytes, 3, %{bytes: "more\r\n"}}}, 2_000
+    end
+
+    # An acknowledgement that named nothing let a process that read nothing
+    # be handed output after output: the owner counts only the one that
+    # names the delivery outstanding for that process.
+    test "only the acknowledgement of the outstanding delivery counts; any other number, " <>
+           "repeated, early or never sent, changes nothing",
+         %{ctx: ctx, row: row, fake: fake} do
+      {id, _session} = start!(ctx, row)
+      {:ok, _} = Programs.attach(ctx, id)
+      Scripted.write(fake, row.id, "first")
+      assert_receive {Opus.Programs, ^id, {:bytes, 1, %{bytes: "first\r\n"}}}, 2_000
+
+      line = String.duplicate("y", 10_000)
+
+      for round <- 1..40 do
+        Scripted.write(fake, row.id, "#{round}:" <> line)
+        for wrong <- [0, 2, 3, round + 1, -1], do: assert(:ok = Programs.taken(ctx, id, wrong))
+      end
+
+      eventually(fn -> :sys.get_state(terminal(id)).tail.bytes =~ "40:" end, "all to be read")
+      refute_receive {Opus.Programs, ^id, {_kind, _delivery, _output}}, 300
+
+      me = self()
+
+      assert %{subscribers: %{^me => %{outstanding: 1, sent: 1, lost: true}}} =
+               :sys.get_state(terminal(id))
+
+      # The right number hands what was kept, once: repeating it is a wrong
+      # number now, and hands nothing more.
+      assert :ok = Programs.taken(ctx, id, 1)
+      assert_receive {Opus.Programs, ^id, {:tail, 2, _tail}}, 2_000
+      assert :ok = Programs.taken(ctx, id, 1)
+      Scripted.write(fake, row.id, "after")
+      eventually(fn -> :sys.get_state(terminal(id)).tail.bytes =~ "after" end, "it to be read")
+      refute_receive {Opus.Programs, ^id, {_kind, _delivery, _output}}, 300
     end
 
     test "the end of a program reaches a process that owes its acknowledgement",
@@ -787,7 +824,7 @@ defmodule Opus.Programs.TerminalTest do
       {id, _session} = start!(ctx, row)
       {:ok, _} = Programs.attach(ctx, id)
       Scripted.write(fake, row.id, "first")
-      assert_receive {Opus.Programs, ^id, {:bytes, _output}}, 2_000
+      assert_receive {Opus.Programs, ^id, {:bytes, _delivery, _output}}, 2_000
       Scripted.write(fake, row.id, "kept for it")
       Scripted.end_sessions(fake, row.id, 0)
       assert_receive {Opus.Programs, ^id, {:ended, :exited}}, 3_000
@@ -823,7 +860,7 @@ defmodule Opus.Programs.TerminalTest do
 
       assert {:ok, %{tail: tail}} = Programs.attach(ctx, id)
       assert inspect(tail) == "#Opus.Programs.Output<#{byte_size(secret) + 2} bytes>"
-      assert inspect({Opus.Programs, id, {:bytes, tail}}) =~ "#Opus.Programs.Output<"
+      assert inspect({Opus.Programs, id, {:bytes, 1, tail}}) =~ "#Opus.Programs.Output<"
     end
 
     # The debug log keeps every message the process handled and the state
@@ -840,7 +877,7 @@ defmodule Opus.Programs.TerminalTest do
       eventually(fn -> :sys.get_state(pid).tail.bytes =~ secret end, "the write to be read")
       assert {:ok, _attached} = Programs.attach(ctx, id)
       Scripted.write(fake, row.id, secret <> "-again")
-      assert_receive {Opus.Programs, ^id, {:bytes, _output}}, 2_000
+      assert_receive {Opus.Programs, ^id, {:bytes, _delivery, _output}}, 2_000
 
       {:ok, events} = :sys.log(pid, :get)
       assert events != []

@@ -4,7 +4,7 @@
 defmodule Opus.Programs.Output do
   @moduledoc """
   Bytes a program wrote on its terminal, as `Opus.Programs` hands them to
-  a process attached to the session: each `{:bytes, output}` message and
+  a process attached to the session: each `{:bytes, delivery, output}` message and
   an attach's `tail`. What a program prints may be a credential (a
   sign-in's code, an address with a token in it), so the value inspects
   as its size alone, and a crash report or a status that prints a

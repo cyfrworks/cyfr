@@ -88,16 +88,16 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       this.sending = false
       term.onData((data) => this.type(data))
 
-      // Each output is acknowledged once drawn, and the server hands the
-      // next only then; a tail replaces what is shown, since what came
-      // before it was let go.
-      this.handleEvent("terminal_output", ({session, data}) => {
-        if (session === this.session) term.write(decode(data), () => this.written())
+      // Each output is acknowledged by its number once drawn, and the
+      // server hands the next only then; a tail replaces what is shown,
+      // since what came before it was let go.
+      this.handleEvent("terminal_output", ({session, delivery, data}) => {
+        if (session === this.session) term.write(decode(data), () => this.written(delivery))
       })
-      this.handleEvent("terminal_tail", ({session, data}) => {
+      this.handleEvent("terminal_tail", ({session, delivery, data}) => {
         if (session !== this.session) return
         term.reset()
-        term.write(decode(data), () => this.written())
+        term.write(decode(data), () => this.written(delivery))
       })
 
       this.onResize = () => this.resized()
@@ -113,8 +113,8 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       })
     },
 
-    written() {
-      this.pushEvent("terminal_written", {session: this.session})
+    written(delivery) {
+      this.pushEvent("terminal_written", {session: this.session, delivery})
     },
 
     // What the person typed, queued and sent a piece at a time.
