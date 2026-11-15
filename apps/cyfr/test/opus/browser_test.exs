@@ -716,9 +716,16 @@ defmodule Opus.BrowserTest do
         "the started session to end with its holder"
       )
 
-      assert Registry.select(Opus.Programs.Registry, [
-               {{{:terminal, :_}, :"$1", {ctx.athanor_id, ctx.user_id, :browser}}, [], [:"$1"]}
-             ]) == []
+      # Its terminal is gone once it has let its owner go, which it waits
+      # for on its way out.
+      eventually(
+        fn ->
+          Registry.select(Opus.Programs.Registry, [
+            {{{:terminal, :_}, :"$1", {ctx.athanor_id, ctx.user_id, :browser}}, [], [:"$1"]}
+          ]) == []
+        end,
+        "the browser's terminal to end"
+      )
     end
   end
 
