@@ -57,7 +57,8 @@ defmodule Sanctum.CompanyLoginTest do
 
     # The issuer's configuration as the `:cyfr_oidc` worker
     # `ueberauth_oidcc` starts holds it once it read the issuer's discovery
-    # document: decoded here from such a document, with no network.
+    # document: decoded here from such a document, with no network, and
+    # kept where `oidcc` reads it, the worker's own table named after it.
     use GenServer
 
     def start_link(issuer), do: GenServer.start_link(__MODULE__, issuer, name: :cyfr_oidc)
@@ -77,14 +78,15 @@ defmodule Sanctum.CompanyLoginTest do
           "code_challenge_methods_supported" => ["S256"]
         })
 
-      {:ok, %{configuration: configuration, jwks: :jose_jwk.generate_key({:ec, "P-256"})}}
+      table = :ets.new(:cyfr_oidc, [:named_table, :set, :protected, read_concurrency: true])
+
+      :ets.insert(table, [
+        {:provider_configuration, configuration},
+        {:jwks, :jose_jwk.generate_key({:ec, "P-256"})}
+      ])
+
+      {:ok, table}
     end
-
-    @impl true
-    def handle_call(:get_provider_configuration, _from, state),
-      do: {:reply, state.configuration, state}
-
-    def handle_call(:get_jwks, _from, state), do: {:reply, state.jwks, state}
   end
 
   defmodule Issuer do
