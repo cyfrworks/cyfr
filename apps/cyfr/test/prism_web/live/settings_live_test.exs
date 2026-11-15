@@ -843,6 +843,9 @@ defmodule PrismWeb.SettingsLiveTest do
       assert reach =~ "opens only on this computer"
       assert administrators =~ "second administrator"
       assert administrators =~ "cyfr backup"
+      assert administrators =~ "the database, the files stored on that machine"
+      assert administrators =~ "Files kept in S3 storage are not in it"
+      refute administrators =~ "everything"
       assert has_element?(view, ~s([data-test="setup"] a[href="#admins"]))
       assert has_element?(view, ~s([data-test="setup"] a[href="#invite-cyfr"]))
       assert has_element?(view, ~s([data-test="setup"] a[href="#allowlist"]))
@@ -888,12 +891,54 @@ defmodule PrismWeb.SettingsLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "a mark taken away while the setup is open closes it at its next act, which does " <>
+           "nothing" do
+      admin = person!(true)
+      market = key!(admin, "market key", @market)
+      {view, _html} = mount_athanor(admin.conn, "/settings?setup=1", admin.own)
+      share = ~s([data-test="setup-key-share"][phx-value-id="#{market.id}"])
+      assert has_element?(view, share)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(u in Arca.Schemas.User, where: u.id == ^admin.user.user_id),
+          set: [platform_admin_at: nil]
+        )
+
+      view |> element(share) |> render_click()
+      refute has_element?(view, "#system-layer-dialog [data-kind=share]")
+      refute has_element?(view, ~s([data-test="setup"]))
+      assert render(view) =~ "You no longer administer this CYFR, so nothing was done."
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the first step's event acts on a listed key alone: keys not read, or outside the " <>
+           "person's own athanor, open nothing and keep the page up" do
+      admin = person!(true)
+      market = key!(admin, "market key", @market)
+      {view, _html} = mount_athanor(admin.conn, "/settings?setup=1", admin.own)
+
+      for state <- [:unread, :not_own] do
+        :sys.replace_state(view.pid, fn channel ->
+          update_in(channel.socket, &Phoenix.Component.assign(&1, :setup_keys, state))
+        end)
+
+        render_click(view, "setup_share", %{"id" => market.id})
+        assert Process.alive?(view.pid), inspect(state)
+        refute has_element?(view, "#system-layer-dialog [data-kind=share]"), inspect(state)
+      end
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "the first step lists the administrator's shareable keys, the newest first, and " <>
            "opens the sharing sheet at everyone with the daily cap per person; what is made " <>
            "is what the sheet shows when confirmed" do
       admin = person!(true)
-      older = key!(admin, "older key", @market)
-      newer = key!(admin, "newer key", @market)
+      # Named so the alphabet orders them the other way round: the step
+      # orders them by when each was made.
+      older = key!(admin, "alpha key", @market)
+      newer = key!(admin, "zulu key", @market)
       _not_shareable = key!(admin, "open key", %{"hosts" => ["api.market.example"]})
 
       {1, _} =
@@ -905,7 +950,7 @@ defmodule PrismWeb.SettingsLiveTest do
       {view, _html} = mount_athanor(admin.conn, "/settings?setup=1", admin.own)
 
       assert texts(view, ~s([data-test="setup-key"] > span:first-child)) ==
-               ["newer key", "older key"]
+               ["zulu key", "alpha key"]
 
       view
       |> element(~s([data-test="setup-key-share"][phx-value-id="#{newer.id}"]))
@@ -988,7 +1033,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert texts(
                vault,
                ~s([data-test="shared-by-you-row"][data-id="#{share.id}"] [data-test="share-line"])
-             ) == ["newer key, shared with everyone, 0 today, at most 20 a person a day"]
+             ) == ["zulu key, shared with everyone, 0 today, at most 20 a person a day"]
 
       Cyfr.Test.Sandbox.end_views()
     end

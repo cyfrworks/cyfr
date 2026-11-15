@@ -122,7 +122,7 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:account_page, nil)
       |> assign(:keys_error, nil)
       |> assign(:setup, false)
-      |> assign(:setup_keys, [])
+      |> assign(:setup_keys, {:listed, []})
 
     {:ok, socket}
   end
@@ -136,22 +136,39 @@ defmodule PrismWeb.SettingsLive do
     {:noreply, socket}
   end
 
-  # The administrator's setup opens for a person who carries the mark as
-  # their row reads now (`Sanctum.Tenancy.revalidate/1`), never by the
-  # session's remembered capability, and opening it once is what Aqua's
-  # setup stops offering it on (`users.prefs`' `admin_setup_seen`).
-  defp setup_open?(%{assigns: %{context: %Sanctum.Context{user_id: user_id} = ctx}} = socket)
-       when is_binary(user_id) do
-    with {:ok, %Sanctum.Context{platform_admin: true}} <- Sanctum.Tenancy.revalidate(ctx),
-         {:ok, user} <- Sanctum.Tenancy.Users.get(user_id) do
-      if connected?(socket), do: setup_seen(user)
-      true
-    else
-      _not_an_administrator -> false
+  # Opening the administrator's setup once is what Aqua's setup stops
+  # offering it on (`users.prefs`' `admin_setup_seen`).
+  defp setup_open?(socket) do
+    case setup_standing(socket) do
+      {:ok, user} ->
+        if connected?(socket), do: setup_seen(user)
+        true
+
+      :none ->
+        false
     end
   end
 
-  defp setup_open?(_socket), do: false
+  # Whether the person may use the administrator's setup: they carry the
+  # mark as their row reads now (`Sanctum.Tenancy.revalidate/1`), never by
+  # the session's remembered capability. Asked when it opens and again at
+  # each of its acts, so a mark taken away while it is open closes it.
+  defp setup_standing(%{assigns: %{context: %Sanctum.Context{user_id: user_id} = ctx}})
+       when is_binary(user_id) do
+    with {:ok, %Sanctum.Context{platform_admin: true}} <- Sanctum.Tenancy.revalidate(ctx),
+         {:ok, user} <- Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, user}
+    else
+      _not_an_administrator -> :none
+    end
+  end
+
+  defp setup_standing(_socket), do: :none
+
+  defp setup_still_open(%{assigns: %{setup: true}} = socket),
+    do: assign(socket, :setup, match?({:ok, _user}, setup_standing(socket)))
+
+  defp setup_still_open(socket), do: socket
 
   defp setup_seen(user) do
     case Sanctum.Tenancy.Users.put_prefs(user, %{"admin_setup_seen" => true}) do
@@ -165,12 +182,18 @@ defmodule PrismWeb.SettingsLive do
 
   @impl true
   def handle_event("setup_share", %{"id" => id}, %{assigns: %{setup: true}} = socket) do
-    case Enum.find(socket.assigns.setup_keys, &(&1.id == id and not &1.shared)) do
-      %{} = key ->
+    socket = setup_still_open(socket)
+
+    case {socket.assigns.setup, Enum.find(listed(socket.assigns.setup_keys), &(&1.id == id))} do
+      {false, _key} ->
+        {:noreply,
+         put_flash(socket, :error, "You no longer administer this CYFR, so nothing was done.")}
+
+      {true, %{shared: false} = key} ->
         SystemLayer.show(SystemLayer.layer_id(), Share.prompt(key, Share.threads(socket), :setup))
         {:noreply, socket}
 
-      nil ->
+      {true, _shared_or_unlisted} ->
         {:noreply, socket}
     end
   end
@@ -367,7 +390,8 @@ defmodule PrismWeb.SettingsLive do
   # A share the setup's sheet made: the setup's keys are read again.
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_report("share-" <> _entry_id, :confirmed, socket),
-    do: {:noreply, socket |> load_setup_keys() |> put_flash(:info, "Shared.")}
+    do:
+      {:noreply, socket |> setup_still_open() |> load_setup_keys() |> put_flash(:info, "Shared.")}
 
   def system_layer_report("share-" <> _entry_id, _outcome, socket), do: {:noreply, socket}
   def system_layer_report(_prompt_id, _outcome, _socket), do: :pass
@@ -574,7 +598,9 @@ defmodule PrismWeb.SettingsLive do
   # The platform settings are the operator's, like the door.
   # The setup's first step: the person's own keys the store would share,
   # the newest first, each saying whether it is shared with everyone
-  # already. Keys are shared from the person's own athanor alone.
+  # already, as `{:listed, keys}`; `:not_own` outside the person's own
+  # athanor, where keys are not shared, and `:unread` when they could not
+  # be read.
   defp load_setup_keys(%{assigns: %{setup: true, context: ctx}} = socket) do
     with true <- PrismWeb.Athanors.own?(%{id: ctx.athanor_id}, ctx),
          {:ok, entries} <- fetch_list(socket, "vault/list", :entries),
@@ -587,10 +613,10 @@ defmodule PrismWeb.SettingsLive do
       keys =
         entries
         |> Enum.filter(&Share.shareable?/1)
-        |> Enum.sort_by(&(&1[:created_at] || ""), :desc)
+        |> Enum.sort_by(& &1.created_at, {:desc, DateTime})
         |> Enum.map(&%{id: &1.id, name: &1.name, shared: MapSet.member?(everyone, &1.id)})
 
-      assign(socket, :setup_keys, keys)
+      assign(socket, :setup_keys, {:listed, keys})
     else
       false ->
         assign(socket, :setup_keys, :not_own)
@@ -602,6 +628,9 @@ defmodule PrismWeb.SettingsLive do
   end
 
   defp load_setup_keys(socket), do: socket
+
+  defp listed({:listed, keys}), do: keys
+  defp listed(_not_listed), do: []
 
   defp load_settings(%{assigns: %{context: %{platform_admin: true}}} = socket) do
     case call_tool(socket, "settings/list", %{}) do
@@ -1373,8 +1402,8 @@ defmodule PrismWeb.SettingsLive do
               so they can start without a key of their own. They never see it. The sheet opens
               with a daily cap per person filled in; change it before you confirm.
             </p>
-            <ul :if={is_list(@keys) and @keys != []} class="mt-2 space-y-1">
-              <li :for={key <- @keys} class="flex items-center gap-3" data-test="setup-key">
+            <ul :if={listed(@keys) != []} class="mt-2 space-y-1">
+              <li :for={key <- listed(@keys)} class="flex items-center gap-3" data-test="setup-key">
                 <span>{key.name}</span>
                 <span :if={key.shared} class="text-xs text-gray-400">Shared with everyone</span>
                 <.button
@@ -1388,7 +1417,11 @@ defmodule PrismWeb.SettingsLive do
                 </.button>
               </li>
             </ul>
-            <p :if={@keys == []} class="text-xs text-gray-400 mt-2" data-test="setup-no-key">
+            <p
+              :if={@keys == {:listed, []}}
+              class="text-xs text-gray-400 mt-2"
+              data-test="setup-no-key"
+            >
               You have no key that can be shared.
               <.link
                 navigate={PrismWeb.Focus.path(@athanor_route, "/aqua?setup=1")}
@@ -1431,8 +1464,13 @@ defmodule PrismWeb.SettingsLive do
             <p class="text-xs text-gray-400 mt-1">
               Administrators change the allowlist, invite people and change this CYFR's
               settings. <a href="#admins" class="text-blue-400 hover:underline">Make a second
-              administrator</a> so this CYFR is never left without one. To keep a copy of
-              everything, run <code>cyfr backup</code> on the machine that runs CYFR.
+              administrator</a>
+              so this CYFR is never left without one. To keep a copy, run <code>cyfr backup</code>
+              on the machine that runs CYFR: it takes a snapshot of the
+              database, the files stored on that machine, the keyring and the configuration, which
+              <code>cyfr restore</code>
+              puts back. Files kept in S3 storage are not in it, and a
+              snapshot holds the keyring, so keep it as safe as CYFR itself.
             </p>
           </li>
         </ol>
