@@ -56,11 +56,11 @@ import {
 } from "../../../../../seed/components/tinctures/local/canvas/0.5.0/src/model.ts"
 
 import * as V6 from "../../../../../seed/components/tinctures/local/canvas/0.6.0/src/model.ts"
-import * as V61 from "../../../../../seed/components/tinctures/local/canvas/0.6.1/src/model.ts"
+import * as V62 from "../../../../../seed/components/tinctures/local/canvas/0.6.2/src/model.ts"
 
 const VERSION = new URL("../../../../../seed/components/tinctures/local/canvas/0.5.0/", import.meta.url)
 const VERSION_6 = new URL("../../../../../seed/components/tinctures/local/canvas/0.6.0/", import.meta.url)
-const VERSION_61 = new URL("../../../../../seed/components/tinctures/local/canvas/0.6.1/", import.meta.url)
+const VERSION_62 = new URL("../../../../../seed/components/tinctures/local/canvas/0.6.2/", import.meta.url)
 const SCAFFOLD = new URL("../../../lib/compendium/scaffold.ex", import.meta.url)
 
 // Every pending reaction runs: a promise's handlers, then theirs.
@@ -1201,11 +1201,11 @@ describe("the shipped canvas 0.6.0", () => {
   })
 })
 
-// The canvas's 0.6.1: each failure by the cause it reads as and who started
+// The canvas's 0.6.2: each failure by the cause it reads as and who started
 // it, Retry only where the run's change says a retry runs it, the first
 // steps on an empty desktop, and an open the shell dropped as too soon.
-describe("the shipped canvas 0.6.1", () => {
-  const folded = (...items) => items.reduce((state, item) => V61.fold(state, "runs.changes", item, 1), V61.EMPTY)
+describe("the shipped canvas 0.6.2", () => {
+  const folded = (...items) => items.reduce((state, item) => V62.fold(state, "runs.changes", item, 1), V62.EMPTY)
   // The wire's failed run (tests/fixtures/tincture_wire.json, stream_events
   // runs.changes, exec_vector_failed), as each run here is built from it,
   // without who started it or whether a retry runs it, which each test says.
@@ -1215,9 +1215,9 @@ describe("the shipped canvas 0.6.1", () => {
     return {...run, execution_id: id, ...extra}
   }
   // The schedules stream's first picture heard whole, as after its snapshot.
-  const heard = (state = V61.EMPTY) => V61.snapshotted(V61.resynced(state, "schedules.changes"), "schedules.changes")
-  const sources = () => files(new URL("src/", VERSION_61)).map((file) => readFileSync(file, "utf8"))
-  const app = () => readFileSync(new URL("src/App.tsx", VERSION_61), "utf8")
+  const heard = (state = V62.EMPTY) => V62.snapshotted(V62.resynced(state, "schedules.changes"), "schedules.changes")
+  const sources = () => files(new URL("src/", VERSION_62)).map((file) => readFileSync(file, "utf8"))
+  const app = () => readFileSync(new URL("src/App.tsx", VERSION_62), "utf8")
 
   // window.cyfr as the model's taps meet it: each call kept, and each
   // answer the next of its queue.
@@ -1245,7 +1245,7 @@ describe("the shipped canvas 0.6.1", () => {
   }
 
   test("Retry is offered only on a failed run whose change says a retry runs it", () => {
-    const {rows} = V61.recentRows(
+    const {rows} = V62.recentRows(
       folded(
         failed("manual", {origin: "interactive", retryable: false}),
         failed("scheduled", {origin: "schedule", retryable: true}),
@@ -1272,7 +1272,7 @@ describe("the shipped canvas 0.6.1", () => {
       ["exec_vector_running", "interactive", false],
       ["exec_vector_failed", "schedule", true]
     ])
-    const {rows} = V61.recentRows(folded(...events), 8)
+    const {rows} = V62.recentRows(folded(...events), 8)
     assert.deepEqual(rows.map((row) => [row.id, row.starter, row.retry]), [
       ["exec_vector_failed", "by a schedule", true],
       ["exec_vector_running", null, false]
@@ -1282,17 +1282,17 @@ describe("the shipped canvas 0.6.1", () => {
   test("a failure names who started it in the canvas's four words, and an origin it has no words for names no one", () => {
     const origins = {interactive: "by you", programmatic: "by an agent or script", schedule: "by a schedule", webhook: "by a webhook"}
     for (const [origin, words] of Object.entries(origins)) {
-      assert.equal(V61.starter(origin), words)
-      const [row] = V61.recentRows(folded(failed("ex-1", {origin})), 8).rows
+      assert.equal(V62.starter(origin), words)
+      const [row] = V62.recentRows(folded(failed("ex-1", {origin})), 8).rows
       assert.equal(row.starter, words)
     }
     for (const origin of [null, undefined, "", "cron", "Interactive", "constructor", 7, {}]) {
-      assert.equal(V61.starter(origin), null, String(origin))
+      assert.equal(V62.starter(origin), null, String(origin))
     }
-    const unknown = V61.recentRows(folded(failed("a", {origin: "a later origin"}), failed("b", {origin: null}), failed("c")), 8).rows
+    const unknown = V62.recentRows(folded(failed("a", {origin: "a later origin"}), failed("b", {origin: null}), failed("c")), 8).rows
     assert.deepEqual(unknown.map((row) => row.starter), [null, null, null])
     // A run that did not fail names no one.
-    assert.equal(V61.recentRows(folded(run("ok", "completed", {origin: "interactive"})), 8).rows[0].starter, null)
+    assert.equal(V62.recentRows(folded(run("ok", "completed", {origin: "interactive"})), 8).rows[0].starter, null)
     // The words are held in one place.
     for (const words of Object.values(origins)) {
       assert.equal(sources().join("\n").split(`"${words}"`).length - 1, 1, words)
@@ -1312,7 +1312,7 @@ describe("the shipped canvas 0.6.1", () => {
       failed("i", {reference: "catalyst:local.z:1.0.0", error: {class: "uncertain", cause: "uncertain"}})
     )
     assert.deepEqual(
-      V61.causes(state).map((c) => [c.cause, c.short, c.count, c.grantable, c.components.map((x) => [x.name, x.count])]),
+      V62.causes(state).map((c) => [c.cause, c.short, c.count, c.grantable, c.components.map((x) => [x.name, x.count])]),
       [
         ["failed", "Failed", 3, false, [["z", 3]]],
         ["refused", "Refused", 3, false, [["x", 2], ["y", 1]]],
@@ -1330,30 +1330,30 @@ describe("the shipped canvas 0.6.1", () => {
       run("plain", "failed", {error: {class: "internal"}})
     )
     const shown = JSON.stringify([
-      V61.causes(state).map(({short, components}) => [short, components.map((c) => c.name)]),
-      V61.recentRows(state, 20).rows.map(({name, detail, reason, starter}) => [name, detail, reason, starter]),
-      V61.today(state, new Date("2026-11-15T09:00:00Z")).sentence
+      V62.causes(state).map(({short, components}) => [short, components.map((c) => c.name)]),
+      V62.recentRows(state, 20).rows.map(({name, detail, reason, starter}) => [name, detail, reason, starter]),
+      V62.today(state, new Date("2026-11-15T09:00:00Z")).sentence
     ])
     for (const cls of classes) assert.ok(!shown.includes(cls), cls)
-    assert.equal(V61.causes(state)[0].class, undefined)
+    assert.equal(V62.causes(state)[0].class, undefined)
     const page = app()
     assert.doesNotMatch(page, /\.class\b|cause\.shown|\.error\b/)
   })
 
   test("a failure opens its run's page, the Executions page at that run, from a tap", () => {
     const {cyfr, calls} = shell()
-    const [row] = V61.recentRows(folded(failed("exec_42", {origin: "schedule", retryable: true})), 8).rows
-    V61.showRun(cyfr, row)
+    const [row] = V62.recentRows(folded(failed("exec_42", {origin: "schedule", retryable: true})), 8).rows
+    V62.showRun(cyfr, row)
     assert.deepEqual(calls.settings, [["executions", "exec_42"]])
     assert.match(app(), /row\.status === "bad" \? \(\s*<button className="link"[^>]*onClick=\{\(\) => showRun\(cyfr, row\)\}/)
   })
 
   test("Retry's answers, in the canvas's words; no words remain for the conflict a retry no longer meets", async () => {
     const {cyfr, calls, answers} = shell()
-    const [row] = V61.recentRows(folded(failed("ex-1", {origin: "schedule", retryable: true})), 8).rows
+    const [row] = V62.recentRows(folded(failed("ex-1", {origin: "schedule", retryable: true})), 8).rows
     const said = (answer) => {
       answers.press.push(answer)
-      return V61.retryRun(cyfr, row)
+      return V62.retryRun(cyfr, row)
     }
     assert.equal(await said({outcome: "accepted"}), "Running again")
     assert.equal(await said({outcome: "refused", reason: "conflict"}), "It could not run again")
@@ -1369,28 +1369,28 @@ describe("the shipped canvas 0.6.1", () => {
     const notes = {ref: "tincture:local.notes", name: "Notes", icon: null, open: false}
     const said = (answer) => {
       answers.open.push(answer)
-      return V61.openApp(cyfr, notes)
+      return V62.openApp(cyfr, notes)
     }
     assert.equal(await said({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
-    assert.equal(V61.TOO_SOON, "Tap again in a moment")
+    assert.equal(V62.TOO_SOON, "Tap again in a moment")
     assert.equal(await said({outcome: "opened"}), null)
     assert.equal(await said({outcome: "refused", reason: "not_found"}), null)
     assert.equal(await said({outcome: "cancelled"}), null)
     assert.deepEqual(calls.open, Array(4).fill("tincture:local.notes"))
     assert.match(app(), /onClick=\{\(\) => openApp\(cyfr, app\)\.then\(say\)\}/)
     assert.match(app(), /\{said !== null && <span className="said">\{said\}<\/span>\}/)
-    assert.match(readFileSync(new URL("src/model.ts", VERSION_61), "utf8"), /open\(ref: string, on\?: \{ kind: string; id: string \} \| null\): Promise<Opened>;/)
+    assert.match(readFileSync(new URL("src/model.ts", VERSION_62), "utf8"), /open\(ref: string, on\?: \{ kind: string; id: string \} \| null\): Promise<Opened>;/)
   })
 
   test("the first steps are offered at first, both, in order, whatever the desktop holds", () => {
-    const [aqua, desktops] = V61.STEPS
+    const [aqua, desktops] = V62.STEPS
     assert.deepEqual([aqua.page, aqua.title, desktops.page, desktops.title], ["aqua_setup", "Set up AQUA", "desktops", "Choose a desktop"])
-    assert.deepEqual(V61.firstSteps(V61.EMPTY), {offered: [aqua, desktops], hidden: []})
+    assert.deepEqual(V62.firstSteps(V62.EMPTY), {offered: [aqua, desktops], hidden: []})
 
     // Apps, runs and a schedule change nothing: only the person hides a step.
-    const busy = V61.fold(
-      V61.fold(
-        V61.installed(heard(), [{ref: "tincture:local.vault", name: "Vault"}]),
+    const busy = V62.fold(
+      V62.fold(
+        V62.installed(heard(), [{ref: "tincture:local.vault", name: "Vault"}]),
         "runs.changes",
         run("models", "completed", {origin: "interactive"}),
         1
@@ -1399,35 +1399,35 @@ describe("the shipped canvas 0.6.1", () => {
       {kind: "changed", schedule_id: "s1", name: "Morning", status: "active"},
       1
     )
-    assert.deepEqual(V61.firstSteps(busy), {offered: [aqua, desktops], hidden: []})
+    assert.deepEqual(V62.firstSteps(busy), {offered: [aqua, desktops], hidden: []})
   })
 
   test("opening a step opens its page and hides nothing: the tap carries one verb", () => {
     const {cyfr, calls} = shell()
-    const state = V61.desktop(V61.EMPTY, {prefs: {document: {desktop: {}}, revision: 1}})
-    for (const step of V61.firstSteps(state).offered) V61.takeStep(cyfr, step)
+    const state = V62.desktop(V62.EMPTY, {prefs: {document: {desktop: {}}, revision: 1}})
+    for (const step of V62.firstSteps(state).offered) V62.takeStep(cyfr, step)
     assert.deepEqual(calls.settings, [["aqua_setup", null], ["desktops", null]])
     assert.deepEqual(calls.prefs, [])
-    assert.deepEqual(V61.firstSteps(state).offered, V61.STEPS)
+    assert.deepEqual(V62.firstSteps(state).offered, V62.STEPS)
   })
 
   test("a hidden step is kept in the preferences' desktop, stays hidden when the page opens again, and Getting started offers it again", async () => {
     const {cyfr, calls, answers} = shell()
-    const told = (document, revision) => V61.desktop(V61.EMPTY, {prefs: {document, revision}})
+    const told = (document, revision) => V62.desktop(V62.EMPTY, {prefs: {document, revision}})
     let state = told({widgets: {runs: {on: false}}, desktop: {}}, 1)
-    const [aqua, desktops] = V61.STEPS
+    const [aqua, desktops] = V62.STEPS
 
     const first = {widgets: {runs: {on: false}}, desktop: {hide_aqua_setup: true}}
     answers.prefs.push({outcome: "saved", document: first, revision: 2})
-    assert.equal((await V61.hideStep(cyfr, state, aqua)).outcome, "saved")
+    assert.equal((await V62.hideStep(cyfr, state, aqua)).outcome, "saved")
     state = told(first, 2)
-    assert.deepEqual(V61.firstSteps(state), {offered: [desktops], hidden: [aqua]})
+    assert.deepEqual(V62.firstSteps(state), {offered: [desktops], hidden: [aqua]})
 
     const both = {widgets: {runs: {on: false}}, desktop: {hide_aqua_setup: true, hide_desktops: true}}
     answers.prefs.push({outcome: "saved", document: both, revision: 3})
-    await V61.hideStep(cyfr, state, desktops)
+    await V62.hideStep(cyfr, state, desktops)
     state = told(both, 3)
-    assert.deepEqual(V61.firstSteps(state), {offered: [], hidden: [aqua, desktops]})
+    assert.deepEqual(V62.firstSteps(state), {offered: [], hidden: [aqua, desktops]})
 
     // The page opened again, its open carrying that document, keeps both hidden.
     const reload = {
@@ -1439,16 +1439,16 @@ describe("the shipped canvas 0.6.1", () => {
       }
     }
     const states = []
-    const stop = V61.start(reload, (s) => states.push(s))
+    const stop = V62.start(reload, (s) => states.push(s))
     await settle()
-    assert.deepEqual(V61.firstSteps(states.at(-1)), {offered: [], hidden: [aqua, desktops]})
+    assert.deepEqual(V62.firstSteps(states.at(-1)), {offered: [], hidden: [aqua, desktops]})
     stop()
 
     // Getting started: the desktop without the steps' fields, so both are offered again.
     answers.prefs.push({outcome: "saved", document: {widgets: {runs: {on: false}}, desktop: {}}, revision: 4})
-    await V61.showSteps(cyfr, state)
+    await V62.showSteps(cyfr, state)
     state = told({widgets: {runs: {on: false}}, desktop: {}}, 4)
-    assert.deepEqual(V61.firstSteps(state), {offered: [aqua, desktops], hidden: []})
+    assert.deepEqual(V62.firstSteps(state), {offered: [aqua, desktops], hidden: []})
 
     // Each write named the whole desktop, never a widget.
     assert.deepEqual(calls.prefs, [
@@ -1467,11 +1467,11 @@ describe("the shipped canvas 0.6.1", () => {
   })
 
   test("the manifest declares each step's field on the desktop as a boolean, beside the four widgets", () => {
-    const {tincture, version} = JSON.parse(readFileSync(new URL("cyfr-manifest.json", VERSION_61), "utf8"))
-    assert.equal(version, "0.6.1")
+    const {tincture, version} = JSON.parse(readFileSync(new URL("cyfr-manifest.json", VERSION_62), "utf8"))
+    assert.equal(version, "0.6.2")
     assert.deepEqual(tincture.desktop.prefs, {
-      widgets: Object.fromEntries(V61.WIDGETS.map((widget) => [widget, {}])),
-      desktop: {fields: Object.fromEntries(V61.STEPS.map((step) => [step.field, {type: "boolean"}]))}
+      widgets: Object.fromEntries(V62.WIDGETS.map((widget) => [widget, {}])),
+      desktop: {fields: Object.fromEntries(V62.STEPS.map((step) => [step.field, {type: "boolean"}]))}
     })
   })
 
@@ -1481,7 +1481,7 @@ describe("the shipped canvas 0.6.1", () => {
     assert.equal(taps.length, 9)
     for (const tap of taps) assert.match(page.slice(0, tap.index), /onClick=\{\(\) => $/)
     assert.doesNotMatch(page, /cyfr\.(press|prefs|open|settings|grant)\(/)
-    const manifest = readFileSync(new URL("cyfr-manifest.json", VERSION_61), "utf8")
+    const manifest = readFileSync(new URL("cyfr-manifest.json", VERSION_62), "utf8")
     for (const body of [manifest, ...sources()]) {
       assert.doesNotMatch(body, /\b(homes?|glass(es)?|hubs?|cells?|nodes?|doors?)\b/i)
     }
